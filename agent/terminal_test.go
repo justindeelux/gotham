@@ -104,8 +104,9 @@ type terminalResult struct {
 
 // recvUntil reads responses until pred matches, the stream fails or the timeout
 // expires.
-func recvUntil(t *testing.T, stream agentv1.TerminalService_OpenTerminalClient, pred func(*agentv1.TerminalResponse) bool, timeout time.Duration) *agentv1.TerminalResponse {
+func recvUntil(t *testing.T, stream agentv1.TerminalService_OpenTerminalClient, pred func(*agentv1.TerminalResponse) bool) *agentv1.TerminalResponse {
 	t.Helper()
+	const timeout = 10 * time.Second
 	results := make(chan terminalResult, 1)
 	go func() {
 		var output strings.Builder
@@ -188,7 +189,9 @@ func TestTerminalOpenValidation(t *testing.T) {
 		open *agentv1.TerminalOpen
 		want codes.Code
 	}{
-		{"unsupported target", &agentv1.TerminalOpen{Target: "container", Root: rootName, Cols: 80, Rows: 24}, codes.InvalidArgument},
+		{"unsupported target", &agentv1.TerminalOpen{Target: "docker", Root: rootName, Cols: 80, Rows: 24}, codes.InvalidArgument},
+		{"container exec not configured", &agentv1.TerminalOpen{Target: "container", ContainerId: "abc123", Cols: 80, Rows: 24}, codes.FailedPrecondition},
+		{"missing container id", &agentv1.TerminalOpen{Target: "container", Cols: 80, Rows: 24}, codes.InvalidArgument},
 		{"zero columns", &agentv1.TerminalOpen{Target: "host", Root: rootName, Cols: 0, Rows: 24}, codes.InvalidArgument},
 		{"huge rows", &agentv1.TerminalOpen{Target: "host", Root: rootName, Cols: 80, Rows: 1001}, codes.InvalidArgument},
 		{"missing root", &agentv1.TerminalOpen{Target: "host", Cols: 80, Rows: 24}, codes.InvalidArgument},
@@ -258,7 +261,7 @@ func TestTerminalEchoResizeAndExit(t *testing.T) {
 	}
 	exited := recvUntil(t, stream, func(response *agentv1.TerminalResponse) bool {
 		return response.GetExited() != nil
-	}, 10*time.Second)
+	})
 	if exited.GetExited().GetExitCode() != 7 {
 		t.Fatalf("exit code = %d, want 7", exited.GetExited().GetExitCode())
 	}
@@ -491,7 +494,7 @@ func runAgentSession(t *testing.T, client agentv1.TerminalServiceClient, rootNam
 	}
 	recvUntil(t, stream, func(response *agentv1.TerminalResponse) bool {
 		return response.GetExited() != nil
-	}, 10*time.Second)
+	})
 	_ = stream.CloseSend()
 	for {
 		if _, err := stream.Recv(); err != nil {
@@ -690,7 +693,7 @@ func TestTerminalOpenUnderFilesystemRoot(t *testing.T) {
 	}
 	exited := recvUntil(t, stream, func(response *agentv1.TerminalResponse) bool {
 		return response.GetExited() != nil
-	}, 10*time.Second)
+	})
 	if exited.GetExited().GetExitCode() != 0 {
 		t.Fatalf("exit code = %d, want 0", exited.GetExited().GetExitCode())
 	}

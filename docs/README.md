@@ -54,10 +54,10 @@ workflow, Playwright UI smoke, and what has been verified on real hardware.
 
 ## Terminal sessions
 
-[`terminal-session-api.md`](terminal-session-api.md) — host PTY session API and
-lifecycle contract shared with the container-exec and terminal-view work
-packages: HTTP create/close, WebSocket framing and authentication, cleanup
-guarantees, and the service identity the shell runs as.
+[`terminal-session-api.md`](terminal-session-api.md) — host PTY and application
+container exec session API and lifecycle contract: HTTP discovery/create/close,
+WebSocket framing and authentication, target resolution and permissions,
+cleanup guarantees, and the service identity each shell runs as.
 
 ## Install & release
 

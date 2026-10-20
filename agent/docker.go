@@ -51,6 +51,16 @@ var ErrDockerUnavailable = errors.New("docker: daemon unavailable")
 // input, not as a missing container.
 var ErrDockerImageNotFound = errors.New("docker: image not found")
 
+// ErrDockerContainerNotRunning marks an exec request against a container that
+// exists but is stopped, restarting or otherwise not running. The terminal
+// service reports it as an actionable precondition instead of a stream failure.
+var ErrDockerContainerNotRunning = errors.New("docker: container is not running")
+
+// ErrDockerNoShell marks a container image that exposes none of the supported
+// shells. A container terminal never starts a half-working exec: the caller
+// gets an explicit "no supported shell" error instead.
+var ErrDockerNoShell = errors.New("docker: container has no supported shell")
+
 // DockerClient talks to the Docker Engine API over a unix socket or TCP
 // endpoint. It implements the subset of the engine API the agent exposes to
 // the control plane.
@@ -521,6 +531,393 @@ func (c *DockerClient) action(ctx context.Context, id, verb string) error {
 	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
+
+// execProbeTimeout bounds the non-interactive shell probe run in a container.
+const execProbeTimeout = 10 * time.Second
+
+// execResizeTimeout bounds one exec resize call.
+const execResizeTimeout = 5 * time.Second
+
+// execExitTimeout bounds how long ExitCode waits for the daemon to publish the
+// process's final status after the attached stream ended.
+const execExitTimeout = 2 * time.Second
+
+// execExitPoll is the interval between exit-status reads.
+const execExitPoll = 50 * time.Millisecond
+
+// execProbeMaxBytes bounds the shell probe output kept in memory.
+const execProbeMaxBytes = 4 << 10
+
+// shellProbeCommand asks the container's POSIX shell for the first supported
+// interactive shell. It is a fixed command written by the agent; no caller
+// input is interpolated into it.
+const shellProbeCommand = `for s in bash sh ash; do p=$(command -v "$s" 2>/dev/null) && { echo "$p"; exit 0; }; done; exit 127`
+
+// ExecOptions describes one interactive exec. Cmd empty selects the first
+// supported shell inside the container. User and WorkingDir default to the
+// container's configured values.
+type ExecOptions struct {
+	Cmd        []string
+	Env        []string
+	User       string
+	WorkingDir string
+	Cols       uint16
+	Rows       uint16
+}
+
+// ExecSession is one attached interactive exec. Read/Write are the container
+// process's stdio over the hijacked Docker connection; Close releases the
+// attachment without stopping the container. Resize changes the TTY window and
+// ExitCode reports the process status once it has ended.
+type ExecSession interface {
+	io.Reader
+	io.Writer
+	io.Closer
+	Resize(ctx context.Context, cols, rows uint16) error
+	ExitCode(ctx context.Context) (int32, string, error)
+	// Shell is the shell executable the agent chose inside the container.
+	Shell() string
+	// User is the container user the process runs as ("root" when unset).
+	User() string
+}
+
+// containerInspect is the subset of GET /containers/{id}/json the exec path
+// needs.
+type containerInspect struct {
+	State struct {
+		Running bool   `json:"Running"`
+		Status  string `json:"Status"`
+	} `json:"State"`
+	Config struct {
+		User       string   `json:"User"`
+		WorkingDir string   `json:"WorkingDir"`
+		Env        []string `json:"Env"`
+	} `json:"Config"`
+}
+
+// Exec starts an interactive exec in containerID and returns its attached
+// stream. The container must exist and be running. When opts.Cmd is empty the
+// agent probes the image for a supported shell and answers ErrDockerNoShell
+// when none exists; it never starts a broken terminal. Closing the returned
+// session ends the exec attachment only: the application container is never
+// stopped or restarted.
+func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOptions) (ExecSession, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return nil, errors.New("docker: container id is required")
+	}
+	inspect, err := c.inspectContainer(ctx, containerID)
+	if err != nil {
+		return nil, err
+	}
+	if !inspect.State.Running {
+		state := strings.TrimSpace(inspect.State.Status)
+		if state == "" {
+			state = "stopped"
+		}
+		return nil, fmt.Errorf("%w: %s", ErrDockerContainerNotRunning, state)
+	}
+
+	user := strings.TrimSpace(opts.User)
+	if user == "" {
+		user = strings.TrimSpace(inspect.Config.User)
+	}
+	workdir := strings.TrimSpace(opts.WorkingDir)
+	if workdir == "" {
+		workdir = strings.TrimSpace(inspect.Config.WorkingDir)
+	}
+
+	command := opts.Cmd
+	shellPath := ""
+	if len(command) == 0 {
+		shellPath, err = c.probeShell(ctx, containerID, user, workdir, inspect.Config.Env)
+		if err != nil {
+			return nil, err
+		}
+		command = []string{shellPath}
+	} else {
+		shellPath = command[0]
+	}
+
+	env := append([]string(nil), opts.Env...)
+	env = append(env, "TERM=xterm-256color")
+	execID, err := c.createExec(ctx, containerID, command, user, workdir, env, true)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := c.startExec(ctx, execID, true)
+	if err != nil {
+		return nil, err
+	}
+	session := &dockerExecSession{
+		client: c,
+		id:     execID,
+		stream: stream,
+		shell:  shellPath,
+		user:   displayContainerUser(user),
+		ctx:    ctx,
+	}
+	if opts.Cols > 0 && opts.Rows > 0 {
+		if err := session.Resize(ctx, opts.Cols, opts.Rows); err != nil {
+			_ = session.Close()
+			return nil, err
+		}
+	}
+	return session, nil
+}
+
+// inspectContainer reads the container's run state and configured user.
+func (c *DockerClient) inspectContainer(ctx context.Context, containerID string) (containerInspect, error) {
+	var out containerInspect
+	path := "/containers/" + url.PathEscape(containerID) + "/json"
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// probeShell runs a fixed non-interactive command inside the container to find
+// a supported shell. Running it detached from the caller's stream keeps the
+// interactive session free of probe output.
+func (c *DockerClient) probeShell(ctx context.Context, containerID, user, workdir string, imageEnv []string) (string, error) {
+	env := append(append([]string(nil), imageEnv...), "TERM=xterm-256color")
+	execID, err := c.createExec(ctx, containerID, []string{"/bin/sh", "-c", shellProbeCommand}, user, workdir, env, true)
+	if err != nil {
+		// A container without /bin/sh cannot offer any supported shell. A
+		// missing container or unreachable daemon keeps its own identity.
+		if errors.Is(err, ErrDockerNotFound) || errors.Is(err, ErrDockerUnavailable) {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %v", ErrDockerNoShell, err)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, execProbeTimeout)
+	defer cancel()
+	stream, err := c.startExec(probeCtx, execID, true)
+	if err != nil {
+		if errors.Is(err, ErrDockerNotFound) || errors.Is(err, ErrDockerUnavailable) {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %v", ErrDockerNoShell, err)
+	}
+	type probeResult struct {
+		output string
+		err    error
+	}
+	readDone := make(chan probeResult, 1)
+	go func() {
+		output, readErr := readProbeOutput(stream, execProbeMaxBytes)
+		readDone <- probeResult{output: output, err: readErr}
+	}()
+	var probe probeResult
+	select {
+	case probe = <-readDone:
+	case <-probeCtx.Done():
+		// A wedged probe must not pin the open path: close the stream so the
+		// reader unblocks and report the image as unsupported.
+		_ = stream.Close()
+		probe = <-readDone
+	}
+	_ = stream.Close()
+	code, _, exitErr := c.execExitCode(probeCtx, execID)
+	if probe.err != nil || exitErr != nil || code != 0 {
+		return "", fmt.Errorf("%w: the image exposes no /bin/sh", ErrDockerNoShell)
+	}
+	output := probe.output
+	shell := firstLine(output)
+	if !validContainerShell(shell) {
+		return "", fmt.Errorf("%w: the image exposes no supported shell", ErrDockerNoShell)
+	}
+	return shell, nil
+}
+
+// readProbeOutput reads at most limit bytes from a probe stream.
+func readProbeOutput(stream io.Reader, limit int) (string, error) {
+	var buffer bytes.Buffer
+	_, err := io.Copy(&buffer, io.LimitReader(stream, int64(limit)))
+	return buffer.String(), err
+}
+
+// firstLine returns the first non-empty output line.
+func firstLine(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if line = strings.TrimSpace(strings.TrimSuffix(line, "\r")); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// validContainerShell accepts the absolute path the probe printed. Anything
+// with whitespace or a non-absolute shape is refused so a weird image cannot
+// smuggle an argument into the exec command.
+func validContainerShell(shell string) bool {
+	if !strings.HasPrefix(shell, "/") || strings.ContainsAny(shell, " \t\r\n\x00") {
+		return false
+	}
+	return true
+}
+
+// displayContainerUser renders the container user for the opened event.
+func displayContainerUser(user string) string {
+	if user = strings.TrimSpace(user); user == "" {
+		return "root"
+	}
+	return user
+}
+
+// createExec creates one exec instance and returns its id.
+func (c *DockerClient) createExec(ctx context.Context, containerID string, command []string, user, workdir string, env []string, tty bool) (string, error) {
+	body := map[string]any{
+		"AttachStdin":  true,
+		"AttachStdout": true,
+		"AttachStderr": true,
+		"Tty":          tty,
+		"Cmd":          command,
+	}
+	if len(env) > 0 {
+		body["Env"] = env
+	}
+	if user != "" {
+		body["User"] = user
+	}
+	if workdir != "" {
+		body["WorkingDir"] = workdir
+	}
+	var out struct {
+		ID string `json:"Id"`
+	}
+	path := "/containers/" + url.PathEscape(containerID) + "/exec"
+	if err := c.doJSON(ctx, http.MethodPost, path, body, &out); err != nil {
+		return "", err
+	}
+	if out.ID == "" {
+		return "", errors.New("docker: exec create response missing Id")
+	}
+	return out.ID, nil
+}
+
+// startExec starts an exec and hijacks the connection. Docker answers 101 and
+// the response body is the duplex stdio stream.
+func (c *DockerClient) startExec(ctx context.Context, execID string, tty bool) (io.ReadWriteCloser, error) {
+	encoded, err := json.Marshal(map[string]any{"Detach": false, "Tty": tty})
+	if err != nil {
+		return nil, fmt.Errorf("docker: marshal exec start: %w", err)
+	}
+	path := "/exec/" + url.PathEscape(execID) + "/start"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("docker: %s %s: %w", http.MethodPost, path, err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "tcp")
+	request.Header.Set("Accept", "application/vnd.docker.raw-stream")
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, dockerTransportError(http.MethodPost, path, err)
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		return nil, statusError(http.MethodPost, path, response)
+	}
+	stream, ok := response.Body.(io.ReadWriteCloser)
+	if !ok {
+		_ = response.Body.Close()
+		return nil, errors.New("docker: exec start did not return a duplex stream")
+	}
+	return stream, nil
+}
+
+// execExitCode reads the exec's final status, waiting briefly for the daemon to
+// publish it after the attached stream ended. A missing exec (the container was
+// removed or replaced) reports -1 without an error: the stream has already
+// ended, and the terminal contract treats that as a normal close.
+func (c *DockerClient) execExitCode(ctx context.Context, execID string) (int32, string, error) {
+	if strings.TrimSpace(execID) == "" {
+		return -1, "", errors.New("docker: exec id is required")
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, execExitTimeout)
+	defer cancel()
+	path := "/exec/" + url.PathEscape(execID) + "/json"
+	for {
+		var out struct {
+			ExitCode int32 `json:"ExitCode"`
+			Running  bool  `json:"Running"`
+		}
+		err := c.doJSON(waitCtx, http.MethodGet, path, nil, &out)
+		if err != nil {
+			if errors.Is(err, ErrDockerNotFound) {
+				return -1, "", nil
+			}
+			return -1, "", err
+		}
+		if !out.Running {
+			return out.ExitCode, "", nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return -1, "", nil
+		case <-time.After(execExitPoll):
+		}
+	}
+}
+
+// dockerExecSession is one attached exec. It owns the hijacked connection.
+type dockerExecSession struct {
+	client *DockerClient
+	id     string
+	stream io.ReadWriteCloser
+	shell  string
+	user   string
+	ctx    context.Context
+
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// Read reads the exec process's TTY output.
+func (s *dockerExecSession) Read(p []byte) (int, error) { return s.stream.Read(p) }
+
+// Write sends bytes to the exec process's stdin.
+func (s *dockerExecSession) Write(p []byte) (int, error) { return s.stream.Write(p) }
+
+// Close releases the attachment. It never stops the application container.
+func (s *dockerExecSession) Close() error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.stream.Close()
+	})
+	return s.closeErr
+}
+
+// Resize applies a new TTY window size through the Docker exec resize endpoint.
+func (s *dockerExecSession) Resize(ctx context.Context, cols, rows uint16) error {
+	if s.client == nil || s.id == "" {
+		return errors.New("docker: exec session is not attached")
+	}
+	if cols == 0 || rows == 0 {
+		return errors.New("docker: exec dimensions must be positive")
+	}
+	query := url.Values{}
+	query.Set("w", strconv.FormatUint(uint64(cols), 10))
+	query.Set("h", strconv.FormatUint(uint64(rows), 10))
+	callCtx, cancel := context.WithTimeout(ctx, execResizeTimeout)
+	defer cancel()
+	return s.client.doJSON(callCtx, http.MethodPost,
+		"/exec/"+url.PathEscape(s.id)+"/resize?"+query.Encode(), nil, nil)
+}
+
+// ExitCode waits for the exec's final status.
+func (s *dockerExecSession) ExitCode(ctx context.Context) (int32, string, error) {
+	if s.client == nil || s.id == "" {
+		return -1, "", errors.New("docker: exec session is not attached")
+	}
+	return s.client.execExitCode(ctx, s.id)
+}
+
+// Shell reports the shell executable the agent chose.
+func (s *dockerExecSession) Shell() string { return s.shell }
+
+// User reports the container user the exec runs as.
+func (s *dockerExecSession) User() string { return s.user }
 
 // doJSON issues a request, optionally encoding body as JSON, and decodes a JSON
 // response into out when out is non-nil.

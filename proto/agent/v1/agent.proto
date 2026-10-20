@@ -1159,14 +1159,16 @@ message ComposePsResponse {
 }
 
 // TerminalService runs on the node agent. The control plane dials it to open a
-// host PTY and stream interactive bytes over the existing mTLS channel.
+// host PTY or an interactive container exec and stream bytes over the existing
+// mTLS channel.
 //
 // The RPC is one bounded bidirectional stream whose first client message must
 // be TerminalOpen; every other message is input, resize or close. Output and
 // the final exit travel back on the same stream. There is no session id in the
 // protocol: the stream *is* the session, so a dropped stream always tears the
-// PTY down and a reconnect can never resume (or replay input into) the old
-// shell. The control plane opens a new stream only for a new session.
+// PTY (or the exec attachment) down and a reconnect can never resume (or
+// replay input into) the old shell. The control plane opens a new stream only
+// for a new session.
 //
 // Trust boundary: host shell access is a platform-operator capability. The
 // agent confines the initial working directory to a FileService root with the
@@ -1204,23 +1206,37 @@ message TerminalRequest {
 message TerminalOpen {
   // target selects what the PTY runs in. "host" (or empty, for compatibility
   // with a caller that omits it) runs a host shell as the agent's service
-  // identity. Container targets are added by a later package and answer
-  // InvalidArgument on an agent that does not implement them, never a silent
-  // fallback to the host.
+  // identity. "container" runs an interactive exec in container_id, attached
+  // over the same stream and bounded by the same lifecycle. Any other target
+  // answers InvalidArgument; an agent that predates a target never silently
+  // falls back to the host.
   string target = 1;
   // root is the FileService root name the initial cwd is resolved under. The
   // agent resolves it against its own allow-list; an unknown root is refused.
+  // It is only used by the host target.
   string root = 2;
   // cwd is the initial working directory relative to root. Empty or "." means
   // the root itself. It must be an existing directory that resolves inside the
   // root: absolute paths, ".." segments and symlink escapes are refused. The
   // agent sets it directly on the child process, never through a shell
-  // command, so no quoting or interpolation is involved.
+  // command, so no quoting or interpolation is involved. It is only used by
+  // the host target.
   string cwd = 3;
   // cols and rows are the initial PTY dimensions. They are bounded by the
   // agent and a zero or out-of-range value is refused.
   uint32 cols = 4;
   uint32 rows = 5;
+  // container_id is the Docker container the container target runs in. The
+  // control plane resolves it server-side from the application's running
+  // deployment and never accepts it from a browser unvalidated. The agent
+  // verifies the container still exists and is running before starting the
+  // exec; the call never falls back to another container or to the host.
+  string container_id = 6;
+  // shell optionally names the shell inside the container. Empty lets the
+  // agent pick the first supported shell (/bin/bash, /bin/sh, /bin/ash) and
+  // report the choice in TerminalOpened.shell. An image without any of them
+  // answers FailedPrecondition instead of starting a broken terminal.
+  string shell = 7;
 }
 
 // TerminalResize changes the PTY window size.
@@ -1258,8 +1274,9 @@ message TerminalOpened {
   // cols and rows are the dimensions the PTY actually has.
   uint32 cols = 2;
   uint32 rows = 3;
-  // service_user is the OS user the shell runs as (the agent's service
-  // identity), so the UI can state the privilege boundary.
+  // service_user is the user the shell runs as: the agent's OS identity for
+  // a host shell, or the container's configured user ("root" when unset) for
+  // a container exec. The UI states the privilege boundary from it.
   string service_user = 4;
 }
 

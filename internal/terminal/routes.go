@@ -57,10 +57,13 @@ type Marker struct {
 //     error is retried, failing closed only after several consecutive errors.
 //
 // Authorize must refuse a token that carries no session id: without a sid there
-// is no lineage a logout could revoke.
+// is no lineage a logout could revoke. target tells the authorizer which
+// capability the session needs: a host authorizer must refuse a container
+// target and an application authorizer must refuse a host target, so the two
+// permissions never imply each other.
 type Authorizer interface {
-	Authorize(ctx context.Context, claims *auth.Claims) (Marker, error)
-	Revalidate(ctx context.Context, claims *auth.Claims, marker Marker) (bool, error)
+	Authorize(ctx context.Context, claims *auth.Claims, target Target) (Marker, error)
+	Revalidate(ctx context.Context, claims *auth.Claims, marker Marker, target Target) (bool, error)
 }
 
 // Revalidation and liveness defaults. They are fields on the handler (not
@@ -134,8 +137,59 @@ func Mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Se
 
 // mount is Mount with test-only timer overrides.
 func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) {
-	if svc == nil {
+	h := newHandler(svc, verifier, authorizer, userIDFrom, logger, options)
+	if h == nil {
 		return
+	}
+	r.Group(func(protected chi.Router) {
+		protected.Use(authMiddleware)
+		protected.Post("/v1/servers/{id}/terminal/sessions", h.create)
+		protected.Delete("/v1/servers/{id}/terminal/sessions/{sessionID}", h.close)
+	})
+	r.Get("/v1/servers/{id}/terminal/sessions/{sessionID}/ws", h.attach)
+}
+
+// MountApplications registers the application container terminal routes on the
+// /api router. They are separate from the host routes so a host authorizer can
+// never authorize a container stream and an application write role never grants
+// a host shell:
+//
+//	GET    /v1/applications/{id}/terminal/targets
+//	POST   /v1/applications/{id}/terminal/sessions
+//	DELETE /v1/applications/{id}/terminal/sessions/{sessionID}
+//	GET    /v1/applications/{id}/terminal/sessions/{sessionID}/ws
+//
+// The control routes run behind the application auth chain (authentication,
+// team scope, the team write gate). The WebSocket route authenticates in-band
+// exactly like the host route and re-checks application write access on every
+// revalidation tick.
+func MountApplications(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger) {
+	mountApplications(r, authMiddleware, svc, verifier, authorizer, userIDFrom, logger, handlerOptions{})
+}
+
+// mountApplications is MountApplications with test-only timer overrides.
+func mountApplications(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) {
+	if svc == nil || svc.Applications() == nil {
+		return
+	}
+	h := newHandler(svc, verifier, authorizer, userIDFrom, logger, options)
+	if h == nil {
+		return
+	}
+	r.Group(func(protected chi.Router) {
+		protected.Use(authMiddleware)
+		protected.Get("/v1/applications/{id}/terminal/targets", h.listTargets)
+		protected.Post("/v1/applications/{id}/terminal/sessions", h.createApplication)
+		protected.Delete("/v1/applications/{id}/terminal/sessions/{sessionID}", h.closeApplication)
+	})
+	r.Get("/v1/applications/{id}/terminal/sessions/{sessionID}/ws", h.attachApplication)
+}
+
+// newHandler builds a handler and applies the liveness defaults. It returns nil
+// when the service is missing.
+func newHandler(svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) *handler {
+	if svc == nil {
+		return nil
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -167,13 +221,7 @@ func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Se
 	if h.writeTimeout <= 0 {
 		h.writeTimeout = defaultWriteTimeout
 	}
-
-	r.Group(func(protected chi.Router) {
-		protected.Use(authMiddleware)
-		protected.Post("/v1/servers/{id}/terminal/sessions", h.create)
-		protected.Delete("/v1/servers/{id}/terminal/sessions/{sessionID}", h.close)
-	})
-	r.Get("/v1/servers/{id}/terminal/sessions/{sessionID}/ws", h.attach)
+	return h
 }
 
 // createResponse tells the client how to attach.
@@ -181,13 +229,65 @@ type createResponse struct {
 	ID            string    `json:"id"`
 	ServerID      string    `json:"server_id"`
 	Target        string    `json:"target"`
-	Root          string    `json:"root"`
-	Cwd           string    `json:"cwd"`
+	Root          string    `json:"root,omitempty"`
+	Cwd           string    `json:"cwd,omitempty"`
 	Cols          uint32    `json:"cols"`
 	Rows          uint32    `json:"rows"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	WebSocketPath string    `json:"websocket_path"`
 	Subprotocol   string    `json:"subprotocol"`
+	// Container target fields. The label is what the UI shows so the operator
+	// knows exactly which service/container the shell belongs to.
+	ApplicationID string `json:"application_id,omitempty"`
+	Service       string `json:"service,omitempty"`
+	ContainerID   string `json:"container_id,omitempty"`
+	ContainerName string `json:"container_name,omitempty"`
+	TargetLabel   string `json:"target_label,omitempty"`
+}
+
+// newCreateResponse renders one session for the create endpoint.
+func newCreateResponse(session *Session, websocketPath string) createResponse {
+	response := createResponse{
+		ID:            session.ID.String(),
+		ServerID:      session.ServerID.String(),
+		Target:        session.Target,
+		Root:          session.Root,
+		Cwd:           session.Cwd,
+		Cols:          session.Cols,
+		Rows:          session.Rows,
+		ExpiresAt:     session.ExpiresAt,
+		WebSocketPath: websocketPath,
+		Subprotocol:   Subprotocol,
+	}
+	if session.Target == TargetContainer {
+		response.ApplicationID = session.ApplicationID.String()
+		response.Service = session.Service
+		response.ContainerID = session.ContainerID
+		response.ContainerName = session.ContainerName
+		response.TargetLabel = session.TargetLabel
+	}
+	return response
+}
+
+// containerTargetResponse is one row of the target discovery response.
+type containerTargetResponse struct {
+	Service     string `json:"service"`
+	ContainerID string `json:"container_id"`
+	Name        string `json:"name"`
+	Image       string `json:"image"`
+	State       string `json:"state"`
+	Replica     int    `json:"replica"`
+	Label       string `json:"label"`
+}
+
+// targetsResponse is the discovery response: the application's running
+// containers with a deterministic visible selection.
+type targetsResponse struct {
+	ApplicationID   string                    `json:"application_id"`
+	ApplicationName string                    `json:"application_name"`
+	ServerID        string                    `json:"server_id"`
+	SourceType      string                    `json:"source_type"`
+	Containers      []containerTargetResponse `json:"containers"`
 }
 
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
@@ -213,18 +313,95 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, createResponse{
-		ID:            session.ID.String(),
-		ServerID:      session.ServerID.String(),
-		Target:        session.Target,
-		Root:          session.Root,
-		Cwd:           session.Cwd,
-		Cols:          session.Cols,
-		Rows:          session.Rows,
-		ExpiresAt:     session.ExpiresAt,
-		WebSocketPath: "/api/v1/servers/" + session.ServerID.String() + "/terminal/sessions/" + session.ID.String() + "/ws",
-		Subprotocol:   Subprotocol,
-	})
+	writeJSON(w, http.StatusCreated, newCreateResponse(session,
+		"/api/v1/servers/"+session.ServerID.String()+"/terminal/sessions/"+session.ID.String()+"/ws"))
+}
+
+// listTargets serves GET /v1/applications/{id}/terminal/targets.
+func (h *handler) listTargets(w http.ResponseWriter, r *http.Request) {
+	appID, ok := applicationParam(w, r)
+	if !ok {
+		return
+	}
+	userID, ok := h.userIDFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+	set, err := h.svc.Applications().ListContainers(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	response := targetsResponse{
+		ApplicationID:   set.ApplicationID.String(),
+		ApplicationName: set.ApplicationName,
+		ServerID:        set.ServerID.String(),
+		SourceType:      set.SourceType,
+		Containers:      make([]containerTargetResponse, 0, len(set.Containers)),
+	}
+	for _, container := range set.Containers {
+		response.Containers = append(response.Containers, containerTargetResponse{
+			Service:     container.Service,
+			ContainerID: container.ContainerID,
+			Name:        container.Name,
+			Image:       container.Image,
+			State:       container.State,
+			Replica:     container.Replica,
+			Label:       container.Label,
+		})
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// createApplication serves POST /v1/applications/{id}/terminal/sessions.
+func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
+	appID, ok := applicationParam(w, r)
+	if !ok {
+		return
+	}
+	userID, ok := h.userIDFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+	var req AppCreateRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
+		return
+	}
+	session, err := h.svc.CreateApplication(r.Context(), userID, appID, req)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, newCreateResponse(session,
+		"/api/v1/applications/"+appID.String()+"/terminal/sessions/"+session.ID.String()+"/ws"))
+}
+
+// closeApplication serves DELETE /v1/applications/{id}/terminal/sessions/{id}.
+func (h *handler) closeApplication(w http.ResponseWriter, r *http.Request) {
+	appID, ok := applicationParam(w, r)
+	if !ok {
+		return
+	}
+	sessionID, ok := sessionParam(w, r)
+	if !ok {
+		return
+	}
+	userID, ok := h.userIDFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+	if err := h.svc.CloseApplication(r.Context(), userID, appID, sessionID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handler) close(w http.ResponseWriter, r *http.Request) {
@@ -271,8 +448,9 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, apiError{Message: "platform operator access is required"})
 		return
 	}
+	target := Target{Kind: TargetHost, ServerID: serverID}
 	authCtx, authCancel := context.WithTimeout(r.Context(), h.revalidateTimeout)
-	marker, authErr := h.authorizer.Authorize(authCtx, claims)
+	marker, authErr := h.authorizer.Authorize(authCtx, claims, target)
 	authCancel()
 	if authErr != nil {
 		h.logger.Warn("terminal: authorization refused", "error", authErr)
@@ -319,14 +497,89 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 				_ = conn.Close()
 				return
 			}
-			h.serve(conn, session, claims, marker)
+			h.serve(conn, session, claims, marker, target)
+		},
+	}
+	server.ServeHTTP(w, r)
+}
+
+// attachApplication authenticates, authorizes application write access and
+// upgrades to the container exec stream.
+func (h *handler) attachApplication(w http.ResponseWriter, r *http.Request) {
+	appID, ok := applicationParam(w, r)
+	if !ok {
+		return
+	}
+	sessionID, ok := sessionParam(w, r)
+	if !ok {
+		return
+	}
+	if !originAllowed(r) {
+		writeJSON(w, http.StatusForbidden, apiError{Message: "origin is not allowed"})
+		return
+	}
+	claims, userID, err := h.authenticate(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+	// Ownership first: another user's session (or an application mismatch) is
+	// indistinguishable from a missing one.
+	pending, err := h.svc.ValidateApplication(r.Context(), userID, appID, sessionID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	target := TargetFor(pending)
+	if h.authorizer == nil {
+		writeJSON(w, http.StatusForbidden, apiError{Message: "application write access is required"})
+		return
+	}
+	authCtx, authCancel := context.WithTimeout(r.Context(), h.revalidateTimeout)
+	marker, authErr := h.authorizer.Authorize(authCtx, claims, target)
+	authCancel()
+	if authErr != nil {
+		h.logger.Warn("terminal: application authorization refused", "error", authErr)
+		writeJSON(w, http.StatusForbidden, apiError{Message: "application write access is required"})
+		return
+	}
+
+	var session *Session
+	server := websocket.Server{
+		Handshake: func(config *websocket.Config, req *http.Request) error {
+			offered := false
+			for _, header := range req.Header.Values("Sec-WebSocket-Protocol") {
+				for _, protocol := range strings.Split(header, ",") {
+					if strings.TrimSpace(protocol) == Subprotocol {
+						offered = true
+					}
+				}
+			}
+			if offered {
+				config.Protocol = []string{Subprotocol}
+			} else {
+				config.Protocol = nil
+			}
+			attached, err := h.svc.AttachApplication(req.Context(), userID, appID, sessionID)
+			if err != nil {
+				return err
+			}
+			session = attached
+			return nil
+		},
+		Handler: func(conn *websocket.Conn) {
+			if session == nil {
+				_ = conn.Close()
+				return
+			}
+			h.serve(conn, session, claims, marker, target)
 		},
 	}
 	server.ServeHTTP(w, r)
 }
 
 // serve relays one WebSocket to one agent terminal stream.
-func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Claims, marker Marker) {
+func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Claims, marker Marker, target Target) {
 	defer func() { _ = conn.Close() }()
 	defer h.svc.Release(session.ID)
 
@@ -338,7 +591,7 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 	// entry end the shell within revalidatePeriod. The handshake token's own
 	// expiry is deliberately not consulted here: the browser cannot present a
 	// refreshed token on an open socket, and the session contract is 8h.
-	go h.revalidate(ctx, cancel, conn, session, claims, marker)
+	go h.revalidate(ctx, cancel, conn, session, claims, marker, target)
 
 	// A session expiry (or an explicit DELETE) cancels the relay, which closes
 	// the agent stream and tears the PTY down.
@@ -382,33 +635,39 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 
 	stream, err := client.OpenTerminal(ctx)
 	if err != nil {
-		h.fail(conn, session, relayError(err))
+		h.fail(conn, session, relayError(err, target))
 		return
 	}
 	defer func() { _ = stream.CloseSend() }()
 
 	if err := stream.Send(&agentv1.TerminalRequest{
 		Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
-			Target: session.Target,
-			Root:   session.Root,
-			Cwd:    session.Cwd,
-			Cols:   session.Cols,
-			Rows:   session.Rows,
+			Target:      session.Target,
+			Root:        session.Root,
+			Cwd:         session.Cwd,
+			Cols:        session.Cols,
+			Rows:        session.Rows,
+			ContainerId: session.ContainerID,
 		}},
 	}); err != nil {
-		h.fail(conn, session, relayError(err))
+		h.fail(conn, session, relayError(err, target))
 		return
 	}
 	opened, err := recvOpened(ctx, stream)
 	if err != nil {
-		h.fail(conn, session, relayError(err))
+		h.fail(conn, session, relayError(err, target))
 		return
 	}
 	payload, _ := json.Marshal(openedEvent{
-		Shell:       opened.GetShell(),
-		Cols:        opened.GetCols(),
-		Rows:        opened.GetRows(),
-		ServiceUser: opened.GetServiceUser(),
+		Shell:         opened.GetShell(),
+		Cols:          opened.GetCols(),
+		Rows:          opened.GetRows(),
+		ServiceUser:   opened.GetServiceUser(),
+		Target:        session.Target,
+		Service:       session.Service,
+		ContainerID:   session.ContainerID,
+		ContainerName: session.ContainerName,
+		TargetLabel:   session.TargetLabel,
 	})
 	if err := h.sendFrame(conn, opOpened, payload); err != nil {
 		return
@@ -453,7 +712,7 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 // expiry must not bound an 8-hour shell. A transient lookup error keeps the
 // shell and is retried; after revalidateMaxErrors consecutive failures the
 // shell fails closed.
-func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, session *Session, claims *auth.Claims, marker Marker) {
+func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, session *Session, claims *auth.Claims, marker Marker, target Target) {
 	if claims == nil || h.authorizer == nil {
 		return
 	}
@@ -469,7 +728,7 @@ func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, con
 			return
 		case <-ticker.C:
 			checkCtx, checkCancel := context.WithTimeout(ctx, h.revalidateTimeout)
-			ok, err := h.authorizer.Revalidate(checkCtx, claims, marker)
+			ok, err := h.authorizer.Revalidate(checkCtx, claims, marker, target)
 			checkCancel()
 
 			if err != nil {
@@ -778,6 +1037,20 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many terminal sessions"})
 	case errors.Is(err, ErrUnsupportedTarget):
 		writeJSON(w, http.StatusNotImplemented, apiError{Message: "the terminal target is not supported"})
+	case errors.Is(err, ErrForbidden):
+		writeJSON(w, http.StatusForbidden, apiError{Message: "application write access is required"})
+	case errors.Is(err, ErrNoRunningDeployment):
+		writeJSON(w, http.StatusConflict, apiError{Message: "the application has no running deployment"})
+	case errors.Is(err, ErrContainerNotFound):
+		writeJSON(w, http.StatusNotFound, apiError{Message: "the selected container is no longer available; refresh the targets"})
+	case errors.Is(err, ErrContainerNotRunning):
+		writeJSON(w, http.StatusConflict, apiError{Message: "the selected container is not running; start the application first"})
+	case errors.Is(err, ErrDeployInProgress):
+		writeJSON(w, http.StatusConflict, apiError{Message: "a deployment is in progress; try again when it finishes"})
+	case errors.Is(err, ErrApplicationsDisabled):
+		writeJSON(w, http.StatusServiceUnavailable, apiError{Message: "application terminals are disabled"})
+	case errors.Is(err, ErrAgentUnavailable):
+		writeJSON(w, http.StatusBadGateway, apiError{Message: "the node agent is unavailable"})
 	case errors.Is(err, ErrInvalid):
 		writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})
 	default:
@@ -787,26 +1060,48 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 }
 
 // relayError is the bounded user-facing reason for a failed agent stream. It
-// never includes a host path or the agent's raw message: the cwd-invalid case
-// is recognised by the agent's stable "terminal: invalid working directory"
-// prefix and reported as a fixed phrase.
-func relayError(err error) string {
+// never includes a host path or the agent's raw message: the cwd-invalid and
+// container-precondition cases are recognised by the agent's stable prefixes
+// and reported as fixed phrases.
+func relayError(err error, target Target) string {
+	container := target.Kind == TargetContainer
+	message := status.Convert(err).Message()
 	switch status.Code(err) {
 	case codes.Unimplemented:
 		return "the node agent does not support terminal sessions"
 	case codes.ResourceExhausted:
 		return "the node is running the maximum number of terminal sessions"
 	case codes.NotFound:
+		if container || strings.HasPrefix(message, "terminal: the container") {
+			return "the container no longer exists; redeploy the application"
+		}
 		return "the working directory no longer exists"
 	case codes.PermissionDenied:
 		return "the working directory is not readable"
 	case codes.FailedPrecondition:
-		return "the node cannot start a shell"
+		switch {
+		case strings.HasPrefix(message, "terminal: the container is not running"):
+			return "the container is not running; start the application first"
+		case strings.HasPrefix(message, "terminal: the container has no supported shell"):
+			return "the container has no supported shell"
+		case strings.HasPrefix(message, "terminal: container sessions are not available"):
+			return "this node agent does not support container terminals"
+		default:
+			return "the node cannot start a shell"
+		}
 	case codes.InvalidArgument:
-		if strings.HasPrefix(status.Convert(err).Message(), "terminal: invalid working directory") {
+		if strings.HasPrefix(message, "terminal: invalid working directory") {
 			return "invalid working directory"
 		}
+		if strings.HasPrefix(message, "terminal: a valid container") {
+			return "the container target is invalid"
+		}
 		return "the terminal request was rejected"
+	case codes.Unavailable:
+		if container {
+			return "the node agent or Docker daemon is unavailable"
+		}
+		return "the node agent is unavailable"
 	case codes.DeadlineExceeded:
 		return "the node did not start the shell in time"
 	default:
@@ -829,6 +1124,15 @@ func serverParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid server id"})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func applicationParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid application id"})
 		return uuid.Nil, false
 	}
 	return id, true

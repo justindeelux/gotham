@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	// terminalTargetHost is the only target this package implements. A later
-	// package adds container targets; anything else is refused rather than
-	// silently falling back to the host.
-	terminalTargetHost = "host"
+	// terminalTargetHost runs a host shell. terminalTargetContainer runs an
+	// interactive exec inside a resolved application container. Anything else
+	// is refused rather than silently falling back to the host.
+	terminalTargetHost      = "host"
+	terminalTargetContainer = "container"
 
 	// terminalDefaultMaxSessions bounds concurrent host shells on one node.
 	// A host PTY is an operator capability, not a per-user fan-out primitive.
@@ -64,18 +65,28 @@ type TerminalRoots interface {
 	ResolveShellDir(rootName, rel string) (string, error)
 }
 
+// ContainerExec runs an interactive exec inside one container. *DockerClient
+// implements it over the Docker Engine HTTP client; tests substitute a fake.
+type ContainerExec interface {
+	Exec(ctx context.Context, containerID string, opts ExecOptions) (ExecSession, error)
+}
+
 // TerminalConfig configures a TerminalServer.
 type TerminalConfig struct {
 	// Logger receives session lifecycle lines. It never receives terminal
 	// bytes or input.
 	Logger *slog.Logger
-	// Roots resolves the initial working directory. It is required; without a
-	// file service there is no root policy to confine cwd to, so an open fails
-	// with FailedPrecondition.
+	// Roots resolves the initial working directory for host targets. It is
+	// required for host sessions; without a file service there is no root
+	// policy to confine cwd to, so a host open fails with FailedPrecondition.
+	// Container targets do not use it.
 	Roots TerminalRoots
-	// Shell is the absolute shell path to run. Empty selects the first usable
-	// candidate from $SHELL, /bin/bash and /bin/sh.
+	// Shell is the absolute shell path to run for host targets. Empty selects
+	// the first usable candidate from $SHELL, /bin/bash and /bin/sh.
 	Shell string
+	// Containers runs container targets. nil makes them fail with
+	// FailedPrecondition instead of falling back to a host shell.
+	Containers ContainerExec
 	// MaxSessions bounds concurrent sessions; 0 uses the default.
 	MaxSessions int
 	// MaxInputBytes bounds one input message; 0 uses the default.
@@ -98,17 +109,30 @@ type TerminalServer struct {
 	maxInputBytes int
 	maxDuration   time.Duration
 	sessions      chan struct{}
+	containers    ContainerExec
 
 	// start is a seam for tests that must not spawn a real shell.
-	start func(terminalStart) (*terminalSession, error)
+	start func(terminalStart) (terminalProcess, error)
 }
 
 // terminalStart is the validated input to a session.
 type terminalStart struct {
-	Shell string
-	Dir   string
-	Cols  uint16
-	Rows  uint16
+	Target      string
+	Shell       string
+	Dir         string
+	ContainerID string
+	Cols        uint16
+	Rows        uint16
+}
+
+// terminalProcess is the small surface OpenTerminal needs from either a host
+// PTY session or a container exec session.
+type terminalProcess interface {
+	read(p []byte) (int, error)
+	write(data []byte) error
+	resize(cols, rows uint16) error
+	terminate()
+	wait() (int32, string)
 }
 
 // NewTerminalServer returns a TerminalService implementation.
@@ -133,6 +157,7 @@ func NewTerminalServer(cfg TerminalConfig) *TerminalServer {
 		log:           log,
 		roots:         cfg.Roots,
 		shell:         cfg.Shell,
+		containers:    cfg.Containers,
 		maxInputBytes: maxInput,
 		maxDuration:   maxDuration,
 		sessions:      make(chan struct{}, maxSessions),
@@ -156,9 +181,6 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 	if open == nil {
 		return status.Error(codes.InvalidArgument, "terminal: first message must be open")
 	}
-	if s.roots == nil {
-		return status.Error(codes.FailedPrecondition, "terminal: the node has no file roots to resolve a working directory")
-	}
 	spec, err := s.prepare(open)
 	if err != nil {
 		return err
@@ -171,19 +193,25 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 		return status.Errorf(codes.ResourceExhausted, "terminal: the node already runs %d sessions", cap(s.sessions))
 	}
 
-	session, err := s.start(spec)
+	var session terminalProcess
+	if spec.Target == terminalTargetContainer {
+		session, err = s.startContainer(ctx, spec)
+	} else {
+		session, err = s.start(spec)
+	}
 	if err != nil {
-		s.log.Warn("terminal: start shell", "error", err)
-		return status.Error(codes.Internal, "terminal: could not start the shell")
+		s.log.Warn("terminal: start session", "target", spec.Target, "error", err)
+		return terminalStartError(err)
 	}
 	defer session.terminate()
 
+	shell, user := terminalSessionIdentity(session, spec)
 	if err := stream.Send(&agentv1.TerminalResponse{
 		Event: &agentv1.TerminalResponse_Opened{Opened: &agentv1.TerminalOpened{
-			Shell:       spec.Shell,
+			Shell:       shell,
 			Cols:        uint32(spec.Cols),
 			Rows:        uint32(spec.Rows),
-			ServiceUser: serviceUser(),
+			ServiceUser: user,
 		}},
 	}); err != nil {
 		return err
@@ -307,12 +335,23 @@ func receiveTerminal(stream grpc.BidiStreamingServer[agentv1.TerminalRequest, ag
 	}
 }
 
-// prepare validates an open request and resolves its working directory.
+// prepare validates an open request and resolves its target.
 func (s *TerminalServer) prepare(open *agentv1.TerminalOpen) (terminalStart, error) {
-	switch strings.TrimSpace(open.GetTarget()) {
+	switch target := strings.TrimSpace(open.GetTarget()); target {
 	case "", terminalTargetHost:
+		return s.prepareHost(open)
+	case terminalTargetContainer:
+		return s.prepareContainer(open)
 	default:
-		return terminalStart{}, status.Errorf(codes.InvalidArgument, "terminal: unsupported target %q", open.GetTarget())
+		return terminalStart{}, status.Errorf(codes.InvalidArgument, "terminal: unsupported target %q", target)
+	}
+}
+
+// prepareHost validates a host shell open and resolves its initial directory.
+func (s *TerminalServer) prepareHost(open *agentv1.TerminalOpen) (terminalStart, error) {
+	if s.roots == nil {
+		return terminalStart{}, status.Error(codes.FailedPrecondition,
+			"terminal: the node has no file roots to resolve a working directory")
 	}
 	if len(open.GetRoot()) == 0 || len(open.GetRoot()) > terminalMaxRootBytes {
 		return terminalStart{}, status.Error(codes.InvalidArgument, "terminal: a bounded root name is required")
@@ -333,7 +372,53 @@ func (s *TerminalServer) prepare(open *agentv1.TerminalOpen) (terminalStart, err
 		s.log.Error("terminal: no usable shell", "configured", s.shell, "error", err)
 		return terminalStart{}, status.Error(codes.FailedPrecondition, "terminal: no usable shell is installed on the node")
 	}
-	return terminalStart{Shell: shell, Dir: dir, Cols: cols, Rows: rows}, nil
+	return terminalStart{Target: terminalTargetHost, Shell: shell, Dir: dir, Cols: cols, Rows: rows}, nil
+}
+
+// prepareContainer validates a container exec open. The container id is
+// resolved by the control plane from the application's running deployment; the
+// agent still verifies the container exists and is running before starting.
+func (s *TerminalServer) prepareContainer(open *agentv1.TerminalOpen) (terminalStart, error) {
+	containerID := strings.TrimSpace(open.GetContainerId())
+	if !validContainerID(containerID) {
+		return terminalStart{}, status.Error(codes.InvalidArgument, "terminal: a valid container id is required")
+	}
+	if s.containers == nil {
+		return terminalStart{}, status.Error(codes.FailedPrecondition,
+			"terminal: container sessions are not available on this node")
+	}
+	if strings.TrimSpace(open.GetRoot()) != "" || strings.TrimSpace(open.GetCwd()) != "" {
+		return terminalStart{}, status.Error(codes.InvalidArgument,
+			"terminal: container targets do not take a file root or working directory")
+	}
+	cols, rows, err := terminalDimensions(open.GetCols(), open.GetRows())
+	if err != nil {
+		return terminalStart{}, err
+	}
+	shell := strings.TrimSpace(open.GetShell())
+	if shell != "" && !validContainerShell(shell) {
+		return terminalStart{}, status.Error(codes.InvalidArgument, "terminal: invalid container shell path")
+	}
+	return terminalStart{Target: terminalTargetContainer, ContainerID: containerID, Shell: shell, Cols: cols, Rows: rows}, nil
+}
+
+// validContainerID bounds the id the control plane resolved. Docker ids are
+// hexadecimal; the extra separators keep the check forward-compatible without
+// accepting whitespace or shell metacharacters.
+func validContainerID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '_', c == '.', c == ':', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // terminalDimensions validates a PTY size.
@@ -380,11 +465,11 @@ func terminalStreamError(action string, err error) error {
 func (s *TerminalServer) pumpOutput(
 	ctx context.Context,
 	stream grpc.BidiStreamingServer[agentv1.TerminalRequest, agentv1.TerminalResponse],
-	session *terminalSession,
+	session terminalProcess,
 ) error {
 	buf := make([]byte, terminalOutputChunk)
 	for {
-		n, err := session.pty.Read(buf)
+		n, err := session.read(buf)
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
@@ -414,7 +499,7 @@ func (s *TerminalServer) pumpOutput(
 }
 
 // startSession starts the configured shell on a new PTY.
-func (s *TerminalServer) startSession(spec terminalStart) (*terminalSession, error) {
+func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, error) {
 	cmd := exec.Command(spec.Shell) // #nosec G204 -- the shell is chosen by the node, not the caller.
 	cmd.Dir = spec.Dir
 	cmd.Env = terminalEnv()
@@ -423,6 +508,114 @@ func (s *TerminalServer) startSession(spec terminalStart) (*terminalSession, err
 		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
 	}
 	return newTerminalSession(cmd, master), nil
+}
+
+// startContainer opens an interactive exec in the resolved container.
+func (s *TerminalServer) startContainer(ctx context.Context, spec terminalStart) (terminalProcess, error) {
+	if s.containers == nil {
+		return nil, errors.New("container exec is not configured")
+	}
+	opts := ExecOptions{Cols: spec.Cols, Rows: spec.Rows}
+	if spec.Shell != "" {
+		opts.Cmd = []string{spec.Shell}
+	}
+	stream, err := s.containers.Exec(ctx, spec.ContainerID, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &containerTerminalSession{stream: stream, ctx: ctx, done: make(chan struct{})}, nil
+}
+
+// containerTerminalSession adapts one Docker exec to terminalProcess.
+type containerTerminalSession struct {
+	stream ExecSession
+	ctx    context.Context
+
+	termOnce sync.Once
+	waitOnce sync.Once
+	code     int32
+	signal   string
+	done     chan struct{}
+}
+
+// read reads the exec process's output.
+func (s *containerTerminalSession) read(p []byte) (int, error) { return s.stream.Read(p) }
+
+// write sends input to the exec process.
+func (s *containerTerminalSession) write(data []byte) error {
+	_, err := s.stream.Write(data)
+	return err
+}
+
+// resize applies a new window size to the container TTY.
+func (s *containerTerminalSession) resize(cols, rows uint16) error {
+	return s.stream.Resize(s.ctx, cols, rows)
+}
+
+// terminate releases the exec attachment. The application container keeps
+// running: only the interactive process goes away.
+func (s *containerTerminalSession) terminate() {
+	s.termOnce.Do(func() {
+		_ = s.stream.Close()
+	})
+}
+
+// wait reports the exec process's exit status. The exit lookup runs on a
+// context detached from the stream so a canceled relay still reaps the status.
+func (s *containerTerminalSession) wait() (int32, string) {
+	s.waitOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), terminalStopWait)
+		defer cancel()
+		code, signal, err := s.stream.ExitCode(ctx)
+		if err != nil {
+			code, signal = -1, ""
+		}
+		s.code, s.signal = code, signal
+		close(s.done)
+	})
+	<-s.done
+	return s.code, s.signal
+}
+
+// Shell reports the shell executable the agent chose in the container.
+func (s *containerTerminalSession) Shell() string { return s.stream.Shell() }
+
+// User reports the container user the exec runs as.
+func (s *containerTerminalSession) User() string { return s.stream.User() }
+
+// terminalSessionIdentity reports the shell and the user shown in the opened
+// event for either target.
+func terminalSessionIdentity(session terminalProcess, spec terminalStart) (string, string) {
+	if identity, ok := session.(interface {
+		Shell() string
+		User() string
+	}); ok {
+		return identity.Shell(), identity.User()
+	}
+	if spec.Target == terminalTargetContainer {
+		return spec.Shell, displayContainerUser("")
+	}
+	return spec.Shell, serviceUser()
+}
+
+// terminalStartError maps a container exec failure onto a bounded gRPC status.
+// The prefixes are stable so the control plane can report an actionable reason
+// without echoing Docker's raw message.
+func terminalStartError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrDockerNotFound):
+		return status.Error(codes.NotFound, "terminal: the container no longer exists")
+	case errors.Is(err, ErrDockerContainerNotRunning):
+		return status.Error(codes.FailedPrecondition, "terminal: the container is not running")
+	case errors.Is(err, ErrDockerNoShell):
+		return status.Error(codes.FailedPrecondition, "terminal: the container has no supported shell")
+	case errors.Is(err, ErrDockerUnavailable):
+		return status.Error(codes.Unavailable, "terminal: the docker daemon is unavailable")
+	default:
+		return status.Error(codes.Internal, "terminal: could not start the session")
+	}
 }
 
 // resolveTerminalShell picks the shell the node runs. The configured value
@@ -528,6 +721,9 @@ func (s *terminalSession) terminate() {
 		go func() { _, _ = s.wait() }()
 	})
 }
+
+// read reads the PTY's output.
+func (s *terminalSession) read(p []byte) (int, error) { return s.pty.Read(p) }
 
 // write sends input to the PTY master with a bounded deadline so a shell that
 // stops reading cannot pin the handler.

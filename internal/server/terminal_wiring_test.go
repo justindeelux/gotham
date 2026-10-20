@@ -14,6 +14,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/servers"
+	"github.com/justindeelux/gotham/internal/terminal"
 )
 
 // stubServerRegistry satisfies the server registry for wiring tests. The
@@ -160,7 +161,7 @@ func TestTerminalAuthorizerSurvivesSessionRotation(t *testing.T) {
 	authorizer := terminalAuthorizer{auth: store, isPlatformAdminEmail: func(string) bool { return false }}
 	claims := authorizerClaims(userID, sessionID)
 
-	marker, err := authorizer.Authorize(context.Background(), claims)
+	marker, err := authorizer.Authorize(context.Background(), claims, hostTarget())
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestTerminalAuthorizerSurvivesSessionRotation(t *testing.T) {
 	// Refresh rotation revokes the handshake session and issues a new sid; the
 	// replacement keeps the sign-in created_at, so the shell stays authorized.
 	store.rotate(sessionID, replacementID)
-	ok, err := authorizer.Revalidate(context.Background(), claims, marker)
+	ok, err := authorizer.Revalidate(context.Background(), claims, marker, hostTarget())
 	if err != nil || !ok {
 		t.Fatalf("after rotation = (%v, %v), want (true, nil)", ok, err)
 	}
@@ -180,7 +181,7 @@ func TestTerminalAuthorizerSurvivesSessionRotation(t *testing.T) {
 	// once its own lineage is gone.
 	store.addSession(uuid.New(), signIn.Add(time.Hour))
 	store.logout(replacementID)
-	ok, err = authorizer.Revalidate(context.Background(), claims, marker)
+	ok, err = authorizer.Revalidate(context.Background(), claims, marker, hostTarget())
 	if err != nil || ok {
 		t.Fatalf("after logout = (%v, %v), want (false, nil)", ok, err)
 	}
@@ -191,23 +192,23 @@ func TestTerminalAuthorizerTransientErrors(t *testing.T) {
 	user := &auth.User{Email: "op@example.com", Role: "admin"}
 	store, authorizer, sessionID := newRotatingAuthorizer(t, user, time.Now().UTC())
 	claims := authorizerClaims(uuid.New(), sessionID)
-	marker, err := authorizer.Authorize(context.Background(), claims)
+	marker, err := authorizer.Authorize(context.Background(), claims, hostTarget())
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
 
 	store.setMeErr(errors.New("database is down"))
-	if ok, err := authorizer.Revalidate(context.Background(), claims, marker); err == nil || ok {
+	if ok, err := authorizer.Revalidate(context.Background(), claims, marker, hostTarget()); err == nil || ok {
 		t.Fatalf("transient Me error = (%v, %v), want (false, err)", ok, err)
 	}
 	store.setMeErr(auth.ErrUnauthorized)
-	if ok, err := authorizer.Revalidate(context.Background(), claims, marker); err != nil || ok {
+	if ok, err := authorizer.Revalidate(context.Background(), claims, marker, hostTarget()); err != nil || ok {
 		t.Fatalf("deleted account = (%v, %v), want (false, nil)", ok, err)
 	}
 	store.setMeErr(nil)
 
 	store.setListErr(errors.New("database is down"))
-	if ok, err := authorizer.Revalidate(context.Background(), claims, marker); err == nil || ok {
+	if ok, err := authorizer.Revalidate(context.Background(), claims, marker, hostTarget()); err == nil || ok {
 		t.Fatalf("transient ListSessions error = (%v, %v), want (false, err)", ok, err)
 	}
 }
@@ -220,7 +221,7 @@ func TestTerminalAuthorizerRefusesTokenWithoutSID(t *testing.T) {
 		Role:             "admin",
 		RegisteredClaims: jwt.RegisteredClaims{Subject: uuid.NewString()},
 	}
-	if _, err := authorizer.Authorize(context.Background(), claims); err == nil {
+	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err == nil {
 		t.Fatal("a token without a sid was authorized")
 	}
 }
@@ -229,11 +230,11 @@ func TestTerminalAuthorizerRejectsRevokedOrUnknownSession(t *testing.T) {
 	t.Setenv("PLATFORM_ADMINS", "")
 	store, authorizer, sessionID := newRotatingAuthorizer(t, &auth.User{Email: "op@example.com", Role: "admin"}, time.Now().UTC())
 	claims := authorizerClaims(uuid.New(), sessionID)
-	if _, err := authorizer.Authorize(context.Background(), claims); err != nil {
+	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
 	store.logout(sessionID)
-	if _, err := authorizer.Authorize(context.Background(), claims); err == nil {
+	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err == nil {
 		t.Fatal("a logged-out session was authorized")
 	}
 }
@@ -246,7 +247,7 @@ func TestTerminalAuthorizerUsesCurrentAccountRole(t *testing.T) {
 	demoted, err := (&Server{auth: &rotatingAuth{
 		user:     &auth.User{Email: "user@example.com", Role: "member"},
 		sessions: []auth.SessionInfo{{ID: mustUUID(demotedClaims.SessionID), CreatedAt: now}},
-	}}).terminalAuthorizer().Authorize(context.Background(), demotedClaims)
+	}}).terminalAuthorizer().Authorize(context.Background(), demotedClaims, hostTarget())
 	if err == nil {
 		t.Fatalf("demoted account authorized with marker %+v", demoted)
 	}
@@ -256,10 +257,12 @@ func TestTerminalAuthorizerUsesCurrentAccountRole(t *testing.T) {
 	if _, err := (&Server{auth: &rotatingAuth{
 		user:     &auth.User{Email: "user@example.com", Role: "admin"},
 		sessions: []auth.SessionInfo{{ID: mustUUID(promotedClaims.SessionID), CreatedAt: now}},
-	}}).terminalAuthorizer().Authorize(context.Background(), promotedClaims); err != nil {
+	}}).terminalAuthorizer().Authorize(context.Background(), promotedClaims, hostTarget()); err != nil {
 		t.Fatalf("promoted account refused: %v", err)
 	}
 }
+
+func hostTarget() terminal.Target { return terminal.Target{Kind: terminal.TargetHost} }
 
 func mustUUID(value string) uuid.UUID {
 	id, err := uuid.Parse(value)
@@ -277,15 +280,15 @@ func TestTerminalAuthorizerPlatformAdminsEmail(t *testing.T) {
 		user:     &auth.User{Email: "ops@example.com", Role: "member"},
 		sessions: []auth.SessionInfo{{ID: mustUUID(claims.SessionID), CreatedAt: now}},
 	}}
-	if _, err := server.terminalAuthorizer().Authorize(context.Background(), claims); err != nil {
+	if _, err := server.terminalAuthorizer().Authorize(context.Background(), claims, hostTarget()); err != nil {
 		t.Fatalf("PLATFORM_ADMINS email refused: %v", err)
 	}
-	if _, err := server.terminalAuthorizer().Authorize(context.Background(), nil); err == nil {
+	if _, err := server.terminalAuthorizer().Authorize(context.Background(), nil, hostTarget()); err == nil {
 		t.Fatal("nil claims authorized")
 	}
 	bad := authorizerClaims(uuid.New(), uuid.New())
 	bad.Subject = "not-a-uuid"
-	if _, err := server.terminalAuthorizer().Authorize(context.Background(), bad); err == nil {
+	if _, err := server.terminalAuthorizer().Authorize(context.Background(), bad, hostTarget()); err == nil {
 		t.Fatal("invalid subject authorized")
 	}
 }

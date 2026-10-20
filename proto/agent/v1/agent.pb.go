@@ -6074,23 +6074,37 @@ type TerminalOpen struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// target selects what the PTY runs in. "host" (or empty, for compatibility
 	// with a caller that omits it) runs a host shell as the agent's service
-	// identity. Container targets are added by a later package and answer
-	// InvalidArgument on an agent that does not implement them, never a silent
-	// fallback to the host.
+	// identity. "container" runs an interactive exec in container_id, attached
+	// over the same stream and bounded by the same lifecycle. Any other target
+	// answers InvalidArgument; an agent that predates a target never silently
+	// falls back to the host.
 	Target string `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
 	// root is the FileService root name the initial cwd is resolved under. The
 	// agent resolves it against its own allow-list; an unknown root is refused.
+	// It is only used by the host target.
 	Root string `protobuf:"bytes,2,opt,name=root,proto3" json:"root,omitempty"`
 	// cwd is the initial working directory relative to root. Empty or "." means
 	// the root itself. It must be an existing directory that resolves inside the
 	// root: absolute paths, ".." segments and symlink escapes are refused. The
 	// agent sets it directly on the child process, never through a shell
-	// command, so no quoting or interpolation is involved.
+	// command, so no quoting or interpolation is involved. It is only used by
+	// the host target.
 	Cwd string `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`
 	// cols and rows are the initial PTY dimensions. They are bounded by the
 	// agent and a zero or out-of-range value is refused.
-	Cols          uint32 `protobuf:"varint,4,opt,name=cols,proto3" json:"cols,omitempty"`
-	Rows          uint32 `protobuf:"varint,5,opt,name=rows,proto3" json:"rows,omitempty"`
+	Cols uint32 `protobuf:"varint,4,opt,name=cols,proto3" json:"cols,omitempty"`
+	Rows uint32 `protobuf:"varint,5,opt,name=rows,proto3" json:"rows,omitempty"`
+	// container_id is the Docker container the container target runs in. The
+	// control plane resolves it server-side from the application's running
+	// deployment and never accepts it from a browser unvalidated. The agent
+	// verifies the container still exists and is running before starting the
+	// exec; the call never falls back to another container or to the host.
+	ContainerId string `protobuf:"bytes,6,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	// shell optionally names the shell inside the container. Empty lets the
+	// agent pick the first supported shell (/bin/bash, /bin/sh, /bin/ash) and
+	// report the choice in TerminalOpened.shell. An image without any of them
+	// answers FailedPrecondition instead of starting a broken terminal.
+	Shell         string `protobuf:"bytes,7,opt,name=shell,proto3" json:"shell,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6158,6 +6172,20 @@ func (x *TerminalOpen) GetRows() uint32 {
 		return x.Rows
 	}
 	return 0
+}
+
+func (x *TerminalOpen) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *TerminalOpen) GetShell() string {
+	if x != nil {
+		return x.Shell
+	}
+	return ""
 }
 
 // TerminalResize changes the PTY window size.
@@ -6373,8 +6401,9 @@ type TerminalOpened struct {
 	// cols and rows are the dimensions the PTY actually has.
 	Cols uint32 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
 	Rows uint32 `protobuf:"varint,3,opt,name=rows,proto3" json:"rows,omitempty"`
-	// service_user is the OS user the shell runs as (the agent's service
-	// identity), so the UI can state the privilege boundary.
+	// service_user is the user the shell runs as: the agent's OS identity for
+	// a host shell, or the container's configured user ("root" when unset) for
+	// a container exec. The UI states the privilege boundary from it.
 	ServiceUser   string `protobuf:"bytes,4,opt,name=service_user,json=serviceUser,proto3" json:"service_user,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6911,13 +6940,15 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\fH\x00R\x05input\x122\n" +
 	"\x06resize\x18\x03 \x01(\v2\x18.agent.v1.TerminalResizeH\x00R\x06resize\x12/\n" +
 	"\x05close\x18\x04 \x01(\v2\x17.agent.v1.TerminalCloseH\x00R\x05closeB\x06\n" +
-	"\x04part\"t\n" +
+	"\x04part\"\xad\x01\n" +
 	"\fTerminalOpen\x12\x16\n" +
 	"\x06target\x18\x01 \x01(\tR\x06target\x12\x12\n" +
 	"\x04root\x18\x02 \x01(\tR\x04root\x12\x10\n" +
 	"\x03cwd\x18\x03 \x01(\tR\x03cwd\x12\x12\n" +
 	"\x04cols\x18\x04 \x01(\rR\x04cols\x12\x12\n" +
-	"\x04rows\x18\x05 \x01(\rR\x04rows\"8\n" +
+	"\x04rows\x18\x05 \x01(\rR\x04rows\x12!\n" +
+	"\fcontainer_id\x18\x06 \x01(\tR\vcontainerId\x12\x14\n" +
+	"\x05shell\x18\a \x01(\tR\x05shell\"8\n" +
 	"\x0eTerminalResize\x12\x12\n" +
 	"\x04cols\x18\x01 \x01(\rR\x04cols\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\"'\n" +

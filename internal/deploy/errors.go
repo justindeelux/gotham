@@ -39,4 +39,12 @@ var (
 	// ErrSourceNotImplemented — the application names a source type the
 	// orchestrator cannot fetch yet (GS-7..GS-9); the deploy fails closed.
 	ErrSourceNotImplemented = errors.New("deploy: source type is not supported yet")
+	// ErrNoRunningDeployment — the application has no deployment that started a
+	// container, so there is nothing to exec into (409 for a terminal request).
+	ErrNoRunningDeployment = errors.New("deploy: application has no running deployment")
+	// ErrContainerNotFound — the resolved container is gone, replaced by a
+	// newer deployment, or was never part of this application's running set.
+	ErrContainerNotFound = errors.New("deploy: container is not part of the running deployment")
+	// ErrContainerNotRunning — the container exists but is stopped/restarting.
+	ErrContainerNotRunning = errors.New("deploy: container is not running")
 )

@@ -253,6 +253,51 @@ func TestDockerServerValidation(t *testing.T) {
 			code: codes.InvalidArgument,
 		},
 		{
+			name: "create negative pids",
+			call: func() error {
+				_, err := client.CreateContainer(ctx, &agentv1.CreateContainerRequest{Image: "nginx", PidsLimit: -1})
+				return err
+			},
+			code: codes.InvalidArgument,
+		},
+		{
+			name: "run negative memory",
+			call: func() error {
+				_, err := client.RunImage(ctx, &agentv1.CreateContainerRequest{Image: "nginx", MemoryBytes: -1})
+				return err
+			},
+			code: codes.InvalidArgument,
+		},
+		{
+			name: "create pids over the cap",
+			call: func() error {
+				_, err := client.CreateContainer(ctx, &agentv1.CreateContainerRequest{Image: "nginx", PidsLimit: maxContainerPidsLimit + 1})
+				return err
+			},
+			code: codes.InvalidArgument,
+		},
+		{
+			name: "run cpus over the cap",
+			call: func() error {
+				_, err := client.RunImage(ctx, &agentv1.CreateContainerRequest{Image: "nginx", NanoCpus: maxContainerNanoCPUs + 1})
+				return err
+			},
+			code: codes.InvalidArgument,
+		},
+		{
+			name: "resource caps at the boundary are accepted",
+			call: func() error {
+				_, err := client.CreateContainer(ctx, &agentv1.CreateContainerRequest{
+					Image:       "nginx",
+					PidsLimit:   maxContainerPidsLimit,
+					MemoryBytes: maxContainerMemoryBytes,
+					NanoCpus:    maxContainerNanoCPUs,
+				})
+				return err
+			},
+			code: codes.OK,
+		},
+		{
 			name: "pull without image",
 			call: func() error {
 				_, err := client.PullImage(ctx, &agentv1.PullImageRequest{})

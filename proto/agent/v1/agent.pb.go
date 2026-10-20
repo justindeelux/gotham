@@ -4570,9 +4570,11 @@ type CreateContainerRequest struct {
 	// probe (the image's own ping tool run inside the container) rather than the
 	// bare container state. Empty leaves the image's own healthcheck (or none).
 	Healthcheck *ContainerHealthcheck `protobuf:"bytes,11,opt,name=healthcheck,proto3" json:"healthcheck,omitempty"`
-	// pids_limit, memory_bytes and nano_cpus bound the container's resources.
-	// Zero leaves Docker's default. They let a caller create a container that
-	// cannot exhaust the node (the terminal e2e safety harness uses them).
+	// pids_limit, memory_bytes and nano_cpus are optional resource bounds. They
+	// are settable only by the control plane over the mTLS DockerService (never
+	// by a browser/tenant), zero keeps Docker's default and therefore the
+	// previous behaviour, and the agent rejects negative values or values above
+	// its capped maxima. The terminal e2e safety harness is the current caller.
 	PidsLimit     int64 `protobuf:"varint,12,opt,name=pids_limit,json=pidsLimit,proto3" json:"pids_limit,omitempty"`
 	MemoryBytes   int64 `protobuf:"varint,13,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	NanoCpus      int64 `protobuf:"varint,14,opt,name=nano_cpus,json=nanoCpus,proto3" json:"nano_cpus,omitempty"`

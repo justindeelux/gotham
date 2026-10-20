@@ -215,7 +215,7 @@ func TestDockerExecRealNonRootManyForeignProcesses(t *testing.T) {
 			start := time.Now()
 			closeErr := nobodySession.Close()
 			elapsed := time.Since(start)
-			t.Logf("nobody Close with 120 root processes: %s", elapsed)
+			t.Logf("elapsed nobody Close with 120 root processes: %s", elapsed)
 			if closeErr != nil {
 				t.Fatalf("nobody Close = %v, want success", closeErr)
 			}

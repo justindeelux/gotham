@@ -936,9 +936,11 @@ message CreateContainerRequest {
   // probe (the image's own ping tool run inside the container) rather than the
   // bare container state. Empty leaves the image's own healthcheck (or none).
   ContainerHealthcheck healthcheck = 11;
-  // pids_limit, memory_bytes and nano_cpus bound the container's resources.
-  // Zero leaves Docker's default. They let a caller create a container that
-  // cannot exhaust the node (the terminal e2e safety harness uses them).
+  // pids_limit, memory_bytes and nano_cpus are optional resource bounds. They
+  // are settable only by the control plane over the mTLS DockerService (never
+  // by a browser/tenant), zero keeps Docker's default and therefore the
+  // previous behaviour, and the agent rejects negative values or values above
+  // its capped maxima. The terminal e2e safety harness is the current caller.
   int64 pids_limit = 12;
   int64 memory_bytes = 13;
   int64 nano_cpus = 14;

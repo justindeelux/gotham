@@ -309,8 +309,8 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   fixpoint from `/proc/<pid>/stat` after the last `)`, so process groups,
   TAB/space separators and spaces in command names do not matter), or (c)
   carries the terminal's unique `GOTHAM_TERMINAL_ID` environment marker. The
-  marker is what catches `nohup`, plain background jobs and a job that called
-  `setsid` or was reparented to pid 1 before the snapshot. The helper then sends
+  marker catches `nohup`, plain background jobs and a job that was reparented or
+  called `setsid` while its environment remained readable. The helper then sends
   `SIGHUP`/`SIGTERM`/`SIGKILL` with a short grace, ignores zombies, re-scans,
   and reports `survivors:<pids>` if anything remains. It never signals pid 1 or
   itself, never uses `kill -1` or `pkill` by name, and receives only the
@@ -357,23 +357,43 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   were started or restarted from that terminal. To keep a service alive across
   terminals, restart it from outside a terminal (the platform's deploy/restart
   path). Processes not started or restarted from the terminal, including the
-  application's pid 1, are not signalled.
+  application's pid 1, are not signalled. The attribution exceptions above
+  still apply: a non-dumpable process that has left the tree/session and whose
+  environment cannot be read may survive without an error.
 
-  **Remaining limit:** a daemon that double-forks, calls `setsid` **and** clears
-  its environment before the terminal is closed is reparented to pid 1 and
-  carries no marker, so the helper cannot attribute it to the terminal. Such a
-  process can outlive the close; ordinary `nohup`, background, trapped and
-  single-`setsid` jobs are covered. A command name made to contain a newline is
-  still parsed correctly: the helper reads the whole `/proc/<pid>/stat` record,
-  not only its first line. A same-uid non-dumpable process that predates the
-  terminal (for example a worker that dropped privileges) is not attributed and
-  is skipped; it cannot carry the terminal's marker. A terminal user who uses
-  `su`/`sudo` to switch to another uid and leaves processes there is also
-  outside the helper's reach: a process the helper does not own cannot be
-  inspected or signalled by a helper without `CAP_SYS_PTRACE`, so it is not
-  reported and may outlive the close. The marker-only path after the shell has
-  already exited has the same attribution limit for an unreadable same-uid
-  orphan.
+  **What cleanup guarantees.** Close ends the interactive shell, foreground and
+  background jobs in its process groups, every process in the shell's session,
+  descendants reachable through the readable `/proc/<pid>/stat` parent chain
+  (including HUP-ignoring jobs and an in-tree non-dumpable child, because `stat`
+  is readable even when `environ` is not), and processes whose **readable**
+  environment carries the terminal marker. The marker catches ordinary
+  `nohup`, plain background and single-`setsid` jobs (setsid does not fork, so
+  the process stays in the stat tree until a reparent), and jobs that were
+  reparented while their environment is still readable. A command name
+  containing a newline is parsed correctly because the helper reads the whole
+  `stat` record.
+
+  **What cleanup does not guarantee — Close reports success.** A process can
+  outlive Close without an error when it is **non-dumpable** and has left the
+  attributable set: it was reparented or `setsid`-ed so it is outside the
+  session/tree, and its environment is unreadable so the marker cannot be seen.
+  This includes a non-dumpable child of a reparented marker holder, a daemon
+  that double-forks and escapes the tree, and a process that scrubs its
+  environment. A pre-existing same-uid non-dumpable worker (for example a worker
+  that dropped privileges) is also skipped: it predates the terminal and cannot
+  carry the terminal's marker. A terminal user who uses `su`/`sudo` to switch to
+  another uid and leaves processes there is outside the helper's reach: a
+  process it does not own cannot be inspected or signalled without
+  `CAP_SYS_PTRACE`. The marker-only path after the shell has already exited has
+  the same attribution limit for an unreadable same-uid orphan. In all of these
+  cases the helper has no positive evidence tying the process to the terminal,
+  so it does not kill it and **does not report an error**; the process may
+  outlive Close.
+
+  **Time budget.** The helper is bounded by the control plane's 8 s context, but
+  that is best-effort under CPU starvation: a deep tree on a starved container
+  can exceed it. Close then reports incomplete cleanup, and the exec is still
+  force-closed.
 * **Agent failure / old agent** ends the stream with an error frame:
   `codes.Unimplemented` is reported as "the node agent does not support terminal
   sessions". The control plane never retries, reconnects or replays input.

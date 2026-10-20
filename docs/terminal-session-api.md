@@ -318,10 +318,32 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   from a dead one.
 * **Any end** — shell exit, client close, socket error, idle timeout, expiry,
   revocation, DELETE, agent failure, control-plane shutdown — cancels the agent
-  stream. For a host shell the agent closes the PTY master, sends `SIGHUP` to
-  the shell's process group, and `SIGKILL`s it after a 2 s grace, so the shell's
-  children die with it. For a container exec, closing the hijacked Docker
-  connection **does not** end the process: the daemon keeps the exec alive. The
+  stream. For a host shell the agent sends `SIGHUP` to the shell's process
+  group, closes the PTY master immediately, and then ends the whole **session**,
+  not just that process group: it scans `/proc/<pid>/stat` (parsed from the last
+  `)`, so a command name containing spaces, parentheses or a newline cannot
+  shift the fields) for every process whose session id equals the shell's pid,
+  sends `SIGTERM`, and `SIGKILL`s whatever remains after the 2 s grace. An
+  interactive shell with job control puts every background job in its own
+  process group, so the group signal alone leaves `sleep N &`, `nohup x &` and
+  nested subshell jobs running; the session scan is what ends them. The same
+  scan runs when the shell exited before the close, so a job that outlived its
+  shell is still killed. The walk never signals pid 1 or the agent itself, and
+  it refuses the whole session when the process that now owns the recorded pid
+  has a different `/proc` start time (pid reuse); a session id is only trusted
+  after that check. It is a single pass capped in process count and wall-clock
+  time, followed by at most four hard-kill re-scans (100 ms apart) for jobs
+  forked during the grace — never an unbounded loop and never a per-process
+  sleep. Zombies are ignored. A process that changed uid (`su`/`sudo`) stays in
+  the session and is still matched: a root agent can signal it, a non-root
+  agent's `kill` fails with `EPERM` and the process is left behind.
+  **Residual limit:** a job that calls `setsid` (for example `(setsid x &)`)
+  leaves the session and is not attributable to the shell, so it may survive
+  the close. It no longer pins the agent: the PTY master is non-blocking, so
+  closing it interrupts the output pump's pending `Read` and releases the file
+  descriptor and goroutine within a bounded interval even while that process
+  still holds the slave side open. For a container exec, closing the hijacked
+  Docker connection **does not** end the process: the daemon keeps the exec alive. The
   agent therefore wraps the shell in a fixed recorder that prints its pid before
   `exec`ing the shell, and on every end runs a second, fixed helper exec inside
   the same container. The helper collects every process that (a) is in the
@@ -575,7 +597,20 @@ docker run --rm --platform linux/amd64 -v /tmp/gotham-terminal-amd64.test:/termi
 The same suites also run natively on the development host (darwin). `go test
 -race ./agent ./internal/terminal` passes as part of the pre-push checks; the
 terminal tests cover session isolation, fd/goroutine release after close and
-disconnect, and process-group death on connection loss.
+disconnect, and process-group death on connection loss. On Linux the host
+session tests additionally run real PTYs for: a foreground job, `sleep N &`
+under an interactive job-control shell and under a non-interactive shell,
+`nohup x &`, a job that ignores `HUP` and `TERM` (ends only through the
+post-grace `SIGKILL`), `(setsid x &)` (the job may survive, the agent's master
+fd and pump goroutine must still be released), nested subshell jobs, a shell
+that exits before the close, close during heavy output, and 20 repeated
+open/close cycles. Each case asserts no process of the session remains (except
+the documented `setsid` escape) and that the agent's `/proc/self/fd` and
+goroutine counts return to baseline within a bound. All cases are bounded: a
+handful of processes per test, hard deadlines and a `t.Cleanup` that kills a
+recorded pid (or a uniquely named escaped `sleep`). The same binary is then run
+under `linux/amd64` and `linux/arm64` containers with `--pids-limit`,
+`--memory` and `--cpus` set.
 
 The JUS-253 rootless entry is covered by real PTY tests: an open with no
 `root`/`cwd` runs `printf` and asserts `$PWD` equals the agent's default

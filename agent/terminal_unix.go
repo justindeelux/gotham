@@ -10,8 +10,9 @@ import (
 // The signals a terminal session uses: a polite hangup first, then a hard kill
 // after the grace period.
 var (
-	terminalHangup os.Signal = syscall.SIGHUP
-	terminalKill   os.Signal = syscall.SIGKILL
+	terminalHangup    os.Signal = syscall.SIGHUP
+	terminalTerminate os.Signal = syscall.SIGTERM
+	terminalKill      os.Signal = syscall.SIGKILL
 )
 
 // killTerminalProcessGroup signals the whole process group led by pid, so a

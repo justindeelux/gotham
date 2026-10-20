@@ -48,6 +48,19 @@ const (
 	// terminalKillGrace is how long a session gets to exit after SIGHUP before
 	// its process group is killed outright.
 	terminalKillGrace = 2 * time.Second
+	// terminalGraceProbe is how often the graceful cleanup re-checks whether the
+	// session is already empty, so a close does not sit idle for the whole grace
+	// after every job exited.
+	terminalGraceProbe = terminalKillGrace / 4
+	// terminalScanRounds bounds the hard-kill re-scans used for processes forked
+	// while the previous signal was being delivered.
+	terminalScanRounds = 4
+	// terminalScanInterval is the settle time between hard-kill re-scans. It is
+	// per round, never per process.
+	terminalScanInterval = 100 * time.Millisecond
+	// terminalSessionBudget bounds the whole session scan-and-signal walk,
+	// including the graceful probes and the hard-kill re-scans.
+	terminalSessionBudget = terminalKillGrace + 2*time.Second
 	// terminalStopWait bounds how long a handler waits for the output pump to
 	// deliver the final event before returning anyway.
 	terminalStopWait = terminalKillGrace + 2*time.Second
@@ -98,10 +111,10 @@ type TerminalConfig struct {
 }
 
 // TerminalServer implements agentv1.TerminalServiceServer with a Linux PTY
-// (github.com/creack/pty). Every stream owns exactly one shell: the PTY and its
-// process group are killed and reaped when the stream ends, whether the shell
-// exited, the control plane closed it, the context was cancelled or the session
-// hit its lifetime cap.
+// (github.com/creack/pty). Every stream owns exactly one shell: the PTY, its
+// process group and every process in its session are killed and reaped when the
+// stream ends, whether the shell exited, the control plane closed it, the
+// context was cancelled or the session hit its lifetime cap.
 type TerminalServer struct {
 	agentv1.UnimplementedTerminalServiceServer
 
@@ -574,6 +587,15 @@ func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, erro
 	if err != nil {
 		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
 	}
+	// pty's ioctl helpers use os.File.Fd, which puts the master back into
+	// blocking mode. Restore non-blocking I/O so Close can interrupt a Read that
+	// a process outside the session is still holding open through the slave.
+	if err := terminalNonblock(master); err != nil {
+		_ = killTerminalProcessGroup(cmd.Process.Pid, terminalKill)
+		_ = master.Close()
+		go func() { _, _ = cmd.Process.Wait() }()
+		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
+	}
 	return newTerminalSession(cmd, master), nil
 }
 
@@ -779,7 +801,12 @@ type terminalSession struct {
 	cmd  *exec.Cmd
 	pty  *os.File
 	pid  int
+	sid  int
 	done chan struct{}
+
+	// leaderStart is the shell's /proc start time, captured at fork time. It
+	// lets the session walk tell the recorded session apart from a reused pid.
+	leaderStart uint64
 
 	termOnce sync.Once
 	waitOnce sync.Once
@@ -788,19 +815,32 @@ type terminalSession struct {
 }
 
 func newTerminalSession(cmd *exec.Cmd, master *os.File) *terminalSession {
+	pid := cmd.Process.Pid
 	return &terminalSession{
-		cmd:  cmd,
-		pty:  master,
-		pid:  cmd.Process.Pid,
-		done: make(chan struct{}),
+		cmd:         cmd,
+		pty:         master,
+		pid:         pid,
+		sid:         pid,
+		leaderStart: terminalProcessStartTime(pid),
+		done:        make(chan struct{}),
 	}
 }
 
-// terminate asks the process group to exit, closes the PTY and schedules a hard
-// kill if the child ignores SIGHUP. It is idempotent and never waits. A child
-// that already exited is never signalled again: its pid could have been reused
-// as another process group. The reaping goroutine guarantees no zombie remains
-// even when no output pump ever ran (for example a failed opened event).
+// terminate ends the whole host session, not just the shell's process group. It
+// is idempotent and never waits for a shell that ignores signals.
+//
+// The shell is a session leader (pty.StartWithSize sets Setsid). An interactive
+// shell with job control puts every job in its own process group, so signalling
+// only the shell's group leaves `sleep N &` running. After SIGHUP to the group,
+// every process whose session id equals the shell's pid gets SIGTERM, then
+// SIGKILL after terminalKillGrace (a bounded set of re-scans catches jobs forked
+// during the grace). The PTY master is closed immediately: because it is
+// non-blocking, Close interrupts the output pump's pending Read even when a
+// process that left the session (setsid) still holds the slave open.
+//
+// A child that already exited is not signalled through its group, and a session
+// id whose leader start time no longer matches is never signalled: that pid has
+// been reused. Reaping is scheduled on every path so no zombie remains.
 func (s *terminalSession) terminate() {
 	s.termOnce.Do(func() {
 		select {
@@ -809,16 +849,72 @@ func (s *terminalSession) terminate() {
 		default:
 			_ = killTerminalProcessGroup(s.pid, terminalHangup)
 			_ = s.pty.Close()
-			go func() {
-				select {
-				case <-s.done:
-				case <-time.After(terminalKillGrace):
-					_ = killTerminalProcessGroup(s.pid, terminalKill)
-				}
-			}()
 		}
 		go func() { _, _ = s.wait() }()
+		s.endSession()
 	})
+}
+
+// endSession sends SIGTERM to every process in the shell's session and schedules
+// the bounded hard kill. It falls back to the process-group cleanup when /proc
+// cannot be inspected, so an unsupported host keeps the previous behaviour.
+func (s *terminalSession) endSession() {
+	members, ok := terminalSessionMembers(s.sid, s.leaderStart, time.Now().Add(terminalSessionBudget))
+	if !ok {
+		go s.killProcessGroupAfterGrace()
+		return
+	}
+	if len(members) == 0 {
+		return
+	}
+	signalTerminalSession(members, terminalTerminate)
+	go s.killSessionAfterGrace()
+}
+
+// killProcessGroupAfterGrace is the /proc-less fallback: the shell's own group
+// is killed if it outlives the grace.
+func (s *terminalSession) killProcessGroupAfterGrace() {
+	select {
+	case <-s.done:
+	case <-time.After(terminalKillGrace):
+		_ = killTerminalProcessGroup(s.pid, terminalKill)
+	}
+}
+
+// killSessionAfterGrace probes the session through the grace so an already
+// empty session is noticed early, then hard-kills whatever remains in a few
+// bounded re-scans. Every loop is bounded and no sleep is per process.
+func (s *terminalSession) killSessionAfterGrace() {
+	deadline := time.Now().Add(terminalSessionBudget)
+	grace := time.Now().Add(terminalKillGrace)
+	for {
+		remaining := time.Until(grace)
+		if remaining <= 0 {
+			break
+		}
+		if remaining > terminalGraceProbe {
+			remaining = terminalGraceProbe
+		}
+		time.Sleep(remaining)
+		members, ok := terminalSessionMembers(s.sid, s.leaderStart, deadline)
+		if !ok || len(members) == 0 {
+			return
+		}
+	}
+	for round := 0; round < terminalScanRounds; round++ {
+		if time.Now().After(deadline) {
+			return
+		}
+		members, ok := terminalSessionMembers(s.sid, s.leaderStart, deadline)
+		if !ok || len(members) == 0 {
+			return
+		}
+		signalTerminalSession(members, terminalKill)
+		if round == terminalScanRounds-1 {
+			return
+		}
+		time.Sleep(terminalScanInterval)
+	}
 }
 
 // read reads the PTY's output.

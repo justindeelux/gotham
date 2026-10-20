@@ -3,7 +3,11 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
-import { isLive, statusTone } from "@/features/terminal/utils/terminal";
+import {
+  isContainerTerminalTarget,
+  isLive,
+  statusTone,
+} from "@/features/terminal/utils/terminal";
 
 /** Status footer for one terminal (JUS-249 extraction). */
 interface Props {
@@ -16,6 +20,9 @@ const { t } = useI18n();
 
 const statusText = computed<string>(() => t(`terminal.status.${props.tab.status}`));
 const tone = computed<string>(() => statusTone(props.tab.status));
+const isContainer = computed<boolean>(() =>
+  isContainerTerminalTarget(props.tab.target),
+);
 </script>
 
 <template>
@@ -41,7 +48,7 @@ const tone = computed<string>(() => statusTone(props.tab.status));
       :title="t('terminal.pane.privilege')"
     >
       {{ t("terminal.pane.serviceUser", { user: props.tab.serviceUser }) }}
-      <template v-if="props.variant === 'page'">
+      <template v-if="props.variant === 'page' && !isContainer">
         · {{ t("terminal.pane.privilege") }}
       </template>
     </span>

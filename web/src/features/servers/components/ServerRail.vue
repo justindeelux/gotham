@@ -16,6 +16,7 @@ import { useEditorStore } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { useAuthStore } from "@/features/auth";
 import { useTerminalStore, useTerminalWindowStore } from "@/features/terminal";
+import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
 const serversStore = useServersStore();
 const authStore = useAuthStore();
@@ -50,12 +51,28 @@ function toggleEditor(): void {
   editorWindow.setMinimized(!editorWindow.minimized);
 }
 
+/**
+ * terminalTabs applies the same capability split as the dock: host shells stay
+ * operator-only, container shells belong to the application team. A demotion
+ * disposes container tabs at its boundary, so a hidden shell can never linger.
+ */
+const terminalTabs = computed(() =>
+  terminal.tabs.filter((tab) =>
+    isContainerTerminalTarget(tab.target) ? true : authStore.isPlatformAdmin,
+  ),
+);
+
 /** terminalCount is the rail badge: every live session, page or window. */
-const terminalCount = computed<number>(() => terminal.sessionCount);
+const terminalCount = computed<number>(() => terminalTabs.value.length);
+
+/** terminalWindowCount names the tabs the floating window currently holds. */
+const terminalWindowCount = computed<number>(
+  () => terminalTabs.value.filter((tab) => tab.mode === "window").length,
+);
 
 /** terminalLabel names the rail terminal button with its open-session count. */
 const terminalLabel = computed<string>(() =>
-  terminal.windowOpenCount > 0
+  terminalWindowCount.value > 0
     ? t("terminal.rail.openWithCount", { count: terminalCount.value })
     : t("terminal.rail.pageWithCount", { count: terminalCount.value }),
 );
@@ -66,8 +83,8 @@ const terminalLabel = computed<string>(() =>
  * owning page instead of hiding a live shell.
  */
 function toggleTerminal(): void {
-  if (terminal.windowOpenCount === 0) {
-    const pageTab = terminal.pageTabs[0];
+  if (terminalWindowCount.value === 0) {
+    const pageTab = terminalTabs.value.find((tab) => tab.mode === "page");
     if (pageTab?.sourcePath) {
       void router.push(pageTab.sourcePath);
       return;
@@ -183,8 +200,9 @@ onMounted(() => {
       </div>
       <!-- JUS-245: the minimized terminal window parks beside the editor with
            its own count badge; a click restores the same live sessions.
-           JUS-246: operator-only, like the backend host-terminal gate. -->
-      <div v-if="authStore.isPlatformAdmin && terminalCount > 0" class="rail-item">
+           JUS-246/247: terminalTabs applies the capability split (host shells
+           operator-only, container shells to the application's team). -->
+      <div v-if="terminalCount > 0" class="rail-item">
         <button
           type="button"
           class="rail-btn rail-btn--terminal"
@@ -209,7 +227,7 @@ onMounted(() => {
         </button>
       </div>
       <div
-        v-if="editorCount > 0 || (authStore.isPlatformAdmin && terminalCount > 0)"
+        v-if="editorCount > 0 || terminalCount > 0"
         class="rail-sep"
         aria-hidden="true"
       ></div>

@@ -21,6 +21,28 @@ const vi: ApplicationsMessages = {
     breadcrumb: "Điều hướng phân cấp",
     loadingApp: "Đang tải ứng dụng…",
   },
+  terminal: {
+    tab: "Terminal",
+    title: "Terminal ứng dụng",
+    checkingAccess: "Đang kiểm tra quyền terminal…",
+    accessErrorTitle: "Không kiểm tra được quyền terminal",
+    accessErrorBody:
+      "Không đọc được vai trò trong nhóm. Chưa có phiên terminal nào được yêu cầu. Hãy thử lại khi bản điều khiển truy cập được.",
+    loading: "Đang tìm các service container đang chạy…",
+    serviceLabel: "Service container",
+    chooseService: "Chọn một service container",
+    selectTitle: "Chọn một service container để mở shell",
+    selectBody:
+      "Ứng dụng này chạy nhiều container. Hãy chọn đúng service và bản sao; chưa có shell nào được mở cho đến khi bạn chọn.",
+    emptyTitle: "Không có container đang chạy",
+    emptyBody:
+      "Ứng dụng này hiện không có service container nào đang chạy. Hãy triển khai hoặc khởi động ứng dụng rồi làm mới danh sách.",
+    refresh: "Làm mới danh sách",
+    retry: "Thử lại",
+    notAllowedTitle: "Không dùng được terminal",
+    notAllowedBody:
+      "Mở shell trong container cần quyền ghi vào nhóm của ứng dụng (chủ sở hữu hoặc quản trị viên). Hãy đề nghị quản trị viên nhóm cấp quyền rồi tải lại trang.",
+  },
   header: {
     fallbackName: "Ứng dụng",
     stopped: "đã dừng",

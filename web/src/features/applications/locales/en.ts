@@ -20,6 +20,33 @@ const en = {
     breadcrumb: "Breadcrumb",
     loadingApp: "Loading the application…",
   },
+  /**
+   * Application container terminal (JUS-247). Discovery and lifecycle errors
+   * themselves live in the shared terminal catalog under `terminal.errors.*`
+   * so the tab, the dock and the floating window show identical bounded copy.
+   */
+  terminal: {
+    tab: "Terminal",
+    title: "Application terminal",
+    checkingAccess: "Checking terminal access…",
+    accessErrorTitle: "Terminal access could not be checked",
+    accessErrorBody:
+      "The team role could not be read. No terminal session was requested. Retry once the control plane is reachable.",
+    loading: "Looking for running service containers…",
+    serviceLabel: "Service container",
+    chooseService: "Choose a service container",
+    selectTitle: "Choose a service container to open a shell",
+    selectBody:
+      "This application runs more than one container. Pick the exact service and replica; no shell starts until you do.",
+    emptyTitle: "No running containers",
+    emptyBody:
+      "This application has no running service container right now. Deploy or start it, then refresh the list.",
+    refresh: "Refresh services",
+    retry: "Try again",
+    notAllowedTitle: "Terminal not available",
+    notAllowedBody:
+      "Opening a container shell needs write access to this application's team (owner or admin). Ask a team admin for access, then reload this page.",
+  },
   header: {
     fallbackName: "Application",
     stopped: "stopped",

@@ -579,6 +579,7 @@ export function useApplicationDetail() {
     "deployments",
     "logs",
     "env",
+    "terminal",
     "storage",
     "domains",
     "previews",

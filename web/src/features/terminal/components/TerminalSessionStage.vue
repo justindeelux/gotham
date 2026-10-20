@@ -22,9 +22,16 @@ interface Props {
   tabId: string;
   starting: boolean;
   closed: boolean;
+  /**
+   * mode keeps the host readiness copy off the application tab (JUS-247): a
+   * container session has no server lifecycle branch, it is only ready once
+   * the control plane created it. Discovery/empty/error states belong to the
+   * calling host; this stage renders the shared pane, loading and restart.
+   */
+  mode?: "host" | "application";
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { mode: "host" });
 const emit = defineEmits<{ start: [fresh: boolean] }>();
 const { t } = useI18n();
 
@@ -61,7 +68,7 @@ function statusLabel(server: Server): string {
 <template>
   <div class="term-stage">
     <NAlert
-      v-if="server === null"
+      v-if="mode === 'host' && server === null"
       type="error"
       :show-icon="true"
       class="term-stage-alert"
@@ -69,7 +76,7 @@ function statusLabel(server: Server): string {
       {{ t("terminal.page.unknownServer") }}
     </NAlert>
     <NAlert
-      v-else-if="!ready"
+      v-else-if="mode === 'host' && (!ready || server === null)"
       type="warning"
       :show-icon="true"
       class="term-stage-alert"
@@ -77,7 +84,7 @@ function statusLabel(server: Server): string {
       <template #header>{{ t("terminal.page.notReadyTitle") }}</template>
       {{
         t("terminal.page.notReadyBody", {
-          status: statusLabel(server),
+          status: server ? statusLabel(server) : "",
         })
       }}
     </NAlert>

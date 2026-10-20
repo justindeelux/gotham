@@ -11,9 +11,14 @@ import { TerminalPageDock, TerminalWindow } from "@/features/terminal";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
 import { provideMobileNav } from "./useMobileNav";
+import { useTerminalAccessBoundary } from "./useTerminalAccessBoundary";
 
 const { mobileNavOpen, closeMobileNav } = provideMobileNav();
 const serversStore = useServersStore();
+
+// JUS-247: the shell is the single owner of container-tab disposal at a team
+// role switch/demotion; the app page and tab host only leave their pane.
+useTerminalAccessBoundary();
 
 // JUS-135: below the tablet breakpoint the rail leaves the grid column and
 // moves into the rail drawer (AppTopbar). Only one ServerRail is mounted at a

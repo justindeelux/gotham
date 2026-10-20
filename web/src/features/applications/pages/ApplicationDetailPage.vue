@@ -4,24 +4,44 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import ApplicationDeleteDialog from "@/features/applications/components/ApplicationDeleteDialog.vue";
-
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
 import ApplicationHeader from "@/features/applications/components/ApplicationHeader.vue";
-import ApplicationLogsTab from "@/features/applications/components/ApplicationLogsTab.vue";
 import ApplicationImagePanel from "@/features/applications/components/ApplicationImagePanel.vue";
+import ApplicationLogsTab from "@/features/applications/components/ApplicationLogsTab.vue";
 import ApplicationOverviewTab from "@/features/applications/components/ApplicationOverviewTab.vue";
 import ApplicationPreviewsTab from "@/features/applications/components/ApplicationPreviewsTab.vue";
 import ApplicationStorageTab from "@/features/applications/components/ApplicationStorageTab.vue";
+import ApplicationTerminalTab from "@/features/applications/components/ApplicationTerminalTab.vue";
 import DomainEditor from "@/features/applications/components/DomainEditor.vue";
 import RollbackDialog from "@/features/applications/components/RollbackDialog.vue";
 import { useApplicationDetail } from "@/features/applications/composables/useApplicationDetail";
+import { useApplicationTerminalAccess } from "@/features/applications/composables/useApplicationTerminalAccess";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
 
 const detail = useApplicationDetail();
 
 const { t } = useI18n();
+
+/**
+ * Terminal access mirrors the backend's owner/admin team role and, crucially,
+ * waits until that role is known (JUS-247 r1): the projects store reads
+ * writable while the teams list is loading, so acting on it early would send a
+ * read_only account a discovery/create it may never make. Demotion disposal is
+ * owned once by the app shell (AppLayout); this page only decides visibility.
+ */
+const {
+  accessKnown,
+  accessError,
+  retryAccess,
+  canWrite,
+  showTab: showTerminalTab,
+  blocked: blockedTerminal,
+  resolveTab,
+} = useApplicationTerminalAccess(
+  () => detail.application.value !== null,
+);
 
 /** deploymentsTab names the deployment count; 0/1/many all render. */
 const deploymentsTab = computed<string>(() =>
@@ -52,10 +72,13 @@ const showStorageTab = computed<boolean>(
  * programmatic selection therefore never renders a missing pane.
  */
 const activeTab = computed<string>({
-  get: () =>
-    detail.activeTab.value === "storage" && !showStorageTab.value
-      ? "overview"
-      : detail.activeTab.value,
+  get: () => {
+    const selected =
+      detail.activeTab.value === "storage" && !showStorageTab.value
+        ? "overview"
+        : detail.activeTab.value;
+    return resolveTab(selected);
+  },
   set: (value: string) => {
     detail.activeTab.value = value;
   },
@@ -84,6 +107,18 @@ const activeTab = computed<string>({
         style="margin-bottom: 12px"
       >
         {{ detail.appsStore.error }}
+      </NAlert>
+
+      <NAlert
+        v-if="blockedTerminal"
+        type="info"
+        :show-icon="true"
+        class="app-blocked-terminal"
+      >
+        <template #header>
+          {{ t("applications.terminal.notAllowedTitle") }}
+        </template>
+        {{ t("applications.terminal.notAllowedBody") }}
       </NAlert>
 
       <ApplicationHeader
@@ -163,6 +198,25 @@ const activeTab = computed<string>({
             @update:draft="detail.envDraft.value = $event"
             @save="detail.handleSaveEnv"
             @retry="detail.loadEnv()"
+          />
+        </NTabPane>
+
+        <NTabPane
+          v-if="showTerminalTab"
+          name="terminal"
+          :tab="t('applications.terminal.tab')"
+          display-directive="show"
+        >
+          <ApplicationTerminalTab
+            v-if="detail.application.value"
+            class="application-terminal"
+            :application-id="detail.application.value.id"
+            :application-name="detail.application.value.name"
+            :access-known="accessKnown"
+            :access-error="accessError"
+            :can-write="canWrite"
+            :active="activeTab === 'terminal'"
+            @retry-access="retryAccess"
           />
         </NTabPane>
 
@@ -267,5 +321,17 @@ const activeTab = computed<string>({
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.application-terminal {
+  /* The shared stage needs a bounded pane; 60vh stays inside the modal-free
+     page on phones and leaves the tab strip reachable. */
+  display: flex;
+  flex-direction: column;
+  min-height: min(60vh, 34rem);
+}
+
+.app-blocked-terminal {
+  margin-bottom: 12px;
 }
 </style>

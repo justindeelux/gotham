@@ -6,10 +6,14 @@ import { describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
 import {
+  applicationTerminalFailure,
   terminalFailure,
   terminalStreamFailureCode,
 } from "@/features/terminal/api/terminal";
-import { terminalSessionSchema } from "@/features/terminal/schemas/terminal";
+import {
+  applicationTerminalTargetsSchema,
+  terminalSessionSchema,
+} from "@/features/terminal/schemas/terminal";
 
 // Literal create responses from docs/terminal-session-api.md section 1/1a.
 // They are kept as JSON strings so a backend shape drift is visible here.
@@ -169,5 +173,83 @@ describe("terminalStreamFailureCode", () => {
 
   it("leaves an unknown bounded message verbatim", () => {
     expect(terminalStreamFailureCode("agent offline")).toBeNull();
+  });
+});
+
+
+describe("applicationTerminalFailure (JUS-247)", () => {
+  it("maps the container statuses and the 409 phrases", () => {
+    expect(applicationTerminalFailure({ status: 403, message: "x" }).code).toBe(
+      "applicationForbidden",
+    );
+    expect(applicationTerminalFailure({ status: 404, message: "not found" }).code).toBe(
+      "applicationNotFound",
+    );
+    expect(
+      applicationTerminalFailure({
+        status: 404,
+        message: "the selected container is no longer available",
+      }).code,
+    ).toBe("containerGone");
+    expect(
+      applicationTerminalFailure({
+        status: 409,
+        message: "the application has no running deployment",
+      }).code,
+    ).toBe("noDeployment");
+    expect(
+      applicationTerminalFailure({
+        status: 409,
+        message: "a deployment is in progress; try again when it finishes",
+      }).code,
+    ).toBe("deployInFlight");
+    expect(
+      applicationTerminalFailure({
+        status: 409,
+        message: "the selected container is not running; start the application first",
+      }).code,
+    ).toBe("containerStopped");
+    expect(applicationTerminalFailure({ status: 502, message: "x" }).code).toBe(
+      "unavailable",
+    );
+    expect(applicationTerminalFailure({ status: 503, message: "x" }).code).toBe(
+      "terminalDisabled",
+    );
+    // An unexpected 2xx target/create shape is badResponse, never network.
+    expect(applicationTerminalFailure(new ZodError([])).code).toBe(
+      "badResponse",
+    );
+  });
+});
+
+describe("applicationTerminalTargetsSchema (JUS-247)", () => {
+  it("accepts the Go wire shape, including an empty single-app service", () => {
+    const parsed = applicationTerminalTargetsSchema.safeParse({
+      application_id: "app-1",
+      application_name: "shop",
+      server_id: "srv-1",
+      source_type: "image",
+      containers: [
+        {
+          service: "",
+          container_id: "cid-1",
+          name: "gotham-shop-1",
+          image: "nginx:1",
+          state: "running",
+          replica: 1,
+          label: "gotham-shop-1",
+        },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a drifted envelope without containers", () => {
+    expect(
+      applicationTerminalTargetsSchema.safeParse({
+        application_id: "app-1",
+        server_id: "srv-1",
+      }).success,
+    ).toBe(false);
   });
 });

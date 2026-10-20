@@ -326,6 +326,9 @@ type serverConfig struct {
 	// allowAnyPeer opts out of the mandatory control-plane peer check. It is set
 	// only by WithoutControlPlanePeer (tests and the explicit dev-insecure mode).
 	allowAnyPeer bool
+	// terminal is the host terminal service, when registered, so shutdown can
+	// wait for in-flight session cleanup.
+	terminal *TerminalServer
 }
 
 // ServerOption registers an optional service or interceptor on the agent gRPC
@@ -379,6 +382,9 @@ func WithFileService(files agentv1.FileServiceServer) ServerOption {
 // answers codes.Unimplemented, which the control plane reports as unsupported.
 func WithTerminalService(terminal agentv1.TerminalServiceServer) ServerOption {
 	return func(c *serverConfig) {
+		if sessions, ok := terminal.(*TerminalServer); ok {
+			c.terminal = sessions
+		}
 		c.registers = append(c.registers, func(server *grpc.Server) {
 			agentv1.RegisterTerminalServiceServer(server, terminal)
 		})
@@ -450,9 +456,10 @@ func requireControlPlanePeerFromContext(ctx context.Context, log *slog.Logger) e
 
 // Server wraps a gRPC server exposing DockerService over TLS.
 type Server struct {
-	grpc *grpc.Server
-	ln   net.Listener
-	log  *slog.Logger
+	grpc     *grpc.Server
+	ln       net.Listener
+	log      *slog.Logger
+	terminal *TerminalServer
 }
 
 // NewServer binds addr and registers the DockerService implementation plus any
@@ -503,7 +510,7 @@ func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1
 	if creds == nil {
 		log.Warn("agent: serving plaintext on loopback (development only)", "addr", listener.Addr().String())
 	}
-	return &Server{grpc: server, ln: listener, log: log}, nil
+	return &Server{grpc: server, ln: listener, log: log, terminal: config.terminal}, nil
 }
 
 // isLoopbackListenAddr reports whether a listen address is confined to the
@@ -544,6 +551,11 @@ func (s *Server) Serve(ctx context.Context) error {
 		case <-stopped:
 		case <-time.After(serverDrainTimeout):
 			s.grpc.Stop()
+		}
+		// Handlers are drained; finish the session cleanup walks (SIGTERM then
+		// SIGKILL) within a bound so a graceful stop does not strand a job.
+		if s.terminal != nil {
+			s.terminal.WaitTerminations(terminalShutdownWait)
 		}
 	}()
 

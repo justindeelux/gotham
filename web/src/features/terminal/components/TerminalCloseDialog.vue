@@ -77,6 +77,17 @@ function confirm(): void {
 </template>
 
 <style scoped>
+/* JUS-261: the shared footer row. Both actions are pushed to the end and keep
+   a token-based gap, so "Keep terminals" and "Close terminal" never touch.
+   The modal contract (fixed header/footer, bounded content) stays in the
+   shared .app-modal styles. */
+.dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 .term-close-list {
   margin: var(--space-3) 0 0;
   padding-left: var(--space-4);

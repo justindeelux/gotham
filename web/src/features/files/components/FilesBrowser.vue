@@ -2801,13 +2801,13 @@ function onFolderMenu(key: string): void {
     </div>
 
     <!-- Toolbar (JUS-160): the left group carries Upload, the New menu, a
-         separator, the Root selector and the File Operations dropdown (cut,
-         copy, paste, compress, extract, permissions); the right group pins
-         the recycle bin and the list/grid toggle to the right edge.
-         Favorite/Terminal slots stay hidden until those features are approved
-         (no buttons rendered). Both groups always have content, so the toolbar
-         can never wrap onto an empty second row (JUS-147). Labels collapse to
-         icon-only <=640px, each keeping its aria-label.
+         separator, the Root selector, the File Operations dropdown (cut,
+         copy, paste, compress, extract, permissions) and the terminal action
+         directly after it (JUS-261); the right group pins the recycle bin and
+         the list/grid toggle to the right edge. Both groups always have
+         content, so the toolbar can never wrap onto an empty second row
+         (JUS-147). Labels collapse to icon-only <=640px, each keeping its
+         aria-label.
          JUS-208 round 2: in grid view the selection cluster overlays this row
          while a selection exists (see .fm-grid-bulk below) instead of joining
          it, so selecting never grows the toolbar or shifts the tiles. -->
@@ -2888,6 +2888,28 @@ function onFolderMenu(key: string): void {
               <ChevronDown class="fm-caret" :size="12" :stroke-width="1.8" aria-hidden="true" />
             </NButton>
           </NDropdown>
+          <!-- JUS-261: the terminal action sits directly after File operations
+               and carries a visible label. Same platform-operator gate,
+               single-flight guard and hover/focus hint as before (JUS-248). -->
+          <span v-if="canOpenTerminal" class="fm-terminal-action-wrap">
+            <NButton
+              size="small"
+              class="fm-terminal-action"
+              :loading="terminalOpening || terminalRequesting"
+              :aria-busy="terminalOpening || terminalRequesting"
+              :aria-label="$t('files.terminal.openHere')"
+              :aria-describedby="terminalHintId"
+              @click="openTerminalHere()"
+            >
+              <template #icon>
+                <Terminal :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              <span class="fm-btn-label">{{ $t("files.terminal.label") }}</span>
+            </NButton>
+            <span :id="terminalHintId" class="fm-terminal-hint" role="tooltip">
+              {{ $t("files.terminal.openHereHint") }}
+            </span>
+          </span>
           <span v-if="files.hasClipboard" class="small muted clipboard-hint">
             {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
           </span>
@@ -2926,30 +2948,6 @@ function onFolderMenu(key: string): void {
         </div>
 
         <div class="fm-toolbar-group fm-toolbar-end">
-          <!-- JUS-248: platform-operator only; opens a host shell in this
-               folder in the floating window. Hidden (not disabled) for anyone
-               else, because file read access never grants a shell. Icon-only:
-               the toolbar row must not grow a second line at 1024px. The
-               wrapper carries the hover/focus hint so the button keeps its
-               aria-label as the accessible name (JUS-210: no bare title). -->
-          <span v-if="canOpenTerminal" class="fm-terminal-action-wrap">
-            <NButton
-              size="small"
-              class="fm-terminal-action"
-              :loading="terminalOpening || terminalRequesting"
-              :aria-busy="terminalOpening || terminalRequesting"
-              :aria-label="$t('files.terminal.openHere')"
-              :aria-describedby="terminalHintId"
-              @click="openTerminalHere()"
-            >
-              <template #icon>
-                <Terminal :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-            </NButton>
-            <span :id="terminalHintId" class="fm-terminal-hint" role="tooltip">
-              {{ $t("files.terminal.openHereHint") }}
-            </span>
-          </span>
           <!-- The bin belongs to the root, not the folder: any member may open
                it, while restore/purge inside need write. -->
           <NButton
@@ -3969,20 +3967,27 @@ function onFolderMenu(key: string): void {
   max-width: 100%;
 }
 
-/* JUS-248: the terminal action is icon-only and a 24px square. At 1366px the
-   grid toolbar's two groups are within 2px of the row width, so this control
-   must not take a full small-button box (it would wrap the end group to a
-   second row). 24px still meets the WCAG 2.2 target minimum. */
-.fm-terminal-action {
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  padding: 0;
+/* JUS-261: the labelled terminal action adds a full button to the left group.
+   Up to 1400px the Root selector gives up some of its 220px desktop width (the
+   value truncates, the aria-label stays) so the two groups keep one row at
+   1280px and the grid toolbar keeps one row at 1366px instead of dropping the
+   whole end group to a second line. The phone rules below take over <=640px. */
+@media (max-width: 1400px) {
+  .fm-toolbar .fm-root-select {
+    width: calc(var(--space-12) * 4 - var(--space-2));
+  }
 }
 
-/* Hover/focus hint for the icon-only terminal action (JUS-248 r1). It is a
-   tooltip, not the accessible name: the button keeps its translated
-   aria-label and points here through aria-describedby. */
+/* JUS-261: the terminal action sits after File operations with an icon and the
+   visible "Terminal" label (the shared <=640px rule collapses .fm-btn-label to
+   the icon, like every other toolbar button). */
+.fm-terminal-action {
+  flex: 0 0 auto;
+}
+
+/* Hover/focus hint for the terminal action (JUS-248 r1). It is a tooltip, not
+   the accessible name: the button keeps its translated aria-label and points
+   here through aria-describedby. */
 .fm-terminal-action-wrap {
   position: relative;
   display: inline-flex;

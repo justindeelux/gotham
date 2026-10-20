@@ -592,29 +592,33 @@ defineExpose({ restoreWindow });
           </button>
         </div>
       </div>
-      <span class="grow" />
-      <NButton
-        quaternary
-        size="tiny"
-        class="term-window-min"
-        :aria-label="t('terminal.window.minimize')"
-        @click="minimizeWindow"
-      >
-        <template #icon>
-          <Minus :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-      </NButton>
-      <NButton
-        quaternary
-        size="tiny"
-        class="term-window-close"
-        :aria-label="t('terminal.window.close')"
-        @click="requestCloseWindow"
-      >
-        <template #icon>
-          <X :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-      </NButton>
+      <!-- JUS-261: the add-tab (+) slot. A later ticket renders it here, right
+           after the tab strip and before the window controls, so the flexible
+           space never separates the tabs from their add control. -->
+      <div class="term-window-controls">
+        <NButton
+          quaternary
+          size="tiny"
+          class="term-window-min"
+          :aria-label="t('terminal.window.minimize')"
+          @click="minimizeWindow"
+        >
+          <template #icon>
+            <Minus :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+        </NButton>
+        <NButton
+          quaternary
+          size="tiny"
+          class="term-window-close"
+          :aria-label="t('terminal.window.close')"
+          @click="requestCloseWindow"
+        >
+          <template #icon>
+            <X :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+        </NButton>
+      </div>
     </header>
 
     <div class="term-window-body">
@@ -711,6 +715,18 @@ defineExpose({ restoreWindow });
   font-weight: 600;
   color: var(--fg-2);
   white-space: nowrap;
+}
+
+/* JUS-261: the window controls are pinned to the far right edge in every
+   state. The flexible space sits before them, so the tab strip can grow (or
+   scroll) without ever pushing minimize/close inward, and the add-tab slot
+   stays directly after the tabs. */
+.term-window-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
 }
 
 .term-tabs {

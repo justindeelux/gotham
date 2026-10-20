@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
-/* global Event:readonly, document:readonly, getComputedStyle:readonly, HTMLElement:readonly, localStorage:readonly, URL:readonly, window:readonly */
+/* global Element:readonly, Event:readonly, document:readonly, getComputedStyle:readonly, HTMLElement:readonly, localStorage:readonly, URL:readonly, window:readonly */
 // URL/window run inside the page (browser globals); the repo lint envs do not
 // cover tests/, so they are declared.
 
@@ -425,6 +425,43 @@ async function expectInsideViewport(
   expect(box.width).toBeLessThanOrEqual(viewport.width);
 }
 
+/** expectDialogActionGap asserts the footer actions keep a token-sized gap. */
+async function expectDialogActionGap(page: Page): Promise<void> {
+  // Naive zooms the card in; a raw bounding box taken mid-transition would
+  // report a fraction of the token-sized gap, so wait for the settled scale.
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const button = document.querySelector(
+          ".term-close-modal .dialog-foot button",
+        );
+        if (!button) {
+          return 0;
+        }
+        const rect = button.getBoundingClientRect();
+        const width = Number.parseFloat(getComputedStyle(button).width);
+        return width === 0 ? 0 : rect.width / width;
+      }),
+    )
+    .toBeGreaterThan(0.99);
+
+  const gap = await page.evaluate(() => {
+    const buttons = [
+      ...document.querySelectorAll(".term-close-modal .dialog-foot button"),
+    ];
+    const first = buttons[0]?.getBoundingClientRect();
+    const last = buttons.at(-1)?.getBoundingClientRect();
+    const token = Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--space-2"),
+    );
+    return {
+      actual: first && last ? last.left - first.right : -1,
+      token,
+    };
+  });
+  expect(gap.actual).toBeGreaterThanOrEqual(gap.token - 0.5);
+}
+
 /** freshState resets the mock ledger for one test. */
 function freshState(): TerminalState {
   return { sessions: [], creates: 0, deletes: 0, seq: 0 };
@@ -636,6 +673,7 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   await expect(dialog).toContainText("Close all terminals?");
   await expect(dialog).toContainText("prod-01 · one");
   await expect(dialog).toContainText("prod-01 · two");
+  await expectDialogActionGap(page);
   await page.getByRole("button", { name: "Keep terminals" }).click();
   await expect(page.locator(".term-tab")).toHaveCount(2);
   expect(state.deletes).toBe(0);
@@ -653,6 +691,8 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(closeBox?.height ?? 0).toBeGreaterThanOrEqual(24);
   await closeButton.click();
   await expect(dialog).toContainText("Close this terminal?");
+  // The sign-out gate uses this same dialog, so the single-tab arm is covered.
+  await expectDialogActionGap(page);
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
   await expect(page.locator(".term-tab")).toHaveCount(1);
   await expect(page.locator(".term-tab")).toContainText("prod-01 · two");
@@ -690,6 +730,114 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   await expect(page.locator(".rail-btn--terminal")).toHaveCount(0);
   expect(state.deletes).toBe(2);
   expect(state.sessions[1]?.closeFrames).toBe(1);
+});
+
+test("window controls stay at the header's right edge at every width", async ({
+  page,
+}) => {
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await seedApp(page, "/dashboard");
+
+  // Ten tabs: at 390px the strip is narrower than the tabs' minimum width, so
+  // this test covers the scrolling state as well as the many-tab desktop rows.
+  const titles = [
+    "one", "two", "three", "four", "five",
+    "six", "seven", "eight", "nine", "ten",
+  ];
+  for (const cwd of titles) {
+    await openWindow(page, cwd);
+  }
+  await expect(page.locator(".term-tab")).toHaveCount(titles.length);
+
+  for (const width of [1366, 1280, 480, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(async () => (await windowBox(page)).width).toBeLessThanOrEqual(width);
+
+    const geometry = await page.evaluate(() => {
+      const box = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+      };
+      const bar = document.querySelector(".term-window-bar") as HTMLElement;
+      const tabs = document.querySelector(".term-tabs") as HTMLElement;
+      const min = document.querySelector(".term-window-min") as HTMLElement;
+      const close = document.querySelector(".term-window-close") as HTMLElement;
+      const minBox = box(min);
+      const closeBox = box(close);
+      return {
+        bar: box(bar),
+        paddingRight: Number.parseFloat(getComputedStyle(bar).paddingRight),
+        tabs: box(tabs),
+        scroll: {
+          width: tabs.scrollWidth,
+          client: tabs.clientWidth,
+        },
+        tabRects: [...document.querySelectorAll(".term-tab")].map(box),
+        min: minBox,
+        close: closeBox,
+        // The topmost element at each control's centre must be the control (or
+        // one of its children), proving no tab/label paints over it.
+        minHit: document
+          .elementsFromPoint((minBox.left + minBox.right) / 2, (minBox.top + minBox.bottom) / 2)
+          .some((element) => element === min || min.contains(element)),
+        closeHit: document
+          .elementsFromPoint((closeBox.left + closeBox.right) / 2, (closeBox.top + closeBox.bottom) / 2)
+          .some((element) => element === close || close.contains(element)),
+      };
+    });
+
+    // The close control's right edge is the header's content right edge, and
+    // the pair is to the right of the tab strip in every state.
+    expect(
+      Math.abs(geometry.close.right - (geometry.bar.right - geometry.paddingRight)),
+    ).toBeLessThanOrEqual(1);
+    expect(geometry.tabs.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
+    expect(geometry.min.right).toBeLessThanOrEqual(geometry.close.left);
+    expect(geometry.minHit).toBe(true);
+    expect(geometry.closeHit).toBe(true);
+
+    if (width <= 480) {
+      expect(geometry.scroll.width).toBeGreaterThan(geometry.scroll.client);
+    } else {
+      // A non-scrolling strip shows every tab strictly left of the controls.
+      for (const tab of geometry.tabRects) {
+        expect(tab.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
+      }
+    }
+  }
+
+  // At 390px the scrollable strip can be scrolled to its end without the
+  // controls moving: they are pinned, the tabs are what scrolls.
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.evaluate(() => {
+    const tabs = document.querySelector(".term-tabs") as HTMLElement;
+    tabs.scrollLeft = tabs.scrollWidth;
+  });
+  const scrolled = await page.evaluate(() => {
+    const tabs = document.querySelector(".term-tabs") as HTMLElement;
+    const min = document.querySelector(".term-window-min") as HTMLElement;
+    const last = [...document.querySelectorAll(".term-tab")].at(-1) as HTMLElement;
+    return {
+      tabsRight: tabs.getBoundingClientRect().right,
+      lastRight: last.getBoundingClientRect().right,
+      minLeft: min.getBoundingClientRect().left,
+    };
+  });
+  expect(scrolled.lastRight).toBeLessThanOrEqual(scrolled.tabsRight + 0.5);
+  expect(scrolled.tabsRight).toBeLessThanOrEqual(scrolled.minLeft + 0.5);
+
+  // Keyboard reachable: Tab from the active tab lands on minimize, then close.
+  await page.locator('.term-tab-name[aria-selected="true"]').focus();
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
+    .toContain("term-window-min");
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
+    .toContain("term-window-close");
 });
 
 test("the window moves, resizes and stays bounded at desktop and phone sizes", async ({

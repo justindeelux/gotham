@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NAvatar, NButton, NDropdown, NSpace, NText } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
-import { computed, h, onMounted, onUnmounted, watch } from "vue";
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
@@ -19,6 +19,18 @@ const { t } = useI18n();
 const authStore = useAuthStore();
 const teamsStore = useTeamsStore();
 const router = useRouter();
+/** accountTrigger is the dropdown trigger, refocused when a cancel aborts. */
+const accountTrigger = ref<InstanceType<typeof NButton> | null>(null);
+
+/** restoreAccountTrigger puts keyboard focus back on the menu button. */
+function restoreAccountTrigger(): void {
+  void nextTick(() => {
+    const element = accountTrigger.value?.$el;
+    if (element instanceof HTMLElement) {
+      element.focus();
+    }
+  });
+}
 
 /** displayName is the footer name: display name, falling back to the email. */
 const displayName = computed<string>(() => {
@@ -167,6 +179,9 @@ async function handleSelect(key: string | number): Promise<void> {
   // the logout. Forced sign-outs bypass this path and reset directly.
   const editor = useEditorStore();
   if ((await editor.confirmDiscard()) !== "leave") {
+    // Cancelling a confirmation closes the dialog and otherwise strands focus
+    // on <body>; the keyboard user stays on the account trigger (JUS-246).
+    restoreAccountTrigger();
     return;
   }
   // Live shells are a session-terminating resource too: sign-out runs the
@@ -174,6 +189,7 @@ async function handleSelect(key: string | number): Promise<void> {
   // Forced sign-outs (401/revocation/cross-tab) bypass this path and reset.
   const terminal = useTerminalStore();
   if (!(await terminal.confirmCloseAll())) {
+    restoreAccountTrigger();
     return;
   }
   try {
@@ -194,7 +210,7 @@ async function handleSelect(key: string | number): Promise<void> {
     :menu-props="() => ({ style: 'min-width: 240px; max-width: min(320px, calc(100vw - 24px))' })"
     @select="handleSelect"
   >
-    <NButton v-if="compact" quaternary circle :aria-label="t('shell.account')" aria-haspopup="menu">
+    <NButton v-if="compact" ref="accountTrigger" quaternary circle :aria-label="t('shell.account')" aria-haspopup="menu">
       <template #icon>
         <NAvatar round :size="24" :src="authStore.user?.avatar">
           <template v-if="!authStore.user?.avatar">{{ userInitial }}</template>
@@ -202,7 +218,7 @@ async function handleSelect(key: string | number): Promise<void> {
         </NAvatar>
       </template>
     </NButton>
-    <NButton v-else quaternary class="me-card" :aria-label="t('shell.account')" aria-haspopup="menu">
+    <NButton v-else ref="accountTrigger" quaternary class="me-card" :aria-label="t('shell.account')" aria-haspopup="menu">
       <NSpace align="center" :size="8" :wrap="false" :wrap-item="false" class="me-card-inner">
         <NAvatar round :size="24" :src="authStore.user?.avatar">
           <template v-if="!authStore.user?.avatar">{{ userInitial }}</template>

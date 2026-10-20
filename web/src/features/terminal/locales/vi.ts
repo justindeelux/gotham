@@ -16,6 +16,7 @@ const vi = {
   },
   rail: {
     openWithCount: "Cửa sổ terminal, {count} đang mở",
+    pageWithCount: "Terminal trên trang, {count} đang mở",
   },
   pane: {
     openInWindow: "Mở trong cửa sổ",
@@ -66,7 +67,7 @@ const vi = {
     generic: "Không thể khởi động terminal.",
   },
   actions: {
-    retry: "Tạo phiên mới",
+    retry: "Bắt đầu phiên mới",
     show: "Hiện terminal",
     minimize: "Thu nhỏ",
     close: "Đóng",
@@ -85,10 +86,52 @@ const vi = {
     title: "Phím tắt terminal",
     show: "Phím tắt terminal",
     escape:
-      "Ctrl+Shift+Escape rời khỏi vùng nhập terminal và đưa tiêu điểm về tab cửa sổ.",
-    closeTab: "Nhấn Delete trên tab đang chọn để đóng terminal đó sau khi xác nhận.",
-    closeWindow: "Alt+Shift+W đóng tất cả terminal sau khi xác nhận.",
-    minimize: "Alt+M thu nhỏ cửa sổ.",
+      "Ctrl+Shift+E rời khỏi vùng nhập terminal và đưa tiêu điểm về tab cửa sổ hoặc nút trên khung. Shift+Tab cũng rời khỏi shell.",
+    closeTab:
+      "Nhấn Delete trên tab đang chọn để đóng terminal đó sau khi xác nhận.",
+    closeWindow:
+      "Alt+Shift+W đóng tất cả terminal trong cửa sổ sau khi xác nhận khi tiêu điểm ở thanh tiêu đề hoặc tab.",
+    minimize:
+      "Alt+M thu nhỏ cửa sổ khi tiêu điểm ở thanh tiêu đề hoặc tab.",
+    hint:
+      "Ctrl+Shift+E hoặc Shift+Tab rời khỏi vùng nhập terminal. Trong shell, phím Alt và Option được gửi tới terminal (readline, vim, tmux); Alt+M và Alt+Shift+W hoạt động từ thanh cửa sổ.",
+  },
+  page: {
+    navLabel: "Terminal",
+    title: "Terminal",
+    eyebrow: "Vận hành",
+    description:
+      "Mở shell trên máy chủ đã quản lý. Quyền terminal là quản trị toàn bộ máy chủ và chỉ dành cho quản trị viên nền tảng.",
+    tabLabel: "Terminal",
+    switchServer: "Máy chủ",
+    chooseServer: "Chọn máy chủ",
+    chooseHint: "Chọn một máy chủ sẵn sàng để mở terminal trên trang.",
+    empty: "Chưa có máy chủ nào",
+    emptyHint: "Hãy thêm và kiểm tra một máy chủ trước khi mở terminal.",
+    addServer: "Thêm máy chủ",
+    starting: "Đang khởi động terminal…",
+    sessionClosedTitle: "Phiên đã đóng",
+    sessionClosedBody:
+      "Trang này không còn terminal đang hoạt động. Hệ thống sẽ không tự khởi động; hãy dùng nút bên dưới khi bạn sẵn sàng.",
+    notAvailableTitle: "Không thể dùng terminal",
+    notAvailableBody:
+      "Terminal chỉ dành cho quản trị viên nền tảng. Hãy đề nghị quyền truy cập rồi tải lại trang này.",
+    notReadyTitle: "Không thể mở terminal",
+    notReadyBody:
+      "Máy chủ này đang ở trạng thái {status}. Terminal chỉ có thể bắt đầu trên node sẵn sàng.",
+    unknownServer: "Máy chủ này không được quản lý bởi bảng điều khiển.",
+  },
+  dock: {
+    label: "Terminal trên trang đang tạm dừng",
+    heading: "Terminal trên trang",
+    paused: "Tạm dừng",
+    resume: "Tiếp tục",
+    resumeTab: "Tiếp tục terminal {title}",
+    openInWindow: "Mở trong cửa sổ",
+    openInWindowTab: "Mở {title} trong cửa sổ",
+    expand: "Hiện các terminal trên trang đang tạm dừng",
+    collapse: "Ẩn các terminal trên trang đang tạm dừng",
+    closeTab: "Đóng {title}",
   },
   appearance: {
     label: "Giao diện terminal",

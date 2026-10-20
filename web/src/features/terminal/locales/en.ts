@@ -17,6 +17,7 @@ const en = {
   },
   rail: {
     openWithCount: "Terminal window, {count} open",
+    pageWithCount: "Page terminals, {count} open",
   },
   pane: {
     openInWindow: "Open in window",
@@ -67,7 +68,7 @@ const en = {
     generic: "The terminal could not be started.",
   },
   actions: {
-    retry: "Start a new session",
+    retry: "Start new session",
     show: "Show terminal",
     minimize: "Minimize",
     close: "Close",
@@ -86,10 +87,51 @@ const en = {
     title: "Terminal keyboard shortcuts",
     show: "Terminal keyboard shortcuts",
     escape:
-      "Ctrl+Shift+Escape leaves the terminal input and returns focus to the window tab.",
+      "Ctrl+Shift+E leaves the terminal input and returns focus to the window tab or the pane action. Shift+Tab also leaves the shell.",
     closeTab: "Delete on a focused tab closes that terminal after confirmation.",
-    closeWindow: "Alt+Shift+W closes all terminals after confirmation.",
-    minimize: "Alt+M minimizes the window.",
+    closeWindow:
+      "Alt+Shift+W closes all window terminals after confirmation when focus is on the window header or a tab.",
+    minimize:
+      "Alt+M minimizes the window when focus is on its header or a tab.",
+    hint:
+      "Ctrl+Shift+E or Shift+Tab leaves the terminal input. Inside the shell, Alt and Option keys go to the terminal (readline, vim, tmux); Alt+M and Alt+Shift+W work from the window chrome.",
+  },
+  page: {
+    navLabel: "Terminal",
+    title: "Terminal",
+    eyebrow: "Operations",
+    description:
+      "Open a host shell on a managed server. Terminal access is full host administration and is limited to platform operators.",
+    tabLabel: "Terminal",
+    switchServer: "Server",
+    chooseServer: "Choose a server",
+    chooseHint: "Select a ready server to start a page terminal.",
+    empty: "No managed servers yet",
+    emptyHint: "Add and validate a server before opening a terminal.",
+    addServer: "Add a server",
+    starting: "Starting terminal…",
+    sessionClosedTitle: "Session closed",
+    sessionClosedBody:
+      "This page no longer has a live terminal. Nothing starts automatically; use the button below when you are ready.",
+    notAvailableTitle: "Terminal not available",
+    notAvailableBody:
+      "The terminal is reserved for platform operators. Ask an operator for access, then reload this page.",
+    notReadyTitle: "Terminal unavailable",
+    notReadyBody:
+      "This server is {status}. A terminal can only start on a ready node.",
+    unknownServer: "This server is not managed by this control plane.",
+  },
+  dock: {
+    label: "Paused page terminals",
+    heading: "Page terminals",
+    paused: "Paused",
+    resume: "Resume",
+    resumeTab: "Resume {title} terminal",
+    openInWindow: "Open in window",
+    openInWindowTab: "Open {title} in the window",
+    expand: "Show paused page terminals",
+    collapse: "Hide paused page terminals",
+    closeTab: "Close {title}",
   },
   appearance: {
     label: "Terminal theme",

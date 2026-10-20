@@ -92,6 +92,18 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
+        path: "terminal",
+        name: "terminal",
+        component: () => import("@/features/terminal/pages/TerminalPage.vue"),
+        meta: {
+          titleKey: "terminal.page.title",
+          requiresAuth: true,
+          requiresPlatformAdmin: true,
+          // The page pane owns its own scroll/fit region.
+          fillViewport: true,
+        },
+      },
+      {
         path: "projects",
         name: "projects",
         component: () => import("@/features/projects/pages/ProjectsPage.vue"),

@@ -21,6 +21,12 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+/**
+ * startNew is emitted only from the moved-to-window notice. The host owns the
+ * decision and opens a fresh page shell; the pane never creates a session on
+ * its own.
+ */
+const emit = defineEmits<{ startNew: [] }>();
 const { t } = useI18n();
 const terminal = useTerminalStore();
 const windowStore = useTerminalWindowStore();
@@ -53,7 +59,10 @@ function closeDetached(): void {
         <NButton size="small" type="primary" @click="showWindow">
           {{ t("terminal.pane.showWindow") }}
         </NButton>
-        <NButton size="small" secondary @click="closeDetached">
+        <NButton size="small" secondary @click="emit('startNew')">
+          {{ t("terminal.actions.retry") }}
+        </NButton>
+        <NButton size="small" quaternary @click="closeDetached">
           {{ t("terminal.pane.close") }}
         </NButton>
       </div>
@@ -79,10 +88,20 @@ function closeDetached(): void {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  max-width: 520px;
+  max-width: min(33rem, 100%);
   margin: auto;
   padding: var(--space-6);
   text-align: center;
+  /* The one-way notice must stay reachable when the floating window opens
+   * over the page (JUS-246 r2): paint it above the window's chrome and give it
+   * a surface so its buttons are real pointer targets, not hidden behind the
+   * terminal. */
+  position: relative;
+  z-index: 74;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elev-raised);
 }
 
 .term-detached-title {

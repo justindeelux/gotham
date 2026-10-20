@@ -131,11 +131,15 @@ function retrySession(): void {
 
 /**
  * onSurfaceKeydown provides the documented escape from xterm's input trap.
- * Ctrl+Shift+Escape moves focus out of the shell to the window tab (or the
- * page pane's action), so keyboard users are never stuck in the terminal.
+ * Ctrl+Shift+E moves focus out of the shell to the window tab (or the page
+ * pane's action), so keyboard users are never stuck in the terminal.
+ *
+ * The chord deliberately avoids Ctrl+Shift+Escape: Windows reserves it for
+ * Task Manager, so the browser never sees it. Shift+Tab also leaves the
+ * shell and is documented in the shortcuts popover.
  */
 function onSurfaceKeydown(event: KeyboardEvent): void {
-  if (!event.ctrlKey || !event.shiftKey || event.key !== "Escape") {
+  if (!event.ctrlKey || !event.shiftKey || event.code !== "KeyE") {
     return;
   }
   event.preventDefault();
@@ -184,7 +188,7 @@ watch(
     :aria-label="variant === 'window' ? undefined : surfaceLabel"
     :aria-labelledby="variant === 'window' ? labelledBy : undefined"
     :aria-describedby="hintId"
-    aria-keyshortcuts="Control+Shift+Escape"
+    aria-keyshortcuts="Control+Shift+E"
     :data-theme="terminal.theme"
     @click="onSurfaceClick"
     @keydown.capture="onSurfaceKeydown"
@@ -238,10 +242,13 @@ watch(
               <dd>{{ t("terminal.shortcuts.closeTab") }}</dd>
             </div>
             <div>
-              <dt class="mono">Ctrl+Shift+Escape</dt>
+              <dt class="mono">Ctrl+Shift+E</dt>
               <dd>{{ t("terminal.shortcuts.escape") }}</dd>
             </div>
           </dl>
+          <p class="term-shortcuts-note small muted">
+            {{ t("terminal.shortcuts.hint") }}
+          </p>
         </div>
       </NPopover>
       <span class="grow" />
@@ -272,7 +279,7 @@ watch(
     </div>
 
     <p :id="hintId" class="term-sr">
-      {{ t("terminal.shortcuts.escape") }}
+      {{ t("terminal.shortcuts.hint") }}
     </p>
     <div ref="surface" class="term-screen" data-testid="terminal-screen" />
 
@@ -407,7 +414,15 @@ watch(
 }
 
 .term-shortcuts-btn {
+  /* WCAG 2.5.8: the trigger keeps a 24x24 target (Naive's tiny 26x22 is
+   * below the minimum). The visual icon stays small; the hit box grows. */
+  min-width: var(--space-6);
+  min-height: var(--space-6);
   margin-left: var(--space-1);
+}
+
+.term-shortcuts-note {
+  max-width: 26rem;
 }
 
 .term-shortcuts {
@@ -560,5 +575,31 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--meta);
+}
+
+/* Phone width (390px): the meta row wraps instead of clipping the working
+ * directory to a single character. The key labels and the session id are
+ * diagnostic only; the cwd takes its own full row, while the action buttons
+ * stay on the first row. */
+@media (max-width: 520px) {
+  .term-meta {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .term-key,
+  .term-session {
+    display: none;
+  }
+
+  .term-cwd {
+    order: 10;
+    flex: 1 1 100%;
+  }
+
+  .term-shortcuts-btn {
+    margin-left: 0;
+  }
 }
 </style>

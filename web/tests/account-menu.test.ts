@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AccountMenu from "@/app/layouts/AccountMenu.vue";
 import { useAuthStore } from "@/features/auth";
 import { useTeamsStore } from "@/features/teams";
+import { useTerminalStore } from "@/features/terminal";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -141,6 +142,22 @@ describe("shared account menu", () => {
     await flushPromises();
     expect(logout).toHaveBeenCalledOnce();
     expect(router.currentRoute.value.name).toBe("login");
+    wrapper.unmount();
+  });
+
+  it("returns focus to the account trigger when sign-out is cancelled", async () => {
+    const { wrapper, router } = await mountMenu(true);
+    vi.spyOn(useTerminalStore(), "confirmCloseAll").mockResolvedValue(false);
+    wrapper.findComponent(NDropdown).vm.$emit("select", "sign-out");
+    await flushPromises();
+    await nextTick();
+    // The cancel aborts the sign-out and leaves the keyboard user on the
+    // trigger instead of document.body (JUS-246 review carry-over).
+    expect(router.currentRoute.value.name).not.toBe("login");
+    const trigger = globalThis.document.querySelector<HTMLElement>(
+      '[aria-haspopup="menu"]',
+    );
+    expect(globalThis.document.activeElement).toBe(trigger);
     wrapper.unmount();
   });
 });

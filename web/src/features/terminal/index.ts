@@ -17,6 +17,8 @@
  * Closing always goes through `requestClose` so the shared confirmation runs.
  */
 export { default as TerminalPane } from "./components/TerminalPane.vue";
+export { default as TerminalPageDock } from "./components/TerminalPageDock.vue";
+export { default as TerminalSessionStage } from "./components/TerminalSessionStage.vue";
 export { default as TerminalSurface } from "./components/TerminalSurface.vue";
 export { default as TerminalWindow } from "./components/TerminalWindow.vue";
 export { useTerminalStore } from "./stores/terminal";

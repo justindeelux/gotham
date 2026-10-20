@@ -26,8 +26,10 @@ import {
   ServerMetricsKey,
   useServerMetrics,
 } from "@/features/servers/composables/useServerMetrics";
+import { useServerDetailTab } from "@/features/servers/composables/useServerDetailTab";
 import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers/stores/servers";
+import ServerTerminalTab from "@/features/servers/components/ServerTerminalTab.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -37,6 +39,8 @@ const serversStore = useServersStore();
 const authStore = useAuthStore();
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
+
+const { activeTab, blockedTerminal, showOverview } = useServerDetailTab(serverId);
 
 const server = ref<Server | null>(null);
 const loading = ref(false);
@@ -59,7 +63,22 @@ const error = computed<string | null>(() => {
 const validating = ref(false);
 const deleting = ref(false);
 const editOpen = ref(false);
-const activeTab = ref("overview");
+
+/**
+ * liveServer merges the polled list status into the detail row, so a node
+ * that goes offline (or comes back) is reflected without a manual reload.
+ */
+const liveServer = computed<Server | null>(() => {
+  const local = server.value;
+  const cached = serversStore.servers.find((item) => item.id === serverId.value);
+  if (!local) {
+    return cached ?? null;
+  }
+  if (!cached || cached.status === local.status) {
+    return local;
+  }
+  return { ...local, status: cached.status };
+});
 
 // One shared metrics window for the page and the metrics tab.
 const { context: metricsContext, resetForServer } = useServerMetrics(serverId, activeTab);
@@ -136,10 +155,21 @@ async function handleDelete(): Promise<void> {
 }
 
 watch(serverId, () => {
-  activeTab.value = "overview";
   resetForServer();
   void fetchServer();
 });
+
+// Demotion is enforced by the backend and must leave the operator tab even
+// though its pane is removed by `v-if` at the same moment. A sign-out is not
+// a demotion: the auth flow owns that redirect.
+watch(
+  [() => authStore.isAuthenticated, () => authStore.isPlatformAdmin],
+  ([authenticated, admin]) => {
+    if (authenticated && !admin) {
+      showOverview();
+    }
+  },
+);
 
 onMounted(() => {
   void fetchServer();
@@ -171,6 +201,16 @@ onMounted(() => {
           @edit="editOpen = true"
           @validate="handleValidate"
         />
+
+        <NAlert
+          v-if="blockedTerminal"
+          type="info"
+          :show-icon="true"
+          class="server-blocked-tab"
+        >
+          <template #header>{{ $t("terminal.page.notAvailableTitle") }}</template>
+          {{ $t("terminal.page.notAvailableBody") }}
+        </NAlert>
 
         <NTabs v-model:value="activeTab" type="line" animated>
           <NTabPane name="overview" :tab="$t('servers.detail.tabOverview')">
@@ -231,6 +271,22 @@ onMounted(() => {
             </NCard>
           </NTabPane>
 
+          <NTabPane
+            v-if="authStore.isPlatformAdmin"
+            name="terminal"
+            :tab="$t('terminal.page.tabLabel')"
+            display-directive="show"
+          >
+            <ServerTerminalTab
+              class="server-terminal"
+              :server="liveServer"
+              :server-id="serverId"
+              :ready="liveServer?.status === 'ready'"
+              :active="activeTab === 'terminal'"
+              @blocked="showOverview"
+            />
+          </NTabPane>
+
           <NTabPane name="metrics" :tab="$t('servers.detail.tabMetrics')">
             <ServerMetricsTab />
           </NTabPane>
@@ -268,5 +324,19 @@ onMounted(() => {
 
 .muted {
   color: var(--muted);
+}
+
+.server-terminal {
+  /* The extracted stage owns the state view; keep a usable terminal height
+   * on the detail page without letting the page grow unbounded. */
+  display: flex;
+  flex-direction: column;
+  height: clamp(18rem, 60vh, 44rem);
+  min-height: 0;
+  margin-top: var(--space-4);
+}
+
+.server-blocked-tab {
+  margin-bottom: var(--space-3);
 }
 </style>

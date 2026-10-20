@@ -36,9 +36,14 @@ import { i18n } from "@/shared/i18n";
  *                                               create already in flight is shared
  *   - detachToWindow(tabId)                     one-way page → window transfer
  *   - requestClose([tabId])                     same confirmation path as the UI
+ *   - isDisplayed(tabId)                        a page pane owns the live host
  *
  * A transfer reuses the SAME session id, renderer and socket: it only moves
  * the host element. There is deliberately no window → page action.
+ *
+ * A page session outlives its route: the runtime keeps the renderer when the
+ * pane unmounts (`displayed` drops), and the app-level page dock shows the
+ * paused session so it stays reachable and closable from every route.
  */
 
 /** TerminalMode is where one live session is shown. */
@@ -64,6 +69,12 @@ export interface TerminalTab {
   exitSignal: string;
   errorCode: TerminalErrorCode | null;
   createdAt: number;
+  /**
+   * sourcePath is the route that owns this page session, used by the app
+   * dock to resume a paused page tab after a route change. It is display
+   * metadata only and never part of the idempotency key.
+   */
+  sourcePath: string;
 }
 
 /** TerminalOpenOptions is the public entry-point input. */
@@ -76,6 +87,15 @@ export interface TerminalOpenOptions {
   cols?: number;
   rows?: number;
   title?: string;
+  /** sourcePath is the fullPath of the page/tab that opened the session. */
+  sourcePath?: string;
+  /**
+   * fresh asks for a new page tab even when a detached tab for the same
+   * target exists. Hosts use it only for an explicit "start a new session"
+   * action (for example after the page session moved into the window);
+   * ordinary opens still reuse the live shell.
+   */
+  fresh?: boolean;
 }
 
 /** TerminalCloseRequest is the pending confirmation (always one at a time). */
@@ -139,6 +159,12 @@ export const useTerminalStore = defineStore("terminal", () => {
    * new renderer into the still-mounted pane.
    */
   const surfaces = new Map<string, HTMLElement>();
+  /**
+   * displayed is the reactive companion of `surfaces`: the page dock shows a
+   * paused card for every page tab without a live pane, while window tabs are
+   * surfaced by the floating window and the rail.
+   */
+  const displayed = ref<Set<string>>(new Set());
   /** inflight deduplicates rapid page opens for the same target. */
   const inflight = new Map<string, Promise<TerminalTab>>();
   /**
@@ -174,6 +200,11 @@ export const useTerminalStore = defineStore("terminal", () => {
   );
   const windowOpenCount = computed<number>(() => windowTabs.value.length);
   /**
+   * sessionCount is the total number of live tabs: page sessions count too,
+   * so the rail badge never hides a page-only shell from the operator.
+   */
+  const sessionCount = computed<number>(() => tabs.value.length);
+  /**
    * hasLiveSessions is the beforeunload guard: a browser unload terminates an
    * attached PTY just like a tab close, so it must warn the same way.
    */
@@ -188,11 +219,17 @@ export const useTerminalStore = defineStore("terminal", () => {
     return tabs.value.find((tab) => tab.id === id) ?? null;
   }
 
-  /** findTabForTarget returns an existing session for one page target. */
+  /**
+   * findTabForTarget returns an existing session for one page target. A live
+   * page tab wins over a detached copy of the same target: after an explicit
+   * "start a new page session", later opens must reuse the page tab instead of
+   * jumping back to the old window tab.
+   */
   function findTabForTarget(options: TerminalOpenOptions): TerminalTab | null {
     const key = targetKey(options);
+    const matches = tabs.value.filter((tab) => targetKey(tab) === key);
     return (
-      tabs.value.find((tab) => targetKey(tab) === key) ?? null
+      matches.find((tab) => tab.mode === "page") ?? matches[0] ?? null
     );
   }
 
@@ -364,6 +401,7 @@ export const useTerminalStore = defineStore("terminal", () => {
       exitSignal: "",
       errorCode: null,
       createdAt: Date.now(),
+      sourcePath: options.sourcePath ?? "",
     };
     tabs.value.push(tab);
     // Read the tab back from the reactive array: Vue wraps the raw object on
@@ -384,15 +422,29 @@ export const useTerminalStore = defineStore("terminal", () => {
    * remounting the page cannot spawn a duplicate shell. A session that was
    * detached is returned as-is: the caller renders its "open in window" state
    * instead of creating a second session.
+   *
+   * `fresh: true` is the explicit exception: the host asked for a brand-new
+   * page shell (for example from the moved-to-window notice), so the detached
+   * tab is left in the window and a page tab is created. Rapid repeated fresh
+   * opens for one target still share the in-flight promise.
    */
   function openPageSession(
     options: TerminalOpenOptions,
   ): Promise<TerminalTab> {
-    const existing = findTabForTarget(options);
-    if (existing) {
-      return Promise.resolve(existing);
+    if (options.fresh !== true) {
+      const existing = findTabForTarget(options);
+      if (existing) {
+        // Another entry point (menu page, server tab) reused this shell: keep
+        // the latest source so the dock can resume the pane the user came from.
+        if (options.sourcePath) {
+          existing.sourcePath = options.sourcePath;
+        }
+        return Promise.resolve(existing);
+      }
     }
-    const key = targetKey(options);
+    const key = options.fresh === true
+      ? `${targetKey(options)}\u0000fresh`
+      : targetKey(options);
     const pending = inflight.get(key);
     if (pending) {
       return pending;
@@ -461,6 +513,7 @@ export const useTerminalStore = defineStore("terminal", () => {
   /** attach offers a surface element to the live runtime (or queues it). */
   function attach(id: string, container: HTMLElement): void {
     surfaces.set(id, container);
+    displayed.value.add(id);
     runtimes.get(id)?.attach(container);
   }
 
@@ -472,7 +525,13 @@ export const useTerminalStore = defineStore("terminal", () => {
   function detach(id: string, container: HTMLElement): void {
     if (surfaces.get(id) === container) {
       surfaces.delete(id);
+      displayed.value.delete(id);
     }
+  }
+
+  /** isDisplayed reports whether a mounted pane currently owns the host. */
+  function isDisplayed(id: string): boolean {
+    return displayed.value.has(id);
   }
 
   /** focus focuses the live renderer of one tab. */
@@ -618,6 +677,7 @@ export const useTerminalStore = defineStore("terminal", () => {
       runtimes.delete(id);
       runtime?.dispose(true);
       surfaces.delete(id);
+      displayed.value.delete(id);
       retrying.delete(id);
       if (tab.sessionId !== "") {
         void closeTerminalSession(tab.serverId, tab.sessionId).catch(() => {
@@ -667,6 +727,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
     runtimes.clear();
     surfaces.clear();
+    displayed.value.clear();
     inflight.clear();
     windowInflight.clear();
     windowBusyKeys.value.clear();
@@ -684,6 +745,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     pageTabs,
     windowTabs,
     windowOpenCount,
+    sessionCount,
     hasLiveSessions,
     closeRequest,
     theme: computed<TerminalThemeName>(() => appearance.theme),
@@ -696,6 +758,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     activate,
     attach,
     detach,
+    isDisplayed,
     focus,
     fit,
     setTheme,

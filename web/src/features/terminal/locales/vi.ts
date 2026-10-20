@@ -94,6 +94,9 @@ const vi = {
       gothamLight: "Gotham Sáng",
     },
   },
+  banner: {
+    server: "máy chủ",
+  },
 };
 
 export default vi;

@@ -18,8 +18,10 @@ import type {
 } from "@/features/terminal/transport/terminalRuntime";
 import {
   isHostTerminalTarget,
+  knownGothamVersion,
   runningGothamVersion,
 } from "@/features/terminal/utils/terminalBanner";
+import { i18n } from "@/shared/i18n";
 
 /**
  * Terminal tabs and live sessions (JUS-245).
@@ -211,12 +213,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.exitCode = null;
     tab.exitSignal = "";
     try {
-      // The version lookup runs beside the HTTP create and is cached for the
-      // page lifetime; a failed lookup only drops the version tag.
+      // The version lookup runs beside the HTTP create and never gates the
+      // session: a hung /version only drops the banner's version tag.
       const hostSession = isHostTerminalTarget(tab.target);
-      const versionRequest = hostSession
-        ? runningGothamVersion()
-        : Promise.resolve<string | null>(null);
+      const versionRequest = hostSession ? runningGothamVersion() : null;
       const session = await createTerminalSession(tab.serverId, {
         target: tab.target,
         ...(tab.root !== "" ? { root: tab.root } : {}),
@@ -224,7 +224,6 @@ export const useTerminalStore = defineStore("terminal", () => {
         cols: tab.cols,
         rows: tab.rows,
       });
-      const version = await versionRequest;
       // A tab can be closed while the create call is in flight.
       if (!findTab(tab.id)) {
         await closeTerminalSession(tab.serverId, session.id).catch(() => {
@@ -242,11 +241,13 @@ export const useTerminalStore = defineStore("terminal", () => {
         ...(hostSession
           ? {
               banner: {
-                version,
+                version: knownGothamVersion(),
                 serverName: tab.serverName,
                 serverId: tab.serverId,
                 target: tab.target,
+                serverLabel: i18n.global.t("terminal.banner.server"),
               },
+              ...(versionRequest ? { bannerVersion: versionRequest } : {}),
             }
           : {}),
         onState: (patch) => applyPatch(tab, patch),

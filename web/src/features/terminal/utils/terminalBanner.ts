@@ -17,23 +17,20 @@ export const TERMINAL_LOGO_SHA256 =
   "76a2f2e19ef0f58326c1f79c5ac837cc25df96f40b7a6d606d292f27b177a274";
 
 /**
- * BLOCK_CELL_WIDTH is the cell width xterm's DOM renderer gives the logo's
- * block glyphs. They are font-fallback glyphs in the mono stack and occupy two
- * cells, so a 63-character line needs 121 cells (blank lines stay 63).
+ * TERMINAL_LOGO_DISPLAY is the asset with terminal line endings. The committed
+ * file keeps plain LF (and no final newline); xterm needs CRLF or every line
+ * continues at the previous cursor column.
  */
-const BLOCK_CELL_WIDTH = 2;
+export const TERMINAL_LOGO_DISPLAY = TERMINAL_LOGO.replace(/\r?\n/g, "\r\n");
 
-/** logoCellWidth measures one logo line in terminal cells, not characters. */
-function logoCellWidth(line: string): number {
-  return [...line].reduce(
-    (width, char) => width + (char === " " ? 1 : BLOCK_CELL_WIDTH),
-    0,
-  );
-}
-
-/** logoColumns is the widest logo line, in terminal cells. */
+/**
+ * logoColumns is the widest logo line in xterm cells. U+2593/U+2591 are
+ * single-width in xterm's Unicode tables (verified in Chromium at 63, 80 and
+ * 100 columns), so the code-point count of a line is its cell width; there is
+ * no double-width assumption here.
+ */
 export const TERMINAL_LOGO_COLUMNS = Math.max(
-  ...TERMINAL_LOGO.split("\n").map(logoCellWidth),
+  ...TERMINAL_LOGO.split("\n").map((line) => [...line].length),
 );
 
 /**
@@ -42,6 +39,15 @@ export const TERMINAL_LOGO_COLUMNS = Math.max(
  * narrow pane never wraps the artwork into the prompt.
  */
 export const TERMINAL_LOGO_MIN_COLS = TERMINAL_LOGO_COLUMNS;
+
+/** TERMINAL_BANNER_LINES is the logo height plus its title, label and gap. */
+export const TERMINAL_BANNER_LINES = TERMINAL_LOGO.split("\n").length + 3;
+
+/**
+ * TERMINAL_LOGO_MIN_ROWS keeps the logo plus a prompt line inside a short
+ * pane; below it the compact banner is used instead of scrolling it away.
+ */
+export const TERMINAL_LOGO_MIN_ROWS = TERMINAL_BANNER_LINES + 2;
 
 /** TerminalBannerInfo is the display-only metadata for one new session. */
 export interface TerminalBannerInfo {
@@ -53,6 +59,8 @@ export interface TerminalBannerInfo {
   serverId: string;
   /** target is the session target; only a host target gets a banner. */
   target: string;
+  /** serverLabel is the localized metadata label (fallback: "server"). */
+  serverLabel?: string;
 }
 
 /** isHostTerminalTarget reports whether a session targets the server host. */
@@ -61,16 +69,33 @@ export function isHostTerminalTarget(target: string): boolean {
 }
 
 /**
- * sanitizeTerminalText removes control characters (including ESC) and folds
- * whitespace, so a server name or version can never inject terminal control
- * sequences or break the banner into extra rows.
+ * BIDI_CONTROLS are Unicode formatting controls that can reorder the banner
+ * around a server-supplied name (Trojan Source class attacks).
+ */
+const BIDI_CONTROLS =
+  /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+
+/**
+ * sanitizeTerminalText removes control characters, escape/OSC payloads and
+ * bidi overrides, then folds whitespace, so no server name, version or other
+ * metadata can inject terminal control sequences or reorder the banner.
  */
 export function sanitizeTerminalText(value: string, maxLength: number): string {
   const cleaned = value
-    // Drop complete CSI sequences first (SGR colors, erases), then any
-    // remaining C0/C1 control characters so no escape can reach xterm.
+    // OSC strings (title, clipboard, links): drop the whole payload.
+    // eslint-disable-next-line no-control-regex -- stripping ESC/OSC is the point
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
+    // DCS/SOS/PM/APC strings: drop the whole payload.
+    // eslint-disable-next-line no-control-regex -- stripping ESC/DCS is the point
+    .replace(/\u001b[P^_][^\u001b]*(?:\u001b\\)?/g, "")
+    // CSI sequences (SGR colors, erases, cursor movement).
+    // eslint-disable-next-line no-control-regex -- stripping ESC/CSI is the point
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    // Remaining two-byte escape sequences.
     // eslint-disable-next-line no-control-regex -- stripping ESC is the point
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-_]|\u001b./g, "")
+    .replace(BIDI_CONTROLS, "")
+    // C0/C1 controls (CR, LF, TAB, DEL) become spaces before whitespace folds.
     // eslint-disable-next-line no-control-regex -- stripping controls is the point
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
     .replace(/\s+/g, " ")
@@ -81,55 +106,80 @@ export function sanitizeTerminalText(value: string, maxLength: number): string {
   return `${cleaned.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
-/** BANNER_LABEL_PREFIX is the fixed server metadata prefix. */
-const BANNER_LABEL_PREFIX = "server: ";
+/** DEFAULT_SERVER_LABEL is used by non-Vue callers; the store localizes it. */
+const DEFAULT_SERVER_LABEL = "server";
 
 /** bannerLabel is the server line shared by the wide and compact banners. */
 function bannerLabel(info: TerminalBannerInfo, columns: number): string {
+  const prefix = `${sanitizeTerminalText(
+    info.serverLabel ?? DEFAULT_SERVER_LABEL,
+    24,
+  )}: `;
   // Leave room for the prefix so the rendered line never exceeds the pane.
-  const room = Math.max(1, columns - BANNER_LABEL_PREFIX.length);
+  const room = Math.max(1, columns - prefix.length);
   const name =
     sanitizeTerminalText(info.serverName, room) ||
     sanitizeTerminalText(info.serverId, room);
-  return `${BANNER_LABEL_PREFIX}${name}`;
+  return `${prefix}${name}`;
 }
 
 /**
  * buildTerminalBanner returns the exact bytes written to xterm once a new
- * host session is confirmed. Wide renderers get the complete asset; narrow
- * renderers get a two-line banner so nothing wraps into the prompt. An
- * unknown version simply omits the version tag.
+ * host session is confirmed. A renderer wide and tall enough gets the complete
+ * asset (63 columns, deterministic rows); anything smaller gets the compact
+ * two-line banner so nothing wraps into the prompt. Every dynamic value is
+ * sanitized on BOTH paths, and an unknown version only omits the version tag.
  */
 export function buildTerminalBanner(
   info: TerminalBannerInfo,
   columns: number,
+  rows: number = Number.MAX_SAFE_INTEGER,
 ): string {
   const width = Math.max(1, Math.floor(columns));
+  const height = Math.max(1, Math.floor(rows));
   const tag = formatVersionTag(info.version);
-  const title = tag === null ? "Gotham" : `Gotham ${tag}`;
-  const label = bannerLabel(info, width);
-  if (width >= TERMINAL_LOGO_MIN_COLS) {
-    return `${TERMINAL_LOGO}\r\n${title} · ${label}\r\n\r\n`;
-  }
-  return `${sanitizeTerminalText(title, width)}\r\n${sanitizeTerminalText(
-    label,
+  const safeTag =
+    tag === null ? null : sanitizeTerminalText(tag, Math.max(1, width - 7));
+  const title = sanitizeTerminalText(
+    safeTag === null ? "Gotham" : `Gotham ${safeTag}`,
     width,
-  )}\r\n\r\n`;
+  );
+  const label = sanitizeTerminalText(bannerLabel(info, width), width);
+  if (width >= TERMINAL_LOGO_MIN_COLS && height >= TERMINAL_LOGO_MIN_ROWS) {
+    return `${TERMINAL_LOGO_DISPLAY}\r\n${title} · ${label}\r\n\r\n`;
+  }
+  return `${title}\r\n${label}\r\n\r\n`;
 }
 
 let runningVersionRequest: Promise<string | null> | null = null;
+let knownVersion: string | null = null;
+
+/**
+ * knownGothamVersion returns the already-resolved version without awaiting, so
+ * a new session can render the banner immediately when metadata is warm.
+ */
+export function knownGothamVersion(): string | null {
+  return knownVersion;
+}
 
 /**
  * runningGothamVersion resolves the running control-plane version through the
- * existing metadata endpoint and caches it for the page's lifetime: opening
- * ten terminals must not issue ten /version requests. A failed lookup resolves
- * to null so the banner still renders without a version.
+ * existing metadata endpoint and caches a SUCCESS for the page's lifetime:
+ * opening ten terminals must not issue ten /version requests. A failure is not
+ * cached forever (a later session may succeed); it resolves to null so the
+ * banner still renders without a version.
  */
 export function runningGothamVersion(): Promise<string | null> {
   if (runningVersionRequest === null) {
     runningVersionRequest = getVersion()
-      .then((version) => version)
-      .catch(() => null);
+      .then((version) => {
+        knownVersion = version;
+        return version;
+      })
+      .catch(() => {
+        runningVersionRequest = null;
+        return null;
+      });
   }
   return runningVersionRequest;
 }

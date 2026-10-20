@@ -246,19 +246,19 @@
    * repaints xterm — the shell, its id and buffer are untouched. */
   --term-dark-bg: var(--surface-warm);
   --term-dark-fg: var(--fg);
-  --term-dark-cursor: var(--accent);
+  --term-dark-cursor: #7b87ff;
   --term-dark-cursor-accent: var(--surface-warm);
-  --term-dark-selection: rgba(88, 101, 242, 0.35);
+  --term-dark-selection: rgba(123, 135, 255, 0.35);
   --term-dark-selection-fg: var(--fg-2);
-  --term-dark-ansi-black: #1e1f22;
-  --term-dark-ansi-red: #f23f43;
+  --term-dark-ansi-black: #6b7280;
+  --term-dark-ansi-red: #f65a5e;
   --term-dark-ansi-green: #23a55a;
   --term-dark-ansi-yellow: #f0b232;
-  --term-dark-ansi-blue: #5865f2;
+  --term-dark-ansi-blue: #6b7cff;
   --term-dark-ansi-magenta: #c47cf5;
   --term-dark-ansi-cyan: #4fc3f7;
   --term-dark-ansi-white: #dbdee1;
-  --term-dark-ansi-bright-black: #4e5058;
+  --term-dark-ansi-bright-black: #828a94;
   --term-dark-ansi-bright-red: #ff6b6e;
   --term-dark-ansi-bright-green: #3fd27a;
   --term-dark-ansi-bright-yellow: #ffd166;
@@ -281,12 +281,12 @@
   --term-light-ansi-magenta: #9333ea;
   --term-light-ansi-cyan: #0e7490;
   --term-light-ansi-white: #4b5563;
-  --term-light-ansi-bright-black: #6b7280;
-  --term-light-ansi-bright-red: #dc2626;
-  --term-light-ansi-bright-green: #16a34a;
-  --term-light-ansi-bright-yellow: #ca8a04;
+  --term-light-ansi-bright-black: #5b6270;
+  --term-light-ansi-bright-red: #c81e1e;
+  --term-light-ansi-bright-green: #166534;
+  --term-light-ansi-bright-yellow: #8a6400;
   --term-light-ansi-bright-blue: #2563eb;
-  --term-light-ansi-bright-magenta: #a855f7;
-  --term-light-ansi-bright-cyan: #0891b2;
+  --term-light-ansi-bright-magenta: #7e22ce;
+  --term-light-ansi-bright-cyan: #155e75;
   --term-light-ansi-bright-white: #111827;
 }

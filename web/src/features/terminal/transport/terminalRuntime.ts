@@ -94,8 +94,17 @@ export interface TerminalRuntimeOptions {
   theme?: TerminalThemeName;
   /** banner is display-only metadata written once after `opened` (host only). */
   banner?: TerminalBannerInfo;
+  /**
+   * bannerVersion is the version lookup started in parallel with the session
+   * create. The banner never waits on it for session start; it is used if it
+   * resolves before the first output/input, otherwise the banner omits it.
+   */
+  bannerVersion?: Promise<string | null>;
   deps?: Partial<TerminalRuntimeDeps>;
 }
+
+/** BANNER_VERSION_WAIT_MS bounds how long the display banner waits for metadata. */
+export const BANNER_VERSION_WAIT_MS = 750;
 
 /** defaultCreateSocket wraps the browser WebSocket behind the minimal shape. */
 function defaultCreateSocket(url: string, protocols: string[]): TerminalSocket {
@@ -159,10 +168,15 @@ export class TerminalRuntime {
   private themeName: TerminalThemeName;
   /** bannerWritten ensures one display banner per runtime/session. */
   private bannerWritten = false;
+  /** bannerVersion is the version known when the banner is finally written. */
+  private bannerVersion: string | null;
+  /** bannerTimer writes a version-less banner if metadata is slow. */
+  private bannerTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: TerminalRuntimeOptions) {
     this.options = options;
     this.themeName = options.theme ?? DEFAULT_TERMINAL_THEME;
+    this.bannerVersion = options.banner?.version ?? null;
     this.deps = {
       createSocket: options.deps?.createSocket ?? defaultCreateSocket,
       loadTerminal: options.deps?.loadTerminal ?? defaultLoadTerminal,
@@ -231,6 +245,11 @@ export class TerminalRuntime {
 
   /** sendInput sends raw keystrokes; nothing is queued while disconnected. */
   sendInput(data: string): void {
+    // A user keystroke ahead of a slow version lookup flushes the banner first
+    // (without the tag), so the banner never lands after the user's echo.
+    if (this.status === "connected") {
+      this.writeBanner();
+    }
     this.send(encodeInput(data));
   }
 
@@ -262,6 +281,7 @@ export class TerminalRuntime {
     }
     this.disposed = true;
     this.stopHeartbeat();
+    this.clearBannerTimer();
     this.inputSubscription?.dispose();
     this.resizeSubscription?.dispose();
     this.observer?.disconnect();
@@ -418,6 +438,9 @@ export class TerminalRuntime {
     }
     switch (frame.kind) {
       case "output":
+        // Flush the welcome first when metadata was still pending, so shell
+        // output never appears above the banner.
+        this.writeBanner();
         this.terminal?.write(frame.bytes);
         return;
       case "opened": {
@@ -439,13 +462,15 @@ export class TerminalRuntime {
         this.pendingSize = null;
         this.sendResize(size.cols, size.rows);
         this.fit();
-        // Display-only welcome: written to xterm, never to the socket.
-        this.writeBanner();
+        // Display-only welcome: written to xterm, never to the socket. A slow
+        // /version never delays this confirmation or the PTY stream.
+        this.scheduleBanner();
         return;
       }
       case "exited":
         this.ended = true;
         this.stopHeartbeat();
+        this.clearBannerTimer();
         this.setStatus("exited", {
           exitCode: frame.info.exit_code,
           exitSignal: frame.info.signal,
@@ -454,6 +479,7 @@ export class TerminalRuntime {
       case "error":
         this.ended = true;
         this.stopHeartbeat();
+        this.clearBannerTimer();
         // The server's message is already a bounded, localized-agnostic
         // diagnostic; the catalog supplies the title and generic fallback.
         this.setStatus("error", { errorMessage: frame.message });
@@ -463,16 +489,51 @@ export class TerminalRuntime {
       case "invalid":
         this.ended = true;
         this.stopHeartbeat();
+        this.clearBannerTimer();
         this.setStatus("error", { errorCode: "generic", errorMessage: "" });
         return;
     }
   }
 
   /**
+   * scheduleBanner writes the welcome without delaying the session. A warm
+   * version renders immediately; a pending lookup gets a short display-only
+   * wait, and the first output/input flushes the banner early (without a tag)
+   * so ordering stays banner → shell output.
+   */
+  private scheduleBanner(): void {
+    const banner = this.options.banner;
+    if (
+      this.bannerWritten ||
+      !banner ||
+      !isHostTerminalTarget(banner.target)
+    ) {
+      return;
+    }
+    if (this.bannerVersion !== null || !this.options.bannerVersion) {
+      this.writeBanner();
+      return;
+    }
+    void this.options.bannerVersion
+      .then((version) => {
+        if (version !== null) {
+          this.bannerVersion = version;
+        }
+        this.writeBanner();
+      })
+      .catch(() => this.writeBanner());
+    this.bannerTimer ??= setTimeout(() => {
+      this.bannerTimer = null;
+      this.writeBanner();
+    }, BANNER_VERSION_WAIT_MS);
+  }
+
+  /**
    * writeBanner prints the Gotham welcome once, on the `opened` frame of this
-   * runtime. A tab switch, fit, minimize/restore, theme change or page→window
-   * detach re-parents the same renderer and never re-runs this. Non-host
-   * targets (containers) are filtered before anything reaches the screen.
+   * runtime (or at the first output/input when metadata was slow). A tab
+   * switch, fit, minimize/restore, theme change or page→window detach
+   * re-parents the same renderer and never re-runs this. Non-host targets
+   * (containers) are filtered before anything reaches the screen.
    */
   private writeBanner(): void {
     const banner = this.options.banner;
@@ -484,8 +545,24 @@ export class TerminalRuntime {
       return;
     }
     this.bannerWritten = true;
+    this.clearBannerTimer();
     const columns = this.terminal?.cols ?? this.options.session.cols;
-    this.terminal?.write(buildTerminalBanner(banner, columns));
+    const rows = this.terminal?.rows ?? this.options.session.rows;
+    this.terminal?.write(
+      buildTerminalBanner(
+        { ...banner, version: this.bannerVersion },
+        columns,
+        rows,
+      ),
+    );
+  }
+
+  /** clearBannerTimer cancels the display-only metadata wait. */
+  private clearBannerTimer(): void {
+    if (this.bannerTimer !== null) {
+      clearTimeout(this.bannerTimer);
+      this.bannerTimer = null;
+    }
   }
 
   /**

@@ -95,6 +95,9 @@ const en = {
       gothamLight: "Gotham Light",
     },
   },
+  banner: {
+    server: "server",
+  },
 };
 
 export default en;

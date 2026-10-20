@@ -329,28 +329,6 @@ async function storeCall(
   );
 }
 
-/** windowStoreCall runs one action on the live Pinia terminal-window store. */
-async function windowStoreCall(
-  page: Page,
-  action: string,
-  args: unknown[] = [],
-): Promise<unknown> {
-  return page.evaluate(
-    async ({ name, params }) => {
-      const app = (document.querySelector("#app") as unknown as {
-        __vue_app__: {
-          config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
-        };
-      }).__vue_app__;
-      const store = app.config.globalProperties.$pinia._s.get("terminalWindow") as {
-        [key: string]: (..._args: unknown[]) => unknown;
-      };
-      return store[name]!(...params);
-    },
-    { name: action, params: args },
-  );
-}
-
 /** countOf counts non-overlapping occurrences of one marker in the buffer. */
 function countOf(text: string, marker: string): number {
   return text.split(marker).length - 1;
@@ -1031,6 +1009,15 @@ test("the theme applies immediately and survives page → window without a new s
   const surface = page.locator(".term-window .term-surface:visible");
   await expect(page.locator(".term-window")).toBeVisible();
   await expect(surface).toHaveAttribute("data-theme", "gotham-light");
+  // The frame around the xterm canvas follows the light theme instead of
+  // leaving an 8px dark gutter.
+  await expect
+    .poll(() =>
+      surface.evaluate((element) =>
+        getComputedStyle(element as HTMLElement).backgroundColor,
+      ),
+    )
+    .toBe("rgb(247, 248, 250)");
   await expect.poll(() => terminalText(page)).toContain("welcome session-1");
   expect(state.creates).toBe(1);
 
@@ -1059,17 +1046,79 @@ test("the theme applies immediately and survives page → window without a new s
   expect(state.creates).toBe(1);
 });
 
-test("the host banner shows the exact logo, real version and server once", async ({
+test("the theme menu is keyboard operable and never types into the shell", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.setViewportSize({ width: 1280, height: 800 });
   const state = freshState();
   await mockTerminalApi(page, state);
   await seedApp(page, "/dashboard");
-  // A wide renderer is the only size that can show the 179-column artwork
-  // without wrapping it into the prompt.
-  await windowStoreCall(page, "setSize", [1860, 900, 1920, 1080]);
+  const tab = await openWindow(page, "keys");
+  await expect(
+    page.locator(".term-window .term-surface:visible .term-state"),
+  ).toHaveText("Connected");
 
+  const session = state.sessions[0]!;
+  // Ignore the initial fitted-size frame; any 0x01 after this is leaked input.
+  session.opcodes.length = 0;
+  session.input = "";
+  const surface = page.locator(".term-window .term-surface:visible");
+  const trigger = surface.locator(".term-theme-btn");
+  const group = page.getByRole("radiogroup", { name: "Terminal theme" });
+
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(group).toBeVisible();
+  // Focus lands on the checked radio, not xterm's textarea.
+  await expect(group.getByRole("radio", { name: "Gotham Dark" })).toBeFocused();
+
+  // Arrows move the native radio group and apply the theme as they go.
+  await page.keyboard.press("ArrowDown");
+  await expect(surface).toHaveAttribute("data-theme", "gotham-light");
+  await page.keyboard.press("ArrowUp");
+  await expect(surface).toHaveAttribute("data-theme", "gotham-dark");
+  await page.keyboard.press("Space");
+  await page.keyboard.press("Enter");
+  // A printable key while the menu owns focus must not become PTY input.
+  await page.keyboard.press("a");
+  await page.keyboard.press("Tab");
+  const tabLandedInShell = await page.evaluate(
+    () =>
+      document.activeElement?.classList.contains("xterm-helper-textarea") ??
+      false,
+  );
+  expect(tabLandedInShell).toBe(false);
+  await trigger.focus();
+  await page.keyboard.press("Escape");
+  await expect(group).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  // Reopen with Space on the trigger, pick the light theme, Escape back.
+  await page.keyboard.press("Space");
+  await expect(group).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await expect(surface).toHaveAttribute("data-theme", "gotham-light");
+  await page.keyboard.press("Escape");
+  await expect(group).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  // The shell never saw a keystroke from the menu, and the PTY is unchanged.
+  expect(session.opcodes.filter((opcode) => opcode === 1)).toEqual([]);
+  expect(session.input).toBe("");
+  expect(state.creates).toBe(1);
+  expect((await tabState(page, tab.id)).status).toBe("connected");
+});
+
+test("the host banner shows the exact logo, real version and server once", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  // The default window is ~100 columns: enough for the 63-cell logo, so a
+  // fresh session must show the artwork without any resizing.
   const first = await openWindow(page, "one");
   await expect(page.locator(".term-window")).toBeVisible();
   await expect.poll(() => state.sessions[0]?.resizes.length ?? 0).toBeGreaterThan(0);

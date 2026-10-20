@@ -12,6 +12,7 @@ import {
   CLIENT_RESIZE,
 } from "@/features/terminal/transport/frames";
 import {
+  BANNER_VERSION_WAIT_MS,
   TERMINAL_HEARTBEAT_MS,
   TerminalRuntime,
 } from "@/features/terminal/transport/terminalRuntime";
@@ -22,7 +23,7 @@ import type {
   TerminalStatePatch,
 } from "@/features/terminal/transport/terminalRuntime";
 import {
-  TERMINAL_LOGO,
+  TERMINAL_LOGO_DISPLAY,
   buildTerminalBanner,
 } from "@/features/terminal/utils/terminalBanner";
 
@@ -609,7 +610,7 @@ describe("TerminalRuntime welcome banner", () => {
     );
     expect(banners).toHaveLength(1);
     expect(banners[0]).toBe(buildTerminalBanner(BANNER_INFO, 220));
-    expect(banners[0]!.startsWith(TERMINAL_LOGO)).toBe(true);
+    expect(banners[0]!.startsWith(TERMINAL_LOGO_DISPLAY)).toBe(true);
     expect(banners[0]).toContain("server: prod-01");
     expect(context.socket.opcodes()).not.toContain(CLIENT_INPUT);
     expect(context.socket.opcodes()).toContain(CLIENT_RESIZE);
@@ -653,5 +654,96 @@ describe("TerminalRuntime welcome banner", () => {
     context.socket.message(openFrame());
     expect(context.terminal().written).toHaveLength(0);
     expect(context.runtime.getStatus()).toBe("connected");
+  });
+
+  it("never delays output or input for a hung version lookup", async () => {
+    // A /version request that never settles: the session must still connect
+    // and the first server bytes must flush a version-less banner first.
+    const hung = new Promise<string | null>(() => {
+      // Intentionally never resolves.
+    });
+    const context = setup({
+      banner: { ...BANNER_INFO, version: null },
+      bannerVersion: hung,
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+    expect(context.runtime.getStatus()).toBe("connected");
+    expect(context.terminal().written).toHaveLength(0);
+
+    context.socket.message(serverFrame(0x01, new TextEncoder().encode("hello")));
+    const writes = decodeWrites(context.terminal());
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toBe(
+      buildTerminalBanner({ ...BANNER_INFO, version: null }, 120, 32),
+    );
+    expect(writes[0]).not.toContain("v0.2.1-dev");
+    expect(writes[1]).toBe("hello");
+  });
+
+  it("falls back to a version-less banner after the display-only cap", async () => {
+    const hung = new Promise<string | null>(() => {
+      // Intentionally never resolves.
+    });
+    const context = setup({
+      banner: { ...BANNER_INFO, version: null },
+      bannerVersion: hung,
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+    expect(context.terminal().written).toHaveLength(0);
+
+    vi.advanceTimersByTime(BANNER_VERSION_WAIT_MS);
+    const writes = decodeWrites(context.terminal());
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("Gotham ·");
+    expect(writes[0]).not.toContain("v0.2.1-dev");
+  });
+
+  it("uses a version that resolves before the first server bytes", async () => {
+    let resolveVersion: (_value: string | null) => void = () => {};
+    const pending = new Promise<string | null>((resolve) => {
+      resolveVersion = resolve;
+    });
+    const context = setup({
+      banner: { ...BANNER_INFO, version: null },
+      bannerVersion: pending,
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+    expect(context.terminal().written).toHaveLength(0);
+
+    resolveVersion("v0.9.0");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(decodeWrites(context.terminal())[0]).toContain("Gotham v0.9.0");
+
+    context.socket.message(serverFrame(0x01, new TextEncoder().encode("hello")));
+    const writes = decodeWrites(context.terminal());
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toBe("hello");
+  });
+
+  it("flushes the banner before the first keystroke when metadata is slow", async () => {
+    const hung = new Promise<string | null>(() => {
+      // Intentionally never resolves.
+    });
+    const context = setup({
+      banner: { ...BANNER_INFO, version: null },
+      bannerVersion: hung,
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+
+    context.terminal().type("ls");
+    const writes = decodeWrites(context.terminal());
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).not.toContain("v0.2.1-dev");
+    const input = context.socket.sent.find((frame) => frame[0] === CLIENT_INPUT);
+    expect([...(input ?? new Uint8Array())].slice(1)).toEqual([0x6c, 0x73]);
   });
 });

@@ -21,13 +21,21 @@ const runtimeFakes = vi.hoisted(() => {
       onState: (_patch: Record<string, unknown>) => void;
       session: { id: string };
       theme?: string;
-      banner?: { version: string | null; serverName: string; target: string };
+      banner?: {
+        version: string | null;
+        serverName: string;
+        serverId: string;
+        target: string;
+        serverLabel?: string;
+      };
+      bannerVersion?: Promise<string | null>;
     };
     host: HTMLElement;
     attached: HTMLElement | null = null;
     disposed = false;
     focused = false;
     fitted = 0;
+    connected = false;
     theme: string | undefined;
 
     constructor(options: FakeRuntime["options"]) {
@@ -39,6 +47,7 @@ const runtimeFakes = vi.hoisted(() => {
     }
 
     async connect(): Promise<void> {
+      this.connected = true;
       this.options.onState({ status: "connected", shell: "/bin/bash" });
     }
 
@@ -78,6 +87,12 @@ const apiFakes = vi.hoisted(() => ({
   close: vi.fn(),
 }));
 
+/** versionFakes controls the metadata lookup without touching HTTP. */
+const versionFakes = vi.hoisted(() => ({
+  running: vi.fn(),
+  known: vi.fn(),
+}));
+
 vi.mock("@/features/terminal/transport/terminalRuntime", () => ({
   TerminalRuntime: runtimeFakes.FakeRuntime,
 }));
@@ -89,7 +104,8 @@ vi.mock("@/features/terminal/utils/terminalBanner", async (importOriginal) => {
     >();
   return {
     ...actual,
-    runningGothamVersion: () => Promise.resolve("v0.2.1-dev"),
+    runningGothamVersion: () => versionFakes.running(),
+    knownGothamVersion: () => versionFakes.known(),
   };
 });
 
@@ -128,6 +144,10 @@ beforeEach(() => {
   setActivePinia(createPinia());
   runtimeFakes.instances.length = 0;
   sessionSeq = 0;
+  versionFakes.running.mockReset();
+  versionFakes.running.mockResolvedValue("v0.2.1-dev");
+  versionFakes.known.mockReset();
+  versionFakes.known.mockReturnValue("v0.2.1-dev");
   apiFakes.create.mockReset();
   apiFakes.close.mockReset();
   apiFakes.close.mockResolvedValue(undefined);
@@ -253,6 +273,7 @@ describe("terminal appearance and host banner", () => {
       serverName: "prod-01",
       serverId: "server-1",
       target: "host",
+      serverLabel: "server",
     });
 
     await terminal.openWindowSession({
@@ -264,6 +285,25 @@ describe("terminal appearance and host banner", () => {
     // A container exec is not a host shell: no Gotham host banner is queued.
     expect(runtimeFakes.instances[1]!.options.banner).toBeUndefined();
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts the shell without waiting for a hung /version lookup", async () => {
+    versionFakes.running.mockReturnValue(new Promise(() => {}));
+    versionFakes.known.mockReturnValue(null);
+    const terminal = useTerminalStore();
+    const tab = await terminal.openWindowSession(options("hung"));
+
+    // The create resolved and the runtime connected while /version is still
+    // pending; only the banner's version tag is deferred.
+    expect(tab.status).toBe("connected");
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    const runtime = runtimeFakes.instances[0]!;
+    expect(runtime.connected).toBe(true);
+    expect(runtime.options.banner).toMatchObject({
+      version: null,
+      serverLabel: "server",
+    });
+    expect(runtime.options.bannerVersion).toBeInstanceOf(Promise);
   });
 
   it("themes every live renderer without recreating sessions", async () => {

@@ -16,3 +16,9 @@ indent_style = tab
 
 [*.md]
 trim_trailing_whitespace = false
+
+# The supplied Gotham logo must stay byte-exact: trailing spaces carry the
+# artwork's edges and the final line has no newline.
+[web/src/features/terminal/assets/*.txt]
+trim_trailing_whitespace = false
+insert_final_newline = false

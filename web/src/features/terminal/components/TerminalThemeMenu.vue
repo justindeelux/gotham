@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import { Palette } from "@lucide/vue";
 import { NButton, NPopover } from "naive-ui";
-import { computed, useId } from "vue";
+import {
+  computed,
+  nextTick,
+  ref,
+  useId,
+  watch,
+} from "vue";
+import type { ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 
 import {
   TERMINAL_THEMES,
+  isTerminalThemeName,
   type TerminalThemeName,
 } from "@/features/terminal/schemas/terminalAppearance";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
@@ -13,13 +21,20 @@ import { useTerminalStore } from "@/features/terminal/stores/terminal";
 /**
  * Terminal theme picker (JUS-250). One shared control for page and window
  * modes: choosing a named theme repaints every live renderer immediately
- * through the terminal store (no session is recreated). Native radios keep the
- * popover keyboard- and screen-reader-operable; each surface gets its own
- * radio group name so multiple panes never share a group.
+ * through the terminal store (no session is recreated).
+ *
+ * Keyboard contract: Enter/Space on the trigger opens the popover and moves
+ * focus onto the checked radio; ArrowUp/ArrowDown move the radio group and
+ * apply the theme as they go; Enter applies the focused option explicitly;
+ * Escape closes and returns focus to the trigger. Key events are stopped at
+ * the popover, so nothing typed in this menu can reach xterm's input.
  */
 const { t } = useI18n();
 const terminal = useTerminalStore();
 const groupName = useId();
+const show = ref(false);
+const triggerRef = ref<ComponentPublicInstance | null>(null);
+const contentRef = ref<HTMLElement | null>(null);
 
 /** THEME_LABEL_KEYS maps a stored theme onto its catalog label. */
 const THEME_LABEL_KEYS: Record<TerminalThemeName, string> = {
@@ -40,16 +55,72 @@ const themes = computed(() =>
 function choose(name: TerminalThemeName): void {
   terminal.setTheme(name);
 }
+
+/** closeMenu hides the popover and returns focus to its trigger. */
+function closeMenu(): void {
+  show.value = false;
+  void nextTick(() => {
+    const trigger = triggerRef.value?.$el;
+    if (trigger instanceof HTMLElement) {
+      trigger.focus();
+    }
+  });
+}
+
+/** onMenuKeydown keeps Escape/Enter inside the menu and off the PTY. */
+function onMenuKeydown(event: KeyboardEvent): void {
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeMenu();
+    return;
+  }
+  if (event.key !== "Enter") {
+    return;
+  }
+  const target = event.target;
+  if (target instanceof HTMLInputElement && target.type === "radio") {
+    event.preventDefault();
+    if (isTerminalThemeName(target.value)) {
+      choose(target.value);
+    }
+  }
+}
+
+// The panel is teleported, so its ref exists only after the body mounts. The
+// checked radio is the single tab stop of a native radio group.
+watch(show, async (open) => {
+  if (!open) {
+    return;
+  }
+  await nextTick();
+  const content = contentRef.value;
+  const checked = content?.querySelector<HTMLInputElement>(
+    "input[type='radio']:checked",
+  );
+  const first = content?.querySelector<HTMLInputElement>("input[type='radio']");
+  (checked ?? first)?.focus();
+});
 </script>
 
 <template>
-  <NPopover trigger="click" placement="bottom-end" :duration="0" :animated="false">
+  <NPopover
+    v-model:show="show"
+    trigger="click"
+    placement="bottom-end"
+    :duration="0"
+    :animated="false"
+  >
     <template #trigger>
       <NButton
+        ref="triggerRef"
         quaternary
         size="tiny"
         class="term-theme-btn"
         :aria-label="t('terminal.appearance.label')"
+        aria-haspopup="true"
+        :aria-expanded="show"
+        @keydown.esc.stop.prevent="closeMenu"
       >
         <template #icon>
           <Palette :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -58,9 +129,11 @@ function choose(name: TerminalThemeName): void {
     </template>
 
     <div
+      ref="contentRef"
       class="term-themes"
       role="radiogroup"
       :aria-label="t('terminal.appearance.title')"
+      @keydown.stop="onMenuKeydown"
     >
       <p class="term-themes-title">{{ t("terminal.appearance.title") }}</p>
       <label
@@ -123,6 +196,11 @@ function choose(name: TerminalThemeName): void {
 .term-theme-radio {
   margin: 0;
   accent-color: var(--accent);
+}
+
+.term-theme-radio:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .term-theme-label {

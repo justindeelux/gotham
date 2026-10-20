@@ -26,12 +26,14 @@ interface Props {
   applicationId: string;
   applicationName: string;
   accessKnown: boolean;
+  /** accessError means the team role could not be read (e.g. /teams 500). */
+  accessError: boolean;
   canWrite: boolean;
   active: boolean;
 }
 
 const props = defineProps<Props>();
-const emit = defineEmits<{ blocked: [] }>();
+const emit = defineEmits<{ retryAccess: [] }>();
 const { t } = useI18n();
 
 const canUse = computed<boolean>(() => props.accessKnown && props.canWrite);
@@ -55,7 +57,6 @@ const {
   applicationName: () => props.applicationName,
   canUse: () => canUse.value,
   active: () => props.active,
-  onBlocked: () => emit("blocked"),
 });
 
 /** errorText is bounded catalog copy; the backend body is never rendered. */
@@ -64,8 +65,27 @@ const errorText = computed<string>(() => t(errorKey(targetsError.value)));
 
 <template>
   <div class="app-term">
+    <NAlert
+      v-if="!accessKnown && accessError"
+      type="error"
+      :show-icon="true"
+      class="app-term-alert app-term-access-error"
+    >
+      <template #header>
+        {{ t("applications.terminal.accessErrorTitle") }}
+      </template>
+      <p class="app-term-copy">
+        {{ t("applications.terminal.accessErrorBody") }}
+      </p>
+      <div class="app-term-actions">
+        <NButton class="app-term-access-retry" type="primary" @click="emit('retryAccess')">
+          {{ t("applications.terminal.retry") }}
+        </NButton>
+      </div>
+    </NAlert>
+
     <div
-      v-if="!accessKnown"
+      v-else-if="!accessKnown"
       class="app-term-checking"
       role="status"
       aria-live="polite"

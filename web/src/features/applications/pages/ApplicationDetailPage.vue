@@ -33,6 +33,8 @@ const { t } = useI18n();
  */
 const {
   accessKnown,
+  accessError,
+  retryAccess,
   canWrite,
   showTab: showTerminalTab,
   blocked: blockedTerminal,
@@ -211,9 +213,10 @@ const activeTab = computed<string>({
             :application-id="detail.application.value.id"
             :application-name="detail.application.value.name"
             :access-known="accessKnown"
+            :access-error="accessError"
             :can-write="canWrite"
             :active="activeTab === 'terminal'"
-            @blocked="detail.activeTab.value = 'overview'"
+            @retry-access="retryAccess"
           />
         </NTabPane>
 

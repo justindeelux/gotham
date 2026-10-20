@@ -29,6 +29,9 @@ const en = {
     tab: "Terminal",
     title: "Application terminal",
     checkingAccess: "Checking terminal access…",
+    accessErrorTitle: "Terminal access could not be checked",
+    accessErrorBody:
+      "The team role could not be read. No terminal session was requested. Retry once the control plane is reachable.",
     loading: "Looking for running service containers…",
     serviceLabel: "Service container",
     chooseService: "Choose a service container",

@@ -25,6 +25,9 @@ const vi: ApplicationsMessages = {
     tab: "Terminal",
     title: "Terminal ứng dụng",
     checkingAccess: "Đang kiểm tra quyền terminal…",
+    accessErrorTitle: "Không kiểm tra được quyền terminal",
+    accessErrorBody:
+      "Không đọc được vai trò trong nhóm. Chưa có phiên terminal nào được yêu cầu. Hãy thử lại khi bản điều khiển truy cập được.",
     loading: "Đang tìm các service container đang chạy…",
     serviceLabel: "Service container",
     chooseService: "Chọn một service container",

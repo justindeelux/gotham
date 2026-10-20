@@ -258,6 +258,15 @@ vi.mock("@/features/applications/api/previews", async (importOriginal) => {
   return { ...actual, listPreviews: applicationApiFakes.listPreviews };
 });
 
+/** teamsApiFakes lets a test make the role read fail or hang. */
+const teamsApiFakes = vi.hoisted(() => ({ listTeams: vi.fn() }));
+
+vi.mock("@/features/teams/api/teams", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/features/teams/api/teams")>();
+  return { ...actual, listTeams: teamsApiFakes.listTeams };
+});
+
 vi.mock("@/features/projects/api/variables", () => ({
   getEnvironmentVariables: vi.fn().mockResolvedValue([]),
   getProjectVariables: vi.fn().mockResolvedValue([]),
@@ -284,6 +293,9 @@ vi.mock("naive-ui", async (importOriginal) => {
 });
 
 const { useTerminalStore } = await import("@/features/terminal/stores/terminal");
+const { useTerminalWindowStore } = await import(
+  "@/features/terminal/stores/terminalWindow"
+);
 const { useAuthStore } = await import("@/features/auth");
 const { useTeamsStore } = await import("@/features/teams");
 const { useApplicationsStore } = await import(
@@ -395,6 +407,8 @@ beforeEach(() => {
   applicationApiFakes.getStorages.mockResolvedValue([]);
   applicationApiFakes.listPreviews.mockReset();
   applicationApiFakes.listPreviews.mockResolvedValue([]);
+  teamsApiFakes.listTeams.mockReset();
+  teamsApiFakes.listTeams.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -423,13 +437,26 @@ async function mountDetail(
   path = `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_ID}?tab=terminal`,
   role: "owner" | "admin" | "read_only" | null = "owner",
   existingPinia?: Pinia,
+  teamsFailure: "error" | "hang" | null = null,
 ) {
   const pinia = existingPinia ?? createPinia();
   setActivePinia(pinia);
   login(pinia);
   const teams = useTeamsStore();
   teams.activeTeamId = "team-1";
-  teams.teams = role === null ? [] : [team(role)];
+  teams.teams = role === null || teamsFailure !== null ? [] : [team(role)];
+  if (teamsFailure === "error") {
+    teamsApiFakes.listTeams.mockRejectedValueOnce({
+      status: 500,
+      message: "teams unavailable",
+    });
+    await teams.fetchTeams().catch(() => undefined);
+  } else if (teamsFailure === "hang") {
+    teamsApiFakes.listTeams.mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+    void teams.fetchTeams();
+  }
   const router = pageRouter();
   await router.push(path);
   await router.isReady();
@@ -936,6 +963,72 @@ describe("application terminal failure states (JUS-247)", () => {
     second.wrapper.unmount();
   });
 
+  it("opens a fresh page session beside a retained window shell", async () => {
+    const { wrapper, terminal } = await mountDetail();
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    const first = terminal.pageTabs[0]!;
+    await wrapper.find(".term-open-in-window").trigger("click");
+    await flushPromises();
+    expect(terminal.findTab(first.id)?.mode).toBe("window");
+    expect(wrapper.find(".term-detached").exists()).toBe(true);
+    // JUS-255: the moved card exposes its actions once the window is minimized.
+    useTerminalWindowStore().setMinimized(true);
+    await nextTick();
+
+    apiFakes.listTargets.mockResolvedValueOnce(
+      targetsResponse([target("", "cid-new", "gotham-shop-2")], "image"),
+    );
+    const start = wrapper
+      .find(".term-detached")
+      .findAll("button")
+      .find((node) => node.text().includes("Start new session"));
+    await start!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+
+    // One rediscovery + one fresh page POST; the detached window tab is kept.
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
+      containerId: "cid-new",
+    });
+    expect(apiFakes.close).toHaveBeenCalledTimes(0);
+    const tabs = terminal.tabs;
+    expect(tabs).toHaveLength(2);
+    expect(tabs.find((tab) => tab.id === first.id)?.mode).toBe("window");
+    expect(tabs.find((tab) => tab.id === first.id)?.sessionId).toBe("session-1");
+    const page = tabs.find((tab) => tab.mode === "page")!;
+    expect(page.containerId).toBe("cid-new");
+    expect(page.sessionId).toBe("session-2");
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("retains the window shell when the selector changes while detached", async () => {
+    apiFakes.listTargets.mockResolvedValue(targetsResponse(COMPOSE));
+    const { wrapper, terminal } = await mountDetail();
+    await selectValue(wrapper, "web\u0000cid-web-1");
+    const first = terminal.pageTabs[0]!;
+    await wrapper.find(".term-open-in-window").trigger("click");
+    await flushPromises();
+    expect(terminal.findTab(first.id)?.mode).toBe("window");
+
+    await selectValue(wrapper, "db\u0000cid-db");
+    expect(terminal.closeRequest).toBeNull();
+    expect(apiFakes.close).toHaveBeenCalledTimes(0);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
+      service: "db",
+      containerId: "cid-db",
+    });
+    const tabs = terminal.tabs;
+    expect(tabs).toHaveLength(2);
+    expect(tabs.find((tab) => tab.id === first.id)?.mode).toBe("window");
+    expect(tabs.find((tab) => tab.mode === "page")?.containerId).toBe("cid-db");
+    wrapper.unmount();
+  });
+
   it("adopts a live container tab on remount without a second shell", async () => {
     const first = await mountDetail();
     const tab = first.terminal.pageTabs[0]!;
@@ -1090,6 +1183,54 @@ describe("application terminal permissions (JUS-247)", () => {
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
     expect(wrapper.find(".term-surface").exists()).toBe(true);
     wrapper.unmount();
+  });
+
+  it("shows a bounded access error with retry when the teams read fails", async () => {
+    const { wrapper, teams } = await mountDetail(
+      undefined,
+      null,
+      undefined,
+      "error",
+    );
+    expect(wrapper.text()).toContain("Terminal access could not be checked");
+    expect(wrapper.find(".app-term-access-retry").exists()).toBe(true);
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
+    expect(apiFakes.create).toHaveBeenCalledTimes(0);
+
+    teamsApiFakes.listTeams.mockResolvedValueOnce([team("owner")]);
+    await wrapper.find(".app-term-access-retry").trigger("click");
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+    expect(teams.activeTeam?.role).toBe("owner");
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(1);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("bounds a hanging teams read and never requests a terminal meanwhile", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { wrapper } = await mountDetail(
+        undefined,
+        null,
+        undefined,
+        "hang",
+      );
+      expect(wrapper.text()).toContain("Checking terminal access");
+      expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
+      expect(apiFakes.create).toHaveBeenCalledTimes(0);
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await flushPromises();
+      await nextTick();
+      expect(wrapper.text()).toContain("Terminal access could not be checked");
+      expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
+      expect(apiFakes.create).toHaveBeenCalledTimes(0);
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("hides the tab and issues zero requests for a read_only team role", async () => {

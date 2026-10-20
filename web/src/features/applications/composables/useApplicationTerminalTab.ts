@@ -3,10 +3,14 @@ import { useRoute, useRouter } from "vue-router";
 
 import { useApplicationTerminalTargets } from "@/features/applications/composables/useApplicationTerminalTargets";
 import type { TargetsLoadResult } from "@/features/applications/composables/useApplicationTerminalTargets";
-import { useAuthStore } from "@/features/auth";
 import { useTerminalStore } from "@/features/terminal";
 import type { TerminalTab } from "@/features/terminal";
 import type { ApplicationTerminalTarget } from "@/features/terminal/schemas/terminal";
+import {
+  chooseRecoveryTarget,
+  containerTabTitle,
+  containerTargetKey,
+} from "@/features/terminal/utils/containerRecovery";
 import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
 /**
@@ -27,21 +31,11 @@ export interface ApplicationTerminalTabOptions {
   canUse: () => boolean;
   /** active is true only while the Terminal tab is selected. */
   active: () => boolean;
-  /** onBlocked leaves the pane after a demotion/revocation. */
-  onBlocked: () => void;
 }
 
-/** closedTargetKey identifies one discovered container target. */
-function closedTargetKey(target: {
-  service: string;
-  containerId: string;
-}): string {
-  return `${target.service}\u0000${target.containerId}`;
-}
-
-/** tabTargetKey is the same key read back from a live tab. */
+/** tabTargetKey is the key read back from a live tab. */
 function tabTargetKey(tab: TerminalTab): string {
-  return closedTargetKey({
+  return containerTargetKey({
     service: tab.service,
     containerId: tab.containerId,
   });
@@ -52,7 +46,6 @@ export function useApplicationTerminalTab(
 ) {
   const route = useRoute();
   const router = useRouter();
-  const authStore = useAuthStore();
   const terminal = useTerminalStore();
 
   const discovery = useApplicationTerminalTargets({
@@ -72,7 +65,7 @@ export function useApplicationTerminalTab(
   const targetOptions = computed(() =>
     discovery.targets.value.map((target) => ({
       label: target.label || target.name,
-      value: closedTargetKey({
+      value: containerTargetKey({
         service: target.service,
         containerId: target.container_id,
       }),
@@ -80,9 +73,7 @@ export function useApplicationTerminalTab(
   );
   const targetCount = computed<number>(() => discovery.targets.value.length);
   const showPicker = computed<boolean>(() => targetCount.value > 1);
-  const canUse = computed<boolean>(
-    () => authStore.isAuthenticated && options.canUse(),
-  );
+  const canUse = computed<boolean>(() => options.canUse());
   const mode = computed<
     "idle" | "loading" | "error" | "empty" | "select" | "session"
   >(() => {
@@ -136,9 +127,17 @@ export function useApplicationTerminalTab(
   /** openTarget creates (or reuses) the page session for one exact target. */
   async function openTarget(target: ApplicationTerminalTarget): Promise<void> {
     const applicationId = options.applicationId();
-    if (!canUse.value || applicationId === "" || tab.value !== null) {
+    if (!canUse.value || applicationId === "") {
       return;
     }
+    const current = tab.value;
+    if (current !== null && current.mode !== "window") {
+      return;
+    }
+    // A detached tab is explicitly retained in the window: a restart opens a
+    // NEW page session for the two together (one-way close stays automatic
+    // only through the shared confirmation).
+    const detached = current !== null;
     closed.value = false;
     terminal.clearContainerRestart(applicationId);
     starting.value = true;
@@ -153,16 +152,18 @@ export function useApplicationTerminalTab(
         containerId: target.container_id,
         containerName: target.name,
         targetLabel: target.label || target.name,
-        title: [options.applicationName(), target.label || target.name]
-          .filter((part) => part !== "")
-          .join(" · "),
+        title: containerTabTitle(
+          options.applicationName(),
+          target.label || target.name,
+        ),
         sourcePath: sourcePath(),
+        ...(detached ? { fresh: true } : {}),
       });
       if (options.applicationId() !== applicationId) {
         return;
       }
       tabId.value = opened.id;
-      selection.value = closedTargetKey({
+      selection.value = containerTargetKey({
         service: target.service,
         containerId: target.container_id,
       });
@@ -178,7 +179,7 @@ export function useApplicationTerminalTab(
     return (
       targets.find(
         (target) =>
-          closedTargetKey({
+          containerTargetKey({
             service: target.service,
             containerId: target.container_id,
           }) === selection.value,
@@ -239,9 +240,10 @@ export function useApplicationTerminalTab(
     if (!result.ok) {
       return;
     }
-    if (result.targets.length === 1) {
-      await openTarget(result.targets[0]!);
-    } else if (result.targets.length > 1) {
+    const choice = chooseRecoveryTarget(result.targets, null, false);
+    if (choice.target !== null) {
+      await openTarget(choice.target);
+    } else {
       selection.value = "";
     }
   }
@@ -266,6 +268,7 @@ export function useApplicationTerminalTab(
     const live = tab.value;
     if (
       live !== null &&
+      live.mode === "page" &&
       live.status !== "connected" &&
       live.status !== "connecting"
     ) {
@@ -313,7 +316,7 @@ export function useApplicationTerminalTab(
     const target =
       discovery.targets.value.find(
         (candidate) =>
-          closedTargetKey({
+          containerTargetKey({
             service: candidate.service,
             containerId: candidate.container_id,
           }) === key,
@@ -322,7 +325,10 @@ export function useApplicationTerminalTab(
       return;
     }
     const live = tab.value;
-    if (live !== null) {
+    // A detached window shell is retained, never closed by a selection: the
+    // chosen target opens as a new page session beside it. A visible page
+    // shell still uses the shared confirmation (Cancel keeps it).
+    if (live !== null && live.mode === "page") {
       if (tabTargetKey(live) === key) {
         selection.value = key;
         return;
@@ -409,15 +415,6 @@ export function useApplicationTerminalTab(
       if (applicationId !== "") {
         terminal.dismissContainerRestart(applicationId, selection.value);
       }
-    }
-  });
-
-  // Demotion, not sign-out: the store-level owner (AppLayout) disposes the
-  // container tabs at the security boundary. This host only leaves its pane.
-  watch(canUse, (allowed) => {
-    if (!allowed && authStore.isAuthenticated) {
-      resetLocal();
-      options.onBlocked();
     }
   });
 

@@ -13,6 +13,10 @@ import {
 } from "@/features/terminal/api/terminal";
 import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
 import type { ApplicationTerminalTarget } from "@/features/terminal/schemas/terminal";
+import {
+  chooseRecoveryTarget,
+  containerTabTitle,
+} from "@/features/terminal/utils/containerRecovery";
 import type { TerminalThemeName } from "@/features/terminal/schemas/terminalAppearance";
 import { useTerminalAppearanceStore } from "@/features/terminal/stores/terminalAppearance";
 import { useTerminalWindowStore } from "@/features/terminal/stores/terminalWindow";
@@ -794,16 +798,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.containerId = target.container_id;
     tab.containerName = target.name;
     tab.targetLabel = target.label || target.name;
-    tab.title = terminalTitle({
-      serverId: tab.serverId,
-      serverName: tab.serverName,
-      target: tab.target,
-      applicationId: tab.applicationId,
-      applicationName: tab.applicationName,
-      containerId: tab.containerId,
-      containerName: tab.containerName,
-      targetLabel: tab.targetLabel,
-    });
+    tab.title = containerTabTitle(tab.applicationName, tab.targetLabel);
   }
 
   /**
@@ -834,22 +829,19 @@ export const useTerminalStore = defineStore("terminal", () => {
       if (!findTab(id)) {
         return;
       }
-      const exact = resolved.containers.find(
-        (candidate) =>
-          candidate.service === tab.service &&
-          candidate.container_id === tab.containerId,
+      const choice = chooseRecoveryTarget(
+        resolved.containers,
+        { service: tab.service, containerId: tab.containerId },
+        true,
       );
-      const chosen =
-        exact ??
-        (resolved.containers.length === 1 ? resolved.containers[0]! : null);
-      if (chosen === null) {
+      if (choice.target === null) {
         // Zero containers is gone; several need an explicit choice back on the
         // application tab. Both stay bounded and issue no create.
         tab.status = "error";
         tab.errorCode = "containerGone";
         return;
       }
-      applyContainerTarget(tab, chosen);
+      applyContainerTarget(tab, choice.target);
       await startSession(tab);
     } catch (error) {
       if (findTab(id)) {

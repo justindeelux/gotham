@@ -1,4 +1,4 @@
-import { computed } from "vue";
+import { computed, onScopeDispose, ref, watch } from "vue";
 import type { ComputedRef } from "vue";
 import { useRoute } from "vue-router";
 
@@ -23,6 +23,10 @@ export interface ApplicationTerminalAccess {
   accessKnown: ComputedRef<boolean>;
   /** canWrite mirrors the backend's owner/admin team role. */
   canWrite: ComputedRef<boolean>;
+  /** accessError is the bounded failure when the role could not be read. */
+  accessError: ComputedRef<boolean>;
+  /** retryAccess re-reads the teams list after a bounded failure. */
+  retryAccess: () => void;
   /** showTab keeps the tab visible while access is still being checked. */
   showTab: ComputedRef<boolean>;
   /** blocked is the clear not-allowed state for a crafted deep link. */
@@ -31,16 +35,69 @@ export interface ApplicationTerminalAccess {
   resolveTab: (_tab: string) => string;
 }
 
+/**
+ * ACCESS_CHECK_TIMEOUT_MS bounds an unanswered teams read. A hanging request
+ * must not leave "Checking access" spinning forever; after this the tab shows
+ * the same bounded error and explicit Retry as a failed read.
+ */
+export const ACCESS_CHECK_TIMEOUT_MS = 8_000;
+
 export function useApplicationTerminalAccess(
   applicationLoaded: () => boolean,
 ): ApplicationTerminalAccess {
   const route = useRoute();
   const teamsStore = useTeamsStore();
   const projectsStore = useProjectsStore();
+  const timedOut = ref(false);
 
   const accessKnown = computed<boolean>(
     () => teamsStore.activeTeam !== null || teamsStore.featureDisabled,
   );
+  const accessError = computed<boolean>(
+    () => !accessKnown.value && (timedOut.value || teamsStore.error !== null),
+  );
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  /** scheduleTimeout arms the bounded wait while the role is unknown. */
+  function scheduleTimeout(): void {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (accessKnown.value || timedOut.value) {
+      return;
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      timedOut.value = true;
+    }, ACCESS_CHECK_TIMEOUT_MS);
+  }
+
+  watch(accessKnown, (known) => {
+    if (known) {
+      timedOut.value = false;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      return;
+    }
+    scheduleTimeout();
+  }, { immediate: true });
+
+  onScopeDispose(() => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  });
+
+  /** retryAccess clears the bounded failure and re-reads the teams list. */
+  function retryAccess(): void {
+    timedOut.value = false;
+    scheduleTimeout();
+    void teamsStore.fetchTeams().catch(() => undefined);
+  }
   const canWrite = computed<boolean>(
     () => accessKnown.value && projectsStore.canWrite,
   );
@@ -63,5 +120,13 @@ export function useApplicationTerminalAccess(
     return tab;
   }
 
-  return { accessKnown, canWrite, showTab, blocked, resolveTab };
+  return {
+    accessKnown,
+    accessError,
+    retryAccess,
+    canWrite,
+    showTab,
+    blocked,
+    resolveTab,
+  };
 }

@@ -117,11 +117,13 @@ interface Ledger {
   targets: number;
   creates: Array<{ service: string; container_id: string }>;
   deletes: number;
+  /** inputs records raw PTY input frames (opcode 1) from the browser. */
+  inputs: string[];
 }
 
 /** freshLedger resets per-test request counts. */
 function freshLedger(): Ledger {
-  return { targets: 0, creates: [], deletes: 0 };
+  return { targets: 0, creates: [], deletes: 0, inputs: [] };
 }
 
 let server: Server;
@@ -312,6 +314,15 @@ async function mockApi(
       const path = new URL(ws.url()).pathname;
       const id = path.split("/").at(-2) ?? "";
       sockets.set(id, ws);
+      ws.onMessage((message) => {
+        const bytes =
+          typeof message === "string"
+            ? Buffer.from(message, "utf8")
+            : Buffer.from(message);
+        if (bytes.length > 1 && bytes[0] === 1) {
+          ledger.inputs.push(bytes.subarray(1).toString("utf8"));
+        }
+      });
       ws.send(openFrame());
       ws.send(outputFrame(`welcome ${id}\r\n$ `));
     },
@@ -984,4 +995,122 @@ test("detaching keeps the session, label and window tab without a new POST", asy
   expect(after.sessionId).toBe(before.sessionId);
   expect(ledger.creates).toHaveLength(1);
   expect(ledger.deletes).toBe(0);
+});
+
+test("Start new session beside a minimized window shell opens one fresh page session", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  await mockApi(page, ledger);
+  let reads = 0;
+  const rows = [
+    target("", "cid-single", "gotham-shop-1"),
+    target("", "cid-new", "gotham-shop-2"),
+  ];
+  await page.route(
+    `**/api/v1/applications/${APP_ID}/terminal/targets`,
+    async (route) => {
+      ledger.targets += 1;
+      const row = rows[Math.min(reads, rows.length - 1)]!;
+      reads += 1;
+      await route.fulfill({
+        json: {
+          application_id: APP_ID,
+          application_name: "shop",
+          server_id: SERVER_ID,
+          source_type: "image",
+          containers: [row],
+        },
+      });
+    },
+  );
+  await seedApp(page, `${detailPath}?tab=terminal`);
+  await expect.poll(() => ledger.creates.length).toBe(1);
+  const before = (await terminalTabs(page))[0]!;
+
+  await page.locator(".term-open-in-window").click();
+  await expect(page.locator(".term-window")).toBeVisible();
+  await page
+    .locator(".term-window")
+    .getByRole("button", { name: "Minimize terminal window" })
+    .click();
+  await expect(page.locator(".term-detached-actions")).toBeVisible();
+
+  await page
+    .locator(".term-detached")
+    .getByRole("button", { name: "Start new session" })
+    .click();
+  await expect.poll(() => ledger.creates.length).toBe(2);
+  expect(ledger.targets).toBe(2);
+  expect(ledger.creates[1]).toEqual({
+    service: "",
+    container_id: "cid-new",
+  });
+  expect(ledger.deletes).toBe(0);
+  await expect(page.locator(".term-surface--page .term-state")).toHaveText(
+    "Connected",
+  );
+
+  const tabs = await terminalTabs(page);
+  expect(tabs).toHaveLength(2);
+  const retained = tabs.find((tab) => tab.sessionId === before.sessionId)!;
+  expect(retained.mode).toBe("window");
+  const fresh = tabs.find((tab) => tab.mode === "page")!;
+  expect(fresh.containerId).toBe("cid-new");
+  expect(fresh.sessionId).toBe("session-2");
+  await expect(page.locator(".rail-btn--terminal .rail-badge")).toHaveText("2");
+});
+
+test("the theme menu on a container session sends no PTY input and shows no host banner", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  await mockApi(page, ledger);
+  await seedApp(page, `${detailPath}?tab=terminal`);
+  await expect.poll(() => ledger.creates.length).toBe(1);
+  await expect(page.locator(".term-surface .term-state")).toHaveText(
+    "Connected",
+  );
+
+  // A container shell has no Gotham host banner; only the shell output is there.
+  await expect
+    .poll(() => page.locator(".term-surface .xterm-rows").innerText())
+    .toContain("welcome session-1");
+  const rows = await page.locator(".term-surface .xterm-rows").innerText();
+  expect(rows).not.toContain("Gotham");
+
+  await page.locator(".term-theme-btn").click();
+  await page.locator(".term-theme-option", { hasText: "Gotham Light" }).click();
+  await expect(page.locator(".term-surface")).toHaveAttribute(
+    "data-theme",
+    "gotham-light",
+  );
+  // Menu interaction never reaches the PTY.
+  expect(ledger.inputs).toEqual([]);
+  expect(ledger.creates).toHaveLength(1);
+});
+
+test("a failed teams read shows a bounded access error with zero terminal requests", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  await mockApi(page, ledger);
+  await page.route("**/api/v1/teams", async (route) => {
+    await route.fulfill({
+      status: 500,
+      json: { message: "teams unavailable" },
+    });
+  });
+  await seedApp(page, `${detailPath}?tab=terminal`);
+
+  await expect(page.locator(".app-term-access-error")).toBeVisible();
+  await expect(page.locator(".app-term-access-error")).toContainText(
+    "Terminal access could not be checked",
+  );
+  await expect(page.locator(".app-term-access-retry")).toBeVisible();
+  expect(ledger.targets).toBe(0);
+  expect(ledger.creates).toHaveLength(0);
 });

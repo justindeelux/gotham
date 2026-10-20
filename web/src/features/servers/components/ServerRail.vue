@@ -14,10 +14,13 @@ import {
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
+import { useTerminalStore, useTerminalWindowStore } from "@/features/terminal";
 
 const serversStore = useServersStore();
 const editor = useEditorStore();
 const editorWindow = useEditorWindowStore();
+const terminal = useTerminalStore();
+const terminalWindow = useTerminalWindowStore();
 const route = useRoute();
 const { locale, t } = useI18n();
 
@@ -42,6 +45,28 @@ const editorLabel = computed<string>(() =>
 /** toggleEditor minimizes the window, or restores it when collapsed. */
 function toggleEditor(): void {
   editorWindow.setMinimized(!editorWindow.minimized);
+}
+
+/** terminalCount is the rail badge: the number of floating terminal tabs. */
+const terminalCount = computed<number>(() => terminal.windowOpenCount);
+
+/** terminalLabel names the rail terminal button with its open-tab count. */
+const terminalLabel = computed<string>(() =>
+  t("terminal.rail.openWithCount", { count: terminalCount.value }),
+);
+
+/** toggleTerminal restores, raises, or minimizes the terminal window. */
+function toggleTerminal(): void {
+  if (terminalWindow.minimized) {
+    terminalWindow.setMinimized(false);
+    terminalWindow.raise();
+    return;
+  }
+  if (!terminalWindow.raised) {
+    terminalWindow.raise();
+    return;
+  }
+  terminalWindow.setMinimized(true);
 }
 
 // The shared server poll is owned by the app shell (AppLayout), which stays
@@ -138,7 +163,37 @@ onMounted(() => {
           }}</span>
         </button>
       </div>
-      <div v-if="editorCount > 0" class="rail-sep" aria-hidden="true"></div>
+      <!-- JUS-245: the minimized terminal window parks beside the editor with
+           its own count badge; a click restores the same live sessions. -->
+      <div v-if="terminalCount > 0" class="rail-item">
+        <button
+          type="button"
+          class="rail-btn rail-btn--terminal"
+          :aria-label="terminalLabel"
+          @click="toggleTerminal"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m5 8 4 4-4 4" />
+            <path d="M11 16h8" />
+          </svg>
+          <span class="rail-badge" aria-hidden="true">{{
+            terminalCount > 9 ? "9+" : terminalCount
+          }}</span>
+        </button>
+      </div>
+      <div
+        v-if="editorCount > 0 || terminalCount > 0"
+        class="rail-sep"
+        aria-hidden="true"
+      ></div>
       <div class="rail-item">
         <RailIconButton :to="{ name: 'dashboard' }" :label="$t('servers.rail.overview')">
           <svg
@@ -272,8 +327,10 @@ onMounted(() => {
 }
 
 /* JUS-232: the editor restore is a button, not a link, so it resets the
-   native button chrome to match the link-styled rail buttons. */
-.rail-btn--editor {
+   native button chrome to match the link-styled rail buttons.
+   JUS-245: the terminal restore uses the same button reset. */
+.rail-btn--editor,
+.rail-btn--terminal {
   border: 0;
   padding: 0;
   font: inherit;
@@ -286,7 +343,8 @@ onMounted(() => {
    JUS-241: the editor badge is a perfect circle for every digit count — the
    shared padding is dropped so the badge box stays square, and the radius
    turns the square into a circle. */
-.rail-btn--editor .rail-badge {
+.rail-btn--editor .rail-badge,
+.rail-btn--terminal .rail-badge {
   top: calc(-1 * var(--space-1));
   right: calc(-1 * var(--space-1));
   width: var(--space-6);

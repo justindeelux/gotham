@@ -4,6 +4,7 @@ import {
   parseEditorWindow,
 } from "@/features/files/schemas/editorWindow";
 import type { EditorWindowState } from "@/features/files/schemas/editorWindow";
+import { clampWindowSize } from "@/shared/window/geometry";
 
 /**
  * Per-user localStorage persistence for the floating editor window geometry
@@ -81,14 +82,12 @@ export function clampEditorSize(
   minWidth: number,
   minHeight: number,
 ): { width: number; height: number } {
-  return {
-    width: Math.min(
-      Math.max(Math.min(minWidth, viewportWidth), Math.round(width)),
-      Math.max(Math.min(minWidth, viewportWidth), viewportWidth),
-    ),
-    height: Math.min(
-      Math.max(Math.min(minHeight, viewportHeight), Math.round(height)),
-      Math.max(Math.min(minHeight, viewportHeight), viewportHeight),
-    ),
-  };
+  return clampWindowSize(
+    width,
+    height,
+    viewportWidth,
+    viewportHeight,
+    minWidth,
+    minHeight,
+  );
 }

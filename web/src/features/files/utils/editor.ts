@@ -5,6 +5,7 @@
  * arithmetic that retargets an open tab through a rename or move. Kept
  * DOM-free so the store and the vitest suite can exercise them directly.
  */
+import { clampWindowOffset } from "@/shared/window/geometry";
 
 /** EditorEol is the dominant line terminator of an opened document. */
 export type EditorEol = "\n" | "\r\n";
@@ -349,10 +350,14 @@ export function clampEditorOffset(
   viewportWidth: number,
   viewportHeight: number,
 ): { x: number; y: number } {
-  return {
-    x: Math.min(Math.max(0, x), Math.max(0, viewportWidth - width)),
-    y: Math.min(Math.max(0, y), Math.max(0, viewportHeight - height)),
-  };
+  return clampWindowOffset(
+    x,
+    y,
+    width,
+    height,
+    viewportWidth,
+    viewportHeight,
+  );
 }
 
 /** TabCloseScope is the tab-strip command a context-menu entry runs. */

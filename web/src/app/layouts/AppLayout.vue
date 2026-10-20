@@ -7,6 +7,7 @@ import { TaskProgressCards } from "@/features/tasks";
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
 import { useServersStore } from "@/features/servers";
+import { TerminalWindow } from "@/features/terminal";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
 import { provideMobileNav } from "./useMobileNav";
@@ -76,6 +77,11 @@ const widePage = computed(() => route.meta.wide === true);
     <!-- JUS-232: the code editor window mounts once in the app shell, so open
          files and unsaved buffers survive route and page navigation. -->
     <FilesEditor />
+
+    <!-- JUS-245: the floating terminal window mounts beside the editor and
+         collapses with v-show, so every live PTY survives navigation, tab
+         switches and minimize/restore. -->
+    <TerminalWindow />
   </div>
 </template>
 

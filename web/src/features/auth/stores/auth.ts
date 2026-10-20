@@ -31,6 +31,7 @@ import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services";
 import { useTeamsStore } from "@/features/teams";
 import { useTemplatesStore } from "@/features/templates";
+import { useTerminalStore, useTerminalWindowStore } from "@/features/terminal";
 import { useToolchainStore } from "@/features/toolchain";
 
 export type { AuthResult, User } from "@/shared/api/token";
@@ -112,7 +113,12 @@ export const useAuthStore = defineStore("auth", () => {
       lastAccountId = nextAccountId;
       if (nextAccountId !== "") {
         try {
+          // An in-SPA account switch is a sign-out plus sign-in even when no
+          // empty-session step lands in between: drop the previous account's
+          // live terminals before rebinding the window geometry.
+          useTerminalStore().reset();
           useEditorWindowStore().reloadForUser(nextAccountId);
+          useTerminalWindowStore().reloadForUser(nextAccountId);
         } catch {
           // Sign-in must always complete; a geometry reload never blocks it.
         }
@@ -188,6 +194,8 @@ export const useAuthStore = defineStore("auth", () => {
       () => useFilesStore().reset(),
       () => useEditorStore().reset(),
       () => useEditorWindowStore().reset(),
+      () => useTerminalStore().reset(),
+      () => useTerminalWindowStore().reset(),
       () => useTrashStore().reset(),
       () => useNotificationsStore().reset(),
       () => useProjectsStore().reset(),

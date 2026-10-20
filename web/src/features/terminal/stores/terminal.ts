@@ -1,0 +1,554 @@
+import { defineStore } from "pinia";
+import { computed, ref } from "vue";
+
+import {
+  closeTerminalSession,
+  createTerminalSession,
+  currentTerminalToken,
+  terminalFailure,
+} from "@/features/terminal/api/terminal";
+import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
+import { useTerminalWindowStore } from "@/features/terminal/stores/terminalWindow";
+import { TerminalRuntime } from "@/features/terminal/transport/terminalRuntime";
+import type {
+  TerminalStatePatch,
+  TerminalStatus,
+} from "@/features/terminal/transport/terminalRuntime";
+
+/**
+ * Terminal tabs and live sessions (JUS-245).
+ *
+ * The reactive tabs are the window's data; the renderer/transport lives in a
+ * non-reactive map so a pane or route unmount never tears down a shell. The
+ * public methods below are the entry points later work packages call:
+ *
+ *   - openPageSession({ serverId, root, cwd })  page mode, idempotent per target
+ *   - openWindowSession({ serverId, root, cwd }) floating window, one new tab
+ *   - detachToWindow(tabId)                     one-way page → window transfer
+ *   - requestClose([tabId])                     same confirmation path as the UI
+ *
+ * A transfer reuses the SAME session id, renderer and socket: it only moves
+ * the host element. There is deliberately no window → page action.
+ */
+
+/** TerminalMode is where one live session is shown. */
+export type TerminalMode = "page" | "window";
+
+/** TerminalTab is the reactive metadata of one live terminal. */
+export interface TerminalTab {
+  id: string;
+  serverId: string;
+  serverName: string;
+  target: string;
+  root: string;
+  cwd: string;
+  title: string;
+  mode: TerminalMode;
+  sessionId: string;
+  status: TerminalStatus;
+  cols: number;
+  rows: number;
+  shell: string;
+  serviceUser: string;
+  exitCode: number | null;
+  exitSignal: string;
+  errorCode: TerminalErrorCode | null;
+  errorMessage: string;
+  createdAt: number;
+}
+
+/** TerminalOpenOptions is the public entry-point input. */
+export interface TerminalOpenOptions {
+  serverId: string;
+  serverName?: string;
+  target?: string;
+  root?: string;
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+  title?: string;
+}
+
+/** TerminalCloseRequest is the pending confirmation (always one at a time). */
+export interface TerminalCloseRequest {
+  ids: string[];
+  scope: "tab" | "window";
+}
+
+/** DEFAULT_TERMINAL_COLS/ROWS seed the create call before the renderer fits. */
+const DEFAULT_TERMINAL_COLS = 120;
+const DEFAULT_TERMINAL_ROWS = 32;
+
+/** tabId returns a stable local id without requiring a secure context. */
+function tabId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `term-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** targetKey identifies a page session request for idempotent opens. */
+function targetKey(options: TerminalOpenOptions): string {
+  return [
+    options.serverId,
+    options.target ?? "host",
+    options.root ?? "",
+    options.cwd ?? "",
+  ].join("\u0000");
+}
+
+/** terminalTitle names one tab in the window strip. */
+function terminalTitle(options: TerminalOpenOptions): string {
+  if (options.title) {
+    return options.title;
+  }
+  const name = options.serverName || options.serverId;
+  const where = options.cwd && options.cwd !== "." ? options.cwd : options.root;
+  return where ? `${name} · ${where}` : name;
+}
+
+export const useTerminalStore = defineStore("terminal", () => {
+  const tabs = ref<TerminalTab[]>([]);
+  const activeTabId = ref<string>("");
+  const closeRequest = ref<TerminalCloseRequest | null>(null);
+
+  /** runtimes holds one live renderer/transport per tab (non-reactive). */
+  const runtimes = new Map<string, TerminalRuntime>();
+  /**
+   * surfaces remembers the element each tab is displayed in. It queues a
+   * surface that mounted before the socket, and lets an explicit retry put the
+   * new renderer into the still-mounted pane.
+   */
+  const surfaces = new Map<string, HTMLElement>();
+  /** inflight deduplicates rapid page opens for the same target. */
+  const inflight = new Map<string, Promise<TerminalTab>>();
+  /** retrying guards a second explicit retry while the first is running. */
+  const retrying = new Set<string>();
+  /** closeResolve settles an awaited close confirmation (logout path). */
+  let closeResolve: ((_confirmed: boolean) => void) | null = null;
+  /** closePromise is shared by overlapping awaited close requests. */
+  let closePromise: Promise<boolean> | null = null;
+
+  const activeTab = computed<TerminalTab | null>(
+    () => tabs.value.find((tab) => tab.id === activeTabId.value) ?? null,
+  );
+  const pageTabs = computed<TerminalTab[]>(() =>
+    tabs.value.filter((tab) => tab.mode === "page"),
+  );
+  const windowTabs = computed<TerminalTab[]>(() =>
+    tabs.value.filter((tab) => tab.mode === "window"),
+  );
+  const windowOpenCount = computed<number>(() => windowTabs.value.length);
+  /**
+   * hasLiveSessions is the beforeunload guard: a browser unload terminates an
+   * attached PTY just like a tab close, so it must warn the same way.
+   */
+  const hasLiveSessions = computed<boolean>(() =>
+    tabs.value.some(
+      (tab) => tab.status === "connecting" || tab.status === "connected",
+    ),
+  );
+
+  /** findTab resolves one tab by local id. */
+  function findTab(id: string): TerminalTab | null {
+    return tabs.value.find((tab) => tab.id === id) ?? null;
+  }
+
+  /** findTabForTarget returns an existing session for one page target. */
+  function findTabForTarget(options: TerminalOpenOptions): TerminalTab | null {
+    const key = targetKey(options);
+    return (
+      tabs.value.find((tab) => targetKey(tab) === key) ?? null
+    );
+  }
+
+  /** applyPatch merges a runtime lifecycle patch into one tab. */
+  function applyPatch(tab: TerminalTab, patch: TerminalStatePatch): void {
+    if (!findTab(tab.id)) {
+      return;
+    }
+    if (patch.status !== undefined) {
+      tab.status = patch.status;
+    }
+    if (patch.exitCode !== undefined) {
+      tab.exitCode = patch.exitCode;
+    }
+    if (patch.exitSignal !== undefined) {
+      tab.exitSignal = patch.exitSignal;
+    }
+    if (patch.errorCode !== undefined) {
+      tab.errorCode = patch.errorCode;
+    }
+    if (patch.errorMessage !== undefined) {
+      tab.errorMessage = patch.errorMessage;
+    }
+    if (patch.shell !== undefined) {
+      tab.shell = patch.shell;
+    }
+    if (patch.serviceUser !== undefined) {
+      tab.serviceUser = patch.serviceUser;
+    }
+    if (patch.cols !== undefined) {
+      tab.cols = patch.cols;
+    }
+    if (patch.rows !== undefined) {
+      tab.rows = patch.rows;
+    }
+  }
+
+  /** startSession creates the HTTP session and starts its runtime. */
+  async function startSession(tab: TerminalTab): Promise<void> {
+    tab.status = "connecting";
+    tab.errorCode = null;
+    tab.errorMessage = "";
+    tab.exitCode = null;
+    tab.exitSignal = "";
+    try {
+      const session = await createTerminalSession(tab.serverId, {
+        target: tab.target,
+        ...(tab.root !== "" ? { root: tab.root } : {}),
+        ...(tab.cwd !== "" ? { cwd: tab.cwd } : {}),
+        cols: tab.cols,
+        rows: tab.rows,
+      });
+      // A tab can be closed while the create call is in flight.
+      if (!findTab(tab.id)) {
+        await closeTerminalSession(tab.serverId, session.id).catch(() => {
+          // The tab is gone; the server expires an unattached session anyway.
+        });
+        return;
+      }
+      tab.sessionId = session.id;
+      tab.cols = session.cols;
+      tab.rows = session.rows;
+      const runtime = new TerminalRuntime({
+        session,
+        getToken: currentTerminalToken,
+        onState: (patch) => applyPatch(tab, patch),
+      });
+      runtimes.set(tab.id, runtime);
+      const surface = surfaces.get(tab.id);
+      if (surface) {
+        runtime.attach(surface);
+      }
+      await runtime.connect();
+    } catch (error) {
+      const failure = terminalFailure(error);
+      tab.status = "error";
+      tab.errorCode = failure.code;
+      tab.errorMessage = failure.message;
+    }
+  }
+
+  /** createTab appends one tab and starts its session. */
+  async function createTab(
+    options: TerminalOpenOptions,
+    mode: TerminalMode,
+  ): Promise<TerminalTab> {
+    const tab: TerminalTab = {
+      id: tabId(),
+      serverId: options.serverId,
+      serverName: options.serverName ?? "",
+      target: options.target ?? "host",
+      root: options.root ?? "",
+      cwd: options.cwd ?? "",
+      title: terminalTitle(options),
+      mode,
+      sessionId: "",
+      status: "connecting",
+      cols: options.cols ?? DEFAULT_TERMINAL_COLS,
+      rows: options.rows ?? DEFAULT_TERMINAL_ROWS,
+      shell: "",
+      serviceUser: "",
+      exitCode: null,
+      exitSignal: "",
+      errorCode: null,
+      errorMessage: "",
+      createdAt: Date.now(),
+    };
+    tabs.value.push(tab);
+    // Read the tab back from the reactive array: Vue wraps the raw object on
+    // access, and every later mutation (runtime patches included) must go
+    // through that proxy or the UI never re-renders.
+    const stored = tabs.value[tabs.value.length - 1]!;
+    if (mode === "window") {
+      activeTabId.value = stored.id;
+    }
+    await startSession(stored);
+    return stored;
+  }
+
+  /**
+   * openPageSession opens (or reuses) the page-mode session for one target.
+   * Reuse is keyed by server + target + root + cwd, so revisiting the pane or
+   * remounting the page cannot spawn a duplicate shell. A session that was
+   * detached is returned as-is: the caller renders its "open in window" state
+   * instead of creating a second session.
+   */
+  function openPageSession(
+    options: TerminalOpenOptions,
+  ): Promise<TerminalTab> {
+    const existing = findTabForTarget(options);
+    if (existing) {
+      return Promise.resolve(existing);
+    }
+    const key = targetKey(options);
+    const pending = inflight.get(key);
+    if (pending) {
+      return pending;
+    }
+    const created = createTab(options, "page").finally(() => {
+      inflight.delete(key);
+    });
+    inflight.set(key, created);
+    return created;
+  }
+
+  /**
+   * openWindowSession opens a new tab in the floating window. Repeating the
+   * call is intentional (each call is a new independent shell).
+   */
+  async function openWindowSession(
+    options: TerminalOpenOptions,
+  ): Promise<TerminalTab> {
+    useTerminalWindowStore().setMinimized(false);
+    return createTab(options, "window");
+  }
+
+  /**
+   * detachToWindow performs the one-way transfer: the SAME tab, session id,
+   * renderer and buffer move into the window. No HTTP create is issued.
+   */
+  function detachToWindow(id: string): void {
+    const tab = findTab(id);
+    if (!tab || tab.mode === "window") {
+      return;
+    }
+    tab.mode = "window";
+    activeTabId.value = tab.id;
+    useTerminalWindowStore().setMinimized(false);
+  }
+
+  /** activate makes one window tab active. */
+  function activate(id: string): void {
+    if (findTab(id)) {
+      activeTabId.value = id;
+    }
+  }
+
+  /** attach offers a surface element to the live runtime (or queues it). */
+  function attach(id: string, container: HTMLElement): void {
+    surfaces.set(id, container);
+    runtimes.get(id)?.attach(container);
+  }
+
+  /**
+   * detach drops a pane's remembered element when that pane unmounts. The
+   * runtime keeps its own host, so a later mount (or a transfer) re-attaches;
+   * the store never holds a removed DOM node.
+   */
+  function detach(id: string, container: HTMLElement): void {
+    if (surfaces.get(id) === container) {
+      surfaces.delete(id);
+    }
+  }
+
+  /** focus focuses the live renderer of one tab. */
+  function focus(id: string): void {
+    runtimes.get(id)?.focus();
+  }
+
+  /** fit refits one live renderer (after a restore or a window resize). */
+  function fit(id: string): void {
+    runtimes.get(id)?.fit();
+  }
+
+  /** retry is the ONLY reconnect path: it creates a new session, no replay. */
+  async function retry(id: string): Promise<void> {
+    const tab = findTab(id);
+    if (!tab || retrying.has(id)) {
+      return;
+    }
+    if (
+      tab.status !== "disconnected" &&
+      tab.status !== "error" &&
+      tab.status !== "exited"
+    ) {
+      return;
+    }
+    retrying.add(id);
+    const previousSession = tab.sessionId;
+    const previousServer = tab.serverId;
+    const runtime = runtimes.get(id);
+    runtimes.delete(id);
+    runtime?.dispose(true);
+    tab.sessionId = "";
+    try {
+      if (previousSession !== "") {
+        await closeTerminalSession(previousServer, previousSession).catch(() => {
+          // Best-effort: an ended session answers 404, which is success here.
+        });
+      }
+      if (!findTab(id)) {
+        return;
+      }
+      await startSession(tab);
+    } finally {
+      retrying.delete(id);
+    }
+  }
+
+  /**
+   * requestClose asks for confirmation before releasing the given tabs. The
+   * returned promise lets a session-terminating flow (logout) wait for the
+   * user's answer: true means the listed sessions were released, false means
+   * the user kept them. UI callers that do not care can ignore it.
+   */
+  function requestClose(ids: string[]): Promise<boolean> {
+    if (closeRequest.value !== null) {
+      return closePromise ?? Promise.resolve(false);
+    }
+    const unique = [...new Set(ids)].filter((id) => findTab(id) !== null);
+    if (unique.length === 0) {
+      return Promise.resolve(true);
+    }
+    closePromise = new Promise<boolean>((resolve) => {
+      closeResolve = resolve;
+    });
+    closeRequest.value = {
+      ids: unique,
+      scope: unique.length > 1 ? "window" : "tab",
+    };
+    return closePromise;
+  }
+
+  /** settleClose resolves the awaited confirmation exactly once. */
+  function settleClose(confirmed: boolean): void {
+    const resolve = closeResolve;
+    closeResolve = null;
+    closePromise = null;
+    resolve?.(confirmed);
+  }
+
+  /** cancelClose keeps every session intact and returns to the window. */
+  function cancelClose(): void {
+    closeRequest.value = null;
+    settleClose(false);
+  }
+
+  /** confirmClose releases exactly the sessions the dialog listed. */
+  function confirmClose(): void {
+    const request = closeRequest.value;
+    closeRequest.value = null;
+    if (request) {
+      closeTabs(request.ids);
+    }
+    settleClose(request !== null);
+  }
+
+  /**
+   * confirmCloseAll runs the shared close path until no live session remains.
+   * It is the logout gate: a cancel returns false and aborts the sign-out; an
+   * already-open dialog is awaited and, if it targeted a subset, the remaining
+   * live sessions get their own confirmation rather than being killed silently.
+   */
+  async function confirmCloseAll(): Promise<boolean> {
+    while (hasLiveSessions.value) {
+      const confirmed = await requestClose(tabs.value.map((tab) => tab.id));
+      if (!confirmed) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** closeTabs disposes renderers and removes the tabs (no prompt). */
+  function closeTabs(ids: string[]): void {
+    for (const id of ids) {
+      const tab = findTab(id);
+      if (!tab) {
+        continue;
+      }
+      const runtime = runtimes.get(id);
+      runtimes.delete(id);
+      runtime?.dispose(true);
+      surfaces.delete(id);
+      retrying.delete(id);
+      if (tab.sessionId !== "") {
+        void closeTerminalSession(tab.serverId, tab.sessionId).catch(() => {
+          // The server also revokes an ended session; cleanup is best-effort.
+        });
+      }
+      const index = tabs.value.findIndex((item) => item.id === id);
+      if (index !== -1) {
+        tabs.value.splice(index, 1);
+      }
+    }
+    if (activeTabId.value !== "" && findTab(activeTabId.value) === null) {
+      activeTabId.value = tabs.value[tabs.value.length - 1]?.id ?? "";
+    }
+    if (tabs.value.length === 0) {
+      activeTabId.value = "";
+      if (closeRequest.value !== null) {
+        closeRequest.value = null;
+        settleClose(true);
+      }
+      useTerminalWindowStore().setMinimized(false);
+    }
+  }
+
+  /** closeAll strips every session through the same cleanup path. */
+  function closeAll(): void {
+    closeTabs(tabs.value.map((tab) => tab.id));
+  }
+
+  /**
+   * reset disposes every renderer and socket for logout. It never issues a
+   * DELETE (the sign-out already revokes the lineage) and keeps no transcript
+   * or credential: the tabs array, runtimes and queued hosts are dropped.
+   */
+  function reset(): void {
+    for (const runtime of runtimes.values()) {
+      runtime.dispose(true);
+    }
+    runtimes.clear();
+    surfaces.clear();
+    inflight.clear();
+    retrying.clear();
+    tabs.value = [];
+    activeTabId.value = "";
+    closeRequest.value = null;
+    settleClose(false);
+  }
+
+  return {
+    tabs,
+    activeTabId,
+    activeTab,
+    pageTabs,
+    windowTabs,
+    windowOpenCount,
+    hasLiveSessions,
+    closeRequest,
+    findTab,
+    findTabForTarget,
+    openPageSession,
+    openWindowSession,
+    detachToWindow,
+    activate,
+    attach,
+    detach,
+    focus,
+    fit,
+    retry,
+    requestClose,
+    cancelClose,
+    confirmClose,
+    confirmCloseAll,
+    closeTabs,
+    closeAll,
+    reset,
+  };
+});
+
+export type { TerminalStatePatch, TerminalStatus };

@@ -361,7 +361,6 @@ describe("TerminalRuntime failure copy", () => {
     expect(context.states.at(-1)).toEqual({
       status: "error",
       errorCode: "auth",
-      errorMessage: "",
     });
   });
 
@@ -371,7 +370,6 @@ describe("TerminalRuntime failure copy", () => {
     expect(context.states.at(-1)).toEqual({
       status: "error",
       errorCode: "generic",
-      errorMessage: "",
     });
   });
 });
@@ -475,13 +473,14 @@ describe("TerminalRuntime lifecycle", () => {
     expect(context.states.filter((state) => state.status === "disconnected")).toHaveLength(1);
   });
 
-  it("surfaces a server error frame and stops the heartbeat", async () => {
+  it("surfaces a server error frame and keeps only the bounded code", async () => {
     const context = await connectedRuntime();
     context.socket.message(serverFrame(0x03, new TextEncoder().encode("agent offline")));
     expect(context.runtime.getStatus()).toBe("error");
+    // Unknown relay text is never retained: it can carry host paths.
     expect(context.states.at(-1)).toEqual({
       status: "error",
-      errorMessage: "agent offline",
+      errorCode: "generic",
     });
     context.socket.sent = [];
     vi.advanceTimersByTime(TERMINAL_HEARTBEAT_MS * 2);
@@ -507,7 +506,6 @@ describe("TerminalRuntime lifecycle", () => {
       expect(context.states.at(-1)).toEqual({
         status: "error",
         errorCode: code,
-        errorMessage: message,
       });
       context.runtime.dispose(false);
     }

@@ -1,0 +1,1 @@
+import{c_ as o,f as a,j as c,aX as i,br as s}from"./index-Bdg0OAAz.js";function v(){const e=c(null),t=a(()=>{if(e.value!==null)return i.value,String(s.global.t("projects.conflict.nameTaken"))}),r=a(()=>e.value===null?void 0:"error");function u(){e.value=null}function l(n){return o(n)?(e.value=n,!0):!1}return{feedback:t,status:r,clear:u,take:l}}export{v as u};

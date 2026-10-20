@@ -40,7 +40,7 @@ import {
   NSelect,
   useMessage,
 } from "naive-ui";
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useAuthStore } from "@/features/auth";
@@ -2224,12 +2224,12 @@ const serverName = computed<string>(
 );
 
 /**
- * terminalOpening guards one toolbar/menu gesture while its create call is in
- * flight, so the control can show a busy/disabled state (JUS-248 r1). The
- * shared store also dedupes by target, which covers a second event that lands
- * before this flag's render tick.
+ * terminalRequesting is the immediate gesture guard for a synchronous second
+ * click; terminalOpening is the store's slightly longer single-flight state
+ * (create + ~600 ms settle window) that keeps the control busy for the SAME
+ * target only (JUS-248 r2).
  */
-const terminalOpening = ref(false);
+const terminalRequesting = ref(false);
 
 /**
  * terminalTarget is the root-relative folder an "Open terminal here" action
@@ -2259,6 +2259,23 @@ const terminalTarget = computed<string | null>(() => {
 /** canOpenTerminal is the single gate for the toolbar and both menus. */
 const canOpenTerminal = computed<boolean>(() => terminalTarget.value !== null);
 
+/** terminalHintId is unique per mounted browser, so aria-describedby cannot
+ *  resolve to another instance's tooltip (JUS-248 r2). */
+const terminalHintId = useId();
+
+/** terminalOpening is the shared store's per-target busy/settle state. */
+const terminalOpening = computed<boolean>(() => {
+  if (terminalTarget.value === null || files.rootName === "") {
+    return false;
+  }
+  return terminal.isWindowOpening({
+    serverId: props.serverId,
+    target: "host",
+    root: files.rootName,
+    cwd: terminalTarget.value,
+  });
+});
+
 /** symlinkDirectory reports whether the listing proves a link targets a folder. */
 function symlinkDirectory(entry: FilesEntry): boolean {
   return symlinkTargetsDirectory(
@@ -2280,7 +2297,11 @@ function symlinkDirectory(entry: FilesEntry): boolean {
  * reason.
  */
 async function openTerminalHere(entry: FilesEntry | null = null): Promise<void> {
-  if (!canOpenTerminal.value || terminalOpening.value) {
+  if (
+    !canOpenTerminal.value ||
+    terminalOpening.value ||
+    terminalRequesting.value
+  ) {
     return;
   }
   const directory = terminalDirectoryFor(entry, files.activeTab.lastLoadedPath, {
@@ -2291,7 +2312,7 @@ async function openTerminalHere(entry: FilesEntry | null = null): Promise<void> 
   if (directory === null || root === "") {
     return;
   }
-  terminalOpening.value = true;
+  terminalRequesting.value = true;
   try {
     await terminal.openWindowSession({
       serverId: props.serverId,
@@ -2301,7 +2322,7 @@ async function openTerminalHere(entry: FilesEntry | null = null): Promise<void> 
       cwd: directory,
     });
   } finally {
-    terminalOpening.value = false;
+    terminalRequesting.value = false;
   }
 }
 
@@ -2915,17 +2936,17 @@ function onFolderMenu(key: string): void {
             <NButton
               size="small"
               class="fm-terminal-action"
-              :loading="terminalOpening"
-              :aria-busy="terminalOpening"
+              :loading="terminalOpening || terminalRequesting"
+              :aria-busy="terminalOpening || terminalRequesting"
               :aria-label="$t('files.terminal.openHere')"
-              aria-describedby="fm-terminal-hint"
+              :aria-describedby="terminalHintId"
               @click="openTerminalHere()"
             >
               <template #icon>
                 <Terminal :size="14" :stroke-width="1.8" aria-hidden="true" />
               </template>
             </NButton>
-            <span id="fm-terminal-hint" class="fm-terminal-hint" role="tooltip">
+            <span :id="terminalHintId" class="fm-terminal-hint" role="tooltip">
               {{ $t("files.terminal.openHereHint") }}
             </span>
           </span>

@@ -38,6 +38,7 @@ export interface TerminalFailure {
 export async function createTerminalSession(
   serverId: string,
   input: CreateTerminalInput,
+  signal?: AbortSignal,
 ): Promise<TerminalSessionInfo> {
   const response = await http.post<unknown>(
     `/servers/${encodeURIComponent(serverId)}/terminal/sessions`,
@@ -48,6 +49,7 @@ export async function createTerminalSession(
       cols: input.cols,
       rows: input.rows,
     },
+    signal ? { signal } : undefined,
   );
   return terminalSessionSchema.parse(response.data);
 }

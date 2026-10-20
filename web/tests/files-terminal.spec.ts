@@ -755,8 +755,12 @@ test("surfaces an unknown node and an unsupported agent", async ({ page }) => {
     ),
   ).toBeVisible();
 
-  // A second attempt answers 501 from an old agent.
+  // A second attempt answers 501 from an old agent. Wait out the first
+  // gesture's settle window so this is a deliberate new attempt.
   state.createError = { status: 501, message: "unsupported" };
+  await expect(terminalButton(page)).toHaveAttribute("aria-busy", "false", {
+    timeout: 5_000,
+  });
   await page.getByRole("button", { name: "Open terminal here" }).click();
   await expect(
     terminalWindow(page).getByText(
@@ -766,28 +770,37 @@ test("surfaces an unknown node and an unsupported agent", async ({ page }) => {
   expect(state.sessions).toHaveLength(0);
 });
 
-test("a double-click on the toolbar creates exactly one shell", async ({
+test("a human-speed double-click on a fast create starts one shell", async ({
   page,
 }) => {
   const state = newState();
-  state.createDelayMs = 600;
+  // A fast PTY create is the r2 repro: the settle window must still absorb the
+  // second click of one gesture.
+  state.createDelayMs = 30;
   await openFiles(page, state);
 
   const button = terminalButton(page);
   const box = (await button.boundingBox())!;
-  await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
 
-  // Both clicks are one gesture: one POST while the first create is in flight.
+  await page.mouse.click(x, y);
+  await page.waitForTimeout(120);
+  await page.mouse.click(x, y);
   await expect.poll(() => state.creates.length).toBe(1);
+  // The key and the button stay busy through the settle window.
   await expect(button).toHaveAttribute("aria-busy", "true");
-  await expect(button).toHaveClass(/n-button--loading/);
+
+  await page.waitForTimeout(180); // ~300 ms after the first click
+  await page.mouse.click(x, y);
+  await expect.poll(() => state.creates.length).toBe(1);
   await expect(terminalWindow(page).getByRole("tab")).toHaveCount(1);
 
-  // The delay elapses; the control becomes usable again.
-  await expect(button).toHaveAttribute("aria-busy", "false");
-
-  // A later, separate activation is deliberate and starts a new shell.
-  await button.click();
+  // After the window a deliberate click is a new shell.
+  await expect(button).toHaveAttribute("aria-busy", "false", {
+    timeout: 5_000,
+  });
+  await page.mouse.click(x, y);
   await expect.poll(() => state.creates.length).toBe(2);
   await expect(terminalWindow(page).getByRole("tab")).toHaveCount(2);
   expect(state.creates.map((body) => body.cwd ?? "")).toEqual(["", ""]);
@@ -857,6 +870,11 @@ test("never renders raw backend text or host paths in the error overlay", async 
   ];
   for (const item of cases) {
     state.createError = { status: item.status, message: item.body };
+    // Each case is a separate deliberate attempt: the previous target's settle
+    // window keeps a same-gesture double-click from adding a shell.
+    await expect(terminalButton(page)).toHaveAttribute("aria-busy", "false", {
+      timeout: 5_000,
+    });
     await terminalButton(page).click();
     await expect(terminalWindow(page).getByText(item.text)).toBeVisible();
   }
@@ -989,8 +1007,11 @@ test("the icon-only toolbar action names itself and shows a tooltip", async ({
 
   const button = terminalButton(page);
   await expect(button).toHaveAttribute("aria-label", "Open terminal here");
-  await expect(button).toHaveAttribute("aria-describedby", "fm-terminal-hint");
-  const hint = page.locator("#fm-terminal-hint");
+  const describedBy = await button.getAttribute("aria-describedby");
+  expect(describedBy).toBeTruthy();
+  // Per-instance id, never the old shared constant.
+  expect(describedBy).not.toBe("fm-terminal-hint");
+  const hint = page.locator(`[id="${describedBy}"]`);
   await expect(hint).toHaveAttribute("role", "tooltip");
   await expect(hint).toHaveText(
     "Open a host shell in this folder in the floating terminal window.",

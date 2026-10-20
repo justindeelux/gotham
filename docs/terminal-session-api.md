@@ -318,25 +318,44 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   from a dead one.
 * **Any end** — shell exit, client close, socket error, idle timeout, expiry,
   revocation, DELETE, agent failure, control-plane shutdown — cancels the agent
-  stream. For a host shell the agent sends `SIGHUP` to the shell's process
-  group, closes the PTY master immediately, and then ends the whole **session**,
-  not just that process group: it scans `/proc/<pid>/stat` (parsed from the last
-  `)`, so a command name containing spaces, parentheses or a newline cannot
-  shift the fields) for every process whose session id equals the shell's pid,
-  sends `SIGTERM`, and `SIGKILL`s whatever remains after the 2 s grace. An
-  interactive shell with job control puts every background job in its own
-  process group, so the group signal alone leaves `sleep N &`, `nohup x &` and
-  nested subshell jobs running; the session scan is what ends them. The same
-  scan runs when the shell exited before the close, so a job that outlived its
-  shell is still killed. The walk never signals pid 1 or the agent itself, and
-  it refuses the whole session when the process that now owns the recorded pid
-  has a different `/proc` start time (pid reuse); a session id is only trusted
-  after that check. It is a single pass capped in process count and wall-clock
-  time, followed by at most four hard-kill re-scans (100 ms apart) for jobs
-  forked during the grace — never an unbounded loop and never a per-process
-  sleep. Zombies are ignored. A process that changed uid (`su`/`sudo`) stays in
-  the session and is still matched: a root agent can signal it, a non-root
-  agent's `kill` fails with `EPERM` and the process is left behind.
+  stream. For a host shell the only work done inline is `SIGHUP` to the shell's
+  process group and closing the PTY master; the session walk then runs on a
+  background goroutine bounded by a 4 s budget, so a large process table never
+  delays the close. The walk ends the whole **session**, not just that process
+  group: it scans `/proc/<pid>/stat` (parsed from the last `)`, so a command
+  name containing spaces, parentheses or a newline cannot shift the fields) for
+  every process whose session id equals the shell's pid, sends `SIGTERM`, and
+  `SIGKILL`s whatever remains after the 2 s grace. An interactive shell with
+  job control puts every background job in its own process group, so the group
+  signal alone leaves `sleep N &`, `nohup x &` and nested subshell jobs
+  running; the session scan is what ends them. The same scan runs when the
+  shell exited before the close, so a job that outlived its shell is still
+  killed. The walk never signals pid 1 or the agent itself, and it refuses the
+  whole session when the process that now owns the recorded pid has a different
+  `/proc` start time (pid reuse); a session id is only trusted after that
+  check. Each member’s pidfd is opened immediately after its `/proc` record is
+  verified (and the record is re-checked through the same pid), and signals go
+  through `pidfd_send_signal`, so a pid reused between scan and kill is not
+  signalled; when the kernel or sandbox has no pidfds (`ENOSYS`/`EPERM`) the
+  agent falls back to `kill(2)`. The residual window in that fallback — and, even
+  with pidfds, between reading `/proc` and opening the pidfd — is a pid recycled
+  within that microseconds-scale gap, which is practically unreachable.
+  **Bounds and completeness.** One pass reads at most 65,536 process records
+  and checks a 4 s deadline every 64 entries, followed by at most four
+  hard-kill re-scans (100 ms apart) for jobs forked during the grace — never an
+  unbounded loop and never a per-process sleep. A walk that hits the cap, the
+  deadline, an unreadable `/proc`, or a reused leader is **incomplete**, never
+  an empty session: the agent signals the members it did find, logs
+  `terminal: session scan incomplete; falling back to the process group` at
+  `WARN` with `session_id` and `members_found`, and keeps the process-group
+  kill-after-grace fallback. `hidepid` and a restricted or pid-namespaced
+  `/proc` (the agent only sees its own mount/namespace) can hide processes from
+  the scan; those cannot be signalled by session id, which is exactly the case
+  the `WARN` reports. On non-Linux hosts there is no `/proc` walk at all and
+  only the process-group cleanup runs (the supported agent target is Linux).
+  Zombies are ignored. A process that changed uid (`su`/`sudo`) stays in the
+  session and is still matched: a root agent can signal it, a non-root agent's
+  `kill` fails with `EPERM` and the process is left behind.
   **Residual limit:** a job that calls `setsid` (for example `(setsid x &)`)
   leaves the session and is not attributable to the shell, so it may survive
   the close. It no longer pins the agent: the PTY master is non-blocking, so
@@ -605,8 +624,12 @@ post-grace `SIGKILL`), `(setsid x &)` (the job may survive, the agent's master
 fd and pump goroutine must still be released), nested subshell jobs, a shell
 that exits before the close, close during heavy output, and 20 repeated
 open/close cycles. Each case asserts no process of the session remains (except
-the documented `setsid` escape) and that the agent's `/proc/self/fd` and
-goroutine counts return to baseline within a bound. All cases are bounded: a
+the documented `setsid` escape), that `/dev/ptmx` descriptors return to their
+exact baseline (a single leaked master fails the test), and that unrelated fds
+and goroutine counts return to baseline within a bound. Unit tests cover the
+`/proc/<pid>/stat` parser, the pid-reuse refusal, an injected process cap and an
+expired deadline (both must report the walk as incomplete, not empty), and the
+pidfd binding. All cases are bounded: a
 handful of processes per test, hard deadlines and a `t.Cleanup` that kills a
 recorded pid (or a uniquely named escaped `sleep`). The same binary is then run
 under `linux/amd64` and `linux/arm64` containers with `--pids-limit`,

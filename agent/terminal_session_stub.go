@@ -13,8 +13,14 @@ import (
 
 func terminalProcessStartTime(pid int) uint64 { return 0 }
 
-func terminalSessionMembers(sid int, leaderStart uint64, deadline time.Time) ([]int, bool) {
+// terminalSessionMember mirrors the Linux type; no member is ever produced and
+// the fields carry no meaning without a /proc walk.
+type terminalSessionMember struct{}
+
+func closeTerminalSessionMembers(members []terminalSessionMember) {}
+
+func terminalSessionMembers(sid int, leaderStart uint64, deadline time.Time) ([]terminalSessionMember, bool) {
 	return nil, false
 }
 
-func signalTerminalSession(pids []int, signal os.Signal) {}
+func signalTerminalSession(members []terminalSessionMember, signal os.Signal) {}

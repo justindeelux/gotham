@@ -596,7 +596,7 @@ func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, erro
 		go func() { _, _ = cmd.Process.Wait() }()
 		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
 	}
-	return newTerminalSession(cmd, master), nil
+	return newTerminalSession(cmd, master, s.log), nil
 }
 
 // startContainer opens an interactive exec in the resolved container.
@@ -802,6 +802,7 @@ type terminalSession struct {
 	pty  *os.File
 	pid  int
 	sid  int
+	log  *slog.Logger
 	done chan struct{}
 
 	// leaderStart is the shell's /proc start time, captured at fork time. It
@@ -814,20 +815,23 @@ type terminalSession struct {
 	waitErr  error
 }
 
-func newTerminalSession(cmd *exec.Cmd, master *os.File) *terminalSession {
+func newTerminalSession(cmd *exec.Cmd, master *os.File, log *slog.Logger) *terminalSession {
 	pid := cmd.Process.Pid
 	return &terminalSession{
 		cmd:         cmd,
 		pty:         master,
 		pid:         pid,
 		sid:         pid,
+		log:         log,
 		leaderStart: terminalProcessStartTime(pid),
 		done:        make(chan struct{}),
 	}
 }
 
 // terminate ends the whole host session, not just the shell's process group. It
-// is idempotent and never waits for a shell that ignores signals.
+// is idempotent and returns immediately: the PTY master is closed inline and the
+// /proc session walk runs on a background goroutine bounded by
+// terminalSessionBudget, so a large process table never delays the close.
 //
 // The shell is a session leader (pty.StartWithSize sets Setsid). An interactive
 // shell with job control puts every job in its own process group, so signalling
@@ -840,7 +844,9 @@ func newTerminalSession(cmd *exec.Cmd, master *os.File) *terminalSession {
 //
 // A child that already exited is not signalled through its group, and a session
 // id whose leader start time no longer matches is never signalled: that pid has
-// been reused. Reaping is scheduled on every path so no zombie remains.
+// been reused. A walk that could not inspect all of /proc reports itself as
+// incomplete (WARN with the session id) and keeps the process-group fallback.
+// Reaping is scheduled on every path so no zombie remains.
 func (s *terminalSession) terminate() {
 	s.termOnce.Do(func() {
 		select {
@@ -851,16 +857,21 @@ func (s *terminalSession) terminate() {
 			_ = s.pty.Close()
 		}
 		go func() { _, _ = s.wait() }()
-		s.endSession()
+		go s.endSession()
 	})
 }
 
 // endSession sends SIGTERM to every process in the shell's session and schedules
-// the bounded hard kill. It falls back to the process-group cleanup when /proc
-// cannot be inspected, so an unsupported host keeps the previous behaviour.
+// the bounded hard kill. When the walk is incomplete it signals the members it
+// did find, logs the incompleteness at WARN and falls back to the process-group
+// cleanup, so a truncated scan is never mistaken for an empty session.
 func (s *terminalSession) endSession() {
-	members, ok := terminalSessionMembers(s.sid, s.leaderStart, time.Now().Add(terminalSessionBudget))
-	if !ok {
+	members, complete := terminalSessionMembers(s.sid, s.leaderStart, time.Now().Add(terminalSessionBudget))
+	if !complete {
+		if len(members) > 0 {
+			signalTerminalSession(members, terminalTerminate)
+		}
+		s.warnIncompleteScan(len(members))
 		go s.killProcessGroupAfterGrace()
 		return
 	}
@@ -871,8 +882,19 @@ func (s *terminalSession) endSession() {
 	go s.killSessionAfterGrace()
 }
 
-// killProcessGroupAfterGrace is the /proc-less fallback: the shell's own group
-// is killed if it outlives the grace.
+// warnIncompleteScan reports a walk that could not see all of /proc. It is never
+// silent: the session id and the number of members found are logged at WARN.
+func (s *terminalSession) warnIncompleteScan(found int) {
+	if s.log == nil {
+		return
+	}
+	s.log.Warn("terminal: session scan incomplete; falling back to the process group",
+		"session_id", s.sid, "members_found", found)
+}
+
+// killProcessGroupAfterGrace is the fallback when the session walk is
+// unavailable or incomplete: the shell's own group is killed if it outlives the
+// grace.
 func (s *terminalSession) killProcessGroupAfterGrace() {
 	select {
 	case <-s.done:
@@ -896,17 +918,30 @@ func (s *terminalSession) killSessionAfterGrace() {
 			remaining = terminalGraceProbe
 		}
 		time.Sleep(remaining)
-		members, ok := terminalSessionMembers(s.sid, s.leaderStart, deadline)
-		if !ok || len(members) == 0 {
+		members, complete := terminalSessionMembers(s.sid, s.leaderStart, deadline)
+		if !complete {
+			closeTerminalSessionMembers(members)
+			s.warnIncompleteScan(len(members))
+			s.hardKillGroupIfLive()
 			return
 		}
+		if len(members) == 0 {
+			return
+		}
+		closeTerminalSessionMembers(members)
 	}
 	for round := 0; round < terminalScanRounds; round++ {
 		if time.Now().After(deadline) {
 			return
 		}
-		members, ok := terminalSessionMembers(s.sid, s.leaderStart, deadline)
-		if !ok || len(members) == 0 {
+		members, complete := terminalSessionMembers(s.sid, s.leaderStart, deadline)
+		if !complete {
+			closeTerminalSessionMembers(members)
+			s.warnIncompleteScan(len(members))
+			s.hardKillGroupIfLive()
+			return
+		}
+		if len(members) == 0 {
 			return
 		}
 		signalTerminalSession(members, terminalKill)
@@ -914,6 +949,16 @@ func (s *terminalSession) killSessionAfterGrace() {
 			return
 		}
 		time.Sleep(terminalScanInterval)
+	}
+}
+
+// hardKillGroupIfLive kills the shell's process group only while its leader has
+// not been reaped, so a reused pid is never addressed.
+func (s *terminalSession) hardKillGroupIfLive() {
+	select {
+	case <-s.done:
+	default:
+		_ = killTerminalProcessGroup(s.pid, terminalKill)
 	}
 }
 

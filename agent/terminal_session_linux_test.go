@@ -3,7 +3,9 @@
 package agent
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -120,19 +123,58 @@ func cleanupEscapedSleep(t *testing.T, marker string) {
 	})
 }
 
-// waitForResources fails unless the agent's fd and goroutine counts return to
-// the baseline (with a small tolerance for gRPC bookkeeping) inside the bound.
-func waitForResources(t *testing.T, baselineFD, baselineGoroutines int, timeout time.Duration) {
+// terminalResources is the agent's resource baseline, captured after a warm-up
+// session so lazy runtime and gRPC state are not counted as a leak.
+type terminalResources struct {
+	fds        int
+	ptmx       int
+	goroutines int
+}
+
+// terminalResourceBaseline snapshots the agent's fd, PTY-master and goroutine
+// counts.
+func terminalResourceBaseline(t *testing.T) terminalResources {
+	t.Helper()
+	return terminalResources{fds: openFDCount(t), ptmx: ptmxFDCount(t), goroutines: runtime.NumGoroutine()}
+}
+
+// ptmxFDCount counts only PTY master descriptors, so the leak assertion is
+// exact: one leaked master per session is a failure, while unrelated gRPC fds
+// may still fluctuate.
+func ptmxFDCount(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("read /proc/self/fd: %v", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
+		if err == nil && strings.Contains(target, "ptmx") {
+			count++
+		}
+	}
+	return count
+}
+
+// waitForResources fails unless the agent's PTY-master descriptors return to
+// their exact baseline and unrelated fds/goroutines stay within a small
+// tolerance for gRPC bookkeeping.
+func waitForResources(t *testing.T, baseline terminalResources, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
+	var leakedPtmx, otherFD, goroutines int
 	for time.Now().Before(deadline) {
-		if openFDCount(t) <= baselineFD+2 && runtime.NumGoroutine() <= baselineGoroutines+4 {
+		leakedPtmx = ptmxFDCount(t) - baseline.ptmx
+		otherFD = openFDCount(t) - baseline.fds - leakedPtmx
+		goroutines = runtime.NumGoroutine() - baseline.goroutines
+		if leakedPtmx == 0 && otherFD <= 2 && goroutines <= 4 {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("resources after close: fds %d (baseline %d), goroutines %d (baseline %d)",
-		openFDCount(t), baselineFD, runtime.NumGoroutine(), baselineGoroutines)
+	t.Fatalf("resources after close: leaked ptmx fds %d (baseline %d), other fds %d (baseline %d), goroutines +%d (baseline %d)",
+		leakedPtmx, baseline.ptmx, otherFD, baseline.fds, goroutines, baseline.goroutines)
 }
 
 // runBackgroundJob starts line (which must background the job and write its pid
@@ -156,7 +198,7 @@ func TestTerminalCloseKillsJobControlBackgroundJob(t *testing.T) {
 	_, terminal, rootName, root := terminalTestFixture(t)
 	client := startTerminalServer(t, terminal)
 	runAgentSession(t, client, rootName)
-	baselineFD, baselineGoroutines := openFDCount(t), runtime.NumGoroutine()
+	baseline := terminalResourceBaseline(t)
 
 	stream := openTerminalSession(t, client, rootName)
 	defer func() { _ = stream.CloseSend() }()
@@ -171,7 +213,7 @@ func TestTerminalCloseKillsJobControlBackgroundJob(t *testing.T) {
 
 	closeTerminalSession(t, stream)
 	waitForProcessGone(t, pid)
-	waitForResources(t, baselineFD, baselineGoroutines, 8*time.Second)
+	waitForResources(t, baseline, 8*time.Second)
 }
 
 func TestTerminalCloseKillsNonJobControlBackgroundJob(t *testing.T) {
@@ -186,7 +228,7 @@ func TestTerminalCloseKillsNonJobControlBackgroundJob(t *testing.T) {
 	_, terminal, rootName, _ := terminalTestFixture(t)
 	client := startTerminalServer(t, terminal)
 	runAgentSession(t, client, rootName)
-	baselineFD, baselineGoroutines := openFDCount(t), runtime.NumGoroutine()
+	baseline := terminalResourceBaseline(t)
 	terminal.shell = script
 
 	stream := openTerminalSession(t, client, rootName)
@@ -197,7 +239,7 @@ func TestTerminalCloseKillsNonJobControlBackgroundJob(t *testing.T) {
 	closeTerminalSession(t, stream)
 	waitForProcessGone(t, pid)
 	_ = syscall.Kill(pid, syscall.SIGKILL)
-	waitForResources(t, baselineFD, baselineGoroutines, 8*time.Second)
+	waitForResources(t, baseline, 8*time.Second)
 }
 
 func TestTerminalCloseKillsNohupJob(t *testing.T) {
@@ -239,7 +281,7 @@ func TestTerminalCloseReleasesMasterWithSetsidJob(t *testing.T) {
 	_, terminal, rootName, root := terminalTestFixture(t)
 	client := startTerminalServer(t, terminal)
 	runAgentSession(t, client, rootName)
-	baselineFD, baselineGoroutines := openFDCount(t), runtime.NumGoroutine()
+	baseline := terminalResourceBaseline(t)
 
 	stream := openTerminalSession(t, client, rootName)
 	defer func() { _ = stream.CloseSend() }()
@@ -253,7 +295,7 @@ func TestTerminalCloseReleasesMasterWithSetsidJob(t *testing.T) {
 	closeTerminalSession(t, stream)
 	// The escaped job may still exist; the master fd and the pump goroutine must
 	// not wait for it.
-	waitForResources(t, baselineFD, baselineGoroutines, 8*time.Second)
+	waitForResources(t, baseline, 8*time.Second)
 }
 
 func TestTerminalCloseKillsNestedSubshellJob(t *testing.T) {
@@ -297,14 +339,14 @@ func TestTerminalCloseDuringHeavyOutput(t *testing.T) {
 	_, terminal, rootName, _ := terminalTestFixture(t)
 	client := startTerminalServer(t, terminal)
 	runAgentSession(t, client, rootName)
-	baselineFD, baselineGoroutines := openFDCount(t), runtime.NumGoroutine()
+	baseline := terminalResourceBaseline(t)
 
 	stream := openTerminalSession(t, client, rootName)
 	defer func() { _ = stream.CloseSend() }()
 	sendTerminalInput(t, stream, "while :; do echo gotham-flood; done\r")
 	time.Sleep(200 * time.Millisecond)
 	closeTerminalSession(t, stream)
-	waitForResources(t, baselineFD, baselineGoroutines, 8*time.Second)
+	waitForResources(t, baseline, 8*time.Second)
 }
 
 // TestTerminalCloseCyclesReleaseResources runs bounded open/close cycles with a
@@ -315,7 +357,7 @@ func TestTerminalCloseCyclesReleaseResources(t *testing.T) {
 	_, terminal, rootName, root := terminalTestFixture(t)
 	client := startTerminalServer(t, terminal)
 	runAgentSession(t, client, rootName)
-	baselineFD, baselineGoroutines := openFDCount(t), runtime.NumGoroutine()
+	baseline := terminalResourceBaseline(t)
 
 	pids := make([]int, 0, cycles)
 	for i := 0; i < cycles; i++ {
@@ -334,7 +376,7 @@ func TestTerminalCloseCyclesReleaseResources(t *testing.T) {
 	for _, pid := range pids {
 		waitForProcessGone(t, pid)
 	}
-	waitForResources(t, baselineFD, baselineGoroutines, 10*time.Second)
+	waitForResources(t, baseline, 10*time.Second)
 }
 
 // terminalProcessGroup reads field 5 (pgrp) of /proc/<pid>/stat.
@@ -357,6 +399,116 @@ func terminalProcessGroup(t *testing.T, pid int) int {
 		t.Fatalf("pgrp for %d: %v", pid, err)
 	}
 	return group
+}
+
+// newSessionLeader starts a real child in its own session so the /proc walk can
+// be exercised without a PTY.
+func newSessionLeader(t *testing.T, seconds string) int {
+	t.Helper()
+	cmd := exec.Command("sleep", seconds)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start session leader: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	return cmd.Process.Pid
+}
+
+// TestTerminalSessionScanReportsTruncation pins the MEDIUM finding: a walk cut
+// short by the process cap must report itself incomplete, never as a complete
+// (possibly empty) session.
+func TestTerminalSessionScanReportsTruncation(t *testing.T) {
+	pid := newSessionLeader(t, "739")
+	start := terminalProcessStartTime(pid)
+	if start == 0 {
+		t.Fatal("could not read the session leader's start time")
+	}
+	previous := terminalScanLimit
+	// A cap of zero makes the very first inspectable pid truncate the walk,
+	// independent of how many processes the test host happens to have.
+	terminalScanLimit = 0
+	members, complete := terminalSessionMembers(pid, start, time.Now().Add(2*time.Second))
+	terminalScanLimit = previous
+	closeTerminalSessionMembers(members)
+	if complete {
+		t.Fatalf("walk truncated at cap %d reported complete (members %d)", 0, len(members))
+	}
+}
+
+// TestTerminalSessionIncompleteScanWarns pins the operator-visible half of the
+// MEDIUM finding: an incomplete walk is logged at WARN with the session id and
+// the number of members found, and arms the process-group fallback.
+func TestTerminalSessionIncompleteScanWarns(t *testing.T) {
+	pid := newSessionLeader(t, "742")
+	start := terminalProcessStartTime(pid)
+	if start == 0 {
+		t.Fatal("could not read the session leader's start time")
+	}
+	var logs bytes.Buffer
+	session := &terminalSession{
+		sid:         pid,
+		leaderStart: start,
+		log:         slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		done:        make(chan struct{}),
+	}
+	close(session.done) // the group fallback returns immediately; no signal is sent
+
+	previous := terminalScanLimit
+	terminalScanLimit = 0
+	session.endSession()
+	terminalScanLimit = previous
+
+	message := logs.String()
+	for _, want := range []string{"level=WARN", "session scan incomplete", "session_id=" + strconv.Itoa(pid)} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("WARN log %q does not contain %q", message, want)
+		}
+	}
+}
+
+// TestTerminalSessionScanReportsDeadline pins the wall-clock cut: a deadline that
+// has already passed is a truncated walk, not an empty session.
+func TestTerminalSessionScanReportsDeadline(t *testing.T) {
+	pid := newSessionLeader(t, "740")
+	start := terminalProcessStartTime(pid)
+	if start == 0 {
+		t.Fatal("could not read the session leader's start time")
+	}
+	members, complete := terminalSessionMembers(pid, start, time.Now().Add(-time.Second))
+	closeTerminalSessionMembers(members)
+	if complete {
+		t.Fatal("deadline-truncated walk reported complete")
+	}
+}
+
+// TestTerminalSessionScanUsesPidfd checks that a verified member is bound to a
+// pidfd before it is signalled. It skips on kernels or sandboxes without pidfds.
+func TestTerminalSessionScanUsesPidfd(t *testing.T) {
+	pid := newSessionLeader(t, "741")
+	start := terminalProcessStartTime(pid)
+	if start == 0 {
+		t.Fatal("could not read the session leader's start time")
+	}
+	probe, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		t.Skipf("pidfds unavailable on this kernel/sandbox: %v", err)
+	}
+	_ = unix.Close(probe)
+
+	members, complete := terminalSessionMembers(pid, start, time.Now().Add(2*time.Second))
+	defer closeTerminalSessionMembers(members)
+	if !complete {
+		t.Fatal("complete scan reported incomplete")
+	}
+	if len(members) != 1 || members[0].pid != pid {
+		t.Fatalf("members = %+v, want exactly pid %d", members, pid)
+	}
+	if members[0].fd < 0 {
+		t.Fatal("member was not bound to a pidfd")
+	}
 }
 
 // TestParseTerminalStat pins the parser against a comm field that contains

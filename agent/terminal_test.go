@@ -398,6 +398,26 @@ func TestResolveDefaultTerminalDir(t *testing.T) {
 			}
 		})
 	}
+
+	// A directory the service user cannot search would fail at chdir, so the
+	// default must fall back to "/" instead of returning it. Root may traverse
+	// a 0000 directory, so this assertion only applies to a non-root runner.
+	t.Run("unsearchable directory", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root may chdir into a directory without search permission")
+		}
+		locked := filepath.Join(base, "locked")
+		if err := os.Mkdir(locked, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+		if got := resolveDefaultTerminalDir(locked); got != "/" {
+			t.Fatalf("resolveDefaultTerminalDir(unsearchable) = %q, want /", got)
+		}
+	})
 }
 
 func TestTerminalEchoResizeAndExit(t *testing.T) {

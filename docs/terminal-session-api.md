@@ -430,14 +430,15 @@ existing directory. A root at `/` (the default full-access `system` root)
 contains every absolute path, so a cwd such as `tmp` or `usr` resolves normally.
 
 A host session **without** a `root` starts in the agent's default directory: the
-agent service user's home directory if it exists and is a directory, otherwise
-`/`. The home is read from the service user's passwd entry, never from `HOME`,
-the request or any browser value; it is resolved through symlinks and must still
-be a directory, otherwise the fallback is `/`. With no root there is no new path
-from browser input to the start directory at all: the browser sends no start
-path, and the agent alone decides it. A `cwd` without a `root` is refused
-(`invalid request` at the control plane, `InvalidArgument` at the agent) before
-any shell starts.
+agent service user's home directory if it exists, is a directory and is
+searchable, otherwise `/`. The home comes from the service user's passwd entry
+(looked up by uid), so the request and the browser never supply it; if that
+passwd lookup fails, Go's `os/user` may fall back to the agent's `HOME`. It is
+resolved through symlinks and must still be a searchable directory, otherwise
+the fallback is `/`. With no root there is no new path from browser input to the
+start directory at all: the browser sends no start path, and the agent alone
+decides it. A `cwd` without a `root` is refused (`invalid request` at the control
+plane, `InvalidArgument` at the agent) before any shell starts.
 
 In both cases the resolved absolute path is set directly on the child process
 (`exec.Cmd.Dir`); it is never interpolated into a shell command, so no quoting

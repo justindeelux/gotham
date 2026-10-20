@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -351,11 +352,12 @@ func (s *TerminalServer) prepare(open *agentv1.TerminalOpen) (terminalStart, err
 // prepareHost validates a host shell open and resolves its initial directory.
 //
 // A root and cwd are optional. With both omitted the shell starts in a default
-// directory the agent resolves from the service user's passwd entry — never
-// from the request, a browser value or the agent environment — so a host shell
-// does not depend on file roots being configured. A cwd without a root is
-// refused. A provided root keeps the file manager's exact allow-list, relative
-// path, escape and existence policy.
+// directory the agent resolves from the service user's passwd entry (looked up
+// by uid; Go's os/user may use $HOME only if that lookup fails), so a host
+// shell does not depend on file roots being configured. The request and the
+// browser never supply the start directory. A cwd without a root is refused. A
+// provided root keeps the file manager's exact allow-list, relative path,
+// escape and existence policy.
 func (s *TerminalServer) prepareHost(open *agentv1.TerminalOpen) (terminalStart, error) {
 	root := open.GetRoot()
 	cwd := open.GetCwd()
@@ -395,17 +397,20 @@ func (s *TerminalServer) prepareHost(open *agentv1.TerminalOpen) (terminalStart,
 }
 
 // defaultTerminalDir resolves the initial working directory for a host shell
-// opened without a file root. It is decided on the agent, from the service
-// user's passwd entry — never from the request, a browser value or the agent
-// environment. The home directory is resolved (symlinks evaluated) and must be
-// an existing directory; anything else falls back to the filesystem root. The
-// result is set directly on the child process, never interpolated into a shell
-// command.
+// opened without a file root. It is decided on the agent from the service
+// user's passwd entry, looked up by uid; the request and browser never supply
+// it (Go's os/user may fall back to the agent's HOME only when the passwd
+// lookup fails). The home directory is resolved (symlinks evaluated), must be
+// an existing, searchable directory, and otherwise the fallback is the
+// filesystem root. The result is set directly on the child process, never
+// interpolated into a shell command.
 func defaultTerminalDir() string {
 	return resolveDefaultTerminalDir(serviceHomeDir())
 }
 
-// serviceHomeDir reads the service user's home directory from its passwd entry.
+// serviceHomeDir reads the service user's home directory, preferring the
+// passwd entry for the current uid. os/user may use $HOME when that lookup
+// fails; the value never comes from a request or a browser.
 func serviceHomeDir() string {
 	current, err := user.Current()
 	if err != nil {
@@ -417,7 +422,9 @@ func serviceHomeDir() string {
 // resolveDefaultTerminalDir validates one default-directory candidate. It is
 // separate from defaultTerminalDir so the fallback paths are testable: an
 // empty or relative home, a missing target, a symlink that does not resolve to
-// a directory, and a file all fall back to "/".
+// a directory, and a file all fall back to "/". A directory the service user
+// cannot search (chdir would fail) also falls back to "/" rather than returning
+// a start directory the shell cannot enter.
 func resolveDefaultTerminalDir(home string) string {
 	if home == "" || !filepath.IsAbs(home) {
 		return "/"
@@ -428,6 +435,11 @@ func resolveDefaultTerminalDir(home string) string {
 	}
 	info, err := os.Stat(resolved)
 	if err != nil || !info.IsDir() {
+		return "/"
+	}
+	// Stat succeeds for a directory without search permission, but chdir does
+	// not. Check the service user's ability to enter it and fall back safely.
+	if err := unix.Access(resolved, unix.X_OK); err != nil {
 		return "/"
 	}
 	return resolved

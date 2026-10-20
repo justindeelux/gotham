@@ -59,6 +59,11 @@ container exec session API and lifecycle contract: HTTP discovery/create/close,
 WebSocket framing and authentication, target resolution and permissions,
 cleanup guarantees, and the service identity each shell runs as.
 
+[`terminal-shell-integration.md`](terminal-shell-integration.md) — optional
+OSC 133/633 prompt marks for bash/zsh that enable terminal quick-command
+abbreviation suggestions, supported-shell status, and the PTY verification
+story. Snippets are shown in the UI; Gotham never injects them into a shell.
+
 ## Install & release
 
 [`install.md`](install.md) — control-plane and node-agent install, first login,

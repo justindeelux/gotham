@@ -11,8 +11,10 @@ import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
 import type { TerminalThemeName } from "@/features/terminal/schemas/terminalAppearance";
 import { useTerminalAppearanceStore } from "@/features/terminal/stores/terminalAppearance";
 import { useTerminalWindowStore } from "@/features/terminal/stores/terminalWindow";
+import { useQuickCommandsStore } from "@/features/terminal/stores/quickCommands";
 import { TerminalRuntime } from "@/features/terminal/transport/terminalRuntime";
 import type {
+  TerminalCommandResult,
   TerminalStatePatch,
   TerminalStatus,
 } from "@/features/terminal/transport/terminalRuntime";
@@ -22,6 +24,11 @@ import {
   runningGothamVersion,
 } from "@/features/terminal/utils/terminalBanner";
 import { i18n } from "@/shared/i18n";
+import type { PromptPhase } from "@/features/terminal/transport/promptScanner";
+import type {
+  QuickCommandSuggestion,
+  QuickCommandSuggestionState,
+} from "@/features/terminal/utils/quickCommandEngine";
 
 /**
  * Terminal tabs and live sessions (JUS-245).
@@ -75,6 +82,14 @@ export interface TerminalTab {
    * metadata only and never part of the idempotency key.
    */
   sourcePath: string;
+  /** promptPhase is the shell's OSC 133/633 state (JUS-249). */
+  promptPhase: PromptPhase;
+  /** integrationDetected is true once this shell emitted a prompt mark. */
+  integrationDetected: boolean;
+  /** alternateScreen is true while a fullscreen TUI owns the screen. */
+  alternateScreen: boolean;
+  /** suggestion is the current abbreviation match, if any. */
+  suggestion: QuickCommandSuggestion | null;
 }
 
 /** TerminalOpenOptions is the public entry-point input. */
@@ -303,6 +318,20 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
+  /** applySuggestion mirrors the runtime's prompt/suggestion snapshot. */
+  function applySuggestion(
+    tab: TerminalTab,
+    state: QuickCommandSuggestionState,
+  ): void {
+    if (!findTab(tab.id)) {
+      return;
+    }
+    tab.promptPhase = state.phase;
+    tab.integrationDetected = state.detected;
+    tab.alternateScreen = state.alternateScreen;
+    tab.suggestion = state.suggestion;
+  }
+
   /** startSession creates the HTTP session and starts its runtime. */
   async function startSession(tab: TerminalTab): Promise<void> {
     tab.status = "connecting";
@@ -311,6 +340,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.exitSignal = "";
     const controller = new AbortController();
     controllers.set(tab.id, controller);
+    tab.promptPhase = "unknown";
+    tab.integrationDetected = false;
+    tab.alternateScreen = false;
+    tab.suggestion = null;
     try {
       // The version lookup runs beside the HTTP create and never gates the
       // session: a hung /version only drops the banner's version tag.
@@ -358,6 +391,8 @@ export const useTerminalStore = defineStore("terminal", () => {
             }
           : {}),
         onState: (patch) => applyPatch(tab, patch),
+        quickCommands: () => useQuickCommandsStore().commands,
+        onSuggestion: (state) => applySuggestion(tab, state),
       });
       runtimes.set(tab.id, runtime);
       const surface = surfaces.get(tab.id);
@@ -402,6 +437,10 @@ export const useTerminalStore = defineStore("terminal", () => {
       errorCode: null,
       createdAt: Date.now(),
       sourcePath: options.sourcePath ?? "",
+      promptPhase: "unknown",
+      integrationDetected: false,
+      alternateScreen: false,
+      suggestion: null,
     };
     tabs.value.push(tab);
     // Read the tab back from the reactive array: Vue wraps the raw object on
@@ -554,6 +593,34 @@ export const useTerminalStore = defineStore("terminal", () => {
     for (const runtime of runtimes.values()) {
       runtime.setTheme(next);
     }
+  }
+
+  /** acceptSuggestion inserts the matched command without running it. */
+  function acceptSuggestion(id: string): TerminalCommandResult {
+    const runtime = runtimes.get(id);
+    if (!runtime) {
+      return { ok: false, failure: "unavailable" };
+    }
+    return runtime.acceptSuggestion();
+  }
+
+  /** insertCommand inserts saved text at the prompt without running it. */
+  function insertCommand(id: string, text: string): TerminalCommandResult {
+    const runtime = runtimes.get(id);
+    if (!runtime) {
+      return { ok: false, failure: "unavailable" };
+    }
+    return runtime.insertCommand(text);
+  }
+
+  /** dismissSuggestion hides the abbreviation suggestion. */
+  function dismissSuggestion(id: string): void {
+    runtimes.get(id)?.dismissSuggestion();
+  }
+
+  /** setComposing suspends suggestions while an IME composition is open. */
+  function setComposing(id: string, composing: boolean): void {
+    runtimes.get(id)?.setComposing(composing);
   }
 
   /** retry is the ONLY reconnect path: it creates a new session, no replay. */
@@ -762,6 +829,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     focus,
     fit,
     setTheme,
+    acceptSuggestion,
+    insertCommand,
+    dismissSuggestion,
+    setComposing,
     retry,
     requestClose,
     cancelClose,

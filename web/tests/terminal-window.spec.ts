@@ -1233,3 +1233,121 @@ async function surfaceToText(page: Page): Promise<string> {
     .locator(".term-window .term-surface:visible .xterm-rows")
     .innerText();
 }
+
+test("quick commands save, insert without Enter, and suggest an abbreviation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+  const tab = await openWindow(page, "app");
+  await expect(
+    page.locator(".term-window .term-surface:visible .term-state"),
+  ).toHaveText("Connected");
+
+  // Add one command through the panel.
+  await page.locator(".term-commands-btn").click();
+  await expect(page.getByText("Quick commands", { exact: true })).toBeVisible();
+
+  // The editor stays inside a phone viewport. Popper repositions after the
+  // resize, so poll for the settled box instead of measuring mid-move.
+  for (const width of [390, 480]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect
+      .poll(async () => {
+        const rect = await page.locator(".qc").boundingBox();
+        return rect?.x ?? -1;
+      })
+      .toBeGreaterThanOrEqual(0);
+    const box = await page.locator(".qc").boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  await page.getByRole("button", { name: "Add command" }).click();
+  await page.locator(".qc-form input").first().fill("Git status");
+  await page.locator(".qc-form textarea").fill("git status");
+  await page.locator(".qc-form input").nth(1).fill("gs");
+  await page.getByRole("button", { name: "Save command" }).click();
+  await expect(page.locator(".qc-item")).toHaveCount(1);
+  await expect(page.locator(".qc-item")).toContainText("git status");
+
+  // Selecting it inserts text only.
+  await page.locator(".qc-insert").click();
+  await expect.poll(() => state.sessions[0]?.input ?? "").toContain("git status");
+  expect(state.sessions[0]?.input ?? "").not.toContain("\r");
+  const afterInsert = state.sessions[0]?.input.length ?? 0;
+  await page.waitForTimeout(50);
+  expect(state.sessions[0]?.input.length).toBe(afterInsert);
+
+  // A real prompt mark enables the abbreviation suggestion. Typing `gs` is
+  // forwarded; Control+Space focuses the option; Enter accepts it.
+  state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
+  const input = page.locator(
+    ".term-window .term-surface:visible .xterm-helper-textarea",
+  );
+  await input.focus();
+  await page.keyboard.type("gs");
+  const suggestion = page.locator(".term-window .term-suggest-option");
+  await expect(suggestion).toBeVisible();
+  await expect(suggestion).toContainText("Git status");
+
+  // The strip stays inside the viewport at phone and desktop widths.
+  for (const width of [390, 480, 1366]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(suggestion).toBeVisible();
+    await expect
+      .poll(async () => {
+        const rect = await page.locator(".term-window .term-suggest").boundingBox();
+        return rect?.x ?? -1;
+      })
+      .toBeGreaterThanOrEqual(0);
+    const box = await page.locator(".term-window .term-suggest").boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await input.focus();
+
+  await page.keyboard.press("Control+Space");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.getAttribute("role") ?? ""))
+    .toBe("option");
+  await page.keyboard.press("Enter");
+
+  await expect
+    .poll(() => state.sessions[0]?.input ?? "")
+    .toContain("gs\x7f\x7fgit status");
+  expect(state.sessions[0]?.input ?? "").not.toContain("\r");
+  await expect(suggestion).toBeHidden();
+
+  // Escape dismisses a visible suggestion without sending the ESC byte.
+  await page.keyboard.type("gs");
+  await expect(suggestion).toBeVisible();
+  const beforeEscape = state.sessions[0]?.input ?? "";
+  await page.keyboard.press("Escape");
+  await expect(suggestion).toBeHidden();
+  await page.waitForTimeout(50);
+  expect(state.sessions[0]?.input).toBe(beforeEscape);
+
+  // The list survives a reload for the same account. Close the live shell
+  // first so the beforeunload guard does not prompt during the reload.
+  await page.locator(".term-window-close").click();
+  await page
+    .locator(".term-close-modal")
+    .getByRole("button", { name: "Close terminal", exact: true })
+    .click();
+  await expect(page.locator(".term-window")).toBeHidden();
+  await page.reload();
+  await expect(page.locator(".topbar")).toBeVisible();
+  const reopened = await openWindow(page, "app");
+  expect(reopened.id).toBeTruthy();
+  await page.locator(".term-commands-btn").click();
+  await expect(page.locator(".qc-item")).toHaveCount(1);
+  await expect(page.locator(".qc-item")).toContainText("git status");
+  expect(tab.id).toBeTruthy();
+});

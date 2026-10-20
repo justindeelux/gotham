@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { ExternalLink, Keyboard, RefreshCw, X } from "@lucide/vue";
+import { BookMarked, ExternalLink, Keyboard, RefreshCw, X } from "@lucide/vue";
 import { NButton, NPopover, NSpin } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import QuickCommandPanel from "@/features/terminal/components/QuickCommandPanel.vue";
+import TerminalThemeMenu from "@/features/terminal/components/TerminalThemeMenu.vue";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
-import TerminalThemeMenu from "@/features/terminal/components/TerminalThemeMenu.vue";
+import type { TerminalCommandFailure } from "@/features/terminal/transport/terminalRuntime";
 import {
   errorKey,
   isLive,
@@ -33,6 +35,10 @@ const { t } = useI18n();
 const terminal = useTerminalStore();
 const surface = ref<HTMLElement | null>(null);
 const shortcutsOpen = ref<boolean>(false);
+const commandsOpen = ref<boolean>(false);
+const suggestionsFocused = ref(false);
+const suggestionList = ref<HTMLElement | null>(null);
+const commandNotice = ref("");
 const hintId = computed<string>(() => `term-hint-${props.tabId}`);
 const tab = computed<TerminalTab | null>(() => terminal.findTab(props.tabId));
 
@@ -82,6 +88,96 @@ const surfaceLabel = computed<string>(() =>
   }),
 );
 
+/** suggestion is the single abbreviation match the runtime reports. */
+const suggestion = computed(() => tab.value?.suggestion ?? null);
+
+/** insertFailureText maps a refused insertion onto localized guidance. */
+function insertFailureText(failure?: TerminalCommandFailure): string {
+  switch (failure) {
+    case "multiline-no-paste":
+      return t("terminal.quickCommands.insertMultiline");
+    case "control":
+      return t("terminal.quickCommands.insertControl");
+    case "empty":
+      return t("terminal.quickCommands.insertEmpty");
+    default:
+      return t("terminal.quickCommands.insertUnavailable");
+  }
+}
+
+/** acceptSuggestion replaces the abbreviation; it never presses Enter. */
+function acceptSuggestion(): void {
+  const result = terminal.acceptSuggestion(props.tabId);
+  if (!result.ok) {
+    commandNotice.value = insertFailureText(result.failure);
+    return;
+  }
+  commandNotice.value = "";
+  suggestionsFocused.value = false;
+  void nextTick(() => terminal.focus(props.tabId));
+}
+
+/** dismissSuggestion hides the strip and returns focus to the shell. */
+function dismissSuggestion(): void {
+  terminal.dismissSuggestion(props.tabId);
+  suggestionsFocused.value = false;
+  commandNotice.value = "";
+  void nextTick(() => terminal.focus(props.tabId));
+}
+
+/** focusSuggestions moves keyboard focus onto the suggestion option. */
+function focusSuggestions(): void {
+  void nextTick(() => {
+    const option = suggestionList.value?.querySelector<HTMLElement>(
+      "[role='option']",
+    );
+    option?.focus();
+  });
+}
+
+/** onSuggestionKeydown keeps the list keyboard-operable and contained. */
+function onSuggestionKeydown(event: KeyboardEvent): void {
+  switch (event.key) {
+    case "Escape":
+      event.preventDefault();
+      event.stopPropagation();
+      dismissSuggestion();
+      return;
+    case "Enter":
+      event.preventDefault();
+      event.stopPropagation();
+      acceptSuggestion();
+      return;
+    case "Tab":
+      // Let focus return to the terminal rather than leaving it in a
+      // transient list; the option is still reachable with Ctrl+Space.
+      event.preventDefault();
+      event.stopPropagation();
+      suggestionsFocused.value = false;
+      void nextTick(() => terminal.focus(props.tabId));
+      return;
+    default:
+      return;
+  }
+}
+
+/** onCommandInserted closes the panel and lands focus back in the shell. */
+function onCommandInserted(label: string): void {
+  commandsOpen.value = false;
+  commandNotice.value = t("terminal.quickCommands.inserted", { label });
+  void nextTick(() => terminal.focus(props.tabId));
+}
+
+/** onCompositionStart suspends suggestions during IME composition. */
+function onCompositionStart(): void {
+  terminal.setComposing(props.tabId, true);
+}
+
+/** onCompositionEnd re-enables the mirror after IME composition. */
+function onCompositionEnd(): void {
+  terminal.setComposing(props.tabId, false);
+}
+
 /** attachSurface hands the display element to the tab runtime. */
 function attachSurface(): void {
   const element = surface.value;
@@ -129,6 +225,19 @@ function retrySession(): void {
   void terminal.retry(props.tabId);
 }
 
+/** isTerminalKeyTarget keeps shortcuts out of the meta bar and popovers. */
+function isTerminalKeyTarget(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return (
+    target.closest(".term-surface") !== null &&
+    target.closest(".term-meta") === null &&
+    target.closest(".n-popover") === null
+  );
+}
+
 /**
  * onSurfaceKeydown provides the documented escape from xterm's input trap.
  * Ctrl+Shift+E moves focus out of the shell to the window tab (or the page
@@ -167,6 +276,14 @@ onBeforeUnmount(() => {
   }
 });
 watch(() => props.tabId, attachSurface);
+// If the match disappears (prompt ended, Escape, paste), never leave focus
+// stranded on a removed list.
+watch(suggestion, (next) => {
+  if (next === null && suggestionsFocused.value) {
+    suggestionsFocused.value = false;
+    void nextTick(() => terminal.focus(props.tabId));
+  }
+});
 // A retry swaps the runtime under the still-mounted surface; re-attach once
 // the new session exists so the fresh renderer lands in the same pane.
 watch(
@@ -192,6 +309,8 @@ watch(
     :data-theme="terminal.theme"
     @click="onSurfaceClick"
     @keydown.capture="onSurfaceKeydown"
+    @compositionstart.capture="onCompositionStart"
+    @compositionend.capture="onCompositionEnd"
   >
     <div class="term-meta">
       <span class="term-chip">
@@ -251,6 +370,34 @@ watch(
           </p>
         </div>
       </NPopover>
+      <NPopover
+        v-model:show="commandsOpen"
+        trigger="click"
+        placement="bottom-end"
+        :duration="0"
+        :animated="false"
+      >
+        <template #trigger>
+          <NButton
+            quaternary
+            size="tiny"
+            class="term-commands-btn"
+            :aria-label="t('terminal.quickCommands.open')"
+            @click.stop
+          >
+            <template #icon>
+              <BookMarked :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+          </NButton>
+        </template>
+        <QuickCommandPanel
+          :tab-id="tab.id"
+          :shell="tab.shell"
+          :integration-detected="tab.integrationDetected"
+          :alternate-screen="tab.alternateScreen"
+          @inserted="onCommandInserted"
+        />
+      </NPopover>
       <span class="grow" />
       <TerminalThemeMenu />
       <template v-if="variant === 'page'">
@@ -282,6 +429,73 @@ watch(
       {{ t("terminal.shortcuts.hint") }}
     </p>
     <div ref="surface" class="term-screen" data-testid="terminal-screen" />
+
+    <p class="term-sr" role="status" aria-live="polite">
+      <template v-if="suggestion">
+        {{
+          t("terminal.suggestions.announce", {
+            abbreviation: suggestion.abbreviation,
+            label: suggestion.label,
+          })
+        }}
+      </template>
+    </p>
+    <div
+      v-if="suggestion"
+      class="term-suggest"
+      role="listbox"
+      :aria-label="t('terminal.suggestions.label')"
+    >
+      <ul ref="suggestionList" class="term-suggest-list">
+        <li>
+          <button
+            type="button"
+            role="option"
+            aria-selected="true"
+            class="term-suggest-option"
+            :aria-label="t('terminal.suggestions.accept', { label: suggestion.label })"
+            @mousedown.prevent
+            @click.stop="acceptSuggestion"
+            @keydown="onSuggestionKeydown"
+          >
+            <span class="term-suggest-abbr mono">{{ suggestion.abbreviation }}</span>
+            <span class="term-suggest-arrow" aria-hidden="true">→</span>
+            <span class="term-suggest-label">{{ suggestion.label }}</span>
+            <code class="term-suggest-command mono">{{ suggestion.command }}</code>
+          </button>
+        </li>
+      </ul>
+      <div class="term-suggest-foot">
+        <span>{{ t("terminal.suggestions.hint") }}</span>
+        <NButton
+          quaternary
+          size="tiny"
+          :aria-label="t('terminal.suggestions.dismiss')"
+          @click.stop="dismissSuggestion"
+        >
+          <template #icon>
+            <X :size="12" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+        </NButton>
+      </div>
+    </div>
+    <p
+      v-else-if="commandNotice"
+      class="term-command-notice"
+      role="status"
+    >
+      {{ commandNotice }}
+      <NButton
+        quaternary
+        size="tiny"
+        :aria-label="t('terminal.quickCommands.dismissNotice')"
+        @click.stop="commandNotice = ''"
+      >
+        <template #icon>
+          <X :size="12" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+      </NButton>
+    </p>
 
     <div
       v-if="tab.status !== 'connected'"
@@ -425,6 +639,10 @@ watch(
   max-width: 26rem;
 }
 
+.term-commands-btn {
+  margin-left: var(--space-1);
+}
+
 .term-shortcuts {
   display: flex;
   flex-direction: column;
@@ -517,6 +735,105 @@ watch(
   margin: 0;
   font-weight: 600;
   color: var(--fg-2);
+}
+
+.term-detail {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--meta);
+}
+
+/* Suggestion strip (JUS-249): overlays the last terminal rows instead of
+ * shrinking the PTY, so appearing/disappearing never reflows the prompt. */
+.term-suggest,
+.term-command-notice {
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: calc(var(--space-8) + var(--space-1));
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--surface) 96%, transparent);
+  box-shadow: var(--elev-raised);
+}
+
+.term-command-notice {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.term-suggest-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.term-suggest-option {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.term-suggest-option:hover,
+.term-suggest-option:focus-visible {
+  background: var(--surface-warm);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.term-suggest-abbr {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.term-suggest-arrow {
+  flex: 0 0 auto;
+  color: var(--meta);
+}
+
+.term-suggest-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.term-suggest-command {
+  margin-left: auto;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.term-suggest-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--meta);
+  font-size: var(--text-xs);
 }
 
 .term-statusbar {

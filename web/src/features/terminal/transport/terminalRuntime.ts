@@ -7,6 +7,7 @@ import {
   encodeResize,
 } from "@/features/terminal/transport/frames";
 import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
+import type { QuickCommand } from "@/features/terminal/schemas/quickCommands";
 import type { TerminalSessionInfo } from "@/features/terminal/schemas/terminal";
 import {
   terminalStreamFailureCode,
@@ -25,6 +26,20 @@ import {
   readDesignToken,
   terminalTheme,
 } from "@/features/terminal/utils/terminalTheme";
+import {
+  PromptScanner,
+  UNKNOWN_PROMPT_STATE,
+} from "@/features/terminal/transport/promptScanner";
+import type { PromptState } from "@/features/terminal/transport/promptScanner";
+import { QuickCommandEngine } from "@/features/terminal/utils/quickCommandEngine";
+import type {
+  QuickCommandSuggestionState,
+} from "@/features/terminal/utils/quickCommandEngine";
+import {
+  prepareAcceptance,
+  prepareInsertion,
+} from "@/features/terminal/utils/quickCommandInsertion";
+import type { InsertionFailure } from "@/features/terminal/utils/quickCommandInsertion";
 
 /**
  * One live terminal session (JUS-245): the xterm renderer, the WebSocket
@@ -102,11 +117,27 @@ export interface TerminalRuntimeOptions {
    * resolves before the first output/input, otherwise the banner omits it.
    */
   bannerVersion?: Promise<string | null>;
+  /**
+   * quickCommands supplies the live per-user list. Suggestions are only
+   * offered while the shell reports an editable prompt over OSC 133/633.
+   */
+  quickCommands?: () => QuickCommand[];
+  /** onSuggestion publishes the prompt/suggestion state for the tab UI. */
+  onSuggestion?: (_state: QuickCommandSuggestionState) => void;
   deps?: Partial<TerminalRuntimeDeps>;
 }
 
 /** BANNER_VERSION_WAIT_MS bounds how long the display banner waits for metadata. */
 export const BANNER_VERSION_WAIT_MS = 750;
+
+/** TerminalCommandFailure classifies a refused insertion. */
+export type TerminalCommandFailure = InsertionFailure | "unavailable" | "no-suggestion";
+
+/** TerminalCommandResult reports whether bytes were inserted (never run). */
+export interface TerminalCommandResult {
+  ok: boolean;
+  failure?: TerminalCommandFailure;
+}
 
 /** defaultCreateSocket wraps the browser WebSocket behind the minimal shape. */
 function defaultCreateSocket(url: string, protocols: string[]): TerminalSocket {
@@ -154,6 +185,12 @@ export class TerminalRuntime {
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private inputSubscription: { dispose: () => void } | null = null;
   private resizeSubscription: { dispose: () => void } | null = null;
+  /** scanner observes OSC 133/633 prompt marks and alternate-screen switches. */
+  private readonly scanner: PromptScanner;
+  /** engine mirrors only the safe part of the editable line for suggestions. */
+  private readonly engine: QuickCommandEngine;
+  /** promptState is the last scanner snapshot (diagnostics and UI). */
+  private promptState: PromptState = { ...UNKNOWN_PROMPT_STATE };
 
   private status: TerminalStatus = "connecting";
   private disposed = false;
@@ -183,6 +220,14 @@ export class TerminalRuntime {
       createSocket: options.deps?.createSocket ?? defaultCreateSocket,
       loadTerminal: options.deps?.loadTerminal ?? defaultLoadTerminal,
     };
+    this.engine = new QuickCommandEngine({
+      getCommands: options.quickCommands ?? (() => []),
+      onChange: (state) => options.onSuggestion?.(state),
+    });
+    this.scanner = new PromptScanner((state) => {
+      this.promptState = state;
+      this.engine.setPrompt(state);
+    });
   }
 
   /** connect loads the renderer, opens the socket and waits for `opened`. */
@@ -245,6 +290,77 @@ export class TerminalRuntime {
     }
   }
 
+  /** getPromptState exposes the last OSC 133/633 observation. */
+  getPromptState(): PromptState {
+    return { ...this.promptState };
+  }
+
+  /** getSuggestionState exposes the current abbreviation suggestion. */
+  getSuggestionState(): QuickCommandSuggestionState {
+    return this.engine.getState();
+  }
+
+  /** dismissSuggestion hides the suggestion (Escape / UI close). */
+  dismissSuggestion(): void {
+    this.engine.dismiss();
+  }
+
+  /** setComposing suspends suggestions while an IME composition is open. */
+  setComposing(composing: boolean): void {
+    this.engine.setComposing(composing);
+  }
+
+  /**
+   * acceptSuggestion replaces the typed abbreviation with the saved command.
+   * It never sends Enter. The insertion is planned before the mirror is
+   * cleared, so a refused command leaves the typed line untouched.
+   */
+  acceptSuggestion(commandId?: string): TerminalCommandResult {
+    if (this.status !== "connected") {
+      return { ok: false, failure: "unavailable" };
+    }
+    const acceptance = this.engine.accept(commandId);
+    if (!acceptance) {
+      return { ok: false, failure: "no-suggestion" };
+    }
+    const plan = prepareAcceptance(
+      acceptance.erase,
+      acceptance.text,
+      this.bracketedPasteEnabled(),
+    );
+    if (!plan.ok) {
+      return { ok: false, failure: plan.failure ?? "control" };
+    }
+    this.sendInput(plan.sequence);
+    this.engine.clearTracking();
+    return { ok: true };
+  }
+
+  /**
+   * insertCommand inserts saved text at the prompt without running it. Single
+   * line text is sent verbatim; multiline/tab text requires bracketed paste
+   * and is refused otherwise. No Enter/CR is ever appended.
+   */
+  insertCommand(text: string): TerminalCommandResult {
+    if (this.status !== "connected") {
+      return { ok: false, failure: "unavailable" };
+    }
+    const plan = prepareInsertion(text, this.bracketedPasteEnabled());
+    if (!plan.ok) {
+      return { ok: false, failure: plan.failure ?? "control" };
+    }
+    this.sendInput(plan.sequence);
+    // The mirror cannot know the inserted line's shape; wait for a fresh
+    // prompt mark before suggesting again.
+    this.engine.clearTracking();
+    return { ok: true };
+  }
+
+  /** bracketedPasteEnabled reads the live application mode; never assumed. */
+  private bracketedPasteEnabled(): boolean {
+    return this.terminal?.modes.bracketedPasteMode === true;
+  }
+
   /** sendInput sends raw keystrokes; nothing is queued while disconnected. */
   sendInput(data: string): void {
     // A user keystroke ahead of a slow version lookup flushes the banner first
@@ -284,6 +400,8 @@ export class TerminalRuntime {
     this.disposed = true;
     this.stopHeartbeat();
     this.clearBannerTimer();
+    this.scanner.reset();
+    this.engine.reset();
     this.inputSubscription?.dispose();
     this.resizeSubscription?.dispose();
     this.observer?.disconnect();
@@ -355,7 +473,12 @@ export class TerminalRuntime {
     this.inputSubscription = terminal.onData((data) => {
       // Never replay or queue: input typed after an end state is dropped.
       if (this.status === "connected") {
-        this.sendInput(data);
+        // The engine may swallow a lone Escape that dismisses a suggestion;
+        // every other chunk is forwarded unchanged.
+        const forwarded = this.engine.handleInput(data);
+        if (forwarded !== null) {
+          this.sendInput(forwarded);
+        }
       }
     });
     this.resizeSubscription = terminal.onResize(({ cols, rows }) => {
@@ -445,8 +568,12 @@ export class TerminalRuntime {
     switch (frame.kind) {
       case "output":
         // Flush the welcome first when metadata was still pending, so shell
-        // output never appears above the banner.
+        // output never appears above the banner. The banner is display-only
+        // and is never fed to the prompt scanner.
         this.writeBanner();
+        // Observe the shell's own prompt marks before handing the bytes to
+        // xterm. The scanner never consumes or rewrites output.
+        this.scanner.push(frame.bytes);
         this.terminal?.write(frame.bytes);
         return;
       case "opened": {

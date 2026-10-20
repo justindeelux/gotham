@@ -38,4 +38,7 @@ export type {
   TerminalAppearance,
   TerminalThemeName,
 } from "./schemas/terminalAppearance";
+export { useQuickCommandsStore } from "./stores/quickCommands";
+export type { QuickCommand, QuickCommandDraft } from "./schemas/quickCommands";
+export type { QuickCommandSuggestion } from "./utils/quickCommandEngine";
 export type { TerminalStatus } from "./transport/terminalRuntime";

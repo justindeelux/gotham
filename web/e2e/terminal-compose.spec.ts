@@ -4,6 +4,7 @@ import {
   authHeaders,
   installSession,
   loginFresh,
+  skipOrFail,
   terminalServer,
   waitForCreate,
   watchTerminal,
@@ -21,9 +22,9 @@ import type { APIRequestContext } from "@playwright/test";
  * agent), each service must be selectable, and the shell must run in the real
  * container without stopping it on close.
  *
- * While #405 is unmerged the control plane still resolves 12-hex ids; the test
- * detects that specific state and skips with the ticket reference instead of
- * failing green CI on a known, separately tracked defect.
+ * JUS-256 / PR #405 is merged: the control plane resolves Compose targets to
+ * full 64-hex ids. A 12-hex id is a REGRESSION and must fail this test, never
+ * turn into a skip.
  */
 
 test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 900 } });
@@ -75,12 +76,13 @@ async function seedComposeApplication(request: APIRequestContext): Promise<Compo
   const body = me.ok()
     ? ((await me.json()) as { user?: { is_platform_admin?: boolean } })
     : {};
-  test.skip(
+  skipOrFail(
     body.user?.is_platform_admin !== true,
     "the smoke account is not a platform operator (PLATFORM_ADMINS)",
+    test.skip,
   );
   const server = await terminalServer(request, account);
-  test.skip(server === null, "no ready node agent is registered");
+  skipOrFail(server === null, "no ready node agent is registered", test.skip);
   const headers = authHeaders(account);
 
   const project = await request.post("/api/v1/projects", {
@@ -95,14 +97,22 @@ async function seedComposeApplication(request: APIRequestContext): Promise<Compo
   const projectId = projectBody.project.id;
   const environmentId = projectBody.environments[0]!.id;
 
+  // A run-unique label on every service lets the CI cleanup remove only this
+  // test's containers/network/volumes — never another Compose project (and
+  // never gotham-dev-postgres/gotham-dev-redis).
+  const runLabel = process.env.GOTHAM_E2E_RUN_ID ?? "local-run";
   const composeContent = [
     "services:",
     "  web:",
     `    image: ${COMPOSE_IMAGE}`,
     '    command: ["sleep", "3600"]',
+    "    labels:",
+    `      e2e.gotham.run: "${runLabel}"`,
     "  worker:",
     `    image: ${COMPOSE_IMAGE}`,
     '    command: ["sleep", "3600"]',
+    "    labels:",
+    `      e2e.gotham.run: "${runLabel}"`,
     "",
   ].join("\n");
   const application = await request.post("/api/v1/applications", {
@@ -159,23 +169,16 @@ async function seedComposeApplication(request: APIRequestContext): Promise<Compo
   throw new Error("compose application never produced two service containers");
 }
 
-/** fullComposeIds reports whether JUS-256's full-id resolution is deployed. */
-function fullComposeIds(current: ComposeSeed): boolean {
-  return (
-    /^[0-9a-f]{64}$/.test(current.webId) && /^[0-9a-f]{64}$/.test(current.workerId)
-  );
-}
-
 test("a real compose project lists every service with a full id and opens a shell", async ({
   page,
   request,
 }) => {
   test.setTimeout(300_000);
   const current = await seedComposeApplication(request);
-  test.skip(
-    !fullComposeIds(current),
-    "JUS-256 (#405) not merged: compose targets still return 12-hex ids",
-  );
+  // JUS-256: the API must already return full ids; a short id is the exact
+  // regression this scenario exists for.
+  expect(current.webId).toMatch(/^[0-9a-f]{64}$/);
+  expect(current.workerId).toMatch(/^[0-9a-f]{64}$/);
 
   const traffic = watchTerminal(page);
   const calls: string[] = [];

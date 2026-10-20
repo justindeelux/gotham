@@ -1,8 +1,11 @@
 name: UI E2E
 
 # Browser-level smoke for the embedded SPA against a real control plane.
-# Separate from ci.yml (unit/build) and internal/e2e (API-level suite) so the
-# Playwright run only fires on UI changes.
+# Separate from ci.yml (unit/build) and internal/e2e (API-level suite).
+# JUS-251: the terminal specs drive real PTYs and real containers through the
+# control plane + node agent, so backend terminal/agent/auth changes must run
+# this job too (a regression that re-requires `root`, breaks the relay or the
+# authorizer has to reach the browser proof).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -11,6 +14,11 @@ on:
   pull_request:
     paths:
       - "web/**"
+      - "internal/terminal/**"
+      - "internal/servers/**"
+      - "internal/auth/**"
+      - "agent/**"
+      - "proto/**"
       - ".github/workflows/ui-e2e.yml"
 
 permissions:
@@ -75,6 +83,11 @@ jobs:
       # plane maps to 127.0.0.1:9443 without an operator-recorded address.
       GOTHAM_E2E_TERMINAL_NODE: localhost
       GOTHAM_E2E_TERMINAL_IMAGE: nginx:1.28.0-alpine
+      # JUS-251: CI must FAIL, not skip, when the node/agent/permission/pid
+      # prerequisites are missing; the final step also asserts the terminal
+      # specs actually executed.
+      GOTHAM_E2E_REQUIRE_TERMINAL: "1"
+      GOTHAM_E2E_RUN_ID: ${{ github.run_id }}
       # The smoke account is a platform operator so the platform-global DNS
       # surface (BE-8.2) is reachable; per-application cert/redirect management
       # stays team-scoped.
@@ -179,7 +192,40 @@ jobs:
 
       - name: Run Playwright smoke
         working-directory: web
-        run: npm run e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/terminal-report.json
+        run: npx playwright test --reporter=list,html,json
+
+      - name: Assert the terminal specs ran
+        working-directory: web
+        run: |
+          node - <<'NODE'
+          const report = require("./test-results/terminal-report.json");
+          const specs = [];
+          const walk = (suite) => {
+            for (const child of suite.suites ?? []) walk(child);
+            for (const spec of suite.specs ?? []) specs.push(spec);
+          };
+          walk(report);
+          const terminal = specs.filter((spec) =>
+            /terminal-(host|regressions|application|compose)\.spec/.test(spec.file ?? ""),
+          );
+          const skipped = terminal.filter((spec) =>
+            (spec.tests ?? []).some((t) => t.status === "skipped"),
+          );
+          const passed = terminal.filter((spec) => spec.ok === true);
+          if (terminal.length < 20 || skipped.length > 0 || passed.length !== terminal.length) {
+            console.error({
+              total: terminal.length,
+              passed: passed.length,
+              skipped: skipped.length,
+            });
+            process.exit(1);
+          }
+          console.log(
+            `terminal specs: ${terminal.length} total, ${passed.length} passed, 0 skipped`,
+          );
+          NODE
 
       - name: Show control-plane and agent logs on failure
         if: failure()
@@ -214,4 +260,21 @@ jobs:
           fi
           pkill -f 'bin/gotham-agent serve' || true
           pkill -f 'bin/gotham serve' || true
-          docker ps -aq --filter "label=com.docker.compose.project" | xargs -r docker rm -f || true
+
+          # JUS-251: remove ONLY this run's containers/network/volumes. The
+          # generic com.docker.compose.project label also matches unrelated
+          # projects (on a developer machine or a self-hosted runner it would
+          # remove gotham-dev-postgres and gotham-dev-redis). Compose services
+          # carry e2e.gotham.run=<run id>; image-source applications seeded by
+          # the specs use the gotham-ui-e2e-term- name prefix.
+          RUN_ID="${GOTHAM_E2E_RUN_ID:-local-run}"
+          projects="$(docker ps -a --filter "label=e2e.gotham.run=$RUN_ID" \
+            --format '{{.Label "com.docker.compose.project"}}' | sort -u)"
+          docker ps -aq --filter "label=e2e.gotham.run=$RUN_ID" | xargs -r docker rm -f || true
+          docker ps -aq --filter "name=gotham-ui-e2e-term-" | xargs -r docker rm -f || true
+          for project in $projects; do
+            docker network ls -q --filter "label=com.docker.compose.project=$project" \
+              | xargs -r docker network rm || true
+            docker volume ls -q --filter "label=com.docker.compose.project=$project" \
+              | xargs -r docker volume rm || true
+          done

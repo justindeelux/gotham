@@ -268,6 +268,33 @@ export async function waitForScreenText(
   return text;
 }
 
+/**
+ * waitForScreenStable returns the screen text after it has not changed for
+ * quietMs. Banner/duplicate assertions need the settled buffer: counting at
+ * the first sight of the banner races any later output frame.
+ */
+export async function waitForScreenStable(
+  page: Page,
+  scope = ".term-page",
+  quietMs = 1_200,
+  timeout = 15_000,
+): Promise<string> {
+  let last = "";
+  let stableSince = Date.now();
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const text = await screenText(page, scope).catch(() => "");
+    if (text !== last) {
+      last = text;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= quietMs) {
+      return text;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+  }
+  return last;
+}
+
 /** focusTerminal focuses the xterm helper textarea of a terminal. */
 export async function focusTerminal(
   page: Page,
@@ -513,6 +540,33 @@ export async function isPlatformAdmin(
   return body.user?.is_platform_admin === true;
 }
 
+/**
+ * requireTerminal is the CI interlock: with GOTHAM_E2E_REQUIRE_TERMINAL=1 a
+ * missing node, a non-operator account or an absent agent pid is a FAILURE,
+ * never a green skip. CI sets it; a local run without an agent keeps skipping.
+ */
+export function requireTerminal(): boolean {
+  return process.env.GOTHAM_E2E_REQUIRE_TERMINAL === "1";
+}
+
+/**
+ * skipOrFail reports a missing prerequisite. In CI (requireTerminal) it throws
+ * so a silent all-skip run cannot be green; locally it skips.
+ */
+export function skipOrFail(
+  condition: boolean,
+  reason: string,
+  testSkip: (_condition: boolean, _reason: string) => void,
+): void {
+  if (!condition) {
+    return;
+  }
+  if (requireTerminal()) {
+    throw new Error(`GOTHAM_E2E_REQUIRE_TERMINAL=1: ${reason}`);
+  }
+  testSkip(true, reason);
+}
+
 /** agentPid is the runner-provided pid used by the descriptor-leak regression. */
 export function agentPid(): number | null {
   const raw = process.env.GOTHAM_E2E_AGENT_PID ?? "";
@@ -522,35 +576,32 @@ export function agentPid(): number | null {
 
 /**
  * ptmxCount counts the agent's /dev/ptmx master descriptors. Linux reads
- * /proc/<pid>/fd; macOS (a developer machine) falls back to lsof. A missing
- * inspection tool returns null so the caller can skip only that assertion.
+ * /proc/<pid>/fd; macOS (a developer machine) falls back to lsof. A failed
+ * inspection THROWS: returning a default here would let a leak assert pass
+ * vacuously when /proc is unreadable or the pid is gone.
  */
-export function ptmxCount(pid: number): number | null {
-  try {
-    if (process.platform === "linux") {
-      const dir = `/proc/${pid}/fd`;
-      const targets = execFileSync("ls", ["-l", dir], { encoding: "utf8" });
-      return targets.split("\n").filter((line) => line.includes("ptmx")).length;
-    }
-    const output = execFileSync("lsof", ["-p", String(pid), "-Fn"], {
-      encoding: "utf8",
-    });
-    return output.split("\n").filter((line) => line.includes("/dev/ptmx")).length;
-  } catch {
-    return null;
+export function ptmxCount(pid: number): number {
+  if (process.platform === "linux") {
+    const dir = `/proc/${pid}/fd`;
+    const targets = execFileSync("ls", ["-l", dir], { encoding: "utf8" });
+    return targets.split("\n").filter((line) => line.includes("ptmx")).length;
   }
+  const output = execFileSync("lsof", ["-p", String(pid), "-Fn"], {
+    encoding: "utf8",
+  });
+  return output.split("\n").filter((line) => line.includes("/dev/ptmx")).length;
 }
 
-/** processExists reports whether any process command line contains needle. */
+/**
+ * processRunning reports whether any process command line contains needle. A
+ * failed ps THROWS instead of reading as "gone": the cleanup assertion must not
+ * pass because the inspection tool could not run.
+ */
 export function processRunning(needle: string): boolean {
-  try {
-    const output = execFileSync("ps", ["-eo", "args="], { encoding: "utf8" });
-    return output
-      .split("\n")
-      .some((line) => line.includes(needle) && !line.includes("ps -eo"));
-  } catch {
-    return false;
-  }
+  const output = execFileSync("ps", ["-eo", "args="], { encoding: "utf8" });
+  return output
+    .split("\n")
+    .some((line) => line.includes(needle) && !line.includes("ps -eo"));
 }
 
 /** waitForProcessGone polls until no command line contains needle. */

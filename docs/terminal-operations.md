@@ -23,13 +23,15 @@ over the floating window (JUS-255), while Compose targets carried 12-hex ids
 the agent rejected (JUS-256). JUS-251 therefore validates the **real stack**:
 
 | Layer | Real in the browser suite | Real in the Go suite |
-|---|---|---|
-| Control plane | `gotham serve` (embedded SPA) | `terminal.Service` + production routes |
-| Database / Redis | PostgreSQL 16 + Redis 7 containers | same, throwaway |
-| Node agent | `gotham-agent` built from the repo | in-process agent over mTLS |
+|---|---|---|---|
+| Control plane | `gotham serve` (embedded SPA) | `terminal.Service` + production HTTP/WebSocket routes |
+| PostgreSQL | PostgreSQL 16 container | **not used** (no store is opened) |
+| Redis | Redis 7 container | real server, **subscribe-only** (`PSUBSCRIBE *`; no publisher in the test CP) |
+| Auth / registry | real accounts, sessions and team scopes | **stubs** (fixed verifier, permissive authorizer, static registry) |
+| Node agent | `gotham-agent` built from the repo | in-process agent over mTLS (the same gRPC services) |
 | Host shell | real PTY (zsh on macOS, bash on Linux) | real PTY |
 | Application shell | real `docker exec` in a deployed container | covered by the agent lifecycle suite (JUS-244) |
-| Compose shell | real `docker compose` project | covered by deploy/GS-8 suites |
+| Compose shell | real `docker compose` project | covered by the deploy/GS-8 suites |
 
 Entry points:
 
@@ -45,18 +47,22 @@ GOTHAM_E2E_AGENT_PID=$(cat "$RUNNER_TEMP/gotham-agent.pid") \
     e2e/terminal-application.spec.ts \
     e2e/terminal-compose.spec.ts
 
-# Go integration/security proof (throwaway Postgres + Redis + Docker):
+# Go real-stack proof (real agent + PTY + gRPC/WebSocket relay, real Redis;
+# no Postgres, stubbed verifier/authorizer/registry — see the table above):
 GOTHAM_E2E=1 \
-GOTHAM_TEST_DSN='postgres://gotham:gotham@localhost:5433/gotham?sslmode=disable' \
 GOTHAM_E2E_REDIS=127.0.0.1:6380 \
   go test ./internal/e2e -run TestTerminalRealStackNoLeak -count=1 -v
 ```
 
 `.github/workflows/ui-e2e.yml` starts its own control plane, its own node agent
 and its own Postgres/Redis service containers. It never reuses the long-lived
-`gotham-dev-postgres` / `gotham-dev-redis`, and its final step stops the agent,
-the control plane and any leftover Compose container. Follow the same rule on
-a developer machine (see [`test-server.md`](test-server.md)).
+`gotham-dev-postgres` / `gotham-dev-redis`, and its final step stops the agent
+and control plane, then removes **only that run's** Compose containers (the
+`e2e.gotham.run=<run id>` label), their network/volumes, and the seeded image
+application containers (`gotham-ui-e2e-term-*`). It never filters on the
+generic `com.docker.compose.project` label, which would also match unrelated
+projects on a developer machine or a self-hosted runner. Follow the same rule
+locally (see [`test-server.md`](test-server.md)).
 
 ### Scenario → proof map
 
@@ -94,15 +100,22 @@ resource-limited Linux containers so the kernel, PTY driver and shell are Linux
 even on a macOS workstation:
 
 ```sh
-docker run --rm --platform linux/arm64 --pids-limit=100 --memory=256m --cpus=1 \
-  -v "$D/agent-arm64.test:/agent.test" alpine:3 /agent.test \
-  -test.run 'TestTerminalEchoResizeAndExit|TestTerminalCtrlC|TestTerminalCloseKillsJobControlBackgroundJob|TestTerminalReleasesResources'
-# linux/amd64: same command with --platform linux/amd64 and agent-amd64.test
+D="$(mktemp -d)"
+GOOS=linux GOARCH=arm64 go test -c ./agent -o "$D/agent-arm64.test"
+GOOS=linux GOARCH=amd64 go test -c ./agent -o "$D/agent-amd64.test"
+for arch in arm64 amd64; do
+  docker run --rm --platform "linux/$arch" --pids-limit=100 --memory=256m --cpus=1 \
+    -v "$D/agent-$arch.test:/agent.test" alpine:3 /agent.test \
+    -test.run 'TestTerminalEchoResizeAndExit|TestTerminalCtrlC|TestTerminalCloseKillsJobControlBackgroundJob|TestTerminalReleasesResources'
+done
+rm -rf "$D"
 ```
 
 All four pass on **arm64** and **amd64**: initial 80×24 geometry, a multi-byte
 UTF-8 round-trip (`echo gotham-pty-é✓ñ`), Ctrl-C interrupting a foreground
 job, `sleep N &` killed on close, and `/dev/ptmx`/fd release back to baseline.
+The shell in these containers is busybox `sh` (alpine has no bash); see the
+shell table above for where bash/zsh marks are proven.
 The supported-shell shortcut proof is `web/tests/terminal-quick-command-pty.test.ts`
 (real bash PTY, OSC 133 A/B marks, suggestion insert without running); it runs
 in the CI web job, which installs bash and zsh.
@@ -117,10 +130,16 @@ the container's own `/bin/sh`/`/bin/bash`; a container without either reports
 
 | Shell | Host | Container | Prompt marks (quick-command suggestions) |
 |---|---|---|---|
-| bash ≥ 4.4 | yes | yes (if installed) | yes — proven against a real bash PTY (Playwright + Go) |
-| zsh ≥ 5.3 | yes | rare | yes — snippet documented; validated manually on macOS |
+| bash (3.2 and 5.x) | yes | yes (if installed) | yes — PTY-proven locally on bash 3.2/5.2 and in CI on bash 5.x; `PS0` (`C` mark) needs bash ≥ 4.4, older bash still emits A/B/D |
+| zsh (5.9) | yes | rare | yes — PTY-proven locally (zsh 5.9) and in CI (zsh installed in the web job) |
 | sh / dash / busybox ash | yes (`/bin/sh`) | yes | no `PROMPT_COMMAND`; suggestions stay off until a shell that emits OSC 133 runs |
 | fish, PowerShell, cmd | not supported | not supported | — |
+
+The privileged-host evidence in this guide runs on the shells above. The Linux
+container evidence (`alpine:3`) has **no bash**, so those runs exercise busybox
+`sh` for the PTY round-trip/Ctrl-C/resize/cleanup assertions; bash/zsh prompt
+marks are proven separately by the web PTY suite (bash 5.x + zsh in CI, plus
+bash 3.2/5.2 and zsh 5.9 locally).
 
 Gotham never injects shell integration. The operator adds the additive snippet
 from [`terminal-shell-integration.md`](terminal-shell-integration.md) to
@@ -144,15 +163,24 @@ command is inserted, and the operator presses Enter.
   owner/admin role never grants a host shell, and a platform operator role
   never grants a container shell.
 * **Default start directory.** A session without `root`/`cwd` (the Terminal
-  page and the Server detail tab) starts in the agent's own working directory,
-  falling back to `/` for a root agent with no usable home (JUS-253). The File
-  manager's "Open terminal here" sends the root name and the root-relative
-  folder, and the agent resolves it through the FileService root (symlinks and
-  `..` are refused when they leave the root).
+  page and the Server detail tab) starts in the **service user's passwd home**
+  directory, resolved on the agent by uid (symlinks evaluated, must exist and
+  be searchable); if that lookup fails, is empty/relative, missing or not
+  enterable, it falls back to `/` (JUS-253). The browser never supplies it.
+  The File manager's "Open terminal here" sends the root name and the
+  root-relative folder, and the agent resolves it through the FileService root
+  (symlinks and `..` are refused when they leave the root).
+* **Identity in the stream.** The agent's `opened` frame reports the shell
+  path, dimensions and `service_user` — the identity the shell actually runs
+  as (the agent's service user, often `root` on a standard install).
 * **Audit.** Creating, attaching and failing sessions are logged with
   `session_id`, user and node. Terminal **bytes are never logged** and never
-  published to Redis; the Go proof subscribes to every channel while typing a
-  unique canary and asserts the canary appears in neither log.
+  published to Redis. The Go proof types a unique canary while it captures the
+  agent logger, the control-plane logger, `slog.Default()` and the process's
+  `os.Stderr`, and subscribes to **every** Redis channel (`PSUBSCRIBE *`); the
+  canary appears in none of them. The test control plane does not mount the
+  realtime Redis hub (no deploy/log traffic), and the subscriber is wider than
+  the hub, so any publish to that Redis by any component would be seen.
 
 ## Close, disconnect, expiry: what ends and what is killed
 
@@ -264,6 +292,7 @@ them reaches the PTY.
 | "That folder no longer exists on the server." | folder deleted after listing | refresh the File manager |
 | "The terminal session quota is reached." | per-operator/node limit | close a session |
 | "This application has no running deployment." | nothing to exec into | deploy or start it |
+| "The container target is invalid." | malformed/forged service, container id or replica in a crafted request (the UI never sends one) | refresh the targets and pick a listed container |
 | "The selected container is not running." / "… no longer available." | stopped or replaced container | "Refresh services" then pick the running one |
 | "A deployment is in progress." | container being replaced | wait for the deploy, then retry |
 | "You need write access to this application's team…" | read_only team role | ask a team admin |
@@ -276,9 +305,9 @@ Log lines worth knowing:
 |---|---|---|
 | `terminal: session failed session_id=… reason=…` | INFO | the relay ended by itself (agent loss, refusal); the reason is bounded |
 | `terminal: session scan incomplete; falling back to the process group` | WARN | the cleanup walk could not see every process (cap, deadline, `hidepid`, namespace); the group fallback and the found members were still handled |
-| `terminal: cleanup incomplete` / container cleanup error with a container id | ERROR | positive evidence a container helper failed; investigate the node (Docker/exec, missing `tr`/`grep`, `/proc` unavailable) |
-| `terminal: revalidation failed` (repeated) | WARN | the CP cannot confirm the sign-in; after ~90 s the shell fails closed |
-| `terminal: pty master release incomplete` | WARN | the master could not be closed within the bound; report with the session id |
+| `terminal: container exec cleanup incomplete` (with the container id) | ERROR | positive evidence a container helper failed; investigate the node (Docker/exec, missing `tr`/`grep`, `/proc` unavailable) |
+| `terminal: revalidation unavailable` (repeated) | WARN | a lookup failed transiently; the shell is kept and the tick retried. Three consecutive failures (~90 s) fail closed |
+| `terminal: authorization refused` | WARN | the handshake/attach or a revalidation was definitively refused (session revoked, role lost, wrong team) |
 
 ## Known limits found during validation
 
@@ -295,14 +324,16 @@ Log lines worth knowing:
   sign-in per worker rather than pinning this refusal.
 * **JUS-257 (open):** a shared-team application detail page answers 404 for
   every member because `getApplication` sends no `X-Team-Id` while the backend
-  defaults to the personal team. This blocks the UI half of the read-only
-  scenario (a `read_only` role can only exist in a shared team); the terminal
-  permission boundary is still proven at the API level (targets/create 403).
-  The browser test auto-skips with the ticket reference until it is fixed.
-* **JUS-256 / PR #405:** Compose terminals resolved 12-hex CLI ids, which the
-  agent rejects. The browser Compose test detects that state and skips with the
-  ticket reference; with the fix merged it asserts a full 64-hex id and a real
-  shell.
+  defaults to the personal team. The read-only UI test exercises the member
+  gate **now** by adding the `X-Team-Id` header on that one page's API calls
+  (exactly what the fixed client will send) and asserts no Terminal tab and
+  zero terminal requests; it has been executed and passes. The plain page
+  still 404s until JUS-257 lands, so remove that route fixture with the fix.
+  The API half independently proves targets/create 403 and foreign-scope 404.
+* **JUS-256 / PR #405 (fixed):** Compose terminals resolved 12-hex CLI ids,
+  which the agent rejects. With #405 merged the browser Compose test asserts a
+  full 64-hex id for every service and opens a real shell; a short id is now a
+  hard failure, never a skip.
 * **Headless and background tabs.** A background browser tab does not run
   `requestAnimationFrame`; xterm rendering and Naive UI transitions can look
   frozen. This is a harness artifact, not a terminal bug. The Playwright suite

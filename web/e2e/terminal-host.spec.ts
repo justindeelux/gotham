@@ -12,9 +12,11 @@ import {
   terminalLogoSHA256,
   terminalPageURL,
   pickServer,
+  skipOrFail,
   terminalServer,
   typeReal,
   waitForCreate,
+  waitForScreenStable,
   watchTerminal,
   installSession,
   loginFresh,
@@ -36,10 +38,11 @@ import {
  * workflow provisions both, so CI always runs them.
  */
 
-// A desktop viewport tall enough for the full 19-line logo: the banner is the
-// full committed artwork above its minimum rows and a compact two-line form
-// below it (both are by design). This suite pins the full form.
-test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 900 } });
+// A viewport tall enough for the full 19-line logo AND for two banners to fit
+// on screen at once: the duplicate-banner regression (6b) then shows two title
+// rows instead of pushing the first copy out of the viewport. The compact form
+// below the minimum rows is by design; this suite pins the full form.
+test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 1200 } });
 
 const account = loadAccount();
 /** fresh is this file's own sign-in (see loginFresh). */
@@ -55,14 +58,16 @@ test.beforeEach(async ({ page }) => {
 
 /** requireTerminalNode skips when the real node is unavailable. */
 async function requireTerminalNode(request: Parameters<typeof terminalServer>[0]) {
-  test.skip(
+  skipOrFail(
     !(await isPlatformAdmin(request, account)),
     "the smoke account is not a platform operator (PLATFORM_ADMINS in the UI E2E workflow)",
+    test.skip,
   );
   const server = await terminalServer(request, account);
-  test.skip(
+  skipOrFail(
     server === null,
     "no ready node agent is registered (the UI E2E workflow starts one)",
+    test.skip,
   );
   return server!;
 }
@@ -109,11 +114,18 @@ test.describe("host terminal on the real stack", () => {
     expect(typeof create.body?.cols).toBe("number");
     expect(typeof create.body?.rows).toBe("number");
 
+    // Wait for the prompt and a quiet buffer before counting: a banner written
+    // on every output frame (mutation 6b) adds a second copy after the prompt.
+    await expect
+      .poll(async () => /[@#]/.test(await screenText(page)))
+      .toBe(true);
     const text = await expectBanner(page, server.name);
     expect(text).toContain("server: " + server.name);
-    // Exactly one banner: the server line appears once, never repeated by a
-    // second create or by a reconnect.
+    // Exactly one banner: both the title row and the first logo row appear
+    // once in the settled screen (a tall viewport keeps two copies visible).
     expect(countOccurrences(text, "server: " + server.name)).toBe(1);
+    const firstLogoRow = terminalLogoLines()[0]!.trimEnd();
+    expect(countOccurrences(text, firstLogoRow)).toBe(1);
     expect(traffic.createCount()).toBe(1);
     expect(traffic.sockets).toHaveLength(1);
 
@@ -216,10 +228,24 @@ test.describe("host terminal on the real stack", () => {
       .first()
       .getAttribute("data-theme");
 
-    await page.getByRole("button", { name: "Terminal theme" }).click();
+    const trigger = page.getByRole("button", { name: "Terminal theme" });
+    await trigger.click();
     const light = page.getByRole("radio", { name: "Gotham Light" });
     await expect(light).toBeVisible();
-    await light.check();
+    // Exercise every documented menu key path while the popover is open. None
+    // of ArrowDown/Space/Enter/Tab/a printable character may reach the PTY,
+    // and Escape must close the menu and return focus to the trigger.
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Space");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("x");
+    await page.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
+    // Re-open and exercise Tab while the menu owns focus too; the key must not
+    // reach the PTY even when focus leaves the radio group.
+    await trigger.click();
+    await expect(page.getByRole("radio", { name: "Gotham Light" })).toBeVisible();
+    await page.keyboard.press("Tab");
     await page.keyboard.press("Escape");
 
     await expect
@@ -233,6 +259,9 @@ test.describe("host terminal on the real stack", () => {
     expect(traffic.createCount()).toBe(1);
     expect(traffic.currentSocket()).toBe(socket);
     expect(socket.closed).toBe(false);
+    // The key sequence never typed into the shell (zero input frames) and the
+    // trigger owned focus again after Escape.
+    expect(traffic.inputFrames()).toBe(beforeInput);
   });
 
   test("real UTF-8 typing, paste, resize (stty), Ctrl-C and shell exit", async ({
@@ -378,19 +407,19 @@ async function expectBanner(
   page: import("@playwright/test").Page,
   serverName: string,
 ): Promise<string> {
-  const text = await (async () => {
-    let current = "";
-    await expect
-      .poll(
-        async () => {
-          current = await screenText(page).catch(() => "");
-          return current.includes(`server: ${serverName}`);
-        },
-        { timeout: 25_000, intervals: [100, 250, 500] },
-      )
-      .toBe(true);
-    return current;
-  })();
+  await expect
+    .poll(
+      async () =>
+        (await screenText(page).catch(() => "")).includes(
+          `server: ${serverName}`,
+        ),
+      { timeout: 25_000, intervals: [100, 250, 500] },
+    )
+    .toBe(true);
+  // The duplicate-banner assertion needs the SETTLED buffer, not the first
+  // frame that happens to contain the title.
+  const text = await waitForScreenStable(page);
+  expect(text).toContain(`server: ${serverName}`);
 
   // The committed asset is the single source of the banner artwork. Its
   // documented SHA-256 guards against an accidental edit and the rendered

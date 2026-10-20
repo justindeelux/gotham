@@ -9,9 +9,11 @@ import {
   pickServer,
   processRunning,
   ptmxCount,
+  requireTerminal,
   runCommand,
   screenText,
   serverTemporaryRoot,
+  skipOrFail,
   terminalServer,
   waitForCreate,
   waitForProcessGone,
@@ -46,14 +48,16 @@ test.beforeEach(async ({ page }) => {
 
 /** requireTerminalNode skips when the real node is unavailable. */
 async function requireTerminalNode(request: Parameters<typeof terminalServer>[0]) {
-  test.skip(
+  skipOrFail(
     !(await isPlatformAdmin(request, account)),
     "the smoke account is not a platform operator (PLATFORM_ADMINS in the UI E2E workflow)",
+    test.skip,
   );
   const server = await terminalServer(request, account);
-  test.skip(
+  skipOrFail(
     server === null,
     "no ready node agent is registered (the UI E2E workflow starts one)",
+    test.skip,
   );
   return server!;
 }
@@ -149,6 +153,18 @@ test.describe("terminal regressions", () => {
     const server = await requireTerminalNode(request);
     const traffic = watchTerminal(page);
     const pid = agentPid();
+    if (pid === null && requireTerminal()) {
+      throw new Error(
+        "GOTHAM_E2E_REQUIRE_TERMINAL=1 requires GOTHAM_E2E_AGENT_PID for the descriptor assertion",
+      );
+    }
+    if (pid === null) {
+      test.info().annotations.push({
+        type: "note",
+        description:
+          "GOTHAM_E2E_AGENT_PID is unset: process cleanup is asserted, the fd baseline is not",
+      });
+    }
     const baseline = pid === null ? null : ptmxCount(pid);
 
     await page.goto("/terminal");
@@ -182,33 +198,32 @@ test.describe("terminal regressions", () => {
     // agent pid it started. The macOS fallback keeps the check useful on a
     // developer machine; a missing inspection tool skips only this part.
     if (pid !== null && baseline !== null) {
-      let after = baseline;
+      // ptmxCount throws when /proc (or lsof) cannot be read, so a failed
+      // inspection fails this assertion instead of passing vacuously.
       await expect
-        .poll(async () => {
-          after = ptmxCount(pid) ?? baseline;
-          return after;
-        }, { timeout: 20_000 })
+        .poll(async () => ptmxCount(pid), { timeout: 20_000 })
         .toBe(baseline);
     }
   });
 
-  test("JUS-255: the floating window is on top of the page notice at every breakpoint", async ({
-    page,
-    request,
-  }) => {
-    test.setTimeout(120_000);
-    const server = await requireTerminalNode(request);
-    for (const [width, height] of [
-      [1366, 800],
-      [1280, 720],
-      [480, 800],
-      [390, 800],
-    ]) {
+  // One independent test per breakpoint: a regression at 1280/480/390 must be
+  // reported even when 1366 fails first (the previous loop aborted at the
+  // first failure and hid the other sizes).
+  for (const [width, height] of [
+    [1366, 800],
+    [1280, 720],
+    [480, 800],
+    [390, 800],
+  ] as const) {
+    test(`JUS-255: the floating window is on top of the page notice at ${width}x${height}`, async ({
+      page,
+      request,
+    }) => {
+      test.setTimeout(90_000);
+      const server = await requireTerminalNode(request);
       const traffic = watchTerminal(page);
       await page.setViewportSize({ width, height });
       await page.goto("/terminal");
-      // A fresh session per viewport keeps the geometry deterministic (the
-      // window is positioned relative to the viewport on first open).
       await pickServer(page, server.name);
       await waitForCreate(traffic);
       await expect
@@ -250,15 +265,8 @@ test.describe("terminal regressions", () => {
       for (const [point, hit] of Object.entries(probes!)) {
         expect(hit, `${width}x${height}: ${point} is covered by the page`).toBe(true);
       }
-      // Close through the dialog so the next viewport starts empty.
-      await page.getByRole("button", { name: "Close terminal window" }).click();
-      await page
-        .getByRole("dialog")
-        .getByRole("button", { name: /^(Close all|Close terminal)$/ })
-        .click();
-      await expect(page.locator(".term-window")).not.toBeVisible();
-    }
-  });
+    });
+  }
 
   test("an unauthenticated create request is refused with no session", async ({
     request,

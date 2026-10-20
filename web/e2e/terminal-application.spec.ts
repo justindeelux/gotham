@@ -4,6 +4,7 @@ import type { E2EAccount } from "./support";
 import { loadAccount } from "./support";
 import {
   authHeaders,
+  skipOrFail,
   terminalServer,
   waitForCreate,
   watchTerminal,
@@ -210,12 +211,13 @@ async function terminalTargets(
 async function seedSingleApplication(
   request: APIRequestContext,
 ): Promise<SeededApplication> {
-  test.skip(
+  skipOrFail(
     !(await isOperator(request)),
     "the smoke account is not a platform operator (PLATFORM_ADMINS)",
+    test.skip,
   );
   const server = await terminalServer(request, account);
-  test.skip(server === null, "no ready node agent is registered");
+  skipOrFail(server === null, "no ready node agent is registered", test.skip);
   const headers = authHeaders(account);
   const { projectId, environmentId } = await createProject(request, headers);
   const applicationId = await createImageApplication(
@@ -339,6 +341,44 @@ test.describe("application terminal on the real stack", () => {
       .toBe(true);
     const screen = await page.locator(".xterm-rows").first().innerText();
     expect(screen).not.toContain("Gotham dev · server:");
+  });
+
+  test("an unknown team role blocks every terminal request until the role resolves", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const seed = await seedSingleApplication(request);
+    const { traffic, paths } = watchApplicationTerminal(page);
+
+    // Mutation 5a: `accessKnown = true` (or a gate that reads the default
+    // writable projects store) would start discovery while the role is still
+    // unknown. Hold the teams response so the window is deterministic.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/v1/teams", async (route) => {
+      await held;
+      await route.continue();
+    });
+
+    await page.goto(applicationURL(seed, "terminal"));
+    await expect(page.locator('nav[aria-label="Breadcrumb"]')).toBeVisible();
+    // The page and its deep-linked Terminal tab are mounted, but no terminal
+    // control request may leave the browser while the role is unknown.
+    await page.waitForTimeout(2_000);
+    expect(paths).toEqual([]);
+    expect(traffic.createCount()).toBe(0);
+
+    release();
+    await expect
+      .poll(() => paths.filter((path) => path.startsWith("GET")).length, {
+        timeout: 20_000,
+      })
+      .toBe(1);
+    const create = await waitForCreate(traffic);
+    expect(create.body).toMatchObject({ container_id: seed.containerId });
   });
 
   test("the retained window session survives while the page starts one more", async ({
@@ -493,24 +533,25 @@ test.describe("application terminal on the real stack", () => {
 
     test("sees no Terminal tab and issues zero terminal requests", async ({
       browser,
-      request,
     }) => {
-      // JUS-257: the application detail route reads without X-Team-Id, so every
-      // shared-team application page answers 404 for every member. Until that is
-      // fixed the UI half cannot load the fixture; the API half above still
-      // proves the terminal permission boundary. Flip this back on with JUS-257.
-      const probe = await request.get(
-        `/api/v1/applications/${readOnly.applicationId}`,
-        { headers: { Authorization: `Bearer ${readOnly.viewerToken}` } },
-      );
-      test.skip(
-        probe.status() === 404,
-        "JUS-257: shared-team application detail 404s (getApplication sends no X-Team-Id)",
-      );
+      // JUS-257: the SPA's getApplication sends no X-Team-Id, so a shared-team
+      // application page answers 404 before the member gate can render. This
+      // fixture adds the header the fixed client would send, so the read-only
+      // gate is exercised NOW instead of being skipped. Remove the route when
+      // JUS-257 lands; the rest of the test is unchanged.
       const visitor = await viewerContext(browser, readOnly);
 
       try {
         const viewerPage = await visitor.newPage();
+        const appPrefix = `/api/v1/applications/${readOnly.applicationId}`;
+        await viewerPage.route(`**${appPrefix}*`, (route) => {
+          void route.continue({
+            headers: {
+              ...route.request().headers(),
+              "x-team-id": readOnly.teamId,
+            },
+          });
+        });
         const { paths } = watchApplicationTerminal(viewerPage);
         await viewerPage.goto(applicationURL(readOnly));
         await expect(
@@ -541,16 +582,18 @@ test.describe("application terminal on the real stack", () => {
 async function seedReadOnlyApplication(
   request: APIRequestContext,
 ): Promise<SeededApplication> {
-  test.skip(
+  skipOrFail(
     !(await isOperator(request)),
     "the smoke account is not a platform operator (PLATFORM_ADMINS)",
+    test.skip,
   );
-  test.skip(
+  skipOrFail(
     process.env.GOTHAM_AUTH_ALLOW_REGISTRATION !== "true",
     "registration is closed, so the read-only viewer account cannot be created",
+    test.skip,
   );
   const server = await terminalServer(request, account);
-  test.skip(server === null, "no ready node agent is registered");
+  skipOrFail(server === null, "no ready node agent is registered", test.skip);
 
   const ownerHeaders = authHeaders(account);
   const teamResponse = await request.post("/api/v1/teams", {

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +13,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -29,18 +32,27 @@ import (
 )
 
 // JUS-251: the terminal journeys against the real stack — a real mTLS agent,
-// a real PTY, the production control-plane service and WebSocket routes, a
-// real Redis connection and the real FileService roots. The test proves the
-// three things fakes cannot:
+// a real PTY, the production control-plane service and WebSocket routes, the
+// real FileService roots, and every Redis channel observed while a unique
+// canary is typed.
 //
-//  1. a host session starts with no root and no cwd (JUS-253),
-//  2. terminal input/output NEVER appears in the control-plane or agent logs
-//     or in Redis pub/sub, and
-//  3. closing the session kills its background job and releases the PTY
-//     master descriptor (JUS-254), while an escaping cwd is refused before a
-//     shell starts.
+// What is REAL here: the node agent (in-process gRPC server over mTLS, the
+// same one the binary runs), the PTY and its kernel cleanup, the
+// control-plane terminal.Service and HTTP/WebSocket routes, the relay frames,
+// the FileService root resolution, and the Redis server the subscriber talks
+// to.
 //
-// It is gated by GOTHAM_E2E=1 because it needs Redis (and, on Linux, /proc).
+// What is NOT: PostgreSQL is not used (no store is opened); the token
+// verifier, the authorizer and the server registry are stubs, so this test
+// proves the terminal path, not the account/team permission logic (that lives
+// in internal/server and internal/deploy tests); the control plane's realtime
+// Redis hub is not mounted (there is no deploy/log traffic here). The
+// subscriber uses PSUBSCRIBE * rather than the hub, so it observes every
+// channel on this Redis; a publisher configured with a different Redis address
+// would be outside this check (terminal code has no such publisher).
+//
+// It is gated by GOTHAM_E2E=1 because it needs Redis, Docker (for the agent
+// construction path) and, for the fd/escaped-job assertions, Linux /proc.
 
 // terminalTokenProtocol mirrors the route contract's token subprotocol.
 const terminalToken = "e2e-terminal-token"
@@ -86,6 +98,32 @@ func (b *terminalLogBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.data.String()
+}
+
+// terminalCaptureStderr redirects the process stderr for the test duration, so
+// a production log line written through os.Stderr (not an injected logger) is
+// visible to the canary assertion. The test is not parallel.
+func terminalCaptureStderr(t *testing.T) *terminalLogBuffer {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	previous := os.Stderr
+	os.Stderr = writer
+	buffer := &terminalLogBuffer{}
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(buffer, reader)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		os.Stderr = previous
+		_ = writer.Close()
+		<-done
+		_ = reader.Close()
+	})
+	return buffer
 }
 
 // terminalFrame reads one server frame with a bounded deadline.
@@ -134,7 +172,8 @@ func terminalReadUntil(t *testing.T, conn *websocket.Conn, marker string) {
 	t.Fatalf("timed out waiting for %q; output %q", marker, output.String())
 }
 
-// terminalPWDFD processes are the test process (the agent runs in-process).
+// terminalOpenPTMX counts this process's /dev/ptmx master descriptors (the
+// agent runs in-process). A failed inspection fails the test.
 func terminalOpenPTMX(t *testing.T) int {
 	t.Helper()
 	if runtime.GOOS == "linux" {
@@ -164,16 +203,114 @@ func terminalOpenPTMX(t *testing.T) int {
 	return count
 }
 
-// terminalProcessExists checks for the uniquely named background job.
-func terminalProcessExists(marker string) bool {
-	out, err := exec.Command("ps", "-eo", "args=").Output()
+// terminalProcessAlive reports whether the recorded pid is a LIVE process. pid
+// comes from the shell's $!, so it is exact and unique per run. A zombie is
+// NOT alive: in a container the test binary is pid 1 and never reaps an orphan
+// that the agent SIGKILLed, and signal 0 alone would keep reporting it.
+func terminalProcessAlive(pid int) bool {
+	if runtime.GOOS == "linux" {
+		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			return false
+		}
+		// The state is the first field after the parenthesized command name.
+		if index := strings.LastIndexByte(string(raw), ')'); index >= 0 && index+2 < len(raw) {
+			state := raw[index+2]
+			return state != 'Z' && state != 'X'
+		}
+		return false
+	}
+	process, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, marker) && !strings.Contains(line, "ps -eo") {
+	return process.Signal(syscall.Signal(0)) == nil
+}
+
+// terminalWaitPIDFile reads a pid written by the shell.
+func terminalWaitPIDFile(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw))); convErr == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("pid file %s was never written", path)
+	return 0
+}
+
+// terminalCreate opens one pending host session and returns its id and
+// websocket path.
+func terminalCreate(t *testing.T, client *http.Client, baseURL, serverID, body string) (string, string) {
+	t.Helper()
+	response, err := client.Post(baseURL+"/api/v1/servers/"+serverID+"/terminal/sessions",
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(response.Body)
+		t.Fatalf("create session = %d, want 201: %s", response.StatusCode, raw)
+	}
+	var created struct {
+		ID            string `json:"id"`
+		WebSocketPath string `json:"websocket_path"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	return created.ID, created.WebSocketPath
+}
+
+// terminalOpened is the agent's opened frame payload.
+type terminalOpened struct {
+	Shell       string `json:"shell"`
+	Cols        uint16 `json:"cols"`
+	Rows        uint16 `json:"rows"`
+	ServiceUser string `json:"service_user"`
+}
+
+// terminalAttach dials one pending session and validates the opened frame.
+func terminalAttach(t *testing.T, baseURL, path string) (*websocket.Conn, terminalOpened) {
+	t.Helper()
+	config, err := websocket.NewConfig("ws"+strings.TrimPrefix(baseURL, "http")+path, baseURL)
+	if err != nil {
+		t.Fatalf("ws config: %v", err)
+	}
+	config.Protocol = []string{terminal.Subprotocol, terminal.TokenProtocolPrefix + terminalToken}
+	conn, err := websocket.DialConfig(config)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	opcode, payload := terminalFrame(t, conn, 15*time.Second)
+	if opcode != 0x04 {
+		t.Fatalf("first frame = %#x, want opened", opcode)
+	}
+	var opened terminalOpened
+	if err := json.Unmarshal(payload, &opened); err != nil {
+		t.Fatalf("decode opened: %v", err)
+	}
+	if opened.ServiceUser == "" {
+		t.Fatal("opened frame has no service_user")
+	}
+	return conn, opened
+}
+
+// terminalWaitPTMX polls the descriptor count back to baseline.
+func terminalWaitPTMX(t *testing.T, baseline int, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if terminalOpenPTMX(t) == baseline {
 			return true
 		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	return false
 }
@@ -184,6 +321,14 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+
+	// Capture every logging channel the relay could use: injected loggers,
+	// slog.Default() resolved at call time, and direct os.Stderr writes.
+	stderr := terminalCaptureStderr(t)
+	previousDefault := slog.Default()
+	defaultLogs := &terminalLogBuffer{}
+	slog.SetDefault(slog.New(slog.NewTextHandler(defaultLogs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousDefault) })
 
 	root := t.TempDir()
 	volumes := filepath.Join(root, "volumes")
@@ -258,9 +403,12 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 	})
 	httpServer := httptest.NewServer(router)
 	t.Cleanup(httpServer.Close)
+	client := &http.Client{Timeout: 30 * time.Second}
 
 	// Redis: subscribe to EVERY channel for the whole test. Terminal bytes
 	// must never be published, so this pattern sees nothing from the shell.
+	// (The test CP has no realtime hub; PSUBSCRIBE * is strictly wider and
+	// observes any publish to this Redis, whoever makes it.)
 	rdb := redis.NewClient(&redis.Options{Addr: e2eRedisAddr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 	pubsub := rdb.PSubscribe(ctx, "*")
@@ -279,75 +427,56 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 	}()
 
 	baselinePTMX := terminalOpenPTMX(t)
+	t.Logf("ptmx baseline: %d", baselinePTMX)
 	canary := "GOTHAM-CANARY-" + uuid.New().String()[:8]
 
-	// 1. A host session with NO root and NO cwd (JUS-253).
-	createBody := `{"target":"host","cols":100,"rows":30}`
-	response, err := http.Post(httpServer.URL+"/api/v1/servers/"+serverID.String()+"/terminal/sessions",
-		"application/json", strings.NewReader(createBody))
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if response.StatusCode != http.StatusCreated {
-		t.Fatalf("create without root/cwd = %d, want 201 (JUS-253)", response.StatusCode)
-	}
-	var created struct {
-		ID            string `json:"id"`
-		WebSocketPath string `json:"websocket_path"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
-		t.Fatalf("decode create: %v", err)
-	}
-	_ = response.Body.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + created.WebSocketPath
-	config, err := websocket.NewConfig(wsURL, httpServer.URL)
-	if err != nil {
-		t.Fatalf("ws config: %v", err)
-	}
-	config.Protocol = []string{terminal.Subprotocol, terminal.TokenProtocolPrefix + terminalToken}
-	conn, err := websocket.DialConfig(config)
-	if err != nil {
-		t.Fatalf("attach: %v", err)
-	}
-	if opcode, _ := terminalFrame(t, conn, 15*time.Second); opcode != 0x04 {
-		t.Fatalf("first frame = %#x, want opened", opcode)
-	}
+	// 1. A host session with NO root and NO cwd (JUS-253). The opened frame
+	//    reports the shell and the service_user the shell runs as.
+	sessionID, sessionPath := terminalCreate(t, client, httpServer.URL, serverID.String(),
+		`{"target":"host","cols":100,"rows":30}`)
+	conn, opened := terminalAttach(t, httpServer.URL, sessionPath)
+	t.Logf("opened: shell=%s service_user=%s %dx%d", opened.Shell, opened.ServiceUser, opened.Cols, opened.Rows)
 
 	// 2. Type a unique canary; the real PTY echoes it and `stty size` agrees
-	//    with the resize frame the route relays.
+	//    with the resize frame the route relays. The shell identity is the
+	//    agent's service user, reported by the opened frame's service_user.
 	terminalSend(t, conn, 0x01, []byte("echo "+canary+"\r"))
 	terminalReadUntil(t, conn, canary)
 	resize := make([]byte, 4)
 	binary.BigEndian.PutUint16(resize[0:2], 90)
 	binary.BigEndian.PutUint16(resize[2:4], 28)
 	terminalSend(t, conn, 0x02, resize)
-	terminalSend(t, conn, 0x01, []byte("stty size; pwd\r"))
+	terminalSend(t, conn, 0x01, []byte("stty size; pwd; id -un\r"))
 	terminalReadUntil(t, conn, "28 90")
 
-	// 3. The canary is absent from both logs and from every Redis channel.
+	// 3. The canary is absent from every logging channel and from Redis.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		pubMu.Lock()
 		for _, message := range published {
 			if strings.Contains(message, canary) {
+				pubMu.Unlock()
 				t.Fatalf("terminal bytes leaked into Redis: %s", message)
 			}
 		}
 		pubMu.Unlock()
 		time.Sleep(50 * time.Millisecond)
 	}
-	if strings.Contains(agentLogs.String(), canary) {
-		t.Error("terminal input leaked into the agent log")
-	}
-	if strings.Contains(cpLogs.String(), canary) {
-		t.Error("terminal input leaked into the control-plane log")
+	for name, logs := range map[string]string{
+		"agent logger":      agentLogs.String(),
+		"control-plane":     cpLogs.String(),
+		"slog.Default()":    defaultLogs.String(),
+		"process os.Stderr": stderr.String(),
+	} {
+		if strings.Contains(logs, canary) {
+			t.Errorf("terminal input leaked into %s", name)
+		}
 	}
 
 	// 4. A cwd through a symlink that leaves the root is refused and starts no
 	//    shell.
 	escapeBody := `{"target":"host","root":"volumes","cwd":"escape","cols":80,"rows":24}`
-	escape, err := http.Post(httpServer.URL+"/api/v1/servers/"+serverID.String()+"/terminal/sessions",
+	escape, err := client.Post(httpServer.URL+"/api/v1/servers/"+serverID.String()+"/terminal/sessions",
 		"application/json", strings.NewReader(escapeBody))
 	if err != nil {
 		t.Fatalf("create escaping cwd: %v", err)
@@ -387,42 +516,69 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 	}
 
 	// 5. Close with a background job: no process survives and the PTY master
-	//    descriptor is released.
-	jobSeconds := "7641"
-	terminalSend(t, conn, 0x01, []byte("sleep "+jobSeconds+" &\r"))
-	waitFor := time.Now().Add(10 * time.Second)
-	for time.Now().Before(waitFor) && !terminalProcessExists("sleep "+jobSeconds) {
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !terminalProcessExists("sleep " + jobSeconds) {
+	//    descriptor is released. The pid comes from the shell's $!, so it is
+	//    exact and unique for this run.
+	pidPath := filepath.Join(root, "job.pid")
+	terminalSend(t, conn, 0x01, []byte("sleep 7641 & echo $! > "+pidPath+"\r"))
+	jobPID := terminalWaitPIDFile(t, pidPath)
+	t.Cleanup(func() {
+		if terminalProcessAlive(jobPID) {
+			_ = syscall.Kill(jobPID, syscall.SIGKILL)
+		}
+	})
+	if !terminalProcessAlive(jobPID) {
 		t.Fatal("background job never started")
 	}
 
 	terminalSend(t, conn, 0x03, nil) // explicit close frame
 	_ = conn.Close()
-	waitGone := time.Now().Add(15 * time.Second)
-	for time.Now().Before(waitGone) && terminalProcessExists("sleep "+jobSeconds) {
+	goneBy := time.Now().Add(15 * time.Second)
+	for time.Now().Before(goneBy) && terminalProcessAlive(jobPID) {
 		time.Sleep(200 * time.Millisecond)
 	}
-	if terminalProcessExists("sleep " + jobSeconds) {
-		t.Fatalf("background job sleep %s survived session close (JUS-254)", jobSeconds)
+	if terminalProcessAlive(jobPID) {
+		t.Fatalf("background job %d survived session close (JUS-254)", jobPID)
+	}
+	if !terminalWaitPTMX(t, baselinePTMX, 15*time.Second) {
+		t.Fatalf("PTY master descriptor leaked: %d open, baseline %d",
+			terminalOpenPTMX(t), baselinePTMX)
 	}
 
-	released := false
-	waitFD := time.Now().Add(15 * time.Second)
-	for time.Now().Before(waitFD) {
-		if terminalOpenPTMX(t) == baselinePTMX {
-			released = true
-			break
+	// 6. The mutation that re-blocks the PTY master read is only visible while
+	//    a process outside the shell's session still holds the slave open:
+	//    a setsid-escaped job. It may survive close (documented residual), but
+	//    the non-blocking master must still release the fd. Linux-only because
+	//    setsid comes from util-linux.
+	if _, lookErr := exec.LookPath("setsid"); lookErr != nil {
+		t.Log("setsid is not available; the escaped-job fd regression did not run (Linux CI runs it)")
+	} else {
+		escapedPIDPath := filepath.Join(root, "escaped.pid")
+		_, escapedPath := terminalCreate(t, client, httpServer.URL, serverID.String(),
+			`{"target":"host","cols":80,"rows":24}`)
+		escaped, _ := terminalAttach(t, httpServer.URL, escapedPath)
+		// `exec sleep` keeps the recorded pid after sh writes it, so cleanup can
+		// kill exactly this process; the job is in its own session (setsid).
+		terminalSend(t, escaped, 0x01,
+			[]byte("(setsid sh -c 'echo $$ > "+escapedPIDPath+"; exec sleep 7642' &)\r"))
+		escapedPID := terminalWaitPIDFile(t, escapedPIDPath)
+		t.Cleanup(func() {
+			if terminalProcessAlive(escapedPID) {
+				_ = syscall.Kill(escapedPID, syscall.SIGKILL)
+			}
+		})
+		if !terminalProcessAlive(escapedPID) {
+			t.Fatal("setsid-escaped job never started")
 		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	if !released {
-		t.Fatalf("PTY master descriptor leaked: %d open, baseline %d", terminalOpenPTMX(t), baselinePTMX)
+		terminalSend(t, escaped, 0x03, nil)
+		_ = escaped.Close()
+		if !terminalWaitPTMX(t, baselinePTMX, 15*time.Second) {
+			t.Fatalf("PTY master stayed open with a setsid-escaped job: %d, baseline %d (mutation 2b)",
+				terminalOpenPTMX(t), baselinePTMX)
+		}
 	}
 
-	// The session registry no longer holds it either.
-	if _, err := svc.Attach(ctx, userID, serverID, uuid.MustParse(created.ID)); err == nil {
+	// The session registry no longer holds the closed session.
+	if _, err := svc.Attach(ctx, userID, serverID, uuid.MustParse(sessionID)); err == nil {
 		t.Fatal("closed session is still attachable")
 	}
 }

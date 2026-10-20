@@ -857,17 +857,30 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
   await expect(shortcuts).toBeVisible();
   await expect(shortcuts).toContainText("Ctrl+Shift+Escape");
   await expect(shortcuts).toContainText("Alt+Shift+W");
-  await page.keyboard.press("Escape");
+  // Toggle the popover closed deterministically (Escape focus handling differs
+  // across platforms), then drive the real xterm input textarea.
+  await page.locator(".term-shortcuts-btn").click();
+  await expect(shortcuts).toBeHidden();
+  const input = page.locator(
+    ".term-window .term-surface:visible .xterm-helper-textarea",
+  );
+  await input.focus();
 
   // The chord pulls focus out of the shell onto the window tab.
-  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
   await page.keyboard.press("Control+Shift+Escape");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
     .toBe(`term-tab-${tab.id}`);
 
   // Alt+Shift+W works from the shell and uses the shared dialog.
-  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
+  await input.focus();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.activeElement?.classList.contains("xterm-helper-textarea") ?? false,
+      ),
+    )
+    .toBe(true);
   await page.keyboard.press("Alt+Shift+W");
   const dialog = page.locator(".term-close-modal");
   await expect(dialog).toBeVisible();

@@ -176,6 +176,28 @@ func waitForOutput(t *testing.T, stream agentv1.TerminalService_OpenTerminalClie
 	t.Fatalf("timed out waiting for %q; output %q", marker, accumulated.String())
 }
 
+// TestTerminalServerWaitsForCleanup pins the shutdown contract: a graceful agent
+// stop waits for in-flight session cleanup walks, bounded by a timeout.
+func TestTerminalServerWaitsForCleanup(t *testing.T) {
+	terminal := NewTerminalServer(TerminalConfig{Logger: discardLogger()})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	terminal.walks.Add(1)
+	go func() {
+		defer terminal.walks.Done()
+		close(started)
+		<-release
+	}()
+	<-started
+	if terminal.WaitTerminations(50 * time.Millisecond) {
+		t.Fatal("WaitTerminations returned before the walk finished")
+	}
+	close(release)
+	if !terminal.WaitTerminations(2 * time.Second) {
+		t.Fatal("WaitTerminations did not observe the finished walk")
+	}
+}
+
 func TestTerminalRequiresOpenFirst(t *testing.T) {
 	t.Parallel()
 	_, terminal, _, _ := terminalTestFixture(t)

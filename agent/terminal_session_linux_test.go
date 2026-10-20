@@ -5,6 +5,7 @@ package agent
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -511,6 +513,168 @@ func TestTerminalSessionScanUsesPidfd(t *testing.T) {
 	}
 }
 
+// newStubbornSessionLeader starts a real shell that ignores HUP and TERM in its
+// own session, so only SIGKILL can end it.
+func newStubbornSessionLeader(t *testing.T, seconds string) int {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "trap '' HUP TERM; sleep "+seconds)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start stubborn session leader: %v", err)
+	}
+	pid := cmd.Process.Pid
+	t.Cleanup(func() {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	return pid
+}
+
+// TestTerminalCloseKillsStubbornJobWhenARescanIsIncomplete is the round-2
+// regression: the first scan is complete and keeps the job's pidfd, then every
+// later scan is truncated. The kept member must still be SIGKILLed; without that
+// the job in its own process group survives.
+func TestTerminalCloseKillsStubbornJobWhenARescanIsIncomplete(t *testing.T) {
+	_, terminal, rootName, root := terminalTestFixture(t)
+	client := startTerminalServer(t, terminal)
+	stream := openTerminalSession(t, client, rootName)
+	defer func() { _ = stream.CloseSend() }()
+	pid := runBackgroundJob(t, stream, terminalPidFile(root, "stubborn-incomplete.pid"),
+		"sh -c 'trap \"\" HUP TERM; sleep 748' >/dev/null 2>&1")
+
+	previous := terminalScanLimit
+	defer func() { terminalScanLimit = previous }()
+	closeTerminalSession(t, stream)
+	// The first scan runs immediately; the first grace probe fires at
+	// terminalGraceProbe (500 ms). Truncate every re-scan in between.
+	time.Sleep(300 * time.Millisecond)
+	terminalScanLimit = 0
+
+	waitForProcessGone(t, pid)
+}
+
+// TestTerminalEndSessionKillsFoundMembersWhenFirstScanIncomplete covers the
+// other half: the very first walk is incomplete (an unreadable /proc entry) but
+// still found the stubborn member. It must be SIGTERMed now and SIGKILLed after
+// the grace instead of only falling back to the shell's process group.
+func TestTerminalEndSessionKillsFoundMembersWhenFirstScanIncomplete(t *testing.T) {
+	pid := newStubbornSessionLeader(t, "749")
+	decoy := newSessionLeader(t, "750")
+
+	previous := terminalScanStat
+	terminalScanStat = func(candidate int) (terminalStat, error) {
+		if candidate == decoy {
+			return terminalStat{}, fs.ErrPermission // simulate hidepid on one entry
+		}
+		return readTerminalStatErr(candidate)
+	}
+	defer func() { terminalScanStat = previous }()
+
+	session := &terminalSession{
+		sid:         pid,
+		leaderStart: terminalProcessStartTime(pid),
+		log:         discardLogger(),
+		done:        make(chan struct{}),
+	}
+	close(session.done) // the group fallback is a no-op: the member SIGKILL must act
+
+	session.endSession()
+	waitForProcessGone(t, pid)
+}
+
+// TestTerminalSessionMembersRejectsReusedPidAfterPidfdOpen pins the pidfd
+// identity re-check. A fake verifier that reports a different start time (or a
+// different session) must drop the member, so no signal is ever sent; removing
+// the re-check makes this test fail.
+func TestTerminalSessionMembersRejectsReusedPidAfterPidfdOpen(t *testing.T) {
+	pid := newSessionLeader(t, "751")
+	start := terminalProcessStartTime(pid)
+	if start == 0 {
+		t.Fatal("could not read the session leader's start time")
+	}
+	probe, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		t.Skipf("pidfds unavailable on this kernel/sandbox: %v", err)
+	}
+	_ = unix.Close(probe)
+
+	previous := terminalVerifyStat
+	defer func() { terminalVerifyStat = previous }()
+	cases := []struct {
+		name string
+		stat terminalStat
+	}{
+		{"different start time", terminalStat{pid: pid, state: 'S', session: pid, startTime: start + 1}},
+		{"different session", terminalStat{pid: pid, state: 'S', session: pid + 1, startTime: start}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			terminalVerifyStat = func(candidate int) (terminalStat, error) {
+				if candidate == pid {
+					return testCase.stat, nil
+				}
+				return previous(candidate)
+			}
+			members, complete := terminalSessionMembers(pid, start, time.Now().Add(2*time.Second))
+			closeTerminalSessionMembers(members)
+			if !complete {
+				t.Fatal("scan reported incomplete")
+			}
+			if len(members) != 0 {
+				t.Fatalf("reused pid was kept: %+v", members)
+			}
+		})
+	}
+
+	// The matching record keeps the member.
+	terminalVerifyStat = previous
+	members, complete := terminalSessionMembers(pid, start, time.Now().Add(2*time.Second))
+	closeTerminalSessionMembers(members)
+	if !complete || len(members) != 1 {
+		t.Fatalf("matching member: complete=%v members=%+v", complete, members)
+	}
+}
+
+// TestTerminalSessionScansAreBounded proves the process-wide scan slot: while
+// every slot is held, many concurrent walks give up at their deadline instead of
+// adding unbounded /proc scans.
+func TestTerminalSessionScansAreBounded(t *testing.T) {
+	pid := newSessionLeader(t, "752")
+	start := terminalProcessStartTime(pid)
+	if start == 0 {
+		t.Fatal("could not read the session leader's start time")
+	}
+	for index := 0; index < cap(terminalScanSlots); index++ {
+		terminalScanSlots <- struct{}{}
+	}
+	defer func() {
+		for index := 0; index < cap(terminalScanSlots); index++ {
+			<-terminalScanSlots
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for index := 0; index < 20; index++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			members, complete := terminalSessionMembers(pid, start, time.Now().Add(100*time.Millisecond))
+			closeTerminalSessionMembers(members)
+			if complete {
+				t.Error("scan reported complete while every scan slot was held")
+			}
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("20 waiting scans did not return within 5 s")
+	}
+}
+
 // TestParseTerminalStat pins the parser against a comm field that contains
 // spaces and parentheses, which is why parsing starts after the last ')'.
 func TestParseTerminalStat(t *testing.T) {
@@ -548,15 +712,19 @@ func TestTerminalSessionMembersRefusesReusedLeader(t *testing.T) {
 	if start == 0 {
 		t.Fatal("could not read the child's start time")
 	}
-	if _, ok := terminalSessionMembers(pid, start+1, time.Now().Add(time.Second)); ok {
+	if members, ok := terminalSessionMembers(pid, start+1, time.Now().Add(time.Second)); ok {
+		closeTerminalSessionMembers(members)
 		t.Fatal("scan accepted a session leader with a mismatched start time")
 	}
 	// The same leader start time is accepted; the child is not a session leader,
 	// so it simply contributes no members.
-	if _, ok := terminalSessionMembers(pid, start, time.Now().Add(time.Second)); !ok {
+	members, ok := terminalSessionMembers(pid, start, time.Now().Add(time.Second))
+	closeTerminalSessionMembers(members)
+	if !ok {
 		t.Fatal("scan refused a matching session leader")
 	}
 	if members, ok := terminalSessionMembers(1, start, time.Now().Add(time.Second)); ok || len(members) != 0 {
+		closeTerminalSessionMembers(members)
 		t.Fatalf("scan accepted pid 1 as a session: %v, %v", members, ok)
 	}
 }

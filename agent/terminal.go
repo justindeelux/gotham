@@ -100,14 +100,17 @@ type TerminalConfig struct {
 	// disabled can still run a shell. Container targets do not use it.
 	Roots TerminalRoots
 	// Shell is the absolute shell path to run for host targets. Empty prefers
-	// bash (/bin/bash, /usr/bin/bash, then bash from PATH) for host sessions,
-	// falling back to $SHELL and /bin/sh; with IntegrationDisabled it selects
-	// the first usable candidate from $SHELL, /bin/bash and /bin/sh.
+	// the operator's $SHELL when it is bash or zsh (both have the optional
+	// startup integration), then bash (/bin/bash, /usr/bin/bash, bash from
+	// PATH), then zsh (/bin/zsh, /usr/bin/zsh, zsh from PATH), falling back to
+	// $SHELL and /bin/sh; with IntegrationDisabled it selects the first usable
+	// candidate from $SHELL, /bin/bash and /bin/sh exactly as before JUS-252.
 	Shell string
-	// IntegrationDisabled turns off the optional bash startup integration: the
-	// bash-first host shell selection and the additive rcfile that adds colour
-	// defaults and OSC 133 prompt marks. False (the default) keeps it on; the
-	// agent config sets it from GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
+	// IntegrationDisabled turns off the optional bash/zsh startup integration:
+	// the integrated host shell selection, the bash rcfile and the zsh ZDOTDIR
+	// wrapper that source the operator's files and add colour defaults and OSC
+	// 133 prompt marks. False (the default) keeps it on; the agent config sets
+	// it from GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
 	IntegrationDisabled bool
 	// Containers runs container targets. nil makes them fail with
 	// FailedPrecondition instead of falling back to a host shell.
@@ -598,23 +601,24 @@ func (s *TerminalServer) pumpOutput(
 }
 
 // startSession starts the configured shell on a new PTY. A bash host session
-// gets the constant integration rcfile as --rcfile (never through stdin); if
-// the private file cannot be created the shell still starts without it.
+// gets the constant integration rcfile as --rcfile and a zsh host session gets a
+// private ZDOTDIR; neither is ever sent through stdin. If the private files
+// cannot be created the shell still starts without the integration.
 func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, error) {
-	args, cleanup, err := terminalBashRcArgs(spec.Shell, s.integration)
+	setup, err := terminalShellSetupFor(spec.Shell, s.integration)
 	if err != nil {
 		if s.log != nil {
-			s.log.Warn("terminal: bash integration unavailable", "error", err)
+			s.log.Warn("terminal: shell integration unavailable", "error", err)
 		}
-		args, cleanup = nil, nil
+		setup = terminalShellSetup{}
 	}
-	cmd := exec.Command(spec.Shell, args...) // #nosec G204 -- the shell is chosen by the node, not the caller.
+	cmd := exec.Command(spec.Shell, setup.args...) // #nosec G204 -- the shell is chosen by the node, not the caller.
 	cmd.Dir = spec.Dir
-	cmd.Env = terminalEnv()
+	cmd.Env = append(terminalEnv(), setup.env...)
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
 	if err != nil {
-		if cleanup != nil {
-			cleanup()
+		if setup.cleanup != nil {
+			setup.cleanup()
 		}
 		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
 	}
@@ -625,12 +629,12 @@ func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, erro
 		_ = killTerminalProcessGroup(cmd.Process.Pid, terminalKill)
 		_ = master.Close()
 		go func() { _, _ = cmd.Process.Wait() }()
-		if cleanup != nil {
-			cleanup()
+		if setup.cleanup != nil {
+			setup.cleanup()
 		}
 		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
 	}
-	return newTerminalSession(cmd, master, s.log, &s.walks, cleanup), nil
+	return newTerminalSession(cmd, master, s.log, &s.walks, setup.cleanup), nil
 }
 
 // startContainer opens an interactive exec in the resolved container.
@@ -776,20 +780,21 @@ func terminalStartError(err error) error {
 // resolveTerminalShell picks the shell the node runs. A configured value must
 // be an absolute, executable regular file and is used exactly as given.
 //
-// Bash is preferred over the service user's $SHELL on purpose: the terminal
-// experience this package promises (colours and the OSC 133 prompt marks that
-// quick-command suggestions need) is implemented only for bash, and the product
-// owner asked for /bin/bash rather than whatever shell the service account was
-// created with. A node whose $SHELL is zsh or fish therefore gets bash by
-// design; set GOTHAM_AGENT_TERMINAL_SHELL to opt a node back to another shell.
-// The old order ($SHELL, /bin/bash, /bin/sh) is kept only when the integration
-// is disabled with GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
+// With the integration on, the operator's $SHELL is honored when it is bash or
+// zsh, because both now receive the full terminal experience (colours for bash
+// and the OSC 133 prompt marks that quick-command suggestions need). Otherwise
+// bash is preferred over an unsupported $SHELL on purpose: the product owner
+// asked for /bin/bash rather than whatever shell the service account was created
+// with. A node whose $SHELL is fish or sh therefore gets bash by design; set
+// GOTHAM_AGENT_TERMINAL_SHELL to opt a node back to another shell. The old order
+// ($SHELL, /bin/bash, /bin/sh) is kept only when the integration is disabled
+// with GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
 func resolveTerminalShell(configured string, integration bool) (string, error) {
 	return resolveTerminalShellWith(configured, integration, exec.LookPath, os.Stat)
 }
 
 // resolveTerminalShellWith is resolveTerminalShell with injectable lookup and
-// stat so the bash-present/bash-absent branches are testable.
+// stat so the installed-shell branches are testable.
 func resolveTerminalShellWith(
 	configured string,
 	integration bool,
@@ -805,9 +810,16 @@ func resolveTerminalShellWith(
 	}
 	var candidates []string
 	if integration {
-		// Deliberately before $SHELL; see the function comment.
+		// Honor an operator's bash/zsh before forcing bash; both are integrated.
+		if shell := strings.TrimSpace(os.Getenv("SHELL")); bashShell(shell) || zshShell(shell) {
+			candidates = append(candidates, shell)
+		}
 		candidates = append(candidates, "/bin/bash", "/usr/bin/bash")
 		if path, err := lookPath("bash"); err == nil {
+			candidates = append(candidates, path)
+		}
+		candidates = append(candidates, "/bin/zsh", "/usr/bin/zsh")
+		if path, err := lookPath("zsh"); err == nil {
 			candidates = append(candidates, path)
 		}
 	}
@@ -946,8 +958,8 @@ type terminalSession struct {
 	walks *sync.WaitGroup
 	done  chan struct{}
 
-	// cleanup removes the per-session integration rcfile (0700 directory,
-	// 0600 file). nil for non-bash sessions and when the integration is off.
+	// cleanup removes the per-session integration directory (0700 directory,
+	// 0600 files). nil for non-integrated shells and when the integration is off.
 	cleanup     func()
 	cleanupOnce sync.Once
 

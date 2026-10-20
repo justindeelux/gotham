@@ -73,19 +73,59 @@ text (abbreviation, label, command).
 
 ## Supported shells
 
+On a **host** target the agent starts bash and zsh with the integration on by
+default (JUS-252), so the manual snippets in the next sections are only a
+fallback. Container bash is integrated by the agent too; container zsh is not.
+
 | Shell | Status | Notes |
 |---|---|---|
-| bash ≥ 4.4 | **Supported; PTY-proven in CI (Linux bash 5.x) and locally (bash 3.2/5.2)** | `PS0` emits the `C` mark. Older bash still emits A/B/D through `PROMPT_COMMAND`; Enter suspends matching, so the absence of `C` is safe, only less precise. The snippet is idempotent when sourced twice. |
-| zsh ≥ 5.3 | **Supported; PTY-proven locally (macOS zsh 5.9) and in CI (zsh installed in the web job)** | `add-zsh-hook precmd/preexec` plus `add-zle-hook-widget line-init` so Ctrl-C re-emits `B`; the `B` mark is added to `PROMPT` once and re-checked every prompt. |
-| fish | **Unsupported and untested in JUS-249** | No tested integration is shipped; suggestions stay off, manual insertion still works. |
+| bash ≥ 3.2 | **Supported; PTY-proven in CI (Linux bash 5.x) and locally (bash 3.2/5.2)** | Host: agent `--rcfile` integration by default. `PS0` emits `C` on bash ≥ 4.4; older bash still emits A/B/D through `PROMPT_COMMAND`, and Enter suspends matching, so the absence of `C` is safe, only less precise. The generated file is idempotent. |
+| zsh ≥ 5.3 | **Supported; PTY-proven locally (macOS zsh 5.9) and in CI (zsh installed in the web job and the agent Linux suite)** | Host: agent `ZDOTDIR` integration by default. `add-zsh-hook precmd/preexec` plus `add-zle-hook-widget line-init` so Ctrl-C re-emits `B`; the `B` mark is added to `PROMPT` once and re-checked every prompt. On zsh < 5.3 the line-init hook is skipped and the next prompt re-adds `B`. |
+| fish | **Unsupported and untested** | No tested integration is shipped; the host falls back to bash by default, or to the plain shell if fish is configured. Suggestions stay off, manual insertion still works. |
 | sh / dash | **Unsupported; negative PTY proof in CI/local** | No prompt hook or `PS0`; suggestions stay off, manual insertion still works. |
 | ksh / others | **Unsupported** | Same as sh/dash. |
+| container zsh | **Not integrated** | A container image is the application's filesystem; the agent does not write startup files into it. Plain zsh keeps working without marks. |
 
 "Not supported" is a clean state, not an error: the terminal keeps working,
 typing is forwarded unchanged, and the quick-command panel shows the setup
 hint without offering a snippet for an untested shell.
 
-## bash setup (additive, optional)
+## Automatic host integration (default)
+
+`GOTHAM_AGENT_TERMINAL_INTEGRATION` is on unless it is set to `false`. On a host
+session the agent then:
+
+* starts **bash** with `--rcfile` pointing at a fresh private file that sources
+  `~/.bashrc` first, keeps its prompt and aliases, adds colour defaults only
+  where none were set, and installs the OSC 133 marks;
+* starts **zsh** with `ZDOTDIR` pointing at a fresh private directory whose
+  constant `.zshenv`/`.zshrc` source the operator's own `.zshenv`/`.zshrc`
+  first (with the operator's normal `ZDOTDIR`), then install the same marks.
+  After startup the integration restores the operator's `ZDOTDIR` (or unsets it
+  when they had none), so `$ZDOTDIR` and nested `zsh` processes use the
+  operator's own rc files, not the private directory. A relative `ZDOTDIR` is
+  ignored and `HOME` is used, because it would otherwise depend on the shell's
+  cwd;
+* leaves every other shell alone: no arguments, no extra environment, no marks.
+
+Nothing is written to the shell's stdin or to the terminal transcript. The
+private directory is `0700` with `0600` files, is removed when the session ends,
+and is swept at agent startup if a previous process was hard-killed. A failing
+operator rc does not disable the marks or the shell. A custom operator `ZDOTDIR`
+is read from the agent service environment (for example the unit file), not from
+the login shell of the person opening the terminal; set it where `gotham-agent`
+is started. zsh prints `B` twice on a fresh prompt (at the end of `PROMPT` and
+again from the line-init widget that recovers after Ctrl-C); the web prompt
+scanner treats the repeat as a no-op, so no de-duplication is needed.
+
+Selection with the integration on: an absolute `$SHELL` that is bash or zsh is
+honored; otherwise bash is preferred, with zsh as the fallback. Setting
+`GOTHAM_AGENT_TERMINAL_SHELL=/usr/bin/zsh` pins zsh. Setting
+`GOTHAM_AGENT_TERMINAL_INTEGRATION=false` restores the pre-JUS-252 behavior
+exactly (old shell order, no arguments, no extra environment, no marks). An
+older agent has no integration; use the manual snippet below.
+
+## bash setup (manual fallback)
 
 Append to `~/.bashrc` (or the file passed with `--rcfile`). It keeps the
 existing prompt and `PROMPT_COMMAND`, re-adds the `B` mark if a theme rewrote
@@ -123,7 +163,7 @@ own `PROMPT_COMMAND` runs **after** this one and replaces `PS1`, the mark is
 re-added on the following prompt; put `__gotham_prompt_command` last in that
 case.
 
-## zsh setup (additive, optional)
+## zsh setup (manual fallback)
 
 Append to `~/.zshrc` after your theme/hook setup. `status` is a read-only
 special parameter in zsh, so the snippet uses `st`. `add-zsh-hook` appends the
@@ -175,14 +215,14 @@ duplicated.
 
 ## What this build does not do
 
-* It does not start the shell with an integration rcfile. Starting bash with
-  `--rcfile` (and zsh with an additive `ZDOTDIR` rc) belongs to the node agent,
-  which currently runs `exec.Command(shell)` with no arguments. That follow-up
-  (JUS-252) must be additive and optional: source the operator's normal rc
-  first, add the marks last, and never inject commands into stdin.
 * It does not inject the snippet automatically, does not copy it to the
   clipboard without a click, and does not store terminal transcripts or
-  credentials.
+  credentials. The manual snippets above are the fallback for container zsh, an
+  agent with the integration disabled, a shell the agent does not integrate, or
+  an older node agent; host bash and zsh get the agent-generated files instead.
+* It does not write startup files into an application container (container
+  bash uses the fd-3 here-document from JUS-263) and does not claim zsh support
+  inside containers.
 
 ## Verification
 
@@ -212,6 +252,15 @@ fail-closed: they keep suggestions off until the next `Ctrl-C` or executed
 command re-emits `B`. A blanket pre-redraw hook would also fire inside Ctrl-R
 search and re-enable suggestions there, so it is intentionally not installed.
 The scan stays safe (no wrong match, no shell errors) until the next prompt.
+
+The agent side is proven by real PTYs in Go as well:
+`TestTerminalBashIntegrationScript` and `TestTerminalZshIntegrationScript`
+(agent package) run the exact generated startup files on the host and in Linux
+containers, and `TestTerminalBashHostSessionIntegration` /
+`TestTerminalZshHostSessionIntegration` drive the production `OpenTerminal`
+path. They cover operator rc files that fail, a disabled integration, non-bash
+shells, private file permissions and cleanup. The commands are in
+[`terminal-session-api.md`](terminal-session-api.md#6-verification).
 
 The CI web job installs zsh and sets `GOTHAM_REQUIRE_PTY_SHELLS=bash,zsh,sh`,
 so a missing required shell fails the suite instead of silently skipping it.

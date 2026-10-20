@@ -129,13 +129,19 @@ type terminalTestPTY struct {
 // agent gives a host session, with HOME pointing at home.
 func startTerminalTestBash(t *testing.T, bash string, args []string, home string) *terminalTestPTY {
 	t.Helper()
-	cmd := exec.Command(bash, args...)
 	env := terminalEnv()
 	env = terminalEnvSet(env, "HOME", home)
+	return startTerminalTestShell(t, bash, args, env)
+}
+
+// startTerminalTestShell starts shell on a real PTY with the given environment.
+func startTerminalTestShell(t *testing.T, shell string, args []string, env []string) *terminalTestPTY {
+	t.Helper()
+	cmd := exec.Command(shell, args...)
 	cmd.Env = env
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 200, Rows: 40})
 	if err != nil {
-		t.Fatalf("start bash pty: %v", err)
+		t.Fatalf("start %s pty: %v", shell, err)
 	}
 
 	var mu sync.Mutex
@@ -170,8 +176,9 @@ func startTerminalTestBash(t *testing.T, bash string, args []string, home string
 		},
 		all: snapshot,
 		settle: func() {
-			// Let readline take over the terminal before typing: bytes written
-			// while bash is still in canonical mode are echoed and redrawn.
+			// Let the line editor take over the terminal before typing: bytes
+			// written while the shell is still in canonical mode are echoed and
+			// redrawn.
 			last := ""
 			for stable := 0; stable < 10; stable++ {
 				time.Sleep(15 * time.Millisecond)
@@ -232,8 +239,9 @@ func writeTempBashrc(t *testing.T, content string) string {
 	return home
 }
 
-// TestResolveTerminalShellPreference pins the bash-first order and the
-// pre-JUS-263 fallback when the integration is disabled.
+// TestResolveTerminalShellPreference pins the integrated shell order ($SHELL
+// when bash/zsh, then bash, then zsh) and the pre-JUS-263 fallback when the
+// integration is disabled.
 func TestResolveTerminalShellPreference(t *testing.T) {
 	statWith := func(existing map[string]os.FileMode) func(string) (os.FileInfo, error) {
 		return func(path string) (os.FileInfo, error) {
@@ -253,10 +261,19 @@ func TestResolveTerminalShellPreference(t *testing.T) {
 		}
 	}
 
-	t.Run("integration prefers /bin/bash over $SHELL", func(t *testing.T) {
+	t.Run("integration honors a bash or zsh $SHELL", func(t *testing.T) {
 		t.Setenv("SHELL", "/bin/zsh")
 		shell, err := resolveTerminalShellWith("", true, lookPathMissing, statWith(map[string]os.FileMode{
 			"/bin/bash": 0o755, "/bin/zsh": 0o755, "/bin/sh": 0o755,
+		}))
+		if err != nil || shell != "/bin/zsh" {
+			t.Fatalf("shell = %q, err = %v; want $SHELL (/bin/zsh)", shell, err)
+		}
+	})
+	t.Run("integration prefers bash over an unsupported $SHELL", func(t *testing.T) {
+		t.Setenv("SHELL", "/usr/bin/fish")
+		shell, err := resolveTerminalShellWith("", true, lookPathMissing, statWith(map[string]os.FileMode{
+			"/bin/bash": 0o755, "/usr/bin/fish": 0o755, "/bin/sh": 0o755,
 		}))
 		if err != nil || shell != "/bin/bash" {
 			t.Fatalf("shell = %q, err = %v; want /bin/bash", shell, err)
@@ -269,6 +286,15 @@ func TestResolveTerminalShellPreference(t *testing.T) {
 		}))
 		if err != nil || shell != "/usr/bin/bash" {
 			t.Fatalf("shell = %q, err = %v; want /usr/bin/bash", shell, err)
+		}
+	})
+	t.Run("integration uses zsh when bash is absent", func(t *testing.T) {
+		t.Setenv("SHELL", "/bin/sh")
+		shell, err := resolveTerminalShellWith("", true, lookPathMissing, statWith(map[string]os.FileMode{
+			"/bin/zsh": 0o755, "/bin/sh": 0o755,
+		}))
+		if err != nil || shell != "/bin/zsh" {
+			t.Fatalf("shell = %q, err = %v; want /bin/zsh", shell, err)
 		}
 	})
 	t.Run("integration finds bash on PATH", func(t *testing.T) {
@@ -619,6 +645,7 @@ func TestTerminalBashIntegrationScript(t *testing.T) {
 	}
 
 	kinds := markKinds(marks)
+	t.Logf("bash OSC 133 marks: %q", kinds)
 	if strings.Count(kinds, "AB") < 2 {
 		t.Fatalf("marks %q; want at least two ordered A B prompt pairs", kinds)
 	}
@@ -654,7 +681,9 @@ func TestTerminalBashRcfileIsIdempotent(t *testing.T) {
 	home := writeTempBashrc(t, `printf 'sourced\n' >> "$HOME/rc-sources"`)
 	shell := startTerminalTestBash(t, bash, []string{"--rcfile", rcfile}, home)
 	defer shell.stop()
-	shell.waitFor("$ ")
+	// The prompt mark is ready once the integration hook ran; the prompt text
+	// itself differs for root ("# ") and non-root ("$ ").
+	shell.waitFor("\x1b]133;B")
 	shell.settle()
 
 	shell.write(". '" + rcfile + "'; echo SOURCE-\"\"DONE\r")
@@ -696,7 +725,9 @@ func TestTerminalBashErrexitUserRcKeepsSession(t *testing.T) {
 	home := writeTempBashrc(t, "set -u\nset -e\n")
 	shell := startTerminalTestBash(t, bash, []string{"--rcfile", args[1]}, home)
 	defer shell.stop()
-	shell.waitFor("$ ")
+	// The prompt mark is ready once the integration hook ran; the prompt text
+	// itself differs for root ("# ") and non-root ("$ ").
+	shell.waitFor("\x1b]133;B")
 	shell.settle()
 
 	shell.write("echo ERR-\"\"EXIT-OK\r")
@@ -776,7 +807,9 @@ func TestTerminalBashColourAliases(t *testing.T) {
 	home := writeTempBashrc(t, "")
 	shell := startTerminalTestBash(t, bash, []string{"--rcfile", args[1]}, home)
 	defer shell.stop()
-	shell.waitFor("$ ")
+	// The prompt mark is ready once the integration hook ran; the prompt text
+	// itself differs for root ("# ") and non-root ("$ ").
+	shell.waitFor("\x1b]133;B")
 	shell.settle()
 	shell.write("alias ls; alias grep; alias diff; echo ALIAS-''DONE\r")
 	text := shell.waitFor("ALIAS-DONE\r\n")

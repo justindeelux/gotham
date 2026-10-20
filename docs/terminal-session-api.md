@@ -548,6 +548,19 @@ The shell environment is an allowlist (locale, `PATH`, `HOME`, `USER`, terminal
 description). The agent's own environment — including
 `GOTHAM_AGENT_ENROLLMENT_TOKEN` and certificate paths — is not inherited; the
 files themselves remain readable by the service user, as described above.
+With the optional bash/zsh startup integration (section 5) on, a zsh session
+additionally receives the three agent-owned `GOTHAM_TERMINAL_*` variables and a
+`ZDOTDIR` that points at its private startup directory. The operator's own
+`ZDOTDIR` is read from the **agent service environment** — the systemd unit or
+whatever process starts `gotham-agent`, not the login shell of the person using
+the terminal — when that value is absolute; it is passed to the generated script
+as a quoted value and never interpolated into shell code. A relative `ZDOTDIR`
+is ignored and the operator's `HOME` startup files are used instead. The private
+`ZDOTDIR` is only exported for the startup files: once the operator's rc has run,
+the generated `.zshrc` restores the operator's value (or unsets it), so
+`echo $ZDOTDIR` and child `zsh` processes see the operator's own directory. The
+generated files are constants, so nothing from the request, the browser or the
+transcript selects what the shell executes.
 
 ## 4a. Container resolution and privilege boundary
 
@@ -590,8 +603,66 @@ A container terminal is an **application** capability, not a node capability:
 
 | Variable | Meaning |
 |---|---|
-| `GOTHAM_AGENT_TERMINAL_SHELL` | Absolute shell path. Empty picks the first usable of `$SHELL`, `/bin/bash`, `/bin/sh`. |
+| `GOTHAM_AGENT_TERMINAL_SHELL` | Absolute shell path. Empty honors `$SHELL` when it is bash or zsh, then prefers bash (`/bin/bash`, `/usr/bin/bash`, `PATH`), then zsh (`/bin/zsh`, `/usr/bin/zsh`, `PATH`), then `$SHELL` and `/bin/sh`. |
 | `GOTHAM_AGENT_TERMINAL_MAX_SESSIONS` | Concurrent host shells on the node (default 8). Excess opens answer `ResourceExhausted`. |
+| `GOTHAM_AGENT_TERMINAL_INTEGRATION` | Optional bash/zsh startup integration (default `true`). `false` restores the pre-JUS-252 behavior exactly: the old shell order (`$SHELL`, `/bin/bash`, `/bin/sh`) and no extra arguments or environment. |
+
+### Startup integration (JUS-252)
+
+On by default, the agent makes quick-command suggestions work without a manual
+rc edit. It is **additive** and **optional**, it never writes a command or a
+setup sequence to the PTY, and it only ever applies to the host target.
+
+* **bash** starts with `--rcfile <private>/bashrc`. Bash still runs the
+  system-wide startup file, and the constant rcfile sources the operator's
+  `~/.bashrc` first, then adds colour defaults only where the operator set none,
+  a `PROMPT_COMMAND` hook (string or array) and `PS0` marks. Bash 3.2+ gets
+  A/B/D; the `C` mark needs bash 4.4+.
+* **zsh** starts with `ZDOTDIR=<private>`. zsh has no `--rcfile`, so the
+  private directory contains a constant `.zshenv` and `.zshrc`. The `.zshenv`
+  restores the operator's `ZDOTDIR` (or unsets it so `HOME` is used) and sources
+  the operator's `.zshenv`; if that file sets or changes `ZDOTDIR`, the new value
+  is used for `.zshrc`. The generated `.zshrc` sources the operator's `.zshrc`
+  with that same value, installs `add-zsh-hook precmd/preexec` and, on zsh 5.3+,
+  an `add-zle-hook-widget line-init` that re-emits `B` after Ctrl-C, and finally
+  restores the operator's `ZDOTDIR` (or unsets it) for the live session. Children
+  and lazy rc code therefore see the operator's value, never the private
+  directory, and a nested `zsh -i` reads the operator's own rc files. The prompt
+  is only appended to; a theme's prompt wins. A relative operator `ZDOTDIR` is
+  ignored (it would be cwd-relative) and `HOME` is used. Host sessions are
+  interactive but not login shells, so `.zprofile`/`.zlogin` are not read, the
+  same as a plain `zsh -i`.
+* **Other shells** (`sh`, dash, ash, fish, an operator-configured binary) start
+  exactly as before: no arguments and no integration variables. They emit no
+  marks, so suggestions stay off while manual insertion keeps working.
+
+Every session gets a fresh `0700` directory with `0600` files. The directory is
+removed when the session ends; a startup sweep removes leftovers from an agent
+that was hard-killed. If the private files cannot be created, the agent logs a
+WARN without any terminal content and starts the plain shell. The integration
+scripts are constants of the agent; cwd, root, service, container and every
+other request field are absent from them, so the browser cannot influence what
+the shell executes. The scripts are never logged and never written to the PTY;
+a setup failure logs only the error (a temp-path message, no script text), and
+terminal output is never logged. A user rc that fails (non-zero return or a
+syntax error) does not stop the integration or the shell.
+
+The host shell selection follows the same rule: with the integration on, an
+absolute `$SHELL` that is bash or zsh is used as-is, otherwise bash is preferred
+and zsh is the fallback; the pre-JUS-252 order is kept when the switch is off.
+
+**Container sessions (JUS-244).** A container image is not the agent's host and
+its filesystem belongs to the application, so the agent does not write startup
+files into it. A probed container bash gets the constant integration through a
+quoted here-document on fd 3 and `--rcfile /dev/fd/3` (falling back to plain
+interactive bash when `/dev/fd` is absent); that is the only container
+integration, added by JUS-263. zsh is not probed or integrated in containers
+(it has no `--rcfile`, and a per-image `ZDOTDIR` directory would have to be
+created in the application's filesystem). Container sessions keep the plain
+probed shell for sh/ash, and zsh therefore stays plain there. No control-plane
+or proto field was added: the integration is agent-local, so new control planes
+and old agents remain compatible, and an old agent simply keeps its prior
+behavior.
 
 The TerminalService is always registered by the agent (JUS-244). A host target
 with a `root` needs the file service's root policy: with
@@ -694,6 +765,44 @@ returns backend-shaped responses, and asserts the exact payload
 `{"target":"host","cols":120,"rows":32}`. A malformed 2xx body is asserted to
 show the bounded "unexpected response" copy, never a network error, and to open
 no socket.
+
+The JUS-252 integration is covered by real PTYs on the host and in Linux
+containers. `TestTerminalBashIntegrationScript` and
+`TestTerminalZshIntegrationScript` run the exact generated files, assert the
+operator's rc is sourced first (prompt/alias preserved), A/B/C/D ordering, a
+`D;1` after a failing command (zsh's D/A hook is prepended so a theme precmd
+cannot clobber `$?`), idempotent re-sourcing, and `TERM`/`COLORTERM`. Additional
+cases cover a broken rc file (zsh parse error and bash errexit), a disabled
+integration (plain shell, no marks, no `ZDOTDIR`), non-integrated shells
+(`/bin/sh`, dash, ash, fish), private `0700`/`0600` files, a relative operator
+`ZDOTDIR`, a HOME and temp path containing spaces and `$` with no operator rc
+files, an operator `ZDOTDIR` containing shell metacharacters (it stays a quoted
+environment value and never reaches the script text), restoration of the
+operator's `ZDOTDIR` (or no `ZDOTDIR`) after startup with nested `zsh -i`
+reading the operator's own rc files for both an unset and a custom path
+containing spaces, and cleanup on a failed start. The gRPC host tests
+`TestTerminalBashHostSessionIntegration` and
+`TestTerminalZshHostSessionIntegration` prove the same through
+`OpenTerminal`, including removal of the private directory when the shell exits.
+
+```sh
+# Linux/amd64 and linux/arm64 with bash and zsh installed (throwaway container).
+GOOS=linux GOARCH=arm64 go test -c ./agent -o /tmp/gotham-agent-arm64.test
+docker run --rm -v /tmp/gotham-agent-arm64.test:/agent.test debian:bookworm-slim \
+  sh -c 'apt-get update -qq && apt-get install -y -qq zsh bash >/dev/null &&
+         /agent.test -test.run TestTerminalZsh -test.v'
+
+GOOS=linux GOARCH=amd64 go test -c ./agent -o /tmp/gotham-agent-amd64.test
+docker run --rm --platform linux/amd64 -v /tmp/gotham-agent-amd64.test:/agent.test \
+  debian:bookworm-slim \
+  sh -c 'apt-get update -qq && apt-get install -y -qq zsh bash >/dev/null &&
+         /agent.test -test.run TestTerminalZsh -test.v'
+```
+
+The same binary run with `-test.run 'TestTerminal|TestResolveShellDir'` also
+covers the bash/zsh integration, the non-integrated `/bin/sh` path and the session
+cleanup suite on both architectures. On a host without zsh the zsh suites skip
+with an explicit message; the Linux CI job installs both shells.
 
 Container exec additionally runs **real throwaway container** checks. They
 start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /

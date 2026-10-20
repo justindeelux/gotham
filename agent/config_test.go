@@ -54,7 +54,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Error("Insecure = true; want false by default")
 	}
 	if !cfg.TerminalIntegration {
-		t.Error("TerminalIntegration = false; want the bash integration on by default")
+		t.Error("TerminalIntegration = false; want the bash/zsh integration on by default")
 	}
 }
 

@@ -28,7 +28,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), { error: "" });
-const emit = defineEmits<{ save: [draft: QuickCommandDraft]; cancel: [] }>();
+const emit = defineEmits<{ save: [draft: QuickCommandDraft] }>();
 const { t } = useI18n();
 
 const formRef = ref<FormInst | null>(null);
@@ -131,9 +131,6 @@ onMounted(() => {
     <div class="qc-form-actions">
       <NButton size="small" type="primary" attr-type="submit">
         {{ t("terminal.quickCommands.save") }}
-      </NButton>
-      <NButton size="small" secondary @click="emit('cancel')">
-        {{ t("terminal.quickCommands.cancel") }}
       </NButton>
     </div>
   </NForm>

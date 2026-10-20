@@ -383,6 +383,23 @@ test.describe("host terminal on the real stack", () => {
     await expect(dialog).toContainText("docker-compose up -d --build");
     await expect(dialog.locator(".qc-item .n-tag")).toContainText("dcup");
 
+    // JUS-267: Add swaps the list for the editor (never appends it below the
+    // list) and the footer keeps a visible action, so the click can never look
+    // dead; Cancel returns to the list with Add visible again.
+    await dialog.getByRole("button", { name: "Add command" }).click();
+    await expect(dialog.locator(".qc-form")).toBeVisible();
+    await expect(dialog.locator(".qc-list")).toHaveCount(0);
+    await expect(
+      dialog.getByRole("button", { name: "Save command" }),
+    ).toBeInViewport();
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog.locator(".qc-form")).toHaveCount(0);
+    await expect(dialog.locator(".qc-item")).toHaveCount(1);
+    await expect(
+      dialog.getByRole("button", { name: "Add command" }),
+    ).toBeVisible();
+
     // The Insert path sends the exact reviewed bytes, never Enter, and hands
     // focus back to the shell.
     const socket = traffic.currentSocket();
@@ -447,6 +464,18 @@ test.describe("host terminal on the real stack", () => {
     expect(box!.width).toBeLessThanOrEqual(390);
     expect(box!.y).toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height).toBeLessThanOrEqual(800);
+    await expect(dialog.getByRole("button", { name: "Add command" })).toBeVisible();
+
+    // JUS-267 on a phone: Add opens the editor in place of the list and keeps
+    // the Save and Cancel actions in view instead of appending a form below
+    // the fold.
+    await dialog.getByRole("button", { name: "Add command" }).click();
+    await expect(dialog.locator(".qc-form")).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: "Save command" }),
+    ).toBeInViewport();
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog.getByRole("button", { name: "Add command" })).toBeVisible();
 
     // Tab cycles inside the dialog: the trap never lets focus escape.

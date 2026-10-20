@@ -469,6 +469,41 @@ describe("quick command modal", () => {
     wrapper.unmount();
   });
 
+  it("swaps the list for the editor and keeps a footer action in every state", async () => {
+    const { wrapper, commands } = await mountModal();
+    for (let index = 0; index < 12; index += 1) {
+      commands.add({
+        label: `Command ${index + 1}`,
+        command: `echo ${index + 1}`,
+      });
+    }
+    await flushPromises();
+    expect(document.querySelectorAll(".qc-item")).toHaveLength(12);
+
+    click("Add command");
+    await flushPromises();
+
+    // JUS-267: the editor replaces the list instead of being appended below
+    // it, so it is always the first thing in the scrollable body. The footer
+    // keeps a visible Cancel action while the Add button is gone.
+    expect(document.querySelector(".qc-form")).not.toBeNull();
+    expect(document.querySelector(".qc-list")).toBeNull();
+    expect(document.querySelector(".qc-add")).toBeNull();
+    expect(document.querySelector(".qc-form-actions")).not.toBeNull();
+    const cancel = document.querySelector<HTMLButtonElement>(".qc-cancel");
+    expect(cancel).not.toBeNull();
+    expect(cancel!.textContent).toContain(
+      i18n.global.t("terminal.quickCommands.cancel"),
+    );
+
+    cancel!.click();
+    await flushPromises();
+    expect(document.querySelector(".qc-form")).toBeNull();
+    expect(document.querySelectorAll(".qc-item")).toHaveLength(12);
+    expect(document.querySelector(".qc-add")).not.toBeNull();
+    wrapper.unmount();
+  });
+
   it("explains the feature with the dcup example when empty", async () => {
     const { wrapper } = await mountModal();
     expect(document.body.textContent).toContain(

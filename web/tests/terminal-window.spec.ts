@@ -1,0 +1,683 @@
+import { Buffer } from "node:buffer";
+import { createServer } from "node:http";
+import type { AddressInfo, Server } from "node:net";
+import { readFile } from "node:fs/promises";
+import { dirname, extname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { expect, test } from "@playwright/test";
+import type { Page, WebSocketRoute } from "@playwright/test";
+
+/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL:readonly, window:readonly */
+// URL/window run inside the page (browser globals); the repo lint envs do not
+// cover tests/, so they are declared.
+
+// Real-browser proof for JUS-245: the committed webdist is served statically,
+// the control-plane terminal API is mocked, and Playwright's WebSocket router
+// stands in for the PTY stream with the exact binary framing. Real Chromium
+// types into xterm, drags and resizes the window, minimizes to the rail and
+// measures the viewport at desktop and phone sizes.
+
+const testsDir = dirname(fileURLToPath(import.meta.url));
+const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
+
+const mimeTypes: Record<string, string> = {
+  ".css": "text/css",
+  ".html": "text/html",
+  ".ico": "image/x-icon",
+  ".js": "text/javascript",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".woff2": "font/woff2",
+};
+
+const session = {
+  user: {
+    id: "u-1",
+    email: "ada@gotham.dev",
+    created_at: "2026-03-04T12:00:00Z",
+    display_name: "Ada",
+    has_password: true,
+    is_platform_admin: true,
+  },
+  accessToken: "test-access",
+  refreshToken: "test-refresh",
+};
+
+const team = {
+  id: "team-1",
+  name: "Acme",
+  is_personal: false,
+  role: "owner",
+  created_at: "2026-10-01T00:00:00Z",
+  updated_at: "2026-10-01T00:00:00Z",
+};
+
+const serverId = "33333333-3333-4333-8333-333333333333";
+
+const serverRow = {
+  id: serverId,
+  name: "prod-01",
+  ip: "10.0.0.1",
+  status: "ready",
+  created_at: "2026-10-01T00:00:00Z",
+  updated_at: "2026-10-01T00:00:00Z",
+};
+
+const root = {
+  name: "volumes",
+  path: "/var/lib/gotham/volumes",
+  writable: true,
+  free_bytes: 21 * 1024 ** 3,
+};
+
+const entry = {
+  name: "app.yaml",
+  kind: "file",
+  size: 24,
+  mode: 0o100644,
+  modified_at: "2026-10-12T09:02:00Z",
+  etag: '"v1"',
+};
+
+/** fakeSession is one session the mocked HTTP + WS pair understands. */
+interface FakeSession {
+  id: string;
+  cwd: string;
+  input: string;
+  socket: WebSocketRoute | null;
+  closeFrames: number;
+}
+
+/** terminalState is the per-test mock ledger. */
+interface TerminalState {
+  sessions: FakeSession[];
+  creates: number;
+  deletes: number;
+  seq: number;
+}
+
+let server: Server;
+let baseURL = "";
+
+test.beforeAll(async () => {
+  server = createServer(async (request, response) => {
+    try {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      let path = decodeURIComponent(url.pathname);
+      if (path === "/" || !extname(path)) {
+        path = "/index.html";
+      }
+      const file = resolve(webdistRoot, `.${path}`);
+      if (!file.startsWith(webdistRoot)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      const body = await readFile(file);
+      response.writeHead(200, {
+        "content-type": mimeTypes[extname(file)] ?? "application/octet-stream",
+      });
+      response.end(body);
+    } catch {
+      response.writeHead(404);
+      response.end();
+    }
+  });
+  await new Promise<void>((done) => {
+    server.listen(0, "127.0.0.1", () => done());
+  });
+  const address = server.address() as AddressInfo;
+  baseURL = `http://127.0.0.1:${address.port}`;
+});
+
+test.afterAll(async () => {
+  await new Promise<void>((done) => {
+    server.close(() => done());
+  });
+});
+
+/** frame builds one binary server frame. */
+function frame(opcode: number, payload: Buffer = Buffer.alloc(0)): Buffer {
+  return Buffer.concat([Buffer.from([opcode]), payload]);
+}
+
+/** jsonFrame builds one JSON control frame. */
+function jsonFrame(opcode: number, value: unknown): Buffer {
+  return frame(opcode, Buffer.from(JSON.stringify(value), "utf8"));
+}
+
+/** openFrame confirms a PTY for one session. */
+function openFrame(): Buffer {
+  return jsonFrame(4, {
+    shell: "/bin/bash",
+    cols: 120,
+    rows: 32,
+    service_user: "gotham-agent",
+  });
+}
+
+/** outputFrame writes one line of shell output. */
+function outputFrame(text: string): Buffer {
+  return frame(1, Buffer.from(text, "utf8"));
+}
+
+/** mockTerminalApi answers session create/delete and routes the PTY socket. */
+async function mockTerminalApi(
+  page: Page,
+  state: TerminalState,
+): Promise<void> {
+  await page.route("**/api/v1/**", async (route) => {
+    await route.fulfill({ json: {} });
+  });
+  await page.route("**/api/v1/auth/me", async (route) => {
+    await route.fulfill({ json: session.user });
+  });
+  await page.route("**/api/v1/teams", async (route) => {
+    await route.fulfill({ json: { teams: [team] } });
+  });
+  await page.route("**/api/v1/version", async (route) => {
+    await route.fulfill({ json: { version: "v0.2.1-dev" } });
+  });
+  await page.route("**/api/v1/servers", async (route) => {
+    await route.fulfill({ json: { servers: [serverRow] } });
+  });
+  await page.route(`**/api/v1/servers/${serverId}`, async (route) => {
+    await route.fulfill({ json: serverRow });
+  });
+
+  await page.route("**/api/v1/servers/*/terminal/sessions**", async (route) => {
+    const request = route.request();
+    if (request.method() === "DELETE") {
+      state.deletes += 1;
+      await route.fulfill({ status: 204, body: "" });
+      return;
+    }
+    if (request.method() !== "POST") {
+      await route.fulfill({ json: {} });
+      return;
+    }
+    const body = request.postDataJSON() as { cwd?: string };
+    state.seq += 1;
+    state.creates += 1;
+    const id = `session-${state.seq}`;
+    const cwd = body.cwd ?? "app";
+    state.sessions.push({ id, cwd, input: "", socket: null, closeFrames: 0 });
+    await route.fulfill({
+      status: 201,
+      json: {
+        id,
+        server_id: serverId,
+        target: "host",
+        root: "volumes",
+        cwd,
+        cols: 120,
+        rows: 32,
+        expires_at: "2026-10-20T12:01:00Z",
+        websocket_path: `/api/v1/servers/${serverId}/terminal/sessions/${id}/ws`,
+        subprotocol: "gotham.terminal.v1",
+      },
+    });
+  });
+
+  // The PTY stream: binary frames only, exactly as the contract specifies.
+  await page.routeWebSocket(
+    /\/api\/v1\/servers\/[^/]+\/terminal\/sessions\/[^/]+\/ws$/,
+    (ws) => {
+      const path = new URL(ws.url()).pathname;
+      const id = path.split("/").at(-2) ?? "";
+      const current = state.sessions.find((item) => item.id === id);
+      if (!current) {
+        ws.close();
+        return;
+      }
+      current.socket = ws;
+      ws.send(openFrame());
+      ws.send(outputFrame(`welcome ${id}\r\n$ `));
+      ws.onMessage((message) => {
+        const bytes =
+          typeof message === "string"
+            ? Buffer.from(message, "utf8")
+            : Buffer.from(message);
+        if (bytes.length === 0) {
+          return;
+        }
+        if (bytes[0] === 1) {
+          current.input += bytes.subarray(1).toString("utf8");
+        } else if (bytes[0] === 3) {
+          current.closeFrames += 1;
+        }
+      });
+    },
+  );
+
+  // File manager routes, used by the editor-coexistence test.
+  await page.route(`**/api/v1/servers/${serverId}/files/roots`, async (route) => {
+    await route.fulfill({ json: { roots: [root] } });
+  });
+  await page.route(`**/api/v1/servers/${serverId}/files/list*`, async (route) => {
+    await route.fulfill({
+      json: { entries: [entry], truncated: false, cursor: "" },
+    });
+  });
+  await page.route(`**/api/v1/servers/${serverId}/files/content*`, async (route) => {
+    await route.fulfill({
+      json: {
+        content: "services:\n  web:\n",
+        etag: '"v1"',
+        sha256: "abc",
+        size: 24,
+        mode: 0o100644,
+      },
+    });
+  });
+}
+
+/** seedApp seeds the session and opens one route. */
+async function seedApp(page: Page, path: string): Promise<void> {
+  await page.addInitScript((value) => {
+    window.localStorage.setItem("gotham.auth.session", value);
+  }, JSON.stringify(session));
+  await page.goto(`${baseURL}${path}`);
+  // main.ts mounts after the initial navigation resolves; wait for the shell
+  // before reaching into the Pinia store.
+  await expect(page.locator(".topbar")).toBeVisible();
+}
+
+/** storeCall runs one action on the live Pinia terminal store. */
+async function storeCall(
+  page: Page,
+  action: string,
+  argument: unknown = {},
+): Promise<unknown> {
+  return page.evaluate(
+    async ({ name, arg }) => {
+      const app = (document.querySelector("#app") as unknown as {
+        __vue_app__: {
+          config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+        };
+      }).__vue_app__;
+      const store = app.config.globalProperties.$pinia._s.get("terminal") as {
+        [key: string]: (..._args: unknown[]) => unknown;
+      };
+      return store[name]!(arg);
+    },
+    { name: action, arg: argument },
+  );
+}
+
+/** openWindow opens one floating-window session through the public store API. */
+async function openWindow(
+  page: Page,
+  cwd: string,
+): Promise<{ id: string; sessionId: string }> {
+  return (await page.evaluate(async ({ serverId: id, dir }) => {
+    const app = (document.querySelector("#app") as unknown as {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+      };
+    }).__vue_app__;
+    const store = app.config.globalProperties.$pinia._s.get("terminal") as {
+      openWindowSession: (_options: Record<string, unknown>) => Promise<{
+        id: string;
+        sessionId: string;
+      }>;
+    };
+    return store.openWindowSession({
+      serverId: id,
+      serverName: "prod-01",
+      root: "volumes",
+      cwd: dir,
+    });
+  }, { serverId, dir: cwd })) as { id: string; sessionId: string };
+}
+
+/** terminalText reads the visible xterm rows. */
+async function terminalText(page: Page): Promise<string> {
+  return page
+    .locator(".term-window .term-surface:visible .xterm-rows")
+    .innerText();
+}
+
+/** boxOf returns the visible terminal window box. */
+async function windowBox(page: Page): Promise<{
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}> {
+  const box = await page.locator(".term-window").boundingBox();
+  if (!box) {
+    throw new Error("terminal window has no box");
+  }
+  return box;
+}
+
+/** expectInsideViewport asserts the window keeps its margins and stays on screen. */
+async function expectInsideViewport(
+  page: Page,
+  viewport: { width: number; height: number },
+): Promise<void> {
+  // A viewport change refits on the resize event; poll until the rendered box
+  // reflects the new screen before measuring.
+  await expect
+    .poll(async () => {
+      const box = await windowBox(page);
+      return (
+        box.x >= 0 &&
+        box.y >= 0 &&
+        box.x + box.width <= viewport.width + 0.5 &&
+        box.y + box.height <= viewport.height + 0.5
+      );
+    })
+    .toBe(true);
+  const box = await windowBox(page);
+  expect(box.width).toBeLessThanOrEqual(viewport.width);
+}
+
+/** freshState resets the mock ledger for one test. */
+function freshState(): TerminalState {
+  return { sessions: [], creates: 0, deletes: 0, seq: 0 };
+}
+
+test("two terminal tabs stay isolated through typing, switches and minimize", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  const first = await openWindow(page, "one");
+  const second = await openWindow(page, "two");
+  expect(state.creates).toBe(2);
+
+  const window = page.locator(".term-window");
+  await expect(window).toBeVisible();
+  await expect(page.locator(".term-tab")).toHaveCount(2);
+  await expect(
+    page.locator(".term-window .term-surface:visible .term-state"),
+  ).toHaveText("Connected");
+
+  // Type into the active (second) tab.
+  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
+  await page.keyboard.type("echo two");
+  await expect
+    .poll(() => state.sessions.find((item) => item.id === second.sessionId)?.input)
+    .toBe("echo two");
+
+  // Switch to the first tab: the same keystrokes must land in its own PTY.
+  await page
+    .locator(".term-tab-name", { hasText: "prod-01 · one" })
+    .click();
+  await expect(
+    page.locator(".term-window .term-surface:visible .xterm-screen"),
+  ).toBeVisible();
+  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
+  await page.keyboard.type("echo one");
+  await expect
+    .poll(() => state.sessions.find((item) => item.id === first.sessionId)?.input)
+    .toBe("echo one");
+  expect(
+    state.sessions.find((item) => item.id === second.sessionId)?.input,
+  ).toBe("echo two");
+
+  // A window resize re-fits the visible renderer; typing still reaches the
+  // same session.
+  await page.locator(".term-resize--se").focus();
+  await page.keyboard.press("Shift+ArrowLeft");
+  await page.keyboard.press("Shift+ArrowUp");
+  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
+  await page.keyboard.type(" pwd");
+  await expect
+    .poll(() => state.sessions.find((item) => item.id === first.sessionId)?.input)
+    .toBe("echo one pwd");
+
+  // Switching panes repeatedly does not swap or recreate sessions.
+  for (let index = 0; index < 3; index += 1) {
+    await page
+      .locator(".term-tab-name", { hasText: "prod-01 · two" })
+      .click();
+    await page
+      .locator(".term-tab-name", { hasText: "prod-01 · one" })
+      .click();
+  }
+  expect(state.creates).toBe(2);
+
+  // An in-app route change keeps both PTYs mounted in the app shell.
+  await page.locator('a[href="/servers"]').first().click();
+  await expect(page).toHaveURL(/\/servers$/);
+  await expect(window).toBeVisible();
+  await expect(page.locator(".term-tab")).toHaveCount(2);
+  await page.locator('a[href="/dashboard"]').first().click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.locator(".term-tab")).toHaveCount(2);
+
+  // Minimize → rail badge → restore keeps both live and both buffers.
+  await page.locator(".term-window-min").click();
+  await expect(window).toBeHidden();
+  const rail = page.locator(".rail-btn--terminal");
+  await expect(rail).toBeVisible();
+  await expect(rail).toHaveAttribute("aria-label", "Terminal window, 2 open");
+  await expect(rail.locator(".rail-badge")).toHaveText("2");
+  await rail.click();
+  await expect(window).toBeVisible();
+  await expect(page.locator(".term-tab")).toHaveCount(2);
+  expect(state.creates).toBe(2);
+
+  // A real keyboard shortcut opens the confirmation, and cancel keeps both.
+  await page
+    .locator(".term-tab-name", { hasText: "prod-01 · one" })
+    .focus();
+  await page.keyboard.press("Delete");
+  await expect(page.locator(".term-close-modal")).toBeVisible();
+  await page.getByRole("button", { name: "Keep terminals" }).click();
+  await expect(page.locator(".term-close-modal")).toBeHidden();
+  await expect(page.locator(".term-tab")).toHaveCount(2);
+  expect(state.deletes).toBe(0);
+});
+
+test("page → window transfer keeps the session, buffer and no new shell", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  const tab = (await storeCall(page, "openPageSession", {
+    serverId,
+    serverName: "prod-01",
+    root: "volumes",
+    cwd: "app",
+  })) as { id: string; sessionId: string };
+  expect(state.creates).toBe(1);
+  // The page surface is not mounted in this package (JUS-246 owns the route);
+  // the session still streams into its renderer, so the buffer is real.
+  await expect.poll(() => state.sessions[0]?.socket !== null).toBe(true);
+
+  // Transfer is one-way and reuses the tab: no POST, same live socket.
+  await storeCall(page, "detachToWindow", tab.id);
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expect(
+    page.locator(".term-window .term-surface:visible .term-state"),
+  ).toHaveText("Connected");
+  expect(state.creates).toBe(1);
+  await expect
+    .poll(() => terminalText(page))
+    .toContain(`welcome ${tab.sessionId}`);
+
+  // Returning to the page source returns the same detached tab; it must not
+  // create a duplicate shell. No window → page action is offered.
+  const reopened = (await storeCall(page, "openPageSession", {
+    serverId,
+    serverName: "prod-01",
+    root: "volumes",
+    cwd: "app",
+  })) as { id: string; sessionId: string; mode: string };
+  expect(reopened.id).toBe(tab.id);
+  expect(reopened.sessionId).toBe(tab.sessionId);
+  expect(reopened.mode).toBe("window");
+  expect(state.creates).toBe(1);
+  await expect(page.getByText("Open in window")).toHaveCount(0);
+});
+
+test("close confirmation cancel/confirm releases only the intended sessions", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  await openWindow(page, "one");
+  await openWindow(page, "two");
+  await expect(page.locator(".term-tab")).toHaveCount(2);
+
+  // Window close → cancel keeps both PTYs running.
+  await page.locator(".term-window-close").click();
+  const dialog = page.locator(".term-close-modal");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Close all terminals?");
+  await expect(dialog).toContainText("prod-01 · one");
+  await expect(dialog).toContainText("prod-01 · two");
+  await page.getByRole("button", { name: "Keep terminals" }).click();
+  await expect(page.locator(".term-tab")).toHaveCount(2);
+  expect(state.deletes).toBe(0);
+  expect(state.sessions.every((item) => item.closeFrames === 0)).toBe(true);
+
+  // A single tab's inline close confirms and releases only that session.
+  await page
+    .locator(".term-tab", { hasText: "prod-01 · one" })
+    .locator(".term-tab-close")
+    .click();
+  await expect(dialog).toContainText("Close this terminal?");
+  await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
+  await expect(page.locator(".term-tab")).toHaveCount(1);
+  await expect(page.locator(".term-tab")).toContainText("prod-01 · two");
+  expect(state.deletes).toBe(1);
+  expect(state.sessions[0]?.closeFrames).toBe(1);
+  expect(state.sessions[1]?.closeFrames).toBe(0);
+
+  // Closing the window confirms the remaining session and removes the badge.
+  await page.locator(".term-window-close").click();
+  await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
+  await expect(page.locator(".term-window")).toBeHidden();
+  await expect(page.locator(".rail-btn--terminal")).toHaveCount(0);
+  expect(state.deletes).toBe(2);
+  expect(state.sessions[1]?.closeFrames).toBe(1);
+});
+
+test("the window moves, resizes and stays bounded at desktop and phone sizes", async ({
+  page,
+}) => {
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await seedApp(page, "/dashboard");
+  await openWindow(page, "app");
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expectInsideViewport(page, { width: 1280, height: 800 });
+
+  // Drag the title bar: the window follows the pointer, clamped on screen.
+  const before = await windowBox(page);
+  const bar = await page.locator(".term-window-bar").boundingBox();
+  await page.mouse.move(bar!.x + 24, bar!.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(bar!.x + 164, bar!.y + 80, { steps: 5 });
+  await page.mouse.up();
+  const after = await windowBox(page);
+  expect(after.x).toBeGreaterThan(before.x);
+  expect(after.y).toBeGreaterThan(before.y);
+  await expectInsideViewport(page, { width: 1280, height: 800 });
+
+  // Drag far past the bottom-right edge: it never leaves the viewport.
+  const movedBar = await page.locator(".term-window-bar").boundingBox();
+  await page.mouse.move(movedBar!.x + 24, movedBar!.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(2000, 2000, { steps: 6 });
+  await page.mouse.up();
+  await expectInsideViewport(page, { width: 1280, height: 800 });
+
+  // Keyboard resize through the SE slider grows the window, still bounded.
+  const grip = page.locator(".term-resize--se");
+  await grip.focus();
+  const beforeResize = await windowBox(page);
+  await page.keyboard.press("Shift+ArrowLeft");
+  await page.keyboard.press("Shift+ArrowUp");
+  const afterResize = await windowBox(page);
+  expect(afterResize.width).toBeLessThan(beforeResize.width);
+  expect(afterResize.height).toBeLessThan(beforeResize.height);
+  await expectInsideViewport(page, { width: 1280, height: 800 });
+
+  // 1366 keeps the same bound.
+  await page.setViewportSize({ width: 1366, height: 800 });
+  await expectInsideViewport(page, { width: 1366, height: 800 });
+
+  // 390px phone: the window fills the width within its margins and the
+  // minimized session is restorable from the mobile rail drawer.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectInsideViewport(page, { width: 390, height: 844 });
+  await page.locator(".term-window-min").click();
+  await expect(page.locator(".term-window")).toBeHidden();
+  await page.locator(".rail-toggle").click();
+  const drawer = page.locator(".n-drawer");
+  await expect(drawer).toBeVisible();
+  await drawer.locator(".rail-btn--terminal").click();
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expectInsideViewport(page, { width: 390, height: 844 });
+
+  // 480px keeps the same contract.
+  await page.setViewportSize({ width: 480, height: 900 });
+  await expectInsideViewport(page, { width: 480, height: 900 });
+  expect(state.creates).toBe(1);
+});
+
+test("the terminal window coexists with the code editor without replacing it", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, `/servers/${serverId}/files`);
+
+  const label = page.locator(".fm-label", { hasText: "app.yaml" }).first();
+  await expect(label).toBeVisible();
+  await label.dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".ed-window")).toBeVisible();
+
+  await openWindow(page, "app");
+  const terminal = page.locator(".term-window");
+  await expect(terminal).toBeVisible();
+  // Both floating windows and both rail controls exist at once.
+  await expect(page.locator(".ed-window")).toBeVisible();
+  await page.locator(".term-window-min").click();
+  await expect(page.locator(".rail-btn--terminal")).toBeVisible();
+  await expect(page.locator(".rail-btn--editor")).toBeVisible();
+  await page.locator(".rail-btn--terminal").click();
+  await expect(terminal).toBeVisible();
+
+  // Clicking the editor lowers the terminal beneath it; clicking the terminal
+  // raises it again, so neither surface permanently covers the other.
+  await page.locator(".ed-window-bar").click({ position: { x: 200, y: 12 } });
+  const lowered = await terminal.evaluate((element) =>
+    Number.parseInt(getComputedStyle(element as HTMLElement).zIndex, 10),
+  );
+  // The rail icon is always reachable: with the window visible but behind the
+  // editor it raises it instead of merely minimizing it.
+  await page.locator(".rail-btn--terminal").click();
+  const raised = await terminal.evaluate((element) =>
+    Number.parseInt(getComputedStyle(element as HTMLElement).zIndex, 10),
+  );
+  expect(raised).toBeGreaterThan(lowered);
+  await expect(terminal).toBeVisible();
+
+  // The editor still owns its buffer after all the terminal activity.
+  await expect(page.locator(".cm-content")).toBeVisible();
+  await page.locator(".ed-window-min").click();
+  await expect(page.locator(".ed-window")).toBeHidden();
+  await expect(terminal).toBeVisible();
+  expect(state.creates).toBe(1);
+});

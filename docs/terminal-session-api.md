@@ -363,7 +363,10 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   `SIGKILL`s them after the grace, in addition to the group fallback. `hidepid` and a restricted or pid-namespaced
   `/proc` (the agent only sees its own mount/namespace) can hide processes from
   the scan; those cannot be signalled by session id, which is exactly the case
-  the `WARN` reports. On non-Linux hosts there is no `/proc` walk at all and
+  the `WARN` reports. A host mounted with `hidepid=1` hides every other-uid
+  process from a non-root agent, so each close reports an incomplete walk and
+  always runs the process-group fallback in addition to hard-killing the
+  members it did find. On non-Linux hosts there is no `/proc` walk at all and
   only the process-group cleanup runs (the supported agent target is Linux).
   Zombies are ignored. A process that changed uid (`su`/`sudo`) stays in the
   session and is still matched: a root agent can signal it, a non-root agent's

@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -489,6 +490,7 @@ func TestTerminalSessionScanReportsDeadline(t *testing.T) {
 // TestTerminalSessionScanUsesPidfd checks that a verified member is bound to a
 // pidfd before it is signalled. It skips on kernels or sandboxes without pidfds.
 func TestTerminalSessionScanUsesPidfd(t *testing.T) {
+	maskHiddenProcEntries(t)
 	pid := newSessionLeader(t, "741")
 	start := terminalProcessStartTime(pid)
 	if start == 0 {
@@ -511,6 +513,23 @@ func TestTerminalSessionScanUsesPidfd(t *testing.T) {
 	if members[0].fd < 0 {
 		t.Fatal("member was not bound to a pidfd")
 	}
+}
+
+// maskHiddenProcEntries makes the scan treat entries hidden by a hardened /proc
+// (hidepid, as on the CI runner) as processes that exited. Tests that need a
+// complete walk stay deterministic on such hosts; the production behaviour under
+// hidepid is covered by the incomplete-scan tests.
+func maskHiddenProcEntries(t *testing.T) {
+	t.Helper()
+	previous := terminalScanStat
+	terminalScanStat = func(pid int) (terminalStat, error) {
+		stat, err := previous(pid)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return terminalStat{}, fs.ErrNotExist
+		}
+		return stat, err
+	}
+	t.Cleanup(func() { terminalScanStat = previous })
 }
 
 // newStubbornSessionLeader starts a real shell that ignores HUP and TERM in its
@@ -588,6 +607,7 @@ func TestTerminalEndSessionKillsFoundMembersWhenFirstScanIncomplete(t *testing.T
 // different session) must drop the member, so no signal is ever sent; removing
 // the re-check makes this test fail.
 func TestTerminalSessionMembersRejectsReusedPidAfterPidfdOpen(t *testing.T) {
+	maskHiddenProcEntries(t)
 	pid := newSessionLeader(t, "751")
 	start := terminalProcessStartTime(pid)
 	if start == 0 {
@@ -702,6 +722,7 @@ func TestParseTerminalStat(t *testing.T) {
 // process that owns the recorded pid with a different start time is a different
 // session, and the scan must refuse to signal its members.
 func TestTerminalSessionMembersRefusesReusedLeader(t *testing.T) {
+	maskHiddenProcEntries(t)
 	cmd := exec.Command("sleep", "737")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

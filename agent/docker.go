@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -562,51 +564,167 @@ const execStillRunningTimeout = 3 * time.Second
 // fixed kill helper on close. No caller input is interpolated into it.
 const execWrapperCommand = `printf '%s\n' "$$"; exec "$@"`
 
-// execKillTreeScript ends a container exec's shell and every process below it.
-// The root pid is passed as $1 (a validated decimal number) and the script is
-// fixed; no caller input is interpolated. It snapshots the descendant tree
-// before signalling, so foreground/background jobs are included even though an
-// interactive shell puts them in their own process groups, then sends
-// HUP/TERM/KILL with a short grace. It never signals pid 1.
+// execKillTreeScript ends a container exec's shell and every process it started.
+// It is a constant; only the validated decimal root pid ($1) and the generated
+// terminal marker ($2) are passed as arguments. It collects:
+//
+//   - every process whose session id equals the shell's (foreground/background
+//     jobs in their own process groups, and their descendants);
+//   - every process whose parent chain reaches the shell (walked to a fixpoint,
+//     parsing /proc/<pid>/stat after the last ")" so TAB/space separators and
+//     spaces in the command name are irrelevant);
+//   - every process carrying the terminal's unique environment marker. This is
+//     what catches a job that called setsid or was reparented to pid 1 before
+//     the snapshot; a daemon that also scrubs its environment can still escape
+//     (documented limit).
+//
+// It then sends HUP/TERM/KILL with a short grace, ignores zombies, re-scans,
+// and exits non-zero with "survivors:<pids>" if anything remains. It never
+// signals pid 1 or itself and never uses kill -1 or pkill by name.
 const execKillTreeScript = `root=$1
+marker=$2
 case "$root" in ''|*[!0-9]*) exit 2;; esac
 [ "$root" -gt 1 ] || exit 2
+case "$marker" in ''|*[!A-Za-z0-9-]*) marker="";; esac
 list=" $root "
+add_pid() {
+  case " $list " in
+    *" $1 "*) ;;
+    *) list="$list$1 " ;;
+  esac
+}
+parse_stat() {
+  stat_rest=${1##*) }
+  set -- $stat_rest
+  stat_state=$1
+  stat_ppid=$2
+  stat_sid=$4
+}
 frontier="$root"
 while [ -n "$frontier" ]; do
   next=""
   for d in /proc/[0-9]*; do
-    [ -r "$d/status" ] || continue
+    [ -r "$d/stat" ] || continue
     pid=${d#/proc/}
-    ppid=""
-    while IFS=' ' read -r key value rest; do
-      if [ "$key" = "PPid:" ]; then ppid=$value; break; fi
-    done < "$d/status" 2>/dev/null
-    [ -n "$ppid" ] || continue
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    stat_line=""
+    read -r stat_line < "$d/stat" 2>/dev/null
+    [ -n "$stat_line" ] || continue
+    parse_stat "$stat_line"
+    if [ "$stat_sid" = "$root" ]; then add_pid "$pid"; fi
     case " $frontier " in
-      *" $ppid "*)
-        case "$list" in
-          *" $pid "*) ;;
-          *) list="$list$pid "; next="$next$pid " ;;
-        esac
+      *" $stat_ppid "*)
+        add_pid "$pid"
+        next="$next$pid "
         ;;
     esac
   done
   frontier=$next
 done
+if [ -n "$marker" ] && command -v tr >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    [ -r "$d/environ" ] || continue
+    if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$marker"; then
+      add_pid "$pid"
+    fi
+  done
+fi
 for sig in HUP TERM KILL; do
   for pid in $list; do
-    if [ "$pid" = "$root" ] && [ "$sig" != "KILL" ]; then
-      kill -"$sig" "$pid" 2>/dev/null
-      continue
-    fi
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
     kill -"$sig" "$pid" 2>/dev/null
   done
-  kill -"$sig" -"$root" 2>/dev/null
   [ "$sig" = "KILL" ] && break
-  sleep 0.2
+  sleep 0.2 2>/dev/null || :
 done
-exit 0`
+sleep 0.2 2>/dev/null || :
+attempt=0
+survivors=""
+while [ "$attempt" -lt 5 ]; do
+  survivors=""
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    [ -r "$d/stat" ] || continue
+    stat_line=""
+    read -r stat_line < "$d/stat" 2>/dev/null
+    [ -n "$stat_line" ] || continue
+    parse_stat "$stat_line"
+    [ "$stat_state" = "Z" ] && continue
+    if [ "$stat_sid" = "$root" ]; then survivors="$survivors $pid"; continue; fi
+    if [ -n "$marker" ] && command -v tr >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
+      if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$marker"; then
+        survivors="$survivors $pid"
+      fi
+    fi
+  done
+  [ -z "$survivors" ] && exit 0
+  sleep 0.2 2>/dev/null || :
+  attempt=$((attempt + 1))
+done
+echo "survivors:$survivors"
+exit 3`
+
+// execKillMarkerScript is the safer cleanup used when Docker already reports
+// the exec as not Running. The shell's pid may have been reused, so it does not
+// walk the tree or the session; it only kills processes still carrying this
+// terminal's unique environment marker (orphaned nohup/background jobs).
+const execKillMarkerScript = `marker=$1
+case "$marker" in ''|*[!A-Za-z0-9-]*) exit 2;; esac
+if ! command -v tr >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then
+  exit 0
+fi
+list=""
+add_pid() {
+  case " $list " in
+    *" $1 "*) ;;
+    *) list="$list$1 " ;;
+  esac
+}
+for d in /proc/[0-9]*; do
+  pid=${d#/proc/}
+  [ "$pid" -gt 1 ] || continue
+  [ "$pid" = "$$" ] && continue
+  [ -r "$d/environ" ] || continue
+  if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$marker"; then
+    add_pid "$pid"
+  fi
+done
+for sig in HUP TERM KILL; do
+  for pid in $list; do
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    kill -"$sig" "$pid" 2>/dev/null
+  done
+  [ "$sig" = "KILL" ] && break
+  sleep 0.2 2>/dev/null || :
+done
+sleep 0.2 2>/dev/null || :
+attempt=0
+survivors=""
+while [ "$attempt" -lt 5 ]; do
+  survivors=""
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    [ -r "$d/environ" ] || continue
+    if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$marker"; then
+      survivors="$survivors $pid"
+    fi
+  done
+  [ -z "$survivors" ] && exit 0
+  sleep 0.2 2>/dev/null || :
+  attempt=$((attempt + 1))
+done
+echo "survivors:$survivors"
+exit 3`
 
 // shellProbeCommand asks the container's POSIX shell for the first supported
 // interactive shell. It is a fixed command written by the agent; no caller
@@ -663,8 +781,8 @@ type containerInspect struct {
 // stream. The container must exist and be running. When opts.Cmd is empty the
 // agent probes the image for a supported shell and answers ErrDockerNoShell
 // when none exists; it never starts a broken terminal. Closing the returned
-// session ends the exec attachment only: the application container is never
-// stopped or restarted.
+// session ends the exec process tree (see Kill) and the attach connection: the
+// application container is never stopped or restarted.
 func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOptions) (ExecSession, error) {
 	if strings.TrimSpace(containerID) == "" {
 		return nil, errors.New("docker: container id is required")
@@ -706,8 +824,12 @@ func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOp
 	// away.
 	wrapped := append([]string{"/bin/sh", "-c", execWrapperCommand, "gotham-terminal"}, command...)
 
+	// The marker is generated per session and inherited by every descendant.
+	// The kill helper finds setsid/reparented jobs by it even after they leave
+	// the shell's session or process tree.
+	marker := uuid.NewString()
 	env := append([]string(nil), opts.Env...)
-	env = append(env, "TERM=xterm-256color")
+	env = append(env, "GOTHAM_TERMINAL_ID="+marker, "TERM=xterm-256color")
 	execID, err := c.createExec(ctx, containerID, wrapped, user, workdir, env, true)
 	if err != nil {
 		return nil, err
@@ -733,7 +855,7 @@ func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOp
 		user:        displayContainerUser(user),
 		execUser:    user,
 		workdir:     workdir,
-		env:         env,
+		marker:      marker,
 		ctx:         ctx,
 	}
 	if opts.Cols > 0 && opts.Rows > 0 {
@@ -985,7 +1107,7 @@ type dockerExecSession struct {
 	user        string
 	execUser    string
 	workdir     string
-	env         []string
+	marker      string
 	ctx         context.Context
 
 	closeOnce sync.Once
@@ -1006,9 +1128,10 @@ func (s *dockerExecSession) Write(p []byte) (int, error) { return s.stream.Write
 func (s *dockerExecSession) Close() error {
 	s.closeOnce.Do(func() {
 		// The helper must run before the attach connection is closed: the
-		// daemon keeps an exec alive after the client disconnects.
-		_ = s.Kill(context.Background())
-		s.closeErr = s.stream.Close()
+		// daemon keeps an exec alive after the client disconnects. A cleanup
+		// failure is returned, never swallowed.
+		cleanupErr := s.Kill(context.Background())
+		s.closeErr = errors.Join(cleanupErr, s.stream.Close())
 	})
 	return s.closeErr
 }
@@ -1025,9 +1148,34 @@ func (s *dockerExecSession) Kill(ctx context.Context) error {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, execKillTimeout)
 	defer cancel()
-	killErr := s.client.killExecTree(callCtx, s.containerID, s.pid, s.execUser, s.workdir, s.env)
 	running, verifyErr := s.client.execRunning(callCtx, s.id)
+	if verifyErr != nil {
+		return fmt.Errorf("docker: inspect exec %s: %w", s.id, verifyErr)
+	}
+	var helperOutput string
+	var killErr error
+	if running {
+		// The shell is alive, so its pid cannot have been reused: the full
+		// tree/session/marker walk is safe.
+		helperOutput, killErr = s.client.killExecTree(callCtx, s.containerID, s.pid, s.execUser, s.workdir, s.marker)
+	} else {
+		// The exec already ended. The recorded pid may now belong to an
+		// unrelated process, so only the unique marker is matched; orphaned
+		// nohup/background jobs are still cleaned up.
+		helperOutput, killErr = s.client.killExecMarker(callCtx, s.containerID, s.execUser, s.workdir, s.marker)
+	}
+	running, verifyErr = s.client.execRunning(callCtx, s.id)
 	if verifyErr == nil && !running {
+		// The container disappearing leaves nothing to clean up.
+		if errors.Is(killErr, ErrDockerNotFound) {
+			s.killed = true
+			return nil
+		}
+		// A helper that still reported survivors (or could not run) is
+		// surfaced instead of being treated as success.
+		if killErr != nil {
+			return fmt.Errorf("docker: exec %s cleanup incomplete: %w", s.id, killErr)
+		}
 		s.killed = true
 		return nil
 	}
@@ -1037,7 +1185,7 @@ func (s *dockerExecSession) Kill(ctx context.Context) error {
 	for running && time.Now().Before(deadline) {
 		select {
 		case <-callCtx.Done():
-			return fmt.Errorf("docker: verify exec stopped: %w", callCtx.Err())
+			return fmt.Errorf("docker: verify exec %s stopped: %w", s.id, callCtx.Err())
 		case <-time.After(execExitPoll):
 		}
 		if verifyErr != nil {
@@ -1046,13 +1194,16 @@ func (s *dockerExecSession) Kill(ctx context.Context) error {
 		running, verifyErr = s.client.execRunning(callCtx, s.id)
 	}
 	if verifyErr != nil {
-		return fmt.Errorf("docker: verify exec stopped: %w", verifyErr)
+		return fmt.Errorf("docker: verify exec %s stopped: %w", s.id, verifyErr)
 	}
 	if running {
 		if killErr != nil {
-			return fmt.Errorf("docker: exec still running after kill helper: %v", killErr)
+			return fmt.Errorf("docker: exec %s still running after kill helper (%s): %w", s.id, helperOutput, killErr)
 		}
-		return errors.New("docker: exec still running after kill helper")
+		return fmt.Errorf("docker: exec %s still running after kill helper", s.id)
+	}
+	if killErr != nil && !errors.Is(killErr, ErrDockerNotFound) {
+		return fmt.Errorf("docker: exec %s cleanup incomplete (%s): %w", s.id, helperOutput, killErr)
 	}
 	s.killed = true
 	return nil
@@ -1077,44 +1228,66 @@ func (c *DockerClient) execRunning(ctx context.Context, execID string) (bool, er
 	return out.Running, nil
 }
 
-// killExecTree runs the fixed kill helper in the same container as the terminal
-// exec. The helper receives the validated numeric pid as $1; no caller input is
-// interpolated into the script.
-func (c *DockerClient) killExecTree(ctx context.Context, containerID string, pid int, user, workdir string, env []string) error {
+// killExecTree runs the fixed full kill helper in the same container as the
+// terminal exec. The helper receives the validated numeric pid as $1 and the
+// generated terminal marker as $2; no caller input is interpolated into the
+// script. Its bounded output is returned for the error message when survivors
+// remain.
+func (c *DockerClient) killExecTree(ctx context.Context, containerID string, pid int, user, workdir, marker string) (string, error) {
 	if pid <= 1 {
-		return nil
+		return "", nil
 	}
-	command := []string{"/bin/sh", "-c", execKillTreeScript, "gotham-terminal-kill", strconv.Itoa(pid)}
-	execID, err := c.createExec(ctx, containerID, command, user, workdir, env, false)
+	command := []string{"/bin/sh", "-c", execKillTreeScript, "gotham-terminal-kill", strconv.Itoa(pid), marker}
+	return c.runKillHelper(ctx, containerID, command, user, workdir)
+}
+
+// killExecMarker runs the marker-only helper. It is used when the exec is
+// already gone, so the recorded pid may have been reused and must not be used
+// for a tree/session walk.
+func (c *DockerClient) killExecMarker(ctx context.Context, containerID, user, workdir, marker string) (string, error) {
+	command := []string{"/bin/sh", "-c", execKillMarkerScript, "gotham-terminal-kill", marker}
+	return c.runKillHelper(ctx, containerID, command, user, workdir)
+}
+
+// runKillHelper runs one fixed helper exec and returns its bounded output.
+func (c *DockerClient) runKillHelper(ctx context.Context, containerID string, command []string, user, workdir string) (string, error) {
+	// The helper must not inherit the terminal marker: it would match itself.
+	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+	execID, err := c.createExec(ctx, containerID, command, user, workdir, env, true)
 	if err != nil {
-		return err
+		return "", err
 	}
-	stream, err := c.startExec(ctx, execID, false)
+	stream, err := c.startExec(ctx, execID, true)
 	if err != nil {
-		return err
+		return "", err
 	}
 	// The helper is finite, but bound the read anyway: a wedged container must
 	// not pin the close path after the attach connection is gone.
-	readDone := make(chan struct{})
+	var output bytes.Buffer
+	readDone := make(chan error, 1)
 	go func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(stream, execProbeMaxBytes))
-		close(readDone)
+		_, readErr := io.Copy(&output, io.LimitReader(stream, execProbeMaxBytes))
+		readDone <- readErr
 	}()
+	var readErr error
 	select {
-	case <-readDone:
+	case readErr = <-readDone:
 	case <-ctx.Done():
 		_ = stream.Close()
-		<-readDone
+		readErr = <-readDone
 	}
 	_ = stream.Close()
+	if readErr != nil && ctx.Err() != nil {
+		return output.String(), ctx.Err()
+	}
 	code, _, exitErr := c.execExitCode(ctx, execID)
 	if exitErr != nil {
-		return exitErr
+		return output.String(), exitErr
 	}
 	if code != 0 {
-		return fmt.Errorf("docker: kill helper exited with code %d", code)
+		return output.String(), fmt.Errorf("docker: kill helper exited with code %d: %s", code, strings.TrimSpace(output.String()))
 	}
-	return nil
+	return output.String(), nil
 }
 
 // Resize applies a new TTY window size through the Docker exec resize endpoint.

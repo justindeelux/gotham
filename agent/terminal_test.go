@@ -142,17 +142,33 @@ func waitForOutput(t *testing.T, stream agentv1.TerminalService_OpenTerminalClie
 	deadline := time.Now().Add(10 * time.Second)
 	var accumulated strings.Builder
 	for time.Now().Before(deadline) {
-		response, err := stream.Recv()
-		if err != nil {
-			t.Fatalf("waiting for %q: %v", marker, err)
+		// A terminal can be quiet for a long time (a foreground job); bound
+		// each Recv so a missing marker fails instead of hanging the test.
+		type received struct {
+			response *agentv1.TerminalResponse
+			err      error
 		}
-		if chunk := response.GetOutput(); len(chunk) > 0 {
+		results := make(chan received, 1)
+		go func() {
+			response, err := stream.Recv()
+			results <- received{response: response, err: err}
+		}()
+		var value received
+		select {
+		case value = <-results:
+		case <-time.After(time.Until(deadline)):
+			t.Fatalf("timed out waiting for %q; output %q", marker, accumulated.String())
+		}
+		if value.err != nil {
+			t.Fatalf("waiting for %q: %v; output %q", marker, value.err, accumulated.String())
+		}
+		if chunk := value.response.GetOutput(); len(chunk) > 0 {
 			accumulated.Write(chunk)
 			if strings.Contains(accumulated.String(), marker) {
 				return
 			}
 		}
-		if exited := response.GetExited(); exited != nil {
+		if exited := value.response.GetExited(); exited != nil {
 			t.Fatalf("shell exited (code %d, signal %q) before %q; output %q",
 				exited.GetExitCode(), exited.GetSignal(), marker, accumulated.String())
 		}

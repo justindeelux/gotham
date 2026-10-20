@@ -37,22 +37,27 @@ func e2eContainerClient(t *testing.T) *DockerClient {
 	return client
 }
 
-// e2eContainer starts a unique throwaway alpine:3 container and removes it at
-// the end of the test.
+// e2eContainer starts a unique throwaway alpine:3 container.
 func e2eContainer(t *testing.T, client *DockerClient) string {
+	return e2eContainerImage(t, client, "alpine:3")
+}
+
+// e2eContainerImage starts a unique throwaway container of image and removes it
+// at the end of the test.
+func e2eContainerImage(t *testing.T, client *DockerClient, image string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	if _, err := client.PullImage(ctx, "alpine:3", "", ""); err != nil {
-		t.Logf("pull alpine:3: %v (using a local image if present)", err)
+	if _, err := client.PullImage(ctx, image, "", ""); err != nil {
+		t.Logf("pull %s: %v (using a local image if present)", image, err)
 	}
 	id, err := client.RunImage(ctx, &agentv1.CreateContainerRequest{
-		Image:   "alpine:3",
+		Image:   image,
 		Name:    "gotham-exec-lifecycle-" + uuid.NewString()[:8],
 		Command: []string{"sleep", "600"},
 	})
 	if err != nil {
-		t.Skipf("run throwaway container: %v", err)
+		t.Skipf("run throwaway %s container: %v", image, err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -66,18 +71,93 @@ func e2eContainer(t *testing.T, client *DockerClient) string {
 // returns its output.
 func runContainerCommand(t *testing.T, client *DockerClient, containerID, command string) string {
 	t.Helper()
+	return runContainerCommandArgs(t, client, containerID, command)
+}
+
+// runContainerCommandArgs is runContainerCommand with positional arguments for
+// the script (kept out of the script text so a scan never matches itself).
+func runContainerCommandArgs(t *testing.T, client *DockerClient, containerID, command string, args ...string) string {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	session, err := client.Exec(ctx, containerID, ExecOptions{Cmd: []string{"/bin/sh", "-c", command}})
+	cmd := append([]string{"/bin/sh", "-c", command, "gotham-scan"}, args...)
+	session, err := client.Exec(ctx, containerID, ExecOptions{Cmd: cmd})
 	if err != nil {
-		t.Fatalf("exec %q: %v", command, err)
+		t.Fatalf("exec scan: %v", err)
 	}
 	output, readErr := io.ReadAll(session)
 	if readErr != nil {
-		t.Logf("read %q: %v", command, readErr)
+		t.Logf("read scan: %v", readErr)
 	}
 	_ = session.Close()
 	return string(output)
+}
+
+// markerScanScript lists pids carrying the terminal's unique environment
+// marker. It is a scan from outside the terminal exec (a fresh Exec), using
+// /proc and tr/grep rather than the kill helper.
+const markerScanScript = `exec 2>/dev/null
+for d in /proc/[0-9]*; do
+  [ -r "$d/environ" ] || continue
+  if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$1"; then
+    echo "$d"
+  fi
+done`
+
+// cmdlineScanScript lists pids whose command line contains $1. The scan shell
+// is skipped by its gotham-scan argv[0].
+const cmdlineScanScript = `exec 2>/dev/null
+for d in /proc/[0-9]*; do
+  [ -r "$d/cmdline" ] || continue
+  cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+  case "$cmd" in
+    *gotham-scan*) ;;
+    *"$1"*) echo "$d $cmd" ;;
+  esac
+done`
+
+// terminalMarkerLeaks returns the /proc entries still carrying marker.
+func terminalMarkerLeaks(t *testing.T, client *DockerClient, containerID, marker string) string {
+	t.Helper()
+	return strings.TrimSpace(runContainerCommandArgs(t, client, containerID, markerScanScript, marker))
+}
+
+// cmdlineLeaks returns the /proc entries whose command line contains needle.
+func cmdlineLeaks(t *testing.T, client *DockerClient, containerID, needle string) string {
+	t.Helper()
+	return strings.TrimSpace(runContainerCommandArgs(t, client, containerID, cmdlineScanScript, needle))
+}
+
+// waitNoMarker polls until no process carries the terminal marker.
+func waitNoMarker(t *testing.T, client *DockerClient, containerID, marker string) {
+	t.Helper()
+	const timeout = 10 * time.Second
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		last = terminalMarkerLeaks(t, client, containerID, marker)
+		if last == "" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("terminal marker %s still present in:\n%s", marker, last)
+}
+
+// waitNoCmdline polls until no process's command line contains needle.
+func waitNoCmdline(t *testing.T, client *DockerClient, containerID, needle string) {
+	t.Helper()
+	const timeout = 10 * time.Second
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		last = cmdlineLeaks(t, client, containerID, needle)
+		if last == "" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("process %q still running inside the container:\n%s", needle, last)
 }
 
 // containerRunning reports the container's Docker state.
@@ -90,22 +170,6 @@ func containerRunning(t *testing.T, client *DockerClient, containerID string) bo
 		t.Fatalf("inspect container: %v", err)
 	}
 	return info.State.Running
-}
-
-// waitNoProcess polls the container until marker is absent from ps output.
-func waitNoProcess(t *testing.T, client *DockerClient, containerID, marker string) {
-	t.Helper()
-	const timeout = 10 * time.Second
-	deadline := time.Now().Add(timeout)
-	var last string
-	for time.Now().Before(deadline) {
-		last = runContainerCommand(t, client, containerID, "ps -o pid,ppid,args")
-		if !strings.Contains(last, marker) {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("process %q still running inside the container:\n%s", marker, last)
 }
 
 // pidGone reports whether the pid no longer exists inside the container.
@@ -142,7 +206,7 @@ func TestDockerExecRealCloseKillsShellAndJob(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	waitNoProcess(t, client, containerID, "sleep 777")
+	waitNoCmdline(t, client, containerID, "sleep 777")
 	if !pidGone(t, client, containerID, shellPID) {
 		t.Fatalf("terminal shell pid %d survived Close", shellPID)
 	}
@@ -179,7 +243,7 @@ func TestDockerExecRealTransportLossKillsShell(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	cancel()
 
-	waitNoProcess(t, client, containerID, "sleep 778")
+	waitNoCmdline(t, client, containerID, "sleep 778")
 	if !containerRunning(t, client, containerID) {
 		t.Fatal("transport loss stopped the application container")
 	}
@@ -239,7 +303,7 @@ func TestDockerExecRealCtrlCResizeAndClose(t *testing.T) {
 	if err := stream.CloseSend(); err != nil {
 		t.Fatalf("close send: %v", err)
 	}
-	waitNoProcess(t, client, containerID, "sleep 779")
+	waitNoCmdline(t, client, containerID, "sleep 779")
 	if !containerRunning(t, client, containerID) {
 		t.Fatal("closing the terminal stopped the application container")
 	}
@@ -279,7 +343,7 @@ func TestDockerExecRealOpenCloseCyclesLeakNothing(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		waitNoProcess(t, client, containerID, fmt.Sprintf("sleep 78%d", i))
+		waitNoCmdline(t, client, containerID, fmt.Sprintf("sleep 78%d", i))
 	}
 	for _, pid := range shellPIDs {
 		if !pidGone(t, client, containerID, pid) {

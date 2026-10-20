@@ -520,14 +520,21 @@ func (s *TerminalServer) startContainer(ctx context.Context, spec terminalStart)
 	if err != nil {
 		return nil, err
 	}
-	return &containerTerminalSession{stream: stream, ctx: ctx, log: s.log, done: make(chan struct{})}, nil
+	return &containerTerminalSession{
+		stream:      stream,
+		ctx:         ctx,
+		log:         s.log,
+		containerID: spec.ContainerID,
+		done:        make(chan struct{}),
+	}, nil
 }
 
 // containerTerminalSession adapts one Docker exec to terminalProcess.
 type containerTerminalSession struct {
-	stream ExecSession
-	ctx    context.Context
-	log    *slog.Logger
+	stream      ExecSession
+	ctx         context.Context
+	log         *slog.Logger
+	containerID string
 
 	termOnce sync.Once
 	waitOnce sync.Once
@@ -566,19 +573,19 @@ func (s *containerTerminalSession) resize(cols, rows uint16) error {
 	return s.stream.Resize(s.ctx, cols, rows)
 }
 
-// terminate ends the exec process tree and releases the attachment. Closing
-// the hijacked connection alone does not stop the container process, so the
-// explicit Kill runs first with a detached, bounded context (the terminal
-// stream's context is usually already cancelled on this path). The application
-// container keeps running: only the interactive process and its jobs go away.
+// terminate ends the exec process tree and releases the attachment. Closing the
+// hijacked connection alone does not stop the container process, so Close runs
+// the explicit cleanup with a detached, bounded context (the terminal stream's
+// context is usually already cancelled on this path) and returns any failure.
+// A failure is logged at ERROR with the container id, never silently treated as
+// success. The application container keeps running: only the interactive
+// process and its jobs go away.
 func (s *containerTerminalSession) terminate() {
 	s.termOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), terminalStopWait)
-		if err := s.stream.Kill(ctx); err != nil && s.log != nil {
-			s.log.Warn("terminal: container exec cleanup failed", "error", err)
+		if err := s.stream.Close(); err != nil && s.log != nil {
+			s.log.Error("terminal: container exec cleanup incomplete",
+				"container_id", s.containerID, "error", err)
 		}
-		cancel()
-		_ = s.stream.Close()
 	})
 }
 

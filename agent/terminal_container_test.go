@@ -84,6 +84,7 @@ func (s *fakeExecSession) Write(p []byte) (int, error) {
 
 func (s *fakeExecSession) Close() error {
 	s.once.Do(func() {
+		_ = s.Kill(context.Background())
 		s.closeErr = s.reader.Close()
 		close(s.closed)
 	})
@@ -276,12 +277,15 @@ func TestDockerClientExecHijacksStream(t *testing.T) {
 		creates[1][2] != execWrapperCommand || creates[1][3] != "gotham-terminal" || creates[1][4] != "/bin/sh" {
 		t.Fatalf("interactive command = %v, want the fixed wrapper plus the probed shell", creates[1])
 	}
-	if len(creates[2]) != 5 || creates[2][0] != "/bin/sh" || creates[2][1] != "-c" ||
+	if len(creates[2]) != 6 || creates[2][0] != "/bin/sh" || creates[2][1] != "-c" ||
 		creates[2][2] != execKillTreeScript || creates[2][3] != "gotham-terminal-kill" {
 		t.Fatalf("kill command = %v, want the fixed kill helper", creates[2])
 	}
 	if _, err := strconv.Atoi(creates[2][4]); err != nil {
 		t.Fatalf("kill pid = %q, want a decimal process id", creates[2][4])
+	}
+	if _, err := uuid.Parse(creates[2][5]); err != nil {
+		t.Fatalf("kill marker = %q, want a generated UUID", creates[2][5])
 	}
 	if input != "echo hi\n" {
 		t.Fatalf("exec input = %q, want the written bytes", input)
@@ -312,6 +316,42 @@ func TestDockerClientExecReportsMissingShell(t *testing.T) {
 	}
 	if _, err := client.Exec(context.Background(), "c1", ExecOptions{Cols: 80, Rows: 24}); !errors.Is(err, ErrDockerNoShell) {
 		t.Fatalf("Exec(no shell) = %v, want ErrDockerNoShell", err)
+	}
+}
+
+// TestDockerClientExecCleanupFailureIsReturned proves a missing helper is not
+// swallowed: Close returns the cleanup error.
+func TestDockerClientExecCleanupFailureIsReturned(t *testing.T) {
+	api := newFakeExecAPI(t)
+	api.killCreateFail = true
+	client, err := NewDockerClient(api.server.URL)
+	if err != nil {
+		t.Fatalf("NewDockerClient: %v", err)
+	}
+	session, err := client.Exec(context.Background(), "c1", ExecOptions{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if err := session.Close(); err == nil {
+		t.Fatal("Close swallowed a helper-create failure")
+	}
+}
+
+// TestDockerClientExecSurvivorsAreReturned proves a helper that reports
+// survivors fails the close instead of reporting success.
+func TestDockerClientExecSurvivorsAreReturned(t *testing.T) {
+	api := newFakeExecAPI(t)
+	api.killSurvivors = true
+	client, err := NewDockerClient(api.server.URL)
+	if err != nil {
+		t.Fatalf("NewDockerClient: %v", err)
+	}
+	session, err := client.Exec(context.Background(), "c1", ExecOptions{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if err := session.Close(); err == nil || !strings.Contains(err.Error(), "survivors") {
+		t.Fatalf("Close = %v, want a survivors error", err)
 	}
 }
 
@@ -414,18 +454,21 @@ func readExecUntil(reader io.Reader, marker string, timeout time.Duration) strin
 type fakeExecAPI struct {
 	server *httptest.Server
 
-	mu          sync.Mutex
-	running     bool
-	probeExit   int32
-	probeOutput string
-	commands    [][]string
-	inputs      strings.Builder
-	resizeQuery string
+	mu             sync.Mutex
+	running        bool
+	probeExit      int32
+	probeOutput    string
+	killCreateFail bool
+	killSurvivors  bool
+	execRunning    bool
+	commands       [][]string
+	inputs         strings.Builder
+	resizeQuery    string
 }
 
 func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 	t.Helper()
-	api := &fakeExecAPI{running: true, probeOutput: "/bin/sh\n"}
+	api := &fakeExecAPI{running: true, execRunning: true, probeOutput: "/bin/sh\n"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/containers/c1/json", func(w http.ResponseWriter, _ *http.Request) {
 		api.mu.Lock()
@@ -443,9 +486,14 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		api.mu.Lock()
 		api.commands = append(api.commands, body.Cmd)
-		id := fmt.Sprintf("exec%d", len(api.commands))
+		number := len(api.commands)
+		fail := api.killCreateFail && number == 3
 		api.mu.Unlock()
-		writeJSON(t, w, map[string]string{"Id": id})
+		if fail {
+			http.Error(w, "helper unavailable", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(t, w, map[string]string{"Id": fmt.Sprintf("exec%d", number)})
 	})
 	start := func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/exec/"), "/start")
@@ -474,6 +522,13 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 		}
 		if id != "exec2" {
 			// The kill helper runs non-interactively and exits immediately.
+			api.mu.Lock()
+			survivors := api.killSurvivors
+			api.execRunning = false
+			api.mu.Unlock()
+			if survivors {
+				_, _ = conn.Write([]byte("survivors: 42\n"))
+			}
 			return
 		}
 		_, _ = conn.Write([]byte("1234\nshell-ready\r\n"))
@@ -509,8 +564,15 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 			if id == "exec1" {
 				code = api.probeExit
 			}
+			if id == "exec3" && api.killSurvivors {
+				code = 3
+			}
+			running := false
+			if id == "exec2" {
+				running = api.execRunning
+			}
 			api.mu.Unlock()
-			writeJSON(t, w, map[string]any{"ExitCode": code, "Running": false})
+			writeJSON(t, w, map[string]any{"ExitCode": code, "Running": running})
 		}
 	})
 	api.server = httptest.NewServer(mux)

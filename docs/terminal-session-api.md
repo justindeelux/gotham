@@ -304,17 +304,35 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   connection **does not** end the process: the daemon keeps the exec alive. The
   agent therefore wraps the shell in a fixed recorder that prints its pid before
   `exec`ing the shell, and on every end runs a second, fixed helper exec inside
-  the same container. The helper snapshots the shell's descendant tree (so
-  foreground/background jobs are included even though an interactive shell puts
-  them in their own process groups), sends `SIGHUP`/`SIGTERM`/`SIGKILL` with a
-  short grace, never signals pid 1, and uses only the validated numeric pid — no
-  caller input is interpolated. The agent then verifies through Docker's exec
-  inspect that the exec is no longer `Running`, and only then closes the attach
-  connection and reports the exit status. **Neither path stops, restarts or
+  the same container. The helper collects every process that (a) is in the
+  shell's session, (b) has a parent chain reaching the shell (walked to a
+  fixpoint from `/proc/<pid>/stat` after the last `)`, so process groups,
+  TAB/space separators and spaces in command names do not matter), or (c)
+  carries the terminal's unique `GOTHAM_TERMINAL_ID` environment marker. The
+  marker is what catches `nohup`, plain background jobs and a job that called
+  `setsid` or was reparented to pid 1 before the snapshot. The helper then sends
+  `SIGHUP`/`SIGTERM`/`SIGKILL` with a short grace, ignores zombies, re-scans,
+  and reports `survivors:<pids>` if anything remains. It never signals pid 1 or
+  itself, never uses `kill -1` or `pkill` by name, and receives only the
+  validated numeric pid and the generated marker — no caller or container value
+  is interpolated into the script. When Docker already reports the exec as not
+  `Running`, the agent skips the tree/session walk (the recorded pid may have
+  been reused) and runs a marker-only helper, so orphaned jobs are still cleaned
+  up without touching an unrelated process.
+  The agent then verifies through Docker's exec inspect that the exec is no
+  longer `Running`, and only then closes the attach connection and reports the
+  exit status. If the helper cannot run or still reports survivors, the cleanup
+  error is returned by `Close` and logged at `ERROR` with the container id — it
+  is never silently treated as success. **Neither path stops, restarts or
   removes the application container.** The host child is always reaped (even
   when the opened event could not be sent), and a child that already exited is
   never signalled again. File descriptors, hijacked connections and goroutines
   are released on both sides.
+  **Remaining limit:** a daemon that double-forks, calls `setsid` **and** clears
+  its environment before the terminal is closed is reparented to pid 1 and
+  carries no marker, so the helper cannot attribute it to the terminal. Such a
+  process can outlive the close; ordinary `nohup`, background, trapped and
+  single-`setsid` jobs are covered.
 * **Agent failure / old agent** ends the stream with an error frame:
   `codes.Unimplemented` is reported as "the node agent does not support terminal
   sessions". The control plane never retries, reconnects or replays input.
@@ -453,22 +471,29 @@ Container exec additionally runs **real throwaway container** checks. They
 start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /
 `gotham-dev-redis`) and remove them afterwards. The suite covers:
 
-* open, run a foreground job, **Close**, and assert neither the shell pid nor
-  the job survives (the finding-1 regression);
-* the same after **transport loss** (cancelled terminal stream);
-* Ctrl-C interrupting a foreground job with the shell still usable;
-* resize observed through `stty size`;
-* the application container still running after every close;
-* three open/close cycles leaking no shell or job.
+* the review table on `alpine:3`, `busybox:1.36` and `debian:bookworm-slim`:
+  foreground `sleep`, `trap '' HUP TERM INT`, `nohup x &`, plain `x &`,
+  `(setsid x &)`, nested `( (x &) & )` and a shell that exits before Close. Each
+  case scans `/proc` from a fresh exec (not the kill helper) for the session's
+  unique environment marker and checks Docker's exec inspect after Close;
+* the same hard rows after **transport loss** (cancelled terminal stream),
+  scanning the unique job's command line;
+* **Ctrl-Z / `jobs` / `bg` / `fg`** followed by Ctrl-C and a usable prompt;
+* **concurrent CloseSend + cancellation** (5 racing cycles) and the **lifetime
+  cap** (short `MaxDuration`) with no double-kill panic, run under `-race`;
+* a cleanup-failure case (`chmod -x /bin/sh` after the terminal opens) proving
+  `Close` surfaces the failure instead of reporting success;
+* resize observed through `stty size`, Ctrl-C, and three open/close cycles.
 
 ```sh
-GOTHAM_E2E=1 go test ./agent -run 'TestDockerClientExecReal|TestDockerExecReal' -v
+GOTHAM_E2E=1 go test -race ./agent -run 'TestDockerClientExecReal|TestDockerExecReal' -v
 ```
 
-The same command is a step in `.github/workflows/e2e.yml` (the existing
+The same suite is a step in `.github/workflows/e2e.yml` (the existing
 `GOTHAM_E2E=1` job on GitHub-hosted Ubuntu with Docker), so the lifecycle is
-gated in CI; `alpine:3` is pre-pulled with the other e2e images. A developer
-without a local Docker daemon can run the unit suite only.
+gated in CI; `alpine:3` and `debian:bookworm-slim` are pre-pulled with the other
+e2e images (`busybox:1.36` is already there). A developer without a local Docker
+daemon can run the unit suite only.
 
 Unit coverage (no daemon needed) exercises the hijacked exec stream, shell
 probe, wrapper pid, fixed kill helper, resize and exit status against a faithful

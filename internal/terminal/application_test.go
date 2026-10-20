@@ -119,7 +119,10 @@ func (s *appFakeSession) Write(p []byte) (int, error) {
 	return n, err
 }
 func (s *appFakeSession) Close() error {
-	s.closeOnce.Do(func() { close(s.closed) })
+	s.closeOnce.Do(func() {
+		_ = s.Kill(context.Background())
+		close(s.closed)
+	})
 	return s.reader.Close()
 }
 func (s *appFakeSession) Resize(_ context.Context, cols, rows uint16) error {

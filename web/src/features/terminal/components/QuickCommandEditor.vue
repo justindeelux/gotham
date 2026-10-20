@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NButton, NForm, NFormItem, NInput } from "naive-ui";
+import { NForm, NFormItem, NInput } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -80,6 +80,11 @@ async function save(): Promise<void> {
   emit("save", parsed.data);
 }
 
+// The modal footer owns the primary Save and Cancel actions, so they stay
+// visible when the form is taller than a short viewport; the form still
+// submits on Enter (JUS-267 fix round 1).
+defineExpose({ submit: save });
+
 onMounted(() => {
   labelRef.value?.focus();
 });
@@ -128,11 +133,6 @@ onMounted(() => {
       {{ t("terminal.quickCommands.abbreviationHint") }}
     </p>
     <p v-if="shownError" class="qc-alert" role="alert">{{ shownError }}</p>
-    <div class="qc-form-actions">
-      <NButton size="small" type="primary" attr-type="submit">
-        {{ t("terminal.quickCommands.save") }}
-      </NButton>
-    </div>
   </NForm>
 </template>
 
@@ -151,11 +151,6 @@ onMounted(() => {
   color: var(--fg-2);
   font-size: var(--text-sm);
   font-weight: 600;
-}
-
-.qc-form-actions {
-  display: flex;
-  gap: var(--space-2);
 }
 
 .qc-note {

@@ -2,6 +2,7 @@
 import { Plus } from "@lucide/vue";
 import { NButton, NModal } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import type { ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 
 import QuickCommandEditor from "@/features/terminal/components/QuickCommandEditor.vue";
@@ -42,6 +43,8 @@ const formError = ref("");
 const insertError = ref("");
 /** bodyRef is the modal's content root; the editor replaces the list there. */
 const bodyRef = ref<HTMLElement | null>(null);
+const addButtonRef = ref<ComponentPublicInstance | null>(null);
+const editorRef = ref<InstanceType<typeof QuickCommandEditor> | null>(null);
 
 const editing = computed<QuickCommand | null>(
   () => store.commands.find((command) => command.id === editingId.value) ?? null,
@@ -80,10 +83,35 @@ function onWindowKeydown(event: KeyboardEvent): void {
   event.preventDefault();
   event.stopPropagation();
   if (showForm.value) {
-    resetForm();
+    resetForm({ restoreFocus: true });
     return;
   }
   close();
+}
+
+/** buttonElement unwraps a Naive button instance to its real <button>. */
+function buttonElement(instance: ComponentPublicInstance | null): HTMLElement | null {
+  const element = instance?.$el;
+  return element instanceof HTMLElement ? element : null;
+}
+
+/**
+ * restoreListFocus puts the keyboard back where the editor was opened from:
+ * Add for a new command, the edited row's Edit button otherwise. Focus is
+ * restored after the list renders (JUS-267 fix round 1).
+ */
+async function restoreListFocus(commandId: string): Promise<void> {
+  await nextTick();
+  if (commandId !== "") {
+    const row = [
+      ...(bodyRef.value?.querySelectorAll<HTMLElement>("[data-qc-edit]") ?? []),
+    ].find((element) => element.dataset.qcEdit === commandId);
+    if (row) {
+      row.focus();
+      return;
+    }
+  }
+  buttonElement(addButtonRef.value)?.focus();
 }
 
 /**
@@ -120,11 +148,24 @@ function startEdit(command: QuickCommand): void {
   void openEditor();
 }
 
-/** resetForm closes the editor without saving. */
-function resetForm(): void {
+/**
+ * resetForm closes the editor without saving. Only the in-modal exits
+ * (Cancel, Save, Escape-in-form) restore keyboard focus; closing the dialog
+ * or reopening it must leave focus to the surface's own after-leave logic.
+ */
+function resetForm(options: { restoreFocus?: boolean } = {}): void {
+  const restoreId = editingId.value;
   showForm.value = false;
   editingId.value = "";
   formError.value = "";
+  if (options.restoreFocus) {
+    void restoreListFocus(restoreId);
+  }
+}
+
+/** saveFromFooter submits the pinned footer Save through the editor. */
+function saveFromFooter(): void {
+  void editorRef.value?.submit();
 }
 
 /** saveCommand persists a validated draft and updates the list immediately. */
@@ -141,7 +182,7 @@ function saveCommand(draft: QuickCommandDraft): void {
     formError.value = t("terminal.quickCommands.saveRejected");
     return;
   }
-  resetForm();
+  resetForm({ restoreFocus: true });
 }
 
 /** insertCommand puts the command on the prompt without running it. */
@@ -261,6 +302,7 @@ onBeforeUnmount(() => {
 
       <QuickCommandEditor
         v-else
+        ref="editorRef"
         :key="editingId === '' ? 'new' : editingId"
         :commands="store.commands"
         :editing="editing"
@@ -273,6 +315,7 @@ onBeforeUnmount(() => {
       <div class="qc-foot">
         <NButton
           v-if="!showForm"
+          ref="addButtonRef"
           size="small"
           secondary
           class="qc-add"
@@ -284,17 +327,27 @@ onBeforeUnmount(() => {
           </template>
           {{ t("terminal.quickCommands.add") }}
         </NButton>
-        <!-- The footer always keeps a visible mode action: Add on the list,
-             Cancel in the editor (JUS-267). -->
-        <NButton
-          v-else
-          size="small"
-          secondary
-          class="qc-cancel"
-          @click="resetForm"
-        >
-          {{ t("terminal.quickCommands.cancel") }}
-        </NButton>
+        <!-- The footer always keeps the mode actions visible: Add on the
+             list, Save + Cancel in the editor, so a primary action is never
+             below the fold on a short viewport (JUS-267). -->
+        <template v-else>
+          <NButton
+            size="small"
+            type="primary"
+            class="qc-save"
+            @click="saveFromFooter"
+          >
+            {{ t("terminal.quickCommands.save") }}
+          </NButton>
+          <NButton
+            size="small"
+            secondary
+            class="qc-cancel"
+            @click="resetForm({ restoreFocus: true })"
+          >
+            {{ t("terminal.quickCommands.cancel") }}
+          </NButton>
+        </template>
         <span class="qc-foot-spacer" />
         <NButton size="small" class="qc-close" @click="close">
           {{ t("terminal.quickCommands.done") }}

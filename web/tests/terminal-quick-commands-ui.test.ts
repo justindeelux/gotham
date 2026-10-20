@@ -355,7 +355,9 @@ describe("quick command modal", () => {
     const wrapper = mount(QuickCommandsModal, {
       props: { show: true, tabId: tab.id },
       attachTo: document.body,
-      global: { plugins: [i18n] },
+      // Naive's focus trap looks for the card as a plain <div> sibling; VTU's
+      // default <transition-stub> breaks that lookup, so render the transition.
+      global: { plugins: [i18n], stubs: { transition: false } },
     });
     await flushPromises();
     return { wrapper, commands, runtime: runtimeFakes.instances[0]! };
@@ -469,7 +471,7 @@ describe("quick command modal", () => {
     wrapper.unmount();
   });
 
-  it("swaps the list for the editor and keeps a footer action in every state", async () => {
+  it("keeps Save and Cancel pinned and restores focus after leaving the editor", async () => {
     const { wrapper, commands } = await mountModal();
     for (let index = 0; index < 12; index += 1) {
       commands.add({
@@ -484,23 +486,63 @@ describe("quick command modal", () => {
     await flushPromises();
 
     // JUS-267: the editor replaces the list instead of being appended below
-    // it, so it is always the first thing in the scrollable body. The footer
-    // keeps a visible Cancel action while the Add button is gone.
+    // it, so it is always the first thing in the scrollable body. Both mode
+    // actions live in the fixed footer: Save stays visible without scrolling
+    // and Cancel remains next to it.
     expect(document.querySelector(".qc-form")).not.toBeNull();
     expect(document.querySelector(".qc-list")).toBeNull();
     expect(document.querySelector(".qc-add")).toBeNull();
-    expect(document.querySelector(".qc-form-actions")).not.toBeNull();
-    const cancel = document.querySelector<HTMLButtonElement>(".qc-cancel");
+    expect(document.querySelector(".qc-form-actions")).toBeNull();
+    const save = document.querySelector<HTMLButtonElement>(".qc-foot .qc-save");
+    expect(save).not.toBeNull();
+    expect(save!.textContent).toContain(
+      i18n.global.t("terminal.quickCommands.save"),
+    );
+    const cancel = document.querySelector<HTMLButtonElement>(".qc-foot .qc-cancel");
     expect(cancel).not.toBeNull();
     expect(cancel!.textContent).toContain(
       i18n.global.t("terminal.quickCommands.cancel"),
     );
 
+    // Cancel returns to the list and keeps the keyboard on Add.
     cancel!.click();
     await flushPromises();
     expect(document.querySelector(".qc-form")).toBeNull();
     expect(document.querySelectorAll(".qc-item")).toHaveLength(12);
-    expect(document.querySelector(".qc-add")).not.toBeNull();
+    expect(document.activeElement).toBe(document.querySelector(".qc-add"));
+
+    // Saving a new command also returns focus to Add.
+    click("Add command");
+    await flushPromises();
+    await fill(".qc-form input", "Command 13");
+    await fill(".qc-form textarea", "echo 13");
+    document.querySelector<HTMLButtonElement>(".qc-foot .qc-save")!.click();
+    await flushPromises();
+    await flushPromises();
+    expect(commands.commands).toHaveLength(13);
+    expect(document.querySelector(".qc-form")).toBeNull();
+    expect(document.activeElement).toBe(document.querySelector(".qc-add"));
+
+    // Escape from an edit returns focus to that row's Edit button.
+    const edit = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit Command 1"]',
+    );
+    expect(edit).not.toBeNull();
+    expect(edit!.dataset.qcEdit).toBe(commands.commands[0]!.id);
+    edit!.click();
+    await flushPromises();
+    document.querySelector<HTMLInputElement>(".qc-form input")!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushPromises();
+    expect(document.querySelector(".qc-form")).toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Edit Command 1",
+    );
     wrapper.unmount();
   });
 

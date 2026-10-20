@@ -1102,6 +1102,13 @@ func relayError(err error, target Target) string {
 		if strings.HasPrefix(message, "terminal: a valid container") {
 			return "the container target is invalid"
 		}
+		// A JUS-243 agent requires a File manager root. A new control plane
+		// legitimately sends an empty root for the Terminal page and the server
+		// detail tab, so that older agent's refusal is reported as an update
+		// requirement instead of a generic rejection.
+		if strings.HasPrefix(message, "terminal: a bounded root name is required") {
+			return "the node agent needs an update to open a terminal without a folder"
+		}
 		return "the terminal request was rejected"
 	case codes.Unavailable:
 		if container {

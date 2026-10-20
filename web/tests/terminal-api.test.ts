@@ -3,12 +3,88 @@
 // input: HTTP statuses for create, bounded phrases for the attach stream.
 import { describe, expect, it } from "vitest";
 
+import { ZodError } from "zod";
+
 import {
   terminalFailure,
   terminalStreamFailureCode,
 } from "@/features/terminal/api/terminal";
+import { terminalSessionSchema } from "@/features/terminal/schemas/terminal";
+
+// Literal create responses from docs/terminal-session-api.md section 1/1a.
+// They are kept as JSON strings so a backend shape drift is visible here.
+const HOST_NO_ROOT_RESPONSE = {
+  id: "3f8c2a1e-0000-4000-8000-000000000001",
+  server_id: "11111111-1111-4111-8111-111111111111",
+  target: "host",
+  cols: 120,
+  rows: 32,
+  expires_at: "2026-10-20T12:01:00Z",
+  websocket_path:
+    "/api/v1/servers/11111111-1111-4111-8111-111111111111/terminal/sessions/3f8c2a1e-0000-4000-8000-000000000001/ws",
+  subprotocol: "gotham.terminal.v1",
+} as const;
+
+const HOST_WITH_ROOT_RESPONSE = {
+  ...HOST_NO_ROOT_RESPONSE,
+  root: "volumes",
+  cwd: "my-app/data",
+} as const;
+
+const CONTAINER_RESPONSE = {
+  id: "3f8c2a1e-0000-4000-8000-000000000002",
+  server_id: "11111111-1111-4111-8111-111111111111",
+  target: "container",
+  cols: 120,
+  rows: 32,
+  expires_at: "2026-10-20T12:01:00Z",
+  websocket_path:
+    "/api/v1/applications/22222222-2222-4222-8222-222222222222/terminal/sessions/3f8c2a1e-0000-4000-8000-000000000002/ws",
+  subprotocol: "gotham.terminal.v1",
+  application_id: "22222222-2222-4222-8222-222222222222",
+  service: "web",
+  container_id: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  container_name: "gotham-22222222-web-1",
+  target_label: "web · gotham-22222222-web-1",
+} as const;
+
+describe("terminalSessionSchema", () => {
+  it("accepts a host create response without a File manager root", () => {
+    // The Terminal page and the server detail tab create a host session with
+    // no root/cwd; the control plane omits both fields in that response.
+    const parsed = terminalSessionSchema.parse(HOST_NO_ROOT_RESPONSE);
+    expect(parsed.root).toBe("");
+    expect(parsed.cwd).toBe("");
+  });
+
+  it("keeps an explicit root and cwd", () => {
+    const parsed = terminalSessionSchema.parse(HOST_WITH_ROOT_RESPONSE);
+    expect(parsed.root).toBe("volumes");
+    expect(parsed.cwd).toBe("my-app/data");
+  });
+
+  it("accepts the container create response", () => {
+    const parsed = terminalSessionSchema.parse(CONTAINER_RESPONSE);
+    expect(parsed.target).toBe("container");
+    expect(parsed.root).toBe("");
+    expect(parsed.cwd).toBe("");
+  });
+
+  it("rejects an unexpected 2xx shape", () => {
+    expect(() => terminalSessionSchema.parse({ id: "only-an-id" })).toThrow(
+      ZodError,
+    );
+  });
+});
 
 describe("terminalFailure", () => {
+  it("reports an unexpected 2xx response as badResponse, not network", () => {
+    expect(terminalFailure(new ZodError([]))).toEqual({
+      code: "badResponse",
+      message: "",
+    });
+  });
+
   it("maps the create-session statuses the file manager can hit", () => {
     expect(terminalFailure({ status: 401, message: "unauthorized" })).toEqual({
       code: "auth",
@@ -76,6 +152,11 @@ describe("terminalStreamFailureCode", () => {
         "  The Node Agent Does Not Support Terminal Sessions  ",
       ),
     ).toBe("unsupported");
+    expect(
+      terminalStreamFailureCode(
+        "the node agent needs an update to open a terminal without a folder",
+      ),
+    ).toBe("agentUpdate");
     expect(
       terminalStreamFailureCode(
         "the node is running the maximum number of terminal sessions",

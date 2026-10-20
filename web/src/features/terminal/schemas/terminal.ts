@@ -14,8 +14,11 @@ export const terminalSessionSchema = z.object({
   id: z.string().min(1),
   server_id: z.string().min(1),
   target: terminalTargetSchema,
-  root: z.string(),
-  cwd: z.string(),
+  // root and cwd are omitted by the control plane when the session was created
+  // without a File manager context (the Terminal page and the server detail
+  // tab); default them to "" so the no-root response stays valid.
+  root: z.string().default(""),
+  cwd: z.string().default(""),
   cols: z.number().int().min(1).max(1000),
   rows: z.number().int().min(1).max(1000),
   expires_at: z.string().min(1),

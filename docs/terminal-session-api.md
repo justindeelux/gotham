@@ -43,6 +43,18 @@ one it is absent.
 ```json
 {
   "target": "host",
+  "cols": 120,
+  "rows": 32
+}
+```
+
+The Terminal page and the Server detail Terminal tab have no File manager
+context and send exactly that: no `root` and no `cwd`. The File manager entry
+adds both:
+
+```json
+{
+  "target": "host",
   "root": "volumes",
   "cwd": "my-app/data",
   "cols": 120,
@@ -53,12 +65,16 @@ one it is absent.
 | Field | Rules |
 |---|---|
 | `target` | `host` or omitted on this route. `container` answers 501 here: container sessions have their own application routes and their own permission. Any other value answers 501. An old agent never silently falls back to the host. |
-| `root` | A FileService root name (`^[a-z0-9][a-z0-9_-]{0,127}$`). The agent resolves it against its own allow-list. |
-| `cwd` | Relative to `root`, at most 4096 bytes, no NUL, no absolute path, no `..` segment. Empty/`.` means the root itself. |
+| `root` | Optional. A FileService root name (`^[a-z0-9][a-z0-9_-]{0,127}$`). The agent resolves it against its own allow-list. When it is omitted the agent starts the shell in its own default directory (section 4); the browser never chooses that path. |
+| `cwd` | Optional, and only valid together with `root`. Relative to `root`, at most 4096 bytes, no NUL, no absolute path, no `..` segment. Empty/`.` means the root itself. |
 | `cols`, `rows` | 1–1000. |
 
-Response `201`:
+`cwd` without `root` answers `400` before any shell starts. An omitted `root`
+and `cwd` is the no-File-manager case: the control plane accepts it and the
+agent decides the start directory.
 
+Response `201` (the example includes a File manager root; when `root`/`cwd` are
+omitted the response omits those two fields):
 ```json
 {
   "id": "…",
@@ -74,9 +90,13 @@ Response `201`:
 }
 ```
 
-Errors: `400` invalid request, `404` unknown node, `429` quota reached, `501`
-unsupported target, `503`/`500` internal. Quotas: 4 sessions per user, 64 per
-control plane by default.
+The response body is a closed contract. A client validates it, and a `201`
+whose shape drifts is reported as an unexpected response rather than a network
+or transport failure.
+
+Errors: `400` invalid request (including a `cwd` without a `root`), `404`
+unknown node, `429` quota reached, `501` unsupported target, `503`/`500`
+internal. Quotas: 4 sessions per user, 64 per control plane by default.
 
 A created session is **pending**: no PTY exists yet. It expires after 60 s if
 no WebSocket attaches. `DELETE /api/v1/servers/{id}/terminal/sessions/{sessionID}`
@@ -402,22 +422,37 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
 
 ## 4. Working directory and privilege boundary
 
-The initial cwd is resolved **on the agent** from the FileService root plus the
-relative path, using the same policy as the file manager: the root must be
-allow-listed, `..` and absolute paths are refused, a symlink whose target leaves
-the root is refused, and the result must be an existing directory. A root at `/`
-(the default full-access `system` root) contains every absolute path, so a cwd
-such as `tmp` or `usr` resolves normally. The resolved absolute path is set
-directly on the child process (`exec.Cmd.Dir`); it is never interpolated into a
-shell command, so no quoting or escaping is involved. A cwd the agent refuses is
-reported to the client as the bounded phrase `invalid working directory` (no
-host path); a missing or unreadable directory is reported separately.
+The initial cwd is resolved **on the agent**. A host session with a `root` uses
+the FileService root plus the relative path, using the same policy as the file
+manager: the root must be allow-listed, `..` and absolute paths are refused, a
+symlink whose target leaves the root is refused, and the result must be an
+existing directory. A root at `/` (the default full-access `system` root)
+contains every absolute path, so a cwd such as `tmp` or `usr` resolves normally.
 
-**The shell itself is not confined to FileService roots, and on a standard
-install it is effectively root on the host.** Host terminal access is a
-platform-operator capability first; the process runs as the agent's service
-identity (`User=gotham-agent` in `deploy/gotham-agent.service`), but that
-identity is not a sandbox:
+A host session **without** a `root` starts in the agent's default directory: the
+agent service user's home directory if it exists, is a directory and is
+searchable, otherwise `/`. The home comes from the service user's passwd entry
+(looked up by uid), so the request and the browser never supply it; if that
+passwd lookup fails, Go's `os/user` may fall back to the agent's `HOME`. It is
+resolved through symlinks and must still be a searchable directory, otherwise
+the fallback is `/`. With no root there is no new path from browser input to the
+start directory at all: the browser sends no start path, and the agent alone
+decides it. A `cwd` without a `root` is refused (`invalid request` at the control
+plane, `InvalidArgument` at the agent) before any shell starts.
+
+In both cases the resolved absolute path is set directly on the child process
+(`exec.Cmd.Dir`); it is never interpolated into a shell command, so no quoting
+or escaping is involved. A cwd the agent refuses is reported to the client as
+the bounded phrase `invalid working directory` (no host path); a missing or
+unreadable directory is reported separately.
+
+**The shell itself is not confined to FileService roots or to the default
+directory, and on a standard install it is effectively root on the host.** A
+root/cwd only chooses where the shell starts; the process may `cd` anywhere the
+service user can read, and the rootless entry grants exactly the same
+capability. Host terminal access is a platform-operator capability first; the
+process runs as the agent's service identity (`User=gotham-agent` in
+`deploy/gotham-agent.service`), but that identity is not a sandbox:
 
 * The shipped unit adds `SupplementaryGroups=docker`. The shell can therefore
   talk to `/var/run/docker.sock` and start a privileged container that mounts
@@ -432,8 +467,9 @@ identity is not a sandbox:
 
 Treat a host terminal as **full host administration (effectively root)**, not as
 a file-browser session. The platform-operator gate and the periodic
-re-authorization are the real boundary. The file-manager root only chooses where
-the shell starts; `cwd` confinement is not a privilege boundary. The UI should
+re-authorization are the real boundary. The file-manager root (or the agent's
+default directory) only chooses where the shell starts; `cwd` confinement is not
+a privilege boundary. The UI should
 state this next to the `opened` event's `service_user` (JUS-245). The agent unit
 is not weakened for the terminal: the capabilities above are required by
 Docker management and self-update.
@@ -481,20 +517,33 @@ A container terminal is an **application** capability, not a node capability:
 | `GOTHAM_AGENT_TERMINAL_MAX_SESSIONS` | Concurrent host shells on the node (default 8). Excess opens answer `ResourceExhausted`. |
 
 The TerminalService is always registered by the agent (JUS-244). A host target
-needs the file service's root policy: with `GOTHAM_AGENT_FILES=false` the Roots
-resolver is absent and a host open answers `FailedPrecondition`, while container
-targets keep working through the Docker client. An agent that predates the
-service answers `codes.Unimplemented`, which the control plane surfaces as
-"unsupported". Container exec uses the existing Docker Engine HTTP client (no
-second SDK): create an exec, hijack `POST /exec/{id}/start`, resize with
-`POST /exec/{id}/resize`, and read the final status from `GET /exec/{id}/json`.
+with a `root` needs the file service's root policy: with
+`GOTHAM_AGENT_FILES=false` the Roots resolver is absent and such an open answers
+`FailedPrecondition`. A host target **without** a root does not use the resolver
+and still opens in the default directory, so a node with the file service
+disabled can run a host shell. Container targets keep working through the
+Docker client. An agent that predates the service answers `codes.Unimplemented`,
+which the control plane surfaces as "unsupported". Container exec uses the
+existing Docker Engine HTTP client (no second SDK): create an exec, hijack
+`POST /exec/{id}/start`, resize with `POST /exec/{id}/resize`, and read the
+final status from `GET /exec/{id}/json`.
+
+**Older agents.** A JUS-243 agent requires a root on every host open. A new
+control plane that sends the empty root of the no-File-manager entry gets
+`InvalidArgument` ("a bounded root name is required") from that agent. The
+control plane maps exactly that refusal to the bounded error frame `the node
+agent needs an update to open a terminal without a folder` instead of the
+generic `the terminal request was rejected`. It never retries, never falls back
+to another directory, and the File manager entry (root + cwd) keeps working
+against the older agent. Upgrade the agent to JUS-253 or later for rootless host
+sessions.
 
 ## 6. Verification
 
 The PTY path is exercised by real shells, not mocks. Commands below were run on
-the JUS-243 branch; the Linux runs use the cross-compiled agent test binary
-inside a container so the kernel, PTY driver and `/bin/sh` are Linux even on a
-macOS host.
+the JUS-243 and JUS-253 branches; the Linux runs use the cross-compiled agent
+test binary inside a container so the kernel, PTY driver and `/bin/sh` are Linux
+even on a macOS host.
 
 ```sh
 # Cross-builds for both release architectures.
@@ -504,7 +553,7 @@ GOOS=linux GOARCH=arm64 go build ./...
 # Linux/arm64 (native on an arm64 host).
 GOOS=linux GOARCH=arm64 go test -c ./agent -o /tmp/gotham-agent-arm64.test
 docker run --rm -v /tmp/gotham-agent-arm64.test:/agent.test alpine:3 \
-  /agent.test -test.run 'TestTerminal|TestResolveShellDir'
+  /agent.test -test.run 'TestTerminal|TestResolveShellDir|TestResolveDefaultTerminalDir'
 # PASS
 
 GOOS=linux GOARCH=arm64 go test -c ./internal/terminal -o /tmp/gotham-terminal-arm64.test
@@ -514,7 +563,7 @@ docker run --rm -v /tmp/gotham-terminal-arm64.test:/terminal.test alpine:3 /term
 # Linux/amd64 (emulated on the same arm64 host).
 GOOS=linux GOARCH=amd64 go test -c ./agent -o /tmp/gotham-agent-amd64.test
 docker run --rm --platform linux/amd64 -v /tmp/gotham-agent-amd64.test:/agent.test \
-  alpine:3 /agent.test -test.run 'TestTerminal|TestResolveShellDir'
+  alpine:3 /agent.test -test.run 'TestTerminal|TestResolveShellDir|TestResolveDefaultTerminalDir'
 # PASS
 
 GOOS=linux GOARCH=amd64 go test -c ./internal/terminal -o /tmp/gotham-terminal-amd64.test
@@ -527,6 +576,25 @@ The same suites also run natively on the development host (darwin). `go test
 -race ./agent ./internal/terminal` passes as part of the pre-push checks; the
 terminal tests cover session isolation, fd/goroutine release after close and
 disconnect, and process-group death on connection loss.
+
+The JUS-253 rootless entry is covered by real PTY tests: an open with no
+`root`/`cwd` runs `printf` and asserts `$PWD` equals the agent's default
+directory (the service user's home or `/`); a server built **without** a Roots
+resolver (`GOTHAM_AGENT_FILES=false`) still opens that shell while a named root
+is refused with `FailedPrecondition`; a `cwd` without a root fails in validation
+before `start` is called; and an older agent's `InvalidArgument` refusal is
+mapped in the relay test. Default-directory fallbacks (file, missing target,
+symlink to a file, relative or empty home) are unit-tested without a shell. A
+Go test pins the exact 201 key set (`root`/`cwd` omitted when empty, for both a
+rootless host and a container), and the same literals are parsed by the web
+schema tests (host with/without a root and the container response). The web
+regression in `web/tests/terminal-page.spec.ts` drives both the Terminal page
+and the Server detail tab against a fake that validates the create body with the
+backend rules (root optional but shaped like the regex; `cwd` requires `root`),
+returns backend-shaped responses, and asserts the exact payload
+`{"target":"host","cols":120,"rows":32}`. A malformed 2xx body is asserted to
+show the bounded "unexpected response" copy, never a network error, and to open
+no socket.
 
 Container exec additionally runs **real throwaway container** checks. They
 start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /

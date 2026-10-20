@@ -93,7 +93,17 @@ const servers = [
   serverRow(SERVER_OFFLINE, "prod-03", "offline"),
 ];
 
-/** fakeSession is one session the mocked HTTP + WS pair understands. */
+/** CreateBody is the exact terminal create-session request. */
+interface CreateBody {
+  target?: string;
+  root?: string;
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+  [key: string]: unknown;
+}
+
+/** FakeSession is one session the mocked HTTP + WS pair understands. */
 interface FakeSession {
   id: string;
   serverId: string;
@@ -109,6 +119,7 @@ type CreateBehavior =
   | { kind: "ok" }
   | { kind: "status"; status: number }
   | { kind: "body"; status: number; message: string }
+  | { kind: "malformed" }
   | { kind: "network" }
   | { kind: "delay" }
   | { kind: "close" };
@@ -118,6 +129,8 @@ interface TerminalState {
   creates: number;
   deletes: number;
   createServers: string[];
+  /** createBodies records the exact payload of every create call. */
+  createBodies: CreateBody[];
   seq: number;
   /** behaviors is consumed per create; empty means "ok". */
   behaviors: CreateBehavior[];
@@ -198,10 +211,65 @@ function freshState(): TerminalState {
     creates: 0,
     deletes: 0,
     createServers: [],
+    createBodies: [],
     seq: 0,
     behaviors: [],
     releases: [],
   };
+}
+
+/** ROOT_PATTERN mirrors internal/terminal's allow-listed root name shape. */
+const ROOT_PATTERN = /^[a-z0-9][a-z0-9_-]{0,127}$/;
+
+/**
+ * createBodyError mirrors the control plane's create-session validation. The
+ * Terminal page and the Server detail Terminal tab must send a payload this
+ * accepts: root is optional (the agent then picks the default directory), but
+ * a root that is present must be a bounded name, and a cwd requires a root.
+ * Keeping the real rules in the fake makes a UI/backend payload mismatch fail
+ * these tests instead of being silently accepted by a permissive mock.
+ */
+function createBodyError(body: CreateBody): string | null {
+  const target = body.target ?? "host";
+  if (target !== "host") {
+    return `unsupported target ${target}`;
+  }
+  if (typeof body.root !== "undefined") {
+    if (
+      typeof body.root !== "string" ||
+      (body.root !== "" && !ROOT_PATTERN.test(body.root))
+    ) {
+      return "root must match ^[a-z0-9][a-z0-9_-]{0,127}$";
+    }
+  }
+  if (typeof body.cwd !== "undefined" && typeof body.cwd !== "string") {
+    return "invalid working directory";
+  }
+  const root = body.root ?? "";
+  const cwd = body.cwd ?? "";
+  if (cwd.length > 4096 || cwd.includes("\0")) {
+    return "invalid working directory";
+  }
+  if (cwd.startsWith("/") || cwd.startsWith("\\")) {
+    return "working directory must be relative to the root";
+  }
+  if (cwd.split(/[/\\]/).includes("..")) {
+    return "working directory must not contain a parent segment";
+  }
+  if (cwd !== "" && root === "") {
+    return "a working directory requires a file root";
+  }
+  if (
+    !Number.isInteger(body.cols) ||
+    !Number.isInteger(body.rows) ||
+    (body.cols as number) < 1 ||
+    (body.cols as number) > 1000 ||
+    (body.rows as number) < 1 ||
+    (body.rows as number) > 1000
+  ) {
+    return "dimensions must be between 1 and 1000";
+  }
+  return null;
 }
 
 /** mockApi answers the shell, server and terminal routes. */
@@ -248,6 +316,19 @@ async function mockApi(
     state.creates += 1;
     state.createServers.push(serverId);
 
+    // Validate exactly like the control plane. A create body the backend would
+    // refuse must fail here, never be accepted because the mock is permissive.
+    const body = (request.postDataJSON() ?? {}) as CreateBody;
+    state.createBodies.push(body);
+    const bodyError = createBodyError(body);
+    if (bodyError !== null) {
+      await route.fulfill({
+        status: 400,
+        json: { message: `terminal: invalid request: ${bodyError}` },
+      });
+      return;
+    }
+
     // A fault scripted by a test: count the request first so a "no retry"
     // assertion sees the exact number of attempts.
     if (behavior.kind === "network") {
@@ -270,6 +351,12 @@ async function mockApi(
       });
       return;
     }
+    if (behavior.kind === "malformed") {
+      // A 2xx body that violates the create contract: the UI must report an
+      // unexpected response, never a network error, and never open a socket.
+      await route.fulfill({ status: 201, json: { id: "only-an-id" } });
+      return;
+    }
     if (behavior.kind === "delay") {
       await new Promise<void>((resolve) => {
         state.releases.push(resolve);
@@ -286,16 +373,18 @@ async function mockApi(
       closeFrames: 0,
       closeOnOpen: behavior.kind === "close",
     });
+    const root = body.root ?? "";
+    const cwd = body.cwd ?? "";
     await route.fulfill({
       status: 201,
       json: {
         id,
         server_id: serverId,
         target: "host",
-        root: "volumes",
-        cwd: "a/deep/working/directory",
-        cols: 120,
-        rows: 32,
+        ...(root !== "" ? { root } : {}),
+        ...(cwd !== "" ? { cwd } : {}),
+        cols: body.cols ?? 120,
+        rows: body.rows ?? 32,
         expires_at: "2026-10-20T12:01:00Z",
         websocket_path: `/api/v1/servers/${serverId}/terminal/sessions/${id}/ws`,
         subprotocol: "gotham.terminal.v1",
@@ -439,6 +528,9 @@ test("the standalone page creates one shell for the chosen server and survives r
   await page.locator(".server-pick", { hasText: "prod-01" }).click();
   await expect.poll(() => state.creates).toBe(1);
   expect(state.createServers).toEqual([SERVER_A]);
+  // The page has no File manager context: the create payload must not invent a
+  // root or cwd (the control plane now accepts an omitted root).
+  expect(state.createBodies[0]).toEqual({ target: "host", cols: 120, rows: 32 });
   await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_A}`));
   await expect(
     page.locator(".term-surface .term-state"),
@@ -593,6 +685,9 @@ test("the server detail Terminal tab is lazy, single-flight and server-correct",
   await page.locator(".n-tabs-tab", { hasText: "Terminal" }).click();
   await expect.poll(() => state.creates).toBe(1);
   expect(state.createServers).toEqual([SERVER_A]);
+  // The detail tab has no File manager context either; the same exact payload
+  // the Terminal page sends must pass the control plane's validation.
+  expect(state.createBodies[0]).toEqual({ target: "host", cols: 120, rows: 32 });
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
   const before = await tabInfo(page);
   expect(before?.sourcePath).toContain("tab=terminal");
@@ -689,7 +784,11 @@ test("the moved-to-window notice starts a new page session only on demand", asyn
     .getByRole("button", { name: "Start new session" });
   await startNew.click();
   await expect.poll(() => state.creates).toBe(2);
-  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  // Scope to the page pane: the floating window keeps its own (already
+  // Connected) surface, so a bare .term-surface locator is ambiguous here.
+  await expect(page.locator(".term-page .term-surface .term-state")).toHaveText(
+    "Connected",
+  );
   expect(await tabCounts(page)).toEqual({ page: 1, window: 1 });
 });
 
@@ -839,6 +938,36 @@ test("server detail create failure is explicit and never auto-retries", async ({
   await page.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+});
+
+test("an unexpected create response is bounded and never reported as network", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  state.behaviors = [{ kind: "malformed" }];
+  await mockApi(page, state);
+  await seedApp(page, `/terminal?server=${SERVER_A}`);
+
+  await expect.poll(() => state.creates).toBe(1);
+  await expect(
+    page.getByText(
+      "The control plane sent an unexpected response. Start a new session to try again.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("The control plane could not be reached."),
+  ).toHaveCount(0);
+  // No session was registered, so no WebSocket could be opened.
+  expect(state.sessions).toHaveLength(0);
+  await page.waitForTimeout(1500);
+  expect(state.creates).toBe(1);
+
+  // Explicit retry only; the next create is a well-formed response.
+  await page.getByRole("button", { name: "Start new session" }).click();
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  expect(state.sessions).toHaveLength(1);
 });
 
 test("rapid tab flapping while a create is in flight issues one POST", async ({

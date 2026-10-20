@@ -1,3 +1,5 @@
+import { ZodError } from "zod";
+
 import type { ApiError } from "@/shared/api/http";
 import { http } from "@/shared/api/http";
 import { getAccessToken } from "@/shared/api/token";
@@ -25,6 +27,8 @@ export type TerminalErrorCode =
   | "cwdInvalid"
   | "cwdMissing"
   | "cwdUnreadable"
+  | "agentUpdate"
+  | "badResponse"
   | "generic";
 
 /** TerminalFailure is a bounded failure a tab can render. */
@@ -99,6 +103,12 @@ export function currentTerminalToken(): string | null {
  * every known code.
  */
 export function terminalFailure(error: unknown): TerminalFailure {
+  // A 2xx body that does not match the create contract is a schema failure,
+  // not a transport failure: report it as an unexpected response so the UI
+  // never blames the network or echoes raw parse text.
+  if (error instanceof ZodError) {
+    return { code: "badResponse", message: "" };
+  }
   const api = error as Partial<ApiError> | null;
   const status = typeof api?.status === "number" ? api.status : null;
   const message = typeof api?.message === "string" ? api.message : "";
@@ -152,6 +162,8 @@ export function terminalStreamFailureCode(
       return "cwdUnreadable";
     case "the node agent does not support terminal sessions":
       return "unsupported";
+    case "the node agent needs an update to open a terminal without a folder":
+      return "agentUpdate";
     case "the node is running the maximum number of terminal sessions":
       return "quota";
     case "the node is unavailable":

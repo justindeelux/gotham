@@ -162,10 +162,14 @@ type DialFunc func(ctx context.Context, server *servers.Server) (TerminalClient,
 // CreateRequest is one operator's request to start a session.
 type CreateRequest struct {
 	Target string `json:"target"`
-	Root   string `json:"root"`
-	Cwd    string `json:"cwd"`
-	Cols   uint32 `json:"cols"`
-	Rows   uint32 `json:"rows"`
+	// Root is an optional FileService root name. When it is empty the agent
+	// starts the shell in its own default directory, so a host session does not
+	// depend on the node having file roots configured.
+	Root string `json:"root"`
+	// Cwd is relative to Root; it is only valid together with a Root.
+	Cwd  string `json:"cwd"`
+	Cols uint32 `json:"cols"`
+	Rows uint32 `json:"rows"`
 }
 
 // Session is a snapshot of a created session.
@@ -299,6 +303,9 @@ func (s *Service) Create(ctx context.Context, userID, serverID uuid.UUID, req Cr
 	}
 	if err := validateCwd(req.Cwd); err != nil {
 		return nil, err
+	}
+	if req.Cwd != "" && req.Root == "" {
+		return nil, fmt.Errorf("%w: a working directory requires a file root", ErrInvalid)
 	}
 	if err := validateDimensions(req.Cols, req.Rows); err != nil {
 		return nil, err
@@ -688,7 +695,13 @@ func normalizeTarget(target string) (string, error) {
 	}
 }
 
+// validateRoot accepts an omitted root: a host session without a File manager
+// root starts in a default directory the agent chooses. A provided root keeps
+// the exact bounded-name shape the agent generates.
 func validateRoot(root string) error {
+	if root == "" {
+		return nil
+	}
 	if !rootPattern.MatchString(root) {
 		return fmt.Errorf("%w: root must match %s", ErrInvalid, rootPattern)
 	}

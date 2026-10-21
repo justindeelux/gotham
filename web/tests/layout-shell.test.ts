@@ -78,7 +78,6 @@ async function mountShell(): Promise<ReturnType<typeof mount>> {
           { path: "dashboard", name: "dashboard", component: stub },
           { path: "servers", name: "servers", component: stub },
           { path: "projects", name: "projects", component: stub },
-          { path: "templates", name: "templates", component: stub },
           { path: "toolchain", name: "toolchain", component: stub },
           { path: "domains", name: "domains", component: stub },
           { path: "teams", name: "teams", component: stub },

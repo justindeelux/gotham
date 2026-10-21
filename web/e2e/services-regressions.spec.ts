@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
 
 import {
+  environmentURL,
   loadAccount,
   nestedURL,
   seedNodeAddress,
@@ -197,13 +198,16 @@ test.describe("services fix regressions", () => {
     const headers = { Authorization: `Bearer ${account.accessToken}` };
     const suffix = uniqueSuffix();
     const server = await seedServer(request, headers, suffix, "fix2");
-    const { projectName, environmentId } = await seedProjectEnvironment(request, headers);
+    const { projectId, projectName, environmentId } = await seedProjectEnvironment(request, headers);
     const oldDomain = `fix-old-${suffix}.example.test`;
     const newDomain = `fix-new-${suffix}.example.test`;
     const serviceName = `fix2-tpl-${suffix}`;
 
-    await page.goto("/templates");
-    await page.locator('[data-template="wordpress"]').click();
+    await page.goto(environmentURL(projectId, environmentId));
+    await page.getByRole("button", { name: "Add resource" }).first().click();
+    const picker = page.locator(".n-modal.app-modal");
+    await picker.getByRole("tab", { name: "Service", exact: true }).click();
+    await picker.locator('[data-template="wordpress"]').click();
     const wizard = page
       .locator(".n-modal")
       .filter({ hasText: "Deploy template WordPress" })
@@ -252,16 +256,8 @@ test.describe("services fix regressions", () => {
     await wizard.getByRole("button", { name: "Next" }).click();
     const step3 = wizard.locator('[data-testid="wizard-step-3"]');
     await step3.locator(".field-service-name input").fill(serviceName);
-    await step3.locator('[aria-label="Project"]').click();
-    await page
-      .locator(".n-base-select-option")
-      .filter({ hasText: projectName })
-      .click();
-    await step3.locator('[aria-label="Environment"]').click();
-    await page
-      .locator(".n-base-select-option")
-      .filter({ hasText: "production" })
-      .click();
+    // The picker preselects the seeded scope; the summary names it.
+    await expect(step3).toContainText(`${projectName} / production`);
     await step3.locator(".wizard__metaform .n-select").click();
     await page
       .locator(".n-base-select-option")

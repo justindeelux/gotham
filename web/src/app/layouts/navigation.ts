@@ -32,7 +32,6 @@ export const navSections: NavSection[] = [
       { key: "projects", label: "Projects", labelKey: "nav.items.projects", icon: "layers", to: "projects" },
       { key: "files", label: "File manager", labelKey: "nav.items.files", icon: "folder", to: "files", adminOnly: true },
       { key: "terminal", label: "Terminal", labelKey: "terminal.page.navLabel", icon: "terminal", to: "terminal", adminOnly: true },
-      { key: "templates", label: "Template library", labelKey: "nav.items.templates", icon: "rocket", to: "templates" },
       { key: "toolchain", label: "App Store", labelKey: "nav.items.toolchain", icon: "box", to: "toolchain" },
       { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers" },
       { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains", adminOnly: true },

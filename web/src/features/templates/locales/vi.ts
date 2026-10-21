@@ -25,21 +25,6 @@ const vi: typeof en = {
     notFoundWithDetail: "Không tìm thấy: {detail}",
     disabled: "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
   },
-  gallery: {
-    empty: "Danh mục chưa có mẫu nào.",
-  },
-  page: {
-    eyebrow: "Vận hành · Mẫu một chạm",
-    title: "Thư viện mẫu",
-    description:
-      "Chọn một mẫu, điền biểu mẫu, control plane sẽ dựng tài liệu compose rồi triển khai qua node agent. Biểu mẫu sinh từ schema của mẫu nên thêm mẫu mới không cần đổi giao diện.",
-    calloutTitle: "Cấu trúc của một mẫu",
-    calloutYaml:
-      "{file} khai báo tên, biểu tượng, mô tả và các trường biểu mẫu (kiểu, mặc định, bắt buộc, kiểm tra).",
-    calloutComposeUses: "{file} dùng chỗ giữ {placeholder}.",
-    calloutComposeNote:
-      "Engine chỉ thay thế chuỗi, không bao giờ chạy mã, nên mẫu không thể chạy lệnh trên node. Sửa mẫu không ảnh hưởng dịch vụ đã triển khai.",
-  },
   wizard: {
     title: "Triển khai mẫu {name}",
     steps: {

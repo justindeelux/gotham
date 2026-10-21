@@ -54,6 +54,9 @@ describe("navSections", () => {
     expect(keys).not.toContain("applications");
     expect(keys).not.toContain("services");
     expect(keys).not.toContain("databases");
+    // GOTHAM-18: the standalone template library is gone; the add-resource
+    // picker is the only way to a template.
+    expect(keys).not.toContain("templates");
     const projects = navSections
       .flatMap((section) => section.items)
       .find((item) => item.key === "projects");

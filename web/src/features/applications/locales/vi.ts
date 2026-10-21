@@ -160,6 +160,47 @@ const vi: ApplicationsMessages = {
   },
   storageTab: {
     title: "Volume",
+    refresh: "Làm mới",
+    name: "Volume",
+    kindLabel: "Loại",
+    hostPath: "Thư mục được gắn",
+    mounts: "Điểm gắn trong container",
+    stateLabel: "Trạng thái",
+    open: "Tệp",
+    openAction: "Mở trong Trình quản lý tệp",
+    openAria: "Mở volume {name} trong Trình quản lý tệp",
+    openUnavailable: "Không có thao tác thư mục cho vùng lưu trữ này",
+    invalidTarget: "Thư mục đó không thuộc vùng lưu trữ của ứng dụng này",
+    readOnly: "chỉ đọc",
+    readWrite: "đọc-ghi",
+    empty: "Chưa có volume nào",
+    emptyHint:
+      "Ứng dụng chưa cấu hình lưu trữ. Thêm volume bên dưới để giữ dữ liệu qua các lần triển khai lại.",
+    emptyCompose:
+      "Nguồn compose chưa khai báo volume nào. Thêm volume có tên trong services[].volumes để giữ dữ liệu.",
+    composeTitle: "Volume của Compose",
+    composeHint:
+      "Volume của Compose được khai báo trong nguồn compose tại services[].volumes; Gotham gắn mỗi volume có tên dưới thư mục được quản lý của ứng dụng.",
+    editorTitle: "Cấu hình lưu trữ",
+    kind: {
+      managed: "Được quản lý",
+      named: "Volume có tên",
+      bind: "Gắn từ host",
+      tmpfs: "Tạm thời",
+      unknown: "Không rõ",
+    },
+    state: {
+      running: "Đang chạy",
+      stopped: "Đã dừng",
+      unverified: "Chưa xác minh",
+    },
+    reason: {
+      files_disabled: "Trình quản lý tệp đang tắt trên máy chủ này",
+      root_unavailable: "Không có thư mục gốc nào của Trình quản lý tệp chứa thư mục này",
+      not_browsable: "Vùng lưu trữ này không thể duyệt trong Trình quản lý tệp",
+      volume_unverified: "Không thể xác minh thư mục của volume trên node",
+      no_node: "Ứng dụng chưa được gán máy chủ",
+    },
     footer:
       "Lưu sẽ thay thế toàn bộ tập hợp. Volume nằm trên node nên dữ liệu còn nguyên sau khi triển khai lại và quay lui.",
   },

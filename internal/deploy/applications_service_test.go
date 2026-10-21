@@ -381,6 +381,10 @@ func TestServiceApplicationOwnership(t *testing.T) {
 			_, err := svc.ReplaceStorages(context.Background(), otherUser, app.ID, nil)
 			return err
 		}},
+		{"list volumes", func() error {
+			_, err := svc.ListVolumes(context.Background(), otherUser, app.ID)
+			return err
+		}},
 		{"stop", func() error {
 			_, err := svc.Stop(context.Background(), otherUser, app.ID)
 			return err

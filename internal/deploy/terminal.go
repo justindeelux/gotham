@@ -225,7 +225,7 @@ func (s *Service) terminalTargets(ctx context.Context, userID, appID uuid.UUID) 
 			// call shares the control timeout with every other node RPC.
 			listed, listErr := node.ContainersByLabel(callCtx, map[string]string{
 				composeProjectLabel: project,
-			})
+			}, false, false)
 			if listErr != nil {
 				return TerminalTargetSet{}, listErr
 			}

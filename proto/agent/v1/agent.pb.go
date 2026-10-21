@@ -3923,9 +3923,14 @@ type ListContainersRequest struct {
 	// The agent applies them through Docker's native label filter, so only the
 	// matching containers travel back (the terminal id resolution asks for one
 	// compose project instead of listing the whole node).
-	Labels        map[string]string `protobuf:"bytes,2,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Labels map[string]string `protobuf:"bytes,2,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// resolve_volume_devices asks the agent to resolve the configured host
+	// device of each named volume (an extra Docker volume inspect per distinct
+	// volume). Off by default so a heartbeat or a node-wide listing never pays
+	// for it; the volume listing sets it.
+	ResolveVolumeDevices bool `protobuf:"varint,3,opt,name=resolve_volume_devices,json=resolveVolumeDevices,proto3" json:"resolve_volume_devices,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ListContainersRequest) Reset() {
@@ -3970,6 +3975,13 @@ func (x *ListContainersRequest) GetLabels() map[string]string {
 		return x.Labels
 	}
 	return nil
+}
+
+func (x *ListContainersRequest) GetResolveVolumeDevices() bool {
+	if x != nil {
+		return x.ResolveVolumeDevices
+	}
+	return false
 }
 
 // ContainerInfo describes one container.
@@ -4107,17 +4119,34 @@ func (x *ContainerInfo) GetHealth() string {
 	return ""
 }
 
-// ContainerMount is one bind mount of a container.
+// ContainerMount is one mount of a container.
 type ContainerMount struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// source is the host path of the mount.
+	// source is the host path of the mount as the engine reports it: a bind
+	// source, or a named volume's Docker mountpoint.
 	Source string `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
 	// destination is the path inside the container.
 	Destination string `protobuf:"bytes,2,opt,name=destination,proto3" json:"destination,omitempty"`
 	// read_only is true for a read-only mount.
-	ReadOnly      bool `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ReadOnly bool `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	// type is the engine's mount type ("bind", "volume", "tmpfs", "npipe"),
+	// empty from an agent that predates it.
+	Type string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	// volume_name is the Docker volume name for a "volume" mount, empty
+	// otherwise.
+	VolumeName string `protobuf:"bytes,5,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
+	// volume_device is the configured host device of a local volume whose
+	// driver options bind it to a directory (the managed compose volumes).
+	// Empty for a volume without a configured device; source then remains the
+	// volume's Docker mountpoint. Never inferred from the volume name.
+	VolumeDevice string `protobuf:"bytes,6,opt,name=volume_device,json=volumeDevice,proto3" json:"volume_device,omitempty"`
+	// volume_device_unverified is true when the agent tried to resolve the
+	// volume's device (resolve_volume_devices) and the engine could not answer,
+	// so the caller must treat the backing directory as unknown rather than
+	// falling back to the Docker mountpoint.
+	VolumeDeviceUnverified bool `protobuf:"varint,7,opt,name=volume_device_unverified,json=volumeDeviceUnverified,proto3" json:"volume_device_unverified,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *ContainerMount) Reset() {
@@ -4167,6 +4196,34 @@ func (x *ContainerMount) GetDestination() string {
 func (x *ContainerMount) GetReadOnly() bool {
 	if x != nil {
 		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *ContainerMount) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *ContainerMount) GetVolumeName() string {
+	if x != nil {
+		return x.VolumeName
+	}
+	return ""
+}
+
+func (x *ContainerMount) GetVolumeDevice() string {
+	if x != nil {
+		return x.VolumeDevice
+	}
+	return ""
+}
+
+func (x *ContainerMount) GetVolumeDeviceUnverified() bool {
+	if x != nil {
+		return x.VolumeDeviceUnverified
 	}
 	return false
 }
@@ -6825,10 +6882,11 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"ToolResult\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1b\n" +
-	"\texit_code\x18\x02 \x01(\x05R\bexitCode\"\xa9\x01\n" +
+	"\texit_code\x18\x02 \x01(\x05R\bexitCode\"\xdf\x01\n" +
 	"\x15ListContainersRequest\x12\x10\n" +
 	"\x03all\x18\x01 \x01(\bR\x03all\x12C\n" +
-	"\x06labels\x18\x02 \x03(\v2+.agent.v1.ListContainersRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\x02 \x03(\v2+.agent.v1.ListContainersRequest.LabelsEntryR\x06labels\x124\n" +
+	"\x16resolve_volume_devices\x18\x03 \x01(\bR\x14resolveVolumeDevices\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc8\x03\n" +
@@ -6848,11 +6906,16 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06health\x18\v \x01(\tR\x06health\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfb\x01\n" +
 	"\x0eContainerMount\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\tR\x06source\x12 \n" +
 	"\vdestination\x18\x02 \x01(\tR\vdestination\x12\x1b\n" +
-	"\tread_only\x18\x03 \x01(\bR\breadOnly\"a\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\x12\x12\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1f\n" +
+	"\vvolume_name\x18\x05 \x01(\tR\n" +
+	"volumeName\x12#\n" +
+	"\rvolume_device\x18\x06 \x01(\tR\fvolumeDevice\x128\n" +
+	"\x18volume_device_unverified\x18\a \x01(\bR\x16volumeDeviceUnverified\"a\n" +
 	"\vPortBinding\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12!\n" +
 	"\fprivate_port\x18\x02 \x01(\x05R\vprivatePort\x12\x1f\n" +

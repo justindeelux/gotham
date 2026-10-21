@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import { Server as ServerIcon } from "@lucide/vue";
-import { NSelect } from "naive-ui";
+import { NAlert, NSelect } from "naive-ui";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import FilesBrowser from "@/features/files/components/FilesBrowser.vue";
 import type { Server } from "@/features/servers/api/servers";
-import { getServer } from "@/features/servers/api/servers";
+import { getServer, isApiError } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers";
+import { useFilesStore } from "@/features/files";
+import { isRootRelativePath } from "@/features/files/utils/deepLink";
 
 const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
 const serversStore = useServersStore();
+const files = useFilesStore();
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
 const server = ref<Server | null>(null);
@@ -77,6 +80,105 @@ async function loadServer(): Promise<void> {
 
 watch(serverId, () => void loadServer(), { immediate: true });
 
+/**
+ * appliedDeepLink pins the target the browser already opened: the watcher reruns
+ * when the roots or the query change, and re-opening the same directory would
+ * reload it for nothing.
+ */
+const appliedDeepLink = ref("");
+/** deepLinkNotice explains a rejected link and where the browser landed. */
+const deepLinkNotice = ref<string | null>(null);
+
+/**
+ * currentRoots is empty until the CURRENT server's root list has loaded: a
+ * leftover list from the previous node must never validate a deep link.
+ */
+const currentRoots = computed(() =>
+  files.rootsServerId === serverId.value ? files.roots : [],
+);
+
+/**
+ * fallbackRoot names the root the browser actually shows when a link is
+ * rejected: the active tab (which may be restored from persistence), then the
+ * node's first root.
+ */
+const fallbackRoot = computed<string>(
+  () => files.activeTab?.rootName || currentRoots.value[0]?.name || "",
+);
+
+/**
+ * applyDeepLink opens a `?root=&path=` target once the node's roots are
+ * loaded. The notice distinguishes why a link was not opened: a root the node
+ * does not expose, a malformed/escaping path, or a directory the node reports
+ * as missing. The agent still enforces its own confinement and the File
+ * Manager its authorization.
+ */
+async function applyDeepLink(): Promise<void> {
+  const rawRoot = typeof route.query.root === "string" ? route.query.root : "";
+  const rawPath = typeof route.query.path === "string" ? route.query.path : "";
+  if (rawRoot === "") {
+    deepLinkNotice.value = null;
+    return;
+  }
+  const roots = currentRoots.value;
+  if (roots.length === 0) {
+    // Roots are still loading (or belong to another server): wait for the
+    // watch below instead of rejecting a link that may be valid.
+    return;
+  }
+  if (!roots.some((root) => root.name === rawRoot)) {
+    deepLinkNotice.value = t("files.deepLink.rootUnavailable", {
+      root: rawRoot,
+      path: rawPath,
+      fallback: fallbackRoot.value,
+    });
+    return;
+  }
+  if (!isRootRelativePath(rawPath)) {
+    deepLinkNotice.value = t("files.deepLink.invalidPath", {
+      root: rawRoot,
+      path: rawPath,
+      fallback: fallbackRoot.value,
+    });
+    return;
+  }
+  deepLinkNotice.value = null;
+  const key = `${serverId.value}|${rawRoot}|${rawPath}`;
+  if (appliedDeepLink.value === key) {
+    return;
+  }
+  appliedDeepLink.value = key;
+  await files.openAt(rawRoot, rawPath);
+  // The target was well-formed and root-valid, but the node may not have the
+  // directory: the browser keeps its own not-found state; the notice names the
+  // link so the reason is clear.
+  if (isApiError(files.errorRaw) && files.errorRaw.status === 404) {
+    deepLinkNotice.value = t("files.deepLink.notFound", {
+      root: rawRoot,
+      path: rawPath,
+    });
+  }
+}
+
+watch(
+  [
+    () => files.rootsServerId,
+    () => files.roots.map((root) => root.name).join(","),
+    () => route.query.root,
+    () => route.query.path,
+    serverId,
+  ],
+  () => void applyDeepLink(),
+  { immediate: true },
+);
+
+// A node switch replaces the root list; a notice for the previous node's link
+// must not linger over the new browser.
+watch(serverId, () => {
+  appliedDeepLink.value = "";
+  deepLinkNotice.value = null;
+});
+
 onMounted(() => {
   if (serversStore.servers.length === 0 && !serversStore.loading) {
     void serversStore.fetchServers().catch(() => undefined);
@@ -99,6 +201,14 @@ function switchNode(next: string | number | null): void {
 
 <template>
   <div class="server-files">
+    <NAlert
+      v-if="deepLinkNotice"
+      class="server-files__deep-link"
+      type="warning"
+      :show-icon="true"
+    >
+      {{ deepLinkNotice }}
+    </NAlert>
     <FilesBrowser class="server-files__browser" :server-id="serverId">
       <!-- JUS-134/JUS-206 round 4: the agent-node selector decides the whole
            listing, so it rides at the right end of the tab row (passed through
@@ -135,6 +245,10 @@ function switchNode(next: string | number | null): void {
 .server-files__browser {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.server-files__deep-link {
+  flex: 0 0 auto;
 }
 
 /* Agent-node switcher (JUS-119/134, JUS-206 round 4): names the node on

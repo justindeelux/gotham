@@ -545,7 +545,7 @@ func p6WaitForContainer(t *testing.T, ctx context.Context, engine *agent.DockerC
 	deadline := time.Now().Add(p6HTTPWait)
 	for {
 		listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		listed, err := engine.ListContainers(listCtx, true, nil)
+		listed, err := engine.ListContainers(listCtx, true, nil, false)
 		cancel()
 		if err == nil {
 			for _, container := range listed {
@@ -673,7 +673,7 @@ func p6FindContainer(t *testing.T, ctx context.Context, engine *agent.DockerClie
 	t.Helper()
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	listed, err := engine.ListContainers(listCtx, true, nil)
+	listed, err := engine.ListContainers(listCtx, true, nil, false)
 	if err != nil {
 		t.Fatalf("list containers: %v", err)
 	}

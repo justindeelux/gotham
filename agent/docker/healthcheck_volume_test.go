@@ -113,7 +113,7 @@ func TestListContainersSetsHealth(t *testing.T) {
 	t.Cleanup(server.Close)
 	client := newFakeDockerClient(t, server.URL)
 
-	containers, err := client.ListContainers(context.Background(), true, nil)
+	containers, err := client.ListContainers(context.Background(), true, nil, false)
 	if err != nil {
 		t.Fatalf("ListContainers: %v", err)
 	}

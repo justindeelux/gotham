@@ -38,6 +38,8 @@ type fakeDeployService struct {
 	envErr            error
 	storages          []Storage
 	storagesErr       error
+	volumes           VolumeListing
+	volumesErr        error
 	stop              Deployment
 	stopErr           error
 	start             Deployment
@@ -242,6 +244,15 @@ func (f *fakeDeployService) GetStorages(_ context.Context, userID, appID uuid.UU
 		return nil, f.storagesErr
 	}
 	return f.storages, nil
+}
+
+// ListVolumes implements DeployService.
+func (f *fakeDeployService) ListVolumes(_ context.Context, userID, appID uuid.UUID) (VolumeListing, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.volumesErr != nil {
+		return VolumeListing{}, f.volumesErr
+	}
+	return f.volumes, nil
 }
 
 // ReplaceStorages implements DeployService.

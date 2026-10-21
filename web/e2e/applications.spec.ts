@@ -47,6 +47,9 @@ function waitForDetailReads(page: Page, applicationId: string): Promise<unknown[
       response.url().includes(`${detailPrefix}/storages`),
     ),
     page.waitForResponse((response) =>
+      response.url().includes(`${detailPrefix}/volumes`),
+    ),
+    page.waitForResponse((response) =>
       response.url().includes(`${detailPrefix}/previews`),
     ),
     // The rail polls the same endpoint on its own interval, so this waiter
@@ -173,10 +176,10 @@ test.describe("applications", () => {
     expect(guardrails.apiFailures).toEqual([]);
   });
 
-  // JUS-238: the single-container Storage tab does not apply to a compose
-  // source (volumes live in the compose document), so the tab is absent and a
-  // stale ?tab=storage deep link falls back to Overview.
-  test("compose application hides Storage and falls back to Overview", async ({
+  // JUS-273: a compose source keeps the Storage tab. It lists the named
+  // volumes declared in the compose source and points at that source for
+  // editing; the single-container editor is never shown.
+  test("compose application shows the Storage list and the compose hint", async ({
     page,
     guardrails,
     request,
@@ -196,7 +199,20 @@ test.describe("applications", () => {
         repo: "",
         clone_url: "",
         source_type: "compose",
-        compose_content: "services:\n  web:\n    image: nginx:1.25\n",
+        compose_content: [
+          "services:",
+          "  web:",
+          "    image: nginx:1.25",
+          "    volumes:",
+          "      - shared:/var/www/html",
+          "  worker:",
+          "    image: busybox:1.36",
+          "    volumes:",
+          "      - shared:/work",
+          "volumes:",
+          "  shared: {}",
+          "",
+        ].join("\n"),
         compose_service: "web",
         server_id: nodeId,
       },
@@ -214,23 +230,33 @@ test.describe("applications", () => {
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
 
     const tabs = page.locator(".n-tabs-tab");
-    await expect(tabs.filter({ hasText: "Storage" })).toHaveCount(0);
-    await expect(page.locator(".n-tabs-tab.n-tabs-tab--active")).toHaveText("Overview");
+    await expect(tabs.filter({ hasText: "Storage" })).toHaveCount(1);
+    await expect(page.locator(".n-tabs-tab.n-tabs-tab--active")).toHaveText("Storage");
+    // The shared volume is one row with both consuming services.
+    await expect(page.getByText("shared", { exact: true })).toHaveCount(1);
+    // Exact mount lines: "/work" alone also matches the runner's own path in
+    // the mapped directory cell.
+    await expect(page.getByText("/var/www/html · web", { exact: true })).toBeVisible();
+    await expect(page.getByText("/work · worker", { exact: true })).toBeVisible();
+    await expect(page.getByText("Compose volumes", { exact: true })).toBeVisible();
     await expect(
-      page.getByText("declared in the compose source", { exact: false }),
+      page.getByText("declared in the compose source", { exact: false }).first(),
     ).toBeVisible();
+    await expect(page.getByText("Storage configuration", { exact: true })).toHaveCount(0);
 
     expect(guardrails.apiFailures).toEqual([]);
   });
 
-  // Image sources keep the single-container volume editor unchanged.
-  test("image application keeps the Storage tab", async ({
+  // JUS-273: with no agent on the application's node, the configured volume is
+  // retained unverified and the listing explains why no File Manager target
+  // exists (root_unavailable) instead of naming a root the node does not have.
+  test("keeps the volume and explains an unreachable node", async ({
     page,
     guardrails,
     request,
   }) => {
     const account = loadAccount();
-    const name = `ui-e2e-image-${uniqueSuffix()}`;
+    const name = `ui-e2e-volume-${uniqueSuffix()}`;
     const headers = { Authorization: `Bearer ${account.accessToken}` };
     const nodeId = await seedNode(request, headers);
     const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
@@ -246,12 +272,50 @@ test.describe("applications", () => {
         source_type: "image",
         image_ref: "nginx:1.25",
         server_id: nodeId,
+        storage: [{ name: "data", host_path: "", container_path: "/data" }],
       },
     });
     expect(created.status(), await created.text()).toBe(201);
     const { application } = (await created.json()) as {
-      application: { id: string; name: string };
+      application: { id: string };
     };
+
+    const listing = await request.get(
+      `/api/v1/applications/${application.id}/volumes`,
+      { headers },
+    );
+    expect(listing.status(), await listing.text()).toBe(200);
+    const body = (await listing.json()) as {
+      source_type: string;
+      runtime: string;
+      reason?: string;
+      volumes: Array<{
+        name: string;
+        kind: string;
+        host_path?: string;
+        state: string;
+        mounts: Array<{ destination: string; read_only: boolean; state: string }>;
+        file_manager?: { server_id: string; root: string; path: string };
+        open_reason?: string;
+      }>;
+    };
+    expect(body.source_type).toBe("image");
+    // The seeded node is refused at once, so storage stays retained and
+    // unverified instead of being reported as deleted. No File Manager root can
+    // be read from that node, so the listing explains why there is no target
+    // instead of hard-coding a root name.
+    expect(body.runtime).toBe("unavailable");
+    expect(body.reason).toBeTruthy();
+    expect(body.volumes).toHaveLength(1);
+    const volume = body.volumes[0];
+    expect(volume.name).toBe("data");
+    expect(volume.kind).toBe("managed");
+    expect(volume.state).toBe("unverified");
+    expect(volume.mounts).toEqual([
+      { destination: "/data", read_only: false, state: "unverified" },
+    ]);
+    expect(volume.file_manager).toBeUndefined();
+    expect(volume.open_reason).toBe("root_unavailable");
 
     const settled = waitForDetailReads(page, application.id);
     await page.goto(
@@ -259,13 +323,19 @@ test.describe("applications", () => {
     );
     await settled;
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
-
-    // The deep link is applied once the row loads, and the tab stays visible
-    // for a non-compose source.
-    const storageTab = page.locator(".n-tabs-tab").filter({ hasText: "Storage" });
-    await expect(storageTab).toHaveCount(1);
-    await expect(page.locator(".n-tabs-tab.n-tabs-tab--active")).toHaveText("Storage");
-    await expect(page.getByText("Volumes", { exact: true })).toBeVisible();
+    // The unavailable agent is explained on the list, not hidden and not
+    // reported as deleted storage.
+    await expect(
+      page.getByText("did not answer the container listing", { exact: false }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("No File Manager root on this server exposes the directory", {
+        exact: false,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Open volume .* in File Manager/ }),
+    ).toHaveCount(0);
 
     expect(guardrails.apiFailures).toEqual([]);
   });

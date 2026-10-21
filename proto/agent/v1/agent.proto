@@ -836,6 +836,11 @@ message ListContainersRequest {
   // matching containers travel back (the terminal id resolution asks for one
   // compose project instead of listing the whole node).
   map<string, string> labels = 2;
+  // resolve_volume_devices asks the agent to resolve the configured host
+  // device of each named volume (an extra Docker volume inspect per distinct
+  // volume). Off by default so a heartbeat or a node-wide listing never pays
+  // for it; the volume listing sets it.
+  bool resolve_volume_devices = 3;
 }
 
 // ContainerInfo describes one container.
@@ -863,14 +868,31 @@ message ContainerInfo {
   string health = 11;
 }
 
-// ContainerMount is one bind mount of a container.
+// ContainerMount is one mount of a container.
 message ContainerMount {
-  // source is the host path of the mount.
+  // source is the host path of the mount as the engine reports it: a bind
+  // source, or a named volume's Docker mountpoint.
   string source = 1;
   // destination is the path inside the container.
   string destination = 2;
   // read_only is true for a read-only mount.
   bool read_only = 3;
+  // type is the engine's mount type ("bind", "volume", "tmpfs", "npipe"),
+  // empty from an agent that predates it.
+  string type = 4;
+  // volume_name is the Docker volume name for a "volume" mount, empty
+  // otherwise.
+  string volume_name = 5;
+  // volume_device is the configured host device of a local volume whose
+  // driver options bind it to a directory (the managed compose volumes).
+  // Empty for a volume without a configured device; source then remains the
+  // volume's Docker mountpoint. Never inferred from the volume name.
+  string volume_device = 6;
+  // volume_device_unverified is true when the agent tried to resolve the
+  // volume's device (resolve_volume_devices) and the engine could not answer,
+  // so the caller must treat the backing directory as unknown rather than
+  // falling back to the Docker mountpoint.
+  bool volume_device_unverified = 7;
 }
 
 // PortBinding is one published container port as the engine reports it.

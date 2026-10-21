@@ -34,7 +34,7 @@ func (f *fakeDockerClient) Version(context.Context) (string, error) {
 	return f.version, f.err
 }
 
-func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
+func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {
 	f.listAll = all
 	f.listLabels = labels
 	if f.err != nil {

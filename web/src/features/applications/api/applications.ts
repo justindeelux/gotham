@@ -1,5 +1,8 @@
 import { http, teamHeaders } from "@/shared/api/http";
 import type { SourceType } from "@/features/applications/schemas/applications";
+import type { VolumeListing } from "@/features/applications/schemas/volumes";
+import { volumeListingSchema } from "@/features/applications/schemas/volumes";
+import { parseWith } from "@/shared/validation/parse";
 import { i18n } from "@/shared/i18n";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
@@ -16,6 +19,7 @@ import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers
  *   PUT    /applications/{id}/env
  *   GET    /applications/{id}/storages
  *   PUT    /applications/{id}/storages
+ *   GET    /applications/{id}/volumes
  *   POST   /applications/{id}/stop
  *   POST   /applications/{id}/start
  *   POST   /applications/{id}/deploy
@@ -684,6 +688,20 @@ export async function replaceStorages(
     { storage },
   );
   return response.data.storage ?? [];
+}
+
+/**
+ * listVolumes returns the application's read-only storage view: configured
+ * volumes plus the mounts observed on its node (GET .../volumes → 200).
+ * Validated warn-only so a newer backend field degrades to a warning.
+ */
+export async function listVolumes(appId: string): Promise<VolumeListing> {
+  const response = await http.get<VolumeListing>(
+    `/applications/${appId}/volumes`,
+  );
+  return parseWith(volumeListingSchema, response.data, {
+    context: "ApplicationVolumeListing",
+  });
 }
 
 /**

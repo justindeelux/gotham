@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -258,7 +259,7 @@ func TestDockerClientListContainers(t *testing.T) {
 	server, _ := newFakeDockerServer(t)
 	client := newFakeDockerClient(t, server.URL)
 
-	containers, err := client.ListContainers(context.Background(), true, nil)
+	containers, err := client.ListContainers(context.Background(), true, nil, false)
 	if err != nil {
 		t.Fatalf("ListContainers: %v", err)
 	}
@@ -277,10 +278,135 @@ func TestDockerClientListContainers(t *testing.T) {
 	}
 }
 
-// TestDockerClientListContainersLabelFilter proves the filter runs inside
-// Docker: the request carries every label pair and only running containers are
-// asked for, so the terminal's project-scoped resolution never pulls the whole
-// node list over the wire.
+// TestDockerClientListContainersMountMetadata proves the mount type, volume
+// name and a local bind volume's configured device reach the control plane, so
+// a compose managed volume is never mistaken for its Docker mountpoint and a
+// bind is never resolved by guessing from the source path. It also pins the
+// device rules (local driver + bind/none options + absolute path) and that a
+// failed inspect is reported as unverified rather than as Docker's mountpoint.
+func TestDockerClientListContainersMountMetadata(t *testing.T) {
+	managed := filepath.Join(t.TempDir(), "app", "data")
+	var inspectCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/containers/json", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, []map[string]any{{
+			"Id": "abc123", "Names": []string{"/shop-web-1"}, "Image": "nginx",
+			"State": "exited",
+			"Mounts": []map[string]any{
+				{"Type": "bind", "Source": managed, "Destination": "/data", "RW": true},
+				{"Type": "volume", "Name": "shop_data", "Source": "/var/lib/docker/volumes/shop_data/_data", "Destination": "/cache", "RW": false},
+				{"Type": "volume", "Name": "plain_vol", "Source": "/var/lib/docker/volumes/plain_vol/_data", "Destination": "/plain", "RW": true},
+				{"Type": "volume", "Name": "broken_vol", "Source": "/var/lib/docker/volumes/broken_vol/_data", "Destination": "/broken", "RW": true},
+				{"Type": "volume", "Name": "relative_vol", "Source": "/var/lib/docker/volumes/relative_vol/_data", "Destination": "/relative", "RW": true},
+				{"Type": "volume", "Name": "nfs_vol", "Source": "/var/lib/docker/volumes/nfs_vol/_data", "Destination": "/nfs", "RW": true},
+				{"Type": "volume", "Name": "noexec_vol", "Source": "/var/lib/docker/volumes/noexec_vol/_data", "Destination": "/noexec", "RW": true},
+				{"Type": "tmpfs", "Destination": "/tmp", "RW": true},
+			},
+		}})
+	})
+	volume := func(body map[string]any) func(http.ResponseWriter, *http.Request) {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			inspectCalls++
+			writeJSON(t, w, body)
+		}
+	}
+	mux.HandleFunc("/volumes/shop_data", volume(map[string]any{
+		"Driver": "local", "Options": map[string]string{"type": "none", "o": "bind", "device": managed},
+	}))
+	mux.HandleFunc("/volumes/plain_vol", volume(map[string]any{
+		"Driver": "local", "Options": map[string]string{},
+	}))
+	mux.HandleFunc("/volumes/broken_vol", func(w http.ResponseWriter, _ *http.Request) {
+		inspectCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"engine unavailable"}`))
+	})
+	mux.HandleFunc("/volumes/relative_vol", volume(map[string]any{
+		"Driver": "local", "Options": map[string]string{"type": "none", "o": "bind", "device": "relative/dir"},
+	}))
+	mux.HandleFunc("/volumes/nfs_vol", volume(map[string]any{
+		"Driver": "nfs", "Options": map[string]string{"type": "nfs", "o": "addr=10.0.0.1", "device": "/export"},
+	}))
+	mux.HandleFunc("/volumes/noexec_vol", volume(map[string]any{
+		"Driver": "local", "Options": map[string]string{"type": "ext4", "o": "noexec", "device": "/dev/sdb1"},
+	}))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := newFakeDockerClient(t, server.URL)
+
+	containers, err := client.ListContainers(context.Background(), true, nil, true)
+	if err != nil {
+		t.Fatalf("ListContainers: %v", err)
+	}
+	if inspectCalls != 6 {
+		t.Errorf("volume inspects = %d, want 6 (one per distinct named volume)", inspectCalls)
+	}
+	mounts := containers[0].GetMounts()
+	if len(mounts) != 8 {
+		t.Fatalf("mounts = %+v, want 8", mounts)
+	}
+	if got := mounts[0]; got.GetType() != "bind" || got.GetVolumeName() != "" || got.GetVolumeDevice() != "" {
+		t.Errorf("bind mount = %+v; want type bind and no volume metadata", got)
+	}
+	if got := mounts[1]; got.GetType() != "volume" || got.GetVolumeName() != "shop_data" || got.GetVolumeDevice() != managed {
+		t.Errorf("managed volume = %+v; want device %q, not its mountpoint", got, managed)
+	}
+	if !mounts[1].GetReadOnly() {
+		t.Errorf("managed volume read_only = false; want true")
+	}
+	if got := mounts[2]; got.GetVolumeName() != "plain_vol" || got.GetVolumeDevice() != "" || got.GetVolumeDeviceUnverified() {
+		t.Errorf("plain volume = %+v; want no device and not unverified", got)
+	}
+	if got := mounts[3]; got.GetVolumeDevice() != "" || !got.GetVolumeDeviceUnverified() {
+		t.Errorf("broken volume = %+v; want empty device marked unverified", got)
+	}
+	if got := mounts[4]; got.GetVolumeDevice() != "" {
+		t.Errorf("relative device = %+v; want refused", got)
+	}
+	if got := mounts[5]; got.GetVolumeDevice() != "" {
+		t.Errorf("non-local driver = %+v; want refused", got)
+	}
+	if got := mounts[6]; got.GetVolumeDevice() != "" {
+		t.Errorf("non-bind options = %+v; want refused", got)
+	}
+	if got := mounts[7]; got.GetType() != "tmpfs" || got.GetVolumeName() != "" {
+		t.Errorf("tmpfs mount = %+v; want type tmpfs and no host path", got)
+	}
+}
+
+// TestDockerClientListContainersSkipsDevicesUnlessAsked pins M3: a node-wide
+// listing (heartbeat) never pays for a volume inspect.
+func TestDockerClientListContainersSkipsDevicesUnlessAsked(t *testing.T) {
+	var inspectCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/containers/json", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, []map[string]any{{
+			"Id": "abc123", "Names": []string{"/shop-web-1"}, "Image": "nginx", "State": "running",
+			"Mounts": []map[string]any{
+				{"Type": "volume", "Name": "shop_data", "Source": "/docker/shop_data", "Destination": "/cache", "RW": true},
+			},
+		}})
+	})
+	mux.HandleFunc("/volumes/shop_data", func(w http.ResponseWriter, _ *http.Request) {
+		inspectCalls++
+		writeJSON(t, w, map[string]any{"Driver": "local"})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := newFakeDockerClient(t, server.URL)
+
+	containers, err := client.ListContainers(context.Background(), true, nil, false)
+	if err != nil {
+		t.Fatalf("ListContainers: %v", err)
+	}
+	if inspectCalls != 0 {
+		t.Errorf("volume inspects = %d, want 0 when devices are not requested", inspectCalls)
+	}
+	if got := containers[0].GetMounts()[0]; got.GetVolumeDevice() != "" || got.GetVolumeDeviceUnverified() {
+		t.Errorf("mount = %+v; want no device and not unverified", got)
+	}
+}
+
 func TestDockerClientListContainersLabelFilter(t *testing.T) {
 	server, state := newFakeDockerServer(t)
 	client := newFakeDockerClient(t, server.URL)
@@ -289,7 +415,7 @@ func TestDockerClientListContainersLabelFilter(t *testing.T) {
 		"com.docker.compose.project": "gotham-3f2a4b6c-8d0e-4f1a-9b2c-3d4e5f607182",
 		"com.docker.compose.service": "web",
 	}
-	if _, err := client.ListContainers(context.Background(), false, labels); err != nil {
+	if _, err := client.ListContainers(context.Background(), false, labels, false); err != nil {
 		t.Fatalf("ListContainers: %v", err)
 	}
 	query := state.snapshot().listQuery

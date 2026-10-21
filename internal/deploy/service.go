@@ -88,6 +88,9 @@ type DeployService interface {
 	ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entries []EnvEntry) ([]EnvEntry, error)
 	// GetStorages returns the application's storage mappings.
 	GetStorages(ctx context.Context, userID, appID uuid.UUID) ([]Storage, error)
+	// ListVolumes returns the application's volumes as configured and as
+	// observed on its node (read-only; never creates or modifies anything).
+	ListVolumes(ctx context.Context, userID, appID uuid.UUID) (VolumeListing, error)
 	// ReplaceStorages replaces the storage collection and returns it as stored.
 	ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, storages []Storage) ([]Storage, error)
 	// Stop stops the container of the newest deployment.

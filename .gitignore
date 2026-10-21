@@ -57,3 +57,10 @@ web/src/features/__i18n_probe__/
 
 # Operator notes for the shared test box (kept local)
 /docs/test-server.md
+
+# Local MCP tool configs (keep untracked: contain API keys)
+/.mcp.json
+/.codex/
+/opencode.json
+/opencode.jsonc
+/.mcp.env

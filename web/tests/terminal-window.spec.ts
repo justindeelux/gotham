@@ -1866,7 +1866,7 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
     await page.setViewportSize({ width, height: 800 });
     await expect
       .poll(async () => {
-        const rect = await page.locator(".qc").boundingBox();
+        const rect = await page.locator(".term-quick-commands-body").boundingBox();
         if (!rect) {
           return "missing";
         }
@@ -1884,15 +1884,15 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await expect(
     page.getByText(/Type this at a supported prompt/),
   ).toBeVisible();
-  await page.locator(".qc-form input").first().fill("Git status");
-  await page.locator(".qc-form textarea").fill("git status");
-  await page.locator(".qc-form input").nth(1).fill("gs");
+  await page.locator(".term-quick-commands-form input").first().fill("Git status");
+  await page.locator(".term-quick-commands-form textarea").fill("git status");
+  await page.locator(".term-quick-commands-form input").nth(1).fill("gs");
   await page.getByRole("button", { name: "Save command" }).click();
-  await expect(page.locator(".qc-item")).toHaveCount(1);
-  await expect(page.locator(".qc-item")).toContainText("git status");
+  await expect(page.locator(".term-quick-commands-item")).toHaveCount(1);
+  await expect(page.locator(".term-quick-commands-item")).toContainText("git status");
 
   // Selecting it inserts text only.
-  await page.locator(".qc-insert").click();
+  await page.locator(".term-quick-commands-insert").click();
   await expect.poll(() => state.sessions[0]?.input ?? "").toContain("git status");
   expect(state.sessions[0]?.input ?? "").not.toContain("\r");
   const afterInsert = state.sessions[0]?.input.length ?? 0;
@@ -2017,8 +2017,8 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   const reopened = await openWindow(page, "app");
   expect(reopened.id).toBeTruthy();
   await page.locator(".term-commands-btn").click();
-  await expect(page.locator(".qc-item")).toHaveCount(1);
-  await expect(page.locator(".qc-item")).toContainText("git status");
+  await expect(page.locator(".term-quick-commands-item")).toHaveCount(1);
+  await expect(page.locator(".term-quick-commands-item")).toContainText("git status");
   expect(tab.id).toBeTruthy();
 });
 

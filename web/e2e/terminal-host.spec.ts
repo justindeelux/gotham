@@ -97,11 +97,11 @@ async function addQuickCommand(
 ) {
   const dialog = page.locator(".term-quick-commands");
   await dialog.getByRole("button", { name: "Add command" }).click();
-  await dialog.locator(".qc-form input").first().fill(command.label);
-  await dialog.locator(".qc-form textarea").fill(command.command);
-  await dialog.locator(".qc-form input").nth(1).fill(command.abbreviation);
+  await dialog.locator(".term-quick-commands-form input").first().fill(command.label);
+  await dialog.locator(".term-quick-commands-form textarea").fill(command.command);
+  await dialog.locator(".term-quick-commands-form input").nth(1).fill(command.abbreviation);
   await dialog.getByRole("button", { name: "Save command" }).click();
-  await expect(dialog.locator(".qc-item")).toContainText(command.label);
+  await expect(dialog.locator(".term-quick-commands-item")).toContainText(command.label);
 }
 
 /** inputFrames returns the client input frames of one terminal socket. */
@@ -379,23 +379,23 @@ test.describe("host terminal on the real stack", () => {
       command: "docker-compose up -d --build",
       abbreviation: "dcup",
     });
-    await expect(dialog.locator(".qc-item")).toHaveCount(1);
+    await expect(dialog.locator(".term-quick-commands-item")).toHaveCount(1);
     await expect(dialog).toContainText("docker-compose up -d --build");
-    await expect(dialog.locator(".qc-item .n-tag")).toContainText("dcup");
+    await expect(dialog.locator(".term-quick-commands-item .n-tag")).toContainText("dcup");
 
     // JUS-267: Add swaps the list for the editor (never appends it below the
     // list) and the footer keeps a visible action, so the click can never look
     // dead; Cancel returns to the list with Add visible again.
     await dialog.getByRole("button", { name: "Add command" }).click();
-    await expect(dialog.locator(".qc-form")).toBeVisible();
-    await expect(dialog.locator(".qc-list")).toHaveCount(0);
+    await expect(dialog.locator(".term-quick-commands-form")).toBeVisible();
+    await expect(dialog.locator(".term-quick-commands-list")).toHaveCount(0);
     await expect(
       dialog.getByRole("button", { name: "Save command" }),
     ).toBeInViewport();
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
     await dialog.getByRole("button", { name: "Cancel" }).click();
-    await expect(dialog.locator(".qc-form")).toHaveCount(0);
-    await expect(dialog.locator(".qc-item")).toHaveCount(1);
+    await expect(dialog.locator(".term-quick-commands-form")).toHaveCount(0);
+    await expect(dialog.locator(".term-quick-commands-item")).toHaveCount(1);
     await expect(
       dialog.getByRole("button", { name: "Add command" }),
     ).toBeVisible();
@@ -403,7 +403,7 @@ test.describe("host terminal on the real stack", () => {
     await expect
       .poll(() =>
         page.evaluate(
-          () => document.activeElement?.classList.contains("qc-add") ?? false,
+          () => document.activeElement?.classList.contains("term-quick-commands-add") ?? false,
         ),
       )
       .toBe(true);
@@ -433,9 +433,9 @@ test.describe("host terminal on the real stack", () => {
     // Edit keeps the same row and updates the label in place.
     await openQuickCommands(page);
     await dialog.getByRole("button", { name: "Edit Deploy" }).click();
-    await dialog.locator(".qc-form input").first().fill("Deploy stack");
+    await dialog.locator(".term-quick-commands-form input").first().fill("Deploy stack");
     await dialog.getByRole("button", { name: "Save command" }).click();
-    await expect(dialog.locator(".qc-item")).toContainText("Deploy stack");
+    await expect(dialog.locator(".term-quick-commands-item")).toContainText("Deploy stack");
     // Saving an edit returns the keyboard to that row's Edit button.
     await expect
       .poll(() =>
@@ -451,7 +451,7 @@ test.describe("host terminal on the real stack", () => {
       .locator(".n-popconfirm")
       .getByRole("button", { name: "Delete", exact: true })
       .click();
-    await expect(dialog.locator(".qc-item")).toHaveCount(0);
+    await expect(dialog.locator(".term-quick-commands-item")).toHaveCount(0);
     await expect(dialog).toContainText("dcup");
 
     await dialog.getByRole("button", { name: "Done" }).click();
@@ -486,20 +486,20 @@ test.describe("host terminal on the real stack", () => {
     // primary actions stay in the fixed footer, and leaving the editor puts
     // the keyboard back on the control that opened it.
     await dialog.getByRole("button", { name: "Add command" }).click();
-    await expect(dialog.locator(".qc-form")).toBeVisible();
+    await expect(dialog.locator(".term-quick-commands-form")).toBeVisible();
     await expect(
       dialog.getByRole("button", { name: "Save command" }),
     ).toBeInViewport();
     await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
-    await dialog.locator(".qc-form input").first().fill("Phone command");
-    await dialog.locator(".qc-form textarea").fill("echo phone");
+    await dialog.locator(".term-quick-commands-form input").first().fill("Phone command");
+    await dialog.locator(".term-quick-commands-form textarea").fill("echo phone");
     await dialog.getByRole("button", { name: "Save command" }).click();
-    await expect(dialog.locator(".qc-item")).toHaveCount(1);
+    await expect(dialog.locator(".term-quick-commands-item")).toHaveCount(1);
     // Save returns focus to Add.
     await expect
       .poll(() =>
         page.evaluate(
-          () => document.activeElement?.classList.contains("qc-add") ?? false,
+          () => document.activeElement?.classList.contains("term-quick-commands-add") ?? false,
         ),
       )
       .toBe(true);
@@ -507,7 +507,7 @@ test.describe("host terminal on the real stack", () => {
     // Keyboard: Escape from the editor returns focus to that row's Edit button.
     await dialog.getByRole("button", { name: "Edit Phone command" }).click();
     await page.keyboard.press("Escape");
-    await expect(dialog.locator(".qc-form")).toHaveCount(0);
+    await expect(dialog.locator(".term-quick-commands-form")).toHaveCount(0);
     await expect
       .poll(() =>
         page.evaluate(
@@ -530,7 +530,7 @@ test.describe("host terminal on the real stack", () => {
     await expect
       .poll(() =>
         page.evaluate(
-          () => document.activeElement?.classList.contains("qc-add") ?? false,
+          () => document.activeElement?.classList.contains("term-quick-commands-add") ?? false,
         ),
       )
       .toBe(true);

@@ -16,23 +16,23 @@ const { t } = useI18n();
 </script>
 
 <template>
-  <li class="qc-item">
-    <div class="qc-main">
-      <div class="qc-line">
-        <span class="qc-label">{{ props.command.label }}</span>
+  <li class="term-quick-commands-item">
+    <div class="term-quick-commands-main">
+      <div class="term-quick-commands-line">
+        <span class="term-quick-commands-label">{{ props.command.label }}</span>
         <NTag v-if="props.command.abbreviation" size="tiny" type="info" class="mono">
           {{ props.command.abbreviation }}
         </NTag>
       </div>
-      <code class="qc-text mono" :title="props.command.command">
+      <code class="term-quick-commands-text mono" :title="props.command.command">
         {{ props.command.command }}
       </code>
     </div>
-    <div class="qc-actions">
+    <div class="term-quick-commands-actions">
       <NButton
         size="tiny"
         secondary
-        class="qc-insert"
+        class="term-quick-commands-insert"
         :aria-label="t('terminal.quickCommands.insertLabel', { label: props.command.label })"
         @click="emit('insert')"
       >
@@ -41,7 +41,7 @@ const { t } = useI18n();
       <NButton
         quaternary
         size="tiny"
-        :data-qc-edit="props.command.id"
+        :data-term-quick-commands-edit="props.command.id"
         :aria-label="t('terminal.quickCommands.editLabel', { label: props.command.label })"
         @click="emit('edit')"
       >
@@ -65,7 +65,7 @@ const { t } = useI18n();
             </template>
           </NButton>
         </template>
-        <span class="qc-confirm">
+        <span class="term-quick-commands-confirm">
           {{ t("terminal.quickCommands.deleteBody", { label: props.command.label }) }}
         </span>
       </NPopconfirm>
@@ -74,7 +74,7 @@ const { t } = useI18n();
 </template>
 
 <style scoped>
-.qc-item {
+.term-quick-commands-item {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -84,7 +84,7 @@ const { t } = useI18n();
   background: var(--surface);
 }
 
-.qc-main {
+.term-quick-commands-main {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -92,14 +92,14 @@ const { t } = useI18n();
   flex: 1 1 auto;
 }
 
-.qc-line {
+.term-quick-commands-line {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
 }
 
-.qc-label {
+.term-quick-commands-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -107,7 +107,7 @@ const { t } = useI18n();
   color: var(--fg-2);
 }
 
-.qc-text {
+.term-quick-commands-text {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -116,14 +116,14 @@ const { t } = useI18n();
   font-size: var(--text-xs);
 }
 
-.qc-actions {
+.term-quick-commands-actions {
   display: flex;
   align-items: center;
   gap: var(--space-1);
   flex: 0 0 auto;
 }
 
-.qc-confirm {
+.term-quick-commands-confirm {
   display: block;
   max-width: 14rem;
   font-size: var(--text-xs);

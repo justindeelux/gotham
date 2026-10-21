@@ -339,7 +339,7 @@ describe("terminal suggestion UI", () => {
       },
       { timeout: 4_000, interval: 50 },
     );
-    expect(document.querySelector(".qc-snippet")).toBeNull();
+    expect(document.querySelector(".term-quick-commands-snippet")).toBeNull();
     wrapper.unmount();
   });
 });
@@ -383,6 +383,42 @@ describe("quick command modal", () => {
     await flushPromises();
   }
 
+  /**
+   * genericClassTokens collects the class tokens a content blocker's generic
+   * cosmetic filter could match (JUS-287): exactly `qc` or `qc-<something>`.
+   */
+  function genericClassTokens(): string[] {
+    return [...document.querySelectorAll<HTMLElement>("[class]")].flatMap(
+      (element) =>
+        [...element.classList].filter(
+          (name) => name === "qc" || name.startsWith("qc-"),
+        ),
+    );
+  }
+
+  it("never renders a short generic class token that content blockers hide", async () => {
+    const { wrapper, commands } = await mountModal();
+    expect(genericClassTokens()).toEqual([]);
+
+    commands.add({ label: "Status", command: "git status", abbreviation: "gs" });
+    await flushPromises();
+    expect(genericClassTokens()).toEqual([]);
+
+    click("Add command");
+    await flushPromises();
+    expect(genericClassTokens()).toEqual([]);
+
+    click("Cancel");
+    await flushPromises();
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Edit Status"]')!
+      .click();
+    await flushPromises();
+    expect(genericClassTokens()).toEqual([]);
+
+    wrapper.unmount();
+  });
+
   /** modalIsHidden reads the teleported card's v-show state. */
   function modalIsHidden(): boolean {
     const root = document.querySelector<HTMLElement>(".term-quick-commands");
@@ -394,10 +430,10 @@ describe("quick command modal", () => {
 
     click("Add command");
     await flushPromises();
-    await fill(".qc-form input", "Deploy");
-    await fill(".qc-form textarea", "docker compose up -d");
+    await fill(".term-quick-commands-form input", "Deploy");
+    await fill(".term-quick-commands-form textarea", "docker compose up -d");
     // The abbreviation input is the second text input in the form.
-    const inputs = document.querySelectorAll(".qc-form input");
+    const inputs = document.querySelectorAll(".term-quick-commands-form input");
     expect(inputs.length).toBeGreaterThanOrEqual(2);
     const abbreviation = inputs[1] as HTMLInputElement;
     abbreviation.value = "dcu";
@@ -426,7 +462,7 @@ describe("quick command modal", () => {
     expect(edit).not.toBeNull();
     edit!.click();
     await flushPromises();
-    await fill(".qc-form input", "Deploy prod");
+    await fill(".term-quick-commands-form input", "Deploy prod");
     click("Save command");
     await flushPromises();
     expect(commands.commands[0]!.label).toBe("Deploy prod");
@@ -440,9 +476,11 @@ describe("quick command modal", () => {
 
     click("Add command");
     await flushPromises();
-    await fill(".qc-form input", "Other");
-    await fill(".qc-form textarea", "git stash");
-    const abbreviation = document.querySelectorAll(".qc-form input")[1] as HTMLInputElement;
+    await fill(".term-quick-commands-form input", "Other");
+    await fill(".term-quick-commands-form textarea", "git stash");
+    const abbreviation = document.querySelectorAll(
+      ".term-quick-commands-form input",
+    )[1] as HTMLInputElement;
     abbreviation.value = "GS";
     abbreviation.dispatchEvent(new Event("input", { bubbles: true }));
     click("Save command");
@@ -480,7 +518,7 @@ describe("quick command modal", () => {
       });
     }
     await flushPromises();
-    expect(document.querySelectorAll(".qc-item")).toHaveLength(12);
+    expect(document.querySelectorAll(".term-quick-commands-item")).toHaveLength(12);
 
     click("Add command");
     await flushPromises();
@@ -489,16 +527,20 @@ describe("quick command modal", () => {
     // it, so it is always the first thing in the scrollable body. Both mode
     // actions live in the fixed footer: Save stays visible without scrolling
     // and Cancel remains next to it.
-    expect(document.querySelector(".qc-form")).not.toBeNull();
-    expect(document.querySelector(".qc-list")).toBeNull();
-    expect(document.querySelector(".qc-add")).toBeNull();
-    expect(document.querySelector(".qc-form-actions")).toBeNull();
-    const save = document.querySelector<HTMLButtonElement>(".qc-foot .qc-save");
+    expect(document.querySelector(".term-quick-commands-form")).not.toBeNull();
+    expect(document.querySelector(".term-quick-commands-list")).toBeNull();
+    expect(document.querySelector(".term-quick-commands-add")).toBeNull();
+    expect(document.querySelector(".term-quick-commands-form-actions")).toBeNull();
+    const save = document.querySelector<HTMLButtonElement>(
+      ".term-quick-commands-foot .term-quick-commands-save",
+    );
     expect(save).not.toBeNull();
     expect(save!.textContent).toContain(
       i18n.global.t("terminal.quickCommands.save"),
     );
-    const cancel = document.querySelector<HTMLButtonElement>(".qc-foot .qc-cancel");
+    const cancel = document.querySelector<HTMLButtonElement>(
+      ".term-quick-commands-foot .term-quick-commands-cancel",
+    );
     expect(cancel).not.toBeNull();
     expect(cancel!.textContent).toContain(
       i18n.global.t("terminal.quickCommands.cancel"),
@@ -507,31 +549,34 @@ describe("quick command modal", () => {
     // Cancel returns to the list and keeps the keyboard on Add.
     cancel!.click();
     await flushPromises();
-    expect(document.querySelector(".qc-form")).toBeNull();
-    expect(document.querySelectorAll(".qc-item")).toHaveLength(12);
-    expect(document.activeElement).toBe(document.querySelector(".qc-add"));
+    expect(document.querySelector(".term-quick-commands-form")).toBeNull();
+    expect(document.querySelectorAll(".term-quick-commands-item")).toHaveLength(12);
+    expect(document.activeElement).toBe(document.querySelector(".term-quick-commands-add"));
 
     // Saving a new command also returns focus to Add.
     click("Add command");
     await flushPromises();
-    await fill(".qc-form input", "Command 13");
-    await fill(".qc-form textarea", "echo 13");
-    document.querySelector<HTMLButtonElement>(".qc-foot .qc-save")!.click();
+    await fill(".term-quick-commands-form input", "Command 13");
+    await fill(".term-quick-commands-form textarea", "echo 13");
+    const saveButton = document.querySelector<HTMLButtonElement>(
+      ".term-quick-commands-foot .term-quick-commands-save",
+    );
+    saveButton!.click();
     await flushPromises();
     await flushPromises();
     expect(commands.commands).toHaveLength(13);
-    expect(document.querySelector(".qc-form")).toBeNull();
-    expect(document.activeElement).toBe(document.querySelector(".qc-add"));
+    expect(document.querySelector(".term-quick-commands-form")).toBeNull();
+    expect(document.activeElement).toBe(document.querySelector(".term-quick-commands-add"));
 
     // Escape from an edit returns focus to that row's Edit button.
     const edit = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Edit Command 1"]',
     );
     expect(edit).not.toBeNull();
-    expect(edit!.dataset.qcEdit).toBe(commands.commands[0]!.id);
+    expect(edit!.dataset.termQuickCommandsEdit).toBe(commands.commands[0]!.id);
     edit!.click();
     await flushPromises();
-    document.querySelector<HTMLInputElement>(".qc-form input")!.dispatchEvent(
+    document.querySelector<HTMLInputElement>(".term-quick-commands-form input")!.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,
@@ -539,7 +584,7 @@ describe("quick command modal", () => {
       }),
     );
     await flushPromises();
-    expect(document.querySelector(".qc-form")).toBeNull();
+    expect(document.querySelector(".term-quick-commands-form")).toBeNull();
     expect(document.activeElement?.getAttribute("aria-label")).toBe(
       "Edit Command 1",
     );
@@ -579,9 +624,9 @@ describe("quick command modal", () => {
 
     click("Add command");
     await flushPromises();
-    await fill(".qc-form input", "Discarded draft");
+    await fill(".term-quick-commands-form input", "Discarded draft");
 
-    const label = document.querySelector<HTMLInputElement>(".qc-form input");
+    const label = document.querySelector<HTMLInputElement>(".term-quick-commands-form input");
     expect(label).not.toBeNull();
     label!.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -592,12 +637,12 @@ describe("quick command modal", () => {
     );
     await flushPromises();
     // The draft is discarded, not saved, and the modal stays open.
-    expect(document.querySelector(".qc-form")).toBeNull();
+    expect(document.querySelector(".term-quick-commands-form")).toBeNull();
     expect(useQuickCommandsStore().commands).toHaveLength(0);
     expect(modalIsHidden()).toBe(false);
 
     // The second Escape (now no form) closes the modal.
-    document.querySelector<HTMLButtonElement>(".qc-add")!.dispatchEvent(
+    document.querySelector<HTMLButtonElement>(".term-quick-commands-add")!.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,

@@ -104,8 +104,8 @@ async function restoreListFocus(commandId: string): Promise<void> {
   await nextTick();
   if (commandId !== "") {
     const row = [
-      ...(bodyRef.value?.querySelectorAll<HTMLElement>("[data-qc-edit]") ?? []),
-    ].find((element) => element.dataset.qcEdit === commandId);
+      ...(bodyRef.value?.querySelectorAll<HTMLElement>("[data-term-quick-commands-edit]") ?? []),
+    ].find((element) => element.dataset.termQuickCommandsEdit === commandId);
     if (row) {
       row.focus();
       return;
@@ -256,23 +256,25 @@ onBeforeUnmount(() => {
   >
     <div
       ref="bodyRef"
-      class="qc"
+      class="term-quick-commands-body"
       role="group"
       :aria-label="t('terminal.quickCommands.title')"
     >
       <template v-if="!showForm">
-        <div class="qc-summary">
-          <span class="qc-count">
+        <div class="term-quick-commands-summary">
+          <span class="term-quick-commands-count">
             {{ t("terminal.quickCommands.count", { count: store.commands.length }) }}
           </span>
-          <span class="qc-note">{{ t("terminal.quickCommands.storageNote") }}</span>
+          <span class="term-quick-commands-note">
+            {{ t("terminal.quickCommands.storageNote") }}
+          </span>
         </div>
 
-        <p v-if="store.saveFailed" class="qc-alert" role="alert">
+        <p v-if="store.saveFailed" class="term-quick-commands-alert" role="alert">
           {{ t("terminal.quickCommands.saveFailed") }}
         </p>
 
-        <div v-if="store.commands.length === 0" class="qc-empty">
+        <div v-if="store.commands.length === 0" class="term-quick-commands-empty">
           <p>{{ t("terminal.quickCommands.empty") }}</p>
           <p>
             {{
@@ -282,7 +284,7 @@ onBeforeUnmount(() => {
             }}
           </p>
         </div>
-        <ul v-else class="qc-list">
+        <ul v-else class="term-quick-commands-list">
           <QuickCommandRow
             v-for="command in store.commands"
             :key="command.id"
@@ -293,9 +295,9 @@ onBeforeUnmount(() => {
           />
         </ul>
 
-        <p v-if="insertError" class="qc-alert" role="alert">{{ insertError }}</p>
+        <p v-if="insertError" class="term-quick-commands-alert" role="alert">{{ insertError }}</p>
 
-        <p v-if="atLimit" class="qc-note">
+        <p v-if="atLimit" class="term-quick-commands-note">
           {{ t("terminal.quickCommands.atLimit") }}
         </p>
       </template>
@@ -312,13 +314,13 @@ onBeforeUnmount(() => {
     </div>
 
     <template #footer>
-      <div class="qc-foot">
+      <div class="term-quick-commands-foot">
         <NButton
           v-if="!showForm"
           ref="addButtonRef"
           size="small"
           secondary
-          class="qc-add"
+          class="term-quick-commands-add"
           :disabled="atLimit"
           @click="startAdd"
         >
@@ -334,7 +336,7 @@ onBeforeUnmount(() => {
           <NButton
             size="small"
             type="primary"
-            class="qc-save"
+            class="term-quick-commands-save"
             @click="saveFromFooter"
           >
             {{ t("terminal.quickCommands.save") }}
@@ -342,14 +344,14 @@ onBeforeUnmount(() => {
           <NButton
             size="small"
             secondary
-            class="qc-cancel"
+            class="term-quick-commands-cancel"
             @click="resetForm({ restoreFocus: true })"
           >
             {{ t("terminal.quickCommands.cancel") }}
           </NButton>
         </template>
-        <span class="qc-foot-spacer" />
-        <NButton size="small" class="qc-close" @click="close">
+        <span class="term-quick-commands-foot-spacer" />
+        <NButton size="small" class="term-quick-commands-close" @click="close">
           {{ t("terminal.quickCommands.done") }}
         </NButton>
       </div>
@@ -358,21 +360,21 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.qc {
+.term-quick-commands-body {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
 }
 
-.qc-summary {
+.term-quick-commands-summary {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-1) var(--space-2);
 }
 
-.qc-count {
+.term-quick-commands-count {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -381,20 +383,20 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-.qc-note {
+.term-quick-commands-note {
   margin: 0;
   color: var(--muted);
   font-size: var(--text-xs);
   line-height: 1.45;
 }
 
-.qc-alert {
+.term-quick-commands-alert {
   margin: 0;
   color: var(--danger);
   font-size: var(--text-xs);
 }
 
-.qc-empty {
+.term-quick-commands-empty {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -404,11 +406,11 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.qc-empty p {
+.term-quick-commands-empty p {
   margin: 0;
 }
 
-.qc-list {
+.term-quick-commands-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -417,13 +419,13 @@ onBeforeUnmount(() => {
   list-style: none;
 }
 
-.qc-foot {
+.term-quick-commands-foot {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.qc-foot-spacer {
+.term-quick-commands-foot-spacer {
   flex: 1 1 auto;
 }
 </style>

@@ -14,7 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/justindeelux/gotham/agent/docker"
 	"github.com/justindeelux/gotham/agent/stats"
+	"github.com/justindeelux/gotham/agent/updates"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -55,7 +57,7 @@ const (
 type Agent struct {
 	cfg        Config
 	log        *slog.Logger
-	docker     dockerClient
+	docker     docker.Client
 	sampler    *stats.Sampler
 	interval   time.Duration
 	minBackoff time.Duration
@@ -76,7 +78,7 @@ type Agent struct {
 
 	versionMu sync.Mutex
 	version   string
-	updater   *updater
+	updater   *updates.Updater
 }
 
 // Option customizes an Agent. Options are primarily used by tests.
@@ -141,7 +143,7 @@ func WithRenewBefore(d time.Duration) Option {
 }
 
 // NewAgent returns an Agent that reports Docker state through docker.
-func NewAgent(cfg Config, log *slog.Logger, docker dockerClient, options ...Option) *Agent {
+func NewAgent(cfg Config, log *slog.Logger, docker docker.Client, options ...Option) *Agent {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -172,7 +174,7 @@ func NewAgent(cfg Config, log *slog.Logger, docker dockerClient, options ...Opti
 	}
 	// The updater is disabled (nil) when no release public key is configured or
 	// no fixed binary path is set; it never blocks construction.
-	if u, err := newUpdater(cfg, log, agent.Version, agent.setVersion); err != nil {
+	if u, err := updates.New(agent.cfg.updateConfig(), log, agent.Version, agent.setVersion); err != nil {
 		log.Warn("agent: self-update disabled", "error", err)
 	} else {
 		agent.updater = u
@@ -288,7 +290,7 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			updateWG.Add(1)
 			go func() {
 				defer updateWG.Done()
-				a.updater.run(hbCtx, updateClient)
+				a.updater.Run(hbCtx, updateClient)
 			}()
 		}
 

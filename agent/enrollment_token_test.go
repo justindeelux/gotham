@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/justindeelux/gotham/agent/docker"
 )
 
 // TestShouldSendEnrollmentToken pins the two conditions (JUS-194 M1): the token
@@ -49,7 +51,7 @@ func TestEnrollmentTokenNotSentWithoutCA(t *testing.T) {
 		CPAddr:          "passthrough:///bufnet",
 		NodeID:          "node-plaintext",
 		CertDir:         t.TempDir(),
-		DockerSock:      defaultDockerSock,
+		DockerSock:      docker.DefaultDockerSocket,
 		LogLevel:        "error",
 		EnrollmentToken: "s3cret-enroll",
 	}, discardLogger(), &fakeDockerClient{}, WithDialOptions(dialOptions...), WithHeartbeatInterval(time.Hour))

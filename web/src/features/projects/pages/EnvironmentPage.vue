@@ -310,11 +310,13 @@ function afterServiceCreate(service: Service): void {
               >
                 <td :data-label="t('projects.environment.table.name')">
                   <RouterLink :to="row.to" class="resource-link">
-                    <span class="resource-name-line">
+                    <span class="resource-cell">
                       <BrandIcon v-if="row.brand" v-bind="row.brand" size="sm" />
-                      <span class="resource-name">{{ row.name }}</span>
+                      <span class="resource-body">
+                        <span class="resource-name">{{ row.name }}</span>
+                        <span class="cell-sub mono">{{ row.subtitle }}</span>
+                      </span>
                     </span>
-                    <span class="cell-sub mono">{{ row.subtitle }}</span>
                   </RouterLink>
                 </td>
                 <td :data-label="t('projects.environment.table.type')">
@@ -585,10 +587,18 @@ function afterServiceCreate(service: Service): void {
   z-index: 1;
 }
 
-.resource-name-line {
+/* Icon left, name and secondary info stacked right; min-width: 0 lets the
+   text block shrink so long names truncate instead of widening the cell. */
+.resource-cell {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
+}
+
+.resource-body {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
@@ -600,15 +610,17 @@ function afterServiceCreate(service: Service): void {
 }
 
 /* Preview rows nest under their base application. */
-.preview-row .resource-name {
+.preview-row .resource-cell {
   padding-left: var(--space-4);
   position: relative;
 }
 
-.preview-row .resource-name::before {
+.preview-row .resource-cell::before {
   content: "↳";
   position: absolute;
   left: var(--space-1);
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--muted);
 }
 

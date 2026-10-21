@@ -116,9 +116,6 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
       v-if="props.application && props.application.source_type === 'dockerfile'"
       :application="props.application"
     />
-    <NAlert v-if="isCompose" type="info" :show-icon="true">
-      {{ t("applications.overview.composeVolumesHint") }}
-    </NAlert>
     <ComposeEditor
       v-if="props.application && props.application.source_type === 'compose'"
       :application="props.application"

@@ -52,19 +52,6 @@ docs/plans/      # feature/phase plans (medium to large work)
 - UI e2e: run the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
-## Plane Work Items
-
-Work is tracked in Plane (self-hosted CE) through the `plane` MCP server; the `plane-ce` skill holds the CE-specific rules. Workspace `gotham`, project `Gotham` (identifier `GOTHAM`), item ids `GOTHAM-<N>`.
-
-When creating a work item, always set all of these:
-
-- Project `GOTHAM`, assignee = the workspace owner (`member me`).
-- Exactly one label matching the work: `Bug` (broken behavior), `Improvement` (UI/UX polish or enhancement of existing behavior), `Feature` (new capability).
-- Title and body in the project language: Summary, Changes (numbered), Acceptance criteria (include the relevant invariants from Development Workflow).
-- State by UUID from `state list`: `Todo` when ready, `In Progress` while the branch is open, `Done` after the PR merges.
-
-CE limits: no PQL (filter client-side over a fully paged `workitem list`), no issue types (`workitem_type list` 404s — omit `type_id`), no cycles (disabled). Always pass `project_id` and read back every mutation.
-
 ## Code Style
 
 - Vue SFC blocks: **always** `<script>` → `<template>` → `<style>` (omit unused blocks; when present, keep this order)

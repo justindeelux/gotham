@@ -951,11 +951,16 @@ export const useFilesStore = defineStore("files", () => {
       if (gen !== tab.generation || server !== serverId.value) {
         return;
       }
+      // A server whose roots are already loaded has live tabs in the store:
+      // they are newer than the stored snapshot (a remount, or a deep link the
+      // page opened before this init), so restoring over them would reopen a
+      // stale folder.
+      const alreadyLoaded = rootsServerId.value === server;
       roots.value = list;
       rootsServerId.value = server;
       revalidateRoots(list);
       const rebuilt =
-        snapshot === null || touchedDuringInit
+        snapshot === null || touchedDuringInit || alreadyLoaded
           ? null
           : rebuildTabsFromSnapshot(snapshot);
       if (rebuilt === null) {

@@ -39,9 +39,9 @@ export type TerminalSessionInfo = z.infer<typeof terminalSessionSchema>;
 
 /**
  * applicationTerminalTargetSchema validates one running service container the
- * control plane allows a shell into (docs/terminal-session-api.md §1a). The Go
- * wire struct has no omitempty, so every field is required; `service` is the
- * empty string for a single-container application.
+ * control plane allows a shell into. The Go wire struct has no omitempty, so
+ * every field is required; `service` is the empty string for a
+ * single-container application.
  */
 export const applicationTerminalTargetSchema = z.object({
   service: z.string(),

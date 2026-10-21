@@ -201,7 +201,8 @@ type Config struct {
 	// TerminalShell is the absolute shell a host terminal session runs. Empty
 	// honors $SHELL when it is bash or zsh, then prefers bash, then zsh, then
 	// /bin/sh (GOTHAM_AGENT_TERMINAL_SHELL). The shell runs as the agent's
-	// service identity; see docs/terminal-session-api.md.
+	// service identity; see the TerminalService contract in
+	// proto/agent/v1/agent.proto.
 	TerminalShell string
 	// TerminalMaxSessions bounds concurrent host terminal sessions on this
 	// node (GOTHAM_AGENT_TERMINAL_MAX_SESSIONS). Zero uses the package default.

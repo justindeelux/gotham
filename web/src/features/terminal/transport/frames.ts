@@ -1,5 +1,5 @@
 /**
- * Terminal WebSocket framing (docs/terminal-session-api.md, JUS-243).
+ * Terminal WebSocket framing (JUS-243).
  *
  * Every frame is binary and starts with one opcode byte. Input and output
  * carry raw PTY bytes, so they are never decoded as text: a UTF-8 code point

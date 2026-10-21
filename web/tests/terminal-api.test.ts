@@ -1,6 +1,6 @@
 // JUS-248: backend terminal failures are mapped to stable, translatable
-// classes. The control plane's contract (docs/terminal-session-api.md) is the
-// input: HTTP statuses for create, bounded phrases for the attach stream.
+// classes. The control plane's contract is the input: HTTP statuses for
+// create, bounded phrases for the attach stream.
 import { describe, expect, it } from "vitest";
 
 import { ZodError } from "zod";
@@ -16,8 +16,8 @@ import {
   terminalTargetsSchema,
 } from "@/features/terminal/schemas/terminal";
 
-// Literal create responses from docs/terminal-session-api.md section 1/1a.
-// They are kept as JSON strings so a backend shape drift is visible here.
+// Literal create responses from the control plane's create contract. They are
+// kept as JSON strings so a backend shape drift is visible here.
 const HOST_NO_ROOT_RESPONSE = {
   id: "3f8c2a1e-0000-4000-8000-000000000001",
   server_id: "11111111-1111-4111-8111-111111111111",

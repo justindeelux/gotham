@@ -2476,7 +2476,8 @@ const (
 // agent confines the initial working directory to a FileService root with the
 // same no-escape policy as the file manager, but the shell itself is a host
 // process running as the agent's service identity and is not confined to those
-// roots — that privilege boundary is documented in docs/terminal-session-api.md.
+// roots — that privilege boundary is owned by the agent, which runs the shell
+// as its service identity and confines it only to the initial directory.
 // The agent bounds message size, session count and idle lifetime, and kills the
 // whole process group when the stream ends for any reason.
 type TerminalServiceClient interface {
@@ -2531,7 +2532,8 @@ type TerminalService_OpenTerminalClient = grpc.BidiStreamingClient[TerminalReque
 // agent confines the initial working directory to a FileService root with the
 // same no-escape policy as the file manager, but the shell itself is a host
 // process running as the agent's service identity and is not confined to those
-// roots — that privilege boundary is documented in docs/terminal-session-api.md.
+// roots — that privilege boundary is owned by the agent, which runs the shell
+// as its service identity and confines it only to the initial directory.
 // The agent bounds message size, session count and idle lifetime, and kills the
 // whole process group when the stream ends for any reason.
 type TerminalServiceServer interface {

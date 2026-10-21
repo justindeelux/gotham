@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { BookMarked, ExternalLink, Keyboard, X } from "@lucide/vue";
-import { NButton, NPopover } from "naive-ui";
+import { NButton, NPopover, NTooltip } from "naive-ui";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -82,7 +82,7 @@ function onCommandsClosed(): void {
         <button
           type="button"
           class="term-chip term-context"
-          :aria-label="t('terminal.pane.details')"
+          :title="t('terminal.pane.details')"
           :aria-expanded="detailsOpen"
         >
           <span class="term-key">
@@ -126,16 +126,21 @@ function onCommandsClosed(): void {
         placement="bottom-end"
       >
         <template #trigger>
-          <NButton
-            quaternary
-            size="tiny"
-            class="term-shortcuts-btn"
-            :aria-label="t('terminal.shortcuts.show')"
-          >
-            <template #icon>
-              <Keyboard :size="14" :stroke-width="1.8" aria-hidden="true" />
+          <NTooltip trigger="hover" placement="bottom">
+            <template #trigger>
+              <NButton
+                quaternary
+                size="tiny"
+                class="term-shortcuts-btn"
+                :aria-label="t('terminal.shortcuts.show')"
+              >
+                <template #icon>
+                  <Keyboard :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+              </NButton>
             </template>
-          </NButton>
+            {{ t("terminal.shortcuts.show") }}
+          </NTooltip>
         </template>
         <div class="term-shortcuts">
           <p class="term-shortcuts-title">{{ t("terminal.shortcuts.title") }}</p>
@@ -166,19 +171,24 @@ function onCommandsClosed(): void {
           </p>
         </div>
       </NPopover>
-      <NButton
-        quaternary
-        size="tiny"
-        class="term-commands-btn"
-        :aria-label="t('terminal.quickCommands.open')"
-        aria-haspopup="dialog"
-        :aria-expanded="commandsOpen"
-        @click.stop="commandsOpen = true"
-      >
-        <template #icon>
-          <BookMarked :size="14" :stroke-width="1.8" aria-hidden="true" />
+      <NTooltip trigger="hover" placement="bottom">
+        <template #trigger>
+          <NButton
+            quaternary
+            size="tiny"
+            class="term-commands-btn"
+            :aria-label="t('terminal.quickCommands.open')"
+            aria-haspopup="dialog"
+            :aria-expanded="commandsOpen"
+            @click.stop="commandsOpen = true"
+          >
+            <template #icon>
+              <BookMarked :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+          </NButton>
         </template>
-      </NButton>
+        {{ t("terminal.quickCommands.open") }}
+      </NTooltip>
       <TerminalThemeMenu />
       <template v-if="props.variant === 'page'">
         <NButton

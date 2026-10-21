@@ -291,11 +291,8 @@ watch(
     }
   },
 );
-// The suggestion row only exists while it has content, so its mount/unmount
-// changes the renderer box: refit the shell instead of leaving stale rows.
-watch(suggestionBarVisible, () => {
-  void nextTick(() => terminal.fit(props.tabId));
-});
+// The suggestion row only exists while it has content; it is an overlay, so
+// the renderer box (and therefore the PTY size) never changes with a match.
 </script>
 
 <template>
@@ -324,18 +321,23 @@ watch(suggestionBarVisible, () => {
     <p :id="hintId" class="term-sr">
       {{ t("terminal.shortcuts.hint") }}
     </p>
-    <TerminalSuggestionStrip
-      v-if="suggestionBarVisible"
-      ref="suggestionStrip"
-      :suggestion="suggestion"
-      :notice="commandNotice"
-      :no-prompt-marks-hint="noPromptMarksHint"
-      @accept="acceptSuggestion"
-      @dismiss="dismissSuggestion"
-      @dismiss-notice="commandNotice = ''"
-      @return-focus="returnFocus"
-    />
-    <div ref="surface" class="term-screen" data-testid="terminal-screen" />
+    <div class="term-terminal">
+      <div ref="surface" class="term-screen" data-testid="terminal-screen" />
+      <!-- JUS-275: the suggestion row is an overlay anchored to the terminal
+           bottom. It never takes a row from xterm, so a match appearing or
+           disappearing sends no PTY resize frame. -->
+      <TerminalSuggestionStrip
+        v-if="suggestionBarVisible"
+        ref="suggestionStrip"
+        :suggestion="suggestion"
+        :notice="commandNotice"
+        :no-prompt-marks-hint="noPromptMarksHint"
+        @accept="acceptSuggestion"
+        @dismiss="dismissSuggestion"
+        @dismiss-notice="commandNotice = ''"
+        @return-focus="returnFocus"
+      />
+    </div>
 
     <TerminalStatusOverlay :tab="tab" @retry="retrySession" />
     <TerminalStatusBar :tab="tab" :variant="variant" />
@@ -369,6 +371,16 @@ watch(suggestionBarVisible, () => {
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* The terminal box: xterm plus the suggestion overlay, so the overlay never
+ * changes the size the renderer fits into. */
+.term-terminal {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 
 .term-screen {

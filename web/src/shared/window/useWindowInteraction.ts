@@ -29,6 +29,7 @@ const DRAG_EXCLUSIONS = [
   "textarea",
   "select",
   "[role='tab']",
+  "[role='button']",
   "[contenteditable='true']",
   ".n-popover",
   ".n-dropdown",

@@ -10,9 +10,9 @@ import type { QuickCommandSuggestion } from "@/features/terminal/utils/quickComm
  * Suggestion bar (JUS-249, JUS-275).
  *
  * It only mounts for a real suggestion (or a command notice / the no-prompt
- * marks diagnostic); the surface owns that condition and refits xterm when
- * the row appears or disappears. An idle terminal therefore keeps every row
- * for the shell instead of reserving an empty hint.
+ * marks diagnostic), and it is an overlay on the terminal bottom: the renderer
+ * box never changes, so a match cannot resize the PTY and an idle terminal
+ * keeps every row for the shell instead of reserving an empty hint.
  *
  * The list is a valid listbox owning one option directly (no ul/li wrappers).
  * Keys reach the PTY unless the user explicitly focuses the list with
@@ -83,7 +83,7 @@ function onOptionKeydown(event: KeyboardEvent): void {
 </script>
 
 <template>
-  <div class="term-suggest" :class="{ 'is-active': props.suggestion !== null }">
+  <div class="term-suggest">
     <p class="term-sr" role="status" aria-live="polite">{{ announcement }}</p>
     <template v-if="props.suggestion">
       <div
@@ -148,11 +148,14 @@ function onOptionKeydown(event: KeyboardEvent): void {
 </template>
 
 <style scoped>
-/* The bar owns a fixed height for as long as it is mounted; the surface
- * refits xterm when it mounts or unmounts. Never let content change that
- * height: an Xterm viewport resize would reflow the shell. */
+/* The strip is an overlay on the terminal bottom: it never takes a row from
+ * the xterm box, so showing/hiding a suggestion cannot resize the PTY. */
 .term-suggest {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -164,11 +167,8 @@ function onOptionKeydown(event: KeyboardEvent): void {
   max-height: var(--space-12);
   overflow: hidden;
   padding: 0 var(--space-3);
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
   background: var(--surface);
-}
-
-.term-suggest.is-active {
   box-shadow: var(--elev-raised);
 }
 

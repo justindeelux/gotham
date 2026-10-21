@@ -10,6 +10,7 @@ const en = {
     minimize: "Minimize terminal window",
     close: "Close terminal window",
     resize: "Resize terminal window",
+    resizeValue: "{width} by {height} pixels",
     tabs: "Terminal sessions",
     closeTab: "Close {title}",
     activeTarget: "Target",

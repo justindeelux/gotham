@@ -26,7 +26,8 @@ function mountFrame() {
     slots: {
       title: "Title",
       context: "Context",
-      actions: '<button type="button" class="slot-action">Act</button>',
+      actions:
+        '<button type="button" class="slot-action">Act</button><span role="button" class="slot-role-action">Role</span>',
       tabs: '<div class="slot-tabs">Tabs</div>',
       default: '<div class="slot-body">Body</div>',
     },
@@ -100,6 +101,12 @@ describe("FloatingWindow", () => {
     const action = wrapper.find(".slot-action").element;
     firePointer(action, "pointerdown", { clientX: 30, clientY: 40 });
     firePointer(action, "pointermove", { clientX: 130, clientY: 140 });
+    expect(wrapper.emitted("drag")).toBeUndefined();
+
+    // A custom control that only carries role=button owns its clicks too.
+    const roleAction = wrapper.find(".slot-role-action").element;
+    firePointer(roleAction, "pointerdown", { clientX: 30, clientY: 40 });
+    firePointer(roleAction, "pointermove", { clientX: 130, clientY: 140 });
     expect(wrapper.emitted("drag")).toBeUndefined();
 
     firePointer(bar, "pointerdown", { clientX: 30, clientY: 40 });

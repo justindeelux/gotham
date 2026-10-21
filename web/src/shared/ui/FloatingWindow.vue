@@ -172,9 +172,8 @@ const resizeClass = computed<string>(
 
 <style scoped>
 .floating-window {
-  position: fixed;
-  right: var(--space-6);
-  bottom: var(--space-4);
+  /* Positioning (fixed + inset) belongs to each feature's root class, so the
+     frame's default placement never races its consumer's stylesheet order. */
   display: flex;
   flex-direction: column;
   background: var(--surface);

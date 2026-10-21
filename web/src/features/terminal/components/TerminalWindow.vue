@@ -388,6 +388,12 @@ defineExpose({ restoreWindow });
     :minimize-label="t('terminal.window.minimize')"
     :close-label="t('terminal.window.close')"
     :resize-label="t('terminal.window.resize')"
+    :resize-value-text="
+      t('terminal.window.resizeValue', {
+        width: displayedSize.width,
+        height: displayedSize.height,
+      })
+    "
     :size="displayedSize"
     :resize-limits="resizeLimits"
     :class-names="{
@@ -481,6 +487,7 @@ defineExpose({ restoreWindow });
 
 <style scoped>
 .term-window {
+  position: fixed;
   right: var(--space-6);
   bottom: var(--space-4);
   z-index: var(--term-window-z, 68);
@@ -518,14 +525,6 @@ defineExpose({ restoreWindow });
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
-
-
-
-
-/* JUS-261: the window controls are pinned to the far right edge in every
-   state. The flexible space sits before them, so the tab strip can grow (or
-   scroll) without ever pushing minimize/close inward, and the add-tab slot
-   stays directly after the tabs. */
 
 .term-tabs {
   flex: 0 1 auto;

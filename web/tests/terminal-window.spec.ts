@@ -788,6 +788,14 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
   }
   await expect(page.locator(".term-tab")).toHaveCount(titles.length);
 
+  // JUS-275: the context trigger is named by its visible text, so the target
+  // is announced instead of a generic "session details" label (WCAG 2.5.3).
+  const context = page.locator(
+    ".term-window .term-surface:visible .term-context",
+  );
+  await expect(context).toHaveAccessibleName(/host/);
+  await expect(context).not.toHaveAttribute("aria-label", /.+/);
+
   for (const width of [1366, 1280, 480, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await expect.poll(async () => (await windowBox(page)).width).toBeLessThanOrEqual(width);
@@ -1171,6 +1179,11 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
   // across platforms), then drive the real xterm input textarea.
   await page.locator(".term-shortcuts-btn").click();
   await expect(shortcuts).toBeHidden();
+  // JUS-156: the icon-only toolbar controls also explain themselves on hover.
+  await page.locator(".term-commands-btn").hover();
+  await expect(
+    page.locator(".n-tooltip", { hasText: "Quick commands" }),
+  ).toBeVisible();
   const input = page.locator(
     ".term-window .term-surface:visible .xterm-helper-textarea",
   );
@@ -1512,7 +1525,7 @@ async function surfaceToText(page: Page): Promise<string> {
     .innerText();
 }
 
-test("an idle terminal reserves no suggestion row and refits when one appears", async ({
+test("an idle terminal reserves no suggestion row and a match never resizes the PTY", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -1547,27 +1560,30 @@ test("an idle terminal reserves no suggestion row and refits when one appears", 
   const idle = await surface.locator(".term-screen").boundingBox();
   const idleResizes = state.sessions[0]?.resizes.length ?? 0;
 
-  // A real prompt mark plus a typed abbreviation mounts the row; the screen
-  // gives it exactly one row and the shell is refitted.
+  // A real prompt mark plus a typed abbreviation mounts the strip as an
+  // overlay: the renderer box and the PTY size stay exactly as they were.
   state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
   await surface.locator(".xterm-helper-textarea").focus();
   await page.keyboard.type("gs");
   await expect(surface.locator(".term-suggest-option")).toBeVisible();
   await expect
-    .poll(async () => (await surface.locator(".term-screen").boundingBox())?.height ?? 0)
-    .toBeLessThan((idle?.height ?? 0) - 1);
-  await expect
-    .poll(() => state.sessions[0]?.resizes.length ?? 0)
-    .toBeGreaterThan(idleResizes);
+    .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
+    .toBe(Math.round(idle?.height ?? 0));
+  const strip = await surface.locator(".term-suggest").boundingBox();
+  expect(strip).not.toBeNull();
+  const screen = await surface.locator(".term-screen").boundingBox();
+  expect(screen).not.toBeNull();
+  // Anchored to the terminal bottom and inside its box, never above it.
+  expect(Math.abs((strip!.y + strip!.height) - (screen!.y + screen!.height))).toBeLessThanOrEqual(1);
+  expect(strip!.y).toBeGreaterThanOrEqual(screen!.y - 1);
 
-  // Dismissing it hands the row back to the shell.
-  await surface
-    .getByRole("button", { name: "Dismiss suggestion" })
-    .click();
+  // Dismissing the match must not resize the PTY either.
+  await surface.getByRole("button", { name: "Dismiss suggestion" }).click();
   await expect(surface.locator(".term-suggest")).toHaveCount(0);
   await expect
     .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
     .toBe(Math.round(idle?.height ?? 0));
+  expect(state.sessions[0]?.resizes.length ?? 0).toBe(idleResizes);
 });
 
 test("quick command suggestions survive a theme change and page → window move", async ({
@@ -1682,6 +1698,11 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await page.setViewportSize({ width: 1280, height: 800 });
 
   await page.getByRole("button", { name: "Add command" }).click();
+  // JUS-275 item 7: abbreviation discoverability lives in the quick-command UI.
+  await expect(page.getByText("Abbreviation (optional)")).toBeVisible();
+  await expect(
+    page.getByText(/Type this at a supported prompt/),
+  ).toBeVisible();
   await page.locator(".qc-form input").first().fill("Git status");
   await page.locator(".qc-form textarea").fill("git status");
   await page.locator(".qc-form input").nth(1).fill("gs");
@@ -1716,19 +1737,11 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   expect(liveBox?.width ?? 0).toBeLessThanOrEqual(1);
   expect(liveBox?.height ?? 0).toBeLessThanOrEqual(1);
 
-  // The strip stays inside the viewport at phone and desktop widths and never
-  // covers the xterm viewport (the prompt line).
+  // The strip stays inside the viewport at phone and desktop widths and is an
+  // overlay on the terminal bottom: it never takes a row from xterm.
   for (const width of [390, 480, 1280, 1366]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(suggestion).toBeVisible();
-    await expect
-      .poll(async () => {
-        const rect = await page.locator(".term-window .term-suggest").boundingBox();
-        return rect?.x ?? -1;
-      })
-      .toBeGreaterThanOrEqual(0);
-    // The strip is above the xterm viewport; poll because a viewport resize
-    // reflows the window and the boxes settle on the next frame.
     await expect
       .poll(async () => {
         const nextBox = await page
@@ -1743,7 +1756,11 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
         return (
           nextBox.x >= 0 &&
           nextBox.x + nextBox.width <= width + 1 &&
-          nextBox.y + nextBox.height <= nextScreen.y + 1
+          nextBox.y >= nextScreen.y - 1 &&
+          nextBox.y + nextBox.height <= nextScreen.y + nextScreen.height + 1 &&
+          Math.abs(
+            nextBox.y + nextBox.height - (nextScreen.y + nextScreen.height),
+          ) <= 1
         );
       })
       .toBe(true);
@@ -1779,12 +1796,10 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
     .boundingBox();
   expect(screenBefore).not.toBeNull();
   expect(screenShown).not.toBeNull();
-  // JUS-275: the row only exists for a real suggestion, so mounting it hands
-  // one row back to it and refits the shell exactly once.
-  await expect
-    .poll(() => state.sessions[0]?.resizes.length ?? 0)
-    .toBe(resizesBefore + 1);
-  expect(screenShown?.height).toBeLessThan((screenBefore?.height ?? 0) - 1);
+  // JUS-275: the row is an overlay, so the renderer box is untouched and the
+  // suggestion sends no resize frame.
+  expect(screenShown?.height).toBe(screenBefore?.height);
+  expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
 
   const beforeEscape = state.sessions[0]?.input ?? "";
   await page.keyboard.press("Escape");
@@ -1792,10 +1807,8 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await expect
     .poll(() => state.sessions[0]?.input ?? "")
     .toBe(`${beforeEscape}\x1b`);
-  // The row is gone again: the shell gets it back with one more fit.
-  await expect
-    .poll(() => state.sessions[0]?.resizes.length ?? 0)
-    .toBe(resizesBefore + 2);
+  // The strip is gone again: still no resize frame.
+  expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
   await expect
     .poll(async () =>
       Math.round(
@@ -1875,4 +1888,5 @@ test("the terminal window floats on the soft elevation shadow in both themes", a
   );
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
 

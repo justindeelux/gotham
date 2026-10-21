@@ -9,6 +9,7 @@ const vi = {
     minimize: "Thu nhỏ cửa sổ terminal",
     close: "Đóng cửa sổ terminal",
     resize: "Thay đổi kích thước cửa sổ terminal",
+    resizeValue: "{width} × {height} pixel",
     tabs: "Các phiên terminal",
     closeTab: "Đóng {title}",
     activeTarget: "Đích",

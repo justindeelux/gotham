@@ -10,6 +10,7 @@ const vi = {
   minimize: "Thu nhỏ trình soạn thảo",
   closeWindow: "Đóng trình soạn thảo",
   resize: "Đổi kích thước trình soạn thảo",
+  resizeValue: "{width} × {height} pixel",
   dockLabel: "Thanh neo trình soạn thảo",
   restore: "Khôi phục {name}",
   restoreUnsaved: "Khôi phục {name} (thay đổi chưa lưu)",

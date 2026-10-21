@@ -202,11 +202,6 @@ const resizeLimits = computed(() =>
   editorResizeLimits(viewport.value.width, viewport.value.height),
 );
 
-/** resizeValueText keeps the slider semantics honest for screen readers. */
-const resizeValueText = computed<string>(
-  () => `${displayedSize.value.width} by ${displayedSize.value.height} pixels`,
-);
-
 /**
  * windowStyle applies the displayed size and dragged position. Until the
  * window is dragged the CSS default (pinned bottom-right) applies, so a
@@ -1436,7 +1431,12 @@ onBeforeUnmount(() => {
     :minimize-label="t('files.editor.minimize')"
     :close-label="t('files.editor.closeWindow')"
     :resize-label="t('files.editor.resize')"
-    :resize-value-text="resizeValueText"
+    :resize-value-text="
+      t('files.editor.resizeValue', {
+        width: displayedSize.width,
+        height: displayedSize.height,
+      })
+    "
     :size="displayedSize"
     :resize-limits="resizeLimits"
     :class-names="{
@@ -1911,6 +1911,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .ed-window {
+  position: fixed;
   right: var(--space-6);
   bottom: var(--space-4);
   width: min(1331px, calc(100vw - var(--space-6) * 2));

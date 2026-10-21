@@ -534,6 +534,25 @@ test.describe("host terminal on the real stack", () => {
         ),
       )
       .toBe(true);
+
+    // On a very short viewport (205px) the card scrolls as a whole, so the
+    // form body keeps a usable height instead of collapsing under the pinned
+    // header and footer.
+    await page.setViewportSize({ width: 900, height: 205 });
+    await dialog.getByRole("button", { name: "Add command" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => {
+            const body = document.querySelector<HTMLElement>(
+              ".term-quick-commands .n-card-content",
+            );
+            return body ? body.scrollHeight - body.clientHeight : -1;
+          },
+        ),
+      )
+      .toBe(0);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
     await page.setViewportSize({ width: 390, height: 800 });
 
     // Tab cycles inside the dialog: the trap never lets focus escape.

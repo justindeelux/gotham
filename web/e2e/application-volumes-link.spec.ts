@@ -159,7 +159,9 @@ test("volume link uses the root the agent exposes and opens the directory", asyn
 
   // The action is a real link: middle-click and copy-link reach the same
   // directory, and a plain click must not navigate the application tab.
-  const href = new URL((await open.getAttribute("href")) ?? "");
+  const openHref = await open.getAttribute("href");
+  expect(openHref, "the open action carries an href").toBeTruthy();
+  const href = new URL(openHref as string, page.url());
   expect(href.pathname).toBe(`/servers/${node.id}/files`);
   expect(href.searchParams.get("root")).toBe(target.root);
   expect(href.searchParams.get("path")).toBe(target.path);

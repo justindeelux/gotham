@@ -2,8 +2,8 @@
 import { NButton, NIcon, NSpace, NTag, NText, NTooltip } from "naive-ui";
 import { useI18n } from "vue-i18n";
 
-import BrandIcon from "@/features/add-resource/components/BrandIcon.vue";
-import type { BrandMark } from "@/features/add-resource/utils/brands";
+import { BrandIcon } from "@/features/add-resource";
+import type { BrandMark } from "@/features/add-resource";
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
@@ -37,7 +37,7 @@ const { t } = useI18n();
 
 <template>
   <div class="page-head">
-    <BrandIcon v-bind="props.brand" :size="44" />
+    <BrandIcon v-bind="props.brand" size="lg" />
     <div class="page-head__title">
       <NSpace align="center" :size="10">
         <NText strong style="font-size: 20px" class="mono">{{ props.displayName || t("applications.header.fallbackName") }}</NText>

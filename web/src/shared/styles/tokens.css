@@ -134,6 +134,13 @@
   --radius-lg: 16px;
   --radius-pill: 9999px;
 
+  /* ─── Brand avatars ────────────────────────────────────────────── */
+  /* Frame edge lengths for resource marks: environment list, Add
+   * resource picker, application detail. */
+  --brand-icon-sm: 28px;
+  --brand-icon-md: 40px;
+  --brand-icon-lg: 44px;
+
   /* ─── Elevation ────────────────────────────────────────────────── */
   /* Dark surfaces: luminance stepping; semi-transparent white borders
      as depth signal rather than drop shadows.

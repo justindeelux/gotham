@@ -6,8 +6,8 @@ import type { DeploymentState } from "@/features/applications/api/applications";
 import {
   latestDeploymentStates,
 } from "@/features/applications/api/applications";
-import { applicationBrand } from "@/features/add-resource/utils/brands";
-import type { BrandMark } from "@/features/add-resource/utils/brands";
+import { applicationBrand } from "@/features/add-resource";
+import type { BrandMark } from "@/features/add-resource";
 import {
   describeProjectError,
   getEnvironmentResources,

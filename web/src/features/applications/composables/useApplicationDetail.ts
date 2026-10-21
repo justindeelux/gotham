@@ -17,8 +17,8 @@ import {
   listPreviews,
 } from "@/features/applications/api/previews";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
-import { applicationBrand } from "@/features/add-resource/utils/brands";
-import type { BrandMark } from "@/features/add-resource/utils/brands";
+import { applicationBrand } from "@/features/add-resource";
+import type { BrandMark } from "@/features/add-resource";
 import {
   getEnvironmentVariables,
   getProjectVariables,

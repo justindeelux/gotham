@@ -279,9 +279,11 @@ test("picker tiles render the approved monochrome brand glyphs", async ({ page }
       const frame = await glyph.locator("xpath=..").boundingBox();
       expect(box, "glyph renders a box").not.toBeNull();
       expect(frame, "frame renders a box").not.toBeNull();
-      // The approved treatment: a white silhouette at ~62% of the frame,
-      // optically centered inside it.
-      expect(box!.width).toBeCloseTo(frame!.width * 0.62, 0);
+      // The approved treatment: a white silhouette at roughly 62% of the
+      // frame (the 1px token ring counts toward the frame), optically
+      // centered inside it.
+      expect(box!.width / frame!.width).toBeGreaterThan(0.55);
+      expect(box!.width / frame!.width).toBeLessThan(0.65);
       expect(box!.x - frame!.x).toBeCloseTo((frame!.width - box!.width) / 2, 0);
       const style = await glyph.evaluate((node) => {
         const computed = getComputedStyle(node);

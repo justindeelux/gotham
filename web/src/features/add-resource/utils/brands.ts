@@ -19,6 +19,9 @@ export interface BrandMark {
 
 const BRAND_ACCENT = "#5865f2";
 
+/** Frame sizes of a resource avatar; the edge lengths are design tokens. */
+export type BrandIconSize = "sm" | "md" | "lg";
+
 /** Template slug (the API `icon` key) to its brand glyph and hue. */
 const TEMPLATE_BRANDS: Record<string, { logo: string; color: string }> = {
   wordpress: { logo: "wordpress", color: "#21759b" },

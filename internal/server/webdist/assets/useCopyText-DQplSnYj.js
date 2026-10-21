@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-BTN1I0iY.js
+import{e as i}from"./index-WvYdGtHh.js";import{u as n}from"./use-message-C_VzUYTn.js";import{bs as e}from"./index-BXADM5hg.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+========
+import{e as i}from"./index-CWCc3TXu.js";import{u as n}from"./use-message-D1X6qLYy.js";import{bq as e}from"./index-CnffFKTW.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+>>>>>>>> 1c67755a5 (fix(ui): unify editor and terminal window chrome and strengthen shadows):internal/server/webdist/assets/useCopyText-DQplSnYj.js

@@ -80,9 +80,21 @@ watch(
 /** suggestion is the single abbreviation match the runtime reports. */
 const suggestion = computed(() => tab.value?.suggestion ?? null);
 
-/** hasAbbreviations chooses the fixed bar's setup vs usage hint. */
+/** hasAbbreviations decides whether the no-marks hint can explain suggestions. */
 const hasAbbreviations = computed<boolean>(() =>
   quickCommands.commands.some((command) => command.abbreviation !== undefined),
+);
+
+/**
+ * suggestionBarVisible reserves a row only when it has something to say: a
+ * match, a command notice, or the diagnostic about a shell without prompt
+ * marks. An idle terminal keeps the whole viewport for the shell (JUS-275).
+ */
+const suggestionBarVisible = computed<boolean>(
+  () =>
+    suggestion.value !== null ||
+    commandNotice.value !== "" ||
+    (hasAbbreviations.value && noPromptMarksHint.value),
 );
 
 /** surfaceLabel names the region for screen readers. */
@@ -279,6 +291,11 @@ watch(
     }
   },
 );
+// The suggestion row only exists while it has content, so its mount/unmount
+// changes the renderer box: refit the shell instead of leaving stale rows.
+watch(suggestionBarVisible, () => {
+  void nextTick(() => terminal.fit(props.tabId));
+});
 </script>
 
 <template>
@@ -308,10 +325,10 @@ watch(
       {{ t("terminal.shortcuts.hint") }}
     </p>
     <TerminalSuggestionStrip
+      v-if="suggestionBarVisible"
       ref="suggestionStrip"
       :suggestion="suggestion"
       :notice="commandNotice"
-      :has-abbreviations="hasAbbreviations"
       :no-prompt-marks-hint="noPromptMarksHint"
       @accept="acceptSuggestion"
       @dismiss="dismissSuggestion"

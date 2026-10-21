@@ -8,15 +8,17 @@ import QuickCommandsModal from "@/features/terminal/components/QuickCommandsModa
 import TerminalThemeMenu from "@/features/terminal/components/TerminalThemeMenu.vue";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
-import {
-  isContainerTerminalTarget,
-  shortSessionId,
-} from "@/features/terminal/utils/terminal";
+import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
 /**
- * Terminal meta bar (JUS-249, quick-command modal JUS-264): target/cwd/session
- * chips, the shortcuts popover, the quick-command modal trigger, the theme
- * menu, and page-mode actions.
+ * Terminal toolbar (JUS-249, JUS-275).
+ *
+ * The compact row keeps usable context on the left — target/application and
+ * the (ellipsized) working directory — and groups the shortcuts popover, the
+ * quick-command manager and the theme menu on the right. The diagnostic
+ * session id and the full working directory live in the context popover
+ * instead of a permanent chip, so a long path or a narrow window never pushes
+ * the actions off-screen.
  */
 interface Props {
   tab: TerminalTab;
@@ -30,6 +32,7 @@ const terminal = useTerminalStore();
 
 const shortcutsOpen = ref(false);
 const commandsOpen = ref(false);
+const detailsOpen = ref(false);
 
 const isContainer = computed<boolean>(() =>
   isContainerTerminalTarget(props.tab.target),
@@ -70,119 +73,143 @@ function onCommandsClosed(): void {
 
 <template>
   <div class="term-meta">
-    <span class="term-chip">
-      <span class="term-key">{{ t("terminal.pane.target") }}</span>
-      <span class="mono">{{ targetText }}</span>
-    </span>
-    <span
-      v-if="isContainer && props.tab.applicationName"
-      class="term-chip term-container"
-      :title="t('terminal.pane.containerNote')"
+    <NPopover
+      v-model:show="detailsOpen"
+      trigger="click"
+      placement="bottom-start"
     >
-      <span class="term-key">{{ t("terminal.pane.application") }}</span>
-      <span class="mono">{{ props.tab.applicationName }}</span>
-    </span>
+      <template #trigger>
+        <button
+          type="button"
+          class="term-chip term-context"
+          :aria-label="t('terminal.pane.details')"
+          :aria-expanded="detailsOpen"
+        >
+          <span class="term-key">
+            {{
+              isContainer
+                ? t("terminal.pane.application")
+                : t("terminal.pane.target")
+            }}
+          </span>
+          <span class="mono term-context-value">{{ targetText }}</span>
+        </button>
+      </template>
+      <dl class="term-details">
+        <div>
+          <dt class="term-key">{{ t("terminal.pane.target") }}</dt>
+          <dd class="mono">{{ props.tab.target }}</dd>
+        </div>
+        <div v-if="isContainer && props.tab.applicationName">
+          <dt class="term-key">{{ t("terminal.pane.application") }}</dt>
+          <dd class="mono">{{ props.tab.applicationName }}</dd>
+        </div>
+        <div v-if="props.tab.cwd">
+          <dt class="term-key">{{ t("terminal.pane.cwd") }}</dt>
+          <dd class="mono term-details-cwd">{{ props.tab.cwd }}</dd>
+        </div>
+        <div v-if="props.tab.sessionId">
+          <dt class="term-key">{{ t("terminal.pane.session") }}</dt>
+          <dd class="mono">{{ props.tab.sessionId }}</dd>
+        </div>
+      </dl>
+    </NPopover>
     <span v-if="props.tab.cwd" class="term-chip term-cwd" :title="props.tab.cwd">
       <span class="term-key">{{ t("terminal.pane.cwd") }}</span>
       <span class="mono">{{ props.tab.cwd }}</span>
     </span>
-    <span
-      v-if="props.tab.sessionId"
-      class="term-session mono"
-      :title="props.tab.sessionId"
-    >
-      {{ shortSessionId(props.tab.sessionId) }}
-    </span>
-    <NPopover
-      v-model:show="shortcutsOpen"
-      trigger="click"
-      placement="bottom-end"
-    >
-      <template #trigger>
+    <span class="grow" />
+    <div class="term-meta-actions">
+      <NPopover
+        v-model:show="shortcutsOpen"
+        trigger="click"
+        placement="bottom-end"
+      >
+        <template #trigger>
+          <NButton
+            quaternary
+            size="tiny"
+            class="term-shortcuts-btn"
+            :aria-label="t('terminal.shortcuts.show')"
+          >
+            <template #icon>
+              <Keyboard :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+          </NButton>
+        </template>
+        <div class="term-shortcuts">
+          <p class="term-shortcuts-title">{{ t("terminal.shortcuts.title") }}</p>
+          <dl>
+            <div>
+              <dt class="mono">Alt+Shift+W</dt>
+              <dd>{{ t("terminal.shortcuts.closeWindow") }}</dd>
+            </div>
+            <div>
+              <dt class="mono">Alt+M</dt>
+              <dd>{{ t("terminal.shortcuts.minimize") }}</dd>
+            </div>
+            <div>
+              <dt class="mono">Delete</dt>
+              <dd>{{ t("terminal.shortcuts.closeTab") }}</dd>
+            </div>
+            <div>
+              <dt class="mono">Ctrl+Shift+E</dt>
+              <dd>{{ t("terminal.shortcuts.escape") }}</dd>
+            </div>
+            <div>
+              <dt class="mono">Ctrl+Shift+Space</dt>
+              <dd>{{ t("terminal.shortcuts.chooseSuggestion") }}</dd>
+            </div>
+          </dl>
+          <p class="term-shortcuts-note small muted">
+            {{ t("terminal.shortcuts.hint") }}
+          </p>
+        </div>
+      </NPopover>
+      <NButton
+        quaternary
+        size="tiny"
+        class="term-commands-btn"
+        :aria-label="t('terminal.quickCommands.open')"
+        aria-haspopup="dialog"
+        :aria-expanded="commandsOpen"
+        @click.stop="commandsOpen = true"
+      >
+        <template #icon>
+          <BookMarked :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+      </NButton>
+      <TerminalThemeMenu />
+      <template v-if="props.variant === 'page'">
+        <NButton
+          size="tiny"
+          secondary
+          class="term-open-in-window"
+          @click.stop="detachToWindow"
+        >
+          <template #icon>
+            <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          {{ t("terminal.pane.openInWindow") }}
+        </NButton>
         <NButton
           quaternary
           size="tiny"
-          class="term-shortcuts-btn"
-          :aria-label="t('terminal.shortcuts.show')"
+          :aria-label="t('terminal.pane.close')"
+          @click.stop="closeTerminal"
         >
           <template #icon>
-            <Keyboard :size="14" :stroke-width="1.8" aria-hidden="true" />
+            <X :size="14" :stroke-width="1.8" aria-hidden="true" />
           </template>
         </NButton>
       </template>
-      <div class="term-shortcuts">
-        <p class="term-shortcuts-title">{{ t("terminal.shortcuts.title") }}</p>
-        <dl>
-          <div>
-            <dt class="mono">Alt+Shift+W</dt>
-            <dd>{{ t("terminal.shortcuts.closeWindow") }}</dd>
-          </div>
-          <div>
-            <dt class="mono">Alt+M</dt>
-            <dd>{{ t("terminal.shortcuts.minimize") }}</dd>
-          </div>
-          <div>
-            <dt class="mono">Delete</dt>
-            <dd>{{ t("terminal.shortcuts.closeTab") }}</dd>
-          </div>
-          <div>
-            <dt class="mono">Ctrl+Shift+E</dt>
-            <dd>{{ t("terminal.shortcuts.escape") }}</dd>
-          </div>
-          <div>
-            <dt class="mono">Ctrl+Shift+Space</dt>
-            <dd>{{ t("terminal.shortcuts.chooseSuggestion") }}</dd>
-          </div>
-        </dl>
-        <p class="term-shortcuts-note small muted">
-          {{ t("terminal.shortcuts.hint") }}
-        </p>
-      </div>
-    </NPopover>
-    <NButton
-      quaternary
-      size="tiny"
-      class="term-commands-btn"
-      :aria-label="t('terminal.quickCommands.open')"
-      aria-haspopup="dialog"
-      :aria-expanded="commandsOpen"
-      @click.stop="commandsOpen = true"
-    >
-      <template #icon>
-        <BookMarked :size="14" :stroke-width="1.8" aria-hidden="true" />
-      </template>
-    </NButton>
+    </div>
     <QuickCommandsModal
       v-model:show="commandsOpen"
       :tab-id="props.tab.id"
       @inserted="onInserted"
       @closed="onCommandsClosed"
     />
-    <span class="grow" />
-    <TerminalThemeMenu />
-    <template v-if="props.variant === 'page'">
-      <NButton
-        size="tiny"
-        secondary
-        class="term-open-in-window"
-        @click.stop="detachToWindow"
-      >
-        <template #icon>
-          <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ t("terminal.pane.openInWindow") }}
-      </NButton>
-      <NButton
-        quaternary
-        size="tiny"
-        :aria-label="t('terminal.pane.close')"
-        @click.stop="closeTerminal"
-      >
-        <template #icon>
-          <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-      </NButton>
-    </template>
   </div>
 </template>
 
@@ -193,7 +220,7 @@ function onCommandsClosed(): void {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -207,7 +234,37 @@ function onCommandsClosed(): void {
   color: var(--fg-2);
 }
 
+/* The context chip is the popover trigger: it keeps the chip look and gains a
+   real hit box and focus ring. */
+.term-context {
+  flex: 0 1 auto;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.term-context:hover {
+  border-color: var(--border-soft);
+}
+
+.term-context:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.term-context-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .term-cwd {
+  flex: 0 1 auto;
   overflow: hidden;
 }
 
@@ -224,9 +281,40 @@ function onCommandsClosed(): void {
   font-size: var(--text-xs);
 }
 
-.term-session {
-  color: var(--meta);
+.term-meta .grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.term-meta-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.term-details {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  max-width: min(28rem, 80vw);
   font-size: var(--text-xs);
+}
+
+.term-details > div {
+  display: grid;
+  gap: 2px;
+}
+
+.term-details dd {
+  margin: 0;
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+
+.term-details-cwd {
+  max-height: 8rem;
+  overflow-y: auto;
 }
 
 .term-shortcuts-btn {
@@ -234,11 +322,6 @@ function onCommandsClosed(): void {
    * below the minimum). The visual icon stays small; the hit box grows. */
   min-width: var(--space-6);
   min-height: var(--space-6);
-  margin-left: var(--space-1);
-}
-
-.term-commands-btn {
-  margin-left: var(--space-1);
 }
 
 .term-shortcuts-note {
@@ -283,10 +366,9 @@ function onCommandsClosed(): void {
   font-size: var(--text-xs);
 }
 
-/* Phone width (390px): the meta row wraps instead of clipping the working
- * directory to a single character. The key labels and the session id are
- * diagnostic only; the cwd takes its own full row, while the action buttons
- * stay on the first row. */
+/* Phone width (390px): the key labels yield and the working directory takes a
+ * full row below the context/actions row, so the path is never clipped to a
+ * single character. */
 @media (max-width: 520px) {
   .term-meta {
     flex-wrap: wrap;
@@ -294,18 +376,13 @@ function onCommandsClosed(): void {
     padding: var(--space-1) var(--space-2);
   }
 
-  .term-key,
-  .term-session {
+  .term-key {
     display: none;
   }
 
   .term-cwd {
     order: 10;
     flex: 1 1 100%;
-  }
-
-  .term-shortcuts-btn {
-    margin-left: 0;
   }
 }
 </style>

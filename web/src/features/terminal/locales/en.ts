@@ -37,6 +37,8 @@ const en = {
     privilege: "Full host administration (effectively root).",
     application: "Application",
     containerNote: "This shell runs inside the selected application container.",
+    details: "Session details",
+    session: "Session ID",
     detailLabel: "Terminal for {title}",
   },
   status: {
@@ -275,8 +277,6 @@ const en = {
     announce:
       "Suggestion: {label} for {abbreviation}. Press Control+Shift+Space to choose or Escape to dismiss.",
     hint: "Ctrl+Shift+Space to choose · Esc dismisses",
-    placeholder: "Type an abbreviation to insert a saved command.",
-    placeholderEmpty: "Save a quick command with an abbreviation to see suggestions here.",
     noPromptMarks:
       "This shell does not report prompts, so shortcuts cannot suggest commands.",
     choose: "Choose",

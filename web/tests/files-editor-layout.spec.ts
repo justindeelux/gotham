@@ -1055,6 +1055,53 @@ test("the editor window drags by its title bar and clamps to the viewport", asyn
   );
 });
 
+test("the editor title bar keeps its controls pinned at every width", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+
+  for (const width of [1280, 480, 390]) {
+    await page.setViewportSize({ width, height: 800 });
+    const geometry = await page.evaluate(() => {
+      const box = (selector: string) => {
+        const rect = document.querySelector(selector)?.getBoundingClientRect();
+        return { left: rect?.left ?? -1, right: rect?.right ?? -1 };
+      };
+      const bar = document.querySelector(".ed-window-bar") as HTMLElement;
+      const path = document.querySelector(".ed-window-path") as HTMLElement;
+      return {
+        window: box(".ed-window"),
+        bar: box(".ed-window-bar"),
+        title: box(".floating-window-title"),
+        path: box(".ed-window-path"),
+        min: box(".ed-window-min"),
+        close: box(".ed-window-close"),
+        paddingRight: Number.parseFloat(getComputedStyle(bar).paddingRight),
+        barOverflow: bar.scrollWidth - bar.clientWidth,
+        pathOverflow: path.scrollWidth - path.clientWidth,
+        sharedBar: bar.classList.contains("floating-window-bar"),
+      };
+    });
+
+    // The shared frame owns the bar, the controls sit at its right edge and
+    // the title/context are ellipsized instead of pushing them out.
+    expect(geometry.sharedBar).toBe(true);
+    expect(geometry.close.right).toBeLessThanOrEqual(geometry.window.right + 0.5);
+    expect(
+      Math.abs(geometry.close.right - (geometry.bar.right - geometry.paddingRight)),
+    ).toBeLessThanOrEqual(1);
+    expect(geometry.min.right).toBeLessThanOrEqual(geometry.close.right);
+    expect(geometry.title.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
+    expect(geometry.path.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
+    expect(geometry.barOverflow).toBeLessThanOrEqual(1);
+    expect(geometry.pathOverflow).toBeGreaterThanOrEqual(0);
+  }
+});
+
 /** persistedGeometry reads the editor window record from localStorage. */
 async function persistedGeometry(page: Page): Promise<{
   width: number;

@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/use-message-C_VzUYTn.js
+import{bL as s,aP as o,hN as t}from"./index-BXADM5hg.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+========
+import{bJ as s,aO as o,hc as t}from"./index-CnffFKTW.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+>>>>>>>> 1c67755a5 (fix(ui): unify editor and terminal window chrome and strengthen shadows):internal/server/webdist/assets/use-message-D1X6qLYy.js

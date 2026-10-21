@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { Minus, X } from "@lucide/vue";
-import { NButton } from "naive-ui";
+import { X } from "@lucide/vue";
 import {
   computed,
   nextTick,
@@ -23,12 +22,9 @@ import {
 } from "@/features/terminal/schemas/terminal";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import { useTerminalWindowStore } from "@/features/terminal/stores/terminalWindow";
-import {
-  WINDOW_RESIZE_DIRECTIONS,
-  resizeWindowBox,
-  windowResizeLimits,
-} from "@/shared/window/geometry";
-import type { WindowResizeDirection } from "@/shared/window/geometry";
+import FloatingWindow from "@/shared/ui/FloatingWindow.vue";
+import type { WindowBox } from "@/shared/window/geometry";
+import { windowResizeLimits } from "@/shared/window/geometry";
 
 /**
  * App-level floating terminal window (JUS-245).
@@ -42,31 +38,11 @@ const { t } = useI18n();
 const terminal = useTerminalStore();
 const windowStore = useTerminalWindowStore();
 
-const windowElement = ref<HTMLElement | null>(null);
 const tabsElement = ref<HTMLElement | null>(null);
 const viewport = ref({
   width: typeof window === "undefined" ? 0 : window.innerWidth,
   height: typeof window === "undefined" ? 0 : window.innerHeight,
 });
-
-let dragState: {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  originX: number;
-  originY: number;
-} | null = null;
-
-let resizeState: {
-  pointerId: number;
-  direction: WindowResizeDirection;
-  startX: number;
-  startY: number;
-  originX: number;
-  originY: number;
-  originWidth: number;
-  originHeight: number;
-} | null = null;
 
 const tabs = computed(() => terminal.windowTabs);
 const activeTab = computed(() => {
@@ -83,15 +59,19 @@ const displayedSize = computed<{ width: number; height: number }>(() => {
   return { width: fitted.width, height: fitted.height };
 });
 
-/** resizeAria carries honest slider semantics for the keyboard grip. */
-const resizeAria = computed<{ min: number; max: number; now: number }>(() => {
-  const min = Math.min(TERMINAL_WINDOW_MIN_WIDTH, displayedSize.value.width);
-  return {
-    min,
-    max: Math.max(min, viewport.value.width),
-    now: displayedSize.value.width,
-  };
-});
+/** resizeLimits is the terminal's resize band for the current viewport. */
+const resizeLimits = computed(() =>
+  windowResizeLimits(
+    viewport.value.width,
+    viewport.value.height,
+    {
+      side: TERMINAL_WINDOW_SIDE_MARGIN,
+      chrome: TERMINAL_WINDOW_CHROME_MARGIN,
+    },
+    TERMINAL_WINDOW_MIN_WIDTH,
+    TERMINAL_WINDOW_MIN_HEIGHT,
+  ),
+);
 
 /** windowStyle applies the displayed size and the dragged position. */
 const windowStyle = computed<CSSProperties>(() => {
@@ -126,15 +106,38 @@ function focusWindow(): void {
 
 /** onDocumentPointerDown lowers the window when a click lands elsewhere. */
 function onDocumentPointerDown(event: PointerEvent): void {
-  const element = windowElement.value;
   if (
     !windowStore.raised ||
-    !element ||
-    (event.target instanceof Node && element.contains(event.target))
+    (event.target instanceof Element && event.target.closest(".term-window"))
   ) {
     return;
   }
   windowStore.lower();
+}
+
+/** onWindowDrag applies a title-bar drag, clamped by the store. */
+function onWindowDrag(x: number, y: number): void {
+  windowStore.setPosition(
+    x,
+    y,
+    displayedSize.value.width,
+    displayedSize.value.height,
+  );
+}
+
+/** onWindowResize applies a grip resize; the store keeps the opposite edge. */
+function onWindowResizeMove(box: WindowBox): void {
+  windowStore.resizeTo(box, viewport.value.width, viewport.value.height);
+}
+
+/** onWindowResizeBy applies one keyboard resize step from the slider. */
+function onWindowResizeBy(deltaWidth: number, deltaHeight: number): void {
+  windowStore.resizeBy(
+    deltaWidth,
+    deltaHeight,
+    viewport.value.width,
+    viewport.value.height,
+  );
 }
 
 /** minimizeWindow collapses into the rail and moves focus to its icon. */
@@ -186,160 +189,6 @@ watch(
     });
   },
 );
-
-/** onBarPointerDown starts a title-bar drag (never on a control). */
-function onBarPointerDown(event: PointerEvent): void {
-  if (event.button !== 0) {
-    return;
-  }
-  const bar = event.currentTarget;
-  const element = windowElement.value;
-  if (!(bar instanceof HTMLElement) || !element) {
-    return;
-  }
-  // The tab strip and header controls own their clicks; a drag starts only on
-  // the empty title-bar surface so pointer capture never swallows a tab close.
-  if (
-    event.target instanceof Element &&
-    event.target.closest("button, .term-tabs")
-  ) {
-    return;
-  }
-  const rect = element.getBoundingClientRect();
-  dragState = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    originX: rect.left,
-    originY: rect.top,
-  };
-  bar.setPointerCapture(event.pointerId);
-  focusWindow();
-}
-
-/** onBarPointerMove drags by the pointer delta against the displayed size. */
-function onBarPointerMove(event: PointerEvent): void {
-  if (!dragState || event.pointerId !== dragState.pointerId) {
-    return;
-  }
-  windowStore.setPosition(
-    dragState.originX + (event.clientX - dragState.startX),
-    dragState.originY + (event.clientY - dragState.startY),
-    displayedSize.value.width,
-    displayedSize.value.height,
-  );
-}
-
-/** onBarPointerUp ends the drag (also on pointercancel). */
-function onBarPointerUp(event: PointerEvent): void {
-  if (dragState && event.pointerId === dragState.pointerId) {
-    dragState = null;
-  }
-}
-
-/** RESIZE_GRIPS are the pointer-only grips; the SE corner is the slider. */
-const RESIZE_GRIPS = WINDOW_RESIZE_DIRECTIONS.filter(
-  (direction) => direction !== "se",
-);
-
-/** onResizePointerDown seeds a resize from the rendered box. */
-function onResizePointerDown(
-  event: PointerEvent,
-  direction: WindowResizeDirection,
-): void {
-  if (event.button !== 0) {
-    return;
-  }
-  const handle = event.currentTarget;
-  const element = windowElement.value;
-  if (!(handle instanceof HTMLElement) || !element) {
-    return;
-  }
-  const rect = element.getBoundingClientRect();
-  resizeState = {
-    pointerId: event.pointerId,
-    direction,
-    startX: event.clientX,
-    startY: event.clientY,
-    originX: rect.left,
-    originY: rect.top,
-    originWidth: displayedSize.value.width,
-    originHeight: displayedSize.value.height,
-  };
-  handle.setPointerCapture(event.pointerId);
-  event.preventDefault();
-  focusWindow();
-}
-
-/** onResizePointerMove applies the grip delta inside the viewport band. */
-function onResizePointerMove(event: PointerEvent): void {
-  if (!resizeState || event.pointerId !== resizeState.pointerId) {
-    return;
-  }
-  const next = resizeWindowBox(
-    resizeState.direction,
-    {
-      x: resizeState.originX,
-      y: resizeState.originY,
-      width: resizeState.originWidth,
-      height: resizeState.originHeight,
-    },
-    event.clientX - resizeState.startX,
-    event.clientY - resizeState.startY,
-    windowResizeLimits(
-      viewport.value.width,
-      viewport.value.height,
-      {
-        side: TERMINAL_WINDOW_SIDE_MARGIN,
-        chrome: TERMINAL_WINDOW_CHROME_MARGIN,
-      },
-      TERMINAL_WINDOW_MIN_WIDTH,
-      TERMINAL_WINDOW_MIN_HEIGHT,
-    ),
-  );
-  windowStore.resizeTo(next, viewport.value.width, viewport.value.height);
-}
-
-/** onResizePointerUp ends the resize (also on pointercancel). */
-function onResizePointerUp(event: PointerEvent): void {
-  if (resizeState && event.pointerId === resizeState.pointerId) {
-    resizeState = null;
-  }
-}
-
-/** RESIZE_KEY_STEP/LARGE mirror the editor's keyboard resize steps. */
-const RESIZE_KEY_STEP = 16;
-const RESIZE_KEY_STEP_LARGE = 64;
-
-/** onResizeKeydown resizes from the keyboard slider grip. */
-function onResizeKeydown(event: KeyboardEvent): void {
-  const step = event.shiftKey ? RESIZE_KEY_STEP_LARGE : RESIZE_KEY_STEP;
-  let deltaWidth = 0;
-  let deltaHeight = 0;
-  switch (event.key) {
-    case "ArrowRight":
-      deltaWidth = step;
-      break;
-    case "ArrowLeft":
-      deltaWidth = -step;
-      break;
-    case "ArrowDown":
-      deltaHeight = step;
-      break;
-    case "ArrowUp":
-      deltaHeight = -step;
-      break;
-    default:
-      return;
-  }
-  event.preventDefault();
-  windowStore.resizeBy(
-    deltaWidth,
-    deltaHeight,
-    viewport.value.width,
-    viewport.value.height,
-  );
-}
 
 /** requestCloseTab uses the shared confirmation path. */
 function requestCloseTab(id: string): void {
@@ -530,98 +379,89 @@ defineExpose({ restoreWindow });
 </script>
 
 <template>
-  <section
+  <FloatingWindow
     v-if="tabs.length > 0"
     v-show="!windowStore.minimized"
-    ref="windowElement"
     class="term-window"
     :style="windowStyle"
-    role="region"
-    :aria-label="t('terminal.window.label')"
+    :window-label="t('terminal.window.label')"
+    :minimize-label="t('terminal.window.minimize')"
+    :close-label="t('terminal.window.close')"
+    :resize-label="t('terminal.window.resize')"
+    :size="displayedSize"
+    :resize-limits="resizeLimits"
+    :class-names="{
+      bar: 'term-window-bar',
+      min: 'term-window-min',
+      close: 'term-window-close',
+      resize: 'term-resize',
+    }"
+    @minimize="minimizeWindow"
+    @close="requestCloseWindow"
+    @drag="onWindowDrag"
+    @resize="onWindowResizeMove"
+    @resize-by="onWindowResizeBy"
     @pointerdown="focusWindow"
     @focusin="focusWindow"
   >
-    <header
-      class="term-window-bar"
-      @pointerdown="onBarPointerDown"
-      @pointermove="onBarPointerMove"
-      @pointerup="onBarPointerUp"
-      @pointercancel="onBarPointerUp"
-      @lostpointercapture="onBarPointerUp"
-    >
-      <span class="term-window-title">{{ t("terminal.window.heading") }}</span>
-      <div
-        ref="tabsElement"
-        class="term-tabs"
-        role="tablist"
-        :aria-label="t('terminal.window.tabs')"
-      >
+    <template #title>{{ t("terminal.window.heading") }}</template>
+    <template #context>
+      <span v-if="activeTab" class="term-window-context mono" :title="activeTab.title">
+        {{ activeTab.title }}
+      </span>
+    </template>
+
+    <!-- JUS-275: sessions live on their own strip below the title bar, with
+         the add-tab (+) control directly after the last tab. The strip scrolls
+         instead of pushing minimize/close or the add control off-screen. -->
+    <template #tabs>
+      <div class="term-tabstrip">
         <div
-          v-for="(tab, index) in tabs"
-          :key="tab.id"
-          class="term-tab"
-          :class="{ 'is-active': tab.id === activeTab?.id }"
-          role="presentation"
+          ref="tabsElement"
+          class="term-tabs"
+          role="tablist"
+          :aria-label="t('terminal.window.tabs')"
         >
-          <!-- The tablist owns only role=tab elements: the close control is a
-               non-interactive span inside the tab (like the file tabs), so
-               aria-required-children stays valid. Keyboard users close the
-               focused tab with Delete, which the tab announces. -->
-          <button
-            :id="`term-tab-${tab.id}`"
-            type="button"
-            class="term-tab-name"
-            role="tab"
-            :aria-selected="tab.id === activeTab?.id"
-            :aria-controls="`term-panel-${tab.id}`"
-            :tabindex="tab.id === activeTab?.id ? 0 : -1"
-            :title="tab.title"
-            aria-keyshortcuts="Delete"
-            @click="activateTab(tab.id)"
-            @keydown="onTabKeydown($event, index)"
+          <div
+            v-for="(tab, index) in tabs"
+            :key="tab.id"
+            class="term-tab"
+            :class="{ 'is-active': tab.id === activeTab?.id }"
+            role="presentation"
           >
-            <span class="term-tab-status" :class="`is-${tab.status}`" aria-hidden="true" />
-            <span class="term-tab-label">{{ tab.title }}</span>
-            <span
-              class="term-tab-close"
-              aria-hidden="true"
-              :title="t('terminal.window.closeTab', { title: tab.title })"
-              @click.stop="requestCloseTab(tab.id)"
+            <!-- The tablist owns only role=tab elements: the close control is a
+                 non-interactive span inside the tab (like the file tabs), so
+                 aria-required-children stays valid. Keyboard users close the
+                 focused tab with Delete, which the tab announces. -->
+            <button
+              :id="`term-tab-${tab.id}`"
+              type="button"
+              class="term-tab-name"
+              role="tab"
+              :aria-selected="tab.id === activeTab?.id"
+              :aria-controls="`term-panel-${tab.id}`"
+              :tabindex="tab.id === activeTab?.id ? 0 : -1"
+              :title="tab.title"
+              aria-keyshortcuts="Delete"
+              @click="activateTab(tab.id)"
+              @keydown="onTabKeydown($event, index)"
             >
-              <X :size="12" :stroke-width="2" aria-hidden="true" />
-            </span>
-          </button>
+              <span class="term-tab-status" :class="`is-${tab.status}`" aria-hidden="true" />
+              <span class="term-tab-label">{{ tab.title }}</span>
+              <span
+                class="term-tab-close"
+                aria-hidden="true"
+                :title="t('terminal.window.closeTab', { title: tab.title })"
+                @click.stop="requestCloseTab(tab.id)"
+              >
+                <X :size="12" :stroke-width="2" aria-hidden="true" />
+              </span>
+            </button>
+          </div>
         </div>
+        <TerminalTargetPicker surface="window" class="term-window-add" />
       </div>
-      <!-- JUS-261/JUS-265: the add-tab (+) control sits directly after the tab
-           strip, so the flexible space never separates the tabs from their add
-           control while minimize/close stay pinned at the far right. -->
-      <TerminalTargetPicker surface="window" class="term-window-add" />
-      <div class="term-window-controls">
-        <NButton
-          quaternary
-          size="tiny"
-          class="term-window-min"
-          :aria-label="t('terminal.window.minimize')"
-          @click="minimizeWindow"
-        >
-          <template #icon>
-            <Minus :size="16" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-        </NButton>
-        <NButton
-          quaternary
-          size="tiny"
-          class="term-window-close"
-          :aria-label="t('terminal.window.close')"
-          @click="requestCloseWindow"
-        >
-          <template #icon>
-            <X :size="16" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-        </NButton>
-      </div>
-    </header>
+    </template>
 
     <div class="term-window-body">
       <TerminalSurface
@@ -634,50 +474,16 @@ defineExpose({ restoreWindow });
         :id="`term-panel-${tab.id}`"
       />
     </div>
-
-    <!-- The SE grip carries the slider semantics (keyboard resize); the other
-         grips are pointer-only. -->
-    <div
-      class="term-resize term-resize--se"
-      tabindex="0"
-      role="slider"
-      :aria-label="t('terminal.window.resize')"
-      :aria-valuemin="resizeAria.min"
-      :aria-valuemax="resizeAria.max"
-      :aria-valuenow="resizeAria.now"
-      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
-      @pointerdown="onResizePointerDown($event, 'se')"
-      @pointermove="onResizePointerMove"
-      @pointerup="onResizePointerUp"
-      @pointercancel="onResizePointerUp"
-      @lostpointercapture="onResizePointerUp"
-      @keydown="onResizeKeydown"
-    />
-    <div
-      v-for="direction in RESIZE_GRIPS"
-      :key="direction"
-      class="term-resize"
-      :class="`term-resize--${direction}`"
-      aria-hidden="true"
-      @pointerdown="onResizePointerDown($event, direction)"
-      @pointermove="onResizePointerMove"
-      @pointerup="onResizePointerUp"
-      @pointercancel="onResizePointerUp"
-      @lostpointercapture="onResizePointerUp"
-    />
-  </section>
+  </FloatingWindow>
 
   <TerminalCloseDialog @confirmed="onConfirmed" />
 </template>
 
 <style scoped>
 .term-window {
-  position: fixed;
   right: var(--space-6);
   bottom: var(--space-4);
   z-index: var(--term-window-z, 68);
-  display: flex;
-  flex-direction: column;
   width: min(55rem, calc(100vw - var(--space-6) * 2));
   height: min(37.5rem, calc(100vh - var(--term-window-chrome)));
   height: min(37.5rem, calc(100dvh - var(--term-window-chrome)));
@@ -686,59 +492,47 @@ defineExpose({ restoreWindow });
   max-width: calc(100vw - var(--space-6) * 2);
   max-height: calc(100vh - var(--space-6) * 2);
   max-height: calc(100dvh - var(--space-6) * 2);
-  background: var(--surface);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  /* JUS-270: the same soft lift as the code editor window; the shadow paints
-     outside the border box, so the body's overflow clip never trims it. */
-  box-shadow: var(--elev-floating);
-  overflow: hidden;
 }
 
-.term-window-bar {
+/* The identity copy in the shared title bar: the heading already names the
+   tool, so the active session's title follows it as context. */
+.term-window-context {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* JUS-275: sessions sit on their own row under the title bar. The strip takes
+   the free width, scrolls when tabs overflow, and keeps the add-tab control
+   immediately after the last tab. */
+.term-tabstrip {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  min-height: calc(var(--space-8) + var(--space-2));
-  padding: var(--space-1) var(--space-2);
-  padding-left: var(--space-3);
-  background: var(--surface);
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--border);
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
+  background: var(--surface);
 }
 
-.term-window-bar:active {
-  cursor: grabbing;
-}
 
-.term-window-title {
-  font-weight: 600;
-  color: var(--fg-2);
-  white-space: nowrap;
-}
+
 
 /* JUS-261: the window controls are pinned to the far right edge in every
    state. The flexible space sits before them, so the tab strip can grow (or
    scroll) without ever pushing minimize/close inward, and the add-tab slot
    stays directly after the tabs. */
-.term-window-controls {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-1);
-  margin-left: auto;
-}
 
 .term-tabs {
+  flex: 0 1 auto;
   display: flex;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  max-width: 60%;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -848,96 +642,15 @@ defineExpose({ restoreWindow });
   min-width: 0;
 }
 
-.term-resize {
-  position: absolute;
-  z-index: 5;
-  touch-action: none;
-}
-
-.term-resize--n {
-  top: calc(-1 * var(--space-1) / 2);
-  left: var(--space-3);
-  right: var(--space-3);
-  height: var(--space-1);
-  cursor: ns-resize;
-}
-
-.term-resize--s {
-  bottom: calc(-1 * var(--space-1) / 2);
-  left: var(--space-3);
-  right: var(--space-3);
-  height: var(--space-1);
-  cursor: ns-resize;
-}
-
-.term-resize--e {
-  right: calc(-1 * var(--space-1) / 2);
-  top: var(--space-3);
-  bottom: var(--space-3);
-  width: var(--space-1);
-  cursor: ew-resize;
-}
-
-.term-resize--w {
-  left: calc(-1 * var(--space-1) / 2);
-  top: var(--space-3);
-  bottom: var(--space-3);
-  width: var(--space-1);
-  cursor: ew-resize;
-}
-
-.term-resize--ne {
-  top: calc(-1 * var(--space-1) / 2);
-  right: calc(-1 * var(--space-1) / 2);
-  width: var(--space-3);
-  height: var(--space-3);
-  cursor: nesw-resize;
-}
-
-.term-resize--nw {
-  top: calc(-1 * var(--space-1) / 2);
-  left: calc(-1 * var(--space-1) / 2);
-  width: var(--space-3);
-  height: var(--space-3);
-  cursor: nwse-resize;
-}
-
-.term-resize--sw {
-  bottom: calc(-1 * var(--space-1) / 2);
-  left: calc(-1 * var(--space-1) / 2);
-  width: var(--space-3);
-  height: var(--space-3);
-  cursor: nesw-resize;
-}
-
-.term-resize--se {
-  bottom: 0;
-  right: 0;
-  width: var(--space-4);
-  height: var(--space-4);
-  cursor: nwse-resize;
-}
-
-.term-resize--se:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
 @media (max-width: 640px) {
   .term-window {
     right: var(--space-4);
     bottom: var(--space-2);
   }
 
-  /* A phone keeps both tabs legible: the window title and status dots yield,
-     leaving the tab labels (and their close buttons) the header width. */
-  .term-window-title,
+  /* A phone keeps the tab labels legible: the status dots yield. */
   .term-tab-status {
     display: none;
-  }
-
-  .term-tabs {
-    max-width: calc(100% - var(--space-12));
   }
 
   .term-tab {

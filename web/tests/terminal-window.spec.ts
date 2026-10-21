@@ -769,7 +769,7 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(state.sessions[1]?.closeFrames).toBe(1);
 });
 
-test("window controls stay at the header's right edge at every width", async ({
+test("window actions stay pinned and tabs keep their own scrollable strip", async ({
   page,
 }) => {
   const state = freshState();
@@ -797,7 +797,9 @@ test("window controls stay at the header's right edge at every width", async ({
         const rect = element.getBoundingClientRect();
         return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
       };
+      const window_ = document.querySelector(".term-window") as HTMLElement;
       const bar = document.querySelector(".term-window-bar") as HTMLElement;
+      const strip = document.querySelector(".term-tabstrip") as HTMLElement;
       const tabs = document.querySelector(".term-tabs") as HTMLElement;
       const add = document.querySelector(".term-add-tab") as HTMLElement;
       const min = document.querySelector(".term-window-min") as HTMLElement;
@@ -805,9 +807,14 @@ test("window controls stay at the header's right edge at every width", async ({
       const addBox = box(add);
       const minBox = box(min);
       const closeBox = box(close);
+      const windowBox = box(window_);
       return {
         bar: box(bar),
+        strip: box(strip),
+        window: windowBox,
         paddingRight: Number.parseFloat(getComputedStyle(bar).paddingRight),
+        // JUS-275: sessions never crowd the title bar.
+        tabsInBar: bar.contains(tabs),
         tabs: box(tabs),
         scroll: {
           width: tabs.scrollWidth,
@@ -817,13 +824,11 @@ test("window controls stay at the header's right edge at every width", async ({
         add: addBox,
         min: minBox,
         close: closeBox,
-        // The (+)-after-tabs contract: the add control follows the strip and
-        // the pinned controls stay at the far right, in that DOM order.
+        // The (+)-after-tabs contract: the add control follows the last tab in
+        // the strip, and the pinned controls stay at the bar's far right.
         addHit: document
           .elementsFromPoint((addBox.left + addBox.right) / 2, (addBox.top + addBox.bottom) / 2)
           .some((element) => element === add || add.contains(element)),
-        // The topmost element at each control's centre must be the control (or
-        // one of its children), proving no tab/label paints over it.
         minHit: document
           .elementsFromPoint((minBox.left + minBox.right) / 2, (minBox.top + minBox.bottom) / 2)
           .some((element) => element === min || min.contains(element)),
@@ -833,14 +838,18 @@ test("window controls stay at the header's right edge at every width", async ({
       };
     });
 
-    // The close control's right edge is the header's content right edge, and
-    // the pair is to the right of the tab strip in every state.
+    // The strip sits below the title bar and stays inside the window.
+    expect(geometry.tabsInBar).toBe(false);
+    expect(geometry.strip.top).toBeGreaterThanOrEqual(geometry.bar.bottom - 0.5);
+    expect(geometry.strip.right).toBeLessThanOrEqual(geometry.window.right + 0.5);
+    // The close control's right edge is the bar's content right edge, and the
+    // minimize/close pair is at the far right of that bar.
     expect(
       Math.abs(geometry.close.right - (geometry.bar.right - geometry.paddingRight)),
     ).toBeLessThanOrEqual(1);
-    expect(geometry.tabs.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
-    expect(geometry.add.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
     expect(geometry.min.right).toBeLessThanOrEqual(geometry.close.left);
+    expect(geometry.tabs.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
+    expect(geometry.add.right).toBeLessThanOrEqual(geometry.strip.right + 0.5);
     expect(geometry.addHit).toBe(true);
     expect(geometry.minHit).toBe(true);
     expect(geometry.closeHit).toBe(true);
@@ -848,15 +857,15 @@ test("window controls stay at the header's right edge at every width", async ({
     if (width <= 480) {
       expect(geometry.scroll.width).toBeGreaterThan(geometry.scroll.client);
     } else {
-      // A non-scrolling strip shows every tab strictly left of the controls.
+      // A non-scrolling strip shows every tab strictly left of the add control.
       for (const tab of geometry.tabRects) {
         expect(tab.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
       }
     }
   }
 
-  // At 390px the scrollable strip can be scrolled to its end without the
-  // controls moving: they are pinned, the tabs are what scrolls.
+  // At 390px the scrollable strip can be scrolled to its end without moving
+  // the add control: the tabs are what scrolls.
   await page.setViewportSize({ width: 390, height: 900 });
   await page.evaluate(() => {
     const tabs = document.querySelector(".term-tabs") as HTMLElement;
@@ -875,16 +884,14 @@ test("window controls stay at the header's right edge at every width", async ({
   expect(scrolled.lastRight).toBeLessThanOrEqual(scrolled.tabsRight + 0.5);
   expect(scrolled.tabsRight).toBeLessThanOrEqual(scrolled.addLeft + 0.5);
 
-  // Keyboard reachable in DOM order: active tab → add → minimize → close.
+  // Keyboard reachable in DOM order: the active tab hands Tab to the add
+  // control, and the bar's minimize then close follow.
   await page.locator('.term-tab-name[aria-selected="true"]').focus();
   await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
     .toContain("term-add-tab");
-  await page.keyboard.press("Tab");
-  await expect
-    .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
-    .toContain("term-window-min");
+  await page.locator(".term-window-min").focus();
   await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
@@ -1014,6 +1021,78 @@ test("the terminal window coexists with the code editor without replacing it", a
   expect(state.creates).toBe(1);
 });
 
+
+test("both floating tools render through one window frame and elevation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, `/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await openWindow(page, "app");
+  await expect(page.locator(".term-window")).toBeVisible();
+
+  const chrome = await page.evaluate(() => {
+    const shadow = (element: Element) => getComputedStyle(element).boxShadow;
+    const resolve = (name: string) => {
+      const probe = document.createElement("div");
+      probe.style.boxShadow = getComputedStyle(document.documentElement)
+        .getPropertyValue(name)
+        .trim();
+      document.body.append(probe);
+      const value = getComputedStyle(probe).boxShadow;
+      probe.remove();
+      return value;
+    };
+    const size = (selector: string) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      return { width: rect?.width ?? 0, height: rect?.height ?? 0 };
+    };
+    const style = (selector: string, property: string) =>
+      getComputedStyle(document.querySelector(selector) as Element).getPropertyValue(property);
+    return {
+      floating: resolve("--elev-floating"),
+      editor: {
+        shadow: shadow(document.querySelector(".ed-window") as Element),
+        radius: style(".ed-window", "border-top-left-radius"),
+        border: style(".ed-window", "border-top-width"),
+        barHeight:
+          document.querySelector(".ed-window-bar")?.getBoundingClientRect().height ?? 0,
+        min: size(".ed-window-min"),
+        close: size(".ed-window-close"),
+        sharedBar: document.querySelector(".ed-window-bar")?.classList.contains("floating-window-bar"),
+      },
+      terminal: {
+        shadow: shadow(document.querySelector(".term-window") as Element),
+        radius: style(".term-window", "border-top-left-radius"),
+        border: style(".term-window", "border-top-width"),
+        barHeight:
+          document.querySelector(".term-window-bar")?.getBoundingClientRect().height ?? 0,
+        min: size(".term-window-min"),
+        close: size(".term-window-close"),
+        sharedBar: document.querySelector(".term-window-bar")?.classList.contains("floating-window-bar"),
+      },
+    };
+  });
+
+  // One shared frame: same elevation token, radius, border and header height.
+  expect(chrome.floating).not.toBe("none");
+  expect(chrome.editor.shadow).toBe(chrome.floating);
+  expect(chrome.terminal.shadow).toBe(chrome.floating);
+  expect(chrome.editor.radius).toBe(chrome.terminal.radius);
+  expect(chrome.editor.border).toBe(chrome.terminal.border);
+  expect(Math.abs(chrome.editor.barHeight - chrome.terminal.barHeight)).toBeLessThanOrEqual(0.5);
+  expect(chrome.editor.sharedBar).toBe(true);
+  expect(chrome.terminal.sharedBar).toBe(true);
+  // Same control sizing for minimize/close.
+  expect(Math.abs(chrome.editor.min.width - chrome.terminal.min.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(chrome.editor.min.height - chrome.terminal.min.height)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(chrome.editor.close.width - chrome.terminal.close.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(chrome.editor.close.height - chrome.terminal.close.height)).toBeLessThanOrEqual(0.5);
+});
 
 test("heartbeat, disconnect, exit and error states use real frames", async ({
   page,
@@ -1277,7 +1356,7 @@ test("the theme applies immediately and survives page → window without a new s
   await expect(group.getByRole("radio", { name: "Gotham Light" })).toBeChecked();
   await group.getByRole("radio", { name: "Gotham Dark" }).click();
   await expect(surface).toHaveAttribute("data-theme", "gotham-dark");
-  await page.locator(".term-window-title").click();
+  await page.locator(".floating-window-title").click();
   await expect(page.getByRole("radiogroup", { name: "Terminal theme" })).toBeHidden();
   expect(state.creates).toBe(1);
   expect((await tabState(page, tab.id)).status).toBe("connected");
@@ -1389,7 +1468,7 @@ test("the host banner shows the exact logo, real version and server once", async
     .locator(".term-window .term-surface:visible .term-theme-btn")
     .click();
   await page.getByRole("radio", { name: "Gotham Light" }).click();
-  await page.locator(".term-window-title").click();
+  await page.locator(".floating-window-title").click();
   const firstTab = page.locator(".term-tab-name", { hasText: "prod-01 · one" });
   await firstTab.click();
   await expect
@@ -1432,6 +1511,64 @@ async function surfaceToText(page: Page): Promise<string> {
     .locator(".term-window .term-surface:visible .xterm-rows")
     .innerText();
 }
+
+test("an idle terminal reserves no suggestion row and refits when one appears", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  // One saved abbreviation makes the suggestion path reachable.
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      "gotham.terminal.commands.v1.u-1",
+      JSON.stringify({
+        version: 1,
+        commands: [
+          {
+            id: "c1",
+            label: "Git status",
+            command: "git status",
+            abbreviation: "gs",
+          },
+        ],
+      }),
+    );
+  });
+
+  await openWindow(page, "app");
+  const surface = page.locator(".term-window .term-surface:visible");
+  await expect(surface.locator(".term-state")).toHaveText("Connected");
+
+  // JUS-275: no suggestion row is reserved while the shell is idle.
+  await expect(surface.locator(".term-suggest")).toHaveCount(0);
+  const idle = await surface.locator(".term-screen").boundingBox();
+  const idleResizes = state.sessions[0]?.resizes.length ?? 0;
+
+  // A real prompt mark plus a typed abbreviation mounts the row; the screen
+  // gives it exactly one row and the shell is refitted.
+  state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
+  await surface.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type("gs");
+  await expect(surface.locator(".term-suggest-option")).toBeVisible();
+  await expect
+    .poll(async () => (await surface.locator(".term-screen").boundingBox())?.height ?? 0)
+    .toBeLessThan((idle?.height ?? 0) - 1);
+  await expect
+    .poll(() => state.sessions[0]?.resizes.length ?? 0)
+    .toBeGreaterThan(idleResizes);
+
+  // Dismissing it hands the row back to the shell.
+  await surface
+    .getByRole("button", { name: "Dismiss suggestion" })
+    .click();
+  await expect(surface.locator(".term-suggest")).toHaveCount(0);
+  await expect
+    .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
+    .toBe(Math.round(idle?.height ?? 0));
+});
 
 test("quick command suggestions survive a theme change and page → window move", async ({
   page,
@@ -1516,18 +1653,31 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
 
   // The editor stays inside a phone viewport. Popper repositions after the
   // resize, so poll for the settled box instead of measuring mid-move.
+  // Wait for the card's open transition to finish before measuring: a
+  // mid-transition box carries the old transform origin and proves nothing.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document
+            .querySelector(".term-quick-commands")
+            ?.className.includes("enter-active") ?? true,
+      ),
+    )
+    .toBe(false);
   for (const width of [390, 480]) {
     await page.setViewportSize({ width, height: 800 });
     await expect
       .poll(async () => {
         const rect = await page.locator(".qc").boundingBox();
-        return rect?.x ?? -1;
+        if (!rect) {
+          return "missing";
+        }
+        return rect.x >= 0 && rect.x + rect.width <= width + 1
+          ? "inside"
+          : `outside:${Math.round(rect.x)}:${Math.round(rect.width)}`;
       })
-      .toBeGreaterThanOrEqual(0);
-    const box = await page.locator(".qc").boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.x).toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+      .toBe("inside");
   }
   await page.setViewportSize({ width: 1280, height: 800 });
 
@@ -1629,8 +1779,12 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
     .boundingBox();
   expect(screenBefore).not.toBeNull();
   expect(screenShown).not.toBeNull();
-  expect(state.sessions[0]?.resizes.length).toBe(resizesBefore);
-  expect(screenShown?.height).toBe(screenBefore?.height);
+  // JUS-275: the row only exists for a real suggestion, so mounting it hands
+  // one row back to it and refits the shell exactly once.
+  await expect
+    .poll(() => state.sessions[0]?.resizes.length ?? 0)
+    .toBe(resizesBefore + 1);
+  expect(screenShown?.height).toBeLessThan((screenBefore?.height ?? 0) - 1);
 
   const beforeEscape = state.sessions[0]?.input ?? "";
   await page.keyboard.press("Escape");
@@ -1638,12 +1792,19 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await expect
     .poll(() => state.sessions[0]?.input ?? "")
     .toBe(`${beforeEscape}\x1b`);
-  const screenHidden = await page
-    .locator(".term-window .term-surface:visible .term-screen")
-    .boundingBox();
-  expect(screenHidden).not.toBeNull();
-  expect(state.sessions[0]?.resizes.length).toBe(resizesBefore);
-  expect(screenHidden?.height).toBe(screenBefore?.height);
+  // The row is gone again: the shell gets it back with one more fit.
+  await expect
+    .poll(() => state.sessions[0]?.resizes.length ?? 0)
+    .toBe(resizesBefore + 2);
+  await expect
+    .poll(async () =>
+      Math.round(
+        (await page
+          .locator(".term-window .term-surface:visible .term-screen")
+          .boundingBox())?.height ?? 0,
+      ),
+    )
+    .toBe(Math.round(screenBefore?.height ?? 0));
 
   // The list survives a reload for the same account. Close the live shell
   // first so the beforeunload guard does not prompt during the reload.
@@ -1714,3 +1875,4 @@ test("the terminal window floats on the soft elevation shadow in both themes", a
   );
   expect(overflow).toBeLessThanOrEqual(0);
 });
+

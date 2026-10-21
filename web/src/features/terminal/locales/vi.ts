@@ -36,6 +36,8 @@ const vi = {
     privilege: "Quản trị toàn bộ máy chủ (thực tế là root).",
     application: "Ứng dụng",
     containerNote: "Shell này chạy bên trong container ứng dụng đã chọn.",
+    details: "Chi tiết phiên",
+    session: "Mã phiên",
     detailLabel: "Terminal cho {title}",
   },
   status: {
@@ -271,8 +273,6 @@ const vi = {
     announce:
       "Gợi ý: {label} cho {abbreviation}. Nhấn Control+Shift+Space để chọn hoặc Escape để bỏ qua.",
     hint: "Ctrl+Shift+Space để chọn · Esc để bỏ qua",
-    placeholder: "Gõ viết tắt để chèn một lệnh đã lưu.",
-    placeholderEmpty: "Lưu lệnh nhanh có viết tắt để thấy gợi ý tại đây.",
     noPromptMarks: "Shell này không báo dấu nhắc nên phím tắt không thể gợi ý lệnh.",
     choose: "Chọn",
     dismiss: "Bỏ qua gợi ý",

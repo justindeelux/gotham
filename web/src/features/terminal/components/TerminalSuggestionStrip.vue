@@ -7,12 +7,12 @@ import { useI18n } from "vue-i18n";
 import type { QuickCommandSuggestion } from "@/features/terminal/utils/quickCommandEngine";
 
 /**
- * Suggestion bar (JUS-249). It is ALWAYS mounted as a fixed-height flex
- * sibling above the xterm viewport, so showing or hiding a suggestion never
- * changes the renderer box (and therefore never sends a resize frame). The
- * space is reserved permanently; when there is no match it shows a short hint
- * or the latest command notice. It is never an overlay, so it cannot cover the
- * active prompt row.
+ * Suggestion bar (JUS-249, JUS-275).
+ *
+ * It only mounts for a real suggestion (or a command notice / the no-prompt
+ * marks diagnostic); the surface owns that condition and refits xterm when
+ * the row appears or disappears. An idle terminal therefore keeps every row
+ * for the shell instead of reserving an empty hint.
  *
  * The list is a valid listbox owning one option directly (no ul/li wrappers).
  * Keys reach the PTY unless the user explicitly focuses the list with
@@ -21,17 +21,14 @@ import type { QuickCommandSuggestion } from "@/features/terminal/utils/quickComm
  */
 interface Props {
   suggestion: QuickCommandSuggestion | null;
-  /** notice replaces the empty hint (e.g. an insert refusal). */
+  /** notice replaces the hint (e.g. an insert refusal). */
   notice?: string;
-  /** hasAbbreviations switches the empty hint between setup and usage. */
-  hasAbbreviations?: boolean;
   /** noPromptMarksHint only turns true after the post-connect grace period. */
   noPromptMarksHint?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   notice: "",
-  hasAbbreviations: false,
   noPromptMarksHint: false,
 });
 const emit = defineEmits<{
@@ -144,25 +141,16 @@ function onOptionKeydown(event: KeyboardEvent): void {
         </template>
       </NButton>
     </template>
-    <span
-      v-else-if="props.hasAbbreviations && props.noPromptMarksHint"
-      class="term-suggest-placeholder"
-    >
+    <span v-else class="term-suggest-placeholder" role="status">
       {{ t("terminal.suggestions.noPromptMarks") }}
-    </span>
-    <span v-else class="term-suggest-placeholder">
-      {{
-        props.hasAbbreviations
-          ? t("terminal.suggestions.placeholder")
-          : t("terminal.suggestions.placeholderEmpty")
-      }}
     </span>
   </div>
 </template>
 
 <style scoped>
-/* The bar owns a fixed height in the flex column. Never let its content
- * change that height: an Xterm viewport resize would reflow the shell. */
+/* The bar owns a fixed height for as long as it is mounted; the surface
+ * refits xterm when it mounts or unmounts. Never let content change that
+ * height: an Xterm viewport resize would reflow the shell. */
 .term-suggest {
   flex: 0 0 auto;
   display: flex;

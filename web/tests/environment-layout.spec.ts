@@ -353,12 +353,21 @@ test("application rows show the source brand avatar", async ({ page }) => {
     .locator(".resource-table tbody tr.resource-row")
     .filter({ hasText: "storefront" })
     .first();
-  const icon = appRow.locator(".resource-name-line .brand-icon");
+  const icon = appRow.locator(".resource-cell .brand-icon");
   await expect(icon).toBeVisible();
   const box = await icon.boundingBox();
   expect(box, "avatar renders a box").not.toBeNull();
   expect(box!.width).toBe(28);
   expect(box!.height).toBe(28);
+  // Icon sits left of the name/summary block, which stacks its two lines.
+  const body = await appRow.locator(".resource-cell .resource-body").boundingBox();
+  expect(body, "name block renders a box").not.toBeNull();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(body!.x);
+  const nameBox = await appRow.locator(".resource-body .resource-name").boundingBox();
+  const subBox = await appRow.locator(".resource-body .cell-sub").boundingBox();
+  expect(nameBox, "name renders a box").not.toBeNull();
+  expect(subBox, "summary renders a box").not.toBeNull();
+  expect(nameBox!.y + nameBox!.height).toBeLessThanOrEqual(subBox!.y);
   // GitHub App source -> GitHub hue behind a white glyph.
   expect(
     await icon.evaluate((node) => getComputedStyle(node).backgroundColor),
@@ -379,6 +388,48 @@ test("application rows show the source brand avatar", async ({ page }) => {
     page.locator(".resource-table tr.preview-row .brand-icon"),
   ).toHaveCSS("background-color", "rgb(240, 80, 50)");
 });
+
+for (const locale of ["en", "vi"] as const) {
+  test(`long application names truncate right of the icon (${locale})`, async ({
+    page,
+  }) => {
+    const longName = "storefront-checkout-with-a-very-long-application-name";
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await mockApi(page);
+    await page.addInitScript((value) => {
+      window.localStorage.setItem("gotham-locale", value);
+    }, locale);
+    await page.route("**/api/v1/environments/*/resources*", async (route) => {
+      const json = resourcesFor(environmentId, false);
+      json.applications = [{ ...json.applications[0], name: longName }];
+      await route.fulfill({ json });
+    });
+    await page.goto(`${baseURL}/projects/${envPath}`);
+    await page.locator(".resource-table").waitFor();
+    // The localized Name header still heads the cell in both languages.
+    await expect(page.locator(".resource-table thead")).toContainText(
+      locale === "en" ? "Name" : "Tên",
+    );
+    const row = page.locator(".resource-table tbody tr.resource-row").first();
+    await expect(row.locator(".resource-name")).toHaveText(longName);
+    const iconBox = await row.locator(".resource-cell .brand-icon").boundingBox();
+    const name = row.locator(".resource-body .resource-name");
+    const nameBox = await name.boundingBox();
+    expect(iconBox, "icon renders a box").not.toBeNull();
+    expect(nameBox, "name renders a box").not.toBeNull();
+    // The icon keeps its left slot; the long name truncates beside it
+    // instead of widening the cell or pushing the other columns out.
+    expect(iconBox!.x + iconBox!.width).toBeLessThanOrEqual(nameBox!.x);
+    const [scrollWidth, clientWidth] = await name.evaluate((element) => [
+      element.scrollWidth,
+      element.clientWidth,
+    ]);
+    expect(scrollWidth, "long name truncates").toBeGreaterThan(clientWidth);
+    const rowBox = await row.boundingBox();
+    expect(rowBox, "row renders a box").not.toBeNull();
+    expect(rowBox!.x + rowBox!.width).toBeLessThanOrEqual(1280);
+  });
+}
 
 test("preview switch nests previews under their base with a tag", async ({
   page,

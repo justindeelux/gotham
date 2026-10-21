@@ -95,10 +95,10 @@ onMounted(() => {
     ref="formRef"
     :model="form"
     :rules="rules"
-    class="qc-form"
+    class="term-quick-commands-form"
     @submit.prevent="save"
   >
-    <p class="qc-form-title">
+    <p class="term-quick-commands-form-title">
       {{
         props.editing
           ? t("terminal.quickCommands.editTitle")
@@ -129,15 +129,15 @@ onMounted(() => {
         :placeholder="t('terminal.quickCommands.abbreviationPlaceholder')"
       />
     </NFormItem>
-    <p class="qc-note qc-abbr-hint">
+    <p class="term-quick-commands-note term-quick-commands-abbr-hint">
       {{ t("terminal.quickCommands.abbreviationHint") }}
     </p>
-    <p v-if="shownError" class="qc-alert" role="alert">{{ shownError }}</p>
+    <p v-if="shownError" class="term-quick-commands-alert" role="alert">{{ shownError }}</p>
   </NForm>
 </template>
 
 <style scoped>
-.qc-form {
+.term-quick-commands-form {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -145,7 +145,7 @@ onMounted(() => {
   border-top: 1px solid var(--border);
 }
 
-.qc-form-title {
+.term-quick-commands-form-title {
   margin: 0;
   padding-top: var(--space-2);
   color: var(--fg-2);
@@ -153,18 +153,18 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.qc-note {
+.term-quick-commands-note {
   margin: 0;
   color: var(--muted);
   font-size: var(--text-xs);
   line-height: 1.45;
 }
 
-.qc-abbr-hint {
+.term-quick-commands-abbr-hint {
   margin-top: calc(-1 * var(--space-2));
 }
 
-.qc-alert {
+.term-quick-commands-alert {
   margin: 0;
   color: var(--danger);
   font-size: var(--text-xs);

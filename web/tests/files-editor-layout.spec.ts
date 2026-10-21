@@ -141,7 +141,10 @@ test.afterAll(async () => {
 });
 
 /** mockApi seeds the session and answers the calls the files page makes. */
-async function mockApi(page: Page): Promise<void> {
+async function mockApi(
+  page: Page,
+  options: { historyVersions?: number } = {},
+): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
@@ -194,6 +197,17 @@ async function mockApi(page: Page): Promise<void> {
       },
     });
   });
+  if (options.historyVersions) {
+    const versions = Array.from({ length: options.historyVersions }, (_, index) => ({
+      id: `v${options.historyVersions! - index}`,
+      created_at: `2026-10-1${index}T09:00:00Z`,
+      size: 12 * (index + 1),
+      etag: `"v${options.historyVersions! - index}"`,
+    }));
+    await page.route(`**/api/v1/servers/${serverId}/files/history*`, async (route) => {
+      await route.fulfill({ json: { versions } });
+    });
+  }
 }
 
 /** openConflict opens app.yaml, edits it, and triggers the 409 conflict modal. */
@@ -1382,4 +1396,384 @@ test("the Close control closes every tab, guarding dirty buffers", async ({
   await page.locator(".ed-window-close").click();
   await expect(page.locator(".files-editor-close-modal")).toHaveCount(0);
   await expect(page.locator(".ed-window")).toHaveCount(0);
+});
+
+/**
+ * TOOLBAR_LABELS lists the editor toolbar actions in DOM (and therefore Tab)
+ * order, per locale. The Settings trigger lives in a child component; its
+ * accessible name is the one asserted here.
+ */
+const TOOLBAR_LABELS: Record<string, string[]> = {
+  en: ["Wrap", "Find / replace", "Go to line", "Settings", "History", "Save all", "Save"],
+  vi: ["Ngắt dòng", "Tìm / thay thế", "Đi tới dòng", "Cài đặt", "Lịch sử", "Lưu tất cả", "Lưu"],
+};
+
+interface ToolbarCase {
+  viewport: { width: number; height: number };
+  /** Persisted editor window width; omitted keeps the fitted default. */
+  windowWidth?: number;
+  locale: "en" | "vi";
+  explorer: boolean;
+  /** Number of mocked revisions, so the History tooltip carries a count. */
+  historyVersions?: number;
+}
+
+/**
+ * TOOLBAR_CASES covers the widths JUS-286 measured: the fitted default on a
+ * 1366px screen, the reported ~830px window, the 480px minimum, and the two
+ * phone viewports, each with the explorer open and closed in both locales.
+ */
+const TOOLBAR_CASES: ToolbarCase[] = [
+  { viewport: { width: 1366, height: 844 }, locale: "en", explorer: true },
+  { viewport: { width: 1366, height: 844 }, locale: "vi", explorer: true },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 830, locale: "en", explorer: true },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 830, locale: "vi", explorer: true },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 830, locale: "en", explorer: false },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 830, locale: "vi", explorer: false },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 480, locale: "en", explorer: true },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 480, locale: "vi", explorer: true },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 480, locale: "en", explorer: false },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 480, locale: "vi", explorer: false },
+  // Straddle the 320px editor-column breakpoint: 570px of window leaves a
+  // 308px column (labels hidden), 600px leaves 338px (labels visible).
+  { viewport: { width: 1366, height: 844 }, windowWidth: 570, locale: "en", explorer: true },
+  { viewport: { width: 1366, height: 844 }, windowWidth: 600, locale: "en", explorer: true },
+];
+
+/** MOBILE_TOOLBAR_CASES are the fitted window on the two phone viewports. */
+const MOBILE_TOOLBAR_CASES: ToolbarCase[] = [
+  { viewport: { width: 480, height: 844 }, locale: "en", explorer: true },
+  { viewport: { width: 480, height: 844 }, locale: "vi", explorer: true },
+  { viewport: { width: 480, height: 844 }, locale: "en", explorer: false },
+  { viewport: { width: 480, height: 844 }, locale: "vi", explorer: false },
+  { viewport: { width: 390, height: 844 }, locale: "en", explorer: true },
+  { viewport: { width: 390, height: 844 }, locale: "vi", explorer: true },
+  { viewport: { width: 390, height: 844 }, locale: "en", explorer: false },
+  { viewport: { width: 390, height: 844 }, locale: "vi", explorer: false },
+];
+
+/** seedToolbarPreferences pins the locale and the persisted window geometry. */
+async function seedToolbarPreferences(
+  page: Page,
+  locale: string,
+  width?: number,
+): Promise<void> {
+  await page.addInitScript(
+    (value: { locale: string; width: number | null }) => {
+      window.localStorage.setItem("gotham-locale", value.locale);
+      const key = "gotham.files.editorWindow.v1.u-1";
+      if (value.width === null) {
+        window.localStorage.removeItem(key);
+      } else {
+        window.localStorage.setItem(
+          key,
+          JSON.stringify({
+            version: 1,
+            width: value.width,
+            height: 696,
+            x: null,
+            y: null,
+            minimized: false,
+          }),
+        );
+      }
+    },
+    { locale, width: width ?? null },
+  );
+}
+
+/** openToolbarCase opens app.yaml at the case geometry and explorer state. */
+async function openToolbarCase(page: Page, testCase: ToolbarCase): Promise<void> {
+  await page.setViewportSize(testCase.viewport);
+  await seedToolbarPreferences(page, testCase.locale, testCase.windowWidth);
+  await mockApi(page, { historyVersions: testCase.historyVersions });
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  const toggle = page.locator(".ed-window-explorer");
+  const open = (await toggle.getAttribute("aria-pressed")) === "true";
+  if (open !== testCase.explorer) {
+    await toggle.click();
+  }
+  await expect(toggle).toHaveAttribute("aria-pressed", String(testCase.explorer));
+  // Let the wrap/container-query layout settle before measuring.
+  await expect(page.locator(".ed-toolbar")).toBeVisible();
+}
+
+/**
+ * toolbarGeometry reports, for every toolbar button: its box, its own
+ * content overflow, whether its visible label is hidden, and whether its
+ * centre point is hit-testable. It also reports the editor column width (the
+ * container-query input), the toolbar's content right edge and the right edge
+ * of the Save group.
+ */
+async function toolbarGeometry(page: Page): Promise<{
+  windowRight: number;
+  editorColumnWidth: number;
+  toolbarRight: number;
+  actionsGroupRight: number | null;
+  toolbar: { clientWidth: number; scrollWidth: number };
+  actions: {
+    name: string;
+    ariaLabel: string | null;
+    left: number;
+    right: number;
+    contentOverflow: number;
+    labelWidth: number;
+    labelHidden: boolean;
+    hitTestable: boolean;
+  }[];
+}> {
+  return page.evaluate(() => {
+    const windowElement = document.querySelector(".ed-window");
+    const toolbar = document.querySelector(".ed-toolbar");
+    const column = document.querySelector(".ed-right");
+    if (!(windowElement instanceof HTMLElement) || !(toolbar instanceof HTMLElement)) {
+      throw new Error("the editor window or toolbar is missing");
+    }
+    const windowRight = windowElement.getBoundingClientRect().right;
+    const actions = [
+      ...toolbar.querySelectorAll<HTMLElement>(".n-button"),
+    ].map((button) => {
+      const box = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        box.left + box.width / 2,
+        box.top + box.height / 2,
+      );
+      const content = button.querySelector<HTMLElement>(".n-button__content");
+      const labelWidth = content?.getBoundingClientRect().width ?? 0;
+      return {
+        // The accessible name is the aria-label; an icon-only control has no
+        // text content to fall back to (JUS-286 fix round 1).
+        name: button.getAttribute("aria-label") ?? "",
+        ariaLabel: button.getAttribute("aria-label"),
+        left: box.left,
+        right: box.right,
+        contentOverflow: button.scrollWidth - button.clientWidth,
+        labelWidth,
+        labelHidden: labelWidth < 1,
+        hitTestable: hit === button || button.contains(hit),
+      };
+    });
+    const group = toolbar.querySelector<HTMLElement>(".ed-toolbar-actions");
+    return {
+      windowRight,
+      editorColumnWidth: column?.getBoundingClientRect().width ?? 0,
+      toolbarRight: toolbar.getBoundingClientRect().right,
+      actionsGroupRight: group?.getBoundingClientRect().right ?? null,
+      toolbar: {
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+      },
+      actions,
+    };
+  });
+}
+
+/** EDITOR_COLUMN_BREAKPOINT mirrors the @container query in FilesEditor.vue. */
+const EDITOR_COLUMN_BREAKPOINT = 320;
+
+/** assertToolbarActionsFit is the JUS-286 acceptance proof for one case. */
+async function assertToolbarActionsFit(page: Page, testCase: ToolbarCase): Promise<void> {
+  const label = `${testCase.viewport.width}px viewport, ${testCase.locale}, ${
+    testCase.windowWidth ? `${testCase.windowWidth}px window, ` : ""
+  }explorer ${testCase.explorer ? "open" : "closed"}`;
+  const geometry = await toolbarGeometry(page);
+
+  // The toolbar itself never overflows its column: no clipped row.
+  expect(
+    geometry.toolbar.scrollWidth,
+    `${label}: toolbar scrollWidth`,
+  ).toBeLessThanOrEqual(geometry.toolbar.clientWidth + 1);
+
+  // Every action exists, in Tab order, with a non-empty aria-label. The name
+  // comes from the attribute, not the (sometimes hidden) text content.
+  for (const action of geometry.actions) {
+    expect(action.ariaLabel, `${label}: action aria-label`).toBeTruthy();
+  }
+  expect(
+    geometry.actions.map((action) => action.name),
+    `${label}: actions`,
+  ).toEqual(TOOLBAR_LABELS[testCase.locale]);
+
+  // The labels are hidden exactly when the editor column is at or below the
+  // container-query breakpoint; above it they are visible. This pins the
+  // breakpoint value, not just the icon-only rendering.
+  const labelsHidden = geometry.editorColumnWidth <= EDITOR_COLUMN_BREAKPOINT;
+  for (const action of geometry.actions) {
+    expect(
+      action.labelHidden,
+      `${label}: ${action.name} label hidden (column ${geometry.editorColumnWidth}px)`,
+    ).toBe(labelsHidden);
+  }
+
+  // The Save group rides the right edge of its row: its right edge equals the
+  // toolbar content edge. Dropping margin-left:auto breaks this.
+  expect(geometry.actionsGroupRight, `${label}: save group`).not.toBeNull();
+  expect(
+    Math.abs(geometry.actionsGroupRight! - geometry.toolbarRight),
+    `${label}: save group right-aligned`,
+  ).toBeLessThanOrEqual(1);
+
+  // No action's right edge escapes the window frame, and none is clipped or
+  // covered: elementFromPoint at its centre resolves to the action itself.
+  for (const action of geometry.actions) {
+    expect(action.right, `${label}: ${action.name} right edge`).toBeLessThanOrEqual(
+      geometry.windowRight + 0.5,
+    );
+    expect(action.left, `${label}: ${action.name} left edge`).toBeGreaterThanOrEqual(0);
+    expect(
+      action.contentOverflow,
+      `${label}: ${action.name} content clipped`,
+    ).toBeLessThanOrEqual(1);
+    expect(action.hitTestable, `${label}: ${action.name} hit-testable`).toBe(true);
+  }
+}
+
+test("every editor toolbar action stays reachable at narrow window widths", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  for (const testCase of TOOLBAR_CASES) {
+    await openToolbarCase(page, testCase);
+    await assertToolbarActionsFit(page, testCase);
+  }
+});
+
+test("every editor toolbar action stays reachable on phone viewports", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  for (const testCase of MOBILE_TOOLBAR_CASES) {
+    await openToolbarCase(page, testCase);
+    await assertToolbarActionsFit(page, testCase);
+  }
+});
+
+/**
+ * ToolbarTabStop is one Tab stop inside the editor toolbar as the browser
+ * resolved it: accessible name, focus-visible state and computed focus ring.
+ */
+interface ToolbarTabStop {
+  name: string;
+  focusVisible: boolean;
+  outlineStyle: string;
+  outlineWidth: number;
+}
+
+/**
+ * nextToolbarTabStop presses Tab once and reports the newly focused toolbar
+ * button's name and visible focus ring (the global :focus-visible outline).
+ */
+async function nextToolbarTabStop(page: Page): Promise<ToolbarTabStop> {
+  await page.keyboard.press("Tab");
+  return page.evaluate(() => {
+    const element = document.activeElement;
+    if (!(element instanceof HTMLElement)) {
+      throw new Error("Tab did not focus an element");
+    }
+    const style = getComputedStyle(element);
+    return {
+      name: element.getAttribute("aria-label") ?? "",
+      focusVisible: element.matches(":focus-visible"),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: Number.parseFloat(style.outlineWidth) || 0,
+    };
+  });
+}
+
+test("icon-only toolbar buttons keep tooltips, Tab order and a visible focus ring", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const testCase: ToolbarCase = {
+    viewport: { width: 390, height: 844 },
+    locale: "en",
+    explorer: true,
+  };
+  await openToolbarCase(page, testCase);
+
+  // A dirty buffer enables Save and Save all, so all seven actions are
+  // focusable and hoverable (the disabled pair would swallow both).
+  await page.locator(".cm-content").click();
+  await page.keyboard.type("#");
+  await expect(page.locator(".ed-dot")).toHaveCount(1);
+  const geometry = await toolbarGeometry(page);
+  expect(geometry.editorColumnWidth).toBeLessThanOrEqual(EDITOR_COLUMN_BREAKPOINT);
+  expect(geometry.actions.every((action) => action.labelHidden)).toBe(true);
+
+  // The labels are gone, so each icon needs its JUS-156 tooltip. Hover and
+  // keyboard focus both open it, with the same copy as the aria-label.
+  const tooltip = page.locator(".app-tooltip-content");
+  const saveAll = page.locator(".ed-toolbar .n-button").nth(5);
+  await saveAll.hover();
+  await expect(tooltip).toHaveText("Save all");
+  await page.mouse.move(5, 5);
+  await expect(tooltip).toBeHidden();
+
+  await page.locator(".ed-tab-name").focus();
+  for (const [index, name] of TOOLBAR_LABELS[testCase.locale].entries()) {
+    const stop = await nextToolbarTabStop(page);
+    expect(stop.name, `Tab stop ${index + 1}`).toBe(name);
+    expect(stop.focusVisible, `Tab stop ${index + 1} focus-visible`).toBe(true);
+    expect(stop.outlineStyle, `Tab stop ${index + 1} outline`).toBe("solid");
+    expect(stop.outlineWidth, `Tab stop ${index + 1} outline width`).toBeGreaterThanOrEqual(2);
+    // The keyboard-focused icon shows its tooltip too.
+    await expect(tooltip, `Tab stop ${index + 1} tooltip`).toHaveText(name);
+  }
+
+  // Wrapping the trigger in a tooltip must not break the settings popover or
+  // its focus return, whichever way the popover closes.
+  const settingsButton = page.locator(".ed-toolbar .n-button[aria-label='Settings']");
+  await settingsButton.click();
+  await expect(page.locator(".ed-settings")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".ed-settings")).toBeHidden();
+  await expect(settingsButton).toBeFocused();
+
+  await settingsButton.click();
+  await expect(page.locator(".ed-settings")).toBeVisible();
+  // Click the toolbar's own padding: outside the popover, inside the window.
+  await page.locator(".ed-toolbar").click({ position: { x: 2, y: 2 } });
+  await expect(page.locator(".ed-settings")).toBeHidden();
+  await expect(settingsButton).toBeFocused();
+});
+
+test("the History tooltip keeps the revision count when the label is hidden", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const cases: ToolbarCase[] = [
+    {
+      viewport: { width: 1366, height: 844 },
+      windowWidth: 480,
+      locale: "en",
+      explorer: true,
+      historyVersions: 2,
+    },
+    {
+      viewport: { width: 1366, height: 844 },
+      windowWidth: 480,
+      locale: "vi",
+      explorer: true,
+      historyVersions: 2,
+    },
+  ];
+  for (const testCase of cases) {
+    await openToolbarCase(page, testCase);
+    const historyName = TOOLBAR_LABELS[testCase.locale][4];
+    const history = page.locator(`.ed-toolbar .n-button[aria-label="${historyName}"]`);
+
+    // The narrow layout hides the label and the count badge; the count must
+    // survive in the tooltip (and its aria-describedby description).
+    expect((await toolbarGeometry(page)).actions[4].labelHidden).toBe(true);
+    await history.hover();
+    await expect(page.locator(".app-tooltip-content")).toHaveText(
+      testCase.locale === "en" ? "History (2)" : "Lịch sử (2)",
+    );
+    await expect(history).toHaveAttribute(
+      "aria-describedby",
+      /app-tooltip-\d+/,
+    );
+  }
 });

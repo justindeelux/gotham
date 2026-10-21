@@ -66,6 +66,7 @@ const vi = {
   lineEndingTitle: "Kiểu xuống dòng",
   tabSizeValue: "Tab {size}",
   historyShow: "Xem lịch sử tệp ({count})",
+  historyWithCount: "Lịch sử ({count})",
   encodingTitle: "Mã hóa khi lưu",
   encodingMessage: "Chọn bảng mã dùng khi lưu tệp này.",
   encodingPending: "Tệp sẽ được lưu bằng {encoding} ở lần lưu tiếp theo.",

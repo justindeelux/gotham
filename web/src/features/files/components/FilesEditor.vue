@@ -39,6 +39,7 @@ import EditorSearchBar from "@/features/files/components/EditorSearchBar.vue";
 import EditorSettingsPopover from "@/features/files/components/EditorSettingsPopover.vue";
 import EditorShortcutsDialog from "@/features/files/components/EditorShortcutsDialog.vue";
 import EditorStatusBar from "@/features/files/components/EditorStatusBar.vue";
+import AppTooltip from "@/shared/ui/AppTooltip.vue";
 // Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
@@ -293,6 +294,16 @@ const historyTarget = computed<EditorTab | null>(() =>
 /** historyCount is the active file's cached revision count. */
 const historyCount = computed<number>(() =>
   activeTab.value ? (historyCounts.value[activeTab.value.id] ?? 0) : 0,
+);
+
+/**
+ * historyTooltip carries the revision count that the visible badge loses when
+ * the icon-only layout hides the button's content (JUS-286 fix round 1).
+ */
+const historyTooltip = computed<string>(() =>
+  historyCount.value > 0
+    ? t("files.editor.historyWithCount", { count: historyCount.value })
+    : t("files.editor.history"),
 );
 
 /** pendingCloseDirty is the dirty subset of the tabs awaiting a close prompt. */
@@ -1546,87 +1557,132 @@ onBeforeUnmount(() => {
 
         <div v-if="activeTab" class="ed-body">
           <div v-if="activeTab.status === 'ready' && activeTab.kind === 'file'" class="ed-toolbar">
-            <NButton
-              size="tiny"
-              secondary
-              :type="editorSettings.settings.wrap ? 'primary' : 'default'"
-              :aria-pressed="editorSettings.settings.wrap"
-              @click="toggleWrap"
-            >
-              <template #icon>
-                <WrapText :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.wrap") }}
-            </NButton>
-            <NButton size="tiny" secondary @click="openFind(false)">
-              <template #icon>
-                <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.search") }}
-            </NButton>
-            <NButton size="tiny" secondary @click="openGotoLine">
-              <template #icon>
-                <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.goToLine") }}
-            </NButton>
+            <!-- AppTooltip (JUS-156) keeps every action named when the narrow
+                 layout hides the visible labels (icon-only below 320px of
+                 editor column). Its copy is the aria-label, so a visible label
+                 and its tooltip never disagree. -->
+            <AppTooltip :label="t('files.editor.wrap')">
+              <NButton
+                size="tiny"
+                secondary
+                :type="editorSettings.settings.wrap ? 'primary' : 'default'"
+                :aria-pressed="editorSettings.settings.wrap"
+                :aria-label="t('files.editor.wrap')"
+                @click="toggleWrap"
+              >
+                <template #icon>
+                  <WrapText :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+                {{ t("files.editor.wrap") }}
+              </NButton>
+            </AppTooltip>
+            <AppTooltip :label="t('files.editor.search')">
+              <NButton
+                size="tiny"
+                secondary
+                :aria-label="t('files.editor.search')"
+                @click="openFind(false)"
+              >
+                <template #icon>
+                  <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+                {{ t("files.editor.search") }}
+              </NButton>
+            </AppTooltip>
+            <AppTooltip :label="t('files.editor.goToLine')">
+              <NButton
+                size="tiny"
+                secondary
+                :aria-label="t('files.editor.goToLine')"
+                @click="openGotoLine"
+              >
+                <template #icon>
+                  <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+                {{ t("files.editor.goToLine") }}
+              </NButton>
+            </AppTooltip>
             <EditorSettingsPopover />
-            <NButton
-              v-if="files.canWrite && !activeTab.truncated"
-              size="tiny"
-              secondary
-              @click="openHistory"
-            >
-              <template #icon>
-                <History :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.history") }}
-              <span v-if="historyCount > 0" class="ed-history-count">{{ historyCount }}</span>
-            </NButton>
-            <span class="grow" />
-            <NButton
-              v-if="files.canWrite"
-              size="small"
-              secondary
-              :disabled="!editor.hasDirty"
-              :loading="editor.dirtyTabs.some((tab) => tab.saving)"
-              @click="saveAllTabs"
-            >
-              <template #icon>
-                <SaveAll :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.saveAll") }}
-            </NButton>
-            <NButton
-              v-if="files.canWrite"
-              size="small"
-              type="primary"
-              :loading="activeTab.saving"
-              :disabled="!editor.isDirty(activeTab) || activeTab.truncated"
-              @click="() => void saveTab(activeTab!.id)"
-            >
-              <template #icon>
-                <Save :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ activeTab.saving ? t("files.editor.saving") : t("files.editor.save") }}
-            </NButton>
+            <AppTooltip v-if="files.canWrite && !activeTab.truncated" :label="historyTooltip">
+              <NButton
+                size="tiny"
+                secondary
+                :aria-label="t('files.editor.history')"
+                @click="openHistory"
+              >
+                <template #icon>
+                  <History :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+                {{ t("files.editor.history") }}
+                <span v-if="historyCount > 0" class="ed-history-count">{{ historyCount }}</span>
+              </NButton>
+            </AppTooltip>
+            <div class="ed-toolbar-actions">
+              <AppTooltip v-if="files.canWrite" :label="t('files.editor.saveAll')">
+                <NButton
+                  size="small"
+                  secondary
+                  :aria-label="t('files.editor.saveAll')"
+                  :disabled="!editor.hasDirty"
+                  :loading="editor.dirtyTabs.some((tab) => tab.saving)"
+                  @click="saveAllTabs"
+                >
+                  <template #icon>
+                    <SaveAll :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                  {{ t("files.editor.saveAll") }}
+                </NButton>
+              </AppTooltip>
+              <AppTooltip
+                v-if="files.canWrite"
+                :label="activeTab.saving ? t('files.editor.saving') : t('files.editor.save')"
+              >
+                <NButton
+                  size="small"
+                  type="primary"
+                  :loading="activeTab.saving"
+                  :disabled="!editor.isDirty(activeTab) || activeTab.truncated"
+                  :aria-label="activeTab.saving ? t('files.editor.saving') : t('files.editor.save')"
+                  @click="() => void saveTab(activeTab!.id)"
+                >
+                  <template #icon>
+                    <Save :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                  {{ activeTab.saving ? t("files.editor.saving") : t("files.editor.save") }}
+                </NButton>
+              </AppTooltip>
+            </div>
           </div>
 
           <div v-if="activeTab.kind === 'diff'" class="ed-toolbar">
-            <span class="small muted">{{ t("files.editor.historyDiffReadOnly") }}</span>
+            <span class="ed-diff-note small muted">{{ t("files.editor.historyDiffReadOnly") }}</span>
             <span class="grow" />
-            <NButton size="tiny" secondary @click="openFind(false)">
-              <template #icon>
-                <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.search") }}
-            </NButton>
-            <NButton size="tiny" secondary @click="openGotoLine">
-              <template #icon>
-                <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.goToLine") }}
-            </NButton>
+            <AppTooltip :label="t('files.editor.search')">
+              <NButton
+                size="tiny"
+                secondary
+                :aria-label="t('files.editor.search')"
+                @click="openFind(false)"
+              >
+                <template #icon>
+                  <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+                {{ t("files.editor.search") }}
+              </NButton>
+            </AppTooltip>
+            <AppTooltip :label="t('files.editor.goToLine')">
+              <NButton
+                size="tiny"
+                secondary
+                :aria-label="t('files.editor.goToLine')"
+                @click="openGotoLine"
+              >
+                <template #icon>
+                  <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+                {{ t("files.editor.goToLine") }}
+              </NButton>
+            </AppTooltip>
           </div>
 
           <!-- A file over the editor ceiling opens as a read-only tail: say so
@@ -1958,6 +2014,10 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  /* The toolbar adapts to the editor column, not the viewport: a container
+     query hides its labels once the column can no longer fit them (JUS-286). */
+  container-type: inline-size;
+  container-name: editor;
 }
 
 .ed-tabs {
@@ -2050,9 +2110,35 @@ onBeforeUnmount(() => {
 .ed-toolbar {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+  row-gap: var(--space-1);
   padding: var(--space-2) 0;
+}
+
+/* The save pair stays together and rides the right edge of whichever row it
+   lands on; at narrow widths it is the first group to wrap. */
+.ed-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.ed-diff-note {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Below this editor-column width even one labelled action no longer fits on a
+   row. Drop the visible labels (the aria-label keeps every name) and let the
+   icon buttons wrap: every action stays on screen and unclipped. */
+@container editor (max-width: 320px) {
+  .ed-toolbar :deep(.n-button__content) {
+    display: none;
+  }
 }
 
 .ed-truncated {

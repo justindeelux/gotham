@@ -70,6 +70,7 @@ const en = {
   lineEndingTitle: "Line ending",
   tabSizeValue: "Tab {size}",
   historyShow: "Show file history ({count})",
+  historyWithCount: "History ({count})",
   encodingTitle: "Save encoding",
   encodingMessage: "Choose the character encoding this file is saved in.",
   encodingPending: "The file will be saved as {encoding} the next time you save.",

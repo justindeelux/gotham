@@ -148,13 +148,14 @@ function onOptionKeydown(event: KeyboardEvent): void {
 </template>
 
 <style scoped>
-/* The strip is an overlay on the terminal bottom: it never takes a row from
- * the xterm box, so showing/hiding a suggestion cannot resize the PTY. */
+/* The strip is an overlay: it never takes a row from the xterm box, so
+ * showing/hiding a suggestion cannot resize the PTY. The surface itself is
+ * transparent to the pointer (rows under it stay clickable/selectable); only
+ * its controls take input. */
 .term-suggest {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
   z-index: 3;
   display: flex;
   align-items: center;
@@ -168,8 +169,14 @@ function onOptionKeydown(event: KeyboardEvent): void {
   overflow: hidden;
   padding: 0 var(--space-3);
   border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--elev-raised);
+  pointer-events: none;
+}
+
+.term-suggest > * {
+  pointer-events: auto;
 }
 
 /* Visually hidden but exposed to assistive technology. This must live in

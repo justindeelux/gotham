@@ -83,6 +83,8 @@ const exitText = computed<string>(() => {
 <style scoped>
 .term-overlay {
   position: absolute;
+  /* Above the suggestion overlay so a reconnect state is never covered. */
+  z-index: 4;
   inset: auto var(--space-3) calc(var(--space-8) + var(--space-2));
   display: grid;
   place-items: center;

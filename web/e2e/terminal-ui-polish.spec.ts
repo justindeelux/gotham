@@ -272,6 +272,13 @@ test.describe("terminal UI polish", () => {
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
       .toContain("term-add-tab");
+    // The strip is reachable in both directions from the active tab.
+    await page.keyboard.press("Shift+Tab");
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.activeElement?.getAttribute("role") ?? ""),
+      )
+      .toBe("tab");
     await page.locator(".term-window-min").focus();
     await page.keyboard.press("Tab");
     await expect

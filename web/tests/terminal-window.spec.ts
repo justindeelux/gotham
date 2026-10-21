@@ -899,6 +899,11 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
     .toContain("term-add-tab");
+  // The strip is reachable in both directions from the active tab.
+  await page.keyboard.press("Shift+Tab");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.getAttribute("role") ?? ""))
+    .toBe("tab");
   await page.locator(".term-window-min").focus();
   await page.keyboard.press("Tab");
   await expect
@@ -1569,13 +1574,46 @@ test("an idle terminal reserves no suggestion row and a match never resizes the 
   await expect
     .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
     .toBe(Math.round(idle?.height ?? 0));
-  const strip = await surface.locator(".term-suggest").boundingBox();
-  expect(strip).not.toBeNull();
-  const screen = await surface.locator(".term-screen").boundingBox();
-  expect(screen).not.toBeNull();
-  // Anchored to the terminal bottom and inside its box, never above it.
-  expect(Math.abs((strip!.y + strip!.height) - (screen!.y + screen!.height))).toBeLessThanOrEqual(1);
-  expect(strip!.y).toBeGreaterThanOrEqual(screen!.y - 1);
+  // Restored guarantee (round 2): the strip is inside the terminal box but
+  // never intersects the cursor row / the line being typed. The placement
+  // follows the renderer cursor, so poll for the settled box.
+  await expect
+    .poll(async () => {
+      const strip = await surface.locator(".term-suggest").boundingBox();
+      const screen = await surface.locator(".term-screen").boundingBox();
+      const cursor = await surface.locator(".xterm-cursor").boundingBox();
+      if (!strip || !screen || !cursor) {
+        return "missing";
+      }
+      if (strip.y < screen.y - 1) {
+        return "above box";
+      }
+      if (strip.y + strip.height > screen.y + screen.height + 1) {
+        return "below box";
+      }
+      const clear =
+        strip.y + strip.height <= cursor.y + 1 ||
+        strip.y >= cursor.y + cursor.height - 1;
+      return clear ? "ok" : "covers cursor";
+    })
+    .toBe("ok");
+  // The overlay surface is pointer-transparent: the rows under it still take
+  // clicks/selection, only its controls capture the pointer.
+  const under = await page.evaluate(() => {
+    const element = document.querySelector(
+      ".term-window .term-suggest",
+    );
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + 8;
+    const y = rect.top + rect.height / 2;
+    return document
+      .elementsFromPoint(x, y)
+      .some((node) => node === element || element.contains(node));
+  });
+  expect(under).toBe(false);
 
   // Dismissing the match must not resize the PTY either.
   await surface.getByRole("button", { name: "Dismiss suggestion" }).click();
@@ -1584,6 +1622,149 @@ test("an idle terminal reserves no suggestion row and a match never resizes the 
     .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
     .toBe(Math.round(idle?.height ?? 0));
   expect(state.sessions[0]?.resizes.length ?? 0).toBe(idleResizes);
+});
+
+test("a suggestion never covers a prompt that sits on the last row", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      "gotham.terminal.commands.v1.u-1",
+      JSON.stringify({
+        version: 1,
+        commands: [
+          {
+            id: "c1",
+            label: "Git status",
+            command: "git status",
+            abbreviation: "gs",
+          },
+        ],
+      }),
+    );
+  });
+
+  const tab = await openWindow(page, "app");
+  const surface = page.locator(".term-window .term-surface:visible");
+  await expect(surface.locator(".term-state")).toHaveText("Connected");
+
+  // Fill the viewport so the next prompt lands on the very last row.
+  const rows = (await tabState(page, tab.id)).rows;
+  const filler = Array.from({ length: rows + 8 }, (_, index) => `line ${index}`)
+    .join("\r\n");
+  state.sessions[0]?.socket?.send(outputFrame(`${filler}\r\n`));
+  state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
+  await expect
+    .poll(async () => (await surfaceToText(page)).includes(`line ${rows + 7}`))
+    .toBe(true);
+
+  const resizesBefore = state.sessions[0]?.resizes.length ?? 0;
+  const screenBefore = await surface.locator(".term-screen").boundingBox();
+  const input = surface.locator(".xterm-helper-textarea");
+  await input.focus();
+  await page.keyboard.type("gs");
+  await expect(surface.locator(".term-suggest-option")).toBeVisible();
+
+  const geometry = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const box = document
+        .querySelector(selector)
+        ?.getBoundingClientRect();
+      return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
+    };
+    return {
+      screen: rect(".term-window .term-screen"),
+      cursor: rect(".term-window .xterm-cursor"),
+      strip: rect(".term-window .term-suggest"),
+      status: rect(".term-window .term-statusbar"),
+      statusHit: (() => {
+        const bar = document.querySelector(
+          ".term-window .term-statusbar",
+        );
+        const box = bar?.getBoundingClientRect();
+        if (!bar || !box) {
+          return false;
+        }
+        return document
+          .elementsFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+          .some((node) => node === bar || bar.contains(node));
+      })(),
+    };
+  });
+  expect(geometry.screen).not.toBeNull();
+  expect(geometry.cursor).not.toBeNull();
+  expect(geometry.strip).not.toBeNull();
+
+  // The prompt really is on the last row: the cursor cell reaches the bottom
+  // of the terminal (inside its 8px padding).
+  expect(
+    geometry.cursor!.y + geometry.cursor!.height,
+  ).toBeGreaterThanOrEqual(
+    geometry.screen!.y + geometry.screen!.height - 16,
+  );
+
+  // A suggestion appearing sends no resize frame and keeps the xterm box.
+  await expect
+    .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
+    .toBe(Math.round(screenBefore?.height ?? 0));
+  expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
+
+  // The strip stays above the cursor row: the line being typed is visible.
+  await expect
+    .poll(async () => {
+      const strip = await surface.locator(".term-suggest").boundingBox();
+      const cursor = await surface.locator(".xterm-cursor").boundingBox();
+      const screen = await surface.locator(".term-screen").boundingBox();
+      if (!strip || !cursor || !screen) {
+        return "missing";
+      }
+      if (strip.y < screen.y - 1) {
+        return "above box";
+      }
+      return strip.y + strip.height <= cursor.y + 1 ? "clear" : "covers";
+    })
+    .toBe("clear");
+
+  // Chrome stays on top (reconnect/status), and the terminal rows under the
+  // strip stay interactive.
+  expect(geometry.status).not.toBeNull();
+  expect(geometry.statusHit).toBe(true);
+  const passThrough = await page.evaluate(() => {
+    const strip = document.querySelector(
+      ".term-window .term-suggest",
+    );
+    const box = strip?.getBoundingClientRect();
+    if (!strip || !box) {
+      return null;
+    }
+    return document
+      .elementsFromPoint(box.x + 8, box.y + box.height / 2)
+      .some((node) => node === strip || strip.contains(node));
+  });
+  expect(passThrough).toBe(false);
+
+  // Round 2 (d): a reconnect state paints above the overlay, so its retry
+  // stays visible and clickable.
+  state.sessions[0]?.socket?.close({ code: 1006 });
+  const overlay = surface.locator(".term-overlay");
+  await expect(overlay).toBeVisible();
+  const retryBox = await overlay.getByRole("button").boundingBox();
+  expect(retryBox).not.toBeNull();
+  const retryHit = await page.evaluate(
+    (point) =>
+      document
+        .elementsFromPoint(point.x, point.y)
+        .some((node) => node.closest(".term-overlay") !== null),
+    {
+      x: retryBox!.x + retryBox!.width / 2,
+      y: retryBox!.y + retryBox!.height / 2,
+    },
+  );
+  expect(retryHit).toBe(true);
 });
 
 test("quick command suggestions survive a theme change and page → window move", async ({
@@ -1750,17 +1931,21 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
         const nextScreen = await page
           .locator(".term-window .term-surface:visible .term-screen")
           .boundingBox();
-        if (!nextBox || !nextScreen) {
+        const nextCursor = await page
+          .locator(".term-window .term-surface:visible .xterm-cursor")
+          .boundingBox();
+        if (!nextBox || !nextScreen || !nextCursor) {
           return false;
         }
+        const clearOfCursor =
+          nextBox.y + nextBox.height <= nextCursor.y + 1 ||
+          nextBox.y >= nextCursor.y + nextCursor.height - 1;
         return (
           nextBox.x >= 0 &&
           nextBox.x + nextBox.width <= width + 1 &&
           nextBox.y >= nextScreen.y - 1 &&
           nextBox.y + nextBox.height <= nextScreen.y + nextScreen.height + 1 &&
-          Math.abs(
-            nextBox.y + nextBox.height - (nextScreen.y + nextScreen.height),
-          ) <= 1
+          clearOfCursor
         );
       })
       .toBe(true);
@@ -1888,5 +2073,3 @@ test("the terminal window floats on the soft elevation shadow in both themes", a
   );
   expect(overflow).toBeLessThanOrEqual(0);
 });
-
-

@@ -279,6 +279,47 @@ export class TerminalRuntime {
     return this.host;
   }
 
+  /**
+   * getCursorRow returns the rendered cursor cell in client coordinates so a
+   * surface overlay can stay clear of the prompt line. It reads the buffer
+   * cursor against the first rendered row's cell height, so it works even while
+   * the cursor is not focused (the DomRenderer only tags a focused cursor).
+   */
+  getCursorRow(): { top: number; height: number } | null {
+    const terminal = this.terminal;
+    const host = this.host;
+    if (!terminal || !host) {
+      return null;
+    }
+    const rows = host.querySelector<HTMLElement>(".xterm-rows");
+    const cell = rows?.firstElementChild;
+    if (!rows || !cell) {
+      return null;
+    }
+    const height = cell.getBoundingClientRect().height;
+    if (height <= 0) {
+      return null;
+    }
+    const cursorY = terminal.buffer.active.cursorY;
+    return { top: rows.getBoundingClientRect().top + cursorY * height, height };
+  }
+
+  /**
+   * watchCursor subscribes to the moves that relocate the prompt cell: cursor
+   * moves and buffer scrolls (background output keeps scrolling the view).
+   */
+  watchCursor(listener: () => void): () => void {
+    const subscriptions = [
+      this.terminal?.onCursorMove(listener),
+      this.terminal?.onScroll(listener),
+    ];
+    return () => {
+      for (const subscription of subscriptions) {
+        subscription?.dispose();
+      }
+    };
+  }
+
   /** getStatus exposes the local lifecycle copy. */
   getStatus(): TerminalStatus {
     return this.status;

@@ -194,6 +194,7 @@ test.describe("terminal UI polish", () => {
           };
         };
         const bar = document.querySelector(".term-window-bar") as HTMLElement;
+        const strip = document.querySelector(".term-tabstrip") as HTMLElement;
         const tabs = document.querySelector(".term-tabs") as HTMLElement;
         const add = document.querySelector(".term-add-tab") as HTMLElement;
         const min = document.querySelector(".term-window-min") as HTMLElement;
@@ -203,6 +204,8 @@ test.describe("terminal UI polish", () => {
         const closeBox = box(close);
         return {
           bar: box(bar),
+          strip: box(strip),
+          tabsInBar: bar.contains(tabs),
           paddingRight: Number.parseFloat(getComputedStyle(bar).paddingRight),
           tabs: box(tabs),
           scroll: { width: tabs.scrollWidth, client: tabs.clientWidth },
@@ -231,18 +234,24 @@ test.describe("terminal UI polish", () => {
         };
       });
 
-      // The close control's right edge is the header's content right edge and
-      // the pair is right of the whole tab strip, with nothing painted over it.
+      // JUS-275: the sessions keep their own strip under the title bar, so the
+      // header only carries the pinned minimize/close pair at its right edge.
+      expect(geometry.tabsInBar).toBe(false);
+      expect(geometry.strip.top).toBeGreaterThanOrEqual(
+        geometry.bar.bottom - 0.5,
+      );
       expect(
         Math.abs(
           geometry.close.right - (geometry.bar.right - geometry.paddingRight),
         ),
       ).toBeLessThanOrEqual(1);
+      expect(geometry.min.right).toBeLessThanOrEqual(geometry.close.left);
       expect(geometry.tabs.right).toBeLessThanOrEqual(
         geometry.add.left + 0.5,
       );
-      expect(geometry.add.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
-      expect(geometry.min.right).toBeLessThanOrEqual(geometry.close.left);
+      expect(geometry.add.right).toBeLessThanOrEqual(
+        geometry.strip.right + 0.5,
+      );
       expect(geometry.addHit).toBe(true);
       expect(geometry.minHit).toBe(true);
       expect(geometry.closeHit).toBe(true);
@@ -256,16 +265,14 @@ test.describe("terminal UI polish", () => {
       }
     }
 
-    // Keyboard reachable in DOM order: active tab → add → minimize → close.
+    // Keyboard reachable: the active tab hands Tab to the add control, and the
+    // bar's minimize then close follow.
     await page.locator('.term-tab-name[aria-selected="true"]').focus();
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
       .toContain("term-add-tab");
-    await page.keyboard.press("Tab");
-    await expect
-      .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
-      .toContain("term-window-min");
+    await page.locator(".term-window-min").focus();
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))

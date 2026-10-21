@@ -223,7 +223,10 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 	return server, nil
 }
 
-// withinPath reports whether path is base or a descendant of it.
+// withinPath reports whether path is base or a descendant of it. Keep this
+// byte-for-byte in sync with agent/docker/volumes.go (bind validation) and the
+// test helper in agent/terminal/helpers_test.go; there is deliberately no
+// shared-utils package.
 func withinPath(base, path string) bool {
 	if base == "" || path == "" || !filepath.IsAbs(base) || !filepath.IsAbs(path) {
 		return false

@@ -25,7 +25,9 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	}
 }
 
-// withinPath reports whether path is base or a descendant of it.
+// withinPath reports whether path is base or a descendant of it. This is the
+// test-only copy of the confinement predicate; keep it byte-for-byte in sync
+// with agent/files/files.go and agent/docker/volumes.go.
 func withinPath(base, path string) bool {
 	if base == "" || path == "" || !filepath.IsAbs(base) || !filepath.IsAbs(path) {
 		return false

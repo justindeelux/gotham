@@ -15,8 +15,10 @@
 //	agent/stats     host resource sampling for heartbeats
 //
 // Dependencies point inward: the root imports the subpackages, and a
-// subpackage never imports the root. leaf packages are proxy, fsroot, stats and
-// tools; docker imports proxy and tools; files imports proxy and fsroot.
+// subpackage never imports the root. Leaf packages are fsroot, stats, proxy,
+// tools and updates; files imports fsroot and proxy; terminal imports docker
+// and fsroot; docker imports proxy and tools (plus the shared buildtool and
+// composeguard packages); updates imports updatecore.
 //
 // This package must not import any package under gotham/internal, which is
 // reserved for the control plane; the binary is built and shipped on its own.

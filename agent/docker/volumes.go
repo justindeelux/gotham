@@ -236,7 +236,10 @@ func isDangerousHostPath(host string) bool {
 // arguments must be absolute; a relative or empty value is never contained.
 // It compares cleaned path components rather than a string prefix, so a
 // filesystem root base ("/") contains every absolute path and a sibling with a
-// shared prefix ("/tmpx" vs "/tmp") is not treated as a descendant.
+// shared prefix ("/tmpx" vs "/tmp") is not treated as a descendant. Keep this
+// byte-for-byte in sync with agent/files/files.go (file roots) and the test
+// helper in agent/terminal/helpers_test.go; there is deliberately no
+// shared-utils package.
 func withinPath(base, path string) bool {
 	if base == "" || path == "" || !filepath.IsAbs(base) || !filepath.IsAbs(path) {
 		return false

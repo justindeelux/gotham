@@ -39,8 +39,8 @@ docs/plans/      # feature/phase plans (medium to large work)
 ## Development Workflow
 
 - Docs index: `docs/README.md` (plan status, process, test server, design).
-- Each task = 1 work package in its own worktree/branch (naming: `docs/ORCHESTRATION.md` → Naming rule), merged via its own PR; CI must be green before merge. Work is tracked in Linear; `docs/plans/` and `docs/TODO.md` are reference only.
-- Git operations (branching, commit messages, merge vs rebase, conflict resolution): use the `/git-workflow` skill. Commits and PR titles follow Conventional Commits, `<type>(<scope>): <subject>` (e.g. `fix(files): show owner / mode separately`), with the Linear ticket in the footer (`Refs: JUS-216`). Branch and worktree names keep the `<type>/<slug>` rule in `docs/ORCHESTRATION.md`.
+- Each task = 1 work package in its own worktree/branch (naming: `docs/ORCHESTRATION.md` → Naming rule), merged via its own PR; CI must be green before merge. Work is tracked in Plane (CE) via the `plane` MCP server; `docs/plans/` and `docs/TODO.md` are reference only.
+- Git operations (branching, commit messages, merge vs rebase, conflict resolution): use the `/git-workflow` skill. Commits and PR titles follow Conventional Commits, `<type>(<scope>): <subject>` (e.g. `fix(files): show owner / mode separately`), with the Plane item in the footer (`Refs: GOTHAM-216`). Branch and worktree names keep the `<type>/<slug>` rule in `docs/ORCHESTRATION.md`.
 - Invariants (run after every task, before merge):
   1. `go build ./...` clean
   2. `go test ./...` green
@@ -52,13 +52,18 @@ docs/plans/      # feature/phase plans (medium to large work)
 - UI e2e: run the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
-## Linear Issues
+## Plane Work Items
 
-When creating an issue (via `orca-linear`), always set all of these:
+Work is tracked in Plane (self-hosted CE) through the `plane` MCP server; the `plane-ce` skill holds the CE-specific rules. Workspace `gotham`, project `Gotham` (identifier `GOTHAM`), item ids `GOTHAM-<N>`.
 
-- Team `JUS`, project `gotham`, assignee `me` (Justin Nguyen).
+When creating a work item, always set all of these:
+
+- Project `GOTHAM`, assignee = the workspace owner (`member me`).
 - Exactly one label matching the work: `Bug` (broken behavior), `Improvement` (UI/UX polish or enhancement of existing behavior), `Feature` (new capability).
 - Title and body in the project language: Summary, Changes (numbered), Acceptance criteria (include the relevant invariants from Development Workflow).
+- State by UUID from `state list`: `Todo` when ready, `In Progress` while the branch is open, `Done` after the PR merges.
+
+CE limits: no PQL (filter client-side over a fully paged `workitem list`), no issue types (`workitem_type list` 404s — omit `type_id`), no cycles (disabled). Always pass `project_id` and read back every mutation.
 
 ## Code Style
 

@@ -1,0 +1,1 @@
+import{d2 as o,f as t,j as c,a$ as i,bt as s}from"./index-DFKLtmHG.js";function v(){const e=c(null),a=t(()=>{if(e.value!==null)return i.value,String(s.global.t("projects.conflict.nameTaken"))}),u=t(()=>e.value===null?void 0:"error");function l(){e.value=null}function r(n){return o(n)?(e.value=n,!0):!1}return{feedback:a,status:u,clear:l,take:r}}export{v as u};

@@ -3,7 +3,6 @@ import { SlidersHorizontal } from "@lucide/vue";
 import { NButton, NPopover, NSelect, NSwitch } from "naive-ui";
 import { storeToRefs } from "pinia";
 import { computed, nextTick, ref, watch } from "vue";
-import type { ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 
 import {
@@ -12,6 +11,7 @@ import {
 } from "@/features/files/schemas/editorSettings";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
+import AppTooltip from "@/shared/ui/AppTooltip.vue";
 
 const { t } = useI18n();
 const store = useEditorSettingsStore();
@@ -20,7 +20,7 @@ const store = useEditorSettingsStore();
 const { settings } = storeToRefs(store);
 
 const show = ref(false);
-const triggerRef = ref<ComponentPublicInstance | null>(null);
+const triggerRef = ref<HTMLElement | null>(null);
 const contentRef = ref<HTMLElement | null>(null);
 
 /** themeOptions are the two editor surfaces. */
@@ -73,10 +73,8 @@ watch(show, async (value) => {
     return;
   }
   await nextTick();
-  const trigger = triggerRef.value?.$el;
-  if (trigger instanceof HTMLElement) {
-    trigger.focus();
-  }
+  // The popover's trigger is the anchor span around the tooltip and button.
+  triggerRef.value?.querySelector<HTMLElement>("button")?.focus();
 });
 </script>
 
@@ -90,18 +88,21 @@ watch(show, async (value) => {
     class="ed-settings-popover"
   >
     <template #trigger>
-      <NButton
-        ref="triggerRef"
-        size="tiny"
-        secondary
-        :aria-label="t('files.editor.settings.label')"
-        @keydown.esc.stop.prevent="close"
-      >
-        <template #icon>
-          <SlidersHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ t("files.editor.settings.label") }}
-      </NButton>
+      <span ref="triggerRef" class="ed-settings-anchor">
+        <AppTooltip :label="t('files.editor.settings.label')">
+          <NButton
+            size="tiny"
+            secondary
+            :aria-label="t('files.editor.settings.label')"
+            @keydown.esc.stop.prevent="close"
+          >
+            <template #icon>
+              <SlidersHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ t("files.editor.settings.label") }}
+          </NButton>
+        </AppTooltip>
+      </span>
     </template>
 
     <div
@@ -262,6 +263,12 @@ watch(show, async (value) => {
   max-height: 60vh;
   overflow-y: auto;
   padding: var(--space-1);
+}
+
+/* The popover trigger is an anchor span around the tooltip + button; it keeps
+   the button's inline size in the toolbar row. */
+.ed-settings-anchor {
+  display: inline-flex;
 }
 
 .ed-settings-title {

@@ -86,7 +86,7 @@ The full triage lives in [`plans/18-file-manager.md`](plans/18-file-manager.md) 
   accepted by the owner. `install-agent.sh` asks (default no) and on yes runs the agent as root
   through the `file-manager.conf` drop-in.
 - [x] **Container-created volumes.** Solved for operators who answer yes: the agent runs as root.
-- [ ] **`agent/files.go` root-stat symlink swap.** Capture the root identity fd-first
+- [ ] **`agent/files/files.go` root-stat symlink swap.** Capture the root identity fd-first
   (`O_PATH`/`openat` + `fstat`, or `Lstat`) instead of `EvalSymlinks` then a fresh `os.Stat`.
 - [ ] **Per-team upload staging cap.** `FILES_SPOOL_CONCURRENCY` is a single global semaphore, so
   one team can starve others; add a per-team cap or fair queueing.

@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justindeelux/gotham/agent/docker"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -157,7 +158,7 @@ func TestAgentRegisterAndHeartbeat(t *testing.T) {
 		CPAddr:     "passthrough:///bufnet",
 		NodeID:     "node-1",
 		CertDir:    t.TempDir(),
-		DockerSock: defaultDockerSock,
+		DockerSock: docker.DefaultDockerSocket,
 		LogLevel:   "error",
 	}
 	certDir := cfg.CertDir
@@ -270,7 +271,7 @@ func TestAgentRetriesRegisterUntilCanceled(t *testing.T) {
 		CPAddr:     "passthrough:///bufnet",
 		NodeID:     "node-retry",
 		CertDir:    t.TempDir(),
-		DockerSock: defaultDockerSock,
+		DockerSock: docker.DefaultDockerSocket,
 		LogLevel:   "error",
 	}
 	runner := NewAgent(cfg, discardLogger(), nil,

@@ -18,7 +18,7 @@ HELPER="/usr/libexec/gotham/gotham-toolctl"
 SUDOERS_FILE="/etc/sudoers.d/gotham-toolctl"
 
 # The exact verb/id pairs the agent may invoke. Keep in sync with
-# agent/tool_server.go (helperInstallVerb/helperUninstallVerb) and the
+# agent/tools/server.go (helperInstallVerb/helperUninstallVerb) and the
 # allow-lists in deploy/gotham-toolctl.sh.
 INSTALL_IDS="railpack buildkit pack docker git"
 UNINSTALL_IDS="railpack buildkit pack git"

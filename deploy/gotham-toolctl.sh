@@ -46,7 +46,7 @@ PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH
 
 # Hard wall-clock bound for the transient unit, kept under the agent's install
-# timeout (agent/tool_server.go defaultToolTimeout, 15m) so a job cannot
+# timeout (agent/tools/server.go defaultToolTimeout, 15m) so a job cannot
 # outlive its request even if the agent is killed mid-run.
 RUNTIME_MAX_SEC="840"
 

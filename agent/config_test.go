@@ -4,6 +4,9 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/justindeelux/gotham/agent/docker"
+	"github.com/justindeelux/gotham/agent/files"
 )
 
 func clearAgentEnv(t *testing.T) {
@@ -35,11 +38,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.CertDir != defaultCertDir {
 		t.Errorf("CertDir = %q; want %q", cfg.CertDir, defaultCertDir)
 	}
-	if cfg.DockerSock != defaultDockerSock {
-		t.Errorf("DockerSock = %q; want %q", cfg.DockerSock, defaultDockerSock)
+	if cfg.DockerSock != docker.DefaultDockerSocket {
+		t.Errorf("DockerSock = %q; want %q", cfg.DockerSock, docker.DefaultDockerSocket)
 	}
-	if cfg.ManagedVolumeRoot != defaultManagedVolumeRoot {
-		t.Errorf("ManagedVolumeRoot = %q; want %q", cfg.ManagedVolumeRoot, defaultManagedVolumeRoot)
+	if cfg.ManagedVolumeRoot != docker.DefaultManagedVolumeRoot {
+		t.Errorf("ManagedVolumeRoot = %q; want %q", cfg.ManagedVolumeRoot, docker.DefaultManagedVolumeRoot)
 	}
 	if cfg.LogLevel != defaultLogLevel {
 		t.Errorf("LogLevel = %q; want %q", cfg.LogLevel, defaultLogLevel)
@@ -174,8 +177,8 @@ func TestLoadArchiveLimitsFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.FileArchiveMaxBytes != defaultFileArchiveMaxBytes || cfg.FileArchiveMaxEntries != defaultFileArchiveMaxEntries ||
-		cfg.FileArchiveMaxInputBytes != defaultFileArchiveMaxInputBytes {
+	if cfg.FileArchiveMaxBytes != files.DefaultArchiveMaxBytes || cfg.FileArchiveMaxEntries != files.DefaultArchiveMaxEntries ||
+		cfg.FileArchiveMaxInputBytes != files.DefaultArchiveMaxInputBytes {
 		t.Fatalf("archive limits = %d/%d/%d, want the defaults", cfg.FileArchiveMaxBytes, cfg.FileArchiveMaxEntries, cfg.FileArchiveMaxInputBytes)
 	}
 }

@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/justindeelux/gotham/agent/docker"
+	"github.com/justindeelux/gotham/agent/files"
+	"github.com/justindeelux/gotham/agent/updates"
 	"github.com/justindeelux/gotham/updatecore"
 )
 
@@ -78,15 +81,7 @@ const (
 	defaultCPAddr     = "127.0.0.1:9442"
 	defaultListenAddr = ":9443"
 	defaultCertDir    = "./data/agent"
-	defaultDockerSock = "/var/run/docker.sock"
 	defaultLogLevel   = "info"
-	// defaultManagedVolumeRoot is the parent of every application bind mount
-	// the node accepts. It must match the control plane's
-	// GOTHAM_MANAGED_VOLUME_ROOT: the node re-validates every bind against its
-	// own root, so a compromised or stale control plane cannot smuggle an
-	// arbitrary host path through.
-	defaultManagedVolumeRoot = "/var/lib/gotham/volumes"
-
 	// Agent self-update layout, mirroring the control plane's split
 	// privileges: the binary and its hardlink backup live in the agent-writable
 	// StateDirectory, the wrapper and its config are root-owned, and the
@@ -106,34 +101,8 @@ const (
 	defaultAgentHealthAddr  = "127.0.0.1:8001"
 	defaultUpdateInterval   = 5 * time.Minute
 	// defaultUpdateChannel is the release channel accepted when
-	// GOTHAM_AGENT_UPDATE_CHANNEL is unset. A stable node refuses beta offers;
-	// a beta node accepts stable and beta offers (the offer carries the
-	// release's own channel). An unknown configured value behaves like stable.
-	defaultUpdateChannel = "stable"
-	// betaUpdateChannel opts a node into prereleases: a beta node accepts both
-	// stable and beta offers (the offer carries the release's own channel).
-	betaUpdateChannel = "beta"
-
-	// defaultFileMaxUpload bounds one file upload in bytes (Phase 18).
-	defaultFileMaxUpload = 1 << 30
-	// defaultFileMaxTransfers caps concurrent file transfers per node
-	// (Phase 18); a transfer above the cap is refused as ResourceExhausted.
-	defaultFileMaxTransfers = 8
-	// defaultFileArchiveMaxBytes bounds the total uncompressed bytes an archive
-	// operation may read (compress) or write (extract), guarding a zip bomb and
-	// an oversized archive (Phase 18 step 9b). Override with
-	// GOTHAM_AGENT_ARCHIVE_MAX_BYTES.
-	defaultFileArchiveMaxBytes = 4 << 30 // 4 GiB
-	// defaultFileArchiveMaxEntries bounds how many entries an archive operation
-	// may walk (compress) or unpack (extract) (Phase 18 step 9b). Override with
-	// GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES.
-	defaultFileArchiveMaxEntries = 100_000
-	// defaultFileArchiveMaxInputBytes bounds the on-disk size of an archive
-	// file that extract will read, checked before any archive parser runs so a
-	// hostile archive cannot make the agent allocate ahead of the entry/byte
-	// caps (Phase 18 step 9b). Override with
-	// GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES.
-	defaultFileArchiveMaxInputBytes = 1 << 30 // 1 GiB
+	// GOTHAM_AGENT_UPDATE_CHANNEL is unset.
+	defaultUpdateChannel = updates.DefaultChannel
 )
 
 // Config holds the agent's runtime configuration, loaded from the environment.
@@ -265,20 +234,20 @@ func Load() (Config, error) {
 		CertDir:         envOr(envCertDir, defaultCertDir),
 		KeyFile:         os.Getenv(envKey),
 		DockerSock:      dockerSock(),
-		ComposeRoot:     envOr(envComposeRoot, defaultComposeRoot),
+		ComposeRoot:     envOr(envComposeRoot, docker.DefaultComposeRoot),
 		LogLevel:        envOr(envLogLevel, defaultLogLevel),
 
-		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, defaultManagedVolumeRoot)),
+		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, docker.DefaultManagedVolumeRoot)),
 
 		Files:            !envOff(envFiles),
 		FileFullAccess:   !envOff(envFileFullAccess),
 		FileRoots:        os.Getenv(envFileRoots),
-		FileMaxUpload:    int64FromEnv(envFileMaxUpload, defaultFileMaxUpload),
-		FileMaxTransfers: int(int64FromEnv(envFileMaxTransfers, defaultFileMaxTransfers)),
+		FileMaxUpload:    int64FromEnv(envFileMaxUpload, files.DefaultMaxUpload),
+		FileMaxTransfers: int(int64FromEnv(envFileMaxTransfers, files.DefaultMaxTransfers)),
 
-		FileArchiveMaxBytes:      int64FromEnv(envFileArchiveMaxBytes, defaultFileArchiveMaxBytes),
-		FileArchiveMaxEntries:    int64FromEnv(envFileArchiveMaxEntries, defaultFileArchiveMaxEntries),
-		FileArchiveMaxInputBytes: int64FromEnv(envFileArchiveMaxInput, defaultFileArchiveMaxInputBytes),
+		FileArchiveMaxBytes:      int64FromEnv(envFileArchiveMaxBytes, files.DefaultArchiveMaxBytes),
+		FileArchiveMaxEntries:    int64FromEnv(envFileArchiveMaxEntries, files.DefaultArchiveMaxEntries),
+		FileArchiveMaxInputBytes: int64FromEnv(envFileArchiveMaxInput, files.DefaultArchiveMaxInputBytes),
 
 		TerminalShell:       strings.TrimSpace(os.Getenv(envTerminalShell)),
 		TerminalMaxSessions: int(int64FromEnv(envTerminalMaxSessions, 0)),
@@ -352,7 +321,7 @@ func parseLevel(name string) (slog.Level, error) {
 // dockerSock resolves the Docker endpoint, preferring the agent-specific
 // variable, then DOCKER_HOST, then the platform default socket.
 func dockerSock() string {
-	return envOr(envDockerSock, envOr(envDockerHost, defaultDockerSock))
+	return envOr(envDockerSock, envOr(envDockerHost, docker.DefaultDockerSocket))
 }
 
 // envOr returns the value of key, or fallback when it is unset.
@@ -412,4 +381,22 @@ func envOff(key string) bool {
 		return true
 	}
 	return false
+}
+
+// updateConfig maps the agent configuration onto the self-update package.
+func (c Config) updateConfig() updates.Config {
+	return updates.Config{
+		AutoUpdate:   c.AutoUpdate,
+		Interval:     c.UpdateInterval,
+		Channel:      c.UpdateChannel,
+		BinaryPath:   c.BinaryPath,
+		UpdateScript: c.UpdateScript,
+		StatusPath:   c.UpdateStatusPath,
+		PendingPath:  c.UpdatePendingPath,
+		LockPath:     c.UpdateLockPath,
+		RetryPath:    c.UpdateRetryPath,
+		BackoffPath:  c.UpdateBackoffPath,
+		Version:      c.Version,
+		Restart:      c.Restart,
+	}
 }

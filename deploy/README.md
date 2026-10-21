@@ -388,7 +388,7 @@ the body).
   (the agent must join the group). Superseded for operators who accept the risk:
   the installer's file-manager "yes" runs the agent as root (details:
   `docs/install.md` → "Remote file service").
-- **File manager — root-stat symlink swap (LOW).** `agent/files.go`
+- **File manager — root-stat symlink swap (LOW).** `agent/files/files.go`
   `validateFileRoot` resolves the root with `EvalSymlinks` then re-`os.Stat`s the
   resolved path; a component swapped between the calls is followed by `os.Stat`.
   `fsroot.Open` re-verifies the opened descriptor, so confinement holds, but the
@@ -495,7 +495,7 @@ the body).
   accepts stable offers on every non-beta configuration, so a beta node takes a
   newer stable release; stable nodes still never see prereleases and the
   offer→manifest channel binding stays enforced (`internal/updates/checker.go`,
-  `agent/updater.go`).
+  `agent/updates/updater.go`).
 - **The agent channel is mutual (LOW-4, JUS-194) — resolved.** The TLS listener
   requires a client certificate and the gateway verifies it per RPC: identity must
   match the claimed node id and the key must match the key bound to the node, for

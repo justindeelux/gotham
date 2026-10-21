@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/justindeelux/gotham/agent/docker"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
@@ -61,7 +62,7 @@ func reportedVersions(fake *fakeAgentService) map[string]string {
 // in-process: two agents at v1.0.0 poll a fake CP that offers v1.2.0, both
 // apply it and both report v1.2.0 on their next heartbeat.
 func TestTwoAgentsUpdateAllReportNewVersion(t *testing.T) {
-	release := newAgentReleaseServer(t, false)
+	release := newAgentReleaseServer(t)
 	setTestPublicKey(t, release.public)
 
 	fakeAgent := &fakeAgentService{
@@ -85,7 +86,7 @@ func TestTwoAgentsUpdateAllReportNewVersion(t *testing.T) {
 		cfg.CPAddr = "passthrough:///bufnet"
 		cfg.NodeID = node
 		cfg.CertDir = dir
-		cfg.DockerSock = defaultDockerSock
+		cfg.DockerSock = docker.DefaultDockerSocket
 		cfg.UpdateInterval = 20 * time.Millisecond
 		runner := NewAgent(cfg, discardLogger(), &fakeDockerClient{},
 			WithHeartbeatInterval(20*time.Millisecond),

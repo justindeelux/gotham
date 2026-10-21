@@ -89,6 +89,11 @@ const appliedDeepLink = ref("");
 /** deepLinkNotice explains a rejected link and where the browser landed. */
 const deepLinkNotice = ref<string | null>(null);
 
+/** deepLinkKey identifies one server's `?root=&path=` target. */
+function deepLinkKey(root: string, path: string): string {
+  return `${serverId.value}|${root}|${path}`;
+}
+
 /**
  * currentRoots is empty until the CURRENT server's root list has loaded: a
  * leftover list from the previous node must never validate a deep link.
@@ -143,7 +148,7 @@ async function applyDeepLink(): Promise<void> {
     return;
   }
   deepLinkNotice.value = null;
-  const key = `${serverId.value}|${rawRoot}|${rawPath}`;
+  const key = deepLinkKey(rawRoot, rawPath);
   if (appliedDeepLink.value === key) {
     return;
   }
@@ -178,6 +183,31 @@ watch(serverId, () => {
   appliedDeepLink.value = "";
   deepLinkNotice.value = null;
 });
+
+/**
+ * syncUrlToTab keeps the address bar on the folder the browser shows, so a
+ * reload or a copied URL reopens the same directory. A link that has not landed
+ * yet stays authoritative (the browser's initial load may still be moving the
+ * tab), and replace() keeps a folder walk out of the back history.
+ */
+watch(
+  [() => files.activeTab.rootName, () => files.activeTab.path],
+  () => {
+    const { rootName: root, path } = files.activeTab;
+    if (root === "") {
+      return;
+    }
+    const rawRoot = typeof route.query.root === "string" ? route.query.root : "";
+    const rawPath = typeof route.query.path === "string" ? route.query.path : "";
+    if (rawRoot !== "" && appliedDeepLink.value !== deepLinkKey(rawRoot, rawPath)) {
+      return;
+    }
+    if (rawRoot === root && rawPath === path) {
+      return;
+    }
+    void router.replace({ query: { ...route.query, root, path } });
+  },
+);
 
 onMounted(() => {
   if (serversStore.servers.length === 0 && !serversStore.loading) {

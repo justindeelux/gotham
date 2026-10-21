@@ -343,6 +343,21 @@ a {
   min-width: 0;
 }
 
+/* On a very short viewport (a docked devtools pane, a landscape phone) the
+ * pinned header and footer alone can fill the bounded card and leave the body
+ * a few pixels tall, hiding the form (JUS-267 follow-up). Below that height
+ * the whole card scrolls instead, so the body keeps its natural height. */
+@media (max-height: 480px) {
+  .app-modal.n-modal.n-card {
+    overflow-y: auto;
+  }
+
+  .app-modal.n-modal.n-card > .n-card-content {
+    flex: 0 0 auto;
+    overflow-y: visible;
+  }
+}
+
 /* Wizard modals (create application, add server) keep their own footer: the
  * card body is a fixed flex column and only the step body scrolls, so
  * Back/Continue/Create never leave the viewport on tall steps (Dockerfile

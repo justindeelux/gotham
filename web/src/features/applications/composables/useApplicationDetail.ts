@@ -10,6 +10,10 @@ import type {
   StorageMapping,
   UpdateApplicationInput,
 } from "@/features/applications/api/applications";
+import { listVolumes } from "@/features/applications/api/applications";
+import type { VolumeListing } from "@/features/applications/schemas/volumes";
+import { filesDeepLinkRoute, isFilesDeepLink } from "@/features/files";
+import type { FilesDeepLink } from "@/features/files";
 import type { Preview } from "@/features/applications/api/previews";
 import {
   describePreviewError,
@@ -87,6 +91,18 @@ export function useApplicationDetail() {
     return describeApplicationError(storagesErrorRaw.value);
   });
   const storagesLoadedFor = ref<string>("");
+  /** volumes/volumesError is the read-only storage listing of every source. */
+  const volumes = ref<VolumeListing | null>(null);
+  const volumesLoading = ref(false);
+  const volumesErrorRaw = ref<unknown>(null);
+  const volumesError = computed<string | null>(() => {
+    if (volumesErrorRaw.value === null) {
+      return null;
+    }
+    void activeLocale.value;
+    return describeApplicationError(volumesErrorRaw.value);
+  });
+  const volumesLoadedFor = ref<string>("");
 
   // Inherited shared variables (PE-6): the project's and the environment's
   // masked sets, shown read-only above the application editor with their
@@ -322,6 +338,7 @@ export function useApplicationDetail() {
     }
     void loadEnv();
     void loadStorages();
+    void loadVolumes();
     void loadInherited();
     void loadPreviews();
     void serversStore.fetchServers().catch(() => undefined);
@@ -433,6 +450,56 @@ export function useApplicationDetail() {
         storagesLoading.value = false;
       }
     }
+  }
+
+  /**
+   * loadVolumes refreshes the read-only storage listing. A failure keeps the
+   * previously loaded rows and shows an explicit error, never an empty list.
+   */
+  async function loadVolumes(): Promise<void> {
+    const target = appId.value;
+    if (target === "") {
+      return;
+    }
+    const token = draftGeneration.current();
+    volumesLoading.value = true;
+    volumesErrorRaw.value = null;
+    try {
+      const listing = await listVolumes(target);
+      if (!draftGeneration.isCurrent(token) || target !== appId.value) {
+        return;
+      }
+      volumes.value = listing;
+      volumesLoadedFor.value = target;
+    } catch (error) {
+      if (!draftGeneration.isCurrent(token) || target !== appId.value) {
+        return;
+      }
+      volumesErrorRaw.value = error;
+      volumesLoadedFor.value = "";
+    } finally {
+      if (draftGeneration.isCurrent(token) && target === appId.value) {
+        volumesLoading.value = false;
+      }
+    }
+  }
+
+  /**
+   * openVolumeInFileManager navigates to a volume's validated target. The
+   * target must name this application's own server; anything else is refused
+   * with a message instead of routing, and the File Manager re-validates the
+   * root and its own authorization after navigation.
+   */
+  async function openVolumeInFileManager(target: FilesDeepLink): Promise<void> {
+    const app = application.value;
+    if (app === null || app.server_id === null) {
+      return;
+    }
+    if (!isFilesDeepLink(target, app.server_id)) {
+      message.error(tr("applications.storageTab.invalidTarget"));
+      return;
+    }
+    await router.push(filesDeepLinkRoute(target));
   }
 
   /**
@@ -602,19 +669,19 @@ export function useApplicationDetail() {
 
   /**
    * applyRouteTab selects the deep-linked tab once the application row is
-   * loaded. A compose app never selects Storage (the page hides that tab), so
-   * a stale query falls back to Overview even when the row arrives late.
+   * loaded. Storage exists for every source now (JUS-273), so no tab needs a
+   * source-type fallback; the row gate only keeps a stale query from selecting
+   * a pane before the source is known.
    */
   function applyRouteTab(app: Application | null): void {
     if (app === null) {
-      return; // wait for the row so a storage query is resolved against it
+      return;
     }
     const tab = routeTab();
     if (tab === null) {
       return;
     }
-    activeTab.value =
-      tab === "storage" && app.source_type === "compose" ? "overview" : tab;
+    activeTab.value = tab;
   }
 
   /** openRollbackFor preselects a deployment and opens the dialog. */
@@ -779,6 +846,10 @@ export function useApplicationDetail() {
     storagesErrorRaw.value = null;
     storagesLoadedFor.value = "";
     storagesLoading.value = false;
+    volumes.value = null;
+    volumesErrorRaw.value = null;
+    volumesLoadedFor.value = "";
+    volumesLoading.value = false;
     previews.value = [];
     previewsLoaded.value = false;
     previewsErrorRaw.value = null;
@@ -874,6 +945,11 @@ export function useApplicationDetail() {
     storagesLoading,
     storagesError,
     storagesLoadedFor,
+    volumes,
+    volumesLoading,
+    volumesError,
+    volumesLoadedFor,
+    openVolumeInFileManager,
     previews,
     previewsLoading,
     previewsLoaded,
@@ -896,6 +972,7 @@ export function useApplicationDetail() {
     openRollbackFor,
     loadEnv,
     loadStorages,
+    loadVolumes,
     loadInherited,
     loadPreviews,
   };

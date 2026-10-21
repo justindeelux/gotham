@@ -83,6 +83,11 @@ func WithRegistryStateDir(dir string) DockerClientOption {
 	return docker.WithRegistryStateDir(dir)
 }
 
+// WithLogger sets the Docker client's best-effort failure logger.
+func WithLogger(log *slog.Logger) DockerClientOption {
+	return docker.WithLogger(log)
+}
+
 // NewDockerServer returns the DockerService implementation.
 func NewDockerServer(client docker.Client, log *slog.Logger, options ...DockerServerOption) *docker.DockerServer {
 	return docker.NewDockerServer(client, log, options...)

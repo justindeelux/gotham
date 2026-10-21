@@ -47,12 +47,16 @@ func (n *composeRealNode) ComposePs(ctx context.Context, projectName string) ([]
 	return containers, nil
 }
 
-func (n *composeRealNode) ContainersByLabel(ctx context.Context, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
-	containers, err := n.docker.ListContainers(ctx, false, labels)
+func (n *composeRealNode) ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error) {
+	containers, err := n.docker.ListContainers(ctx, all, labels, resolveVolumes)
 	if err != nil {
 		return nil, mapRPCError(err)
 	}
 	return containers, nil
+}
+
+func (n *composeRealNode) FileRoots(context.Context) ([]*agentv1.FileRoot, error) {
+	return nil, nil
 }
 
 func (n *composeRealNode) Close() error { return nil }
@@ -214,7 +218,7 @@ func TestTerminalComposeReal(t *testing.T) {
 	// Closing the terminal must not stop the application container.
 	inspectCtx, inspectCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer inspectCancel()
-	containers, err := docker.ListContainers(inspectCtx, false, map[string]string{composeProjectLabel: project})
+	containers, err := docker.ListContainers(inspectCtx, false, map[string]string{composeProjectLabel: project}, false)
 	if err != nil {
 		t.Fatalf("list after exec close: %v", err)
 	}

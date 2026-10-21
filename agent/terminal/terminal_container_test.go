@@ -479,7 +479,7 @@ func TestDockerClientExecRealContainer(t *testing.T) {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 	// Closing the exec must not stop the application container.
-	containers, err := client.ListContainers(ctx, true, nil)
+	containers, err := client.ListContainers(ctx, true, nil, false)
 	if err != nil {
 		t.Fatalf("list after exec close: %v", err)
 	}

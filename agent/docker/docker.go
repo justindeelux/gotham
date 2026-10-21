@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,6 +75,9 @@ type DockerClient struct {
 	// dockerHost is target normalised to a DOCKER_HOST value, exported to the
 	// language toolchains (pack, railpack) the node runs.
 	dockerHost string
+	// log records best-effort resolution failures (a volume inspect the
+	// engine could not answer) instead of swallowing them.
+	log *slog.Logger
 	// registryStateDir holds the node-local registry credentials. Empty
 	// disables authenticated registry bootstrap.
 	registryStateDir string
@@ -96,6 +101,22 @@ func WithRegistryStateDir(dir string) DockerClientOption {
 	return func(c *DockerClient) {
 		c.registryStateDir = strings.TrimSpace(dir)
 	}
+}
+
+// WithLogger sets the logger used for best-effort failures. A nil logger
+// falls back to slog.Default.
+func WithLogger(log *slog.Logger) DockerClientOption {
+	return func(c *DockerClient) {
+		c.log = log
+	}
+}
+
+// logger returns the configured logger, never nil.
+func (c *DockerClient) logger() *slog.Logger {
+	if c.log == nil {
+		return slog.Default()
+	}
+	return c.log
 }
 
 // NewDockerClient builds a client for target, a Docker endpoint string as
@@ -149,7 +170,12 @@ func (c *DockerClient) Version(ctx context.Context) (string, error) {
 // including stopped ones and restricted to containers carrying every label in
 // labels. The label filter runs inside Docker, so a caller that only needs one
 // compose project never receives the node's whole container list.
-func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
+//
+// resolveDevices asks for an extra volume inspect per distinct named volume so
+// the mount carries its configured host device (a compose managed volume).
+// Callers that do not need the backing directory leave it off: a node-wide
+// listing or heartbeat must not pay N Docker round trips.
+func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {
 	path := "/containers/json?all=0"
 	if all {
 		path = "/containers/json?all=1"
@@ -171,6 +197,16 @@ func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &summaries); err != nil {
 		return nil, err
 	}
+	// A compose managed volume resolves to a directory through its driver
+	// options, not its Docker mountpoint. Resolve each volume once per listing
+	// (a shared volume appears in every service) and only when asked. An
+	// engine failure leaves the device unverified instead of falling back to
+	// the mountpoint, so the control plane never claims a wrong directory.
+	type deviceResult struct {
+		device     string
+		unverified bool
+	}
+	devices := map[string]deviceResult{}
 	containers := make([]*agentv1.ContainerInfo, 0, len(summaries))
 	for _, summary := range summaries {
 		info := &agentv1.ContainerInfo{
@@ -195,10 +231,30 @@ func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[
 			})
 		}
 		for _, mount := range summary.Mounts {
+			var resolved deviceResult
+			asked := resolveDevices && mount.Type == "volume" && mount.Name != ""
+			if asked {
+				var ok bool
+				resolved, ok = devices[mount.Name]
+				if !ok {
+					device, err := c.volumeDevice(ctx, mount.Name)
+					resolved = deviceResult{device: device}
+					if err != nil {
+						resolved.unverified = true
+						c.logger().Debug("docker: resolve volume device failed; leaving it unverified",
+							"volume", mount.Name, "error", err)
+					}
+					devices[mount.Name] = resolved
+				}
+			}
 			info.Mounts = append(info.Mounts, &agentv1.ContainerMount{
-				Source:      mount.Source,
-				Destination: mount.Destination,
-				ReadOnly:    !mount.RW,
+				Source:                 mount.Source,
+				Destination:            mount.Destination,
+				ReadOnly:               !mount.RW,
+				Type:                   mount.Type,
+				VolumeName:             mount.Name,
+				VolumeDevice:           resolved.device,
+				VolumeDeviceUnverified: resolved.unverified,
 			})
 		}
 		// The restart policy is not part of the container summary; only the
@@ -214,6 +270,44 @@ func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[
 		containers = append(containers, info)
 	}
 	return containers, nil
+}
+
+// volumeDevice resolves the configured host device of a local volume: the
+// driver option that binds a compose managed volume to a directory. It is
+// empty for a volume without one (source stays Docker's mountpoint) and is
+// never derived from the volume name. A volume with another driver is left
+// unresolved, as is an engine error.
+func (c *DockerClient) volumeDevice(ctx context.Context, name string) (string, error) {
+	var out struct {
+		Driver  string            `json:"Driver"`
+		Options map[string]string `json:"Options"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, &out); err != nil {
+		return "", err
+	}
+	// Only a local volume whose driver options bind a directory has a host
+	// device. A plain local volume (no device option) and any other driver
+	// keep the Docker mountpoint as their backing store, so no device is
+	// reported rather than a guess.
+	if out.Driver != "local" {
+		return "", nil
+	}
+	device := strings.TrimSpace(out.Options["device"])
+	if device == "" || !filepath.IsAbs(device) {
+		return "", nil
+	}
+	opts := strings.ToLower(out.Options["o"])
+	kind := strings.ToLower(strings.TrimSpace(out.Options["type"]))
+	bind := kind == "none"
+	for _, option := range strings.Split(opts, ",") {
+		if strings.TrimSpace(option) == "bind" {
+			bind = true
+		}
+	}
+	if !bind {
+		return "", nil
+	}
+	return filepath.Clean(device), nil
 }
 
 // restartPolicy reads a container's native Docker restart policy. It is used
@@ -1816,10 +1910,14 @@ type dockerContainerSummary struct {
 	Mounts  []dockerMountSummary `json:"Mounts"`
 }
 
-// dockerMountSummary is one bind mount of a container summary.
+// dockerMountSummary is one mount of a container summary. Type and Name let
+// the agent distinguish a bind from a named volume without inferring it from
+// the source path.
 type dockerMountSummary struct {
 	Source      string `json:"Source"`
 	Destination string `json:"Destination"`
+	Type        string `json:"Type"`
+	Name        string `json:"Name"`
 	Mode        string `json:"Mode"`
 	RW          bool   `json:"RW"`
 }

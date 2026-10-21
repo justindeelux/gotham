@@ -22,7 +22,7 @@ import (
 type fakeBindDocker struct{}
 
 func (fakeBindDocker) Version(context.Context) (string, error) { return "test", nil }
-func (fakeBindDocker) ListContainers(context.Context, bool, map[string]string) ([]*agentv1.ContainerInfo, error) {
+func (fakeBindDocker) ListContainers(context.Context, bool, map[string]string, bool) ([]*agentv1.ContainerInfo, error) {
 	return nil, nil
 }
 func (fakeBindDocker) Start(context.Context, string) error   { return nil }

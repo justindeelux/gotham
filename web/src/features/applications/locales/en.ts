@@ -164,6 +164,47 @@ const en = {
   },
   storageTab: {
     title: "Volumes",
+    refresh: "Refresh",
+    name: "Volume",
+    kindLabel: "Type",
+    hostPath: "Mapped directory",
+    mounts: "Container mount",
+    stateLabel: "Runtime",
+    open: "Files",
+    openAction: "Open in File Manager",
+    openAria: "Open volume {name} in File Manager",
+    openUnavailable: "No directory action for this storage",
+    invalidTarget: "That directory is not part of this application's storage",
+    readOnly: "read-only",
+    readWrite: "read-write",
+    empty: "No volumes yet",
+    emptyHint:
+      "This application has no configured storage. Add a volume below to keep data across redeploys.",
+    emptyCompose:
+      "No volumes are declared in the compose source yet. Add a named volume under services[].volumes to keep data.",
+    composeTitle: "Compose volumes",
+    composeHint:
+      "Compose volumes are declared in the compose source under services[].volumes; Gotham mounts each named volume under the application's managed directory.",
+    editorTitle: "Storage configuration",
+    kind: {
+      managed: "Managed",
+      named: "Named volume",
+      bind: "Host bind",
+      tmpfs: "Temporary",
+      unknown: "Unknown",
+    },
+    state: {
+      running: "Running",
+      stopped: "Stopped",
+      unverified: "Unverified",
+    },
+    reason: {
+      files_disabled: "File Manager is disabled on this server",
+      root_unavailable: "No File Manager root on this server exposes the directory",
+      not_browsable: "This storage is not browsable in File Manager",
+      volume_unverified: "The volume's directory could not be verified on the node",
+      no_node: "No server is assigned to this application",
+    },
     footer:
       "Saving replaces the whole collection. Volumes live on the node, so data survives redeploys and rollbacks.",
   },

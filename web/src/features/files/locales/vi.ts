@@ -14,6 +14,13 @@ const vi = {
     open: "Duyệt tệp",
     server: "Máy chủ",
   },
+  deepLink: {
+    rootUnavailable:
+      "Không mở được “{path}” vì root “{root}” không có trên máy chủ này. Đang hiển thị root “{fallback}”.",
+    invalidPath:
+      "Liên kết “{path}” trong root “{root}” không phải là vị trí hợp lệ. Đang hiển thị root “{fallback}”.",
+    notFound: "Không tìm thấy thư mục “{path}” trong root “{root}”.",
+  },
   browser: {
     heading: "Trình duyệt tệp",
     rootLabel: "Thư mục gốc",

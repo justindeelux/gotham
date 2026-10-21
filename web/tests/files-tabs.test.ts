@@ -88,6 +88,37 @@ beforeEach(() => {
   ];
 });
 
+describe("files browser deep links", () => {
+  it("reuses the tab already showing the linked directory", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    await store.openAt("volumes", "app-1/data");
+    expect(store.tabs).toHaveLength(1);
+    expect(store.tabs[0].path).toBe("app-1/data");
+    const linkedId = store.tabs[0].id;
+
+    await store.openTab({ root: "compose" });
+    expect(store.tabs).toHaveLength(2);
+
+    // Re-opening the same link focuses the existing tab instead of stacking
+    // another one.
+    await store.openAt("volumes", "app-1/data");
+    expect(store.tabs).toHaveLength(2);
+    expect(store.activeTabId).toBe(linkedId);
+    expect(store.activeTab.path).toBe("app-1/data");
+  });
+
+  it("records the server its roots belong to", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    expect(store.rootsServerId).toBe("server-1");
+
+    await store.init("server-2");
+    expect(store.rootsServerId).toBe("server-2");
+    expect(store.tabs).toHaveLength(1);
+  });
+});
+
 describe("files browser tabs", () => {
   it("starts with one tab and opens a focused second tab", async () => {
     const store = useFilesStore();

@@ -1,6 +1,7 @@
-// JUS-238: compose applications declare volumes in their compose source, so
-// the single-container Storage tab is hidden and a stale selection falls back
-// to Overview. Image/git applications keep the tab unchanged.
+// JUS-273: the Storage tab is now shown for every source. Compose applications
+// get the read-only volume list plus a hint that declarations live in the
+// compose source (and never the single-container editor); non-compose sources
+// keep both the list and the editor. A stale selection no longer falls back.
 
 import { mount } from "@vue/test-utils";
 import { NMessageProvider, NTabs } from "naive-ui";
@@ -99,6 +100,10 @@ function mockDetail() {
     pipelineSteps: ref([]),
     envDraft: ref([]),
     storagesDraft: ref([]),
+    volumes: ref(null),
+    volumesLoading: ref(false),
+    volumesError: ref(null),
+    volumesLoadedFor: ref(""),
     inheritedVars: ref([]),
     serverOptions: ref([]),
     deploymentOptions: ref([]),
@@ -174,7 +179,7 @@ function tabLabels(wrapper: ReturnType<typeof mountDetailPage>): string[] {
 }
 
 describe("application detail storage tab", () => {
-  it("does not render Storage while loading, then follows the loaded source", async () => {
+  it("does not render Storage while loading, then shows it for every source", async () => {
     setDetail(null, "storage");
     const wrapper = mountDetailPage();
 
@@ -189,11 +194,11 @@ describe("application detail storage tab", () => {
     expect(tabLabels(wrapper)).toContain("Storage");
     expect(wrapper.findComponent(NTabs).props("value")).toBe("storage");
 
-    // A loaded compose app hides it again and falls back to Overview.
+    // A compose app keeps both the tab and the selection.
     applicationRef.value = composeApp();
     await nextTick();
-    expect(tabLabels(wrapper)).not.toContain("Storage");
-    expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
+    expect(tabLabels(wrapper)).toContain("Storage");
+    expect(wrapper.findComponent(NTabs).props("value")).toBe("storage");
     wrapper.unmount();
   });
 
@@ -205,18 +210,18 @@ describe("application detail storage tab", () => {
     wrapper.unmount();
   });
 
-  it("hides the Storage tab for compose applications", () => {
+  it("shows the Storage tab for compose applications", () => {
     setDetail(composeApp());
     const wrapper = mountDetailPage();
-    expect(tabLabels(wrapper)).not.toContain("Storage");
+    expect(tabLabels(wrapper)).toContain("Storage");
     expect(tabLabels(wrapper)).toContain("Overview");
     wrapper.unmount();
   });
 
-  it("falls back to Overview when a compose app selects Storage", () => {
+  it("keeps a compose Storage selection instead of falling back", () => {
     setDetail(composeApp(), "storage");
     const wrapper = mountDetailPage();
-    expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
+    expect(wrapper.findComponent(NTabs).props("value")).toBe("storage");
     wrapper.unmount();
   });
 

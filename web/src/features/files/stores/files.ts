@@ -201,6 +201,12 @@ export const useFilesStore = defineStore("files", () => {
   // roots are server-level (the same list for every tab); the selected root is
   // per tab, so two tabs can browse different roots of the same server.
   const roots = ref<FilesRoot[]>([]);
+  /**
+   * rootsServerId names the server `roots` belongs to. The page gates a
+   * deep-link root against the CURRENT server's list, so roots left over from a
+   * node switch can never validate a target.
+   */
+  const rootsServerId = ref("");
 
   /** createTab seeds one independent browser tab. */
   function createTab(rootName = "", path = "", id = nextTabId()): FilesTab {
@@ -712,6 +718,7 @@ export const useFilesStore = defineStore("files", () => {
         return;
       }
       roots.value = list;
+      rootsServerId.value = server;
       revalidateRoots(list);
       if (tab.rootName === "") {
         applyListingTo(tab, [], "", false);
@@ -945,6 +952,7 @@ export const useFilesStore = defineStore("files", () => {
         return;
       }
       roots.value = list;
+      rootsServerId.value = server;
       revalidateRoots(list);
       const rebuilt =
         snapshot === null || touchedDuringInit
@@ -1658,6 +1666,35 @@ export const useFilesStore = defineStore("files", () => {
     await loadEntriesFor(tab);
   }
 
+  /**
+   * openAt opens one root-relative directory for a deep link
+   * (`?root=`/`?path=`): an existing tab already showing it is focused, so a
+   * repeated visit never stacks duplicate tabs; otherwise the active tab
+   * navigates in a single load. The caller validated the root against the
+   * current server's list, so a forged target never gets here.
+   */
+  async function openAt(root: string, dir: string): Promise<void> {
+    touchedDuringInit = true;
+    const existing = tabs.value.find(
+      (tab) => tab.rootName === root && tab.path === dir,
+    );
+    if (existing) {
+      if (existing.id !== activeTabId.value) {
+        await switchTab(existing.id);
+      }
+      return;
+    }
+    const tab = activeTab.value;
+    tab.rootName = root;
+    tab.path = dir;
+    tab.scrollTop = 0;
+    tab.query = "";
+    tab.anchor = null;
+    clearSearch();
+    clearSelection();
+    await loadEntriesFor(tab);
+  }
+
   /** goToPath navigates the active tab to an absolute (root-relative) path. */
   async function goToPath(next: string): Promise<void> {
     touchedDuringInit = true;
@@ -2037,6 +2074,7 @@ export const useFilesStore = defineStore("files", () => {
     tabs.value = [tab];
     activeTabId.value = tab.id;
     roots.value = [];
+    rootsServerId.value = "";
     acting.value = false;
     clipboard.value = null;
     conflictPrompt.value = null;
@@ -2056,6 +2094,7 @@ export const useFilesStore = defineStore("files", () => {
     // state
     serverId,
     roots,
+    rootsServerId,
     // tabs
     tabs,
     activeTabId,
@@ -2088,6 +2127,7 @@ export const useFilesStore = defineStore("files", () => {
     scrollTop,
     // derived
     error,
+    errorRaw,
     currentRoot,
     writable,
     freeBytes,
@@ -2122,6 +2162,7 @@ export const useFilesStore = defineStore("files", () => {
     restorePersistedTabs,
     setScrollTop,
     setRoot,
+    openAt,
     openDirectory,
     goToPath,
     openSymlinkTarget,

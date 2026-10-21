@@ -56,14 +56,13 @@ const previewsTab = computed<string>(() =>
 );
 
 /**
- * showStorageTab gates the single-container storage editor on the loaded row:
- * until the application arrives its source type is unknown, so rendering the
- * tab then would flash it for compose apps. Compose sources never show it.
+ * showStorageTab gates the Storage tab on the loaded row: until the
+ * application arrives its source type is unknown, so rendering the tab then
+ * would flash it. Every source shows the read-only volume list; only
+ * non-compose sources also get the mapping editor (the tab itself decides).
  */
 const showStorageTab = computed<boolean>(
-  () =>
-    detail.application.value !== null &&
-    detail.application.value.source_type !== "compose",
+  () => detail.application.value !== null,
 );
 
 /**
@@ -222,6 +221,11 @@ const activeTab = computed<string>({
 
         <NTabPane v-if="showStorageTab" name="storage" :tab="t('applications.tabs.storage')">
           <ApplicationStorageTab
+            v-if="detail.application.value"
+            :source-type="detail.application.value.source_type"
+            :volumes="detail.volumes.value"
+            :volumes-loading="detail.volumesLoading.value"
+            :volumes-error="detail.volumesError.value"
             :storages-draft="detail.storagesDraft.value"
             :storages-loading="detail.storagesLoading.value"
             :storages-error="detail.storagesError.value"
@@ -230,6 +234,8 @@ const activeTab = computed<string>({
             @update:draft="detail.storagesDraft.value = $event"
             @save="detail.handleSaveStorages"
             @retry="detail.loadStorages()"
+            @refresh="detail.loadVolumes()"
+            @open="detail.openVolumeInFileManager($event)"
           />
         </NTabPane>
 

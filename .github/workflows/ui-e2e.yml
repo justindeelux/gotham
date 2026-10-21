@@ -138,6 +138,12 @@ jobs:
         run: pkill -f 'bin/gotham serve' || true
 
       - name: Start control plane
+        env:
+          # JUS-273: the control plane derives application volume paths and the
+          # File Manager roots from this root; the node agent below is started
+          # with the same value so a volume link resolves to the directory the
+          # agent exposes.
+          GOTHAM_MANAGED_VOLUME_ROOT: ${{ runner.temp }}/gotham-agent/volumes
         run: |
           nohup ./bin/gotham serve > gotham-ui-e2e.log 2>&1 &
           for _ in $(seq 1 30); do

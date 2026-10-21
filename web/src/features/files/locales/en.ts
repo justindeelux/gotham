@@ -15,6 +15,13 @@ const en = {
     open: "Browse files",
     server: "Server",
   },
+  deepLink: {
+    rootUnavailable:
+      "Could not open “{path}” because root “{root}” is not available on this server. Showing the “{fallback}” root instead.",
+    invalidPath:
+      "The link “{path}” in root “{root}” is not a valid location. Showing the “{fallback}” root instead.",
+    notFound: "The folder “{path}” was not found in root “{root}”.",
+  },
   browser: {
     heading: "File browser",
     rootLabel: "Root",

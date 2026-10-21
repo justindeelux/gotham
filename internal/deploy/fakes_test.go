@@ -1418,6 +1418,11 @@ type mockNode struct {
 	composeDownProjects  []string
 	composeDownDocuments []string
 
+	// fileRoots/fileRootsErr seed the FileRoots answer (nil models an agent
+	// without the FileService, e.g. files disabled or older).
+	fileRoots    []*agentv1.FileRoot
+	fileRootsErr error
+
 	// healthState/healthStatus describe the container Run created.
 	containerID  string
 	healthState  string
@@ -1626,7 +1631,10 @@ func (m *mockNode) Containers(_ context.Context) ([]*agentv1.ContainerInfo, erro
 
 // ContainersByLabel implements Node: it answers the seeded containers carrying
 // every requested label, mirroring a node's server-side Docker label filter.
-func (m *mockNode) ContainersByLabel(_ context.Context, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
+func (m *mockNode) ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.listErr != nil {
@@ -1634,6 +1642,9 @@ func (m *mockNode) ContainersByLabel(_ context.Context, labels map[string]string
 	}
 	out := make([]*agentv1.ContainerInfo, 0, len(m.listed)+len(m.orphans))
 	for _, container := range append(append([]*agentv1.ContainerInfo{}, m.listed...), m.orphans...) {
+		if !all && container.GetState() != "running" {
+			continue
+		}
 		matched := true
 		for key, value := range labels {
 			if container.GetLabels()[key] != value {
@@ -1646,6 +1657,17 @@ func (m *mockNode) ContainersByLabel(_ context.Context, labels map[string]string
 		}
 	}
 	return out, nil
+}
+
+// FileRoots implements Node, answering the seeded File Manager roots (nil when
+// the fake models an agent without the FileService).
+func (m *mockNode) FileRoots(_ context.Context) ([]*agentv1.FileRoot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fileRootsErr != nil {
+		return nil, m.fileRootsErr
+	}
+	return m.fileRoots, nil
 }
 
 // Close implements Node.

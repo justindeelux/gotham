@@ -18,28 +18,30 @@ import (
 
 // fakeDockerClient is a configurable dockerClient for server tests.
 type fakeDockerClient struct {
-	containers     []*agentv1.ContainerInfo
-	listAll        bool
-	listLabels     map[string]string
-	version        string
-	err            error
-	logs           []byte
-	logStreamErr   error
-	started        []string
-	stopped        []string
-	restarted      []string
-	removed        []string
-	removedVolumes []string
-	createdID      string
+	containers         []*agentv1.ContainerInfo
+	listAll            bool
+	listLabels         map[string]string
+	listResolveDevices bool
+	version            string
+	err                error
+	logs               []byte
+	logStreamErr       error
+	started            []string
+	stopped            []string
+	restarted          []string
+	removed            []string
+	removedVolumes     []string
+	createdID          string
 }
 
 func (f *fakeDockerClient) Version(context.Context) (string, error) {
 	return f.version, f.err
 }
 
-func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
+func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {
 	f.listAll = all
 	f.listLabels = labels
+	f.listResolveDevices = resolveDevices
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -169,6 +171,22 @@ func TestDockerServerListContainers(t *testing.T) {
 	// Docker), not be dropped at the gRPC boundary.
 	if !fake.listAll || fake.listLabels["com.docker.compose.project"] != labels["com.docker.compose.project"] {
 		t.Errorf("docker client got (all=%v, labels=%v), want (true, %v)", fake.listAll, fake.listLabels, labels)
+	}
+}
+
+// TestDockerServerListContainersResolveDevices pins S4: the request flag reaches
+// the Docker client unchanged in both directions, so the agent cannot silently
+// resolve (or stop resolving) volume devices for every caller.
+func TestDockerServerListContainersResolveDevices(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		fake := &fakeDockerClient{}
+		client := newDockerServiceClient(t, fake)
+		if _, err := client.ListContainers(context.Background(), &agentv1.ListContainersRequest{ResolveVolumeDevices: want}); err != nil {
+			t.Fatalf("ListContainers(resolve=%v): %v", want, err)
+		}
+		if fake.listResolveDevices != want {
+			t.Errorf("docker client got resolveDevices=%v, want %v", fake.listResolveDevices, want)
+		}
 	}
 }
 

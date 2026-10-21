@@ -225,6 +225,46 @@ type storageListEnvelope struct {
 	Storage []storageRequest `json:"storage"`
 }
 
+// volumeMountResponse is one container mount of a listed volume. service is
+// empty for a single-container application.
+type volumeMountResponse struct {
+	Destination string `json:"destination"`
+	ReadOnly    bool   `json:"read_only"`
+	Service     string `json:"service,omitempty"`
+	Container   string `json:"container,omitempty"`
+	State       string `json:"state"`
+}
+
+// volumeFileManagerResponse is the validated File Manager navigation target of
+// one volume: the application's own server, a root name and a root-relative
+// path.
+type volumeFileManagerResponse struct {
+	ServerID string `json:"server_id"`
+	Root     string `json:"root"`
+	Path     string `json:"path"`
+}
+
+// volumeResponse is one backing storage of the read-only listing. open_reason
+// explains why no File Manager target is offered; file_manager is omitted in
+// that case.
+type volumeResponse struct {
+	Name        string                     `json:"name"`
+	Kind        string                     `json:"kind"`
+	HostPath    string                     `json:"host_path,omitempty"`
+	State       string                     `json:"state"`
+	Mounts      []volumeMountResponse      `json:"mounts"`
+	FileManager *volumeFileManagerResponse `json:"file_manager,omitempty"`
+	OpenReason  string                     `json:"open_reason,omitempty"`
+}
+
+// volumeListEnvelope is the GET /applications/{id}/volumes response.
+type volumeListEnvelope struct {
+	SourceType string           `json:"source_type"`
+	Runtime    string           `json:"runtime"`
+	Reason     string           `json:"reason,omitempty"`
+	Volumes    []volumeResponse `json:"volumes"`
+}
+
 // createApplicationRequest is the POST /applications body; it matches
 // CreateApplicationInput in web/src/features/applications/api/applications.ts.
 type createApplicationRequest struct {
@@ -358,6 +398,7 @@ type handler struct {
 //	PUT    /v1/applications/{id}/env
 //	GET    /v1/applications/{id}/storages
 //	PUT    /v1/applications/{id}/storages
+//	GET    /v1/applications/{id}/volumes
 //	POST   /v1/applications/{id}/stop
 //	POST   /v1/applications/{id}/start
 //	POST   /v1/applications/{id}/deploy
@@ -397,6 +438,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Put("/v1/applications/{id}/env", h.putEnv)
 		protected.Get("/v1/applications/{id}/storages", h.getStorages)
 		protected.Put("/v1/applications/{id}/storages", h.putStorages)
+		protected.Get("/v1/applications/{id}/volumes", h.getVolumes)
 		protected.Post("/v1/applications/{id}/stop", h.stop)
 		protected.Post("/v1/applications/{id}/start", h.start)
 		protected.Post("/v1/applications/{id}/deploy", h.deploy)
@@ -636,6 +678,54 @@ func (h *handler) getStorages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, storageListEnvelope{Storage: wireStorages(storages)})
+}
+
+// getVolumes serves GET /applications/{id}/volumes: the read-only storage view
+// of one application. Reading never creates, remounts or modifies anything.
+func (h *handler) getVolumes(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	listing, err := h.svc.ListVolumes(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, volumeListEnvelope{
+		SourceType: listing.SourceType,
+		Runtime:    listing.Runtime,
+		Reason:     listing.RuntimeReason,
+		Volumes:    wireVolumes(listing.Volumes),
+	})
+}
+
+// wireVolumes maps the listing to the wire (always a JSON array).
+func wireVolumes(volumes []VolumeEntry) []volumeResponse {
+	rows := make([]volumeResponse, 0, len(volumes))
+	for _, volume := range volumes {
+		mounts := make([]volumeMountResponse, 0, len(volume.Mounts))
+		for _, mount := range volume.Mounts {
+			mounts = append(mounts, volumeMountResponse(mount))
+		}
+		row := volumeResponse{
+			Name:       volume.Name,
+			Kind:       volume.Kind,
+			HostPath:   volume.HostPath,
+			State:      volume.State,
+			Mounts:     mounts,
+			OpenReason: volume.OpenReason,
+		}
+		if volume.FileManager != nil {
+			row.FileManager = &volumeFileManagerResponse{
+				ServerID: volume.FileManager.ServerID.String(),
+				Root:     volume.FileManager.Root,
+				Path:     volume.FileManager.Path,
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // putStorages serves PUT /applications/{id}/storages: replaces the collection.

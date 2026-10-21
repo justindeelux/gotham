@@ -127,7 +127,7 @@ func containerRunning(t *testing.T, client *docker.DockerClient, containerID str
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	containers, err := client.ListContainers(ctx, true, nil)
+	containers, err := client.ListContainers(ctx, true, nil, false)
 	if err != nil {
 		t.Fatalf("list containers: %v", err)
 	}

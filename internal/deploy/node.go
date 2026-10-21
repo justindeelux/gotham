@@ -96,11 +96,18 @@ type Node interface {
 	Remove(ctx context.Context, containerID string) error
 	// Containers lists every container on the node, including stopped ones.
 	Containers(ctx context.Context) ([]*agentv1.ContainerInfo, error)
-	// ContainersByLabel lists the node's running containers that carry every
-	// label in labels (key=value). The agent applies Docker's native label
-	// filter, so the response carries only the matching containers instead of
-	// the whole node.
-	ContainersByLabel(ctx context.Context, labels map[string]string) ([]*agentv1.ContainerInfo, error)
+	// ContainersByLabel lists the node's containers that carry every label in
+	// labels (key=value), including stopped ones when all is true. The agent
+	// applies Docker's native label filter, so the response carries only the
+	// matching containers instead of the whole node. resolveVolumes asks the
+	// node to resolve each named volume's configured device (an extra volume
+	// inspect); only the volume listing needs it.
+	ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error)
+	// FileRoots lists the File Manager roots the node actually exposes. An
+	// agent without the FileService (files disabled, or older) answers an
+	// Unimplemented error; the caller turns that into "files disabled" rather
+	// than guessing a root name.
+	FileRoots(ctx context.Context) ([]*agentv1.FileRoot, error)
 	// Close releases the underlying agent connection.
 	Close() error
 }
@@ -139,6 +146,7 @@ type agentNode struct {
 	docker  *servers.DockerClient
 	build   agentv1.BuildServiceClient
 	compose agentv1.ComposeServiceClient
+	files   agentv1.FileServiceClient
 }
 
 // Compile-time guarantee that agentNode satisfies the Node seam.
@@ -153,6 +161,7 @@ func newAgentNode(client *servers.DockerClient) *agentNode {
 		docker:  client,
 		build:   agentv1.NewBuildServiceClient(client.Conn()),
 		compose: agentv1.NewComposeServiceClient(client.Conn()),
+		files:   agentv1.NewFileServiceClient(client.Conn()),
 	}
 }
 
@@ -405,12 +414,27 @@ func (n *agentNode) Containers(ctx context.Context) ([]*agentv1.ContainerInfo, e
 }
 
 // ContainersByLabel implements Node.
-func (n *agentNode) ContainersByLabel(ctx context.Context, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
-	response, err := n.docker.ListContainers(ctx, &agentv1.ListContainersRequest{Labels: labels})
+func (n *agentNode) ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error) {
+	response, err := n.docker.ListContainers(ctx, &agentv1.ListContainersRequest{
+		Labels:               labels,
+		All:                  all,
+		ResolveVolumeDevices: resolveVolumes,
+	})
 	if err != nil {
 		return nil, mapRPCError(err)
 	}
 	return response.GetContainers(), nil
+}
+
+// FileRoots implements Node over the FileService riding the same agent
+// connection. The error is returned unmapped so the caller can tell an absent
+// FileService (Unimplemented) from a transport failure.
+func (n *agentNode) FileRoots(ctx context.Context) ([]*agentv1.FileRoot, error) {
+	response, err := n.files.ListRoots(ctx, &agentv1.ListRootsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetRoots(), nil
 }
 
 // Close implements Node.

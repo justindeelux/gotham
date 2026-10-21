@@ -801,6 +801,67 @@ func TestRoutesStorageCollection(t *testing.T) {
 	})
 }
 
+func TestRoutesVolumeListing(t *testing.T) {
+	userID, appID, serverID := uuid.New(), uuid.New(), uuid.New()
+	svc := &fakeDeployService{volumes: VolumeListing{
+		SourceType: SourceCompose,
+		Runtime:    VolumeRuntimeLimited,
+		Volumes: []VolumeEntry{{
+			Name:     "data",
+			Kind:     VolumeKindManaged,
+			HostPath: "/var/lib/gotham/volumes/app/data",
+			State:    VolumeStateRunning,
+			Mounts: []VolumeMount{{
+				Destination: "/data", ReadOnly: true, Service: "web", Container: "shop-web-1", State: VolumeStateRunning,
+			}},
+			FileManager: &VolumeFileManager{ServerID: serverID, Root: "volumes", Path: "app/data"},
+		}},
+	}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+	path := applicationsPath + "/" + appID.String() + "/volumes"
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	assertJSONKeys(t, rec.Body.Bytes(), "source_type", "runtime", "volumes")
+	if svc.seenApplication != appID {
+		t.Errorf("service saw application %s, want %s", svc.seenApplication, appID)
+	}
+
+	var body volumeListEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.SourceType != SourceCompose || body.Runtime != VolumeRuntimeLimited || len(body.Volumes) != 1 {
+		t.Fatalf("body = %+v, want the compose listing", body)
+	}
+	volume := body.Volumes[0]
+	if volume.FileManager == nil || volume.FileManager.ServerID != serverID.String() ||
+		volume.FileManager.Root != "volumes" || volume.FileManager.Path != "app/data" {
+		t.Errorf("file manager = %+v, want the validated target", volume.FileManager)
+	}
+	if len(volume.Mounts) != 1 || volume.Mounts[0].Service != "web" || !volume.Mounts[0].ReadOnly {
+		t.Errorf("mounts = %+v, want the web read-only mount", volume.Mounts)
+	}
+}
+
+// TestRoutesVolumeListingRejectsForeignCaller pins the authorization boundary
+// at the HTTP layer: the service's 404 (never the row) is what a foreign caller
+// sees.
+func TestRoutesVolumeListingRejectsForeignCaller(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{volumesErr: ErrNotFound}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath+"/"+appID.String()+"/volumes", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
 func TestRoutesStopStart(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 	deployment := Deployment{

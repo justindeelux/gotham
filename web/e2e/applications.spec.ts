@@ -160,6 +160,16 @@ test.describe("applications", () => {
     await settled;
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
 
+    // JUS-274: the header avatar comes from the application's source metadata
+    // (the seed uses provider github), not from its name.
+    const avatar = page.locator(".page-head .brand-icon");
+    await expect(avatar).toBeVisible();
+    const avatarBox = await avatar.boundingBox();
+    expect(avatarBox, "avatar renders a box").not.toBeNull();
+    expect(avatarBox!.width).toBe(44);
+    await expect(avatar).toHaveCSS("background-color", "rgb(36, 41, 47)");
+    await expect(avatar.locator(".brand-icon__glyph")).toHaveCount(1);
+
     expect(guardrails.apiFailures).toEqual([]);
   });
 

@@ -105,6 +105,8 @@ export interface EnvironmentResourceApplication {
   provider: string;
   repo: string;
   clone_url: string;
+  /** Canonical source model (see SourceType in applications/schemas). */
+  source_type?: string;
   branch: string;
   build_pack: string;
   primary_domain: string;

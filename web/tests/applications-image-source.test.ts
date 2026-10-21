@@ -296,7 +296,7 @@ function mockImageDetail() {
     appId: ref("app-1"),
     shortId: ref("app-1"),
     displayName: ref("storefront"),
-    initials: ref("ST"),
+    brand: ref({ logo: "docker", letters: "ST", color: "#2496ed" }),
     descColumns: ref(2),
     controlHint: ref(""),
     containerStopped: ref(false),

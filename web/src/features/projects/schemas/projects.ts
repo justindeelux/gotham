@@ -231,6 +231,7 @@ export const environmentResourceApplicationSchema = z.object({
   provider: z.string(),
   repo: z.string(),
   clone_url: z.string(),
+  source_type: z.string().optional(),
   branch: z.string(),
   build_pack: z.string(),
   primary_domain: z.string(),

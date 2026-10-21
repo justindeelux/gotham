@@ -108,7 +108,7 @@ function mockDetail() {
     appId: computed(() => applicationRef.value?.id ?? ""),
     shortId: computed(() => (applicationRef.value?.id ?? "").slice(0, 8)),
     displayName: computed(() => applicationRef.value?.name ?? ""),
-    initials: ref("AP"),
+    brand: ref({ logo: "docker", letters: "AP", color: "#2496ed" }),
     descColumns: ref(2),
     controlHint: ref(null),
     containerStopped: ref(false),

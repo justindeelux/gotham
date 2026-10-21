@@ -1,48 +1,49 @@
 import { cardMark } from "@/features/templates/utils/templateMark";
 
 /**
- * Brand colors for the Add-resource picker. Inline SVG only (no CDN): each
- * mark is a rounded square in the brand hue with a letter mark, in the same
- * visual language as the `.tpl-mark` avatars in the design mockups.
- * Template letters come from the shared `cardMark` so one template shows
- * the same mark in the gallery and on this picker; unknown keys fall back
- * to the accent hue, so a new template or engine needs no UI change.
+ * Brand identity for resource avatars (JUS-274). Every mark is a vendored
+ * Simple Icons monochrome glyph (see `assets/brands`) on the brand hue, so one
+ * mapping drives the Add-resource picker, application detail and the
+ * environment list. Unknown keys keep the deterministic initials fallback
+ * instead of rendering a broken image. Inline assets only (no CDN).
  */
 
 export interface BrandMark {
+  /** Vendored Simple Icons slug, null when the key has no brand glyph. */
+  logo: string | null;
+  /** Letter fallback; always set so an unknown key never renders blank. */
   letters: string;
+  /** Avatar background hue. The glyph itself stays white. */
   color: string;
 }
 
 const BRAND_ACCENT = "#5865f2";
 
-/** Template slug (the API `icon` key) to brand hue. */
-const TEMPLATE_COLORS: Record<string, string> = {
-  wordpress: "#21759b",
-  nextcloud: "#0082c9",
-  n8n: "#ea4b71",
-  "uptime-kuma": "#3f9e4d",
+/** Template slug (the API `icon` key) to its brand glyph and hue. */
+const TEMPLATE_BRANDS: Record<string, { logo: string; color: string }> = {
+  wordpress: { logo: "wordpress", color: "#21759b" },
+  nextcloud: { logo: "nextcloud", color: "#0082c9" },
+  n8n: { logo: "n8n", color: "#ea4b71" },
+  "uptime-kuma": { logo: "uptimekuma", color: "#369b6b" },
 };
 
-const MARKS: Record<string, BrandMark> = {
-  application: { letters: "</>", color: "#5865f2" },
-  // Application source types: explicit marks, never derived from the label
-  // (initials of "Public/Private git repository" collide with each other
-  // and with PostgreSQL, and "GitHub (connected)" renders as "G(").
-  // Every text below is unique across the picker's sources, engines and
-  // single-letter template marks. GitHub/GitLab use the provider hues.
-  git_public: { letters: "GIT", color: "#5865f2" },
-  git_private: { letters: "KEY", color: "#8250df" },
-  github_app: { letters: "GH", color: "#24292f" },
-  gitlab_app: { letters: "GL", color: "#fc6d26" },
-  dockerfile: { letters: "DF", color: "#2496ed" },
-  image: { letters: "IMG", color: "#6e7681" },
-  compose: { letters: "DC", color: "#0b7285" },
-  postgres: { letters: "PG", color: "#336791" },
-  mysql: { letters: "MY", color: "#00758f" },
-  mariadb: { letters: "MD", color: "#c0765a" },
-  mongodb: { letters: "MG", color: "#47a248" },
-  redis: { letters: "RD", color: "#dc382d" },
+/**
+ * Source values and database engines. The Docker source variants share the
+ * Docker glyph; their labels keep them distinguishable in the picker.
+ */
+const MARKS: Record<string, { logo: string | null; color: string }> = {
+  git_public: { logo: "git", color: "#f05032" },
+  git_private: { logo: "git", color: "#f05032" },
+  github_app: { logo: "github", color: "#24292f" },
+  gitlab_app: { logo: "gitlab", color: "#fc6d26" },
+  dockerfile: { logo: "docker", color: "#2496ed" },
+  image: { logo: "docker", color: "#2496ed" },
+  compose: { logo: "docker", color: "#2496ed" },
+  postgres: { logo: "postgresql", color: "#4169e1" },
+  mysql: { logo: "mysql", color: "#4479a1" },
+  mariadb: { logo: "mariadb", color: "#c0765a" },
+  mongodb: { logo: "mongodb", color: "#47a248" },
+  redis: { logo: "redis", color: "#ff4438" },
 };
 
 /** initialsOf derives a one- or two-letter mark from a display name. */
@@ -58,11 +59,16 @@ export function initialsOf(name: string): string {
 }
 
 /**
- * templateBrand resolves the mark for one template catalog entry: shared
- * gallery letters on the brand hue.
+ * templateBrand resolves the mark for one template catalog entry: its brand
+ * glyph on the brand hue, or the shared gallery initials for unknown slugs.
  */
 export function templateBrand(icon: string, name: string): BrandMark {
-  return { letters: cardMark(name), color: TEMPLATE_COLORS[icon] ?? BRAND_ACCENT };
+  const brand = TEMPLATE_BRANDS[icon];
+  return {
+    logo: brand?.logo ?? null,
+    letters: cardMark(name),
+    color: brand?.color ?? BRAND_ACCENT,
+  };
 }
 
 /**
@@ -71,5 +77,32 @@ export function templateBrand(icon: string, name: string): BrandMark {
  * unknown keys.
  */
 export function brandFor(key: string, name: string): BrandMark {
-  return MARKS[key] ?? { letters: initialsOf(name), color: BRAND_ACCENT };
+  const brand = MARKS[key];
+  return {
+    logo: brand?.logo ?? null,
+    letters: initialsOf(name),
+    color: brand?.color ?? BRAND_ACCENT,
+  };
+}
+
+/**
+ * applicationBrand resolves an application's identity from its canonical
+ * source metadata. A legacy row without `source_type` derives the type from
+ * its provider, exactly like the control plane's NormalizeSourceType.
+ */
+export function applicationBrand(
+  sourceType: string,
+  provider: string,
+  name: string,
+): BrandMark {
+  if (sourceType !== "") {
+    return brandFor(sourceType, name);
+  }
+  if (provider === "github") {
+    return brandFor("github_app", name);
+  }
+  if (provider === "gitlab") {
+    return brandFor("gitlab_app", name);
+  }
+  return brandFor("git_public", name);
 }

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global URL, window:readonly */
+/* global URL, window, getComputedStyle:readonly */
 // Real-browser proof for the PE-5 environment surface: the committed webdist
 // is served statically with the control-plane API mocked, a session is seeded
 // in localStorage, and real Chromium measures the real Naive UI DOM. No
@@ -103,6 +103,7 @@ const previewRow = {
   provider: "public",
   repo: "medusajs/medusa",
   clone_url: "https://github.com/medusajs/medusa.git",
+  source_type: "git_private",
   branch: "pr-7",
   build_pack: "",
   primary_domain: "",
@@ -146,6 +147,7 @@ const resources = {
       provider: "public",
       repo: "medusajs/medusa",
       clone_url: "https://github.com/medusajs/medusa.git",
+      source_type: "github_app",
       branch: "main",
       build_pack: "",
       primary_domain: "",
@@ -340,6 +342,42 @@ test("type tabs filter the unified table", async ({ page }) => {
   await page.locator(".tabs").getByRole("tab", { name: /Databases/ }).click();
   await expect(page.locator(".resource-table")).toContainText("pg-orders");
   await expect(page.locator(".resource-table")).not.toContainText("plausible");
+});
+
+test("application rows show the source brand avatar", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/projects/${envPath}`);
+  await page.locator(".resource-table").waitFor();
+  const appRow = page
+    .locator(".resource-table tbody tr.resource-row")
+    .filter({ hasText: "storefront" })
+    .first();
+  const icon = appRow.locator(".resource-name-line .brand-icon");
+  await expect(icon).toBeVisible();
+  const box = await icon.boundingBox();
+  expect(box, "avatar renders a box").not.toBeNull();
+  expect(box!.width).toBe(28);
+  expect(box!.height).toBe(28);
+  // GitHub App source -> GitHub hue behind a white glyph.
+  expect(
+    await icon.evaluate((node) => getComputedStyle(node).backgroundColor),
+  ).toBe("rgb(36, 41, 47)");
+  await expect(icon.locator(".brand-icon__glyph")).toHaveCount(1);
+  await expect(icon).toHaveAttribute("aria-hidden", "true");
+  // Only applications carry an avatar; services and databases keep the plain
+  // row they had.
+  await expect(
+    page.locator(".resource-table tbody tr", { hasText: "plausible" }).locator(".brand-icon"),
+  ).toHaveCount(0);
+  await expect(
+    page.locator(".resource-table tbody tr", { hasText: "pg-orders" }).locator(".brand-icon"),
+  ).toHaveCount(0);
+  // A preview resolves its own source identity, not its base's.
+  await page.locator(".preview-switch .n-switch").click();
+  await expect(
+    page.locator(".resource-table tr.preview-row .brand-icon"),
+  ).toHaveCSS("background-color", "rgb(240, 80, 50)");
 });
 
 test("preview switch nests previews under their base with a tag", async ({

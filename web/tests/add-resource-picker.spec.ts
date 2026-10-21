@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global URL, window:readonly */
+/* global URL, window, getComputedStyle:readonly */
 // Real-browser proof for the JUS-71/72/76 fix round 2: every picker tile
 // renders an explicit, pairwise distinct brand mark, and opening a wizard
 // hides the picker modal (no card bleeds through behind the wizard) until
@@ -104,6 +104,24 @@ const templates = [
     name: "Nextcloud",
     icon: "nextcloud",
     description: "Nextcloud with PostgreSQL and Redis.",
+  },
+  {
+    slug: "n8n",
+    name: "n8n",
+    icon: "n8n",
+    description: "n8n workflow automation.",
+  },
+  {
+    slug: "uptime-kuma",
+    name: "Uptime Kuma",
+    icon: "uptime-kuma",
+    description: "Uptime Kuma monitoring.",
+  },
+  {
+    slug: "mystery",
+    name: "Mystery",
+    icon: "mystery",
+    description: "A catalog entry without a brand glyph.",
   },
 ];
 
@@ -208,23 +226,82 @@ async function openPicker(page: Page) {
   return picker;
 }
 
-test("picker tiles render pairwise distinct brand marks", async ({ page }) => {
+test("picker tiles render the approved monochrome brand glyphs", async ({ page }) => {
   const picker = await openPicker(page);
-  const texts: string[] = [];
-  for (const [tab, count] of [["Application", 7], ["Service", 2], ["Database", 5]] as const) {
+  // Frame hues per tab, in card order. Repeated glyphs are intentional: both
+  // generic Git sources show Git and every Docker source shows Docker.
+  const expected: Record<string, { colors: string[]; glyphs: number }> = {
+    Application: {
+      colors: [
+        "rgb(240, 80, 50)",
+        "rgb(240, 80, 50)",
+        "rgb(36, 41, 47)",
+        "rgb(252, 109, 38)",
+        "rgb(36, 150, 237)",
+        "rgb(36, 150, 237)",
+        "rgb(36, 150, 237)",
+      ],
+      glyphs: 7,
+    },
+    Service: {
+      colors: [
+        "rgb(33, 117, 155)",
+        "rgb(0, 130, 201)",
+        "rgb(234, 75, 113)",
+        "rgb(54, 155, 107)",
+        "rgb(88, 101, 242)",
+      ],
+      glyphs: 4,
+    },
+    Database: {
+      colors: [
+        "rgb(65, 105, 225)",
+        "rgb(68, 121, 161)",
+        "rgb(192, 118, 90)",
+        "rgb(71, 162, 72)",
+        "rgb(255, 68, 56)",
+      ],
+      glyphs: 5,
+    },
+  };
+  for (const [tab, { colors, glyphs }] of Object.entries(expected)) {
     await picker.getByRole("tab", { name: tab, exact: true }).click();
-    const marks = picker.locator("button.res-card .brand-icon text");
-    await expect(marks).toHaveCount(count);
-    for (const mark of await marks.all()) {
-      const box = await mark.boundingBox();
-      expect(box, "mark renders a box").not.toBeNull();
-      expect(box!.width, "mark has width").toBeGreaterThan(0);
-      texts.push(((await mark.textContent()) ?? "").trim());
+    const cards = picker.locator("button.res-card");
+    const frames = cards.locator(".brand-icon");
+    await expect(frames).toHaveCount(colors.length);
+    expect(await frames.evaluateAll((nodes) =>
+      nodes.map((node) => getComputedStyle(node).backgroundColor),
+    )).toEqual(colors);
+    const glyphNodes = cards.locator(".brand-icon__glyph");
+    await expect(glyphNodes).toHaveCount(glyphs);
+    for (const glyph of await glyphNodes.all()) {
+      const box = await glyph.boundingBox();
+      const frame = await glyph.locator("xpath=..").boundingBox();
+      expect(box, "glyph renders a box").not.toBeNull();
+      expect(frame, "frame renders a box").not.toBeNull();
+      // The approved treatment: a white silhouette at ~62% of the frame,
+      // optically centered inside it.
+      expect(box!.width).toBeCloseTo(frame!.width * 0.62, 0);
+      expect(box!.x - frame!.x).toBeCloseTo((frame!.width - box!.width) / 2, 0);
+      const style = await glyph.evaluate((node) => {
+        const computed = getComputedStyle(node);
+        return {
+          image:
+            computed.getPropertyValue("mask-image") ||
+            computed.getPropertyValue("-webkit-mask-image"),
+          background: computed.backgroundColor,
+        };
+      });
+      expect(style.image).toContain("svg");
+      expect(style.background).toBe("rgb(255, 255, 255)");
     }
   }
-  expect(texts).toHaveLength(14);
-  expect(texts.every((text) => text.length > 0)).toBe(true);
-  expect(new Set(texts).size).toBe(texts.length);
+  await picker.getByRole("tab", { name: "Service", exact: true }).click();
+  // Unknown future catalog entries keep the letter fallback, never an empty
+  // frame or a broken image.
+  const fallback = picker.locator('button.res-card[data-template="mystery"]');
+  await expect(fallback.locator(".brand-icon__glyph")).toHaveCount(0);
+  await expect(fallback.locator(".brand-icon__letters")).toHaveText("M");
 });
 
 test("an open wizard hides the picker until Change closes it", async ({ page }) => {

@@ -17,6 +17,7 @@ import { computed, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
 import ResourcePicker from "@/features/add-resource/components/ResourcePicker.vue";
+import BrandIcon from "@/features/add-resource/components/BrandIcon.vue";
 import ImportComposeDialog from "@/features/services/components/ImportComposeDialog.vue";
 import type { Service } from "@/features/services/api/services";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
@@ -309,7 +310,10 @@ function afterServiceCreate(service: Service): void {
               >
                 <td :data-label="t('projects.environment.table.name')">
                   <RouterLink :to="row.to" class="resource-link">
-                    <span class="resource-name">{{ row.name }}</span>
+                    <span class="resource-name-line">
+                      <BrandIcon v-if="row.brand" v-bind="row.brand" :size="28" />
+                      <span class="resource-name">{{ row.name }}</span>
+                    </span>
                     <span class="cell-sub mono">{{ row.subtitle }}</span>
                   </RouterLink>
                 </td>
@@ -579,6 +583,13 @@ function afterServiceCreate(service: Service): void {
 .resource-row .row-action {
   position: relative;
   z-index: 1;
+}
+
+.resource-name-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .resource-name {

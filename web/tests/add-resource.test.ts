@@ -22,7 +22,7 @@ import TemplateWizard from "@/features/templates/components/TemplateWizard.vue";
 import ResourcePicker from "@/features/add-resource/components/ResourcePicker.vue";
 import addResourceEn from "@/features/add-resource/locales/en";
 import addResourceVi from "@/features/add-resource/locales/vi";
-import { brandFor, initialsOf, templateBrand } from "@/features/add-resource/utils/brands";
+import { applicationBrand, brandFor, initialsOf, templateBrand } from "@/features/add-resource/utils/brands";
 import { cardMark } from "@/features/templates/utils/templateMark";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 import {
@@ -71,17 +71,20 @@ function shell(child: object) {
 }
 
 describe("templateBrand", () => {
-  it("uses the shared gallery mark on the brand hue", () => {
+  it("uses the vendored brand glyph on the brand hue", () => {
     expect(templateBrand("nextcloud", "Nextcloud")).toEqual({
+      logo: "nextcloud",
       letters: "N",
       color: "#0082c9",
     });
     // Same mark as the template gallery renders for this template.
     expect(templateBrand("nextcloud", "Nextcloud").letters).toBe(cardMark("Nextcloud"));
+    expect(templateBrand("uptime-kuma", "Uptime Kuma").logo).toBe("uptimekuma");
   });
 
   it("falls back to the accent hue for unknown template slugs", () => {
     expect(templateBrand("future-tool", "Cool Tool")).toEqual({
+      logo: null,
       letters: "C",
       color: "#5865f2",
     });
@@ -91,21 +94,47 @@ describe("templateBrand", () => {
 describe("brandFor", () => {
   it("resolves known engine and application keys to their brand mark", () => {
     expect(brandFor("postgres", "PostgreSQL")).toEqual({
-      letters: "PG",
-      color: "#336791",
+      logo: "postgresql",
+      letters: "PO",
+      color: "#4169e1",
     });
     expect(brandFor("application", "Application")).toEqual({
-      letters: "</>",
+      logo: null,
+      letters: "AP",
       color: "#5865f2",
     });
   });
 
   it("falls back to initials on the accent hue for unknown keys", () => {
     expect(brandFor("some-future-engine", "Cool Tool")).toEqual({
+      logo: null,
       letters: "CT",
       color: "#5865f2",
     });
-    expect(brandFor("", "")).toEqual({ letters: "?", color: "#5865f2" });
+    expect(brandFor("", "")).toEqual({ logo: null, letters: "?", color: "#5865f2" });
+  });
+});
+
+describe("applicationBrand", () => {
+  it("maps every source type to its approved glyph", () => {
+    const logos = {
+      git_public: "git",
+      git_private: "git",
+      github_app: "github",
+      gitlab_app: "gitlab",
+      dockerfile: "docker",
+      image: "docker",
+      compose: "docker",
+    };
+    for (const [source, logo] of Object.entries(logos)) {
+      expect(applicationBrand(source, "git", "shop").logo, source).toBe(logo);
+    }
+  });
+
+  it("derives a legacy row's identity from its provider", () => {
+    expect(applicationBrand("", "github", "shop").logo).toBe("github");
+    expect(applicationBrand("", "gitlab", "shop").logo).toBe("gitlab");
+    expect(applicationBrand("", "", "shop").logo).toBe("git");
   });
 });
 
@@ -640,10 +669,20 @@ describe("picker marks and wizard overlay", () => {
       "dockerfile",
       "image",
       "compose",
-    ].map((value) => brandFor(value, "").letters);
-    expect(sources).toEqual(["GIT", "KEY", "GH", "GL", "DF", "IMG", "DC"]);
-    const engines = ENGINES.map((engine) => brandFor(engine.value, engine.label).letters);
-    expect(new Set([...sources, ...engines]).size).toBe(sources.length + engines.length);
+    ].map((value) => brandFor(value, "").logo);
+    expect(sources).toEqual([
+      "git",
+      "git",
+      "github",
+      "gitlab",
+      "docker",
+      "docker",
+      "docker",
+    ]);
+    const engines = ENGINES.map((engine) => brandFor(engine.value, engine.label).logo);
+    for (const logo of engines) {
+      expect(sources, `${logo} must not double as a source mark`).not.toContain(logo);
+    }
   });
 
   it("reports wizardOpen while a wizard covers the picker", async () => {

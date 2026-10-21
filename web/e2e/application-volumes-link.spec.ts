@@ -17,7 +17,8 @@ test.use({ storageState: storageStatePath });
 /**
  * JUS-273 real-stack proof: the volumes API must name the File Manager root the
  * enrolled agent ACTUALLY exposes (full access => "system"/"/", confined =>
- * "volumes"), and Open in File Manager must land in that directory. The spec
+ * "volumes"), and Open in File Manager must open that directory in a new tab
+ * while the application tab stays. The spec
  * runs against the node agent started by the UI e2e workflow; without an
  * enrolled agent there is nothing to resolve.
  */
@@ -151,35 +152,42 @@ test("volume link uses the root the agent exposes and opens the directory", asyn
     `${nestedURL(projectId, environmentId, "applications", application.id)}?tab=storage`,
   );
   await expect(page.getByText(volume.host_path ?? "", { exact: false })).toBeVisible();
-  const open = page.getByRole("button", {
+  const open = page.getByRole("link", {
     name: `Open volume ${volume.name} in File Manager`,
   });
   await expect(open).toBeVisible();
 
-  const listed = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return (
-      url.pathname.endsWith(`/servers/${node.id}/files/list`) &&
-      url.searchParams.get("root") === target.root &&
-      url.searchParams.get("path") === target.path
-    );
-  });
-  await open.click();
-  await listed;
+  // The action is a real link: middle-click and copy-link reach the same
+  // directory, and a plain click must not navigate the application tab.
+  const openHref = await open.getAttribute("href");
+  expect(openHref, "the open action carries an href").toBeTruthy();
+  const href = new URL(openHref as string, page.url());
+  expect(href.pathname).toBe(`/servers/${node.id}/files`);
+  expect(href.searchParams.get("root")).toBe(target.root);
+  expect(href.searchParams.get("path")).toBe(target.path);
+  expect(await open.getAttribute("target")).toBe("_blank");
+  expect(await open.getAttribute("rel")).toBe("noopener");
 
-  const landed = new URL(page.url());
+  const applicationURL = page.url();
+  const [opened] = await Promise.all([page.waitForEvent("popup"), open.click()]);
+  await opened.waitForURL(`**/servers/${node.id}/files?**`);
+
+  const landed = new URL(opened.url());
   expect(landed.pathname).toBe(`/servers/${node.id}/files`);
   expect(landed.searchParams.get("root")).toBe(target.root);
   expect(landed.searchParams.get("path")).toBe(target.path);
-  await expect(page.getByText("marker.txt", { exact: true }).first()).toBeVisible();
+  await expect(opened.getByText("marker.txt", { exact: true }).first()).toBeVisible();
 
-  // Re-opening the same link focuses the tab already showing the directory
-  // instead of stacking duplicates.
-  await page.goto(page.url());
-  await expect(page.getByText("marker.txt", { exact: true }).first()).toBeVisible();
-  await expect(
-    page.locator(".fm-tab").filter({ hasText: "web_data" }),
-  ).toHaveCount(1);
+  // The original tab stays on the application page, still showing the volume.
+  expect(page.url()).toBe(applicationURL);
+  await expect(page.getByText(volume.host_path ?? "", { exact: false })).toBeVisible();
+
+  // Re-opening the same link in the new tab shows the directory once instead
+  // of stacking duplicate File Manager tabs.
+  await opened.goto(opened.url());
+  await expect(opened.getByText("marker.txt", { exact: true }).first()).toBeVisible();
+  await expect(opened.locator(".fm-tab").filter({ hasText: "web_data" })).toHaveCount(1);
+  await opened.close();
 
   expect(guardrails.apiFailures).toEqual([]);
 });

@@ -6,6 +6,7 @@
 
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
+import { createMemoryHistory, createRouter } from "vue-router";
 
 import ApplicationStorageTab from "@/features/applications/components/ApplicationStorageTab.vue";
 import StorageEditor from "@/features/applications/components/StorageEditor.vue";
@@ -109,8 +110,16 @@ function namedListing(): VolumeListing {
 
 /** mountTab renders the Storage tab with the props the page passes. */
 function mountTab(listing: VolumeListing | null, sourceType = listing?.source_type ?? "git_public") {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/servers/:id/files", name: "server-files", component: { template: "<div />" } },
+      { path: "/", component: { template: "<div />" } },
+    ],
+  });
   return mount(ApplicationStorageTab, {
     props: {
+      serverId: "server-1",
       sourceType,
       volumes: listing,
       volumesLoading: false,
@@ -121,8 +130,15 @@ function mountTab(listing: VolumeListing | null, sourceType = listing?.source_ty
       saveDisabled: false,
       saving: false,
     },
-    global: { plugins: [i18n] },
+    global: { plugins: [router, i18n] },
   });
+}
+
+/** findOpenLink returns the new-tab link of a volume row, if it has one. */
+function findOpenLink(wrapper: ReturnType<typeof mountTab>) {
+  return wrapper
+    .findAll("a")
+    .find((link) => link.text().includes("Open in File Manager"));
 }
 
 describe("application volume listing schema", () => {
@@ -192,27 +208,22 @@ describe("ApplicationStorageTab volume list", () => {
     expect(text).toContain("read-only");
     expect(text).toContain("Running");
     expect(text).toContain("/var/lib/gotham/volumes/app-1/shared");
-    const open = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("Open in File Manager"));
+    const open = findOpenLink(wrapper);
     expect(open?.attributes("aria-label")).toBe(
       "Open volume shared in File Manager",
     );
     wrapper.unmount();
   });
 
-  it("emits the validated File Manager target on Open", async () => {
+  it("links the validated File Manager target in a new tab", () => {
     const wrapper = mountTab(composeListing());
-    const open = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("Open in File Manager"));
+    const open = findOpenLink(wrapper);
     expect(open, "the volume offers Open in File Manager").toBeTruthy();
-    await open?.trigger("click");
-    expect(wrapper.emitted("open")?.[0]?.[0]).toEqual({
-      serverId: "server-1",
-      root: "volumes",
-      path: "app-1/shared",
-    });
+    expect(open?.attributes("href")).toBe(
+      "/servers/server-1/files?root=volumes&path=app-1/shared",
+    );
+    expect(open?.attributes("target")).toBe("_blank");
+    expect(open?.attributes("rel")).toBe("noopener");
     wrapper.unmount();
   });
 
@@ -232,18 +243,28 @@ describe("ApplicationStorageTab volume list", () => {
     wrapper.unmount();
   });
 
-  it("emits the root the backend chose (full-access system mode)", async () => {
+  it("links the root the backend chose (full-access system mode)", () => {
     const wrapper = mountTab(fullAccessListing());
-    const open = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("Open in File Manager"));
+    const open = findOpenLink(wrapper);
     expect(open).toBeTruthy();
-    await open?.trigger("click");
-    expect(wrapper.emitted("open")?.[0]?.[0]).toEqual({
-      serverId: "server-1",
-      root: "system",
-      path: "var/lib/gotham/volumes/app-1/web_data",
-    });
+    expect(open?.attributes("href")).toBe(
+      "/servers/server-1/files?root=system&path=var/lib/gotham/volumes/app-1/web_data",
+    );
+    wrapper.unmount();
+  });
+
+  it("refuses a target that names another server", () => {
+    const listing = composeListing();
+    listing.volumes[0].file_manager = {
+      server_id: "server-2",
+      root: "volumes",
+      path: "app-1/shared",
+    };
+    const wrapper = mountTab(listing);
+    expect(findOpenLink(wrapper)).toBeUndefined();
+    expect(wrapper.text()).toContain(
+      "That directory is not part of this application's storage",
+    );
     wrapper.unmount();
   });
 
@@ -273,11 +294,7 @@ describe("ApplicationStorageTab volume list", () => {
     const wrapper = mountTab(namedListing());
     const text = wrapper.text();
     expect(text).toContain("not browsable in File Manager");
-    expect(
-      wrapper
-        .findAll("button")
-        .some((button) => button.text().includes("Open in File Manager")),
-    ).toBe(false);
+    expect(findOpenLink(wrapper)).toBeUndefined();
     wrapper.unmount();
   });
 

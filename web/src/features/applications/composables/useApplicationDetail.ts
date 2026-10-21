@@ -12,8 +12,6 @@ import type {
 } from "@/features/applications/api/applications";
 import { listVolumes } from "@/features/applications/api/applications";
 import type { VolumeListing } from "@/features/applications/schemas/volumes";
-import { filesDeepLinkRoute, isFilesDeepLink } from "@/features/files";
-import type { FilesDeepLink } from "@/features/files";
 import type { Preview } from "@/features/applications/api/previews";
 import {
   describePreviewError,
@@ -485,24 +483,6 @@ export function useApplicationDetail() {
   }
 
   /**
-   * openVolumeInFileManager navigates to a volume's validated target. The
-   * target must name this application's own server; anything else is refused
-   * with a message instead of routing, and the File Manager re-validates the
-   * root and its own authorization after navigation.
-   */
-  async function openVolumeInFileManager(target: FilesDeepLink): Promise<void> {
-    const app = application.value;
-    if (app === null || app.server_id === null) {
-      return;
-    }
-    if (!isFilesDeepLink(target, app.server_id)) {
-      message.error(tr("applications.storageTab.invalidTarget"));
-      return;
-    }
-    await router.push(filesDeepLinkRoute(target));
-  }
-
-  /**
    * loadPreviews refreshes the application's preview bindings. A feature-flag
    * 404 hides the tab; any other failure keeps the rows already shown and
    * surfaces an explicit error with a retry (an unavailable list is never
@@ -949,7 +929,6 @@ export function useApplicationDetail() {
     volumesLoading,
     volumesError,
     volumesLoadedFor,
-    openVolumeInFileManager,
     previews,
     previewsLoading,
     previewsLoaded,

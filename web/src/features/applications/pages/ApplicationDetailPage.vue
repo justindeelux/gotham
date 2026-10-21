@@ -222,6 +222,7 @@ const activeTab = computed<string>({
         <NTabPane v-if="showStorageTab" name="storage" :tab="t('applications.tabs.storage')">
           <ApplicationStorageTab
             v-if="detail.application.value"
+            :server-id="detail.application.value.server_id"
             :source-type="detail.application.value.source_type"
             :volumes="detail.volumes.value"
             :volumes-loading="detail.volumesLoading.value"
@@ -235,7 +236,6 @@ const activeTab = computed<string>({
             @save="detail.handleSaveStorages"
             @retry="detail.loadStorages()"
             @refresh="detail.loadVolumes()"
-            @open="detail.openVolumeInFileManager($event)"
           />
         </NTabPane>
 

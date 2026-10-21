@@ -3,6 +3,7 @@ import { NAlert, NButton, NCard, NDataTable, NEmpty, NSpace, NSpin, NTag, NText 
 import type { DataTableColumns } from "naive-ui";
 import { computed, h } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 
 import type { StorageMapping } from "@/features/applications/api/applications";
 import type {
@@ -10,6 +11,7 @@ import type {
   VolumeListing,
   VolumeMount,
 } from "@/features/applications/schemas/volumes";
+import { filesDeepLinkRoute, isFilesDeepLink } from "@/features/files";
 import type { FilesDeepLink } from "@/features/files";
 import StorageEditor from "@/features/applications/components/StorageEditor.vue";
 
@@ -21,6 +23,7 @@ import StorageEditor from "@/features/applications/components/StorageEditor.vue"
  * directory nor touches the data.
  */
 interface Props {
+  serverId: string | null;
   sourceType: string;
   volumes: VolumeListing | null;
   volumesLoading: boolean;
@@ -39,10 +42,10 @@ const emit = defineEmits<{
   save: [];
   retry: [];
   refresh: [];
-  open: [target: FilesDeepLink];
 }>();
 
 const { t } = useI18n();
+const router = useRouter();
 
 /**
  * volumeTableScrollX is the horizontal budget of the six columns (the table
@@ -86,6 +89,36 @@ function mountMode(mount: VolumeMount): string {
   return mount.read_only
     ? t("applications.storageTab.readOnly")
     : t("applications.storageTab.readWrite");
+}
+
+/**
+ * openHref is the validated File Manager deep link of one volume row, or null
+ * when the backend target names another server (never routed).
+ */
+function openHref(row: ApplicationVolume): string | null {
+  const target = row.file_manager;
+  if (!target) {
+    return null;
+  }
+  const link: FilesDeepLink = {
+    serverId: target.server_id,
+    root: target.root,
+    path: target.path,
+  };
+  if (!isFilesDeepLink(link, props.serverId ?? "")) {
+    return null;
+  }
+  return router.resolve(filesDeepLinkRoute(link)).href;
+}
+
+/** unavailableText explains why a row has no File Manager link. */
+function unavailableText(row: ApplicationVolume): string {
+  if (row.file_manager) {
+    return t("applications.storageTab.invalidTarget");
+  }
+  return row.open_reason
+    ? openReasonText(row.open_reason)
+    : t("applications.storageTab.openUnavailable");
 }
 
 /**
@@ -150,29 +183,25 @@ const volumeColumns = computed<DataTableColumns<ApplicationVolume>>(() => [
     title: String(t("applications.storageTab.open")),
     key: "open",
     width: 175,
-    render: (row) =>
-      row.file_manager
+    render: (row) => {
+      const href = openHref(row);
+      return href === null
         ? h(
-            NButton,
-            {
-              size: "small",
-              text: true,
-              type: "primary",
-              "aria-label": t("applications.storageTab.openAria", { name: row.name }),
-              onClick: () =>
-                emit("open", {
-                  serverId: row.file_manager?.server_id ?? "",
-                  root: row.file_manager?.root ?? "",
-                  path: row.file_manager?.path ?? "",
-                }),
-            },
-            { default: () => t("applications.storageTab.openAction") },
-          )
-        : h(
             NText,
             { depth: 3, class: "storage-open-reason" },
-            { default: () => (row.open_reason ? openReasonText(row.open_reason) : t("applications.storageTab.openUnavailable")) },
-          ),
+            { default: () => unavailableText(row) },
+          )
+        : h(
+            "a",
+            {
+              href,
+              target: "_blank",
+              rel: "noopener",
+              "aria-label": t("applications.storageTab.openAria", { name: row.name }),
+            },
+            t("applications.storageTab.openAction"),
+          );
+    },
   },
 ]);
 

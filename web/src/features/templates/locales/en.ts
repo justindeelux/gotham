@@ -25,21 +25,6 @@ const en = {
     notFoundWithDetail: "{detail}",
     disabled: "Services are turned off on this control plane. The platform administrator must enable them.",
   },
-  gallery: {
-    empty: "No templates in the catalog.",
-  },
-  page: {
-    eyebrow: "Operations · One-click templates",
-    title: "Template library",
-    description:
-      "Pick a template, fill the form, and the control plane renders the compose document before deploying it through the node agent. The form is generated from the template schema, so a new template needs no UI change.",
-    calloutTitle: "How a template is structured",
-    calloutYaml:
-      "{file} declares the name, icon, description and the form fields (type, default, required, validation).",
-    calloutComposeUses: "{file} uses {placeholder} placeholders.",
-    calloutComposeNote:
-      "The engine only substitutes strings and never executes code, so a template cannot run commands on a node. Editing a template does not affect a service that is already deployed.",
-  },
   wizard: {
     title: "Deploy template {name}",
     steps: {

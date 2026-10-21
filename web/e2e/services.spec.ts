@@ -27,15 +27,15 @@ interface ServicePayload {
 }
 
 /**
- * FE-7.1: drives the real template gallery and wizard against the control
- * plane.
+ * FE-7.1: drives the real add-resource service picker and wizard against the
+ * control plane.
  *
- * Covers the catalog rendering, the dynamic form generated from the template
- * schema (required + default), the rendered compose preview, service creation
- * from the render with the secret `env` map, and the service appearing on
- * the environment page. The render contract is asserted at the API boundary:
- * `compose_yaml` keeps the `${field}` reference while the value travels only
- * in `env`.
+ * Covers the catalog rendering in the picker, the dynamic form generated from
+ * the template schema (required + default), the rendered compose preview,
+ * service creation from the render with the secret `env` map, and the service
+ * appearing on the environment page. The render contract is asserted at the API
+ * boundary: `compose_yaml` keeps the `${field}` reference while the value
+ * travels only in `env`.
  *
  * The control plane has no node agent, so a live deploy cannot be asserted
  * here (it is covered by the gated internal/e2e P7 tests); this smoke stops
@@ -43,7 +43,7 @@ interface ServicePayload {
  * disabled, every route answers 404/503 and the smoke skips.
  */
 test.describe("services & templates", () => {
-  test("gallery → dynamic form → compose preview → create service", async ({
+  test("picker → dynamic form → compose preview → create service", async ({
     page,
     request,
     guardrails,
@@ -85,20 +85,20 @@ test.describe("services & templates", () => {
     expect(serverResponse.status(), await serverResponse.text()).toBe(201);
     const { projectId, projectName, environmentId } = await seedProjectEnvironment(request, headers);
 
-    // ── the gallery loads the live catalog ───────────────────────────────
-    await page.goto("/templates");
-    await expect(
-      page.getByRole("heading", { name: "Template library", level: 1 }),
-    ).toBeVisible();
+    // ── the add-resource picker loads the live catalog ───────────────────
+    await page.goto(environmentURL(projectId, environmentId));
+    await page.getByRole("button", { name: "Add resource" }).first().click();
+    const picker = page.locator(".n-modal.app-modal");
+    await picker.getByRole("tab", { name: "Service", exact: true }).click();
     for (const template of templates) {
       await expect(
-        page.locator(`[data-template="${template.slug}"]`),
+        picker.locator(`[data-template="${template.slug}"]`),
         `${template.slug} renders as a card`,
       ).toBeVisible();
     }
 
     // ── opening a template renders the dynamic form ──────────────────────
-    await page.locator('[data-template="wordpress"]').click();
+    await picker.locator('[data-template="wordpress"]').click();
     const wizard = page
       .locator(".n-modal")
       .filter({ hasText: "Deploy template WordPress" })
@@ -147,18 +147,9 @@ test.describe("services & templates", () => {
     const step3 = wizard.locator('[data-testid="wizard-step-3"]');
     await expect(step3).toBeVisible();
     await step3.locator(".field-service-name input").fill(serviceName);
-    // The scope summary arrives empty on the flat library: the selects
-    // show immediately, so pick the seeded project and environment there.
-    await step3.locator('[aria-label="Project"]').click();
-    await page
-      .locator(".n-base-select-option")
-      .filter({ hasText: projectName })
-      .click();
-    await step3.locator('[aria-label="Environment"]').click();
-    await page
-      .locator(".n-base-select-option")
-      .filter({ hasText: "production" })
-      .click();
+    // The picker preselects the environment scope, so the summary shows the
+    // seeded project and environment instead of the selects.
+    await expect(step3).toContainText(`${projectName} / production`);
     // The seeded node is pending (no agent validated it); pending nodes stay
     // selectable, only offline ones are disabled.
     await step3.locator(".wizard__metaform .n-select").click();
@@ -207,7 +198,8 @@ test.describe("services & templates", () => {
 
     // ── the created service appears on the environment page ─────────────
     await wizard.getByRole("button", { name: "Close", exact: true }).click();
-    await expect(page.locator(".n-modal")).toHaveCount(0);
+    // Closing the wizard restores the add-resource picker.
+    await expect(picker).toBeVisible();
     await page.goto(environmentURL(projectId, environmentId));
     const row = page.locator(".resource-table tbody tr").filter({ hasText: serviceName });
     await expect(row).toHaveCount(1);

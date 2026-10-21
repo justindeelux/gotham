@@ -163,12 +163,6 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.serviceDetail", requiresAuth: true },
       },
       {
-        path: "templates",
-        name: "templates",
-        component: () => import("@/features/templates/pages/TemplatesPage.vue"),
-        meta: { titleKey: "titles.templates", requiresAuth: true },
-      },
-      {
         path: "toolchain",
         name: "toolchain",
         component: () => import("@/features/toolchain/pages/ToolchainPage.vue"),

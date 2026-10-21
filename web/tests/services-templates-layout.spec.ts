@@ -4,7 +4,7 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 /* global URL, StorageEvent, document, window:readonly */
 // Real-browser proof for the I18N-7 services/templates surface: the rebuilt
@@ -240,6 +240,32 @@ async function mockApi(
       },
     });
   });
+  await page.route("**/api/v1/environments/*/resources*", async (route) => {
+    await route.fulfill({
+      json: {
+        environment: {
+          id: "env-1",
+          project_id: "proj-1",
+          name: "production",
+          created_at: "2026-09-01T10:00:00Z",
+          updated_at: "2026-09-01T10:00:00Z",
+          resource_counts: { applications: 0, services: 1, databases: 0 },
+        },
+        project: {
+          id: "proj-1",
+          name: "shop",
+          description: "",
+          created_at: "2026-09-01T10:00:00Z",
+          updated_at: "2026-09-01T10:00:00Z",
+          environment_count: 1,
+          resource_counts: { applications: 0, services: 1, databases: 0 },
+        },
+        applications: [],
+        services: [],
+        databases: [],
+      },
+    });
+  });
   await page.route("**/api/v1/services/svc-1/deploys", async (route) => {
     if (deploysFailure === null) {
       await route.fulfill({ json: { deploys } });
@@ -274,6 +300,20 @@ async function switchLocale(page: Page, locale: string): Promise<void> {
   }, locale);
 }
 
+/** openServicePicker opens Add resource on the seeded environment's Service tab. */
+async function openServicePicker(page: Page): Promise<Locator> {
+  await page.goto(`${baseURL}/projects/proj-1/environments/env-1`);
+  await page
+    .getByRole("button", { name: /^(Add resource|Thêm tài nguyên)$/ })
+    .first()
+    .click();
+  const picker = page.locator(".n-modal.app-modal");
+  // Tab order is fixed: Application, Service, Database.
+  await picker.getByRole("tab").nth(1).click();
+  await picker.locator(".res-pane").waitFor();
+  return picker;
+}
+
 /** noHorizontalOverflow fails when the page scrolls sideways at this width. */
 async function expectNoOverflow(page: Page, width: number): Promise<void> {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth);
@@ -282,36 +322,38 @@ async function expectNoOverflow(page: Page, width: number): Promise<void> {
 
 const widths = [390, 900, 1280];
 
-test("template gallery renders overlay copy at every width, en and vi", async ({
+test("service picker renders overlay copy at every width, en and vi", async ({
   page,
 }) => {
   for (const width of widths) {
     for (const locale of ["en", "vi"] as const) {
       await page.setViewportSize({ width, height: 900 });
       await mockApi(page);
-      await page.goto(`${baseURL}/templates`);
-      await page.locator(".template-gallery__grid").waitFor();
+      const picker = await openServicePicker(page);
       // The context keeps localStorage between iterations, so pin the
       // locale explicitly on every pass.
       await switchLocale(page, locale);
       if (locale === "en") {
-        await expect(page.locator(".templates-page h1")).toHaveText("Template library");
-        await expect(page.locator(".template-gallery")).toContainText(
+        await expect(picker.locator(".res-pane")).toContainText(
+          "Pick a service template, or import a Docker Compose file.",
+        );
+        await expect(picker).toContainText(
           "n8n workflow automation with a persistent named volume and a routed domain.",
         );
       } else {
-        await switchLocale(page, "vi");
-        await expect(page.locator(".templates-page h1")).toHaveText("Thư viện mẫu");
-        await expect(page.locator(".template-gallery")).toContainText(
+        await expect(picker.locator(".res-pane")).toContainText(
+          "Chọn template service, hoặc nhập tệp Docker Compose.",
+        );
+        await expect(picker).toContainText(
           "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền được định tuyến.",
         );
       }
       // Unknown operator-provided metadata is never translated.
-      await expect(page.locator(".template-gallery")).toContainText(
+      await expect(picker).toContainText(
         "Operator-provided template copy stays untouched.",
       );
       await expectNoOverflow(page, width);
-      await page.screenshot({ path: test.info().outputPath(`gallery-${locale}-${width}.png`) });
+      await page.screenshot({ path: test.info().outputPath(`picker-${locale}-${width}.png`) });
       await page.unrouteAll({ behavior: "wait" });
     }
   }
@@ -320,9 +362,8 @@ test("template gallery renders overlay copy at every width, en and vi", async ({
 test("wizard keeps its draft while feedback switches language", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 900 });
   await mockApi(page);
-  await page.goto(`${baseURL}/templates`);
-  await page.locator(".template-gallery__grid").waitFor();
-  await page.locator('.tpl-card[data-template="n8n"]').click();
+  const picker = await openServicePicker(page);
+  await picker.locator('button.res-card[data-template="n8n"]').click();
   await page.locator('[data-testid="wizard-step-1"]').waitFor();
   // Stepper and counter render in English first, with provider help visible.
   await expect(page.locator(".template-wizard")).toContainText("Step 1 / 3");
@@ -406,16 +447,16 @@ test("feature-off failure shows the translated frame with the intact token", asy
       await page.route("**/api/v1/templates", async (route) => {
         await route.fulfill({ status: 503, json: { message: "" } });
       });
-      await page.goto(`${baseURL}/templates`);
+      const picker = await openServicePicker(page);
       await switchLocale(page, locale);
       const expected =
         locale === "vi"
           ? "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật."
           : "Services are turned off on this control plane. The platform administrator must enable them.";
-      await expect(page.locator(".template-gallery")).toContainText(expected);
+      await expect(picker.locator(".res-pane")).toContainText(expected);
       // The retry control stays usable at every width.
       const retry = locale === "vi" ? "Thử lại" : "Retry";
-      await expect(page.getByRole("button", { name: retry })).toBeVisible();
+      await expect(picker.getByRole("button", { name: retry })).toBeVisible();
       await expectNoOverflow(page, width);
       await page.screenshot({
         path: test.info().outputPath(`feature-off-${locale}-${width}.png`),

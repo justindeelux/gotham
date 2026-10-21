@@ -17,7 +17,6 @@ import {
   serviceStatusLabel,
 } from "@/features/services/api/services";
 import { useImportService } from "@/features/services/composables/useImportService";
-import TemplateGallery from "@/features/templates/components/TemplateGallery.vue";
 import {
   checkTemplateValue,
   describeTemplateError,
@@ -281,26 +280,6 @@ describe("template overlay falls back to provider metadata", () => {
     expect(templateOverlayFieldHelp("acme-custom", domain)).toBe(domain.help);
   });
 
-  it("renders gallery descriptions from the overlay with provider fallback", () => {
-    const wrapper = mount(TemplateGallery, {
-      props: { templates: [bundled, foreign], loading: false, error: null },
-    });
-    const cards = wrapper.findAll(".tpl-card");
-    expect(cards[0].find(".tpl-desc").text()).toBe(bundled.description);
-    expect(cards[1].find(".tpl-desc").text()).toBe(foreign.description);
-    // Template IDs, names and icon markers are never translated.
-    expect(cards[0].attributes("data-template")).toBe("n8n");
-    expect(cards[0].find(".tpl-name").text()).toBe("n8n");
-    setLocale("vi", null);
-    return wrapper.vm.$nextTick().then(() => {
-      const updated = wrapper.findAll(".tpl-card");
-      expect(updated[0].find(".tpl-desc").text()).toBe(
-        "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền được định tuyến.",
-      );
-      expect(updated[1].find(".tpl-desc").text()).toBe(foreign.description);
-      expect(updated[0].attributes("data-template")).toBe("n8n");
-    });
-  });
 });
 
 describe("wizard draft and deploy state survive the language change", () => {

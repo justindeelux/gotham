@@ -233,8 +233,8 @@ describe("application detail storage tab", () => {
   });
 });
 
-describe("compose volume hint", () => {
-  it("names the compose source and the managed root", () => {
+describe("compose volumes notice", () => {
+  it("is no longer rendered for compose applications", () => {
     const wrapper = mount(ApplicationOverviewTab, {
       props: {
         application: composeApp(),
@@ -249,28 +249,8 @@ describe("compose volume hint", () => {
         stubs: { ComposeEditor: true, DeploymentHistoryTable: true },
       },
     });
-    const text = wrapper.text();
-    expect(text).toContain("declared in the compose source");
-    expect(text).toContain("/var/lib/gotham/volumes/<appID>/<name>");
-    wrapper.unmount();
-  });
-
-  it("does not render the hint for non-compose applications", () => {
-    const wrapper = mount(ApplicationOverviewTab, {
-      props: {
-        application: imageApp(),
-        latest: null,
-        deployments: [],
-        pipelineSteps: [],
-        descColumns: 2,
-        acting: false,
-      },
-      global: {
-        plugins: [i18n],
-        stubs: { DeploymentHistoryTable: true },
-      },
-    });
     expect(wrapper.text()).not.toContain("declared in the compose source");
+    expect(wrapper.text()).not.toContain("/var/lib/gotham/volumes/");
     wrapper.unmount();
   });
 });

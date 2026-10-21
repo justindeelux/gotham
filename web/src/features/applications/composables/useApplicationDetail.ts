@@ -17,6 +17,8 @@ import {
   listPreviews,
 } from "@/features/applications/api/previews";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
+import { applicationBrand } from "@/features/add-resource";
+import type { BrandMark } from "@/features/add-resource";
 import {
   getEnvironmentVariables,
   getProjectVariables,
@@ -187,8 +189,14 @@ export function useApplicationDetail() {
   /** shortId renders the head of the application UUID for the header. */
   const shortId = computed<string>(() => appId.value.slice(0, 8));
 
-  /** initials derives a two-letter avatar from the application id. */
-  const initials = computed<string>(() => (shortId.value.slice(0, 2) || "AP").toUpperCase());
+  /** brand resolves the avatar identity from the application's source metadata. */
+  const brand = computed<BrandMark>(() =>
+    applicationBrand(
+      application.value?.source_type ?? "",
+      application.value?.provider ?? "",
+      displayName.value,
+    ),
+  );
 
   /** runningDeployments lists terminal running rows eligible for rollback. */
   const runningDeployments = computed<Deployment[]>(() =>
@@ -831,7 +839,7 @@ export function useApplicationDetail() {
     application,
     displayName,
     shortId,
-    initials,
+    brand,
     descColumns,
     deployments,
     latest,

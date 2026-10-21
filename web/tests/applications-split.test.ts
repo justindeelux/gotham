@@ -41,7 +41,7 @@ describe("ApplicationHeader", () => {
         displayName: "storefront",
         appId: "app-abcdef",
         shortId: "app-abcd",
-        initials: "AP",
+        brand: { logo: "github", letters: "AP", color: "#6e7681" },
         latest: running,
         containerStopped: false,
         activeDeploying: false,
@@ -61,6 +61,13 @@ describe("ApplicationHeader", () => {
     for (const label of ["Redeploy", "Rollback", "Stop", "Start"]) {
       expect(wrapper.findAll("button").some((button) => button.text() === label)).toBe(true);
     }
+  });
+
+  it("renders the source brand avatar, hidden from assistive tech", () => {
+    const wrapper = mountHeader();
+    const icon = wrapper.find(".brand-icon");
+    expect(icon.exists()).toBe(true);
+    expect(icon.attributes("aria-hidden")).toBe("true");
   });
 
   it("shows Deploying… while a deployment is in flight", () => {

@@ -111,6 +111,7 @@ type environmentResourceApplication struct {
 	Provider        string    `json:"provider"`
 	Repo            string    `json:"repo"`
 	CloneURL        string    `json:"clone_url"`
+	SourceType      string    `json:"source_type"`
 	Branch          string    `json:"branch"`
 	BuildPack       string    `json:"build_pack"`
 	PrimaryDomain   string    `json:"primary_domain"`
@@ -422,6 +423,7 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 			// Display data: never echo embedded credentials (see
 			// deploy.RedactCloneURL).
 			CloneURL:      deploy.RedactCloneURL(application.CloneURL),
+			SourceType:    application.SourceType,
 			Branch:        application.Branch,
 			BuildPack:     application.BuildPack,
 			PrimaryDomain: primaryDomain(application),

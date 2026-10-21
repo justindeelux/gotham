@@ -168,7 +168,7 @@ func TestEnvironmentResourcesRoute(t *testing.T) {
 	production := environments[0]
 
 	listers := &fakeListers{
-		applications: []deploy.Application{{ID: uuid.New(), EnvironmentID: production.ID, Name: "web"}},
+		applications: []deploy.Application{{ID: uuid.New(), EnvironmentID: production.ID, Name: "web", SourceType: deploy.SourceGitHubApp}},
 		services:     []services.Service{{ID: uuid.New(), EnvironmentID: production.ID, Name: "worker"}},
 		databases:    []databases.Database{{ID: uuid.New(), EnvironmentID: production.ID, Name: "db"}},
 	}
@@ -188,6 +188,9 @@ func TestEnvironmentResourcesRoute(t *testing.T) {
 	if len(envelope.Applications) != 1 || len(envelope.Services) != 1 || len(envelope.Databases) != 1 {
 		t.Errorf("workloads = %d/%d/%d, want one each",
 			len(envelope.Applications), len(envelope.Services), len(envelope.Databases))
+	}
+	if got := envelope.Applications[0].SourceType; got != deploy.SourceGitHubApp {
+		t.Errorf("application source_type = %q, want %q", got, deploy.SourceGitHubApp)
 	}
 
 	rec = doRequest(handler, http.MethodGet, "/v1/environments/"+uuid.NewString()+"/resources", "")

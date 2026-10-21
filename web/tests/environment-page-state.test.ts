@@ -86,9 +86,10 @@ function envelope(overrides = {}) {
         environment_name: "production",
         project_id: "11111111-1111-4111-8111-111111111111",
         project_name: "storefront",
-        provider: "public",
+        provider: "github",
         repo: "medusajs/medusa",
         clone_url: "https://github.com/medusajs/medusa.git",
+        source_type: "github_app",
         branch: "main",
         build_pack: "",
         primary_domain: "",
@@ -260,6 +261,7 @@ describe("buildEnvironmentRows", () => {
       name: "storefront",
       serverName: "prod-01",
       statusText: "running",
+      brand: { logo: "github", color: "#6e7681" },
     });
     expect(rows[0]!.to).toEqual({
       name: "application-detail",

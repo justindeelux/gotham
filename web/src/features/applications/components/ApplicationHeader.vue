@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { NAvatar, NButton, NIcon, NSpace, NTag, NText, NTooltip } from "naive-ui";
+import { NButton, NIcon, NSpace, NTag, NText, NTooltip } from "naive-ui";
 import { useI18n } from "vue-i18n";
 
+import { BrandIcon } from "@/features/add-resource";
+import type { BrandMark } from "@/features/add-resource";
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
@@ -10,7 +12,8 @@ interface Props {
   displayName: string;
   appId: string;
   shortId: string;
-  initials: string;
+  /** Identity derived from the application's source/provider metadata. */
+  brand: BrandMark;
   latest: Deployment | null;
   containerStopped: boolean;
   activeDeploying: boolean;
@@ -34,7 +37,7 @@ const { t } = useI18n();
 
 <template>
   <div class="page-head">
-    <NAvatar round :size="48">{{ props.initials }}</NAvatar>
+    <BrandIcon v-bind="props.brand" size="lg" />
     <div class="page-head__title">
       <NSpace align="center" :size="10">
         <NText strong style="font-size: 20px" class="mono">{{ props.displayName || t("applications.header.fallbackName") }}</NText>

@@ -91,6 +91,12 @@ test.describe("environment page", () => {
     await expect(page.locator('nav[aria-label="Breadcrumb"]')).toContainText(projectName);
     const appRow = page.locator(".resource-table tbody tr").filter({ hasText: appName });
     await expect(appRow).toHaveCount(1);
+    // JUS-274: the list avatar comes from the seeded source (github).
+    const rowAvatar = appRow.locator(".brand-icon");
+    await expect(rowAvatar).toBeVisible();
+    expect((await rowAvatar.boundingBox())?.width).toBe(28);
+    await expect(rowAvatar).toHaveCSS("background-color", "rgb(110, 118, 129)");
+    await expect(rowAvatar.locator(".brand-icon__glyph")).toHaveCount(1);
     const serviceRow = page.locator(".resource-table tbody tr").filter({ hasText: serviceName });
     await expect(serviceRow).toHaveCount(1);
 
@@ -123,6 +129,10 @@ test.describe("environment page", () => {
 
     // ── Add resource: the app wizard takes the route scope ───────────────
     await page.getByRole("button", { name: "Add resource" }).click();
+    // JUS-274: every source tile carries a monochrome brand glyph.
+    await expect(
+      page.locator('.n-modal button.res-card[data-source="git_public"] .brand-icon__glyph'),
+    ).toHaveCount(1);
     await page.locator(".n-modal button.res-card", { hasText: "Public git repository" }).click();
     const wizard = page.locator(".wizard-modal");
     await expect(wizard).toBeVisible();

@@ -6,6 +6,8 @@ import type { DeploymentState } from "@/features/applications/api/applications";
 import {
   latestDeploymentStates,
 } from "@/features/applications/api/applications";
+import { applicationBrand } from "@/features/add-resource";
+import type { BrandMark } from "@/features/add-resource";
 import {
   describeProjectError,
   getEnvironmentResources,
@@ -38,6 +40,8 @@ export interface EnvironmentRow {
   id: string;
   name: string;
   subtitle: string;
+  /** Source/provider identity for application rows; null for other kinds. */
+  brand: BrandMark | null;
   serverName: string;
   statusText: string;
   statusTag: "success" | "warning" | "error" | "default";
@@ -154,6 +158,11 @@ export function buildEnvironmentRows(
       id: application.id,
       name: application.name,
       subtitle: applicationSubtitle(application),
+      brand: applicationBrand(
+        application.source_type ?? "",
+        application.provider,
+        application.name,
+      ),
       serverName: application.server_name || statusText("projects.environment.unassigned"),
       statusText: view.text,
       statusTag: view.tag,
@@ -182,6 +191,7 @@ export function buildEnvironmentRows(
       id: service.id,
       name: service.name,
       subtitle: serviceSubtitle(service),
+      brand: null,
       serverName: service.server_name,
       statusText: service.status,
       statusTag: serviceStatusTagType(service.status),
@@ -196,6 +206,7 @@ export function buildEnvironmentRows(
       id: database.id,
       name: database.name,
       subtitle: databaseSubtitle(database),
+      brand: null,
       serverName: database.server_name,
       statusText: view.text,
       statusTag: view.tag,

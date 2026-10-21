@@ -125,7 +125,7 @@ const activeTab = computed<string>({
         :display-name="detail.displayName.value"
         :app-id="detail.appId.value"
         :short-id="detail.shortId.value"
-        :initials="detail.initials.value"
+        :brand="detail.brand.value"
         :latest="detail.latest.value"
         :container-stopped="detail.containerStopped.value"
         :active-deploying="detail.active.value !== null"

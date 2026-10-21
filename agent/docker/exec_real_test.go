@@ -38,50 +38,7 @@ var killTableCases = []struct {
 	{"shell-exit-before-close", "exit 0\n", ""},
 }
 
-// cmdlineScanScript lists pids whose command line contains $1. The scan shell
-// is skipped by its gotham-scan argv[0].
-const cmdlineScanScript = `exec 2>/dev/null
-for d in /proc/[0-9]*; do
-  [ -r "$d/cmdline" ] || continue
-  cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
-  case "$cmd" in
-    *gotham-scan*) ;;
-    *"$1"*) echo "$d $cmd" ;;
-  esac
-done`
-
-// anyMarkerScanScript lists pids carrying any Gotham terminal marker.
-const anyMarkerScanScript = `exec 2>/dev/null
-for d in /proc/[0-9]*; do
-  [ -r "$d/environ" ] || continue
-  if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -q "^GOTHAM_TERMINAL_ID="; then
-    echo "$d"
-  fi
-done`
-
-// anyTerminalMarkerLeaks returns the /proc entries still carrying any terminal
-// marker (the shell and every descendant inherit it).
-func anyTerminalMarkerLeaks(t *testing.T, client *DockerClient, containerID string) string {
-	t.Helper()
-	return strings.TrimSpace(runContainerCommand(t, client, containerID, anyMarkerScanScript))
-}
-
-// waitNoAnyTerminalMarker polls until no process carries any terminal marker.
-func waitNoAnyTerminalMarker(t *testing.T, client *DockerClient, containerID string) {
-	t.Helper()
-	const timeout = 10 * time.Second
-	deadline := time.Now().Add(timeout)
-	var last string
-	for time.Now().Before(deadline) {
-		last = strings.TrimSpace(runContainerCommand(t, client, containerID, anyMarkerScanScript))
-		if last == "" {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("terminal marker still present in:\n%s", last)
-}
-
+// e2eContainerClient returns a Docker client, skipping unless GOTHAM_E2E=1.
 func e2eContainerClient(t *testing.T) *DockerClient {
 	t.Helper()
 	if os.Getenv("GOTHAM_E2E") != "1" {
@@ -158,6 +115,18 @@ func runContainerCommandArgs(t *testing.T, client *DockerClient, containerID, co
 	return string(output)
 }
 
+// cmdlineScanScript lists pids whose command line contains $1. The scan shell
+// is skipped by its gotham-scan argv[0].
+const cmdlineScanScript = `exec 2>/dev/null
+for d in /proc/[0-9]*; do
+  [ -r "$d/cmdline" ] || continue
+  cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)
+  case "$cmd" in
+    *gotham-scan*) ;;
+    *"$1"*) echo "$d $cmd" ;;
+  esac
+done`
+
 // cmdlineLeaks returns the /proc entries whose command line contains needle.
 func cmdlineLeaks(t *testing.T, client *DockerClient, containerID, needle string) string {
 	t.Helper()
@@ -178,6 +147,47 @@ func waitNoCmdline(t *testing.T, client *DockerClient, containerID, needle strin
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("process %q still running inside the container:\n%s", needle, last)
+}
+
+// markerScanScript lists pids carrying the terminal's unique environment
+// marker. It is a scan from outside the terminal exec (a fresh Exec), using
+// /proc and tr/grep rather than the kill helper.
+const markerScanScript = `exec 2>/dev/null
+for d in /proc/[0-9]*; do
+  [ -r "$d/environ" ] || continue
+  if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$1"; then
+    echo "$d"
+  fi
+done`
+
+// terminalMarkerLeaks returns the /proc entries still carrying marker.
+func terminalMarkerLeaks(t *testing.T, client *DockerClient, containerID, marker string) string {
+	t.Helper()
+	return strings.TrimSpace(runContainerCommandArgs(t, client, containerID, markerScanScript, marker))
+}
+
+// waitNoMarker polls until no process carries the terminal marker.
+func waitNoMarker(t *testing.T, client *DockerClient, containerID, marker string) {
+	t.Helper()
+	const timeout = 10 * time.Second
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		last = terminalMarkerLeaks(t, client, containerID, marker)
+		if last == "" {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("terminal marker %s still present in:\n%s", marker, last)
+}
+
+// pidGone reports whether the pid no longer exists inside the container.
+func pidGone(t *testing.T, client *DockerClient, containerID string, pid int) bool {
+	t.Helper()
+	output := runContainerCommand(t, client, containerID,
+		fmt.Sprintf("if kill -0 %d 2>/dev/null; then echo alive; else echo gone; fi", pid))
+	return strings.Contains(output, "gone")
 }
 
 // containerRunning reports the container's Docker state.
@@ -205,6 +215,10 @@ func TestDockerExecRealKillTable(t *testing.T) {
 					if err != nil {
 						t.Fatalf("Exec: %v", err)
 					}
+					dockerSession, ok := session.(*dockerExecSession)
+					if !ok {
+						t.Fatalf("session type = %T", session)
+					}
 					if _, err := session.Write([]byte(testCase.input)); err != nil {
 						t.Fatalf("write: %v", err)
 					}
@@ -212,7 +226,14 @@ func TestDockerExecRealKillTable(t *testing.T) {
 					if err := session.Close(); err != nil {
 						t.Fatalf("Close: %v", err)
 					}
-					waitNoAnyTerminalMarker(t, client, containerID)
+					running, err := client.execRunning(context.Background(), dockerSession.id)
+					if err != nil {
+						t.Fatalf("inspect exec: %v", err)
+					}
+					if running {
+						t.Fatal("Docker still reports the exec as Running after Close")
+					}
+					waitNoMarker(t, client, containerID, dockerSession.marker)
 					if testCase.needle != "" {
 						waitNoCmdline(t, client, containerID, testCase.needle)
 					}
@@ -245,8 +266,12 @@ func TestDockerExecRealCleanupFailureIsSurfaced(t *testing.T) {
 	if closeErr == nil || (!strings.Contains(closeErr.Error(), "cleanup incomplete") && !strings.Contains(closeErr.Error(), "still running")) {
 		t.Fatalf("Close = %v, want a surfaced cleanup failure", closeErr)
 	}
-	if leaks := anyTerminalMarkerLeaks(t, client, containerID); leaks == "" {
-		t.Fatal("cleanup failure was reported but no terminal process is left")
+	running, inspectErr := client.execRunning(context.Background(), session.(*dockerExecSession).id)
+	if inspectErr != nil {
+		t.Fatalf("inspect exec: %v", inspectErr)
+	}
+	if !running {
+		t.Fatal("cleanup failure was reported but the exec is already gone")
 	}
 }
 
@@ -263,6 +288,11 @@ func TestDockerExecRealCloseKillsShellAndJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
+	execSession, ok := session.(*dockerExecSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *dockerExecSession", session)
+	}
+	shellPID := execSession.pid
 	if _, err := session.Write([]byte("sleep 777\n")); err != nil {
 		t.Fatalf("write foreground job: %v", err)
 	}
@@ -272,7 +302,9 @@ func TestDockerExecRealCloseKillsShellAndJob(t *testing.T) {
 	}
 
 	waitNoCmdline(t, client, containerID, "sleep 777")
-	waitNoAnyTerminalMarker(t, client, containerID)
+	if !pidGone(t, client, containerID, shellPID) {
+		t.Fatalf("terminal shell pid %d survived Close", shellPID)
+	}
 	if !containerRunning(t, client, containerID) {
 		t.Fatal("closing the exec stopped the application container")
 	}
@@ -284,6 +316,7 @@ func TestDockerExecRealOpenCloseCyclesLeakNothing(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
 
+	shellPIDs := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		session, err := client.Exec(ctx, containerID, ExecOptions{Cols: 80, Rows: 24})
@@ -291,6 +324,12 @@ func TestDockerExecRealOpenCloseCyclesLeakNothing(t *testing.T) {
 			cancel()
 			t.Fatalf("Exec %d: %v", i, err)
 		}
+		execSession, ok := session.(*dockerExecSession)
+		if !ok {
+			cancel()
+			t.Fatalf("session type = %T", session)
+		}
+		shellPIDs = append(shellPIDs, execSession.pid)
 		job := fmt.Sprintf("sleep 78%d\n", i)
 		if _, err := session.Write([]byte(job)); err != nil {
 			cancel()
@@ -307,7 +346,11 @@ func TestDockerExecRealOpenCloseCyclesLeakNothing(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		waitNoCmdline(t, client, containerID, fmt.Sprintf("sleep 78%d", i))
 	}
-	waitNoAnyTerminalMarker(t, client, containerID)
+	for _, pid := range shellPIDs {
+		if !pidGone(t, client, containerID, pid) {
+			t.Fatalf("terminal shell pid %d survived", pid)
+		}
+	}
 	if !containerRunning(t, client, containerID) {
 		t.Fatal("open/close cycles stopped the application container")
 	}

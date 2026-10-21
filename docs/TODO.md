@@ -1,8 +1,7 @@
 # Gotham TODO
 
 Open work only. Workflow, invariants and gates: [`../AGENTS.md`](../AGENTS.md).
-Open work is tracked in Plane as `GOTHAM-<N>`; the `JUS-*` ids below are
-historical Linear tickets. Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
+The `JUS-*` ids below are historical Linear tickets. Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
 Closed items, PR numbers and merge evidence live in git history and the PRs.
 
 ## Status

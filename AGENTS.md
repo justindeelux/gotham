@@ -39,8 +39,8 @@ docs/plans/      # feature/phase plans (medium to large work)
 ## Development Workflow
 
 - Docs index: `docs/README.md` (plan status, process, test server, design).
-- Each task = 1 work package in its own worktree/branch (naming: `docs/ORCHESTRATION.md` → Naming rule), merged via its own PR; CI must be green before merge. Work is tracked in Plane (CE) via the `plane` MCP server; `docs/plans/` and `docs/TODO.md` are reference only.
-- Git operations (branching, commit messages, merge vs rebase, conflict resolution): use the `/git-workflow` skill. Commits and PR titles follow Conventional Commits, `<type>(<scope>): <subject>` (e.g. `fix(files): show owner / mode separately`), with the Plane item in the footer (`Refs: GOTHAM-216`). Branch and worktree names keep the `<type>/<slug>` rule in `docs/ORCHESTRATION.md`.
+- Each task = 1 work package in its own worktree/branch (naming: `docs/ORCHESTRATION.md` → Naming rule), merged via its own PR; CI must be green before merge. `docs/plans/` and `docs/TODO.md` are reference only.
+- Git operations (branching, commit messages, merge vs rebase, conflict resolution): use the `/git-workflow` skill. Commits and PR titles follow Conventional Commits, `<type>(<scope>): <subject>` (e.g. `fix(files): show owner / mode separately`). Branch and worktree names keep the `<type>/<slug>` rule in `docs/ORCHESTRATION.md`.
 - Invariants (run after every task, before merge):
   1. `go build ./...` clean
   2. `go test ./...` green

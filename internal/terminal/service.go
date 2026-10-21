@@ -4,8 +4,8 @@
 // relayed to the node agent's TerminalService over the existing CP→agent mTLS
 // gRPC channel. Terminal bytes never touch Redis or the log feed.
 //
-// See docs/terminal-session-api.md for the full contract consumed by later work
-// packages (container exec, the shared terminal view).
+// The full session contract lives in this package (routes and service) and in
+// proto/agent/v1/agent.proto (TerminalService).
 package terminal
 
 import (

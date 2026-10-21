@@ -366,10 +366,10 @@ func TestCreateHostWithoutRootRoute(t *testing.T) {
 	}
 }
 
-// TestCreateResponseJSONShape pins the key set of the 201 body against
-// docs/terminal-session-api.md: root/cwd are omitted when empty (a rootless
-// host session and every container session), while the required fields are
-// always present. The web fixtures in terminal-api.test.ts use the same shape.
+// TestCreateResponseJSONShape pins the key set of the 201 body: root/cwd are
+// omitted when empty (a rootless host session and every container session),
+// while the required fields are always present. The web fixtures in
+// terminal-api.test.ts use the same shape.
 func TestCreateResponseJSONShape(t *testing.T) {
 	t.Parallel()
 	base := Session{

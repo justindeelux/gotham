@@ -21,7 +21,8 @@ import (
 // it is never interpolated into a shell command.
 //
 // This confines only the *starting directory*. A host shell can cd anywhere the
-// agent's service user may read; see docs/terminal-session-api.md.
+// agent's service user may read; see the TerminalService contract in
+// proto/agent/v1/agent.proto.
 func (s *FileServer) ResolveShellDir(rootName, rel string) (string, error) {
 	root, err := s.root(rootName)
 	if err != nil {

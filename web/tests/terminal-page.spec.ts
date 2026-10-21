@@ -862,7 +862,7 @@ test("menu order and operator gating match the backend", async ({ page }) => {
 
   const labels = await navLabels(page);
   expect(labels.indexOf("Terminal")).toBe(labels.indexOf("File manager") + 1);
-  expect(labels.indexOf("Template library")).toBe(
+  expect(labels.indexOf("App Store")).toBe(
     labels.indexOf("Terminal") + 1,
   );
 

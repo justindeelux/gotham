@@ -41,7 +41,7 @@ describe("ApplicationHeader", () => {
         displayName: "storefront",
         appId: "app-abcdef",
         shortId: "app-abcd",
-        brand: { logo: "github", letters: "AP", color: "#24292f" },
+        brand: { logo: "github", letters: "AP", color: "#6e7681" },
         latest: running,
         containerStopped: false,
         activeDeploying: false,

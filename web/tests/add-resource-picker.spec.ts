@@ -235,7 +235,7 @@ test("picker tiles render the approved monochrome brand glyphs", async ({ page }
       colors: [
         "rgb(240, 80, 50)",
         "rgb(240, 80, 50)",
-        "rgb(36, 41, 47)",
+        "rgb(110, 118, 129)",
         "rgb(252, 109, 38)",
         "rgb(36, 150, 237)",
         "rgb(36, 150, 237)",

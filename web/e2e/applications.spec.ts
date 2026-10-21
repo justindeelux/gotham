@@ -167,7 +167,7 @@ test.describe("applications", () => {
     const avatarBox = await avatar.boundingBox();
     expect(avatarBox, "avatar renders a box").not.toBeNull();
     expect(avatarBox!.width).toBe(44);
-    await expect(avatar).toHaveCSS("background-color", "rgb(36, 41, 47)");
+    await expect(avatar).toHaveCSS("background-color", "rgb(110, 118, 129)");
     await expect(avatar.locator(".brand-icon__glyph")).toHaveCount(1);
 
     expect(guardrails.apiFailures).toEqual([]);

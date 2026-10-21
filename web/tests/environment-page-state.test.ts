@@ -261,7 +261,7 @@ describe("buildEnvironmentRows", () => {
       name: "storefront",
       serverName: "prod-01",
       statusText: "running",
-      brand: { logo: "github", color: "#24292f" },
+      brand: { logo: "github", color: "#6e7681" },
     });
     expect(rows[0]!.to).toEqual({
       name: "application-detail",

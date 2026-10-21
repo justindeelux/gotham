@@ -362,7 +362,7 @@ test("application rows show the source brand avatar", async ({ page }) => {
   // GitHub App source -> GitHub hue behind a white glyph.
   expect(
     await icon.evaluate((node) => getComputedStyle(node).backgroundColor),
-  ).toBe("rgb(36, 41, 47)");
+  ).toBe("rgb(110, 118, 129)");
   await expect(icon.locator(".brand-icon__glyph")).toHaveCount(1);
   await expect(icon).toHaveAttribute("aria-hidden", "true");
   // Only applications carry an avatar; services and databases keep the plain

@@ -95,7 +95,7 @@ test.describe("environment page", () => {
     const rowAvatar = appRow.locator(".brand-icon");
     await expect(rowAvatar).toBeVisible();
     expect((await rowAvatar.boundingBox())?.width).toBe(28);
-    await expect(rowAvatar).toHaveCSS("background-color", "rgb(36, 41, 47)");
+    await expect(rowAvatar).toHaveCSS("background-color", "rgb(110, 118, 129)");
     await expect(rowAvatar.locator(".brand-icon__glyph")).toHaveCount(1);
     const serviceRow = page.locator(".resource-table tbody tr").filter({ hasText: serviceName });
     await expect(serviceRow).toHaveCount(1);

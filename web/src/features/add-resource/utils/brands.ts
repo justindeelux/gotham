@@ -37,7 +37,10 @@ const TEMPLATE_BRANDS: Record<string, { logo: string; color: string }> = {
 const MARKS: Record<string, { logo: string | null; color: string }> = {
   git_public: { logo: "git", color: "#f05032" },
   git_private: { logo: "git", color: "#f05032" },
-  github_app: { logo: "github", color: "#24292f" },
+  // GitHub's own dark hue (#24292f) is 1.06:1 against --surface, so the frame
+  // disappears on the app's dark surfaces; this lighter GitHub slate reads
+  // (3.0:1) while the glyph stays white.
+  github_app: { logo: "github", color: "#6e7681" },
   gitlab_app: { logo: "gitlab", color: "#fc6d26" },
   dockerfile: { logo: "docker", color: "#2496ed" },
   image: { logo: "docker", color: "#2496ed" },

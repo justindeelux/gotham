@@ -769,7 +769,7 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(state.sessions[1]?.closeFrames).toBe(1);
 });
 
-test("window controls stay at the header's right edge at every width", async ({
+test("window actions stay pinned and tabs keep their own scrollable strip", async ({
   page,
 }) => {
   const state = freshState();
@@ -788,6 +788,14 @@ test("window controls stay at the header's right edge at every width", async ({
   }
   await expect(page.locator(".term-tab")).toHaveCount(titles.length);
 
+  // JUS-275: the context trigger is named by its visible text, so the target
+  // is announced instead of a generic "session details" label (WCAG 2.5.3).
+  const context = page.locator(
+    ".term-window .term-surface:visible .term-context",
+  );
+  await expect(context).toHaveAccessibleName(/host/);
+  await expect(context).not.toHaveAttribute("aria-label", /.+/);
+
   for (const width of [1366, 1280, 480, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await expect.poll(async () => (await windowBox(page)).width).toBeLessThanOrEqual(width);
@@ -797,7 +805,9 @@ test("window controls stay at the header's right edge at every width", async ({
         const rect = element.getBoundingClientRect();
         return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
       };
+      const window_ = document.querySelector(".term-window") as HTMLElement;
       const bar = document.querySelector(".term-window-bar") as HTMLElement;
+      const strip = document.querySelector(".term-tabstrip") as HTMLElement;
       const tabs = document.querySelector(".term-tabs") as HTMLElement;
       const add = document.querySelector(".term-add-tab") as HTMLElement;
       const min = document.querySelector(".term-window-min") as HTMLElement;
@@ -805,9 +815,14 @@ test("window controls stay at the header's right edge at every width", async ({
       const addBox = box(add);
       const minBox = box(min);
       const closeBox = box(close);
+      const windowBox = box(window_);
       return {
         bar: box(bar),
+        strip: box(strip),
+        window: windowBox,
         paddingRight: Number.parseFloat(getComputedStyle(bar).paddingRight),
+        // JUS-275: sessions never crowd the title bar.
+        tabsInBar: bar.contains(tabs),
         tabs: box(tabs),
         scroll: {
           width: tabs.scrollWidth,
@@ -817,13 +832,11 @@ test("window controls stay at the header's right edge at every width", async ({
         add: addBox,
         min: minBox,
         close: closeBox,
-        // The (+)-after-tabs contract: the add control follows the strip and
-        // the pinned controls stay at the far right, in that DOM order.
+        // The (+)-after-tabs contract: the add control follows the last tab in
+        // the strip, and the pinned controls stay at the bar's far right.
         addHit: document
           .elementsFromPoint((addBox.left + addBox.right) / 2, (addBox.top + addBox.bottom) / 2)
           .some((element) => element === add || add.contains(element)),
-        // The topmost element at each control's centre must be the control (or
-        // one of its children), proving no tab/label paints over it.
         minHit: document
           .elementsFromPoint((minBox.left + minBox.right) / 2, (minBox.top + minBox.bottom) / 2)
           .some((element) => element === min || min.contains(element)),
@@ -833,14 +846,18 @@ test("window controls stay at the header's right edge at every width", async ({
       };
     });
 
-    // The close control's right edge is the header's content right edge, and
-    // the pair is to the right of the tab strip in every state.
+    // The strip sits below the title bar and stays inside the window.
+    expect(geometry.tabsInBar).toBe(false);
+    expect(geometry.strip.top).toBeGreaterThanOrEqual(geometry.bar.bottom - 0.5);
+    expect(geometry.strip.right).toBeLessThanOrEqual(geometry.window.right + 0.5);
+    // The close control's right edge is the bar's content right edge, and the
+    // minimize/close pair is at the far right of that bar.
     expect(
       Math.abs(geometry.close.right - (geometry.bar.right - geometry.paddingRight)),
     ).toBeLessThanOrEqual(1);
-    expect(geometry.tabs.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
-    expect(geometry.add.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
     expect(geometry.min.right).toBeLessThanOrEqual(geometry.close.left);
+    expect(geometry.tabs.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
+    expect(geometry.add.right).toBeLessThanOrEqual(geometry.strip.right + 0.5);
     expect(geometry.addHit).toBe(true);
     expect(geometry.minHit).toBe(true);
     expect(geometry.closeHit).toBe(true);
@@ -848,15 +865,15 @@ test("window controls stay at the header's right edge at every width", async ({
     if (width <= 480) {
       expect(geometry.scroll.width).toBeGreaterThan(geometry.scroll.client);
     } else {
-      // A non-scrolling strip shows every tab strictly left of the controls.
+      // A non-scrolling strip shows every tab strictly left of the add control.
       for (const tab of geometry.tabRects) {
         expect(tab.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
       }
     }
   }
 
-  // At 390px the scrollable strip can be scrolled to its end without the
-  // controls moving: they are pinned, the tabs are what scrolls.
+  // At 390px the scrollable strip can be scrolled to its end without moving
+  // the add control: the tabs are what scrolls.
   await page.setViewportSize({ width: 390, height: 900 });
   await page.evaluate(() => {
     const tabs = document.querySelector(".term-tabs") as HTMLElement;
@@ -875,16 +892,19 @@ test("window controls stay at the header's right edge at every width", async ({
   expect(scrolled.lastRight).toBeLessThanOrEqual(scrolled.tabsRight + 0.5);
   expect(scrolled.tabsRight).toBeLessThanOrEqual(scrolled.addLeft + 0.5);
 
-  // Keyboard reachable in DOM order: active tab → add → minimize → close.
+  // Keyboard reachable in DOM order: the active tab hands Tab to the add
+  // control, and the bar's minimize then close follow.
   await page.locator('.term-tab-name[aria-selected="true"]').focus();
   await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
     .toContain("term-add-tab");
-  await page.keyboard.press("Tab");
+  // The strip is reachable in both directions from the active tab.
+  await page.keyboard.press("Shift+Tab");
   await expect
-    .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
-    .toContain("term-window-min");
+    .poll(() => page.evaluate(() => document.activeElement?.getAttribute("role") ?? ""))
+    .toBe("tab");
+  await page.locator(".term-window-min").focus();
   await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
@@ -1015,6 +1035,78 @@ test("the terminal window coexists with the code editor without replacing it", a
 });
 
 
+test("both floating tools render through one window frame and elevation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, `/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await openWindow(page, "app");
+  await expect(page.locator(".term-window")).toBeVisible();
+
+  const chrome = await page.evaluate(() => {
+    const shadow = (element: Element) => getComputedStyle(element).boxShadow;
+    const resolve = (name: string) => {
+      const probe = document.createElement("div");
+      probe.style.boxShadow = getComputedStyle(document.documentElement)
+        .getPropertyValue(name)
+        .trim();
+      document.body.append(probe);
+      const value = getComputedStyle(probe).boxShadow;
+      probe.remove();
+      return value;
+    };
+    const size = (selector: string) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      return { width: rect?.width ?? 0, height: rect?.height ?? 0 };
+    };
+    const style = (selector: string, property: string) =>
+      getComputedStyle(document.querySelector(selector) as Element).getPropertyValue(property);
+    return {
+      floating: resolve("--elev-floating"),
+      editor: {
+        shadow: shadow(document.querySelector(".ed-window") as Element),
+        radius: style(".ed-window", "border-top-left-radius"),
+        border: style(".ed-window", "border-top-width"),
+        barHeight:
+          document.querySelector(".ed-window-bar")?.getBoundingClientRect().height ?? 0,
+        min: size(".ed-window-min"),
+        close: size(".ed-window-close"),
+        sharedBar: document.querySelector(".ed-window-bar")?.classList.contains("floating-window-bar"),
+      },
+      terminal: {
+        shadow: shadow(document.querySelector(".term-window") as Element),
+        radius: style(".term-window", "border-top-left-radius"),
+        border: style(".term-window", "border-top-width"),
+        barHeight:
+          document.querySelector(".term-window-bar")?.getBoundingClientRect().height ?? 0,
+        min: size(".term-window-min"),
+        close: size(".term-window-close"),
+        sharedBar: document.querySelector(".term-window-bar")?.classList.contains("floating-window-bar"),
+      },
+    };
+  });
+
+  // One shared frame: same elevation token, radius, border and header height.
+  expect(chrome.floating).not.toBe("none");
+  expect(chrome.editor.shadow).toBe(chrome.floating);
+  expect(chrome.terminal.shadow).toBe(chrome.floating);
+  expect(chrome.editor.radius).toBe(chrome.terminal.radius);
+  expect(chrome.editor.border).toBe(chrome.terminal.border);
+  expect(Math.abs(chrome.editor.barHeight - chrome.terminal.barHeight)).toBeLessThanOrEqual(0.5);
+  expect(chrome.editor.sharedBar).toBe(true);
+  expect(chrome.terminal.sharedBar).toBe(true);
+  // Same control sizing for minimize/close.
+  expect(Math.abs(chrome.editor.min.width - chrome.terminal.min.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(chrome.editor.min.height - chrome.terminal.min.height)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(chrome.editor.close.width - chrome.terminal.close.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(chrome.editor.close.height - chrome.terminal.close.height)).toBeLessThanOrEqual(0.5);
+});
+
 test("heartbeat, disconnect, exit and error states use real frames", async ({
   page,
 }) => {
@@ -1092,6 +1184,11 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
   // across platforms), then drive the real xterm input textarea.
   await page.locator(".term-shortcuts-btn").click();
   await expect(shortcuts).toBeHidden();
+  // JUS-156: the icon-only toolbar controls also explain themselves on hover.
+  await page.locator(".term-commands-btn").hover();
+  await expect(
+    page.locator(".n-tooltip", { hasText: "Quick commands" }),
+  ).toBeVisible();
   const input = page.locator(
     ".term-window .term-surface:visible .xterm-helper-textarea",
   );
@@ -1277,7 +1374,7 @@ test("the theme applies immediately and survives page → window without a new s
   await expect(group.getByRole("radio", { name: "Gotham Light" })).toBeChecked();
   await group.getByRole("radio", { name: "Gotham Dark" }).click();
   await expect(surface).toHaveAttribute("data-theme", "gotham-dark");
-  await page.locator(".term-window-title").click();
+  await page.locator(".floating-window-title").click();
   await expect(page.getByRole("radiogroup", { name: "Terminal theme" })).toBeHidden();
   expect(state.creates).toBe(1);
   expect((await tabState(page, tab.id)).status).toBe("connected");
@@ -1389,7 +1486,7 @@ test("the host banner shows the exact logo, real version and server once", async
     .locator(".term-window .term-surface:visible .term-theme-btn")
     .click();
   await page.getByRole("radio", { name: "Gotham Light" }).click();
-  await page.locator(".term-window-title").click();
+  await page.locator(".floating-window-title").click();
   const firstTab = page.locator(".term-tab-name", { hasText: "prod-01 · one" });
   await firstTab.click();
   await expect
@@ -1432,6 +1529,243 @@ async function surfaceToText(page: Page): Promise<string> {
     .locator(".term-window .term-surface:visible .xterm-rows")
     .innerText();
 }
+
+test("an idle terminal reserves no suggestion row and a match never resizes the PTY", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  // One saved abbreviation makes the suggestion path reachable.
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      "gotham.terminal.commands.v1.u-1",
+      JSON.stringify({
+        version: 1,
+        commands: [
+          {
+            id: "c1",
+            label: "Git status",
+            command: "git status",
+            abbreviation: "gs",
+          },
+        ],
+      }),
+    );
+  });
+
+  await openWindow(page, "app");
+  const surface = page.locator(".term-window .term-surface:visible");
+  await expect(surface.locator(".term-state")).toHaveText("Connected");
+
+  // JUS-275: no suggestion row is reserved while the shell is idle.
+  await expect(surface.locator(".term-suggest")).toHaveCount(0);
+  const idle = await surface.locator(".term-screen").boundingBox();
+  const idleResizes = state.sessions[0]?.resizes.length ?? 0;
+
+  // A real prompt mark plus a typed abbreviation mounts the strip as an
+  // overlay: the renderer box and the PTY size stay exactly as they were.
+  state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
+  await surface.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type("gs");
+  await expect(surface.locator(".term-suggest-option")).toBeVisible();
+  await expect
+    .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
+    .toBe(Math.round(idle?.height ?? 0));
+  // Restored guarantee (round 2): the strip is inside the terminal box but
+  // never intersects the cursor row / the line being typed. The placement
+  // follows the renderer cursor, so poll for the settled box.
+  await expect
+    .poll(async () => {
+      const strip = await surface.locator(".term-suggest").boundingBox();
+      const screen = await surface.locator(".term-screen").boundingBox();
+      const cursor = await surface.locator(".xterm-cursor").boundingBox();
+      if (!strip || !screen || !cursor) {
+        return "missing";
+      }
+      if (strip.y < screen.y - 1) {
+        return "above box";
+      }
+      if (strip.y + strip.height > screen.y + screen.height + 1) {
+        return "below box";
+      }
+      const clear =
+        strip.y + strip.height <= cursor.y + 1 ||
+        strip.y >= cursor.y + cursor.height - 1;
+      return clear ? "ok" : "covers cursor";
+    })
+    .toBe("ok");
+  // The overlay surface is pointer-transparent: the rows under it still take
+  // clicks/selection, only its controls capture the pointer.
+  const under = await page.evaluate(() => {
+    const element = document.querySelector(
+      ".term-window .term-suggest",
+    );
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + 8;
+    const y = rect.top + rect.height / 2;
+    return document
+      .elementsFromPoint(x, y)
+      .some((node) => node === element || element.contains(node));
+  });
+  expect(under).toBe(false);
+
+  // Dismissing the match must not resize the PTY either.
+  await surface.getByRole("button", { name: "Dismiss suggestion" }).click();
+  await expect(surface.locator(".term-suggest")).toHaveCount(0);
+  await expect
+    .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
+    .toBe(Math.round(idle?.height ?? 0));
+  expect(state.sessions[0]?.resizes.length ?? 0).toBe(idleResizes);
+});
+
+test("a suggestion never covers a prompt that sits on the last row", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      "gotham.terminal.commands.v1.u-1",
+      JSON.stringify({
+        version: 1,
+        commands: [
+          {
+            id: "c1",
+            label: "Git status",
+            command: "git status",
+            abbreviation: "gs",
+          },
+        ],
+      }),
+    );
+  });
+
+  const tab = await openWindow(page, "app");
+  const surface = page.locator(".term-window .term-surface:visible");
+  await expect(surface.locator(".term-state")).toHaveText("Connected");
+
+  // Fill the viewport so the next prompt lands on the very last row.
+  const rows = (await tabState(page, tab.id)).rows;
+  const filler = Array.from({ length: rows + 8 }, (_, index) => `line ${index}`)
+    .join("\r\n");
+  state.sessions[0]?.socket?.send(outputFrame(`${filler}\r\n`));
+  state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
+  await expect
+    .poll(async () => (await surfaceToText(page)).includes(`line ${rows + 7}`))
+    .toBe(true);
+
+  const resizesBefore = state.sessions[0]?.resizes.length ?? 0;
+  const screenBefore = await surface.locator(".term-screen").boundingBox();
+  const input = surface.locator(".xterm-helper-textarea");
+  await input.focus();
+  await page.keyboard.type("gs");
+  await expect(surface.locator(".term-suggest-option")).toBeVisible();
+
+  const geometry = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const box = document
+        .querySelector(selector)
+        ?.getBoundingClientRect();
+      return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
+    };
+    return {
+      screen: rect(".term-window .term-screen"),
+      cursor: rect(".term-window .xterm-cursor"),
+      strip: rect(".term-window .term-suggest"),
+      status: rect(".term-window .term-statusbar"),
+      statusHit: (() => {
+        const bar = document.querySelector(
+          ".term-window .term-statusbar",
+        );
+        const box = bar?.getBoundingClientRect();
+        if (!bar || !box) {
+          return false;
+        }
+        return document
+          .elementsFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+          .some((node) => node === bar || bar.contains(node));
+      })(),
+    };
+  });
+  expect(geometry.screen).not.toBeNull();
+  expect(geometry.cursor).not.toBeNull();
+  expect(geometry.strip).not.toBeNull();
+
+  // The prompt really is on the last row: the cursor cell reaches the bottom
+  // of the terminal (inside its 8px padding).
+  expect(
+    geometry.cursor!.y + geometry.cursor!.height,
+  ).toBeGreaterThanOrEqual(
+    geometry.screen!.y + geometry.screen!.height - 16,
+  );
+
+  // A suggestion appearing sends no resize frame and keeps the xterm box.
+  await expect
+    .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
+    .toBe(Math.round(screenBefore?.height ?? 0));
+  expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
+
+  // The strip stays above the cursor row: the line being typed is visible.
+  await expect
+    .poll(async () => {
+      const strip = await surface.locator(".term-suggest").boundingBox();
+      const cursor = await surface.locator(".xterm-cursor").boundingBox();
+      const screen = await surface.locator(".term-screen").boundingBox();
+      if (!strip || !cursor || !screen) {
+        return "missing";
+      }
+      if (strip.y < screen.y - 1) {
+        return "above box";
+      }
+      return strip.y + strip.height <= cursor.y + 1 ? "clear" : "covers";
+    })
+    .toBe("clear");
+
+  // Chrome stays on top (reconnect/status), and the terminal rows under the
+  // strip stay interactive.
+  expect(geometry.status).not.toBeNull();
+  expect(geometry.statusHit).toBe(true);
+  const passThrough = await page.evaluate(() => {
+    const strip = document.querySelector(
+      ".term-window .term-suggest",
+    );
+    const box = strip?.getBoundingClientRect();
+    if (!strip || !box) {
+      return null;
+    }
+    return document
+      .elementsFromPoint(box.x + 8, box.y + box.height / 2)
+      .some((node) => node === strip || strip.contains(node));
+  });
+  expect(passThrough).toBe(false);
+
+  // Round 2 (d): a reconnect state paints above the overlay, so its retry
+  // stays visible and clickable.
+  state.sessions[0]?.socket?.close({ code: 1006 });
+  const overlay = surface.locator(".term-overlay");
+  await expect(overlay).toBeVisible();
+  const retryBox = await overlay.getByRole("button").boundingBox();
+  expect(retryBox).not.toBeNull();
+  const retryHit = await page.evaluate(
+    (point) =>
+      document
+        .elementsFromPoint(point.x, point.y)
+        .some((node) => node.closest(".term-overlay") !== null),
+    {
+      x: retryBox!.x + retryBox!.width / 2,
+      y: retryBox!.y + retryBox!.height / 2,
+    },
+  );
+  expect(retryHit).toBe(true);
+});
 
 test("quick command suggestions survive a theme change and page → window move", async ({
   page,
@@ -1516,22 +1850,40 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
 
   // The editor stays inside a phone viewport. Popper repositions after the
   // resize, so poll for the settled box instead of measuring mid-move.
+  // Wait for the card's open transition to finish before measuring: a
+  // mid-transition box carries the old transform origin and proves nothing.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document
+            .querySelector(".term-quick-commands")
+            ?.className.includes("enter-active") ?? true,
+      ),
+    )
+    .toBe(false);
   for (const width of [390, 480]) {
     await page.setViewportSize({ width, height: 800 });
     await expect
       .poll(async () => {
         const rect = await page.locator(".qc").boundingBox();
-        return rect?.x ?? -1;
+        if (!rect) {
+          return "missing";
+        }
+        return rect.x >= 0 && rect.x + rect.width <= width + 1
+          ? "inside"
+          : `outside:${Math.round(rect.x)}:${Math.round(rect.width)}`;
       })
-      .toBeGreaterThanOrEqual(0);
-    const box = await page.locator(".qc").boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.x).toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+      .toBe("inside");
   }
   await page.setViewportSize({ width: 1280, height: 800 });
 
   await page.getByRole("button", { name: "Add command" }).click();
+  // JUS-275 item 7: abbreviation discoverability lives in the quick-command UI.
+  await expect(page.getByText("Abbreviation (optional)")).toBeVisible();
+  await expect(
+    page.getByText(/Type this at a supported prompt/),
+  ).toBeVisible();
   await page.locator(".qc-form input").first().fill("Git status");
   await page.locator(".qc-form textarea").fill("git status");
   await page.locator(".qc-form input").nth(1).fill("gs");
@@ -1566,19 +1918,11 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   expect(liveBox?.width ?? 0).toBeLessThanOrEqual(1);
   expect(liveBox?.height ?? 0).toBeLessThanOrEqual(1);
 
-  // The strip stays inside the viewport at phone and desktop widths and never
-  // covers the xterm viewport (the prompt line).
+  // The strip stays inside the viewport at phone and desktop widths and is an
+  // overlay on the terminal bottom: it never takes a row from xterm.
   for (const width of [390, 480, 1280, 1366]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(suggestion).toBeVisible();
-    await expect
-      .poll(async () => {
-        const rect = await page.locator(".term-window .term-suggest").boundingBox();
-        return rect?.x ?? -1;
-      })
-      .toBeGreaterThanOrEqual(0);
-    // The strip is above the xterm viewport; poll because a viewport resize
-    // reflows the window and the boxes settle on the next frame.
     await expect
       .poll(async () => {
         const nextBox = await page
@@ -1587,13 +1931,21 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
         const nextScreen = await page
           .locator(".term-window .term-surface:visible .term-screen")
           .boundingBox();
-        if (!nextBox || !nextScreen) {
+        const nextCursor = await page
+          .locator(".term-window .term-surface:visible .xterm-cursor")
+          .boundingBox();
+        if (!nextBox || !nextScreen || !nextCursor) {
           return false;
         }
+        const clearOfCursor =
+          nextBox.y + nextBox.height <= nextCursor.y + 1 ||
+          nextBox.y >= nextCursor.y + nextCursor.height - 1;
         return (
           nextBox.x >= 0 &&
           nextBox.x + nextBox.width <= width + 1 &&
-          nextBox.y + nextBox.height <= nextScreen.y + 1
+          nextBox.y >= nextScreen.y - 1 &&
+          nextBox.y + nextBox.height <= nextScreen.y + nextScreen.height + 1 &&
+          clearOfCursor
         );
       })
       .toBe(true);
@@ -1629,8 +1981,10 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
     .boundingBox();
   expect(screenBefore).not.toBeNull();
   expect(screenShown).not.toBeNull();
-  expect(state.sessions[0]?.resizes.length).toBe(resizesBefore);
+  // JUS-275: the row is an overlay, so the renderer box is untouched and the
+  // suggestion sends no resize frame.
   expect(screenShown?.height).toBe(screenBefore?.height);
+  expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
 
   const beforeEscape = state.sessions[0]?.input ?? "";
   await page.keyboard.press("Escape");
@@ -1638,12 +1992,17 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await expect
     .poll(() => state.sessions[0]?.input ?? "")
     .toBe(`${beforeEscape}\x1b`);
-  const screenHidden = await page
-    .locator(".term-window .term-surface:visible .term-screen")
-    .boundingBox();
-  expect(screenHidden).not.toBeNull();
-  expect(state.sessions[0]?.resizes.length).toBe(resizesBefore);
-  expect(screenHidden?.height).toBe(screenBefore?.height);
+  // The strip is gone again: still no resize frame.
+  expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
+  await expect
+    .poll(async () =>
+      Math.round(
+        (await page
+          .locator(".term-window .term-surface:visible .term-screen")
+          .boundingBox())?.height ?? 0,
+      ),
+    )
+    .toBe(Math.round(screenBefore?.height ?? 0));
 
   // The list survives a reload for the same account. Close the live shell
   // first so the beforeunload guard does not prompt during the reload.

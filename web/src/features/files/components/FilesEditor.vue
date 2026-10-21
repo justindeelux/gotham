@@ -3,7 +3,6 @@ import {
   CaseSensitive,
   History,
   Keyboard,
-  Minus,
   PanelLeft,
   Save,
   SaveAll,
@@ -59,10 +58,7 @@ import type { FilesVersion } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
-import {
-  EDITOR_WINDOW_CHROME_MARGIN,
-  EDITOR_WINDOW_MIN_WIDTH,
-} from "@/features/files/schemas/editorWindow";
+import { EDITOR_WINDOW_CHROME_MARGIN } from "@/features/files/schemas/editorWindow";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import {
@@ -76,14 +72,11 @@ import type {
   EditorLanguageId,
   TabCloseScope,
 } from "@/features/files/utils/editor";
-import {
-  EDITOR_RESIZE_DIRECTIONS,
-  editorResizeLimits,
-  resizeEditorBox,
-} from "@/features/files/utils/editorResize";
-import type { EditorResizeDirection } from "@/features/files/utils/editorResize";
+import { editorResizeLimits } from "@/features/files/utils/editorResize";
 import { useTeamsStore } from "@/features/teams";
 import { useCopyText } from "@/shared/composables/useCopyText";
+import FloatingWindow from "@/shared/ui/FloatingWindow.vue";
+import type { WindowBox } from "@/shared/window/geometry";
 import { formatBytes, formatDateTime } from "@/shared/utils/format";
 
 interface Props {
@@ -159,29 +152,6 @@ const viewport = ref({
   width: typeof window === "undefined" ? 0 : window.innerWidth,
   height: typeof window === "undefined" ? 0 : window.innerHeight,
 });
-// windowElement is the floating window, measured for drag clamping.
-const windowElement = ref<HTMLElement | null>(null);
-// resizeState tracks one in-flight resize (null when idle). The grip, the
-// pointer and the box the drag started from: the opposite edge stays put
-// during the drag, so the box is seeded from the rendered window (JUS-241).
-let resizeState: {
-  pointerId: number;
-  direction: EditorResizeDirection;
-  startX: number;
-  startY: number;
-  originX: number;
-  originY: number;
-  originWidth: number;
-  originHeight: number;
-} | null = null;
-// dragState tracks one in-flight title-bar drag (null when idle).
-let dragState: {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  originX: number;
-  originY: number;
-} | null = null;
 // closeAllOpen arms the "close all with unsaved files" confirmation.
 const closeAllOpen = ref(false);
 // historyOpen shows the version-history dialog for the active file tab.
@@ -225,19 +195,12 @@ const displayedSize = computed<{ width: number; height: number }>(() => {
 });
 
 /**
- * resizeAria keeps the slider semantics honest: the value is the displayed
- * size and the range always brackets it, even on a phone viewport narrower
- * than the drag floor.
+ * resizeLimits is the resize band for the current viewport: the shared frame
+ * clamps every grip/keyboard step against it (JUS-275).
  */
-const resizeAria = computed<{ min: number; max: number; now: number; text: string }>(() => {
-  const min = Math.min(EDITOR_WINDOW_MIN_WIDTH, displayedSize.value.width);
-  return {
-    min,
-    max: Math.max(min, viewport.value.width),
-    now: displayedSize.value.width,
-    text: `${displayedSize.value.width} by ${displayedSize.value.height} pixels`,
-  };
-});
+const resizeLimits = computed(() =>
+  editorResizeLimits(viewport.value.width, viewport.value.height),
+);
 
 /**
  * windowStyle applies the displayed size and dragged position. Until the
@@ -1029,7 +992,6 @@ async function useUtf8AndSave(): Promise<void> {
 /** resetWindowPosition returns the window to its pinned default position. */
 function resetWindowPosition(): void {
   editorWindow.resetPosition();
-  dragState = null;
 }
 
 /** onWindowResize records the viewport for display-only fitting. */
@@ -1037,171 +999,29 @@ function onWindowResize(): void {
   viewport.value = { width: window.innerWidth, height: window.innerHeight };
 }
 
-/**
- * onBarPointerDown starts a title-bar drag. The press must land on the bar
- * itself: a press on a control (minimize/close) is that control's click, never
- * a drag. Pointer capture keeps the drag tracking even outside the bar. The
- * position is only pinned on the first move, so a bare click never re-anchors
- * the window away from its bottom-right default.
- */
-function onBarPointerDown(event: PointerEvent): void {
-  if (event.button !== 0) {
-    return;
-  }
-  const bar = event.currentTarget;
-  const element = windowElement.value;
-  if (!(bar instanceof HTMLElement) || !element) {
-    return;
-  }
-  // A press on a control (minimize/close) is a click, never a drag. The
-  // control's icon is an SVG element, so the test must accept any Element.
-  if (event.target instanceof Element && event.target.closest("button")) {
-    return;
-  }
-  const rect = element.getBoundingClientRect();
-  dragState = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    originX: rect.left,
-    originY: rect.top,
-  };
-  bar.setPointerCapture(event.pointerId);
-}
-
-/** onBarPointerMove drags the window by the pointer delta, clamped on screen
- * against the DISPLAYED size, so a fitted window never snaps to the origin
- * on the first move. */
-function onBarPointerMove(event: PointerEvent): void {
-  if (!dragState || event.pointerId !== dragState.pointerId) {
-    return;
-  }
+/** onWindowDrag applies a title-bar drag, clamped by the store. */
+function onWindowDrag(x: number, y: number): void {
   editorWindow.setPosition(
-    dragState.originX + (event.clientX - dragState.startX),
-    dragState.originY + (event.clientY - dragState.startY),
+    x,
+    y,
     displayedSize.value.width,
     displayedSize.value.height,
   );
 }
 
-/** onBarPointerUp ends the drag (also on pointercancel). */
-function onBarPointerUp(event: PointerEvent): void {
-  if (dragState && event.pointerId === dragState.pointerId) {
-    dragState = null;
-  }
+/** onWindowResize applies a grip resize; the store keeps the opposite edge. */
+function onWindowResizeMove(box: WindowBox): void {
+  editorWindow.resizeTo(box, viewport.value.width, viewport.value.height);
 }
 
-/**
- * RESIZE_GRIPS are the pointer-only grips of the window frame (JUS-241). The
- * bottom-right corner is rendered on its own: it carries the slider
- * semantics, so the window can also be resized from the keyboard.
- */
-const RESIZE_GRIPS = EDITOR_RESIZE_DIRECTIONS.filter(
-  (direction) => direction !== "se",
-);
-
-/**
- * onResizePointerDown starts a drag-to-resize from one grip. Pointer capture
- * keeps the tracking even outside the handle; the host store clamps the
- * result and persists it.
- *
- * The drag is seeded from the RENDERED window — the displayed size and the
- * on-screen position — never from the persisted geometry: a stale saved size
- * would clamp the drag and snap the window back to it (JUS-241).
- */
-function onResizePointerDown(
-  event: PointerEvent,
-  direction: EditorResizeDirection,
-): void {
-  if (event.button !== 0) {
-    return;
-  }
-  const handle = event.currentTarget;
-  const element = windowElement.value;
-  if (!(handle instanceof HTMLElement) || !element) {
-    return;
-  }
-  const rect = element.getBoundingClientRect();
-  resizeState = {
-    pointerId: event.pointerId,
-    direction,
-    startX: event.clientX,
-    startY: event.clientY,
-    originX: rect.left,
-    originY: rect.top,
-    originWidth: displayedSize.value.width,
-    originHeight: displayedSize.value.height,
-  };
-  handle.setPointerCapture(event.pointerId);
-  event.preventDefault();
-}
-
-/**
- * onResizePointerMove resizes the window by the pointer delta. The grip
- * decides which edges move: the opposite edge (or corner) stays anchored, and
- * the size never leaves the viewport band.
- */
-function onResizePointerMove(event: PointerEvent): void {
-  if (!resizeState || event.pointerId !== resizeState.pointerId) {
-    return;
-  }
-  const next = resizeEditorBox(
-    resizeState.direction,
-    {
-      x: resizeState.originX,
-      y: resizeState.originY,
-      width: resizeState.originWidth,
-      height: resizeState.originHeight,
-    },
-    event.clientX - resizeState.startX,
-    event.clientY - resizeState.startY,
-    editorResizeLimits(viewport.value.width, viewport.value.height),
+/** onWindowResizeBy applies one keyboard resize step from the slider. */
+function onWindowResizeBy(deltaWidth: number, deltaHeight: number): void {
+  editorWindow.resizeBy(
+    deltaWidth,
+    deltaHeight,
+    viewport.value.width,
+    viewport.value.height,
   );
-  editorWindow.resizeTo(next, viewport.value.width, viewport.value.height);
-}
-
-/** onResizePointerUp ends the resize (also on pointercancel). */
-function onResizePointerUp(event: PointerEvent): void {
-  if (resizeState && event.pointerId === resizeState.pointerId) {
-    resizeState = null;
-  }
-}
-
-/**
- * RESIZE_KEY_STEP is the keyboard resize step; Shift multiplies it for a
- * larger jump (mirrors the explorer splitter's 16px press).
- */
-const RESIZE_KEY_STEP = 16;
-const RESIZE_KEY_STEP_LARGE = 64;
-
-/**
- * onResizeKeydown resizes from the keyboard: arrows grow or shrink the window
- * by one step from its DISPLAYED size, Shift+arrows by a large step. The host
- * store clamps the result and persists only fitting sizes, exactly like a
- * pointer drag.
- */
-function onResizeKeydown(event: KeyboardEvent): void {
-  const step = event.shiftKey ? RESIZE_KEY_STEP_LARGE : RESIZE_KEY_STEP;
-  let deltaWidth = 0;
-  let deltaHeight = 0;
-  switch (event.key) {
-    case "ArrowRight":
-      deltaWidth = step;
-      break;
-    case "ArrowLeft":
-      deltaWidth = -step;
-      break;
-    case "ArrowDown":
-      deltaHeight = step;
-      break;
-    case "ArrowUp":
-      deltaHeight = -step;
-      break;
-    default:
-      return;
-  }
-  event.preventDefault();
-  editorWindow.resizeBy(deltaWidth, deltaHeight, viewport.value.width, viewport.value.height);
 }
 
 /** minimizeWindow collapses the window into the rail icon and moves focus there. */
@@ -1602,32 +1422,46 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section
+  <FloatingWindow
     v-if="editor.tabs.length > 0"
     v-show="!editorWindow.minimized"
-    ref="windowElement"
     class="ed-window files-editor"
     :style="windowStyle"
-    role="region"
-    :aria-label="t('files.editor.windowLabel')"
+    :window-label="t('files.editor.windowLabel')"
+    :minimize-label="t('files.editor.minimize')"
+    :close-label="t('files.editor.closeWindow')"
+    :resize-label="t('files.editor.resize')"
+    :resize-value-text="
+      t('files.editor.resizeValue', {
+        width: displayedSize.width,
+        height: displayedSize.height,
+      })
+    "
+    :size="displayedSize"
+    :resize-limits="resizeLimits"
+    :class-names="{
+      bar: 'ed-window-bar',
+      min: 'ed-window-min',
+      close: 'ed-window-close',
+      resize: 'ed-resize',
+    }"
+    @minimize="minimizeWindow"
+    @close="closeAllTabs"
+    @drag="onWindowDrag"
+    @resize="onWindowResizeMove"
+    @resize-by="onWindowResizeBy"
     @keydown.esc="onWindowEsc"
   >
-    <header
-      class="ed-window-bar"
-      @pointerdown="onBarPointerDown"
-      @pointermove="onBarPointerMove"
-      @pointerup="onBarPointerUp"
-      @pointercancel="onBarPointerUp"
-      @lostpointercapture="onBarPointerUp"
-    >
-      <span class="ed-window-title">{{ activeTab?.name ?? t("files.editor.heading") }}</span>
+    <template #title>{{ activeTab?.name ?? t("files.editor.heading") }}</template>
+    <template #context>
       <span v-if="activeTab" class="ed-window-path mono" :title="activeTab.path">
         {{ activeTab.path }}
       </span>
       <span v-if="editor.hasDirty" class="ed-window-dirty">
         {{ t("files.editor.unsaved") }}
       </span>
-      <span class="grow" />
+    </template>
+    <template #actions>
       <NButton
         quaternary
         size="tiny"
@@ -1655,29 +1489,7 @@ onBeforeUnmount(() => {
           <PanelLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
         </template>
       </NButton>
-      <NButton
-        quaternary
-        size="tiny"
-        class="ed-window-min"
-        :aria-label="t('files.editor.minimize')"
-        @click="minimizeWindow"
-      >
-        <template #icon>
-          <Minus :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-      </NButton>
-      <NButton
-        quaternary
-        size="tiny"
-        class="ed-window-close"
-        :aria-label="t('files.editor.closeWindow')"
-        @click="closeAllTabs"
-      >
-        <template #icon>
-          <X :size="16" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-      </NButton>
-    </header>
+    </template>
 
     <div class="ed-main">
       <EditorExplorer
@@ -1994,39 +1806,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-    <!-- JUS-241: the window resizes from every edge and corner. The
-         bottom-right corner carries the slider semantics (keyboard resize);
-         the other grips are pointer-only. -->
-    <div
-      class="ed-resize ed-resize--se"
-      tabindex="0"
-      role="slider"
-      :aria-label="t('files.editor.resize')"
-      :aria-valuemin="resizeAria.min"
-      :aria-valuemax="resizeAria.max"
-      :aria-valuenow="resizeAria.now"
-      :aria-valuetext="resizeAria.text"
-      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
-      @pointerdown="onResizePointerDown($event, 'se')"
-      @pointermove="onResizePointerMove"
-      @pointerup="onResizePointerUp"
-      @pointercancel="onResizePointerUp"
-      @lostpointercapture="onResizePointerUp"
-      @keydown="onResizeKeydown"
-    />
-    <div
-      v-for="direction in RESIZE_GRIPS"
-      :key="direction"
-      class="ed-resize"
-      :class="`ed-resize--${direction}`"
-      aria-hidden="true"
-      @pointerdown="onResizePointerDown($event, direction)"
-      @pointermove="onResizePointerMove"
-      @pointerup="onResizePointerUp"
-      @pointercancel="onResizePointerUp"
-      @lostpointercapture="onResizePointerUp"
-    />
-  </section>
+  </FloatingWindow>
 
   <NDropdown
     :show="tabMenuOpen"
@@ -2134,8 +1914,6 @@ onBeforeUnmount(() => {
   position: fixed;
   right: var(--space-6);
   bottom: var(--space-4);
-  display: flex;
-  flex-direction: column;
   width: min(1331px, calc(100vw - var(--space-6) * 2));
   height: min(936px, calc(100vh - var(--ed-window-chrome, 104px)));
   height: min(936px, calc(100dvh - var(--ed-window-chrome, 104px)));
@@ -2147,39 +1925,7 @@ onBeforeUnmount(() => {
   max-width: calc(100vw - var(--space-6) * 2);
   max-height: calc(100vh - var(--space-6) * 2);
   max-height: calc(100dvh - var(--space-6) * 2);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  /* JUS-270: a soft, static lift. The shadow paints outside the border box,
-     so the window's own overflow clip cannot cut it off. */
-  box-shadow: var(--elev-floating);
-  overflow: hidden;
   z-index: 70;
-}
-
-.ed-window-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-warm);
-  /* The bar is the drag handle: a grab cursor, no text selection, and no
-     touch scroll fighting the drag. */
-  cursor: grab;
-  user-select: none;
-  touch-action: none;
-}
-
-.ed-window-bar:active {
-  cursor: grabbing;
-}
-
-.ed-window-title {
-  font-weight: 600;
-  color: var(--fg-2);
-  white-space: nowrap;
 }
 
 .ed-window-path {
@@ -2195,91 +1941,6 @@ onBeforeUnmount(() => {
   color: var(--warn-ink);
   font-size: var(--text-xs);
   white-space: nowrap;
-}
-
-/* Drag-to-resize grips (JUS-241, JUS-269): the window resizes from all four
-   edges and all four corners. The grips are invisible hit strips on the frame
-   — no icon, mark or highlight — and only the resize cursor signals them. They
-   stay inside the window padding, so they never cover the editor content. */
-.ed-resize {
-  position: absolute;
-  z-index: 5;
-  touch-action: none;
-}
-
-/* The edge grips: a thin strip along the frame, inset so the corners own the
-   corner area. */
-.ed-resize--n {
-  top: 0;
-  left: var(--space-4);
-  right: var(--space-4);
-  height: var(--space-1);
-  cursor: ns-resize;
-}
-
-.ed-resize--s {
-  bottom: 0;
-  left: var(--space-4);
-  right: var(--space-4);
-  height: var(--space-1);
-  cursor: ns-resize;
-}
-
-.ed-resize--e {
-  top: var(--space-4);
-  bottom: var(--space-4);
-  right: 0;
-  width: var(--space-1);
-  cursor: ew-resize;
-}
-
-.ed-resize--w {
-  top: var(--space-4);
-  bottom: var(--space-4);
-  left: 0;
-  width: var(--space-1);
-  cursor: ew-resize;
-}
-
-/* The corner grips: a square in the corner with the matching cursor. */
-.ed-resize--nw,
-.ed-resize--ne,
-.ed-resize--sw,
-.ed-resize--se {
-  width: var(--space-4);
-  height: var(--space-4);
-}
-
-.ed-resize--nw {
-  top: 0;
-  left: 0;
-  cursor: nwse-resize;
-}
-
-.ed-resize--ne {
-  top: 0;
-  right: 0;
-  cursor: nesw-resize;
-}
-
-.ed-resize--sw {
-  bottom: 0;
-  left: 0;
-  cursor: nesw-resize;
-}
-
-.ed-resize--se {
-  right: 0;
-  bottom: 0;
-  cursor: nwse-resize;
-}
-
-/* Keyboard focus stays visible even though the grip is invisible: the
-   bottom-right corner is the keyboard resize slider. */
-.ed-resize:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
 }
 
 .ed-main {
@@ -2458,7 +2119,6 @@ onBeforeUnmount(() => {
   padding: var(--space-4);
 }
 
-.ed-window-bar .grow,
 .ed-toolbar .grow {
   flex: 1 1 auto;
 }

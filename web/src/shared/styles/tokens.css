@@ -145,15 +145,18 @@
   /* Dark surfaces: luminance stepping; semi-transparent white borders
      as depth signal rather than drop shadows.
      --elev-floating lifts the full-window surfaces (code editor, terminal)
-     off the page: two wide, low-alpha layers with a negative spread so the
-     halo stays soft instead of forming a hard dark rim. The window border
-     still draws the 1px edge, so the shadow carries no ring of its own. */
+     off the page: three wide, low-alpha layers with a negative spread so the
+     halo stays soft instead of forming a hard dark rim. The layers carry the
+     drop (JUS-275) so a floating window reads clearly above page content and
+     above another floating window, while the window border still draws the
+     1px edge — the shadow carries no ring of its own. */
   --elev-flat: none;
   --elev-ring: 0 0 0 1px var(--border);
   --elev-raised: rgba(0, 0, 0, 0.4) 0px 2px 4px,
     0 0 0 1px rgba(255, 255, 255, 0.06);
-  --elev-floating: rgba(0, 0, 0, 0.45) 0px 12px 28px -6px,
-    rgba(0, 0, 0, 0.32) 0px 3px 10px -4px;
+  --elev-floating: rgba(0, 0, 0, 0.62) 0px 24px 56px -16px,
+    rgba(0, 0, 0, 0.42) 0px 8px 22px -8px,
+    rgba(0, 0, 0, 0.24) 0px 2px 6px -2px;
 
   /* ─── Focus ────────────────────────────────────────────────────── */
   /* Accent mixed toward white: >=5.3:1 on every app surface, so keyboard

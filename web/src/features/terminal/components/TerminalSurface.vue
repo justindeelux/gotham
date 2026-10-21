@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 
 import TerminalMetaBar from "@/features/terminal/components/TerminalMetaBar.vue";
@@ -35,6 +36,8 @@ const quickCommands = useQuickCommandsStore();
 const surface = ref<HTMLElement | null>(null);
 const suggestionStrip = ref<{ focusOption: () => void } | null>(null);
 const commandNotice = ref("");
+/** terminalBox is the xterm wrapper the strip overlay is positioned in. */
+const terminalBox = ref<HTMLElement | null>(null);
 const hintId = computed<string>(() => `term-hint-${props.tabId}`);
 const tab = computed<TerminalTab | null>(() => terminal.findTab(props.tabId));
 
@@ -80,10 +83,85 @@ watch(
 /** suggestion is the single abbreviation match the runtime reports. */
 const suggestion = computed(() => tab.value?.suggestion ?? null);
 
-/** hasAbbreviations chooses the fixed bar's setup vs usage hint. */
+/** hasAbbreviations decides whether the no-marks hint can explain suggestions. */
 const hasAbbreviations = computed<boolean>(() =>
   quickCommands.commands.some((command) => command.abbreviation !== undefined),
 );
+
+/**
+ * suggestionBarVisible reserves a row only when it has something to say: a
+ * match, a command notice, or the diagnostic about a shell without prompt
+ * marks. An idle terminal keeps the whole viewport for the shell (JUS-275).
+ */
+const suggestionBarVisible = computed<boolean>(
+  () =>
+    suggestion.value !== null ||
+    commandNotice.value !== "" ||
+    (hasAbbreviations.value && noPromptMarksHint.value),
+);
+
+/** SUGGESTION_STRIP_HEIGHT mirrors the strip's fixed --space-12 height. */
+const SUGGESTION_STRIP_HEIGHT = 40;
+
+/** cursorRow is the rendered cursor cell, relative to the terminal box. */
+const cursorRow = ref<{ top: number; height: number } | null>(null);
+const terminalBoxHeight = ref<number>(0);
+let stopCursorWatch: (() => void) | null = null;
+
+/** updateCursorRow re-measures the prompt line the overlay must stay off. */
+function updateCursorRow(): void {
+  const box = terminalBox.value;
+  if (!box) {
+    cursorRow.value = null;
+    return;
+  }
+  const boxRect = box.getBoundingClientRect();
+  terminalBoxHeight.value = boxRect.height;
+  const cursor = terminal.cursorRow(props.tabId);
+  cursorRow.value = cursor
+    ? { top: cursor.top - boxRect.top, height: cursor.height }
+    : null;
+}
+
+/** stopCursorTracking drops the renderer cursor subscription. */
+function stopCursorTracking(): void {
+  stopCursorWatch?.();
+  stopCursorWatch = null;
+}
+
+/** startCursorTracking follows the live cursor while the strip is visible. */
+function startCursorTracking(): void {
+  stopCursorTracking();
+  updateCursorRow();
+  stopCursorWatch = terminal.watchCursor(props.tabId, updateCursorRow);
+}
+
+/**
+ * stripStyle keeps the suggestion overlay clear of the cursor row: above the
+ * prompt when there is room, below it otherwise. It never changes the xterm
+ * box, so showing a match sends no PTY resize frame. Until the renderer
+ * reports a cursor (jsdom, hidden cursor) the overlay anchors to the top edge,
+ * which still never covers the last row.
+ */
+const stripStyle = computed<CSSProperties>(() => {
+  const cursor = cursorRow.value;
+  if (!cursor) {
+    return { top: "0px" };
+  }
+  const height = SUGGESTION_STRIP_HEIGHT;
+  const below = cursor.top + cursor.height;
+  if (cursor.top >= height) {
+    return { top: `${Math.round(cursor.top - height)}px` };
+  }
+  if (terminalBoxHeight.value - below >= height) {
+    return { top: `${Math.round(below)}px` };
+  }
+  // A terminal shorter than the strip plus the prompt line: keep the larger
+  // side free and let pointer-events pass the overlay's surface through.
+  return cursor.top > terminalBoxHeight.value - below
+    ? { top: "0px" }
+    : { top: `${Math.max(0, Math.round(terminalBoxHeight.value - height))}px` };
+});
 
 /** surfaceLabel names the region for screen readers. */
 const surfaceLabel = computed<string>(() =>
@@ -249,9 +327,21 @@ function onSurfaceKeydown(event: KeyboardEvent): void {
   action?.focus();
 }
 
-onMounted(attachSurface);
+/** onWindowResize re-measures the prompt cell after a viewport change. */
+function onWindowResize(): void {
+  if (suggestionBarVisible.value) {
+    void nextTick(updateCursorRow);
+  }
+}
+
+onMounted(() => {
+  attachSurface();
+  window.addEventListener("resize", onWindowResize);
+});
 onBeforeUnmount(() => {
   clearPromptHintTimer();
+  stopCursorTracking();
+  window.removeEventListener("resize", onWindowResize);
   const element = surface.value;
   if (element) {
     terminal.detach(props.tabId, element);
@@ -276,6 +366,26 @@ watch(
   () => {
     if (tab.value?.sessionId) {
       void nextTick(attachSurface);
+    }
+  },
+);
+// The suggestion row only exists while it has content. It is an overlay, so
+// the renderer box (and therefore the PTY size) never changes; while it is up
+// it follows the cursor so the prompt line always stays visible.
+watch(suggestionBarVisible, (visible) => {
+  if (visible) {
+    void nextTick(startCursorTracking);
+    return;
+  }
+  stopCursorTracking();
+  cursorRow.value = null;
+});
+// A refit changes the cursor cell; re-measure while the overlay is up.
+watch(
+  () => [tab.value?.rows, tab.value?.cols] as const,
+  () => {
+    if (suggestionBarVisible.value) {
+      void nextTick(updateCursorRow);
     }
   },
 );
@@ -307,18 +417,24 @@ watch(
     <p :id="hintId" class="term-sr">
       {{ t("terminal.shortcuts.hint") }}
     </p>
-    <TerminalSuggestionStrip
-      ref="suggestionStrip"
-      :suggestion="suggestion"
-      :notice="commandNotice"
-      :has-abbreviations="hasAbbreviations"
-      :no-prompt-marks-hint="noPromptMarksHint"
-      @accept="acceptSuggestion"
-      @dismiss="dismissSuggestion"
-      @dismiss-notice="commandNotice = ''"
-      @return-focus="returnFocus"
-    />
-    <div ref="surface" class="term-screen" data-testid="terminal-screen" />
+    <div ref="terminalBox" class="term-terminal">
+      <div ref="surface" class="term-screen" data-testid="terminal-screen" />
+      <!-- JUS-275: the suggestion row is an overlay anchored to the terminal
+           bottom. It never takes a row from xterm, so a match appearing or
+           disappearing sends no PTY resize frame. -->
+      <TerminalSuggestionStrip
+        v-if="suggestionBarVisible"
+        ref="suggestionStrip"
+        :suggestion="suggestion"
+        :notice="commandNotice"
+        :no-prompt-marks-hint="noPromptMarksHint"
+        :style="stripStyle"
+        @accept="acceptSuggestion"
+        @dismiss="dismissSuggestion"
+        @dismiss-notice="commandNotice = ''"
+        @return-focus="returnFocus"
+      />
+    </div>
 
     <TerminalStatusOverlay :tab="tab" @retry="retrySession" />
     <TerminalStatusBar :tab="tab" :variant="variant" />
@@ -352,6 +468,16 @@ watch(
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* The terminal box: xterm plus the suggestion overlay, so the overlay never
+ * changes the size the renderer fits into. */
+.term-terminal {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 
 .term-screen {

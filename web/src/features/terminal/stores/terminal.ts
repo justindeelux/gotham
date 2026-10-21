@@ -789,6 +789,21 @@ export const useTerminalStore = defineStore("terminal", () => {
   }
 
   /**
+   * cursorRow reports the rendered cursor cell (client coordinates) for one
+   * tab, so an overlay can be placed clear of the prompt line.
+   */
+  function cursorRow(id: string): { top: number; height: number } | null {
+    // Optional calls keep test fakes (which do not model the renderer) and
+    // restored page hosts working: no cursor means the overlay anchors safely.
+    return runtimes.get(id)?.getCursorRow?.() ?? null;
+  }
+
+  /** watchCursor subscribes to one tab's cursor moves; returns a disposer. */
+  function watchCursor(id: string, listener: () => void): () => void {
+    return runtimes.get(id)?.watchCursor?.(listener) ?? (() => {});
+  }
+
+  /**
    * setTheme applies one named theme to every live renderer and persists it
    * for this account. It never recreates a session: xterm repaints the same
    * buffer and the PTY keeps its id/process.
@@ -1183,6 +1198,8 @@ export const useTerminalStore = defineStore("terminal", () => {
     isDisplayed,
     focus,
     fit,
+    cursorRow,
+    watchCursor,
     setTheme,
     acceptSuggestion,
     insertCommand,

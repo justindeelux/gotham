@@ -14,6 +14,7 @@ const en = {
   minimize: "Minimize editor",
   closeWindow: "Close editor",
   resize: "Resize editor",
+  resizeValue: "{width} by {height} pixels",
   dockLabel: "Editor dock",
   restore: "Restore {name}",
   restoreUnsaved: "Restore {name} (unsaved changes)",

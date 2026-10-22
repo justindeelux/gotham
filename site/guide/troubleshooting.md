@@ -86,8 +86,9 @@ every 10 seconds, so this is a live connection problem, not a stale row.
    same id while its key is still bound: delete the node (allowed only once it
    has no resources) and add it again, which makes it a first enrollment and asks
    for the enrollment token. The same applies when the node's certificate and key
-   are lost. **Reset host key** in the console only re-pins the SSH host key used
-   for validation; it does not touch the agent certificate.
+   are lost. Resetting the host key (`DELETE /api/v1/servers/{id}/host-key`)
+   only clears the stored SSH pin used for validation; it does not touch the
+   agent certificate.
 
 5. **Version skew.** The agent reports its build version on every heartbeat, and
    `GET /api/v1/servers/agents` lists the version per node. The control plane

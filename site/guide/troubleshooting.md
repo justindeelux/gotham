@@ -18,9 +18,9 @@ Logs go to the systemd journal. The default format is JSON; set
 more detail. When a `gotham.yaml` is present the log level is hot-reloaded from
 it; the format is fixed at startup and needs a restart.
 
-`GET /healthz` on the panel returns `{"status", "db", "redis"}` and answers 200
-only when PostgreSQL and Redis both respond; otherwise it returns 503 with
-`"status": "degraded"`.
+`GET /healthz` on the panel returns `{"status":"ok","db":"ok","redis":"ok"}` and
+answers 200 only when PostgreSQL and Redis both respond; otherwise it returns 503
+with `"status":"degraded"`.
 
 ## The control plane will not start
 

@@ -226,6 +226,12 @@ Update settings:
 | `GOTHAM_AGENT_UPDATE_BACKOFF` | `/var/lib/gotham-agent/update.backoff` | Persisted failed-attempt count. |
 | `GOTHAM_AGENT_HEALTH_ADDR` | `127.0.0.1:8001` | Loopback liveness endpoint the wrapper probes. |
 
+File service settings:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GOTHAM_AGENT_FILE_MAX_UPLOAD` | `1073741824` (1 GiB) | Ceiling for one upload body; a larger body is refused with `ResourceExhausted` (413). Should match the control plane's `FILES_MAX_UPLOAD_BYTES`. |
+
 ## Feature switches
 
 These ten switches are environment-only — there is no YAML key. All are on by
@@ -249,3 +255,11 @@ starts, and a disabled module logs its flag at startup.
 Turning a module off unmounts its routes for that process (the file manager's
 routes stay mounted but answer 503), so its API calls fail instead of running
 degraded. Feature flags are not a per-user permission — use team roles for that.
+
+Separate from the switches, the file manager reads one more environment limit:
+
+Control-plane file limit:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Ceiling for one write/upload body (413 above it); should match the node's `GOTHAM_AGENT_FILE_MAX_UPLOAD`. |

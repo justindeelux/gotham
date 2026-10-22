@@ -384,6 +384,7 @@ Useful agent installer flags and variables:
 | `GOTHAM_AGENT_FILES` | The remote file service on the node. On unless set to `false` (the installer writes the answer above). |
 | `GOTHAM_AGENT_FILE_FULL_ACCESS` | On unless set to `false`: the service exposes the **whole filesystem** as one writable root `system` (`/`), with no protected paths — the operator accepted that risk. `false` restores the confined roots described below. |
 | `GOTHAM_AGENT_FILE_ROOTS` | Extra browsable roots, colon-separated absolute paths (default none). Operator roots are **read-only** in this phase; a root that is missing, not absolute, in a dangerous tree or overlapping another root refuses startup. |
+| `GOTHAM_AGENT_FILE_MAX_UPLOAD` | Ceiling for one upload body in bytes (default `1073741824`, 1 GiB); a larger body is refused with `ResourceExhausted` (413). Should match the control plane's `FILES_MAX_UPLOAD_BYTES`. |
 | `GOTHAM_AGENT_ARCHIVE_MAX_BYTES` | Total uncompressed bytes one **compress or extract** may read/write before it is refused with `ResourceExhausted` (413) — the size cap and half of the zip-bomb guard. Default `4294967296` (4 GiB). |
 | `GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES` | Maximum entries one archive operation may walk or unpack (default `100000`); beyond it the operation is refused with `ResourceExhausted` (413). |
 | `GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES` | Maximum on-disk size of an archive file that **extract** will read (default `1073741824`, 1 GiB); an archive above it is refused with `ResourceExhausted` (413) before any parser runs. Applies to every format. |
@@ -564,12 +565,13 @@ leaves the tree is refused by the descriptor walk. The service must not be
 exposed without the agent's CA configured, since confinement is not
 authentication.
 
-`List` returns at most 5,000 entries per page, sorted by name. A page with more
-entries follows reports `truncated=true` and an opaque base64 `cursor`; pass the
-cursor back to resume, and keep paging until `truncated=false` — a truncated
-page always carries a non-empty cursor that makes progress, so a client can
-never loop. The cursor is base64 because a boundary name may hold bytes that are
-not valid UTF-8 (legal on Linux), which a raw proto3 string could not carry; the
+`List` returns at most 5,000 entries per page, sorted by name. A page that has
+more entries than one response can carry reports `truncated=true` and an opaque
+base64 `cursor`; pass the cursor back to resume, and keep paging until
+`truncated=false` — a truncated page always carries a non-empty cursor that
+makes progress, so a client can never loop.
+The cursor is base64 because a boundary name may hold bytes that are not valid
+UTF-8 (legal on Linux), which a raw proto3 string could not carry; the
 displayed `name` of such an entry is scrubbed to U+FFFD and therefore cannot be
 fed back to `Stat`/`Read`, but the cursor still addresses the real bytes. A
 malformed cursor is rejected with `InvalidArgument`. A single `List` scans up to
@@ -635,16 +637,15 @@ apply to it.
 
 The `/api/v1/servers/{id}/files` routes are mounted by default; set
 `FEATURE_FILES=false` to switch them off (they then answer **503**). The whole
-surface is limited to **platform operators** (an admin-scoped API token, a session
-with the `admin` role claim, or an email in `PLATFORM_ADMINS`): everyone else gets
-**403**, because the API exposes the node's filesystem. Operators also need to belong to the node's team, and read/deploy-scoped API tokens no longer reach the file API (an admin-scoped token is required). The routes are also team-scoped: a
-browsable server must belong to a team (a legacy team-less node answers 404),
-`roots`/`list`/`stat` need any member, and `content`, `download`, uploads and
-every mutation need an owner/admin role. File bodies can hold secrets (a `0600`
-compose `.env`), so `GET /content` and `POST /download-ticket` stay owner/admin.
-For API tokens: `roots`/`list`/`stat` are readable with a **read**-scoped token;
-every write, `GET /content` and `POST /download-ticket` need the **deploy** scope
-(the non-GET method gate plus the secret-bearing read suffix); and the
+surface is limited to **platform operators** (an admin-scoped API token, a
+session with the `admin` role claim, or an email in `PLATFORM_ADMINS`): every
+file route except the ticket-gated download sits behind that gate, so a read- or
+deploy-scoped API token gets **403**, because the API exposes the node's
+filesystem. Inside the gate the team role still applies: a browsable server must
+belong to a team (a legacy team-less node answers 404), `roots`/`list`/`stat`
+need any member, and `content`, `download-ticket`, uploads and every mutation
+need an owner/admin role. File bodies can hold secrets (a `0600` compose
+`.env`), so `GET /content` and `POST /download-ticket` stay owner/admin. The
 ticket-gated `GET /files/download` sits outside the auth group, so the
 single-use ticket is its credential.
 
@@ -665,7 +666,7 @@ for the staging knobs.
 
 ### Permissions (chmod)
 
-`POST /files/chmod` (owner/admin, deploy scope for an API token) changes one
+`POST /files/chmod` (owner/admin team role; an API token needs the admin scope) changes one
 entry's permission bits. The body is `{root, path, mode}` and **`mode` is
 required**: an omitted field is refused **400** rather than silently applied as
 `000`. Only the low `0o777` bits are accepted: a request carrying setuid
@@ -802,8 +803,9 @@ owners.
   go run ./cmd/signer keygen -out signing.key
   # put signing.key (PKCS#8 PEM) in the GOTHAM_UPDATE_SIGNING_KEY release environment secret
   # put signing.key.pub at deploy/gotham-signing-key.pub
-  # put the base64 value printed above in GOTHAM_UPDATE_PUBLIC_KEY and in
-  # deploy/install.sh (GOTHAM_RELEASE_PUBLIC_KEY_B64) and install-agent.sh
+  # put the base64 public key from the printed -ldflags line in
+  # GOTHAM_UPDATE_PUBLIC_KEY and in deploy/install.sh
+  # (GOTHAM_RELEASE_PUBLIC_KEY_B64) and install-agent.sh
   ```
 
 ## Testing the install chain without GitHub

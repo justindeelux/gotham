@@ -223,6 +223,12 @@ Cài đặt cập nhật:
 | `GOTHAM_AGENT_UPDATE_BACKOFF` | `/var/lib/gotham-agent/update.backoff` | Số lần thử thất bại được lưu. |
 | `GOTHAM_AGENT_HEALTH_ADDR` | `127.0.0.1:8001` | Điểm cuối kiểm tra sức khỏe trên loopback mà wrapper dò. |
 
+Cấu hình dịch vụ tệp:
+
+| Biến | Mặc định | Mục đích |
+|---|---|---|
+| `GOTHAM_AGENT_FILE_MAX_UPLOAD` | `1073741824` (1 GiB) | Mức trần cho một body tải lên; body lớn hơn bị từ chối với `ResourceExhausted` (413). Nên khớp với `FILES_MAX_UPLOAD_BYTES` của control plane. |
+
 ## Cờ tính năng
 
 Mười công tắc này chỉ đặt qua biến môi trường — không có khóa YAML. Tất cả đều bật
@@ -247,3 +253,11 @@ Tắt một module sẽ gỡ các tuyến của nó khỏi tiến trình đó (c
 lý tệp vẫn được gắn nhưng trả lời 503), nên các lệnh gọi API của nó thất bại thay vì
 chạy ở trạng thái suy giảm. Cờ tính năng không phải quyền theo từng người dùng — hãy
 dùng vai trò nhóm cho việc đó.
+
+Tách khỏi các công tắc, trình quản lý tệp đọc thêm một giới hạn từ môi trường:
+
+Giới hạn tệp phía control plane:
+
+| Biến | Mặc định | Mục đích |
+|---|---|---|
+| `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Mức trần cho một body ghi/tải lên (413 khi vượt); nên khớp với `GOTHAM_AGENT_FILE_MAX_UPLOAD` của node. |

@@ -371,6 +371,7 @@ Các cờ và biến hữu ích của trình cài agent:
 | `GOTHAM_AGENT_FILES` | Dịch vụ tệp từ xa trên node. Bật trừ khi đặt là `false` (trình cài đặt ghi câu trả lời ở trên). |
 | `GOTHAM_AGENT_FILE_FULL_ACCESS` | Bật trừ khi đặt là `false`: dịch vụ phơi **toàn bộ hệ thống tệp** thành một gốc ghi được tên `system` (`/`), không có đường dẫn được bảo vệ — người vận hành đã chấp nhận rủi ro đó. `false` khôi phục các gốc bị giới hạn mô tả bên dưới. |
 | `GOTHAM_AGENT_FILE_ROOTS` | Các gốc duyệt thêm, là đường dẫn tuyệt đối phân tách bằng dấu hai chấm (mặc định không có). Các gốc của người vận hành là **chỉ đọc** trong giai đoạn này; một gốc bị thiếu, không tuyệt đối, nằm trong cây nguy hiểm hoặc chồng lấn gốc khác sẽ bị từ chối lúc khởi động. |
+| `GOTHAM_AGENT_FILE_MAX_UPLOAD` | Mức trần cho một body tải lên, tính bằng byte (mặc định `1073741824`, 1 GiB); body lớn hơn bị từ chối với `ResourceExhausted` (413). Nên khớp với `FILES_MAX_UPLOAD_BYTES` của control plane. |
 | `GOTHAM_AGENT_ARCHIVE_MAX_BYTES` | Tổng số byte chưa nén mà một lần **nén hoặc giải nén** được đọc/ghi trước khi bị từ chối với `ResourceExhausted` (413) — giới hạn kích thước và một nửa biện pháp chống zip-bomb. Mặc định `4294967296` (4 GiB). |
 | `GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES` | Số mục tối đa mà một thao tác archive được duyệt hoặc giải nén (mặc định `100000`); vượt quá thì thao tác bị từ chối với `ResourceExhausted` (413). |
 | `GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES` | Kích thước trên đĩa tối đa của một tệp archive mà **giải nén** sẽ đọc (mặc định `1073741824`, 1 GiB); archive lớn hơn bị từ chối với `ResourceExhausted` (413) trước khi bất kỳ bộ phân tích nào chạy. Áp dụng cho mọi định dạng. |
@@ -552,10 +553,11 @@ thành phần `..`, một đường dẫn tuyệt đối hoặc một symlink r�
 bởi bước duyệt descriptor. Dịch vụ không được phơi ra khi chưa cấu hình CA của agent,
 vì việc giới hạn không phải xác thực.
 
-`List` trả về tối đa 5.000 mục mỗi trang, sắp theo tên. Một trang còn nhiều mục hơn sẽ
-báo `truncated=true` và một `cursor` base64 không trong suốt; hãy truyền cursor trở lại
-để tiếp tục, và tiếp tục phân trang cho đến khi `truncated=false` — một trang bị cắt
-luôn mang cursor khác rỗng và tiến về phía trước, nên client không bao giờ lặp vô hạn.
+`List` trả về tối đa 5.000 mục mỗi trang, sắp theo tên. Một trang có nhiều mục hơn
+một phản hồi mang được sẽ báo `truncated=true` và một `cursor` base64 không trong
+suốt; hãy truyền cursor trở lại để tiếp tục, và tiếp tục phân trang cho đến khi
+`truncated=false` — một trang bị cắt luôn mang cursor khác rỗng và tiến về phía
+trước, nên client không bao giờ lặp vô hạn.
 Cursor là base64 vì một tên ở ranh giới có thể chứa byte không phải UTF-8 hợp lệ (hợp
 lệ trên Linux), thứ mà một chuỗi proto3 thô không mang được; `name` hiển thị của một mục
 như vậy được làm sạch thành U+FFFD và do đó không thể đưa lại vào `Stat`/`Read`, nhưng
@@ -624,18 +626,15 @@ trước API tệp, nên các timeout của nó không áp dụng.
 Các tuyến `/api/v1/servers/{id}/files` được gắn mặc định; đặt `FEATURE_FILES=false` để
 tắt chúng (khi đó chúng trả **503**). Toàn bộ bề mặt bị giới hạn cho **người vận hành
 nền tảng** (một API token có phạm vi admin, một phiên mang claim vai trò `admin`, hoặc
-một email trong `PLATFORM_ADMINS`): mọi người khác nhận **403**, vì API phơi hệ thống
-tệp của node. Người vận hành cũng cần thuộc nhóm của node, và các API token có phạm vi
-read/deploy không còn với tới được API tệp (cần một token có phạm vi admin). Các tuyến
-cũng có phạm vi nhóm: một máy chủ duyệt được phải thuộc một nhóm (một node cũ không có
-nhóm trả 404), `roots`/`list`/`stat` cần bất kỳ thành viên nào, còn `content`,
-`download`, các lần tải lên và mọi thao tác thay đổi cần vai trò chủ sở hữu/quản trị.
-Body của tệp có thể chứa bí mật (một `.env` compose `0600`), nên `GET /content` và
-`POST /download-ticket` vẫn chỉ dành cho chủ sở hữu/quản trị. Với API token:
-`roots`/`list`/`stat` đọc được bằng token phạm vi **read**; mọi thao tác ghi,
-`GET /content` và `POST /download-ticket` cần phạm vi **deploy** (cổng chặn phương thức
-không phải GET cộng với hậu tố đọc mang bí mật); và `GET /files/download` có cổng vé
-nằm ngoài nhóm xác thực, nên vé dùng một lần chính là thông tin đăng nhập của nó.
+một email trong `PLATFORM_ADMINS`): mọi tuyến tệp, trừ bản tải có cổng vé, đều nằm sau
+cổng đó, nên một API token có phạm vi read hay deploy nhận **403**, vì API phơi hệ thống
+tệp của node. Bên trong cổng, vai trò nhóm vẫn áp dụng: một máy chủ duyệt được phải thuộc
+một nhóm (một node cũ không có nhóm trả 404), `roots`/`list`/`stat` cần bất kỳ thành viên
+nào, còn `content`, `download-ticket`, các lần tải lên và mọi thao tác thay đổi cần vai
+trò chủ sở hữu/quản trị. Body của tệp có thể chứa bí mật (một `.env` compose `0600`),
+nên `GET /content` và `POST /download-ticket` vẫn chỉ dành cho chủ sở hữu/quản trị.
+`GET /files/download` có cổng vé nằm ngoài nhóm xác thực, nên vé dùng một lần chính là
+thông tin đăng nhập của nó.
 
 | Biến | Mặc định | Mục đích |
 |---|---|---|
@@ -653,7 +652,7 @@ của node; xem `deploy/README.md` → "File-manager uploads (staging)" để bi
 
 ### Quyền (chmod)
 
-`POST /files/chmod` (chủ sở hữu/quản trị, phạm vi deploy với API token) đổi bit quyền
+`POST /files/chmod` (vai trò owner/admin; API token cần scope admin) đổi bit quyền
 của một mục. Body là `{root, path, mode}` và **`mode` là bắt buộc**: trường bị thiếu bị
 từ chối **400** thay vì lặng lẽ áp dụng `000`. Chỉ các bit thấp `0o777` được chấp nhận:
 một yêu cầu mang setuid (`0o4000`), setgid (`0o2000`), sticky (`0o1000`) hoặc bất kỳ
@@ -784,8 +783,9 @@ lại vì vậy điều khiển *ai có thể tạo một bản phát hành đã
   go run ./cmd/signer keygen -out signing.key
   # put signing.key (PKCS#8 PEM) in the GOTHAM_UPDATE_SIGNING_KEY release environment secret
   # put signing.key.pub at deploy/gotham-signing-key.pub
-  # put the base64 value printed above in GOTHAM_UPDATE_PUBLIC_KEY and in
-  # deploy/install.sh (GOTHAM_RELEASE_PUBLIC_KEY_B64) and install-agent.sh
+  # put the base64 public key from the printed -ldflags line in
+  # GOTHAM_UPDATE_PUBLIC_KEY and in deploy/install.sh
+  # (GOTHAM_RELEASE_PUBLIC_KEY_B64) and install-agent.sh
   ```
 
 ## Thử chuỗi cài đặt mà không cần GitHub

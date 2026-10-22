@@ -19,9 +19,9 @@ Log đi vào journal của systemd. Định dạng mặc định là JSON; đặ
 chi tiết. Khi có tệp `gotham.yaml`, mức log được nạp lại nóng từ đó; định dạng thì
 cố định lúc khởi động và cần khởi động lại.
 
-`GET /healthz` trên bảng điều khiển trả về `{"status", "db", "redis"}` và chỉ trả
-200 khi cả PostgreSQL và Redis đều phản hồi; nếu không nó trả 503 với
-`"status": "degraded"`.
+`GET /healthz` trên bảng điều khiển trả về `{"status":"ok","db":"ok","redis":"ok"}`
+và chỉ trả 200 khi cả PostgreSQL và Redis đều phản hồi; nếu không nó trả 503 với
+`"status":"degraded"`.
 
 ## Control plane không khởi động
 

@@ -325,6 +325,7 @@ func (s *Server) routes() (http.Handler, error) {
 		api.NotFound(s.handleAPINotFound)
 
 		if s.auth != nil {
+			s.mountMCPRoutes(api)
 			s.mountAuthRoutes(api)
 		}
 		if s.oauth != nil {

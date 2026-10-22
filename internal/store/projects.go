@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
@@ -13,6 +14,9 @@ import (
 // (production) in one transaction, so a project can never exist without an
 // environment.
 func (s *Store) CreateProjectWithEnvironment(ctx context.Context, project sqlc.CreateProjectParams, environmentID pgtype.UUID, environmentName string) (sqlc.Project, sqlc.Environment, error) {
+	if requestreplay.From(ctx) != nil {
+		return s.createProjectReplay(ctx, project, environmentID, environmentName)
+	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return sqlc.Project{}, sqlc.Environment{}, err
@@ -105,6 +109,9 @@ func (s *Store) DeleteProject(ctx context.Context, params sqlc.DeleteProjectPara
 
 // CreateEnvironment stores an environment row and returns it.
 func (s *Store) CreateEnvironment(ctx context.Context, params sqlc.CreateEnvironmentParams) (sqlc.Environment, error) {
+	if requestreplay.From(ctx) != nil {
+		return s.createEnvironmentReplay(ctx, params)
+	}
 	return s.queries.CreateEnvironment(ctx, params)
 }
 

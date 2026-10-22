@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
@@ -106,6 +107,9 @@ func (s *Store) CreateApplicationWithConfig(
 	secrets []sqlc.InsertSecretParams,
 	storages []sqlc.InsertStorageParams,
 ) (sqlc.Application, error) {
+	if requestreplay.From(ctx) != nil {
+		return s.createApplicationReplay(ctx, params, envVars, secrets, storages)
+	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return sqlc.Application{}, err
@@ -282,6 +286,9 @@ func (s *Store) ReplaceApplicationStorages(
 // unique index guarantees at most one active deployment per application, so a
 // concurrent submit surfaces as a unique-constraint violation.
 func (s *Store) CreateDeployment(ctx context.Context, params sqlc.CreateDeploymentParams) (sqlc.Deployment, error) {
+	if requestreplay.From(ctx) != nil {
+		return s.createDeploymentReplay(ctx, params)
+	}
 	return s.queries.CreateDeployment(ctx, params)
 }
 

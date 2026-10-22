@@ -12,6 +12,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/teams"
@@ -246,6 +247,9 @@ func (s *Service) CreateProject(ctx context.Context, userID uuid.UUID, name, des
 	if err != nil {
 		return Project{}, Environment{}, err
 	}
+	if err := requestreplay.Fingerprint(ctx, "", []string{clean, cleanDescription}); err != nil {
+		return Project{}, Environment{}, err
+	}
 	project, environment, err := s.repo.CreateProject(ctx, teamIDFor(ctx, userID), clean, cleanDescription)
 	if err != nil {
 		return Project{}, Environment{}, err
@@ -404,6 +408,9 @@ func (s *Service) CreateEnvironment(ctx context.Context, userID, projectID uuid.
 	}
 	clean, err := validateName(name)
 	if err != nil {
+		return Environment{}, err
+	}
+	if err := requestreplay.Fingerprint(ctx, "", clean); err != nil {
 		return Environment{}, err
 	}
 	environment, err := s.repo.CreateEnvironment(ctx, teamIDFor(ctx, userID), projectID, clean)

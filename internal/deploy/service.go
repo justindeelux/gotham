@@ -15,6 +15,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/proxy"
+	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/taskevents"
 	"github.com/justindeelux/gotham/internal/teams"
@@ -428,6 +429,21 @@ func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployme
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Deployment{}, err
+	}
+	if !Enabled() {
+		return Deployment{}, ErrDisabled
+	}
+	if err := requestreplay.Fingerprint(ctx, "", struct{}{}); err != nil {
+		return Deployment{}, err
+	}
+	if err := s.lookupReplay(ctx); err != nil {
+		return Deployment{}, err
+	}
+	if result := requestreplay.ResultFrom(ctx); result != nil {
+		if result.RelatedID != app.EnvironmentID {
+			return Deployment{}, requestreplay.ErrMissing
+		}
+		return s.repo.GetDeployment(ctx, app.ID, result.ResourceID)
 	}
 	return s.deployApplication(ctx, app)
 }
@@ -846,6 +862,9 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 	if err != nil {
 		return Deployment{}, err
 	}
+	if requestreplay.Replayed(ctx) {
+		return created, nil
+	}
 	// The run is queued: surface it on the progress card BEFORE the worker
 	// can publish anything, including webhook-triggered (DeploySystem) runs
 	// that share this boundary. Publishing first keeps every task's frames
@@ -885,6 +904,9 @@ func (s *Service) createDeployment(ctx context.Context, app Application, dep Dep
 	created, err := s.repo.CreateDeployment(ctx, dep)
 	if err != nil {
 		return Application{}, Deployment{}, "", err
+	}
+	if requestreplay.Replayed(ctx) {
+		return app, created, "", nil
 	}
 	previous, err := s.previousContainer(ctx, app.ID)
 	if err != nil {

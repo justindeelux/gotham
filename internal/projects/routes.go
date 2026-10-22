@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/requestreplay"
 	servicespkg "github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/teams"
 )
@@ -68,6 +69,7 @@ type (
 		Environments []environmentResponse `json:"environments"`
 	}
 	projectCreateEnvelope struct {
+		Receipt      *requestreplay.Result `json:"receipt,omitempty"`
 		Project      projectResponse       `json:"project"`
 		Environments []environmentResponse `json:"environments"`
 	}
@@ -75,7 +77,8 @@ type (
 		Environments []environmentResponse `json:"environments"`
 	}
 	environmentEnvelope struct {
-		Environment environmentResponse `json:"environment"`
+		Receipt     *requestreplay.Result `json:"receipt,omitempty"`
+		Environment environmentResponse   `json:"environment"`
 	}
 )
 
@@ -207,6 +210,8 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Use(auth)
 		protected.Get("/v1/projects", h.listProjects)
 		protected.Post("/v1/projects", h.createProject)
+		protected.With(requestreplay.RequireStrict).Post("/v1/mcp/projects", h.createProject)
+		protected.With(requestreplay.RequireStrict).Post("/v1/mcp/projects/{id}/environments", h.createEnvironment)
 		protected.Get("/v1/projects/{id}", h.getProject)
 		protected.Patch("/v1/projects/{id}", h.updateProject)
 		protected.Delete("/v1/projects/{id}", h.deleteProject)
@@ -243,16 +248,28 @@ func (h *handler) createProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var replayOK bool
+	r, replayOK = requestreplay.Begin(w, r, userID, teamIDFor(r.Context(), userID), "create_project", uuid.Nil)
+	if !replayOK {
+		return
+	}
 	var req createProjectRequest
 	if !decodeBody(w, r, &req) {
 		return
 	}
 	project, environment, err := h.svc.CreateProject(r.Context(), userID, req.Name, req.Description)
 	if err != nil {
+		if requestreplay.WriteError(w, err) {
+			return
+		}
+		if !errors.Is(err, ErrNotFound) && !errors.Is(err, teams.ErrForbidden) && requestreplay.WriteAccepted(w, r.Context(), 201) {
+			return
+		}
 		h.writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, projectCreateEnvelope{
+		Receipt:      requestreplay.ResultFrom(r.Context()),
 		Project:      newProjectResponse(project),
 		Environments: []environmentResponse{newEnvironmentResponse(environment)},
 	})
@@ -327,16 +344,27 @@ func (h *handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var replayOK bool
+	r, replayOK = requestreplay.Begin(w, r, userID, teamIDFor(r.Context(), userID), "create_environment", projectID)
+	if !replayOK {
+		return
+	}
 	var req createEnvironmentRequest
 	if !decodeBody(w, r, &req) {
 		return
 	}
 	environment, err := h.svc.CreateEnvironment(r.Context(), userID, projectID, req.Name)
 	if err != nil {
+		if requestreplay.WriteError(w, err) {
+			return
+		}
+		if !errors.Is(err, ErrNotFound) && !errors.Is(err, teams.ErrForbidden) && requestreplay.WriteAccepted(w, r.Context(), 201) {
+			return
+		}
 		h.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, environmentEnvelope{Environment: newEnvironmentResponse(environment)})
+	writeJSON(w, http.StatusCreated, environmentEnvelope{Receipt: requestreplay.ResultFrom(r.Context()), Environment: newEnvironmentResponse(environment)})
 }
 
 // updateEnvironment serves PATCH /v1/environments/{id}.

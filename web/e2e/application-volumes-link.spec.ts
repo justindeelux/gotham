@@ -15,12 +15,12 @@ import {
 test.use({ storageState: storageStatePath });
 
 /**
- * JUS-273 real-stack proof: the volumes API must name the File Manager root the
- * enrolled agent ACTUALLY exposes (full access => "system"/"/", confined =>
- * "volumes"), and Open in File Manager must open that directory in a new tab
- * while the application tab stays. The spec
- * runs against the node agent started by the UI e2e workflow; without an
- * enrolled agent there is nothing to resolve.
+ * JUS-273 / GOTHAM-19 real-stack proof: the volumes API must name the File
+ * Manager root the enrolled agent ACTUALLY exposes (full access => "system"/"/",
+ * confined => "volumes"), and Open in File Manager must navigate this browser
+ * tab to that directory as a new internal File Manager tab, keeping the tabs
+ * already open. The spec runs against the node agent started by the UI e2e
+ * workflow; without an enrolled agent there is nothing to resolve.
  */
 
 interface ServerRow {
@@ -152,42 +152,40 @@ test("volume link uses the root the agent exposes and opens the directory", asyn
     `${nestedURL(projectId, environmentId, "applications", application.id)}?tab=storage`,
   );
   await expect(page.getByText(volume.host_path ?? "", { exact: false })).toBeVisible();
-  const open = page.getByRole("link", {
+  const open = page.getByRole("button", {
     name: `Open volume ${volume.name} in File Manager`,
   });
   await expect(open).toBeVisible();
 
-  // The action is a real link: middle-click and copy-link reach the same
-  // directory, and a plain click must not navigate the application tab.
-  const openHref = await open.getAttribute("href");
-  expect(openHref, "the open action carries an href").toBeTruthy();
-  const href = new URL(openHref as string, page.url());
-  expect(href.pathname).toBe(`/servers/${node.id}/files`);
-  expect(href.searchParams.get("root")).toBe(target.root);
-  expect(href.searchParams.get("path")).toBe(target.path);
-  expect(await open.getAttribute("target")).toBe("_blank");
-  expect(await open.getAttribute("rel")).toBe("noopener");
-
+  // The action is a button that navigates in this browser tab: no new window
+  // and no target=_blank, the application page is replaced by the File Manager.
   const applicationURL = page.url();
-  const [opened] = await Promise.all([page.waitForEvent("popup"), open.click()]);
-  await opened.waitForURL(`**/servers/${node.id}/files?**`);
-
-  const landed = new URL(opened.url());
+  await open.click();
+  await page.waitForURL(`**/servers/${node.id}/files?**`);
+  const landed = new URL(page.url());
   expect(landed.pathname).toBe(`/servers/${node.id}/files`);
   expect(landed.searchParams.get("root")).toBe(target.root);
   expect(landed.searchParams.get("path")).toBe(target.path);
-  await expect(opened.getByText("marker.txt", { exact: true }).first()).toBeVisible();
+  expect(page.url()).not.toBe(applicationURL);
+  await expect(page.getByText("marker.txt", { exact: true }).first()).toBeVisible();
 
-  // The original tab stays on the application page, still showing the volume.
-  expect(page.url()).toBe(applicationURL);
+  // The volume directory is its own focused internal tab, beside the File
+  // Manager tab that was already open.
+  const volumeTab = page.locator(".fm-tab").filter({ hasText: volume.name });
+  await expect(volumeTab).toHaveCount(1);
+  await expect(volumeTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".fm-tab")).toHaveCount(2);
+
+  // Going back to the application and re-opening the same target focuses that
+  // tab instead of stacking a duplicate.
+  await page.goBack();
   await expect(page.getByText(volume.host_path ?? "", { exact: false })).toBeVisible();
-
-  // Re-opening the same link in the new tab shows the directory once instead
-  // of stacking duplicate File Manager tabs.
-  await opened.goto(opened.url());
-  await expect(opened.getByText("marker.txt", { exact: true }).first()).toBeVisible();
-  await expect(opened.locator(".fm-tab").filter({ hasText: "web_data" })).toHaveCount(1);
-  await opened.close();
+  await open.click();
+  await page.waitForURL(`**/servers/${node.id}/files?**`);
+  await expect(page.getByText("marker.txt", { exact: true }).first()).toBeVisible();
+  await expect(page.locator(".fm-tab")).toHaveCount(2);
+  await expect(volumeTab).toHaveCount(1);
+  await expect(volumeTab).toHaveAttribute("aria-selected", "true");
 
   expect(guardrails.apiFailures).toEqual([]);
 });

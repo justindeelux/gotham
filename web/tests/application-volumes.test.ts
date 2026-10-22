@@ -4,7 +4,7 @@
 // validated strictly so a UI fake cannot accept a shape the backend never
 // sends.
 
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 
@@ -134,11 +134,11 @@ function mountTab(listing: VolumeListing | null, sourceType = listing?.source_ty
   });
 }
 
-/** findOpenLink returns the new-tab link of a volume row, if it has one. */
-function findOpenLink(wrapper: ReturnType<typeof mountTab>) {
+/** findOpenButton returns the File Manager action button of a volume row. */
+function findOpenButton(wrapper: ReturnType<typeof mountTab>) {
   return wrapper
-    .findAll("a")
-    .find((link) => link.text().includes("Open in File Manager"));
+    .findAll("button")
+    .find((button) => button.text().includes("Open in File Manager"));
 }
 
 describe("application volume listing schema", () => {
@@ -208,22 +208,31 @@ describe("ApplicationStorageTab volume list", () => {
     expect(text).toContain("read-only");
     expect(text).toContain("Running");
     expect(text).toContain("/var/lib/gotham/volumes/app-1/shared");
-    const open = findOpenLink(wrapper);
+    const open = findOpenButton(wrapper);
     expect(open?.attributes("aria-label")).toBe(
       "Open volume shared in File Manager",
     );
     wrapper.unmount();
   });
 
-  it("links the validated File Manager target in a new tab", () => {
+  it("opens the validated File Manager target in the same browser tab", async () => {
     const wrapper = mountTab(composeListing());
-    const open = findOpenLink(wrapper);
+    const open = findOpenButton(wrapper);
     expect(open, "the volume offers Open in File Manager").toBeTruthy();
-    expect(open?.attributes("href")).toBe(
-      "/servers/server-1/files?root=volumes&path=app-1/shared",
+    // A button, not a link: the SPA navigates in the current browser tab.
+    expect(open?.attributes("href")).toBeUndefined();
+    expect(open?.attributes("target")).toBeUndefined();
+    expect(open?.attributes("aria-label")).toBe(
+      "Open volume shared in File Manager",
     );
-    expect(open?.attributes("target")).toBe("_blank");
-    expect(open?.attributes("rel")).toBe("noopener");
+
+    await open?.trigger("click");
+    await flushPromises();
+
+    const route = wrapper.vm.$router.currentRoute.value;
+    expect(route.name).toBe("server-files");
+    expect(route.params.id).toBe("server-1");
+    expect(route.query).toMatchObject({ root: "volumes", path: "app-1/shared" });
     wrapper.unmount();
   });
 
@@ -243,13 +252,20 @@ describe("ApplicationStorageTab volume list", () => {
     wrapper.unmount();
   });
 
-  it("links the root the backend chose (full-access system mode)", () => {
+  it("opens the root the backend chose (full-access system mode)", async () => {
     const wrapper = mountTab(fullAccessListing());
-    const open = findOpenLink(wrapper);
+    const open = findOpenButton(wrapper);
     expect(open).toBeTruthy();
-    expect(open?.attributes("href")).toBe(
-      "/servers/server-1/files?root=system&path=var/lib/gotham/volumes/app-1/web_data",
-    );
+
+    await open?.trigger("click");
+    await flushPromises();
+
+    const route = wrapper.vm.$router.currentRoute.value;
+    expect(route.name).toBe("server-files");
+    expect(route.query).toMatchObject({
+      root: "system",
+      path: "var/lib/gotham/volumes/app-1/web_data",
+    });
     wrapper.unmount();
   });
 
@@ -261,7 +277,7 @@ describe("ApplicationStorageTab volume list", () => {
       path: "app-1/shared",
     };
     const wrapper = mountTab(listing);
-    expect(findOpenLink(wrapper)).toBeUndefined();
+    expect(findOpenButton(wrapper)).toBeUndefined();
     expect(wrapper.text()).toContain(
       "That directory is not part of this application's storage",
     );
@@ -294,7 +310,7 @@ describe("ApplicationStorageTab volume list", () => {
     const wrapper = mountTab(namedListing());
     const text = wrapper.text();
     expect(text).toContain("not browsable in File Manager");
-    expect(findOpenLink(wrapper)).toBeUndefined();
+    expect(findOpenButton(wrapper)).toBeUndefined();
     wrapper.unmount();
   });
 

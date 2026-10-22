@@ -89,21 +89,27 @@ beforeEach(() => {
 });
 
 describe("files browser deep links", () => {
-  it("reuses the tab already showing the linked directory", async () => {
+  it("opens the linked directory in a new tab and reuses it on repeat", async () => {
     const store = useFilesStore();
     await store.init("server-1");
+    const previousId = store.tabs[0].id;
+
+    // The deep link opens its own tab and leaves the open one untouched.
     await store.openAt("volumes", "app-1/data");
-    expect(store.tabs).toHaveLength(1);
-    expect(store.tabs[0].path).toBe("app-1/data");
-    const linkedId = store.tabs[0].id;
+    expect(store.tabs).toHaveLength(2);
+    expect(store.tabs[0].id).toBe(previousId);
+    expect(store.tabs[0].path).toBe("");
+    const linkedId = store.activeTabId;
+    expect(linkedId).not.toBe(previousId);
+    expect(store.activeTab.path).toBe("app-1/data");
 
     await store.openTab({ root: "compose" });
-    expect(store.tabs).toHaveLength(2);
+    expect(store.tabs).toHaveLength(3);
 
     // Re-opening the same link focuses the existing tab instead of stacking
     // another one.
     await store.openAt("volumes", "app-1/data");
-    expect(store.tabs).toHaveLength(2);
+    expect(store.tabs).toHaveLength(3);
     expect(store.activeTabId).toBe(linkedId);
     expect(store.activeTab.path).toBe("app-1/data");
   });

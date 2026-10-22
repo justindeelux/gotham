@@ -91,6 +91,9 @@ func registerCreateTools(server *sdk.Server, client *Client) {
 		}{in.Name, in.Description}, &out)
 		if err == nil {
 			err = validateCreateReceipt(out.Receipt)
+			if out.Receipt != nil {
+				out.Receipt.Hook = ""
+			}
 		}
 		return nil, out, err
 	})
@@ -105,6 +108,9 @@ func registerCreateTools(server *sdk.Server, client *Client) {
 		}{in.Name}, &out)
 		if err == nil {
 			err = validateCreateReceipt(out.Receipt)
+			if out.Receipt != nil {
+				out.Receipt.Hook = ""
+			}
 		}
 		return nil, out, err
 	})
@@ -129,6 +135,13 @@ func registerCreateTools(server *sdk.Server, client *Client) {
 		if err == nil {
 			err = validateCreateReceipt(body.Receipt)
 		}
+		if body.Receipt != nil {
+			switch body.Receipt.Hook {
+			case "none", "installed", "warning", "not_confirmed":
+			default:
+				body.Receipt.Hook = "not_confirmed"
+			}
+		}
 		out := applicationCreated{Receipt: body.Receipt, Application: body.Application, WebhookOutcome: "not_confirmed"}
 		if body.Receipt != nil {
 			switch body.Receipt.Hook {
@@ -147,11 +160,6 @@ func validateCreateReceipt(receipt *mutationReceipt) error {
 	id, err := uuid.Parse(receipt.ResourceID)
 	if err != nil || id == uuid.Nil {
 		return &Error{Code: "invalid_response"}
-	}
-	switch receipt.Hook {
-	case "none", "installed", "warning", "not_confirmed":
-	default:
-		receipt.Hook = "not_confirmed"
 	}
 	switch receipt.Outcome {
 	case "accepted", "accepted_not_confirmed":

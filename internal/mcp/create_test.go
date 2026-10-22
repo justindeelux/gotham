@@ -118,8 +118,12 @@ func TestCreateSourceSchemasRejectConflicts(t *testing.T) {
 			args := createArgs(tt.source)
 			args[tt.key] = tt.value
 			result, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "application_create", Arguments: args})
-			if err == nil && !result.IsError {
-				t.Fatalf("conflict accepted %+v", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCreateError(t, result, "invalid_request")
+			if calls != 0 {
+				t.Fatalf("invalid %s/%s reached backend", tt.source, tt.key)
 			}
 		})
 	}
@@ -129,8 +133,12 @@ func TestCreateSourceSchemasRejectConflicts(t *testing.T) {
 			delete(args, key)
 		}
 		result, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "application_create", Arguments: args})
-		if err == nil && !result.IsError {
-			t.Errorf("missing source accepted %s", source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertCreateError(t, result, "invalid_request")
+		if calls != 0 {
+			t.Fatalf("missing %s source reached backend", source)
 		}
 	}
 	if calls != 0 {
@@ -150,11 +158,11 @@ func TestProjectAndEnvironmentCreateReturnedIdentity(t *testing.T) {
 		}
 	})
 	out := callDiscovery(t, cs, "project_create", map[string]any{"request_id": "stable-1", "name": "test"})
-	if out.IsError || !strings.Contains(resultJSON(t, out), "actual-production") {
+	if out.IsError || !strings.Contains(resultJSON(t, out), "actual-production") || strings.Contains(resultJSON(t, out), "webhook_outcome") {
 		t.Fatalf("project %+v", out)
 	}
 	out = callDiscovery(t, cs, "environment_create", map[string]any{"request_id": "stable-1", "project_id": project, "name": "staging"})
-	if out.IsError || !strings.Contains(resultJSON(t, out), environment) {
+	if out.IsError || !strings.Contains(resultJSON(t, out), environment) || strings.Contains(resultJSON(t, out), "webhook_outcome") {
 		t.Fatalf("environment %+v", out)
 	}
 }
@@ -168,6 +176,11 @@ func TestCreateReplayFailuresAndAcceptedUnknown(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"code":%q,"message":"secret-sentinel"}`, code)
 			})
 			out := callDiscovery(t, cs, "application_create", createArgs("image"))
+			wantCode := code
+			if wantCode == "" {
+				wantCode = "upstream_error"
+			}
+			assertCreateError(t, out, wantCode)
 			data, _ := json.Marshal(out)
 			if !out.IsError || strings.Contains(string(data), "secret-sentinel") || calls != 1 {
 				t.Fatalf("unsafe failure %s", data)

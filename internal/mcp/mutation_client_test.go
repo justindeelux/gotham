@@ -48,7 +48,12 @@ func TestMutationClientFailsClosed(t *testing.T) {
 			}
 			var out map[string]any
 			err := client.mutateJSON(ctx, "/api/v1/mcp/projects", "stable-1", map[string]string{"name": "project"}, &out)
-			if err == nil || calls > 1 {
+			wantCode := map[string]string{"old_backend": "unsupported_or_not_found", "redirect": "redirect_refused", "missing_ack": "contract_mismatch", "foreign_ack": "contract_mismatch", "oversized": "response_too_large", "invalid_json": "invalid_response", "cancelled": "cancelled", "unauthorized": "unauthorized", "forbidden": "forbidden"}[mode]
+			wantCalls := 1
+			if mode == "cancelled" {
+				wantCalls = 0
+			}
+			if err == nil || sectionError(err).Code != wantCode || calls != wantCalls {
 				t.Fatalf("fail-open %v calls %d", err, calls)
 			}
 		})
@@ -60,17 +65,7 @@ func TestCreateValidationDoesNotEchoSecrets(t *testing.T) {
 	args["registry_password"] = map[string]any{"password": "secret-sentinel"}
 	out, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "application_create", Arguments: args})
 	if err != nil {
-		if strings.Contains(err.Error(), "secret-sentinel") {
-			t.Fatal("secret in protocol error")
-		}
-		return
+		t.Fatalf("protocol error instead of safe tool rejection: %v", err)
 	}
-	if !out.IsError {
-		t.Fatal("invalid secret accepted")
-	}
-	for _, content := range out.Content {
-		if text, ok := content.(*sdk.TextContent); ok && strings.Contains(text.Text, "secret-sentinel") {
-			t.Fatal("secret in schema error")
-		}
-	}
+	assertCreateError(t, out, "invalid_request")
 }

@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -75,7 +77,8 @@ func TestMCPCreationBacked(t *testing.T) {
 	s, _ := newScopeTestServer(t)
 	s.tokens = tokens
 	s.teamService = teams.NewService(teams.Config{Store: st, Logger: logger})
-	svc := deploy.NewService(deploy.Config{Store: st, Secret: "stable-mcp-create-key", Logger: logger})
+	hook := &mcpCreateHook{}
+	svc := deploy.NewService(deploy.Config{Store: st, Secret: "stable-mcp-create-key", Logger: logger, Hooks: func() deploy.HookLifecycle { return hook }})
 	defer svc.Close()
 	projectSvc := projects.NewService(projects.Config{Store: st, Counter: projects.StoreCounter{Store: st}, Logger: logger})
 	router := chi.NewRouter()
@@ -86,9 +89,9 @@ func TestMCPCreationBacked(t *testing.T) {
 	})
 	api := httptest.NewServer(router)
 	defer api.Close()
-	session := func(bearer string) *sdk.ClientSession {
+	session := func(bearer string, activeTeam uuid.UUID) *sdk.ClientSession {
 		t.Helper()
-		server, err := adapter.NewServer(ctx, adapter.Config{URL: api.URL, Token: bearer, TeamID: teamID}, "test", logger)
+		server, err := adapter.NewServer(ctx, adapter.Config{URL: api.URL, Token: bearer, TeamID: activeTeam}, "test", logger)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,12 +108,41 @@ func TestMCPCreationBacked(t *testing.T) {
 		t.Cleanup(func() { _ = cs.Close() })
 		return cs
 	}
-	cs := session(token.Token)
-	call := func(cs *sdk.ClientSession, name string, args map[string]any, wantError bool) map[string]any {
+	cs := session(token.Token, teamID)
+	call := func(cs *sdk.ClientSession, name string, args map[string]any, wantCode string) map[string]any {
 		t.Helper()
+		var before [4]int
+		counts := func() [4]int {
+			t.Helper()
+			var out [4]int
+			err := pool.QueryRow(ctx, `SELECT
+    (SELECT count(*) FROM applications WHERE user_id=$1),
+    (SELECT count(*) FROM projects WHERE team_id IN (SELECT team_id FROM team_members WHERE user_id=$1)),
+    (SELECT count(*) FROM environments WHERE project_id IN (SELECT id FROM projects WHERE team_id IN (SELECT team_id FROM team_members WHERE user_id=$1))),
+    (SELECT count(*) FROM request_receipts WHERE principal_id=$1)`, principal).Scan(&out[0], &out[1], &out[2], &out[3])
+			if err != nil {
+				t.Fatal(err)
+			}
+			return out
+		}
+		if wantCode != "" {
+			before = counts()
+		}
 		result, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: args})
-		if err != nil || result.IsError != wantError {
+		if err != nil || result.IsError != (wantCode != "") {
 			t.Fatalf("%s error=%v result=%+v", name, err, result)
+		}
+		if wantCode != "" {
+			if len(result.Content) != 1 {
+				t.Fatalf("%s missing error code: %+v", name, result)
+			}
+			text, ok := result.Content[0].(*sdk.TextContent)
+			if !ok || text.Text != wantCode {
+				t.Fatalf("%s error=%+v want %s", name, result.Content, wantCode)
+			}
+			if after := counts(); after != before {
+				t.Fatalf("%s wrote rows on %s: before=%v after=%v", name, wantCode, before, after)
+			}
 		}
 		data, err := json.Marshal(result)
 		if err != nil {
@@ -125,8 +157,8 @@ func TestMCPCreationBacked(t *testing.T) {
 		return body
 	}
 	projectArgs := map[string]any{"request_id": "project", "name": "shop"}
-	call(session(read.Token), "project_create", projectArgs, true)
-	out := call(cs, "project_create", projectArgs, false)
+	call(session(read.Token, teamID), "project_create", projectArgs, "forbidden")
+	out := call(cs, "project_create", projectArgs, "")
 	receipt := out["receipt"].(map[string]any)
 	projectID := receipt["resource_id"].(string)
 	environment := out["environments"].([]any)[0].(map[string]any)
@@ -134,13 +166,13 @@ func TestMCPCreationBacked(t *testing.T) {
 	if environment["name"] != "production" || receipt["related_id"] != envID {
 		t.Fatal("production identity lost")
 	}
-	replay := call(cs, "project_create", projectArgs, false)
+	replay := call(cs, "project_create", projectArgs, "")
 	if replay["receipt"].(map[string]any)["replayed"] != true {
 		t.Fatal("project not replayed")
 	}
-	call(cs, "project_create", map[string]any{"request_id": "duplicate", "name": "shop"}, true)
-	call(cs, "environment_create", map[string]any{"request_id": "environment", "name": "staging", "project_id": projectID}, false)
-	call(cs, "environment_create", map[string]any{"request_id": "environment-duplicate", "name": "staging", "project_id": projectID}, true)
+	call(cs, "project_create", map[string]any{"request_id": "duplicate", "name": "shop"}, "upstream_error")
+	call(cs, "environment_create", map[string]any{"request_id": "environment", "name": "staging", "project_id": projectID}, "")
+	call(cs, "environment_create", map[string]any{"request_id": "environment-duplicate", "name": "staging", "project_id": projectID}, "upstream_error")
 	node, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "mcp-node", Ip: "127.0.0.1", Port: 22, SshUser: "root", TeamID: team.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -171,13 +203,13 @@ func TestMCPCreationBacked(t *testing.T) {
 	for _, source := range []string{"git_public", "git_private", "github_app", "gitlab_app", "dockerfile", "compose", "image"} {
 		t.Run(source, func(t *testing.T) {
 			args := base(source)
-			out := call(cs, "application_create", args, false)
+			out := call(cs, "application_create", args, "")
 			app := out["application"].(map[string]any)
 			id := app["id"].(string)
 			if app["environment_id"] != envID || app["server_id"] != nodeID || app["environment_name"] != "production" {
 				t.Fatal("target not preserved")
 			}
-			again := call(cs, "application_create", args, false)
+			again := call(cs, "application_create", args, "")
 			if again["receipt"].(map[string]any)["replayed"] != true || again["application"].(map[string]any)["id"] != id {
 				t.Fatal("app recreated")
 			}
@@ -196,12 +228,12 @@ func TestMCPCreationBacked(t *testing.T) {
 	publicImage["request_id"], publicImage["name"] = "public-image", "public-image"
 	delete(publicImage, "registry_username")
 	delete(publicImage, "registry_password")
-	call(cs, "application_create", publicImage, false)
+	call(cs, "application_create", publicImage, "")
 	repoCompose := base("compose")
 	repoCompose["request_id"], repoCompose["name"] = "repo-compose", "repo-compose"
 	delete(repoCompose, "compose_content")
 	repoCompose["clone_url"], repoCompose["compose_file"] = "https://example.com/repo.git", "compose.yml"
-	call(cs, "application_create", repoCompose, false)
+	call(cs, "application_create", repoCompose, "")
 	foreignTeam, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "foreign-mcp"})
 	if err != nil {
 		t.Fatal(err)
@@ -210,6 +242,19 @@ func TestMCPCreationBacked(t *testing.T) {
 		_, _ = pool.Exec(ctx, "DELETE FROM servers WHERE team_id=$1", foreignTeam.ID)
 		_, _ = pool.Exec(ctx, "DELETE FROM teams WHERE id=$1", foreignTeam.ID)
 	}()
+	if _, err := st.CreateTeamMember(ctx, sqlc.CreateTeamMemberParams{TeamID: foreignTeam.ID, UserID: user.ID, Role: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	foreignSession := session(token.Token, uuid.UUID(foreignTeam.ID.Bytes))
+	foreignOut := call(foreignSession, "project_create", projectArgs, "")
+	if foreignOut["receipt"].(map[string]any)["resource_id"] == projectID {
+		t.Fatal("request identity crossed team boundary")
+	}
+	foreignReplay := call(foreignSession, "project_create", projectArgs, "")
+	if foreignReplay["receipt"].(map[string]any)["replayed"] != true || foreignReplay["receipt"].(map[string]any)["resource_id"] != foreignOut["receipt"].(map[string]any)["resource_id"] {
+		t.Fatal("cross-team key reuse did not replay its own resource")
+	}
+
 	foreignCtx := teams.WithScope(ctx, teams.Scope{UserID: principal, TeamID: uuid.UUID(foreignTeam.ID.Bytes), Role: teams.RoleAdmin})
 	_, foreignEnv, err := projectSvc.CreateProject(foreignCtx, principal, "foreign-project", "")
 	if err != nil {
@@ -223,9 +268,9 @@ func TestMCPCreationBacked(t *testing.T) {
 		args := base("image")
 		args["request_id"] = "cross-team-" + field
 		args[field] = id
-		call(cs, "application_create", args, true)
+		call(cs, "application_create", args, "unsupported_or_not_found")
 	}
-	call(cs, "environment_create", map[string]any{"request_id": "foreign-project", "name": "blocked", "project_id": foreignEnv.ProjectID.String()}, true)
+	call(cs, "environment_create", map[string]any{"request_id": "foreign-project", "name": "blocked", "project_id": foreignEnv.ProjectID.String()}, "unsupported_or_not_found")
 
 	var deployments, domains int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM deployments WHERE application_id IN (SELECT id FROM applications WHERE team_id=$1)", teamID).Scan(&deployments); err != nil {
@@ -241,7 +286,7 @@ func TestMCPCreationBacked(t *testing.T) {
 		args := base("github_app")
 		args["request_id"] = "foreign-" + field
 		args[field] = uuid.NewString()
-		call(cs, "application_create", args, true)
+		call(cs, "application_create", args, "unsupported_or_not_found")
 	}
 	// Another user's connection stays foreign even when both users belong to this team.
 	other, err := st.CreateUser(ctx, uuid.NewString()+"@example.com", nil)
@@ -259,7 +304,40 @@ func TestMCPCreationBacked(t *testing.T) {
 	args := base("github_app")
 	args["request_id"] = "other-user"
 	args["github_app_id"] = uuid.UUID(connection.ID.Bytes).String()
-	call(cs, "application_create", args, true)
+	call(cs, "application_create", args, "unsupported_or_not_found")
+	owned, err := st.CreateGitHubApp(ctx, sqlc.CreateGitHubAppParams{UserID: user.ID, AppID: 54321, Slug: "owned", Name: "owned", BaseUrl: "https://github.com", ApiBaseUrl: "https://api.github.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"installed", "warning", "not_confirmed"} {
+		switch mode {
+		case "installed":
+			hook.err = nil
+		case "warning":
+			hook.err = errors.New("provider unavailable secret-sentinel")
+		case "not_confirmed":
+			hook.err = context.DeadlineExceeded
+		}
+		args := base("github_app")
+		args["request_id"], args["name"] = "owned-"+mode, "owned-"+mode
+		args["github_app_id"] = uuid.UUID(owned.ID.Bytes).String()
+		first := call(cs, "application_create", args, "")
+		if first["webhook_outcome"] != mode || first["receipt"].(map[string]any)["webhook_outcome"] != mode {
+			t.Fatalf("hook %s outcome=%+v", mode, first)
+		}
+		calls := hook.calls
+		again := call(cs, "application_create", args, "")
+		if hook.calls != calls || again["webhook_outcome"] != mode || again["receipt"].(map[string]any)["replayed"] != true || again["receipt"].(map[string]any)["resource_id"] != first["receipt"].(map[string]any)["resource_id"] {
+			t.Fatal("owned connection replay retried hook or lost identity/outcome")
+		}
+	}
+	conflict := base("image")
+	conflict["name"] = "different-body"
+	call(cs, "application_create", conflict, "request_conflict")
+	readSession := session(read.Token, teamID)
+	call(readSession, "application_create", base("image"), "forbidden")
+	call(readSession, "environment_create", map[string]any{"request_id": "environment", "name": "staging", "project_id": projectID}, "forbidden")
+
 	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='read_only' WHERE team_id=$1 AND user_id=$2", teamID, principal); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +349,7 @@ func TestMCPCreationBacked(t *testing.T) {
 		if name == "application_create" {
 			args = base("image")
 		}
-		call(cs, name, args, true)
+		call(cs, name, args, "forbidden")
 	}
 	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='admin' WHERE team_id=$1 AND user_id=$2", teamID, principal); err != nil {
 		t.Fatal(err)
@@ -284,13 +362,25 @@ func TestMCPCreationBacked(t *testing.T) {
 	if _, err := pool.Exec(ctx, "UPDATE applications SET environment_id=$1 WHERE id=$2", staging, imageID); err != nil {
 		t.Fatal(err)
 	}
-	call(cs, "application_create", base("image"), true)
+	call(cs, "application_create", base("image"), "request_target_missing")
 	if _, err := pool.Exec(ctx, "DELETE FROM applications WHERE id=$1", imageID); err != nil {
 		t.Fatal(err)
 	}
-	call(cs, "application_create", base("image"), true)
+	call(cs, "application_create", base("image"), "unsupported_or_not_found")
 	if _, err := pool.Exec(ctx, "UPDATE request_receipts SET accepted_at=clock_timestamp()-interval '25 hours' WHERE principal_id=$1 AND request_key='git_public'", principal); err != nil {
 		t.Fatal(err)
 	}
-	call(cs, "application_create", base("git_public"), true)
+	call(cs, "application_create", base("git_public"), "request_expired")
 }
+
+// Only the provider boundary is stubbed; receipts and resources use the real store.
+type mcpCreateHook struct {
+	calls int
+	err   error
+}
+
+func (h *mcpCreateHook) InstallHook(context.Context, uuid.UUID, uuid.UUID, *http.Request) error {
+	h.calls++
+	return h.err
+}
+func (*mcpCreateHook) RemoveHook(context.Context, uuid.UUID, uuid.UUID) error { return nil }

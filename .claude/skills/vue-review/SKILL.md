@@ -1,5 +1,6 @@
 ---
 name: vue-review
+model: sonnet
 description: Review Vue 3 / TypeScript changes in gotham's web/ SPA (src/app, src/features/<module>, src/shared; Pinia, vue-router, Naive UI, vue-i18n, zod validation) for reactivity bugs, XSS, component contracts, project style and UI-design rules. Use whenever the user asks to review, check or audit .vue/.ts code under web/, a frontend PR or diff, or a UI change — and proactively before merging any change that touches web/, even if they don't say "review".
 ---
 

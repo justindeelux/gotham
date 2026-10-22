@@ -628,10 +628,11 @@ tắt chúng (khi đó chúng trả **503**). Toàn bộ bề mặt bị giới 
 nền tảng** (một API token có phạm vi admin, một phiên mang claim vai trò `admin`, hoặc
 một email trong `PLATFORM_ADMINS`): mọi tuyến tệp, trừ bản tải có cổng vé, đều nằm sau
 cổng đó, nên một API token có phạm vi read hay deploy nhận **403**, vì API phơi hệ thống
-tệp của node. Bên trong cổng, vai trò nhóm vẫn áp dụng: một máy chủ duyệt được phải thuộc
-một nhóm (một node cũ không có nhóm trả 404), `roots`/`list`/`stat` cần bất kỳ thành viên
-nào, còn `content`, `download-ticket`, các lần tải lên và mọi thao tác thay đổi cần vai
-trò chủ sở hữu/quản trị. Body của tệp có thể chứa bí mật (một `.env` compose `0600`),
+tệp của node. Bên trong cổng, vai trò nhóm áp dụng cho máy chủ thuộc một nhóm: một node
+thuộc nhóm khác trả 404, `roots`/`list`/`stat` cần bất kỳ thành viên nào, còn `content`,
+`download-ticket`, các lần tải lên và mọi thao tác thay đổi cần vai trò chủ sở hữu/quản
+trị. Một node cũ không có nhóm thì không có cổng vai trò nhóm — mọi người vận hành nền
+tảng đều dùng được, kể cả ghi. Body của tệp có thể chứa bí mật (một `.env` compose `0600`),
 nên `GET /content` và `POST /download-ticket` vẫn chỉ dành cho chủ sở hữu/quản trị.
 `GET /files/download` có cổng vé nằm ngoài nhóm xác thực, nên vé dùng một lần chính là
 thông tin đăng nhập của nó.

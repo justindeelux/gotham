@@ -641,10 +641,11 @@ surface is limited to **platform operators** (an admin-scoped API token, a
 session with the `admin` role claim, or an email in `PLATFORM_ADMINS`): every
 file route except the ticket-gated download sits behind that gate, so a read- or
 deploy-scoped API token gets **403**, because the API exposes the node's
-filesystem. Inside the gate the team role still applies: a browsable server must
-belong to a team (a legacy team-less node answers 404), `roots`/`list`/`stat`
-need any member, and `content`, `download-ticket`, uploads and every mutation
-need an owner/admin role. File bodies can hold secrets (a `0600` compose
+filesystem. Inside the gate the team role applies to servers that belong to a
+team: a node in another team answers 404, `roots`/`list`/`stat` need any member,
+and `content`, `download-ticket`, uploads and every mutation need an owner/admin
+role. A legacy node with no team has no team role gate — every platform operator
+can use it, including writes. File bodies can hold secrets (a `0600` compose
 `.env`), so `GET /content` and `POST /download-ticket` stay owner/admin. The
 ticket-gated `GET /files/download` sits outside the auth group, so the
 single-use ticket is its credential.

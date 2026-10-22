@@ -53,7 +53,7 @@ hard requirement.
 `deploy/install.sh` automates the layout below for a clean systemd host:
 download → verify the signed manifest and artifact digest → install the binary,
 wrapper, config, status directory, sudoers rule and unit → migrate → start. It
-uses the shared `release-verify.sh`; see `docs/install.md`.
+uses the shared `release-verify.sh`; see `site/guide/install.md`.
 
 The manual layout it produces is:
 
@@ -208,7 +208,7 @@ ports 80 and 443 reachable. HTTP-01 requires the domain's A/AAAA records to poin
 **directly at this box**, with Cloudflare's proxy disabled (DNS only). For a
 proxied Cloudflare domain, configure a DNS provider and change the panel intent
 to DNS-01 through `/api/v1/proxy/panel-certificates/{id}`; see
-[panel HTTPS setup](../docs/install.md#https-for-the-panel). HTTP stays available
+[panel HTTPS setup](../site/guide/install.md#https-for-the-panel). HTTP stays available
 while issuance is pending or failed, and redirects only after an unexpired
 certificate is observed. Confirmation retires the previous host's intent;
 reverting retires the proposed host's intent. Certificate errors never fail a
@@ -238,7 +238,7 @@ loopback.
 
 Remote `install-agent.sh` runs must set a distinct `GOTHAM_AGENT_NODE_ID`
 and the remote `GOTHAM_AGENT_CP_ADDR`; the agent's default identity is
-`localhost`. See `docs/install.md`, "Node agent".
+`localhost`. See `site/guide/install.md`, "Node agent".
 
 Re-running `install-agent.sh` is a safe reinstall: values the invocation does not
 set (for example the control plane address and node id) are kept from the
@@ -286,7 +286,7 @@ fails with the manual step instead of guessing. Re-running it is a no-op when
 
 Re-running `install.sh` on a pre-existing plaintext control plane flips it to
 TLS; agents installed before that go offline until they are reinstalled with
-`--ca` (see `docs/install.md`, "Upgrading an existing control plane").
+`--ca` (see `site/guide/install.md`, "Upgrading an existing control plane").
 
 
 ## Outcome, gate and recovery
@@ -387,7 +387,7 @@ the body).
   chowns it to `gotham-agent`, **or** a shared group plus a setgid (`2775`) dir
   (the agent must join the group). Superseded for operators who accept the risk:
   the installer's file-manager "yes" runs the agent as root (details:
-  `docs/install.md` → "Remote file service").
+  `site/guide/install.md` → "Remote file service").
 - **File manager — root-stat symlink swap (LOW).** `agent/files/files.go`
   `validateFileRoot` resolves the root with `EvalSymlinks` then re-`os.Stat`s the
   resolved path; a component swapped between the calls is followed by `os.Stat`.

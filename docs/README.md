@@ -60,7 +60,7 @@ workflow, Playwright UI smoke, and what has been verified on real hardware.
 
 ## Install & release
 
-[`install.md`](install.md) — control-plane and node-agent install, first login,
+[`site/guide/install.md`](../site/guide/install.md) — control-plane and node-agent install, first login,
 updates/rollback, and the signed release/signing flow (keypair, assets,
 GoReleaser workflow).
 

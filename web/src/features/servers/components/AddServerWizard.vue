@@ -55,7 +55,7 @@ const { t } = useI18n();
 // (deploy/release-verify.sh, gotham-agent-updater.conf, ...); it also fails
 // closed without the control-plane CA, and the agent dials 127.0.0.1 unless
 // GOTHAM_AGENT_CP_ADDR is set. This is the same complete checkout block
-// docs/install.md uses — keep it a single copy-pasteable command (the copy
+// site/guide/install.md uses — keep it a single copy-pasteable command (the copy
 // button copies this exact string).
 const installCommand = [
   "scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .",

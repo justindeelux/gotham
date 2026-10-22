@@ -124,8 +124,8 @@ similar services: configure an endpoint, region, bucket, optional key prefix,
 access key and secret key.
 
 Targets are configured under **Backups → Backup targets**, once per account
-rather than per database — on a shared instance the platform operator normally
-owns that setup. The keys are sealed on the server and never shown back, so an
+rather than per database — any member with deploy access can add them. The keys
+are sealed on the server and never shown back, so an
 edit form leaves stored keys in place when the key fields are blank. **Test**
 checks the endpoint and credentials against the bucket and reports the result.
 

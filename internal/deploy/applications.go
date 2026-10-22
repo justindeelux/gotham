@@ -14,6 +14,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/teams"
 )
@@ -148,7 +149,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		return Application{}, err
 	}
 	app := Application{
-		ID:            uuid.New(),
+		ID:            uuid.Nil,
 		UserID:        userID,
 		TeamID:        teamID,
 		EnvironmentID: in.EnvironmentID,
@@ -175,13 +176,6 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	registryPassword := strings.TrimSpace(in.RegistryPassword)
 	if err := validateRegistryCredential(app.RegistryUsername, registryPassword); err != nil {
 		return Application{}, err
-	}
-	if registryPassword != "" {
-		sealed, err := providers.SealSecret(s.secret, registryPassword)
-		if err != nil {
-			return Application{}, fmt.Errorf("deploy: seal registry credential: %w", err)
-		}
-		app.RegistryPasswordCiphertext = sealed
 	}
 	// A dockerfile application carries no repository: the pasted text is the
 	// whole build context, so any repo fields a direct API caller sent are
@@ -225,6 +219,34 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
 	}
+	if requestreplay.From(ctx) != nil {
+		if !teams.ScopeFor(ctx, userID).CanWrite() {
+			return Application{}, teams.ErrForbidden
+		}
+		if err := fingerprintApplication(ctx, s.secret, app, registryPassword, in); err != nil {
+			return Application{}, err
+		}
+		if err := s.lookupReplay(ctx); err != nil {
+			return Application{}, err
+		}
+		if result := requestreplay.ResultFrom(ctx); result != nil {
+			existing, err := s.application(ctx, userID, result.ResourceID, true)
+			if err != nil {
+				return Application{}, err
+			}
+			if existing.EnvironmentID != in.EnvironmentID {
+				return Application{}, requestreplay.ErrMissing
+			}
+			return existing, nil
+		}
+	}
+	if registryPassword != "" {
+		sealed, err := providers.SealSecret(s.secret, registryPassword)
+		if err != nil {
+			return Application{}, fmt.Errorf("deploy: seal registry credential: %w", err)
+		}
+		app.RegistryPasswordCiphertext = sealed
+	}
 	// A link names a GitHub App connection the caller must own; a foreign
 	// id answers not-found, like any other foreign resource.
 	if app.GitHubAppID != uuid.Nil {
@@ -243,6 +265,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return Application{}, err
 	}
+	app.ID = uuid.New()
 	storages, err := normalizeStorages(app.ID, in.Storage)
 	if err != nil {
 		return Application{}, err

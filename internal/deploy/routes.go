@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
@@ -54,7 +55,8 @@ type deploymentResponse struct {
 
 // deploymentEnvelope wraps a single deployment.
 type deploymentEnvelope struct {
-	Deployment deploymentResponse `json:"deployment"`
+	Receipt    *requestreplay.Result `json:"receipt,omitempty"`
+	Deployment deploymentResponse    `json:"deployment"`
 }
 
 // deploymentListEnvelope wraps a deployment list.
@@ -136,8 +138,9 @@ type applicationResponse struct {
 // attempted (a pasted public URL, or no hook lifecycle wired) and on the
 // read/update responses, which never attempt one.
 type applicationEnvelope struct {
-	Application applicationResponse `json:"application"`
-	Webhook     *webhookOutcome     `json:"webhook,omitempty"`
+	Receipt     *requestreplay.Result `json:"receipt,omitempty"`
+	Application applicationResponse   `json:"application"`
+	Webhook     *webhookOutcome       `json:"webhook,omitempty"`
 }
 
 // webhookOutcome is the wire report of the automatic provider-hook install on
@@ -429,6 +432,8 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Post("/v1/applications", h.createApplication)
+		protected.With(requestreplay.RequireStrict).Post("/v1/mcp/applications", h.createApplication)
+		protected.With(requestreplay.RequireStrict).Post("/v1/mcp/applications/{id}/deploy", h.deploy)
 		protected.Get("/v1/applications", h.listApplications)
 		protected.Get("/v1/applications/{id}", h.getApplication)
 		protected.Put("/v1/applications/{id}", h.updateApplication)
@@ -467,6 +472,11 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
+		return
+	}
+	var replayOK bool
+	r, replayOK = requestreplay.Begin(w, r, userID, teamIDFor(r.Context(), userID), "create_application", uuid.Nil)
+	if !replayOK {
 		return
 	}
 	var req createApplicationRequest
@@ -509,6 +519,12 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		ComposeService:    req.ComposeService,
 	})
 	if err != nil {
+		if requestreplay.WriteError(w, err) {
+			return
+		}
+		if !errors.Is(err, ErrNotFound) && !errors.Is(err, teams.ErrForbidden) && requestreplay.WriteAccepted(w, r.Context(), 201) {
+			return
+		}
 		h.writeServiceError(w, err)
 		return
 	}
@@ -521,16 +537,50 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	// outcome so the caller knows automatic deploys are off and which route
 	// retries the install. A pasted public URL has no provider hook.
 	var webhook *webhookOutcome
-	if supportedSourceProvider(application.Provider) && strings.TrimSpace(application.Repo) != "" {
+	var hookUnconfirmed bool
+	if !requestreplay.Replayed(r.Context()) && supportedSourceProvider(application.Provider) && strings.TrimSpace(application.Repo) != "" {
 		attempted, err := h.svc.InstallHook(r.Context(), userID, application.ID, r)
 		if attempted {
+			hookUnconfirmed = errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 			webhook = &webhookOutcome{Installed: err == nil}
 			if err != nil {
 				webhook.Error = "provider hook not installed; retry with the application webhook endpoint"
 			}
 		}
 	}
+	if result := requestreplay.ResultFrom(r.Context()); result != nil {
+		if !result.Replayed {
+			outcome := "none"
+			if webhook != nil {
+				outcome = "installed"
+				if !webhook.Installed {
+					outcome = "warning"
+				}
+				if hookUnconfirmed || r.Context().Err() != nil {
+					outcome = "not_confirmed"
+				}
+			}
+			if saver, ok := h.svc.(interface {
+				SaveRequestHook(context.Context, string) error
+			}); ok {
+				ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+				if err := saver.SaveRequestHook(ctx, outcome); err != nil {
+					h.logger.Warn("deploy: webhook receipt outcome not confirmed", "application_id", application.ID)
+				}
+				cancel()
+			}
+		}
+		switch result.Hook {
+		case "installed":
+			webhook = &webhookOutcome{Installed: true}
+		case "warning":
+			webhook = &webhookOutcome{Error: "provider hook not installed; retry with the application webhook endpoint"}
+		case "not_confirmed":
+			webhook = &webhookOutcome{Error: "provider hook outcome not confirmed; reconcile before retrying"}
+		}
+	}
 	writeJSON(w, http.StatusCreated, applicationEnvelope{
+		Receipt:     requestreplay.ResultFrom(r.Context()),
 		Application: newApplicationResponse(application),
 		Webhook:     webhook,
 	})
@@ -792,13 +842,34 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var replayOK bool
+	r, replayOK = requestreplay.Begin(w, r, userID, teamIDFor(r.Context(), userID), "deploy", appID)
+	if !replayOK {
+		return
+	}
+	if requestreplay.From(r.Context()) != nil {
+		var body map[string]any
+		if !decodeOptionalBody(w, r, &body) {
+			return
+		}
+		if len(body) != 0 {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: "deploy request must be empty"})
+			return
+		}
+	}
 
 	deployment, err := h.svc.Deploy(r.Context(), userID, appID)
 	if err != nil {
+		if requestreplay.WriteError(w, err) {
+			return
+		}
+		if !errors.Is(err, ErrNotFound) && !errors.Is(err, teams.ErrForbidden) && requestreplay.WriteAccepted(w, r.Context(), 202) {
+			return
+		}
 		h.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, deploymentEnvelope{Deployment: newDeploymentResponse(deployment)})
+	writeJSON(w, http.StatusAccepted, deploymentEnvelope{Receipt: requestreplay.ResultFrom(r.Context()), Deployment: newDeploymentResponse(deployment)})
 }
 
 // list serves GET .../deployments. The response is newest first; ?limit=

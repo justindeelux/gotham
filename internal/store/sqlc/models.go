@@ -445,6 +445,19 @@ type ReposCache struct {
 	CachedAt      pgtype.Timestamptz `json:"cached_at"`
 }
 
+type RequestReceipt struct {
+	PrincipalID    pgtype.UUID        `json:"principal_id"`
+	TeamID         pgtype.UUID        `json:"team_id"`
+	Operation      string             `json:"operation"`
+	TargetID       pgtype.UUID        `json:"target_id"`
+	RequestKey     string             `json:"request_key"`
+	Fingerprint    string             `json:"fingerprint"`
+	ResourceID     pgtype.UUID        `json:"resource_id"`
+	RelatedID      pgtype.UUID        `json:"related_id"`
+	AcceptedAt     pgtype.Timestamptz `json:"accepted_at"`
+	WebhookOutcome string             `json:"webhook_outcome"`
+}
+
 type Restore struct {
 	ID         pgtype.UUID        `json:"id"`
 	DatabaseID pgtype.UUID        `json:"database_id"`

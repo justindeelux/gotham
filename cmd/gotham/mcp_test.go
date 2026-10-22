@@ -123,3 +123,45 @@ func TestMCPDispatchAndStdout(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPStartupErrorCode(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		code   string
+	}{
+		{http.StatusUnauthorized, "unauthorized"},
+		{http.StatusForbidden, "forbidden"},
+		{http.StatusOK, "contract_mismatch"},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprint(w, "upstream-private-text")
+			}))
+			defer api.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPProcessHelper$")
+			cmd.Env = append(os.Environ(), "GOTHAM_TEST_MCP_PROCESS=1", "GOTHAM_TEST_MCP_ARGS=mcp serve", "GOTHAM_MCP_URL="+api.URL, "GOTHAM_MCP_TOKEN=gt1_private-test-token", "GOTHAM_MCP_TEAM_ID=11111111-1111-4111-8111-111111111111")
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != exitError {
+				t.Fatalf("startup exit=%v", err)
+			}
+			if !strings.Contains(stderr.String(), "code="+tc.code) {
+				t.Fatalf("missing stable code: %s", stderr.String())
+			}
+			for _, secret := range []string{"gt1_private-test-token", "upstream-private-text", api.URL} {
+				if strings.Contains(stderr.String(), secret) {
+					t.Fatal("startup error leaked private input")
+				}
+			}
+			if stdout.Len() != 0 {
+				t.Fatal("startup failure wrote stdout")
+			}
+		})
+	}
+}

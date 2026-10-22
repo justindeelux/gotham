@@ -120,3 +120,16 @@ func TestMCPRevokedToken(t *testing.T) {
 		t.Fatalf("revoked token=%d", got)
 	}
 }
+
+func TestMCPContextNotMountedWithoutAuth(t *testing.T) {
+	s := newTestServer(t, stubPinger{}, stubPinger{})
+	for _, token := range []string{"", "Bearer login-token", "Bearer gt1_test"} {
+		req := httptest.NewRequest("GET", "/api/v1/mcp/context", nil)
+		req.Header.Set("Authorization", token)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 404 {
+			t.Fatalf("nil-auth context status=%d want 404", rec.Code)
+		}
+	}
+}

@@ -35,3 +35,8 @@ and request-path inputs are also bounded. REST calls have a 30-second ceiling
 and honor caller cancellation. Error categories are fixed local strings with
 optional HTTP status; upstream bodies, URLs, and transport error text are never
 returned. Later tools must preserve these bounds and project only safe fields.
+
+Callers composing REST paths must apply `url.PathEscape` to each dynamic segment.
+The adapter rejects decoded `.` and `..` segments (including encoded dots), while
+allowing ordinary names containing embedded dots such as `a..b`. Public health
+requests carry no token or team headers after the strict context check.

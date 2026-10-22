@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,7 +27,12 @@ func runMCP(args []string) int {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := mcp.Serve(ctx, cfg, version, logger); err != nil {
 		// SDK errors can contain client-controlled data; diagnostics stay fixed and secret-safe.
-		logger.Error("MCP server stopped")
+		var safe *mcp.Error
+		if errors.As(err, &safe) {
+			logger.Error("MCP server stopped", "code", safe.Code)
+		} else {
+			logger.Error("MCP server stopped")
+		}
 		return exitError
 	}
 	return exitOK

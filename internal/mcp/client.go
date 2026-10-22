@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -59,6 +60,7 @@ func (c *Client) Context(ctx context.Context) (Context, error) {
 }
 
 // readJSON is the package-local registration seam for typed read tools.
+// Callers must url.PathEscape each dynamic path segment before composing the path.
 func (c *Client) readJSON(ctx context.Context, path string, out any) error {
 	return c.get(ctx, path, out, true, false)
 }
@@ -83,17 +85,27 @@ func (c *Client) Health(ctx context.Context) (Health, error) {
 
 func (c *Client) get(ctx context.Context, path string, out any, strict, health bool) error {
 	// Paths originate in tool implementations; reject accidental origin or traversal overrides.
-	if len(path) > 8192 || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "#\\") || strings.Contains(path, "..") {
+	if len(path) > 8192 || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "#\\") {
 		return &Error{Code: "invalid_request"}
 	}
+	decodedPath, err := url.PathUnescape(strings.SplitN(path, "?", 2)[0])
+	if err != nil {
+		return &Error{Code: "invalid_request"}
+	}
+	for _, segment := range strings.Split(decodedPath, "/") {
+		if segment == "." || segment == ".." {
+			return &Error{Code: "invalid_request"}
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.config.URL, "/")+path, nil)
 	if err != nil {
 		return &Error{Code: "invalid_request"}
 	}
-	req.Header.Set("Authorization", "Bearer "+c.config.Token)
-	req.Header.Set("X-Team-Id", c.config.TeamID.String())
 	req.Header.Set("Accept", "application/json")
 	if strict {
+		req.Header.Set("Authorization", "Bearer "+c.config.Token)
+		req.Header.Set("X-Team-Id", c.config.TeamID.String())
 		req.Header.Set(contractHeader, "1")
 	}
 	resp, err := c.http.Do(req)

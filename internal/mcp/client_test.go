@@ -165,6 +165,9 @@ func TestHealthRequiresCurrentContext(t *testing.T) {
 			_, _ = fmt.Fprintf(w, `{"team_id":%q,"capabilities":["strict_reads"]}`, r.Header.Get("X-Team-Id"))
 			return
 		}
+		if r.Header.Get("Authorization") != "" || r.Header.Get("X-Team-Id") != "" || r.Header.Get(contractHeader) != "" {
+			t.Error("public health received authority headers")
+		}
 		healthCalls++
 		w.WriteHeader(503)
 		_, _ = fmt.Fprint(w, `{"status":"degraded","db":"error","redis":"ok"}`)
@@ -183,7 +186,7 @@ func TestHealthRequiresCurrentContext(t *testing.T) {
 
 func TestUnsafeAndOversizedPaths(t *testing.T) {
 	c, _ := NewClient(testConfig("https://example.com"))
-	for _, path := range []string{"https://other.example", "//other.example", "/../secret", "/api/#fragment", "/api/\\secret", "/" + strings.Repeat("x", 8192)} {
+	for _, path := range []string{"https://other.example", "//other.example", "/../secret", "/./secret", "/api/%2e%2e/admin", "/api/%2E%2E/admin", "/api/%2e/admin", "/api/a%2f..%2fadmin", "/api/%zz", "/api/#fragment", "/api/\\secret", "/" + strings.Repeat("x", 8192)} {
 		if err := c.readJSON(context.Background(), path, new(any)); err == nil || err.Error() != "invalid_request" {
 			t.Fatalf("path boundary=%v", err)
 		}
@@ -202,5 +205,24 @@ func TestCrossOriginRedirectDoesNotForwardCredential(t *testing.T) {
 	}
 	if received {
 		t.Fatal("forwarded credential to redirect target")
+	}
+}
+
+func TestPathSegmentsAllowEmbeddedDots(t *testing.T) {
+	for _, path := range []string{"/api/v1/projects/a..b", "/api/v1/projects/a%2E%2Eb", "/api/v1/projects/a%2Fb", "/api/v1/projects?name=.."} {
+		t.Run(path, func(t *testing.T) {
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.RequestURI() != path {
+					t.Errorf("path=%s want %s", r.URL.RequestURI(), path)
+				}
+				acknowledge(w, r)
+				_, _ = fmt.Fprint(w, `{}`)
+			}))
+			defer api.Close()
+			c, _ := NewClient(testConfig(api.URL))
+			if err := c.readJSON(context.Background(), path, new(any)); err != nil {
+				t.Fatalf("valid path: %v", err)
+			}
+		})
 	}
 }

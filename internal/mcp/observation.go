@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/justindeelux/gotham/internal/servers"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -312,7 +311,7 @@ func (c *Client) nodeMetrics(ctx context.Context, input MetricsInput) (MetricsOu
 	if input.Step == "" {
 		input.Step = "1m"
 	}
-	bucket, err := servers.ParseMetricsQuery(input.From, input.To, input.Step)
+	bucket, err := parseMetricsQuery(input.From, input.To, input.Step)
 	if err != nil {
 		return MetricsOutput{}, &Error{Code: "invalid_request"}
 	}

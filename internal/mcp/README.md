@@ -27,8 +27,9 @@ membership. Strict resource reads require the same membership checks, preserving
 legacy behavior for requests without the opt-in header. Successful strict
 responses acknowledge `X-Gotham-MCP-Contract: 1` and
 `X-Gotham-MCP-Team-Id: <configured UUID>` before data can be projected. A backend
-without this contract fails closed. Context advertises only `context` and
-`strict_reads`; no mutation capability or mutation fallback exists in S1.
+without this contract fails closed. Context advertises `context` and `strict_reads`, plus `strict_mutations` and
+`request_replay` when the backend has the required services and stable secret.
+Mutation tools always use strict aliases; no mutation fallback exists.
 
 REST JSON bodies and inbound MCP frames are capped at 2 MiB; URL, credential,
 and request-path inputs are also bounded. REST calls have a 30-second ceiling
@@ -162,3 +163,52 @@ secret loading/decryption fails, including for non-Compose apps. This preserves 
 configured-value masking boundary at the cost of log availability during configuration
 store failures or unreadable secrets after key rotation; pattern-only output is not used
 as a fallback.
+
+## Creation
+
+`project_create` takes `request_id`, `name`, and optional `description`. It returns
+safe project metadata and the actual production environment ID/name; use that
+returned environment rather than guessing an ID. `environment_create` takes
+`request_id`, `project_id`, and `name`. Names remain subject to native uniqueness
+and validation rules.
+
+`application_create` requires `request_id`, `name`, `environment_id`, `server_id`
+(the managed server UUID from discovery), and an explicit `source_type`. Project
+identity derives from the environment. The source schema rejects conflicting
+fields; content, URL, build-pack and ownership validation stay in the native API:
+
+| Source | Required source fields | Optional source fields |
+| --- | --- | --- |
+| `git_public` | `clone_url` | `repo`, `provider`, `branch`, `build_pack` |
+| `git_private` | `clone_url` | `repo`, `branch`, `build_pack` |
+| `github_app` | `provider: github`, `repo`, `clone_url` | `github_app_id`, `branch`, `build_pack` |
+| `gitlab_app` | `provider: gitlab`, `repo`, `clone_url` | `branch`, `build_pack` |
+| `dockerfile` | `dockerfile_content` | `build_args`, `build_pack` |
+| `image` | `image_ref` | paired `registry_username`, `registry_password` |
+| `compose` (pasted) | `compose_content`, `compose_service` | none |
+| `compose` (repository) | `clone_url`, `compose_file`, `compose_service` | `provider`, `repo`, `branch` |
+
+Public Git leaves an empty branch to the remote default; public images require
+no provider. Private provider connections must already exist. A `github_app_id`
+must belong to the token principal, even when another owner shares the team.
+Providerless private Git credential/key setup happens outside MCP after creation
+and before deploy. Creation does not prove clone readiness, deploy anything,
+select a node/environment, create domains, or establish public URL readiness.
+
+All three tools send exactly one POST to the corresponding `/api/v1/mcp/*` strict
+alias, mapping the stable `request_id` to `Idempotency-Key`. There is no legacy
+fallback, generated replacement key, automatic deploy, or automatic retry. Keep
+the same ID and payload after timeouts or lost responses. The backend guarantees
+replay for 24 hours and retains tombstones for 7 days; expired, conflicting,
+in-progress and missing-target outcomes remain explicit errors. A moved/deleted
+resource is never replaced by a retry. Read tokens and read-only memberships
+cannot create resources; current authorization is checked again on every replay.
+
+Results retain accepted resource/related IDs, acceptance time, replay status and
+`accepted`/`accepted_not_confirmed` outcome even when postcommit enrichment is
+unavailable. Application responses project safe metadata plus a fixed webhook
+outcome: `none`, `installed`, `warning`, or `not_confirmed`. A warning means the
+resource exists but hook installation failed; unknown hook outcomes remain
+`not_confirmed`. Replays never retry the hook. Source, pasted content, build args,
+registry credentials and upstream error text are omitted. SDK validation errors
+for these tools are sanitized because diagnostics may otherwise quote secrets.

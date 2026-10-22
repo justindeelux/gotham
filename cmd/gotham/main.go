@@ -42,6 +42,8 @@ func run(args []string) int {
 	}
 
 	switch args[0] {
+	case "mcp":
+		return runMCP(args[1:])
 	case "serve":
 		return runServe()
 	case "admin":
@@ -364,6 +366,7 @@ func usage(w io.Writer) {
 
 Usage:
   gotham serve              Start the control plane
+  gotham mcp serve          Start the MCP stdio adapter
   gotham admin create       Create the first account (--email; see gotham admin help)
   gotham admin reset-password
                             Replace a password and revoke its sessions

@@ -29,6 +29,10 @@ const TeamHeader = "X-Team-Id"
 // creator-scoped behavior.
 func (s *Server) RequireTeam(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, strict := r.Header[http.CanonicalHeaderKey(mcpContractHeader)]; strict {
+			s.requireMCPTeam(next).ServeHTTP(w, r)
+			return
+		}
 		if s.teamService == nil {
 			next.ServeHTTP(w, r)
 			return

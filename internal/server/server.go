@@ -323,6 +323,7 @@ func (s *Server) routes() (http.Handler, error) {
 	// Unmatched API routes return JSON rather than the SPA shell.
 	r.Route("/api", func(api chi.Router) {
 		api.NotFound(s.handleAPINotFound)
+		s.mountMCPRoutes(api)
 
 		if s.auth != nil {
 			s.mountAuthRoutes(api)

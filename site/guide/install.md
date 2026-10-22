@@ -340,7 +340,7 @@ with no CA it refuses to start unless `GOTHAM_AGENT_INSECURE=true`, and a
 plaintext listener is confined to loopback (the installer defaults the address
 to `127.0.0.1:9443`). Never use it on a real node.
 
-Over TLS the channel is mutual (JUS-194): the agent generates a key, sends a CSR
+Over TLS the channel is mutual: the agent generates a key, sends a CSR
 on `Register`, receives a node certificate, and presents it on every later
 connection; the control plane binds the certificate identity and key to the
 node, and each agent accepts only the control plane (a certificate carrying the

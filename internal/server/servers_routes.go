@@ -103,6 +103,11 @@ type serverDTO struct {
 	DiskUsage      *float64   `json:"disk_usage,omitempty"`
 	ContainerCount *int64     `json:"container_count,omitempty"`
 	LastSeen       *time.Time `json:"last_seen,omitempty"`
+
+	// Heartbeat versions are enriched only after ordinary node read authorization.
+	AgentVersion           *string    `json:"agent_version"`
+	AgentVersionReportedAt *time.Time `json:"agent_version_reported_at"`
+
 	// HostKeyFingerprint is the TOFU-pinned SSH host key (SHA256), when known.
 	HostKeyFingerprint *string   `json:"host_key_fingerprint,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
@@ -239,7 +244,7 @@ func (s *Server) handleListServers(w http.ResponseWriter, r *http.Request) {
 
 	response := serverListEnvelope{Servers: make([]serverDTO, 0, len(items))}
 	for i := range items {
-		response.Servers = append(response.Servers, newServerDTO(&items[i]))
+		response.Servers = append(response.Servers, s.observedServerDTO(&items[i]))
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -283,7 +288,7 @@ func (s *Server) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		s.writeServerError(w, "get", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, serverEnvelope{Server: newServerDTO(found)})
+	writeJSON(w, http.StatusOK, serverEnvelope{Server: s.observedServerDTO(found)})
 }
 
 // handleUpdateServer applies a PATCH edit to one server.

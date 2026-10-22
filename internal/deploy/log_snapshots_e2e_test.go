@@ -32,6 +32,9 @@ func TestLogSnapshotDockerAgentReal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("throwaway container: %s %v", output, err)
 	}
+	if waited, waitErr := exec.CommandContext(ctx, "docker", "wait", name).CombinedOutput(); waitErr != nil || strings.TrimSpace(string(waited)) != "0" {
+		t.Fatalf("wait for stopped fixture: %s %v", waited, waitErr)
+	}
 	docker, err := agent.NewDockerClient("")
 	if err != nil {
 		t.Fatal(err)

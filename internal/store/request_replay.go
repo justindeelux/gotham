@@ -59,7 +59,13 @@ func (s *Store) LookupRequestReceipt(ctx context.Context) error {
 
 // withRequestReceipt serializes the identity on PostgreSQL across service instances.
 // The callback reads the original resource on replay; it never writes a replacement.
-func (s *Store) withRequestReceipt(ctx context.Context, fn func(*sqlc.Queries, *requestreplay.Result) (uuid.UUID, uuid.UUID, error)) error {
+func (s *Store) withRequestReceipt(ctx context.Context, fn func(*sqlc.Queries, *requestreplay.Result) (uuid.UUID, uuid.UUID, error)) (err error) {
+	defer func() {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+			err = requestreplay.ErrProgress
+		}
+	}()
 	r := requestreplay.From(ctx)
 	if r == nil || r.Fingerprint == "" || !requestreplay.ValidKey(r.Key) {
 		return fmt.Errorf("replay: incomplete request identity")
@@ -77,10 +83,6 @@ func (s *Store) withRequestReceipt(ctx context.Context, fn func(*sqlc.Queries, *
 		return err
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(identity)); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
-			return requestreplay.ErrProgress
-		}
 		return err
 	}
 	result, err := readReceipt(ctx, tx, r)

@@ -209,15 +209,40 @@ func (r replayHookOutcomeFailure) SaveRequestHook(context.Context, string) error
 	return errors.New("outcome persistence failed")
 }
 
+type replayHookFailure struct {
+	*fakeHookLifecycle
+	err           error
+	cancelRequest func()
+}
+
+func (h replayHookFailure) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error {
+	if err := h.fakeHookLifecycle.InstallHook(ctx, userID, appID, r); err != nil {
+		return err
+	}
+	if h.cancelRequest != nil {
+		h.cancelRequest()
+	}
+	return h.err
+}
+
 func TestReplayHookAndPostcommitResponseLoss(t *testing.T) {
 	st, principal, team, env, node := replayDeployFixture(t)
-	for _, mode := range []string{"installed", "timeout", "before_hook", "outcome_loss"} {
+	for _, mode := range []string{"installed", "timeout", "canceled", "request_canceled", "definite_failure", "before_hook", "outcome_loss"} {
 		t.Run(mode, func(t *testing.T) {
 			hook := &fakeHookLifecycle{}
 			stall := &stallingHookLifecycle{}
+			var cancelRequest context.CancelFunc
 			var lifecycle HookLifecycle = hook
 			if mode == "timeout" {
 				lifecycle = stall
+			}
+			switch mode {
+			case "canceled":
+				lifecycle = replayHookFailure{fakeHookLifecycle: hook, err: errors.Join(errors.New("provider response unavailable"), context.Canceled)}
+			case "request_canceled":
+				lifecycle = replayHookFailure{fakeHookLifecycle: hook, err: errors.New("provider response unavailable"), cancelRequest: func() { cancelRequest() }}
+			case "definite_failure":
+				lifecycle = replayHookFailure{fakeHookLifecycle: hook, err: errors.New("provider refused hook installation")}
 			}
 			repo := newStoreRepository(st, testSecretKey)
 			var repository Repository = repo
@@ -236,6 +261,10 @@ func TestReplayHookAndPostcommitResponseLoss(t *testing.T) {
 				r := httptest.NewRequest("POST", "/v1/applications", strings.NewReader(body))
 				r.Header.Set("Idempotency-Key", mode)
 				r = r.WithContext(teams.WithScope(r.Context(), teams.Scope{UserID: principal, TeamID: team, Role: teams.RoleAdmin}))
+				ctx, cancel := context.WithCancel(r.Context())
+				defer cancel()
+				cancelRequest = cancel
+				r = r.WithContext(ctx)
 				w := httptest.NewRecorder()
 				router.ServeHTTP(w, r)
 				return w
@@ -269,8 +298,16 @@ func TestReplayHookAndPostcommitResponseLoss(t *testing.T) {
 					t.Fatalf("hook repeated/outcome %+v calls=%d", after, hook.installCalls)
 				}
 			case "timeout":
-				if stall.installCalls != 1 || after.Receipt.Hook != "warning" || !strings.Contains(again.Body.String(), "not installed") {
+				if stall.installCalls != 1 || before.Receipt.Hook != "not_confirmed" || after.Receipt.Hook != "not_confirmed" || !strings.Contains(first.Body.String(), "not confirmed") || !strings.Contains(again.Body.String(), "not confirmed") {
 					t.Fatalf("timeout %+v calls=%d", after, stall.installCalls)
+				}
+			case "canceled", "request_canceled":
+				if hook.installCalls != 1 || before.Receipt.Hook != "not_confirmed" || after.Receipt.Hook != "not_confirmed" || !strings.Contains(first.Body.String(), "not confirmed") || !strings.Contains(again.Body.String(), "not confirmed") {
+					t.Fatal("canceled hook was asserted not installed or repeated")
+				}
+			case "definite_failure":
+				if hook.installCalls != 1 || before.Receipt.Hook != "warning" || after.Receipt.Hook != "warning" || !strings.Contains(again.Body.String(), "not installed") {
+					t.Fatal("definite hook failure lost its warning")
 				}
 			case "outcome_loss":
 				if hook.installCalls != 1 || after.Receipt.Hook != "not_confirmed" || !strings.Contains(again.Body.String(), "not confirmed") {

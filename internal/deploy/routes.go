@@ -537,9 +537,11 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	// outcome so the caller knows automatic deploys are off and which route
 	// retries the install. A pasted public URL has no provider hook.
 	var webhook *webhookOutcome
+	var hookUnconfirmed bool
 	if !requestreplay.Replayed(r.Context()) && supportedSourceProvider(application.Provider) && strings.TrimSpace(application.Repo) != "" {
 		attempted, err := h.svc.InstallHook(r.Context(), userID, application.ID, r)
 		if attempted {
+			hookUnconfirmed = errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 			webhook = &webhookOutcome{Installed: err == nil}
 			if err != nil {
 				webhook.Error = "provider hook not installed; retry with the application webhook endpoint"
@@ -553,6 +555,9 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 				outcome = "installed"
 				if !webhook.Installed {
 					outcome = "warning"
+				}
+				if hookUnconfirmed || r.Context().Err() != nil {
+					outcome = "not_confirmed"
 				}
 			}
 			if saver, ok := h.svc.(interface {

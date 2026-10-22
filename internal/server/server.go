@@ -89,6 +89,9 @@ type Server struct {
 	tokens      TokenService
 	servers     ServerService
 	persistence *store.Store
+
+	ephemeralSecret bool
+
 	// instanceSvc backs instance settings (JUS-92); nil without a database.
 	instanceSvc *instance.Service
 	teamService teams.TeamService
@@ -180,6 +183,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		cfg:               cfg,
 		logger:            logger,
 		secretKey:         secretKey,
+		ephemeralSecret:   generatedSecret,
 		db:                db,
 		allowRegistration: snap.Auth.AllowRegistration,
 		redis:             redisClient,

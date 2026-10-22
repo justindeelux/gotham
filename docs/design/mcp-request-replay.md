@@ -12,8 +12,10 @@ unchanged. MCP clients must use only these strict aliases:
 Aliases require an API token with deploy scope, `X-Gotham-MCP-Contract: 1`, an
 explicit nonzero `X-Team-Id`, current owner/admin membership, and a key matching
 `[A-Za-z0-9._:-]{1,128}`. They reuse the ordinary handlers and domain validation.
-The authenticated context advertises `strict_mutations` and `request_replay` when
-persistence is wired. Applications must also be enabled for application routes.
+The authenticated context advertises `strict_mutations` only when persistence and
+the application service are wired and applications are enabled. It advertises
+`request_replay` only when that same wiring uses a configured or persisted secret
+key; an ephemeral fallback key cannot preserve application fingerprints on restart.
 An older control plane returns 404: never fall back to a legacy mutation path.
 
 ## Identity and canonical input
@@ -88,11 +90,15 @@ locks and the active-deployment unique index remain in force.
 
 Only the first successful application-create path attempts the bounded best-effort
 provider hook. Its safe `installed`, `warning`, or `none` outcome is saved after
-that attempt. A crash/enrichment failure before the attempt, or lost persistence
-after the provider accepted it, leaves `not_confirmed`. Replay never installs a
+that attempt. A timeout or cancellation is ambiguous even when the provider may
+have accepted the hook, so it is saved as `not_confirmed`; only definite failures
+use `warning`. A crash/enrichment failure before the attempt, or lost persistence
+after the provider accepted it, also leaves `not_confirmed`. Replay never installs a
 hook to reconstruct its response; known warnings and unknown outcomes are
 returned with the accepted application ID. Explicit provider onboarding and hook
-retry remain separate operator actions.
+retry remain separate operator actions. Opted-in responses use the same generic
+webhook warning/not-confirmed text on the first response and replays, rather than
+preserving provider-specific detail; provider errors are never saved in receipts.
 
 Rollback disables the opt-in handlers/aliases and retains migration 00062 and its
 receipts. Do not roll back or edit the merged schema migration.

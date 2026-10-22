@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/teams"
 )
@@ -72,8 +73,11 @@ func (s *Server) mountMCPRoutes(api chi.Router) {
 	api.With(s.readScopeAuth, s.requireMCPTeam).Get("/v1/mcp/context", func(w http.ResponseWriter, r *http.Request) {
 		scope, _ := teams.FromContext(r.Context())
 		capabilities := []string{"context", "strict_reads"}
-		if s.persistence != nil {
-			capabilities = append(capabilities, "strict_mutations", "request_replay")
+		if s.persistence != nil && s.deploy != nil && deploy.Enabled() {
+			capabilities = append(capabilities, "strict_mutations")
+			if !s.ephemeralSecret {
+				capabilities = append(capabilities, "request_replay")
+			}
 		}
 		writeJSON(w, http.StatusOK, struct {
 			TeamID       uuid.UUID `json:"team_id"`

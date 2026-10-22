@@ -328,3 +328,45 @@ func TestRequestReplayCleanupBound(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestReplayResourceLockTimeout(t *testing.T) {
+	st, _ := replayTestStore(t)
+	team, project, _, _ := seedReplayResources(t, st)
+	ctx := context.Background()
+	holder, err := st.DB.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	// The environment insert's foreign-key check waits on this parent row.
+	if _, err := holder.Exec(ctx, "SELECT id FROM projects WHERE id=$1 FOR UPDATE", project.ID); err != nil {
+		t.Fatal(err)
+	}
+	request := func() context.Context {
+		return replayContext(t, team, team, "create_environment", uuid.UUID(project.ID.Bytes), "resource-lock", "body")
+	}
+	params := sqlc.CreateEnvironmentParams{ID: replayUUID(uuid.New()), ProjectID: project.ID, Name: "blocked"}
+	c := request()
+	if _, err := st.CreateEnvironment(c, params); !errors.Is(err, requestreplay.ErrProgress) {
+		t.Fatalf("resource lock timeout=%v, want request_in_progress", err)
+	}
+	if requestreplay.ResultFrom(c) != nil {
+		t.Fatal("timed-out resource was accepted")
+	}
+	var receipts, resources int
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM request_receipts WHERE request_key='resource-lock'").Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM environments WHERE name='blocked'").Scan(&resources); err != nil {
+		t.Fatal(err)
+	}
+	if receipts != 0 || resources != 0 {
+		t.Fatalf("timeout left receipt/resource rows: %d/%d", receipts, resources)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateEnvironment(request(), params); err != nil {
+		t.Fatalf("same-key retry after unlock: %v", err)
+	}
+}

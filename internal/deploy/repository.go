@@ -22,6 +22,7 @@ import (
 // configuration the runtime payload is built from. It is implemented over
 // *store.Store (sqlc) in production and by fakes in tests.
 type Repository interface {
+	GetBoundedBuildLog(context.Context, uuid.UUID, uuid.UUID, LogOptions) (string, State, bool, error)
 	// GetApplication returns the application, or ErrNotFound.
 	GetApplication(ctx context.Context, appID uuid.UUID) (Application, error)
 	// ListApplications returns the applications of the scope's active team

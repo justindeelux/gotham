@@ -42,6 +42,12 @@ live only in [`TODO.md`](TODO.md).
 |---|---|
 | [`plans/`](plans/) | Medium to large features and phases: goal, scope, backend + web design, work packages, risks |
 
+## Reference
+
+[`features-inventory.md`](features-inventory.md) — code-derived ground truth of what
+Gotham actually does (extracted at commit `d77c6aaba`), for content writers. Public
+documentation lives in [`../site/`](../site/).
+
 ## How we work
 
 [`../AGENTS.md`](../AGENTS.md) — workflow and invariants.

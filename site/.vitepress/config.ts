@@ -121,7 +121,7 @@ export default defineConfig({
                 { text: "Tổng quan", link: "/vi/operating/" },
                 { text: "Node và container", link: "/vi/operating/nodes-containers" },
                 { text: "Terminal và tệp", link: "/vi/operating/terminal-files" },
-                { text: "Cửa hàng ứng dụng", link: "/vi/operating/app-store" },
+                { text: "Kho ứng dụng", link: "/vi/operating/app-store" },
                 { text: "Mạng của instance", link: "/vi/operating/instance-network" },
                 { text: "Proxy và DNS", link: "/vi/operating/proxy-dns" },
                 { text: "Bảo mật", link: "/vi/operating/security" },

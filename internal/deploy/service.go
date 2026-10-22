@@ -137,6 +137,9 @@ type DeployService interface {
 	// without a team context), newest first, at most limit rows (clamped).
 	// It backs the dashboard feed and never crosses the team boundary.
 	ListRecentDeployments(ctx context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error)
+	// GetDeployment returns one exact release after application read authorization.
+	GetDeployment(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error)
+
 	// GetDeploymentBuildLog returns the persisted build log of one
 	// deployment (JUS-84). Same ownership as the deployment reads: a foreign
 	// deployment answers ErrNotFound. Empty while the run is in flight.

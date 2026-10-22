@@ -256,11 +256,11 @@ func TestObservationProtocolAndAfterInitDisablement(t *testing.T) {
 	}
 	defer cs.Close()
 	list, err := cs.ListTools(ctx, &sdk.ListToolsParams{})
-	if err != nil || len(list.Tools) != 15 {
+	if err != nil || len(list.Tools) != 18 {
 		t.Fatalf("tools=%+v %v", list, err)
 	}
 	for _, tool := range list.Tools {
-		if tool.Annotations == nil || (!strings.HasSuffix(tool.Name, "_create") && !tool.Annotations.ReadOnlyHint) || tool.InputSchema == nil || tool.OutputSchema == nil {
+		if tool.Annotations == nil || (!strings.HasSuffix(tool.Name, "_create") && tool.Name != "application_deploy" && !tool.Annotations.ReadOnlyHint) || tool.InputSchema == nil || tool.OutputSchema == nil {
 			t.Fatalf("contract=%+v", tool)
 		}
 	}

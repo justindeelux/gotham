@@ -212,3 +212,39 @@ resource exists but hook installation failed; unknown hook outcomes remain
 `not_confirmed`. Replays never retry the hook. Source, pasted content, build args,
 registry credentials and upstream error text are omitted. SDK validation errors
 for these tools are sanitized because diagnostics may otherwise quote secrets.
+
+## Deployment tools
+
+`application_deploy` requires explicit `application_id` and stable `request_id`
+(1–128 ASCII letters, digits, `.`, `_`, `:`, or `-`). It sends one empty-body POST
+only to `/api/v1/mcp/applications/{id}/deploy`. A missing strict route fails closed;
+there is no legacy POST fallback. Reuse the same key after a timeout, canceled
+client wait, or response loss: the job may already be accepted. Never automatically
+issue a new key. Replay is guaranteed for 24 hours; tombstones remain for 7 days,
+after which manual reconciliation is required. Configuration changes do not alter
+the empty deploy fingerprint. A deliberate new deploy after a known terminal
+failure needs a separately authorized new request ID.
+
+The result has `accepted: true` and a durable receipt with `resource_id` (the exact
+deployment ID), original `accepted_at`, `replayed`, and `outcome`. A 202 is acceptance,
+not a finished deployment. A postcommit failure may yield only that receipt with
+`accepted_not_confirmed`; the deployment projection is then absent. Poll the receipt's
+ID. Replay after control-plane restart returns the same possibly-failed ID and never
+re-enqueues it.
+
+`deployments_list` returns the newest releases of one application with `limit`
+(default 20, maximum 100) and explicit `newest_window_not_complete_history` coverage.
+`deployment_status` makes one read for an exact `application_id`/`deployment_id` pair
+through the additive read-authorized GET. Old IDs remain addressable outside the
+history window; mismatched, foreign and moved application targets return 404.
+Read-scoped tokens and read-only members can poll; deploy requires deploy scope
+and a write-authorized team role.
+
+Status preserves wire state and original created/updated/started/finished timestamps.
+`terminal` is true only for `running` or `failed`; queued, cloning, building, pushing
+and starting remain nonterminal. Pipeline `running` means the pipeline completed;
+it does not establish current container health or public URL readiness. Use runtime
+observation separately. Canceling the client wait never means the job was canceled.
+Clients choose bounded polling; these tools do not wait, monitor, retry, remediate
+or roll back. MCP metadata excludes raw pipeline errors, logs, source/configuration
+and Compose documents; lifecycle failures remain visible through the original state.

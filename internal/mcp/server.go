@@ -30,6 +30,7 @@ func registerTools(server *sdk.Server, client *Client) {
 	registerDiscoveryTools(server, client)
 	registerLogTools(server, client)
 	registerCreateTools(server, client)
+	registerDeploymentTools(server, client)
 }
 
 func Serve(ctx context.Context, cfg Config, version string, logger *slog.Logger) error {

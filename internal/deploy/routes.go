@@ -450,6 +450,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/applications/{id}/start", h.start)
 		protected.Post("/v1/applications/{id}/deploy", h.deploy)
 		protected.Get("/v1/applications/{id}/deployments", h.list)
+		protected.Get("/v1/applications/{id}/deployments/{deployment_id}", h.getDeployment)
 		protected.Get("/v1/applications/{id}/deployments/{deployment_id}/logs", h.getDeploymentLog)
 		protected.Post("/v1/applications/{id}/rollback", h.rollback)
 		protected.Post("/v1/applications/{id}/deploy-key", h.createDeployKey)

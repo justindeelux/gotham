@@ -174,7 +174,7 @@ async function mountPage(
 }
 
 describe("opening a storage volume in File Manager", () => {
-  it("lands in the linked directory when the previous visit's tabs are still in the store", async () => {
+  it("adds the linked directory as a new tab beside the previous visit's tabs", async () => {
     const files = useFilesStore();
     // The user was in File Manager for this server before opening the volume:
     // the store is bound and localStorage holds the persisted snapshot.
@@ -190,6 +190,9 @@ describe("opening a storage volume in File Manager", () => {
       "/servers/server-1/files?root=volumes&path=app-1/data",
     );
 
+    // The volume opens its own focused tab; the composed tab is still there.
+    expect(files.tabs).toHaveLength(2);
+    expect(files.tabs[0].rootName).toBe("compose");
     expect(files.activeTab.rootName).toBe("volumes");
     expect(files.activeTab.path).toBe("app-1/data");
     expect(files.entries[0]?.name).toBe("volumes:app-1/data");
@@ -212,6 +215,8 @@ describe("opening a storage volume in File Manager", () => {
 
     expect(files.activeTab.rootName).toBe("volumes");
     expect(files.activeTab.path).toBe("app-2/data");
+    // The first volume's tab stays open too.
+    expect(files.tabs.filter((tab) => tab.path === "app-1/data")).toHaveLength(1);
     wrapper.unmount();
   });
 

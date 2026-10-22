@@ -92,10 +92,11 @@ function mountMode(mount: VolumeMount): string {
 }
 
 /**
- * openHref is the validated File Manager deep link of one volume row, or null
- * when the backend target names another server (never routed).
+ * openRoute is the validated File Manager deep link of one volume row, or null
+ * when the backend target names another server (never routed). The File
+ * Manager page opens it as a new internal tab in this browser tab.
  */
-function openHref(row: ApplicationVolume): string | null {
+function openRoute(row: ApplicationVolume): ReturnType<typeof filesDeepLinkRoute> | null {
   const target = row.file_manager;
   if (!target) {
     return null;
@@ -108,7 +109,7 @@ function openHref(row: ApplicationVolume): string | null {
   if (!isFilesDeepLink(link, props.serverId ?? "")) {
     return null;
   }
-  return router.resolve(filesDeepLinkRoute(link)).href;
+  return filesDeepLinkRoute(link);
 }
 
 /** unavailableText explains why a row has no File Manager link. */
@@ -184,22 +185,22 @@ const volumeColumns = computed<DataTableColumns<ApplicationVolume>>(() => [
     key: "open",
     width: 175,
     render: (row) => {
-      const href = openHref(row);
-      return href === null
+      const route = openRoute(row);
+      return route === null
         ? h(
             NText,
             { depth: 3, class: "storage-open-reason" },
             { default: () => unavailableText(row) },
           )
         : h(
-            "a",
+            NButton,
             {
-              href,
-              target: "_blank",
-              rel: "noopener",
+              size: "small",
+              quaternary: true,
               "aria-label": t("applications.storageTab.openAria", { name: row.name }),
+              onClick: () => void router.push(route),
             },
-            t("applications.storageTab.openAction"),
+            { default: () => t("applications.storageTab.openAction") },
           );
     },
   },

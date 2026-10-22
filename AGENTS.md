@@ -5,6 +5,7 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
 ## Development Workflow
 
 - Docs index: `docs/README.md` (plan status, process, test server, design).
+- Public docs: `site/` (VitePress, EN + `/vi/`); `docs/` is internal reference, never `docs/plans/`.
 - Each task = 1 work package in its own worktree/branch (naming: `docs/ORCHESTRATION.md` → Naming rule), merged via its own PR; CI must be green before merge. `docs/plans/` and `docs/TODO.md` are reference only.
 - Git operations (branching, commit messages, merge vs rebase, conflict resolution): use the `/git-workflow` skill. Commits and PR titles follow Conventional Commits, `<type>(<scope>): <subject>` (e.g. `fix(files): show owner / mode separately`). Branch and worktree names keep the `<type>/<slug>` rule in `docs/ORCHESTRATION.md`.
 - Invariants (run after every task, before merge):
@@ -14,6 +15,7 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
   4. Migrations are **forward-only** — never edit a merged migration; schema change = new migration
   5. `npm run build` + `npm run type-check` clean (web/)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
+  7. `cd site && npm ci && npm run docs:build` clean (`site/` only; Node 20+; no Go/`web/` impact)
 - Orchestration rules (worker dispatch, recipe, lessons): see `docs/ORCHESTRATION.md`.
 - UI e2e: run the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).

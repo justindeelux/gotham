@@ -13,6 +13,9 @@ The newest protocol uses SDK discovery; older protocols use initialize.
 The process test additionally verifies real stdio initialize/list traffic at
 `2025-11-25`. Protocol framing, negotiation, cancellation, and lifecycle are owned
 by the SDK. Diagnostics go to stderr; stdout is reserved for MCP JSON-RPC.
+`TestProtocolStdioAllTools` drives that real stdio process with the SDK client
+for every registered tool schema and annotation; operator documentation lives in
+[`docs/mcp.md`](../../docs/mcp.md).
 
 Observation and discovery tools register through `registerTools` using typed SDK
 handlers and safe DTOs; there is no generic HTTP request tool. `Client.readJSON`

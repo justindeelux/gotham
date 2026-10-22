@@ -58,6 +58,14 @@ workflow, Playwright UI smoke, and what has been verified on real hardware.
 updates/rollback, and the signed release/signing flow (keypair, assets,
 GoReleaser workflow).
 
+## MCP server
+
+[`mcp.md`](mcp.md) — operator docs for `gotham mcp serve` (local stdio MCP
+client): client configuration with placeholder credentials, supported Linux
+hosts, the 18-tool catalog and bounds, request-ID recovery, fixed team context,
+source prerequisites, retained resources and log-confidentiality limits.
+Release notes: [`releases/mcp-server-v1.md`](releases/mcp-server-v1.md).
+
 ## One-click service templates
 
 [`../templates/README.md`](../templates/README.md) — the template format

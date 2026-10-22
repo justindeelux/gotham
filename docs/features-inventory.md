@@ -19,8 +19,19 @@ Evidence convention: `file:line` in this repo. HTTP paths below the `/api/v1` mo
   notification channels, PR previews, instance network settings.
 - OAuth login is **GitHub only** (`cmd/gotham/main.go:294-307`); the route is
   `{provider}`-shaped but only one provider is wired.
-- Build engines railpack / buildpacks are detection-only (`ErrEngineNotWired`);
-  only Dockerfile and static builds work (`internal/builds/doc.go:6-8`).
+- Four build engines are wired: dockerfile, railpack, buildpacks, static
+  (`internal/builds/{dockerfile,railpack,buildpacks,static}.go`). Railpack needs
+  the `railpack` + `buildkit` + `docker` host tools, buildpacks needs `pack`;
+  both are installable from the App Store. Do not trust
+  `internal/builds/doc.go:6-8` / `errors.go` — they still say "detection only"
+  and `ErrEngineNotWired` is never returned.
+- `GOTHAM_AGENT_FILES`: the agent binary defaults to enabled
+  (`Files: !envOff(...)`, `agent/config.go:242`), while `install-agent.sh`
+  defaults its prompt to No and writes `false`. Describe both, not "off by
+  default".
+- Backup targets (`/databases/backup-targets`) are team/resource-scoped, not
+  operator-only: mounted with `resourceScopeAuth`
+  (`internal/server/server.go:641`).
 
 ## End-user features (web console)
 
@@ -30,7 +41,7 @@ Evidence convention: `file:line` in this repo. HTTP paths below the `/api/v1` mo
 | Dashboard | KPI tiles (servers ready, running applications; the deploys/24h and SSL tiles are empty placeholders), server health grid, recent deploys | `web/src/features/dashboard/pages/DashboardPage.vue:172-227`, `web/src/features/dashboard/locales/en.ts:15-27` |
 | Projects | Create project (auto production env), rename/delete, shared variables | `web/src/features/projects/pages/ProjectsPage.vue:109`, `internal/projects/service.go:230` |
 | Environments | Add resource (app / service / database), shared variables, switch sibling env | `web/src/features/add-resource/components/ResourcePicker.vue:50`, `web/src/features/projects/composables/useEnvironmentPage.ts:413` |
-| Applications | Deploy, redeploy, rollback, start/stop; tabs Overview, Deployments, Logs, Environment, Terminal, Storage, Domains, Previews, Settings | `web/src/features/applications/pages/ApplicationDetailPage.vue:123-288` |
+| Applications | Four build packs (Dockerfile, Railpack, Buildpacks, static; auto-detect in that order); deploy, redeploy, rollback, start/stop; tabs Overview, Deployments, Logs, Environment, Terminal, Storage, Domains, Previews, Settings | `web/src/features/applications/pages/ApplicationDetailPage.vue:123-288` |
 | Databases | PostgreSQL, MySQL, MariaDB, MongoDB, Redis; start/stop/restart; credentials + connection string; backups, restore, cron schedules, S3 targets | `internal/databases/engine.go:12-16`, `internal/databases/routes.go:141-144`, `internal/databases/backup_routes.go:181-198`, `web/src/features/databases/composables/useDatabaseDetail.ts:141-147` |
 | Services | One compose project per service; edit compose.yaml; deploy/stop/restart; logs; deploy history | `web/src/features/services/pages/ServiceDetailPage.vue:67-122` |
 | Templates | One-click: WordPress, Nextcloud, n8n, Uptime Kuma; render to compose + env | `templates/embed.go:15-16` |

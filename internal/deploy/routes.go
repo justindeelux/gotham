@@ -961,7 +961,7 @@ func (h *handler) getDeploymentLog(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid deployment id"})
 		return
 	}
-	if r.URL.RawQuery != "" {
+	if r.URL.Query().Has("tail") || r.URL.Query().Has("max_bytes") {
 		options, ok := logOptionsParam(w, r, false)
 		if !ok {
 			return

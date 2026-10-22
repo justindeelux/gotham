@@ -162,15 +162,22 @@ func readLogPrefix(reader io.Reader, maxBytes, maxLines int) (LogRead, int) {
 	return out, lines
 }
 
-var logCredentialField = regexp.MustCompile(`(?i)((?:password|passwd|token|api[_-]?key|secret|authorization)["']?\s*[:=]\s*["']?)[^\s,"'}]+`)
+var logCredentialField = regexp.MustCompile(`(?i)((?:password|passwd|token|api[_-]?key|secret|authorization)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|(?:(?:basic|bearer)\s+)?[^\s,"'}]+)`)
 var logBearer = regexp.MustCompile(`(?i)(bearer\s+)[^\s,"'}]+`)
 var logURLCredential = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s/]*[:@][^\s]*`)
 
 func maskLog(raw string, env map[string]string, incomplete bool, maxBytes int) string {
+	// Short/common values would erase ordinary diagnostics such as "retry 1 of 10".
+	maskValues := make(map[string]string, len(env))
+	for key, value := range env {
+		if len(value) >= 6 {
+			maskValues[key] = value
+		}
+	}
 	// Hide partial configured values at a cap too; never expose a credential prefix as a clipping artifact.
 	if incomplete {
 		cut := 0
-		for _, value := range env {
+		for _, value := range maskValues {
 			for _, candidate := range []string{value, strings.ReplaceAll(value, "$", "$$")} {
 				for n := min(len(candidate), len(raw)); n > 0; n-- {
 					if strings.HasSuffix(raw, candidate[:n]) {
@@ -184,11 +191,18 @@ func maskLog(raw string, env map[string]string, incomplete bool, maxBytes int) s
 			raw = raw[:len(raw)-cut] + "<redacted>"
 		}
 	}
-	raw = services.Redact(raw, env)
+	raw = services.Redact(raw, maskValues)
 	raw = redactCloneError(raw)
 	raw = logURLCredential.ReplaceAllString(raw, "${1}<redacted>")
 	raw = logBearer.ReplaceAllString(raw, "${1}<redacted>")
-	raw = logCredentialField.ReplaceAllString(raw, "${1}<redacted>")
+	raw = logCredentialField.ReplaceAllStringFunc(raw, func(field string) string {
+		indexes := logCredentialField.FindStringSubmatchIndex(field)
+		prefix, value := field[:indexes[3]], field[indexes[3]:]
+		if value[0] == '"' || value[0] == '\'' {
+			return prefix + value[:1] + "<redacted>" + value[:1]
+		}
+		return prefix + "<redacted>"
+	})
 	if len(raw) > maxBytes {
 		raw = raw[:maxBytes]
 		for !utf8.ValidString(raw) {

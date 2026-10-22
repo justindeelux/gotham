@@ -121,13 +121,16 @@ application GET, including stopped containers. `deployment_logs` reads only pers
 build output for an exact application/deployment pair. Build output is persisted at
 terminal best effort: an active empty log is `not_yet_persisted`; a terminal empty log
 means `no_persisted_output_available`, not proven silence. The no-query REST build-log
-GET retains its original `{log}` shape; bounded reads opt in with `tail`/`max_bytes`.
+GET retains its original `{log}` shape, including requests with unknown-only query
+parameters; bounded reads opt in when `tail` or `max_bytes` is present.
 
 Both default to 100 lines and 64 KiB, with hard maxima of 1000 lines, 256 KiB and a
 15-second overall deadline. Runtime selection is at most ten app-owned full container
 IDs in stable ID order, with exact optional Compose service/replica selectors. Reads
 are sequential (one active stream), follow is false, and the line/byte budget is shared
-across all selected containers. Connections and stream contexts close at the cap.
+across all selected containers. Sequential reads keep buffering and cancellation simple,
+but a slow early container can consume the shared deadline and leave later containers
+unread or timed out. Connections and stream contexts close at the cap.
 Snapshots never switch to a replacement container. Release association remains nullable
 and is not inferred from the current app/pipeline. Per-container StreamLogs avoids
 Compose Ready/control frames entirely. Empty data chunks are ignored.
@@ -143,10 +146,19 @@ oversized gRPC response can fail with `upstream_too_large`; 256 KiB is a respons
 content ceiling, not an end-to-end memory ceiling.
 
 Logs are untrusted data, never tool instructions. Reads mask current configured
-application/shared environment values (including dollar-escaped values), URL userinfo,
-common credential fields and bearer tokens. The MCP adapter also suppresses its fixed
+application/shared environment values of at least six UTF-8 bytes (including
+dollar-escaped values), URL userinfo, common quoted/unquoted credential fields and
+Authorization Basic/Bearer values. Shorter configured values are skipped to preserve
+ordinary diagnostics such as `retry 1 of 10`; short secrets emitted outside recognized
+credential fields may therefore remain. The MCP adapter also suppresses its fixed
 API token. Masking precedes final clipping and covers configured-value prefixes at a
 cap. Arbitrary application-emitted secrets, historical/rotated values, encodings and
 unrecognized formats may remain: no perfect redaction is promised. Credentials,
 source/configuration and raw agent errors are not included as response metadata.
 Large log text appears only in structuredContent; the text fallback is a short notice.
+
+Both log snapshot reads fail closed with a generic error if configured environment or
+secret loading/decryption fails, including for non-Compose apps. This preserves the
+configured-value masking boundary at the cost of log availability during configuration
+store failures or unreadable secrets after key rotation; pattern-only output is not used
+as a fallback.

@@ -190,10 +190,10 @@ func TestSnapshotFailuresCloseStreams(t *testing.T) {
 	}
 }
 func TestSnapshotMaskingAndClipping(t *testing.T) {
-	env := map[string]string{"SECRET": "configured-value", "ESCAPED": "x$y", "SHORT": "a-secret"}
-	for _, raw := range []string{"prefix configured-value suffix", "x$$y", "token=private-value", "Authorization: Bearer private-value", "https://user:pass@example.com/repo", "configured-va"} {
+	env := map[string]string{"SECRET": "configured-value", "ESCAPED": "long$x$y", "SHORT": "a-secret"}
+	for _, raw := range []string{"prefix configured-value suffix", "long$$x$$y", "token=private-value", "Authorization: Bearer private-value", "https://user:pass@example.com/repo", "configured-va"} {
 		got := maskLog(raw, env, true, 256)
-		for _, secret := range []string{"configured-value", "private-value", "user:pass", "x$$y", "configured-va"} {
+		for _, secret := range []string{"configured-value", "private-value", "user:pass", "long$$x$$y", "configured-va"} {
 			if strings.Contains(got, secret) {
 				t.Fatalf("secret in %q", got)
 			}

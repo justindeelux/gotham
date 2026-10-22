@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/justindeelux/gotham/agent"
@@ -23,6 +26,7 @@ import (
 	"github.com/justindeelux/gotham/internal/deploy"
 	adapter "github.com/justindeelux/gotham/internal/mcp"
 	"github.com/justindeelux/gotham/internal/projects"
+	"github.com/justindeelux/gotham/internal/server"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -114,6 +118,17 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	if _, err := pool.Exec(ctx, "UPDATE servers SET status='ready', last_seen=now() WHERE id=$1", node.ID); err != nil {
 		t.Fatal(err)
 	}
+	// A legacy node (team_id NULL) predates teams and must stay visible to
+	// every team, while team A's node must stay invisible to team B.
+	legacy, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "mcp-legacy-node", Ip: "127.0.0.1", Port: 22, SshUser: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyID := uuid.UUID(legacy.ID.Bytes)
+	if _, err := pool.Exec(ctx, "UPDATE servers SET status='ready', last_seen=now() WHERE id=$1", legacyID); err != nil {
+		t.Fatal(err)
+	}
+	var workflowApps []string
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cleanupCancel()
@@ -126,11 +141,19 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 				t.Logf("cleanup %q: %v", query, err)
 			}
 		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id=$1", nodeID); err != nil {
-			t.Logf("cleanup server: %v", err)
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id=$1 OR id=$2", nodeID, legacyID); err != nil {
+			t.Logf("cleanup servers: %v", err)
 		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id IN ($1,$2)", teamAID, teamBID); err != nil {
 			t.Logf("cleanup teams: %v", err)
+		}
+		// CreateUser auto-creates the owner's personal team (id = user id);
+		// it is not one of the fixture teams and must not survive the run.
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM team_members WHERE team_id=$1", userID); err != nil {
+			t.Logf("cleanup personal membership: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id=$1", userID); err != nil {
+			t.Logf("cleanup personal team: %v", err)
 		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM request_receipts WHERE principal_id=$1", userID); err != nil {
 			t.Logf("cleanup receipts: %v", err)
@@ -138,6 +161,7 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id=$1", userID); err != nil {
 			t.Logf("cleanup user: %v", err)
 		}
+		assertMCPWorkflowClean(t, cleanupCtx, pool, userID, teamAID, teamBID, nodeID, legacyID, workflowApps)
 	})
 
 	// The real agent on the local Docker daemon.
@@ -217,13 +241,22 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		t.Fatal("revoked token initialized the adapter")
 	}
 
-	// Inspect the authorized node before mutating anything.
+	// Inspect the authorized nodes before mutating anything. The legacy node is
+	// shared; team A's node is not visible to team B.
 	nodes := h.call(t, owner, "nodes_list", map[string]any{"limit": 10})
-	if nodes["total"] != float64(1) || len(nodes["nodes"].([]any)) != 1 {
+	if nodes["total"] != float64(2) {
 		t.Fatalf("nodes_list=%+v", nodes)
 	}
-	if got := nodes["nodes"].([]any)[0].(map[string]any)["id"]; got != nodeID.String() {
-		t.Fatalf("node id=%v want %s", got, nodeID)
+	ownerNodes := nodeIDSet(nodes)
+	if !ownerNodes[nodeID.String()] || !ownerNodes[legacyID.String()] {
+		t.Fatalf("team A nodes=%v want team node %s and legacy %s", ownerNodes, nodeID, legacyID)
+	}
+	foreignNodes := nodeIDSet(h.call(t, foreign, "nodes_list", map[string]any{"limit": 10}))
+	if foreignNodes[nodeID.String()] {
+		t.Fatalf("team B saw team A's node %s: %v", nodeID, foreignNodes)
+	}
+	if !foreignNodes[legacyID.String()] {
+		t.Fatalf("team B did not see the legacy shared node: %v", foreignNodes)
 	}
 	nodeOut := h.call(t, owner, "node_overview", map[string]any{"node_id": nodeID.String()})
 	if nodeOut["node"].(map[string]any)["status"] != "ready" {
@@ -260,7 +293,7 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	fixture.commit(t, marker, `FROM busybox:1.36
 COPY index.html /www/index.html
 EXPOSE 8080
-CMD ["sh","-c","echo gotham-mcp-runtime; exec httpd -f -p 8080 -h /www"]
+CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET}; exec httpd -f -p 8080 -h /www"]
 `)
 	app := h.call(t, owner, "application_create", map[string]any{
 		"request_id": "mcp-app", "name": "mcp-app-" + suffix,
@@ -268,10 +301,13 @@ CMD ["sh","-c","echo gotham-mcp-runtime; exec httpd -f -p 8080 -h /www"]
 		"clone_url": fixture.dir,
 	})
 	appID := app["application"].(map[string]any)["id"].(string)
+	workflowApps = append(workflowApps, appID)
 	t.Cleanup(func() {
 		removeImages(t, "gotham/"+appID)
 		removeLabelledContainers(t, "gotham.app_id="+appID)
 	})
+	// The configured value must be masked in the runtime log snapshot.
+	h.putEnv(t, deployToken.Token, teamAID, appID, "MCP_ECHO_SECRET", "secret-echo-sentinel")
 
 	// A public image application proves the second source without deploying it.
 	image := h.call(t, owner, "application_create", map[string]any{
@@ -292,12 +328,18 @@ CMD ["sh","-c","echo gotham-mcp-runtime; exec httpd -f -p 8080 -h /www"]
 	if strings.Contains(fmt.Sprint(private), "secret-sentinel") {
 		t.Fatal("registry password echoed by application_create")
 	}
+	workflowApps = append(workflowApps, image["application"].(map[string]any)["id"].(string), private["application"].(map[string]any)["id"].(string))
 
-	// Read scope cannot deploy; read-only team membership cannot either.
+	// Read scope cannot deploy; read-only team membership cannot either. The
+	// direct HTTP probe pins the production role gate itself (a different
+	// 403 message than the deploy service's own write check).
 	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='read_only' WHERE team_id=$1 AND user_id=$2", teamAID, userID); err != nil {
 		t.Fatal(err)
 	}
 	h.expectError(t, owner, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy-role"}, "forbidden")
+	if status, body := h.mutationProbe(t, deployToken.Token, teamAID, appID); status != http.StatusForbidden || !strings.Contains(body, "insufficient team role") {
+		t.Fatalf("production role gate not enforced: status=%d body=%s", status, body)
+	}
 	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='admin' WHERE team_id=$1 AND user_id=$2", teamAID, userID); err != nil {
 		t.Fatal(err)
 	}
@@ -322,18 +364,26 @@ CMD ["sh","-c","echo gotham-mcp-runtime; exec httpd -f -p 8080 -h /www"]
 	if buildLogs["availability"] != "available" || buildLogs["log"] == "" {
 		t.Fatalf("deployment_logs=%+v", buildLogs)
 	}
-	// Runtime logs come from the live container, not the build row.
+	// Runtime logs come from the live container, not the build row. The
+	// configured env value must arrive masked (<redacted>), not verbatim.
 	var runtimeLogs map[string]any
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		runtimeLogs = h.call(t, owner, "application_logs", map[string]any{"application_id": appID, "tail": 50})
-		if strings.Contains(fmt.Sprint(runtimeLogs["containers"]), "gotham-mcp-runtime") {
+		logText := fmt.Sprint(runtimeLogs["containers"])
+		if strings.Contains(logText, "gotham-mcp-runtime") && strings.Contains(logText, "runtime-secret:<redacted>") {
+			if strings.Contains(logText, "secret-echo-sentinel") {
+				t.Fatalf("runtime log echoed a configured env value: %s", logText)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("runtime logs missing startup line: %+v", runtimeLogs)
+			t.Fatalf("runtime logs missing the masked startup line: %+v", runtimeLogs)
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+	if strings.Contains(fmt.Sprint(buildLogs), "secret-echo-sentinel") {
+		t.Fatal("build log echoed a configured env value")
 	}
 	overview := h.call(t, owner, "application_overview", map[string]any{"application_id": appID})
 	if overview["application"].(map[string]any)["id"] != appID || len(overview["pipeline"].([]any)) == 0 || overview["runtime"] == nil {
@@ -359,6 +409,7 @@ CMD ["sh","-c","echo gotham-mcp-runtime; exec httpd -f -p 8080 -h /www"]
 		"clone_url": broken.dir,
 	})
 	failedID := failedApp["application"].(map[string]any)["id"].(string)
+	workflowApps = append(workflowApps, failedID)
 	failed := h.call(t, owner, "application_deploy", map[string]any{"application_id": failedID, "request_id": "mcp-failed-deploy"})
 	failedDeployment := failed["receipt"].(map[string]any)["resource_id"].(string)
 	failedTerminal := h.waitTerminal(t, owner, failedID, failedDeployment)
@@ -368,6 +419,17 @@ CMD ["sh","-c","echo gotham-mcp-runtime; exec httpd -f -p 8080 -h /www"]
 	failedLogs := h.call(t, owner, "deployment_logs", map[string]any{"application_id": failedID, "deployment_id": failedDeployment})
 	if !strings.Contains(fmt.Sprint(failedLogs["log"]), "P4-BUILD-BOOM") {
 		t.Fatalf("failed build log=%+v", failedLogs)
+	}
+	// The failed deploy replays the same failed ID and must not enqueue a
+	// hidden second job.
+	failedReplay := h.call(t, owner, "application_deploy", map[string]any{"application_id": failedID, "request_id": "mcp-failed-deploy"})
+	failedReceipt := failedReplay["receipt"].(map[string]any)
+	if failedReceipt["replayed"] != true || failedReceipt["resource_id"] != failedDeployment {
+		t.Fatalf("failed replay=%+v", failedReplay)
+	}
+	var failedJobs int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM deployments WHERE application_id=$1", failedID).Scan(&failedJobs); err != nil || failedJobs != 1 {
+		t.Fatalf("failed replay created %d jobs (%v)", failedJobs, err)
 	}
 	failedOverview := h.call(t, owner, "application_overview", map[string]any{"application_id": failedID})
 	pipelines := failedOverview["pipeline"].([]any)
@@ -418,6 +480,13 @@ func (h *mcpWorkflowHarness) currentUser(context.Context) (uuid.UUID, bool) {
 // bearer token -> method scope (read vs deploy) -> explicit team membership
 // -> owner/admin for mutations. The strict contract and Idempotency-Key are
 // enforced by the production requestreplay.RequireStrict wrapper per route.
+// authorize authenticates the bearer token, applies the method scope and the
+// explicit team membership, then delegates the owner/admin write gate to the
+// production server.RequireTeamRole. Token/scopes/team-header resolution is
+// mirrored because this harness wires a custom agent dialer that the full
+// internal/server constructor cannot inject; internal/server/mcp_*_test.go
+// remains the authority for RequireAuth and requireMCPTeam. The role gate is
+// pinned by mutationProbe: removing it makes this test fail.
 func (h *mcpWorkflowHarness) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -449,14 +518,17 @@ func (h *mcpWorkflowHarness) authorize(next http.Handler) http.Handler {
 			mcpWriteJSON(w, http.StatusForbidden, map[string]string{"message": "not a member"})
 			return
 		}
-		if mutation && !role.CanWrite() {
-			mcpWriteJSON(w, http.StatusForbidden, map[string]string{"message": "insufficient team role"})
-			return
-		}
 		w.Header().Set(mcpContractHeaderE2E, "1")
 		w.Header().Set(mcpTeamHeaderE2E, teamID.String())
 		scope := teams.Scope{UserID: identity.UserID, TeamID: teamID, Role: role}
-		next.ServeHTTP(w, r.WithContext(teams.WithScope(r.Context(), scope)))
+		ctx := teams.WithScope(r.Context(), scope)
+		if mutation {
+			// Use the production owner/admin gate rather than a local copy, so
+			// the read-only probe below fails if this gate is removed.
+			server.RequireTeamRole(teams.RoleOwner, teams.RoleAdmin)(next).ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -579,4 +651,95 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func nodeIDSet(out map[string]any) map[string]bool {
+	ids := map[string]bool{}
+	for _, item := range out["nodes"].([]any) {
+		ids[item.(map[string]any)["id"].(string)] = true
+	}
+	return ids
+}
+
+// putEnv writes the application's environment through the production
+// replace-env route so the deploy carries the value into the container.
+func (h *mcpWorkflowHarness) putEnv(t *testing.T, token string, team uuid.UUID, appID, key, value string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"env":[{"key":%q,"value":%q}]}`, key, value)
+	request, err := http.NewRequest(http.MethodPut, h.baseURL+"/api/v1/applications/"+appID+"/env", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-Team-Id", team.String())
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		var raw json.RawMessage
+		_ = json.NewDecoder(response.Body).Decode(&raw)
+		t.Fatalf("put env: status=%d body=%s", response.StatusCode, raw)
+	}
+}
+
+// mutationProbe sends the strict deploy mutation directly to the HTTP surface,
+// so the test pins the production role gate rather than only the deploy
+// service's own write check.
+func (h *mcpWorkflowHarness) mutationProbe(t *testing.T, token string, team uuid.UUID, appID string) (int, string) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, h.baseURL+"/api/v1/mcp/applications/"+appID+"/deploy", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-Team-Id", team.String())
+	request.Header.Set(mcpContractHeaderE2E, "1")
+	request.Header.Set("Idempotency-Key", "role-probe")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, _ := io.ReadAll(response.Body)
+	return response.StatusCode, string(body)
+}
+
+// assertMCPWorkflowClean runs after the per-resource cleanups (t.Cleanup is
+// LIFO) and proves no fixture rows or Docker artifacts survived.
+func assertMCPWorkflowClean(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, teamA, teamB, nodeID, legacyID uuid.UUID, appIDs []string) {
+	t.Helper()
+	checks := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{"applications", "SELECT count(*) FROM applications WHERE team_id IN ($1,$2)", []any{teamA, teamB}},
+		{"projects", "SELECT count(*) FROM projects WHERE team_id IN ($1,$2)", []any{teamA, teamB}},
+		{"servers", "SELECT count(*) FROM servers WHERE id IN ($1,$2)", []any{nodeID, legacyID}},
+		{"teams", "SELECT count(*) FROM teams WHERE id IN ($1,$2,$3)", []any{teamA, teamB, userID}},
+		{"team_members", "SELECT count(*) FROM team_members WHERE team_id IN ($1,$2,$3)", []any{teamA, teamB, userID}},
+		{"users", "SELECT count(*) FROM users WHERE id=$1", []any{userID}},
+		{"request_receipts", "SELECT count(*) FROM request_receipts WHERE principal_id=$1", []any{userID}},
+	}
+	for _, check := range checks {
+		var count int
+		if err := pool.QueryRow(ctx, check.query, check.args...).Scan(&count); err != nil {
+			t.Errorf("cleanup check %s: %v", check.name, err)
+			continue
+		}
+		if count != 0 {
+			t.Errorf("cleanup leaked %d %s row(s)", count, check.name)
+		}
+	}
+	for _, appID := range appIDs {
+		if output, err := exec.Command("docker", "ps", "-aq", "--filter", "label=gotham.app_id="+appID).Output(); err == nil && strings.TrimSpace(string(output)) != "" {
+			t.Errorf("cleanup left containers for application %s: %s", appID, strings.TrimSpace(string(output)))
+		}
+		if output, err := exec.Command("docker", "images", "-q", "gotham/"+appID).Output(); err == nil && strings.TrimSpace(string(output)) != "" {
+			t.Errorf("cleanup left image gotham/%s", appID)
+		}
+	}
 }

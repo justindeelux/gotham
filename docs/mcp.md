@@ -41,8 +41,9 @@ it in the MCP client's secret/environment configuration, not in a repository.
 
 ## Client configuration
 
-Launch the binary over stdio. This generic example works for clients whose
-configuration accepts an `mcpServers` map (Claude Desktop, Codex and similar):
+Launch the binary over stdio. This generic example targets clients whose
+configuration accepts an `mcpServers` map; only the official SDK test client
+was exercised, so a specific desktop product's stdio launching is untested:
 
 ```json
 {
@@ -207,8 +208,12 @@ GOTHAM_E2E_REDIS='127.0.0.1:<redis-port>' \
 go test ./internal/e2e -run '^TestMCPAgentDeploymentWorkflow$' -count=1 -v
 ```
 
-The test refuses port 5432/6379 (the shared development services) and cleans up
-its rows, containers and images. `go test ./...` alone can skip the gated suites;
+The test refuses port 5432/6379 (the shared development services) and deletes
+its fixture rows (including the user's personal team) and its own containers and
+images. The backed harness mirrors token/scope/team-header resolution because it
+injects a custom node-agent dialer; `internal/server/mcp_*_test.go` remains the
+authority for `RequireAuth` and the strict MCP team middleware, and the harness
+uses the production `server.RequireTeamRole` write gate directly. `go test ./...` alone can skip the gated suites;
 it is not evidence that they ran.
 
 ## Release notes

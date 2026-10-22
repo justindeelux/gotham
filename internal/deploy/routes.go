@@ -439,6 +439,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Get("/v1/applications/{id}/storages", h.getStorages)
 		protected.Put("/v1/applications/{id}/storages", h.putStorages)
 		protected.Get("/v1/applications/{id}/volumes", h.getVolumes)
+		protected.Get("/v1/applications/{id}/runtime", h.getRuntime)
 		protected.Post("/v1/applications/{id}/stop", h.stop)
 		protected.Post("/v1/applications/{id}/start", h.start)
 		protected.Post("/v1/applications/{id}/deploy", h.deploy)

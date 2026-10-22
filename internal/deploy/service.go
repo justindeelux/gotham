@@ -46,6 +46,7 @@ const DefaultHookTimeout = 8 * time.Second
 // DeployService is the control-plane surface the HTTP layer depends on. It is
 // implemented by Service and by fakes in route tests.
 type DeployService interface {
+	GetApplicationRuntime(ctx context.Context, userID, appID uuid.UUID) (ApplicationRuntime, error)
 	// CreateApplication stores an application together with the environment
 	// and storage configuration sent with it.
 	CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error)

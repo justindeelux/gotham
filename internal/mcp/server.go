@@ -27,6 +27,7 @@ func NewServer(ctx context.Context, cfg Config, version string, logger *slog.Log
 // registerTools is extended by subsequent read and mutation work packages.
 func registerTools(server *sdk.Server, client *Client) {
 	registerObservationTools(server, client)
+	registerDiscoveryTools(server, client)
 }
 
 func Serve(ctx context.Context, cfg Config, version string, logger *slog.Logger) error {

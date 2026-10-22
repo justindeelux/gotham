@@ -14,8 +14,9 @@ The process test additionally verifies real stdio initialize/list traffic at
 `2025-11-25`. Protocol framing, negotiation, cancellation, and lifecycle are owned
 by the SDK. Diagnostics go to stderr; stdout is reserved for MCP JSON-RPC.
 
-Observation tools register through `registerTools` using typed SDK handlers and
-explicit safe DTOs; there is no generic HTTP request tool. `Client.readJSON` enforces the team contract on every resource
+Observation and discovery tools register through `registerTools` using typed SDK
+handlers and safe DTOs; there is no generic HTTP request tool. `Client.readJSON`
+enforces the team contract on every resource
 read. `Client.Health` first authenticates strict context, then decodes dependency
 health, including degraded HTTP 503 responses. All requests revalidate the token
 at the backend; the adapter never retries or follows redirects.
@@ -75,3 +76,42 @@ be distinguished. Other dependency failures return `unavailable`; auth failures
 remain tool errors. No inferred `disabled` state is emitted without an explicit
 capability signal. Observation calls have a 15-second overall deadline and honor
 shorter caller deadlines/cancellation; no background polling is started.
+
+## Discovery
+
+`projects_list`, `environments_list`, and `applications_list` return explicit IDs
+and safe metadata. Names are display text and need not be unique. Select by UUID;
+application project/environment filters are mutually exclusive. Lists decode one
+upstream response (2 MiB ceiling), then page locally with `limit` (default 20,
+maximum 100) and `offset`. They do not provide database pagination or snapshot
+consistency across calls.
+
+`environment_resources` projects inventory without source, environment values,
+registry credentials, mounts, or build arguments. Each workload collection is
+capped at 100 and reports its total/truncation. `project_overview` includes counts,
+environments (first 20), inventory for at most four environments, and at most 20
+project deployments found in the latest 100 team deployments, with the window size
+reported as `activity_window_limit`. This activity window
+is not complete project history. Inventory calls run sequentially (fan-out one);
+failed sections are explicitly unavailable. Counts and inventory do not establish
+live health. Use the list tools to inspect remaining environments/applications.
+
+`application_overview` returns safe app metadata, at most five recent pipeline
+outcomes, and the additive `GET /api/v1/applications/{id}/runtime` observation.
+These separate reads do not form an atomic snapshot. A successful/running pipeline
+is independent of current Docker state and does not prove public URL readiness.
+Runtime returns an observation time and at most 100 ownership-checked full
+container IDs in stable order, including stopped containers. No healthcheck means
+unknown readiness. Compose service/replica membership does not prove an exact
+release: its deployment association is null even when an unchanged `up` reused
+containers. Missing agent ownership/full-ID metadata yields limited coverage,
+without a node-wide fallback. Agent failures yield unavailable coverage with no
+fresh timestamp. Optional exact-deployment enrichment makes at most four distinct
+repository lookups per inventory, caching repeated labels and leaving remaining
+associations unknown. The endpoint uses application READ authorization, including
+read-only members; terminal write authorization is unchanged.
+
+`GOTHAM_E2E=1 go test ./internal/deploy -run '^TestRuntimeComposeReal$' -count=1 -v`
+runs the isolated Docker/Compose proof for replicas, unhealthy/stopped containers,
+no healthcheck, unchanged-up reuse, and cleanup. It requires local Docker/Compose
+and never uses the shared development Postgres/Redis containers.

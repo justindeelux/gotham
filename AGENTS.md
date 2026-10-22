@@ -2,40 +2,6 @@
 
 Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node agent (Go) + embedded Vue 3 SPA. Design priorities: compatibility → extensibility → self-updating → lean footprint.
 
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Backend / Agent | Go 1.27+, single binary, `linux/amd64` + `linux/arm64` |
-| HTTP framework | Chi router |
-| Data access | sqlc + pgx |
-| Database | PostgreSQL 16 |
-| Migrations | goose (forward-only) |
-| CP ↔ Agent | gRPC + protobuf (buf), mTLS |
-| Realtime | WebSocket + Redis pub/sub |
-| Reverse proxy | Traefik 3.x |
-| Frontend | Vue 3 + Vite + TypeScript (SPA embedded via `embed.FS`) |
-| State / HTTP | Pinia + axios |
-| UI kit | Naive UI |
-| Auth | JWT + OAuth2 (GitHub, GitLab), argon2id, TOTP later |
-| Config | viper (YAML / ENV, hot reload of log level) |
-| Self-update | Built-in atomic swap + Ed25519 signed manifest (GitHub Releases) |
-| CI/CD | GitHub Actions + GoReleaser |
-
-## Repository Layout
-
-```
-cmd/             # control-plane + agent entrypoints
-internal/        # CP packages (server, deploy, builds, proxy, databases, services, auth, updates, store)
-agent/           # node agent implementation
-updatecore/      # shared, transport-agnostic self-update engine (verify + swap), imported by internal/updates and agent/
-proto/           # protobuf contracts (buf-managed)
-web/             # Vue 3 SPA (Vite; src/: app/ shell, features/<module>/, shared/)
-templates/       # one-click service templates (YAML)
-deploy/          # install scripts, systemd units, compose
-docs/plans/      # feature/phase plans (medium to large work)
-```
-
 ## Development Workflow
 
 - Docs index: `docs/README.md` (plan status, process, test server, design).

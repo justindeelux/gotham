@@ -41,6 +41,8 @@ Thumbs.db
 
 # Frontend local caches
 web/.vite/
+site/.vitepress/cache/
+site/.vitepress/dist/
 
 # Playwright (web/e2e)
 .playwright-mcp/

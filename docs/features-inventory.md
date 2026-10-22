@@ -29,8 +29,9 @@ Evidence convention: `file:line` in this repo. HTTP paths below the `/api/v1` mo
   (`Files: !envOff(...)`, `agent/config.go:242`), while `install-agent.sh`
   defaults its prompt to No and writes `false`. Describe both, not "off by
   default".
-- Backup targets (`/databases/backup-targets`) are team/resource-scoped, not
-  operator-only: mounted with `resourceScopeAuth`
+- Backup targets (`/databases/backup-targets`) are account-scoped (keyed by
+  user id), not operator-only and not team-scoped: mounted with
+  `resourceScopeAuth`
   (`internal/server/server.go:641`).
 
 ## End-user features (web console)

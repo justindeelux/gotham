@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -202,6 +203,13 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	router := chi.NewRouter()
 	router.Route("/api", func(api chi.Router) {
 		api.With(h.authorize).Get("/v1/mcp/context", h.context)
+		// A route whose only write gate is the production server.RequireTeamRole:
+		// no domain service below repeats the role check, so a read-only role
+		// refusing the request or an owner/admin reaching it pins that gate.
+		api.With(h.authorize).Post("/v1/role-probe", func(w http.ResponseWriter, _ *http.Request) {
+			h.roleProbeHits.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		})
 		projects.Mount(api, h.authorize, h.currentUser, projectSvc)
 		deploy.Mount(api, h.authorize, h.currentUser, deploySvc)
 		api.With(h.authorize).Get("/v1/servers", func(w http.ResponseWriter, r *http.Request) {
@@ -337,11 +345,14 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 		t.Fatal(err)
 	}
 	h.expectError(t, owner, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy-role"}, "forbidden")
-	if status, body := h.mutationProbe(t, deployToken.Token, teamAID, appID); status != http.StatusForbidden || !strings.Contains(body, "insufficient team role") {
-		t.Fatalf("production role gate not enforced: status=%d body=%s", status, body)
+	if status, body := h.roleProbe(t, deployToken.Token, teamAID); status != http.StatusForbidden || !strings.Contains(body, "insufficient team role") || h.roleProbeHits.Load() != 0 {
+		t.Fatalf("production role gate admitted a read-only write: status=%d hits=%d body=%s", status, h.roleProbeHits.Load(), body)
 	}
 	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='admin' WHERE team_id=$1 AND user_id=$2", teamAID, userID); err != nil {
 		t.Fatal(err)
+	}
+	if status, _ := h.roleProbe(t, deployToken.Token, teamAID); status != http.StatusNoContent || h.roleProbeHits.Load() != 1 {
+		t.Fatalf("owner/admin did not reach the role-probe handler: status=%d hits=%d", status, h.roleProbeHits.Load())
 	}
 	h.expectError(t, readOnly, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy-read"}, "forbidden")
 	h.expectError(t, foreign, "application_overview", map[string]any{"application_id": appID}, "unsupported_or_not_found")
@@ -465,10 +476,11 @@ func requireIsolatedMCPEnvironment(t *testing.T) {
 }
 
 type mcpWorkflowHarness struct {
-	baseURL string
-	userID  uuid.UUID
-	tokens  *auth.APITokenService
-	teams   *teams.Service
+	baseURL       string
+	userID        uuid.UUID
+	tokens        *auth.APITokenService
+	teams         *teams.Service
+	roleProbeHits atomic.Int32
 }
 
 // currentUser is the fixed principal every token in this fixture belongs to.
@@ -486,7 +498,7 @@ func (h *mcpWorkflowHarness) currentUser(context.Context) (uuid.UUID, bool) {
 // mirrored because this harness wires a custom agent dialer that the full
 // internal/server constructor cannot inject; internal/server/mcp_*_test.go
 // remains the authority for RequireAuth and requireMCPTeam. The role gate is
-// pinned by mutationProbe: removing it makes this test fail.
+// pinned by roleProbe: removing it makes this test fail.
 func (h *mcpWorkflowHarness) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -685,19 +697,17 @@ func (h *mcpWorkflowHarness) putEnv(t *testing.T, token string, team uuid.UUID, 
 	}
 }
 
-// mutationProbe sends the strict deploy mutation directly to the HTTP surface,
-// so the test pins the production role gate rather than only the deploy
-// service's own write check.
-func (h *mcpWorkflowHarness) mutationProbe(t *testing.T, token string, team uuid.UUID, appID string) (int, string) {
+// roleProbe posts to a route whose only write gate is the production
+// server.RequireTeamRole. If that gate is removed or neutered, the read-only
+// request reaches the recording handler and the test fails.
+func (h *mcpWorkflowHarness) roleProbe(t *testing.T, token string, team uuid.UUID) (int, string) {
 	t.Helper()
-	request, err := http.NewRequest(http.MethodPost, h.baseURL+"/api/v1/mcp/applications/"+appID+"/deploy", nil)
+	request, err := http.NewRequest(http.MethodPost, h.baseURL+"/api/v1/role-probe", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("X-Team-Id", team.String())
-	request.Header.Set(mcpContractHeaderE2E, "1")
-	request.Header.Set("Idempotency-Key", "role-probe")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)

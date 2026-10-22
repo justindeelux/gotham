@@ -277,7 +277,23 @@ func TestProtocolStdioTokenFailures(t *testing.T) {
 			}
 		}
 		if writes := backend.writeCount(); writes != 0 {
-			t.Fatalf("old backend received %d successful legacy mutation(s)", writes)
+			t.Fatalf("old backend received %d legacy mutation attempt(s)", writes)
+		}
+	})
+
+	// Negative control: the same counter must move for a POST to a legacy
+	// alias, proving the old-backend zero above is meaningful.
+	t.Run("legacy write counter moves on a POST", func(t *testing.T) {
+		backend := &protocolBackend{mode: protocolOldBackend}
+		api := httptest.NewServer(backend.handler(t))
+		defer api.Close()
+		response, err := http.Post(api.URL+"/api/v1/projects", "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusNotFound || backend.writeCount() != 1 {
+			t.Fatalf("counter did not move: status=%d writes=%d", response.StatusCode, backend.writeCount())
 		}
 	})
 }
@@ -293,19 +309,27 @@ const (
 // protocolBackend is one stable fake control plane for every tool shape. It
 // records successful mutations so an old-backend fallback cannot hide.
 type protocolBackend struct {
-	mode protocolMode
-	mu   sync.Mutex
-	post int
+	mode         protocolMode
+	mu           sync.Mutex
+	legacyWrites int
 }
 
+// writeCount counts non-GET requests to a non-strict alias. A correct adapter
+// only mutates through /api/v1/mcp/*; a legacy fallback would move this
+// counter even when the old backend answers 404.
 func (b *protocolBackend) writeCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.post
+	return b.legacyWrites
 }
 
 func (b *protocolBackend) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !strings.HasPrefix(r.URL.Path, "/api/v1/mcp/") {
+			b.mu.Lock()
+			b.legacyWrites++
+			b.mu.Unlock()
+		}
 		switch b.mode {
 		case protocolUnauthorized:
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -325,11 +349,6 @@ func (b *protocolBackend) handler(t *testing.T) http.HandlerFunc {
 		if r.URL.Path != "/healthz" {
 			w.Header().Set(contractHeader, "1")
 			w.Header().Set(teamHeader, protocolTeam)
-		}
-		if r.Method == http.MethodPost {
-			b.mu.Lock()
-			b.post++
-			b.mu.Unlock()
 		}
 		protocolRoute(t, w, r)
 	}

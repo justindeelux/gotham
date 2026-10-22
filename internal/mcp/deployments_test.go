@@ -238,9 +238,9 @@ func (t traceRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func TestApplicationDeployAcceptanceReplayAndResponseLoss(t *testing.T) {
 	app, dep := uuid.NewString(), uuid.NewString()
-	posts := 0
+	var posts atomic.Int32
 	cs := deploymentSession(t, func(w http.ResponseWriter, r *http.Request) {
-		posts++
+		count := posts.Add(1)
 		if r.Method != "POST" || r.URL.Path != "/api/v1/mcp/applications/"+app+"/deploy" || r.Header.Get("Idempotency-Key") != "stable-request" {
 			t.Error("wrong mutation target/identity")
 		}
@@ -248,7 +248,7 @@ func TestApplicationDeployAcceptanceReplayAndResponseLoss(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 0 {
 			t.Errorf("deploy fingerprint must be empty: %v %v", body, err)
 		}
-		if posts == 1 {
+		if count == 1 {
 			connection, _, err := w.(http.Hijacker).Hijack()
 			if err != nil {
 				t.Error(err)
@@ -262,16 +262,16 @@ func TestApplicationDeployAcceptanceReplayAndResponseLoss(t *testing.T) {
 	})
 	args := map[string]any{"application_id": app, "request_id": "stable-request"}
 	first := callDiscovery(t, cs, "application_deploy", args)
-	if !first.IsError || posts != 1 {
-		t.Fatalf("lost response retried implicitly: %+v posts=%d", first, posts)
+	if !first.IsError || posts.Load() != 1 {
+		t.Fatalf("lost response retried implicitly: %+v posts=%d", first, posts.Load())
 	}
 	replay := callDiscovery(t, cs, "application_deploy", args)
 	var got applicationDeployResult
 	if err := json.Unmarshal([]byte(resultJSON(t, replay)), &got); err != nil {
 		t.Fatal(err)
 	}
-	if replay.IsError || !got.Accepted || !got.Receipt.Replayed || got.Receipt.ResourceID != dep || got.Deployment == nil || got.Deployment.State != "failed" || !got.Deployment.Terminal || strings.Contains(resultJSON(t, replay), "secret-sentinel") || posts != 2 {
-		t.Fatalf("replay=%+v posts=%d", got, posts)
+	if replay.IsError || !got.Accepted || !got.Receipt.Replayed || got.Receipt.ResourceID != dep || got.Deployment == nil || got.Deployment.State != "failed" || !got.Deployment.Terminal || strings.Contains(resultJSON(t, replay), "secret-sentinel") || posts.Load() != 2 {
+		t.Fatalf("replay=%+v posts=%d", got, posts.Load())
 	}
 }
 

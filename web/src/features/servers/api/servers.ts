@@ -296,6 +296,7 @@ const errorPrefixPackages = new Set([
   "providers",
   "projects",
   "proxy",
+  "replay",
   "server",
   "servers",
   "services",

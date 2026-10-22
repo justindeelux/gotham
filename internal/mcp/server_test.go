@@ -43,7 +43,7 @@ func TestSDKLifecycle(t *testing.T) {
 				t.Fatalf("negotiated %q want %q", got, version)
 			}
 			list, err := cs.ListTools(ctx, &sdk.ListToolsParams{})
-			if err != nil || len(list.Tools) != 10 {
+			if err != nil || len(list.Tools) != 12 {
 				t.Fatalf("tool list=%+v %v", list, err)
 			}
 			if _, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "not_registered"}); err == nil {

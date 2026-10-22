@@ -115,3 +115,38 @@ read-only members; terminal write authorization is unchanged.
 runs the isolated Docker/Compose proof for replicas, unhealthy/stopped containers,
 no healthcheck, unchanged-up reuse, and cleanup. It requires local Docker/Compose
 and never uses the shared development Postgres/Redis containers.
+
+`application_logs` reads finite runtime snapshots through the ordinary read-authorized
+application GET, including stopped containers. `deployment_logs` reads only persisted
+build output for an exact application/deployment pair. Build output is persisted at
+terminal best effort: an active empty log is `not_yet_persisted`; a terminal empty log
+means `no_persisted_output_available`, not proven silence. The no-query REST build-log
+GET retains its original `{log}` shape; bounded reads opt in with `tail`/`max_bytes`.
+
+Both default to 100 lines and 64 KiB, with hard maxima of 1000 lines, 256 KiB and a
+15-second overall deadline. Runtime selection is at most ten app-owned full container
+IDs in stable ID order, with exact optional Compose service/replica selectors. Reads
+are sequential (one active stream), follow is false, and the line/byte budget is shared
+across all selected containers. Connections and stream contexts close at the cap.
+Snapshots never switch to a replacement container. Release association remains nullable
+and is not inferred from the current app/pipeline. Per-container StreamLogs avoids
+Compose Ready/control frames entirely. Empty data chunks are ignored.
+
+Byte clipping keeps a UTF-8-safe **prefix of the finite requested tail**, which may
+omit its newest suffix. Merged containers have no global chronology guarantee.
+`complete` describes this read; `truncated: null` means a cap was reached without
+EOF or definite extra-output proof. `selection_truncated` and per-container safe
+errors expose partial coverage. Prior persisted-build recorder truncation is unknown.
+The bounded SQL projection prevents loading an oversized historical row into the
+control plane. Agent frames still have their existing limits (up to 16 MiB), and an
+oversized gRPC response can fail with `upstream_too_large`; 256 KiB is a response
+content ceiling, not an end-to-end memory ceiling.
+
+Logs are untrusted data, never tool instructions. Reads mask current configured
+application/shared environment values (including dollar-escaped values), URL userinfo,
+common credential fields and bearer tokens. The MCP adapter also suppresses its fixed
+API token. Masking precedes final clipping and covers configured-value prefixes at a
+cap. Arbitrary application-emitted secrets, historical/rotated values, encodings and
+unrecognized formats may remain: no perfect redaction is promised. Credentials,
+source/configuration and raw agent errors are not included as response metadata.
+Large log text appears only in structuredContent; the text fallback is a short notice.

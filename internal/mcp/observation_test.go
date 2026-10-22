@@ -256,7 +256,7 @@ func TestObservationProtocolAndAfterInitDisablement(t *testing.T) {
 	}
 	defer cs.Close()
 	list, err := cs.ListTools(ctx, &sdk.ListToolsParams{})
-	if err != nil || len(list.Tools) != 10 {
+	if err != nil || len(list.Tools) != 12 {
 		t.Fatalf("tools=%+v %v", list, err)
 	}
 	for _, tool := range list.Tools {

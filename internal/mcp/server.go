@@ -28,6 +28,7 @@ func NewServer(ctx context.Context, cfg Config, version string, logger *slog.Log
 func registerTools(server *sdk.Server, client *Client) {
 	registerObservationTools(server, client)
 	registerDiscoveryTools(server, client)
+	registerLogTools(server, client)
 }
 
 func Serve(ctx context.Context, cfg Config, version string, logger *slog.Logger) error {

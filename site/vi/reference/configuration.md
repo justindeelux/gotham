@@ -59,7 +59,7 @@ giữ hiệu lực.
 | `grpc.insecure` | `GOTHAM_GRPC_INSECURE` | `false` | không |
 | `grpc.enrollment_token` | `GOTHAM_GRPC_ENROLLMENT_TOKEN` | được sinh cạnh CA | không |
 | `grpc.allow_open_enrollment` | `GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT` | `false` | không |
-| `grpc.legacy_leaf_until` | `GOTHAM_GRPC_LEGACY_LEAF_UNTIL` | ngày kết thúc tích hợp | không |
+| `grpc.legacy_leaf_until` | `GOTHAM_GRPC_LEGACY_LEAF_UNTIL` | ngày kết thúc có sẵn | không |
 | `ca.dir` | `GOTHAM_CA_DIR` | `./data/ca/` | có, ở môi trường production |
 
 - `grpc.addr` là nơi agent trên node gọi tới. `grpc.hosts` thêm tên DNS và IP vào
@@ -79,7 +79,7 @@ giữ hiệu lực.
   cậy ở lần dùng đầu). Hãy để `false` trên một instance thật.
 - `grpc.legacy_leaf_until` là một mốc thời gian RFC 3339, hoặc `none` để tắt ngày
   kết thúc cho các chứng chỉ node được cấp trước khi có mutual TLS. Để trống thì
-  chọn mặc định tích hợp; một giá trị sai định dạng làm khởi động thất bại.
+  chọn mặc định có sẵn; một giá trị sai định dạng làm khởi động thất bại.
 - `ca.dir` chứa `ca.crt`, `ca.key` (mode 0600) và danh sách máy chủ SAN tùy chọn.
   Hãy tạo nó bằng `gotham ca init` (xem [CLI](/vi/reference/cli)).
 

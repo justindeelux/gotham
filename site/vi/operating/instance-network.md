@@ -4,7 +4,7 @@ title: Mạng của instance
 
 # Mạng của instance
 
-**Cài đặt → Instance** cấu hình chính máy chủ control plane: địa chỉ công khai và
+**Cài đặt → Hệ thống Gotham** cấu hình chính máy chủ control plane: địa chỉ công khai và
 định danh, ngăn xếp mạng, và vài tùy chọn hệ thống Linux. Mục này chỉ quản trị viên
 nền tảng thấy được và áp dụng cho máy chủ control plane, không áp dụng cho các node.
 
@@ -20,7 +20,7 @@ Trang có ba tab: **Chung**, **Mạng** và **Hệ thống**.
 
 URL phải là `http` hoặc `https` có tên máy chủ, không kèm thông tin đăng nhập, query
 hay fragment. Mỗi trường hiển thị nguồn của giá trị — biến môi trường, cơ sở dữ
-liệu hay mặc định tích hợp. Một trường được đặt bởi biến môi trường sẽ bị khóa và
+liệu hay mặc định có sẵn. Một trường được đặt bởi biến môi trường sẽ bị khóa và
 không sửa được ở đây; trang nêu tên biến đó.
 
 URL control plane là địa chỉ mà agent đăng ký tới và các dịch vụ bên ngoài gọi về,

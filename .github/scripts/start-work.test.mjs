@@ -36,19 +36,17 @@ function fixture(t) {
   return { repo, root, work: join(root, "gotham-work"), run, taskEnv };
 }
 
-test("sequential checkout creates no agent config and preserves existing config on reuse", (t) => {
+test("sequential checkout is reused, keeps primary main and local model config", (t) => {
   const { repo, work, run } = fixture(t);
   let result = run("fix/first");
   assert.equal(result.status, 0, result.stderr);
   assert.equal(git(work, "branch", "--show-current"), "fix/first");
-  assert.equal(existsSync(join(work, "opencode.json")), false);
-  const config = '{"model":"owner-choice","default_agent":"custom"}\n';
-  writeFileSync(join(work, "opencode.json"), config);
+  writeFileSync(join(work, "opencode.json"), '{"model":"owner-choice"}\n');
   result = run("docs/next");
   assert.equal(result.status, 0, result.stderr);
   assert.equal(git(work, "branch", "--show-current"), "docs/next");
   assert.equal(git(repo, "branch", "--show-current"), "main");
-  assert.equal(readFileSync(join(work, "opencode.json"), "utf8"), config);
+  assert.equal(JSON.parse(readFileSync(join(work, "opencode.json"), "utf8")).model, "owner-choice");
 });
 
 test("parallel work gets a separate checkout and existing paths are preserved", (t) => {
@@ -57,7 +55,6 @@ test("parallel work gets a separate checkout and existing paths are preserved", 
   const result = run("fix/second", "--parallel");
   assert.equal(result.status, 0, result.stderr);
   assert.equal(git(join(root, "gotham-fix-second"), "branch", "--show-current"), "fix/second");
-  assert.equal(existsSync(join(root, "gotham-fix-second", "opencode.json")), false);
   assert.equal(git(work, "branch", "--show-current"), "fix/first");
   assert.notEqual(run("fix/second", "--parallel").status, 0);
 });
@@ -121,6 +118,7 @@ test("remote branch names are not reused and dangling local config is preserved"
   assert.notEqual(run("fix/existing").status, 0);
   assert.equal(existsSync(work), false);
   assert.equal(run("fix/first").status, 0);
+  rmSync(join(work, "opencode.json"));
   symlinkSync(join(root, "missing-config"), join(work, "opencode.json"));
   const result = run("fix/next");
   assert.equal(result.status, 0, result.stderr);

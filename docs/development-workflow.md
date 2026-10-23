@@ -46,24 +46,9 @@ branches and resources.
 
 The bootstrap links ignored `docs/ORCHESTRATION.md` and `docs/test-server.md` to
 their primary-checkout originals when available, so they do not become stale
-copies. Bootstrap handles checkout setup only and leaves agent configuration
-untouched. Dispatch and operator/test-server details remain in those local notes;
+copies. It creates the local OpenCode model pin only when absent. Agent dispatch,
+model verification and operator/test-server details remain in those local notes;
 this tracked document is the common workflow policy available in fresh checkouts.
-
-## Agent selection
-
-Choose and record the agent and model for each task when dispatching it. Explicit
-user choices for the task or session take precedence over defaults. The default
-implementation worker is OpenCode with `opencode-go/deepseek-v4.1-flash`; the
-default reviewer is Claude Code with its configured model. These are fallback
-choices, not mandatory assignments. The coordinator may use another agent/model
-when the user requests it or the task needs it.
-
-Apply the selection through the chosen agent's supported launch/session controls
-and verify the effective agent/model against that task's selection, including
-fix rounds on reused sessions. Bootstrap does not choose an agent, launch a
-worker, or create a provider/model pin. Existing agent configuration belongs to
-the user and must not be rewritten to enforce a default.
 
 ## Review and CI
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 const [branch, mode, ...extra] = process.argv.slice(2);
@@ -58,6 +58,13 @@ try {
     const source = join(repo, "docs", name);
     const link = join(target, "docs", name);
     if (exists(source) && !exists(link)) symlinkSync(source, link);
+  }
+  const config = join(target, "opencode.json");
+  if (!exists(config)) {
+    writeFileSync(config, JSON.stringify({
+      "$schema": "https://opencode.ai/config.json",
+      model: "opencode-go/deepseek-v4.1-flash",
+    }, null, 2) + "\n", { flag: "wx" });
   }
   console.log(target);
   console.log(`cd '${target.replaceAll("'", "'\\''")}'`);

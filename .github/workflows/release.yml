@@ -1,36 +1,10 @@
 name: Release
 
-# INFRA-9.1: build, sign and publish a Gotham release on a v* tag.
-#
-# The workflow runs in the `release` environment (required reviewer) and fails
-# closed unless BOTH environment secrets are present:
-#   GOTHAM_UPDATE_PUBLIC_KEY   base64 raw Ed25519 public key (-ldflags embed)
-#   GOTHAM_UPDATE_SIGNING_KEY  PKCS#8 PEM Ed25519 private key (signing only)
-# The private key never leaves a 0600 temp file and is never echoed.
-#
-# GOTHAM_UPDATE_NEXT_PUBLIC_KEY is OPTIONAL: the base64 raw Ed25519 public key
-# pre-positioned for the next rotation. When set, it is validated (parses,
-# differs from the current key) and both binaries must embed it. See
-# deploy/release-key-rotation.md for the rotation procedure.
-#
-# GoReleaser creates the release as a DRAFT (see .goreleaser.yaml; drafts are
-# skipped by the update checkers). This workflow then signs per-arch manifests
-# over the exact built bytes, locates the draft through the releases list
-# (drafts are not returned by /releases/tags/<tag>), asserts the complete asset
-# set, uploads the manifests + signatures, and finally publishes the draft and
-# verifies it is no longer a draft.
-#
-# Actions are pinned by commit SHA on purpose: this job holds contents: write
-# and the signing secret.
-
 on:
   push:
     tags:
       - "v*"
 
-# A tag cannot be re-pushed under the same name while a release runs, so the
-# group only guards against a manual duplicate dispatch; never cancel in
-# progress — a killed release could leave a draft or half-published state.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -42,11 +16,6 @@ jobs:
   release:
     name: goreleaser + signed manifests
     runs-on: ubuntu-latest
-    # The signing secret lives in the `release` environment, which has a
-    # required reviewer, so the job reads environment secrets and needs the
-    # owner's approval before it can run. Release and PR CI both run on
-    # GitHub-hosted runners, so untrusted pull_request code never shares a host
-    # with the signing key; the gate governs who can build a signed release.
     environment: release
     permissions:
       contents: write
@@ -130,8 +99,6 @@ jobs:
           echo "keypair consistent with the embedded and published public key"
 
       - name: Install GoReleaser
-        # Version-pinned on purpose. GoReleaser v2.18 targets go 1.27.0, so the
-        # 1.27.x CI toolchain builds it directly (no GOTOOLCHAIN=auto download).
         run: |
           go install github.com/goreleaser/goreleaser/v2@v2.18.0
           echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
@@ -158,8 +125,6 @@ jobs:
               echo "::error::$bin did not embed the release public key"
               exit 1
             }
-            # A configured next key must be embedded in every binary: a mixed
-            # ring would leave a node unable to verify the promoted key.
             if [ -n "${GOTHAM_UPDATE_NEXT_PUBLIC_KEY:-}" ]; then
               grep -aqF "$GOTHAM_UPDATE_NEXT_PUBLIC_KEY" "$bin" || {
                 echo "::error::$bin did not embed the pre-positioned next release key"
@@ -171,8 +136,6 @@ jobs:
             echo "::error::expected 4 release binaries, found $count"
             exit 1
           }
-          # Run the host-arch control-plane binary and check its exact version
-          # rather than a bare substring match.
           case "$(uname -m)" in
             x86_64 | amd64) host_arch=amd64 ;;
             aarch64 | arm64) host_arch=arm64 ;;
@@ -206,11 +169,6 @@ jobs:
           mkdir -p signed
           go build -o "$RUNNER_TEMP/gotham-signer" ./cmd/signer
 
-          # Host-helper payload (JUS-188). The deploy scripts travel inside the
-          # signed release so the root update wrapper can verify (manifest
-          # signature + payload digest against the root-owned key) and apply them
-          # on a self-update, instead of only install.sh writing them. The names
-          # here are what gotham-hostbootstrap-fetch.sh expects.
           helper_dir="$(mktemp -d)"
           cp deploy/gotham-hostctl.sh "${helper_dir}/gotham-hostctl"
           cp deploy/gotham-toolctl.sh "${helper_dir}/gotham-toolctl"
@@ -230,8 +188,6 @@ jobs:
             base="$(basename "$bin")"
             asset="${base}-linux-${arch}"
             cp "$bin" "signed/${asset}"
-            # The control-plane manifest binds the host-helper payload digest
-            # (the agent never applies it, so its manifest stays as before).
             helper_args=()
             if [ "$base" = "gotham" ]; then
               prefix="gotham-manifest"
@@ -246,13 +202,10 @@ jobs:
             count=$((count + 1))
           done
           [ "$count" = "4" ] || { echo "::error::expected 4 signed binaries, got $count"; exit 1; }
-          # Exactly 4 binaries + 4 manifests + 4 signatures, no more, no less
-          # (the host-helper payload does not match these patterns).
           for pattern in '*-linux-*' '*manifest*.txt' '*manifest*.txt.sig'; do
             n="$(find signed -maxdepth 1 -type f -name "$pattern" | wc -l | tr -d ' ')"
             [ "$n" = "4" ] || { echo "::error::expected 4 files matching '$pattern', found $n"; exit 1; }
           done
-          # The signed copy must match the checksum GoReleaser published.
           (cd signed && sha256sum --check --ignore-missing ../dist/checksums.txt)
 
       - name: Upload signed manifests and publish the release
@@ -265,13 +218,11 @@ jobs:
           api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
           auth="Authorization: Bearer ${GITHUB_TOKEN}"
 
-          # /releases/tags/<tag> returns 404 for drafts; list and match instead.
           release_id="$(curl -fsSL -H "$auth" "${api}/releases?per_page=100" \
             | jq -r --arg tag "$tag" '.[] | select(.draft == true and .tag_name == $tag) | .id' \
             | head -n1)"
           [ -n "$release_id" ] || { echo "::error::draft release for ${tag} not found"; exit 1; }
 
-          # Every asset the checkers and the installer need for both arches.
           base="gotham-linux-amd64 gotham-linux-arm64 gotham-agent-linux-amd64 gotham-agent-linux-arm64 checksums.txt gotham-signing-key.pub"
           expected="$base gotham-manifest-amd64.txt gotham-manifest-amd64.txt.sig gotham-manifest-arm64.txt gotham-manifest-arm64.txt.sig gotham-agent-manifest-amd64.txt gotham-agent-manifest-amd64.txt.sig gotham-agent-manifest-arm64.txt gotham-agent-manifest-arm64.txt.sig gotham-hosthelpers.tar.gz"
 
@@ -293,7 +244,6 @@ jobs:
             fi
           }
 
-          # GoReleaser must have uploaded the binaries, checksums and public key.
           check_assets "$base"
 
           for asset in signed/*manifest*.txt signed/*manifest*.txt.sig signed/gotham-hosthelpers.tar.gz; do
@@ -306,7 +256,6 @@ jobs:
               >/dev/null
           done
 
-          # Complete before publishing: all 14 assets must be attached.
           check_assets "$expected"
           echo "all $(printf '%s\n' "$expected" | wc -w | tr -d ' ') expected assets attached"
 

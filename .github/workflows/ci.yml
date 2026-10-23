@@ -1,14 +1,11 @@
 name: CI
 
 on:
-  # pull_request covers branch PRs; the push event is limited to main so a
-  # push to a PR branch does not run the same suite twice (push + pull_request).
   push:
     branches:
       - main
   pull_request:
 
-# A new push to a PR cancels the superseded run; main always runs to completion.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -17,7 +14,47 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.scope.outputs.go }}
+      web: ${{ steps.scope.outputs.web }}
+      sqlc: ${{ steps.scope.outputs.sqlc }}
+      proto: ${{ steps.scope.outputs.proto }}
+      installer: ${{ steps.scope.outputs.installer }}
+      docs: ${{ steps.scope.outputs.docs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Select checks
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only "origin/${BASE_REF}...HEAD" > changed.txt
+            grep -qx '.github/workflows/ci.yml' changed.txt && all=true || all=false
+          else
+            all=true
+          fi
+          has() { [ "$all" = true ] || grep -qE "$1" changed.txt && echo true || echo false; }
+          {
+            echo "go=$(has '\.go$|^go\.(mod|sum)$|^Makefile$|^internal/|^agent/|^templates/|^\.golangci')"
+            echo "web=$(has '^web/|^internal/server/webdist/')"
+            echo "sqlc=$(has '^internal/store/|sqlc\.ya?ml$|\.sql$')"
+            echo "proto=$(has '^proto/|^buf|^Makefile$|\.pb\.go$')"
+            echo "installer=$(has '^deploy/|^updatecore/|^\.github/workflows/')"
+            echo "docs=$(has '^docs/')"
+          } >> "$GITHUB_OUTPUT"
+
   build-test:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     name: fmt + vet + test + build (go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -68,6 +105,8 @@ jobs:
           if-no-files-found: error
 
   lint:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     name: lint
     runs-on: ubuntu-latest
     steps:
@@ -86,6 +125,8 @@ jobs:
           version: v2.14.0
 
   web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     name: web build + type-check + dist drift
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -96,8 +137,6 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          # Node 22+ provides a global WebSocket, which the frontend harness
-          # checks (mock-ws-check.mjs) require.
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
@@ -116,7 +155,6 @@ jobs:
       - name: Frontend harness checks
         working-directory: web
         env:
-          # Fail instead of silently skipping a PTY shell in CI.
           GOTHAM_REQUIRE_PTY_SHELLS: bash,zsh,sh
         run: npm test
 
@@ -137,6 +175,8 @@ jobs:
           fi
 
   sqlc:
+    needs: changes
+    if: needs.changes.outputs.sqlc == 'true'
     name: sqlc drift check
     runs-on: ubuntu-latest
     steps:
@@ -144,9 +184,6 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install sqlc
-        # The tarball is executed, so verify it against a pinned SHA-256 before
-        # extraction: a compromised release mirror must not become code execution
-        # on the runner.
         run: |
           set -eu
           version="1.31.1"
@@ -168,6 +205,8 @@ jobs:
           fi
 
   proto:
+    needs: changes
+    if: needs.changes.outputs.proto == 'true'
     name: proto lint + drift check
     runs-on: ubuntu-latest
     steps:
@@ -186,8 +225,6 @@ jobs:
           version: "1.73.0"
 
       - name: Install protoc plugins
-        # Pinned to the versions in go.mod so the regenerated code is identical
-        # to the committed .pb.go files.
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
@@ -197,6 +234,8 @@ jobs:
         run: make proto-check
 
   db-test:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     name: DB-backed tests (postgres + redis)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -225,9 +264,6 @@ jobs:
           --health-retries 12
 
     env:
-      # Setting GOTHAM_TEST_DSN is the explicit opt-in the DB-backed suites use
-      # to fail instead of skip, so a broken database is a red job rather than
-      # a green run with invisible skips.
       GOTHAM_DATABASE_DSN: postgres://gotham:gotham@localhost:5433/gotham_test?sslmode=disable
       GOTHAM_TEST_DSN: postgres://gotham:gotham@localhost:5433/gotham_test?sslmode=disable
       GOTHAM_TEST_REDIS: 127.0.0.1:6380
@@ -247,14 +283,14 @@ jobs:
         run: go mod download
 
       - name: Apply migrations
-        # Runs the real migration chain against a fresh database, so a broken
-        # migration fails here even before the test suite enters the picture.
         run: go run ./cmd/gotham migrate up
 
       - name: Run DB-backed tests
         run: go test ./internal/... -count=1
 
   installer:
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
     name: installer scripts (shell + actionlint + release chain)
     runs-on: ubuntu-latest
     steps:
@@ -285,3 +321,35 @@ jobs:
 
       - name: Host helper refresh (test-host-helper-refresh.sh)
         run: sh deploy/test-host-helper-refresh.sh
+
+  docs:
+    name: docs build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Build
+        working-directory: docs
+        run: npm ci && npm run docs:build
+
+  ci:
+    name: CI
+    if: always()
+    needs: [build-test, lint, web, sqlc, proto, db-test, installer, docs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any needed job failed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac

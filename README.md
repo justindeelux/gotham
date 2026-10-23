@@ -12,7 +12,7 @@ Design priorities (in order):
 ## Install
 
 Control-plane and node-agent install, first login, updates and the
-release/signing flow live in [`docs/install.md`](docs/install.md). Releases are
+release/signing flow live in [`site/guide/install.md`](site/guide/install.md). Releases are
 signed with Ed25519; the installer and the built-in updater verify the signed
 manifest and the artifact digest before installing anything. The installer
 collects the first admin credentials up front and creates the account before

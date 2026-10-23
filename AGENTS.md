@@ -37,7 +37,7 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
 - Keep Naive UI as the component base — do not rebuild components from raw CSS. Colors, fonts, spacing and radii come from the design tokens in `web/src/shared/styles/tokens.css`, not hard-coded hex/px.
 - UI copy follows the project's language policy (see Language below); rewrite from the mockups where they differ.
 - Modals: header and footer stay fixed, only the content region scrolls, max-height is bounded to the viewport and a modal never exceeds it (shared `.app-modal`/`.wizard-modal` contract in `web/src/shared/styles/main.css`).
-- Rebuilt `internal/server/webdist` stays committed; the CI dist-drift check must pass.
+- `internal/server/webdist` is not committed except a placeholder `index.html`; `make web-build` (or `npm run build` in `web/`) fills it, and release CI builds it before `go build`.
 
 ## Language
 

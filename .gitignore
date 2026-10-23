@@ -41,8 +41,8 @@ Thumbs.db
 
 # Frontend local caches
 web/.vite/
-site/.vitepress/cache/
-site/.vitepress/dist/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 
 # Playwright (web/e2e)
 .playwright-mcp/
@@ -51,14 +51,11 @@ web/playwright-report/
 web/test-results/
 web/blob-report/
 
-# Local orchestration handoff (kept untracked)
-docs/ORCHESTRATION.md
+# Personal workflow rules (Orca / Plane / opencode), not shared
+/.workflow/
 
 # i18n discovery probe staged temporarily by web/tests/i18n-discovery-global-setup.ts
 web/src/features/__i18n_probe__/
-
-# Operator notes for the shared test box (kept local)
-/docs/test-server.md
 
 # Local MCP tool configs (keep untracked: contain API keys)
 /.mcp.json

@@ -12,7 +12,7 @@ Design priorities (in order):
 ## Install
 
 Control-plane and node-agent install, first login, updates and the
-release/signing flow live in [`site/guide/install.md`](site/guide/install.md). Releases are
+release/signing flow live in [`docs/guide/install.md`](docs/guide/install.md). Releases are
 signed with Ed25519; the installer and the built-in updater verify the signed
 manifest and the artifact digest before installing anything. The installer
 collects the first admin credentials up front and creates the account before
@@ -104,12 +104,7 @@ re-runs.
 ├── web/                      # Vue 3 SPA (Vite)
 ├── templates/                # one-click service templates (YAML)
 ├── deploy/                   # install scripts, systemd units, compose
-└── docs/                     # docs index, plan, test server
-    ├── README.md             # start here: plan status and test server
-    ├── TODO.md               # remaining work, checkbox by checkbox
-    ├── test-server.md        # shared all-in-one test box
-    ├── plan/                 # development plan per phase
-    └── design/               # UI mockups (*.html) + design tokens
+└── docs/                     # public docs (VitePress, EN + /vi/)
 ```
 
 ## Agent remote update (BE-9.2)
@@ -258,9 +253,6 @@ suspect it.
 
 ---
 
-## 4. Development Plan
+## 4. Contributing
 
-Development is phased — one file per phase in `docs/plans/`. See
-[`docs/README.md`](docs/README.md) for the plan index with per-phase status,
-[`AGENTS.md`](AGENTS.md) for how we work, and
-[`docs/TODO.md`](docs/TODO.md) for what is left.
+See [`AGENTS.md`](AGENTS.md) for how we work (workflow, code style, invariants).

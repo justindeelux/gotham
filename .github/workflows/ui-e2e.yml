@@ -1,11 +1,5 @@
 name: UI E2E
 
-# Browser-level smoke for the embedded SPA against a real control plane.
-# Separate from ci.yml (unit/build) and internal/e2e (API-level suite).
-# JUS-251: the terminal specs drive real PTYs and real containers through the
-# control plane + node agent, so backend terminal/agent/auth changes must run
-# this job too (a regression that re-requires `root`, breaks the relay or the
-# authorizer has to reach the browser proof).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -55,47 +49,24 @@ jobs:
           --health-retries 10
 
     env:
-      # Dedicated test database and fixed port, kept off the production
-      # defaults used by the shared test server.
       GOTHAM_DATABASE_DSN: postgres://gotham:gotham@localhost:5433/gotham_ui_e2e?sslmode=disable
       GOTHAM_REDIS_ADDR: localhost:6380
       GOTHAM_SERVER_ADDR: 127.0.0.1
       GOTHAM_SERVER_PORT: "8099"
       GOTHAM_GRPC_ADDR: 127.0.0.1:9444
-      # Development only: this smoke runs without a CA, so the gateway needs the
-      # explicit plaintext opt-in or serve refuses to start.
       GOTHAM_GRPC_INSECURE: "true"
       GOTHAM_LOG_LEVEL: info
       GOTHAM_LOG_FORMAT: text
-      # Applications are enabled by default; pinned explicitly so the smoke
-      # would catch an accidental default flip.
       FEATURE_APPLICATIONS: "true"
-      # Compose services + template gallery (BE-7.1/BE-7.2) are enabled by
-      # default too; pinned explicitly, and the services smoke skips when the
-      # flag is off (404 on the template surface).
       FEATURE_SERVICES: "true"
-      # The SSL surface (BE-6.2) refuses credential writes without a secret
-      # key; the domains smoke exercises the DNS-provider CRUD path.
       GOTHAM_SECRET_KEY: "ui-e2e-secret-key-not-for-production"
       GOTHAM_E2E_BASE_URL: http://127.0.0.1:8099
-      # JUS-251: the terminal journeys drive a real node agent started below
-      # on this runner. `localhost` is the co-located identity the control
-      # plane maps to 127.0.0.1:9443 without an operator-recorded address.
       GOTHAM_E2E_TERMINAL_NODE: localhost
       GOTHAM_E2E_TERMINAL_IMAGE: nginx:1.28.0-alpine
-      # JUS-251: CI must FAIL, not skip, when the node/agent/permission/pid
-      # prerequisites are missing; the final step also asserts the terminal
-      # specs actually executed.
       GOTHAM_E2E_REQUIRE_TERMINAL: "1"
       GOTHAM_E2E_RUN_ID: ${{ github.run_id }}
-      # The smoke account is a platform operator so the platform-global DNS
-      # surface (BE-8.2) is reachable; per-application cert/redirect management
-      # stays team-scoped.
       GOTHAM_E2E_EMAIL: ui-e2e-admin@example.com
       PLATFORM_ADMINS: ui-e2e-admin@example.com
-      # Test-only: the smoke seeds extra accounts through POST /auth/register,
-      # which is closed once the instance has an account (P-A2). Production
-      # never sets this; the closed default is covered by the Go HTTP tests.
       GOTHAM_AUTH_ALLOW_REGISTRATION: "true"
 
     steps:
@@ -139,10 +110,6 @@ jobs:
 
       - name: Start control plane
         env:
-          # JUS-273: the control plane derives application volume paths and the
-          # File Manager roots from this root; the node agent below is started
-          # with the same value so a volume link resolves to the directory the
-          # agent exposes.
           GOTHAM_MANAGED_VOLUME_ROOT: ${{ runner.temp }}/gotham-agent/volumes
         run: |
           nohup ./bin/gotham serve > gotham-ui-e2e.log 2>&1 &
@@ -157,11 +124,6 @@ jobs:
           cat gotham-ui-e2e.log
           exit 1
 
-      # JUS-251: the terminal specs exercise real PTYs and real application
-      # containers, so the node agent is the repository build registered to
-      # this control plane (plaintext dev mode, loopback only). The file
-      # service is on by default; compose root and volumes live in the
-      # runner's temp dir so the run leaves nothing behind.
       - name: Start node agent
         env:
           GOTHAM_AGENT_CP_ADDR: 127.0.0.1:9444
@@ -267,12 +229,6 @@ jobs:
           pkill -f 'bin/gotham-agent serve' || true
           pkill -f 'bin/gotham serve' || true
 
-          # JUS-251: remove ONLY this run's containers/network/volumes. The
-          # generic com.docker.compose.project label also matches unrelated
-          # projects (on a developer machine or a self-hosted runner it would
-          # remove gotham-dev-postgres and gotham-dev-redis). Compose services
-          # carry e2e.gotham.run=<run id>; image-source applications seeded by
-          # the specs use the gotham-ui-e2e-term- name prefix.
           RUN_ID="${GOTHAM_E2E_RUN_ID:-local-run}"
           projects="$(docker ps -a --filter "label=e2e.gotham.run=$RUN_ID" \
             --format '{{.Label "com.docker.compose.project"}}' | sort -u)"

@@ -1,6 +1,14 @@
 # Gotham — PaaS Platform
 
-Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node agent (Go) + embedded Vue 3 SPA. Design priorities: compatibility → extensibility → self-updating → lean footprint.
+Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node agent (Go) + embedded Vue 3 SPA. Design priorities: ease of use for non-developers → compatibility → extensibility → self-updating → lean footprint.
+
+## Product Principle
+
+Gotham is self-hosted and aimed at people with little server experience, not only developers. Installing, configuring and updating it must not require running shell commands by hand or setting Linux environment variables.
+
+- A fresh install works out of the box with sensible defaults; anything optional (domain, HTTPS, extra nodes) is a prompt in the installer or a setting in the UI.
+- Environment variables and CLI flags are escape hatches for automation, never the primary path.
+- Installation is a single script that needs no repository checkout.
 
 ## Development Workflow
 

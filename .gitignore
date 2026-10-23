@@ -51,13 +51,17 @@ web/playwright-report/
 web/test-results/
 web/blob-report/
 
-# Local orchestration handoff (kept untracked)
-docs/ORCHESTRATION.md
+# Private local workflow bundle and agent discovery links
+/.local-workflow
+/.claude
+/.opencode
+
+# Legacy local operator-note paths (never publish copies)
+/docs/ORCHESTRATION.md
 
 # i18n discovery probe staged temporarily by web/tests/i18n-discovery-global-setup.ts
 web/src/features/__i18n_probe__/
 
-# Operator notes for the shared test box (kept local)
 /docs/test-server.md
 
 # Local MCP tool configs (keep untracked: contain API keys)

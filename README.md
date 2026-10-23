@@ -104,12 +104,12 @@ re-runs.
 ├── web/                      # Vue 3 SPA (Vite)
 ├── templates/                # one-click service templates (YAML)
 ├── deploy/                   # install scripts, systemd units, compose
-└── docs/                     # docs index, plan, test server
-    ├── README.md             # start here: plan status and test server
-    ├── TODO.md               # remaining work, checkbox by checkbox
-    ├── test-server.md        # shared all-in-one test box
-    ├── plan/                 # development plan per phase
-    └── design/               # UI mockups (*.html) + design tokens
+├── site/                     # public documentation (English and Vietnamese)
+└── docs/                     # technical references and release notes
+    ├── README.md             # technical documentation index
+    ├── mcp.md                # MCP server operator guide
+    ├── design/               # architecture/design references
+    └── releases/             # release notes
 ```
 
 ## Agent remote update (BE-9.2)
@@ -258,9 +258,7 @@ suspect it.
 
 ---
 
-## 4. Development Plan
+## 4. Documentation
 
-Development is phased — one file per phase in `docs/plans/`. See
-[`docs/README.md`](docs/README.md) for the plan index with per-phase status,
-[`AGENTS.md`](AGENTS.md) for how we work, and
-[`docs/TODO.md`](docs/TODO.md) for what is left.
+Public guides live in [`site/`](site/). See [`docs/README.md`](docs/README.md)
+for technical references and release notes.

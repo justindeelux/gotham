@@ -35,8 +35,8 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Test CI policy and worktree safety
-        run: node --test .github/scripts/*.test.mjs
+      - name: Test CI scope and gate
+        run: node --test .github/scripts/ci-scope.test.mjs
 
       - name: Select checks
         id: scope

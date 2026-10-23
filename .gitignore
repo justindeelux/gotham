@@ -51,10 +51,8 @@ web/playwright-report/
 web/test-results/
 web/blob-report/
 
-# Private local workflow bundle and agent discovery links
+# Private workflow notes and local tools
 /.local-workflow
-/.claude
-/.opencode
 
 # Legacy local operator-note paths (never publish copies)
 /docs/ORCHESTRATION.md

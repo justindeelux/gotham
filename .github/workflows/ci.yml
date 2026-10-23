@@ -343,7 +343,7 @@ jobs:
         run: npm ci && npm run docs:build
 
   ci:
-    name: CI
+    name: CI gate
     if: always()
     needs: [build-test, lint, web, sqlc, proto, db-test, installer, docs]
     runs-on: ubuntu-latest

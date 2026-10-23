@@ -536,7 +536,8 @@ the body).
   manifests and artifact digests verify with the pinned key, and the two-agent
   systemd update path is proven on the test box. Still unproven: applying a
   *newer* GitHub-hosted release through `gotham update` (control plane and agent
-  rollout) and exercising the unattended `AUTO_UPDATE` loop.
+  rollout) and exercising the unattended `AUTO_UPDATE` loop. See
+  `docs/plans/10-self-update-release.md` and `docs/TODO.md` (LOW-4).
 - **Release trigger custody (INFO).** The release job and PR CI now run on
   GitHub-hosted runners and the signing key stays in the approval-gated
   `release` environment, so untrusted `pull_request` code no longer shares a host
@@ -637,8 +638,8 @@ read.
 systemd host. See the script header and the BE-9.1 report for exactly what it
 proves.
 
-CI covers the installer chain on relevant ready PRs and every push to `main`:
-the `installer` job in `.github/workflows/ci.yml` runs `sh -n` over `deploy/*.sh`, `actionlint` over the
+CI covers the installer chain on every PR: the `installer` job in
+`.github/workflows/ci.yml` runs `sh -n` over `deploy/*.sh`, `actionlint` over the
 workflows, and `deploy/test-release-install.sh` (the checkout-level chain with a
 loopback fake releases server and no host changes). The two scripts that need a
 real systemd host and root — `deploy/verify-systemd.sh` and

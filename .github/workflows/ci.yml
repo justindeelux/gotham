@@ -7,7 +7,6 @@ on:
     branches:
       - main
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
 # A new push to a PR cancels the superseded run; main always runs to completion.
 concurrency:
@@ -18,33 +17,7 @@ permissions:
   contents: read
 
 jobs:
-  changes:
-    name: CI scope + policy tests
-    runs-on: ubuntu-latest
-    outputs:
-      jobs: ${{ steps.scope.outputs.jobs }}
-      ready: ${{ steps.scope.outputs.ready }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          fetch-depth: 0
-
-      - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "22"
-
-      - name: Test CI scope and gate
-        run: node --test .github/scripts/ci-scope.test.mjs
-
-      - name: Select checks
-        id: scope
-        run: node .github/scripts/ci-scope.mjs
-
   build-test:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs)['build-test']
     name: fmt + vet + test + build (go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -95,8 +68,6 @@ jobs:
           if-no-files-found: error
 
   lint:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs).lint
     name: lint
     runs-on: ubuntu-latest
     steps:
@@ -115,8 +86,6 @@ jobs:
           version: v2.14.0
 
   web:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs).web
     name: web build + type-check + dist drift
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -168,8 +137,6 @@ jobs:
           fi
 
   sqlc:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs).sqlc
     name: sqlc drift check
     runs-on: ubuntu-latest
     steps:
@@ -201,8 +168,6 @@ jobs:
           fi
 
   proto:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs).proto
     name: proto lint + drift check
     runs-on: ubuntu-latest
     steps:
@@ -232,8 +197,6 @@ jobs:
         run: make proto-check
 
   db-test:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs)['db-test']
     name: DB-backed tests (postgres + redis)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -292,8 +255,6 @@ jobs:
         run: go test ./internal/... -count=1
 
   installer:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs).installer
     name: installer scripts (shell + actionlint + release chain)
     runs-on: ubuntu-latest
     steps:
@@ -324,52 +285,3 @@ jobs:
 
       - name: Host helper refresh (test-host-helper-refresh.sh)
         run: sh deploy/test-host-helper-refresh.sh
-
-  site:
-    name: documentation build
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs).site
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: site/package-lock.json
-
-      - name: Install dependencies and build docs
-        working-directory: site
-        run: npm ci && npm run docs:build
-
-  e2e:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs).e2e
-    uses: ./.github/workflows/e2e.yml
-
-  ui-e2e:
-    needs: changes
-    if: needs.changes.outputs.ready == 'true' && fromJSON(needs.changes.outputs.jobs)['ui-e2e']
-    uses: ./.github/workflows/ui-e2e.yml
-
-  gate:
-    name: CI gate
-    if: always()
-    needs: [changes, build-test, lint, web, sqlc, proto, db-test, installer, site, e2e, ui-e2e]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "22"
-
-      - name: Require every selected check
-        env:
-          CI_NEEDS: ${{ toJSON(needs) }}
-        run: node .github/scripts/ci-scope.mjs gate

@@ -47,6 +47,8 @@ const DefaultHookTimeout = 8 * time.Second
 // DeployService is the control-plane surface the HTTP layer depends on. It is
 // implemented by Service and by fakes in route tests.
 type DeployService interface {
+	GetApplicationLogs(context.Context, uuid.UUID, uuid.UUID, LogOptions) (ApplicationLogs, error)
+	GetDeploymentLogs(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, LogOptions) (DeploymentLogs, error)
 	GetApplicationRuntime(ctx context.Context, userID, appID uuid.UUID) (ApplicationRuntime, error)
 	// CreateApplication stores an application together with the environment
 	// and storage configuration sent with it.
@@ -135,6 +137,9 @@ type DeployService interface {
 	// without a team context), newest first, at most limit rows (clamped).
 	// It backs the dashboard feed and never crosses the team boundary.
 	ListRecentDeployments(ctx context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error)
+	// GetDeployment returns one exact release after application read authorization.
+	GetDeployment(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error)
+
 	// GetDeploymentBuildLog returns the persisted build log of one
 	// deployment (JUS-84). Same ownership as the deployment reads: a foreign
 	// deployment answers ErrNotFound. Empty while the run is in flight.

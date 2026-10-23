@@ -445,10 +445,12 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Put("/v1/applications/{id}/storages", h.putStorages)
 		protected.Get("/v1/applications/{id}/volumes", h.getVolumes)
 		protected.Get("/v1/applications/{id}/runtime", h.getRuntime)
+		protected.Get("/v1/applications/{id}/logs", h.getApplicationLogs)
 		protected.Post("/v1/applications/{id}/stop", h.stop)
 		protected.Post("/v1/applications/{id}/start", h.start)
 		protected.Post("/v1/applications/{id}/deploy", h.deploy)
 		protected.Get("/v1/applications/{id}/deployments", h.list)
+		protected.Get("/v1/applications/{id}/deployments/{deployment_id}", h.getDeployment)
 		protected.Get("/v1/applications/{id}/deployments/{deployment_id}/logs", h.getDeploymentLog)
 		protected.Post("/v1/applications/{id}/rollback", h.rollback)
 		protected.Post("/v1/applications/{id}/deploy-key", h.createDeployKey)
@@ -958,6 +960,19 @@ func (h *handler) getDeploymentLog(w http.ResponseWriter, r *http.Request) {
 	deploymentID, err := uuid.Parse(chi.URLParam(r, "deployment_id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid deployment id"})
+		return
+	}
+	if r.URL.Query().Has("tail") || r.URL.Query().Has("max_bytes") {
+		options, ok := logOptionsParam(w, r, false)
+		if !ok {
+			return
+		}
+		out, err := h.svc.GetDeploymentLogs(r.Context(), userID, appID, deploymentID, options)
+		if err != nil {
+			h.writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	log, err := h.svc.GetDeploymentBuildLog(r.Context(), userID, appID, deploymentID)

@@ -11,7 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// sealShared seals plaintext with the suite key for shared-secret fixtures.
 func sealShared(t *testing.T, plain string) string {
 	t.Helper()
 	sealed, err := providers.SealSecret(testSecretKey, plain)
@@ -21,8 +20,6 @@ func sealShared(t *testing.T, plain string) string {
 	return sealed
 }
 
-// mergedEnv renders a merge result the way the agent payload sees it: plain
-// vars plus opened secrets.
 func mergedEnv(t *testing.T, vars []EnvVar, secrets []Secret) map[string]string {
 	t.Helper()
 	out := make(map[string]string, len(vars)+len(secrets))
@@ -39,9 +36,6 @@ func mergedEnv(t *testing.T, vars []EnvVar, secrets []Secret) map[string]string 
 	return out
 }
 
-// TestMergeSharedVariablesPrecedence pins the deploy contract: project <
-// environment < application, with a nearer scope winning outright whether it
-// is plain or sealed.
 func TestMergeSharedVariablesPrecedence(t *testing.T) {
 	project := []SharedVariable{
 		{Key: "SHARED", Value: "project"},
@@ -76,8 +70,6 @@ func TestMergeSharedVariablesPrecedence(t *testing.T) {
 			t.Errorf("merged[%s] = %q, want %q", key, got[key], value)
 		}
 	}
-	// A shared secret's ciphertext passes through untouched: it is opened
-	// once, by buildEnv, not re-sealed at every layer.
 	for _, s := range secrets {
 		if s.Key == "PLAIN_FLIP" && s.Ciphertext != environment[2].Ciphertext {
 			t.Errorf("shared ciphertext was re-sealed: %q", s.Ciphertext)
@@ -85,9 +77,6 @@ func TestMergeSharedVariablesPrecedence(t *testing.T) {
 	}
 }
 
-// TestMergeApplicationOverridesShared pins both override directions: an
-// application plain var hides a shared secret and an application secret hides
-// a shared plain var.
 func TestMergeApplicationOverridesShared(t *testing.T) {
 	sealed := sealShared(t, "shared-secret")
 	vars, secrets := mergeSharedVariables(
@@ -108,8 +97,6 @@ func TestMergeApplicationOverridesShared(t *testing.T) {
 	}
 }
 
-// TestMergeSharedVariablesEmptyScopes pins the no-op: no shared rows leaves
-// the application payload byte-identical.
 func TestMergeSharedVariablesEmptyScopes(t *testing.T) {
 	appVars := []EnvVar{{Key: "FOO", Value: "bar"}}
 	appSecrets := []Secret{{Key: "TOKEN", Ciphertext: sealShared(t, "hunter2")}}
@@ -122,8 +109,6 @@ func TestMergeSharedVariablesEmptyScopes(t *testing.T) {
 	}
 }
 
-// seedSharedApp wires an application with its project and environment scopes
-// and stores the given shared rows on the fake.
 func seedSharedApp(app Application, projectID uuid.UUID, project, environment []SharedVariable, repo *fakeRepository) Application {
 	app.ProjectID = projectID
 	repo.sharedProject = map[uuid.UUID][]SharedVariable{projectID: project}
@@ -131,7 +116,6 @@ func seedSharedApp(app Application, projectID uuid.UUID, project, environment []
 	return app
 }
 
-// runToStart deploys app and returns the agent payload of its start step.
 func runToStart(t *testing.T, repo *fakeRepository, app Application) []string {
 	t.Helper()
 	node := newMockNode()
@@ -147,13 +131,11 @@ func runToStart(t *testing.T, repo *fakeRepository, app Application) []string {
 	return node.requests[0].GetEnv()
 }
 
-// TestDeployMergesSharedVariables pins the orchestrator path: the running
-// container sees project < environment < application, with secrets opened.
 func TestDeployMergesSharedVariables(t *testing.T) {
 	projectID := uuid.New()
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
-	envVars, secrets := testEnv(t) // plain FOO=bar + secret API_TOKEN
+	envVars, secrets := testEnv(t)
 	repo.envVars, repo.secrets = envVars, secrets
 	app = seedSharedApp(app, projectID,
 		[]SharedVariable{
@@ -168,9 +150,9 @@ func TestDeployMergesSharedVariables(t *testing.T) {
 
 	env := strings.Join(runToStart(t, repo, app), "\n")
 	for _, want := range []string{
-		"FOO=bar", "API_TOKEN=hunter2", // the application's own
+		"FOO=bar", "API_TOKEN=hunter2",
 		"SHARED=project", "OVERRIDDEN=environment", "ENV_ONLY=yes",
-		"DB_PASSWORD=project-db-pass", // opened shared secret
+		"DB_PASSWORD=project-db-pass",
 	} {
 		if !strings.Contains(env, want) {
 			t.Errorf("run env = %q, want %q", env, want)
@@ -178,9 +160,6 @@ func TestDeployMergesSharedVariables(t *testing.T) {
 	}
 }
 
-// TestPreviewDeployMergesSharedVariables pins the preview half of the
-// contract: a preview inherits its base application's environment, so its
-// deploys merge the same shared scopes.
 func TestPreviewDeployMergesSharedVariables(t *testing.T) {
 	projectID := uuid.New()
 	app := testApplication(uuid.New())
@@ -198,9 +177,6 @@ func TestPreviewDeployMergesSharedVariables(t *testing.T) {
 	}
 }
 
-// TestSharedSecretWithBrokenCiphertextFailsClosed pins the secret log path:
-// an undecryptable shared secret fails the deploy with the key name only —
-// never the plaintext — and the live release is untouched.
 func TestSharedSecretWithBrokenCiphertextFailsClosed(t *testing.T) {
 	projectID := uuid.New()
 	app := testApplication(uuid.New())
@@ -230,9 +206,6 @@ func TestSharedSecretWithBrokenCiphertextFailsClosed(t *testing.T) {
 	}
 }
 
-// TestListSharedVariablesRejectsZeroScope pins the defensive guard: a zero
-// project or environment id fails explicitly instead of silently matching no
-// rows and deploying without shared variables.
 func TestListSharedVariablesRejectsZeroScope(t *testing.T) {
 	repo := &storeRepository{}
 	if _, _, err := repo.ListSharedVariables(context.Background(), uuid.Nil, uuid.New()); !errors.Is(err, ErrValidation) {

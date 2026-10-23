@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// isPKCEUnreserved reports whether r is in the RFC 7636 unreserved set.
 func isPKCEUnreserved(r rune) bool {
 	switch {
 	case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
@@ -24,8 +23,6 @@ func isPKCEUnreserved(r rune) bool {
 	}
 }
 
-// TestPKCEChallengeVector pins the S256 derivation to the RFC 7636 appendix B
-// vector, so a wrong hash can never silently break the GitLab flow.
 func TestPKCEChallengeVector(t *testing.T) {
 	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	if got := pkceChallenge(verifier); got != "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" {
@@ -33,8 +30,6 @@ func TestPKCEChallengeVector(t *testing.T) {
 	}
 }
 
-// TestPKCEVerifierFormat pins the generator output to the RFC 7636 verifier
-// alphabet and length: 43 base64url characters with no padding.
 func TestPKCEVerifierFormat(t *testing.T) {
 	verifier, err := generatePKCEVerifier()
 	if err != nil {
@@ -57,9 +52,6 @@ func TestPKCEVerifierFormat(t *testing.T) {
 	}
 }
 
-// TestGitLabAuthorizeConnectPKCE runs the GitLab connect against a fake:
-// Authorize binds the URL to an S256 challenge, and Connect redeems the code
-// with the verifier the browser never saw.
 func TestGitLabAuthorizeConnectPKCE(t *testing.T) {
 	var gotVerifier, gotCode string
 	tokenSrv := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -120,15 +112,11 @@ func TestGitLabAuthorizeConnectPKCE(t *testing.T) {
 			gotCode, gotVerifier)
 	}
 
-	// The verifier is single-use with the state: replaying it is refused.
 	if _, err := svc.Connect(context.Background(), userID, provider.ID, "gl-code", state); !errors.Is(err, ErrValidation) {
 		t.Fatalf("replayed Connect: error = %v, want ErrValidation", err)
 	}
 }
 
-// TestGitLabConnectFailsClosedWithoutVerifier proves a PKCE source never
-// redeems a code for a state that carries no verifier (a legacy or forged
-// authorization).
 func TestGitLabConnectFailsClosedWithoutVerifier(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitLab})
@@ -148,8 +136,6 @@ func TestGitLabConnectFailsClosedWithoutVerifier(t *testing.T) {
 	}
 }
 
-// TestConnectStateVerifierExpiry proves an expired PKCE authorization loses
-// its verifier with its state.
 func TestConnectStateVerifierExpiry(t *testing.T) {
 	states := newConnectState()
 	user, provider := uuid.New(), uuid.New()
@@ -163,8 +149,6 @@ func TestConnectStateVerifierExpiry(t *testing.T) {
 	}
 }
 
-// TestConnectStateVerifierRoundTrip proves redeem returns the stored verifier
-// exactly once.
 func TestConnectStateVerifierRoundTrip(t *testing.T) {
 	states := newConnectState()
 	user, provider := uuid.New(), uuid.New()
@@ -181,8 +165,6 @@ func TestConnectStateVerifierRoundTrip(t *testing.T) {
 	}
 }
 
-// fakeGitLab serves the GitLab endpoints GS-6 needs: OAuth application
-// provisioning, the token exchange and the project APIs.
 type fakeGitLab struct {
 	t *testing.T
 
@@ -190,8 +172,6 @@ type fakeGitLab struct {
 	seenPayload  map[string]any
 	seenVerifier string
 	seenCode     string
-	// applications counts POST /api/v4/applications calls; deletedApp records
-	// the id of a DELETE /api/v4/applications/:id rollback.
 	applications int
 	deletedApp   int64
 
@@ -273,8 +253,6 @@ func (f *fakeGitLab) handler() http.HandlerFunc {
 	}
 }
 
-// TestAutoProvisionGitLab creates the OAuth application from the one-time
-// admin token and stores only the resulting client credentials.
 func TestAutoProvisionGitLab(t *testing.T) {
 	fake := &fakeGitLab{t: t}
 	srv := httptest.NewServer(fake.handler())
@@ -313,7 +291,6 @@ func TestAutoProvisionGitLab(t *testing.T) {
 		t.Fatalf("payload = %v", fake.seenPayload)
 	}
 
-	// The admin token is one-time: no stored field may contain it.
 	stored := repo.providers[provider.ID]
 	for _, field := range []string{stored.ClientID, stored.ClientSecret, stored.AccessToken, stored.RefreshToken, stored.RedirectURL, stored.Scopes} {
 		if strings.Contains(field, "one-time-admin") {
@@ -322,9 +299,6 @@ func TestAutoProvisionGitLab(t *testing.T) {
 	}
 }
 
-// TestGitLabInstanceBase pins the instance-root normalization: gitlab.com
-// (with or without the API suffix) stores as empty, and a self-hosted root
-// loses a pasted /api/v4 suffix.
 func TestGitLabInstanceBase(t *testing.T) {
 	for raw, want := range map[string]string{
 		"":                             "",
@@ -343,8 +317,6 @@ func TestGitLabInstanceBase(t *testing.T) {
 	}
 }
 
-// TestAutoProvisionGitLabValidation rejects a missing admin token, a bad
-// redirect and an unsafe base without touching the network.
 func TestAutoProvisionGitLabValidation(t *testing.T) {
 	repo := newFakeRepo()
 	svc := NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
@@ -369,8 +341,6 @@ func TestAutoProvisionGitLabValidation(t *testing.T) {
 	}
 }
 
-// TestAutoProvisionGitLabNormalizesScopes proves repeated and padded scopes
-// are stored and registered in canonical space-joined form.
 func TestAutoProvisionGitLabNormalizesScopes(t *testing.T) {
 	fake := &fakeGitLab{t: t}
 	srv := httptest.NewServer(fake.handler())
@@ -396,8 +366,6 @@ func TestAutoProvisionGitLabNormalizesScopes(t *testing.T) {
 	}
 }
 
-// TestAutoProvisionGitLabRejectsBadAdminToken maps a 401 from GitLab to a
-// validation error that never names the token.
 func TestAutoProvisionGitLabRejectsBadAdminToken(t *testing.T) {
 	fake := &fakeGitLab{t: t, applicationStatus: http.StatusUnauthorized}
 	srv := httptest.NewServer(fake.handler())
@@ -417,8 +385,6 @@ func TestAutoProvisionGitLabRejectsBadAdminToken(t *testing.T) {
 	}
 }
 
-// TestGitLabSetupInfo returns the exact redirect URI and scopes for a manual
-// application.
 func TestGitLabSetupInfo(t *testing.T) {
 	svc := NewService(Config{Repository: newFakeRepo(), Logger: discardLogger(), AllowUnsafeBaseURL: true})
 
@@ -442,8 +408,6 @@ func TestGitLabSetupInfo(t *testing.T) {
 	}
 }
 
-// TestServiceDelete forgets the connection; deleting twice or another user's
-// row is safe.
 func TestServiceDelete(t *testing.T) {
 	repo := newFakeRepo()
 	svc := NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
@@ -468,8 +432,6 @@ func TestServiceDelete(t *testing.T) {
 	}
 }
 
-// TestGitLabListBranchesAndWebhooks runs list, branches and the webhook
-// lifecycle against the fake GitLab.
 func TestGitLabListBranchesAndWebhooks(t *testing.T) {
 	fake := &fakeGitLab{t: t}
 	srv := httptest.NewServer(fake.handler())
@@ -523,7 +485,6 @@ func TestGitLabListBranchesAndWebhooks(t *testing.T) {
 	}
 }
 
-// TestServiceListBranchesRequiresConnection fails closed without a token.
 func TestServiceListBranchesRequiresConnection(t *testing.T) {
 	repo := newFakeRepo()
 	provider, err := repo.Create(context.Background(), Provider{
@@ -539,9 +500,6 @@ func TestServiceListBranchesRequiresConnection(t *testing.T) {
 	}
 }
 
-// TestGitLabTransparentRefresh rotates an expired token inside a listing call
-// and persists the rotated pair, so the next call does not present the
-// consumed refresh token.
 func TestGitLabTransparentRefresh(t *testing.T) {
 	var refreshSeen string
 	apiSrv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -592,8 +550,6 @@ func TestGitLabTransparentRefresh(t *testing.T) {
 	}
 }
 
-// TestAutoProvisionGitLabRefusesDuplicate proves a second provision for the
-// same normalized instance is refused before anything is created on GitLab.
 func TestAutoProvisionGitLabRefusesDuplicate(t *testing.T) {
 	fake := &fakeGitLab{t: t}
 	srv := httptest.NewServer(fake.handler())
@@ -623,8 +579,6 @@ func TestAutoProvisionGitLabRefusesDuplicate(t *testing.T) {
 	}
 }
 
-// TestAutoProvisionGitLabRemovesOrphanOnStoreFailure proves a row insert
-// failure after a successful POST deletes the just-created application again.
 func TestAutoProvisionGitLabRemovesOrphanOnStoreFailure(t *testing.T) {
 	fake := &fakeGitLab{t: t}
 	srv := httptest.NewServer(fake.handler())
@@ -647,8 +601,6 @@ func TestAutoProvisionGitLabRemovesOrphanOnStoreFailure(t *testing.T) {
 	}
 }
 
-// TestAutoProvisionGitLabRequiresHTTPS proves the admin token is never sent
-// over plain HTTP outside tests.
 func TestAutoProvisionGitLabRequiresHTTPS(t *testing.T) {
 	fake := &fakeGitLab{t: t}
 	srv := httptest.NewServer(fake.handler())
@@ -668,7 +620,6 @@ func TestAutoProvisionGitLabRequiresHTTPS(t *testing.T) {
 	}
 }
 
-// TestAutoProvisionGitLabRejectsUnknownScopes proves a typo fails at the API.
 func TestAutoProvisionGitLabRejectsUnknownScopes(t *testing.T) {
 	fake := &fakeGitLab{t: t}
 	srv := httptest.NewServer(fake.handler())
@@ -689,8 +640,6 @@ func TestAutoProvisionGitLabRejectsUnknownScopes(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteRefusesInUse proves a connection applications still
-// deploy through is refused naming them, while other hosts stay deletable.
 func TestServiceDeleteRefusesInUse(t *testing.T) {
 	repo := newFakeRepo()
 	userID := uuid.New()
@@ -736,8 +685,6 @@ func TestServiceDeleteRefusesInUse(t *testing.T) {
 	}
 }
 
-// TestConnectCallback completes a connect from code and state alone: the
-// browser callback needs no session because the state binds both.
 func TestConnectCallback(t *testing.T) {
 	tokenSrv := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSONTest(t, w, map[string]any{
@@ -797,8 +744,6 @@ func TestConnectCallback(t *testing.T) {
 	}
 }
 
-// TestServiceCreateNormalizesGitLabBase proves the manual create stores the
-// instance root, so gitlab.com cannot be connected twice under two spellings.
 func TestServiceCreateNormalizesGitLabBase(t *testing.T) {
 	repo := newFakeRepo()
 	svc := NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})

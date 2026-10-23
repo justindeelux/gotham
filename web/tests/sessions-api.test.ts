@@ -1,5 +1,3 @@
-// Sessions API client (JUS-28): routes, payloads, and envelope handling
-// with a mocked axios layer (the PF-2 backend ships in parallel).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/shared/api/http", () => ({
@@ -78,8 +76,6 @@ describe("session messages are keys with byte-exact English display", () => {
       [profileMessages.signInAgain, "Sign in again"],
     ];
     for (const [key, text] of cases) {
-      // Keys stay namespaced; behavior preserved: each resolves to the
-      // exact previous string in the default locale.
       expect(key.startsWith("profile.sessions.")).toBe(true);
       expect(resolveValidationMessage(key)).toBe(text);
     }

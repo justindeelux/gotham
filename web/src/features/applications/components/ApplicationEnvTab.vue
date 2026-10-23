@@ -17,7 +17,6 @@ interface Props {
   envError: string | null;
   saveDisabled: boolean;
   saving: boolean;
-  /** inherited lists the project/environment rows shown read-only, if any. */
   inherited?: InheritedVariable[];
   inheritedLoading?: boolean;
 }
@@ -35,12 +34,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/**
- * isRowOverridden marks a row the application draft shadows, and — for
- * project rows — a key the environment set already shadows. Deploy
- * precedence is project < environment < application, so a project row with
- * the same key in the environment set never takes effect.
- */
 function isRowOverridden(row: InheritedVariable): boolean {
   if (isOverriddenBy(row.key, props.envDraft)) {
     return true;

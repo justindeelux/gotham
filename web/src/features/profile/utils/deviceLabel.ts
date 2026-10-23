@@ -1,16 +1,7 @@
-/**
- * deviceLabel parses a session user agent into a short readable label
- * ("Chrome on macOS"). Deliberately dependency-free and heuristic: it only
- * sniffs the common browser/OS tokens and falls back to the catalog's
- * unknown-device string, with the raw string kept in the row's title
- * attribute. The locale selects the fallback/joiner language (callers pass
- * the active locale); browser/OS names stay untranslated proper nouns.
- */
 import type { ProfileMessages } from "@/features/profile/locales/en";
 import enCatalog from "@/features/profile/locales/en";
 import viCatalog from "@/features/profile/locales/vi";
 
-/** DeviceLocale selects the fallback/joiner language for device labels. */
 export type DeviceLocale = "en" | "vi";
 
 const deviceTables: Record<DeviceLocale, ProfileMessages["sessions"]> = {
@@ -18,7 +9,6 @@ const deviceTables: Record<DeviceLocale, ProfileMessages["sessions"]> = {
   vi: viCatalog.sessions,
 };
 
-/** deviceLabel renders a readable "browser on OS" label for a user agent. */
 export function deviceLabel(
   userAgent: string | null | undefined,
   locale: DeviceLocale = "en",
@@ -35,7 +25,6 @@ export function deviceLabel(
   return browser ?? os ?? table.unknownDevice;
 }
 
-/** browserName sniffs the common browser tokens, Edge before Chrome. */
 function browserName(userAgent: string): string | null {
   if (/\bEdg(e|A|iOS)?\//.test(userAgent)) {
     return "Edge";
@@ -61,7 +50,6 @@ function browserName(userAgent: string): string | null {
   return null;
 }
 
-/** osName sniffs the common OS tokens, mobile before desktop. */
 function osName(userAgent: string): string | null {
   if (/\bAndroid\b/.test(userAgent)) {
     return "Android";

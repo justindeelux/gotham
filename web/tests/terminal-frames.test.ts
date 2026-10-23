@@ -1,6 +1,3 @@
-// JUS-245: the binary frame contract shared with the JUS-243 transport.
-// Output bytes must pass through verbatim (UTF-8 may split across frames) and
-// control frames must decode without throwing on malformed payloads.
 /* global TextEncoder:readonly */
 import { describe, expect, it } from "vitest";
 
@@ -17,7 +14,6 @@ import {
   encodeResize,
 } from "@/features/terminal/transport/frames";
 
-/** concat builds one raw server frame from an opcode and payload bytes. */
 function frame(opcode: number, payload: Uint8Array = new Uint8Array()): Uint8Array {
   const bytes = new Uint8Array(payload.length + 1);
   bytes[0] = opcode;
@@ -25,7 +21,6 @@ function frame(opcode: number, payload: Uint8Array = new Uint8Array()): Uint8Arr
   return bytes;
 }
 
-/** text encodes one JSON/UTF-8 control payload. */
 function text(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
@@ -73,7 +68,6 @@ describe("client frames", () => {
 
 describe("server frames", () => {
   it("returns output bytes untouched, including split UTF-8", () => {
-    // 0xE2 is the first byte of a euro sign; the rest arrives next frame.
     const partial = new Uint8Array([0x01, 0xe2]);
     const first = decodeServerFrame(partial);
     const second = decodeServerFrame(frame(0x01, new Uint8Array([0x82, 0xac])));

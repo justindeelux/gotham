@@ -1,7 +1,3 @@
-// JUS-246: the standalone Terminal page, the app-level paused-session dock and
-// the lazy server-detail tab. The transport and API seams are faithful fakes
-// (they record creates, deletes and server ids) so request counts and target
-// identity are asserted, not only rendered text.
 /* global document:readonly, HTMLElement:readonly, window:readonly */
 import { NTabs } from "naive-ui";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -22,7 +18,6 @@ import { checkCatalogParity } from "@/shared/i18n/catalog";
 import enTerminal from "../src/features/terminal/locales/en";
 import viTerminal from "../src/features/terminal/locales/vi";
 
-/** runtimeFakes records every renderer the store creates. */
 const runtimeFakes = vi.hoisted(() => {
   class FakeRuntime {
     options: {
@@ -62,7 +57,6 @@ const runtimeFakes = vi.hoisted(() => {
   return { FakeRuntime, instances };
 });
 
-/** apiFakes is the HTTP seam; creates/deletes are counted per server. */
 const apiFakes = vi.hoisted(() => ({
   create: vi.fn(),
   close: vi.fn(),
@@ -82,7 +76,6 @@ vi.mock("@/features/terminal/api/terminal", () => ({
   terminalWebSocketUrl: (path: string) => `ws://test${path}`,
 }));
 
-/** serverApiFakes replaces the detail read with a deterministic row. */
 const serverApiFakes = vi.hoisted(() => ({ getServer: vi.fn() }));
 
 vi.mock("@/features/servers/api/servers", async (importOriginal) => {
@@ -99,8 +92,6 @@ vi.mock("@/features/servers/composables/useServerMetrics", () => ({
   }),
 }));
 
-// useMessage needs an NMessageProvider ancestor, which the app shell provides.
-// The page calls it at setup; give the page the same toast surface shape.
 vi.mock("naive-ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("naive-ui")>();
   return {
@@ -127,7 +118,6 @@ const { default: TerminalPageDock } = await import(
   "../src/features/terminal/components/TerminalPageDock.vue"
 );
 
-/** serverRow builds one managed server. */
 function serverRow(
   id: string,
   name: string,
@@ -166,10 +156,8 @@ const SERVER_OFFLINE = serverRow(
   "offline",
 );
 
-/** stub is the lazy route component used outside the page under test. */
 const stub = { template: "<div />" };
 
-/** pageRouter is the minimal route table (names match the app router). */
 function pageRouter() {
   return createRouter({
     history: createMemoryHistory(),
@@ -250,12 +238,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** login sets the platform-operator flag the page and route guard read. */
 function login(pinia: Pinia, isAdmin = true): void {
   setActivePinia(pinia);
   const auth = useAuthStore();
-  // A real signed-in session, not just a user row: the page now distinguishes
-  // logout from demotion via isAuthenticated.
   auth.accessToken = "test-access";
   auth.refreshToken = "test-refresh";
   auth.user = {
@@ -267,7 +252,6 @@ function login(pinia: Pinia, isAdmin = true): void {
   };
 }
 
-/** mountPage mounts the standalone page on one URL. */
 async function mountPage(path = "/terminal") {
   const pinia = createPinia();
   setActivePinia(pinia);
@@ -285,7 +269,6 @@ async function mountPage(path = "/terminal") {
   return { wrapper, router, terminal: useTerminalStore() };
 }
 
-/** mountDetail mounts the server detail page with its heavy tabs stubbed. */
 async function mountDetail(path: string, isAdmin = true) {
   const pinia = createPinia();
   setActivePinia(pinia);
@@ -316,7 +299,6 @@ async function mountDetail(path: string, isAdmin = true) {
   return { wrapper, router, terminal: useTerminalStore() };
 }
 
-/** clickButtonByText finds one button by its visible label. */
 function clickButtonByText(wrapper: VueWrapper, label: string) {
   const button = wrapper
     .findAll("button")
@@ -379,8 +361,6 @@ describe("standalone Terminal page (JUS-246)", () => {  it("creates nothing befo
     expect(wrapper.find(".term-surface").exists()).toBe(true);
     expect(runtimeFakes.instances[0]?.attached).not.toBeNull();
 
-    // The session now lives in its own tab; the empty picker is gone and the
-    // add-tab control is still available.
     expect(wrapper.findAll(".term-page-tab")).toHaveLength(1);
     expect(wrapper.find(".term-add-tab").exists()).toBe(true);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
@@ -403,8 +383,6 @@ describe("standalone Terminal page (JUS-246)", () => {  it("creates nothing befo
     const tabId = useTerminalStore().pageTabs[0]!.id;
     first.unmount();
 
-    // The same store (the app shell survives a route change) reopens the
-    // source route: the session is reattached, never recreated.
     const second = mount(TerminalPage, {
       attachTo: document.body,
       global: { plugins: [pinia, router, i18n] },
@@ -422,7 +400,6 @@ describe("standalone Terminal page (JUS-246)", () => {  it("creates nothing befo
     );
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // The add-tab path opens a second, independent page tab.
     const second = await terminal.openPageSession({
       serverId: SERVER_B.id,
       serverName: SERVER_B.name,
@@ -437,7 +414,6 @@ describe("standalone Terminal page (JUS-246)", () => {  it("creates nothing befo
     expect(wrapper.findAll(".term-page-tab")).toHaveLength(2);
     expect(wrapper.find(".term-surface").exists()).toBe(true);
 
-    // Closing the active tab asks first; Cancel keeps both shells.
     terminal.requestClose([second.id]);
     await flushPromises();
     terminal.cancelClose();
@@ -445,7 +421,6 @@ describe("standalone Terminal page (JUS-246)", () => {  it("creates nothing befo
     expect(terminal.pageTabs).toHaveLength(2);
     expect(apiFakes.close).not.toHaveBeenCalled();
 
-    // Confirm releases exactly that session; the first tab is untouched.
     terminal.requestClose([second.id]);
     await flushPromises();
     terminal.confirmClose();
@@ -492,7 +467,6 @@ describe("standalone Terminal page (JUS-246)", () => {  it("creates nothing befo
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
     expect(wrapper.find(".term-detached").exists()).toBe(true);
     expect(wrapper.text()).toContain("open in the window");
-    // There is deliberately no window → page action.
     expect(wrapper.find(".term-open-in-page").exists()).toBe(false);
   });
 });
@@ -514,7 +488,6 @@ describe("paused page terminal dock (JUS-246)", () => {
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
     const tabId = useTerminalStore().pageTabs[0]!.id;
 
-    // Leaving the route tears the pane down but keeps the PTY.
     page.unmount();
     await router.push("/dashboard");
     const dock = mount(TerminalPageDock, {
@@ -528,7 +501,6 @@ describe("paused page terminal dock (JUS-246)", () => {
     expect(dock.find(".term-host").exists()).toBe(false);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // Resume goes back to the owning route; the store reuses the session.
     await dock.find(".term-dock-resume").trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.fullPath).toContain(`server=${SERVER_A.id}`);
@@ -558,7 +530,6 @@ describe("paused page terminal dock (JUS-246)", () => {
     await flushPromises();
     expect(dock.find(".term-dock").exists()).toBe(true);
 
-    // Close asks first; cancel keeps the shell and the card.
     await dock.find(".term-dock-close").trigger("click");
     await flushPromises();
     expect(terminal.closeRequest?.ids).toEqual([tab.id]);
@@ -566,7 +537,6 @@ describe("paused page terminal dock (JUS-246)", () => {
     await flushPromises();
     expect(terminal.findTab(tab.id)).not.toBeNull();
 
-    // Confirm removes it and issues exactly one DELETE.
     await dock.find(".term-dock-close").trigger("click");
     await flushPromises();
     terminal.confirmClose();
@@ -575,7 +545,6 @@ describe("paused page terminal dock (JUS-246)", () => {
     expect(apiFakes.close).toHaveBeenCalledTimes(1);
     expect(dock.find(".term-dock").exists()).toBe(false);
 
-    // A second page session can move into the window (one-way, same id).
     const second = await terminal.openPageSession({
       serverId: SERVER_B.id,
       serverName: SERVER_B.name,
@@ -623,7 +592,6 @@ describe("server detail Terminal tab (JUS-246)", () => {
     await flushPromises();
     await nextTick();
 
-    // The server read is mocked at the module boundary in this suite.
     expect(apiFakes.create).toHaveBeenCalledTimes(0);
     const tabLabels = wrapper.findAll(".n-tabs-tab").map((node) => node.text());
     expect(tabLabels).toContain("Files");
@@ -643,7 +611,6 @@ describe("server detail Terminal tab (JUS-246)", () => {
     expect(tab.serverId).toBe(SERVER_A.id);
     expect(tab.sourcePath).toContain("tab=terminal");
 
-    // Rapid tab changes and re-entry never open a concurrent duplicate.
     const overview = wrapper
       .findAll(".n-tabs-tab")
       .find((node) => node.text() === "Overview")!;
@@ -741,7 +708,6 @@ describe("page session recovery (JUS-246 fix round 1)", () => {
     await flushPromises();
     await nextTick();
 
-    // No dead tab id, no blank pane, and no automatic replacement shell.
     expect(wrapper.find(".term-surface").exists()).toBe(false);
     expect(wrapper.text()).toContain("Session closed");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
@@ -763,9 +729,6 @@ describe("page session recovery (JUS-246 fix round 1)", () => {
     await wrapper.find(".term-open-in-window").trigger("click");
     await flushPromises();
     expect(wrapper.find(".term-detached").exists()).toBe(true);
-    // JUS-255: while the window is open the pane is a passive line. Its
-    // actions only appear once the window is collapsed, so nothing in the page
-    // can ever paint over (or swallow clicks from) the floating terminal.
     expect(wrapper.find(".term-detached-actions").exists()).toBe(false);
     expect(wrapper.find(".term-detached").text()).toContain("Minimize the window");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
@@ -775,7 +738,6 @@ describe("page session recovery (JUS-246 fix round 1)", () => {
     await flushPromises();
     expect(wrapper.find(".term-detached-actions").exists()).toBe(true);
 
-    // "Show window" restores the same window without creating a shell.
     await clickButtonByText(wrapper, "Show window");
     await flushPromises();
     expect(windowStore.minimized).toBe(false);
@@ -817,13 +779,10 @@ describe("page session recovery (JUS-246 fix round 1)", () => {
     expect(wrapper.text()).toContain("Session closed");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // Confirming Close lands focus on the explicit restart, not the rail.
     expect(globalThis.document.activeElement?.textContent).toContain(
       "Start new session",
     );
 
-    // Re-entering the tab keeps the closed card and creates nothing (JUS-246
-    // r2 finding 3: no auto-create after a close).
     const tabButton = (label: string) =>
       wrapper.findAll(".n-tabs-tab").find((node) => node.text() === label)!;
     await tabButton("Overview").trigger("click");
@@ -837,7 +796,6 @@ describe("page session recovery (JUS-246 fix round 1)", () => {
     await flushPromises();
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(wrapper.find(".term-surface").exists()).toBe(true);
-    // The tab is still active: no longer requires switching away and back.
     expect(wrapper.find(".n-tabs-tab--active").text()).toBe("Terminal");
     wrapper.unmount();
   });
@@ -857,7 +815,6 @@ describe("role demotion (JUS-246 fix round 1)", () => {
     await flushPromises();
     await nextTick();
     expect(router.currentRoute.value.name).toBe("forbidden");
-    // The demotion itself never issues another create.
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
@@ -869,8 +826,6 @@ describe("role demotion (JUS-246 fix round 1)", () => {
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
     const auth = useAuthStore();
 
-    // The real AccountMenu clears the session and then pushes /login. The
-    // page must not race it with a /forbidden redirect.
     auth.accessToken = null;
     auth.refreshToken = null;
     auth.user = null;
@@ -959,10 +914,8 @@ describe("paused dock accessibility and demotion (JUS-246 fix round 1)", () => {
     expect(resumeLabels[0]).toContain("prod-01 · one");
     expect(resumeLabels[1]).toContain("prod-02 · two");
 
-    // <section aria-label> already exposes the region role.
     expect(wrapper.find(".term-dock").attributes("role")).toBeUndefined();
 
-    // The header toggles the list (compact dock on phones).
     const head = wrapper.find(".term-dock-head");
     expect(head.attributes("aria-expanded")).toBe("true");
     await head.trigger("click");
@@ -971,7 +924,6 @@ describe("paused dock accessibility and demotion (JUS-246 fix round 1)", () => {
     await head.trigger("click");
     expect(wrapper.find(".term-dock-list").isVisible()).toBe(true);
 
-    // A demotion hides every card, even before the backend closes the shell.
     useAuthStore().user = {
       ...useAuthStore().user!,
       is_platform_admin: false,

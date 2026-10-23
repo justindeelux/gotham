@@ -50,7 +50,6 @@ func TestAuthorityGeneratePersistReload(t *testing.T) {
 		t.Fatal("reloaded CA certificate is not the same certificate")
 	}
 
-	// LoadAuthority returns nil when no CA exists.
 	missing, err := LoadAuthority(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadAuthority (empty dir): %v", err)
@@ -91,7 +90,6 @@ func TestIssueServerAndClientCerts(t *testing.T) {
 	}
 }
 
-// parseCertPEM decodes the first certificate block in a PEM blob.
 func parseCertPEM(t *testing.T, certPEM []byte) *x509.Certificate {
 	t.Helper()
 
@@ -106,7 +104,6 @@ func parseCertPEM(t *testing.T, certPEM []byte) *x509.Certificate {
 	return cert
 }
 
-// testKey returns a fresh P-256 key for CSR tests.
 func testKey(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -116,7 +113,6 @@ func testKey(t *testing.T) *ecdsa.PrivateKey {
 	return key
 }
 
-// testCSR builds and PEM-encodes a PKCS#10 CSR from template.
 func testCSR(t *testing.T, key crypto.Signer, template *x509.CertificateRequest) []byte {
 	t.Helper()
 	der, err := x509.CreateCertificateRequest(rand.Reader, template, key)
@@ -154,7 +150,6 @@ func TestIssueAgentCertFromCSRRoundtrip(t *testing.T) {
 		t.Fatalf("DNS SANs = %v, want [node-42]", cert.DNSNames)
 	}
 
-	// The certificate must carry the CSR's public key, not a fresh one.
 	publicKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
 		t.Fatalf("certificate public key type = %T, want *ecdsa.PublicKey", cert.PublicKey)
@@ -170,7 +165,6 @@ func TestIssueAgentCertFromCSRAddsCommonNameSAN(t *testing.T) {
 		t.Fatalf("LoadOrCreateAuthority: %v", err)
 	}
 
-	// A CSR with a common name but no SANs must still verify by name.
 	csrPEM := testCSR(t, testKey(t), &x509.CertificateRequest{
 		Subject: pkix.Name{CommonName: "node-9"},
 	})
@@ -179,7 +173,6 @@ func TestIssueAgentCertFromCSRAddsCommonNameSAN(t *testing.T) {
 		t.Fatalf("DNS SANs = %v, want [node-9]", cert.DNSNames)
 	}
 
-	// An IP node id must become an IP SAN so address-based verification works.
 	ipCSR := testCSR(t, testKey(t), &x509.CertificateRequest{
 		Subject:     pkix.Name{CommonName: "10.0.0.9"},
 		DNSNames:    []string{"10.0.0.9"},
@@ -204,8 +197,6 @@ func TestIssueAgentCertFromCSRTampered(t *testing.T) {
 		DNSNames: []string{"node-tamper"},
 	})
 
-	// Flip the last byte of the DER. The CSR still parses, but the ECDSA
-	// signature no longer verifies.
 	block, _ := pem.Decode(csrPEM)
 	if block == nil {
 		t.Fatal("decode CSR: not PEM")
@@ -236,10 +227,6 @@ func TestIssueAgentCertFromCSRRejectsEmpty(t *testing.T) {
 	}
 }
 
-// TestIssueAgentCertFromCSRRejectsUnboundSANs is the FX-3 item-1 rejection
-// matrix: a certificate is only issued for the enrolled identity, and a CSR
-// carrying a foreign common name, extra/wildcard SANs or an oversized SAN set
-// is refused.
 func TestIssueAgentCertFromCSRRejectsUnboundSANs(t *testing.T) {
 	authority, err := LoadOrCreateAuthority(t.TempDir())
 	if err != nil {
@@ -306,7 +293,6 @@ func TestIssueAgentCertFromCSRRejectsUnboundSANs(t *testing.T) {
 		})
 	}
 
-	// A correctly bound CSR is accepted and carries exactly the node identity.
 	valid := testCSR(t, testKey(t), &x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: "node-1"},
 		DNSNames: []string{"node-1"},
@@ -317,7 +303,6 @@ func TestIssueAgentCertFromCSRRejectsUnboundSANs(t *testing.T) {
 	}
 }
 
-// mustIssueFromCSR issues an agent certificate from csrPEM, failing on error.
 func mustIssueFromCSR(t *testing.T, authority *Authority, csrPEM []byte, nodeID string) []byte {
 	t.Helper()
 	certPEM, err := authority.IssueAgentCertFromCSR(csrPEM, nodeID)
@@ -327,8 +312,6 @@ func mustIssueFromCSR(t *testing.T, authority *Authority, csrPEM []byte, nodeID 
 	return certPEM
 }
 
-// TestFileStateSurfacesStatErrors is the FX-3 R5 guard: only an absent file is
-// (false, nil); any other stat failure is an error, never silently "absent".
 func TestFileStateSurfacesStatErrors(t *testing.T) {
 	dir := t.TempDir()
 	existing := filepath.Join(dir, "present")
@@ -348,15 +331,12 @@ func TestFileStateSurfacesStatErrors(t *testing.T) {
 	if _, err := fileState(asDir); err == nil {
 		t.Error("fileState(directory) = nil error, want an error")
 	}
-	// A path under a non-directory cannot be stat'd: ENOTDIR, not NotExist.
 	notdir := filepath.Join(existing, "child")
 	if _, err := fileState(notdir); err == nil {
 		t.Error("fileState(ENOTDIR) = nil error, want an error")
 	}
 }
 
-// TestLoadAuthorityFailsClosedOnIncompletePair is the FX-3 item-2 guard: half a
-// CA pair must never silently downgrade to a plaintext listener.
 func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
 	dir := t.TempDir()
 	authority, err := LoadOrCreateAuthority(dir)
@@ -366,7 +346,6 @@ func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
 	certPath := filepath.Join(dir, caCertFile)
 	keyPath := filepath.Join(dir, caKeyFile)
 
-	// Certificate without key.
 	if err := os.Remove(keyPath); err != nil {
 		t.Fatalf("remove key: %v", err)
 	}
@@ -377,7 +356,6 @@ func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
 		t.Error("LoadOrCreateAuthority(cert only) = nil error, want fail-closed")
 	}
 
-	// A key without certificate.
 	if err := os.WriteFile(keyPath, authority.CACertPEM(), 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
@@ -388,8 +366,6 @@ func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
 		t.Error("LoadAuthority(key only) = nil error, want fail-closed")
 	}
 
-	// A directory where a file belongs is a stat failure, not an absent CA:
-	// it must not be reported as "no CA configured".
 	odd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(odd, caCertFile), authority.CACertPEM(), 0o600); err != nil {
 		t.Fatalf("write cert: %v", err)
@@ -404,16 +380,11 @@ func TestLoadAuthorityFailsClosedOnIncompletePair(t *testing.T) {
 		t.Error("LoadOrCreateAuthority(key is a directory) = nil error, want failure")
 	}
 
-	// A truly empty directory still means "no CA configured".
 	if loaded, err := LoadAuthority(t.TempDir()); err != nil || loaded != nil {
 		t.Errorf("LoadAuthority(empty) = (%v, %v), want (nil, nil)", loaded, err)
 	}
 }
 
-// TestUniqueStringsTrims pins N1: environment-provided SAN hosts
-// (GOTHAM_GRPC_HOSTS="cp.example.com, 203.0.113.10") can carry surrounding
-// spaces; a padded entry must be trimmed, not left as a SAN that matches
-// nothing (net.ParseIP fails on " 203.0.113.10").
 func TestUniqueStringsTrims(t *testing.T) {
 	got := uniqueStrings([]string{"cp.example.com", " 203.0.113.10", "", "cp.example.com", "  ", "\t::1 "})
 	want := []string{"cp.example.com", "203.0.113.10", "::1"}
@@ -427,10 +398,6 @@ func TestUniqueStringsTrims(t *testing.T) {
 	}
 }
 
-// TestIssueClientCertCarriesControlPlaneIdentity pins the two-role model: the
-// control-plane client credential carries the ControlPlaneURI URI SAN and is
-// refused as a node credential, while a node leaf is not accepted as the CP
-// credential (agent-side test).
 func TestIssueClientCertCarriesControlPlaneIdentity(t *testing.T) {
 	if ControlPlaneURI != "spiffe://gotham/control-plane" {
 		t.Fatalf("ControlPlaneURI = %q, want spiffe://gotham/control-plane", ControlPlaneURI)
@@ -455,8 +422,6 @@ func TestIssueClientCertCarriesControlPlaneIdentity(t *testing.T) {
 	}
 }
 
-// TestVerifyNodeClientCertReportsLegacy pins the sunset input: a pre-mTLS
-// (serverAuth-only) leaf is reported legacy, a dual-EKU leaf is not.
 func TestVerifyNodeClientCertReportsLegacy(t *testing.T) {
 	authority, err := LoadOrCreateAuthority(t.TempDir())
 	if err != nil {
@@ -472,7 +437,6 @@ func TestVerifyNodeClientCertReportsLegacy(t *testing.T) {
 	if legacy, err := authority.VerifyNodeClientCert(parseCertPEM(t, legacyPEM)); err != nil || legacy {
 		t.Fatalf("dual-EKU leaf: legacy=%v err=%v, want false/nil", legacy, err)
 	}
-	// A pre-mTLS leaf (serverAuth only) is what the sunset is about.
 	legacyLeaf, err := authority.sign("legacy", []string{"legacy"}, nil, nil,
 		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, time.Hour, &key.PublicKey)
 	if err != nil {
@@ -483,8 +447,6 @@ func TestVerifyNodeClientCertReportsLegacy(t *testing.T) {
 	}
 }
 
-// TestParseLegacyLeafDeadline pins the sunset configuration: a default, an
-// explicit date, a disabled sunset and a malformed value that must not default.
 func TestParseLegacyLeafDeadline(t *testing.T) {
 	deflt, err := ParseLegacyLeafDeadline("")
 	if err != nil || deflt.IsZero() {
@@ -502,8 +464,6 @@ func TestParseLegacyLeafDeadline(t *testing.T) {
 	}
 }
 
-// TestLoadOrCreateEnrollmentToken proves the fail-closed default: a token is
-// generated, persisted 0600, and reused unchanged on the next call.
 func TestLoadOrCreateEnrollmentToken(t *testing.T) {
 	dir := t.TempDir()
 	token, path, err := LoadOrCreateEnrollmentToken(dir)
@@ -527,7 +487,6 @@ func TestLoadOrCreateEnrollmentToken(t *testing.T) {
 	if err != nil || again != token {
 		t.Fatalf("second call = (%q, %v), want the persisted token", again, err)
 	}
-	// An empty file is treated as absent and regenerated.
 	if err := os.WriteFile(path, []byte("\n"), 0o600); err != nil {
 		t.Fatalf("write empty token: %v", err)
 	}
@@ -535,14 +494,12 @@ func TestLoadOrCreateEnrollmentToken(t *testing.T) {
 	if err != nil || regenerated == "" || regenerated == token {
 		t.Fatalf("regenerated = (%q, %v), want a fresh token", regenerated, err)
 	}
-	// A token readable beyond its owner is refused rather than trusted.
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatalf("chmod token: %v", err)
 	}
 	if _, _, err := LoadOrCreateEnrollmentToken(dir); err == nil {
 		t.Fatal("a group/world-readable enrollment token was accepted")
 	}
-	// A symlinked token file is refused.
 	if err := os.Chmod(path, 0o600); err != nil {
 		t.Fatalf("chmod token: %v", err)
 	}

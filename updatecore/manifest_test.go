@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// TestManifestRoundtrip covers build, marshal and parse.
 func TestManifestRoundtrip(t *testing.T) {
 	artifact := []byte("gotham binary")
 	manifest := BuildManifest("v1.2.0", "stable", "amd64", "gotham-linux-amd64", artifact)
@@ -29,9 +28,6 @@ func TestManifestRoundtrip(t *testing.T) {
 	}
 }
 
-// TestManifestHelperBinding covers the optional host-helper payload binding
-// (JUS-188): a manifest without a helper renders exactly as before, a helper
-// digest round-trips, and a half-bound or malformed binding fails closed.
 func TestManifestHelperBinding(t *testing.T) {
 	artifact := []byte("gotham binary")
 	helper := []byte("helper payload")
@@ -64,7 +60,6 @@ func TestManifestHelperBinding(t *testing.T) {
 	}
 }
 
-// TestParseManifestRejectsInvalid covers missing and malformed fields.
 func TestParseManifestRejectsInvalid(t *testing.T) {
 	valid := "version=v1.2.0\nchannel=stable\narch=amd64\nfile=gotham-linux-amd64\nsha256=" +
 		strings.Repeat("a", 64) + "\n"
@@ -88,7 +83,6 @@ func TestParseManifestRejectsInvalid(t *testing.T) {
 	}
 }
 
-// TestBindManifest covers the identity binding.
 func TestBindManifest(t *testing.T) {
 	rel := &Release{Version: "v1.2.0", Channel: "stable", Arch: "amd64", AssetName: "gotham-linux-amd64"}
 	good := Manifest{Version: "v1.2.0", Channel: "stable", Arch: "amd64", File: "gotham-linux-amd64", SHA256: strings.Repeat("a", 64)}
@@ -109,7 +103,6 @@ func TestBindManifest(t *testing.T) {
 	}
 }
 
-// TestManifestNames pins the asset naming contract INFRA-9.1 must produce.
 func TestManifestNames(t *testing.T) {
 	if got := ManifestName("arm64"); got != "gotham-manifest-arm64.txt" {
 		t.Errorf("ManifestName = %q", got)

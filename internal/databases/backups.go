@@ -9,63 +9,25 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// Label keys applied to every temporary backup/restore container. They mirror
-// the gotham.* vocabulary of spec.go so an operator can tell a Gotham job
-// container apart from a database container on the same node.
 const (
 	labelRole     = "gotham.role"
 	labelBackupID = "gotham.backup_id"
-	// roleBackup, roleRestore and roleStage mark the three kinds of temporary
-	// container a backup flow creates: the dump job, the restore job and the
-	// single chunk that stages one part of the artifact onto the volume.
-	roleBackup  = "backup"
-	roleRestore = "restore"
-	roleStage   = "restore-stage"
+	roleBackup    = "backup"
+	roleRestore   = "restore"
+	roleStage     = "restore-stage"
 )
 
-// stagingDirName is the directory a restore stages its artifact into, inside
-// the database volume. It lives under the engine's mount path (the only place
-// a temporary container can write for its successor to read) and is removed
-// by the restore job before the engine starts, so a fresh volume stays empty
-// for initdb/initialisation.
 const stagingDirName = ".gotham-restore"
 
-// stageChunkBytes is the raw size of one staging chunk. base64 expands it by
-// 4/3 and the encoded chunk travels as a single command argument inside a
-// `sh -c` script, so it must respect Linux's per-argument limit
-// (MAX_ARG_STRLEN = 32 * PAGE_SIZE = 128 KiB on the common 4 KiB page), not
-// just the 2 MiB total ARG_MAX. 90 000 raw bytes encode to 120 000, leaving
-// ~8 KiB of script and quoting overhead inside the per-argument budget.
 const stageChunkBytes = 90_000
 
-// BackupEngine builds the temporary-container jobs of one engine. The control
-// plane never runs a dump tool itself: it stops the database container, runs
-// the job on the same node with the database volume mounted, and reads the
-// framed payload back from the container's log stream. The payload travels
-// base64-encoded (see backup_job.go): the Docker log pipeline replaces
-// invalid UTF-8 bytes, so raw dump bytes would be corrupted before the
-// control plane could read them. A restore job decompresses the staged
-// artifact with a checked status and only then invokes the engine tool, so a
-// truncated or corrupt artifact can never be reported as a successful
-// restore.
-//
-// Implementations are stateless and shared; every method must be safe for
-// concurrent use.
 type BackupEngine interface {
-	// Name returns the engine key ("postgres", "mysql", ...).
 	Name() string
-	// DumpExtension is the artifact file extension without compression
-	// suffix, e.g. "dump" or "sql".
 	DumpExtension() string
-	// DumpOptions returns the temporary container that starts the engine on
-	// the database volume and writes the framed dump payload to stdout.
 	DumpOptions(db Database, c Credentials, runID string) (containers.RunOptions, error)
-	// RestoreOptions returns the temporary container that moves the staged
-	// artifact out of the volume, starts the engine and applies it.
 	RestoreOptions(db Database, c Credentials, runID, stagedPath string) (containers.RunOptions, error)
 }
 
-// backupEngines holds one BackupEngine per supported engine name.
 var backupEngines = map[string]BackupEngine{
 	EnginePostgres: postgresBackupEngine{},
 	EngineMySQL:    mysqlBackupEngine{},
@@ -74,28 +36,20 @@ var backupEngines = map[string]BackupEngine{
 	EngineRedis:    redisBackupEngine{},
 }
 
-// LookupBackupEngine returns the backup engine registered for name
-// (case-insensitive).
 func LookupBackupEngine(name string) (BackupEngine, bool) {
 	engine, ok := backupEngines[strings.ToLower(strings.TrimSpace(name))]
 	return engine, ok
 }
 
-// postgresBackupEngine dumps PostgreSQL with pg_dump and restores with
-// pg_restore, both against a temporary server the job starts on the mounted
-// volume (the agent contract has no Exec RPC, so the tool cannot run inside
-// the live database container).
 type postgresBackupEngine struct{}
 
 func (postgresBackupEngine) Name() string          { return EnginePostgres }
 func (postgresBackupEngine) DumpExtension() string { return "dump" }
 
-// DumpOptions implements BackupEngine.
 func (e postgresBackupEngine) DumpOptions(db Database, c Credentials, runID string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleBackup, runID), roleBackup, runID, "", e.dumpScript())
 }
 
-// RestoreOptions implements BackupEngine.
 func (e postgresBackupEngine) RestoreOptions(db Database, c Credentials, runID, stagedPath string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleRestore, runID), roleRestore, runID, stagedPath, e.restoreScript())
 }
@@ -175,13 +129,7 @@ fi
 exit "$status"`
 }
 
-// mysqlBackupEngine serves MySQL and MariaDB. The two images share the same
-// environment and entrypoint, but MariaDB 11.0 removed the mysql, mysqldump
-// and mysqladmin symlinks from the official image, so the tool names are
-// selected per engine instead of assuming the MySQL spelling.
 type mysqlBackupEngine struct {
-	// mariadb selects the MariaDB tool names (mariadbd, mariadb-admin,
-	// mariadb-dump, mariadb) over the MySQL ones.
 	mariadb bool
 }
 
@@ -194,10 +142,6 @@ func (e mysqlBackupEngine) Name() string {
 
 func (mysqlBackupEngine) DumpExtension() string { return "sql" }
 
-// bins returns the engine's tool names: the server argument for the image
-// entrypoint, the ping tool, the dump tool and the client. MariaDB 11.0+
-// removed the MySQL symlinks from the official image, so a hardcoded
-// `mysqldump`/`mysql` fails there.
 func (e mysqlBackupEngine) bins() (server, ping, dump, client string) {
 	if e.mariadb {
 		return "mariadbd", "mariadb-admin", "mariadb-dump", "mariadb"
@@ -205,19 +149,14 @@ func (e mysqlBackupEngine) bins() (server, ping, dump, client string) {
 	return "mysqld", "mysqladmin", "mysqldump", "mysql"
 }
 
-// DumpOptions implements BackupEngine.
 func (e mysqlBackupEngine) DumpOptions(db Database, c Credentials, runID string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleBackup, runID), roleBackup, runID, "", e.dumpScript())
 }
 
-// RestoreOptions implements BackupEngine.
 func (e mysqlBackupEngine) RestoreOptions(db Database, c Credentials, runID, stagedPath string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleRestore, runID), roleRestore, runID, stagedPath, e.restoreScript())
 }
 
-// mysqlDumpScript is the dump script with named tool placeholders. It is a
-// template rather than a Sprintf format because the script itself carries
-// printf '%s' format strings.
 const mysqlDumpScript = `set -u
 id="$GOTHAM_RUN_ID"
 log=/tmp/gotham-engine.log
@@ -246,11 +185,6 @@ else
 fi
 exit "$status"`
 
-// mysqlRestoreScript is the restore script with named tool placeholders. The
-// client is invoked without preselecting the database: the dump carries
-// `--databases`, so its CREATE DATABASE/USE statements recreate a database
-// that no longer exists. Selecting `$MYSQL_DATABASE` first would fail against
-// a dropped database before the archive could recreate it.
 const mysqlRestoreScript = `set -u
 id="$GOTHAM_RUN_ID"
 staged="$GOTHAM_STAGED"
@@ -302,19 +236,15 @@ func (e mysqlBackupEngine) restoreScript() string {
 	return strings.NewReplacer("__SERVER__", server, "__PING__", ping, "__CLIENT__", client).Replace(mysqlRestoreScript)
 }
 
-// mongoBackupEngine dumps to a BSON archive (mongodump --archive) and
-// restores it with mongorestore --drop.
 type mongoBackupEngine struct{}
 
 func (mongoBackupEngine) Name() string          { return EngineMongoDB }
 func (mongoBackupEngine) DumpExtension() string { return "archive" }
 
-// DumpOptions implements BackupEngine.
 func (e mongoBackupEngine) DumpOptions(db Database, c Credentials, runID string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleBackup, runID), roleBackup, runID, "", e.dumpScript())
 }
 
-// RestoreOptions implements BackupEngine.
 func (e mongoBackupEngine) RestoreOptions(db Database, c Credentials, runID, stagedPath string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleRestore, runID), roleRestore, runID, stagedPath, e.restoreScript())
 }
@@ -392,20 +322,15 @@ fi
 exit "$status"`
 }
 
-// redisBackupEngine has no dump tool to run: the RDB file and the AOF
-// directory are copied as a tar stream while the database is stopped, so both
-// persistence modes survive the round trip.
 type redisBackupEngine struct{}
 
 func (redisBackupEngine) Name() string          { return EngineRedis }
 func (redisBackupEngine) DumpExtension() string { return "tar" }
 
-// DumpOptions implements BackupEngine.
 func (e redisBackupEngine) DumpOptions(db Database, c Credentials, runID string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleBackup, runID), roleBackup, runID, "", e.dumpScript())
 }
 
-// RestoreOptions implements BackupEngine.
 func (e redisBackupEngine) RestoreOptions(db Database, c Credentials, runID, stagedPath string) (containers.RunOptions, error) {
 	return backupJobOptions(db, c, tempJobName(roleRestore, runID), roleRestore, runID, stagedPath, e.restoreScript())
 }
@@ -465,11 +390,6 @@ fi
 exit "$status"`
 }
 
-// backupJobOptions assembles the agent payload of a temporary job: the
-// engine's image (so the dump tool the node already has is the one used), the
-// standard environment, the database volume and the job's script. Credentials
-// arrive in the environment — the same place the live database container
-// keeps them — so the script carries no secrets of its own.
 func backupJobOptions(
 	db Database,
 	c Credentials,
@@ -515,10 +435,6 @@ func backupJobOptions(
 	}, nil
 }
 
-// tempJobName derives the Docker-safe, unique name of a job container:
-// "gotham-<role>-<id prefix>", where id is the run (backup) id. The short id
-// keeps two runs of the same database from colliding while their containers
-// still exist, without ever repeating a name after a crashed job.
 func tempJobName(role, id string) string {
 	suffix := id
 	if len(suffix) > 8 {
@@ -541,16 +457,10 @@ func tempJobName(role, id string) string {
 	return name
 }
 
-// safeJobPath reports whether a path can travel inside a single-quoted shell
-// argument: no quote, no backslash, no control character. Engine mount paths
-// are constants and the file name is a UUID, so this is a guard rather than a
-// sanitiser — a path that fails it is rejected, never rewritten.
 func safeJobPath(value string) bool {
 	return value != "" && !strings.ContainsAny(value, "'\\\n\r\x00")
 }
 
-// stagingDir returns the directory inside the database volume where a restore
-// stages its artifact for the job container to pick up.
 func stagingDir(db Database) (string, error) {
 	engine, _, err := parseEngine(db.Engine)
 	if err != nil {
@@ -563,7 +473,6 @@ func stagingDir(db Database) (string, error) {
 	return strings.TrimRight(mount, "/") + "/" + stagingDirName, nil
 }
 
-// stagingPath returns the file a backup's artifact is staged into.
 func stagingPath(db Database, backupID uuid.UUID) (string, error) {
 	dir, err := stagingDir(db)
 	if err != nil {

@@ -1,5 +1,3 @@
-// JUS-245: every terminating path routes through one confirmation dialog.
-// Cancel preserves the sessions; confirm releases exactly the listed tabs.
 /* global document:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -18,7 +16,6 @@ const { default: TerminalCloseDialog } = await import(
   "../src/features/terminal/components/TerminalCloseDialog.vue"
 );
 
-/** makeTab builds one minimal tab for the dialog. */
 function makeTab(id: string, cwd: string): TerminalTab {
   return {
     id,

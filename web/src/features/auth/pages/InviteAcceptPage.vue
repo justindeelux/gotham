@@ -7,42 +7,14 @@ import { useRoute, useRouter } from "vue-router";
 import { acceptInvite, describeTeamError } from "@/features/teams";
 import { stripErrorPrefix } from "@/features/servers";
 
-/**
- * Invite acceptance: the page the one-time link points at.
- *
- * The recipient posts the token from the query string to
- * `POST /v1/invites/accept` (never a URL path) as the signed-in account whose
- * email the invite names. The token is consumed once and is not stored.
- *
- * Failure display derives per locale from the retained raw failure object:
- * the team helper is re-invoked on every evaluation (never a cached
- * translated string, so I18N-8's locale-aware describer stays compatible),
- * classification uses only the raw untranslated message, and a failure with
- * no useful diagnostic renders the single localized fallback.
- */
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
 const token = ref<string>(String(route.query.token ?? ""));
 const accepting = ref(false);
-/** rawFailure retains the original failure; display derives per locale. */
 const rawFailure = ref<unknown>(null);
-/**
- * knownTeamStatuses are the HTTP statuses describeTeamError curates with
- * distinct guidance (session/role/removed/conflict/expired/invalid). Only
- * the raw numeric status and the raw stripped message classify the failure
- * below — never translated text or helper result strings — so a future
- * locale-aware team helper stays compatible without double-framing.
- */
 const knownTeamStatuses = [400, 401, 403, 404, 409, 410];
-/**
- * error renders the failure for the current locale: known refusal statuses
- * keep their curated team guidance under the shared summary (even with a
- * blank server message); failures with no usable diagnostic and no known
- * status collapse once to the single localized fallback. The team helper
- * re-invokes on every evaluation, never from a cached translated string.
- */
 const error = computed<string | null>(() => {
   if (rawFailure.value === null) {
     return null;
@@ -57,7 +29,6 @@ const error = computed<string | null>(() => {
 });
 const joined = ref("");
 
-/** rawFailureStatus extracts the raw numeric HTTP status, or -1. */
 function rawFailureStatus(failure: unknown): number {
   if (typeof failure !== "object" || failure === null) {
     return -1;
@@ -66,7 +37,6 @@ function rawFailureStatus(failure: unknown): number {
   return typeof status === "number" ? status : -1;
 }
 
-/** rawFailureMessage extracts the stripped raw message, or "" when unusable. */
 function rawFailureMessage(failure: unknown): string {
   if (typeof failure !== "object" || failure === null) {
     return "";
@@ -81,8 +51,6 @@ async function handleAccept(): Promise<void> {
   try {
     const team = await acceptInvite(token.value);
     joined.value = team.name;
-    // The token is spent: drop it from the address bar and history so a
-    // reload or a shared URL cannot replay it.
     scrubToken();
   } catch (err) {
     rawFailure.value = err;
@@ -91,16 +59,10 @@ async function handleAccept(): Promise<void> {
   }
 }
 
-/**
- * scrubToken replaces the token-bearing query with the bare accept path. It
- * runs only after the token was consumed, so the signed-out handoff (which
- * carries the token to the login/register redirect) is untouched.
- */
 function scrubToken(): void {
   void router.replace({ query: {} });
 }
 
-/** goToTeams returns to the teams page after the flow settles. */
 function goToTeams(): void {
   void router.push({ name: "teams" });
 }

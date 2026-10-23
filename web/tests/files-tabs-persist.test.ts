@@ -1,7 +1,3 @@
-// File manager tab persistence (JUS-209): versioned, zod-validated snapshots
-// round-trip through storage; corrupt, wrong-version and oversized payloads
-// are ignored; keys isolate user+server; missing paths fall back silently;
-// storage failures never throw; restore keeps existing tab behavior.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,7 +23,6 @@ import {
 import type { FilesTabsStorage } from "@/features/files/utils/tabsPersist";
 import { useTeamsStore } from "@/features/teams";
 
-/** memoryStorage builds an in-memory Storage double. */
 function memoryStorage(): FilesTabsStorage & { dump: Map<string, string> } {
   const dump = new Map<string, string>();
   return {
@@ -38,7 +33,6 @@ function memoryStorage(): FilesTabsStorage & { dump: Map<string, string> } {
   };
 }
 
-/** throwingStorage fails every access (private mode / blocked storage). */
 function throwingStorage(): FilesTabsStorage {
   return {
     getItem: () => {
@@ -67,7 +61,6 @@ const compose: FilesRoot = {
   free_bytes: 0,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -79,7 +72,6 @@ function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   };
 }
 
-/** snapshot builds a valid snapshot with sensible defaults. */
 function snapshot(overrides: Partial<FilesTabsSnapshot> = {}): FilesTabsSnapshot {
   return {
     version: 1,
@@ -315,8 +307,6 @@ describe("files store tab restore", () => {
     const restored = await files.restorePersistedTabs(
       snapshot({ tabs: [], activeTabId: "tab-a" }),
     );
-    // An empty list never validates (min(1)), so the store refuses it as well
-    // when it arrives without validation: no rebuild, defaults kept.
     expect(restored).toBe(false);
     expect(files.tabs.map((tab) => tab.id)).toEqual(before);
   });

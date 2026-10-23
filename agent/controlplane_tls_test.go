@@ -16,11 +16,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestControlPlaneDialUsesTLSWithCA proves the agent's control-plane connection
-// — the same conn the updater's RequestUpdate client is built on — runs the
-// CA-backed TLS credentials when GOTHAM_AGENT_CA is configured: the dial
-// completes a TLS handshake against a TLS-only server, while the same dial
-// without a CA is refused by that server.
 func TestControlPlaneDialUsesTLSWithCA(t *testing.T) {
 	caPEM, caCert, caKey := testCA(t)
 	caPath := filepath.Join(t.TempDir(), "ca.pem")
@@ -45,8 +40,6 @@ func TestControlPlaneDialUsesTLSWithCA(t *testing.T) {
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 
-	// requestUpdate dials the TLS-only server with the agent's real dial options
-	// and issues the updater's RPC.
 	requestUpdate := func(caPath string) error {
 		t.Helper()
 		agentInstance := NewAgent(Config{CA: caPath, CPAddr: listener.Addr().String()}, discardLogger(), nil)
@@ -54,8 +47,6 @@ func TestControlPlaneDialUsesTLSWithCA(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// The test leaf carries the "localhost" SAN; pin the TLS server name so
-		// the loopback listener address still verifies.
 		options = append(options, grpc.WithAuthority("localhost"))
 		conn, err := grpc.NewClient(listener.Addr().String(), options...)
 		if err != nil {
@@ -68,12 +59,9 @@ func TestControlPlaneDialUsesTLSWithCA(t *testing.T) {
 		return err
 	}
 
-	// With the CA configured the handshake completes; no service is registered,
-	// so the RPC surfaces as Unimplemented.
 	if err := requestUpdate(caPath); status.Code(err) != codes.Unimplemented {
 		t.Fatalf("RequestUpdate with a CA = %v (code %v), want Unimplemented after a TLS handshake", err, status.Code(err))
 	}
-	// Without a CA the agent dials insecure and the TLS-only server must refuse.
 	if err := requestUpdate(""); status.Code(err) == codes.Unimplemented {
 		t.Fatal("an insecure dial reached a TLS-only control-plane server")
 	}

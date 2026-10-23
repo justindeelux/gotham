@@ -7,13 +7,6 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
 /* global URL, StorageEvent, document, window:readonly */
-// Real-browser proof for the I18N-7 services/templates surface: the rebuilt
-// webdist is served statically with the control-plane API mocked, a session
-// is seeded in localStorage, and real Chromium measures the real Naive UI
-// DOM at 390/900/1280px in English and Vietnamese. Same harness shape as
-// projects-layout.spec.ts. Draft survival is proven by dispatching a storage
-// event (the cross-tab sync path), which switches the locale without a
-// reload, a navigation or an API call.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -145,7 +138,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -178,7 +170,6 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session and answers the calls the I18N-7 surface makes. */
 async function mockApi(
   page: Page,
   deploysFailure: { status: number; message: string } | null = null,
@@ -290,7 +281,6 @@ async function mockApi(
   });
 }
 
-/** switchLocale flips the UI language without reload (cross-tab sync path). */
 async function switchLocale(page: Page, locale: string): Promise<void> {
   await page.evaluate((next) => {
     window.localStorage.setItem("gotham-locale", next);
@@ -300,7 +290,6 @@ async function switchLocale(page: Page, locale: string): Promise<void> {
   }, locale);
 }
 
-/** openServicePicker opens Add resource on the seeded environment's Service tab. */
 async function openServicePicker(page: Page): Promise<Locator> {
   await page.goto(`${baseURL}/projects/proj-1/environments/env-1`);
   await page
@@ -308,13 +297,11 @@ async function openServicePicker(page: Page): Promise<Locator> {
     .first()
     .click();
   const picker = page.locator(".n-modal.app-modal");
-  // Tab order is fixed: Application, Service, Database.
   await picker.getByRole("tab").nth(1).click();
   await picker.locator(".res-pane").waitFor();
   return picker;
 }
 
-/** noHorizontalOverflow fails when the page scrolls sideways at this width. */
 async function expectNoOverflow(page: Page, width: number): Promise<void> {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth);
   expect(overflow, "no horizontal overflow").toBeLessThanOrEqual(width + 1);
@@ -330,8 +317,6 @@ test("service picker renders overlay copy at every width, en and vi", async ({
       await page.setViewportSize({ width, height: 900 });
       await mockApi(page);
       const picker = await openServicePicker(page);
-      // The context keeps localStorage between iterations, so pin the
-      // locale explicitly on every pass.
       await switchLocale(page, locale);
       if (locale === "en") {
         await expect(picker.locator(".res-pane")).toContainText(
@@ -348,7 +333,6 @@ test("service picker renders overlay copy at every width, en and vi", async ({
           "Tự động hóa quy trình n8n với volume có tên bền vững và tên miền được định tuyến.",
         );
       }
-      // Unknown operator-provided metadata is never translated.
       await expect(picker).toContainText(
         "Operator-provided template copy stays untouched.",
       );
@@ -365,19 +349,15 @@ test("wizard keeps its draft while feedback switches language", async ({ page })
   const picker = await openServicePicker(page);
   await picker.locator('button.res-card[data-template="n8n"]').click();
   await page.locator('[data-testid="wizard-step-1"]').waitFor();
-  // Stepper and counter render in English first, with provider help visible.
   await expect(page.locator(".template-wizard")).toContainText("Step 1 / 3");
   await expect(page.locator(".field-domain")).toContainText(
     "The public host served by the node's Traefik proxy.",
   );
   await switchLocale(page, "vi");
-  // The curated field-help overlay translates; the field key never does.
   await expect(page.locator(".field-domain")).toContainText(
     "Host công khai do Traefik proxy của node phục vụ.",
   );
   await switchLocale(page, "en");
-  // Type an invalid value and reveal the error, then switch to Vietnamese:
-  // the typed draft and the step survive, the feedback switches.
   await page.locator(".field-domain input").fill("not a domain!!!");
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.locator(".field-domain")).toContainText(
@@ -392,7 +372,6 @@ test("wizard keeps its draft while feedback switches language", async ({ page })
   await expect(page.locator(".field-domain input")).toHaveValue("not a domain!!!");
   await expectNoOverflow(page, 900);
   await page.screenshot({ path: test.info().outputPath("wizard-vi-900.png") });
-  // Back to English: the draft is still there and the gate still holds.
   await switchLocale(page, "en");
   await expect(page.locator(".template-wizard")).toContainText("Step 1 / 3");
   await expect(page.locator(".field-domain input")).toHaveValue("not a domain!!!");
@@ -412,14 +391,11 @@ test("service detail renders history at every width, en and vi", async ({ page }
       const historyTitle =
         locale === "vi" ? "Lịch sử triển khai" : "Deploy history";
       await expect(page.locator(".service-detail-page")).toContainText(historyTitle);
-      // The log heading keeps the literal command with a translated frame.
       const logsNote =
         locale === "vi" ? "docker compose logs -f qua node agent" : "docker compose logs -f via the node agent";
       await expect(page.locator(".service-detail-page")).toContainText(logsNote);
-      // Wire values are never translated: ids, compose project, domains.
       await expect(page.locator(".service-detail-page")).toContainText("gotham-svc-1");
       await expect(page.locator(".service-detail-page")).toContainText("blog.example.com:80");
-      // Deploy lifecycle actions stay usable at phone width.
       const deploy = page.getByRole("button", {
         name: locale === "vi" ? "Triển khai" : "Deploy",
         exact: true,
@@ -443,7 +419,6 @@ test("feature-off failure shows the translated frame with the intact token", asy
     for (const locale of ["en", "vi"] as const) {
       await page.setViewportSize({ width, height: 900 });
       await mockApi(page);
-      // The control plane refuses the catalog when services are disabled.
       await page.route("**/api/v1/templates", async (route) => {
         await route.fulfill({ status: 503, json: { message: "" } });
       });
@@ -454,7 +429,6 @@ test("feature-off failure shows the translated frame with the intact token", asy
           ? "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật."
           : "Services are turned off on this control plane. The platform administrator must enable them.";
       await expect(picker.locator(".res-pane")).toContainText(expected);
-      // The retry control stays usable at every width.
       const retry = locale === "vi" ? "Thử lại" : "Retry";
       await expect(picker.getByRole("button", { name: retry })).toBeVisible();
       await expectNoOverflow(page, width);
@@ -477,7 +451,6 @@ test("retained deploy-history failure re-derives in the current locale", async (
     "Deploy history unavailable: Node agent error: dial node",
   );
   await switchLocale(page, "vi");
-  // The curated summary switches; the raw node diagnostic stays intact.
   await expect(page.locator('[data-testid="history-unavailable"]')).toContainText(
     "Không đọc được lịch sử triển khai: Lỗi node agent: dial node",
   );

@@ -14,14 +14,11 @@ import (
 
 const testAssetName = "gotham-linux-amd64"
 
-// fakeRelease is a local, manifest-signed release served over httptest.
 type fakeRelease struct {
 	server  *httptest.Server
 	release *Release
 }
 
-// newFakeRelease serves artifact plus its signed manifest. The manifest binds
-// the given version/channel/arch/file to the artifact digest.
 func newFakeRelease(t *testing.T, signer *Signer, artifact []byte, version, channel, arch, file string) *fakeRelease {
 	t.Helper()
 	manifest := BuildManifest(version, channel, arch, file, artifact)
@@ -58,13 +55,11 @@ func newFakeRelease(t *testing.T, signer *Signer, artifact []byte, version, chan
 	}
 }
 
-// defaultFakeRelease builds the canonical v1.2.0 stable amd64 release.
 func defaultFakeRelease(t *testing.T, signer *Signer, artifact []byte) *fakeRelease {
 	t.Helper()
 	return newFakeRelease(t, signer, artifact, "v1.2.0", "stable", "amd64", testAssetName)
 }
 
-// newTestSigner generates a keypair and returns the signer and its verifier.
 func newTestSigner(t *testing.T) (*Signer, *Verifier) {
 	t.Helper()
 	publicKey, privateKey, err := GenerateKey()
@@ -82,12 +77,10 @@ func newTestSigner(t *testing.T) (*Signer, *Verifier) {
 	return signer, verifier
 }
 
-// noopRestart is a RestartFunc that reports the wrapper exited cleanly.
 func noopRestart(context.Context) (func() error, error) {
 	return func() error { return nil }, nil
 }
 
-// newTestApplier builds an Applier whose pending/status/lock live in dir.
 func newTestApplier(t *testing.T, dir, target string, verifier *Verifier, restart RestartFunc) *Applier {
 	t.Helper()
 	return &Applier{
@@ -100,7 +93,6 @@ func newTestApplier(t *testing.T, dir, target string, verifier *Verifier, restar
 	}
 }
 
-// writeTarget creates an "old" binary and returns its path and dir.
 func writeTarget(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "gotham")
@@ -110,7 +102,6 @@ func writeTarget(t *testing.T, content string) string {
 	return path
 }
 
-// readFile reads a path, failing the test on error.
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -120,9 +111,6 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-// TestApplierApplyAndRollback is the fake-release end to end: download the
-// signed manifest, verify it, install the digest-matching artifact, then
-// restore the previous binary.
 func TestApplierApplyAndRollback(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	newBinary := []byte("gotham v1.2.0 binary")
@@ -161,8 +149,6 @@ func TestApplierApplyAndRollback(t *testing.T) {
 	}
 }
 
-// TestApplierRefusesWrongManifestKey proves an artifact whose manifest was
-// signed by another key is never installed.
 func TestApplierRefusesWrongManifestKey(t *testing.T) {
 	_, verifier := newTestSigner(t)
 	otherSigner, _ := newTestSigner(t)
@@ -183,8 +169,6 @@ func TestApplierRefusesWrongManifestKey(t *testing.T) {
 	}
 }
 
-// TestApplierRejectsDigestMismatch proves the artifact must match the signed
-// manifest digest.
 func TestApplierRejectsDigestMismatch(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	manifest := BuildManifest("v1.2.0", "stable", "amd64", testAssetName, []byte("signed payload"))
@@ -223,8 +207,6 @@ func TestApplierRejectsDigestMismatch(t *testing.T) {
 	}
 }
 
-// TestApplierRejectsTagMismatch proves a signed manifest cannot relabel a
-// different version (the applied version always comes from the manifest).
 func TestApplierRejectsTagMismatch(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("payload"))
@@ -242,8 +224,6 @@ func TestApplierRejectsTagMismatch(t *testing.T) {
 	}
 }
 
-// TestApplierRejectsMissingManifest proves an update without a manifest URL is
-// refused.
 func TestApplierRejectsMissingManifest(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("payload"))
@@ -262,9 +242,6 @@ func TestApplierRejectsMissingManifest(t *testing.T) {
 	}
 }
 
-// TestApplierRefusesSecondApplyWhileStaged is the reviewer's two-apply
-// interleave: once an update is staged, a second apply is refused and the last
-// known good backup is preserved.
 func TestApplierRefusesSecondApplyWhileStaged(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	payloadA := []byte("payload A")
@@ -300,9 +277,6 @@ func TestApplierRefusesSecondApplyWhileStaged(t *testing.T) {
 	}
 }
 
-// TestApplierConcurrentApplySerialized proves two overlapping applies cannot
-// both install: exactly one wins and the other is refused as pending, while the
-// known-good backup is preserved.
 func TestApplierConcurrentApplySerialized(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	payloadA := []byte("payload A")
@@ -347,8 +321,6 @@ func TestApplierConcurrentApplySerialized(t *testing.T) {
 	}
 }
 
-// TestApplierCrashLayout proves the activation layout keeps the target present
-// on both sides of the commit rename.
 func TestApplierCrashLayout(t *testing.T) {
 	t.Run("before commit", func(t *testing.T) {
 		target := writeTarget(t, "old")
@@ -382,8 +354,6 @@ func TestApplierCrashLayout(t *testing.T) {
 	})
 }
 
-// TestApplierRecoverRestoresMissingTarget proves recovery restores the backup
-// when a crash left the target missing.
 func TestApplierRecoverRestoresMissingTarget(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "gotham")
 	if err := os.WriteFile(target+OldSuffix, []byte("last known good"), 0o755); err != nil {
@@ -412,8 +382,6 @@ func TestApplierRecoverRestoresMissingTarget(t *testing.T) {
 	}
 }
 
-// TestApplierWrapperLaunchErrorRollsBack proves an immediate wrapper launch
-// failure restores the previous binary and records the outcome.
 func TestApplierWrapperLaunchErrorRollsBack(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("v1.2.0 binary"))
@@ -439,9 +407,6 @@ func TestApplierWrapperLaunchErrorRollsBack(t *testing.T) {
 	}
 }
 
-// TestMonitorRestartRollsBack proves N2: a wrapper that exits without recording
-// a result restores the known-good binary and records a terminal outcome
-// instead of leaving the unproven binary armed behind a reopened gate.
 func TestMonitorRestartRollsBack(t *testing.T) {
 	target := writeTarget(t, "unproven A")
 	if err := os.WriteFile(target+OldSuffix, []byte("original"), 0o755); err != nil {
@@ -466,9 +431,6 @@ func TestMonitorRestartRollsBack(t *testing.T) {
 	}
 }
 
-// TestWrapperFailedPreservesKnownGood is the promoted round-3 repro: a denied
-// sudo leaves the wrapper failed, the control plane rolls back, and a following
-// apply can no longer overwrite the last known good with the unproven binary.
 func TestWrapperFailedPreservesKnownGood(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	payloadA := []byte("payload A")
@@ -487,13 +449,11 @@ func TestWrapperFailedPreservesKnownGood(t *testing.T) {
 		t.Fatalf("apply A: %v", err)
 	}
 
-	// The monitor rolls back asynchronously; wait for a terminal marker.
 	waitForSettledPending(t, applierA.Pending)
 	if got := readFile(t, target); got != "original" {
 		t.Fatalf("target after denied sudo = %q, want the known-good original", got)
 	}
 
-	// A following apply must not lose the original known-good.
 	applierB := newTestApplier(t, dir, target, verifier, noopRestart)
 	applierB.Client = fakeB.server.Client()
 	if _, err := applierB.Apply(context.Background(), fakeB.release); err != nil {
@@ -507,7 +467,6 @@ func TestWrapperFailedPreservesKnownGood(t *testing.T) {
 	}
 }
 
-// waitForSettledPending waits until the pending marker is no longer in flight.
 func waitForSettledPending(t *testing.T, store *StatusStore) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -522,9 +481,6 @@ func waitForSettledPending(t *testing.T, store *StatusStore) {
 	t.Fatalf("pending never settled: %+v", pending)
 }
 
-// TestCrashBeforeCommitReopensGate proves L3: a crash before the commit rename
-// leaves target and backup as the same inode, so the staged gate is cleared and
-// a new apply can proceed.
 func TestCrashBeforeCommitReopensGate(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("payload A"))
@@ -550,8 +506,6 @@ func TestCrashBeforeCommitReopensGate(t *testing.T) {
 	}
 }
 
-// TestResumeStagedRelaunches proves M2: a staged marker left by a crash makes
-// the next startup relaunch the wrapper exactly once (no loop).
 func TestResumeStagedRelaunches(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("payload A"))
@@ -584,7 +538,6 @@ func TestResumeStagedRelaunches(t *testing.T) {
 		t.Fatalf("pending = %+v, want resuming", pending)
 	}
 
-	// A second startup must not relaunch (no loop).
 	if err := applier.ResumeStaged(context.Background()); err != nil {
 		t.Fatalf("ResumeStaged (second): %v", err)
 	}
@@ -593,8 +546,6 @@ func TestResumeStagedRelaunches(t *testing.T) {
 	}
 }
 
-// TestResumeStagedLaunchErrorRollsBack proves a resume that cannot launch the
-// wrapper restores the known-good binary.
 func TestResumeStagedLaunchErrorRollsBack(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("payload A"))
@@ -626,7 +577,6 @@ func TestResumeStagedLaunchErrorRollsBack(t *testing.T) {
 	}
 }
 
-// TestApplierFailClosed covers the missing key and no-backup rollback.
 func TestApplierFailClosed(t *testing.T) {
 	signer, _ := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("binary"))
@@ -642,9 +592,6 @@ func TestApplierFailClosed(t *testing.T) {
 	}
 }
 
-// TestBinaryPathStableAcrossRename proves the target comes from fixed
-// configuration and does not drift to <binary>.old after a rename (the
-// /proc/self/exe problem).
 func TestBinaryPathStableAcrossRename(t *testing.T) {
 	target := writeTarget(t, "v1")
 	applier := newTestApplier(t, filepath.Dir(target), target, nil, nil)
@@ -664,8 +611,6 @@ func TestBinaryPathStableAcrossRename(t *testing.T) {
 	}
 }
 
-// TestApplierRefusesSymlinkedPaths proves a planted symlink at the target or
-// backup cannot redirect a swap.
 func TestApplierRefusesSymlinkedPaths(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	fake := defaultFakeRelease(t, signer, []byte("payload"))
@@ -689,12 +634,6 @@ func TestApplierRefusesSymlinkedPaths(t *testing.T) {
 	}
 }
 
-// TestApplierArtifactDownloadBudget is M1: the artifact body must not be capped
-// by the short metadata bound. http.Client.Timeout covers the body read, and
-// the tens-of-MiB binary needs far longer than the 10s bound the manifest and
-// Releases API use. A server whose artifact body exceeds the metadata bound
-// must still succeed under the separate artifact budget, while the same delay
-// on the manifest must fail.
 func TestApplierArtifactDownloadBudget(t *testing.T) {
 	signer, verifier := newTestSigner(t)
 	artifact := []byte("gotham v1.2.0 binary")
@@ -736,8 +675,6 @@ func TestApplierArtifactDownloadBudget(t *testing.T) {
 		}
 	}
 
-	// 50ms metadata bound, 200ms body: the artifact must still complete. The
-	// default (nil Client) path is exercised, i.e. the shipped HTTP client.
 	applierFor := func(t *testing.T, target string) *Applier {
 		applier := newTestApplier(t, filepath.Dir(target), target, verifier, noopRestart)
 		applier.Timeout = 50 * time.Millisecond

@@ -1,9 +1,4 @@
 /* global Response:readonly, TextEncoder:readonly, ReadableStream:readonly, RequestInit:readonly, AbortSignal:readonly, DOMException:readonly, Headers:readonly */
-// JUS-187: the Add-server wizard offers "Install Docker" over the SSH session
-// when the control plane reports the node installable, and streams the install
-// output into the log modal. The terminal outcome travels on the last line of
-// the stream, because the HTTP status is a committed 200 after the first byte;
-// it is honored only there and only with the response's nonce.
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -43,15 +38,10 @@ function harness() {
   return { wrapper, wizard: wizard as unknown as AddServerWizardContext };
 }
 
-/** markerLine renders one terminal marker line. */
 function markerLine(payload: Record<string, unknown>): string {
   return `${MARKER}${JSON.stringify(payload)}\n`;
 }
 
-/**
- * streamResponse builds a 200 chunked response. nonce "" omits the nonce
- * header, so no marker can be accepted.
- */
 function streamResponse(chunks: string[], nonce: string = NONCE): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -69,7 +59,6 @@ function streamResponse(chunks: string[], nonce: string = NONCE): Response {
   return { ok: true, status: 200, body, headers } as unknown as Response;
 }
 
-/** settle flushes the async stream reader to completion. */
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i += 1) {
     await Promise.resolve();
@@ -137,12 +126,10 @@ describe("wizard Docker install (JUS-187)", () => {
 
     expect(wizard.dockerInstall.status.value).toBe("done");
     expect(wizard.dockerInstall.error.value).toBe("");
-    // The marker is consumed, never rendered.
     expect(wizard.dockerInstall.lines.value.map((line) => line.text)).toEqual([
       "Reading package lists...",
       "Setting up docker.io",
     ]);
-    // The install never carries a stored password: only per-run options.
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.body).toBe("{}");
 
@@ -201,9 +188,6 @@ describe("wizard Docker install (JUS-187)", () => {
     const { wizard, wrapper } = harness();
     await registerAndFailDocker(wizard, true);
 
-    // The node's output copies the marker bytes but is not the JSON the server
-    // writes, then the stream ends without a real terminal line: the install
-    // must read as lost, not as success.
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(streamResponse(["banner\n", `${MARKER}ok\n`])),
@@ -214,7 +198,6 @@ describe("wizard Docker install (JUS-187)", () => {
 
     expect(wizard.dockerInstall.status.value).toBe("error");
     expect(wizard.dockerInstall.error.value).toContain("Connection lost");
-    // The impersonated line is rendered as ordinary output, not swallowed.
     expect(wizard.dockerInstall.lines.value.map((line) => line.text)).toEqual([
       "banner",
       `${MARKER}ok`,
@@ -264,7 +247,6 @@ describe("wizard Docker install (JUS-187)", () => {
     const { wizard, wrapper } = harness();
     await registerAndFailDocker(wizard, true);
 
-    // A well-formed, correctly-nonced marker that is NOT last is ordinary text.
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -318,8 +300,6 @@ describe("wizard Docker install (JUS-187)", () => {
     await settle();
 
     expect(wizard.dockerInstall.status.value).toBe("done");
-    // The cap plus its trim slack bounds the buffer, so a long install cannot
-    // grow the rendered list without bound.
     const rendered = wizard.dockerInstall.lines.value.length;
     expect(rendered).toBeLessThanOrEqual(2000 + 200);
     expect(rendered).toBeGreaterThan(2000);
@@ -350,8 +330,6 @@ describe("wizard Docker install (JUS-187)", () => {
     wizard.closeDockerInstall();
     expect(wizard.dockerInstallOpen.value).toBe(false);
     await settle();
-    // An aborted install is not reported as a failure, and it is no longer
-    // running, so reopening the modal can start a fresh attempt.
     expect(wizard.dockerInstall.status.value).toBe("idle");
     wrapper.unmount();
   });

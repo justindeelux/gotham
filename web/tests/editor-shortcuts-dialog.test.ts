@@ -1,5 +1,3 @@
-// Shortcut sheet rendering (JUS-228): the dialog is generated from the shared
-// binding table, grouped Common/Cursor/Selection/Edit, and read-only.
 /* global document:readonly */
 import { mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,7 +8,6 @@ import {
   editorShortcuts,
   shortcutKeysFor,
 } from "@/features/files/editor/shortcuts";
-// Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
@@ -23,7 +20,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** mountSheet mounts the dialog open with its teleported body inline. */
 function mountSheet() {
   return mount(EditorShortcutsDialog, {
     props: { show: true },
@@ -52,7 +48,6 @@ describe("EditorShortcutsDialog", () => {
     );
     expect(wrapper.findAll(".ed-shortcut-key")).toHaveLength(expectedKeys);
 
-    // The sheet is read-only documentation: no form controls to submit.
     expect(wrapper.findAll("input, textarea, select")).toHaveLength(0);
     wrapper.unmount();
   });

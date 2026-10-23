@@ -8,24 +8,13 @@ import {
 import type { EditorDraft } from "@/features/files/schemas/editorDraft";
 import { editorDraftStorageKeyPrefix } from "@/shared/api/token";
 
-/**
- * Minimal storage surface for editor drafts, so unit tests can pass a fake
- * (jsdom's localStorage works too). Every access is wrapped in try/catch: private
- * mode, quota and blocked storage must never break the editor.
- */
 export type EditorDraftStorage = Pick<
   Storage,
   "getItem" | "setItem" | "removeItem" | "key" | "length"
 >;
 
-/** EditorDraftInput is one draft's payload; the version is added on write. */
 export type EditorDraftInput = Omit<EditorDraft, "version">;
 
-/**
- * editorDraftStoragePrefix scopes drafts by server/node and user: two nodes
- * never share a draft, and another account on the same browser never sees one.
- * Empty segments mean "no identity yet" — the caller skips persistence.
- */
 export function editorDraftStoragePrefix(
   serverId: string,
   userId: string,
@@ -36,11 +25,6 @@ export function editorDraftStoragePrefix(
   return `${editorDraftStorageKeyPrefix}${encodeURIComponent(serverId)}.${encodeURIComponent(userId)}.`;
 }
 
-/**
- * editorDraftStorageKey builds the key for one file. encodeURIComponent escapes
- * "/" (so it is a safe separator) and the value is never parsed back: root and
- * path travel inside the stored draft.
- */
 export function editorDraftStorageKey(
   prefix: string,
   root: string,
@@ -52,16 +36,13 @@ export function editorDraftStorageKey(
   return `${prefix}${encodeURIComponent(root)}/${encodeURIComponent(path)}`;
 }
 
-/** forgetQuietly drops one key, never throwing. */
 function forgetQuietly(storage: EditorDraftStorage, key: string): void {
   try {
     storage.removeItem(key);
   } catch {
-    // Blocked storage: the stale entry stays, the editor still works.
   }
 }
 
-/** keysWithPrefix lists the storage keys under one draft prefix. */
 function keysWithPrefix(storage: EditorDraftStorage, prefix: string): string[] {
   const keys: string[] = [];
   let count: number;
@@ -77,13 +58,11 @@ function keysWithPrefix(storage: EditorDraftStorage, prefix: string): string[] {
         keys.push(key);
       }
     } catch {
-      // A blocked read just hides that entry.
     }
   }
   return keys;
 }
 
-/** savedAtOf reads only the timestamp, so pruning never parses big bodies. */
 function savedAtOf(raw: string): number | null {
   try {
     const value = JSON.parse(raw) as { savedAt?: unknown };
@@ -95,10 +74,6 @@ function savedAtOf(raw: string): number | null {
   }
 }
 
-/**
- * liveDrafts scans one prefix and drops entries that are corrupt, oversized or
- * older than the retention window. Returns the surviving key/timestamp pairs.
- */
 function liveDrafts(
   storage: EditorDraftStorage,
   prefix: string,
@@ -129,11 +104,6 @@ function liveDrafts(
   return live;
 }
 
-/**
- * readEditorDraft loads and validates one draft. Corrupt JSON, a wrong version,
- * an oversized payload or an expired timestamp returns null, and the bad entry
- * is removed so it cannot linger.
- */
 export function readEditorDraft(
   storage: EditorDraftStorage,
   key: string,
@@ -169,7 +139,6 @@ export function readEditorDraft(
   return parsed.data;
 }
 
-/** removeEditorDraft drops one draft, never throwing. */
 export function removeEditorDraft(
   storage: EditorDraftStorage,
   key: string,
@@ -179,11 +148,6 @@ export function removeEditorDraft(
   }
 }
 
-/**
- * writeEditorDraft stores one draft after pruning expired entries and evicting
- * the oldest drafts beyond the retention cap. An oversized payload is refused,
- * and every failure returns false — the editor keeps working without storage.
- */
 export function writeEditorDraft(
   storage: EditorDraftStorage,
   prefix: string,
@@ -201,7 +165,6 @@ export function writeEditorDraft(
   const others = liveDrafts(storage, prefix, now).filter(
     (entry) => entry.key !== key,
   );
-  // Keep room for the draft being written, oldest evicted first.
   const excess = others.length - (EDITOR_DRAFT_MAX_DRAFTS - 1);
   if (excess > 0) {
     others.sort((a, b) => a.savedAt - b.savedAt);
@@ -213,8 +176,6 @@ export function writeEditorDraft(
     storage.setItem(key, raw);
     return true;
   } catch {
-    // Quota: drop the oldest draft and retry once; without room this stays a
-    // silent no-op so the editor never fails because storage is full.
     const survivors = liveDrafts(storage, prefix, now).filter(
       (entry) => entry.key !== key,
     );

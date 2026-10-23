@@ -1,8 +1,3 @@
-// FilesEditor guard regressions (JUS-112 fix round 2): the team-switch prompt
-// must not ping-pong, an implicit unmount must never drop a dirty buffer, a
-// ready tab must render no error state, and a role/root change must flip a live
-// session read-only. The CodeMirror chunk is mocked so the guards run without
-// a real editor.
 /* global document:readonly, Element:readonly, Event:readonly, HTMLElement:readonly, MouseEvent:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NDropdown, NMessageProvider } from "naive-ui";
@@ -106,7 +101,6 @@ import { useTeamsStore } from "@/features/teams";
 import type { Team } from "@/features/teams/api/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
-/** makeTab builds one ready tab; `dirty` sets doc !== original. */
 function makeTab(id: string, dirty: boolean): EditorTab {
   return {
     id,
@@ -130,7 +124,6 @@ function makeTab(id: string, dirty: boolean): EditorTab {
   };
 }
 
-/** makeDiffTab builds one ready history-diff tab. */
 function makeDiffTab(id: string): EditorTab {
   return {
     ...makeTab(id, false),
@@ -149,7 +142,6 @@ function team(id: string, role: Team["role"]): Team {  return {
   };
 }
 
-/** toolbarButton finds an editor toolbar button by its visible label. */
 function toolbarButton(
   wrapper: ReturnType<typeof mountEditor>["wrapper"],
   label: string,
@@ -164,7 +156,6 @@ function toolbarButton(
   return button;
 }
 
-/** lastSessionOptions is the option bag the mocked factory received last. */
 function lastSessionOptions(): Record<string, unknown> {
   const calls = vi.mocked(createEditorSession).mock.calls;
   const options = calls.at(-1)?.[0];
@@ -174,7 +165,6 @@ function lastSessionOptions(): Record<string, unknown> {
   return options as Record<string, unknown>;
 }
 
-/** mountEditor mounts FilesEditor under the message provider with both teams. */
 function mountEditor() {
   setActivePinia(createPinia());
   const teams = useTeamsStore();
@@ -199,8 +189,6 @@ function mountEditor() {
   return { wrapper, teams, files, editor };
 }
 
-/** mountEditorWithRouter mounts FilesEditor with a memory router (JUS-232 fix
- * round 1): navigation and server-switch reverts need real route targets. */
 async function mountEditorWithRouter(initialPath = "/servers/srv-a/files") {
   setActivePinia(createPinia());
   const teams = useTeamsStore();
@@ -236,14 +224,11 @@ async function mountEditorWithRouter(initialPath = "/servers/srv-a/files") {
   return { wrapper, teams, files, editor, router };
 }
 
-/** setViewport overrides the jsdom window size. */
 function setViewport(width: number, height: number): void {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
   Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
 }
 
-/** stubPointerCapture replaces the missing jsdom pointer capture API and
- * returns the restore function. */
 function stubPointerCapture(): () => void {
   const holder = window.HTMLElement.prototype as unknown as {
     setPointerCapture?: (_id: number) => void;
@@ -259,8 +244,6 @@ function stubPointerCapture(): () => void {
   };
 }
 
-/** firePointerEvent dispatches a native pointer-ish mouse event (VTU cannot
- * synthesize PointerEvent init properties). */
 function firePointerEvent(
   target: Element,
   type: string,
@@ -282,7 +265,6 @@ function firePointerEvent(
   target.dispatchEvent(event);
 }
 
-/** leaveDialog finds the open discard-confirmation dialog, if any. */
 function leaveDialog(wrapper: ReturnType<typeof mountEditor>["wrapper"]) {
   return wrapper
     .findAll(".app-modal")
@@ -328,7 +310,6 @@ describe("FilesEditor guards", () => {
     editor.setLanguage(tab.id, "php");
     await flushPromises();
 
-    // The same view is reconfigured, so the undo history is not recreated.
     expect(codemirror.sessions).toHaveLength(1);
     expect(codemirror.sessions[0].setLanguage).toHaveBeenLastCalledWith("php");
     expect(wrapper.find(".ed-language").text()).toBe("PHP");
@@ -351,7 +332,6 @@ describe("FilesEditor guards", () => {
     await stay!.trigger("click");
     await flushPromises();
 
-    // Reverted to the previous team; the revert echo never re-opens the prompt.
     expect(teams.activeTeamId).toBe("team-a");
     expect(wrapper.text()).not.toContain("Discard unsaved changes?");
     wrapper.unmount();
@@ -394,11 +374,8 @@ describe("FilesEditor guards", () => {
     await wrapper.find("button.ed-window-min").trigger("click");
     await flushPromises();
 
-    // The window folds away into the rail icon (the host store owns the
-    // flag, so the rail badge and the window agree).
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
     expect(useEditorWindowStore().minimized).toBe(true);
-    // The buffer, its dirty state and the open tab all survive the collapse.
     expect(editor.tabs).toHaveLength(1);
     expect(editor.hasDirty).toBe(true);
 
@@ -427,7 +404,6 @@ describe("FilesEditor guards", () => {
       "display: none",
     );
 
-    // Once the sheet is closed, Escape belongs to the window again.
     wrapper.findComponent(EditorShortcutsDialog).vm.$emit("update:show", false);
     await flushPromises();
     await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
@@ -443,8 +419,6 @@ describe("FilesEditor guards", () => {
     editor.activeId = tab.id;
     await flushPromises();
 
-    // A teleported follower (settings popover / select menu) exists in the
-    // document while open; Escape must leave it to its own handler.
     const popover = document.createElement("div");
     popover.className = "n-popover";
     document.body.append(popover);
@@ -479,8 +453,6 @@ describe("FilesEditor guards", () => {
     await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
     await flushPromises();
 
-    // Topmost surface: the bar closes, the window stays, focus goes back to
-    // the editor, and the highlight state is cleared.
     expect(wrapper.find(".ed-find").exists()).toBe(false);
     expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain(
       "display: none",
@@ -499,7 +471,6 @@ describe("FilesEditor guards", () => {
 
     await toolbarButton(wrapper, "Find / replace").trigger("click");
     await flushPromises();
-    // The toolbar opens find; only the replace binding expands the row.
     expect(wrapper.findAll(".ed-find input")).toHaveLength(1);
 
     const options = lastSessionOptions();
@@ -556,7 +527,6 @@ describe("FilesEditor guards", () => {
       wrapper.findAllComponents(NDropdown).find((menu) => menu.props("show") === true);
     expect(openMenu()).toBeTruthy();
 
-    // The first Escape belongs to the menu: it closes, the window stays.
     await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
     await flushPromises();
     expect(openMenu()).toBeUndefined();
@@ -564,7 +534,6 @@ describe("FilesEditor guards", () => {
       "display: none",
     );
 
-    // A second Escape now minimizes.
     await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
     await flushPromises();
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
@@ -578,8 +547,6 @@ describe("FilesEditor guards", () => {
     editor.activeId = tab.id;
     await flushPromises();
 
-    // CodeMirror's completion tooltip lives in the editor host; its keymap
-    // owns Escape. The window handler must not collapse underneath it.
     const tooltip = document.createElement("div");
     tooltip.className = "cm-tooltip cm-tooltip-autocomplete";
     document.body.append(tooltip);
@@ -608,7 +575,6 @@ describe("FilesEditor guards", () => {
     await flushPromises();
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
 
-    // openFile() appends the tab and focuses it (a new activeId).
     const second = makeTab("t2", false);
     editor.tabs = [first, second];
     editor.activeId = second.id;
@@ -631,7 +597,6 @@ describe("FilesEditor guards", () => {
     await flushPromises();
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
 
-    // Clicking a file already open only changes activeId (no new tab).
     editor.activeId = second.id;
     await flushPromises();
 
@@ -647,13 +612,10 @@ describe("FilesEditor guards", () => {
     editor.activeId = tab.id;
     await flushPromises();
 
-    // A team switch opens the shared confirmation.
     teams.activeTeamId = "team-b";
     await flushPromises();
     expect(leaveDialog(wrapper)).toBeTruthy();
 
-    // A forced sign-out (401, cross-tab) settles the prompt as aborted: the
-    // tabs are dropped by the session teardown, and no stay-revert runs.
     const selectSpy = vi.spyOn(teams, "selectTeam");
     useAuthStore().clearSession();
     await flushPromises();
@@ -679,7 +641,6 @@ describe("FilesEditor guards", () => {
     useEditorWindowStore().setMinimized(false);
     await flushPromises();
     await nextTick();
-    // The restore lands keyboard focus back on the active tab button.
     expect(document.activeElement?.id).toBe(`ed-tab-${tab.id}`);
     wrapper.unmount();
   });
@@ -694,7 +655,6 @@ describe("FilesEditor guards", () => {
     await router.push("/dashboard");
     await flushPromises();
 
-    // No confirmation, no lost buffer: the window outlives the page.
     expect(leaveDialog(wrapper)).toBeUndefined();
     expect(editor.tabs).toHaveLength(1);
     expect(editor.hasDirty).toBe(true);
@@ -740,13 +700,10 @@ describe("FilesEditor guards", () => {
     editor.activeId = tab.id;
     await flushPromises();
 
-    // First trigger: the team switch opens the confirmation.
     teams.activeTeamId = "team-b";
     await flushPromises();
     expect(leaveDialog(wrapper)).toBeTruthy();
 
-    // Second trigger while the dialog is open: it must reuse the same
-    // promise, never orphan the team guard.
     files.serverId = "srv-b";
     await flushPromises();
     expect(
@@ -755,9 +712,6 @@ describe("FilesEditor guards", () => {
         .filter((node) => node.text().includes("Discard unsaved changes?")),
     ).toHaveLength(1);
 
-    // Staying settles BOTH guards: the team reverts and the browser is sent
-    // back to the tab's server. With the old single slot, the team promise
-    // hung forever and the revert below never happened.
     const stay = wrapper
       .findAll("button")
       .find((button) => button.text() === "Stay");
@@ -804,8 +758,6 @@ describe("FilesEditor guards", () => {
     };
     const originalCapture = captureHolder.setPointerCapture;
     captureHolder.setPointerCapture = () => {};
-    /** firePointer dispatches a native pointer-ish mouse event (VTU cannot
-     * synthesize PointerEvent init properties). */
     function firePointer(
       target: Element,
       type: string,
@@ -831,8 +783,6 @@ describe("FilesEditor guards", () => {
 
       const windows = useEditorWindowStore();
       windows.setSize(1331, 936);
-      // Narrow the viewport: the window now displays fitted (752 wide with
-      // side margins at 800px).
       Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
       Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
       window.dispatchEvent(new Event("resize"));
@@ -844,8 +794,6 @@ describe("FilesEditor guards", () => {
       firePointer(grip, "pointerup", { pointerId: 7 });
       await flushPromises();
 
-      // No jump and no silent persist of a fitted size: the first move
-      // shrinks one step from the displayed 752 and persists the result.
       expect(windows.width).toBe(736);
       expect(wrapper.find(".ed-window").attributes("style") ?? "").toContain(
         "width: 736px",
@@ -893,8 +841,6 @@ describe("FilesEditor guards", () => {
     for (const direction of ["n", "ne", "e", "se", "s", "sw", "w", "nw"]) {
       expect(wrapper.find(`.ed-resize--${direction}`).exists()).toBe(true);
     }
-    // Only the bottom-right corner is a slider: it carries the keyboard
-    // resize, the other grips are pointer-only.
     const slider = wrapper.find(".ed-resize--se");
     expect(slider.attributes("role")).toBe("slider");
     expect(slider.attributes("tabindex")).toBe("0");
@@ -921,9 +867,6 @@ describe("FilesEditor guards", () => {
       windows.setSize(800, 600);
       await flushPromises();
 
-      // The window displays fitted (752 wide at an 800px viewport with the
-      // side margins). Dragging the west grip 40px to the right shrinks the
-      // window from the left: the right edge stays where it was.
       const grip = wrapper.find(".ed-resize--w").element;
       firePointerEvent(grip, "pointerdown", {
         button: 0,
@@ -967,9 +910,6 @@ describe("FilesEditor guards", () => {
       windows.setSize(1331, 936);
       await flushPromises();
 
-      // The window displays fitted (896 tall at a 1000px viewport with the
-      // shell chrome). Dragging the north grip 40px down shrinks the window
-      // from the top: the bottom edge stays where it was.
       const grip = wrapper.find(".ed-resize--n").element;
       firePointerEvent(grip, "pointerdown", {
         button: 0,
@@ -1039,7 +979,6 @@ describe("FilesEditor guards", () => {
     editor.activeId = tab.id;
     await flushPromises();
 
-    // A live, read-only editor with the truncation banner and the badge.
     expect(codemirror.sessions).toHaveLength(1);
     expect(createEditorSession).toHaveBeenCalledWith(
       expect.objectContaining({ readOnly: true }),
@@ -1051,17 +990,13 @@ describe("FilesEditor guards", () => {
     ).toBe(true);
     expect(wrapper.find(".ed-readonly").text()).toBe("Read-only");
 
-    // History is a write path (restore overwrites the file): not offered here.
     expect(wrapper.findAll("button").some((button) => button.text() === "History")).toBe(
       false,
     );
 
-    // Save is inert on the tail.
     const save = wrapper.findAll("button").find((button) => button.text() === "Save");
     expect(save?.attributes("disabled")).toBeDefined();
 
-    // Save All reflects any other savable tab, not the active tail: inert with
-    // nothing dirty, live once a sibling has unsaved changes.
     const saveAll = wrapper.findAll("button").find(
       (button) => button.text() === "Save all",
     );
@@ -1085,7 +1020,6 @@ describe("FilesEditor guards", () => {
     editor.activeId = first.id;
     await flushPromises();
 
-    // Each tab gets its own view when it is first shown.
     editor.activate(second.id);
     await flushPromises();
     expect(codemirror.sessions).toHaveLength(2);
@@ -1170,9 +1104,7 @@ describe("FilesEditor close-all", () => {
     const list = wrapper.find(".ed-unsaved");
     expect(list.text()).toContain("t1.yaml");
     expect(list.text()).toContain("t3.yaml");
-    // Only the dirty buffers are listed.
     expect(list.text()).not.toContain("t2.yaml");
-    // Nothing is closed until the user chooses.
     expect(editor.tabs).toHaveLength(3);
     wrapper.unmount();
   });
@@ -1224,8 +1156,6 @@ describe("FilesEditor close-all", () => {
     editor.activeId = "t1";
     await flushPromises();
 
-    // Simulate a title-bar drag: pointerdown anchors, pointermove pins the
-    // position (jsdom has no PointerEvent, so dispatch a plain Event).
     const bar = wrapper.find(".ed-window-bar").element as HTMLElement;
     bar.setPointerCapture = vi.fn();
     const down = new Event("pointerdown");
@@ -1237,7 +1167,6 @@ describe("FilesEditor close-all", () => {
     await flushPromises();
     expect(wrapper.find(".ed-window").attributes("style")).toContain("left:");
 
-    // Close-all (clean, so no dialog) then reopen: the pinned default is back.
     await wrapper.find("button.ed-window-close").trigger("click");
     await flushPromises();
     expect(wrapper.find(".ed-window").exists()).toBe(false);
@@ -1262,7 +1191,6 @@ describe("FilesEditor close-all", () => {
     bar.dispatchEvent(down);
     await flushPromises();
 
-    // No move: the window keeps its CSS (bottom-right) anchoring.
     expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("left:");
     wrapper.unmount();
   });

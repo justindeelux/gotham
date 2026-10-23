@@ -1,9 +1,3 @@
-/**
- * English catalog for the teams feature: page shell, team list, members
- * and invites panels, and the create/rename/invite/token dialogs.
- * Role display words come from the shared `common.roles` catalog (I18N-1);
- * team names, emails, tokens and URLs stay raw parameters.
- */
 const en = {
   page: {
     eyebrow: "Team · Access control",
@@ -26,10 +20,6 @@ const en = {
   },
   list: {
     title: "Your teams",
-    /**
-     * Team count with library pluralization (one | other): the numeric
-     * argument selects the segment, `{count}` renders it.
-     */
     count: "{count} team | {count} teams",
     rename: "Rename",
     delete: "Delete",

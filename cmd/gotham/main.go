@@ -1,4 +1,3 @@
-// Command gotham is the Gotham control-plane entrypoint.
 package main
 
 import (
@@ -19,11 +18,8 @@ import (
 	"github.com/justindeelux/gotham/internal/updates"
 )
 
-// version is the reported build version. Released binaries override it with
-// -ldflags "-X main.version=<tag>".
 var version = "dev"
 
-// Exit codes returned by run.
 const (
 	exitOK    = 0
 	exitError = 1
@@ -34,7 +30,6 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// run dispatches subcommands and returns the process exit code.
 func run(args []string) int {
 	if len(args) == 0 {
 		usage(os.Stderr)
@@ -67,9 +62,6 @@ func run(args []string) int {
 	}
 }
 
-// runServe loads configuration, builds the logger and HTTP server, and serves
-// until SIGINT or SIGTERM. The database is required: the server exits when it
-// cannot be reached.
 func runServe() int {
 	cfg, err := config.Load()
 	if err != nil {
@@ -79,8 +71,6 @@ func runServe() int {
 
 	logger, levelVar := server.NewLoggerWithLevel(cfg.Log)
 	cfg.SetLogger(logger)
-	// Only log.level is hot-reloaded; the handler's format is fixed at startup,
-	// so a changed log.format takes effect after a restart.
 	cfg.Watch(func() {
 		levelVar.Set(server.ParseLevel(cfg.Snapshot().Log.Level))
 	})
@@ -121,8 +111,6 @@ func runServe() int {
 	authStore := store.New(pool)
 	authService := auth.New(authStore, signer, logger)
 	if snap.Auth.AllowRegistration {
-		// Test/dev escape hatch (P-A2): reopen self-registration after the
-		// first account. Never enable this on a real instance.
 		authService.AllowOpenRegistration = true
 		logger.Warn("registration is open to everyone (GOTHAM_AUTH_ALLOW_REGISTRATION); " +
 			"members should join through admin invites instead")
@@ -130,9 +118,6 @@ func runServe() int {
 	oauthService := buildOAuthService(snap.OAuth, authService, logger)
 	tokenService := auth.NewAPITokenService(authStore, logger)
 
-	// The CA is required: without one, the gRPC gateway would serve the agent
-	// channel in plaintext, so serve refuses unless the operator explicitly
-	// opted in with GOTHAM_GRPC_INSECURE=true (development only).
 	authority, err := servers.LoadAuthority(snap.CA.Dir)
 	if err != nil {
 		logger.Error("failed to load certificate authority", "error", err)
@@ -150,9 +135,6 @@ func runServe() int {
 		logger.Info("certificate authority loaded", "ca_dir", snap.CA.Dir)
 	}
 
-	// Same durable fallback key the server resolves, so SSH keys sealed by the
-	// servers service survive a restart too, and the auth service seals TOTP
-	// secrets under the same credential-encryption key.
 	serverSecret, _, _ := server.ResolveSecretKey(snap.SecretKey, snap.CA.Dir)
 	authService.SetSecretKey(serverSecret)
 	serverService := servers.NewService(servers.Config{
@@ -169,10 +151,6 @@ func runServe() int {
 		return exitError
 	}
 
-	// The gRPC listener certificate carries the operator-configured SAN hosts
-	// (GOTHAM_GRPC_HOSTS, or the list `gotham ca init --host` persisted next to
-	// the CA). The loopback names and the machine hostname are always added, so
-	// a remote agent dialing by the CP's name verifies.
 	grpcHosts := snap.GRPC.Hosts
 	if len(grpcHosts) == 0 {
 		saved, err := servers.LoadHosts(snap.CA.Dir)
@@ -185,11 +163,6 @@ func runServe() int {
 		logger.Info("gRPC listener certificate hosts", "hosts", grpcHosts)
 	}
 
-	// Mutual TLS (JUS-194): agents authenticate to the gateway with a per-node
-	// certificate, and a node's first-ever enrollment needs a bootstrap
-	// credential. Prefer the configured token; otherwise generate and persist
-	// one next to the CA so a TLS control plane fails closed by default instead
-	// of accepting anonymous enrollment. Open enrollment is an explicit opt-in.
 	enrollmentToken := snap.GRPC.EnrollmentToken
 	switch {
 	case enrollmentToken != "":
@@ -207,10 +180,6 @@ func runServe() int {
 		logger.Info("generated a bootstrap enrollment token; pass it to new nodes with GOTHAM_AGENT_ENROLLMENT_TOKEN "+
 			"(or install-agent.sh --enrollment-token-file)", "path", tokenPath)
 	}
-	// The sunset for pre-mutual-TLS (serverAuth-only) node certificates: a
-	// configured date with a built-in default, reported with how many nodes still
-	// present one (JUS-194 M5). A malformed value fails startup rather than
-	// silently extending the window.
 	legacyLeafDeadline, err := servers.ParseLegacyLeafDeadline(snap.GRPC.LegacyLeafUntil)
 	if err != nil {
 		logger.Error("invalid GOTHAM_GRPC_LEGACY_LEAF_UNTIL", "error", err)
@@ -221,10 +190,6 @@ func runServe() int {
 		if countErr != nil {
 			logger.Warn("failed to count nodes with a legacy certificate", "error", countErr)
 		}
-		// A node is unclassified (agent_legacy_leaf NULL) until it connects once,
-		// so on the first boot after an upgrade — or for a node that is offline —
-		// every existing node is unobserved. Count them as possibly legacy: a
-		// bare legacy_nodes=0 must not read as "nothing to renew" (JUS-194 N1).
 		unobservedNodes, unobservedErr := serverService.UnobservedLeafNodeCount(ctx)
 		if unobservedErr != nil {
 			logger.Warn("failed to count nodes with an unclassified certificate", "error", unobservedErr)
@@ -272,9 +237,6 @@ func runServe() int {
 	return exitOK
 }
 
-// agentUpdater builds the control-plane agent-update offerer. It returns nil
-// when FEATURE_UPDATES=false, no release public key is configured, or the
-// configuration is unusable, which disables agent update offers on the gateway.
 func agentUpdater(logger *slog.Logger) servers.AgentUpdateOfferer {
 	updater, err := updates.AgentUpdaterFromEnv(logger)
 	if err != nil {
@@ -287,8 +249,6 @@ func agentUpdater(logger *slog.Logger) servers.AgentUpdateOfferer {
 	return updater
 }
 
-// buildOAuthService wires the configured OAuth2 providers. It returns nil when
-// no provider is enabled so the server does not mount the OAuth routes.
 func buildOAuthService(oauthCfg config.OAuth, authService *auth.Service, logger *slog.Logger) server.OAuthService {
 	providers := make([]auth.OAuthProvider, 0, 1)
 	if provider := auth.NewGitHubProvider(
@@ -307,9 +267,6 @@ func buildOAuthService(oauthCfg config.OAuth, authService *auth.Service, logger 
 	return auth.NewOAuthService(authService, logger, providers...)
 }
 
-// loadJWTKeys reads the configured Ed25519 PEM keypair. When no paths are
-// configured it returns nil slices, which makes auth.NewSigner generate an
-// ephemeral keypair. A configured path that cannot be read is an error.
 func loadJWTKeys(cfg config.Auth) (privatePEM, publicPEM []byte, err error) {
 	if cfg.JWTPrivateKeyPath != "" {
 		privatePEM, err = os.ReadFile(cfg.JWTPrivateKeyPath)
@@ -326,8 +283,6 @@ func loadJWTKeys(cfg config.Auth) (privatePEM, publicPEM []byte, err error) {
 	return privatePEM, publicPEM, nil
 }
 
-// runMigrate applies the embedded database migrations. It accepts an optional
-// verb (default "up") and returns the process exit code.
 func runMigrate(args []string) int {
 	command := store.MigrateUp
 	switch len(args) {
@@ -360,7 +315,6 @@ func runMigrate(args []string) int {
 	return exitOK
 }
 
-// usage prints the top-level command help.
 func usage(w io.Writer) {
 	fmt.Fprintf(w, `gotham %s
 

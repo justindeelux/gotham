@@ -23,68 +23,41 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Defaults for the register/heartbeat loop.
 const (
-	defaultHeartbeatInterval = 10 * time.Second
-	defaultMinBackoff        = time.Second
-	defaultMaxBackoff        = 30 * time.Second
-	// defaultRegisterTimeout bounds a single registration attempt so a stalled
-	// control plane cannot pin the loop (and block backoff/heartbeats).
-	defaultRegisterTimeout = 30 * time.Second
-	// defaultBackoffResetAfter is how long a registration must last before it
-	// counts as healthy and the reconnect backoff resets to the floor. A shorter
-	// session (a flap) keeps the growing backoff, so repeated reconnects cannot
-	// hot-loop at the floor.
-	defaultBackoffResetAfter = 30 * time.Second
-	// backoffJitterFraction bounds the per-attempt jitter to ±20% so a control
-	// plane flap does not have every agent retry in lockstep.
-	backoffJitterFraction = 0.2
-	// defaultRenewBefore re-registers for a fresh certificate this long before
-	// the current leaf expires.
-	defaultRenewBefore = 30 * 24 * time.Hour
-	// dockerCallTimeout bounds best-effort Docker calls made from the loop.
-	dockerCallTimeout = 5 * time.Second
-	// nodeIDMetadataKey carries the node identity on RPCs where the gateway
-	// cannot read it from a client certificate (the bootstrap connection).
-	nodeIDMetadataKey = "node-id"
-	// enrollmentTokenMetadataKey carries the bootstrap credential on the first
-	// Register, before the node holds a client certificate (JUS-194).
+	defaultHeartbeatInterval   = 10 * time.Second
+	defaultMinBackoff          = time.Second
+	defaultMaxBackoff          = 30 * time.Second
+	defaultRegisterTimeout     = 30 * time.Second
+	defaultBackoffResetAfter   = 30 * time.Second
+	backoffJitterFraction      = 0.2
+	defaultRenewBefore         = 30 * 24 * time.Hour
+	dockerCallTimeout          = 5 * time.Second
+	nodeIDMetadataKey          = "node-id"
 	enrollmentTokenMetadataKey = "enrollment-token"
 )
 
-// Agent connects to the control plane, registers this node and streams
-// heartbeats, reconnecting with backoff when the connection drops.
 type Agent struct {
-	cfg        Config
-	log        *slog.Logger
-	docker     docker.Client
-	sampler    *stats.Sampler
-	interval   time.Duration
-	minBackoff time.Duration
-	maxBackoff time.Duration
-	// backoffResetAfter is how long a registration must last before the
-	// reconnect backoff resets to the floor.
+	cfg               Config
+	log               *slog.Logger
+	docker            docker.Client
+	sampler           *stats.Sampler
+	interval          time.Duration
+	minBackoff        time.Duration
+	maxBackoff        time.Duration
 	backoffResetAfter time.Duration
-	// registerTimeout bounds one Register attempt.
-	registerTimeout time.Duration
-	// renewBefore is how long before the served certificate's expiry the agent
-	// re-registers for a fresh one.
-	renewBefore time.Duration
-	dialOptions []grpc.DialOption
-	// randFloat and sleep are seams: production uses math/rand and sleepContext,
-	// tests inject them to make the backoff schedule deterministic.
-	randFloat func() float64
-	sleep     func(context.Context, time.Duration) bool
+	registerTimeout   time.Duration
+	renewBefore       time.Duration
+	dialOptions       []grpc.DialOption
+	randFloat         func() float64
+	sleep             func(context.Context, time.Duration) bool
 
 	versionMu sync.Mutex
 	version   string
 	updater   *updates.Updater
 }
 
-// Option customizes an Agent. Options are primarily used by tests.
 type Option func(*Agent)
 
-// WithHeartbeatInterval overrides the heartbeat cadence (default 10s).
 func WithHeartbeatInterval(interval time.Duration) Option {
 	return func(a *Agent) {
 		if interval > 0 {
@@ -93,7 +66,6 @@ func WithHeartbeatInterval(interval time.Duration) Option {
 	}
 }
 
-// WithBackoff overrides the reconnect backoff bounds.
 func WithBackoff(minBackoff, maxBackoff time.Duration) Option {
 	return func(a *Agent) {
 		if minBackoff > 0 {
@@ -105,8 +77,6 @@ func WithBackoff(minBackoff, maxBackoff time.Duration) Option {
 	}
 }
 
-// WithBackoffResetAfter overrides how long a registration must last before the
-// reconnect backoff resets to the floor (default 30s).
 func WithBackoffResetAfter(d time.Duration) Option {
 	return func(a *Agent) {
 		if d > 0 {
@@ -115,15 +85,12 @@ func WithBackoffResetAfter(d time.Duration) Option {
 	}
 }
 
-// WithDialOptions appends gRPC dial options, for example a bufconn dialer in
-// tests.
 func WithDialOptions(options ...grpc.DialOption) Option {
 	return func(a *Agent) {
 		a.dialOptions = append(a.dialOptions, options...)
 	}
 }
 
-// WithRegisterTimeout overrides the per-attempt registration deadline.
 func WithRegisterTimeout(timeout time.Duration) Option {
 	return func(a *Agent) {
 		if timeout > 0 {
@@ -132,8 +99,6 @@ func WithRegisterTimeout(timeout time.Duration) Option {
 	}
 }
 
-// WithRenewBefore overrides how long before certificate expiry the agent
-// re-registers for a fresh one.
 func WithRenewBefore(d time.Duration) Option {
 	return func(a *Agent) {
 		if d > 0 {
@@ -142,7 +107,6 @@ func WithRenewBefore(d time.Duration) Option {
 	}
 }
 
-// NewAgent returns an Agent that reports Docker state through docker.
 func NewAgent(cfg Config, log *slog.Logger, docker docker.Client, options ...Option) *Agent {
 	if log == nil {
 		log = slog.Default()
@@ -165,15 +129,10 @@ func NewAgent(cfg Config, log *slog.Logger, docker docker.Client, options ...Opt
 	for _, option := range options {
 		option(agent)
 	}
-	// A token on a plaintext channel is never sent (see
-	// shouldSendEnrollmentToken); say so loudly rather than failing to enroll
-	// with a silent, unexplained refusal.
 	if cfg.EnrollmentToken != "" && cfg.CA == "" {
 		log.Warn("agent: GOTHAM_AGENT_ENROLLMENT_TOKEN is set but the channel has no CA; the token is NOT sent over " +
 			"plaintext. Set GOTHAM_AGENT_CA for a TLS channel, or use the control plane's open-enrollment opt-in")
 	}
-	// The updater is disabled (nil) when no release public key is configured or
-	// no fixed binary path is set; it never blocks construction.
 	if u, err := updates.New(agent.cfg.updateConfig(), log, agent.Version, agent.setVersion); err != nil {
 		log.Warn("agent: self-update disabled", "error", err)
 	} else {
@@ -182,14 +141,12 @@ func NewAgent(cfg Config, log *slog.Logger, docker docker.Client, options ...Opt
 	return agent
 }
 
-// Version returns the version this agent currently reports.
 func (a *Agent) Version() string {
 	a.versionMu.Lock()
 	defer a.versionMu.Unlock()
 	return a.version
 }
 
-// setVersion records the version after a successful update.
 func (a *Agent) setVersion(version string) {
 	if version == "" {
 		return
@@ -199,11 +156,6 @@ func (a *Agent) setVersion(version string) {
 	a.versionMu.Unlock()
 }
 
-// Run connects to the control plane and runs the register/heartbeat loop until
-// ctx is canceled. onRegister is invoked after every successful registration.
-// It typically starts the DockerService server using the issued certificate,
-// and returning an error stops the agent. Run returns nil on a graceful
-// shutdown.
 func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterResponse) error) error {
 	options, err := a.dialOptionsFor()
 	if err != nil {
@@ -256,10 +208,6 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 				return err
 			}
 		}
-		// A freshly issued certificate is presented on the next TLS handshake.
-		// Reconnect so this connection carries it: the bootstrap connection had
-		// no client certificate, and a renewed leaf must replace the old one the
-		// control plane no longer accepts for a stream.
 		if newCert {
 			_ = conn.Close()
 			conn, err = grpc.NewClient(a.cfg.CPAddr, options...)
@@ -270,15 +218,8 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			updateClient = agentv1.NewUpdateServiceClient(conn)
 		}
 
-		// Run the current registration for a bounded session: when the issued
-		// certificate approaches expiry the session ends so the outer loop
-		// re-registers and the listener picks up a fresh certificate.
 		renewIn := a.renewalDelay(response.GetCert())
 
-		// Poll for a signed update alongside the heartbeat stream. The poll
-		// stops when the heartbeat stream ends so a reconnect starts a fresh
-		// one; the download never blocks the heartbeat because it runs on its
-		// own goroutine.
 		hbCtx, hbCancel := context.WithCancel(ctx)
 		sessionCtx := hbCtx
 		var sessionCancel context.CancelFunc
@@ -310,9 +251,6 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 		if ctx.Err() != nil {
 			return nil
 		}
-		// Only a session long enough to count as healthy resets the reconnect
-		// backoff; a short-lived success (a flap) keeps the growing backoff so
-		// repeated reconnects cannot hot-loop at the floor.
 		if time.Since(sessionStart) >= a.backoffResetAfter {
 			backoff = a.minBackoff
 		}
@@ -324,9 +262,6 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 	}
 }
 
-// dialOptionsFor builds the gRPC dial options, including transport credentials
-// derived from Config.CA and the node certificate the agent presents as a
-// mutual-TLS client.
 func (a *Agent) dialOptionsFor() ([]grpc.DialOption, error) {
 	certPath := ""
 	if a.cfg.CA != "" {
@@ -343,10 +278,6 @@ func (a *Agent) dialOptionsFor() ([]grpc.DialOption, error) {
 	return append(options, a.dialOptions...), nil
 }
 
-// register sends a single Register RPC bounded by the per-attempt deadline so
-// a stalled control plane cannot block the reconnect loop. The enrollment token,
-// when configured, rides along in metadata for the first (certificate-less)
-// registration.
 func (a *Agent) register(ctx context.Context, client agentv1.AgentServiceClient) (*agentv1.RegisterResponse, error) {
 	callCtx, cancel := context.WithTimeout(ctx, a.registerTimeout)
 	defer cancel()
@@ -356,13 +287,6 @@ func (a *Agent) register(ctx context.Context, client agentv1.AgentServiceClient)
 	return client.Register(callCtx, a.registerRequest(callCtx))
 }
 
-// shouldSendEnrollmentToken reports whether the enrollment token may ride on
-// this Register. The token is a secret with two conditions (JUS-194):
-//   - it is only ever sent over a channel that authenticates the control plane,
-//     i.e. with a configured CA that pins the CP certificate. A plaintext
-//     (dev-insecure) channel must never carry a real token; and
-//   - only while this node has no certificate yet, so a long-lived agent stops
-//     re-sending it once enrolled.
 func (a *Agent) shouldSendEnrollmentToken() bool {
 	if a.cfg.EnrollmentToken == "" || a.cfg.CA == "" {
 		return false
@@ -371,12 +295,6 @@ func (a *Agent) shouldSendEnrollmentToken() bool {
 	return err != nil
 }
 
-// renewalDelay returns how long to keep the current registration before
-// re-registering for a fresh certificate, or 0 when the certificate cannot be
-// parsed. It renews renewBefore ahead of the leaf's expiry, with a one-second
-// floor: a certificate already inside renewBefore nags for a re-issue rather
-// than hot-looping, and a successful issue (a 90-day leaf) immediately moves
-// the next renewal far out.
 func (a *Agent) renewalDelay(certPEM []byte) time.Duration {
 	if len(certPEM) == 0 || a.renewBefore <= 0 {
 		return 0
@@ -396,7 +314,6 @@ func (a *Agent) renewalDelay(certPEM []byte) time.Duration {
 	return renewIn
 }
 
-// registerRequest assembles the node's static identity and capabilities.
 func (a *Agent) registerRequest(ctx context.Context) *agentv1.RegisterRequest {
 	sample, _ := a.sampler.Sample()
 
@@ -426,10 +343,6 @@ func (a *Agent) registerRequest(ctx context.Context) *agentv1.RegisterRequest {
 		TotalDisk:     int64(sample.TotalDisk),
 	}
 	if csr, err := a.certificateRequest(); err != nil {
-		// The CSR is best effort: a node that cannot build one still
-		// registers. It then receives no certificate from the CP and serves
-		// its own self-signed key, so it is reachable only if the CP trusts
-		// that key out of band.
 		a.log.Warn("failed to build certificate signing request; registering without one", "error", err)
 	} else {
 		request.Csr = csr
@@ -437,10 +350,6 @@ func (a *Agent) registerRequest(ctx context.Context) *agentv1.RegisterRequest {
 	return request
 }
 
-// certificateRequest ensures the agent's keypair exists and returns a PEM
-// PKCS#10 CSR for it. The private key stays on the node; only the CSR is sent.
-// It resolves the key exactly as registration does: an explicit Config.KeyFile
-// wins, otherwise <CertDir>/agent.key.
 func (a *Agent) certificateRequest() ([]byte, error) {
 	var (
 		key crypto.Signer
@@ -457,13 +366,7 @@ func (a *Agent) certificateRequest() ([]byte, error) {
 	return GenerateCSR(a.cfg.NodeID, key)
 }
 
-// heartbeat opens the Heartbeat client stream and sends a sample immediately
-// and then once per interval until the stream fails or ctx is canceled. The
-// stream runs on its own cancellable context, canceled on return, so a
-// reconnect never leaves a stream (and its transport) alive.
 func (a *Agent) heartbeat(ctx context.Context, client agentv1.AgentServiceClient) error {
-	// The bootstrap connection presents no client certificate, so the gateway
-	// learns the node identity from metadata to attribute heartbeats.
 	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, a.cfg.NodeID))
 	defer cancel()
 	stream, err := client.Heartbeat(streamCtx)
@@ -486,7 +389,6 @@ func (a *Agent) heartbeat(ctx context.Context, client agentv1.AgentServiceClient
 	}
 }
 
-// heartbeatRequest samples the host and current container count.
 func (a *Agent) heartbeatRequest(ctx context.Context) *agentv1.HeartbeatRequest {
 	sample, _ := a.sampler.Sample()
 	return &agentv1.HeartbeatRequest{
@@ -503,8 +405,6 @@ func (a *Agent) heartbeatRequest(ctx context.Context) *agentv1.HeartbeatRequest 
 	}
 }
 
-// containerCount returns the number of containers known to Docker, or 0 when
-// it cannot be determined.
 func (a *Agent) containerCount(ctx context.Context) int64 {
 	if a.docker == nil {
 		return 0
@@ -519,8 +419,6 @@ func (a *Agent) containerCount(ctx context.Context) int64 {
 	return int64(len(containers))
 }
 
-// sleepContext waits for d or until ctx is canceled, reporting whether the full
-// duration elapsed.
 func sleepContext(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -532,7 +430,6 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// nextBackoff doubles current, capped at max.
 func nextBackoff(current, max time.Duration) time.Duration {
 	next := current * 2
 	if next <= 0 || next > max {
@@ -541,15 +438,10 @@ func nextBackoff(current, max time.Duration) time.Duration {
 	return next
 }
 
-// backoffDelay returns backoff with ±backoffJitterFraction jitter, clamped to
-// [minBackoff, maxBackoff].
 func (a *Agent) backoffDelay(backoff time.Duration) time.Duration {
 	return jitter(backoff, a.minBackoff, a.maxBackoff, a.randFloat)
 }
 
-// jitter returns d with up to ±backoffJitterFraction random jitter, clamped to
-// [min, max]. Jittering every wait de-correlates agents so a control-plane flap
-// does not have them all retry on the same schedule. randFloat returns [0,1).
 func jitter(d, min, max time.Duration, randFloat func() float64) time.Duration {
 	if d <= 0 {
 		return min

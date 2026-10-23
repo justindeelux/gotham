@@ -29,7 +29,6 @@ onMounted(() => {
   }
 });
 
-/** kindLabel renders the owning-resource kind in the current locale. */
 function kindLabel(kind: ProxyRouter["kind"]): string {
   switch (kind) {
     case "service":
@@ -41,7 +40,6 @@ function kindLabel(kind: ProxyRouter["kind"]): string {
   }
 }
 
-/** syncLabel renders one node's sync status; unknown is never a success. */
 function syncLabel(status: string): string {
   switch (status) {
     case "synced":
@@ -53,7 +51,6 @@ function syncLabel(status: string): string {
   }
 }
 
-/** syncTagType maps the node sync status onto a tag style. */
 function syncTagType(status: string): "success" | "warning" | "default" {
   switch (status) {
     case "synced":
@@ -65,7 +62,6 @@ function syncTagType(status: string): "success" | "warning" | "default" {
   }
 }
 
-/** nodeSyncOf resolves the sync status of the router's node, if reported. */
 function nodeSyncOf(router: ProxyRouter): string {
   return (
     proxyStore.routerNodes.find((node) => node.server_id === router.server_id)
@@ -73,7 +69,6 @@ function nodeSyncOf(router: ProxyRouter): string {
   );
 }
 
-/** hostCell renders the host with its backend target. */
 function hostCell(router: ProxyRouter): VNode {
   return h("div", { class: "cell-main" }, [
     h("span", { class: "mono cell-name" }, router.host),
@@ -83,7 +78,6 @@ function hostCell(router: ProxyRouter): VNode {
   ]);
 }
 
-/** sourceCell renders the owning-resource kind and name. */
 function sourceCell(router: ProxyRouter): VNode {
   return h("div", { class: "cell-main" }, [
     h(NTag, { size: "small" }, { default: () => kindLabel(router.kind) }),
@@ -93,7 +87,6 @@ function sourceCell(router: ProxyRouter): VNode {
   ]);
 }
 
-/** nodeCell renders the node name with its sync status. */
 function nodeCell(router: ProxyRouter): VNode {
   const status = nodeSyncOf(router);
   return h("div", { class: "cell-main" }, [
@@ -110,7 +103,6 @@ function nodeCell(router: ProxyRouter): VNode {
   ]);
 }
 
-/** tlsCell renders the TLS resolver, or plain HTTP when there is none. */
 function tlsCell(router: ProxyRouter): VNode {
   if (!router.tls_resolver) {
     return h(NText, { depth: 3 }, { default: () => proxyText("domains.routers.httpOnly", "HTTP") });
@@ -147,7 +139,6 @@ const columns: DataTableColumns<ProxyRouter> = [
   },
 ];
 
-/** emptyText renders the empty state through the current locale. */
 const emptyText = computed(() => proxyText("domains.routers.empty", "No routers generated yet."));
 </script>
 
@@ -205,12 +196,6 @@ const emptyText = computed(() => proxyText("domains.routers.empty", "No routers 
 </template>
 
 <style scoped>
-/* Router-list cell stack (local to this panel: the certificate table owns
-   its own pair in JUS-88, so this rule stays scoped here). Every multi-line
-   cell stacks its lines with the shared 4px step, matching the other
-   tables' cell-name/cell-sub pairs. The :deep span is load-bearing: column
-   bodies render through NDataTable render callbacks, so the inner divs
-   never carry this component's scope attribute. */
 .router-table :deep(.cell-main) {
   display: flex;
   flex-direction: column;

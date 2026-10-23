@@ -2,15 +2,6 @@ import { z } from "zod";
 
 import { sourceTypeSchema } from "@/features/applications/schemas/applications";
 
-/**
- * Response schema for GET /applications/{id}/volumes, the read-only storage
- * listing served by `internal/deploy` (see volumeListEnvelope in routes.go).
- * Optional fields mirror the backend's `omitempty`: `host_path` is absent when
- * no backing directory is known, `service`/`container` on a configured row the
- * runtime has not observed, `file_manager` when no validated target exists
- * (then `open_reason` explains why) and `reason` when the runtime is available.
- */
-
 export const volumeMountSchema = z.object({
   destination: z.string(),
   read_only: z.boolean(),
@@ -20,7 +11,6 @@ export const volumeMountSchema = z.object({
 });
 export type VolumeMount = z.infer<typeof volumeMountSchema>;
 
-/** volumeFileManagerSchema is the validated File Manager target of a volume. */
 export const volumeFileManagerSchema = z.object({
   server_id: z.string(),
   root: z.string(),

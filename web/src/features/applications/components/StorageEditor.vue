@@ -7,12 +7,6 @@ import type { StorageMapping } from "@/features/applications/api/applications";
 import { useStableRowKeys } from "@/shared/composables/useStableRowKeys";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
-/**
- * Editor for the volume map of an application: a named persistent directory on
- * the node (`host_path`) mounted into the container (`container_path`).
- * Every new deploy reuses the same volumes — rollback never loses data.
- */
-
 interface Props {
   modelValue: StorageMapping[];
 }
@@ -27,7 +21,6 @@ const { t } = useI18n();
 const rows = computed<StorageMapping[]>(() => props.modelValue);
 const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
 
-/** updateRow replaces one row, keeping the array immutable for v-model. */
 function updateRow(index: number, patch: Partial<StorageMapping>): void {
   const next = rows.value.map((row, rowIndex) =>
     rowIndex === index ? { ...row, ...patch } : row,
@@ -35,7 +28,6 @@ function updateRow(index: number, patch: Partial<StorageMapping>): void {
   emit("update:modelValue", next);
 }
 
-/** addRow appends an empty row for the next volume. */
 function addRow(): void {
   insertAt(rows.value.length);
   emit("update:modelValue", [
@@ -44,7 +36,6 @@ function addRow(): void {
   ]);
 }
 
-/** removeRow drops one row by index. */
 function removeRow(index: number): void {
   removeAt(index);
   emit("update:modelValue", rows.value.filter((_, rowIndex) => rowIndex !== index));

@@ -24,11 +24,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/**
- * Preview rows shown in the Previews tab, oldest closed last. Computed so a
- * language switch relabels headers without losing table state; hosts, SHAs
- * and branch names stay verbatim.
- */
 const previewColumns = computed<DataTableColumns<Preview>>(() => [
   {
     title: String(t("applications.previewsTab.pr")),
@@ -102,7 +97,6 @@ const previewColumns = computed<DataTableColumns<Preview>>(() => [
   },
 ]);
 
-/** previewRowKey identifies a preview row by its binding id. */
 function previewRowKey(row: Preview): string {
   return row.id;
 }

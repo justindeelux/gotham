@@ -10,9 +10,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestRemoveVolumeConfinesNames proves the agent only deletes managed database
-// volumes: an arbitrary node volume cannot be removed even by a compromised
-// control plane.
 func TestRemoveVolumeConfinesNames(t *testing.T) {
 	fake := &fakeDockerClient{}
 	server := NewDockerServer(fake, discardLogger())
@@ -31,10 +28,8 @@ func TestRemoveVolumeConfinesNames(t *testing.T) {
 		"etc",
 		"gotham-services-data",
 		"gotham-db-not-a-uuid",
-		"gotham-db-11111111-2222-3333-4444-55555555555", // too short
+		"gotham-db-11111111-2222-3333-4444-55555555555",
 		"../../etc",
-		// Anchoring: both ends must be tight, or a prefix/suffix could smuggle
-		// a non-managed name past the guard.
 		"x-gotham-db-11111111-2222-3333-4444-555555555555",
 		"gotham-db-11111111-2222-3333-4444-555555555555x",
 		"gotham-db-11111111-2222-3333-4444-555555555555\n",
@@ -49,8 +44,6 @@ func TestRemoveVolumeConfinesNames(t *testing.T) {
 	}
 }
 
-// TestRemoveVolumeMapsAgentFailure: an engine error is surfaced as a gRPC
-// error rather than a silent success.
 func TestRemoveVolumeMapsAgentFailure(t *testing.T) {
 	fake := &fakeDockerClient{err: errors.New("daemon down")}
 	server := NewDockerServer(fake, discardLogger())
@@ -62,8 +55,6 @@ func TestRemoveVolumeMapsAgentFailure(t *testing.T) {
 	}
 }
 
-// TestContainerHealthParsing pins the Docker summary-status mapping the
-// readiness gate depends on.
 func TestContainerHealthParsing(t *testing.T) {
 	tests := []struct {
 		status string

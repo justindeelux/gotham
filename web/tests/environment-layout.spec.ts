@@ -8,10 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global URL, window, getComputedStyle:readonly */
-// Real-browser proof for the PE-5 environment surface: the committed webdist
-// is served statically with the control-plane API mocked, a session is seeded
-// in localStorage, and real Chromium measures the real Naive UI DOM. No
-// backend is involved. Same harness as projects-layout.spec.ts.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -115,7 +111,6 @@ const previewRow = {
   updated_at: "2026-10-02T00:00:00Z",
 };
 
-/** resourcesFor answers the envelope for one environment, previews on flag. */
 function resourcesFor(envId: string, withPreviews: boolean) {
   const environment = detail.environments.find((item) => item.id === envId) ?? detail.environments[0];
   const full = envId === environmentId;
@@ -217,7 +212,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -251,7 +245,6 @@ test.afterAll(async () => {
 
 const envPath = `${projectId}/environments/${environmentId}`;
 
-/** mockApi seeds the session and answers the calls the environment page makes. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -315,14 +308,11 @@ test("environment page shows breadcrumb, tabs and nested rows at 1280px", async 
   await expect(page.locator('nav[aria-label="Breadcrumb"]')).toContainText("Projects");
   await expect(page.locator('nav[aria-label="Breadcrumb"]')).toContainText("production");
   await expect(page.locator(".environment-page .title")).toHaveText("production");
-  // Type tabs carry live counts.
   await expect(page.locator(".tabs")).toContainText("All");
   await expect(page.locator(".tabs")).toContainText("Applications");
-  // Every kind renders one row with its detail.
   await expect(page.locator(".resource-table")).toContainText("storefront");
   await expect(page.locator(".resource-table")).toContainText("plausible");
   await expect(page.locator(".resource-table")).toContainText("pg-orders");
-  // Rows link to the nested detail pages, not the removed flat routes.
   for (const id of [appId, serviceId, databaseId]) {
     const link = page.locator(`.resource-table a[href$="/${id}"]`);
     await expect(link.first()).toBeVisible();
@@ -359,7 +349,6 @@ test("application rows show the source brand avatar", async ({ page }) => {
   expect(box, "avatar renders a box").not.toBeNull();
   expect(box!.width).toBe(28);
   expect(box!.height).toBe(28);
-  // Icon sits left of the name/summary block, which stacks its two lines.
   const body = await appRow.locator(".resource-cell .resource-body").boundingBox();
   expect(body, "name block renders a box").not.toBeNull();
   expect(box!.x + box!.width).toBeLessThanOrEqual(body!.x);
@@ -368,21 +357,17 @@ test("application rows show the source brand avatar", async ({ page }) => {
   expect(nameBox, "name renders a box").not.toBeNull();
   expect(subBox, "summary renders a box").not.toBeNull();
   expect(nameBox!.y + nameBox!.height).toBeLessThanOrEqual(subBox!.y);
-  // GitHub App source -> GitHub hue behind a white glyph.
   expect(
     await icon.evaluate((node) => getComputedStyle(node).backgroundColor),
   ).toBe("rgb(110, 118, 129)");
   await expect(icon.locator(".brand-icon__glyph")).toHaveCount(1);
   await expect(icon).toHaveAttribute("aria-hidden", "true");
-  // Only applications carry an avatar; services and databases keep the plain
-  // row they had.
   await expect(
     page.locator(".resource-table tbody tr", { hasText: "plausible" }).locator(".brand-icon"),
   ).toHaveCount(0);
   await expect(
     page.locator(".resource-table tbody tr", { hasText: "pg-orders" }).locator(".brand-icon"),
   ).toHaveCount(0);
-  // A preview resolves its own source identity, not its base's.
   await page.locator(".preview-switch .n-switch").click();
   await expect(
     page.locator(".resource-table tr.preview-row .brand-icon"),
@@ -406,7 +391,6 @@ for (const locale of ["en", "vi"] as const) {
     });
     await page.goto(`${baseURL}/projects/${envPath}`);
     await page.locator(".resource-table").waitFor();
-    // The localized Name header still heads the cell in both languages.
     await expect(page.locator(".resource-table thead")).toContainText(
       locale === "en" ? "Name" : "Tên",
     );
@@ -417,8 +401,6 @@ for (const locale of ["en", "vi"] as const) {
     const nameBox = await name.boundingBox();
     expect(iconBox, "icon renders a box").not.toBeNull();
     expect(nameBox, "name renders a box").not.toBeNull();
-    // The icon keeps its left slot; the long name truncates beside it
-    // instead of widening the cell or pushing the other columns out.
     expect(iconBox!.x + iconBox!.width).toBeLessThanOrEqual(nameBox!.x);
     const [scrollWidth, clientWidth] = await name.evaluate((element) => [
       element.scrollWidth,
@@ -443,13 +425,11 @@ test("preview switch nests previews under their base with a tag", async ({
   const previewRow = page.locator(".resource-table tr.preview-row");
   await expect(previewRow).toContainText("storefront-pr-7");
   await expect(previewRow).toContainText("Preview");
-  // Nested directly under the base application row.
   const rows = page.locator(".resource-table tbody tr");
   const names = await rows.evaluateAll((elements) =>
     elements.map((element) => element.querySelector(".resource-name")?.textContent ?? ""),
   );
   expect(names.indexOf("storefront-pr-7")).toBe(names.indexOf("storefront") + 1);
-  // Previews stay out of the tab counts.
   await expect(page.locator(".tabs")).toContainText("All");
   const allTab = page.locator(".tabs").getByRole("tab", { name: /All/ });
   await expect(allTab).toContainText("3");
@@ -486,7 +466,6 @@ test("wrong project in the URL replaces it with the canonical one", async ({
   await mockApi(page);
   await page.goto(`${baseURL}/projects/${projectId}-wrong/environments/${environmentId}`);
   await page.locator(".resource-table").waitFor();
-  // The response ids win over the typed URL.
   await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/environments/${environmentId}$`));
   await expect(page.locator('nav[aria-label="Breadcrumb"]')).toContainText("storefront");
 });
@@ -505,7 +484,6 @@ test("add resource dialog shows the picker groups at both widths", async ({
     await expect(dialog.getByRole("tab", { name: "Service", exact: true })).toBeVisible();
     await expect(dialog.getByRole("tab", { name: "Database", exact: true })).toBeVisible();
     await expect(dialog).toContainText("storefront / production");
-    // The brand cards stay inside the viewport horizontally at phone width.
     const cards = dialog.locator("button.res-card");
     expect(await cards.count()).toBeGreaterThan(1);
     const first = cards.first();
@@ -523,8 +501,6 @@ test("resource rows stay inside the viewport at 480px", async ({ page }) => {
   await mockApi(page);
   await page.goto(`${baseURL}/projects/${envPath}`);
   await page.locator(".resource-table").waitFor();
-  // Narrow rows stack into cards: every resource row (opened through its
-  // stretched name link) needs no horizontal scroll.
   const rows = page.locator(".resource-table tbody tr.resource-row");
   expect(await rows.count()).toBe(3);
   for (let index = 0; index < 3; index += 1) {
@@ -556,17 +532,14 @@ test("JUS-69 add resource modal pins its header and scrolls only the body", asyn
     await expect(dialog.getByRole("heading", { name: "Add resource", exact: true })).toBeVisible();
     await dialog.getByRole("tab", { name: "Service", exact: true }).click();
     await expect(dialog).toHaveCSS("transform", "none");
-    // The card never exceeds the viewport even with the full picker inside.
     const cardBox = await dialog.boundingBox();
     expect(cardBox, "modal has a box").not.toBeNull();
     expect(cardBox!.y).toBeGreaterThanOrEqual(0);
     expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(viewport.height);
-    // Only the body scrolls: it overflows while the header stays put.
     const scroller = dialog.locator(".res-pane");
     expect(await scroller.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
       await scroller.evaluate((element) => element.clientHeight),
     );
-    // Wait out the modal enter transition so the header position is settled.
     await expect
       .poll(async () => {
         const first = (await dialog.locator(".n-card-header").boundingBox())!.y;
@@ -594,8 +567,6 @@ test("JUS-69 add server wizard keeps its footer visible at a 520px height", asyn
   await page.getByRole("button", { name: "Add server" }).first().click();
   const wizard = page.locator(".n-modal.wizard-modal");
   await expect(wizard.getByRole("heading", { name: "Add server", exact: true })).toBeVisible();
-  // The 420px floor is gone: the card fits the short viewport instead of
-  // clipping the footer, and the step body takes the scroll.
   const cardBox = await wizard.boundingBox();
   expect(cardBox, "wizard card has a box").not.toBeNull();
   expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(520);
@@ -616,8 +587,6 @@ test("JUS-69 create application modal keeps its footer visible on Dockerfile and
   await page.route("**/api/v1/templates", async (route) => {
     await route.fulfill({ json: { templates: [] } });
   });
-  // The picker preselects the source, so each tall editor step opens from
-  // its own card instead of switching a type selector in the wizard.
   for (const source of ["Dockerfile", "Docker Compose"]) {
     await page.goto(`${baseURL}/projects/${envPath}`);
     await page.locator(".resource-table").waitFor();
@@ -627,7 +596,6 @@ test("JUS-69 create application modal keeps its footer visible on Dockerfile and
     await picker.locator("button.res-card").filter({ hasText: source }).first().click();
     const wizard = page.locator(".n-modal.wizard-modal");
     await expect(wizard.getByRole("heading", { name: "Create application", exact: true })).toBeVisible();
-    // The tall editor step must not push the card or its footer out.
     const cardBox = await wizard.boundingBox();
     expect(cardBox, `${source} card has a box`).not.toBeNull();
     expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(640);
@@ -636,7 +604,6 @@ test("JUS-69 create application modal keeps its footer visible on Dockerfile and
     const footBox = await cont.boundingBox();
     expect(footBox, `${source} footer has a box`).not.toBeNull();
     expect(footBox!.y + footBox!.height).toBeLessThanOrEqual(640);
-    // The step body is the element that scrolls; the card body itself never does.
     const stepBody = wizard.locator(".wizard-body");
     expect(
       await stepBody.evaluate((element) => element.scrollHeight),

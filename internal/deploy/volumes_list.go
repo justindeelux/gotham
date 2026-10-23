@@ -17,10 +17,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Volume kinds reported by the read-only listing. "managed" is a bind under
-// <managed root>/<appID> (a derived storage or a rewritten compose volume),
-// "named" a Docker named volume, and "unknown" a mount an older agent could
-// not classify.
 const (
 	VolumeKindManaged = "managed"
 	VolumeKindNamed   = "named"
@@ -29,65 +25,40 @@ const (
 	VolumeKindUnknown = "unknown"
 )
 
-// Volume states: the runtime state of a backing storage. "unverified" means
-// no container was observed, so the listing cannot claim the data is gone.
 const (
 	VolumeStateRunning    = "running"
 	VolumeStateStopped    = "stopped"
 	VolumeStateUnverified = "unverified"
 )
 
-// Runtime states of the whole listing: whether the node answered at all.
 const (
 	VolumeRuntimeAvailable   = "available"
 	VolumeRuntimeUnavailable = "unavailable"
 	VolumeRuntimeLimited     = "limited"
 )
 
-// Open reasons on the wire. The backend never names a File Manager root; it
-// resolves the node's own root list and reports one of these codes when no
-// target can be built. The UI translates the codes (and falls back to the raw
-// value for a newer server).
 const (
-	// VolumeOpenFilesDisabled: the File Manager is off for this control plane
-	// or node (FEATURE_FILES=false, GOTHAM_AGENT_FILES=false, or an agent
-	// predating the FileService).
-	VolumeOpenFilesDisabled = "files_disabled"
-	// VolumeOpenRootUnavailable: the node exposes no writable root that
-	// contains the directory (or the root list could not be read).
-	VolumeOpenRootUnavailable = "root_unavailable"
-	// VolumeOpenNotBrowsable: the backing directory is outside the
-	// application's managed storage, is a temporary filesystem, or is stored
-	// in Docker's data directory.
-	VolumeOpenNotBrowsable = "not_browsable"
-	// VolumeOpenDeviceUnverified: the agent could not resolve the volume's
-	// configured device, so its backing directory is unknown.
+	VolumeOpenFilesDisabled    = "files_disabled"
+	VolumeOpenRootUnavailable  = "root_unavailable"
+	VolumeOpenNotBrowsable     = "not_browsable"
 	VolumeOpenDeviceUnverified = "volume_unverified"
-	// VolumeOpenNoNode: the application has no node assigned.
-	VolumeOpenNoNode = "no_node"
+	VolumeOpenNoNode           = "no_node"
 )
 
-// VolumeMount is one container-side mount of a volume entry.
 type VolumeMount struct {
 	Destination string
 	ReadOnly    bool
-	// Service is the compose service name; empty for a single-container
-	// application.
-	Service   string
-	Container string
-	State     string
+	Service     string
+	Container   string
+	State       string
 }
 
-// VolumeFileManager is a validated, root-relative File Manager target for one
-// volume. ServerID is the application's own node, never a caller-supplied one.
 type VolumeFileManager struct {
 	ServerID uuid.UUID
 	Root     string
 	Path     string
 }
 
-// VolumeEntry is one backing storage of an application, grouped across every
-// container that mounts it.
 type VolumeEntry struct {
 	Name        string
 	Kind        string
@@ -95,24 +66,16 @@ type VolumeEntry struct {
 	State       string
 	Mounts      []VolumeMount
 	FileManager *VolumeFileManager
-	// OpenReason explains why no File Manager target is offered. Empty when
-	// FileManager is set.
-	OpenReason string
+	OpenReason  string
 }
 
-// VolumeListing is the read-only storage view of one application.
 type VolumeListing struct {
-	SourceType string
-	// Runtime reports whether the node could be observed.
+	SourceType    string
 	Runtime       string
 	RuntimeReason string
 	Volumes       []VolumeEntry
 }
 
-// ListVolumes returns the application's volumes as configured and as observed
-// on its node. Reading never creates a directory, remounts storage, or
-// recreates a container: it lists the configured rows and the containers of
-// this application only, then groups their mounts by backing storage.
 func (s *Service) ListVolumes(ctx context.Context, userID, appID uuid.UUID) (VolumeListing, error) {
 	app, err := s.application(ctx, userID, appID, false)
 	if err != nil {
@@ -159,11 +122,6 @@ func (s *Service) ListVolumes(ctx context.Context, userID, appID uuid.UUID) (Vol
 	return listing, nil
 }
 
-// configuredVolumes builds the entries that exist before any runtime read: the
-// saved storage rows of a single-container application, or the named-volume
-// declarations of a compose source. Compose rows are rewritten to managed
-// directories by RewriteComposeManagedVolumes, so their mapped path is
-// <root>/<appID>/<name> — derived, never read from the document.
 func (s *Service) configuredVolumes(ctx context.Context, app Application) ([]VolumeEntry, error) {
 	if isComposeApp(app) {
 		return composeConfiguredVolumes(app), nil
@@ -186,8 +144,6 @@ func (s *Service) configuredVolumes(ctx context.Context, app Application) ([]Vol
 	return entries, nil
 }
 
-// storageKind classifies a stored host path: a non-absolute value is a
-// namespaced Docker named volume, an absolute one is a managed bind.
 func storageKind(hostPath string) string {
 	if strings.HasPrefix(hostPath, "/") {
 		return VolumeKindManaged
@@ -195,17 +151,12 @@ func storageKind(hostPath string) string {
 	return VolumeKindNamed
 }
 
-// composeVolumeMount is one named-volume use parsed out of a compose source.
 type composeVolumeMount struct {
 	service     string
 	destination string
 	readOnly    bool
 }
 
-// composeConfiguredVolumes extracts the named-volume declarations of a pasted
-// compose source: every service mount plus a top-level volume nobody mounts.
-// A repo-backed compose file is not cloned here, so it contributes no
-// configured rows; the runtime read still lists its volumes.
 func composeConfiguredVolumes(app Application) []VolumeEntry {
 	content := strings.TrimSpace(app.ComposeContent)
 	if content == "" {
@@ -281,9 +232,6 @@ func composeConfiguredVolumes(app Application) []VolumeEntry {
 	return entries
 }
 
-// composeNamedVolumeMount reads one compose service volume entry in either the
-// short "name:/path[:ro]" or the long mapping form, answering false for a bind,
-// an anonymous volume or an unparseable entry.
 func composeNamedVolumeMount(raw any) (string, composeVolumeMount, bool) {
 	switch value := raw.(type) {
 	case string:
@@ -321,8 +269,6 @@ func composeNamedVolumeMount(raw any) (string, composeVolumeMount, bool) {
 	return "", composeVolumeMount{}, false
 }
 
-// isComposeVolumeName rejects a host path, a relative path and an empty source;
-// a valid name is a single segment the managed path can safely append.
 func isComposeVolumeName(source string) bool {
 	return source != "" &&
 		!strings.HasPrefix(source, "/") &&
@@ -331,7 +277,6 @@ func isComposeVolumeName(source string) bool {
 		composeNamedVolumePattern.MatchString(source)
 }
 
-// asString reads a scalar from a decoded YAML mapping.
 func asString(value any) string {
 	switch typed := value.(type) {
 	case string:
@@ -344,7 +289,6 @@ func asString(value any) string {
 	return ""
 }
 
-// asBool reads a boolean from a decoded YAML mapping.
 func asBool(value any) bool {
 	switch typed := value.(type) {
 	case bool:
@@ -356,8 +300,6 @@ func asBool(value any) bool {
 	return false
 }
 
-// volumeObservation is one node read: the application's containers, the File
-// Manager roots the node exposes, and the runtime state to report.
 type volumeObservation struct {
 	containers    []*agentv1.ContainerInfo
 	roots         []*agentv1.FileRoot
@@ -366,13 +308,6 @@ type volumeObservation struct {
 	runtimeReason string
 }
 
-// observeVolumes lists the containers of this application only — by its
-// gotham.app_id label, or by its exact compose project identity — including
-// stopped ones, and resolves the node's actual File Manager roots in the same
-// connection. A node failure is reported in the listing, not as an error, so
-// configured storage is never hidden because the runtime is unknown; a
-// cancelled request is returned as an error instead of a misleading
-// "unavailable".
 func (s *Service) observeVolumes(ctx context.Context, app Application) (volumeObservation, error) {
 	observation := volumeObservation{
 		runtime:     VolumeRuntimeAvailable,
@@ -427,11 +362,6 @@ func (s *Service) observeVolumes(ctx context.Context, app Application) (volumeOb
 	return observation, nil
 }
 
-// fileRoots reads the node's real File Manager roots. The root names are never
-// assumed: the agent may expose one writable "system" root (full access) or a
-// confined "volumes" plus a read-only "compose" root. An absent FileService
-// (files disabled or an older agent) and an unreadable list answer a reason
-// instead of a guessed target.
 func (s *Service) fileRoots(ctx context.Context, app Application, node Node) ([]*agentv1.FileRoot, string) {
 	if !files.Enabled() {
 		return nil, VolumeOpenFilesDisabled
@@ -451,9 +381,6 @@ func (s *Service) fileRoots(ctx context.Context, app Application, node Node) ([]
 	return roots, ""
 }
 
-// mergeVolumeMounts folds observed container mounts into the configured
-// entries, grouping every consumer of one backing storage into a single row.
-// A mount with no configured match is added as its own entry.
 func mergeVolumeMounts(entries []VolumeEntry, containers []*agentv1.ContainerInfo, project string) []VolumeEntry {
 	byVolume := map[string]int{}
 	byPath := map[string]int{}
@@ -499,9 +426,6 @@ func mergeVolumeMounts(entries []VolumeEntry, containers []*agentv1.ContainerInf
 	return entries
 }
 
-// matchVolumeEntry finds the configured row a runtime mount belongs to: a
-// named volume by its Docker name, a bind by its host path, and an older
-// agent's untyped mount by its destination.
 func matchVolumeEntry(entries []VolumeEntry, byVolume, byPath map[string]int, mount *agentv1.ContainerMount, project string) (int, bool) {
 	switch mount.GetType() {
 	case "volume":
@@ -513,11 +437,6 @@ func matchVolumeEntry(entries []VolumeEntry, byVolume, byPath map[string]int, mo
 				return index, true
 			}
 		}
-		// A compose volume keeps its declared name inside the project
-		// namespace: match the FULL project-prefixed name, never a suffix, so
-		// "my_data" can not fold into "data" (or the reverse). The device
-		// stays the authority for the host path; this only links the consumer
-		// to its configured row.
 		if project != "" {
 			for index, entry := range entries {
 				if entry.Kind == VolumeKindManaged && mount.GetVolumeName() == project+"_"+entry.Name {
@@ -541,8 +460,6 @@ func matchVolumeEntry(entries []VolumeEntry, byVolume, byPath map[string]int, mo
 	return 0, false
 }
 
-// runtimeVolumeEntry describes a mount no configured row covers, keeping an
-// unreadable or temporary mount visible without inventing a host path.
 func runtimeVolumeEntry(mount *agentv1.ContainerMount) VolumeEntry {
 	entry := VolumeEntry{State: VolumeStateUnverified}
 	switch mount.GetType() {
@@ -551,15 +468,10 @@ func runtimeVolumeEntry(mount *agentv1.ContainerMount) VolumeEntry {
 		entry.Name = mount.GetVolumeName()
 		switch {
 		case mount.GetVolumeDeviceUnverified():
-			// The engine could not answer: do not present its mountpoint as
-			// the backing directory.
 			entry.OpenReason = VolumeOpenDeviceUnverified
 		case mount.GetVolumeDevice() != "":
 			entry.HostPath = filepath.Clean(mount.GetVolumeDevice())
 		case mount.GetSource() != "":
-			// No configured device: Docker's mountpoint is the backing store.
-			// It is informational only (never openable: no File Manager root
-			// contains Docker's data directory).
 			entry.HostPath = filepath.Clean(mount.GetSource())
 			entry.OpenReason = VolumeOpenNotBrowsable
 		default:
@@ -592,9 +504,6 @@ func runtimeVolumeEntry(mount *agentv1.ContainerMount) VolumeEntry {
 	return entry
 }
 
-// ensureVolumeHostPath replaces a configured named-volume label with the
-// backing directory the runtime resolved, so the mapped path is truthful
-// instead of the bare volume name. A managed device becomes a managed bind.
 func ensureVolumeHostPath(entry *VolumeEntry, mount *agentv1.ContainerMount) {
 	if entry.Kind != VolumeKindNamed {
 		return
@@ -617,9 +526,6 @@ func ensureVolumeHostPath(entry *VolumeEntry, mount *agentv1.ContainerMount) {
 	}
 }
 
-// matchUnbackedEntry finds the existing row of a mount with no backing
-// directory (tmpfs, an untyped mount): one row per destination, never a
-// duplicate per container listing.
 func matchUnbackedEntry(entries []VolumeEntry, mount *agentv1.ContainerMount) (int, bool) {
 	for index, entry := range entries {
 		if entry.HostPath != "" || entry.Kind != runtimeVolumeKind(mount) {
@@ -634,7 +540,6 @@ func matchUnbackedEntry(entries []VolumeEntry, mount *agentv1.ContainerMount) (i
 	return 0, false
 }
 
-// runtimeVolumeKind classifies a mount no configured row covers.
 func runtimeVolumeKind(mount *agentv1.ContainerMount) string {
 	switch mount.GetType() {
 	case "volume":
@@ -653,8 +558,6 @@ func runtimeVolumeKind(mount *agentv1.ContainerMount) string {
 	return VolumeKindUnknown
 }
 
-// appendMount keeps one row per destination per consumer, filling the
-// configured placeholder (no container) instead of adding a second row.
 func appendMount(mounts []VolumeMount, next VolumeMount) []VolumeMount {
 	for index, mount := range mounts {
 		if mount.Destination != next.Destination {
@@ -671,9 +574,6 @@ func appendMount(mounts []VolumeMount, next VolumeMount) []VolumeMount {
 	return append(mounts, next)
 }
 
-// volumeEntryState reports the aggregate runtime state: running when any
-// consumer runs, stopped when only stopped consumers were observed, and
-// unverified when nothing was observed.
 func volumeEntryState(entry VolumeEntry) string {
 	state := VolumeStateUnverified
 	for _, mount := range entry.Mounts {
@@ -687,8 +587,6 @@ func volumeEntryState(entry VolumeEntry) string {
 	return state
 }
 
-// containerVolumeState maps Docker's container state onto the listing's
-// running/stopped pair; "created" and "paused" are not running consumers.
 func containerVolumeState(state string) string {
 	if state == "running" {
 		return VolumeStateRunning
@@ -696,15 +594,6 @@ func containerVolumeState(state string) string {
 	return VolumeStateStopped
 }
 
-// fileManagerTarget builds the File Manager navigation target of one entry from
-// the node's ACTUAL roots: the most specific writable root whose real path
-// contains the directory wins (full-access agents expose "system" => "/",
-// confined agents expose "volumes" => the managed root; the read-only compose
-// root is never chosen for volume data). The result stays confined to this
-// application's managed directory even though a full-access root could browse
-// much more. Containment here is lexical: the control plane cannot resolve
-// node-side symlinks, so the File Manager's own root-relative confinement is
-// what refuses them after navigation.
 func fileManagerTarget(app Application, entry VolumeEntry, roots []*agentv1.FileRoot, rootsReason string) (*VolumeFileManager, string) {
 	if entry.OpenReason != "" {
 		return nil, entry.OpenReason
@@ -717,8 +606,6 @@ func fileManagerTarget(app Application, entry VolumeEntry, roots []*agentv1.File
 	}
 	root := filepath.Clean(managedVolumeRoot())
 	host := filepath.Clean(entry.HostPath)
-	// The target is confined to THIS application's directory: application
-	// read access never reaches a sibling application's data.
 	appDir := appVolumeDir(root, app.ID)
 	if host == appDir || !withinPath(appDir, host) {
 		return nil, VolumeOpenNotBrowsable
@@ -742,7 +629,6 @@ func fileManagerTarget(app Application, entry VolumeEntry, roots []*agentv1.File
 			if !withinPath(base, host) {
 				continue
 			}
-			// Most specific base wins: a nested operator root beats "/".
 			if len(base) > bestLen {
 				best, bestBase, bestLen = candidate, base, len(base)
 			}
@@ -766,16 +652,6 @@ func fileManagerTarget(app Application, entry VolumeEntry, roots []*agentv1.File
 	}, ""
 }
 
-// rootBases returns the base paths a root may be addressed through. The agent
-// reports resolved paths (macOS /tmp -> /private/tmp, for example), while the
-// control plane derives the managed path from its configured root; when the
-// two name the same directory, both forms are accepted. A path that cannot be
-// resolved on this host contributes only its literal form.
-//
-// EvalSymlinks runs on the CONTROL PLANE's filesystem, so this reconciliation
-// assumes the CP and node see the same path for the managed root (the documented
-// deployment, and the all-in-one/dev case). On a node with a different layout
-// only the literal root path matches; nothing widens beyond appDir either way.
 func rootBases(rootPath, managed string) []string {
 	bases := []string{rootPath}
 	if rootPath == managed {
@@ -791,8 +667,6 @@ func rootBases(rootPath, managed string) []string {
 	return bases
 }
 
-// withinPath reports whether path is base or a descendant of base, comparing
-// path components rather than a string prefix.
 func withinPath(base, path string) bool {
 	if base == "" || path == "" || !filepath.IsAbs(base) || !filepath.IsAbs(path) {
 		return false

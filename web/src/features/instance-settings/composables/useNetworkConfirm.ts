@@ -1,11 +1,6 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import type { Ref } from "vue";
 
-/**
- * useNetworkConfirm turns a pending-change deadline into a whole-second
- * countdown and fires onExpire once when it reaches zero (the host has
- * reverted by then, so the page reloads the state).
- */
 export function useNetworkConfirm(deadline: Ref<string | null>, onExpire: () => void) {
   const now = ref(Date.now());
   let timer: ReturnType<typeof setInterval> | null = null;

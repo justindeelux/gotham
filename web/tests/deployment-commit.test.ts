@@ -37,7 +37,6 @@ beforeEach(() => {
   mockCopy.mockClear();
 });
 
-/** deployment builds one row with commit metadata. */
 function deployment(overrides: Partial<Deployment> = {}): Deployment {
   return {
     id: "deploy-12345678",
@@ -63,7 +62,6 @@ function deployment(overrides: Partial<Deployment> = {}): Deployment {
   } as Deployment;
 }
 
-/** mountCard renders the commit card inside a message provider. */
 function mountCard(row: Deployment | null, repo = "owner/repo", cloneUrl = "") {
   const Harness = defineComponent({
     setup() {
@@ -220,7 +218,6 @@ describe("DeploymentCommitCard", () => {
 });
 
 describe("ApplicationLogsTab", () => {
-  /** mountLogs renders the tab with stubbed log viewers. */
   function mountLogs(row: Deployment | null, overrides: Record<string, unknown> = {}) {
     return mount(ApplicationLogsTab, {
       props: {

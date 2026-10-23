@@ -1,7 +1,3 @@
-// Reusable embedded CodeEditor (JUS-230): preset grammars, the shared
-// settings table, save emission and clean teardown. The session factory is
-// mocked so the test asserts the component's lifecycle without depending on
-// CodeMirror's DOM measurement in jsdom.
 /* global document:readonly, localStorage:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -37,7 +33,6 @@ const mocks = vi.hoisted(() => {
     destroy: ReturnType<typeof vi.fn>;
   }
 
-  /** fakeSession tracks the doc so getDoc mirrors a live CodeMirror view. */
   function fakeSession(doc: string): FakeSession {
     let current = doc;
     const status = { total: 0, current: 0, capped: false };
@@ -94,7 +89,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** mountEditor mounts the component and waits for the lazy session build. */
 async function mountEditor(props: Record<string, unknown> = {}) {
   const wrapper = mount(CodeEditor, {
     props: { modelValue: "services: {}\n", ...props },
@@ -104,7 +98,6 @@ async function mountEditor(props: Record<string, unknown> = {}) {
   return wrapper;
 }
 
-/** lastOptions is the option bag the component handed to the session factory. */
 function lastOptions(): Record<string, unknown> {
   const call = mocks.createEditorSession.mock.calls.at(-1);
   if (!call) {
@@ -193,7 +186,6 @@ describe("CodeEditor", () => {
     });
     await flushPromises();
 
-    // The same view keeps the draft: no second session, no document reset.
     expect(mocks.createEditorSession).toHaveBeenCalledTimes(1);
     expect(session.destroy).not.toHaveBeenCalled();
     expect(session.setDoc).toHaveBeenCalledTimes(setDocCalls);
@@ -210,7 +202,6 @@ describe("CodeEditor", () => {
     const wrapper = await mountEditor({ wrap: true });
     expect(lastOptions().settings).toMatchObject({ wrap: true });
 
-    // A settings change reconfigures the live session and keeps the override.
     useEditorSettingsStore().update({ theme: "light" });
     await flushPromises();
     const applied = mocks.sessions[0].setSettings.mock.calls.at(-1)?.[0];
@@ -253,7 +244,6 @@ describe("CodeEditor", () => {
     expect(wrapper.find(".ed-find").exists()).toBe(true);
     expect(wrapper.findAll(".ed-find input")).toHaveLength(1);
 
-    // The replace binding expands the bar instead of opening a second surface.
     (options.onReplace as () => void)();
     await flushPromises();
     expect(wrapper.findAll(".ed-find input")).toHaveLength(2);

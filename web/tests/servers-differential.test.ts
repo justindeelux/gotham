@@ -1,13 +1,3 @@
-// Differential contract for the servers zod migration (JUS-23 V3/V4).
-//
-// Expected outcomes were recorded from the pre-migration Naive UI rules run
-// through the real async-validator engine (throwaway script, 2026-10-04)
-// and encoded here, so any schema change that alters acceptance or messages
-// fails loudly. The wizard and the modal share these schemas; their key-ID
-// strings differ and are both pinned below. Preserved quirks: whitespace-only
-// names/users pass (untrimmed required + blank-tolerant pattern, as before),
-// and out-of-range IPv4-shaped input passes the host check via the hostname
-// fallback (matches the forms, see server-validation.test.ts).
 
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -29,10 +19,6 @@ import {
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 import type { RuleFromOptions } from "@/shared/validation/naiveAdapter";
 
-// Schema messages are namespaced catalog keys resolved at validation time,
-// so the feature catalogs must be registered and the composer on English
-// before the differential rows run. Resolved English display text stays
-// byte-identical to the pre-i18n literals pinned below.
 beforeAll(() => {
   registerDiscoveredCatalogs();
 });

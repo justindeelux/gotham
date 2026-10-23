@@ -9,27 +9,13 @@ import (
 	"unicode"
 )
 
-// Docker image sources (GS-9) deploy a prebuilt reference: registry/repo:tag
-// with optional @sha256 digest pinning and an optional private-registry
-// credential. There is no build step: the orchestrator pulls on the target
-// node and runs the image with the application's env/ports/domains/storage.
-
-// ImageReference is a validated Docker image reference split into its parts.
-// Name carries the registry host and repository path without tag or digest;
-// Tag is "" when the reference relies on the registry default; Digest is ""
-// unless pinned.
 type ImageReference struct {
-	// Raw is the trimmed reference as entered.
-	Raw string
-	// Name is the host + repository path (no tag, no digest).
-	Name string
-	// Tag is the tag without the leading ":", "" when absent.
-	Tag string
-	// Digest is the pinned digest ("sha256:..."), "" when absent.
+	Raw    string
+	Name   string
+	Tag    string
 	Digest string
 }
 
-// Pinned reports whether the reference carries a digest pin.
 func (r ImageReference) Pinned() bool { return r.Digest != "" }
 
 var (
@@ -38,20 +24,10 @@ var (
 	imageDigestPattern    = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
 )
 
-// maxImageRefLen bounds the stored reference. The engine accepts longer
-// values, but anything past this is a pasted manifest, not a reference.
 const maxImageRefLen = 255
 
-// dockerHubHost is the canonical scope of a bare reference (nginx, team/app):
-// the credential scope comparison uses it so a bare name never matches an
-// explicit host.
 const dockerHubHost = "docker.io"
 
-// RegistryHost returns the canonical registry host a validated reference
-// pulls from: the lowercased explicit host (with port when present), or the
-// Docker Hub marker for bare names. "" means the reference did not validate.
-// Two references share a credential scope exactly when their hosts are equal:
-// the orchestrator sends the stored credential only to that host.
 func RegistryHost(ref string) string {
 	parsed, err := ParseImageReference(ref)
 	if err != nil {
@@ -63,19 +39,11 @@ func RegistryHost(ref string) string {
 	return dockerHubHost
 }
 
-// ValidateImageReference accepts the image references an image source may
-// carry: [host[:port]/]path[:tag][@digest]. It refuses whitespace (a second
-// argv token smuggled into logs), malformed names/tags/digests, and hosts in
-// the node's loopback scope — the node-local registry publishes on loopback,
-// so a loopback reference would resolve to the internal credential scope,
-// never to the registry the user means. A bare `latest` tag stays valid (the
-// wizard warns, it does not refuse).
 func ValidateImageReference(raw string) error {
 	_, err := ParseImageReference(raw)
 	return err
 }
 
-// ParseImageReference validates raw and splits it into its parts.
 func ParseImageReference(raw string) (ImageReference, error) {
 	ref := strings.TrimSpace(raw)
 	if ref == "" {
@@ -117,10 +85,6 @@ func ParseImageReference(raw string) (ImageReference, error) {
 	return parsed, nil
 }
 
-// splitImageTag cuts the tag off repo: the tag separator is the last ":"
-// after the last "/" (a port colon in the registry host sits before it).
-// hadTag reports whether the separator was present, so an empty tag
-// (nginx:) is rejected instead of passing as untagged.
 func splitImageTag(repo string) (name, tag string, hadTag bool) {
 	if index := strings.LastIndex(repo, ":"); index >= 0 && index > strings.LastIndex(repo, "/") {
 		return repo[:index], repo[index+1:], true
@@ -128,9 +92,6 @@ func splitImageTag(repo string) (name, tag string, hadTag bool) {
 	return repo, "", false
 }
 
-// checkImageName validates the host + repository path: non-empty components,
-// a well-formed registry host when present, and never a loopback or
-// unspecified host (the node-local scope pulls resolve to).
 func checkImageName(name string) error {
 	if name == "" {
 		return fmt.Errorf("%w: image reference has no repository name", ErrValidation)
@@ -153,9 +114,6 @@ func checkImageName(name string) error {
 	return nil
 }
 
-// splitImageHost splits a leading registry host off name: the first component
-// is a host when it holds a ".", a ":" (a port) or is "localhost". A bare
-// name (nginx, library/nginx) has no host and pulls from Docker Hub.
 func splitImageHost(name string) (host, rest string, ok bool) {
 	head, tail, found := strings.Cut(name, "/")
 	if !found {
@@ -167,15 +125,8 @@ func splitImageHost(name string) (host, rest string, ok bool) {
 	return "", name, false
 }
 
-// imageLabelPattern is one RFC 1035/1123 DNS label: alphanumerics with
-// interior hyphens, never empty and never starting or ending with "-".
 var imageLabelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// checkRegistryHost validates a registry host and refuses loopback and
-// unspecified addresses: 127.0.0.0/8 (including inet_aton shorthand like
-// 127.1), ::1, 0.0.0.0, [::] and localhost in any spelling. A reference
-// pointing there would aim pulls (and the user's credential) at node-local
-// services instead of the registry the user means. Ports are 1-65535.
 func checkRegistryHost(host string) error {
 	if strings.HasPrefix(host, "[") {
 		end := strings.Index(host, "]")
@@ -200,8 +151,6 @@ func checkRegistryHost(host string) error {
 		return nil
 	}
 	if strings.Contains(host, ":") {
-		// Unbracketed IPv6 is not a valid registry host; a second colon is a
-		// malformed host:port.
 		if strings.Count(host, ":") != 1 {
 			return fmt.Errorf("%w: registry host %q is invalid", ErrValidation, host)
 		}
@@ -214,7 +163,6 @@ func checkRegistryHost(host string) error {
 	return checkRegistryName(host)
 }
 
-// validRegistryPort accepts the Docker registry port range 1-65535.
 func validRegistryPort(port string) bool {
 	if port == "" || len(port) > 5 {
 		return false
@@ -229,12 +177,7 @@ func validRegistryPort(port string) bool {
 	return value >= 1 && value <= 65535
 }
 
-// checkRegistryName validates a registry host without a port: an IP address
-// (loopback and unspecified refused, including inet_aton shorthand), the
-// localhost spellings, or dot-separated RFC 1123 labels.
 func checkRegistryName(bare string) error {
-	// The localhost spellings are checked after one trailing dot is ignored,
-	// so "localhost." names the loopback problem instead of a generic one.
 	if bare == "" {
 		return fmt.Errorf("%w: registry host is empty", ErrValidation)
 	}
@@ -270,9 +213,6 @@ func checkRegistryName(bare string) error {
 	return nil
 }
 
-// isNumericDots reports an all-digits-and-dots host: either dotted-quad IPv4
-// (handled by ParseIP above) or inet_aton shorthand (127.1, 0x7f.1 style is
-// NOT accepted — hex and octal prefixes stay invalid, only decimal).
 func isNumericDots(host string) bool {
 	if !strings.Contains(host, ".") {
 		return false
@@ -285,8 +225,6 @@ func isNumericDots(host string) bool {
 	return true
 }
 
-// inetAton parses classic dotted-decimal shorthand (a, a.b, a.b.c, a.b.c.d)
-// into a 32-bit value. Only decimal parts are accepted.
 func inetAton(host string) (uint32, bool) {
 	parts := strings.Split(host, ".")
 	if len(parts) < 1 || len(parts) > 4 {
@@ -328,10 +266,6 @@ func inetAton(host string) (uint32, bool) {
 	return uint32(value), true
 }
 
-// PinnedImageReference renders name pinned to digest (name@digest) for
-// rollbacks: the tag may have moved since the release, the digest has not.
-// An empty digest falls back to ref unchanged, so a release recorded before
-// digest resolution still rolls back to its tag.
 func PinnedImageReference(ref, digest string) (string, error) {
 	parsed, err := ParseImageReference(ref)
 	if err != nil {

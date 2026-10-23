@@ -14,10 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestProjectsEnvironmentsMigration builds a disposable database at the
-// pre-change schema (00033), seeds resource rows, applies 00034 and asserts
-// the new tables, the case-insensitive indexes and the deliberate resource
-// wipe; then it rolls 00034 back and asserts the two tables are gone.
 func TestProjectsEnvironmentsMigration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -71,9 +67,6 @@ func TestProjectsEnvironmentsMigration(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `INSERT INTO users (email) VALUES ($1) RETURNING id`, email).Scan(&userID); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	// The user is seeded after 00019, so its personal team (team id = user
-	// id) is created explicitly; resource rows carry team_id since 00019
-	// made it NOT NULL.
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO teams (id, name, is_personal) VALUES ($1, $2, true)`, userID, email); err != nil {
 		t.Fatalf("insert personal team: %v", err)
@@ -147,9 +140,6 @@ func TestProjectsEnvironmentsMigration(t *testing.T) {
 			t.Fatalf("index %s was not created", index)
 		}
 	}
-	// The deliberate wipe: every resource table is empty, including the
-	// seeded deployment, which proves CASCADE reached the child rows (a
-	// bare TRUNCATE would have refused while they existed).
 	for _, table := range []string{"applications", "databases", "services", "deployments"} {
 		var count int
 		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
@@ -159,8 +149,6 @@ func TestProjectsEnvironmentsMigration(t *testing.T) {
 			t.Fatalf("%s has %d rows, want the deliberate wipe to empty it", table, count)
 		}
 	}
-	// CASCADE only follows FKs to the referenced rows, so the account, its
-	// team and membership, and the node survive the wipe.
 	for table, want := range map[string]int{
 		"users": 1, "teams": 1, "team_members": 1, "servers": 1,
 	} {
@@ -173,8 +161,6 @@ func TestProjectsEnvironmentsMigration(t *testing.T) {
 		}
 	}
 
-	// Down rolls the phase back: both migrations go, so the two tables are
-	// gone.
 	if _, err := provider.DownTo(ctx, 33); err != nil {
 		t.Fatalf("roll back to 00033: %v", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// writeExec writes an executable shell script at path with the given body.
 func writeExec(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
@@ -15,11 +14,6 @@ func writeExec(t *testing.T, path, body string) {
 	}
 }
 
-// TestProbeRepairViaSudoPolicy is the regression for the round-4 H1 bug: the
-// privilege probe must not stat /etc/sudoers.d (root 0750, unreadable by the
-// service user) — it asks the sudo policy whether the exact pinned repair
-// command is permitted, which works unprivileged, absolute-pathed, with no
-// request data. A fake sudo covers rule-present / rule-absent / sudo-missing.
 func TestProbeRepairViaSudoPolicy(t *testing.T) {
 	dir := t.TempDir()
 	payload := filepath.Join(dir, "payload")
@@ -34,8 +28,6 @@ func TestProbeRepairViaSudoPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	sudo := filepath.Join(bin, "sudo")
-	// The helper path does not exist, so Probe reports Missing and then probes
-	// the repair policy.
 	applier := &sudoApplier{
 		path:    filepath.Join(dir, "gotham-hostctl"),
 		toolctl: filepath.Join(dir, "gotham-toolctl"),
@@ -53,13 +45,11 @@ func TestProbeRepairViaSudoPolicy(t *testing.T) {
 		t.Fatalf("refused rule: %+v, want repair=false", h)
 	}
 
-	// No sudo on PATH at all: the probe fails closed, never an error.
 	t.Setenv("PATH", dir)
 	if h := applier.Probe(context.Background()); h.Repair {
 		t.Fatalf("missing sudo: %+v, want repair=false", h)
 	}
 
-	// Without the payload the probe short-circuits before sudo.
 	if err := os.Remove(filepath.Join(payload, "gotham-hostctl")); err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,3 @@
-// Permissions dialog (JUS-113 fix round 1, simplified by JUS-131): the grid is
-// inert while the octal field is invalid (it must not rewrite what the user
-// typed), Apply is disabled when the mode is unchanged or a directory would
-// lose owner execute, and the octal field now sits BELOW the bits grid.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h } from "vue";
@@ -39,7 +35,6 @@ const root: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -67,7 +62,6 @@ function mountDialog(target: FilesEntry) {
   });
 }
 
-/** applyButton returns the footer Apply button, found by its label. */
 function applyButton(wrapper: ReturnType<typeof mountDialog>) {
   return wrapper.findAll("button").find((b) => b.text().includes("Apply"));
 }
@@ -109,7 +103,6 @@ describe("permissions dialog", () => {
     for (const box of checkboxes) {
       expect(box.classes()).toContain("n-checkbox--disabled");
     }
-    // The invalid text is untouched and Apply stays disabled.
     expect((input.element as { value: string }).value).toBe("99");
     expect(applyButton(wrapper)?.attributes("disabled")).toBeDefined();
     expect(vi.mocked(chmodEntry)).not.toHaveBeenCalled();
@@ -120,7 +113,6 @@ describe("permissions dialog", () => {
     const wrapper = mountDialog(entry({ name: "app.yaml", mode: 0o100644 }));
     await flushPromises();
 
-    // The dialog opens on the entry's current mode: nothing to apply yet.
     expect(applyButton(wrapper)?.attributes("disabled")).toBeDefined();
 
     await wrapper.find(".octal input").setValue("600");
@@ -142,7 +134,6 @@ describe("permissions dialog", () => {
     );
     expect(applyButton(wrapper)?.attributes("disabled")).toBeDefined();
 
-    // Owner execute present: valid again.
     await wrapper.find(".octal input").setValue("700");
     await flushPromises();
     expect(applyButton(wrapper)?.attributes("disabled")).toBeUndefined();
@@ -153,21 +144,16 @@ describe("permissions dialog", () => {
     const wrapper = mountDialog(entry({ name: "app.yaml" }));
     await flushPromises();
 
-    // Bits first, then the octal field: in document order the grid precedes
-    // the `.octal` input the user types in.
     const html = wrapper.html();
     expect(html.indexOf("perms-grid")).toBeGreaterThanOrEqual(0);
     expect(html.indexOf("octal")).toBeGreaterThan(html.indexOf("perms-grid"));
 
-    // JUS-131: the explanatory copy and the labelled "current mode" line are
-    // gone, while the read-only symbolic + octal mode stays visible.
     const text = wrapper.text();
     expect(text).not.toContain("Three octal digits");
     expect(text).not.toContain("Special bits");
     expect(text).not.toContain("keeps its type");
     expect(text).not.toContain("Current mode");
     expect(text).toContain("-rw-r--r-- · 644");
-    // en/vi keep one short label for the octal field.
     expect(viCatalog.permissions.octal).toBe("Bát phân");
   });
 });

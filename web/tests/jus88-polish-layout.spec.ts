@@ -9,12 +9,6 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
 /* global URL, document, window:readonly */
-// JUS-88 follow-up layout proof: hints render below their fields, the
-// certificate table cells stack with a gap, the sidebar footer keeps
-// left-aligned content with a right-aligned chevron, and the sidebar and
-// language menus breathe. Every claim is a measured box on the committed
-// webdist served statically with the API mocked; element screenshots land in
-// .playwright-mcp/ (gitignored) for human review.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -38,8 +32,6 @@ const session = {
     created_at: "2026-03-04T12:00:00Z",
     display_name: "Ada Lovelace",
     has_password: true,
-    // JUS-197: these specs walk the platform-admin-gated Domains page, so
-    // the fixture account carries the instance flag (assertions unchanged).
     is_platform_admin: true,
   },
   accessToken: "test-access",
@@ -160,7 +152,6 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session and answers every call the Domains page makes. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -209,7 +200,6 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
-/** openCertModal opens the Add certificate dialog from the Domains page. */
 async function openCertModal(page: Page): Promise<Locator> {
   await page.getByRole("button", { name: "Add certificate" }).first().click();
   const dialog = page.locator(".n-modal.n-card").filter({ hasText: "Add certificate" }).first();
@@ -220,7 +210,6 @@ async function openCertModal(page: Page): Promise<Locator> {
   return dialog;
 }
 
-/** boxOf returns the bounding box, failing loudly when the element has none. */
 async function boxOf(locator: Locator, label: string) {
   const box = await locator.boundingBox();
   expect(box, `${label} has a box`).not.toBeNull();
@@ -309,7 +298,6 @@ for (const width of [1280, 480]) {
     await page.locator("#app-nav").screenshot({ path: resolve(shotsDir, `jus88-sidebar-${width}.png`) });
     const first = await boxOf(items.nth(0), "first nav item");
     const second = await boxOf(items.nth(1), "second nav item");
-    // 4px token gap; 3.5 tolerates sub-pixel font rounding on CI runners.
     expect(second.y - (first.y + first.height), "nav item gap").toBeGreaterThanOrEqual(3.5);
     if (width <= 1024) {
       await page.keyboard.press("Escape");
@@ -322,7 +310,6 @@ for (const width of [1280, 480]) {
     expect(await options.count()).toBeGreaterThanOrEqual(2);
     const firstOption = await boxOf(options.nth(0), "first language option");
     const secondOption = await boxOf(options.nth(1), "second language option");
-    // 4px token gap; 3.5 tolerates sub-pixel font rounding on CI runners.
     expect(
       secondOption.y - (firstOption.y + firstOption.height),
       "language option gap",

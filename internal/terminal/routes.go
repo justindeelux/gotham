@@ -24,76 +24,30 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// AllowedOriginsEnv optionally lists extra browser origins (comma-separated,
-// scheme included) allowed to open a terminal WebSocket. Same-origin requests
-// are always allowed; an empty list therefore keeps a same-origin panel working
-// without configuration.
 const AllowedOriginsEnv = "TERMINAL_ALLOWED_ORIGINS"
 
-// TokenVerifier validates the access token carried by a WebSocket handshake.
-// It mirrors AuthService.VerifyAccessToken.
 type TokenVerifier interface {
 	VerifyAccessToken(token string) (*auth.Claims, error)
 }
 
-// Marker identifies one sign-in lineage. Refresh-token rotation revokes the
-// presented session row and inserts a replacement that inherits the original
-// sign-in created_at, so the marker survives normal rotation while logout,
-// revoke-all, account deletion and password reset remove every row carrying it.
 type Marker struct {
 	SignInAt time.Time
 }
 
-// Authorizer performs attach-time authorization and periodic revalidation of
-// an open terminal session.
-//
-// Authorize runs once, at the WebSocket handshake, and returns the sign-in
-// lineage marker for the session. Revalidate runs on every interval:
-//
-//   - (true, nil)  keep the shell;
-//   - (false, nil) authorization is definitively revoked (logout, revoke-all,
-//     account deletion, demotion) and the shell ends;
-//   - (_, err)     the lookup failed transiently; the shell is kept and the
-//     error is retried, failing closed only after several consecutive errors.
-//
-// Authorize must refuse a token that carries no session id: without a sid there
-// is no lineage a logout could revoke. A token whose sid row refresh rotation
-// already revoked is still accepted while its sign-in lineage (the row's
-// created_at) has a live session, matching what Revalidate keeps alive; a row
-// deleted by logout, revoke-session or password reset, and a revoked family
-// with no live row, are refused. target tells the authorizer which capability
-// the session needs: a host authorizer must refuse a container target and an
-// application authorizer must refuse a host target, so the two permissions
-// never imply each other.
 type Authorizer interface {
 	Authorize(ctx context.Context, claims *auth.Claims, target Target) (Marker, error)
 	Revalidate(ctx context.Context, claims *auth.Claims, marker Marker, target Target) (bool, error)
 }
 
-// Revalidation and liveness defaults. They are fields on the handler (not
-// package globals) so tests can shorten them without racing each other.
 const (
-	// defaultRevalidatePeriod bounds how long a de-authorized operator keeps a
-	// shell. A revoked session, a role/email change or an expired access token
-	// is noticed within this window.
-	defaultRevalidatePeriod = 30 * time.Second
-	// defaultPingPeriod is how often the server sends a heartbeat frame.
-	defaultPingPeriod = 25 * time.Second
-	// defaultIdleTimeout closes a half-open socket that sends nothing (not even
-	// a heartbeat) for this long.
-	defaultIdleTimeout = 60 * time.Second
-	// defaultRevalidateTimeout bounds one authorization lookup, so a hung
-	// database cannot delay revocation indefinitely.
+	defaultRevalidatePeriod  = 30 * time.Second
+	defaultPingPeriod        = 25 * time.Second
+	defaultIdleTimeout       = 60 * time.Second
 	defaultRevalidateTimeout = 5 * time.Second
-	// revalidateMaxErrors is how many consecutive transient lookup failures are
-	// tolerated before the shell fails closed (3 ticks is about 90 s at the
-	// production interval).
-	revalidateMaxErrors = 3
-	// defaultWriteTimeout bounds one frame write we initiate.
-	defaultWriteTimeout = 10 * time.Second
+	revalidateMaxErrors      = 3
+	defaultWriteTimeout      = 10 * time.Second
 )
 
-// handler serves the terminal HTTP and WebSocket surface.
 type handler struct {
 	svc        *Service
 	verify     TokenVerifier
@@ -107,12 +61,9 @@ type handler struct {
 	idleTimeout       time.Duration
 	writeTimeout      time.Duration
 
-	// writeMu serializes our own frame writes so one writer's deadline reset
-	// cannot clear another writer's in-flight deadline.
 	writeMu sync.Mutex
 }
 
-// handlerOptions overrides the liveness timers (tests).
 type handlerOptions struct {
 	revalidatePeriod  time.Duration
 	revalidateTimeout time.Duration
@@ -121,25 +72,12 @@ type handlerOptions struct {
 	writeTimeout      time.Duration
 }
 
-// UserIDFunc resolves the authenticated user set by the server's auth
-// middleware. It is passed in so this package never imports the HTTP server.
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// Mount registers the terminal session routes on the /api router.
-//
-//	POST   /v1/servers/{id}/terminal/sessions
-//	DELETE /v1/servers/{id}/terminal/sessions/{sessionID}
-//	GET    /v1/servers/{id}/terminal/sessions/{sessionID}/ws
-//
-// The two control routes run behind auth (the server passes its platform-
-// operator chain). The WebSocket route authenticates in-band because browsers
-// cannot set an Authorization header on a WebSocket; the token arrives as a
-// "gotham.token.<jwt>" subprotocol or a Bearer header, never in the query.
 func Mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger) {
 	mount(r, authMiddleware, svc, verifier, authorizer, userIDFrom, logger, handlerOptions{})
 }
 
-// mount is Mount with test-only timer overrides.
 func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) {
 	h := newHandler(svc, verifier, authorizer, userIDFrom, logger, options)
 	if h == nil {
@@ -153,25 +91,10 @@ func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Se
 	r.Get("/v1/servers/{id}/terminal/sessions/{sessionID}/ws", h.attach)
 }
 
-// MountApplications registers the application container terminal routes on the
-// /api router. They are separate from the host routes so a host authorizer can
-// never authorize a container stream and an application write role never grants
-// a host shell:
-//
-//	GET    /v1/applications/{id}/terminal/targets
-//	POST   /v1/applications/{id}/terminal/sessions
-//	DELETE /v1/applications/{id}/terminal/sessions/{sessionID}
-//	GET    /v1/applications/{id}/terminal/sessions/{sessionID}/ws
-//
-// The control routes run behind the application auth chain (authentication,
-// team scope, the team write gate). The WebSocket route authenticates in-band
-// exactly like the host route and re-checks application write access on every
-// revalidation tick.
 func MountApplications(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger) {
 	mountApplications(r, authMiddleware, svc, verifier, authorizer, userIDFrom, logger, handlerOptions{})
 }
 
-// mountApplications is MountApplications with test-only timer overrides.
 func mountApplications(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) {
 	if svc == nil || svc.Applications() == nil {
 		return
@@ -189,8 +112,6 @@ func mountApplications(r chi.Router, authMiddleware func(http.Handler) http.Hand
 	r.Get("/v1/applications/{id}/terminal/sessions/{sessionID}/ws", h.attachApplication)
 }
 
-// newHandler builds a handler and applies the liveness defaults. It returns nil
-// when the service is missing.
 func newHandler(svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) *handler {
 	if svc == nil {
 		return nil
@@ -228,7 +149,6 @@ func newHandler(svc *Service, verifier TokenVerifier, authorizer Authorizer, use
 	return h
 }
 
-// createResponse tells the client how to attach.
 type createResponse struct {
 	ID            string    `json:"id"`
 	ServerID      string    `json:"server_id"`
@@ -240,16 +160,13 @@ type createResponse struct {
 	ExpiresAt     time.Time `json:"expires_at"`
 	WebSocketPath string    `json:"websocket_path"`
 	Subprotocol   string    `json:"subprotocol"`
-	// Container target fields. The label is what the UI shows so the operator
-	// knows exactly which service/container the shell belongs to.
-	ApplicationID string `json:"application_id,omitempty"`
-	Service       string `json:"service,omitempty"`
-	ContainerID   string `json:"container_id,omitempty"`
-	ContainerName string `json:"container_name,omitempty"`
-	TargetLabel   string `json:"target_label,omitempty"`
+	ApplicationID string    `json:"application_id,omitempty"`
+	Service       string    `json:"service,omitempty"`
+	ContainerID   string    `json:"container_id,omitempty"`
+	ContainerName string    `json:"container_name,omitempty"`
+	TargetLabel   string    `json:"target_label,omitempty"`
 }
 
-// newCreateResponse renders one session for the create endpoint.
 func newCreateResponse(session *Session, websocketPath string) createResponse {
 	response := createResponse{
 		ID:            session.ID.String(),
@@ -273,7 +190,6 @@ func newCreateResponse(session *Session, websocketPath string) createResponse {
 	return response
 }
 
-// containerTargetResponse is one row of the target discovery response.
 type containerTargetResponse struct {
 	Service     string `json:"service"`
 	ContainerID string `json:"container_id"`
@@ -284,8 +200,6 @@ type containerTargetResponse struct {
 	Label       string `json:"label"`
 }
 
-// targetsResponse is the discovery response: the application's running
-// containers with a deterministic visible selection.
 type targetsResponse struct {
 	ApplicationID   string                    `json:"application_id"`
 	ApplicationName string                    `json:"application_name"`
@@ -321,7 +235,6 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		"/api/v1/servers/"+session.ServerID.String()+"/terminal/sessions/"+session.ID.String()+"/ws"))
 }
 
-// listTargets serves GET /v1/applications/{id}/terminal/targets.
 func (h *handler) listTargets(w http.ResponseWriter, r *http.Request) {
 	appID, ok := applicationParam(w, r)
 	if !ok {
@@ -358,7 +271,6 @@ func (h *handler) listTargets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// createApplication serves POST /v1/applications/{id}/terminal/sessions.
 func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	appID, ok := applicationParam(w, r)
 	if !ok {
@@ -386,7 +298,6 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		"/api/v1/applications/"+appID.String()+"/terminal/sessions/"+session.ID.String()+"/ws"))
 }
 
-// closeApplication serves DELETE /v1/applications/{id}/terminal/sessions/{id}.
 func (h *handler) closeApplication(w http.ResponseWriter, r *http.Request) {
 	appID, ok := applicationParam(w, r)
 	if !ok {
@@ -429,7 +340,6 @@ func (h *handler) close(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// attach authenticates, authorizes and upgrades to the private terminal stream.
 func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverParam(w, r)
 	if !ok {
@@ -461,10 +371,6 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, apiError{Message: "platform operator access is required"})
 		return
 	}
-	// Ownership and single-use are checked before the upgrade so the client
-	// gets a real 404/409. Attach itself runs in the handshake: a plain GET
-	// (no Upgrade headers) is rejected by the WebSocket reader before that
-	// point, so a non-upgrade request can never burn the session.
 	if err := h.svc.Validate(r.Context(), userID, serverID, sessionID); err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -472,9 +378,6 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 
 	var session *Session
 	server := websocket.Server{
-		// The handshake selects exactly one subprotocol when the client offered
-		// it; the x/net server rejects the upgrade when more than one remains
-		// (the token travels as a second offered protocol and is not echoed).
 		Handshake: func(config *websocket.Config, req *http.Request) error {
 			offered := false
 			for _, header := range req.Header.Values("Sec-WebSocket-Protocol") {
@@ -507,8 +410,6 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 	server.ServeHTTP(w, r)
 }
 
-// attachApplication authenticates, authorizes application write access and
-// upgrades to the container exec stream.
 func (h *handler) attachApplication(w http.ResponseWriter, r *http.Request) {
 	appID, ok := applicationParam(w, r)
 	if !ok {
@@ -527,8 +428,6 @@ func (h *handler) attachApplication(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
 	}
-	// Ownership first: another user's session (or an application mismatch) is
-	// indistinguishable from a missing one.
 	pending, err := h.svc.ValidateApplication(r.Context(), userID, appID, sessionID)
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -547,8 +446,6 @@ func (h *handler) attachApplication(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, apiError{Message: "application write access is required"})
 		return
 	}
-	// A container replaced during the pending window (or a deploy that started
-	// after create) must not attach to the old release.
 	if err := h.svc.RevalidateApplicationTarget(r.Context(), userID, appID, pending); err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -588,7 +485,6 @@ func (h *handler) attachApplication(w http.ResponseWriter, r *http.Request) {
 	server.ServeHTTP(w, r)
 }
 
-// serve relays one WebSocket to one agent terminal stream.
 func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Claims, marker Marker, target Target) {
 	defer func() { _ = conn.Close() }()
 	defer h.svc.Release(session.ID)
@@ -596,15 +492,8 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Re-authorize for the life of the stream from server-side state only:
-	// logout/revocation, a current-role demotion and a removed PLATFORM_ADMINS
-	// entry end the shell within revalidatePeriod. The handshake token's own
-	// expiry is deliberately not consulted here: the browser cannot present a
-	// refreshed token on an open socket, and the session contract is 8h.
 	go h.revalidate(ctx, cancel, conn, session, claims, marker, target)
 
-	// A session expiry (or an explicit DELETE) cancels the relay, which closes
-	// the agent stream and tears the PTY down.
 	go func() {
 		select {
 		case <-session.Done():
@@ -614,14 +503,10 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 	}()
 
 	conn.MaxPayloadBytes = maxWSFrame
-	// Terminal output is raw bytes that may split a UTF-8 sequence; it must
-	// travel in binary frames so the browser never applies text decoding.
 	conn.PayloadType = websocket.BinaryFrame
 	h.svc.Confirm(session.ID)
 	select {
 	case <-session.Done():
-		// The pending lifetime can elapse between attach and this point; the
-		// session is already gone, so never start a shell nobody owns.
 		h.fail(conn, session, "the session expired before it started")
 		return
 	default:
@@ -691,8 +576,6 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 	go func() {
 		err := h.pumpAgentToClient(conn, stream)
 		pumpDone <- err
-		// The shell ended (or the stream failed): close the socket so the
-		// client reader below returns instead of blocking forever.
 		_ = conn.Close()
 	}()
 
@@ -714,14 +597,6 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 	}
 }
 
-// revalidate polls server-side authorization state while the relay is active:
-// the account must still exist, its current role (or PLATFORM_ADMINS entry) must
-// still grant operator access, and a live session carrying the same sign-in
-// lineage must still exist. It never re-verifies the access token: the browser
-// cannot present a refreshed token on an open socket, so the token's 15-minute
-// expiry must not bound an 8-hour shell. A transient lookup error keeps the
-// shell and is retried; after revalidateMaxErrors consecutive failures the
-// shell fails closed.
 func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, session *Session, claims *auth.Claims, marker Marker, target Target) {
 	if claims == nil || h.authorizer == nil {
 		return
@@ -742,8 +617,6 @@ func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, con
 			checkCancel()
 
 			if err != nil {
-				// A tick that raced a normal close sees a cancelled context and
-				// a failed lookup; that is not a revocation.
 				if ctx.Err() != nil || sessionClosed(session) {
 					return
 				}
@@ -774,7 +647,6 @@ func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, con
 	}
 }
 
-// sessionClosed reports whether the service released the session.
 func sessionClosed(session *Session) bool {
 	select {
 	case <-session.Done():
@@ -784,9 +656,6 @@ func sessionClosed(session *Session) bool {
 	}
 }
 
-// keepalive sends a heartbeat frame so a client can distinguish a quiet shell
-// from a dead socket, and so a half-open connection is noticed by the idle
-// read deadline.
 func (h *handler) keepalive(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, done <-chan struct{}) {
 	ticker := time.NewTicker(h.pingPeriod)
 	defer ticker.Stop()
@@ -806,12 +675,8 @@ func (h *handler) keepalive(ctx context.Context, cancel context.CancelFunc, conn
 	}
 }
 
-// readClientFrames forwards browser input to the agent until the socket closes
-// or the client asks to close. It is the only goroutine that sends requests
-// after the open message.
 func readClientFrames(stream agentv1.TerminalService_OpenTerminalClient, conn *websocket.Conn, idleTimeout time.Duration) error {
 	for {
-		// Any inbound frame (input, resize, heartbeat) refreshes the deadline.
 		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
 			return err
 		}
@@ -851,7 +716,6 @@ func readClientFrames(stream agentv1.TerminalService_OpenTerminalClient, conn *w
 				return err
 			}
 		case opHeartbeat:
-			// Client heartbeat; it only refreshes the idle deadline.
 			continue
 		case opClose:
 			_ = stream.CloseSend()
@@ -862,7 +726,6 @@ func readClientFrames(stream agentv1.TerminalService_OpenTerminalClient, conn *w
 	}
 }
 
-// pumpAgentToClient forwards agent output and the final exit event.
 func (h *handler) pumpAgentToClient(conn *websocket.Conn, stream agentv1.TerminalService_OpenTerminalClient) error {
 	for {
 		response, err := stream.Recv()
@@ -890,7 +753,6 @@ func (h *handler) pumpAgentToClient(conn *websocket.Conn, stream agentv1.Termina
 	}
 }
 
-// recvOpened waits for the agent's opened event with a bounded timeout.
 func recvOpened(ctx context.Context, stream agentv1.TerminalService_OpenTerminalClient) (*agentv1.TerminalOpened, error) {
 	type result struct {
 		opened *agentv1.TerminalOpened
@@ -921,11 +783,6 @@ func recvOpened(ctx context.Context, stream agentv1.TerminalService_OpenTerminal
 	}
 }
 
-// sendFrame writes one server frame with a bounded write deadline and then
-// clears it. The deadline must not outlive this write: the x/net read path also
-// writes on the same connection (a protocol-level pong, or a close reply), and
-// a stale deadline left by our last frame would make that write fail with
-// i/o timeout and tear down an otherwise healthy shell.
 func (h *handler) sendFrame(conn *websocket.Conn, opcode byte, payload []byte) error {
 	frame := make([]byte, len(payload)+1)
 	frame[0] = opcode
@@ -941,7 +798,6 @@ func (h *handler) sendFrame(conn *websocket.Conn, opcode byte, payload []byte) e
 	return err
 }
 
-// fail reports a bounded error frame and ends the session.
 func (h *handler) fail(conn *websocket.Conn, session *Session, message string) {
 	if len(message) > maxErrorBytes {
 		message = message[:maxErrorBytes]
@@ -950,7 +806,6 @@ func (h *handler) fail(conn *websocket.Conn, session *Session, message string) {
 	h.logger.Info("terminal: session failed", "session_id", session.ID.String(), "reason", message)
 }
 
-// authenticate extracts and verifies the access token from the handshake.
 func (h *handler) authenticate(r *http.Request) (*auth.Claims, uuid.UUID, error) {
 	if h.verify == nil {
 		return nil, uuid.Nil, errors.New("terminal: no token verifier")
@@ -970,8 +825,6 @@ func (h *handler) authenticate(r *http.Request) (*auth.Claims, uuid.UUID, error)
 	return claims, userID, nil
 }
 
-// tokenFromRequest reads the access token from the Authorization header or,
-// for browsers, a subprotocol. The URL is never inspected.
 func tokenFromRequest(r *http.Request) string {
 	if header := strings.TrimSpace(r.Header.Get("Authorization")); header != "" {
 		if scheme, value, ok := strings.Cut(header, " "); ok && strings.EqualFold(scheme, "Bearer") {
@@ -989,10 +842,6 @@ func tokenFromRequest(r *http.Request) string {
 	return ""
 }
 
-// originAllowed accepts a missing Origin (non-browser clients), the panel's own
-// origin, and any explicitly configured extra origin. A browser always sends
-// Origin, so a hostile page cannot drive a terminal with an operator's cookie
-// or token.
 func originAllowed(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
@@ -1002,8 +851,6 @@ func originAllowed(r *http.Request) bool {
 	if err != nil || parsed.Host == "" || parsed.Scheme == "" {
 		return false
 	}
-	// Same origin means the same scheme as well as the same host: an https
-	// page must not drive an http connection (and vice versa).
 	if strings.EqualFold(parsed.Scheme, requestScheme(r)) && strings.EqualFold(parsed.Host, r.Host) {
 		return true
 	}
@@ -1019,14 +866,6 @@ func originAllowed(r *http.Request) bool {
 	return false
 }
 
-// requestScheme is the scheme the browser used to reach the panel. A TLS
-// connection is https; behind a terminating proxy X-Forwarded-Proto carries
-// the original scheme. Traefik reports a WebSocket upgrade as `wss` (or `ws`),
-// so a forwarded value is normalised to the origin scheme it stands for: an
-// https page and a wss upgrade are the same origin. An unknown value never
-// grants a scheme (it falls back to http, or https on a direct TLS
-// connection); this only affects Origin comparison, never trust in the proxy
-// for authentication.
 func requestScheme(r *http.Request) string {
 	if r.TLS != nil {
 		return "https"
@@ -1043,7 +882,6 @@ func requestScheme(r *http.Request) string {
 	return "http"
 }
 
-// writeServiceError maps a session error onto an HTTP status.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -1076,10 +914,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// relayError is the bounded user-facing reason for a failed agent stream. It
-// never includes a host path or the agent's raw message: the cwd-invalid and
-// container-precondition cases are recognised by the agent's stable prefixes
-// and reported as fixed phrases.
 func relayError(err error, target Target) string {
 	container := target.Kind == TargetContainer
 	message := status.Convert(err).Message()
@@ -1113,10 +947,6 @@ func relayError(err error, target Target) string {
 		if strings.HasPrefix(message, "terminal: a valid container") {
 			return "the container target is invalid"
 		}
-		// A JUS-243 agent requires a File manager root. A new control plane
-		// legitimately sends an empty root for the Terminal page and the server
-		// detail tab, so that older agent's refusal is reported as an update
-		// requirement instead of a generic rejection.
 		if strings.HasPrefix(message, "terminal: a bounded root name is required") {
 			return "the node agent needs an update to open a terminal without a folder"
 		}
@@ -1133,7 +963,6 @@ func relayError(err error, target Target) string {
 	}
 }
 
-// isClosedError reports a write/read on a closed WebSocket as normal end.
 func isClosedError(err error) bool {
 	if err == nil {
 		return false

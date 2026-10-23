@@ -11,9 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestNewServiceRequiresCounter is the PE-2 wiring guard: the resource
-// counter is a required constructor argument, so forgetting to wire the real
-// counter fails fast instead of silently reporting zero resources.
 func TestNewServiceRequiresCounter(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -23,8 +20,6 @@ func TestNewServiceRequiresCounter(t *testing.T) {
 	NewService(Config{Repository: newFakeRepository(), Logger: discardLogger()})
 }
 
-// TestFakeCounterScriptedCounts pins the test counter: scripted counts come
-// back verbatim, unscripted IDs read zero.
 func TestFakeCounterScriptedCounts(t *testing.T) {
 	counter := newFakeCounter()
 	envID, projectID := uuid.New(), uuid.New()
@@ -46,9 +41,6 @@ func TestFakeCounterScriptedCounts(t *testing.T) {
 	}
 }
 
-// TestDeleteBlockedByPreviewsOnly pins F5: previews stay out of the display
-// counts but still block the environment and project deletes, whose 409
-// names them.
 func TestDeleteBlockedByPreviewsOnly(t *testing.T) {
 	repo := newFakeRepository()
 	counter := newFakeCounter()
@@ -83,7 +75,6 @@ func TestDeleteBlockedByPreviewsOnly(t *testing.T) {
 	}
 }
 
-// TestServiceCreateProjectStartsWithProduction asserts the contract's create
 func TestServiceCreateProjectStartsWithProduction(t *testing.T) {
 	repo := newFakeRepository()
 	svc, ctx := newTestService(repo, newFakeCounter(), uuid.New(), uuid.New(), teams.RoleAdmin)
@@ -109,8 +100,6 @@ func TestServiceCreateProjectStartsWithProduction(t *testing.T) {
 	}
 }
 
-// TestServiceNameValidation checks the 1-64 contract rule on both create
-// paths and renames.
 func TestServiceNameValidation(t *testing.T) {
 	repo := newFakeRepository()
 	userID, teamID := uuid.New(), uuid.New()
@@ -140,8 +129,6 @@ func TestServiceNameValidation(t *testing.T) {
 	}
 }
 
-// TestServiceNameCountsRunes checks the 1-64 contract rule counts
-// characters, not bytes: 64 Vietnamese runes (192 bytes) fit, 65 do not.
 func TestServiceNameCountsRunes(t *testing.T) {
 	repo := newFakeRepository()
 	userID, teamID := uuid.New(), uuid.New()
@@ -163,8 +150,6 @@ func TestServiceNameCountsRunes(t *testing.T) {
 	}
 }
 
-// TestServiceDescriptionIsCapped checks the 512-rune description cap the
-// contract leaves silent: over-long descriptions answer 400.
 func TestServiceDescriptionIsCapped(t *testing.T) {
 	repo := newFakeRepository()
 	userID, teamID := uuid.New(), uuid.New()
@@ -185,8 +170,6 @@ func TestServiceDescriptionIsCapped(t *testing.T) {
 	}
 }
 
-// TestServiceDuplicateNamesConflict checks case-insensitive uniqueness in
-// both scopes.
 func TestServiceDuplicateNamesConflict(t *testing.T) {
 	repo := newFakeRepository()
 	userID, teamID := uuid.New(), uuid.New()
@@ -226,8 +209,6 @@ func TestServiceDuplicateNamesConflict(t *testing.T) {
 	}
 }
 
-// TestServiceViewerCannotMutate checks the CanWrite rule at the service
-// layer (the route gate pre-filters the same way).
 func TestServiceViewerCannotMutate(t *testing.T) {
 	repo := newFakeRepository()
 	owner, teamID := uuid.New(), uuid.New()
@@ -254,7 +235,6 @@ func TestServiceViewerCannotMutate(t *testing.T) {
 	if err := svc.DeleteEnvironment(ctx, viewerID, project.ID); !errors.Is(err, ErrForbidden) {
 		t.Errorf("viewer env delete = %v, want ErrForbidden", err)
 	}
-	// Reads stay open.
 	if _, err := svc.ListProjects(ctx, viewerID); err != nil {
 		t.Errorf("viewer list = %v, want success", err)
 	}
@@ -263,8 +243,6 @@ func TestServiceViewerCannotMutate(t *testing.T) {
 	}
 }
 
-// TestServiceCrossTeamIsNotFound checks team isolation: a foreign ID is
-// indistinguishable from a missing one.
 func TestServiceCrossTeamIsNotFound(t *testing.T) {
 	repo := newFakeRepository()
 	owner, teamID := uuid.New(), uuid.New()
@@ -295,8 +273,6 @@ func TestServiceCrossTeamIsNotFound(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteRules checks the refusal order: last environment first,
-// then resources.
 func TestServiceDeleteRules(t *testing.T) {
 	repo := newFakeRepository()
 	counter := newFakeCounter()
@@ -307,7 +283,6 @@ func TestServiceDeleteRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	// The only environment cannot go, even empty.
 	if err := svc.DeleteEnvironment(ctx, userID, production.ID); !errors.Is(err, ErrLastEnvironment) {
 		t.Fatalf("delete last = %v, want ErrLastEnvironment", err)
 	}
@@ -315,7 +290,6 @@ func TestServiceDeleteRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
-	// A project with two empty environments deletes fine.
 	if err := svc.DeleteProject(ctx, userID, project.ID); err != nil {
 		t.Fatalf("delete empty project = %v, want success", err)
 	}
@@ -336,7 +310,6 @@ func TestServiceDeleteRules(t *testing.T) {
 	if err := svc.DeleteProject(ctx, userID, project.ID); !errors.Is(err, ErrProjectNotEmpty) {
 		t.Fatalf("delete nonempty project = %v, want ErrProjectNotEmpty", err)
 	}
-	// Draining the counts unblocks both deletes.
 	counter.environments[staging.ID] = ResourceCounts{}
 	counter.projects[project.ID] = ResourceCounts{}
 	if err := svc.DeleteEnvironment(ctx, userID, staging.ID); err != nil {

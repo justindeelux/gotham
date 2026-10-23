@@ -1,8 +1,3 @@
-// JUS-273: the Storage tab lists an application's volumes for every source.
-// The fixtures here are byte-for-byte the shape internal/deploy emits
-// (volumeListEnvelope, optional fields omitted), and the response schema is
-// validated strictly so a UI fake cannot accept a shape the backend never
-// sends.
 
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -26,7 +21,6 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** composeListing is one managed volume shared by two compose services. */
 function composeListing(): VolumeListing {
   return {
     source_type: "compose",
@@ -59,9 +53,6 @@ function composeListing(): VolumeListing {
   };
 }
 
-/** fullAccessListing is the backend shape on a default agent (single "system"
- * root at "/"): the path carries the managed directory without its leading
- * slash. */
 function fullAccessListing(): VolumeListing {
   return {
     source_type: "image",
@@ -83,8 +74,6 @@ function fullAccessListing(): VolumeListing {
   };
 }
 
-/** namedListing is a non-compose application whose named volume is not in the
- * File Manager roots; the backend sends a reason and no target. */
 function namedListing(): VolumeListing {
   return {
     source_type: "dockerfile",
@@ -108,7 +97,6 @@ function namedListing(): VolumeListing {
   };
 }
 
-/** mountTab renders the Storage tab with the props the page passes. */
 function mountTab(listing: VolumeListing | null, sourceType = listing?.source_type ?? "git_public") {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -134,7 +122,6 @@ function mountTab(listing: VolumeListing | null, sourceType = listing?.source_ty
   });
 }
 
-/** findOpenButton returns the File Manager action button of a volume row. */
 function findOpenButton(wrapper: ReturnType<typeof mountTab>) {
   return wrapper
     .findAll("button")
@@ -143,8 +130,6 @@ function findOpenButton(wrapper: ReturnType<typeof mountTab>) {
 
 describe("application volume listing schema", () => {
   it("pins every optional field the tab reads", () => {
-    // A rename of host_path/file_manager/open_reason must fail a test, not
-    // silently degrade to an absent optional.
     expect(Object.keys(volumeSchema.shape)).toEqual([
       "name",
       "kind",
@@ -163,8 +148,6 @@ describe("application volume listing schema", () => {
     expect(() =>
       parseWith(volumeListingSchema, namedListing(), { strict: true }),
     ).not.toThrow();
-    // The minimal shape omits reason, host_path, file_manager and the mount's
-    // service/container, exactly like the Go `omitempty` tags.
     expect(() =>
       parseWith(
         volumeListingSchema,
@@ -219,7 +202,6 @@ describe("ApplicationStorageTab volume list", () => {
     const wrapper = mountTab(composeListing());
     const open = findOpenButton(wrapper);
     expect(open, "the volume offers Open in File Manager").toBeTruthy();
-    // A button, not a link: the SPA navigates in the current browser tab.
     expect(open?.attributes("href")).toBeUndefined();
     expect(open?.attributes("target")).toBeUndefined();
     expect(open?.attributes("aria-label")).toBe(

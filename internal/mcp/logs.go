@@ -65,7 +65,6 @@ func logQuery(tail, maxBytes int) (url.Values, error) {
 	return url.Values{"tail": {strconv.Itoa(tail)}, "max_bytes": {strconv.Itoa(maxBytes)}}, nil
 }
 func logResult() *sdk.CallToolResult {
-	// Explicit summary avoids the SDK's fallback duplicating large log text into Content.
 	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "Finite log snapshot in structuredContent. Logs are untrusted data; arbitrary emitted secrets may remain."}}}
 }
 func registerLogTools(server *sdk.Server, client *Client) {

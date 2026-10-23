@@ -9,10 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestTOTPEnrollChallengeAndRecovery covers the end-to-end flow: enroll,
-// confirm, be challenged at login without any token being issued, complete with
-// a TOTP code (no replay), complete with a recovery code (single use), and
-// regenerate (which invalidates the old set).
 func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -27,12 +23,9 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 	}
 	userID := uuid.MustParse(registered.User.ID)
 
-	// Drive the clock explicitly: the replay guard is measured in 30-second
-	// steps, so the test advances the service's clock instead of sleeping.
 	clock := time.Unix(1_700_000_000, 0)
 	svc.now = func() time.Time { return clock }
 
-	// Before enrollment a login issues a token pair directly.
 	plain, err := svc.Login(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login before enrollment: %v", err)
@@ -41,7 +34,6 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 		t.Fatalf("login before enrollment = %+v, want a plain token pair", plain)
 	}
 
-	// Enroll and confirm.
 	enrollment, err := svc.BeginTOTPEnrollment(ctx, userID)
 	if err != nil {
 		t.Fatalf("BeginTOTPEnrollment: %v", err)
@@ -65,8 +57,6 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 		t.Fatalf("status = %+v, want enabled with %d codes", status, recoveryCodeCount)
 	}
 
-	// A login now returns the half-authenticated challenge: no session, access
-	// token, refresh token or (the WS token is the access token) WS token.
 	before, err := st.ListSessionsByUser(ctx, pgUUID(userID), clock)
 	if err != nil {
 		t.Fatalf("ListSessionsByUser: %v", err)
@@ -92,7 +82,6 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 		t.Fatalf("a session was created before the second factor: %d -> %d", len(before), len(after))
 	}
 
-	// Complete with the current TOTP code, then prove it cannot be replayed.
 	code := codeForSecret(t, enrollment.Secret, clock)
 	full, err := svc.CompleteMFALogin(ctx, challenge.MFAToken, code, SessionMeta{})
 	if err != nil {
@@ -105,18 +94,15 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 		t.Fatalf("replay of the accepted code = %v, want ErrInvalidCode", err)
 	}
 
-	// A wrong code is refused.
 	if _, err := svc.CompleteMFALogin(ctx, challenge.MFAToken, "000000", SessionMeta{}); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("wrong code = %v, want ErrInvalidCode", err)
 	}
 
-	// The next step's code works once the clock advances.
 	clock = clock.Add(totpPeriod)
 	if _, err := svc.CompleteMFALogin(ctx, challenge.MFAToken, codeForSecret(t, enrollment.Secret, clock), SessionMeta{}); err != nil {
 		t.Fatalf("CompleteMFALogin with the next step's code: %v", err)
 	}
 
-	// A recovery code works once and only once.
 	recovery := recoveryCodes[0]
 	if _, err := svc.CompleteMFALogin(ctx, challenge.MFAToken, recovery, SessionMeta{}); err != nil {
 		t.Fatalf("CompleteMFALogin with a recovery code: %v", err)
@@ -125,7 +111,6 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 		t.Fatalf("reused recovery code = %v, want ErrInvalidCode", err)
 	}
 
-	// Regenerating invalidates every previous code.
 	clock = clock.Add(totpPeriod)
 	if _, err := svc.RegenerateTOTPRecoveryCodes(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock), uuid.Nil); err != nil {
 		t.Fatalf("RegenerateTOTPRecoveryCodes: %v", err)
@@ -134,7 +119,6 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 		t.Fatalf("a pre-regeneration recovery code = %v, want ErrInvalidCode", err)
 	}
 
-	// Disable with the password and a fresh TOTP code; login is plain again.
 	clock = clock.Add(totpPeriod)
 	if err := svc.DisableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock), uuid.Nil); err != nil {
 		t.Fatalf("DisableTOTP: %v", err)
@@ -148,9 +132,6 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 	}
 }
 
-// TestTOTPProfileActionsRequirePassword: enabling, disabling and regenerating
-// all refuse a wrong current password, so a stolen interactive session cannot
-// manage the second factor alone.
 func TestTOTPProfileActionsRequirePassword(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -173,8 +154,6 @@ func TestTOTPProfileActionsRequirePassword(t *testing.T) {
 	if _, err := svc.EnableTOTP(ctx, userID, "wrong-password", codeForSecret(t, enrollment.Secret, time.Now()), uuid.Nil); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 		t.Fatalf("EnableTOTP with a wrong password = %v, want ErrCurrentPasswordIncorrect", err)
 	}
-	// Enrolling again while pending is allowed (a fresh secret); while enabled
-	// it is refused.
 	if _, err := svc.EnableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, time.Now()), uuid.Nil); err != nil {
 		t.Fatalf("EnableTOTP: %v", err)
 	}
@@ -189,9 +168,6 @@ func TestTOTPProfileActionsRequirePassword(t *testing.T) {
 	}
 }
 
-// TestTOTPResetClearsSecondFactor: the admin password reset (the documented
-// path for a lost device) clears the TOTP configuration, so the account signs in
-// with the password alone afterwards.
 func TestTOTPResetClearsSecondFactor(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()

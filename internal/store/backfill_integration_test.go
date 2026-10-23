@@ -13,11 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestBackfillApplicationCertificates proves the JUS-201 startup backfill
-// against a real database: every enabled application domain without an intent
-// gets the default enabled http-01 one, a disabled domain is skipped, an
-// application holding an enabled wildcard intent keeps its SAN-covered
-// siblings uncertified, and a second run inserts nothing.
 func TestBackfillApplicationCertificates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -82,8 +77,6 @@ func TestBackfillApplicationCertificates(t *testing.T) {
 	disabled := newApp("bf-disabled")
 	addDomain(disabled.ID, fmt.Sprintf("disabled-%d.example.com", suffix), true, true, "https")
 
-	// A plain-HTTP domain needs no certificate order: the backfill leaves it
-	// alone.
 	httpOnly := newApp("bf-http")
 	addDomain(httpOnly.ID, fmt.Sprintf("http-%d.example.com", suffix), true, false, "http")
 
@@ -94,8 +87,6 @@ func TestBackfillApplicationCertificates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	// Disabled on purpose: any provider row satisfies the dns-01 constraint
-	// without colliding with another test's enabled provider of the same type.
 	provider, err := st.CreateDNSProvider(ctx, sqlc.CreateDNSProviderParams{
 		Provider: "digitalocean", Zones: []string{"example.com"}, Ciphertext: sealed, Enabled: false,
 	})
@@ -150,7 +141,6 @@ func TestBackfillApplicationCertificates(t *testing.T) {
 		t.Fatalf("wildcard app intents = %#v, want only the operator wildcard", certs)
 	}
 
-	// Idempotent: the second run adds nothing.
 	if _, err := st.BackfillApplicationCertificates(ctx); err != nil {
 		t.Fatalf("second backfill: %v", err)
 	}

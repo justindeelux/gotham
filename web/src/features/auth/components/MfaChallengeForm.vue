@@ -5,14 +5,6 @@ import { useI18n } from "vue-i18n";
 
 import { useMfaChallenge } from "@/features/auth/composables/useMfaChallenge";
 
-/**
- * MfaChallengeForm is the second login step (JUS-196): the account's password
- * (or OAuth identity) was accepted, but no session exists yet. It emits
- * "success" once the code was verified and the session started, "cancel" to go
- * back to the credentials step, and "expired" when the challenge can no longer
- * be redeemed (its lifetime elapsed, or the account is locked out), so the
- * caller must start the sign-in over.
- */
 const emit = defineEmits<{ success: []; cancel: []; expired: [] }>();
 
 const { t } = useI18n();

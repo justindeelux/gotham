@@ -8,7 +8,6 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// deploymentMetadata excludes raw pipeline errors, logs, source and configuration.
 type deploymentMetadata struct {
 	ID            string     `json:"id"`
 	ApplicationID string     `json:"application_id"`

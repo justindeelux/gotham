@@ -51,8 +51,6 @@ function handleSelect(locale: string | number): void {
 </template>
 
 <style scoped>
-/* The two locale options breathe: Naive stacks them flush, so add one token
- * of gap. Scoped :global keeps the rule on this teleported menu only. */
 :global(.language-menu.n-dropdown-menu) {
   display: flex;
   flex-direction: column;

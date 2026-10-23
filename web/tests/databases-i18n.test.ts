@@ -1,5 +1,3 @@
-// I18N-6 coverage: databases catalog parity, invocation-time error
-// summaries with raw diagnostics preserved, and live-switch behavior.
 /* global document: readonly */
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -39,7 +37,6 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** apiError builds the shape the shared HTTP layer throws. */
 function apiError(status: number, message: string): unknown {
   return { status, message };
 }
@@ -128,8 +125,6 @@ describe("describeDatabaseError", () => {
     expect(describeDatabaseError(apiError(404, "databases: gone"))).toBe(
       "Database not found. It may have been deleted or belong to another account.",
     );
-    // Exact backend refusals still render inline for the move settings,
-    // under a non-misleading localized refusal summary.
     expect(
       describeDatabaseError(
         apiError(409, "databases: a database cannot change server once created"),
@@ -284,7 +279,6 @@ describe("runDisplay keeps the English baseline and raw unknowns", () => {
 });
 
 describe("restore confirmation keeps backup identity without a location", () => {
-  /** mountRestoreDialog renders the real dialog for one candidate. */
   function mountRestoreDialog(candidate: Record<string, unknown>) {
     const detail = {
       database: { value: { name: "pg-orders" } },
@@ -371,20 +365,16 @@ describe("live language switch on the configure step", () => {
       global: { provide: { [wizardFormKey as symbol]: form } },
     });
     try {
-      // Invalid-name feedback is visible before any submit.
       expect(wrapper.text()).toContain(
         "Name must be 1-63 characters of letters, digits, ., _ or -.",
       );
       await wrapper.find("input").setValue("no spaces");
       expect(form.name).toBe("no spaces");
-      // The expose-port switch carries the translated field label as its
-      // accessible name in both locales.
       expect(wrapper.find('[role="switch"]').attributes("aria-label")).toBe(
         "Expose a public port",
       );
       setLocale("vi", null);
       await nextTick();
-      // Draft survived, feedback switched, no API call or submit happened.
       expect(form.name).toBe("no spaces");
       expect(form.exposePublic).toBe(false);
       expect(wrapper.find('[role="switch"]').attributes("aria-label")).toBe(

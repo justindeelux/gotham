@@ -19,113 +19,59 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// secretRefPrefix marks an environment value as a sealed secret. Written by an
-// API client the rest of the value is the plaintext to seal; read back from the
-// API it is the reference (`secret:<secrets row id>`) of the sealed row. The
-// prefix is what the FE EnvEditor renders as its "sealed secret" badge, and the
-// plaintext never reaches a response body.
 const secretRefPrefix = "secret:"
 
-// EnvEntry is one row of an application's environment as the API sees it: a
-// plain KEY=VALUE pair, or a key whose value carries secretRefPrefix and names
-// a sealed secret instead of its contents.
 type EnvEntry struct {
 	Key   string
 	Value string
 }
 
-// CreateApplicationInput is the validated creation payload (the wire shape in
-// routes.go mirrors it one to one).
 type CreateApplicationInput struct {
-	Name          string
-	EnvironmentID uuid.UUID
-	Provider      string
-	Repo          string
-	CloneURL      string
-	// SourceType names how the application fetches its code (GS-2); empty
-	// normalizes from Provider so pre-GS-2 clients keep their behaviour.
-	SourceType string
-	// GitHubAppID links the application to its GitHub App connection (GS-5);
-	// uuid.Nil leaves it unlinked. The connection must belong to the caller.
-	GitHubAppID uuid.UUID
-	// DockerfileContent holds pasted Dockerfile text for the dockerfile
-	// source type (GS-7); ignored for every other type.
+	Name              string
+	EnvironmentID     uuid.UUID
+	Provider          string
+	Repo              string
+	CloneURL          string
+	SourceType        string
+	GitHubAppID       uuid.UUID
 	DockerfileContent string
-	// BuildArgs holds the optional --build-arg pairs for the dockerfile
-	// source type; ignored for every other type.
-	BuildArgs map[string]string
-	Branch    string
-	BuildPack string
-	// ImageRef is the prebuilt reference for image sources (GS-9).
-	ImageRef string
-	// RegistryUsername and RegistryPassword are the optional private-registry
-	// credential for image sources, plaintext on the way in and sealed at
-	// rest. They are never returned by the API.
-	RegistryUsername string
-	RegistryPassword string
-	// ComposeContent holds the pasted compose file text of a compose
-	// application; ComposeFile the in-repo path of a repo-backed one (GS-8).
-	// Exactly one of the two is set for compose sources; both stay empty for
-	// every other type. ComposeService names the compose service the
-	// application's domain/port routing targets.
-	ComposeContent string
-	ComposeFile    string
-	ComposeService string
-	ServerID       uuid.UUID
-	Env            []EnvEntry
-	Storage        []Storage
+	BuildArgs         map[string]string
+	Branch            string
+	BuildPack         string
+	ImageRef          string
+	RegistryUsername  string
+	RegistryPassword  string
+	ComposeContent    string
+	ComposeFile       string
+	ComposeService    string
+	ServerID          uuid.UUID
+	Env               []EnvEntry
+	Storage           []Storage
 }
 
-// UpdateApplicationInput carries the mutable application fields. Every field is
-// optional (a zero value means "leave unchanged"). ServerID changes the node
-// (refused while a deployment runs); it must name a server, clearing it is
-// rejected since PE-2 made the assignment required. EnvironmentID moves the
-// application to another environment of the same team.
 type UpdateApplicationInput struct {
-	Name      *string
-	Branch    *string
-	BuildPack *string
-	// ImageRef replaces the prebuilt reference of an image source (GS-9).
-	ImageRef *string
-	// RegistryUsername and RegistryPassword rotate the private-registry
-	// credential of an image source; either may be set independently, and an
-	// empty value clears that half. Plaintext on the way in, sealed at rest,
-	// never returned by the API.
-	RegistryUsername *string
-	RegistryPassword *string
-	ServerID         *uuid.UUID
-	EnvironmentID    *uuid.UUID
-	// GitHubAppID relinks the application: a value sets the connection (it
-	// must belong to the caller), an empty string clears it, absent leaves
-	// it unchanged.
-	GitHubAppID *string
-	// DockerfileContent replaces the stored Dockerfile text for dockerfile
-	// applications (validated like creation); BuildArgs replaces the whole
-	// --build-arg collection (nil leaves it unchanged).
+	Name              *string
+	Branch            *string
+	BuildPack         *string
+	ImageRef          *string
+	RegistryUsername  *string
+	RegistryPassword  *string
+	ServerID          *uuid.UUID
+	EnvironmentID     *uuid.UUID
+	GitHubAppID       *string
 	DockerfileContent *string
 	BuildArgs         *map[string]string
-	// ComposeContent replaces the stored compose file text of a compose
-	// application (setting it switches a repo-backed one to pasted mode and
-	// clears its repository); ComposeFile replaces the in-repo path (setting
-	// it needs a repository); ComposeService replaces the routed web service.
-	// Nil leaves the field unchanged.
-	ComposeContent *string
-	ComposeFile    *string
-	ComposeService *string
+	ComposeContent    *string
+	ComposeFile       *string
+	ComposeService    *string
 }
 
-// ApplicationFilter scopes a list to one environment or one project of the
-// caller's team (the ?environment_id= and ?project_id= filters). At most one
-// may be set; a foreign ID answers ErrNotFound. IncludePreviews lists
-// preview siblings too (the resources endpoint's ?previews=1); the default
-// listing hides them.
 type ApplicationFilter struct {
 	EnvironmentID   uuid.UUID
 	ProjectID       uuid.UUID
 	IncludePreviews bool
 }
 
-// empty reports whether the update carries no field at all.
 func (in UpdateApplicationInput) empty() bool {
 	return in.Name == nil && in.Branch == nil && in.BuildPack == nil &&
 		in.ImageRef == nil && in.RegistryUsername == nil && in.RegistryPassword == nil &&
@@ -134,9 +80,6 @@ func (in UpdateApplicationInput) empty() bool {
 		in.ComposeContent == nil && in.ComposeFile == nil && in.ComposeService == nil
 }
 
-// CreateApplication validates and stores a new application together with its
-// environment and storage configuration. It answers only once every row of the
-// payload is committed.
 func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error) {
 	if !Enabled() {
 		return Application{}, ErrDisabled
@@ -149,21 +92,18 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		return Application{}, err
 	}
 	app := Application{
-		ID:            uuid.Nil,
-		UserID:        userID,
-		TeamID:        teamID,
-		EnvironmentID: in.EnvironmentID,
-		Name:          strings.TrimSpace(in.Name),
-		Provider:      strings.TrimSpace(in.Provider),
-		Repo:          strings.TrimSpace(in.Repo),
-		CloneURL:      strings.TrimSpace(in.CloneURL),
-		SourceType:    NormalizeSourceType(strings.TrimSpace(in.SourceType), strings.TrimSpace(in.Provider)),
-		Branch:        strings.TrimSpace(in.Branch),
-		BuildPack:     strings.TrimSpace(in.BuildPack),
-		ImageRef:      strings.TrimSpace(in.ImageRef),
-		// The username is an identifier, not a secret, but it is equally
-		// never returned by the API or logged; the password is sealed below.
-		// Both are validated together: a half credential is refused.
+		ID:                uuid.Nil,
+		UserID:            userID,
+		TeamID:            teamID,
+		EnvironmentID:     in.EnvironmentID,
+		Name:              strings.TrimSpace(in.Name),
+		Provider:          strings.TrimSpace(in.Provider),
+		Repo:              strings.TrimSpace(in.Repo),
+		CloneURL:          strings.TrimSpace(in.CloneURL),
+		SourceType:        NormalizeSourceType(strings.TrimSpace(in.SourceType), strings.TrimSpace(in.Provider)),
+		Branch:            strings.TrimSpace(in.Branch),
+		BuildPack:         strings.TrimSpace(in.BuildPack),
+		ImageRef:          strings.TrimSpace(in.ImageRef),
 		RegistryUsername:  strings.TrimSpace(in.RegistryUsername),
 		ComposeContent:    in.ComposeContent,
 		ComposeFile:       strings.TrimSpace(in.ComposeFile),
@@ -177,11 +117,6 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err := validateRegistryCredential(app.RegistryUsername, registryPassword); err != nil {
 		return Application{}, err
 	}
-	// A dockerfile application carries no repository: the pasted text is the
-	// whole build context, so any repo fields a direct API caller sent are
-	// cleared rather than stored as stale rows the build silently ignores.
-	// Build args are validated raw before normalization, exactly like the
-	// update path, so both write paths accept the same payloads.
 	if app.SourceType == SourceDockerfile {
 		app.Repo = ""
 		app.CloneURL = ""
@@ -189,9 +124,6 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 			return Application{}, err
 		}
 	}
-	// A pasted compose document is the whole source: any repo fields a direct
-	// API caller sent are cleared rather than stored as stale rows the deploy
-	// silently ignores. Compose applications never use build-pack detection.
 	if app.SourceType == SourceCompose {
 		app.BuildPack = ""
 		if strings.TrimSpace(app.ComposeContent) != "" {
@@ -200,19 +132,10 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 			app.ComposeFile = ""
 		}
 	}
-	// An empty branch stays empty for public-git sources: the clone resolves
-	// the remote default via ls-remote (GS-3) instead of guessing "main".
-	// The branch column is NOT NULL DEFAULT 'main', which only fills rows
-	// that omit the column; storing '' explicitly is allowed and round-trips
-	// unchanged. Provider flows keep the "main" fallback (their wizard
-	// always prefills a branch, and empty would break push-branch matching).
-	// Image sources carry no branch at all.
 	if app.Branch == "" && !BranchDefaultsToRemote(app.SourceType, app.Provider) &&
 		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
 	}
-	// A pasted compose document has no branch: the provider fallback above
-	// must not fill one in.
 	if app.SourceType == SourceCompose && strings.TrimSpace(app.ComposeContent) != "" {
 		app.Branch = ""
 	}
@@ -247,8 +170,6 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		}
 		app.RegistryPasswordCiphertext = sealed
 	}
-	// A link names a GitHub App connection the caller must own; a foreign
-	// id answers not-found, like any other foreign resource.
 	if app.GitHubAppID != uuid.Nil {
 		owned, err := s.repo.GitHubAppOwnedBy(ctx, app.GitHubAppID, userID)
 		if err != nil {
@@ -274,24 +195,9 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return Application{}, err
 	}
-	// The application starts with no domain (JUS-233): domains are attached
-	// explicitly afterwards, and only then does the node need a route.
 	return created, nil
 }
 
-// InstallHook installs the provider hook that triggers automatic deploys of
-// a freshly created application (BE-4.4). It is deliberately best effort:
-// the application row is already committed, so a provider outage, missing
-// credentials or an unusable callback origin must not fail the create and
-// leave the caller with an application it does not know exists. The call is
-// bounded by Config.HookTimeout — a provider that accepts the connection and
-// then stalls must not hold the create request past the SPA's own timeout —
-// and a failure is logged with the configured logger (never silently
-// dropped). The explicit idempotent POST /v1/applications/{id}/webhooks route
-// is the retry path.
-//
-// attempted is false when no hook lifecycle is wired: there is no outcome to
-// report and the create response omits the webhook field.
 func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) (attempted bool, err error) {
 	lifecycle := s.hookLifecycle()
 	if lifecycle == nil {
@@ -307,10 +213,6 @@ func (s *Service) InstallHook(ctx context.Context, userID, appID uuid.UUID, r *h
 	return true, err
 }
 
-// ListApplications returns the active team's applications, newest first.
-// Without a team context it returns the creator's applications, which is the
-// pre-teams behavior. A filter scopes the list to one environment or project
-// of the caller's team (a foreign ID answers ErrNotFound).
 func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID, filter ApplicationFilter) ([]Application, error) {
 	if s == nil || s.repo == nil {
 		return nil, errors.New("deploy: repository is not configured")
@@ -340,14 +242,10 @@ func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID, filter
 	return applications, nil
 }
 
-// GetApplication returns one application the caller owns. Another user's row
-// answers ErrNotFound, so application IDs cannot be probed.
 func (s *Service) GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error) {
 	return s.application(ctx, userID, appID, false)
 }
 
-// UpdateApplication applies a partial update to the mutable application fields
-// (name, branch, build pack, domain, ports, server).
 func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error) {
 	if !Enabled() {
 		return Application{}, ErrDisabled
@@ -359,20 +257,12 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if err != nil {
 		return Application{}, err
 	}
-	// Serialize with deployment submission and manual control: a move may stop
-	// the container on the previous node, and that must not race a deploy that
-	// is selecting or retiring a target. Re-read under the lock so the update
-	// is applied to the current row (no lost update from a stale snapshot).
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
 	app, err = s.application(ctx, userID, appID, true)
 	if err != nil {
 		return Application{}, err
 	}
-	// A move changes the node an in-flight deployment would target; refuse it
-	// while a deployment is non-terminal, exactly like a manual control or a
-	// delete. The worker does not take this lock, so the guard is what keeps a
-	// move from stranding a container on the previous node.
 	if in.ServerID != nil && *in.ServerID != app.ServerID {
 		if open, err := s.repo.HasLivePreviews(ctx, app.ID); err != nil {
 			return Application{}, err
@@ -386,13 +276,8 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 			return Application{}, err
 		}
 	}
-	// A move to another environment stays in the team (a foreign environment
-	// answers 404) and refuses a name the target already holds (409), per the
-	// per-environment uniqueness.
 	movedEnvironment := false
 	if in.EnvironmentID != nil && *in.EnvironmentID != app.EnvironmentID {
-		// Open previews stay pinned to the old environment and node, so a
-		// base with live previews cannot move until they are closed.
 		if open, err := s.repo.HasLivePreviews(ctx, app.ID); err != nil {
 			return Application{}, err
 		} else if open {
@@ -419,9 +304,6 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if in.Name != nil {
 		app.Name = strings.TrimSpace(*in.Name)
 	}
-	// Image sources carry no branch or build pack; the reference and the
-	// private-registry credential are their only source fields. Neither
-	// half is ever returned by the API.
 	isImage := NormalizeSourceType(app.SourceType, app.Provider) == SourceImage
 	if in.ImageRef != nil || in.RegistryUsername != nil || in.RegistryPassword != nil {
 		if !isImage {
@@ -441,21 +323,12 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		if err := ValidateImageReference(ref); err != nil {
 			return Application{}, err
 		}
-		// The credential is bound to the registry host it was entered for:
-		// moving the reference to another host without re-entering the
-		// password would send the stored secret to that host on the next
-		// pull, so the update is refused until the password is re-entered
-		// (or the credential is cleared explicitly in the same request).
 		hostChanged := RegistryHost(app.ImageRef) != RegistryHost(ref)
 		if hostChanged && app.RegistryPasswordCiphertext != "" && in.RegistryPassword == nil {
 			return Application{}, fmt.Errorf("%w: image reference moves to another registry host: re-enter the registry password or clear the credential",
 				ErrValidation)
 		}
 		if hostChanged && in.RegistryUsername == nil {
-			// The username is half of the bound credential: it must not
-			// follow the reference to the new host. Dropping it here forces
-			// the writer to supply both halves with the password (or clear
-			// both), per the pair rule below.
 			app.RegistryUsername = ""
 		}
 		app.ImageRef = ref
@@ -481,9 +354,6 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 			app.RegistryPasswordCiphertext = sealed
 		}
 	}
-	// The halves rotate independently, but the stored pair must stay whole:
-	// a username without a password (or the reverse) would pull anonymously
-	// while reporting a credential as configured.
 	if err := requireCompleteRegistryCredential(app.RegistryUsername, app.RegistryPasswordCiphertext != ""); err != nil {
 		return Application{}, err
 	}
@@ -529,9 +399,6 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		}
 		app.ServerID = *in.ServerID
 	}
-	// Relinking follows the create rules: a value sets the connection (it
-	// must belong to the caller), an empty string clears it, absent leaves
-	// it unchanged. The link only makes sense on the github_app source.
 	if in.GitHubAppID != nil {
 		raw := strings.TrimSpace(*in.GitHubAppID)
 		if raw == "" {
@@ -554,17 +421,10 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 			return Application{}, fmt.Errorf("%w: github_app_id needs source type %q",
 				ErrValidation, SourceGitHubApp)
 		}
-		// Relinking an http clone URL would embed the next installation
-		// token in plaintext: refuse, like creation does.
 		if err := validateLinkedCloneURL(app); err != nil {
 			return Application{}, err
 		}
 	}
-	// Clearing the branch restores ls-remote default resolution for
-	// public-git sources (see the create path); provider flows fall back to
-	// "main" so push-branch matching keeps working. Image sources carry no
-	// branch at all, and a pasted compose document has none either (cleared
-	// below).
 	if app.Branch == "" && !BranchDefaultsToRemote(app.SourceType, app.Provider) &&
 		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
@@ -572,23 +432,16 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if app.SourceType == SourceCompose && strings.TrimSpace(app.ComposeContent) != "" {
 		app.Branch = ""
 	}
-	// A compose application must keep a deployable release after an update;
-	// domains and their ports are validated on their own write path.
 	if isComposeApp(app) {
 		if err := validateComposeTarget(app); err != nil {
 			return Application{}, err
 		}
 	}
-	// The clone URL is not part of the update payload, so it is left out of
-	// validation: an application created with a development-local source must
-	// still be renameable.
 	if err := validateApplication(app, false); err != nil {
 		return Application{}, err
 	}
 	updated, updateErr := s.repo.UpdateApplication(ctx, app)
 	if updateErr != nil {
-		// A concurrent create or move that committed past the pre-check trips
-		// the unique index instead: still a 409, with the move message.
 		if movedEnvironment && errors.Is(updateErr, ErrValidation) &&
 			strings.Contains(updateErr.Error(), "already exists") {
 			return Application{}, fmt.Errorf("%w: an application named %q already exists in the target environment",
@@ -596,10 +449,6 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		}
 		return Application{}, updateErr
 	}
-	// A move rebinds the application to another node: stop what it left
-	// behind (best effort) and refresh both nodes so the old one stops
-	// serving it. Domains are edited through their own endpoints, which
-	// resync the hosting node themselves.
 	moved := updated.ServerID != previousServer
 	if moved {
 		s.stopContainerOnNode(ctx, previousServer, s.latestContainer(ctx, app.ID))
@@ -612,19 +461,6 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	return updated, nil
 }
 
-// DeleteApplication removes an application together with everything that hangs
-// off it. An application with a non-terminal deployment is refused with
-// ErrConflict: deleting it would cascade the deployment row while the worker
-// may be mid-run, orphaning a container no later deploy or delete can reach.
-// Its provider hook is detached first and the delete fails closed on a
-// removal failure, so nothing that would break the still-live application has
-// been mutated when it aborts (the escape hatch for a hook whose provider is
-// gone is ForgetWebhook, DELETE .../webhooks?force=true). The deploy key is
-// detached next, best effort: once the hook is gone, a host failure must not
-// leave a live application without automatic deploys (the local row cascades
-// with the application and the warning names the remote key). The container
-// removal stays best effort too: a control plane that cannot reach the node
-// must still be able to delete an application.
 func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
@@ -633,10 +469,6 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	if err != nil {
 		return err
 	}
-	// Serialize with deployment submission and manual control: the in-flight
-	// check and the cascade must be atomic with respect to a new deployment.
-	// Re-read under the lock so a concurrent move does not leave the delete
-	// removing containers on the previous node and missing the current one.
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
 	app, err = s.application(ctx, userID, appID, true)
@@ -646,28 +478,11 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	if err := s.rejectInFlight(ctx, app.ID); err != nil {
 		return err
 	}
-	// Preview siblings hang off this application outside the deploy schema
-	// (preview_deploys is keyed by the base application and cascades); they
-	// must be torn down before the base row disappears, or the cascade would
-	// erase the only record of them. A cleanup failure aborts the delete: the
-	// container stop inside the teardown is best effort, but the durable
-	// binding must not be lost while a sibling still exists.
 	if s.previewCleanup != nil {
 		if err := s.previewCleanup(ctx, app.ID); err != nil {
 			return err
 		}
 	}
-	// Remove the provider hook (BE-4.4) FIRST, bounded like the create call,
-	// and fail closed: the stored row is the only handle on the remote hook,
-	// so deleting it while the host may still hold the hook would orphan the
-	// hook with nothing left to identify it (the explicit route could no
-	// longer reach it). Ordering matters for the still-live application too:
-	// when this returns an error, the deploy key, the container and the row
-	// are all untouched, so a webhook deploy that still reaches the app can
-	// keep cloning. The caller retries, removes the hook on the host by hand,
-	// or acknowledges the orphan with
-	// DELETE /v1/applications/{id}/webhooks?force=true (ForgetWebhook) and
-	// deletes again. A preview sibling never holds its own hook.
 	if !app.IsPreview && supportedSourceProvider(app.Provider) && strings.TrimSpace(app.Repo) != "" {
 		if lifecycle := s.hookLifecycle(); lifecycle != nil {
 			hookCtx, cancel := context.WithTimeout(ctx, s.hookTimeout)
@@ -678,14 +493,6 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 			}
 		}
 	}
-	// Detach the deploy key next. It is BEST EFFORT once the provider hook is
-	// gone: aborting here would leave a live application whose automatic
-	// deploys are silently disabled — the exact state this ordering exists to
-	// prevent. The local key row cascades away with the application; a key
-	// left registered on the Git host is the lesser evil, and the warning
-	// names provider and repository so it can be removed there by hand. A
-	// preview sibling reuses its base application's remote deploy key, so
-	// only its local rows go and the remote key always stays registered.
 	if app.IsPreview {
 		if key, err := s.repo.GetDeployKey(ctx, app.ID); err == nil {
 			if err := s.deleteLocalDeployKey(ctx, key); err != nil {
@@ -700,29 +507,17 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 		s.logger.Warn("deploy: deploy key could not be detached; the application still deletes",
 			"application_id", app.ID, "provider", app.Provider, "repo", app.Repo, "error", err)
 	}
-	// Containers are removed before the row: the row is the only durable record
-	// of the application's containers, so a row-delete failure after a
-	// successful removal leaves no container behind (the accepted trade; the
-	// caller retries the delete). A container left on a previous node by a move
-	// is out of reach here — the move stopped it best effort and deployments do
-	// not record their node (see the report). A compose project is torn down
-	// first for the same reason: its sidecars survive the container sweep.
 	s.composeDownApp(ctx, app.ServerID, app)
 	s.removeApplicationContainers(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
 	}
-	// The application row is gone: regenerate the node's configuration so
-	// every deleted route stops being served immediately. An application
-	// without a domain never had a route to remove.
 	if app.PrimaryDomain != nil {
 		s.syncProxyServer(ctx, app.ServerID)
 	}
 	return nil
 }
 
-// GetEnv returns the application's environment: plain values verbatim and
-// sealed secrets as `secret:<id>` references. Plaintext is never returned.
 func (s *Service) GetEnv(ctx context.Context, userID, appID uuid.UUID) ([]EnvEntry, error) {
 	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
@@ -730,9 +525,6 @@ func (s *Service) GetEnv(ctx context.Context, userID, appID uuid.UUID) ([]EnvEnt
 	return s.envEntries(ctx, appID)
 }
 
-// ReplaceEnv rewrites the whole environment collection and returns it as
-// stored. A `secret:` value that still points at a stored secret keeps its
-// ciphertext; any other `secret:` value is sealed as new plaintext.
 func (s *Service) ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entries []EnvEntry) ([]EnvEntry, error) {
 	if !Enabled() {
 		return nil, ErrDisabled
@@ -750,7 +542,6 @@ func (s *Service) ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entri
 	return s.envEntries(ctx, appID)
 }
 
-// GetStorages returns the application's storage mappings.
 func (s *Service) GetStorages(ctx context.Context, userID, appID uuid.UUID) ([]Storage, error) {
 	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
@@ -765,8 +556,6 @@ func (s *Service) GetStorages(ctx context.Context, userID, appID uuid.UUID) ([]S
 	return storages, nil
 }
 
-// ReplaceStorages rewrites the whole storage collection and returns it as
-// stored.
 func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, storages []Storage) ([]Storage, error) {
 	if !Enabled() {
 		return nil, ErrDisabled
@@ -775,10 +564,6 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if err != nil {
 		return nil, err
 	}
-	// Compose volumes live in the compose document (and resolve under the
-	// managed root), so the single-container storage map does not apply.
-	// Refuse with a message that names the real source instead of failing
-	// later on the volume-shape validation.
 	if NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose {
 		return nil, fmt.Errorf(
 			"%w: compose applications declare volumes in the compose source (mounted under %s/%s/<name>); update services[].volumes instead of storage mappings",
@@ -796,12 +581,6 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	return s.GetStorages(ctx, userID, appID)
 }
 
-// warnStorageChanges logs when a save changes the resolved host source of an
-// existing storage row in a way that strands data: a previously explicit host
-// path blanked to a managed path, or a pre-change bare named volume silently
-// re-namespaced. An intentional explicit change is left to the operator, and a
-// re-save that resolves to the same value (the derived managed path) does not
-// warn.
 func (s *Service) warnStorageChanges(ctx context.Context, appID uuid.UUID, input, normalized []Storage) {
 	existing, err := s.repo.ListStorages(ctx, appID)
 	if err != nil {
@@ -830,22 +609,14 @@ func (s *Service) warnStorageChanges(ctx context.Context, appID uuid.UUID, input
 	}
 }
 
-// Stop stops the container of the application's newest deployment.
 func (s *Service) Stop(ctx context.Context, userID, appID uuid.UUID) (Deployment, error) {
 	return s.controlContainer(ctx, userID, appID, false)
 }
 
-// Start restarts the container of the application's newest deployment.
 func (s *Service) Start(ctx context.Context, userID, appID uuid.UUID) (Deployment, error) {
 	return s.controlContainer(ctx, userID, appID, true)
 }
 
-// controlContainer runs one manual container operation through the node seam.
-// The deployment row is left untouched: it identifies the release, and its
-// state must keep describing that release (a stop would otherwise break
-// rollback target selection). The agent call is bounded by ControlTimeout; a
-// call that exhausts the bound answers ErrAgentUnavailable, which the client
-// may safely retry (start/stop are idempotent).
 func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID, start bool) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
@@ -854,11 +625,6 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	if err != nil {
 		return Deployment{}, err
 	}
-	// Hold the application lock across target selection and the agent call: a
-	// concurrent deploy must not retire the selected container between the
-	// in-flight check and a delayed start/stop, which would restart a retired
-	// release (leaving two running). Re-read under the lock so a concurrent
-	// move cannot leave the manual call acting on the previous node.
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
 	app, err = s.application(ctx, userID, appID, true)
@@ -869,8 +635,6 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	if err != nil {
 		return Deployment{}, err
 	}
-	// Bound the agent call so a hung agent cannot pin the application lock and
-	// stall every deploy, move and delete for this application.
 	callCtx, cancel := context.WithTimeout(ctx, s.controlTimeout)
 	defer cancel()
 	node, err := s.dialNode(callCtx, app.ServerID)
@@ -893,10 +657,6 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	return target, nil
 }
 
-// controlTarget picks the container a manual stop/start acts on: the newest
-// deployment that started one. An in-flight deployment answers ErrConflict (its
-// container is being replaced right now), and an application that never
-// started a container answers ErrNotFound.
 func (s *Service) controlTarget(ctx context.Context, app Application) (Deployment, error) {
 	if app.ServerID == uuid.Nil {
 		return Deployment{}, ErrServerNotFound
@@ -905,7 +665,7 @@ func (s *Service) controlTarget(ctx context.Context, app Application) (Deploymen
 	if err != nil {
 		return Deployment{}, err
 	}
-	for _, dep := range deployments { // newest first
+	for _, dep := range deployments {
 		if !dep.State.Terminal() {
 			return Deployment{}, fmt.Errorf("%w: a deployment is in progress", ErrConflict)
 		}
@@ -918,16 +678,12 @@ func (s *Service) controlTarget(ctx context.Context, app Application) (Deploymen
 	return Deployment{}, fmt.Errorf("%w: application has no running container", ErrNotFound)
 }
 
-// rejectInFlight returns ErrConflict when the application has a non-terminal
-// deployment: its container is being replaced right now, so a manual control
-// or a delete must wait for it to finish. It is the delete-side mirror of
-// controlTarget's guard.
 func (s *Service) rejectInFlight(ctx context.Context, appID uuid.UUID) error {
 	deployments, err := s.repo.ListDeployments(ctx, appID)
 	if err != nil {
 		return err
 	}
-	for _, dep := range deployments { // newest first
+	for _, dep := range deployments {
 		if !dep.State.Terminal() {
 			return fmt.Errorf("%w: a deployment is in progress", ErrConflict)
 		}
@@ -935,8 +691,6 @@ func (s *Service) rejectInFlight(ctx context.Context, appID uuid.UUID) error {
 	return nil
 }
 
-// latestContainer returns the newest container any deployment of the
-// application started ("" when there is none).
 func (s *Service) latestContainer(ctx context.Context, appID uuid.UUID) string {
 	deployments, err := s.repo.ListDeployments(ctx, appID)
 	if err != nil {
@@ -951,22 +705,10 @@ func (s *Service) latestContainer(ctx context.Context, appID uuid.UUID) string {
 	return ""
 }
 
-// containerCleanupTimeout bounds one best-effort container operation on a node
-// that may have stopped answering. It is a safety net so a hung node cannot pin
-// the application lock; it is not a retry budget.
 const containerCleanupTimeout = 15 * time.Second
 
-// composeCleanupTimeout bounds one best-effort compose teardown (resolving
-// the document, rendering it and running down on the node). A repo-backed
-// teardown clones first, so the budget covers a slow Git host; it is not a
-// retry budget.
 const composeCleanupTimeout = 2 * time.Minute
 
-// composeDownApp tears a compose application's project down on one node,
-// swallowing every failure: a delete or a move must not depend on the node
-// being reachable. The project's sidecars carry no gotham labels for the
-// container sweep to find, so down (which only ever touches this project's
-// containers and never its volumes) is what removes them.
 func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Application) {
 	if NormalizeSourceType(app.SourceType, app.Provider) != SourceCompose {
 		return
@@ -984,9 +726,6 @@ func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Ap
 	defer func() { _ = os.RemoveAll(dir) }()
 	content, _, err := s.resolveComposeContent(opCtx, app, dir, nil)
 	if err != nil {
-		// The stored document no longer resolves: fail loudly (an error,
-		// not a debug) and still tear the project down with a minimal
-		// document, so the sidecars are never silently left behind.
 		s.logger.Error("deploy: compose teardown cannot resolve the stored document; tearing down by project name",
 			"application_id", app.ID, "error", err)
 		content = teardownStubDocument()
@@ -1007,9 +746,6 @@ func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Ap
 			s.logger.Debug("deploy: close agent connection", "error", err)
 		}
 	}()
-	// Teardown stays best effort: the probe never aborts it, but a node
-	// that does not report enforcement is logged loudly, so a fleet with
-	// old agents is visible instead of silently unconfined.
 	if err := s.probeComposeConfinement(opCtx, node, app); err != nil {
 		s.logger.Warn("deploy: compose teardown proceeds without verified confinement",
 			"application_id", app.ID, "error", err)
@@ -1019,8 +755,6 @@ func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Ap
 	}
 }
 
-// stopContainerOnNode stops one container on one node, swallowing every
-// failure: a move must not depend on the previous node being reachable.
 func (s *Service) stopContainerOnNode(ctx context.Context, serverID uuid.UUID, containerID string) {
 	if serverID == uuid.Nil || containerID == "" || s.dial == nil {
 		return
@@ -1042,20 +776,10 @@ func (s *Service) stopContainerOnNode(ctx context.Context, serverID uuid.UUID, c
 	}
 }
 
-// removeApplicationContainers removes every container of an application from
-// its node, swallowing every failure: deletion must not depend on the node
-// being reachable. Containers are found by the gotham.app_id label so a
-// container orphaned by a failed deploy or a lost response is reached too; the
-// recorded deployment container IDs are removed as well, which also covers a
-// node that cannot list containers. Rollback images and persistent bind
-// directories survive (the agent's Remove removes only the container and its
-// anonymous volumes).
 func (s *Service) removeApplicationContainers(ctx context.Context, app Application) {
 	if app.ServerID == uuid.Nil || s.dial == nil {
 		return
 	}
-	// Delete spells no requirement on the node answering; bound every call so a
-	// hung node cannot pin the application lock.
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
 	defer cancel()
 	targets := make(map[string]bool, 2)
@@ -1098,9 +822,6 @@ func (s *Service) removeApplicationContainers(ctx context.Context, app Applicati
 	}
 }
 
-// teamIDFor resolves the team a resource call operates in: the request's
-// active team, or the caller's personal team when no team context is present
-// (the pre-teams path), matching the projects surface.
 func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
 	scope := teams.ScopeFor(ctx, userID)
 	if scope.Active() {
@@ -1109,11 +830,6 @@ func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
 	return teams.PersonalTeamID(userID)
 }
 
-// validateServer enforces that the application points at a server the control
-// plane knows AND that the caller's active team may target it. A node of
-// another team fails like a missing one (ErrServerNotFound, 404), so node IDs
-// cannot be probed and an application can never be bound to a foreign team's
-// node (F6). A legacy node without a team stays shared.
 func (s *Service) validateServer(ctx context.Context, userID, serverID uuid.UUID) error {
 	if serverID == uuid.Nil {
 		return fmt.Errorf("%w: server is required", ErrValidation)
@@ -1128,13 +844,6 @@ func (s *Service) validateServer(ctx context.Context, userID, serverID uuid.UUID
 	return nil
 }
 
-// applyComposeUpdate applies the compose field updates to a compose
-// application. Setting content switches a repo-backed application to pasted
-// mode and clears its repository (the pasted document is the whole source);
-// setting a file path needs the repository the path lives in. The web
-// service is validated against the effective document when one is available
-// (pasted content, new or stored); repo-backed applications check membership
-// at deploy time, once the file is read from the checkout.
 func applyComposeUpdate(app Application, in UpdateApplicationInput) (Application, error) {
 	if app.SourceType != SourceCompose {
 		return Application{}, fmt.Errorf("%w: compose fields are only valid for source type %q",
@@ -1161,11 +870,6 @@ func applyComposeUpdate(app Application, in UpdateApplicationInput) (Application
 	return app, nil
 }
 
-// validateApplication checks the fields every write path shares: a name, a
-// cloneable source (creation only), a known source type with its per-type
-// fields, a build pack builds.ParseEngineKind
-// accepts ("" selects auto-detection) and ports inside the 0–65535 range the
-// schema CHECKs enforce.
 func validateApplication(app Application, checkSource bool) error {
 	if app.Name == "" {
 		return fmt.Errorf("%w: name is required", ErrValidation)
@@ -1184,16 +888,11 @@ func validateApplication(app Application, checkSource bool) error {
 	return nil
 }
 
-// Registry credential bounds: a username is an identifier, a password or
-// token is sealed at rest. Halves are refused on every write path, so a
-// stored credential is always a usable pair.
 const (
 	maxRegistryUsernameLen = 255
 	maxRegistryPasswordLen = 4096
 )
 
-// validateRegistryCredential checks a plaintext credential pair: both or
-// neither, within the length caps. The error never carries the values.
 func validateRegistryCredential(username, password string) error {
 	if err := requireCompleteRegistryCredential(username, password != ""); err != nil {
 		return err
@@ -1207,9 +906,6 @@ func validateRegistryCredential(username, password string) error {
 	return nil
 }
 
-// requireCompleteRegistryCredential refuses a half credential: a username
-// without a password would pull anonymously while the API reports a
-// credential as configured (and the reverse stores a secret no pull uses).
 func requireCompleteRegistryCredential(username string, hasPassword bool) error {
 	hasUser := username != ""
 	if (hasUser && !hasPassword) || (!hasUser && hasPassword) {
@@ -1218,27 +914,7 @@ func requireCompleteRegistryCredential(username string, hasPassword bool) error 
 	return nil
 }
 
-// validateSource checks the per-type source fields on creation. The provider
-// slug must agree with the type (github_app needs provider "github",
-// gitlab_app "gitlab"), so hook and deploy-key paths that key off Provider
-// can never disagree with the orchestrator switch that keys off SourceType.
-// git_public refuses only the two slugs that own a dedicated type and takes a
-// keyless http(s)/git URL; every other provider value ("", the legacy
-// "public" sentinel, gitea and friends) stays git_public, so existing apps
-// and their previews keep working with the provider-based hook and key
-// behavior they already have. git_private is provider-less by definition (a
-// private repository on a connected provider uses that provider's type) and
-// takes an ssh/scp-like or https URL. The dockerfile type needs pasted
-// content (validated without executing anything) plus optional build args
-// and no repository. Image sources (GS-9) carry only a validated reference
-// and an optional credential — no repository, branch or build pack. The
-// compose type (GS-8) takes either pasted content or a repository with an
-// in-repo file path, plus the routed web service. Image fields on any other
-// type are refused, so a credential can never be stored where no pull reads
-// it.
 func validateSource(app Application) error {
-	// A GitHub App link only makes sense on the github_app source: anything
-	// else never consults it, so linking there is a caller error.
 	if app.GitHubAppID != uuid.Nil && app.SourceType != SourceGitHubApp {
 		return fmt.Errorf("%w: github_app_id needs source type %q",
 			ErrValidation, SourceGitHubApp)
@@ -1297,12 +973,6 @@ func validateSource(app Application) error {
 	}
 }
 
-// validateComposeSource checks a compose application: exactly one of pasted
-// content or a repository with an in-repo file path, plus the release web
-// service. A pasted document carries no repository and is validated whole
-// (structure, application scope, service membership); a repo-backed one
-// reuses the matching git flow's repository rules and checks membership at
-// deploy time, once the file is read from the checkout.
 func validateComposeSource(app Application) error {
 	pasted := strings.TrimSpace(app.ComposeContent) != ""
 	repo := strings.TrimSpace(app.Repo) != "" || strings.TrimSpace(app.CloneURL) != "" ||
@@ -1341,10 +1011,6 @@ func validateComposeSource(app Application) error {
 	return ValidateComposeService("", app.ComposeService)
 }
 
-// validateLinkedCloneURL requires a linked application to carry an https
-// clone URL when it carries a URL with a scheme: an installation token must
-// never travel over plaintext http. SSH/scp-like URLs carry no scheme and
-// never take the token path, so they are unaffected.
 func validateLinkedCloneURL(app Application) error {
 	if app.GitHubAppID == uuid.Nil {
 		return nil
@@ -1360,8 +1026,6 @@ func validateLinkedCloneURL(app Application) error {
 	return nil
 }
 
-// validateProviderSource checks a provider-backed source: the slug must match
-// the type, and the repository and clone URL follow the existing flow.
 func validateProviderSource(app Application, provider string) error {
 	if app.Provider != provider {
 		return fmt.Errorf("%w: source type %q requires provider %q, got %q",
@@ -1373,11 +1037,6 @@ func validateProviderSource(app Application, provider string) error {
 	return validateCloneURL(app.CloneURL)
 }
 
-// prepareEnv turns API entries into the two collections that are stored: plain
-// env vars and sealed secrets. Values carrying secretRefPrefix are sealed with
-// providers.SealSecret — unless they still reference a secret this application
-// already holds, in which case the ciphertext is re-written unchanged so a
-// configuration round-trip cannot re-seal a reference as if it were plaintext.
 func (s *Service) prepareEnv(ctx context.Context, appID uuid.UUID, entries []EnvEntry) ([]EnvVar, []Secret, error) {
 	existing, err := s.repo.ListSecrets(ctx, appID)
 	if err != nil {
@@ -1420,8 +1079,6 @@ func (s *Service) prepareEnv(ctx context.Context, appID uuid.UUID, entries []Env
 			})
 			continue
 		}
-		// A reference the application does not hold is a stale or invented one:
-		// re-sealing it would silently replace the secret with a UUID.
 		if _, err := uuid.Parse(reference); err == nil {
 			return nil, nil, fmt.Errorf("%w: unknown secret reference for %q", ErrValidation, key)
 		}
@@ -1437,9 +1094,6 @@ func (s *Service) prepareEnv(ctx context.Context, appID uuid.UUID, entries []Env
 	return envVars, secrets, nil
 }
 
-// validateEnvKey accepts any structurally possible container variable name.
-// The FE warns (without blocking) on ^[A-Z][A-Z0-9_]*$; the API only rejects
-// what Docker could not pass through.
 func validateEnvKey(key string) error {
 	if key == "" {
 		return fmt.Errorf("%w: environment variable name is required", ErrValidation)
@@ -1453,12 +1107,6 @@ func validateEnvKey(key string) error {
 	return nil
 }
 
-// normalizeStorages trims and validates the volume map: named rows with a
-// container path and either a managed host path, a host bind confined to
-// <managed root>/<appID>, or a Docker named volume. An empty host path is
-// derived to a managed directory, so a client never needs to know the
-// application id up front. The rules mirror volumeSpecs, so a bad mapping is a
-// 400 at write time rather than a failed deployment later.
 func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 	root := managedVolumeRoot()
 	normalized := make([]Storage, 0, len(storages))
@@ -1478,8 +1126,6 @@ func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 			return nil, fmt.Errorf("%w: duplicate storage name %q", ErrValidation, row.Name)
 		}
 		seen[row.Name] = true
-		// Two distinct names that sanitize to the same directory would share
-		// one host path once derived; reject rather than silently fuse them.
 		dir := storageDirName(row.Name)
 		if other, ok := seenDirs[dir]; ok {
 			return nil, fmt.Errorf("%w: storage names %q and %q map to the same managed directory %q",
@@ -1491,8 +1137,6 @@ func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 			return nil, err
 		}
 		if !strings.HasPrefix(host, "/") {
-			// Named volumes are namespaced with the storage name; reject two
-			// rows whose (sanitized) names collapse onto one volume.
 			if other, ok := seenNamed[host]; ok {
 				return nil, fmt.Errorf("%w: storage names %q and %q map to the same named volume %q",
 					ErrValidation, other, row.Name, host)
@@ -1508,9 +1152,6 @@ func normalizeStorages(appID uuid.UUID, storages []Storage) ([]Storage, error) {
 	return normalized, nil
 }
 
-// envEntries merges the stored plain env vars and sealed secrets into the API
-// view of the environment, sorted by key. Secrets appear as their reference —
-// the ciphertext and the plaintext stay on the server.
 func (s *Service) envEntries(ctx context.Context, appID uuid.UUID) ([]EnvEntry, error) {
 	envVars, secrets, err := s.repo.ListEnvConfig(ctx, appID)
 	if err != nil {

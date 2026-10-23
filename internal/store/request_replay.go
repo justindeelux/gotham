@@ -44,7 +44,6 @@ func readReceipt(ctx context.Context, db sqlc.DBTX, r *requestreplay.Request) (*
 	return result, nil
 }
 
-// LookupRequestReceipt is a read optimization; first acceptance still serializes inside the write transaction.
 func (s *Store) LookupRequestReceipt(ctx context.Context) error {
 	r := requestreplay.From(ctx)
 	if r == nil {
@@ -57,8 +56,6 @@ func (s *Store) LookupRequestReceipt(ctx context.Context) error {
 	return err
 }
 
-// withRequestReceipt serializes the identity on PostgreSQL across service instances.
-// The callback reads the original resource on replay; it never writes a replacement.
 func (s *Store) withRequestReceipt(ctx context.Context, fn func(*sqlc.Queries, *requestreplay.Result) (uuid.UUID, uuid.UUID, error)) (err error) {
 	defer func() {
 		var pgErr *pgconn.PgError
@@ -105,7 +102,6 @@ func (s *Store) withRequestReceipt(ctx context.Context, fn func(*sqlc.Queries, *
 			return err
 		}
 	}
-	// Lazy bounded cleanup retains tombstones for seven days; never blocks on another identity's sweep.
 	if _, err := tx.Exec(ctx, `DELETE FROM request_receipts WHERE
  (principal_id,team_id,operation,target_id,request_key) IN
  (SELECT principal_id,team_id,operation,target_id,request_key FROM request_receipts
@@ -132,7 +128,6 @@ func (s *Store) SaveRequestHook(ctx context.Context, outcome string) error {
 	return err
 }
 
-// CleanupRequestReceipts bounds each sweep and never removes the 24h replay window.
 func (s *Store) CleanupRequestReceipts(ctx context.Context) (int64, error) {
 	result, err := s.DB.Exec(ctx, `DELETE FROM request_receipts WHERE
  (principal_id,team_id,operation,target_id,request_key) IN

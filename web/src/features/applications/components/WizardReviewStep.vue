@@ -10,7 +10,6 @@ const { form } = wizard;
 
 const { t } = useI18n();
 
-/** reviewDroppedText renders the 1/many grammar through library pluralization. */
 const reviewDroppedText = computed<string>(() =>
   String(
     t(
@@ -21,7 +20,6 @@ const reviewDroppedText = computed<string>(() =>
   ),
 );
 
-/** envVolumesText renders the raw counts; numbers are locale-independent. */
 const envVolumesText = computed<string>(() =>
   String(
     t("applications.wizard.reviewVolumes", {

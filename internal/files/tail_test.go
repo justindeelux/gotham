@@ -14,9 +14,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestTailBytes covers the window trim: the partial first line is always
-// dropped (a tail window starts mid-file), a trailing newline does not count as
-// an extra line, and a window with no newline keeps its single over-long line.
 func TestTailBytes(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -39,7 +36,6 @@ func TestTailBytes(t *testing.T) {
 	}
 }
 
-// TestTailBytesKeepsLastLines caps a tail at TailLines lines.
 func TestTailBytesKeepsLastLines(t *testing.T) {
 	var body strings.Builder
 	for i := 0; i < TailLines+10; i++ {
@@ -54,20 +50,14 @@ func TestTailBytesKeepsLastLines(t *testing.T) {
 	}
 }
 
-// TestTailBytesNeverSplitsMultiByte pins the no-newline fallback: a cut through
-// a UTF-8 sequence drops the continuation bytes instead of leaving an invalid
-// lead.
 func TestTailBytesNeverSplitsMultiByte(t *testing.T) {
-	// Cut "aé…" so the window starts on a UTF-8 continuation byte.
-	window := []byte("a\u00e9b")[2:] // starts on 0xA9, the continuation of é
+	window := []byte("a\u00e9b")[2:]
 	got := string(tailBytes(window))
 	if got != "b" {
 		t.Fatalf("tailBytes = %q, want %q", got, "b")
 	}
 }
 
-// TestContentTailBoundary checks the ceiling at limit-1, limit and limit+1: the
-// first two are full editable reads, the last is a read-only tail.
 func TestContentTailBoundary(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -109,7 +99,6 @@ func TestContentTailBoundary(t *testing.T) {
 			if !test.truncated {
 				return
 			}
-			// The tail is read as a range, not by streaming the whole file.
 			if req := client.seenRead; req.GetOffset() != 1 || req.GetLimit() != int64(8) {
 				t.Fatalf("read range = offset %d limit %d, want 1/8", req.GetOffset(), req.GetLimit())
 			}
@@ -117,15 +106,12 @@ func TestContentTailBoundary(t *testing.T) {
 	}
 }
 
-// TestContentTailDecodesLegacyEncoding proves a GBK tail that is cut mid-file
-// decodes correctly: the window starts mid-character, the trim drops it, and
-// the remaining lines are clean text.
 func TestContentTailDecodesLegacyEncoding(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
 	server := registry.seed(teamID)
 	line := gbkFixture(t, "配置已保存\n")
-	body := bytes.Repeat(line, 4) // 44 bytes, 11 per line
+	body := bytes.Repeat(line, 4)
 	client := &fakeFileClient{
 		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{
 			Name: "app.conf", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: int64(len(body)),
@@ -133,8 +119,6 @@ func TestContentTailDecodesLegacyEncoding(t *testing.T) {
 		readBody: body,
 	}
 	svc := newTestService(t, registry, client)
-	// 17 bytes from a 44-byte file starts at offset 27: the second byte of a
-	// two-byte GBK character, so the tail trim is what makes it decodable.
 	svc.maxContentBytes = 17
 
 	content, err := svc.Content(scopeCtx(teams.RoleOwner, teamID), server.ID, "root", "app.conf")
@@ -152,9 +136,6 @@ func TestContentTailDecodesLegacyEncoding(t *testing.T) {
 	}
 }
 
-// TestContentTailRefusesShrunkFile covers the Stat/Read race: a file that
-// shrank between the stat and the ranged read must not open as an empty tail
-// with a stale size.
 func TestContentTailRefusesShrunkFile(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -171,9 +152,6 @@ func TestContentTailRefusesShrunkFile(t *testing.T) {
 	}
 }
 
-// TestEditorWriteToOversizeFileRefused proves the API still refuses an editor
-// save over an existing file over the ceiling, while an upload over the same
-// file is not the editor's tail and stays allowed.
 func TestEditorWriteToOversizeFileRefused(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -202,8 +180,6 @@ func TestEditorWriteToOversizeFileRefused(t *testing.T) {
 	}
 }
 
-// TestEditorWriteAtCeilingAllowed keeps the boundary editable: a file whose
-// size is exactly the ceiling still accepts an editor save.
 func TestEditorWriteAtCeilingAllowed(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -221,8 +197,6 @@ func TestEditorWriteAtCeilingAllowed(t *testing.T) {
 	}
 }
 
-// TestTruncatedContentIsNeverSnapshotted pins the history guarantee: a tail
-// view is refused as a version rather than stored as the whole file.
 func TestTruncatedContentIsNeverSnapshotted(t *testing.T) {
 	history := &fakeHistory{}
 	svc := NewService(Config{Registry: newFakeRegistry(), HistoryMaxVersions: 10, HistoryMaxBytes: 1024})
@@ -239,8 +213,6 @@ func TestTruncatedContentIsNeverSnapshotted(t *testing.T) {
 	}
 }
 
-// TestPutContentRejectsOversizeFile is the HTTP contract: an editor save over a
-// file over the ceiling answers 413 with the stable too_large token.
 func TestPutContentRejectsOversizeFile(t *testing.T) {
 	teamID := uuid.New()
 	client := &fakeFileClient{

@@ -5,34 +5,14 @@ import { useI18n } from "vue-i18n";
 
 import { useLogStream } from "@/features/servers/composables/useLogStream";
 
-/**
- * Monospace log terminal for the realtime drawer.
- *
- * Renders raw frames pushed by the realtime hub; it never fabricates log
- * content. Auto-scroll follows the tail until the reader scrolls up or flips
- * the follow toggle; pause freezes the view and queues incoming lines.
- */
-
 interface Props {
-  /** Server whose agent sources the log stream. */
   serverId: string;
-  /** Container (or deploy container) being streamed. */
   containerId: string;
-  /** Drawer heading; the header renders only when set. */
   title?: string;
-  /** Drawer sub-heading. */
   subtitle?: string;
-  /** Explicit channel override; defaults to `logs:{serverId}:{containerId}`. */
   channel?: string;
-  /**
-   * When true, ask the control plane to bridge the agent log stream on mount.
-   * Only valid for raw container logs (`logs:{serverId}:{containerId}`); the
-   * deploy-log wrapper leaves it off because its channel is already published.
-   */
   autoStartStream?: boolean;
-  /** Realtime endpoint path. */
   wsPath?: string;
-  /** Maximum rendered lines before the oldest are dropped. */
   maxLines?: number;
 }
 
@@ -63,7 +43,6 @@ const {
 
 const { t } = useI18n();
 
-/** lineCountText renders the rendered-line count in the display locale. */
 const lineCountText = computed<string>(() =>
   lines.value.length === 1
     ? t("servers.logs.lineOne", { count: 1 })
@@ -82,8 +61,6 @@ const lineCountText = computed<string>(() =>
     </header>
 
     <div class="log-viewer__toolbar">
-      <!-- The labels already flip (Pause/Resume, Follow/Following), so no
-           aria-pressed: a screen reader would otherwise hear "Resume, pressed". -->
       <NButton
         size="small"
         secondary
@@ -104,9 +81,6 @@ const lineCountText = computed<string>(() =>
       <span class="log-viewer__count">{{ lineCountText }}</span>
     </div>
 
-    <!-- role=log + aria-live announce appended lines; tabindex makes the
-         scroll region reachable so it can be scrolled with the keyboard
-         (B2-7). -->
     <div
       ref="logBody"
       class="log"

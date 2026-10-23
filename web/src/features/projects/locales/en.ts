@@ -1,9 +1,3 @@
-/**
- * English catalog for the projects surface (I18N-3). Display copy only:
- * user-owned names, resource counts stay numeric, server diagnostics and
- * the `production` environment name remain raw values interpolated as
- * parameters, never translated keys.
- */
 const en = {
   list: {
     eyebrow: "Workspace",

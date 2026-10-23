@@ -14,13 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestPrivateKeyTeamsBackfill builds a disposable database, migrates it to the
-// pre-key-teams schema, seeds legacy keys in every attribution case, then
-// applies 00030 and asserts the backfill: a key referenced only by one team's
-// servers and a deploy-key row follow that team, while a key referenced by two
-// teams, by a legacy (team_id NULL) server, or by nothing keeps team_id NULL
-// (usable only without a team scope or by a referencing team; see
-// ServerService.keyForTeam).
 func TestPrivateKeyTeamsBackfill(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -64,8 +57,6 @@ func TestPrivateKeyTeamsBackfill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init migrations: %v", err)
 	}
-	// 00030 is the key-teams migration; migrate to the newest pre-change
-	// version first so the legacy rows can be seeded.
 	if _, err := provider.UpTo(ctx, 29); err != nil {
 		t.Fatalf("migrate to 00029: %v", err)
 	}

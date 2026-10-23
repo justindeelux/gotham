@@ -17,74 +17,42 @@ import (
 )
 
 const (
-	// DefaultRepo is the GitHub repository that publishes Gotham releases.
-	DefaultRepo = "justindeelux/gotham"
-	// DefaultBaseURL is the public GitHub Releases API. The configured base URL
-	// can point at a GitHub Enterprise host or a local mirror.
-	DefaultBaseURL = "https://api.github.com"
-	// DefaultChannel is the release channel used unless overridden.
-	DefaultChannel = ChannelStable
-	// defaultTimeout bounds a single Releases API request.
-	defaultTimeout = 10 * time.Second
-	// maxReleases caps how many releases are decoded from the API response.
-	maxReleases = 200
-	// maxChangelogEntries bounds the changelog response so a long release
-	// history stays a single small payload.
+	DefaultRepo         = "justindeelux/gotham"
+	DefaultBaseURL      = "https://api.github.com"
+	DefaultChannel      = ChannelStable
+	defaultTimeout      = 10 * time.Second
+	maxReleases         = 200
 	maxChangelogEntries = 20
-	// maxNoteBytes bounds one stored release body; longer bodies are truncated.
-	maxNoteBytes = 32 << 10
+	maxNoteBytes        = 32 << 10
 )
 
-// Channel selects which releases are eligible.
 type Channel string
 
 const (
-	// ChannelStable ignores prereleases.
 	ChannelStable Channel = "stable"
-	// ChannelBeta includes prereleases.
-	ChannelBeta Channel = "beta"
+	ChannelBeta   Channel = "beta"
 )
 
-// Release is an alias of the shared update candidate the checker resolves and
-// the applier installs.
 type Release = updatecore.Release
 
-// Checker queries the Releases API for a repository and resolves an update.
 type Checker struct {
-	// BaseURL is the Releases API root (default DefaultBaseURL).
-	BaseURL string
-	// Repo is "owner/name".
-	Repo string
-	// Channel selects stable or beta releases.
-	Channel Channel
-	// Client is the HTTP client; a bounded default is used when nil.
-	Client *http.Client
-	// Timeout bounds a single request when Client is nil.
-	Timeout time.Duration
-	// GOOS/GOARCH select the asset, defaulting to the running platform.
-	GOOS   string
-	GOARCH string
-	// AssetPrefix is the release asset family prefix; empty selects the
-	// control-plane binary prefix "gotham-linux-". The node agent sets
-	// "gotham-agent-linux-".
-	AssetPrefix string
-	// ManifestPrefix is the signed manifest family prefix; empty selects
-	// "gotham-manifest-".
+	BaseURL        string
+	Repo           string
+	Channel        Channel
+	Client         *http.Client
+	Timeout        time.Duration
+	GOOS           string
+	GOARCH         string
+	AssetPrefix    string
 	ManifestPrefix string
 }
 
-// HTTP errors and resolution failures.
 var (
-	// ErrNoRelease is returned when the API response carries no releases.
-	ErrNoRelease = errors.New("updates: no releases found")
-	// ErrAssetNotFound is returned when a release has no asset for the
-	// running platform.
+	ErrNoRelease     = errors.New("updates: no releases found")
 	ErrAssetNotFound = errors.New("updates: platform asset not found")
-	// ErrHTTP is returned for a non-2xx Releases API response.
-	ErrHTTP = errors.New("updates: releases API request failed")
+	ErrHTTP          = errors.New("updates: releases API request failed")
 )
 
-// ghRelease mirrors the subset of the GitHub Releases API we consume.
 type ghRelease struct {
 	TagName     string    `json:"tag_name"`
 	Name        string    `json:"name"`
@@ -96,10 +64,6 @@ type ghRelease struct {
 	Assets      []ghAsset `json:"assets"`
 }
 
-// ChangelogEntry is one release's viewer-facing changelog: version metadata
-// plus the bounded body and the validated release-page link. It carries no
-// asset URLs, so it is safe to serve to any authenticated caller (the body
-// itself stays admin-gated at the HTTP layer like check notes).
 type ChangelogEntry struct {
 	Version     string
 	Tag         string
@@ -110,16 +74,12 @@ type ChangelogEntry struct {
 	HTMLURL     string
 }
 
-// ghAsset mirrors a release asset.
 type ghAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
 }
 
-// Check returns the newest eligible release newer than current, or (nil, nil)
-// when the running version is up to date. It fails closed: a malformed or
-// unreachable API response is an error, never a silent "no update".
 func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 	currentVersion, err := updatecore.ParseVersion(current)
 	if err != nil {
@@ -170,7 +130,6 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 	return candidate, nil
 }
 
-// fetchReleases returns the raw Releases API listing for the configured repo.
 func (c *Checker) fetchReleases(ctx context.Context) ([]ghRelease, error) {
 	base := strings.TrimRight(defaultString(c.BaseURL, DefaultBaseURL), "/")
 	if err := updatecore.ValidateURL(base); err != nil {
@@ -194,11 +153,6 @@ func (c *Checker) fetchReleases(ctx context.Context) ([]ghRelease, error) {
 	return releases, nil
 }
 
-// Changelog lists every eligible release newer than current, newest first,
-// bounded to maxChangelogEntries with each body truncated to maxNoteBytes. A
-// dev/unknown current version is not an error: it yields no entries and the
-// caller falls back to the running-version entry (CurrentChangelog) or an
-// empty state.
 func (c *Checker) Changelog(ctx context.Context, current string) ([]ChangelogEntry, error) {
 	releases, err := c.fetchReleases(ctx)
 	if err != nil {
@@ -252,9 +206,6 @@ func (c *Checker) Changelog(ctx context.Context, current string) ([]ChangelogEnt
 	return entries, nil
 }
 
-// CurrentChangelog returns the changelog entry for the running version itself
-// ("What's new in this version"), or (nil, nil) when the release cannot be
-// found — e.g. dev builds such as 0.2.x-dev that have no GitHub release.
 func (c *Checker) CurrentChangelog(ctx context.Context, current string) (*ChangelogEntry, error) {
 	currentVersion, err := updatecore.ParseVersion(current)
 	if err != nil {
@@ -290,21 +241,17 @@ func (c *Checker) CurrentChangelog(ctx context.Context, current string) (*Change
 	return nil, nil
 }
 
-// rankedChangelog pairs an entry with its parsed version for newest-first
-// sorting.
 type rankedChangelog struct {
 	entry   ChangelogEntry
 	version updatecore.Version
 }
 
-// sortChangelog orders entries newest first.
 func sortChangelog(rankedList []rankedChangelog) {
 	sort.Slice(rankedList, func(i, j int) bool {
 		return rankedList[i].version.Compare(rankedList[j].version) > 0
 	})
 }
 
-// truncateNotes bounds one release body.
 func truncateNotes(body string) string {
 	if len(body) <= maxNoteBytes {
 		return body
@@ -312,9 +259,6 @@ func truncateNotes(body string) string {
 	return body[:maxNoteBytes] + "\n\n…(truncated)"
 }
 
-// httpsLink keeps raw only when it is an absolute https URL; anything else
-// (javascript:, http, relative, unparsable) is dropped so the "View on
-// GitHub" link can be rendered without further checks.
 func httpsLink(raw string) string {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" {
@@ -326,11 +270,6 @@ func httpsLink(raw string) string {
 	return parsed.String()
 }
 
-// resolve maps a chosen release onto the platform asset, its signed manifest
-// and the manifest signature. The offer carries the release's own channel (the
-// signed manifest records stable for a full release and beta for a prerelease),
-// never the subscriber's configured channel: a beta subscriber taking a newer
-// stable release must stay bound to the stable manifest (M4).
 func (c *Checker) resolve(release ghRelease, version updatecore.Version, arch string) (*Release, error) {
 	assetName := c.assetPrefix() + arch
 	manifestName := updatecore.ManifestNameWithPrefix(c.ManifestPrefix, arch)
@@ -382,7 +321,6 @@ func (c *Checker) resolve(release ghRelease, version updatecore.Version, arch st
 	return candidate, nil
 }
 
-// get performs a bounded GET and returns the response body.
 func (c *Checker) get(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
 	if err := updatecore.ValidateURL(rawURL); err != nil {
 		return nil, err
@@ -416,7 +354,6 @@ func (c *Checker) get(ctx context.Context, rawURL string, maxBytes int64) ([]byt
 	return body, nil
 }
 
-// channel returns the configured channel, defaulting to stable.
 func (c *Checker) channel() Channel {
 	if c.Channel == ChannelBeta {
 		return ChannelBeta
@@ -424,7 +361,6 @@ func (c *Checker) channel() Channel {
 	return ChannelStable
 }
 
-// arch returns the asset architecture, defaulting to the running platform.
 func (c *Checker) arch() string {
 	if c.GOARCH != "" {
 		return c.GOARCH
@@ -432,7 +368,6 @@ func (c *Checker) arch() string {
 	return runtime.GOARCH
 }
 
-// assetPrefix returns the release asset family prefix.
 func (c *Checker) assetPrefix() string {
 	if c.AssetPrefix != "" {
 		return c.AssetPrefix
@@ -440,7 +375,6 @@ func (c *Checker) assetPrefix() string {
 	return "gotham-linux-"
 }
 
-// defaultString returns value when non-empty, otherwise fallback.
 func defaultString(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -448,7 +382,6 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
-// defaultDuration returns value when positive, otherwise fallback.
 func defaultDuration(value, fallback time.Duration) time.Duration {
 	if value > 0 {
 		return value

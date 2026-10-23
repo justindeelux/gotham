@@ -18,7 +18,6 @@ interface Props {
 const props = defineProps<Props>();
 const { t } = useI18n();
 
-/** moreNodesText renders the overflow count in the display locale. */
 const moreNodesText = computed<string>(() =>
   props.hiddenCount === 1
     ? t("dashboard.health.moreOne", { count: 1 })
@@ -63,8 +62,6 @@ const moreNodesText = computed<string>(() =>
       :card="card"
     />
   </div>
-  <!-- Cap the grid so a large fleet is not re-diffed in full every 5s
-       (B4-14); link out for the rest. -->
   <NText v-if="hiddenCount > 0" depth="3" class="meta">
     {{ moreNodesText }} —
     <RouterLink :to="{ name: 'servers' }">{{ $t("dashboard.health.viewAll") }}</RouterLink>

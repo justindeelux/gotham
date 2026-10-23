@@ -19,9 +19,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// composeRealNode backs the production terminal resolution with the real
-// Compose and Docker clients, so a regression in resolveComposeTargetIDs fails
-// this test instead of a parallel copy of the logic.
 type composeRealNode struct {
 	*mockNode
 	compose *agent.ComposeServer
@@ -61,14 +58,6 @@ func (n *composeRealNode) FileRoots(context.Context) ([]*agentv1.FileRoot, error
 
 func (n *composeRealNode) Close() error { return nil }
 
-// TestTerminalComposeReal is the JUS-256 live regression: it starts one bounded
-// throwaway Compose project, persists the CLI's id as the deployment would,
-// then drives the production terminal targets and create/attach resolution
-// against the real node. It fails when the scoped full-id resolution regresses.
-//
-// Safety: unique gotham-<uuid> project, pids_limit 64, mem_limit 64m, one CPU,
-// hard timeouts, and t.Cleanup removes the project even on failure. It never
-// touches the shared development containers or any other gotham-* container.
 func TestTerminalComposeReal(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run the live Compose terminal test")
@@ -91,9 +80,6 @@ func TestTerminalComposeReal(t *testing.T) {
 		t.Logf("pull alpine:3: %v (using a local image if present)", err)
 	}
 
-	// The compose root is opened component by component with O_NOFOLLOW, so
-	// resolve the temporary directory's symlinks first (on darwin t.TempDir
-	// lives under the /var -> /private/var symlink).
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatalf("resolve compose root: %v", err)
@@ -116,9 +102,6 @@ func TestTerminalComposeReal(t *testing.T) {
     cpus: "1"
 `
 	upCtx, upCancel := context.WithTimeout(ctx, 4*time.Minute)
-	// Unconfined keeps the test's own resource bounds (pids_limit/mem_limit/
-	// cpus), which the application confinement allowlist does not carry; the
-	// project name, sweep-label and document checks still apply.
 	_, err = compose.ComposeUp(upCtx, &agentv1.ComposeUpRequest{
 		ProjectName: project,
 		ComposeYaml: []byte(document),
@@ -147,8 +130,6 @@ func TestTerminalComposeReal(t *testing.T) {
 		t.Fatalf("no running web container in %+v", ps.GetContainers())
 	}
 
-	// A compose deployment persists exactly the CLI's id (short on the Compose
-	// versions this regression covers).
 	repo := &fakeRepository{app: app}
 	node := &composeRealNode{mockNode: newMockNode(), compose: compose, docker: docker}
 	svc := newNodeService(t, repo, node)
@@ -178,15 +159,12 @@ func TestTerminalComposeReal(t *testing.T) {
 	}
 	t.Logf("compose ps id %q (%d chars) resolved by production code to full id %q", cliID, len(cliID), web.ContainerID)
 
-	// Create and attach both re-resolve through ResolveTerminalContainer.
 	for attempt := 1; attempt <= 2; attempt++ {
 		_, resolved, resolveErr := svc.ResolveTerminalContainer(ctx, userID, app.ID, "web", web.ContainerID)
 		if resolveErr != nil || resolved.ContainerID != web.ContainerID {
 			t.Fatalf("resolve attempt %d = (%+v, %v)", attempt, resolved, resolveErr)
 		}
 	}
-	// The short id must still be refused before any exec, exactly as a client
-	// sending the old targets value would be.
 	short := web.ContainerID[:12]
 	if _, _, err := svc.ResolveTerminalContainer(ctx, userID, app.ID, "web", short); !errors.Is(err, ErrContainerNotFound) {
 		t.Fatalf("short id %q = %v, want ErrContainerNotFound", short, err)
@@ -203,8 +181,6 @@ func TestTerminalComposeReal(t *testing.T) {
 	if !strings.Contains(output, "compose-terminal-ok") {
 		t.Fatalf("output = %q, want the command result", output)
 	}
-	// Let the shell process `exit 0` on its own first, so Close cleans up an
-	// already-finished exec instead of racing a live shell.
 	code, _, err := session.ExitCode(ctx)
 	if err != nil {
 		t.Fatalf("exit code: %v", err)
@@ -215,7 +191,6 @@ func TestTerminalComposeReal(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("close exec: %v", err)
 	}
-	// Closing the terminal must not stop the application container.
 	inspectCtx, inspectCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer inspectCancel()
 	containers, err := docker.ListContainers(inspectCtx, false, map[string]string{composeProjectLabel: project}, false)
@@ -227,7 +202,6 @@ func TestTerminalComposeReal(t *testing.T) {
 	}
 }
 
-// readTerminalUntil reads the exec stream until marker appears or timeout.
 func readTerminalUntil(reader io.Reader, marker string, timeout time.Duration) string {
 	done := make(chan string, 1)
 	go func() {
@@ -256,8 +230,6 @@ func readTerminalUntil(reader io.Reader, marker string, timeout time.Duration) s
 	}
 }
 
-// composeDown removes the throwaway project with its own bounded context, even
-// when the test body already failed.
 func composeDown(t *testing.T, server *agent.ComposeServer, project, document string) {
 	t.Helper()
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

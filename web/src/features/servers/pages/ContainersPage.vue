@@ -41,7 +41,6 @@ const {
   runAction,
 } = useContainersPage(serverId);
 
-/** emptyDescription renders the table empty state for each data condition. */
 const emptyDescription = computed<string>(() => {
   if (!loaded.value) {
     return t("servers.containers.emptyLoading");

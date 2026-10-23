@@ -8,32 +8,17 @@ import { changePassword } from "@/features/profile/api/profile";
 import { changePasswordRules } from "@/features/profile/schemas/profile";
 import { onLocaleChange } from "@/shared/i18n";
 
-// Error convention (shared with the auth pages): client-side validation
-// errors render inline on the field via NFormItem; server-side submit
-// failures keep the raw error and render once in the NAlert above the form
-// through a computed, so a language switch refreshes the banner reactively.
 interface ChangePasswordForm {
   currentPassword: string;
   newPassword: string;
   confirmPassword: string;
 }
 
-/**
- * useChangePasswordForm holds the change-password panel state. Created per
- * panel mount and dropped on unmount, so typed passwords never survive a
- * route change. On success the returned token pair is installed through
- * setSession so the sidebar and session keep working, and the local fields
- * are cleared.
- */
 export function useChangePasswordForm() {
   const { t } = useI18n();
   const authStore = useAuthStore();
   const message = useMessage();
 
-  // Accounts without a password (OAuth-created) set one without a current
-  // password; a missing flag (older control plane) keeps the field, and the
-  // server ignores a current password it does not need. Reactive over the
-  // store: fetchMe resolves after mount and flips this without a reload.
   const hasPassword = computed<boolean>(
     () => authStore.user?.has_password ?? true,
   );
@@ -52,22 +37,11 @@ export function useChangePasswordForm() {
 
   const strength = computed<number>(() => strengthOf(form.newPassword));
 
-  // The confirm rule reads the live new password through a reader (not a
-  // snapshot), so retyping the password revalidates the confirmation. Built
-  // reactively from hasPassword so a late fetchMe flips the current field.
-  // Validators are wrapped to track visible feedback (see below), so a
-  // language switch refreshes exactly the paths already showing errors.
   const visible = createVisibleValidation();
   const rules = computed<FormRules>(() =>
     visible.trackRules(changePasswordRules(hasPassword.value, () => form.newPassword)),
   );
 
-  /**
-   * A language switch revalidates exactly the paths with visible feedback
-   * (input/blur/submit): already-visible errors refresh, pristine fields
-   * stay clean, and nothing submits or calls an API. The record clears on
-   * success so the cleared form stays pristine across later switches.
-   */
   const stopLocaleWatch = onLocaleChange(() => {
     visible.refreshVisible(formRef);
   });
@@ -77,9 +51,6 @@ export function useChangePasswordForm() {
   });
 
   async function handleSubmit(): Promise<void> {
-    // Guard: a click on a submit button plus the native submit (or Enter
-    // plus the submit event) invoke this twice in the same tick; the second
-    // call must not start a second request.
     if (submitting.value) {
       return;
     }

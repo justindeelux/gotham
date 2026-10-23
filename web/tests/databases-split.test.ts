@@ -1,7 +1,3 @@
-// Unit tests for the pure helpers extracted by the JUS-24 databases split.
-// They pin the exact behaviour the monoliths had inline. (PE-5 removed the
-// flat DatabasesPage with its table, KPI row and empty state; the pure
-// utils below stay and are still pinned here.)
 import { describe, expect, it } from "vitest";
 
 import {

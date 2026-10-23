@@ -18,7 +18,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// Opt-in uses only the explicitly supplied disposable database.
 func TestNodeObservationBackedVisibility(t *testing.T) {
 	dsn := os.Getenv("GOTHAM_TEST_DSN")
 	if dsn == "" {

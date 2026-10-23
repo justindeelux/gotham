@@ -21,10 +21,8 @@ const emit = defineEmits<{
   validate: [];
 }>();
 
-/** initials derives a two-letter avatar from the server name. */
 const initials = computed<string>(() => detailInitials(props.server.name));
 
-/** summary renders the one-line node summary under the title. */
 const summary = computed<string>(() => summaryLine(props.server));
 </script>
 

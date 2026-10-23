@@ -1,8 +1,3 @@
-// Regression test for the JUS-89 fix-round-2 live bug (kept for the JUS-233
-// Domains tab): bumpDomainsRefresh() called inject() after an await, so every
-// domain mutation reported success as "Something went wrong". This mounts the
-// real DomainEditor tree with the HTTP layer mocked and drives add/remove/
-// make-primary through the UI.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -167,7 +162,6 @@ describe("domain mutations work through the table and modal", () => {
       wrapper.text().includes("Something went wrong") ||
       wrapper.text().includes("Cannot read properties");
 
-    // ── add ──────────────────────────────────────────────────────────
     await wrapper.find(".domain-add").trigger("click");
     await nextTick();
     await wrapper
@@ -185,7 +179,6 @@ describe("domain mutations work through the table and modal", () => {
       expect.objectContaining({ domain: "www.example.com", port: 80 }),
     );
 
-    // ── remove ───────────────────────────────────────────────────────
     const wwwRow = () =>
       wrapper
         .findAll(".domain-row")
@@ -210,7 +203,6 @@ describe("domain mutations work through the table and modal", () => {
       wrapper.findAll(".domain-row").some((row) => row.text().includes("www.example.com")),
     ).toBe(false);
 
-    // ── make primary ─────────────────────────────────────────────────
     await wrapper.find(".domain-add").trigger("click");
     await nextTick();
     await wrapper

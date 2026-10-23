@@ -1,11 +1,3 @@
-// Require-mark (asterisk) contract for the zod migration (JUS-23 fix r1).
-//
-// Naive UI derives the red `*` label mark from
-// `rules.some((rule) => rule.required)`; the schemas carry it via ruleFrom's
-// `required` option (validation still goes through `validator`). These tests
-// mount real NForm/NFormItem trees with the ACTUAL rule builders the pages
-// use and assert asterisk presence per field and per authMode/keyMode,
-// including unexpected mode values.
 
 import { mount } from "@vue/test-utils";
 import type { FormRules } from "naive-ui";
@@ -29,9 +21,6 @@ interface Field {
   label: string;
 }
 
-// Schema messages are catalog keys resolved at validation time; register
-// the catalogs so full-form validate() assertions see the English display
-// text the differential contract pins.
 registerDiscoveredCatalogs();
 
 beforeEach(() => {
@@ -61,7 +50,6 @@ function mountFields(
   );
 }
 
-/** fieldMarks reports asterisk presence per field, in mount order. */
 function fieldMarks(
   wrapper: ReturnType<typeof mount>,
   fields: Field[],

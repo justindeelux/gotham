@@ -3,20 +3,9 @@ import type { InjectionKey } from "vue";
 
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
-/**
- * Overview state of the Domains page: first-load orchestration and the
- * KPI tile counts. State is per page instance (created by provideDomainsOverview
- * in the page, shared via inject) so a revisit starts clean: the tiles show
- * a dash until the first load settles instead of stale counts.
- */
-
 function createDomainsOverviewState() {
   const proxyStore = useProxyStore();
 
-  /**
-   * statsReady flips once the first load settles, so the tiles never flash a
-   * 0 that was never read.
-   */
   const statsReady = ref(false);
 
   const enabledProviders = computed(() =>
@@ -35,11 +24,6 @@ function createDomainsOverviewState() {
     () => proxyStore.certificates.filter((item) => item.wildcard).length,
   );
 
-  /**
-   * statsBlocked is true while the first load is in flight or when a read
-   * failed (for example a non-admin 403): the tiles then show a dash rather
-   * than a 0 that looks like real data.
-   */
   const statsBlocked = computed<boolean>(
     () =>
       !statsReady.value ||
@@ -47,12 +31,10 @@ function createDomainsOverviewState() {
       proxyStore.certificatesError !== null,
   );
 
-  /** statText renders a tile count, or a dash when the read failed/is pending. */
   function statText(count: number): string {
     return statsBlocked.value ? "—" : String(count);
   }
 
-  /** load refreshes providers, certificates, redirects, routers and the name map. */
   async function load(): Promise<void> {
     try {
       await Promise.allSettled([
@@ -83,17 +65,12 @@ export type DomainsOverviewState = ReturnType<typeof createDomainsOverviewState>
 const domainsOverviewKey: InjectionKey<DomainsOverviewState> =
   Symbol("domains.overview");
 
-/**
- * provideDomainsOverview creates the overview state for one page mount.
- * Call once in the page; descendants share it through useDomainsOverview.
- */
 export function provideDomainsOverview(): DomainsOverviewState {
   const state = createDomainsOverviewState();
   provide(domainsOverviewKey, state);
   return state;
 }
 
-/** useDomainsOverview shares the page instance; call in descendant components. */
 export function useDomainsOverview(): DomainsOverviewState {
   const state = inject(domainsOverviewKey);
   if (!state) {

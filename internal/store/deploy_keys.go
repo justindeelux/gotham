@@ -9,13 +9,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// CreateApplicationDeployKey stores an application's deploy key: the sealed
-// private key in private_keys plus the application_deploy_keys mapping that
-// points at it, in one transaction. A mapping must never exist without its
-// private key (the cloner would open nothing), so the two rows are written
-// together. The private key is stamped with the owning application's team, so
-// another team that learns its UUID cannot attach it as a node SSH key
-// (JUS-5 fix round 2).
 func (s *Store) CreateApplicationDeployKey(
 	ctx context.Context,
 	params sqlc.CreateApplicationDeployKeyParams,
@@ -51,19 +44,10 @@ func (s *Store) CreateApplicationDeployKey(
 	return row, nil
 }
 
-// GetApplicationDeployKey returns the deploy key of an application, or
-// pgx.ErrNoRows when the application has none.
 func (s *Store) GetApplicationDeployKey(ctx context.Context, applicationID pgtype.UUID) (sqlc.ApplicationDeployKey, error) {
 	return s.queries.GetApplicationDeployKey(ctx, applicationID)
 }
 
-// DeleteApplicationDeployKey removes an application's deploy key: the mapping
-// row and the private key it points at, in one transaction, and returns the
-// mapping that was removed (pgx.ErrNoRows when there was nothing to delete).
-// The delete is fenced on the mapping ID the caller read, so a stale concurrent
-// delete cannot remove a replacement key created in the meantime. Deleting the
-// private key first would cascade the mapping away, so the mapping is read back
-// explicitly before both rows go.
 func (s *Store) DeleteApplicationDeployKey(ctx context.Context, keyID, applicationID pgtype.UUID) (sqlc.ApplicationDeployKey, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -88,9 +72,6 @@ func (s *Store) DeleteApplicationDeployKey(ctx context.Context, keyID, applicati
 	return row, nil
 }
 
-// DeletePrivateKey removes one sealed private key row. It is idempotent: a row
-// that is already gone is not an error. The FK from application_deploy_keys
-// cascades the mapping away with it.
 func (s *Store) DeletePrivateKey(ctx context.Context, privateKeyID pgtype.UUID) error {
 	return s.queries.DeletePrivateKey(ctx, privateKeyID)
 }

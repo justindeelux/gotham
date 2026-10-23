@@ -8,18 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
 /* global URL, window:readonly */
-// URL/window run inside the page and server callbacks (browser/Node URL
-// globals); the repo lint envs do not cover tests/, so they are declared.
-
-// Real-browser proof for JUS-74 fix round 1: the committed webdist is served
-// statically with the control-plane API mocked, a session is seeded in
-// localStorage, and real Chromium measures the real Naive UI DOM bounding
-// boxes. No backend is involved. Same harness as environment-layout.spec.ts.
-//
-// The previous round passed review on source-text assertions yet rendered
-// wrongly (scoped :deep rules never reach NModal's teleported card), so every
-// claim here is a measured box: modal width, input width, hint below input,
-// footer order.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -66,7 +54,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -98,7 +85,6 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session and answers the calls the Git sources page makes. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -123,7 +109,6 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
-/** openDialog opens one connect modal from the empty Git sources page. */
 async function openDialog(page: Page, name: string): Promise<Locator> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
@@ -131,14 +116,12 @@ async function openDialog(page: Page, name: string): Promise<Locator> {
   await page.getByRole("button", { name, exact: true }).first().click();
   const dialog = page.locator(".n-modal.n-card");
   await expect(dialog).toBeVisible();
-  // NModal opens with a scale transition: wait until the card settles.
   await expect
     .poll(async () => (await dialog.boundingBox())?.width ?? 0, { timeout: 5000 })
     .toBeGreaterThanOrEqual(480);
   return dialog;
 }
 
-/** expectStacked asserts a full-width input with its hint rendered below it. */
 async function expectStacked(
   dialog: Locator,
   inputId: string,
@@ -172,7 +155,6 @@ test("Connect GitLab modal is 520px with full-width inputs and hints below", asy
   await expect(token).toHaveAttribute("placeholder", "glpat-…");
   await expectStacked(dialog, "gitlab-admin-token-input", "never stored");
 
-  // Footer: the quiet manual toggle sits left, Cancel + primary right.
   const toggle = dialog.getByRole("button", { name: "Use manual app fields instead" });
   const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
   const primary = dialog.getByRole("button", { name: "Provision & connect" });
@@ -195,7 +177,6 @@ test("Connect GitLab modal is 520px with full-width inputs and hints below", asy
     "primary hugs the dialog right edge",
   ).toBeLessThanOrEqual(40);
 
-  // Manual mode fields stack the same way.
   await toggle.click();
   await expectStacked(dialog, "gitlab-redirect-input", "exactly this URI");
   await expectStacked(dialog, "gitlab-client-secret-input", "never shown again");

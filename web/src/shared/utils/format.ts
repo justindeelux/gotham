@@ -1,19 +1,10 @@
-/**
- * Small display formatters shared by the server UI. Only dependencies are the
- * locale state and the static common catalogs (no vue-i18n runtime), so the
- * helpers stay lean and trivial to unit-test. Date/time wording follows the
- * active UI locale; byte units, thresholds, null placeholders and
- * invalid-date handling are locale-independent.
- */
 import { activeLocale, localeTag } from "@/shared/i18n/locale";
 import type { Locale } from "@/shared/i18n/locale";
 import enCatalog from "@/shared/i18n/locales/en";
 import viCatalog from "@/shared/i18n/locales/vi";
 
-/** Placeholder shown when a value is missing. */
 const emptyPlaceholder = "—";
 
-/** formatBytes renders a byte count using binary (KiB/MiB/GiB) units. */
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || Number.isNaN(bytes)) {
     return emptyPlaceholder;
@@ -37,7 +28,6 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${value.toFixed(decimals)} ${units[exponent]}`;
 }
 
-/** formatPercent renders a 0..100 float as a rounded percentage string. */
 export function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return emptyPlaceholder;
@@ -46,28 +36,12 @@ export function formatPercent(value: number | null | undefined): string {
   return `${clamped.toFixed(1)}%`;
 }
 
-/**
- * Shared usage-meter thresholds (percent, 0..100 after toPercent).
- *
- *   ok      below 60 — healthy headroom, rendered green / base color.
- *   warn    60..79   — getting full, rendered amber.
- *   danger  80+      — act soon, rendered red.
- *
- * The dashboard and the server list share this helper so the same reading
- * never shows two severities on two pages.
- */
 export const USAGE_WARN_PERCENT = 60;
 
-/**
- * USAGE_DANGER_PERCENT is the single danger threshold for CPU/RAM/disk meters.
- * Kept here so the dashboard and the server list cannot drift apart (B4-13).
- */
 export const USAGE_DANGER_PERCENT = 80;
 
-/** Severity level of a normalized 0..100 usage reading. */
 export type UsageLevel = "ok" | "warn" | "danger";
 
-/** usageLevel maps a normalized percentage onto its severity level. */
 export function usageLevel(percent: number): UsageLevel {
   if (percent >= USAGE_DANGER_PERCENT) {
     return "danger";
@@ -78,13 +52,6 @@ export function usageLevel(percent: number): UsageLevel {
   return "ok";
 }
 
-/**
- * usageBarColor maps a severity level onto its bar color: the metric keeps
- * its healthy base hue (per the dashboard/servers mockups CPU renders accent
- * while RAM/disk render success green), warn renders amber and danger red on
- * every page. The dashboard and the server list share this helper so the same
- * reading never shows two severities on two pages.
- */
 export function usageBarColor(level: UsageLevel, healthy: string): string {
   switch (level) {
     case "danger":
@@ -96,21 +63,12 @@ export function usageBarColor(level: UsageLevel, healthy: string): string {
   }
 }
 
-/** UsageView is one rendered usage tile (label, bar color, bar percent). */
 export interface UsageView {
-  /** label is the displayed reading, or an em dash when there is none. */
   label: string;
-  /** color is the bar color from the shared severity scale. */
   color: string;
-  /** percentage is the normalized 0..100 reading the bar renders. */
   percentage: number;
 }
 
-/**
- * usageView normalizes a heartbeat usage reading for display. Null,
- * undefined and NaN render as an em dash (never as a false 0%); other values
- * are clamped to 0..100 through toPercent before the shared thresholds apply.
- */
 export function usageView(
   value: number | null | undefined,
   healthy: string,
@@ -126,12 +84,6 @@ export function usageView(
   };
 }
 
-/** toPercent normalizes a usage reading to a 0-100 percentage.
- *
- * The proto contract (proto/agent/v1/agent.proto) defines heartbeat usage
- * as a fraction 0..1, so fractional readings are scaled up. Readings above
- * 1 pass through unchanged for forward compatibility.
- */
 export function toPercent(value: number | null | undefined): number {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return 0;
@@ -140,7 +92,6 @@ export function toPercent(value: number | null | undefined): number {
   return Math.round(Math.min(Math.max(scaled, 0), 100));
 }
 
-/** rtf caches Intl.RelativeTimeFormat per (tag, numeric) pair. */
 const rtfCache = new Map<string, Intl.RelativeTimeFormat>();
 
 function rtf(tag: string, numeric: "always" | "auto"): Intl.RelativeTimeFormat {
@@ -153,29 +104,11 @@ function rtf(tag: string, numeric: "always" | "auto"): Intl.RelativeTimeFormat {
   return formatter;
 }
 
-/** RelativeTimeOptions tunes the wording of {@link relativeTime}. */
 export interface RelativeTimeOptions {
-  /**
-   * long renders the spelled-out form ("2 days ago", "yesterday", "in 2 days")
-   * instead of the compact app dialect ("2d ago"). The file list's Modified
-   * column uses it (JUS-134).
-   */
   long?: boolean;
-  /**
-   * now is the reference time in ms. A caller driving a coarse clock passes its
-   * tick so the rendered text refreshes, and tests pass a fixed instant;
-   * defaults to the wall clock.
-   */
   now?: number;
 }
 
-/**
- * relativeTime renders an ISO timestamp as a short "x ago" / "in x" string.
- * English keeps the compact app dialect byte-identical; Vietnamese uses
- * native Intl.RelativeTimeFormat with the same thresholds and time zone.
- * Static labels come from the common `time` catalog, never inline copies.
- * `options.long` spells the age out for the file list.
- */
 export function relativeTime(
   iso: string | null | undefined,
   locale?: Locale | null,
@@ -197,9 +130,6 @@ export function relativeTime(
   const seconds = Math.abs(deltaSeconds);
 
   if (options.long) {
-    // A sub-minute age — including the small clock skew where the agent's
-    // clock runs slightly ahead of the browser's — reads as "just now"
-    // rather than "in N seconds".
     if (seconds < 60) {
       return time.justNow;
     }
@@ -217,7 +147,6 @@ export function relativeTime(
   }
 
   if (loc === "en") {
-    /** unit renders the magnitude with the direction that fits the timestamp. */
     const unit = (value: number, suffix: string): string =>
       future ? `in ${value}${suffix}` : `${value}${suffix} ago`;
 
@@ -252,7 +181,6 @@ export function relativeTime(
     return future ? time.inMoment : time.justNow;
   }
   const relative = rtf("vi-VN", "always");
-  /** signed renders value with the direction that fits the timestamp. */
   const signed = (
     value: number,
     unit: "minute" | "hour" | "day" | "month" | "year",
@@ -281,7 +209,6 @@ export function relativeTime(
   return signed(Math.round(months / 12), "year");
 }
 
-/** formatDate renders an ISO timestamp as a short absolute date ("28 Sep 2026"). */
 export function formatDate(
   iso: string | null | undefined,
   locale?: Locale | null,
@@ -301,10 +228,6 @@ export function formatDate(
   });
 }
 
-/**
- * formatDateTime renders an ISO timestamp as a localized date and time
- * ("18 Oct 2026, 09:30"), for labels that must distinguish same-day events.
- */
 export function formatDateTime(
   iso: string | null | undefined,
   locale?: Locale | null,
@@ -323,7 +246,6 @@ export function formatDateTime(
   });
 }
 
-/** expiryLabel renders how far away (or past) an expiry timestamp is. */
 export function expiryLabel(
   iso: string | null | undefined,
   locale?: Locale | null,

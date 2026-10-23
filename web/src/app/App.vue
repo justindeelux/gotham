@@ -15,11 +15,6 @@ import { naiveDateLocale, naiveLocale } from "@/shared/i18n";
 const authStore = useAuthStore();
 const route = useRoute();
 
-// A session restored from localStorage may not carry the account (OAuth mints
-// the token pair before the SPA loads it). Refresh it once on mount so the shell
-// does not render a placeholder until a manual reload (A2-17/F3). Skip it on the
-// callback route, where the exchange installs a fresh session that this delayed
-// response could otherwise overwrite.
 onMounted(() => {
   if (route.path === "/oauth/callback") {
     return;
@@ -29,8 +24,6 @@ onMounted(() => {
   }
 });
 
-// Gotham dark-theme mapping for Naive UI, derived from
-// web/src/shared/styles/tokens.css.
 const themeOverrides: GlobalThemeOverrides = {
   common: {
     primaryColor: "#5865f2",
@@ -65,11 +58,6 @@ const themeOverrides: GlobalThemeOverrides = {
     bodyColor: "#313338",
     cardColor: "#2b2d31",
     modalColor: "#2b2d31",
-    // Design token for floating surfaces (popovers, dropdowns); the previous
-    // #3b3e44 invent a lighter surface that matched no token (B3-7). Kept as a
-    // literal because Naive UI parses these colours and rejects CSS vars /
-    // color-mix() (console error: `[seemly/rgba]: Invalid color value`).
-    // #121315 == color-mix(in oklab, #1e1f22 78%, black) == tokens.css --float.
     popoverColor: "#121315",
     tableColor: "#2b2d31",
     tableHeaderColor: "#232428",
@@ -121,11 +109,6 @@ const themeOverrides: GlobalThemeOverrides = {
     textColorPressedPrimary: "#ffffff",
     textColorFocusPrimary: "#ffffff",
     rippleColorPrimary: "rgba(88, 101, 242, 0.4)",
-    // Non-solid variants paint their text with the semantic fill colour, which
-    // measures ~3.0:1 (primary), 3.66:1 (error), 4.34:1 (success) on the card
-    // surface — below WCAG AA. Use the design "ink" tokens (fill mixed toward
-    // white) so ghost/text/quaternary text reaches >=4.5:1 in every state
-    // (B3-8). Solid buttons keep white text, which already passes.
     textColorHover: "var(--fg-2)",
     textColorPressed: "var(--fg-2)",
     textColorFocus: "var(--fg-2)",
@@ -219,9 +202,6 @@ const themeOverrides: GlobalThemeOverrides = {
     feedbackTextColorError: "#f67c7c",
     feedbackTextColorWarning: "#f3c057",
     feedbackTextColor: "#949ba4",
-    // JUS-16: validation error text is smaller than labels/inputs (12px, the
-    // --text-xs token) while the #f67c7c error ink keeps readable contrast on
-    // the dark surfaces. Set once here so every NFormItem follows it.
     feedbackFontSizeSmall: "12px",
     feedbackFontSizeMedium: "12px",
     feedbackFontSizeLarge: "12px",

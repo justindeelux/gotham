@@ -13,7 +13,6 @@ import (
 )
 
 func TestPendingControlPlaneURLPersistence(t *testing.T) {
-	// Use an explicit test database: the settings row is instance-wide.
 	dsn := os.Getenv("GOTHAM_TEST_DSN")
 	if dsn == "" {
 		t.Skip("GOTHAM_TEST_DSN is required for singleton settings persistence")

@@ -1,8 +1,3 @@
-// Unsaved editor drafts (JUS-229): debounced persistence keyed by
-// server+user+root+path, retention caps and TTL cleanup, silent degradation when
-// storage is blocked, the Restore/Discard prompt on reopen (with a stale-etag
-// warning), and draft removal after save or explicit discard. The files API is
-// mocked so the store runs without axios or a real network.
 /* global Storage:readonly, window:readonly */
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -52,7 +47,6 @@ const server = "srv";
 const user = "user-1";
 const prefix = editorDraftStoragePrefix(server, user);
 
-/** memoryStorage builds an in-memory Storage double. */
 function memoryStorage(): EditorDraftStorage & { dump: Map<string, string> } {
   const dump = new Map<string, string>();
   return {
@@ -67,7 +61,6 @@ function memoryStorage(): EditorDraftStorage & { dump: Map<string, string> } {
   };
 }
 
-/** throwingStorage fails every access (private mode / blocked storage). */
 function throwingStorage(): EditorDraftStorage {
   return {
     length: 0,
@@ -86,7 +79,6 @@ function throwingStorage(): EditorDraftStorage {
   };
 }
 
-/** draft builds one valid draft payload. */
 function draft(overrides: Partial<Parameters<typeof writeEditorDraft>[2]> = {}) {
   return {
     root: "volumes",
@@ -100,17 +92,14 @@ function draft(overrides: Partial<Parameters<typeof writeEditorDraft>[2]> = {}) 
   };
 }
 
-/** content builds a FilesContent response. */
 function content(body: string, etag = '"v1"') {
   return { content: body, etag, sha256: "abc", size: body.length, mode: 0o100644 };
 }
 
-/** account builds one authenticated user. */
 function account(id: string) {
   return { id, email: `${id}@example.com`, created_at: "2026-10-01T00:00:00Z" };
 }
 
-/** draftKeys lists every stored draft key in the browser. */
 function draftKeys(): string[] {
   const keys: string[] = [];
   for (let index = 0; index < window.localStorage.length; index += 1) {
@@ -122,7 +111,6 @@ function draftKeys(): string[] {
   return keys;
 }
 
-/** team builds one team with a role. */
 function team(role: Team["role"]): Team {
   return {
     id: "team-1",
@@ -170,7 +158,6 @@ describe("editor draft storage", () => {
     const key = editorDraftStorageKey(prefix, "volumes", "etc/app.yaml");
     expect(key.startsWith(prefix)).toBe(true);
     expect(key).toContain(encodeURIComponent("etc/app.yaml"));
-    // A dot in a name must not merge two different root/path pairs.
     expect(editorDraftStorageKey(prefix, "a.b", "c")).not.toBe(
       editorDraftStorageKey(prefix, "a", "b.c"),
     );
@@ -236,7 +223,6 @@ describe("editor draft storage", () => {
 });
 
 describe("editor drafts composable", () => {
-  /** start opens one file with the given body and starts the draft watcher. */
   async function start(body = "base\n", etag = '"v1"') {
     getContentMock.mockResolvedValue(content(body, etag));
     const editor = useEditorStore();
@@ -319,7 +305,6 @@ describe("editor drafts composable", () => {
     expect(tab.etag).toBe('"v0"');
     expect(tab.doc).toBe("recovered\n");
 
-    // A later flush must keep the draft's original base, not the loaded etag.
     await nextTick();
     vi.advanceTimersByTime(800);
     expect(readEditorDraft(window.localStorage, key)?.etag).toBe('"v0"');
@@ -344,15 +329,12 @@ describe("editor drafts composable", () => {
     const tab = editor.activeTab!;
     expect(drafts.prompt.value).not.toBeNull();
 
-    // The tab is refreshed (an external refresh or conflict reload) before the
-    // user answers: the stale draft must not clobber the newer buffer.
     getContentMock.mockResolvedValue(content("server moved\n", '"v2"'));
     await editor.reload(tab.id, "team-1");
     await nextTick();
 
     drafts.restore();
     expect(tab.doc).toBe("server moved\n");
-    // Re-offered against the new base instead of silently dropped.
     expect(drafts.prompt.value?.loadedEtag).toBe('"v2"');
     expect(drafts.prompt.value?.conflict).toBe(true);
   });
@@ -418,8 +400,6 @@ describe("editor draft purge on sign-out", () => {
 
   it("clears drafts on the forced session-expiry path", () => {
     writeEditorDraft(window.localStorage, prefix, draft());
-    // The axios interceptor funnels a dead session through this module-level
-    // clear, which also purges user-scoped storage without the auth store.
     clearStoredSession();
     expect(draftKeys()).toEqual([]);
   });
@@ -433,7 +413,6 @@ describe("editor draft purge on sign-out", () => {
     });
     writeEditorDraft(window.localStorage, prefix, draft());
 
-    // A token rotation for the same account keeps the drafts for recovery.
     auth.setSession({
       user: account("user-1"),
       access_token: "b",

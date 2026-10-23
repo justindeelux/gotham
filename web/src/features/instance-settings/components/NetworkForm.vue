@@ -40,8 +40,6 @@ const { t } = useI18n();
 
 const formRef = ref<FormInst | null>(null);
 const dnsExtra = ref(false);
-// baseline is the loaded host configuration the risky-change guard compares
-// against (JUS-100): the server reports the host truth, not stored defaults.
 const baseline = ref<InterfaceConfig>(snapshot(props.state.network));
 const confirmChecked = ref(false);
 const form = reactive({
@@ -60,7 +58,6 @@ const form = reactive({
 watch(
   () => props.state.network,
   (n) => {
-    // A stored third server stays editable; fewer than two pad to Primary/Alternate.
     const servers = n.dns_servers.slice(0, 3);
     form.dns0 = servers[0] ?? "";
     form.dns1 = servers[1] ?? "";
@@ -113,7 +110,6 @@ const { submitting, serverErrors, errorMessage, submit } = useSectionForm(
   () => t("instance-settings.network.applied"),
 );
 
-/** snapshot reads the interface half of a network configuration. */
 function snapshot(n: InterfaceConfig): InterfaceConfig {
   return {
     ipv4: { mode: n.ipv4.mode, address: n.ipv4.address, gateway: n.ipv4.gateway },
@@ -126,7 +122,6 @@ function snapshot(n: InterfaceConfig): InterfaceConfig {
   };
 }
 
-/** current reads the interface half of the form as the submit payload would. */
 function current(): InterfaceConfig {
   return {
     ipv4: {
@@ -146,7 +141,6 @@ function current(): InterfaceConfig {
 const risky = computed<boolean>(() => isRiskyInterfaceChange(baseline.value, current()));
 const dnsOnly = computed<boolean>(() => !risky.value && sameInterface(baseline.value, current()));
 
-/** dnsServers collects the visible resolver inputs, dropping empties. */
 function dnsServers(): string[] {
   const inputs = dnsExtra.value ? [form.dns0, form.dns1, form.dns2] : [form.dns0, form.dns1];
   return inputs.map((item) => item.trim()).filter((item) => item !== "");
@@ -175,7 +169,6 @@ function status(path: string): "error" | undefined {
 
 const disabled = (): boolean => !props.state.capabilities.network || props.state.pending !== null;
 
-// Announcing + focusing when the helper install unlocks the section (JUS-185).
 const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.network);
 </script>
 
@@ -308,9 +301,6 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.n
   max-width: 640px;
 }
 
-/* JUS-99: hints live in the default slot (below their input). NFormItem
- * renders slot content in .n-form-item-blank, a flex row, so wrap it —
- * the same pattern main.css applies to the wizard/edit modals. */
 .instance-form :deep(.n-form-item-blank) {
   flex-wrap: wrap;
 }
@@ -319,8 +309,6 @@ h4 {
   margin: 8px 0;
 }
 
-/* Visually-hidden polite live region (JUS-185): a shared .sr-only utility does
- * not exist yet, so the section owns this one. */
 .sr-only {
   position: absolute;
   width: 1px;

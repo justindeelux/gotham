@@ -14,8 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// newTestService wires a service over the fakes with a short health window, so
-// failure paths resolve in milliseconds instead of engine timeouts.
 func newTestService(repo *fakeRepository, cs *fakeContainers) *Service {
 	return NewService(Config{
 		Repository:    repo,
@@ -27,10 +25,6 @@ func newTestService(repo *fakeRepository, cs *fakeContainers) *Service {
 	})
 }
 
-// TestCreateEachEngine provisions every supported engine and asserts the same
-// contract: a running row, a container payload carrying the image, the sealed
-// environment and the volume, and credentials that are readable but never
-// stored in the clear.
 func TestCreateEachEngine(t *testing.T) {
 	for _, engineName := range EngineNames() {
 		t.Run(engineName, func(t *testing.T) {
@@ -90,11 +84,9 @@ func TestCreateEachEngine(t *testing.T) {
 				t.Errorf("labels = %v, want the database id label", run.Labels)
 			}
 
-			// The payload carries the plaintext credential exactly once...
 			if !envContains(run.Env, credentials.Password) {
 				t.Error("the run payload does not carry the generated password")
 			}
-			// ...while the repository holds ciphertext only.
 			secrets, err := repo.ListSecrets(context.Background(), database.ID)
 			if err != nil {
 				t.Fatalf("ListSecrets: %v", err)
@@ -128,8 +120,6 @@ func TestCreateEachEngine(t *testing.T) {
 	}
 }
 
-// TestCreateInternalDatabasePublishesNoPort: an internal database has no host
-// binding at all.
 func TestCreateInternalDatabasePublishesNoPort(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -150,10 +140,7 @@ func TestCreateInternalDatabasePublishesNoPort(t *testing.T) {
 	}
 }
 
-// TestCreateValidation covers every rejected request shape.
 func TestCreateValidation(t *testing.T) {
-	// serverMode decides which server the request points at: at the default
-	// (valid) the failure under test is not the server resolution.
 	const (
 		serverValid   = "valid"
 		serverAbsent  = "absent"
@@ -247,7 +234,7 @@ func TestCreateValidation(t *testing.T) {
 			case serverAbsent:
 				req.ServerID = uuid.Nil
 			case serverUnknown:
-				req.ServerID = uuid.New() // never seeded
+				req.ServerID = uuid.New()
 			default:
 				req.ServerID = serverID
 			}
@@ -260,7 +247,6 @@ func TestCreateValidation(t *testing.T) {
 	}
 }
 
-// TestCreateRejectsDuplicateName: the partial unique index answers 409.
 func TestCreateRejectsDuplicateName(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -282,8 +268,6 @@ func TestCreateRejectsDuplicateName(t *testing.T) {
 	}
 }
 
-// TestCreateAgentFailureKeepsAnErrorRow: a failed provision leaves a visible
-// row in the error state instead of silently vanishing.
 func TestCreateAgentFailureKeepsAnErrorRow(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -314,8 +298,6 @@ func TestCreateAgentFailureKeepsAnErrorRow(t *testing.T) {
 	}
 }
 
-// TestCreateHealthcheckTimeout: a container that never reports running fails
-// the provision with ErrHealthcheck and an error row.
 func TestCreateHealthcheckTimeout(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -339,8 +321,6 @@ func TestCreateHealthcheckTimeout(t *testing.T) {
 	}
 }
 
-// TestOwnershipIsolation: every read and mutation of another user's database
-// answers ErrNotFound so IDs cannot be probed.
 func TestOwnershipIsolation(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -390,14 +370,12 @@ func TestOwnershipIsolation(t *testing.T) {
 		t.Errorf("owner Get: %v", err)
 	}
 
-	// The stranger's failed deletes must not have touched the row.
 	still, err := svc.Get(context.Background(), owner, created.ID)
 	if err != nil || still.Status == StatusDeleting {
 		t.Errorf("row after failed deletes: %+v (err %v)", still, err)
 	}
 }
 
-// TestListExcludesOtherUsersAndDeletedRows.
 func TestListExcludesOtherUsersAndDeletedRows(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -447,8 +425,6 @@ func TestListExcludesOtherUsersAndDeletedRows(t *testing.T) {
 	}
 }
 
-// TestDeleteStopsRemovesAndKeepsTheVolume is the soft-delete contract: the
-// container goes, the row is hidden, the named volume survives.
 func TestDeleteStopsRemovesAndKeepsTheVolume(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -499,9 +475,6 @@ func TestDeleteStopsRemovesAndKeepsTheVolume(t *testing.T) {
 	}
 }
 
-// TestDeleteFailsWhenTheAgentCannotRemove: a failed removal keeps the row
-// live so the operator can retry instead of losing track of a running
-// container.
 func TestDeleteFailsWhenTheAgentCannotRemove(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -524,8 +497,6 @@ func TestDeleteFailsWhenTheAgentCannotRemove(t *testing.T) {
 	}
 }
 
-// TestDeleteWithoutContainer: a row whose container never came up is still
-// deletable (it is what a failed provision leaves behind).
 func TestDeleteWithoutContainer(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(repo, &fakeContainers{})
@@ -543,9 +514,6 @@ func TestDeleteWithoutContainer(t *testing.T) {
 	}
 }
 
-// TestDeleteSucceedsWhenTheServerIsGone: deleting a server nulls the FK on its
-// databases, and the agent then knows no such node. The row must still
-// soft-delete instead of wedging on ErrServerNotFound forever.
 func TestDeleteSucceedsWhenTheServerIsGone(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -571,9 +539,6 @@ func TestDeleteSucceedsWhenTheServerIsGone(t *testing.T) {
 	}
 }
 
-// TestCreateRemovesContainerWhenTheRowCannotBeUpdated: when the agent starts a
-// container but its ID cannot be persisted, the row can never manage it again,
-// so the container is removed instead of becoming an orphan.
 func TestCreateRemovesContainerWhenTheRowCannotBeUpdated(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -597,7 +562,6 @@ func TestCreateRemovesContainerWhenTheRowCannotBeUpdated(t *testing.T) {
 	}
 }
 
-// TestLifecycleStatuses walks start/stop/restart and their container calls.
 func TestLifecycleStatuses(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -643,8 +607,6 @@ func TestLifecycleStatuses(t *testing.T) {
 	}
 }
 
-// TestLifecycleAgentFailureIsMapped: an unreachable agent surfaces as
-// ErrAgentUnavailable on every verb.
 func TestLifecycleAgentFailureIsMapped(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -676,7 +638,6 @@ func TestLifecycleAgentFailureIsMapped(t *testing.T) {
 	}
 }
 
-// TestLifecycleRequiresContainer guards verbs on a row that never provisioned.
 func TestLifecycleRequiresContainer(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(repo, &fakeContainers{})
@@ -700,8 +661,6 @@ func TestLifecycleRequiresContainer(t *testing.T) {
 	}
 }
 
-// TestCredentialsRoundTrip: what Create returned is what the credentials
-// endpoint decrypts later.
 func TestCredentialsRoundTrip(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -728,7 +687,6 @@ func TestCredentialsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestUpdateRename covers the single mutable field.
 func TestUpdateRename(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -769,7 +727,6 @@ func TestUpdateRename(t *testing.T) {
 	}
 }
 
-// TestServiceWithoutDependencies fails clearly instead of panicking.
 func TestServiceWithoutDependencies(t *testing.T) {
 	svc := NewService(Config{Logger: discardLogger()})
 	if _, _, err := svc.Create(context.Background(), uuid.New(), CreateRequest{Name: "db", Engine: EnginePostgres}); err == nil {
@@ -785,8 +742,6 @@ func TestServiceWithoutDependencies(t *testing.T) {
 	}
 }
 
-// TestNewDefaultServiceReturnsNilWithoutDependencies: the server wiring passes
-// the result to Mount unconditionally.
 func TestNewDefaultServiceReturnsNilWithoutDependencies(t *testing.T) {
 	if svc := NewDefaultService(Config{Secret: testSecret}); svc != nil {
 		t.Error("no repository and no container service must yield a nil service")
@@ -806,13 +761,6 @@ func TestNewDefaultServiceReturnsNilWithoutDependencies(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// FX-8a regression tests: provisioning image pull, cleanup ids, delete/create
-// fencing, column-scoped writes, credential rollback and public-port conflicts.
-// ---------------------------------------------------------------------------
-
-// TestCreatePullsImageBeforeRun (D1-2): a fresh node has no engine image, so
-// create must pull it before running the container.
 func TestCreatePullsImageBeforeRun(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -836,16 +784,12 @@ func TestCreatePullsImageBeforeRun(t *testing.T) {
 	if got := cs.lastRun().Image; got != engine.Image("") || pullImage == "" {
 		t.Fatalf("run image = %q, want %q", got, engine.Image(""))
 	}
-	// Pull must happen before Run: a run against a missing image would fail.
 	want := []string{"pull", "run"}
 	if len(cs.calls) < len(want) || cs.calls[0] != want[0] || cs.calls[1] != want[1] {
 		t.Fatalf("calls = %v, want pull before run", cs.calls)
 	}
 }
 
-// TestCreatePullFailureLeavesTerminalErrorRow (D1-2): a failed pull must not
-// leave a permanently-creating row, and it must not write credentials for a
-// database that will never run.
 func TestCreatePullFailureLeavesTerminalErrorRow(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -881,9 +825,6 @@ func TestCreatePullFailureLeavesTerminalErrorRow(t *testing.T) {
 	}
 }
 
-// TestCreateCleanupUsesRecordedIDs (D1-4): when the container-id write fails,
-// cleanup must remove the container using the node id we actually hold, never
-// a zeroed row.
 func TestCreateCleanupUsesRecordedIDs(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -911,10 +852,6 @@ func TestCreateCleanupUsesRecordedIDs(t *testing.T) {
 	}
 }
 
-// TestDeleteDuringProvisionRemovesLateContainer (D1-5): delete that wins while
-// provisioning is in flight must leave no container behind and the row must
-// stay deleted. The create path's late write is fenced and its cleanup removes
-// the container the agent already started.
 func TestDeleteDuringProvisionRemovesLateContainer(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -926,8 +863,6 @@ func TestDeleteDuringProvisionRemovesLateContainer(t *testing.T) {
 
 	var databaseID uuid.UUID
 	repo.afterCreate = func(d Database) { databaseID = d.ID }
-	// afterRun fires once the agent returned a container id but before create
-	// persisted it: the classic interleaving the finding describes.
 	cs.afterRun = func() {
 		if err := svc.Delete(ctx, owner, databaseID); err != nil {
 			t.Errorf("Delete during provisioning: %v", err)
@@ -955,8 +890,6 @@ func TestDeleteDuringProvisionRemovesLateContainer(t *testing.T) {
 	}
 }
 
-// TestSoftDeletedRowRejectsProvisioningWrites (D1-5): the fence itself — after
-// a soft delete every provisioning write reports no row.
 func TestSoftDeletedRowRejectsProvisioningWrites(t *testing.T) {
 	repo := newFakeRepository()
 	owner := uuid.New()
@@ -983,9 +916,6 @@ func TestSoftDeletedRowRejectsProvisioningWrites(t *testing.T) {
 	}
 }
 
-// TestConcurrentRenameAndLifecycleDoNotClobber (D1-6): column-scoped writes
-// keep a rename and a lifecycle transition from erasing each other's field or
-// the container id.
 func TestConcurrentRenameAndLifecycleDoNotClobber(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		repo := newFakeRepository()
@@ -1035,9 +965,6 @@ func TestConcurrentRenameAndLifecycleDoNotClobber(t *testing.T) {
 	}
 }
 
-// TestCreateCredentialFailureRollsBackAndMarksError (D1-8): a partial
-// credential write is rolled back and the row becomes terminal, never a
-// permanently-creating database with incomplete secrets.
 func TestCreateCredentialFailureRollsBackAndMarksError(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -1048,7 +975,6 @@ func TestCreateCredentialFailureRollsBackAndMarksError(t *testing.T) {
 
 	var createdID uuid.UUID
 	repo.afterCreate = func(d Database) { createdID = d.ID }
-	// The first credential write succeeds, the second fails: a partial write.
 	repo.secretFailAt = 2
 	repo.secretFail = errors.New("credentials table is down")
 
@@ -1077,8 +1003,6 @@ func TestCreateCredentialFailureRollsBackAndMarksError(t *testing.T) {
 	}
 }
 
-// TestCreateRejectsPublicPortInUse (D1-11): the pre-check answers 409 before a
-// row or container is created.
 func TestCreateRejectsPublicPortInUse(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -1109,8 +1033,6 @@ func TestCreateRejectsPublicPortInUse(t *testing.T) {
 	}
 }
 
-// TestCreateMapsDockerPortConflict (D1-11): a Docker bind conflict surfaced by
-// the agent is a typed conflict, not a 500, and leaves a terminal error row.
 func TestCreateMapsDockerPortConflict(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -1137,10 +1059,6 @@ func TestCreateMapsDockerPortConflict(t *testing.T) {
 	}
 }
 
-// TestCreateStatusWriteTransientFailureKeepsContainer (U1): only a fenced
-// (not-found) status write means delete won. Any other status-write failure is
-// transient, so the row becomes terminal error and the healthy container is
-// kept recoverable instead of being destroyed by one failed UPDATE.
 func TestCreateStatusWriteTransientFailureKeepsContainer(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -1178,9 +1096,6 @@ func TestCreateStatusWriteTransientFailureKeepsContainer(t *testing.T) {
 	}
 }
 
-// TestCreateStatusWriteFencedByDeleteRemovesContainer (U1): the fenced case —
-// the status write reports ErrNotFound because delete won — still removes the
-// container.
 func TestCreateStatusWriteFencedByDeleteRemovesContainer(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -1204,9 +1119,6 @@ func TestCreateStatusWriteFencedByDeleteRemovesContainer(t *testing.T) {
 	}
 }
 
-// TestCreateCleanupSurvivesRequestCancellation (U2): a client disconnect
-// during provisioning must not leave a row creating or a container
-// unmanaged — cleanup runs on a context detached from the request.
 func TestCreateCleanupSurvivesRequestCancellation(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -1219,8 +1131,6 @@ func TestCreateCleanupSurvivesRequestCancellation(t *testing.T) {
 	defer cancel()
 	var createdID uuid.UUID
 	repo.afterCreate = func(d Database) { createdID = d.ID }
-	// Cancel the request while the container is starting: the container-id
-	// write then fails with context.Canceled.
 	cs.afterRun = cancel
 
 	if _, _, err := svc.Create(ctx, owner, CreateRequest{
@@ -1248,9 +1158,6 @@ func TestCreateCleanupSurvivesRequestCancellation(t *testing.T) {
 	}
 }
 
-// TestDeleteRemovesContainerPersistedAfterRead (U4): a provision that persists
-// its container id between Delete's read and its soft delete is still removed
-// — exactly once.
 func TestDeleteRemovesContainerPersistedAfterRead(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -1262,8 +1169,6 @@ func TestDeleteRemovesContainerPersistedAfterRead(t *testing.T) {
 		UserID: owner, EnvironmentID: envID, ServerID: serverID, Name: "orders",
 		Engine: EnginePostgres, Status: StatusCreating,
 	})
-	// The provision persists its container id as the delete lands; the row
-	// returned by the soft delete carries it.
 	repo.softDeleteContainerID = "late-container"
 
 	if err := svc.Delete(context.Background(), owner, row.ID); err != nil {
@@ -1284,12 +1189,8 @@ func TestDeleteRemovesContainerPersistedAfterRead(t *testing.T) {
 	}
 }
 
-// errOf runs fn and returns its error, which keeps the ownership table
-// readable.
 func errOf(fn func() error) error { return fn() }
 
-// envContains reports whether a KEY=VALUE list carries value. Generated values
-// are base64url (no "="), so a suffix match on "=value" is exact.
 func envContains(env []string, value string) bool {
 	for _, entry := range env {
 		if strings.HasSuffix(entry, "="+value) {

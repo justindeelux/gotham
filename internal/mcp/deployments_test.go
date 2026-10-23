@@ -174,8 +174,6 @@ func TestDeploymentReadsRejectMismatchedIDs(t *testing.T) {
 	}
 }
 
-// Warm keep-alive connections are the only case where net/http can replay a POST
-// after a lost response; without GetBody = nil this asserts exactly one POST.
 func TestApplicationDeployLostResponseOnReusedConnectionSendsOnce(t *testing.T) {
 	app := uuid.NewString()
 	var posts atomic.Int32

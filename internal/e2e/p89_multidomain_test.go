@@ -15,18 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 )
 
-// JUS-89 production acceptance (gated by GOTHAM_E2E=1): two domains of one
-// application route through a real Traefik, and removing one domain removes
-// only its routers while the survivor keeps serving.
-//
-// The test drives the public generator surface (BuildConfig + Generate, the
-// same bytes a proxy sync pushes) into a real traefik:v3.7 container with the
-// file provider, behind a backend nginx on a dedicated Docker network.
-// Requests carry explicit Host headers, so no DNS or hosts entries are
-// needed. The one-app-two-routes grouping itself is covered by unit tests
-// (TestRoutesForServerEmitsOneRoutePerDomain); this test proves Traefik
-// serves what the generator emits, including the alias router naming and the
-// shared service.
 func TestP89MultiDomainTraefik(t *testing.T) {
 	requireE2E(t)
 	if _, err := exec.LookPath("docker"); err != nil {
@@ -117,18 +105,14 @@ func TestP89MultiDomainTraefik(t *testing.T) {
 		}
 	}
 
-	// Both domains route through their own routers over the shared service.
 	writeDynamic(routes)
 	waitFor(primary, http.StatusOK)
 	waitFor(alias, http.StatusOK)
 
-	// Removing the alias removes only its routers: the survivor keeps its
-	// 200 while the removed host falls through to Traefik's 404.
 	writeDynamic(routes[:1])
 	waitFor(primary, http.StatusOK)
 	waitFor(alias, http.StatusNotFound)
 
-	// The survivor's configuration is byte-identical to a single-domain app.
 	single, err := proxy.Generate(proxy.BuildConfig(routes[:1], nil, nil, "", ""), proxy.FormatYAML)
 	if err != nil {
 		t.Fatalf("generate single: %v", err)

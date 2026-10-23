@@ -8,21 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, requestAnimationFrame:readonly, URL, window:readonly, getComputedStyle:readonly */
-// JUS-118/119/120 layout proof: the committed webdist is served statically with
-// the control-plane file API mocked in real Chromium. Measured claims:
-//   - JUS-118 the browser panel fills the viewport and only the entry list
-//     scrolls (no page-level scroll) at desktop and mobile widths.
-//   - JUS-119/134 the page-top breadcrumb is gone and the agent-node selector
-//     lives in the browser context bar (it switches to another node's files).
-//   - JUS-120 the toolbar groups New file/New folder under one dropdown, keeps
-//     bulk tools on the right, and collapses to labelled icon-only buttons on
-//     small screens.
-//   - JUS-131 the permissions dialog shows the bits grid first with the octal
-//     field below it, and drops the explanatory copy.
-//   - JUS-135 the phone toolbar keeps the list at >=59% of the viewport with a
-//     selection active (the bulk actions become one scrolling 44px row) and
-//     the server rail collapses into a Naive UI drawer below the tablet
-//     breakpoint.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -87,7 +72,6 @@ const root = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/** manyEntries produces a listing tall enough to force the list to scroll. */
 function manyEntries() {
   return Array.from({ length: 60 }, (_, index) => ({
     name: `file-${String(index).padStart(2, "0")}.txt`,
@@ -99,12 +83,6 @@ function manyEntries() {
   }));
 }
 
-/**
- * assertReachable fails when `locator` is not laid out inside `container` (and
- * the viewport) or when its centre is not the topmost element at that point —
- * so a clipped, spilling or covered element fails even though it has an
- * aria-label.
- */
 async function assertReachable(
   page: Page,
   locator: Locator,
@@ -143,7 +121,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -175,12 +152,10 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds a session and answers the files page calls for both nodes. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
-  // Catch-all first so the specific routes registered after it win.
   await page.route("**/api/v1/**", async (route) => {
     await route.fulfill({ json: {} });
   });
@@ -209,7 +184,6 @@ async function mockApi(page: Page): Promise<void> {
       });
     });
   }
-  // A small editable file so the editor window can open and be minimized.
   await page.route("**/api/v1/servers/*/files/content*", async (route) => {
     await route.fulfill({
       json: {
@@ -238,13 +212,8 @@ test("the browser fills the viewport and only the entry list scrolls", async ({
     const card = page.locator(".files-browser");
     await expect(card).toBeVisible();
     await expect(page.locator(".fm-label").first()).toBeVisible();
-    // Wait for the whole listing to render before measuring: the flex height
-    // and the scroll metrics settle only after the rows exist (measuring
-    // mid-render was the source of the one-off flake in the full-suite run).
     await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
 
-    // No page-level scroll: neither the window nor the .view container scrolls.
-    // Polled so a transient mid-layout frame cannot fail the check.
     await expect
       .poll(
         () =>
@@ -260,7 +229,6 @@ test("the browser fills the viewport and only the entry list scrolls", async ({
       )
       .toBeLessThanOrEqual(1);
 
-    // The panel reaches the bottom of the content column (bar + padding).
     await expect
       .poll(async () => {
         const box = await card.boundingBox();
@@ -268,7 +236,6 @@ test("the browser fills the viewport and only the entry list scrolls", async ({
       })
       .toBeGreaterThan(viewport.height - 120);
 
-    // The list owns the overflow: it is taller than its scrollport.
     await expect
       .poll(() =>
         page.evaluate(() => {
@@ -287,12 +254,8 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${server1}/files`);
 
-  // JUS-119: the page-top breadcrumb (Servers / node / Files) is removed.
   await expect(page.locator(".breadcrumb")).toHaveCount(0);
 
-  // JUS-154/JUS-206 round 4: the visible "Agent node" caption is gone (the
-  // group keeps its accessible name); only the "Root" caption in the toolbar
-  // remains, at 12px (--text-xs).
   await expect(page.locator(".fm-contextbar .fm-field-label")).toHaveCount(0);
   const toolbarCaptions = page.locator(".fm-toolbar .fm-field-label");
   await expect(toolbarCaptions).toHaveCount(1);
@@ -302,10 +265,6 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   );
   expect(toolbarSizes).toEqual(["12px"]);
 
-  // JUS-134/JUS-160: the agent-node selector decides the listing, so it lives
-  // in the context bar, while the Root selector moved to the action toolbar
-  // below — not a bar at the page bottom. Round 4: the switcher shares the tab
-  // row (tabs left, switcher right) with its accessible name and no caption.
   const node = page.locator(".fm-node__select");
   await expect(node).toBeVisible();
   await expect(node).toContainText("prod-01");
@@ -317,19 +276,16 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   const nodeBox = (await node.boundingBox())!;
   const rootBox = (await page.locator(".fm-root-select").boundingBox())!;
   const toolbarBox = (await page.locator(".fm-toolbar").boundingBox())!;
-  // Playwright boxes carry x/y/width/height (no top/bottom): derive edges.
   expect(Math.abs(nodeBox.y - tabsBox.y)).toBeLessThanOrEqual(8);
   expect(nodeBox.x).toBeGreaterThanOrEqual(tabsBox.x + tabsBox.width);
   expect(nodeBox.y + nodeBox.height).toBeLessThanOrEqual(toolbarBox.y + 1);
   expect(rootBox.y).toBeGreaterThanOrEqual(toolbarBox.y);
 
-  // An offline node is listed with its status but cannot be selected.
   await node.click();
   const offline = page.locator(".n-base-select-option", { hasText: "prod-03" });
   await expect(offline).toHaveClass(/disabled/);
   await expect(offline).toContainText("Offline");
 
-  // Switching nodes reloads that node's files.
   await page.locator(".n-base-select-option", { hasText: "prod-02" }).click();
   await expect(page.locator(".fm-node__select")).toContainText("prod-02");
   expect(new URL(page.url()).pathname).toContain(server2);
@@ -359,9 +315,6 @@ test("bulk actions stay reachable with a selection at every width", async ({
   page,
 }) => {
   const bulkActions = ["Download", "Copy", "Cut", "Compress…", "Delete", "Clear"];
-  // 1876/1280/1024/861 cover the desktop table overflowing the scroller (the
-  // bar pinned to the scroller's visible width); 768/390 the compact layout
-  // where the table fits and the bar just fills its cell (JUS-145/146).
   for (const viewport of [
     { width: 1876, height: 1080 },
     { width: 1280, height: 1024 },
@@ -373,20 +326,13 @@ test("bulk actions stay reachable with a selection at every width", async ({
     await page.setViewportSize(viewport);
     await mockApi(page);
     await page.goto(`${baseURL}/servers/${server1}/files`);
-    // Select the whole listing so every bulk action is enabled and Clear shows.
     await page.locator(".fm-head .n-checkbox").click();
 
-    // JUS-146: the bulk actions (and their count) live in the sticky header bar
-    // that replaces the column-header row while a selection exists.
     const bar = page.locator(".fm-head-bulk");
     const barBox = await bar.boundingBox();
     expect(barBox, `bulk bar missing at ${viewport.width}px`).not.toBeNull();
     await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
 
-    // JUS-146: where the table is wider than the scroller (tablet/phone) the
-    // bar's OWN action row scrolls, so every action stays reachable without
-    // scrolling the table. Detect the overflow and scroll each action into view
-    // before measuring it.
     const overflow = await page
       .locator(".fm-selection-actions")
       .evaluate((element) => element.scrollWidth - element.clientWidth);
@@ -407,19 +353,15 @@ test("bulk actions stay reachable with a selection at every width", async ({
     }
 
     if (scrolling) {
-      // The bar's action row is the intended scroll region: it must scroll so
-      // Delete/Clear stay reachable.
       expect(overflow, `bulk row scrolls at ${viewport.width}px`).toBeGreaterThan(0);
     }
     if (viewport.width <= 640) {
-      // ...and every action is a 44px touch target on a phone.
       const height = await bar
         .getByRole("button", { name: "Delete", exact: true })
         .evaluate((element) => element.getBoundingClientRect().height);
       expect(height).toBeGreaterThanOrEqual(44);
     }
     if (!scrolling) {
-      // Nothing in the bar (buttons or the count) spills past its right edge.
       const spill = await page.evaluate(() => {
         const el = document.querySelector(".fm-head-bulk") as HTMLElement | null;
         if (el === null) {
@@ -436,13 +378,6 @@ test("bulk actions stay reachable with a selection at every width", async ({
   }
 });
 
-// JUS-134/JUS-141: selecting a row must not reflow the toolbar, or the second
-// click of a double-click lands on a different row. The count cell stacks a
-// hidden reserve sizer and the live summary in one grid area, so its width is
-// max(reserve, live) in every selection state and the toolbar's height is the
-// same before and after the first click at every width. The fixture is the
-// MED-1 boundary: total "1.00 MiB" but a subset "1023.0 KiB" (formatBytes is
-// non-monotonic), plus a long name.
 async function firstRowY(page: Page): Promise<number> {
   return page.evaluate(
     () =>
@@ -452,14 +387,12 @@ async function firstRowY(page: Page): Promise<number> {
   );
 }
 
-/** installListing overrides the listing route with the given entries. */
 async function installListing(page: Page, entries: unknown[]): Promise<void> {
   await page.route(`**/api/v1/servers/${server1}/files/list*`, async (route) => {
     await route.fulfill({ json: { entries, truncated: false, cursor: "" } });
   });
 }
 
-/** installBoundaryListing overrides the listing with a formatBytes boundary. */
 async function installBoundaryListing(page: Page, count: number): Promise<void> {
   const entries = Array.from({ length: count }, (_, index) =>
     index === 0
@@ -483,7 +416,6 @@ async function installBoundaryListing(page: Page, count: number): Promise<void> 
   await installListing(page, entries);
 }
 
-/** settleLayout waits for the responsive re-layout after a viewport change. */
 async function settleLayout(page: Page): Promise<void> {
   await page.evaluate(
     () =>
@@ -493,19 +425,12 @@ async function settleLayout(page: Page): Promise<void> {
   );
 }
 
-/** countCellWidth is the count cell's rendered width. */
 async function countCellWidth(page: Page): Promise<number> {
   return page
     .locator(".fm-bulk-count")
     .evaluate((element) => element.getBoundingClientRect().width);
 }
 
-/**
- * axColumnHeaders counts the header row's columnheader cells in the
- * ACCESSIBILITY tree (not the DOM), so a visibility-hidden variant is not
- * counted — the a11y tree must expose exactly one set of header cells at a time
- * (JUS-146).
- */
 async function axColumnHeaders(page: Page): Promise<number> {
   const snapshot = await page.locator(".fm-head").ariaSnapshot();
   return snapshot
@@ -513,9 +438,6 @@ async function axColumnHeaders(page: Page): Promise<number> {
     .filter((line) => line.includes("columnheader")).length;
 }
 
-/** assertStableOnSelect measures the count-cell width and first-row y on select
- *  and clear, so a reserve narrower than the live summary (a widened cell that
- *  wraps the toolbar) fails loudly. */
 async function assertStableOnSelect(page: Page, widths: number[]): Promise<void> {
   for (const width of widths) {
     await page.setViewportSize({ width, height: 1024 });
@@ -535,7 +457,6 @@ async function assertStableOnSelect(page: Page, widths: number[]): Promise<void>
       `row shift on select at ${width}px`,
     ).toBeLessThanOrEqual(1);
 
-    // Clear via the last bulk button (locale-agnostic: its label is translated).
     await page.locator(".fm-selection-actions .n-button").last().click();
     await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
     expect(
@@ -545,7 +466,6 @@ async function assertStableOnSelect(page: Page, widths: number[]): Promise<void>
   }
 }
 
-/** assertNoRowShift measures the first-row y across select and clear. */
 async function assertNoRowShift(page: Page, widths: number[]): Promise<void> {
   for (const width of widths) {
     await page.setViewportSize({ width, height: 1024 });
@@ -560,7 +480,6 @@ async function assertNoRowShift(page: Page, widths: number[]): Promise<void> {
       `row shift on select at ${width}px`,
     ).toBeLessThanOrEqual(1);
 
-    // Clear via the last bulk button (locale-agnostic: its label is translated).
     await page.locator(".fm-selection-actions .n-button").last().click();
     await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
     const cleared = await firstRowY(page);
@@ -579,9 +498,6 @@ test("selecting a row never shifts the list across 700-1500px", async ({ page })
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(5);
 
-  // The 5-entry fixture exposes the formatBytes boundary on a single click
-  // ("5 selected · 1.00 MiB" reserve vs "1 selected · 1023.0 KiB" live); 796,
-  // 802 and 808 are inside the even step-2 sweep.
   const widths: number[] = [];
   for (let width = 700; width <= 1500; width += 2) {
     widths.push(width);
@@ -595,10 +511,6 @@ test("the count cell never widens at the 100x-unit rounding boundary", async ({
   test.setTimeout(300_000);
   await page.setViewportSize({ width: 1280, height: 1024 });
   await mockApi(page);
-  // A folder of 102399 + 1 bytes: the total formats "100.0 KiB" but a subset
-  // (the 102399-byte entry) formats the WIDER "100.00 KiB" (formatBytes drops
-  // from 2 to 1 decimal at 100, and toFixed rounds 99.999 up). This is the
-  // round-2 BLOCK-1 counterexample; the guard must fail on it.
   await installListing(page, [
     {
       name: "almost-one-hundred-kib.bin",
@@ -620,7 +532,6 @@ test("the count cell never widens at the 100x-unit rounding boundary", async ({
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(2);
 
-  // The reported band, then the full dense sweep.
   const widths = [808, 810, 812, 1148, 1150, 1152];
   for (let width = 700; width <= 1500; width += 2) {
     widths.push(width);
@@ -639,8 +550,6 @@ test("selecting a row never shifts the list in vi with a large count", async ({
   await mockApi(page);
   await installBoundaryListing(page, 1500);
   await page.goto(`${baseURL}/servers/${server1}/files`);
-  // The list windows, so assert the folder total (via the reserve sizer) rather
-  // than the rendered rows. Localized copy, so match the count only.
   await expect(page.locator(".fm-bulk-count-reserve")).toContainText("1500");
 
   const widths: number[] = [];
@@ -650,9 +559,6 @@ test("selecting a row never shifts the list in vi with a large count", async ({
   await assertNoRowShift(page, widths);
 });
 
-// JUS-146: the same guard at the phone/tablet breakpoints and their edges — the
-// header row swaps for the bulk bar at every width, so the first row must not
-// move when it swaps.
 test("selecting a row never shifts the list at phone and tablet widths", async ({
   page,
 }) => {
@@ -665,10 +571,6 @@ test("selecting a row never shifts the list at phone and tablet widths", async (
   await assertNoRowShift(page, [390, 414, 480, 639, 640, 641, 768, 820]);
 });
 
-// JUS-146: the sticky column-header row is REPLACED by the bulk bar while a
-// selection exists (same row, same height). Nothing is permanently reserved, so
-// there is no blank band above the list on desktop; the select-all checkbox
-// stays reachable in both states and the sort buttons return on Clear.
 test("the bulk bar replaces the header row with no reserved band", async ({
   page,
 }) => {
@@ -677,9 +579,6 @@ test("the bulk bar replaces the header row with no reserved band", async ({
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
 
-  // Nothing selected: the column headers show and the bulk bar is hidden (not
-  // merely transparent), so it is not an extra empty columnheader in the a11y
-  // tree — exactly the six real header cells are exposed (JUS-161 dropped Type).
   await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "visible");
   await expect(page.locator(".fm-head-bulk")).toHaveCSS("visibility", "hidden");
   expect(await axColumnHeaders(page), "one set of header cells (idle)").toBe(6);
@@ -692,21 +591,15 @@ test("the bulk bar replaces the header row with no reserved band", async ({
       gap: head.getBoundingClientRect().top - t.bottom,
     };
   });
-  // One toolbar row, then the header — no blank reserved band in between.
   expect(spacing.toolbarHeight, "desktop toolbar is one row").toBe(32);
   expect(spacing.gap, "16px band gap plus table border").toBe(17);
 
-  // Selected: the column headers hide and the bulk bar takes their place — the
-  // a11y tree still exposes exactly one set of header cells (the select-all cell
-  // plus the bar).
   await page.locator(".fm-label").first().click();
   await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "hidden");
   await expect(page.locator(".fm-head-bulk")).toHaveCSS("visibility", "visible");
   await expect(page.locator(".fm-head-bulk")).toContainText("1 selected");
   expect(await axColumnHeaders(page), "one set of header cells (selected)").toBe(2);
 
-  // The leading select-all checkbox stays reachable while the bar shows; Clear
-  // brings the sort buttons (and their aria-sort) back.
   await expect(page.locator(".fm-head .n-checkbox")).toBeVisible();
   await page
     .locator(".fm-selection-actions")
@@ -719,10 +612,6 @@ test("the bulk bar replaces the header row with no reserved band", async ({
   );
 });
 
-// JUS-146: the selection count is announced from an always-mounted polite live
-// region (mounted empty before any selection, updated once the selection
-// settles), so the first selection is announced and a range select does not
-// chatter; the select-all checkbox stays reachable while the bar shows.
 test("the selection count is announced politely while the bar shows", async ({
   page,
 }) => {
@@ -740,11 +629,6 @@ test("the selection count is announced politely while the bar shows", async ({
   await expect(live).toHaveText("60 selected");
 });
 
-// JUS-146/147: while the bulk bar replaces the column headers the sort must stay
-// reachable at EVERY width, not only the compact/grid layouts. JUS-147 moved the
-// selection-time sort OUT of the toolbar (where as a hidden control it wrapped
-// the toolbar onto an empty row) and INTO the bulk bar, which already replaces
-// the header row.
 test("sorting stays reachable while the bulk bar replaces the headers", async ({
   page,
 }) => {
@@ -758,21 +642,15 @@ test("sorting stays reachable while the bulk bar replaces the headers", async ({
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(3);
 
-  // Nothing selected: the headers carry the sort. The toolbar control is not
-  // rendered at all on desktop (JUS-147 — no reserved space) and the bar's own
-  // sort rides the hidden bar.
   await expect(page.locator(".fm-sort-toggle")).toHaveCount(0);
   await expect(page.locator(".fm-bulk-sort")).toBeHidden();
 
   await page.locator(".fm-label").first().click();
   await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "hidden");
-  // The bar replaces the headers; its sort control is the reachable affordance
-  // and mirrors the active sort.
   const sort = page.locator(".fm-bulk-sort");
   await expect(sort).toBeVisible();
   await expect(sort).toHaveAttribute("aria-label", /Name/);
 
-  // It changes the order (click/touch path).
   await sort.click();
   await page.getByRole("menuitem", { name: "Size", exact: true }).click();
   await expect(sort).toHaveAttribute("aria-label", /Size/);
@@ -780,7 +658,6 @@ test("sorting stays reachable while the bulk bar replaces the headers", async ({
     page.locator(".fm-table .fm-row:not(.fm-head)").first().locator("b"),
   ).toHaveText("bbb.txt");
 
-  // Keyboard path: Enter on the focused control opens its menu.
   await sort.focus();
   await page.keyboard.press("Enter");
   await page.getByRole("menuitem", { name: "Name", exact: true }).click();
@@ -788,8 +665,6 @@ test("sorting stays reachable while the bulk bar replaces the headers", async ({
     page.locator(".fm-table .fm-row:not(.fm-head)").first().locator("b"),
   ).toHaveText("aaa.txt");
 
-  // Clear returns the headers and their truthful aria-sort; the bar (and its
-  // sort) hides again.
   await page
     .locator(".fm-selection-actions")
     .getByRole("button", { name: "Clear", exact: true })
@@ -802,8 +677,6 @@ test("sorting stays reachable while the bulk bar replaces the headers", async ({
   await expect(sort).toBeHidden();
 });
 
-// JUS-146: the grid has no column-header row, so its bar stays in the toolbar —
-// selecting a tile must not shift the tiles (they open on double-click).
 test("the grid selection bar does not shift the tiles", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
@@ -828,17 +701,12 @@ test("the grid selection bar does not shift the tiles", async ({ page }) => {
   ).toBeLessThanOrEqual(1);
 });
 
-// JUS-146: with a clipboard AND a selection on a phone, the clipboard hint and
-// the bulk actions must not compete for one narrow width. The hint is a
-// single-line chip; the bar's own action row scrolls, so every action
-// (Delete/Clear included) is reachable without scrolling the table.
 test("on a phone the clipboard chip and the bulk bar never wrap", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
 
-  // Put a Cut clipboard on the store, then select a row.
   await page.getByRole("button", { name: /More actions for file-00/ }).click();
   await page.getByRole("menuitem", { name: "Cut", exact: true }).click();
   await page.locator(".fm-label").first().click();
@@ -854,9 +722,6 @@ test("on a phone the clipboard chip and the bulk bar never wrap", async ({ page 
     "clipboard hint does not wrap into columns",
   ).toBe(1);
 
-  // Scroll the bar's OWN action row to the end: the table must not move, and
-  // Clear (with Delete before it) lands fully inside the viewport as a 44px
-  // target.
   const tableScrollBefore = await page.evaluate(
     () => (document.querySelector(".table-wrap") as HTMLElement).scrollLeft,
   );
@@ -880,9 +745,6 @@ test("on a phone the clipboard chip and the bulk bar never wrap", async ({ page 
   ).toBe(tableScrollBefore);
 });
 
-// JUS-135: the phone toolbar must not eat the list. With a selection active
-// (the tallest chrome state) the entry list keeps at least 59% of an iPhone-14
-// viewport.
 test("the entry list keeps at least 59% of the phone viewport", async ({
   page,
 }) => {
@@ -933,16 +795,12 @@ test("phone chrome keeps the current folder readable and every toolbar action re
   expect(overflow, "the page never scrolls sideways").toBeLessThanOrEqual(1);
 });
 
-// JUS-135: below the tablet breakpoint the server rail is a Naive UI drawer
-// (focus trap / Escape / dialog semantics) instead of an always-on column, so
-// the content column owns the full width.
 test("the server rail collapses into a phone drawer", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-label").first()).toBeVisible();
 
-  // No always-on rail at a phone width, and no drawer until it is opened.
   await expect(page.locator(".app > .rail")).toHaveCount(0);
   await expect(page.locator(".rail-drawer")).toHaveCount(0);
 
@@ -959,7 +817,6 @@ test("the server rail collapses into a phone drawer", async ({ page }) => {
     dialog.getByRole("link", { name: "Add server", exact: true }),
   ).toBeVisible();
 
-  // Escape closes the drawer and focus returns to the trigger (NDrawer).
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(toggle).toBeFocused();
@@ -972,7 +829,6 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${server1}/files`);
 
-  // JUS-120: New file / New folder live inside one dropdown.
   await expect(page.getByRole("button", { name: "New file", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "New folder", exact: true })).toHaveCount(0);
   const newButton = page.getByRole("button", { name: "New", exact: true });
@@ -985,20 +841,15 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   await expect(page.getByRole("menuitem", { name: "New folder", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // JUS-128/134/146: no separate bulk bar and no disabled row — the bulk
-  // actions live in the header bar and are hidden (not disabled) until entries
-  // are selected.
   await expect(page.locator(".fm-bulk")).toHaveCount(0);
   const bar = page.locator(".fm-head-bulk");
   const bulkDownload = bar.getByRole("button", { name: "Download", exact: true });
   await expect(bulkDownload).toBeHidden();
 
-  // Select the whole listing so the bulk actions appear and the count shows.
   await page.locator(".fm-head .n-checkbox").click();
   await expect(bulkDownload).toBeVisible();
   await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
 
-  // The count precedes the bulk actions in the bar (JUS-146).
   const count = await page.locator(".fm-bulk-count").boundingBox();
   const compress = await bar
     .getByRole("button", { name: "Compress…", exact: true })
@@ -1007,7 +858,6 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   expect(compress).not.toBeNull();
   expect(compress!.x).toBeGreaterThan(count!.x + count!.width);
 
-  // Small screens: labels are hidden and every toolbar button keeps its name.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".fm-btn-label").first()).toBeHidden();
   for (const name of [
@@ -1038,25 +888,17 @@ test("the minimized editor rail icon never covers the header node switcher", asy
     await mockApi(page);
     await page.goto(`${baseURL}/servers/${server1}/files`);
 
-    // Open a file and collapse the editor into the rail icon. Enter on
-    // the focused row is the same JUS-130 activation path as a double-click and
-    // keeps this check independent of the selection toolbar's layout.
     await page.locator(".fm-label").first().focus();
     await page.keyboard.press("Enter");
     await expect(page.locator(".ed-window")).toBeVisible({ timeout: 15_000 });
     await page.locator(".ed-window-min").click();
     await expect(page.locator(".ed-window")).toBeHidden();
     if (viewport.width > 1024) {
-      // On desktop the rail is in flow: the minimized editor parks there.
       await expect(page.locator(".rail-btn--editor")).toBeVisible();
     } else {
-      // Below the tablet breakpoint the rail lives in the topbar drawer, so
-      // there is no in-flow icon; the minimized state itself is the assert.
       await expect(page.locator(".ed-window")).toHaveCount(1);
     }
 
-    // The minimized editor leaves no dock band behind, and the header
-    // switcher's centre resolves to the switcher itself (JUS-134).
     await expect(page.locator(".ed-dock")).toHaveCount(0);
     const hit = await page.evaluate(() => {
       const select = document.querySelector(".fm-node__select");
@@ -1092,14 +934,12 @@ test("the permissions dialog puts the octal field under the bits and drops the c
   const dialog = page.locator(".n-modal").filter({ hasText: "Permissions" });
   await expect(dialog).toBeVisible();
 
-  // JUS-131: the bits grid comes first, the octal field sits below it.
   const grid = await dialog.locator(".perms-grid").boundingBox();
   const octal = await dialog.locator(".octal input").boundingBox();
   expect(grid).not.toBeNull();
   expect(octal).not.toBeNull();
   expect(octal!.y).toBeGreaterThan(grid!.y + grid!.height);
 
-  // The redundant explanatory copy is gone.
   const text = await dialog.innerText();
   for (const removed of [
     "Three octal digits",
@@ -1111,9 +951,6 @@ test("the permissions dialog puts the octal field under the bits and drops the c
   }
 });
 
-// JUS-132: the list header stays pinned while a long folder scrolls, the
-// folder filter resets on navigation with a "N of M entries" footer, and a
-// symlink row shows its target and can jump to it.
 test("the list header stays pinned while scrolling a long folder", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
@@ -1130,13 +967,10 @@ test("the list header stays pinned while scrolling a long folder", async ({ page
   });
 
   const headBox = (await head.boundingBox())!;
-  // The header rides the top of the scrollport instead of scrolling away.
   expect(headBox.y).toBeGreaterThanOrEqual(wrapBox.y - 1);
   expect(headBox.y).toBeLessThan(wrapBox.y + 4);
 
-  // Hovering the pinned header keeps it opaque, so rows cannot bleed through.
   await head.hover();
-  // JUS-206: the header band uses --surface-warm (#1e1f22), the reference tone.
   await expect(head).toHaveCSS("background-color", "rgb(30, 31, 34)");
 });
 
@@ -1198,22 +1032,15 @@ test("the folder filter resets on navigation and the footer counts the filtered 
   const search = page.locator(".fm-search input");
   await search.fill("etc");
 
-  // While filtering, the footer says how many of the folder's entries show,
-  // and the breakdown follows the filtered rows: only the matching directory
-  // is counted, so the whole folder's "2 folders · 1 symlink" is not mixed in
-  // (JUS-141).
   await expect(page.locator(".fm-foot")).toContainText("1 of 3 entries");
   await expect(page.locator(".fm-foot")).toContainText("1 folder");
   await expect(page.locator(".fm-foot")).not.toContainText("symlink");
 
-  // Opening the filtered folder clears the needle: its own listing is not
-  // silently hidden behind the stale filter.
   await page.locator(".fm-label").filter({ hasText: "etc" }).dblclick();
   await expect(page.locator(".fm-label").filter({ hasText: "hosts" })).toBeVisible();
   await expect(search).toHaveValue("");
   await expect(page.locator(".fm-foot")).toContainText("1 entry");
 
-  // A filtered single-entry folder reads "1 of 1 entry", not "1 of 1 entries".
   await search.fill("hosts");
   await expect(page.locator(".fm-foot")).toContainText("1 of 1 entry");
 });
@@ -1258,8 +1085,6 @@ test("a symlink row shows its target and can jump to it", async ({ page }) => {
 
   await page.goto(`${baseURL}/servers/${server1}/files`);
 
-  // The target is shown next to the type, in list and grid, and a long target
-  // truncates with an ellipsis instead of wrapping the name column.
   await expect(page.locator(".fm-table").getByText("→ usr/bin")).toBeVisible();
   const subtitle = page.locator(".fm-table .fm-target").first();
   await expect(subtitle).toHaveCSS("text-overflow", "ellipsis");
@@ -1269,7 +1094,6 @@ test("a symlink row shows its target and can jump to it", async ({ page }) => {
   await expect(page.locator(".fm-grid").getByText("Symlink → usr/bin")).toBeVisible();
   await page.getByRole("button", { name: "List view" }).click();
 
-  // "Go to target" follows the link to the resolved path.
   await page.getByRole("button", { name: "More actions for bin" }).click();
   await page.getByRole("menuitem", { name: "Go to target" }).click();
   await expect(
@@ -1284,7 +1108,6 @@ test("Go to target on a file or broken link keeps the view and warns", async ({ 
   await page.route(`**/api/v1/servers/${server1}/files/list*`, async (route) => {
     const path = new URL(route.request().url()).searchParams.get("path") ?? "";
     if (path === "usr/bin") {
-      // A target that is not a browsable directory answers 400 (ENOTDIR).
       await route.fulfill({ status: 400, json: { message: "not a directory" } });
       return;
     }
@@ -1313,26 +1136,16 @@ test("Go to target on a file or broken link keeps the view and warns", async ({ 
   await page.getByRole("button", { name: "More actions for bin" }).click();
   await page.getByRole("menuitem", { name: "Go to target" }).click();
 
-  // The list stays on the folder it was in; the failure is a warning, not an
-  // error view.
   await expect(page.locator(".n-message")).toContainText("Could not open the target of bin");
   await expect(page.locator(".fm-table").getByText("→ usr/bin")).toBeVisible();
   await expect(page.locator(".fm-state")).toHaveCount(0);
 });
 
-// JUS-147: the toolbar must not reserve room for a hidden control, so the first
-// toolbar row cannot wrap onto an empty second row at laptop widths. Nothing is
-// selected here, so the gap from the LOWEST VISIBLE toolbar control to the header
-// must be the plain inter-block rhythm (~12-14px) at EVERY desktop width, never
-// the ~54px blank band the always-mounted hidden sort toggle used to open at
-// 1366-1500px (a visibility:hidden control still occupies its row).
 test("no blank band between the toolbar and the header at desktop widths", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
-  // A nested folder: the breadcrumb is as long as on a real box, which is what
-  // brings the toolbar to the width where the hidden toggle tipped it over.
   await installListing(page, [
     { name: "storefront-8f2c1ab", kind: "directory", size: 4096, mode: 0o040755, modified_at: "2026-10-12T09:02:00Z", etag: '"d"' },
     ...manyEntries(),
@@ -1341,7 +1154,6 @@ test("no blank band between the toolbar and the header at desktop widths", async
   await page.locator(".fm-label", { hasText: "storefront-8f2c1ab" }).dblclick();
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(61);
 
-  /** gap is the header top minus the bottom of the lowest VISIBLE toolbar cell. */
   const measure = (): Promise<number> =>
     page.evaluate(() => {
       const toolbar = document.querySelector(".fm-toolbar") as HTMLElement;
@@ -1369,9 +1181,6 @@ test("no blank band between the toolbar and the header at desktop widths", async
   }
 });
 
-// JUS-148: on a phone the selection bar's action row scrolls, but Delete/Clear
-// used to sit off the right edge behind only a weak fade. A pinned chevron now
-// marks the row as scrollable (and never eats a tap).
 test("the phone selection bar marks its scrollable action row", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page);
@@ -1390,14 +1199,12 @@ test("the phone selection bar marks its scrollable action row", async ({ page })
     await hint.evaluate((el) => getComputedStyle(el).pointerEvents),
     "the hint never steals a tap",
   ).toBe("none");
-  // It rides the row's right edge.
   const hintBox = (await hint.boundingBox())!;
   const rowBox = (await row.boundingBox())!;
   expect(hintBox.x + hintBox.width).toBeGreaterThanOrEqual(
     rowBox.x + rowBox.width - 2,
   );
 
-  // Scrolling the row's own region brings Delete/Clear into the viewport.
   await row.evaluate((el) => {
     el.scrollLeft = el.scrollWidth;
   });
@@ -1408,9 +1215,6 @@ test("the phone selection bar marks its scrollable action row", async ({ page })
   }
 });
 
-// JUS-148 fix round 1: the chevron is a real affordance only while the action row
-// actually overflows to the right — no false "more →" on a wide bar, and it hides
-// once the row is scrolled to its end.
 test("the scroll chevron shows only while the action row overflows", async ({
   page,
 }) => {
@@ -1421,37 +1225,25 @@ test("the scroll chevron shows only while the action row overflows", async ({
   await page.locator(".fm-head .n-checkbox").click();
   await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
 
-  // Wide desktop: the row fits, so no chevron.
   const row = page.locator(".fm-selection-actions");
   expect(await row.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
   await expect(page.locator(".fm-scroll-hint")).toHaveCount(0);
 
-  // Phone: the row overflows, so the chevron shows...
   await page.setViewportSize({ width: 390, height: 844 });
   await settleLayout(page);
   await expect(page.locator(".fm-scroll-hint")).toBeVisible();
 
-  // ...and disappears once the row is scrolled to its end (no more to reveal).
   await row.evaluate((el) => {
     el.scrollLeft = el.scrollWidth;
   });
   await expect(page.locator(".fm-scroll-hint")).toHaveCount(0);
 });
 
-// JUS-148 fix round 1 + JUS-160: both toolbar groups (left actions, right
-// recycle bin + view toggle) always render content, so the toolbar can wrap
-// onto a second row at mid widths but never onto an EMPTY row (a content-free
-// line whose row-gap still grew the toolbar). Every flex row must hold a real
-// control, the toolbar height must be fully backed by content rows (no
-// unexplained row-gap), it must not spill past the panel, and the gap to the
-// header stays tight.
 test("the always-on toolbar groups never open an empty row", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
-  // JUS-160: the right group (recycle bin + list/grid toggle) is always
-  // rendered — its conditional rendering was removed with the regroup.
   await expect(page.locator(".fm-toolbar-end")).toHaveCount(1);
   await expect(
     page.getByRole("button", { name: "Recycle bin", exact: true }),
@@ -1465,11 +1257,6 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
       const head = document.querySelector(".fm-head") as HTMLElement;
       const t = toolbar.getBoundingClientRect();
       const style = getComputedStyle(toolbar);
-      // Cluster the laid-out controls into flex rows by vertical center. Two
-      // box families are structural, never rows, and must not band: an icon's
-      // SVG sub-paths (painted glyph geometry — e.g. a 2-unit menu dot renders
-      // at ~1.17px and bands alone, yet is not a row) and the group containers
-      // themselves (they span every wrapped line by construction).
       const bands: { center: number; maxHeight: number }[] = [];
       for (const child of toolbar.querySelectorAll<HTMLElement>("*")) {
         const tag = child.tagName.toLowerCase();
@@ -1510,16 +1297,11 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
       return {
         rows: bands.length,
         rowHeights: bands.map((band) => band.maxHeight),
-        // Every row-gap in the toolbar height must be backed by a content row:
-        // a content-free wrapped line adds a full row-gap of unexplained
-        // height (the JUS-148 defect), which this cap catches.
         heightCap:
           content +
           Math.max(0, bands.length - 1) *
             (Number.parseFloat(style.rowGap || "0") || 0) +
           (Number.parseFloat(style.borderTopWidth || "0") || 0) +
-          // JUS-203: the toolbar's own vertical padding is intended spacing,
-          // not an empty row, so it belongs in the cap like the border does.
           (Number.parseFloat(style.paddingTop || "0") || 0) +
           (Number.parseFloat(style.paddingBottom || "0") || 0) +
           2,
@@ -1530,7 +1312,6 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
     });
     expect(layout.rows, `toolbar has rows at ${width}px`).toBeGreaterThan(0);
     for (const maxHeight of layout.rowHeights) {
-      // Every row holds a real control (a small button row is ~28px).
       expect(maxHeight, `no empty toolbar row at ${width}px`).toBeGreaterThanOrEqual(20);
     }
     expect(
@@ -1540,9 +1321,6 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
     if (width <= 480) {
       expect(layout.rows, "phone toolbar is one row").toBe(1);
       expect(layout.toolbarHeight, "phone toolbar has no orphan rows").toBe(32);
-      // JUS-208 round 2: the scrollport moved one level in (the outer toolbar
-      // keeps the row box so the grid bulk overlay can anchor to it) — the
-      // scrollability guarantee is unchanged, only its host moved.
       await expect(page.locator(".fm-toolbar-scroll")).toHaveCSS("overflow-x", "auto");
     } else {
       expect(layout.spill, `no toolbar spill at ${width}px`).toBeLessThanOrEqual(1);
@@ -1551,9 +1329,6 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
   }
 });
 
-// JUS-148: on a phone a symlink row truncated the NAME more than its target
-// ("br… → /none…"). The name now owns the first line and the target rides the
-// secondary line next to the relative time.
 test("a phone symlink row keeps the name and moves the target under it", async ({
   page,
 }) => {
@@ -1574,7 +1349,6 @@ test("a phone symlink row keeps the name and moves the target under it", async (
   const row = page.locator('.fm-table .fm-row:not(.fm-head)[data-entry="broken-link"]');
   await expect(row).toBeVisible();
 
-  // The target lives on the secondary line, not squeezed beside the name.
   const sub = row.locator(".fm-name-sub");
   await expect(sub.locator(".fm-target")).toHaveText("→ /nonexistent/pretty-long-target");
   await expect(sub.locator(".fm-row-sub")).toHaveText(/\S/);
@@ -1585,14 +1359,11 @@ test("a phone symlink row keeps the name and moves the target under it", async (
     "the target + time sit below the name",
   ).toBeGreaterThanOrEqual(labelBox.y + labelBox.height - 2);
 
-  // The name is not truncated.
   const name = row.locator(".fm-label b");
   const truncated = await name.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
   expect(truncated, "the symlink name is fully readable").toBe(false);
 });
 
-// JUS-148: the compact sort menu is uncontrolled; a width change that remounts
-// its trigger (compact ↔ desktop) used to reopen it by itself.
 test("the compact sort menu does not reopen after a width change", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page);
@@ -1602,7 +1373,6 @@ test("the compact sort menu does not reopen after a width change", async ({ page
   await expect(page.getByRole("menu", { name: "Sort" })).toBeVisible();
   await expect(sort).toHaveAttribute("aria-expanded", "true");
 
-  // Widen past the compact breakpoint and back.
   await page.setViewportSize({ width: 1440, height: 900 });
   await settleLayout(page);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1615,9 +1385,6 @@ test("the compact sort menu does not reopen after a width change", async ({ page
   await expect(page.getByRole("menu", { name: "Sort" })).toHaveCount(0);
 });
 
-// JUS-161: the Owner/Mode column sits right after Name and stays visible at
-// every desktop width (the JUS-148 861-1280 drop is gone with the old Mode
-// column position); it collapses only in the compact layout (<=860px).
 test("the Owner/Mode column stays visible across desktop widths", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
@@ -1643,18 +1410,11 @@ test("the Owner/Mode column stays visible across desktop widths", async ({ page 
   await expect(rowMode, "Owner/Mode cell hidden in compact layout").toBeHidden();
 });
 
-// JUS-214 fix round: the Owner/Mode track is a fixed 110px, so an owner longer
-// than the track must clip inside the cell instead of spilling into the
-// right-aligned Size cell (the review's "systemd-network/755" case). Measured in
-// real Chromium at 1366/1920px. The full "owner/mode" text stays in the DOM so a
-// screen reader still reads it.
 test("a long owner clips inside the Owner/Mode cell without reaching Size", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1366, height: 900 });
   await mockApi(page);
-  // Override the list with one entry whose owner outgrows the 110px track
-  // ("systemd-network" is 15 chars; "systemd-network/755" does not fit).
   await page.route(
     `**/api/v1/servers/${server1}/files/list*`,
     async (route) => {
@@ -1711,8 +1471,6 @@ test("a long owner clips inside the Owner/Mode cell without reaching Size", asyn
       "ellipsis",
     );
     expect(m.overflow, `overflow hidden at ${width}px`).toBe("hidden");
-    // The cell is capped to its 110px track and never reaches the Size column;
-    // the header's mode cell shares the same boundary.
     expect(m.modeWidth, `mode cell within the track at ${width}px`).toBeLessThanOrEqual(110.5);
     expect(m.modeRight, `mode cell left of Size at ${width}px`).toBeLessThanOrEqual(
       m.sizeLeft + 0.5,
@@ -1723,9 +1481,6 @@ test("a long owner clips inside the Owner/Mode cell without reaching Size", asyn
   }
 });
 
-// JUS-148/JUS-161: while the bar replaces the headers the row exposes 2 cells
-// against 6 body cells. aria-colcount on the table and aria-colspan on the bar
-// keep the semantics consistent at every width.
 test("the table and bulk bar agree on the column count", async ({ page }) => {
   await page.setViewportSize({ width: 1876, height: 1080 });
   await mockApi(page);
@@ -1745,22 +1500,17 @@ test("the table and bulk bar agree on the column count", async ({ page }) => {
     "a body row exposes one cell per column",
   ).toBe(6);
 
-  // No narrow-desktop band change anymore: Owner/Mode stays at 1024px.
   await page.setViewportSize({ width: 1024, height: 768 });
   await settleLayout(page);
   await expect(table).toHaveAttribute("aria-colcount", "6");
   await expect(bar).toHaveAttribute("aria-colspan", "5");
 
-  // The compact layout collapses Modified/Owner-Mode.
   await page.setViewportSize({ width: 390, height: 844 });
   await settleLayout(page);
   await expect(table).toHaveAttribute("aria-colcount", "4");
   await expect(bar).toHaveAttribute("aria-colspan", "3");
 });
 
-// JUS-151: the empty state fills the browser panel, so its content group must
-// sit on both of the panel's centre lines — horizontally AND vertically — at
-// desktop and phone widths, instead of hugging the top-left.
 test("the empty state is centered in the browser panel", async ({ page }) => {
   for (const viewport of [
     { width: 1440, height: 900 },
@@ -1776,9 +1526,6 @@ test("the empty state is centered in the browser panel", async ({ page }) => {
     await expect(state).toBeVisible();
     await expect(state.locator("h4")).toHaveText("This folder is empty");
 
-    // The group's centre (the union of the state's own children) against the
-    // panel's centre. A top-left anchored state is hundreds of px off in y and
-    // roughly half the panel wide in x.
     const measure = (): Promise<{
       panelCentreX: number;
       panelCentreY: number;
@@ -1815,11 +1562,6 @@ test("the empty state is centered in the browser panel", async ({ page }) => {
   }
 });
 
-// JUS-153: the breadcrumb, the folder filter and Refresh moved out of the
-// toolbar into their own bar directly above it, so the toolbar carries actions
-// only. At >=1024px both bars stay one row with no blank band or unintended
-// wrap (the path group takes ~half the row, the search block the right side);
-// below that the path bar may wrap, with the phone rows taking over at <=640px.
 test("the path bar sits above the toolbar with no blank band at 1366-1500px", async ({
   page,
 }) => {
@@ -1832,12 +1574,9 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
   const toolbar = page.locator(".fm-toolbar");
   await expect(pathbar).toHaveCount(1);
 
-  // The path bar owns the breadcrumb, the filter and Refresh...
   await expect(pathbar.locator(".fm-path")).toHaveCount(1);
   await expect(pathbar.locator(".fm-search")).toHaveCount(1);
   await expect(pathbar.getByRole("button", { name: "Refresh" })).toHaveCount(1);
-  // ...and the toolbar keeps only actions (JUS-160 left group: Upload, New,
-  // Root selector, File operations; right group: Recycle bin, view toggle).
   await expect(toolbar.locator(".fm-path")).toHaveCount(0);
   await expect(toolbar.locator(".fm-search")).toHaveCount(0);
   await expect(
@@ -1858,7 +1597,6 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
         aboveToolbar: pr.bottom <= tr.top + 1,
         pathbarToToolbar: tr.top - pr.bottom,
         toolbarToHeader: head.getBoundingClientRect().top - tr.bottom,
-        // a wrapped extra row would roughly double a single small-control row
         pathbarHeight: pr.height,
         toolbarHeight: tr.height,
       };
@@ -1879,14 +1617,6 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
   }
 });
 
-// JUS-208: in grid view the toolbar end group (Recycle bin + list/grid toggle)
-// wrapped onto a second row at every desktop width, even with plenty of free
-// space. The grid-only selection bar stayed mounted with visibility:hidden and
-// reserved ~710px of layout width (count reserve plus every bulk button) while
-// nothing was selected, and the grid-only sort toggle added the rest. Round 2:
-// the idle toolbar is one row wherever the visible controls fit, and while a
-// selection exists the cluster overlays the toolbar row as a contextual action
-// bar instead of joining it — selecting never grows the toolbar (JUS-130/141).
 test("the grid toolbar keeps its end group on the first row at desktop widths", async ({
   page,
 }) => {
@@ -1916,9 +1646,6 @@ test("the grid toolbar keeps its end group on the first row at desktop widths", 
   }
 });
 
-// JUS-208 round 2: selecting a grid tile must not shift the layout — the bulk
-// cluster overlays the toolbar row, so the toolbar keeps its height and the
-// first tile keeps its y, at desktop widths and on the phone.
 test("selecting a grid tile never shifts the toolbar or the tiles", async ({
   page,
 }) => {
@@ -1936,15 +1663,11 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
       (await toolbar.boundingBox())!.height;
     const tileY = async (): Promise<number> =>
       (await tile.boundingBox())!.y;
-    // inert is presence-based (inert="false" still counts), so assert the
-    // attribute's presence, never its value.
     const hasInert = (target: Locator): Promise<boolean> =>
       target.evaluate((element) => element.hasAttribute("inert"));
     expect(await toolbarHeight(), `idle toolbar is one row at ${width}px`).toBe(32);
     const beforeY = await tileY();
 
-    // Idle the overlay is out of the a11y tree and tab order (inert and
-    // hidden), and its actions are not reachable.
     const bulk = page.locator(".fm-grid-bulk");
     const scroller = page.locator(".fm-toolbar-scroll");
     expect(await hasInert(bulk), `idle overlay is inert at ${width}px`).toBe(true);
@@ -1964,10 +1687,6 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
       `first tile unmoved on select at ${width}px`,
     ).toBeLessThanOrEqual(1);
 
-    // While the overlay shows, the covered scroll content goes inert (Tab
-    // skips it, the tree exposes only the bar) and the overlay swallows the
-    // row's pointer events: a hit test on the count text lands on the
-    // overlay, never on the Upload/New control underneath.
     await expect(await hasInert(scroller), `covered content is inert at ${width}px`).toBe(true);
     await expect(await hasInert(bulk), `visible overlay leaves inert at ${width}px`).toBe(false);
     const hitInBulk = await page.evaluate(() => {
@@ -1987,9 +1706,6 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
     expect(hitInBulk, `count hit lands on the overlay at ${width}px`).toBe(true);
 
     if (width === 390) {
-      // The overlay row is 32px: every bulk button renders at the row height
-      // and sits fully inside the overlay box (no 6px clip — the phone focus
-      // ring is inset, so it cannot clip either).
       const bulkBox = (await bulk.boundingBox())!;
       const actions = bulk.locator(".fm-selection-actions").getByRole("button");
       const buttonCount = await actions.count();
@@ -2011,9 +1727,6 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
     }
 
     if (width === 1366 || width === 390) {
-      // Keyboard: Shift+Tab from the tile must land in the overlay (Clear is
-      // its last control), never on a covered toolbar control — Tab skips the
-      // inert content, and the bar stays reachable by keyboard while visible.
       let landed: { label: string; inBulk: boolean } | null = null;
       for (let press = 0; press < 10 && landed === null; press += 1) {
         await page.keyboard.press("Shift+Tab");
@@ -2039,8 +1752,6 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
       expect(landed, `Shift+Tab leaves the tile at ${width}px`).not.toBeNull();
       expect(landed!.label, `Shift+Tab reaches Clear at ${width}px`).toBe("Clear");
       expect(landed!.inBulk, `covered controls are Tab-skipped at ${width}px`).toBe(true);
-      // The keyboard-focused control sits fully inside the overlay box, focus
-      // ring included.
       const bulkBox = (await bulk.boundingBox())!;
       const focusedBox = (await page.locator(":focus").boundingBox())!;
       expect(
@@ -2050,8 +1761,6 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
       ).toBe(true);
     }
 
-    // Delete and Clear stay reachable through the bar's own row: scroll each
-    // into view, then assert it sits fully inside the viewport.
     const bar = page.locator(".fm-grid-bulk .fm-selection-actions");
     for (const name of ["Delete", "Clear"]) {
       const button = bar.getByRole("button", { name, exact: true });
@@ -2071,8 +1780,6 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
 
     await bar.getByRole("button", { name: "Clear", exact: true }).click();
     await expect(page.locator(".fm-tile.is-selected")).toHaveCount(0);
-    // Clearing restores the idle tree: the scroll content leaves inert duty
-    // and the overlay returns to it.
     await expect(await hasInert(scroller), `scroll content uninerted on clear at ${width}px`).toBe(false);
     await expect(await hasInert(bulk), `overlay inert again on clear at ${width}px`).toBe(true);
     expect(

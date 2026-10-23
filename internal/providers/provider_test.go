@@ -14,10 +14,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// staticToken is the access token used by provider client tests.
 var staticToken = &oauth2.Token{AccessToken: "test-token", TokenType: "Bearer"}
 
-// writeJSONTest writes a JSON response body.
 func writeJSONTest(t *testing.T, w http.ResponseWriter, payload any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -26,24 +24,20 @@ func writeJSONTest(t *testing.T, w http.ResponseWriter, payload any) {
 	}
 }
 
-// discardLogger returns a logger that drops output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeRepo is an in-memory Repository for service tests.
 type fakeRepo struct {
 	providers map[uuid.UUID]Provider
 	cached    map[uuid.UUID][]Repo
 	replaced  map[uuid.UUID][]Repo
 	replaceFn func(providerID uuid.UUID, repos []Repo) error
-	// createErr fails Create, so tests can drive post-create failures.
 	createErr error
 
 	updateTokenCalls int
 }
 
-// newFakeRepo builds an empty fake repository.
 func newFakeRepo() *fakeRepo {
 	return &fakeRepo{
 		providers: make(map[uuid.UUID]Provider),
@@ -122,7 +116,6 @@ func (f *fakeRepo) Delete(_ context.Context, id, userID uuid.UUID) error {
 	return nil
 }
 
-// serve starts a test HTTP server and returns it.
 func serve(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(handler)
@@ -130,8 +123,6 @@ func serve(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	return srv
 }
 
-// newTestService builds a Service that permits the loopback base URLs the
-// httptest fakes use. Production leaves the escape hatch off.
 func newTestService(repo Repository) *Service {
 	return NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
 }

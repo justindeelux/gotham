@@ -12,7 +12,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// RuntimeContainer contains only ownership-checked runtime evidence, never node configuration.
 type RuntimeContainer struct {
 	ID           string     `json:"id"`
 	Service      string     `json:"service"`
@@ -22,7 +21,6 @@ type RuntimeContainer struct {
 	DeploymentID *uuid.UUID `json:"deployment_id"`
 }
 
-// ApplicationRuntime is a fresh inventory observation, independent of pipeline success.
 type ApplicationRuntime struct {
 	ApplicationID uuid.UUID          `json:"application_id"`
 	ObservedAt    *time.Time         `json:"observed_at"`
@@ -31,7 +29,6 @@ type ApplicationRuntime struct {
 	Containers    []RuntimeContainer `json:"containers"`
 }
 
-// selectRuntimeContainers is shared with finite log reads: full IDs and exact ownership only.
 func selectRuntimeContainers(app Application, inventory []*agentv1.ContainerInfo) ([]*agentv1.ContainerInfo, bool) {
 	selected := make([]*agentv1.ContainerInfo, 0, len(inventory))
 	limited := false
@@ -56,7 +53,6 @@ func selectRuntimeContainers(app Application, inventory []*agentv1.ContainerInfo
 	return selected, limited
 }
 
-// GetApplicationRuntime requires ordinary application read access, including read-only members.
 func (s *Service) GetApplicationRuntime(ctx context.Context, userID, appID uuid.UUID) (ApplicationRuntime, error) {
 	if !Enabled() {
 		return ApplicationRuntime{}, ErrDisabled
@@ -106,7 +102,6 @@ func (s *Service) GetApplicationRuntime(ctx context.Context, userID, appID uuid.
 		result.Coverage = "limited"
 		result.Reason = "inventory_evidence_incomplete_or_truncated"
 	}
-	// Bound optional release enrichment; unqueried associations remain unknown.
 	associations := map[uuid.UUID]*Deployment{}
 	for _, c := range selected {
 		row := RuntimeContainer{ID: c.GetId(), State: c.GetState(), Health: c.GetHealth()}

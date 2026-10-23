@@ -14,8 +14,6 @@ func init() {
 	goose.AddNamedMigrationContext("00049_localhost_node.go", migrateLocalhostNode, nil)
 }
 
-// The installer supplies the saved agent identity; the migration process may
-// run on a different host. Unknown or conflicting identities must not strand workloads.
 func migrateLocalhostNode(ctx context.Context, tx *sql.Tx) error {
 	legacyID := strings.TrimSpace(os.Getenv("GOTHAM_LEGACY_LOCAL_NODE_ID"))
 	if legacyID == "localhost" {

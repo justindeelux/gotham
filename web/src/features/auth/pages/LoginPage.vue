@@ -23,10 +23,6 @@ import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
 import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
 import MfaChallengeForm from "@/features/auth/components/MfaChallengeForm.vue";
 
-// Error convention (shared with RegisterPage): client-side validation errors
-// render inline on the field via NFormItem; server-side submit failures keep
-// the raw error and render once in the NAlert above the form through a
-// computed, so a language switch refreshes the banner reactively.
 interface LoginForm {
   email: string;
   password: string;
@@ -46,27 +42,12 @@ const errorMessage = computed<string>(() =>
 );
 const form = reactive<LoginForm>({ email: "", password: "" });
 
-/**
- * step is the two-factor login stage (JUS-196): credentials first, then the
- * code when the account has TOTP enabled. The control plane issues no session
- * between the two, so the password is dropped when moving to the code step and
- * the user is never half-signed-in.
- */
 const step = ref<"credentials" | "code">("credentials");
 
-/**
- * mfaNotice explains why the code step was abandoned (an expired half-auth
- * token or an account lockout), so a return to the form is not silent.
- */
 const mfaNotice = ref("");
 
 const rules: FormRules = loginRules();
 
-/**
- * visible tracks paths with currently-shown feedback (input/blur/submit).
- * A language switch revalidates exactly those paths: already-visible errors
- * refresh, pristine fields stay clean, and nothing submits or calls an API.
- */
 const visible = createVisibleValidation();
 const trackedRules: FormRules = visible.trackRules(rules);
 const stopLocaleWatch = onLocaleChange(() => {
@@ -75,7 +56,6 @@ const stopLocaleWatch = onLocaleChange(() => {
 
 onUnmounted(() => {
   stopLocaleWatch();
-  // Never leave a half-authenticated token behind when this page goes away.
   authStore.clearMfaChallenge();
 });
 
@@ -83,7 +63,6 @@ onBeforeRouteLeave(() => {
   authStore.clearMfaChallenge();
 });
 
-/** redirectAfterAuth honours ?redirect when it is a safe local path. */
 async function redirectAfterAuth(): Promise<void> {
   await router.replace(safeRedirect(route.query.redirect) ?? "/dashboard");
 }
@@ -102,7 +81,6 @@ async function handleSubmit(): Promise<void> {
   try {
     const { mfaRequired } = await authStore.login(form.email, form.password);
     if (mfaRequired) {
-      // No session was issued: drop the password and show the code step.
       step.value = "code";
       form.password = "";
       return;
@@ -115,13 +93,11 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
-/** backToCredentials abandons a pending challenge and returns to the form. */
 function backToCredentials(): void {
   authStore.clearMfaChallenge();
   step.value = "credentials";
 }
 
-/** handleChallengeExpired returns to the form once the challenge is dead. */
 function handleChallengeExpired(): void {
   authStore.clearMfaChallenge();
   rawError.value = null;
@@ -130,13 +106,8 @@ function handleChallengeExpired(): void {
 }
 
 onMounted(() => {
-  // Registration is open only on a fresh instance; the create-account tab is
-  // hidden otherwise and members join through an admin invite link (P-A2).
   void authStore.fetchAuthConfig();
 
-  // An OAuth callback that hit a TOTP-enabled account leaves a pending
-  // challenge; land directly on the code step (JUS-196). A challenge past its
-  // lifetime is discarded, so a stale token never reopens the code step.
   if (authStore.mfaPending) {
     if (authStore.isMfaChallengeLive()) {
       step.value = "code";
@@ -242,14 +213,10 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* The design's card is a bare
-   width limiter — no border, no background. The only filled element is the
-   tab switch below. */
 .auth-card {
   width: min(420px, 100%);
 }
 
-/* Tab switch, divider, and footnote; tokens come from styles/tokens.css. */
 .auth-title {
   margin: 0 0 4px;
   font-size: 20px;

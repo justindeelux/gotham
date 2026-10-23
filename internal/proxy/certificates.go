@@ -7,29 +7,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// CreateCertificateInput is the validated input of a new certificate config.
-// The recorded domain defaults to the application's primary domain; Domain
-// selects one of the application's other attached domains instead (JUS-89).
-// Callers never invent a host: it must be attached to the application.
 type CreateCertificateInput struct {
 	ApplicationID uuid.UUID
-	// Domain selects the certified host; empty selects the primary domain.
-	Domain string
-	// Enabled defaults to true when nil.
-	Enabled *bool
-	// Challenge defaults to http-01 when empty.
-	Challenge ChallengeMode
-	// DNSProviderID is required for dns-01 and must be empty for http-01.
+	Domain        string
+	Enabled       *bool
+	Challenge     ChallengeMode
 	DNSProviderID uuid.UUID
-	// Wildcard requests a wildcard certificate for the provider's zone; it is
-	// only valid with dns-01.
-	Wildcard bool
+	Wildcard      bool
 }
 
-// UpdateCertificateInput is a partial update: nil fields stay unchanged,
-// including the recorded domain. Domain re-targets the intent onto another
-// attached host (the explicit re-record path); it must stay attached to the
-// application.
 type UpdateCertificateInput struct {
 	Domain        *string
 	Enabled       *bool
@@ -38,7 +24,6 @@ type UpdateCertificateInput struct {
 	Wildcard      *bool
 }
 
-// CertificateService is the CRUD surface over domain_certificates.
 type CertificateService interface {
 	CreateCertificate(ctx context.Context, in CreateCertificateInput) (DomainCertificate, error)
 	ListCertificates(ctx context.Context) ([]DomainCertificate, error)
@@ -47,7 +32,6 @@ type CertificateService interface {
 	DeleteCertificate(ctx context.Context, id uuid.UUID) error
 }
 
-// certificateDraft is the resolved configuration validated before a write.
 type certificateDraft struct {
 	applicationID uuid.UUID
 	domain        string
@@ -57,10 +41,6 @@ type certificateDraft struct {
 	wildcard      bool
 }
 
-// Create validates and stores one certificate config for an application,
-// inside the shared mutation boundary: the provider checks and the write are
-// one critical section with the provider mutations, so an enabled config can
-// never be inserted against a provider that a concurrent request disables.
 func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificateInput) (DomainCertificate, error) {
 	if in.ApplicationID == uuid.Nil {
 		return DomainCertificate{}, fmt.Errorf("%w: application_id is required", ErrValidation)
@@ -137,8 +117,6 @@ func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificate
 	return certificate, nil
 }
 
-// List returns the certificate configs of the caller's active team, newest
-// first.
 func (s *sslService) ListCertificates(ctx context.Context) ([]DomainCertificate, error) {
 	certificates, err := s.store.ListCertificates(ctx)
 	if err != nil {
@@ -162,8 +140,6 @@ func (s *sslService) ListCertificates(ctx context.Context) ([]DomainCertificate,
 	return filtered, nil
 }
 
-// Get returns one certificate config of an application the caller's active
-// team owns; a foreign team's certificate answers ErrNotFound.
 func (s *sslService) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCertificate, error) {
 	if id == uuid.Nil {
 		return DomainCertificate{}, fmt.Errorf("%w: certificate id is required", ErrValidation)
@@ -182,13 +158,6 @@ func (s *sslService) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCe
 	return certificate, nil
 }
 
-// Update applies a partial update inside the shared mutation boundary. The
-// recorded domain stays put unless Domain re-targets it onto another
-// attached host, so editing one domain's intent never steals or drops its
-// siblings; a domain change made through the application API therefore
-// surfaces through the generator's stale-host diagnostic until an explicit
-// re-record. Enabling a config is one critical section with the provider
-// guards.
 func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in UpdateCertificateInput) (DomainCertificate, error) {
 	if id == uuid.Nil {
 		return DomainCertificate{}, fmt.Errorf("%w: certificate id is required", ErrValidation)
@@ -232,8 +201,6 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 		if in.Challenge != nil {
 			draft.challenge = *in.Challenge
 			if draft.challenge == ChallengeHTTP01 {
-				// Switching back to HTTP-01 drops the DNS provider reference
-				// so the stored row always satisfies the schema constraint.
 				draft.providerID = uuid.Nil
 				draft.wildcard = false
 			}
@@ -280,8 +247,6 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 	return certificate, nil
 }
 
-// Delete removes one certificate config inside the shared mutation boundary;
-// the application stays routable over plain HTTP exactly as in BE-6.1.
 func (s *sslService) DeleteCertificate(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return fmt.Errorf("%w: certificate id is required", ErrValidation)
@@ -307,12 +272,6 @@ func (s *sslService) DeleteCertificate(ctx context.Context, id uuid.UUID) error 
 	return nil
 }
 
-// validateCertificate enforces the challenge/provider matrix:
-//
-//   - http-01 uses the shared default resolver and must not name a provider;
-//   - dns-01 requires a configured provider (enabled while the config is
-//     enabled) whose zones cover the domain;
-//   - wildcard is dns-01 only.
 func (s *sslService) validateCertificate(ctx context.Context, draft certificateDraft) error {
 	if err := ValidateDomain(draft.domain); err != nil {
 		return fmt.Errorf("%w: invalid certificate domain: %v", ErrValidation, err)
@@ -346,9 +305,6 @@ func (s *sslService) validateCertificate(ctx context.Context, draft certificateD
 		return fmt.Errorf("%w: the domain is not under any zone served by the DNS provider", ErrValidation)
 	}
 	if draft.wildcard {
-		// The wildcard base must sit inside a configured zone so the challenge
-		// record can be written there, and the generated request always keeps
-		// the exact host as the main name because a wildcard matches one label.
 		if base, ok := WildcardBase(draft.domain, provider.Zones); !ok {
 			return fmt.Errorf("%w: the wildcard base is not inside any zone served by the DNS provider", ErrValidation)
 		} else if MatchZone(provider.Zones, base) == "" {
@@ -358,8 +314,6 @@ func (s *sslService) validateCertificate(ctx context.Context, draft certificateD
 	return nil
 }
 
-// certificateDomain resolves the domain a certificate config records by
-// default: the application's primary domain.
 func certificateDomain(app ApplicationInfo) (string, error) {
 	if app.DomainDisabled {
 		return "", fmt.Errorf("%w: the application's domain is disabled; resolve the duplicate-domain conflict first", ErrValidation)

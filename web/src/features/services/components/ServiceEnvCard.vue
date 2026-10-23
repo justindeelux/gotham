@@ -4,12 +4,6 @@ import { NAlert, NButton, NCard, NInput, NSpace, NText } from "naive-ui";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
 import { activeLocale, i18n } from "@/shared/i18n";
 
-/** ServiceEnvCard renders the masked environment editor card. */
-
-/**
- * t renders card copy in the active locale (tracks language switches).
- * Called during render, so labels refresh without losing env rows.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

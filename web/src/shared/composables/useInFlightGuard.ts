@@ -3,16 +3,6 @@ import type { Ref } from "vue";
 
 import { createRequestGeneration } from "@/shared/utils/requestGeneration";
 
-/**
- * In-flight guard for a wizard's create/validate requests.
- *
- * `begin()` captures a token before an await; `isCurrent(token)` reports
- * whether the wizard still owns that request. `reset()` invalidates every
- * in-flight request *and* clears the loading flags — without the latter a
- * close during Create/Validate leaves the reopened wizard with a permanently
- * loading button (the guarded `finally` blocks intentionally skip a stale
- * request's cleanup).
- */
 export interface InFlightGuard {
   creating: Ref<boolean>;
   validating: Ref<boolean>;
@@ -21,7 +11,6 @@ export interface InFlightGuard {
   reset(): void;
 }
 
-/** useInFlightGuard returns a fresh guard for one wizard instance. */
 export function useInFlightGuard(): InFlightGuard {
   const generation = createRequestGeneration();
   const creating = ref(false);

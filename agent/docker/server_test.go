@@ -16,7 +16,6 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// fakeDockerClient is a configurable dockerClient for server tests.
 type fakeDockerClient struct {
 	containers         []*agentv1.ContainerInfo
 	listAll            bool
@@ -132,8 +131,6 @@ func (f *fakeDockerClient) Logs(context.Context, string, bool, int64) (<-chan Lo
 	return chunks, nil
 }
 
-// newDockerServiceClient starts an in-process DockerService server backed by
-// fake and returns a client connected over bufconn.
 func newDockerServiceClient(t *testing.T, fake *fakeDockerClient) agentv1.DockerServiceClient {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
@@ -167,16 +164,11 @@ func TestDockerServerListContainers(t *testing.T) {
 	if len(response.GetContainers()) != 1 || response.GetContainers()[0].GetId() != "abc" {
 		t.Errorf("containers = %v; want one with id abc", response.GetContainers())
 	}
-	// The label filter must reach the Docker client (which applies it in
-	// Docker), not be dropped at the gRPC boundary.
 	if !fake.listAll || fake.listLabels["com.docker.compose.project"] != labels["com.docker.compose.project"] {
 		t.Errorf("docker client got (all=%v, labels=%v), want (true, %v)", fake.listAll, fake.listLabels, labels)
 	}
 }
 
-// TestDockerServerListContainersResolveDevices pins S4: the request flag reaches
-// the Docker client unchanged in both directions, so the agent cannot silently
-// resolve (or stop resolving) volume devices for every caller.
 func TestDockerServerListContainersResolveDevices(t *testing.T) {
 	for _, want := range []bool{true, false} {
 		fake := &fakeDockerClient{}
@@ -406,9 +398,6 @@ func TestDockerServerStreamLogs(t *testing.T) {
 	}
 }
 
-// TestDockerServerStreamLogsBrokenStream is the A3-5 guard: a decoder error
-// after a chunk must surface as a gRPC status, not a clean EOF, so the control
-// plane never treats a truncated stream as success.
 func TestDockerServerStreamLogsBrokenStream(t *testing.T) {
 	fake := &fakeDockerClient{logs: []byte("partial"), logStreamErr: errors.New("connection reset")}
 	client := newDockerServiceClient(t, fake)

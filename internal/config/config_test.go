@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// gothamEnvKeys lists every environment variable Load understands.
 var gothamEnvKeys = []string{
 	EnvServerAddr,
 	EnvServerPort,
@@ -32,8 +31,6 @@ var gothamEnvKeys = []string{
 	EnvDeployGitAllowPrivateHosts,
 }
 
-// chdir switches into dir for the duration of the test and restores the
-// previous working directory afterwards.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
 
@@ -51,8 +48,6 @@ func chdir(t *testing.T, dir string) {
 	})
 }
 
-// clearGothamEnv removes any inherited GOTHAM_* variables for the test and
-// restores them afterwards.
 func clearGothamEnv(t *testing.T) {
 	t.Helper()
 
@@ -61,14 +56,13 @@ func clearGothamEnv(t *testing.T) {
 		if !ok {
 			continue
 		}
-		t.Setenv(key, value) // register restore
+		t.Setenv(key, value)
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatalf("unset %s: %v", key, err)
 		}
 	}
 }
 
-// writeConfig creates gotham.yaml with contents under dir.
 func writeConfig(t *testing.T, dir, contents string) {
 	t.Helper()
 
@@ -435,7 +429,6 @@ func TestLoadDeployGitAllowPrivateHostsFromYAML(t *testing.T) {
 		t.Error("Deploy.GitAllowPrivateHosts = false, want true from gotham.yaml")
 	}
 
-	// YAML 1 agrees with env "1": both readers map it to true.
 	writeConfig(t, dir, "deploy:\n  git_allow_private_hosts: 1\n")
 	cfg, err = Load()
 	if err != nil {
@@ -530,7 +523,6 @@ func TestApplyChangeReloadsAndDeduplicates(t *testing.T) {
 		t.Errorf("onChange calls = %d, want 1", calls)
 	}
 
-	// A duplicate event with unchanged content must not reload again.
 	cfg.applyChange(onChange)
 	if calls != 1 {
 		t.Errorf("onChange calls after duplicate = %d, want 1", calls)
@@ -557,9 +549,6 @@ func TestApplyChangeRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-// rewriteConfigAtomic replaces gotham.yaml the way editors do: write a temp
-// file and rename it over the target. This is the case a file-level watch
-// misses, so it exercises the directory watcher.
 func rewriteConfigAtomic(t *testing.T, dir, contents string) {
 	t.Helper()
 
@@ -572,8 +561,6 @@ func rewriteConfigAtomic(t *testing.T, dir, contents string) {
 	}
 }
 
-// TestWatchReloadsOnFileChange pins that hot reload still fires after the viper
-// file watcher was dropped: the directory watcher alone must pick up an edit.
 func TestWatchReloadsOnFileChange(t *testing.T) {
 	clearGothamEnv(t)
 
@@ -606,9 +593,6 @@ func TestWatchReloadsOnFileChange(t *testing.T) {
 	}
 }
 
-// TestWatchReloadNoRace hammers file changes while readers snapshot the config.
-// It is meaningful under `go test -race`: a second watcher mutating viper state
-// concurrently with a reload would be reported.
 func TestWatchReloadNoRace(t *testing.T) {
 	clearGothamEnv(t)
 
@@ -648,9 +632,6 @@ func TestWatchReloadNoRace(t *testing.T) {
 	readers.Wait()
 }
 
-// TestApplyChangeReportsOnlyLevelApplied pins the honest reload report: only
-// log.level is applied live, and a changed log.format says so instead of being
-// logged as if it took effect.
 func TestApplyChangeReportsOnlyLevelApplied(t *testing.T) {
 	clearGothamEnv(t)
 
@@ -695,7 +676,6 @@ func TestApplyChangeReportsOnlyLevelApplied(t *testing.T) {
 		t.Errorf("missing restart warning for changed log.format; log = %q", buf.String())
 	}
 
-	// A level-only reload while the format still differs must not warn again.
 	buf.Reset()
 	writeConfig(t, dir, "log:\n  level: error\n  format: text\n")
 	cfg.applyChange(nil)
@@ -703,7 +683,6 @@ func TestApplyChangeReportsOnlyLevelApplied(t *testing.T) {
 		t.Errorf("level-only reload warned about log.format: %q", buf.String())
 	}
 
-	// Returning to the startup format is already live: no warning either.
 	buf.Reset()
 	writeConfig(t, dir, "log:\n  level: warn\n  format: json\n")
 	cfg.applyChange(nil)

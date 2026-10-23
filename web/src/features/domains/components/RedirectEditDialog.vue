@@ -28,7 +28,6 @@ const {
 } = useRedirects();
 const { applicationName } = useDomainLabels();
 
-/** codeOptions refreshes the redirect-code labels on a language switch. */
 const codeOptions = computed(() => redirectCodeOptions());
 </script>
 

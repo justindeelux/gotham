@@ -11,12 +11,6 @@ import (
 	"github.com/justindeelux/gotham/agent/docker"
 )
 
-// The tests below are the required real-container proof for JUS-263 (gated by
-// GOTHAM_E2E=1 like the other live Docker suites). They never touch a
-// pre-existing container: every case starts its own bounded throwaway
-// container and removes it in cleanup.
-
-// execBuffer is a concurrency-safe sink for one interactive exec.
 type execBuffer struct {
 	mu     sync.Mutex
 	buffer strings.Builder
@@ -34,7 +28,6 @@ func (b *execBuffer) String() string {
 	return b.buffer.String()
 }
 
-// readExec starts draining an exec session in the background.
 func readExec(session docker.ExecSession) (*execBuffer, <-chan struct{}) {
 	buffer := &execBuffer{}
 	done := make(chan struct{})
@@ -45,7 +38,6 @@ func readExec(session docker.ExecSession) (*execBuffer, <-chan struct{}) {
 	return buffer, done
 }
 
-// waitExecOutput waits until output contains marker.
 func waitExecOutput(t *testing.T, buffer *execBuffer, marker string) string {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -59,7 +51,6 @@ func waitExecOutput(t *testing.T, buffer *execBuffer, marker string) string {
 	return ""
 }
 
-// closeExec ends the session and waits for the reader, bounded.
 func closeExec(t *testing.T, session docker.ExecSession, done <-chan struct{}) {
 	t.Helper()
 	_ = session.Close()
@@ -70,8 +61,6 @@ func closeExec(t *testing.T, session docker.ExecSession, done <-chan struct{}) {
 	}
 }
 
-// TestDockerExecRealBashIntegration proves a bash container session gets the
-// prompt marks and terminal description with no image change.
 func TestDockerExecRealBashIntegration(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainerImage(t, client, "debian:bookworm-slim")
@@ -122,11 +111,9 @@ func TestDockerExecRealBashIntegration(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealAlpineWithoutBash proves an image with no bash keeps the
-// plain shell and never emits marks.
 func TestDockerExecRealAlpineWithoutBash(t *testing.T) {
 	client := e2eContainerClient(t)
-	containerID := e2eContainer(t, client) // alpine:3
+	containerID := e2eContainer(t, client)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	session, err := client.Exec(ctx, containerID, docker.ExecOptions{Integration: true, Cols: 200, Rows: 40})
@@ -147,9 +134,6 @@ func TestDockerExecRealAlpineWithoutBash(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealBash32 proves the integration works on bash 3.2 (A/B/D, no
-// PS0 C mark) using the official bash:3.2 image. It skips when the image cannot
-// be pulled.
 func TestDockerExecRealBash32(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainerImage(t, client, "bash:3.2")

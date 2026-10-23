@@ -28,7 +28,6 @@ interface Props {
   isCompose: boolean;
   serviceOptions: Array<{ label: string; value: string }>;
   protocolOptions: Array<{ label: string; value: DomainProtocol }>;
-  /** Old host with a certificate intent that the rename will delete. */
   renameCertificateHost: string;
 }
 
@@ -58,7 +57,6 @@ const submitLabel = computed(() =>
     : t("applications.domain.add"),
 );
 
-/** showRenameWarning marks a hostname change that drops an existing intent. */
 const showRenameWarning = computed<boolean>(
   () =>
     props.editing &&

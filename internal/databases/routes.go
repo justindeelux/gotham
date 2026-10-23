@@ -17,17 +17,10 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// maxBodyBytes bounds database request bodies (they are tiny).
-const maxBodyBytes = 1 << 20 // 1 MiB
+const maxBodyBytes = 1 << 20
 
-// UserIDFunc resolves the authenticated user from the request context. The
-// server passes its own accessor, so this package never imports the HTTP
-// server (it mirrors deploy.UserIDFunc for the same reason).
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// databaseResponse is the wire representation of a database. Sealed secrets
-// never appear here — credentials are served by the credentials endpoint to
-// their owner only.
 type databaseResponse struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
@@ -47,85 +40,48 @@ type databaseResponse struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
-// databaseEnvelope wraps a single database.
 type databaseEnvelope struct {
 	Database databaseResponse `json:"database"`
 }
 
-// databaseListEnvelope wraps a database list.
 type databaseListEnvelope struct {
 	Databases []databaseResponse `json:"databases"`
 }
 
-// createDatabaseEnvelope is the POST /v1/databases response: the row plus the
-// credentials it was created with, so the operator can connect immediately.
 type createDatabaseEnvelope struct {
 	Database    databaseResponse `json:"database"`
 	Credentials Credentials      `json:"credentials"`
 }
 
-// credentialsEnvelope wraps decrypted credentials for their owner.
 type credentialsEnvelope struct {
 	Credentials Credentials `json:"credentials"`
 }
 
-// createRequest is the body of POST /v1/databases.
 type createRequest struct {
-	Name   string `json:"name"`
-	Engine string `json:"engine"`
-	// Version is the optional image tag; empty selects the engine default.
-	Version string `json:"version,omitempty"`
-	// EnvironmentID is the environment the database belongs to.
+	Name          string `json:"name"`
+	Engine        string `json:"engine"`
+	Version       string `json:"version,omitempty"`
 	EnvironmentID string `json:"environment_id"`
-	// ServerID is the node that runs the database.
-	ServerID string `json:"server_id"`
-	// PublicPort optionally publishes the engine port on the host; 0 keeps the
-	// database internal to the node. It is fixed at creation because Docker
-	// port bindings cannot change on a live container.
-	PublicPort int32 `json:"public_port,omitempty"`
+	ServerID      string `json:"server_id"`
+	PublicPort    int32  `json:"public_port,omitempty"`
 }
 
-// updateRequest is the body of PATCH /v1/databases/{id}. Every field is
-// optional: absent fields stay unchanged. Environment and server moves ride
-// string fields (UUIDs do not decode from JSON strings); the handler
-// converts them into the service-level UpdateRequest.
 type updateRequest struct {
 	Name          *string `json:"name,omitempty"`
 	EnvironmentID *string `json:"environment_id,omitempty"`
 	ServerID      *string `json:"server_id,omitempty"`
 }
 
-// errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
 }
 
-// handler serves the database routes for one DatabaseService.
 type handler struct {
 	svc    DatabaseService
 	userID UserIDFunc
 	logger *slog.Logger
 }
 
-// Mount registers the authenticated database endpoints on r:
-//
-//	POST   /v1/databases
-//	GET    /v1/databases
-//	GET    /v1/databases/{id}
-//	PATCH  /v1/databases/{id}
-//	DELETE /v1/databases/{id}
-//	GET    /v1/databases/{id}/credentials
-//	POST   /v1/databases/{id}/start
-//	POST   /v1/databases/{id}/stop
-//	POST   /v1/databases/{id}/restart
-//
-// auth wraps the group (the server passes its team chain); deployScope is the
-// server's deploy-scope middleware, applied explicitly to the credentials read
-// because it returns decrypted passwords. The resource classifier already
-// deploy-gates secret-bearing reads; this wrap is defense in depth, so a future
-// change to the classifier cannot silently reopen the endpoint. A nil svc or
-// FEATURE_DATABASES=false mounts nothing, so the control plane can call Mount
-// unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, deployScope func(http.Handler) http.Handler, userID UserIDFunc, svc DatabaseService) {
 	if svc == nil || !Enabled() {
 		return
@@ -145,7 +101,6 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, deployScope func(
 	})
 }
 
-// create serves POST .../databases: 201 with the row and its credentials.
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -182,8 +137,6 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// list serves GET .../databases, optionally scoped by ?environment_id= or
-// ?project_id=.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -205,7 +158,6 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, databaseListEnvelope{Databases: response})
 }
 
-// get serves GET .../databases/{id}.
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	userID, databaseID, ok := h.databaseParams(w, r)
 	if !ok {
@@ -219,8 +171,6 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, databaseEnvelope{Database: newDatabaseResponse(database)})
 }
 
-// credentials serves GET .../databases/{id}: the decrypted credentials of a
-// database the caller owns.
 func (h *handler) credentials(w http.ResponseWriter, r *http.Request) {
 	userID, databaseID, ok := h.databaseParams(w, r)
 	if !ok {
@@ -234,8 +184,6 @@ func (h *handler) credentials(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, credentialsEnvelope{Credentials: credentials})
 }
 
-// update serves PATCH .../databases/{id} (rename, move environment, change
-// node).
 func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	userID, databaseID, ok := h.databaseParams(w, r)
 	if !ok {
@@ -270,8 +218,6 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, databaseEnvelope{Database: newDatabaseResponse(database)})
 }
 
-// delete serves DELETE .../databases/{id}: the container goes, the row is
-// soft-deleted and the volume stays. 204 on success.
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	userID, databaseID, ok := h.databaseParams(w, r)
 	if !ok {
@@ -284,22 +230,18 @@ func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// start serves POST .../databases/{id}/start.
 func (h *handler) start(w http.ResponseWriter, r *http.Request) {
 	h.action(w, r, "start")
 }
 
-// stop serves POST .../databases/{id}/stop.
 func (h *handler) stop(w http.ResponseWriter, r *http.Request) {
 	h.action(w, r, "stop")
 }
 
-// restart serves POST .../databases/{id}/restart.
 func (h *handler) restart(w http.ResponseWriter, r *http.Request) {
 	h.action(w, r, "restart")
 }
 
-// action dispatches one lifecycle verb and answers with the updated row.
 func (h *handler) action(w http.ResponseWriter, r *http.Request, verb string) {
 	userID, databaseID, ok := h.databaseParams(w, r)
 	if !ok {
@@ -327,7 +269,6 @@ func (h *handler) action(w http.ResponseWriter, r *http.Request, verb string) {
 	writeJSON(w, http.StatusOK, databaseEnvelope{Database: newDatabaseResponse(database)})
 }
 
-// currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -341,8 +282,6 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID
 	return userID, true
 }
 
-// databaseParams resolves the authenticated user and the {id} path parameter,
-// answering 401/400 as needed.
 func (h *handler) databaseParams(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -356,8 +295,6 @@ func (h *handler) databaseParams(w http.ResponseWriter, r *http.Request) (uuid.U
 	return userID, databaseID, true
 }
 
-// parseRequiredUUID parses a required UUID field: empty answers 400 with
-// the required message, anything else must parse (400 naming the field).
 func parseRequiredUUID(w http.ResponseWriter, raw, field, requiredMessage string) (uuid.UUID, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -372,7 +309,6 @@ func parseRequiredUUID(w http.ResponseWriter, raw, field, requiredMessage string
 	return id, true
 }
 
-// writeServiceError maps service sentinels to HTTP responses.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrServerNotFound):
@@ -403,7 +339,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// newDatabaseResponse maps a domain database to its wire representation.
 func newDatabaseResponse(database Database) databaseResponse {
 	return databaseResponse{
 		ID:              database.ID.String(),
@@ -425,8 +360,6 @@ func newDatabaseResponse(database Database) databaseResponse {
 	}
 }
 
-// databaseFilter parses the ?environment_id= and ?project_id= list filters.
-// At most one may be present; a malformed UUID is a 400.
 func databaseFilter(w http.ResponseWriter, r *http.Request) (DatabaseFilter, bool) {
 	var filter DatabaseFilter
 	if raw := strings.TrimSpace(r.URL.Query().Get("environment_id")); raw != "" {
@@ -448,8 +381,6 @@ func databaseFilter(w http.ResponseWriter, r *http.Request) (DatabaseFilter, boo
 	return filter, true
 }
 
-// decodeBody decodes a required JSON body into dst. An empty or malformed
-// body answers 400.
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
@@ -469,7 +400,6 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

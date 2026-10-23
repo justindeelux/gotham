@@ -1,9 +1,3 @@
-/**
- * Files Vietnamese catalog. Mirrors the English key set and parameter names;
- * values are translated, raw technical values (paths, byte counts, modes) are
- * interpolated unchanged. No raw `{{`, bare `@` or bare `|` (the catalog
- * parity test rejects those).
- */
 const vi = {
   chooser: {
     eyebrow: "Vận hành · Quản lý tệp từ xa",

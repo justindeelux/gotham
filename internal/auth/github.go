@@ -11,40 +11,28 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// GitHub OAuth2 endpoints and API base. authURL/tokenURL come from GitHub's
-// documented OAuth flow; apiBase is the REST API root used to read the profile.
 const (
 	gitHubAuthURL    = "https://github.com/login/oauth/authorize"
 	gitHubTokenURL   = "https://github.com/login/oauth/access_token"
 	gitHubAPIBase    = "https://api.github.com"
 	gitHubEmailScope = "user:email"
 
-	// maxGitHubBodyBytes bounds how much of a GitHub response is decoded.
-	maxGitHubBodyBytes = 1 << 20 // 1 MiB
+	maxGitHubBodyBytes = 1 << 20
 )
 
-// gitHubUser is the subset of GET /user this provider consumes.
 type gitHubUser struct {
 	Name      string `json:"name"`
 	AvatarURL string `json:"avatar_url"`
 }
 
-// gitHubEmail is one entry of GET /user/emails.
 type gitHubEmail struct {
 	Email    string `json:"email"`
 	Primary  bool   `json:"primary"`
 	Verified bool   `json:"verified"`
 }
 
-// GitHubCallbackPath is the control-plane callback GitHub redirects to after
-// authorization. Combined with the control-plane base URL it forms the
-// redirect URL registered with the GitHub OAuth app.
 const GitHubCallbackPath = "/api/v1/auth/oauth/github/callback"
 
-// ResolveGitHubRedirectURL returns the effective GitHub OAuth redirect URL.
-// The explicit redirect URL (GOTHAM_OAUTH_GITHUB_REDIRECT_URL) wins when set;
-// otherwise the control-plane base URL names the callback path. Empty when
-// neither is set, which keeps today's behavior.
 func ResolveGitHubRedirectURL(explicit, controlPlaneBase string) string {
 	if v := strings.TrimSpace(explicit); v != "" {
 		return v
@@ -55,20 +43,13 @@ func ResolveGitHubRedirectURL(explicit, controlPlaneBase string) string {
 	return ""
 }
 
-// GitHubProvider implements OAuthProvider against GitHub. It is safe for
-// concurrent use.
 type GitHubProvider struct {
-	config  *oauth2.Config
-	apiBase string
-	// explicitRedirect is the configured redirect URL (possibly empty).
+	config           *oauth2.Config
+	apiBase          string
 	explicitRedirect string
-	// controlPlaneBase supplies the effective control-plane base URL when the
-	// explicit redirect is unset. Nil keeps today's behavior.
 	controlPlaneBase func() string
 }
 
-// NewGitHubProvider builds a GitHub provider. It returns nil when clientID or
-// clientSecret is empty, signalling that the provider is disabled.
 func NewGitHubProvider(clientID, clientSecret, redirectURL string) OAuthProvider {
 	if clientID == "" || clientSecret == "" {
 		return nil
@@ -89,16 +70,10 @@ func NewGitHubProvider(clientID, clientSecret, redirectURL string) OAuthProvider
 	}
 }
 
-// SetControlPlaneURLSource supplies the effective control-plane base URL
-// ("" when unset) used to derive the redirect URL when the explicit one is
-// empty. A nil source keeps today's behavior.
 func (p *GitHubProvider) SetControlPlaneURLSource(src func() string) {
 	p.controlPlaneBase = src
 }
 
-// resolved returns the OAuth2 config with the effective redirect URL: the
-// explicit value wins, otherwise the control-plane base names the callback.
-// The config is copied so concurrent callers never race on the shared one.
 func (p *GitHubProvider) resolved() *oauth2.Config {
 	if p.controlPlaneBase == nil {
 		return p.config
@@ -108,22 +83,16 @@ func (p *GitHubProvider) resolved() *oauth2.Config {
 	return &cfg
 }
 
-// Name identifies the provider.
 func (p *GitHubProvider) Name() string { return "github" }
 
-// AuthCodeURL returns GitHub's authorization URL.
 func (p *GitHubProvider) AuthCodeURL(state string) string {
 	return p.resolved().AuthCodeURL(state)
 }
 
-// Exchange swaps the authorization code for an access token.
 func (p *GitHubProvider) Exchange(ctx context.Context, code string) (*oauth2.Token, error) {
 	return p.resolved().Exchange(ctx, code)
 }
 
-// Identity reads the user profile and email list, preferring the primary
-// verified address. It returns ErrMissingEmail when GitHub exposes no verified
-// address.
 func (p *GitHubProvider) Identity(ctx context.Context, tok *oauth2.Token) (*OAuthIdentity, error) {
 	if tok == nil {
 		return nil, ErrMissingEmail
@@ -148,11 +117,6 @@ func (p *GitHubProvider) Identity(ctx context.Context, tok *oauth2.Token) (*OAut
 	}, nil
 }
 
-// primaryEmail fetches GET /user/emails and picks the primary verified address,
-// falling back to the first verified address. An address GitHub has not
-// verified is never accepted: a user may mark an address primary before
-// verifying it, so trusting it would let an attacker claim someone else's email
-// (and account) through OAuth.
 func (p *GitHubProvider) primaryEmail(ctx context.Context, client *http.Client) (string, error) {
 	var emails []gitHubEmail
 	if err := p.getJSON(ctx, client, "/user/emails", &emails); err != nil {
@@ -181,8 +145,6 @@ func (p *GitHubProvider) primaryEmail(ctx context.Context, client *http.Client) 
 	return "", ErrMissingEmail
 }
 
-// getJSON performs an authenticated GET against the GitHub API and decodes the
-// JSON body into dst.
 func (p *GitHubProvider) getJSON(ctx context.Context, client *http.Client, path string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.apiBase+path, nil)
 	if err != nil {

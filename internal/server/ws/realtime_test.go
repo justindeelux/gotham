@@ -17,8 +17,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// ctxStreamer returns a log stream whose Recv blocks until the stream context
-// is cancelled, modelling a live agent tail.
 type ctxStreamer struct{}
 
 func (ctxStreamer) StreamLogs(ctx context.Context, _ *agentv1.StreamLogsRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.LogChunk], error) {
@@ -35,7 +33,6 @@ func (s ctxStream) Recv() (*agentv1.LogChunk, error) {
 	return nil, s.ctx.Err()
 }
 
-// mountFallback mounts a Realtime with Redis disabled (hub publisher only).
 func mountFallback(t *testing.T) *Realtime {
 	t.Helper()
 	t.Setenv(RealtimeEnv, "false")
@@ -44,9 +41,6 @@ func mountFallback(t *testing.T) *Realtime {
 	return rt
 }
 
-// TestStartLogStreamIdempotentAndCleansUp is the B1-2/B2-1 manager regression:
-// the production start path runs PublishStream to the hub, a repeat start for
-// the same channel is a no-op, and the stream is removed once it ends.
 func TestStartLogStreamIdempotentAndCleansUp(t *testing.T) {
 	rt := mountFallback(t)
 
@@ -57,8 +51,6 @@ func TestStartLogStreamIdempotentAndCleansUp(t *testing.T) {
 		return rt.Hub.Subscribers(channel) == 1
 	})
 
-	// A live stream (one chunk, then stays open) so idempotency is observed
-	// before it ends.
 	opener := func(context.Context) (LogStreamer, io.Closer, error) { return tailStreamer{}, nil, nil }
 	req := &agentv1.StreamLogsRequest{ContainerId: "ctr", Follow: true}
 
@@ -68,7 +60,6 @@ func TestStartLogStreamIdempotentAndCleansUp(t *testing.T) {
 	if msg := nextClientFrame(t, client); msg.Type != TypeLog || msg.Data != "tail\n" {
 		t.Fatalf("frame = %+v, want a log frame", msg)
 	}
-	// A repeat start while the stream is live shares it (idempotent).
 	if _, err := rt.StartLogStream(opener, "srv-rt", "ctr", req); err != nil {
 		t.Fatalf("second StartLogStream: %v", err)
 	}
@@ -77,8 +68,6 @@ func TestStartLogStreamIdempotentAndCleansUp(t *testing.T) {
 	}
 }
 
-// TestStreamRemovedAfterEOF verifies a stream that ends is removed from the
-// active set.
 func TestStreamRemovedAfterEOF(t *testing.T) {
 	rt := mountFallback(t)
 
@@ -105,8 +94,6 @@ func TestStreamRemovedAfterEOF(t *testing.T) {
 	})
 }
 
-// TestStreamReapedWhenNoSubscribers verifies a stream left without a hub
-// subscriber is cancelled rather than running forever.
 func TestStreamReapedWhenNoSubscribers(t *testing.T) {
 	oldCheck, oldGrace := streamIdleCheck, streamIdleGrace
 	streamIdleCheck, streamIdleGrace = 5*time.Millisecond, 10*time.Millisecond
@@ -125,11 +112,8 @@ func TestStreamReapedWhenNoSubscribers(t *testing.T) {
 	})
 }
 
-// TestRealtimeCloseCancelsActiveStream verifies shutdown does not hang on a
-// live agent stream (B1-8).
 func TestRealtimeCloseCancelsActiveStream(t *testing.T) {
 	rt := mountFallback(t)
-	// No t.Cleanup(rt.Close): Close is called by the test body.
 
 	started := make(chan struct{})
 	opener := func(context.Context) (LogStreamer, io.Closer, error) {
@@ -160,8 +144,6 @@ func TestRealtimeCloseCancelsActiveStream(t *testing.T) {
 	}
 }
 
-// tailStreamer emits one chunk then blocks until the stream context ends, so a
-// started stream stays live for a second viewer to join.
 type tailStreamer struct{}
 
 func (tailStreamer) StreamLogs(ctx context.Context, _ *agentv1.StreamLogsRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.LogChunk], error) {
@@ -183,8 +165,6 @@ func (s *tailStream) Recv() (*agentv1.LogChunk, error) {
 	return nil, s.ctx.Err()
 }
 
-// scriptedTailStreamer emits a fixed list of chunks, then blocks until the
-// stream context ends, so its whole history lands in the replay ring.
 type scriptedTailStreamer struct {
 	chunks [][]byte
 }
@@ -210,7 +190,6 @@ func (s *scriptedTail) Recv() (*agentv1.LogChunk, error) {
 	return nil, s.ctx.Err()
 }
 
-// nextClientFrame reads and decodes one frame queued for a hub client.
 func nextClientFrame(t *testing.T, client *Client) Message {
 	t.Helper()
 	select {
@@ -226,7 +205,6 @@ func nextClientFrame(t *testing.T, client *Client) Message {
 	}
 }
 
-// newManualRealtime builds a Realtime with an injected publisher for tests.
 func newManualRealtime(hub *Hub, pub Publisher) *Realtime {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Realtime{
@@ -239,10 +217,6 @@ func newManualRealtime(hub *Hub, pub Publisher) *Realtime {
 	}
 }
 
-// TestStartLogStreamReplaysToLateViewer covers the U2 replay behavior and the
-// round-2 U1 fix: a late viewer receives the buffered tail tagged Replay, and
-// the first viewer's only untagged copy is the live frame — the second copy it
-// also receives is tagged, so the client skips it instead of duplicating lines.
 func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 	rt := mountFallback(t)
 
@@ -275,8 +249,6 @@ func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 	if replayed.Type != TypeLog || replayed.Data != "tail\n" || !replayed.Replay {
 		t.Fatalf("late viewer frame = %+v, want the replay-tagged tail", replayed)
 	}
-	// The first viewer receives the same replayed frame, but tagged, so the
-	// client will not render a duplicate.
 	duplicate := nextClientFrame(t, first)
 	if duplicate.Type != TypeLog || duplicate.Data != "tail\n" || !duplicate.Replay {
 		t.Fatalf("first viewer replay frame = %+v, want a replay-tagged tail", duplicate)
@@ -286,9 +258,6 @@ func TestStartLogStreamReplaysToLateViewer(t *testing.T) {
 	}
 }
 
-// TestReplayEmitsAllBufferedFrames is the round-3 U1 server-side guard: a
-// replay must deliver the whole ring, not just the first frame (the client
-// renders them as one batch decided at start).
 func TestReplayEmitsAllBufferedFrames(t *testing.T) {
 	rt := mountFallback(t)
 
@@ -330,9 +299,6 @@ func TestReplayEmitsAllBufferedFrames(t *testing.T) {
 	}
 }
 
-// TestReplayEndMarkerClosesTheBatch is the round-4 U1 server guard: a replay
-// batch is terminated by an explicit end marker, so the client can close its
-// accept-replay window and never render a later viewer's batch.
 func TestReplayEndMarkerClosesTheBatch(t *testing.T) {
 	rt := mountFallback(t)
 
@@ -371,9 +337,6 @@ func TestReplayEndMarkerClosesTheBatch(t *testing.T) {
 	}
 }
 
-// TestStartLogStreamReplayCount is the round-5 U1 contract: the count returned
-// by StartLogStream equals the number of tagged frames the server actually
-// publishes for that replay.
 func TestStartLogStreamReplayCount(t *testing.T) {
 	rt := mountFallback(t)
 
@@ -396,7 +359,6 @@ func TestStartLogStreamReplayCount(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("fresh stream replay count = %d, want 0", n)
 	}
-	// Drain the live frames so the ring is fully populated before the repeat.
 	for i := 0; i < len(chunks); i++ {
 		if msg := nextClientFrame(t, first); msg.Type != TypeLog || msg.Replay {
 			t.Fatalf("live frame %d = %+v, want untagged", i, msg)
@@ -416,7 +378,6 @@ func TestStartLogStreamReplayCount(t *testing.T) {
 		t.Fatalf("replay count = %d, want %d", n, len(chunks))
 	}
 
-	// The server publishes exactly n tagged frames before the end marker.
 	tagged := 0
 	for {
 		msg := nextClientFrame(t, late)
@@ -434,7 +395,6 @@ func TestStartLogStreamReplayCount(t *testing.T) {
 	}
 }
 
-// flakyPublisher fails the first N publishes, then delivers to the hub.
 type flakyPublisher struct {
 	mu       sync.Mutex
 	failures int
@@ -461,10 +421,6 @@ func (p *flakyPublisher) callCount() int {
 	return p.calls
 }
 
-// TestStartLogStreamRetriesPublishAndNotifies is the U3 regression: a publish
-// failure mid-stream does not silently kill the stream. The frame is retried
-// until it lands, and the viewer gets an interruption notice broadcast straight
-// to the hub while the transport is down.
 func TestStartLogStreamRetriesPublishAndNotifies(t *testing.T) {
 	oldMin, oldMax := streamPublishMinBackoff, streamPublishMaxBackoff
 	streamPublishMinBackoff, streamPublishMaxBackoff = time.Millisecond, 2*time.Millisecond
@@ -520,7 +476,6 @@ func TestStartLogStreamRetriesPublishAndNotifies(t *testing.T) {
 	}
 }
 
-// failOnCallPublisher fails exactly one call (1-based), then delivers.
 type failOnCallPublisher struct {
 	mu     sync.Mutex
 	failOn int
@@ -540,9 +495,6 @@ func (p *failOnCallPublisher) Publish(_ context.Context, channel string, payload
 	return nil
 }
 
-// TestResumedOnlyForLogFrames is the round-3 U3 regression: recovering the
-// terminal disconnect notice must not emit a "resumed" notice immediately
-// before the close frame.
 func TestResumedOnlyForLogFrames(t *testing.T) {
 	oldMin, oldMax := streamPublishMinBackoff, streamPublishMaxBackoff
 	streamPublishMinBackoff, streamPublishMaxBackoff = time.Millisecond, 2*time.Millisecond
@@ -554,8 +506,6 @@ func TestResumedOnlyForLogFrames(t *testing.T) {
 	go hub.Run()
 	t.Cleanup(hub.Close)
 
-	// Call 1 is the log frame (succeeds); call 2 is the terminal disconnect
-	// notice (fails once, then succeeds on retry).
 	pub := &failOnCallPublisher{failOn: 2, hub: hub}
 	rt := newManualRealtime(hub, pub)
 	t.Cleanup(rt.Close)
@@ -605,9 +555,6 @@ drain:
 	}
 }
 
-// TestStartLogStreamReplacesStaleEntry is the U6 regression: a start racing the
-// reaper replaces a stream whose context is already cancelled instead of
-// returning a no-op that leaves the viewer on a dead channel.
 func TestStartLogStreamReplacesStaleEntry(t *testing.T) {
 	rt := mountFallback(t)
 	channel := LogChannel("srv-rt", "stale")

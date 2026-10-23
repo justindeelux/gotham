@@ -21,10 +21,6 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-/**
- * t renders success-panel copy in the active locale (tracks language
- * switches). Names, statuses and routes stay raw parameters.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

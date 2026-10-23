@@ -1,7 +1,3 @@
-/**
- * Files editor Vietnamese catalog, split out of `locales/vi.ts` (see
- * `editorEn.ts` for why). Mirrors the English key set and parameter names.
- */
 const vi = {
   heading: "Trình soạn thảo",
   windowLabel: "Cửa sổ trình soạn thảo mã",

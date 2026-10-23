@@ -1,5 +1,3 @@
-// Profile form mounts (JUS-27): errors, submit payloads, busy state,
-// and per-mount state (typed passwords must not survive navigation).
 import { NButton, NDescriptions, NFormItem, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter, RouterView } from "vue-router";
@@ -58,8 +56,6 @@ function baseUser(): User {
 }
 
 async function mountChild(child: object): Promise<VueWrapper> {
-  // Attached: only a connected form dispatches the native submit, which is
-  // what the exactly-once submit tests need.
   const wrapper = mount(shell(child), {
     attachTo: globalThis.document.body,
     global: { plugins: [i18n], stubs: { transition: false } },
@@ -160,8 +156,6 @@ describe("DisplayNameForm", () => {
     mockPatch.mockResolvedValue({ ...baseUser(), display_name: "Ada" });
     const wrapper = await mountChild(DisplayNameForm);
     await setInput(wrapper, "#profile-display-name", "Ada");
-    // Enter fires the input keyup handler and the native form submit in the
-    // same tick; the submitting guard dedupes them into one request.
     await wrapper.find("#profile-display-name").trigger("keyup.enter");
     await wrapper.find("form").trigger("submit");
     await flushPromises();
@@ -193,8 +187,6 @@ describe("DisplayNameForm", () => {
   it("stacks the input above its hint in a full-width vertical stack", async () => {
     seedAuth(baseUser());
     const wrapper = await mountChild(DisplayNameForm);
-    // Same vertical field stack as the password fields: input and hint share
-    // one column container, so the hint can never sit beside the input.
     const stack = wrapper.find(".field-stack");
     expect(stack.exists()).toBe(true);
     expect(stack.find("#profile-display-name").exists()).toBe(true);
@@ -208,8 +200,6 @@ describe("DisplayNameForm", () => {
     expect(wrapper.find(".n-card-header__main").text()).toContain("Display name");
     const item = wrapper.findComponent(NFormItem);
     expect(item.props("showLabel")).toBe(false);
-    // No label element renders, so no reserved label row; the input carries
-    // the accessible name itself.
     expect(wrapper.find(".n-form-item-label").exists()).toBe(false);
     expect(wrapper.find("#profile-display-name").attributes("aria-label")).toBe(
       "Display name",
@@ -241,7 +231,6 @@ describe("ChangePasswordForm", () => {
     });
     expect(setSession).toHaveBeenCalledWith(pair);
     expect(mockChange).toHaveBeenCalledTimes(1);
-    // Success clears the typed passwords.
     for (const id of [
       "#profile-current-password",
       "#profile-new-password",
@@ -265,8 +254,6 @@ describe("ChangePasswordForm", () => {
     await setInput(wrapper, "#profile-current-password", "old-secret-123");
     await setInput(wrapper, "#profile-new-password", "new-secret-1234");
     await setInput(wrapper, "#profile-confirm-password", "new-secret-1234");
-    // Enter fires the input keyup handler and the native form submit in the
-    // same tick; the submitting guard dedupes them into one request.
     await wrapper.find("#profile-confirm-password").trigger("keyup.enter");
     await wrapper.find("form").trigger("submit");
     await flushPromises();
@@ -288,7 +275,6 @@ describe("ChangePasswordForm", () => {
     const wrapper = await mountChild(ChangePasswordForm);
     expect(wrapper.find("#profile-current-password").exists()).toBe(false);
 
-    // A late fetchMe (or a first password set) flips the field live.
     useAuthStore().user!.has_password = true;
     await nextTick();
     await flushPromises();
@@ -302,7 +288,6 @@ describe("ChangePasswordForm", () => {
       new_password: "new-secret-1234",
     });
 
-    // And back: the field leaves and the payload omits the current password.
     mockChange.mockClear();
     useAuthStore().user!.has_password = false;
     await nextTick();
@@ -395,8 +380,6 @@ describe("ChangePasswordForm", () => {
     expect(element.readOnly).toBe(true);
     expect(element.tabIndex).toBe(-1);
     expect(username.attributes("aria-hidden")).toBe("true");
-    // No name attribute: never submitted. Class clips it out of view and
-    // the absolute position keeps it out of the layout.
     expect(username.attributes("name")).toBeUndefined();
     expect(username.classes()).toContain("username-fix");
     wrapper.unmount();
@@ -475,7 +458,6 @@ describe("ProfileIdentityCard", () => {
     expect(descriptions.props("labelPlacement")).toBe("left");
     expect(descriptions.props("column")).toBe(1);
     expect(descriptions.props("bordered")).toBe(true);
-    // Narrow containers stack label-over-value via a container query.
     expect(wrapper.find(".identity-facts-wrap").exists()).toBe(true);
     wrapper.unmount();
   });

@@ -1,9 +1,3 @@
-// PE-8 (JUS-37): the Change panel must not render empty error alerts.
-// options.projectsError / options.environmentsError are refs inside a plain
-// object, so reading them without .value is always truthy and interpolates
-// to nothing: every screen using ResourceScopeSummary showed two empty red
-// alerts. These tests fail on the old code (2 alerts with no text) and
-// pass on the fixed code.
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,7 +41,6 @@ afterEach(() => {
 });
 
 function openChange() {
-  // Empty scope shows the Change panel immediately.
   return mount(ResourceScopeSummary, {
     props: { projectId: "", environmentId: "" },
   });

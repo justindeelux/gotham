@@ -20,32 +20,21 @@ const router = useRouter();
 type Outcome = "working" | "connected" | "installed" | "failed";
 
 const outcome = ref<Outcome>("working");
-// rawError keeps the failure; the banner renders through a computed so a
-// language switch refreshes it reactively.
 const rawError = ref<unknown>(null);
 const loadError = computed<string>(() =>
   rawError.value === null ? "" : describeGitHubAppError(rawError.value),
 );
 
-/** clearQuery drops one-time codes from the address bar. */
 function clearQuery(): void {
   window.history.replaceState(null, "", "/applications/github-app/callback");
 }
 
-/** finishManifest redeems a code/state pair that landed on the SPA route. */
 async function finishManifest(code: string, state: string): Promise<void> {
   await finishCallback(code, state);
   outcome.value = "connected";
 }
 
-/** finishSetup records the installation_id GitHub returned to setup_url. */
 async function finishSetup(installationId: number): Promise<void> {
-  // The installation is bound to the app identified by the single-use
-  // install state when present: the received state is redeemed itself (not a
-  // freshly minted one), so single-use stays true. With several pending apps
-  // a guess could record it on the wrong one. Without a state the single
-  // pending app is unambiguous; several pending apps without a state is an
-  // error the GS-10 Install control resolves by minting the state itself.
   const state = typeof route.query.state === "string" ? route.query.state : "";
   if (state) {
     const appId = await installStateApp(state);
@@ -67,8 +56,6 @@ onMounted(async () => {
   try {
     const flag = typeof route.query.github_app === "string" ? route.query.github_app : "";
     if (flag === "connected" || flag === "failed" || flag === "expired") {
-      // The public API callback already stored the app and redirected here
-      // with a bounded result flag.
       outcome.value = flag === "connected" ? "connected" : "failed";
       clearQuery();
       return;
@@ -96,8 +83,6 @@ onMounted(async () => {
   }
 });
 
-/** backToGitSources leaves the result page for the Git sources page, which
- * owns the Connect/Install/Disconnect controls (GS-10). */
 async function backToGitSources(): Promise<void> {
   await router.replace({ name: "git-sources" });
 }

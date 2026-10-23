@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// TestEmbedCoversEveryTemplateDirectory fails when a template directory exists
-// in the repository but is missing from the go:embed list in embed.go: the
-// catalog tests only see the embedded files, so without this guard a new
-// template could silently miss the binary.
 func TestEmbedCoversEveryTemplateDirectory(t *testing.T) {
 	onDisk, err := os.ReadDir(".")
 	if err != nil {

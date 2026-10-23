@@ -1,11 +1,3 @@
-// GOTHAM-16: opening a storage volume in File Manager navigates to
-// /servers/:id/files?root=&path=. The folder must open on the first render —
-// not after a refresh — including when the browser re-initialises for a server
-// whose tabs are still in the store (application detail → File Manager is a
-// route change, so the page mounts with the previous visit's tabs loaded).
-// This mounts the real page and the real browser with the files API mocked, so
-// the mount-order race (deep link applied, then the tab restore overwrites it)
-// is exercised end to end.
 /* global document:readonly, window:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -67,7 +59,6 @@ const compose: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one distinguishable row per directory. */
 function entry(name: string): FilesEntry {
   return {
     name,
@@ -79,7 +70,6 @@ function entry(name: string): FilesEntry {
   };
 }
 
-/** previousVisit is the persisted snapshot of the visit before the deep link. */
 function previousVisit(): FilesTabsSnapshot {
   return {
     version: 1,
@@ -134,7 +124,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** settle flushes the store promises and the watcher chain. */
 async function settle(): Promise<void> {
   for (let index = 0; index < 5; index += 1) {
     await flushPromises();
@@ -142,7 +131,6 @@ async function settle(): Promise<void> {
   }
 }
 
-/** routerAt builds a memory router already resolved at one files URL. */
 async function routerAt(url: string): Promise<Router> {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -160,7 +148,6 @@ async function routerAt(url: string): Promise<Router> {
   return router;
 }
 
-/** mountPage mounts the real page + browser at one deep link. */
 async function mountPage(
   url: string,
 ): Promise<{ wrapper: VueWrapper; router: Router }> {
@@ -176,8 +163,6 @@ async function mountPage(
 describe("opening a storage volume in File Manager", () => {
   it("adds the linked directory as a new tab beside the previous visit's tabs", async () => {
     const files = useFilesStore();
-    // The user was in File Manager for this server before opening the volume:
-    // the store is bound and localStorage holds the persisted snapshot.
     await files.init("server-1", previousVisit());
     expect(files.activeTab.rootName).toBe("compose");
     writeFilesTabsSnapshot(
@@ -190,7 +175,6 @@ describe("opening a storage volume in File Manager", () => {
       "/servers/server-1/files?root=volumes&path=app-1/data",
     );
 
-    // The volume opens its own focused tab; the composed tab is still there.
     expect(files.tabs).toHaveLength(2);
     expect(files.tabs[0].rootName).toBe("compose");
     expect(files.activeTab.rootName).toBe("volumes");
@@ -215,7 +199,6 @@ describe("opening a storage volume in File Manager", () => {
 
     expect(files.activeTab.rootName).toBe("volumes");
     expect(files.activeTab.path).toBe("app-2/data");
-    // The first volume's tab stays open too.
     expect(files.tabs.filter((tab) => tab.path === "app-1/data")).toHaveLength(1);
     wrapper.unmount();
   });

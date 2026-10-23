@@ -12,21 +12,12 @@ import {
 import type { Certificate, CertificateDraft } from "@/features/domains/api/proxy";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
-/**
- * Certificate state is per page instance (created by provideCertificates in
- * the page, shared via inject): drafts and dialog flags never outlive the page.
- */
 function createCertificatesState() {
   const message = useMessage();
   const proxyStore = useProxyStore();
 
   const certificateOpen = ref(false);
   const certificateSaving = ref(false);
-  /**
-   * Raw failure behind the dialog alert. The display string derives from it
-   * plus the current locale, so a language switch refreshes a retained
-   * alert without losing the typed draft.
-   */
   const certificateErrorRaw = ref<unknown>(null);
   const certificateError = computed<string | null>(() => {
     void activeLocale.value;
@@ -37,7 +28,6 @@ function createCertificatesState() {
   const editingCertificate = ref<Certificate | null>(null);
   const certificateDraft = ref<CertificateDraft>(emptyCertificateDraft());
 
-  /** openCertificateCreate resets the dialog for a new configuration. */
   function openCertificateCreate(): void {
     editingCertificate.value = null;
     certificateDraft.value = emptyCertificateDraft();
@@ -45,7 +35,6 @@ function createCertificatesState() {
     certificateOpen.value = true;
   }
 
-  /** openCertificateEdit seeds the dialog from a stored configuration. */
   function openCertificateEdit(certificate: Certificate): void {
     editingCertificate.value = certificate;
     certificateDraft.value = draftFromCertificate(certificate);
@@ -53,7 +42,6 @@ function createCertificatesState() {
     certificateOpen.value = true;
   }
 
-  /** handleSaveCertificate creates or patches one certificate configuration. */
   async function handleSaveCertificate(): Promise<void> {
     certificateErrorRaw.value = null;
     certificateSaving.value = true;
@@ -82,7 +70,6 @@ function createCertificatesState() {
     }
   }
 
-  /** handleDeleteCertificate removes one configuration. */
   async function handleDeleteCertificate(certificate: Certificate): Promise<void> {
     try {
       await proxyStore.removeCertificate(certificate.id);
@@ -111,7 +98,6 @@ export type CertificatesState = ReturnType<typeof createCertificatesState>;
 
 const certificatesKey: InjectionKey<CertificatesState> = Symbol("domains.certificates");
 
-/** emptyCertificateDraft returns a create-mode certificate draft. */
 export function emptyCertificateDraft(): CertificateDraft {
   return {
     application_id: "",
@@ -122,17 +108,12 @@ export function emptyCertificateDraft(): CertificateDraft {
   };
 }
 
-/**
- * provideCertificates creates the certificate state for one page mount.
- * Call once in the page; descendants share it through useCertificates.
- */
 export function provideCertificates(): CertificatesState {
   const state = createCertificatesState();
   provide(certificatesKey, state);
   return state;
 }
 
-/** useCertificates shares the page instance; call in descendant components. */
 export function useCertificates(): CertificatesState {
   const state = inject(certificatesKey);
   if (!state) {

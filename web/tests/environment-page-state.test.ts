@@ -1,7 +1,3 @@
-// PE-5 (JUS-34) environment surface: the resources envelope (API path plus
-// warn-only parsing), the unified table builders, and the shared server
-// picker options. Pure helpers are pinned row by row; the envelope test pins
-// the contract path and the previews flag.
 import { describe, expect, it, vi } from "vitest";
 import { afterEach, beforeEach } from "vitest";
 
@@ -46,8 +42,6 @@ import type { Server } from "@/features/servers";
 
 const counts = { applications: 1, services: 1, databases: 1 };
 
-// Display helpers resolve through the projects catalog: merge it once and
-// run English by default so the pinned copy below keeps proving behavior.
 beforeEach(() => {
   i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
   i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });
@@ -211,7 +205,6 @@ describe("applicationStatusView", () => {
     expect(applicationStatusView("queued")).toEqual({ text: "deploying", tag: "warning" });
     expect(applicationStatusView("building")).toEqual({ text: "deploying", tag: "warning" });
     expect(applicationStatusView(null)).toEqual({ text: "not deployed", tag: "default" });
-    // A failed state read never renders as "not deployed".
     expect(applicationStatusView("unknown")).toEqual({ text: "unknown", tag: "default" });
   });
 });
@@ -393,9 +386,7 @@ describe("server picker options", () => {
     const ready = server();
     const offline = server({ id: "s-off", name: "dark-03", status: "offline" });
     expect(singleUsableServerId([ready])).toBe(ready.id);
-    // A lone offline node is never preselected: it cannot be picked.
     expect(singleUsableServerId([offline])).toBe("");
-    // Two nodes never preselect, even when only one is selectable.
     expect(singleUsableServerId([ready, offline])).toBe("");
     expect(singleUsableServerId([ready, server({ id: "s-2", name: "prod-02" })])).toBe("");
     expect(singleUsableServerId([])).toBe("");

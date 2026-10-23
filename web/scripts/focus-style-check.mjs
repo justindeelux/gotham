@@ -1,13 +1,3 @@
-// Single-border focus regression check (JUS-13).
-//
-// A focused field must show exactly one border: its own border in the accent
-// color, with no extra glow ring (box-shadow), no outline on the inner input
-// element, and a still-visible :focus-visible indicator elsewhere. This script
-// stands in for a unit test (the repo has no web test runner): it asserts the
-// shared-style rules exist and that the focus border color keeps >= 3:1
-// contrast against the input surface.
-//
-// Run from web/:  node scripts/focus-style-check.mjs
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -37,7 +27,6 @@ function assert(condition, message) {
   }
 }
 
-/** ruleBody returns the declaration block of the first rule containing sel. */
 function ruleBody(source, sel) {
   const index = source.indexOf(sel);
   assert(index !== -1, `selector not found: ${sel}`);
@@ -67,8 +56,6 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-// NInputNumber renders an inner NInput, so one shared override covers NInput,
-// NInputNumber and the password fields on every form.
 check("focused input state-border has no glow ring", () => {
   const body = ruleBody(css, ".n-input.n-input--focus .n-input__state-border");
   assert(/box-shadow\s*:\s*none/.test(body), "expected box-shadow: none on focus");
@@ -97,7 +84,6 @@ check("focus border color keeps >= 3:1 contrast on the input surface", () => {
   assert(accent, "--accent token not found");
   assert(/--accent-ink:\s*color-mix\(in oklab,\s*var\(--accent\)\s*([\d.]+)%\s*,\s*white\)/.test(tokens), "--accent-ink mix not found");
   const weight = Number.parseFloat(/--accent-ink:\s*color-mix\(in oklab,\s*var\(--accent\)\s*([\d.]+)%/.exec(tokens)[1]) / 100;
-  // sRGB-space approximation of the oklab mix; the assertion margin is wide.
   const mixed = hexToRgb(accent).map((channel) => Math.round(channel * weight + 255 * (1 - weight)));
   const inputBg = hexToRgb("#1e1f22");
   const ratio = contrast(mixed, inputBg);

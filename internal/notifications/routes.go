@@ -14,62 +14,36 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxBodyBytes bounds channel request bodies (they are tiny).
-const maxBodyBytes = 1 << 20 // 1 MiB
+const maxBodyBytes = 1 << 20
 
-// UserIDFunc resolves the authenticated user from the request context. The
-// server passes its own accessor, so this package never imports the HTTP
-// server (it mirrors databases.UserIDFunc for the same reason).
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// channelEnvelope wraps a single channel.
 type channelEnvelope struct {
 	Channel ChannelView `json:"channel"`
 }
 
-// channelListEnvelope wraps a channel list.
 type channelListEnvelope struct {
 	Channels []ChannelView `json:"channels"`
 }
 
-// testEnvelope wraps a send-test result.
 type testEnvelope struct {
 	Check TestResult `json:"check"`
 }
 
-// deliveryListEnvelope wraps a channel's delivery history.
 type deliveryListEnvelope struct {
 	Deliveries []DeliveryView `json:"deliveries"`
 }
 
-// errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
 }
 
-// handler serves the notification-channel routes for one
-// NotificationService.
 type handler struct {
 	svc    NotificationService
 	userID UserIDFunc
 	logger *slog.Logger
 }
 
-// Mount registers the authenticated notification-channel endpoints on r:
-//
-//	GET    /v1/notification-channels
-//	POST   /v1/notification-channels
-//	GET    /v1/notification-channels/{id}
-//	PATCH  /v1/notification-channels/{id}
-//	DELETE /v1/notification-channels/{id}
-//	POST   /v1/notification-channels/{id}/test
-//	GET    /v1/notification-channels/{id}/deliveries
-//
-// auth wraps the group (the server passes its team chain: RequireAuth,
-// RequireTeam and the owner/admin gate for mutating methods, so a read_only
-// member reads and every mutation is refused before the handler). A nil svc
-// or FEATURE_NOTIFICATIONS=false mounts nothing, so the control plane can
-// call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc NotificationService) {
 	if svc == nil || !Enabled() {
 		return
@@ -87,7 +61,6 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 	})
 }
 
-// list serves GET /v1/notification-channels.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -104,7 +77,6 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, channelListEnvelope{Channels: channels})
 }
 
-// create serves POST /v1/notification-channels: 201 with the redacted row.
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -122,7 +94,6 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, channelEnvelope{Channel: channel})
 }
 
-// get serves GET /v1/notification-channels/{id}.
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	userID, channelID, ok := h.channelParams(w, r)
 	if !ok {
@@ -136,7 +107,6 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, channelEnvelope{Channel: channel})
 }
 
-// update serves PATCH /v1/notification-channels/{id}.
 func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	userID, channelID, ok := h.channelParams(w, r)
 	if !ok {
@@ -154,7 +124,6 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, channelEnvelope{Channel: channel})
 }
 
-// delete serves DELETE /v1/notification-channels/{id}: 204 on success.
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	userID, channelID, ok := h.channelParams(w, r)
 	if !ok {
@@ -167,8 +136,6 @@ func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// test serves POST /v1/notification-channels/{id}/test: it delivers a
-// synthetic event and reports the outcome without exposing any secret.
 func (h *handler) test(w http.ResponseWriter, r *http.Request) {
 	userID, channelID, ok := h.channelParams(w, r)
 	if !ok {
@@ -182,9 +149,6 @@ func (h *handler) test(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, testEnvelope{Check: result})
 }
 
-// deliveries serves GET /v1/notification-channels/{id}/deliveries: the
-// channel's newest delivery attempts, newest first. It is a read, so any team
-// member may call it.
 func (h *handler) deliveries(w http.ResponseWriter, r *http.Request) {
 	userID, channelID, ok := h.channelParams(w, r)
 	if !ok {
@@ -201,7 +165,6 @@ func (h *handler) deliveries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, deliveryListEnvelope{Deliveries: deliveries})
 }
 
-// currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -215,8 +178,6 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID
 	return userID, true
 }
 
-// channelParams resolves the authenticated user and the {id} path parameter,
-// answering 401/400 as needed.
 func (h *handler) channelParams(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -230,7 +191,6 @@ func (h *handler) channelParams(w http.ResponseWriter, r *http.Request) (uuid.UU
 	return userID, channelID, true
 }
 
-// writeServiceError maps service sentinels to HTTP responses.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -245,8 +205,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// decodeBody decodes a required JSON body into dst. An empty or malformed
-// body answers 400.
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
@@ -266,7 +224,6 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

@@ -10,9 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// Storage target surfaces: CRUD, credential sealing and store resolution.
-
-// ListTargets implements BackupService.
 func (m *BackupManager) ListTargets(ctx context.Context, userID uuid.UUID) ([]BackupTarget, error) {
 	if err := m.backupsReady(); err != nil {
 		return nil, err
@@ -30,8 +27,6 @@ func (m *BackupManager) ListTargets(ctx context.Context, userID uuid.UUID) ([]Ba
 	return targets, nil
 }
 
-// CreateTarget implements BackupService: configuration in the clear,
-// credentials sealed.
 func (m *BackupManager) CreateTarget(ctx context.Context, userID uuid.UUID, req TargetRequest) (BackupTarget, error) {
 	if err := m.backupsReady(); err != nil {
 		return BackupTarget{}, err
@@ -62,11 +57,6 @@ func (m *BackupManager) CreateTarget(ctx context.Context, userID uuid.UUID, req 
 	return created, nil
 }
 
-// UpdateTarget implements BackupService. Credentials are replaced only when
-// the request carries new ones, so a UI that resends the masked value cannot
-// wipe a stored key. Switching the target to s3 has the same requirement as
-// CreateTarget: the request must carry a complete pair or the target must
-// already hold one, so an s3 target can never end up without keys.
 func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.UUID, req TargetRequest) (BackupTarget, error) {
 	target, err := m.ownedTarget(ctx, userID, targetID)
 	if err != nil {
@@ -89,11 +79,6 @@ func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.
 		return BackupTarget{}, err
 	}
 	target.UpdatedAt = m.now()
-	// The write locks the target row and refuses a destination change while a
-	// run references it, in the same transaction. A recorded location names the
-	// endpoint and bucket it was written to, so moving the target would strand
-	// every completed backup and every run still in flight; a new target is the
-	// escape hatch.
 	updated, err := m.backups.UpdateBackupTargetWithSecrets(ctx, *target, sealed)
 	if err != nil {
 		return BackupTarget{}, err
@@ -101,9 +86,6 @@ func (m *BackupManager) UpdateTarget(ctx context.Context, userID, targetID uuid.
 	return updated, nil
 }
 
-// DeleteTarget implements BackupService. Backups that used the target keep
-// their location; only their ability to be read back from S3 goes with the
-// credentials, which the API surface documents.
 func (m *BackupManager) DeleteTarget(ctx context.Context, userID, targetID uuid.UUID) error {
 	if _, err := m.ownedTarget(ctx, userID, targetID); err != nil {
 		return err
@@ -114,8 +96,6 @@ func (m *BackupManager) DeleteTarget(ctx context.Context, userID, targetID uuid.
 	return nil
 }
 
-// TestTarget implements BackupService: it builds the real client and asks
-// whether the bucket is reachable. The answer never includes credentials.
 func (m *BackupManager) TestTarget(ctx context.Context, userID, targetID uuid.UUID) (TargetCheck, error) {
 	target, err := m.ownedTarget(ctx, userID, targetID)
 	if err != nil {
@@ -139,10 +119,6 @@ func (m *BackupManager) TestTarget(ctx context.Context, userID, targetID uuid.UU
 	return TargetCheck{OK: true, Message: "connected to " + target.Bucket}, nil
 }
 
-// storeAndKey resolves the store a new artifact goes to and the key it is
-// written under. The key is identical for every target — "s3://" locations
-// carry the bucket and "file://" locations the absolute path, and a target
-// prefix only ever applies inside S3.
 func (m *BackupManager) storeAndKey(
 	ctx context.Context,
 	target *BackupTarget,
@@ -164,8 +140,6 @@ func (m *BackupManager) storeAndKey(
 	return store, key, nil
 }
 
-// storeForTarget resolves the store of one target; a nil target (or a local
-// one) is the control plane's own backup directory.
 func (m *BackupManager) storeForTarget(ctx context.Context, target *BackupTarget) (ObjectStore, error) {
 	if m.objects != nil {
 		return m.objects, nil
@@ -183,9 +157,6 @@ func (m *BackupManager) storeForTarget(ctx context.Context, target *BackupTarget
 	return newS3Store(config)
 }
 
-// storeForLocation resolves the store that can read a recorded location. The
-// scheme decides: local files need no target, an s3:// location needs the
-// target its credentials were sealed with.
 func (m *BackupManager) storeForLocation(ctx context.Context, backup Backup, database *Database) (ObjectStore, error) {
 	if m.objects != nil {
 		return m.objects, nil
@@ -210,9 +181,6 @@ func (m *BackupManager) storeForLocation(ctx context.Context, backup Backup, dat
 	}
 }
 
-// openTarget opens a target's sealed credentials and assembles the plaintext
-// configuration of its client. The values returned here are never logged and
-// never leave this call chain.
 func (m *BackupManager) openTarget(ctx context.Context, target BackupTarget) (s3Config, error) {
 	secrets, err := m.backups.ListTargetSecrets(ctx, target.ID)
 	if err != nil {
@@ -232,20 +200,14 @@ func (m *BackupManager) openTarget(ctx context.Context, target BackupTarget) (s3
 	}, nil
 }
 
-// requestCarriesCredentials reports whether the request carries a complete
-// non-blank credential pair.
 func requestCarriesCredentials(req TargetRequest) bool {
 	return strings.TrimSpace(req.AccessKey) != "" && strings.TrimSpace(req.SecretKey) != ""
 }
 
-// s3CredentialsRequired is the shared create/update rejection: an s3 target
-// must always hold a complete access/secret pair.
 func s3CredentialsRequired() error {
 	return fmt.Errorf("%w: s3 targets need both an access key and a secret key", ErrValidation)
 }
 
-// targetHasStoredCredentials reports whether a target already holds an
-// openable, non-blank access/secret pair.
 func (m *BackupManager) targetHasStoredCredentials(ctx context.Context, targetID uuid.UUID) (bool, error) {
 	secrets, err := m.backups.ListTargetSecrets(ctx, targetID)
 	if err != nil {
@@ -258,9 +220,6 @@ func (m *BackupManager) targetHasStoredCredentials(ctx context.Context, targetID
 	return strings.TrimSpace(accessKey) != "" && strings.TrimSpace(secretKey) != "", nil
 }
 
-// sealTargetSecrets seals the halves of an S3 login with AES-256-GCM
-// (providers.SealSecret). Blank values are skipped so a partial update
-// replaces only what it carries.
 func sealTargetSecrets(secret string, targetID uuid.UUID, accessKey, secretKey string) ([]TargetSecret, error) {
 	pairs := [][2]string{
 		{targetSecretAccessKey, accessKey},
@@ -284,8 +243,6 @@ func sealTargetSecrets(secret string, targetID uuid.UUID, accessKey, secretKey s
 	return sealed, nil
 }
 
-// openTargetSecrets reverses sealTargetSecrets. Unknown keys are ignored so a
-// future credential can travel through the same table.
 func openTargetSecrets(secret string, secrets []TargetSecret) (string, string, error) {
 	var accessKey, secretKey string
 	for _, item := range secrets {
@@ -303,9 +260,6 @@ func openTargetSecrets(secret string, secrets []TargetSecret) (string, string, e
 	return accessKey, secretKey, nil
 }
 
-// applyTargetRequest copies the request onto the target, keeping stored
-// values for fields the request leaves empty, and validates the resulting
-// configuration. Credentials are handled separately by the callers.
 func applyTargetRequest(target *BackupTarget, req TargetRequest) error {
 	if name := strings.TrimSpace(req.Name); name != "" {
 		target.Name = name
@@ -348,8 +302,6 @@ func applyTargetRequest(target *BackupTarget, req TargetRequest) error {
 	return nil
 }
 
-// ownedTarget loads a target the caller owns. A zero target id means "the
-// default local store" and resolves to a nil target instead of an error.
 func (m *BackupManager) ownedTarget(ctx context.Context, userID, targetID uuid.UUID) (*BackupTarget, error) {
 	if targetID == uuid.Nil {
 		return nil, nil
@@ -364,7 +316,6 @@ func (m *BackupManager) ownedTarget(ctx context.Context, userID, targetID uuid.U
 	return &target, nil
 }
 
-// ownedTargetID is ownedTarget for the string ids the API carries.
 func (m *BackupManager) ownedTargetID(ctx context.Context, userID uuid.UUID, raw string) (uuid.UUID, error) {
 	if strings.TrimSpace(raw) == "" {
 		return uuid.Nil, nil
@@ -379,12 +330,6 @@ func (m *BackupManager) ownedTargetID(ctx context.Context, userID uuid.UUID, raw
 	return targetID, nil
 }
 
-// targetOwnedByDatabase reports whether a target may store a database's
-// backups. An S3 target is resolved through the database owner on the read
-// path, so it must belong to that owner; a local target records a file://
-// location and is readable regardless of who owns it. It returns ErrNotFound
-// for an inconsistent pair, so the caller cannot probe a target it could never
-// use.
 func (m *BackupManager) targetOwnedByDatabase(ctx context.Context, targetID, databaseOwner uuid.UUID) error {
 	if targetID == uuid.Nil {
 		return nil

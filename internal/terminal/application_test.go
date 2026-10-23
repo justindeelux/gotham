@@ -17,11 +17,8 @@ import (
 	"github.com/justindeelux/gotham/agent"
 )
 
-// fakeWebContainerID is a full lowercase Docker id; the agent accepts only
-// that shape, so the application fixtures use one too.
 const fakeWebContainerID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-// fakeApplicationTargets is a controllable resolver for the application routes.
 type fakeApplicationTargets struct {
 	mu         sync.Mutex
 	set        ContainerTargetSet
@@ -64,7 +61,6 @@ func (f *fakeApplicationTargets) snapshot() (resolved int, user, app uuid.UUID, 
 	return f.resolved, f.lastUser, f.lastApp, f.lastSvc, f.lastID
 }
 
-// appFakeExec is a container exec that echoes input back as output.
 type appFakeExec struct {
 	sessions chan *appFakeSession
 }
@@ -97,7 +93,6 @@ type appFakeSession struct {
 	closeOnce sync.Once
 }
 
-// Kill marks the exec process tree ended, like the Docker client does.
 func (s *appFakeSession) Kill(context.Context) error {
 	s.mu.Lock()
 	s.killed = true
@@ -112,8 +107,6 @@ func (s *appFakeSession) Write(p []byte) (int, error) {
 	exiting := strings.Contains(s.input.String(), "exit")
 	s.mu.Unlock()
 	if exiting {
-		// Simulate the shell exiting after the command: the reader ends, the
-		// pump reports the exit status on the same stream.
 		go func() { _ = s.reader.Close() }()
 	}
 	return n, err
@@ -312,8 +305,6 @@ func TestApplicationSessionOwnershipAndSingleUse(t *testing.T) {
 	if err := f.svc.CloseApplication(context.Background(), f.userID, uuid.New(), session.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-application close = %v, want ErrNotFound", err)
 	}
-	// The host route must not see or close a container session: the two
-	// targets never imply each other.
 	if err := f.svc.Validate(context.Background(), f.userID, f.serverID, session.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("host validate of a container session = %v, want ErrNotFound", err)
 	}
@@ -329,9 +320,6 @@ func TestApplicationSessionOwnershipAndSingleUse(t *testing.T) {
 	}
 }
 
-// TestApplicationAttachReResolvesTarget is the round-1 finding 3 regression: a
-// container replaced (or a deploy started) during the pending window must be
-// rejected at attach, not trusted from create.
 func TestApplicationAttachReResolvesTarget(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -450,9 +438,6 @@ func TestApplicationRelayStreamsContainerSession(t *testing.T) {
 		return cols == 132 && rows == 43
 	}, "resize did not reach the container exec")
 
-	// Running `exit` ends the exec process; the server reports the exit event
-	// on the same stream. Closing the browser socket afterwards must not stop
-	// any application container (the fake has no container to stop).
 	sendFrameTest(t, conn, opInput, []byte("exit\r"))
 	opcode, payload = readFrame(t, conn)
 	if opcode != opExited {
@@ -467,10 +452,6 @@ func TestApplicationRelayStreamsContainerSession(t *testing.T) {
 	}
 }
 
-// TestApplicationAttachThroughTraefikWebSocketProxy is the JUS-260 end-to-end
-// proof for the container route: a real exec attach crosses the same
-// Traefik-shaped wss hop as the host route, and a cross-origin handshake is
-// still refused there.
 func TestApplicationAttachThroughTraefikWebSocketProxy(t *testing.T) {
 	t.Parallel()
 	const publicHost = "gotham.deelux.dev"
@@ -507,7 +488,6 @@ func TestApplicationAttachThroughTraefikWebSocketProxy(t *testing.T) {
 	}
 }
 
-// waitForTest polls cond until true or the deadline expires.
 func waitForTest(t *testing.T, timeout time.Duration, cond func() bool, message string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

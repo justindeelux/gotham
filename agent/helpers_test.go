@@ -8,12 +8,10 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// discardLogger returns a logger that drops every record.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeDockerClient is a configurable dockerClient for server tests.
 type fakeDockerClient struct {
 	containers     []*agentv1.ContainerInfo
 	listAll        bool

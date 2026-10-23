@@ -13,8 +13,6 @@ const store = useRecentDeploymentsStore();
 
 onMounted(() => {
   void store.fetchRecentDeployments();
-  // Light refresh while the panel is visible; the store stops the timer and
-  // the focus listener on unmount (and on sign-out reset).
   store.startRefresh();
 });
 
@@ -22,7 +20,6 @@ onUnmounted(() => {
   store.stopRefresh();
 });
 
-/** commitLine renders the short hash plus subject, falling back to the branch. */
 function commitLine(deployment: RecentDeployment): string {
   if (!deployment.commit_sha) {
     return deployment.application_branch;
@@ -32,7 +29,6 @@ function commitLine(deployment: RecentDeployment): string {
   return subject ? `${sha} ${subject}` : sha;
 }
 
-/** startedAt is the row's reference time: run start, else creation. */
 const startedAt = (deployment: RecentDeployment): string =>
   deployment.started_at ?? deployment.created_at;
 

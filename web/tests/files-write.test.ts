@@ -1,6 +1,3 @@
-// Files write surface (P18 step 7): create-over-existing, batch delete with a
-// partial failure, and the clipboard 409 replace/skip flow. The API module is
-// mocked so the store runs without axios or the DOM.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -50,7 +47,6 @@ const composeRoot: FilesRoot = {
   free_bytes: 0,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(
   overrides: Partial<FilesEntry> & { name: string },
 ): FilesEntry {
@@ -139,8 +135,6 @@ describe("files store delete", () => {
     expect(summary.failed).toHaveLength(1);
     expect(summary.failed[0]?.name).toBe("config");
     expect(summary.failed[0]?.error).toBeTruthy();
-    // A folder is deleted recursively; a file is not. A delete always moves the
-    // entry to the recycle bin (the client never sends a permanent flag).
     expect(vi.mocked(deleteEntry)).toHaveBeenNthCalledWith(
       2,
       "server-1",
@@ -164,7 +158,6 @@ describe("files store clipboard", () => {
     store.copySelection();
     expect(store.hasClipboard).toBe(true);
     expect(store.clipboardMode).toBe("copy");
-    // Paste into a different directory: the same directory is a no-op.
     await store.openDirectory("data");
 
     const summary = await store.paste();
@@ -202,7 +195,6 @@ describe("files store clipboard", () => {
 
     expect(resolved.done).toEqual([]);
     expect(store.conflictPrompt).toBeNull();
-    // Only the initial, non-overwriting attempt ran.
     expect(vi.mocked(copyEntry)).toHaveBeenCalledTimes(1);
   });
 
@@ -234,7 +226,6 @@ describe("files store clipboard", () => {
     store.toggleSelection("app.yaml");
     store.copySelection();
 
-    // A folder-row Paste passes the folder's path, not the directory on screen.
     const summary = await store.pasteInto("config");
 
     expect(summary.done).toEqual(["app.yaml"]);
@@ -269,7 +260,6 @@ describe("files store clipboard", () => {
 
     expect(summary).toEqual({ done: [], conflicts: [], failed: [] });
     expect(vi.mocked(moveEntry)).not.toHaveBeenCalled();
-    // The clip survives: the same-dir paste changed nothing.
     expect(store.hasClipboard).toBe(true);
   });
 
@@ -289,7 +279,6 @@ describe("files store clipboard", () => {
 
     expect(summary.done).toEqual(["app.yaml"]);
     expect(summary.failed).toHaveLength(1);
-    // The failed name stays on the clipboard for a later retry.
     expect(store.clipboard?.names).toEqual(["config"]);
   });
 
@@ -389,7 +378,6 @@ describe("files store selection hygiene", () => {
 
     await store.rename(entry({ name: "app.yaml" }), "c.txt");
 
-    // The clipboard still points at the root's app.yaml, never data/c.txt.
     expect(store.clipboard?.root).toBe("volumes");
     expect(store.clipboard?.path).toBe("");
     expect(store.clipboard?.names).toEqual(["app.yaml"]);
@@ -452,12 +440,10 @@ describe("files store row targets", () => {
     const app = entry({ name: "app.yaml" });
     const config = entry({ name: "config", kind: "directory", size: 0, mode: 0o040755 });
 
-    // Not selected: the row itself.
     expect(store.targetsForRow(app).map((item) => item.name)).toEqual(["app.yaml"]);
 
     store.toggleSelection("app.yaml");
     store.toggleSelection("config");
-    // Selected: the whole selection, including the row (no toggle-off).
     expect(store.targetsForRow(app).map((item) => item.name).sort()).toEqual([
       "app.yaml",
       "config",
@@ -478,7 +464,6 @@ describe("files store row targets", () => {
 
     expect(store.clipboardMode).toBe("cut");
     expect(store.clipboard?.names).toEqual(["app.yaml"]);
-    // The pre-existing selection is untouched.
     expect(store.selectedNames).toEqual(["config"]);
   });
 });

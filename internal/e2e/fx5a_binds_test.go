@@ -16,9 +16,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// fakeBindDocker is a dockerClient that records nothing; it exists only so the
-// agent's DockerService accepts the request and the validation under test is
-// the only thing that can reject it.
 type fakeBindDocker struct{}
 
 func (fakeBindDocker) Version(context.Context) (string, error) { return "test", nil }
@@ -47,9 +44,6 @@ func (fakeBindDocker) Logs(context.Context, string, bool, int64) (<-chan agent.L
 	return ch, nil
 }
 
-// TestAgentAcceptsTraefikProxyVolumes is the FX-5a regression for the proxy:
-// the node's own Traefik mounts (internal/proxy.TraefikVolumesFor) must pass
-// the managed-volume validator, or every node loses routing and TLS.
 func TestAgentAcceptsTraefikProxyVolumes(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
@@ -82,7 +76,6 @@ func TestAgentAcceptsTraefikProxyVolumes(t *testing.T) {
 		t.Error("proxy RunImage returned no container id")
 	}
 
-	// An application bind outside the managed root is still refused.
 	if _, err := client.RunImage(context.Background(), &agentv1.CreateContainerRequest{
 		Image:   "nginx",
 		Volumes: []string{"/etc:/etc"},

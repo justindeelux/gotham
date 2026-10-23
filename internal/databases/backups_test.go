@@ -9,8 +9,6 @@ import (
 	"unicode/utf8"
 )
 
-// jobFrame renders a successful raw frame the way a temporary container could
-// write it: engine chatter first, then the markers and the payload.
 func jobFrame(runID string, payload []byte) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("engine: temporary server started\n")
@@ -22,10 +20,6 @@ func jobFrame(runID string, payload []byte) []byte {
 	return buf.Bytes()
 }
 
-// jobFrameB64 renders a successful dump frame the way the engine scripts
-// write it: the payload base64-encoded, followed directly by the end marker
-// (the real scripts emit no newline between the two), plus post-frame engine
-// chatter the collector must keep as diagnostics.
 func jobFrameB64(runID string, payload []byte) []byte {
 	encoded := base64.StdEncoding.EncodeToString(payload)
 	var buf bytes.Buffer
@@ -38,8 +32,6 @@ func jobFrameB64(runID string, payload []byte) []byte {
 	return buf.Bytes()
 }
 
-// splitEvery cuts a buffer into fixed-size pieces so the collector is exercised
-// across arbitrary chunk boundaries, the way Docker splits log frames.
 func splitEvery(data []byte, size int) [][]byte {
 	var chunks [][]byte
 	for len(data) > 0 {
@@ -152,11 +144,6 @@ func TestBackupEngineRestoreOptions(t *testing.T) {
 	}
 }
 
-// TestRestoreScriptsValidateDecompression pins the restore contract shared by
-// all five engines: the staged artifact is decompressed with a checked status
-// before the engine tool runs, the decompressor is never read through a
-// pipeline whose status could mask corruption, and a decompression failure
-// ends the frame with status 5.
 func TestRestoreScriptsValidateDecompression(t *testing.T) {
 	for _, name := range engineOrder {
 		t.Run(name, func(t *testing.T) {
@@ -183,10 +170,6 @@ func TestRestoreScriptsValidateDecompression(t *testing.T) {
 	}
 }
 
-// TestPostgresRestoreUsesFileAndTransaction pins the PostgreSQL restore
-// invocation: pg_restore reads the checked decompressed archive by name (a
-// trailing "-" is a file name, not stdin) and runs inside a single
-// transaction, so a mid-archive failure cannot leave partial changes.
 func TestPostgresRestoreUsesFileAndTransaction(t *testing.T) {
 	engine, _ := LookupBackupEngine(EnginePostgres)
 	options, err := engine.RestoreOptions(testDatabase(EnginePostgres, ""), testCredentials(),
@@ -203,12 +186,6 @@ func TestPostgresRestoreUsesFileAndTransaction(t *testing.T) {
 	}
 }
 
-// TestMySQLAndMariaDBToolMatrix pins the per-engine binary selection (D2-6):
-// MariaDB 11.0+ removed the mysql/mysqldump/mysqladmin symlinks from the
-// official image, so MariaDB must use the mariadb-* tools while MySQL keeps
-// the mysql* ones. It also pins the restore fix (D2-12): the client is never
-// given $MYSQL_DATABASE as a preselected database, because the dump's
-// CREATE DATABASE/USE statements must be able to recreate a dropped database.
 func TestMySQLAndMariaDBToolMatrix(t *testing.T) {
 	tests := []struct {
 		engine string
@@ -248,8 +225,6 @@ func TestMySQLAndMariaDBToolMatrix(t *testing.T) {
 			if !strings.Contains(restoreScript, test.client+" -h") {
 				t.Errorf("restore does not run %s:\n%s", test.client, restoreScript)
 			}
-			// The MySQL client's only positional argument must be nothing:
-			// a preselected database breaks restoring a dropped one.
 			if strings.Contains(restoreScript, `"$MYSQL_DATABASE" <"$archive"`) {
 				t.Errorf("restore preselects $MYSQL_DATABASE before reading the archive:\n%s", restoreScript)
 			}
@@ -333,8 +308,6 @@ func TestJobCollectorSuccess(t *testing.T) {
 func TestJobCollectorIgnoresForeignRun(t *testing.T) {
 	var stored bytes.Buffer
 	collector := newJobCollector("run-2", &stored)
-	// Output of an earlier container: its markers must never be mistaken for
-	// this run's frame.
 	frame := jobFrame("run-1", []byte("stale"))
 	if _, err := collector.Write(frame); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -364,8 +337,6 @@ func TestJobCollectorFailureCarriesDiagnostics(t *testing.T) {
 
 func TestJobCollectorWithoutMarkerIsBounded(t *testing.T) {
 	collector := newJobCollector("run-1", nil)
-	// Binary noise with no newline at all: the buffer must not grow without
-	// bound, and the collector must still fail cleanly at the end.
 	noise := bytes.Repeat([]byte{0x5a, 0xa5}, 64<<10)
 	for _, chunk := range splitEvery(noise, 4096) {
 		if _, err := collector.Write(chunk); err != nil {
@@ -385,7 +356,6 @@ func TestJobCollectorWithoutMarkerIsBounded(t *testing.T) {
 }
 
 func TestJobCollectorAcceptsNoPayloadFrame(t *testing.T) {
-	// Restore and staging jobs announce a zero-length payload.
 	collector := newJobCollector("run-1", nil)
 	frame := "GOTHAM-BACKUP-START run-1\nGOTHAM-BACKUP-PAYLOAD run-1 0\nGOTHAM-BACKUP-END run-1 ok\n"
 	for _, chunk := range splitEvery([]byte(frame), 5) {
@@ -402,8 +372,6 @@ func TestJobCollectorAcceptsNoPayloadFrame(t *testing.T) {
 }
 
 func TestJobCollectorBase64Payload(t *testing.T) {
-	// 200 KiB of arbitrary bytes stream through in base64: the decoded
-	// artifact must match byte for byte.
 	payload := make([]byte, 200_000)
 	for i := range payload {
 		payload[i] = byte(i*7 + 3)
@@ -427,8 +395,6 @@ func TestJobCollectorBase64Payload(t *testing.T) {
 }
 
 func TestJobCollectorBase64AcrossSmallChunks(t *testing.T) {
-	// A chunk boundary can fall inside a base64 quantum; every boundary from
-	// one to seven bytes exercises the carry of the streaming decoder.
 	payload := []byte{0x00, 0x01, 0x02, '\n', 0xff, 0xfe, 'P', 'K', 0x7f}
 	for size := 1; size <= 7; size++ {
 		var stored bytes.Buffer
@@ -447,9 +413,6 @@ func TestJobCollectorBase64AcrossSmallChunks(t *testing.T) {
 	}
 }
 
-// TestJobCollectorBase64PaddingAcrossWrites covers positive payloads whose
-// base64 ends in one or two padding characters, split at every byte boundary:
-// validity must not depend on how the log stream chunks the writes.
 func TestJobCollectorBase64PaddingAcrossWrites(t *testing.T) {
 	for size := 1; size <= 8; size++ {
 		payload := make([]byte, size)
@@ -476,9 +439,6 @@ func TestJobCollectorBase64PaddingAcrossWrites(t *testing.T) {
 	}
 }
 
-// TestJobCollectorRejectsInteriorPadding pins the terminal-padding state: once
-// a quantum carries "=", the encoded stream ended, so any later quantum is
-// invalid whether or not it arrives in the same Write call.
 func TestJobCollectorRejectsInteriorPadding(t *testing.T) {
 	head := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 8\n"
 	tail := jobEndPrefix + "run-1 ok\n"
@@ -505,10 +465,6 @@ func TestJobCollectorRejectsInteriorPadding(t *testing.T) {
 	}
 }
 
-// TestJobCollectorRejectsUnderdeclaredExtraPayload is the review's F2 case: a
-// B64 frame that declares fewer bytes than it carries must fail instead of
-// silently storing a truncated artifact, whatever the Write boundaries and
-// even when the excess looks like a repeated payload header.
 func TestJobCollectorRejectsUnderdeclaredExtraPayload(t *testing.T) {
 	head := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 4\n"
 	end := jobEndPrefix + "run-1 ok\n"
@@ -536,8 +492,6 @@ func TestJobCollectorRejectsUnderdeclaredExtraPayload(t *testing.T) {
 	}
 }
 
-// TestJobCollectorBase64KeepsPostFrameDiagnostics proves the strict end-marker
-// rule stops at the frame: chatter after the end marker is still collected.
 func TestJobCollectorBase64KeepsPostFrameDiagnostics(t *testing.T) {
 	const chatter = "engine: shutdown complete\n"
 	frame := string(jobFrameB64("run-1", []byte("payload")))
@@ -557,10 +511,6 @@ func TestJobCollectorBase64KeepsPostFrameDiagnostics(t *testing.T) {
 	}
 }
 
-// TestJobCollectorRejectsLineBreaksInBase64Payload pins R2: the wire payload is
-// explicitly unwrapped, so CR/LF inside the declared size must be rejected in
-// one write and at every split point, instead of being silently ignored by the
-// standard decoder in a single batch.
 func TestJobCollectorRejectsLineBreaksInBase64Payload(t *testing.T) {
 	for _, lineBreak := range []string{"\n\n\n\n", "\r\r\r\r", "\r\n\r\n"} {
 		frame := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 8\n" +
@@ -580,10 +530,6 @@ func TestJobCollectorRejectsLineBreaksInBase64Payload(t *testing.T) {
 	}
 }
 
-// TestJobCollectorRejectsRepeatedCompleteFrame pins R3: a job emits exactly one
-// frame, so a second same-run start/payload/end sequence after a completed
-// frame fails the frame whether it arrives in one write or across writes,
-// while bounded post-frame diagnostics remain allowed.
 func TestJobCollectorRejectsRepeatedCompleteFrame(t *testing.T) {
 	head := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 4\n"
 	end := jobEndPrefix + "run-1 ok\n"
@@ -617,7 +563,6 @@ func TestJobCollectorRejectsRepeatedCompleteFrame(t *testing.T) {
 		})
 	}
 
-	// Harmless diagnostics after the frame stay allowed and bounded.
 	collector := newJobCollector("run-1", nil)
 	if _, err := collector.Write([]byte(first)); err != nil {
 		t.Fatalf("Write frame: %v", err)
@@ -646,9 +591,6 @@ func TestJobCollectorRejectsCorruptBase64(t *testing.T) {
 }
 
 func TestJobCollectorRejectsPayloadSizeMismatch(t *testing.T) {
-	// The declared encoded size is the frame's integrity check: a stream that
-	// is shorter or longer than announced must fail instead of producing a
-	// truncated artifact.
 	encoded := base64.StdEncoding.EncodeToString([]byte("hello world"))
 	header := jobStartPrefix + "run-1\n" + jobPayloadB64Prefix + "run-1 "
 	end := jobEndPrefix + "run-1 ok\n"

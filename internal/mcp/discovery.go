@@ -10,7 +10,6 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// These projections intentionally omit source, environment, registry and build configuration.
 type resourceCounts struct {
 	Applications int `json:"applications"`
 	Services     int `json:"services"`
@@ -268,7 +267,6 @@ func (c *Client) discoveryProject(ctx context.Context, value string) (projectOve
 	}
 	page, _ := discoveryPage(body.Environments, 20, 0)
 	out := projectOverview{Project: body.Project, Environments: page, Inventory: []inventorySection{}, InventoryTruncated: len(body.Environments) > 4, RecentActivity: []pipelineMetadata{}, ActivityCoverage: "bounded_team_window_not_complete_project_history", ActivityWindowLimit: 100}
-	// Sequential reads keep fan-out below four even on large projects.
 	for _, env := range body.Environments[:min(4, len(body.Environments))] {
 		inv, readErr := c.discoveryInventory(ctx, env.ID)
 		if fatalSection(readErr) {

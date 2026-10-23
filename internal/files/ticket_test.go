@@ -36,9 +36,6 @@ func TestTicketStoreSingleUseAndExpiry(t *testing.T) {
 	}
 }
 
-// TestTicketStoreWrongServerNotBurned is the fix-round-1 regression: a request
-// for a different server than the ticket was issued for must not consume the
-// ticket, so the legitimate download still works afterwards.
 func TestTicketStoreWrongServerNotBurned(t *testing.T) {
 	store := newTicketStore(60*time.Second, nil)
 	serverID := uuid.New()

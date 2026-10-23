@@ -22,7 +22,6 @@ interface Props {
   rows: ApplicationDomain[];
   loading: boolean;
   busyDomainId: string | null;
-  /** certificateOf resolves the intent recorded for one hostname. */
   certificateOf: (_host: string) => Certificate | null;
 }
 
@@ -37,7 +36,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** removeConfirm names the certificate intent that will also be deleted. */
 function removeConfirm(row: ApplicationDomain): string {
   return props.certificateOf(row.domain)
     ? t("applications.domain.removeWithCertConfirm", { domain: row.domain })
@@ -183,7 +181,6 @@ const columns = computed<DataTableColumns<ApplicationDomain>>(() => [
   },
 ]);
 
-/** rowProps tags every data row for tests and the layout proof. */
 function rowProps(): Record<string, unknown> {
   return { class: "domain-row" };
 }

@@ -15,17 +15,11 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// The fixtures below back TestTwoAgentsUpdateAllReportNewVersion, which drives
-// the whole Agent loop (heartbeat plus updater) against a fake control plane.
-
 const (
-	// testAgentVersion is the release the fixture publishes; testAgentCurrent
-	// is the version the simulated agent starts at.
 	testAgentVersion = "v1.2.0"
 	testAgentCurrent = "v1.0.0"
 )
 
-// agentReleaseServer serves a signed agent release (artifact + manifest + sig).
 type agentReleaseServer struct {
 	server       *httptest.Server
 	public       ed25519.PublicKey
@@ -68,7 +62,6 @@ func newAgentReleaseServer(t *testing.T) *agentReleaseServer {
 	}
 }
 
-// offer builds the CP response the agent receives.
 func (r *agentReleaseServer) offer() *agentv1.UpdateResponse {
 	return &agentv1.UpdateResponse{
 		UpdateAvailable:      true,
@@ -82,17 +75,11 @@ func (r *agentReleaseServer) offer() *agentv1.UpdateResponse {
 	}
 }
 
-// setTestPublicKey installs the release key the agent's embedded key would
-// carry in a release build (the dev override applies only when none is
-// embedded).
 func setTestPublicKey(t *testing.T, public ed25519.PublicKey) {
 	t.Helper()
 	t.Setenv(updatecore.PublicKeyEnv, base64.StdEncoding.EncodeToString(public))
 }
 
-// healthyRestart models the privileged wrapper succeeding: it records an `ok`
-// status for version in the authoritative status file and reports the wrapper
-// exited cleanly.
 func healthyRestart(statusPath, version string) updatecore.RestartFunc {
 	return func(context.Context) (func() error, error) {
 		if err := updatecore.NewStatusStore(statusPath).Write(updatecore.Status{
@@ -104,8 +91,6 @@ func healthyRestart(statusPath, version string) updatecore.RestartFunc {
 	}
 }
 
-// updaterTestConfig builds the agent Config whose update paths live under the
-// target's directory.
 func updaterTestConfig(t *testing.T, target string, restart updatecore.RestartFunc) Config {
 	t.Helper()
 	dir := filepath.Dir(target)

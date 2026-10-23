@@ -16,11 +16,6 @@ import {
 import en from "@/shared/i18n/locales/en";
 import vi from "@/shared/i18n/locales/vi";
 
-/**
- * Catalog fixture proving en/vi key, parameter, plural-form and syntax
- * parity. Literals use the documented vue-i18n escapes, never raw
- * `{{…}}`, bare `@` or bare `|` (all three fail compileError below).
- */
 const enFixture = {
   actions: {
     confirmDelete: "Delete {name}?",

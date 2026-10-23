@@ -1,9 +1,3 @@
-// I18N-7 (JUS-48) focused checks: services/templates catalog parity plus
-// the live language-switch behavior the package promises — schema-owned
-// validation feedback switches without accepting invalid values, template
-// IDs/keys/compose/credentials/payloads stay unchanged, missing overlay
-// entries fall back to provider metadata, and wizard/import drafts survive
-// the switch.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h, ref } from "vue";
@@ -73,10 +67,7 @@ describe("service errors keep raw diagnostics", () => {
     };
     expect(describeServiceError(refusal)).toBe("a deploy is in progress");
     setLocale("vi", null);
-    // Status-classified raw refusals pair a minimal localized frame with the
-    // intact raw detail; refusal distinctions survive the frame.
     expect(describeServiceError(refusal)).toBe("Xung đột: a deploy is in progress");
-    // The heading localizes; the raw detail stays byte-identical.
     expect(
       describeServiceError({ status: 502, message: "services: down", cause: null }),
     ).toBe("Lỗi node agent: down");
@@ -101,7 +92,6 @@ describe("service errors keep raw diagnostics", () => {
       "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     );
     expect(describeServiceError(null)).toBe("Đã xảy ra lỗi. Vui lòng thử lại.");
-    // The UI frame translates and no longer leaks the env-var kill switch.
     expect(describeServiceError({ status: 503, message: "", cause: null })).toBe(
       "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
     );
@@ -118,8 +108,6 @@ describe("service errors keep raw diagnostics", () => {
     expect(
       describeTemplateError({ status: 404, message: "templates: gone", cause: null }),
     ).toBe("gone");
-    // Unknown statuses and plain errors pair a localized summary with the
-    // identical stripped raw detail; empty failures fall back exactly once.
     expect(describeServiceError({ status: 500, message: "services: down", cause: null })).toBe(
       "Request failed: down",
     );
@@ -153,7 +141,6 @@ describe("service errors keep raw diagnostics", () => {
     expect(describeServiceError(new Error(""))).toBe(
       "Đã xảy ra lỗi. Vui lòng thử lại.",
     );
-    // Templates-owned generic passthrough is out of this fix's scope.
     expect(describeTemplateError({ status: 500, message: "templates: down", cause: null })).toBe(
       "down",
     );
@@ -164,7 +151,6 @@ describe("service errors keep raw diagnostics", () => {
     expect(describeServiceError(failure)).toBe("Node agent error: down");
     setLocale("vi", null);
     expect(describeServiceError(failure)).toBe("Lỗi node agent: down");
-    // Unknown diagnostics keep their raw text under the localized heading.
     const unknown = { status: 502, message: "services: dial 10.0.0.9:2375", cause: null };
     expect(describeServiceError(unknown)).toBe("Lỗi node agent: dial 10.0.0.9:2375");
   });
@@ -221,7 +207,6 @@ describe("template validation switches without accepting invalid values", () => 
     expect(checkTemplateValue(count, "abc")).toBe("Phải là số nguyên.");
     expect(checkTemplateValue(count, "99")).toBe("Tối đa 10.");
     expect(checkTemplateValue(mode, "turbo")).toBe("Phải là một trong: slow, fast.");
-    // Valid values stay valid across the switch.
     expect(checkTemplateValue(count, "7")).toBeNull();
     expect(checkTemplateValue(mode, "slow")).toBeNull();
     expect(
@@ -335,11 +320,9 @@ describe("wizard draft and deploy state survive the language change", () => {
     expect(wizard?.step.value).toBe(1);
     expect(wizard?.formErrors.value).toEqual({ domain: "This field is required." });
     setLocale("vi", null);
-    // Draft, step and gating survive; visible feedback switches.
     expect(wizard?.values.value).toEqual({ domain: "", encryption_key: "s3cret" });
     expect(wizard?.step.value).toBe(1);
     expect(wizard?.formErrors.value).toEqual({ domain: "Trường này là bắt buộc." });
-    // Pristine untouched fields stay quiet: only the revealed step-1 errors show.
     expect(Object.keys(wizard?.formErrors.value ?? {})).toEqual(["domain"]);
     setLocale("en", null);
     expect(wizard?.formErrors.value).toEqual({ domain: "This field is required." });
@@ -350,7 +333,6 @@ describe("wizard draft and deploy state survive the language change", () => {
     if (wizard) {
       wizard.values.value = { domain: "", encryption_key: "" };
     }
-    // Invalid but never submitted: no feedback in either locale.
     expect(wizard?.formErrors.value).toEqual({});
     setLocale("vi", null);
     expect(wizard?.formErrors.value).toEqual({});
@@ -402,7 +384,6 @@ describe("import dialog draft survives the language change", () => {
       dialog.yaml.value = "services:\n  web: {}";
     }
     await dialog?.handleImport();
-    // No environment scope: the submit gate holds and the scope alert shows.
     expect(dialog?.scopeError.value).toBe("Select a project and environment.");
     setLocale("vi", null);
     expect(dialog?.name.value).toBe("blog-staging");
@@ -439,8 +420,6 @@ describe("import dialog draft survives the language change", () => {
     });
     showRef.value = true;
     await flushPromises();
-    // Pre-submit: invalid values entered but never submitted stay quiet,
-    // in both locales.
     if (dialog) {
       dialog.name.value = "  ";
       dialog.serverId.value = "";
@@ -452,7 +431,6 @@ describe("import dialog draft survives the language change", () => {
     expect(dialog?.nameError.value).toBe("");
     expect(dialog?.nodeError.value).toBe("");
     expect(dialog?.scopeError.value).toBe("");
-    // After an attempt the feedback shows; reset restores pristine quiet.
     await dialog?.handleImport();
     expect(dialog?.nameError.value).toBe("Nhập tên dịch vụ.");
     dialog?.reset();

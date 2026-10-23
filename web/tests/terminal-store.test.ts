@@ -1,7 +1,3 @@
-// JUS-245: tab/session ownership. The API and the runtime are mocked with
-// faithful fakes that record creates, attaches and disposes, so the tests can
-// prove a page→window transfer issues no new session and that closing releases
-// exactly the confirmed tabs.
 /* global AbortSignal:readonly, document:readonly, HTMLElement:readonly, localStorage:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -14,7 +10,6 @@ import {
   syncComposerLocale,
 } from "../src/shared/i18n";
 
-/** runtimeFakes holds the instances the store created. */
 const runtimeFakes = vi.hoisted(() => {
   class FakeRuntime {
     options: {
@@ -81,7 +76,6 @@ const runtimeFakes = vi.hoisted(() => {
   return { FakeRuntime, instances };
 });
 
-/** apiFakes holds the HTTP seam used by the store. */
 const apiFakes = vi.hoisted(() => ({
   create: vi.fn(),
   close: vi.fn(),
@@ -89,7 +83,6 @@ const apiFakes = vi.hoisted(() => ({
   applicationClose: vi.fn(),
 }));
 
-/** versionFakes controls the metadata lookup without touching HTTP. */
 const versionFakes = vi.hoisted(() => ({
   running: vi.fn(),
   known: vi.fn(),
@@ -136,7 +129,6 @@ const { default: TerminalWindow } = await import(
 
 let sessionSeq = 0;
 
-/** options builds one open request. */
 function options(cwd = "app", serverId = "server-1") {
   return { serverId, serverName: "prod-01", root: "volumes", cwd };
 }
@@ -228,7 +220,6 @@ describe("terminal store sessions", () => {
     expect(terminal.windowOpenCount).toBe(2);
     expect(apiFakes.create).toHaveBeenCalledTimes(3);
     expect(runtimeFakes.instances).toHaveLength(3);
-    // Every tab owns its own runtime and socket wiring.
     expect(new Set(runtimeFakes.instances.map((runtime) => runtime.options.session.id)).size).toBe(3);
   });
 
@@ -286,25 +277,20 @@ describe("terminal store sessions", () => {
     const terminal = useTerminalStore();
     const first = terminal.openWindowSession(options("data"));
     const second = terminal.openWindowSession(options("data"));
-    // The second activation joins the in-flight call: no second shell is asked
-    // for, even before either promise settles.
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
     release();
     const [a, b] = await Promise.all([first, second]);
-    // Let the settle-window scheduler run, then prove the key is still held.
     await vi.advanceTimersByTimeAsync(0);
     expect(b.id).toBe(a.id);
     expect(terminal.windowOpenCount).toBe(1);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
     expect(terminal.isWindowOpening(options("data"))).toBe(true);
 
-    // A click inside the settle window is still the same gesture.
     const held = await terminal.openWindowSession(options("data"));
     expect(held.id).toBe(a.id);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // A deliberate later activation (after the window) opens a new tab.
     await vi.advanceTimersByTimeAsync(WINDOW_SINGLE_FLIGHT_HOLD_MS);
     expect(terminal.isWindowOpening(options("data"))).toBe(false);
     const later = await terminal.openWindowSession(options("data"));
@@ -320,12 +306,10 @@ describe("terminal store sessions", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(terminal.isWindowOpening(options("data"))).toBe(true);
 
-    // Same target inside the window: no new shell.
     const held = await terminal.openWindowSession(options("data"));
     expect(held.id).toBe(first.id);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // A different target is never held by this one.
     expect(terminal.isWindowOpening(options("other"))).toBe(false);
 
     await vi.advanceTimersByTimeAsync(WINDOW_SINGLE_FLIGHT_HOLD_MS - 1);
@@ -337,7 +321,6 @@ describe("terminal store sessions", () => {
     expect(later.id).not.toBe(first.id);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
 
-    // Teardown clears the new hold timer instead of leaving it behind.
     terminal.reset();
     expect(vi.getTimerCount()).toBe(0);
     expect(terminal.isWindowOpening(options("data"))).toBe(false);
@@ -364,11 +347,9 @@ describe("terminal store sessions", () => {
     terminal.closeAll();
 
     expect(signal!.aborted).toBe(true);
-    // The key is released at once, not after the HTTP timeout.
     expect(terminal.isWindowOpening(options("data"))).toBe(false);
     await expect(opening).resolves.toBeDefined();
     expect(apiFakes.close).not.toHaveBeenCalled();
-    // No settle-window timer is left for the aborted target.
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -421,8 +402,6 @@ describe("terminal store sessions", () => {
     expect(runtime.disposed).toBe(false);
     expect(useTerminalWindowStore().minimized).toBe(false);
     expect(terminal.windowOpenCount).toBe(1);
-    // The entry point returning to the page gets the same detached tab, never
-    // a new shell.
     const reopened = await terminal.openPageSession(options());
     expect(reopened.id).toBe(tab.id);
     expect(reopened.sessionId).toBe(tab.sessionId);
@@ -444,14 +423,11 @@ describe("terminal store sessions", () => {
     terminal.attach(tab.id, container);
     expect(terminal.isDisplayed(tab.id)).toBe(true);
 
-    // A stale unmount from a different container must not mark the live pane
-    // as paused; the store compares container identity.
     terminal.detach(tab.id, document.createElement("div"));
     expect(terminal.isDisplayed(tab.id)).toBe(true);
     terminal.detach(tab.id, container);
     expect(terminal.isDisplayed(tab.id)).toBe(false);
 
-    // A second entry point reusing the same shell moves the resume target.
     await terminal.openPageSession({
       ...options(),
       sourcePath: "/servers/server-1?tab=terminal",
@@ -473,11 +449,9 @@ describe("terminal store sessions", () => {
     terminal.detachToWindow(first.id);
     expect(first.mode).toBe("window");
 
-    // A normal reopen still resolves to the detached tab (no duplicate).
     const reopened = await terminal.openPageSession(options());
     expect(reopened.id).toBe(first.id);
 
-    // An explicit fresh open creates a page tab while the window copy stays.
     const fresh = await terminal.openPageSession({ ...options(), fresh: true });
     expect(fresh.id).not.toBe(first.id);
     expect(fresh.mode).toBe("page");
@@ -486,7 +460,6 @@ describe("terminal store sessions", () => {
     expect(terminal.windowTabs).toHaveLength(1);
     expect(terminal.pageTabs).toHaveLength(1);
 
-    // Later normal opens prefer the live page tab over the older window copy.
     const reuse = await terminal.openPageSession(options());
     expect(reuse.id).toBe(fresh.id);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
@@ -523,7 +496,6 @@ describe("terminal store sessions", () => {
     expect(tab.status).toBe("error");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // While not failed, retry is a no-op.
     tab.status = "connected";
     await terminal.retry(tab.id);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
@@ -556,7 +528,6 @@ describe("terminal appearance and host banner", () => {
       target: "container:web-1",
       cwd: "app",
     });
-    // A container exec is not a host shell: no Gotham host banner is queued.
     expect(runtimeFakes.instances[1]!.options.banner).toBeUndefined();
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
   });
@@ -567,8 +538,6 @@ describe("terminal appearance and host banner", () => {
     const terminal = useTerminalStore();
     const tab = await terminal.openWindowSession(options("hung"));
 
-    // The create resolved and the runtime connected while /version is still
-    // pending; only the banner's version tag is deferred.
     expect(tab.status).toBe("connected");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
     const runtime = runtimeFakes.instances[0]!;
@@ -604,7 +573,6 @@ describe("terminal appearance and host banner", () => {
     expect(runtimes.every((runtime) => runtime.theme === "gotham-light")).toBe(
       true,
     );
-    // Repainting is not a reconnect: no renderer was disposed or recreated.
     expect(runtimes.some((runtime) => runtime.disposed)).toBe(false);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(first.sessionId).toBe("session-1");
@@ -613,7 +581,6 @@ describe("terminal appearance and host banner", () => {
       localStorage.getItem("gotham.terminal.appearance.v1.u-1"),
     ).toContain('"theme":"gotham-light"');
 
-    // A terminal opened afterwards starts on the persisted theme.
     await terminal.openWindowSession(options("three"));
     expect(runtimeFakes.instances[2]!.options.theme).toBe("gotham-light");
   });
@@ -727,7 +694,6 @@ describe("terminal pane transfer", () => {
     expect(terminal.findTab(tab.id)?.sessionId).toBe("session-1");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // Two tabs stay isolated: switching panes does not swap sessions.
     const second = await terminal.openWindowSession(options("other"));
     await flushPromises();
     expect(terminal.windowTabs).toHaveLength(2);
@@ -753,7 +719,6 @@ describe("page tabs (JUS-265)", () => {
 
     terminal.activatePage(first.id);
     expect(terminal.pageActiveTab?.id).toBe(first.id);
-    // Window selection is deliberately separate from the page's.
     await terminal.openWindowSession(options("window"));
     expect(terminal.pageActiveTab?.id).toBe(first.id);
     expect(apiFakes.create).toHaveBeenCalledTimes(3);

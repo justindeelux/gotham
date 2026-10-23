@@ -7,16 +7,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// Rules embed backticks (Host(`example.com`)), which Go raw strings cannot
-// carry; goldens use the placeholder below and expand it before comparing.
 const backtickPlaceholder = "§"
 
-// expandGolden turns the readable golden placeholder into the real character.
 func expandGolden(raw string) string {
 	return strings.ReplaceAll(raw, backtickPlaceholder, "`")
 }
 
-// goldenAppID is a fixed application id so generated names are stable.
 const goldenAppID = "11111111-2222-3333-4444-555555555555"
 
 const goldenStaticYAML = `entryPoints:
@@ -95,7 +91,6 @@ entryPoints = ['web']
 url = 'http://172.17.0.1:3000'
 `
 
-// sampleConfig is the generation input the goldens above were rendered from.
 func sampleConfig() ProxyConfig {
 	return BuildConfig([]Route{{
 		AppID:  uuid.MustParse(goldenAppID),
@@ -172,11 +167,6 @@ func TestGenerateIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestGenerateEmptyConfigIsValidDocument proves a node with no routes renders
-// a document with no http section at all: Traefik rejects a standalone empty
-// `http:` element ("http cannot be a standalone element") and would then keep
-// serving the previous document, so a removed last route would never
-// disappear. The live Phase 7 acceptance asserts the removal through Traefik.
 func TestGenerateEmptyConfigIsValidDocument(t *testing.T) {
 	files, err := Generate(BuildConfig(nil, nil, nil, "", ""), FormatYAML)
 	if err != nil {

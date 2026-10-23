@@ -6,8 +6,6 @@ import (
 	"github.com/justindeelux/gotham/toolcatalog"
 )
 
-// TestToolUseTrackerUninstallBlocksBuild proves the uninstall mark refuses a
-// build for its whole lifetime and clears afterwards.
 func TestToolUseTrackerUninstallBlocksBuild(t *testing.T) {
 	tracker := NewToolUseTracker()
 

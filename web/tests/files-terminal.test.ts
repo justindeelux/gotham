@@ -1,6 +1,3 @@
-// JUS-248: the File manager resolves the directory it hands to the terminal
-// session create call. The pure helper must keep the path as data (never a
-// shell command) and only ever accept a real directory row.
 import { describe, expect, it } from "vitest";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
@@ -9,7 +6,6 @@ import {
   terminalDirectoryFor,
 } from "@/features/files/utils/files";
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -53,8 +49,6 @@ describe("terminalDirectoryFor", () => {
       symlink_target: "config",
     });
 
-    // The listing names `config` as a directory: the link's own path is the
-    // cwd, so the agent follows it and still enforces the root policy.
     expect(
       terminalDirectoryFor(link, "", { entries: [config] }),
     ).toBe("current");
@@ -62,7 +56,6 @@ describe("terminalDirectoryFor", () => {
       terminalDirectoryFor(link, "my-app", { entries: [config] }),
     ).toBe("my-app/current");
 
-    // A link to the folder itself or to the root is a known directory.
     expect(
       terminalDirectoryFor(
         entry({
@@ -75,8 +68,6 @@ describe("terminalDirectoryFor", () => {
       ),
     ).toBe("my-app/here");
 
-    // An unlisted target, a file target, a chained symlink and an escape are
-    // never guessed.
     for (const target of ["nowhere", "app.yaml", "another-link", "../escape"]) {
       const unknown = entry({
         name: "mystery",
@@ -107,7 +98,6 @@ describe("terminalDirectoryFor", () => {
       false,
     );
     expect(symlinkTargetsDirectory(link, "", [])).toBe(false);
-    // A nested target is outside what this listing can vouch for.
     expect(
       symlinkTargetsDirectory(
         entry({
@@ -119,7 +109,6 @@ describe("terminalDirectoryFor", () => {
         [config],
       ),
     ).toBe(false);
-    // An escape above the root is never a known directory.
     expect(
       symlinkTargetsDirectory(
         entry({
@@ -139,15 +128,11 @@ describe("terminalDirectoryFor", () => {
     const path = terminalDirectoryFor(folder, "nested dir");
 
     expect(path).toBe(`nested dir/${name}`);
-    // Data only: no command, no quoting and no escaping is added.
     expect(path).not.toContain("cd ");
     expect(path?.includes(name)).toBe(true);
   });
 
   it("leaves names that look like traversal to the agent's resolver", () => {
-    // The file API refuses a ".." entry before it can reach this helper, so a
-    // literal dotted name is data. The agent still re-checks root + relative
-    // path; the browser never normalizes or rewrites it.
     const folder = entry({
       name: "..not-a-parent",
       kind: "directory",

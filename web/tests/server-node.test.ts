@@ -1,4 +1,3 @@
-// Server node card text derivations for the dashboard health grid.
 import { describe, expect, it } from "vitest";
 
 import type { Server } from "@/features/servers";

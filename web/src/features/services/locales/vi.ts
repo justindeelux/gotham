@@ -1,8 +1,3 @@
-/**
- * Vietnamese catalog for the services surface (I18N-7). Same shape as the
- * English catalog; user-owned names, compose documents, environment
- * keys/values, domains and diagnostics stay raw parameters.
- */
 import type en from "./en";
 
 const vi: typeof en = {

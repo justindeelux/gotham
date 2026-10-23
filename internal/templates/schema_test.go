@@ -10,8 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// sampleTemplateYAML exercises every field type: text with a pattern, number
-// with bounds, select, bool and secret.
 const sampleTemplateYAML = `name: Demo
 icon: demo
 description: A demo template.
@@ -47,7 +45,6 @@ fields:
     default: hello
 `
 
-// sampleComposeYAML references every field of sampleTemplateYAML.
 const sampleComposeYAML = `services:
   web:
     image: nginx:1.27
@@ -65,7 +62,6 @@ volumes:
   data:
 `
 
-// sampleFiles returns a valid one-template catalog.
 func sampleFiles() map[string]string {
 	return map[string]string{
 		"demo/template.yaml": sampleTemplateYAML,
@@ -73,7 +69,6 @@ func sampleFiles() map[string]string {
 	}
 }
 
-// catalogFrom loads an in-memory catalog from name -> content pairs.
 func catalogFrom(files map[string]string) (*Catalog, error) {
 	fsys := fstest.MapFS{}
 	for name, content := range files {
@@ -82,7 +77,6 @@ func catalogFrom(files map[string]string) (*Catalog, error) {
 	return Load(fsys)
 }
 
-// mustCatalog loads a valid in-memory catalog or fails the test.
 func mustCatalog(t *testing.T, files map[string]string) *Catalog {
 	t.Helper()
 	catalog, err := catalogFrom(files)
@@ -92,7 +86,6 @@ func mustCatalog(t *testing.T, files map[string]string) *Catalog {
 	return catalog
 }
 
-// TestLoadSample proves a valid template loads with its schema intact.
 func TestLoadSample(t *testing.T) {
 	catalog := mustCatalog(t, sampleFiles())
 
@@ -130,8 +123,6 @@ func TestLoadSample(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsBadDefinitions is the validator's core table: every malformed
-// definition must be rejected at load, never at render.
 func TestLoadRejectsBadDefinitions(t *testing.T) {
 	cases := map[string]struct {
 		files map[string]string
@@ -330,9 +321,6 @@ func TestLoadRejectsBadDefinitions(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsTooManyServices proves the load-time structural check reuses
-// the deploy path's service-count bound, so an oversized catalog entry cannot
-// enter the gallery and fail on every render.
 func TestLoadRejectsTooManyServices(t *testing.T) {
 	var compose strings.Builder
 	compose.WriteString("services:\n")
@@ -347,10 +335,6 @@ func TestLoadRejectsTooManyServices(t *testing.T) {
 	}
 }
 
-// TestLoadAllowsValueDrivenStructure proves the load-time structural check
-// stays value-independent: a placeholder in a service name or image position
-// is allowed, because only the render's services.Parse can judge the
-// substituted value.
 func TestLoadAllowsValueDrivenStructure(t *testing.T) {
 	files := sampleFiles()
 	files["demo/compose.yaml"] = strings.Replace(sampleComposeYAML, "image: nginx:1.27", `image: "{{ .note }}"`, 1)
@@ -364,7 +348,6 @@ func TestLoadAllowsValueDrivenStructure(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsOversizedTemplate proves the template.yaml size bound.
 func TestLoadRejectsOversizedTemplate(t *testing.T) {
 	files := sampleFiles()
 	files["demo/template.yaml"] = sampleTemplateYAML + strings.Repeat("# padding\n", MaxTemplateYAML)

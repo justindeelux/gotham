@@ -17,8 +17,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// fakeDockerServer is an in-process DockerService implementation with canned
-// responses covering all eight RPCs the CP client must expose.
 type fakeDockerServer struct {
 	agentv1.UnimplementedDockerServiceServer
 }
@@ -70,9 +68,6 @@ func (fakeDockerServer) StreamLogs(_ *agentv1.StreamLogsRequest, stream grpc.Ser
 	return nil
 }
 
-// startFakeDockerServer serves fakeDockerServer over bufconn and returns the
-// dial target plus a context dialer option. serverCreds may be nil for an
-// insecure listener.
 func startFakeDockerServer(t *testing.T, serverCreds credentials.TransportCredentials) (string, grpc.DialOption) {
 	t.Helper()
 
@@ -100,7 +95,6 @@ func startFakeDockerServer(t *testing.T, serverCreds credentials.TransportCreden
 	return "passthrough:///bufnet", dialer
 }
 
-// exerciseDockerClient calls every RPC the deliverable requires.
 func exerciseDockerClient(t *testing.T, ctx context.Context, client agentv1.DockerServiceClient) {
 	t.Helper()
 
@@ -179,7 +173,6 @@ func TestDialDockerClientInsecureBufconn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// A nil authority selects insecure transport for development.
 	client, err := DialDockerClient(ctx, target, nil, WithDockerDialOptions(dialer))
 	if err != nil {
 		t.Fatalf("DialDockerClient: %v", err)
@@ -203,8 +196,6 @@ func TestDialDockerClientMTLSBufconn(t *testing.T) {
 	}
 	const nodeID = "test-node"
 
-	// The agent side presents a server-auth certificate and requires a client
-	// certificate, mirroring agent.ServerCredentials with a CA configured.
 	serverCertPEM, serverKeyPEM, err := authority.IssueServerCert([]string{nodeID})
 	if err != nil {
 		t.Fatalf("IssueServerCert: %v", err)
@@ -236,8 +227,6 @@ func TestDialDockerClientMTLSBufconn(t *testing.T) {
 		}
 	}()
 
-	// The CP-issued ephemeral client cert must satisfy the agent's client
-	// verification; exercise the streaming RPC too since it holds a stream.
 	exerciseDockerClient(t, ctx, client)
 }
 
@@ -271,7 +260,6 @@ func TestDialDockerClientMTLSWrongServerNameFails(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	// grpc.NewClient is lazy, so the handshake failure surfaces on first RPC.
 	if _, err := client.ListContainers(ctx, &agentv1.ListContainersRequest{}); err == nil {
 		t.Fatal("ListContainers with wrong server name = nil error, want TLS verification failure")
 	}
@@ -283,7 +271,7 @@ func TestDialDockerClientValidation(t *testing.T) {
 	if _, err := DialDockerClient(ctx, "  ", nil); !errors.Is(err, ErrValidation) {
 		t.Fatalf("empty target = %v, want ErrValidation", err)
 	}
-	var nilCtx context.Context // stays nil: exercises the nil-context guard.
+	var nilCtx context.Context
 	//nolint:staticcheck // intentionally passing a nil Context to test the guard.
 	if _, err := DialDockerClient(nilCtx, "passthrough:///bufnet", nil); err == nil {
 		t.Fatal("nil context = nil error, want error")

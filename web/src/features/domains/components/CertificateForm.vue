@@ -15,22 +15,11 @@ import type { Application } from "@/features/applications";
 import { providerLabel, proxyText } from "@/features/domains/api/proxy";
 import type { CertificateDraft, DNSProvider } from "@/features/domains/api/proxy";
 
-/**
- * Certificate configuration editor used by the Domains page modal and the
- * application detail Domain editor. The recorded domain is never edited here:
- * it always comes from the selected application's primary_domain.
- */
-
 interface Props {
   modelValue: CertificateDraft;
   applications: Application[];
   providers: DNSProvider[];
-  /** When true the application is fixed (editing a stored configuration). */
   lockApplication?: boolean;
-  /**
-   * domain overrides the previewed host. The per-domain application editor
-   * passes the clicked row, which is not necessarily the primary domain.
-   */
   domain?: string;
 }
 
@@ -75,20 +64,16 @@ const selectedApplication = computed<Application | null>(
     ) ?? null,
 );
 
-/** domainPreview shows the exact host the API will record. */
 const domainPreview = computed<string>(
   () => props.domain || selectedApplication.value?.primary_domain || "",
 );
 
-/** isDns01 drives the provider and wildcard controls. */
 const isDns01 = computed<boolean>(() => props.modelValue.challenge === "dns-01");
 
-/** patch emits one updated draft, keeping the object immutable. */
 function patch(changes: Partial<CertificateDraft>): void {
   emit("update:modelValue", { ...props.modelValue, ...changes });
 }
 
-/** setChallenge resets dns-only fields when switching back to http-01. */
 function setChallenge(challenge: string): void {
   const next = challenge === "dns-01" ? "dns-01" : "http-01";
   if (next === "http-01") {
@@ -169,9 +154,6 @@ function setChallenge(challenge: string): void {
 </template>
 
 <style scoped>
-/* Hints render below their field: Naive lays an NFormItem default slot out as
- * a flex row, so without wrapping the hint would sit beside the control (same
- * .field-hint pattern as the wizard and edit-server modals in main.css). */
 .certificate-form :deep(.n-form-item-blank) {
   flex-wrap: wrap;
 }

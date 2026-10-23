@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// The helper process exercises real stdin/stdout without replacing global descriptors.
 func TestMCPProcessHelper(_ *testing.T) {
 	if os.Getenv("GOTHAM_TEST_MCP_PROCESS") != "1" {
 		return

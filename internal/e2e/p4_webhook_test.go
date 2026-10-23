@@ -14,8 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// p4Delivery is the webhook route's response body: why a delivery did or did
-// not start a build, plus the preview host a pull request delivery acted on.
 type p4Delivery struct {
 	Status       string `json:"status"`
 	Reason       string `json:"reason"`
@@ -23,10 +21,6 @@ type p4Delivery struct {
 	Host         string `json:"host"`
 }
 
-// TestP4WebhookAutoDeploy proves the push → deploy path without touching a
-// provider API: the application and its signing secret are seeded as rows, a
-// signed GitHub-style push delivery is replayed against the public route, and
-// the anti-spam ledger must swallow a second delivery of the same commit.
 func TestP4WebhookAutoDeploy(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
@@ -48,7 +42,6 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 	h.seedWebhook(t, app, hookSecret)
 	commit := p4CommitSHA(suffix)
 
-	// 1. A signed push queues a deployment.
 	status, queued, raw := h.deliverGitHub(t, hookSecret, "delivery-1-"+suffix, fixture.repo, commit)
 	if status != http.StatusAccepted {
 		t.Fatalf("first delivery: status %d, want %d: %s", status, http.StatusAccepted, raw)
@@ -57,8 +50,6 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 		t.Fatalf("first delivery = %+v, want a queued deployment (%s)", queued, raw)
 	}
 
-	// 2. The same commit delivered again must not queue a second deployment,
-	// even under a different delivery id.
 	status, duplicate, raw := h.deliverGitHub(t, hookSecret, "delivery-2-"+suffix, fixture.repo, commit)
 	if status != http.StatusOK {
 		t.Fatalf("second delivery: status %d, want %d: %s", status, http.StatusOK, raw)
@@ -70,7 +61,6 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 		t.Errorf("second delivery returned deployment %q, want none", duplicate.DeploymentID)
 	}
 
-	// 3. Exactly one deployment exists, and it runs.
 	deployments := h.deployments(t, app.ID)
 	if len(deployments) != 1 {
 		t.Fatalf("application has %d deployments, want 1: %+v", len(deployments), deployments)
@@ -84,7 +74,6 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 	}
 	waitForHTTPBody(t, h.appURL(t, app.ID), fixture.marker)
 
-	// 4. The replay queued nothing extra after the run finished either.
 	if again := h.deployments(t, app.ID); len(again) != 1 {
 		t.Errorf("application has %d deployments after the run, want 1", len(again))
 	}
@@ -92,9 +81,6 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 	t.Logf("webhook ok: app=%s deployment=%s commit=%s", app.ID, queued.DeploymentID, commit)
 }
 
-// deliverGitHub replays one signed GitHub push delivery against the harness
-// control plane and returns the route's status, its decoded body and the raw
-// payload for failure messages.
 func (h *p4Harness) deliverGitHub(t *testing.T, secret, delivery, repo, commit string) (int, p4Delivery, string) {
 	t.Helper()
 	payload, err := json.Marshal(map[string]any{
@@ -116,7 +102,7 @@ func (h *p4Harness) deliverGitHub(t *testing.T, secret, delivery, repo, commit s
 	}
 
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload) // hash.Hash never fails
+	mac.Write(payload)
 
 	request, err := http.NewRequest(http.MethodPost, h.baseURL+"/v1/webhooks/github", bytes.NewReader(payload))
 	if err != nil {
@@ -143,7 +129,6 @@ func (h *p4Harness) deliverGitHub(t *testing.T, secret, delivery, repo, commit s
 	return response.StatusCode, result, string(raw)
 }
 
-// p4CommitSHA derives the 40-hex commit id GitHub would send for a push.
 func p4CommitSHA(seed string) string {
 	sum := sha256.Sum256([]byte(seed))
 	return hex.EncodeToString(sum[:])[:40]

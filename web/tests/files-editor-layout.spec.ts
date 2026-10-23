@@ -8,15 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Box, Locator, Page } from "@playwright/test";
 
 /* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, SVGSVGElement:readonly, navigator:readonly, URL, window:readonly */
-// URL/window run inside the page and server callbacks (browser/Node URL
-// globals); the repo lint envs do not cover tests/, so they are declared.
-
-// Real-browser proof for the P18 step 8 editor conflict modal: the committed
-// webdist is served statically with the control-plane file API mocked, a
-// session is seeded in localStorage, and real Chromium measures the real Naive
-// UI DOM. The file is opened in the editor (loading the CodeMirror chunk), a
-// change is typed, Ctrl/Cmd+S meets a mocked 409, and the conflict modal is
-// measured. Same harness as environment-layout.spec.ts.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -108,7 +99,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -140,7 +130,6 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session and answers the calls the files page makes. */
 async function mockApi(
   page: Page,
   options: { historyVersions?: number } = {},
@@ -148,7 +137,6 @@ async function mockApi(
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
-  // Catch-all first so the specific routes registered after it win.
   await page.route("**/api/v1/**", async (route) => {
     await route.fulfill({ json: {} });
   });
@@ -177,13 +165,11 @@ async function mockApi(
   });
   await page.route(`**/api/v1/servers/${serverId}/files/content*`, async (route) => {
     if (route.request().method() === "PUT") {
-      // A concurrent write: the editor's If-Match no longer matches.
       await route.fulfill({ status: 409, json: { message: "conflict" } });
       return;
     }
     const path = new URL(route.request().url()).searchParams.get("path") ?? "";
     if (path.endsWith("logo.png")) {
-      // A binary read: the editor renders the download-only state.
       await route.fulfill({ status: 415, json: { message: "not editable" } });
       return;
     }
@@ -210,7 +196,6 @@ async function mockApi(
   }
 }
 
-/** openConflict opens app.yaml, edits it, and triggers the 409 conflict modal. */
 async function openConflict(page: Page): Promise<Locator> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
@@ -220,13 +205,11 @@ async function openConflict(page: Page): Promise<Locator> {
   await expect(label).toBeVisible();
   await label.dblclick();
 
-  // The CodeMirror chunk loads lazily; wait for the real editor surface.
   const editor = page.locator(".cm-content");
   await expect(editor).toBeVisible({ timeout: 15_000 });
   await editor.click();
   await page.keyboard.type("# changed");
 
-  // The dirty dot appears on the tab.
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 
   await page.keyboard.press("ControlOrMeta+s");
@@ -239,21 +222,12 @@ async function openConflict(page: Page): Promise<Locator> {
   return dialog;
 }
 
-/**
- * minimizeEditor collapses the floating editor window into the rail icon so
- * the file browser underneath becomes clickable (the window overlays it).
- */
 async function minimizeEditor(page: Page): Promise<void> {
   await page.locator(".ed-window-min").click();
   await expect(page.locator(".rail-btn--editor")).toBeVisible();
   await expect(page.locator(".ed-window")).toBeHidden();
 }
 
-/**
- * badgeGeometry measures the rail badge of the code-editor button: the box it
- * paints and the corner radius the browser resolved. The badge must be a
- * perfect circle (JUS-241), for a one-digit count and for "9+".
- */
 async function badgeGeometry(
   page: Page,
   label?: string,
@@ -272,11 +246,6 @@ async function badgeGeometry(
   }, label);
 }
 
-/**
- * openViaMenu opens one file's editor tab through its row menu. A binary file
- * (JUS-130) has no double-click action, so its binary/download-only tab is only
- * reachable through "Edit in editor".
- */
 async function openViaMenu(page: Page, name: string): Promise<void> {
   await page.getByRole("button", { name: `More actions for ${name}` }).click();
   await page.getByRole("menuitem", { name: "Edit in editor" }).click();
@@ -293,18 +262,14 @@ test("the minimized editor parks on the rail with a tab-count badge", async ({
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await minimizeEditor(page);
 
-  // A second file while parked reopens the window; parking again counts 2.
   await page.locator(".fm-label", { hasText: "notes.md" }).first().dblclick();
   await expect(page.locator(".ed-window")).toBeVisible();
   await minimizeEditor(page);
 
-  // The rail icon carries a badge with the open-tab count.
   const railButton = page.locator(".rail-btn--editor");
   await expect(railButton).toHaveAttribute("aria-label", /2 open/);
   await expect(railButton.locator(".rail-badge")).toHaveText("2");
 
-  // The badge rides the button's top-right corner and never covers the
-  // icon's centre, so the icon stays fully visible at every count.
   const geometry = await page.evaluate(() => {
     const button = document.querySelector(".rail-btn--editor");
     const badge = button?.querySelector(".rail-badge");
@@ -336,20 +301,15 @@ test("the minimized editor parks on the rail with a tab-count badge", async ({
   expect(geometry!.badgeCoversIconCentre).toBe(false);
   expect(geometry!.badgeInTopRight).toBe(true);
 
-  // The badge is a perfect circle, not a pill (JUS-241): equal sides and a
-  // fully rounded corner. A two-digit count ("9+") must keep that circle.
   const single = await badgeGeometry(page);
   expect(Math.abs(single.width - single.height)).toBeLessThanOrEqual(0.5);
   expect(single.radius).toBeGreaterThanOrEqual(single.width / 2 - 0.5);
   const double = await badgeGeometry(page, "9+");
   expect(Math.abs(double.width - double.height)).toBeLessThanOrEqual(0.5);
   expect(double.radius).toBeGreaterThanOrEqual(double.width / 2 - 0.5);
-  // The badge keeps its size whatever the label says.
   expect(Math.abs(double.width - single.width)).toBeLessThanOrEqual(0.5);
   await badgeGeometry(page, "2");
 
-  // Placement: above Overview and Alert, separated by dividers from the
-  // server list and from those two buttons.
   const footItems = await page.locator(".rail-foot .rail-item").all();
   const labels = await Promise.all(
     footItems.map((item) => item.innerText()),
@@ -359,7 +319,6 @@ test("the minimized editor parks on the rail with a tab-count badge", async ({
   const separators = await page.locator(".rail-foot .rail-sep").count();
   expect(separators).toBeGreaterThanOrEqual(2);
 
-  // A click restores the window with the buffer intact.
   await railButton.click();
   await expect(page.locator(".ed-window")).toBeVisible();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible();
@@ -380,8 +339,6 @@ test("the editor window resizes from its corner within the viewport", async ({
   const before = await window_.boundingBox();
   expect(before).not.toBeNull();
 
-  // Drag the corner grip up and to the left: the window shrinks. The drag
-  // must clear the viewport margin cap, so it moves well past it.
   const grip = page.locator(".ed-resize--se");
   const gripBox = await grip.boundingBox();
   expect(gripBox).not.toBeNull();
@@ -400,11 +357,6 @@ test("the editor window resizes from its corner within the viewport", async ({
   expect(resized!.y + resized!.height).toBeLessThanOrEqual(viewport.height + 1);
 });
 
-/**
- * RESIZE_CASES lists the eight grips of the window frame with a drag that
- * shrinks the window from that side, and the edges that must move with it.
- * The edge opposite the grip stays anchored.
- */
 const RESIZE_CASES = [
   { direction: "n", dx: 0, dy: 40, left: 0, top: 40, right: 0, bottom: 0 },
   { direction: "s", dx: 0, dy: -40, left: 0, top: 0, right: 0, bottom: -40 },
@@ -416,10 +368,6 @@ const RESIZE_CASES = [
   { direction: "sw", dx: 40, dy: -40, left: 40, top: 0, right: 0, bottom: -40 },
 ];
 
-/**
- * dragResizeGrip drags one resize grip by the given delta and returns the
- * window box before and after the drag.
- */
 async function dragResizeGrip(
   page: Page,
   direction: string,
@@ -451,8 +399,6 @@ test("the editor window resizes from every edge and corner", async ({ page }) =>
     await page.setViewportSize(viewport);
     await mockApi(page);
     await page.goto(`${baseURL}/servers/${serverId}/files`);
-    // Every pass starts from the fitted default, not from the geometry the
-    // previous pass left behind.
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
     await reopenEditor(page);
@@ -466,7 +412,6 @@ test("the editor window resizes from every edge and corner", async ({ page }) =>
       );
       const near = (value: number, expected: number): boolean =>
         Math.abs(value - expected) <= 1.5;
-      // The grip moves its own edges; the opposite ones stay anchored.
       expect(
         near(after.x, before.x + resizeCase.left),
         `${resizeCase.direction} left edge`,
@@ -489,7 +434,6 @@ test("the editor window resizes from every edge and corner", async ({ page }) =>
         ),
         `${resizeCase.direction} bottom edge`,
       ).toBe(true);
-      // The window stays fully inside the viewport.
       expect(after.x).toBeGreaterThanOrEqual(-1);
       expect(after.y).toBeGreaterThanOrEqual(-1);
       expect(after.x + after.width).toBeLessThanOrEqual(viewport.width + 1);
@@ -498,11 +442,6 @@ test("the editor window resizes from every edge and corner", async ({ page }) =>
   }
 });
 
-/**
- * RESIZE_GRIP_CURSORS maps every grip to the resize cursor it must keep. JUS-269
- * removed the grip marks; the invisible hit strip is now the only affordance,
- * so the cursor carries the resize signal.
- */
 const RESIZE_GRIP_CURSORS: Record<string, string> = {
   n: "ns-resize",
   s: "ns-resize",
@@ -527,16 +466,12 @@ test("the editor resize grips paint nothing and keep their hit areas and cursors
 
   for (const [direction, cursor] of Object.entries(RESIZE_GRIP_CURSORS)) {
     const grip = page.locator(`.ed-resize--${direction}`);
-    // The invisible strip still occupies its frame area, so the drag target
-    // survives even though the mark is gone.
     await expect(grip).toBeVisible();
     const gripBox = await grip.boundingBox();
     expect(gripBox, `${direction} grip box`).not.toBeNull();
     expect(gripBox!.width, `${direction} grip width`).toBeGreaterThan(0);
     expect(gripBox!.height, `${direction} grip height`).toBeGreaterThan(0);
 
-    // Nothing is painted: no pseudo-element mark, no background, no border.
-    // The cursor is the one visible affordance left.
     const paint = await grip.evaluate((element) => {
       const mark = getComputedStyle(element, "::after");
       const style = getComputedStyle(element);
@@ -557,7 +492,6 @@ test("the editor resize grips paint nothing and keep their hit areas and cursors
     expect(paint.cursor, `${direction} cursor`).toBe(cursor);
   }
 
-  // The hit area still resizes: dragging the east strip shrinks the window.
   const { before, after } = await dragResizeGrip(page, "e", -40, 0);
   expect(Math.abs(after.width - (before.width - 40))).toBeLessThanOrEqual(1.5);
   expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(1.5);
@@ -574,8 +508,6 @@ test("the editor window keeps its minimum size and stays on screen", async ({
   await page.reload();
   await reopenEditor(page);
 
-  // Dragging the west grip far to the right stops at the minimum width: the
-  // window never shrinks below 480px, and its right edge stays put.
   const shrunk = await dragResizeGrip(page, "w", 4000, 0);
   expect(shrunk.after.width).toBeGreaterThanOrEqual(480);
   expect(shrunk.after.width).toBeLessThanOrEqual(481);
@@ -583,7 +515,6 @@ test("the editor window keeps its minimum size and stays on screen", async ({
     viewport.width + 1,
   );
 
-  // The same for the height: the north grip stops at the minimum height.
   const shortened = await dragResizeGrip(page, "n", 0, 4000);
   expect(shortened.after.height).toBeGreaterThanOrEqual(320);
   expect(shortened.after.height).toBeLessThanOrEqual(321);
@@ -591,8 +522,6 @@ test("the editor window keeps its minimum size and stays on screen", async ({
     viewport.height + 1,
   );
 
-  // Growing the east grip far to the right stops at the viewport edge: the
-  // window grows, but it never leaves the screen.
   const grown = await dragResizeGrip(page, "e", 4000, 0);
   expect(grown.after.x).toBeGreaterThanOrEqual(-1);
   expect(grown.after.x + grown.after.width).toBeLessThanOrEqual(
@@ -614,14 +543,12 @@ test("the editor window stays inside a 390px phone viewport with margins", async
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
 
-  // The default size yields to the narrow viewport instead of overflowing it.
   const box = await page.locator(".ed-window").boundingBox();
   expect(box).not.toBeNull();
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height + 1);
-  // ... and dragging the corner cannot push it back out.
   const grip = page.locator(".ed-resize--se");
   const gripBox = await grip.boundingBox();
   expect(gripBox).not.toBeNull();
@@ -637,8 +564,6 @@ test("the editor window stays inside a 390px phone viewport with margins", async
   expect(grown!.x + grown!.width).toBeLessThanOrEqual(viewport.width + 1);
   expect(grown!.y + grown!.height).toBeLessThanOrEqual(viewport.height + 1);
 
-  // Below the tablet breakpoint the rail lives in the topbar drawer, and the
-  // parked icon must still restore the window from there.
   await page.locator(".ed-window-min").click();
   await expect(page.locator(".ed-window")).toBeHidden();
   await page.locator(".rail-toggle").click();
@@ -656,14 +581,11 @@ test("editor save conflict opens a bounded modal with pinned header and three ch
   expect(dialogBox, "dialog has a box").not.toBeNull();
   expect(dialogBox!.width, "dialog is ~480px wide").toBeLessThanOrEqual(560);
   expect(dialogBox!.width, "dialog is ~480px wide").toBeGreaterThanOrEqual(400);
-  // The modal never exceeds the viewport.
   expect(dialogBox!.y).toBeGreaterThanOrEqual(0);
   expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(viewport.height);
 
-  // Header stays fixed while the body scrolls.
   const header = dialog.locator(".n-card-header");
   const body = dialog.locator(".n-card-content");
-  // Wait out the modal enter transition so the header position is settled.
   await expect
     .poll(async () => {
       const first = (await header.boundingBox())!.y;
@@ -678,7 +600,6 @@ test("editor save conflict opens a bounded modal with pinned header and three ch
   const after = await header.boundingBox();
   expect(after!.y).toBeCloseTo(before!.y, 0);
 
-  // The three conflict choices, left to right: Reload, Save as copy, Overwrite.
   const reload = dialog.getByRole("button", { name: "Reload", exact: true });
   const saveAs = dialog.getByRole("button", { name: "Save as copy", exact: true });
   const overwrite = dialog.getByRole("button", { name: "Overwrite", exact: true });
@@ -690,7 +611,6 @@ test("editor save conflict opens a bounded modal with pinned header and three ch
   const overwriteBox = await overwrite.boundingBox();
   expect(reloadBox!.x + reloadBox!.width).toBeLessThanOrEqual(saveAsBox!.x);
   expect(saveAsBox!.x + saveAsBox!.width).toBeLessThanOrEqual(overwriteBox!.x);
-  // Every action stays inside the viewport (the acceptance proof).
   for (const box of [reloadBox, saveAsBox, overwriteBox]) {
     expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
   }
@@ -727,17 +647,13 @@ test("switching to a binary tab and back keeps the editor mounted", async ({
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  // Open the ready tab first.
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
 
-  // Open a binary tab (415) — this used to unmount every ready host. The
-  // floating window overlays the browser, so minimize it first.
   await minimizeEditor(page);
   await openViaMenu(page, "logo.png");
   await expect(page.getByText("Binary file")).toBeVisible();
 
-  // Back to the ready tab: the CodeMirror surface must still be there.
   await page.getByRole("tab", { name: /app\.yaml/ }).click();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText("Binary file")).toHaveCount(0);
@@ -752,7 +668,6 @@ test("Ctrl/Cmd+S is a no-op on a clean tab", async ({ page }) => {
   const editor = page.locator(".cm-content");
   await expect(editor).toBeVisible({ timeout: 15_000 });
   await editor.click();
-  // No edit: the tab is clean, so Ctrl+S must not fire the (mocked 409) PUT.
   await page.keyboard.press("ControlOrMeta+s");
   await page.waitForTimeout(500);
   await expect(page.locator(".ed-dot")).toHaveCount(0);
@@ -772,19 +687,16 @@ test("the editor tablist exposes tabs, a panel and arrow-key navigation", async 
   await openViaMenu(page, "logo.png");
   await expect(page.getByText("Binary file")).toBeVisible();
 
-  // The browser also exposes a tablist (JUS-123), so scope to the editor.
   const tablist = page.getByRole("tablist", { name: "Editor" });
   await expect(tablist).toBeVisible();
   const tabs = tablist.getByRole("tab");
   await expect(tabs).toHaveCount(2);
 
-  // The active tab owns a resolvable panel with role=tabpanel.
   const active = tablist.getByRole("tab", { selected: true });
   const panelId = await active.getAttribute("aria-controls");
   expect(panelId).toBeTruthy();
   await expect(page.locator(`#${panelId}`)).toHaveAttribute("role", "tabpanel");
 
-  // Roving focus: ArrowLeft moves selection to the previous tab.
   await active.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(tablist.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
@@ -799,8 +711,6 @@ test("a ready tab renders no error state and keeps tab/panel ids unique", async 
 
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
-  // A second ready tab: with the old unguarded v-else each one added a
-  // duplicate "Could not open <name>" panel sharing the host's id.
   await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "notes.md" }).first().dblclick();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
@@ -810,9 +720,6 @@ test("a ready tab renders no error state and keeps tab/panel ids unique", async 
   await expect(page.locator(".ed-state")).toHaveCount(0);
   await expect(page.getByText("Could not open")).toHaveCount(0);
 
-  // The whole document (visible and v-show-hidden) must hold one panel id per
-  // ready tab and no duplicate: the old v-else added a second `ed-panel-<id>`
-  // for the active ready tab.
   const ids = await page.evaluate(() =>
     [...document.querySelectorAll("[id^='ed-panel-'], [id^='ed-tab-']")].map(
       (element) => element.id,
@@ -838,13 +745,8 @@ test("arrow keys keep switching between two ready tabs", async ({ page }) => {
     timeout: 15_000,
   });
 
-  // Scope to the editor tablist: the browser tab bar (JUS-123) is a second
-  // tablist on the page.
   const editorTabs = page.getByRole("tablist", { name: "Editor" });
   await expect(editorTabs.getByRole("tab")).toHaveCount(2);
-  // Activate the first tab: the click focuses its button, but the session focus
-  // must not be yanked into the editor, or the arrow keys below drive the
-  // editor cursor instead of the tablist.
   await editorTabs.getByRole("tab", { name: /app\.yaml/ }).click();
   await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
   await page.keyboard.press("ArrowRight");
@@ -855,8 +757,6 @@ test("arrow keys keep switching between two ready tabs", async ({ page }) => {
   await page.keyboard.press("ArrowLeft");
   await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
 
-  // The documented tab-cycling binding works from inside the editor (a browser
-  // never delivers Ctrl+Tab to the page, so the sheet advertises Mod+Alt+Page).
   await page.locator(".ed-host:visible .cm-content").click();
   await page.keyboard.press("ControlOrMeta+Alt+PageDown");
   await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/notes\.md/);
@@ -892,12 +792,9 @@ test("the status bar stays on one line at the default window width", async ({
       clientWidth: el.clientWidth,
     };
   });
-  // One line only: the height is one line box plus its top padding, and no
-  // item overflows horizontally.
   expect(metrics.height).toBeLessThanOrEqual(metrics.oneLine + 2);
   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
 
-  // The long part truncates; the full path stays available as the title.
   const path = page.locator(".ed-path");
   expect(await path.getAttribute("title")).toContain("app.yaml");
   expect(await path.evaluate((el) => getComputedStyle(el).textOverflow)).toBe(
@@ -924,15 +821,12 @@ test("find, the replace binding and the toolbar open the custom find bar", async
   const bar = page.locator(".ed-find");
   const query = bar.locator("input").first();
 
-  // JUS-231: the toolbar opens find collapsed, focused on the query, and the
-  // default CodeMirror panel must not appear.
   await page.getByRole("button", { name: "Find / replace" }).click();
   await expect(bar).toBeVisible();
   await expect(page.locator(".cm-panels")).toHaveCount(0);
   await expect(bar.locator("input")).toHaveCount(1);
   await expect(query).toBeFocused();
 
-  // Find keeps the remembered collapsed state.
   await page.keyboard.press("Escape");
   await expect(bar).toBeHidden();
   await content.click();
@@ -940,8 +834,6 @@ test("find, the replace binding and the toolbar open the custom find bar", async
   await expect(bar.locator("input")).toHaveCount(1);
   await expect(query).toBeFocused();
 
-  // macOS uses Cmd+Option+F (Cmd+H hides the app); other platforms Ctrl+H.
-  // The replace binding expands the row and focuses its field.
   await page.keyboard.press("Escape");
   await expect(bar).toBeHidden();
   await content.click();
@@ -951,8 +843,6 @@ test("find, the replace binding and the toolbar open the custom find bar", async
   await expect(replace).toBeVisible();
   await expect(replace).toBeFocused();
 
-  // The expanded row is remembered for this tab; find does not force it open
-  // or closed, it restores the tab's state and focuses the query.
   await page.keyboard.press("Escape");
   await content.click();
   await page.keyboard.press(mac ? "Meta+f" : "Control+f");
@@ -966,14 +856,12 @@ test("the conflict modal is an alertdialog that confirms overwrite and reload", 
   const dialog = await openConflict(page);
   await expect(dialog).toHaveAttribute("role", "alertdialog");
 
-  // Reload discards unsaved edits, so it asks first.
   await dialog.getByRole("button", { name: "Reload", exact: true }).click();
   const reloadPop = page.locator(".n-popconfirm");
   await expect(reloadPop).toContainText("discards your unsaved edits");
   await reloadPop.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.locator(".n-popconfirm")).toBeHidden();
 
-  // Overwrite is the danger action and asks first too.
   const overwrite = dialog.getByRole("button", { name: "Overwrite", exact: true });
   await expect(overwrite).toHaveClass(/n-button--error-type/);
   await overwrite.click();
@@ -994,9 +882,6 @@ test("leaving the files route with a dirty tab keeps the editor open", async ({
   await page.keyboard.type("# changed");
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 
-  // The window is app-level now: parking it and navigating away prompts
-  // nothing, keeps the tab and its unsaved buffer, and the rail badge still
-  // counts it. (The window overlays the sidebar at this size, so park first.)
   await page.locator(".ed-window-min").click();
   await expect(page.locator(".rail-btn--editor")).toBeVisible();
 
@@ -1006,7 +891,6 @@ test("leaving the files route with a dirty tab keeps the editor open", async ({
   await expect(page.locator(".rail-btn--editor")).toBeVisible();
   await expect(page.locator(".rail-btn--editor .rail-badge")).toHaveText("1");
 
-  // Coming back restores the window with the dirty buffer intact.
   await page.goBack();
   await expect(page).toHaveURL(/\/files/);
   await page.locator(".rail-btn--editor").click();
@@ -1015,14 +899,12 @@ test("leaving the files route with a dirty tab keeps the editor open", async ({
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 });
 
-/** dragWindow drags the floating editor by a point on its title bar. */
 async function dragWindow(
   page: Page,
   target: { x: number; y: number },
 ): Promise<void> {
   const bar = page.locator(".ed-window-bar");
   const box = await bar.boundingBox();
-  // Grab the bar's left side (the title), never the minimize/close controls.
   const fromX = box!.x + 40;
   const fromY = box!.y + box!.height / 2;
   await page.mouse.move(fromX, fromY);
@@ -1046,19 +928,16 @@ test("the editor window drags by its title bar and clamps to the viewport", asyn
   const before = await window_.boundingBox();
   expect(before).not.toBeNull();
 
-  // Drag up and to the left: the position actually changes.
   await dragWindow(page, { x: before!.x - 180, y: before!.y - 140 });
   const moved = await window_.boundingBox();
   expect(moved!.x).toBeLessThan(before!.x);
   expect(moved!.y).toBeLessThan(before!.y);
 
-  // Drag far past the top-left corner: it clamps on screen, not off it.
   await dragWindow(page, { x: -500, y: -500 });
   const clampedTopLeft = await window_.boundingBox();
   expect(clampedTopLeft!.x).toBeGreaterThanOrEqual(0);
   expect(clampedTopLeft!.y).toBeGreaterThanOrEqual(0);
 
-  // Drag far past the bottom-right corner: it stays fully inside the viewport.
   await dragWindow(page, { x: viewport.width + 800, y: viewport.height + 800 });
   const clampedBottomRight = await window_.boundingBox();
   expect(clampedBottomRight!.x + clampedBottomRight!.width).toBeLessThanOrEqual(
@@ -1101,8 +980,6 @@ test("the editor title bar keeps its controls pinned at every width", async ({
       };
     });
 
-    // The shared frame owns the bar, the controls sit at its right edge and
-    // the title/context are ellipsized instead of pushing them out.
     expect(geometry.sharedBar).toBe(true);
     expect(geometry.close.right).toBeLessThanOrEqual(geometry.window.right + 0.5);
     expect(
@@ -1116,7 +993,6 @@ test("the editor title bar keeps its controls pinned at every width", async ({
   }
 });
 
-/** persistedGeometry reads the editor window record from localStorage. */
 async function persistedGeometry(page: Page): Promise<{
   width: number;
   height: number;
@@ -1139,7 +1015,6 @@ async function persistedGeometry(page: Page): Promise<{
   });
 }
 
-/** reopenEditor opens the file after a reload (clean tabs do not survive one). */
 async function reopenEditor(page: Page): Promise<void> {
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
@@ -1159,16 +1034,12 @@ test("a 1366x800 resize persists, clamps the drag and survives reload", async ({
   const window_ = page.locator(".ed-window");
   const initial = await window_.boundingBox();
   expect(initial).not.toBeNull();
-  // The fitted default fills the viewport with side and chrome margins.
   expect(Math.round(initial!.x)).toBe(24);
   expect(Math.round(initial!.y)).toBe(88);
   expect(Math.round(initial!.width)).toBe(1318);
   expect(Math.round(initial!.height)).toBe(696);
-  // Opening alone persists nothing: merely showing the window at a smaller
-  // viewport never rewrites the saved size.
   expect(await persistedGeometry(page)).toBeNull();
 
-  // Keyboard resize seeds from the displayed 1318 and persists the result.
   const grip = page.locator(".ed-resize--se");
   await grip.focus();
   await page.keyboard.press("Shift+ArrowLeft");
@@ -1181,15 +1052,12 @@ test("a 1366x800 resize persists, clamps the drag and survives reload", async ({
     height: 696,
   });
 
-  // Reload restores the resized box exactly.
   await page.reload();
   await reopenEditor(page);
   const reloadedBox = await window_.boundingBox();
   expect(Math.round(reloadedBox!.width)).toBe(1318 - 192);
   expect(Math.round(reloadedBox!.height)).toBe(696);
 
-  // A title-bar drag clamps against the displayed 696px height (y max 104)
-  // and persists the position.
   const bar = page.locator(".ed-window-bar");
   const barBox = await bar.boundingBox();
   await page.mouse.move(barBox!.x + 40, barBox!.y + barBox!.height / 2);
@@ -1207,7 +1075,6 @@ test("a 1366x800 resize persists, clamps the drag and survives reload", async ({
   expect(Math.round(draggedReloaded!.x)).toBe(Math.round(draggedBox!.x));
   expect(Math.round(draggedReloaded!.y)).toBe(104);
 
-  // A corner drag seeds from the displayed size and persists the result.
   const gripBox = await page.locator(".ed-resize--se").boundingBox();
   expect(gripBox).not.toBeNull();
   const gripCenterX = gripBox!.x + gripBox!.width / 2;
@@ -1230,12 +1097,6 @@ test("a 1366x800 resize persists, clamps the drag and survives reload", async ({
   expect(Math.round(resizedReloaded!.height)).toBe(696 - 100);
 });
 
-/**
- * floatingShadow resolves the shared elevation tokens in the browser and
- * reports the window's computed shadow. The token is resolved through a probe
- * element so the assertion compares computed values rather than the raw
- * custom-property text.
- */
 async function floatingShadow(
   page: Page,
   selector: string,
@@ -1267,7 +1128,6 @@ async function floatingShadow(
   }, selector);
 }
 
-/** updateEditorSettings patches the live editor preferences store. */
 async function updateEditorSettings(
   page: Page,
   patch: Record<string, unknown>,
@@ -1297,8 +1157,6 @@ test("the editor window floats on the soft elevation shadow in both themes", asy
   const editorWindow = page.locator(".ed-window");
   await expect(editorWindow).toBeVisible();
 
-  // Dark editor theme: the window paints the dedicated floating elevation,
-  // not the compact raised shadow the smaller popovers use.
   const dark = await floatingShadow(page, ".ed-window");
   expect(dark.expected).not.toBe("none");
   expect(dark.actual).toBe(dark.expected);
@@ -1311,8 +1169,6 @@ test("the editor window floats on the soft elevation shadow in both themes", asy
   await expect.poll(editorBackground).toBe("rgb(30, 31, 34)");
   const darkBox = await editorWindow.boundingBox();
 
-  // The light editor theme only repaints the code surface: the lift and the
-  // window geometry stay identical, so the shadow never shifts the layout.
   await updateEditorSettings(page, { theme: "light" });
   await expect.poll(editorBackground).toBe("rgb(242, 243, 245)");
   const light = await floatingShadow(page, ".ed-window");
@@ -1323,8 +1179,6 @@ test("the editor window floats on the soft elevation shadow in both themes", asy
   expect(Math.round(lightBox!.width)).toBe(Math.round(darkBox!.width));
   expect(Math.round(lightBox!.height)).toBe(Math.round(darkBox!.height));
 
-  // A 390px phone keeps the same lift, the window inside the viewport and no
-  // horizontal document overflow.
   await page.setViewportSize({ width: 390, height: 844 });
   const phone = await floatingShadow(page, ".ed-window");
   expect(phone.actual).toBe(phone.expected);
@@ -1357,7 +1211,6 @@ test("the Close control closes every tab, guarding dirty buffers", async ({
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  // Two open tabs, the active one dirty.
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await minimizeEditor(page);
@@ -1369,20 +1222,17 @@ test("the Close control closes every tab, guarding dirty buffers", async ({
   await page.keyboard.type("# changed");
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 
-  // Close-all asks first and lists the unsaved file by path.
   await page.locator(".ed-window-close").click();
   const dialog = page.locator(".n-modal.files-editor-close-modal");
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("Close all files?");
   await expect(dialog.locator(".ed-unsaved")).toContainText("notes.md");
 
-  // Cancel keeps the whole editor and its buffer.
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(page.locator(".ed-window")).toBeVisible();
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 
-  // Discard and close removes the editor and its rail icon entirely.
   await page.locator(".ed-window-close").click();
   await dialog
     .getByRole("button", { name: "Discard and close", exact: true })
@@ -1390,7 +1240,6 @@ test("the Close control closes every tab, guarding dirty buffers", async ({
   await expect(page.locator(".ed-window")).toHaveCount(0);
   await expect(page.locator(".rail-btn--editor")).toHaveCount(0);
 
-  // A clean buffer closes at once, with no confirmation dialog.
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await page.locator(".ed-window-close").click();
@@ -1398,11 +1247,6 @@ test("the Close control closes every tab, guarding dirty buffers", async ({
   await expect(page.locator(".ed-window")).toHaveCount(0);
 });
 
-/**
- * TOOLBAR_LABELS lists the editor toolbar actions in DOM (and therefore Tab)
- * order, per locale. The Settings trigger lives in a child component; its
- * accessible name is the one asserted here.
- */
 const TOOLBAR_LABELS: Record<string, string[]> = {
   en: ["Wrap", "Find / replace", "Go to line", "Settings", "History", "Save all", "Save"],
   vi: ["Ngắt dòng", "Tìm / thay thế", "Đi tới dòng", "Cài đặt", "Lịch sử", "Lưu tất cả", "Lưu"],
@@ -1410,19 +1254,12 @@ const TOOLBAR_LABELS: Record<string, string[]> = {
 
 interface ToolbarCase {
   viewport: { width: number; height: number };
-  /** Persisted editor window width; omitted keeps the fitted default. */
   windowWidth?: number;
   locale: "en" | "vi";
   explorer: boolean;
-  /** Number of mocked revisions, so the History tooltip carries a count. */
   historyVersions?: number;
 }
 
-/**
- * TOOLBAR_CASES covers the widths JUS-286 measured: the fitted default on a
- * 1366px screen, the reported ~830px window, the 480px minimum, and the two
- * phone viewports, each with the explorer open and closed in both locales.
- */
 const TOOLBAR_CASES: ToolbarCase[] = [
   { viewport: { width: 1366, height: 844 }, locale: "en", explorer: true },
   { viewport: { width: 1366, height: 844 }, locale: "vi", explorer: true },
@@ -1434,13 +1271,10 @@ const TOOLBAR_CASES: ToolbarCase[] = [
   { viewport: { width: 1366, height: 844 }, windowWidth: 480, locale: "vi", explorer: true },
   { viewport: { width: 1366, height: 844 }, windowWidth: 480, locale: "en", explorer: false },
   { viewport: { width: 1366, height: 844 }, windowWidth: 480, locale: "vi", explorer: false },
-  // Straddle the 320px editor-column breakpoint: 570px of window leaves a
-  // 308px column (labels hidden), 600px leaves 338px (labels visible).
   { viewport: { width: 1366, height: 844 }, windowWidth: 570, locale: "en", explorer: true },
   { viewport: { width: 1366, height: 844 }, windowWidth: 600, locale: "en", explorer: true },
 ];
 
-/** MOBILE_TOOLBAR_CASES are the fitted window on the two phone viewports. */
 const MOBILE_TOOLBAR_CASES: ToolbarCase[] = [
   { viewport: { width: 480, height: 844 }, locale: "en", explorer: true },
   { viewport: { width: 480, height: 844 }, locale: "vi", explorer: true },
@@ -1452,7 +1286,6 @@ const MOBILE_TOOLBAR_CASES: ToolbarCase[] = [
   { viewport: { width: 390, height: 844 }, locale: "vi", explorer: false },
 ];
 
-/** seedToolbarPreferences pins the locale and the persisted window geometry. */
 async function seedToolbarPreferences(
   page: Page,
   locale: string,
@@ -1482,7 +1315,6 @@ async function seedToolbarPreferences(
   );
 }
 
-/** openToolbarCase opens app.yaml at the case geometry and explorer state. */
 async function openToolbarCase(page: Page, testCase: ToolbarCase): Promise<void> {
   await page.setViewportSize(testCase.viewport);
   await seedToolbarPreferences(page, testCase.locale, testCase.windowWidth);
@@ -1496,17 +1328,9 @@ async function openToolbarCase(page: Page, testCase: ToolbarCase): Promise<void>
     await toggle.click();
   }
   await expect(toggle).toHaveAttribute("aria-pressed", String(testCase.explorer));
-  // Let the wrap/container-query layout settle before measuring.
   await expect(page.locator(".ed-toolbar")).toBeVisible();
 }
 
-/**
- * toolbarGeometry reports, for every toolbar button: its box, its own
- * content overflow, whether its visible label is hidden, and whether its
- * centre point is hit-testable. It also reports the editor column width (the
- * container-query input), the toolbar's content right edge and the right edge
- * of the Save group.
- */
 async function toolbarGeometry(page: Page): Promise<{
   windowRight: number;
   editorColumnWidth: number;
@@ -1543,8 +1367,6 @@ async function toolbarGeometry(page: Page): Promise<{
       const content = button.querySelector<HTMLElement>(".n-button__content");
       const labelWidth = content?.getBoundingClientRect().width ?? 0;
       return {
-        // The accessible name is the aria-label; an icon-only control has no
-        // text content to fall back to (JUS-286 fix round 1).
         name: button.getAttribute("aria-label") ?? "",
         ariaLabel: button.getAttribute("aria-label"),
         left: box.left,
@@ -1570,24 +1392,19 @@ async function toolbarGeometry(page: Page): Promise<{
   });
 }
 
-/** EDITOR_COLUMN_BREAKPOINT mirrors the @container query in FilesEditor.vue. */
 const EDITOR_COLUMN_BREAKPOINT = 320;
 
-/** assertToolbarActionsFit is the JUS-286 acceptance proof for one case. */
 async function assertToolbarActionsFit(page: Page, testCase: ToolbarCase): Promise<void> {
   const label = `${testCase.viewport.width}px viewport, ${testCase.locale}, ${
     testCase.windowWidth ? `${testCase.windowWidth}px window, ` : ""
   }explorer ${testCase.explorer ? "open" : "closed"}`;
   const geometry = await toolbarGeometry(page);
 
-  // The toolbar itself never overflows its column: no clipped row.
   expect(
     geometry.toolbar.scrollWidth,
     `${label}: toolbar scrollWidth`,
   ).toBeLessThanOrEqual(geometry.toolbar.clientWidth + 1);
 
-  // Every action exists, in Tab order, with a non-empty aria-label. The name
-  // comes from the attribute, not the (sometimes hidden) text content.
   for (const action of geometry.actions) {
     expect(action.ariaLabel, `${label}: action aria-label`).toBeTruthy();
   }
@@ -1596,9 +1413,6 @@ async function assertToolbarActionsFit(page: Page, testCase: ToolbarCase): Promi
     `${label}: actions`,
   ).toEqual(TOOLBAR_LABELS[testCase.locale]);
 
-  // The labels are hidden exactly when the editor column is at or below the
-  // container-query breakpoint; above it they are visible. This pins the
-  // breakpoint value, not just the icon-only rendering.
   const labelsHidden = geometry.editorColumnWidth <= EDITOR_COLUMN_BREAKPOINT;
   for (const action of geometry.actions) {
     expect(
@@ -1607,16 +1421,12 @@ async function assertToolbarActionsFit(page: Page, testCase: ToolbarCase): Promi
     ).toBe(labelsHidden);
   }
 
-  // The Save group rides the right edge of its row: its right edge equals the
-  // toolbar content edge. Dropping margin-left:auto breaks this.
   expect(geometry.actionsGroupRight, `${label}: save group`).not.toBeNull();
   expect(
     Math.abs(geometry.actionsGroupRight! - geometry.toolbarRight),
     `${label}: save group right-aligned`,
   ).toBeLessThanOrEqual(1);
 
-  // No action's right edge escapes the window frame, and none is clipped or
-  // covered: elementFromPoint at its centre resolves to the action itself.
   for (const action of geometry.actions) {
     expect(action.right, `${label}: ${action.name} right edge`).toBeLessThanOrEqual(
       geometry.windowRight + 0.5,
@@ -1650,10 +1460,6 @@ test("every editor toolbar action stays reachable on phone viewports", async ({
   }
 });
 
-/**
- * ToolbarTabStop is one Tab stop inside the editor toolbar as the browser
- * resolved it: accessible name, focus-visible state and computed focus ring.
- */
 interface ToolbarTabStop {
   name: string;
   focusVisible: boolean;
@@ -1661,10 +1467,6 @@ interface ToolbarTabStop {
   outlineWidth: number;
 }
 
-/**
- * nextToolbarTabStop presses Tab once and reports the newly focused toolbar
- * button's name and visible focus ring (the global :focus-visible outline).
- */
 async function nextToolbarTabStop(page: Page): Promise<ToolbarTabStop> {
   await page.keyboard.press("Tab");
   return page.evaluate(() => {
@@ -1693,8 +1495,6 @@ test("icon-only toolbar buttons keep tooltips, Tab order and a visible focus rin
   };
   await openToolbarCase(page, testCase);
 
-  // A dirty buffer enables Save and Save all, so all seven actions are
-  // focusable and hoverable (the disabled pair would swallow both).
   await page.locator(".cm-content").click();
   await page.keyboard.type("#");
   await expect(page.locator(".ed-dot")).toHaveCount(1);
@@ -1702,8 +1502,6 @@ test("icon-only toolbar buttons keep tooltips, Tab order and a visible focus rin
   expect(geometry.editorColumnWidth).toBeLessThanOrEqual(EDITOR_COLUMN_BREAKPOINT);
   expect(geometry.actions.every((action) => action.labelHidden)).toBe(true);
 
-  // The labels are gone, so each icon needs its JUS-156 tooltip. Hover and
-  // keyboard focus both open it, with the same copy as the aria-label.
   const tooltip = page.locator(".app-tooltip-content");
   const saveAll = page.locator(".ed-toolbar .n-button").nth(5);
   await saveAll.hover();
@@ -1718,12 +1516,9 @@ test("icon-only toolbar buttons keep tooltips, Tab order and a visible focus rin
     expect(stop.focusVisible, `Tab stop ${index + 1} focus-visible`).toBe(true);
     expect(stop.outlineStyle, `Tab stop ${index + 1} outline`).toBe("solid");
     expect(stop.outlineWidth, `Tab stop ${index + 1} outline width`).toBeGreaterThanOrEqual(2);
-    // The keyboard-focused icon shows its tooltip too.
     await expect(tooltip, `Tab stop ${index + 1} tooltip`).toHaveText(name);
   }
 
-  // Wrapping the trigger in a tooltip must not break the settings popover or
-  // its focus return, whichever way the popover closes.
   const settingsButton = page.locator(".ed-toolbar .n-button[aria-label='Settings']");
   await settingsButton.click();
   await expect(page.locator(".ed-settings")).toBeVisible();
@@ -1733,7 +1528,6 @@ test("icon-only toolbar buttons keep tooltips, Tab order and a visible focus rin
 
   await settingsButton.click();
   await expect(page.locator(".ed-settings")).toBeVisible();
-  // Click the toolbar's own padding: outside the popover, inside the window.
   await page.locator(".ed-toolbar").click({ position: { x: 2, y: 2 } });
   await expect(page.locator(".ed-settings")).toBeHidden();
   await expect(settingsButton).toBeFocused();
@@ -1764,8 +1558,6 @@ test("the History tooltip keeps the revision count when the label is hidden", as
     const historyName = TOOLBAR_LABELS[testCase.locale][4];
     const history = page.locator(`.ed-toolbar .n-button[aria-label="${historyName}"]`);
 
-    // The narrow layout hides the label and the count badge; the count must
-    // survive in the tooltip (and its aria-describedby description).
     expect((await toolbarGeometry(page)).actions[4].labelHidden).toBe(true);
     await history.hover();
     await expect(page.locator(".app-tooltip-content")).toHaveText(

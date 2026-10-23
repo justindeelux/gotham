@@ -7,7 +7,6 @@ import type { EditorDraftPrompt } from "@/features/files/composables/useEditorDr
 import { formatDateTime } from "@/shared/utils/format";
 
 interface Props {
-  /** prompt is the queued draft awaiting Restore / Discard. */
   prompt: EditorDraftPrompt | null;
 }
 

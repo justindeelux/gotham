@@ -22,7 +22,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// writeEntry is the entry a successful fake Write returns.
 func writeEntry() *agentv1.WriteResponse {
 	return &agentv1.WriteResponse{
 		Entry:     &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 2, Mode: 0o644, Etag: `"v2"`},
@@ -31,8 +30,6 @@ func writeEntry() *agentv1.WriteResponse {
 	}
 }
 
-// failReader yields some bytes then a read error, standing in for a client that
-// disconnects mid-upload.
 type failReader struct {
 	sent bool
 }
@@ -74,9 +71,6 @@ func TestWriteStreamsHeaderAndBody(t *testing.T) {
 	}
 }
 
-// TestWriteShortBodyNotCommitted proves a body shorter than the declared size is
-// refused and the agent stream is cancelled rather than closed, so the agent
-// never renames its staging file into place.
 func TestWriteShortBodyNotCommitted(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -98,8 +92,6 @@ func TestWriteShortBodyNotCommitted(t *testing.T) {
 	}
 }
 
-// TestWriteBodyErrorCancelsStream proves a request-body read error cancels the
-// agent stream so a partial upload is never committed.
 func TestWriteBodyErrorCancelsStream(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -121,9 +113,6 @@ func TestWriteBodyErrorCancelsStream(t *testing.T) {
 	}
 }
 
-// rejectingFileServer is a real gRPC FileService whose Write rejects the stream
-// at header time with a fixed status, standing in for an agent that refuses a
-// read-only root, an over-limit body or a low disk before reading any bytes.
 type rejectingFileServer struct {
 	agentv1.UnimplementedFileServiceServer
 	err error
@@ -133,10 +122,6 @@ func (s rejectingFileServer) Write(grpc.ClientStreamingServer[agentv1.WriteReque
 	return s.err
 }
 
-// startRejectingAgent serves rejectingFileServer over an in-memory bufconn
-// listener and returns a dialed client, so the test exercises real gRPC
-// semantics: Send surfaces io.EOF and the status is only available from
-// CloseAndRecv.
 func startRejectingAgent(t *testing.T, reject error) agentv1.FileServiceClient {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
@@ -164,12 +149,6 @@ func startRejectingAgent(t *testing.T, reject error) agentv1.FileServiceClient {
 	return agentv1.NewFileServiceClient(conn)
 }
 
-// TestWriteHeaderRejectionMapsAgentStatus is the fix-round-1 regression: when
-// the agent rejects the stream at header time, the client stream's Send returns
-// only io.EOF and the real status is available from CloseAndRecv. The service
-// must recover and map that status (403/400/413/507/429), not surface a raw
-// io.EOF that the route turns into a 500 — even with a body large enough that
-// the failure lands on a body chunk rather than the header.
 func TestWriteHeaderRejectionMapsAgentStatus(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -194,7 +173,7 @@ func TestWriteHeaderRejectionMapsAgentStatus(t *testing.T) {
 				Registry: registry,
 				Dial:     func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
 			})
-			const size = 4 << 20 // larger than the stream window, so a Send fails
+			const size = 4 << 20
 			body := strings.NewReader(strings.Repeat("x", size))
 			_, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), server.ID, WriteRequest{
 				Root: "volumes", Path: "a.txt", Size: size,
@@ -258,10 +237,6 @@ func TestWriteValidationBeforeDial(t *testing.T) {
 	}
 }
 
-// TestWriteRejectsBadEtagAndParentSegment is the fix-round-1 regression: an
-// If-Match that is not valid UTF-8 would fail proto.Marshal and surface as a
-// 500, and a ".." path segment should be refused cheaply on the control plane.
-// Both must be ErrValidation (400) before the agent is dialed.
 func TestWriteRejectsBadEtagAndParentSegment(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -421,9 +396,6 @@ func TestWriteRPCErrorMapping(t *testing.T) {
 	}
 }
 
-// TestAuditLogsActorAndNeverBody proves every audited op records the actor,
-// target and result, and that neither a file body nor a download ticket value
-// reaches the log.
 func TestAuditLogsActorAndNeverBody(t *testing.T) {
 	teamID := uuid.New()
 	userID := uuid.New()
@@ -480,8 +452,6 @@ func TestAuditDisabledAndUnavailableResults(t *testing.T) {
 	}
 }
 
-// TestChmod sends a mode to the agent and returns the re-stat-ed entry (the
-// wired ChmodResponse is empty, so the service stats the entry, as Copy does).
 func TestChmod(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -505,9 +475,6 @@ func TestChmod(t *testing.T) {
 	}
 }
 
-// TestChmodRejectsModeBitsBeforeDial proves setuid/setgid/sticky and any bit
-// above 0o777 are a 400 before the agent is dialed, so a bad mode never reaches
-// the node.
 func TestChmodRejectsModeBitsBeforeDial(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()

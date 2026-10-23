@@ -21,44 +21,24 @@ import (
 	"time"
 )
 
-// CA file names and validity windows.
 const (
 	caCertFile = "ca.crt"
 	caKeyFile  = "ca.key"
-	// hostsFile is the optional SAN host list `gotham ca init --host` persists
-	// next to the CA. serve reads it when GOTHAM_GRPC_HOSTS is unset.
-	hostsFile = "hosts"
+	hostsFile  = "hosts"
 
 	caValidity         = 10 * 365 * 24 * time.Hour
 	serverCertValidity = 365 * 24 * time.Hour
 	clientCertValidity = 365 * 24 * time.Hour
-	// agentCertValidity bounds a node leaf's exposure. There is no CRL yet
-	// (docs/TODO.md, LOW-4), so a shorter lifetime is the only revocation
-	// control; the agent re-registers well before it lapses.
-	agentCertValidity = 90 * 24 * time.Hour
+	agentCertValidity  = 90 * 24 * time.Hour
 
-	// maxNodeIDLength caps a registered node identity: the DNS name maximum
-	// (253 bytes), which is also ample for an IP literal.
 	maxNodeIDLength = 253
-	// maxCSRSANs caps how many subject alternative names a CSR may carry, so
-	// an unauthenticated caller cannot make the CP sign a certificate with an
-	// unbounded SAN set.
-	maxCSRSANs = 8
+	maxCSRSANs      = 8
 
 	caCommonName = "Gotham CA"
 
-	// ControlPlaneURI is the URI subject alternative name that marks a
-	// certificate as the control-plane *client* credential for the agent
-	// direction. A node leaf never carries it, so an agent listener can tell
-	// the two trust roles apart even though both chain to the same CA: the CP
-	// presents this identity when it dials an agent, and the agent accepts only
-	// this identity. The agent package keeps the same literal (it cannot import
-	// this one); a mismatch would fail the end-to-end dial test.
 	ControlPlaneURI = "spiffe://gotham/control-plane"
 )
 
-// controlPlaneURIParsed parses ControlPlaneURI once; it is a compile-time
-// constant so a malformed value is a programming error.
 var controlPlaneURIParsed = func() *url.URL {
 	u, err := url.Parse(ControlPlaneURI)
 	if err != nil {
@@ -67,20 +47,12 @@ var controlPlaneURIParsed = func() *url.URL {
 	return u
 }()
 
-// Authority is the control-plane certificate authority. It signs the mTLS
-// certificates agents present and the certificates the control plane uses for
-// its own gRPC listener and for dialing agents.
 type Authority struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
 	pem  []byte
 }
 
-// LoadAuthority loads an existing CA from dir. It returns (nil, nil) only when
-// no CA has been created yet, which signals the caller to fall back to an
-// insecure development listener. A directory holding exactly one of
-// ca.crt/ca.key is an incomplete CA and is refused: silently serving without
-// TLS because half the authority is missing would downgrade the channel.
 func LoadAuthority(dir string) (*Authority, error) {
 	if dir == "" {
 		return nil, errors.New("servers: ca dir is empty")
@@ -105,9 +77,6 @@ func LoadAuthority(dir string) (*Authority, error) {
 	}
 }
 
-// incompleteCAError describes a CA directory that has exactly one of its two
-// files. missingIsKey names whether the key (true) or the certificate (false)
-// is the missing half.
 func incompleteCAError(certPath, keyPath string, missingIsKey bool) error {
 	if missingIsKey {
 		return fmt.Errorf("servers: incomplete CA: %s exists but %s is missing; refusing to serve", certPath, keyPath)
@@ -115,10 +84,6 @@ func incompleteCAError(certPath, keyPath string, missingIsKey bool) error {
 	return fmt.Errorf("servers: incomplete CA: %s exists but %s is missing; refusing to serve", keyPath, certPath)
 }
 
-// LoadOrCreateAuthority loads the CA from dir, generating and persisting a new
-// self-signed CA (ECDSA P-256, 10 years) on first use. Files are written with
-// 0600 permissions. An existing-but-incomplete pair is refused rather than
-// overwritten, so a missing file cannot silently replace the CA.
 func LoadOrCreateAuthority(dir string) (*Authority, error) {
 	if dir == "" {
 		return nil, errors.New("servers: ca dir is empty")
@@ -144,14 +109,10 @@ func LoadOrCreateAuthority(dir string) (*Authority, error) {
 	}
 }
 
-// CACertPEM returns the PEM-encoded CA certificate.
 func (a *Authority) CACertPEM() []byte {
 	return a.pem
 }
 
-// SaveHosts persists the extra gRPC listener SAN hosts under dir, one per line,
-// so `gotham serve` keeps presenting the operator-declared names and IPs after
-// a restart. The file lives inside the 0700 CA directory.
 func SaveHosts(dir string, hosts []string) error {
 	if dir == "" {
 		return errors.New("servers: ca dir is empty")
@@ -171,8 +132,6 @@ func SaveHosts(dir string, hosts []string) error {
 	return writeFile(filepath.Join(dir, hostsFile), []byte(b.String()))
 }
 
-// LoadHosts reads the SAN host list persisted by SaveHosts. It returns nil when
-// the file (or the directory) does not exist.
 func LoadHosts(dir string) ([]string, error) {
 	if dir == "" {
 		return nil, nil
@@ -193,16 +152,8 @@ func LoadHosts(dir string) ([]string, error) {
 	return uniqueStrings(hosts), nil
 }
 
-// enrollmentTokenFile is the bootstrap credential `gotham serve` generates when
-// no GOTHAM_GRPC_ENROLLMENT_TOKEN is configured (JUS-194). It lives inside the
-// 0700 CA directory and is written 0600.
 const enrollmentTokenFile = "enrollment-token"
 
-// LoadOrCreateEnrollmentToken returns the persisted bootstrap enrollment token,
-// generating a random 256-bit one on first use. It exists so a TLS control plane
-// has a token by default (fail closed) instead of falling back to open
-// enrollment; the operator passes the same value to install-agent.sh (via
-// GOTHAM_AGENT_ENROLLMENT_TOKEN or --enrollment-token-file).
 func LoadOrCreateEnrollmentToken(dir string) (token, path string, err error) {
 	if dir == "" {
 		return "", "", errors.New("servers: ca dir is empty")
@@ -222,17 +173,12 @@ func LoadOrCreateEnrollmentToken(dir string) (token, path string, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", "", fmt.Errorf("create ca dir: %w", err)
 	}
-	// O_EXCL: two control-plane starts racing on a fresh CA must converge on one
-	// token, not each persist their own (the loser's in-memory token would no
-	// longer match the file).
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			if existing, readErr := readEnrollmentToken(path); readErr == nil && existing != "" {
 				return existing, path, nil
 			}
-			// The file exists but is empty (a botched earlier write): fill it in
-			// place rather than leave the instance without a token.
 			if writeErr := os.WriteFile(path, []byte(token+"\n"), 0o600); writeErr != nil {
 				return "", "", fmt.Errorf("write enrollment token: %w", writeErr)
 			}
@@ -252,10 +198,6 @@ func LoadOrCreateEnrollmentToken(dir string) (token, path string, err error) {
 	return token, path, nil
 }
 
-// readEnrollmentToken returns the persisted token, or "" when the file does not
-// exist. It refuses a symlink or a non-regular file and a token readable beyond
-// its owner: the value is a credential, and a group- or world-readable file is a
-// hard error rather than a warning.
 func readEnrollmentToken(path string) (string, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -277,38 +219,14 @@ func readEnrollmentToken(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// Pool returns a certificate pool containing the CA certificate, suitable for
-// verifying certificates signed by this authority.
 func (a *Authority) Pool() *x509.CertPool {
 	pool := x509.NewCertPool()
 	pool.AddCert(a.cert)
 	return pool
 }
 
-// nodeCertUsages is the extended key usage of a node identity certificate. One
-// leaf serves both directions of the agent channel: the control plane dials the
-// node as a server (Docker/Compose/File/Build services) and, since JUS-194, the
-// node dials the control plane as a mutual-TLS client.
 var nodeCertUsages = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
 
-// IssueAgentCertFromCSR verifies a PEM-encoded PKCS#10 CSR, checks that it is
-// bound to the enrolled node identity, and issues a mutual-TLS certificate
-// (90 days) for the public key it carries: serverAuth so the control plane can
-// dial the node's services, clientAuth so the node authenticates to the agent
-// channel.
-//
-// The certificate is issued for nodeID — the authenticated identity — and
-// never for the CSR's self-asserted SAN set: the CSR supplies only the public
-// key. A CSR whose common name, DNS SANs or IP SANs do not exactly match
-// nodeID, that carries a wildcard, or that carries an oversized SAN set is
-// rejected with an error wrapping ErrValidation.
-//
-// This binds a caller to one identity but does NOT prove ownership of it: the
-// node id is self-asserted on the bootstrap connection, so any caller can
-// enroll any *enrollable* id (the control-plane listener ids are refused
-// separately in Gateway.Register). A caller cannot obtain a certificate that is
-// valid for an identity other than the one it enrolled; it can still enroll
-// someone else's id until the LOW-4 bootstrap credential exists.
 func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte, error) {
 	nodeID = strings.TrimSpace(nodeID)
 	if err := validateNodeID(nodeID); err != nil {
@@ -325,7 +243,6 @@ func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte,
 
 	dns, ips := identitySANs(nodeID)
 	if nodeID == "localhost" {
-		// The agent must never receive a SAN accepted for the CP loopback listener.
 		dns = []string{localhostAgentServerName}
 	}
 	cert, err := a.sign(nodeID, dns, ips, nil, nodeCertUsages, agentCertValidity, csr.PublicKey)
@@ -335,16 +252,6 @@ func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte,
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), nil
 }
 
-// VerifyNodeClientCert verifies a certificate an agent presented on the mutual-
-// TLS agent channel: it must chain to this authority, be inside its validity
-// window and not be a CA. The extended key usage is deliberately NOT constrained
-// (x509.ExtKeyUsageAny): a leaf issued before mutual TLS carries only serverAuth,
-// and the gateway keeps accepting it until the node renews or the sunset date
-// (DefaultLegacyLeafDeadline) passes.
-//
-// It reports whether the leaf is legacy (serverAuth-only, no clientAuth), which
-// the gateway uses for the sunset decision, the operator's legible count and the
-// per-accept warning.
 func (a *Authority) VerifyNodeClientCert(cert *x509.Certificate) (legacy bool, err error) {
 	if cert == nil {
 		return false, errors.New("servers: no client certificate presented")
@@ -352,8 +259,6 @@ func (a *Authority) VerifyNodeClientCert(cert *x509.Certificate) (legacy bool, e
 	if cert.IsCA {
 		return false, errors.New("servers: a CA certificate is not a node credential")
 	}
-	// The control-plane client credential is a different trust role: it must
-	// never authenticate as a node on the gateway (JUS-194 fix round 1).
 	if hasControlPlaneURI(cert) {
 		return false, errors.New("servers: a control-plane client certificate is not a node credential")
 	}
@@ -366,8 +271,6 @@ func (a *Authority) VerifyNodeClientCert(cert *x509.Certificate) (legacy bool, e
 	return !hasClientAuthUsage(cert), nil
 }
 
-// hasClientAuthUsage reports whether a leaf declares the clientAuth extended key
-// usage (a dual-EKU leaf does; a pre-mTLS serverAuth-only leaf does not).
 func hasClientAuthUsage(cert *x509.Certificate) bool {
 	for _, usage := range cert.ExtKeyUsage {
 		if usage == x509.ExtKeyUsageClientAuth || usage == x509.ExtKeyUsageAny {
@@ -377,17 +280,8 @@ func hasClientAuthUsage(cert *x509.Certificate) bool {
 	return false
 }
 
-// DefaultLegacyLeafDeadline is the default date after which the gateway stops
-// accepting a pre-mutual-TLS (serverAuth-only) node leaf, which the M5 sunset
-// requires. The 90-day agent leaf means every node that is online has renewed
-// long before it; the date is a hard stop, not a hint. Override with
-// GOTHAM_GRPC_LEGACY_LEAF_UNTIL (RFC 3339, or "none" to disable the sunset).
 const DefaultLegacyLeafDeadline = "2027-01-15T00:00:00Z"
 
-// ParseLegacyLeafDeadline resolves the configured sunset date. An empty value
-// selects DefaultLegacyLeafDeadline; "none"/"off" disables the sunset (the
-// operator explicitly accepts it); a malformed value is an error rather than a
-// silent default, so a typo cannot extend the legacy window unnoticed.
 func ParseLegacyLeafDeadline(raw string) (time.Time, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
@@ -402,8 +296,6 @@ func ParseLegacyLeafDeadline(raw string) (time.Time, error) {
 	return deadline, nil
 }
 
-// hasControlPlaneURI reports whether cert carries the control-plane client URI
-// SAN (ControlPlaneURI).
 func hasControlPlaneURI(cert *x509.Certificate) bool {
 	for _, uri := range cert.URIs {
 		if uri != nil && uri.String() == ControlPlaneURI {
@@ -413,10 +305,6 @@ func hasControlPlaneURI(cert *x509.Certificate) bool {
 	return false
 }
 
-// NodeKeyFingerprint returns a stable fingerprint of a public key (the SHA-256
-// of its PKIX encoding, hex). The control plane records it to bind an enrolled
-// node to exactly one key pair, so a certificate for another node's key can
-// never act as this node.
 func NodeKeyFingerprint(pub crypto.PublicKey) (string, error) {
 	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
@@ -426,9 +314,6 @@ func NodeKeyFingerprint(pub crypto.PublicKey) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// CSRKeyFingerprint returns the fingerprint of the public key a PEM CSR carries,
-// so registration can check that a renewal signs for the same key the node
-// already authenticated with.
 func CSRKeyFingerprint(csrPEM []byte) (string, error) {
 	csr, err := parseCSR(csrPEM)
 	if err != nil {
@@ -437,9 +322,6 @@ func CSRKeyFingerprint(csrPEM []byte) (string, error) {
 	return NodeKeyFingerprint(csr.PublicKey)
 }
 
-// validateNodeID rejects node identities that are unusable or hostile: empty,
-// over-long, or carrying a wildcard or path/whitespace characters. It is the
-// shared gate for registration and CSR binding.
 func validateNodeID(nodeID string) error {
 	if nodeID == "" {
 		return fmt.Errorf("%w: node_id is required", ErrValidation)
@@ -453,8 +335,6 @@ func validateNodeID(nodeID string) error {
 	return nil
 }
 
-// identitySANs returns the SANs a node certificate is issued with: the node id
-// as a DNS name and, when it parses as an IP address, an IP SAN as well.
 func identitySANs(nodeID string) ([]string, []net.IP) {
 	dns := []string{nodeID}
 	if ip := net.ParseIP(nodeID); ip != nil {
@@ -463,10 +343,6 @@ func identitySANs(nodeID string) ([]string, []net.IP) {
 	return dns, nil
 }
 
-// verifyCSRBinding rejects a CSR that is not bound to nodeID: a different or
-// missing common name, a wildcard, any extra/foreign SAN, or an oversized SAN
-// set. A caller that controls one node id therefore cannot obtain a
-// certificate valid for a different host.
 func verifyCSRBinding(csr *x509.CertificateRequest, nodeID string) error {
 	commonName := strings.TrimSpace(csr.Subject.CommonName)
 	if commonName == "" {
@@ -502,12 +378,10 @@ func verifyCSRBinding(csr *x509.CertificateRequest, nodeID string) error {
 	return nil
 }
 
-// isWildcardName reports whether a DNS name is a wildcard.
 func isWildcardName(name string) bool {
 	return name == "*" || strings.HasPrefix(name, "*.")
 }
 
-// parseCSR decodes and verifies a PEM-encoded PKCS#10 certificate request.
 func parseCSR(csrPEM []byte) (*x509.CertificateRequest, error) {
 	if len(csrPEM) == 0 {
 		return nil, fmt.Errorf("%w: csr is required", ErrValidation)
@@ -526,10 +400,6 @@ func parseCSR(csrPEM []byte) (*x509.CertificateRequest, error) {
 	return csr, nil
 }
 
-// uniqueStrings returns s with surrounding spaces trimmed and blank entries and
-// duplicates removed, order preserved. Trimming matters for operator input such
-// as GOTHAM_GRPC_HOSTS="cp.example.com, 203.0.113.10": a padded entry would
-// otherwise become a SAN that matches nothing.
 func uniqueStrings(s []string) []string {
 	var out []string
 	for _, item := range s {
@@ -542,7 +412,6 @@ func uniqueStrings(s []string) []string {
 	return out
 }
 
-// containsString reports whether s contains item.
 func containsString(s []string, item string) bool {
 	for _, existing := range s {
 		if existing == item {
@@ -552,8 +421,6 @@ func containsString(s []string, item string) bool {
 	return false
 }
 
-// IssueServerCert issues the control plane's own server certificate for the
-// gRPC listener, returning the certificate and private key as PEM.
 func (a *Authority) IssueServerCert(hosts []string) (certPEM, keyPEM []byte, err error) {
 	if len(hosts) == 0 {
 		hosts = []string{"localhost"}
@@ -565,10 +432,6 @@ func (a *Authority) IssueServerCert(hosts []string) (certPEM, keyPEM []byte, err
 	return leafPEM(cert, key)
 }
 
-// IssueClientCert issues the control-plane client credential the CP presents
-// when dialing an agent. It carries the ControlPlaneURI identity (plus the
-// legacy common name and DNS SAN), so an agent can require exactly this role
-// and reject a node leaf that chains to the same CA.
 func (a *Authority) IssueClientCert(name string) (certPEM, keyPEM []byte, err error) {
 	if name == "" {
 		name = "gotham-control-plane"
@@ -580,7 +443,6 @@ func (a *Authority) IssueClientCert(name string) (certPEM, keyPEM []byte, err er
 	return leafPEM(cert, key)
 }
 
-// issue generates a leaf keypair and certificate signed by the CA.
 func (a *Authority) issue(commonName string, dns []string, ips []net.IP, uris []*url.URL, usages []x509.ExtKeyUsage, validity time.Duration) (*ecdsa.PrivateKey, *x509.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -593,7 +455,6 @@ func (a *Authority) issue(commonName string, dns []string, ips []net.IP, uris []
 	return key, cert, nil
 }
 
-// sign builds a leaf certificate for pub and signs it with the CA key.
 func (a *Authority) sign(commonName string, dns []string, ips []net.IP, uris []*url.URL, usages []x509.ExtKeyUsage, validity time.Duration, pub crypto.PublicKey) (*x509.Certificate, error) {
 	serial, err := randomSerial()
 	if err != nil {
@@ -625,7 +486,6 @@ func (a *Authority) sign(commonName string, dns []string, ips []net.IP, uris []*
 	return cert, nil
 }
 
-// createAuthority generates and persists a fresh self-signed CA.
 func createAuthority(dir, certPath, keyPath string) (*Authority, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -675,7 +535,6 @@ func createAuthority(dir, certPath, keyPath string) (*Authority, error) {
 	return &Authority{cert: cert, key: key, pem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}, nil
 }
 
-// loadAuthority reads and parses a persisted CA.
 func loadAuthority(certPath, keyPath string) (*Authority, error) {
 	if err := checkCAKeyPermissions(keyPath); err != nil {
 		return nil, err
@@ -712,12 +571,6 @@ func loadAuthority(certPath, keyPath string) (*Authority, error) {
 	return &Authority{cert: cert, key: key, pem: certPEM}, nil
 }
 
-// checkCAKeyPermissions refuses a CA private key readable beyond its owner. The
-// CA signs every agent certificate; a group- or world-readable key lets a local
-// user mint certificates for any node, so a loose mode is a hard error rather
-// than a warning. The check is a Stat-then-ReadFile, so a local attacker who can
-// already write the CA directory could swap the file between the two; that
-// attacker can read the key regardless, so the TOCTOU is not a material risk.
 func checkCAKeyPermissions(keyPath string) error {
 	info, err := os.Stat(keyPath)
 	if err != nil {
@@ -729,7 +582,6 @@ func checkCAKeyPermissions(keyPath string) error {
 	return nil
 }
 
-// leafPEM encodes a leaf certificate and its key as PEM.
 func leafPEM(cert *x509.Certificate, key *ecdsa.PrivateKey) (certPEM, keyPEM []byte, err error) {
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
@@ -740,7 +592,6 @@ func leafPEM(cert *x509.Certificate, key *ecdsa.PrivateKey) (certPEM, keyPEM []b
 	return certPEM, keyPEM, nil
 }
 
-// randomSerial returns a random 128-bit certificate serial number.
 func randomSerial() (*big.Int, error) {
 	limit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serial, err := rand.Int(rand.Reader, limit)
@@ -750,7 +601,6 @@ func randomSerial() (*big.Int, error) {
 	return serial, nil
 }
 
-// ipSANs returns the subset of hosts that parse as IP addresses.
 func ipSANs(hosts ...string) []net.IP {
 	var ips []net.IP
 	for _, host := range hosts {
@@ -761,7 +611,6 @@ func ipSANs(hosts ...string) []net.IP {
 	return ips
 }
 
-// writeFile writes data atomically with 0600 permissions.
 func writeFile(path string, data []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
@@ -773,11 +622,6 @@ func writeFile(path string, data []byte) error {
 	return nil
 }
 
-// fileState reports whether path is an existing regular file. A path that
-// cannot be stat'd for any reason other than "does not exist" — a permission
-// error, an I/O error, or a directory sitting where a file belongs — is an
-// error: treating it as "absent" is what would let a broken CA load as a
-// plaintext listener.
 func fileState(path string) (bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {

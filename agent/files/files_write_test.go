@@ -25,8 +25,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// scriptedWriteStream feeds a fixed request sequence to a client-streaming
-// Write and captures the response, without a transport.
 type scriptedWriteStream struct {
 	grpc.ServerStream
 	msgs []*agentv1.WriteRequest
@@ -50,7 +48,6 @@ func (s *scriptedWriteStream) SendAndClose(resp *agentv1.WriteResponse) error {
 
 func (s *scriptedWriteStream) Context() context.Context { return context.Background() }
 
-// collectProgressStream implements a server-streaming Copy/Delete.
 type collectProgressStream struct {
 	grpc.ServerStream
 	sent []*agentv1.Progress
@@ -73,7 +70,6 @@ func (s *collectProgressStream) done() bool {
 	return len(s.sent) > 0 && s.sent[len(s.sent)-1].GetDone()
 }
 
-// writeStream builds a Write message sequence for body.
 func writeStream(root, path string, size int64, expect string, overwrite bool, mode uint32, body []byte) *scriptedWriteStream {
 	msgs := []*agentv1.WriteRequest{{
 		Part: &agentv1.WriteRequest_Header{Header: &agentv1.WriteHeader{
@@ -88,7 +84,6 @@ func writeStream(root, path string, size int64, expect string, overwrite bool, m
 	return &scriptedWriteStream{msgs: msgs}
 }
 
-// write sends a complete body and returns the response.
 func write(t *testing.T, server *FileServer, root, path string, expect string, overwrite bool, body []byte) (*agentv1.WriteResponse, error) {
 	t.Helper()
 	stream := writeStream(root, path, int64(len(body)), expect, overwrite, 0o644, body)
@@ -122,7 +117,6 @@ func TestFileServerWriteCreateAndReplace(t *testing.T) {
 		t.Fatalf("create response = %+v", first)
 	}
 
-	// Replacing with the etag we just read succeeds and is not a create.
 	second, err := write(t, server, RootVolumes, "note.txt", first.GetEntry().GetEtag(), false, []byte("two-two"))
 	if err != nil {
 		t.Fatalf("replace: %v", err)
@@ -170,11 +164,9 @@ func TestFileServerWriteOverwriteRefusalAndForce(t *testing.T) {
 	if _, err := write(t, server, RootVolumes, "x.txt", "", false, []byte("a")); err != nil {
 		t.Fatal(err)
 	}
-	// An empty expect_etag means exclusive create, so an existing target is a conflict.
 	if _, err := write(t, server, RootVolumes, "x.txt", "", false, []byte("b")); status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("no-overwrite replace = %v, want AlreadyExists", err)
 	}
-	// overwrite=true forces the replace without an etag.
 	if _, err := write(t, server, RootVolumes, "x.txt", "", true, []byte("c")); err != nil {
 		t.Fatalf("forced replace: %v", err)
 	}
@@ -206,7 +198,6 @@ func TestFileServerWriteTruncatedLeavesTargetClean(t *testing.T) {
 	if _, err := write(t, server, RootVolumes, "x.txt", "", false, []byte("original")); err != nil {
 		t.Fatal(err)
 	}
-	// A short stream: the header declares 100 bytes, the body carries 3.
 	stream := &scriptedWriteStream{msgs: []*agentv1.WriteRequest{
 		{Part: &agentv1.WriteRequest_Header{Header: &agentv1.WriteHeader{Root: RootVolumes, Path: "x.txt", Size: 100, Overwrite: true}}},
 		{Part: &agentv1.WriteRequest_Data{Data: []byte("bad")}},
@@ -220,7 +211,6 @@ func TestFileServerWriteTruncatedLeavesTargetClean(t *testing.T) {
 	}
 	assertNoTempFiles(t, root)
 
-	// A create that fails partway must leave no file at all.
 	stream = &scriptedWriteStream{msgs: []*agentv1.WriteRequest{
 		{Part: &agentv1.WriteRequest_Header{Header: &agentv1.WriteHeader{Root: RootVolumes, Path: "new.txt", Size: 100}}},
 		{Part: &agentv1.WriteRequest_Data{Data: []byte("bad")}},
@@ -245,7 +235,6 @@ func TestFileServerWriteCommitDigest(t *testing.T) {
 	if err := server.Write(bad); status.Code(err) != codes.Aborted {
 		t.Fatalf("bad digest = %v, want Aborted", err)
 	}
-	// ba7816bf... is sha256("abc").
 	good := &scriptedWriteStream{msgs: []*agentv1.WriteRequest{
 		{Part: &agentv1.WriteRequest_Header{Header: &agentv1.WriteHeader{Root: RootVolumes, Path: "d.txt", Size: 3}}},
 		{Part: &agentv1.WriteRequest_Data{Data: []byte("abc")}},
@@ -296,7 +285,6 @@ func TestFileServerWriteInPlaceKeepsInode(t *testing.T) {
 	}
 }
 
-// etagOf returns the current etag of a file through the Stat RPC.
 func etagOf(t *testing.T, server *FileServer, rel string) string {
 	t.Helper()
 	resp, err := server.Stat(context.Background(), &agentv1.StatRequest{Root: RootVolumes, Path: rel})
@@ -409,7 +397,6 @@ func TestFileServerRename(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "b.txt")); err != nil {
 		t.Fatalf("renamed file missing: %v", err)
 	}
-	// Refuse overwriting the existing destination without overwrite.
 	if _, err := write(t, server, RootVolumes, "c.txt", "", false, []byte("c")); err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +411,6 @@ func TestFileServerRename(t *testing.T) {
 func TestFileServerCopyAndDelete(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
-	// Build a tree to copy: dir/{file, link}.
 	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: RootVolumes, Path: "src"}); err != nil {
 		t.Fatal(err)
 	}
@@ -449,11 +435,9 @@ func TestFileServerCopyAndDelete(t *testing.T) {
 	if err != nil || target != "file.txt" {
 		t.Fatalf("copied symlink = %q, %v; want file.txt", target, err)
 	}
-	// Copy into the source's own subtree is refused.
 	if err := server.Copy(&agentv1.CopyRequest{Root: RootVolumes, Source: "src", Destination: "src/inside"}, &collectProgressStream{}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("copy into itself = %v, want InvalidArgument", err)
 	}
-	// Refuse overwriting an existing destination (a dir or a file).
 	if err := server.Copy(&agentv1.CopyRequest{Root: RootVolumes, Source: "src/file.txt", Destination: "dst/file.txt"}, &collectProgressStream{}); status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("copy over an existing file = %v, want AlreadyExists", err)
 	}
@@ -461,7 +445,6 @@ func TestFileServerCopyAndDelete(t *testing.T) {
 		t.Fatalf("copy over an existing dir = %v, want AlreadyExists", err)
 	}
 
-	// A non-recursive delete of a non-empty directory is a failed precondition.
 	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "dst"}, &collectProgressStream{}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("non-recursive delete of a non-empty dir = %v, want FailedPrecondition", err)
 	}
@@ -502,7 +485,6 @@ func TestFileServerProtectsAppDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, appID)); err != nil {
 		t.Fatalf("the app dir was removed: %v", err)
 	}
-	// Its children are still editable, and a non-UUID directory is not protected.
 	if _, err := write(t, server, RootVolumes, appID+"/inside.txt", "", false, []byte("ok")); err != nil {
 		t.Fatalf("writing inside an app dir: %v", err)
 	}
@@ -524,15 +506,11 @@ func TestFileServerWriteRejectsSpecialTarget(t *testing.T) {
 	if err := unix.Mkfifo(fifo, 0o600); err != nil {
 		t.Skipf("mkfifo: %v", err)
 	}
-	// expect_etag set so it tries to replace the existing special file.
 	if _, err := write(t, server, RootVolumes, "pipe", `"x"`, true, []byte("data")); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("write to a FIFO = %v, want FailedPrecondition", err)
 	}
 }
 
-// TestFileServerWriteRejectsSymlinkTarget proves a write refuses to replace a
-// symlink even when the link points inside the root, keeping the write path
-// limited to regular files.
 func TestFileServerWriteRejectsSymlinkTarget(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -551,8 +529,6 @@ func TestFileServerWriteRejectsSymlinkTarget(t *testing.T) {
 	}
 }
 
-// TestFileServiceWriteOverGRPC exercises the Write RPC over a real transport,
-// so the client-streaming wiring, not just the method, is covered.
 func TestFileServiceWriteOverGRPC(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -587,8 +563,6 @@ func TestFileServiceWriteOverGRPC(t *testing.T) {
 	}
 }
 
-// blockingWriteStream returns a header, then blocks the next Recv until the
-// test releases it, standing in for a peer that stalls mid-upload.
 type blockingWriteStream struct {
 	grpc.ServerStream
 	header  *agentv1.WriteHeader
@@ -609,9 +583,6 @@ func (s *blockingWriteStream) SendAndClose(*agentv1.WriteResponse) error { retur
 
 func (s *blockingWriteStream) Context() context.Context { return context.Background() }
 
-// TestFileServerWriteStaleEtagIgnoresOverwrite pins finding 5: a supplied etag
-// that no longer matches is a failed precondition even when overwrite is set,
-// so a stale save can never silently clobber a newer file.
 func TestFileServerWriteStaleEtagIgnoresOverwrite(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -625,7 +596,6 @@ func TestFileServerWriteStaleEtagIgnoresOverwrite(t *testing.T) {
 	if string(got) != "original" {
 		t.Fatalf("content = %q, want the original", got)
 	}
-	// A matching etag with overwrite still replaces.
 	etag := etagOf(t, server, "x.txt")
 	if _, err := write(t, server, RootVolumes, "x.txt", etag, true, []byte("replaced")); err != nil {
 		t.Fatalf("matching etag with overwrite: %v", err)
@@ -635,10 +605,6 @@ func TestFileServerWriteStaleEtagIgnoresOverwrite(t *testing.T) {
 	}
 }
 
-// TestFileServerWriteInPlaceRefusesFullDisk pins finding 4 and the round-2
-// hardening: an in-place write refuses before writing when the target's own
-// filesystem does not hold the incoming body, so a full disk cannot leave a
-// container-owned file half-written.
 func TestFileServerWriteInPlaceRefusesFullDisk(t *testing.T) {
 	old := fileFreeBytesOn
 	fileFreeBytesOn = func(*os.File) uint64 { return 5 }
@@ -652,7 +618,7 @@ func TestFileServerWriteInPlaceRefusesFullDisk(t *testing.T) {
 	if err := os.Link(path, filepath.Join(root, "hard.link")); err != nil {
 		t.Skipf("hardlinks unsupported: %v", err)
 	}
-	body := []byte("0123456789") // 10 bytes, more than the 5 bytes "free"
+	body := []byte("0123456789")
 	if _, err := write(t, server, RootVolumes, "hard.txt", etagOf(t, server, "hard.txt"), true, body); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("in-place write on a full disk = %v, want ResourceExhausted", err)
 	}
@@ -663,9 +629,6 @@ func TestFileServerWriteInPlaceRefusesFullDisk(t *testing.T) {
 	assertNoTempFiles(t, root)
 }
 
-// TestFileServerWriteInPlaceUnknownFreeSpace pins the round-2 fix that a statfs
-// failure (free == 0) refuses a non-empty in-place body rather than skipping
-// the check, while an empty body still commits.
 func TestFileServerWriteInPlaceUnknownFreeSpace(t *testing.T) {
 	old := fileFreeBytesOn
 	fileFreeBytesOn = func(*os.File) uint64 { return 0 }
@@ -685,7 +648,6 @@ func TestFileServerWriteInPlaceUnknownFreeSpace(t *testing.T) {
 	if got, _ := os.ReadFile(path); string(got) != "original" {
 		t.Fatalf("content = %q, want the original", got)
 	}
-	// An empty body needs no space and still commits in place.
 	resp, err := write(t, server, RootVolumes, "hard.txt", etagOf(t, server, "hard.txt"), true, nil)
 	if err != nil {
 		t.Fatalf("empty in-place write: %v", err)
@@ -698,9 +660,6 @@ func TestFileServerWriteInPlaceUnknownFreeSpace(t *testing.T) {
 	}
 }
 
-// TestFileServerWriteIdleTimeout pins finding 9: a Write that receives nothing
-// after its header times out and releases its transfer slot instead of holding
-// it forever.
 func TestFileServerWriteIdleTimeout(t *testing.T) {
 	old := fileRecvIdleTimeout
 	fileRecvIdleTimeout = 20 * time.Millisecond
@@ -721,15 +680,11 @@ func TestFileServerWriteIdleTimeout(t *testing.T) {
 		t.Fatalf("a stalled write created a target: %v", err)
 	}
 	assertNoTempFiles(t, root)
-	// The slot is free again: a normal write succeeds.
 	if _, err := write(t, server, RootVolumes, "after.txt", "", false, []byte("ok")); err != nil {
 		t.Fatalf("write after a timeout: %v", err)
 	}
 }
 
-// TestFileServerProtectsAppDirViaSymlinkedParent pins finding 1: a symlinked
-// parent that resolves back to the root cannot be used to rename or delete a
-// sibling application directory.
 func TestFileServerProtectsAppDirViaSymlinkedParent(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -740,7 +695,6 @@ func TestFileServerProtectsAppDirViaSymlinkedParent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// appA/up -> .. so appA/up/appB resolves to the top-level appB.
 	if err := os.Symlink("..", filepath.Join(root, appA, "up")); err != nil {
 		t.Fatal(err)
 	}
@@ -755,9 +709,6 @@ func TestFileServerProtectsAppDirViaSymlinkedParent(t *testing.T) {
 	}
 }
 
-// TestFileServerCopyRefusesSymlinkedSelfCopy pins finding 2: a destination whose
-// resolved parent is the source is refused, so a symlinked destination cannot
-// recurse without bound and corrupt the source.
 func TestFileServerCopyRefusesSymlinkedSelfCopy(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -775,8 +726,6 @@ func TestFileServerCopyRefusesSymlinkedSelfCopy(t *testing.T) {
 	}
 }
 
-// TestFileServerCopyDeleteHonourCancelledContext pins finding 3: a cancelled
-// stream aborts Copy and Delete promptly.
 func TestFileServerCopyDeleteHonourCancelledContext(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -797,9 +746,6 @@ func TestFileServerCopyDeleteHonourCancelledContext(t *testing.T) {
 	}
 }
 
-// TestFileServerRenameNonOverwriteRefusesExistingDir pins finding 7 at the RPC
-// level: a non-overwriting rename onto an existing directory is refused and the
-// source survives.
 func TestFileServerRenameNonOverwriteRefusesExistingDir(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -816,8 +762,6 @@ func TestFileServerRenameNonOverwriteRefusesExistingDir(t *testing.T) {
 	}
 }
 
-// TestFileErrorMapping pins finding 6: the resource, name and read-only errnos
-// map onto the documented gRPC codes, and an existing status passes through.
 func TestFileErrorMapping(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -846,9 +790,6 @@ func TestFileErrorMapping(t *testing.T) {
 	}
 }
 
-// TestPathLockIndexInRange pins finding 8: the stripe index is always in range,
-// including when the 32-bit hash has its high bit set (the old int(uint32)
-// modulo could go negative on a 32-bit build).
 func TestPathLockIndexInRange(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -860,8 +801,6 @@ func TestPathLockIndexInRange(t *testing.T) {
 	}
 }
 
-// TestFileServerSweepTempFiles pins finding 10: the sweeper removes an old
-// staging file and keeps a fresh one.
 func TestFileServerSweepTempFiles(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -886,10 +825,6 @@ func TestFileServerSweepTempFiles(t *testing.T) {
 	}
 }
 
-// TestFileServerRenameCrossDeviceFallback pins finding C: when a bind mount
-// forces the copy fallback (EXDEV), an overwriting move onto a non-empty
-// directory is refused like a same-filesystem rename (ENOTEMPTY) and leaves
-// both the source and destination intact; a move onto a free name succeeds.
 func TestFileServerRenameCrossDeviceFallback(t *testing.T) {
 	server, root := newTestFileServer(t)
 	old := renameWithin
@@ -913,9 +848,6 @@ func TestFileServerRenameCrossDeviceFallback(t *testing.T) {
 	_, moveErr := server.Rename(context.Background(), &agentv1.RenameRequest{
 		Root: RootVolumes, Source: "src", Destination: "dst", Overwrite: true,
 	})
-	// Linux refuses a non-empty directory rename with ENOTEMPTY
-	// (FailedPrecondition); macOS may report EEXIST (AlreadyExists). Both are
-	// the same refusal; what matters is that nothing is destroyed.
 	if code := status.Code(moveErr); code != codes.FailedPrecondition && code != codes.AlreadyExists {
 		t.Fatalf("cross-device move onto a non-empty dir = %v, want a refusal", moveErr)
 	}
@@ -926,7 +858,6 @@ func TestFileServerRenameCrossDeviceFallback(t *testing.T) {
 		t.Fatalf("destination modified on a refused move: %q", got)
 	}
 
-	// A move onto a free name still copies and then removes the source.
 	if _, err := server.Rename(context.Background(), &agentv1.RenameRequest{
 		Root: RootVolumes, Source: "src", Destination: "moved", Overwrite: true,
 	}); err != nil {
@@ -940,8 +871,6 @@ func TestFileServerRenameCrossDeviceFallback(t *testing.T) {
 	}
 }
 
-// blockingDeleteStream blocks inside Send so a test can observe whether the
-// stripe lock is still held while progress is being sent.
 type blockingDeleteStream struct {
 	grpc.ServerStream
 	entered chan struct{}
@@ -959,9 +888,6 @@ func (s *blockingDeleteStream) Send(*agentv1.Progress) error {
 
 func (s *blockingDeleteStream) Context() context.Context { return context.Background() }
 
-// TestFileServerDeleteSendsProgressOutsideLock pins finding E: Delete releases
-// its stripe lock before sending progress, so a slow client cannot stall
-// unrelated paths that share the stripe.
 func TestFileServerDeleteSendsProgressOutsideLock(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -985,9 +911,6 @@ func TestFileServerDeleteSendsProgressOutsideLock(t *testing.T) {
 	}
 }
 
-// TestFullAccessProtectsAppDirectory pins that the whole-filesystem root keeps
-// the running-container guard: the application directory of the managed volumes
-// root cannot be renamed or deleted through "/".
 func TestFullAccessProtectsAppDirectory(t *testing.T) {
 	t.Parallel()
 	volumes := t.TempDir()
@@ -1025,7 +948,6 @@ func TestFullAccessProtectsAppDirectory(t *testing.T) {
 	}
 }
 
-// chmodMode returns the permission bits of a path under a root.
 func chmodMode(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -1035,8 +957,6 @@ func chmodMode(t *testing.T, path string) os.FileMode {
 	return info.Mode().Perm()
 }
 
-// TestFileServerChmod pins the happy path: the mode changes on disk and the
-// response is the empty ChmodResponse the wired contract returns.
 func TestFileServerChmod(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1051,7 +971,6 @@ func TestFileServerChmod(t *testing.T) {
 	if got := chmodMode(t, filepath.Join(root, "a.txt")); got != 0o600 {
 		t.Fatalf("mode = %#o, want 0o600", got)
 	}
-	// The agent re-stats for the control plane, so the new mode must be visible.
 	stat, err := server.Stat(context.Background(), &agentv1.StatRequest{Root: RootVolumes, Path: "a.txt"})
 	if err != nil {
 		t.Fatalf("stat: %v", err)
@@ -1059,7 +978,6 @@ func TestFileServerChmod(t *testing.T) {
 	if stat.GetEntry().GetMode() != 0o600 {
 		t.Fatalf("stat mode = %#o, want 0o600", stat.GetEntry().GetMode())
 	}
-	// A directory can be chmod-ed too and keeps its type.
 	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
 		Root: RootVolumes, Path: ".", Mode: proto.Uint32(0o700),
 	}); status.Code(err) != codes.InvalidArgument {
@@ -1067,8 +985,6 @@ func TestFileServerChmod(t *testing.T) {
 	}
 }
 
-// TestFileServerChmodRequiresMode pins that an absent mode is refused rather
-// than silently treated as 000 (the wire field is optional for exactly this).
 func TestFileServerChmodRequiresMode(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1085,8 +1001,6 @@ func TestFileServerChmodRequiresMode(t *testing.T) {
 	}
 }
 
-// TestFileServerChmodRejectsModeBits pins the mask: setuid, setgid, sticky and
-// any bit above 0o777 are a single refusal and never touch the file.
 func TestFileServerChmodRejectsModeBits(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1107,8 +1021,6 @@ func TestFileServerChmodRejectsModeBits(t *testing.T) {
 	}
 }
 
-// TestFileServerChmodRejectsSymlink proves the target's mode is never changed
-// through a link entry, and a special file is refused.
 func TestFileServerChmodRejectsSymlink(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1128,7 +1040,6 @@ func TestFileServerChmodRejectsSymlink(t *testing.T) {
 	}
 }
 
-// TestFileServerChmodRejectsSpecialFile pins the FIFO refusal.
 func TestFileServerChmodRejectsSpecialFile(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1142,9 +1053,6 @@ func TestFileServerChmodRejectsSpecialFile(t *testing.T) {
 	}
 }
 
-// TestFileServerChmodAppDirStaysDirectory pins the plan decision: a managed
-// application directory may be chmod-ed (it stays a directory), unlike rename
-// and delete which refuse it.
 func TestFileServerChmodAppDirStaysDirectory(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1166,8 +1074,6 @@ func TestFileServerChmodAppDirStaysDirectory(t *testing.T) {
 	}
 }
 
-// TestFileServerChmodRefusesDirWithoutOwnerExecute pins the self-lockout guard
-// at the service level: a directory must keep owner execute.
 func TestFileServerChmodRefusesDirWithoutOwnerExecute(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1184,9 +1090,6 @@ func TestFileServerChmodRefusesDirWithoutOwnerExecute(t *testing.T) {
 	}
 }
 
-// TestFileServerChmodRefusesHardlinkInConfinedRoot pins the hard-link guard: a
-// hard-linked regular file is refused in a confined root (its inode may be
-// reachable outside it).
 func TestFileServerChmodRefusesHardlinkInConfinedRoot(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1206,8 +1109,6 @@ func TestFileServerChmodRefusesHardlinkInConfinedRoot(t *testing.T) {
 	}
 }
 
-// TestFullAccessChmod proves chmod works through the whole-filesystem "system"
-// root as well as a confined root.
 func TestFullAccessChmod(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()

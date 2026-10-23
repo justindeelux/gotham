@@ -14,10 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestStoreDeploymentCommitRoundtrip runs the embedded migrations and verifies
-// the JUS-82 columns through Postgres: the commit metadata round-trips on
-// create and update, and rows that predate the columns read back empty,
-// never NULL.
 func TestStoreDeploymentCommitRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

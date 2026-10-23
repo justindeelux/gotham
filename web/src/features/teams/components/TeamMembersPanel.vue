@@ -8,7 +8,6 @@ import { roleLabel, roleTagType, teamText } from "@/features/teams/api/teams";
 import { relativeTime } from "@/shared/utils/format";
 import { useTeamsPageContext } from "@/features/teams/composables/useTeamsPage";
 
-/** TeamMembersPanel renders the members tab: table, role selects, removal. */
 const {
   selectedTeam,
   personalOwnerId,
@@ -154,10 +153,6 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
 </template>
 
 <style scoped>
-/* JUS-197: the members table scrolls inside this wrapper (not the page).
-   The table's own scroll-x floor handles the columns; this wrapper is the
-   dedicated overflow container so a wide table can never push the page
-   sideways at phone widths, independent of any global overflow mask. */
 .table-scroll {
   max-width: 100%;
   overflow-x: auto;

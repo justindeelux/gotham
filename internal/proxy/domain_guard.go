@@ -6,8 +6,6 @@ import (
 	"net/url"
 )
 
-// DomainGuard serializes domain writes with panel URL changes. Release only
-// after persistence; a nil guard leaves standalone services unchanged.
 type DomainGuard func(context.Context, ...string) (release func(), err error)
 
 func (g DomainGuard) Acquire(ctx context.Context, hosts ...string) (func(), error) {
@@ -17,8 +15,6 @@ func (g DomainGuard) Acquire(ctx context.Context, hosts ...string) (func(), erro
 	return g(ctx, hosts...)
 }
 
-// CheckControlPlaneHost rejects all existing app, compose-service and redirect
-// sources, including stopped applications and disabled redirects.
 func (s *SyncService) CheckControlPlaneHost(ctx context.Context, raw string) error {
 	if raw == "" {
 		return nil

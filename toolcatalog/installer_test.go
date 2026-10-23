@@ -20,8 +20,6 @@ func TestPlatformToolsCannotBeUninstalled(t *testing.T) {
 	}
 }
 
-// TestInstallOrderOrdersDependencies proves railpack is preceded by buildkit,
-// which is preceded by docker: the install runs in dependency order.
 func TestInstallOrderOrdersDependencies(t *testing.T) {
 	order, err := InstallOrder(IDRailpack)
 	if err != nil {
@@ -32,7 +30,6 @@ func TestInstallOrderOrdersDependencies(t *testing.T) {
 		t.Fatalf("InstallOrder(railpack) = %v; want %v", order, want)
 	}
 
-	// A dependency that is already the target appears once.
 	order, err = InstallOrder(IDDocker)
 	if err != nil {
 		t.Fatalf("InstallOrder(docker): %v", err)
@@ -42,8 +39,6 @@ func TestInstallOrderOrdersDependencies(t *testing.T) {
 	}
 }
 
-// TestInstallOrderRefusesDetectOnly proves a host unit the platform never
-// installs is refused, not silently planned.
 func TestInstallOrderRefusesDetectOnly(t *testing.T) {
 	for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved, IDNetworkctl, IDSystemctl} {
 		if _, err := InstallOrder(id); !errors.Is(err, ErrNotInstallable) {
@@ -52,8 +47,6 @@ func TestInstallOrderRefusesDetectOnly(t *testing.T) {
 	}
 }
 
-// TestUninstallOrderRefusesUndeletable proves docker and the detect-only units
-// cannot be removed.
 func TestUninstallOrderRefusesUndeletable(t *testing.T) {
 	for _, id := range []string{IDDocker, IDSystemdNetworkd, IDNetworkctl, IDSystemctl, IDCurl} {
 		if _, err := UninstallOrder(id); !errors.Is(err, ErrNotUninstallable) {
@@ -65,7 +58,6 @@ func TestUninstallOrderRefusesUndeletable(t *testing.T) {
 	}
 }
 
-// TestOrdersRefuseUnknownTool proves an unknown id is reported as such.
 func TestOrdersRefuseUnknownTool(t *testing.T) {
 	if _, err := InstallOrder("nope"); !errors.Is(err, ErrUnknownTool) {
 		t.Errorf("InstallOrder(nope) = %v; want ErrUnknownTool", err)
@@ -75,7 +67,6 @@ func TestOrdersRefuseUnknownTool(t *testing.T) {
 	}
 }
 
-// TestDependents proves the reverse-dependency lookup the uninstall guard uses.
 func TestDependents(t *testing.T) {
 	if got := Dependents(IDDocker); !slices.Equal(got, []string{IDBuildKit}) {
 		t.Errorf("Dependents(docker) = %v; want [buildkit]", got)

@@ -25,7 +25,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// tarEntry is one entry a test tar carries.
 type tarEntry struct {
 	name     string
 	typeflag byte
@@ -34,7 +33,6 @@ type tarEntry struct {
 	linkname string
 }
 
-// buildTar serialises entries into an uncompressed tar.
 func buildTar(t *testing.T, entries []tarEntry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -59,7 +57,6 @@ func buildTar(t *testing.T, entries []tarEntry) []byte {
 	return buf.Bytes()
 }
 
-// buildTarGz serialises entries into a gzip-compressed tar.
 func buildTarGz(t *testing.T, entries []tarEntry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -88,9 +85,6 @@ func buildTarGz(t *testing.T, entries []tarEntry) []byte {
 	return buf.Bytes()
 }
 
-// zipTestEntry is one entry a test zip carries. method is passed to the zip
-// writer verbatim: zip.Store (0, the zero value) writes a real uncompressed
-// entry, so a test can exercise the stored-entry CRC/size path.
 type zipTestEntry struct {
 	name   string
 	mode   os.FileMode
@@ -98,9 +92,6 @@ type zipTestEntry struct {
 	method uint16
 }
 
-// buildZip serialises entries into a zip archive. The method is written as
-// given — an unset method (0) is a real Stored entry, never silently Deflated —
-// so a Store-entry regression test actually exercises its guard.
 func buildZip(t *testing.T, entries []zipTestEntry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -124,7 +115,6 @@ func buildZip(t *testing.T, entries []zipTestEntry) []byte {
 	return buf.Bytes()
 }
 
-// writeArchiveFile places archive bytes into root under name.
 func writeArchiveFile(t *testing.T, root, name string, body []byte) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, name), body, 0o644); err != nil {
@@ -132,7 +122,6 @@ func writeArchiveFile(t *testing.T, root, name string, body []byte) {
 	}
 }
 
-// compress runs the Compress RPC and returns the collected progress.
 func compress(t *testing.T, server *FileServer, root, dst string, sources []string, format agentv1.ArchiveFormat, overwrite bool) (*collectProgressStream, error) {
 	t.Helper()
 	stream := &collectProgressStream{}
@@ -142,7 +131,6 @@ func compress(t *testing.T, server *FileServer, root, dst string, sources []stri
 	return stream, err
 }
 
-// extract runs the Extract RPC and returns its error.
 func extract(t *testing.T, server *FileServer, root, src, dst string, overwrite bool) error {
 	t.Helper()
 	stream := &collectProgressStream{}
@@ -151,8 +139,6 @@ func extract(t *testing.T, server *FileServer, root, src, dst string, overwrite 
 	}, stream)
 }
 
-// TestFileServerArchiveRoundTrip proves each format round-trips a directory
-// tree byte for byte and that a symlink inside the tree is skipped and counted.
 func TestFileServerArchiveRoundTrip(t *testing.T) {
 	t.Parallel()
 	formats := map[string]agentv1.ArchiveFormat{
@@ -213,8 +199,6 @@ func TestFileServerArchiveRoundTrip(t *testing.T) {
 	}
 }
 
-// TestFileServerCompressRefusesOverwriteAndDestinationInsideSource pins the
-// conflict policy and the recursion guard.
 func TestFileServerCompressRefusesOverwriteAndDestinationInsideSource(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -241,9 +225,6 @@ func TestFileServerCompressRefusesOverwriteAndDestinationInsideSource(t *testing
 	}
 }
 
-// TestFileServerExtractZipSlip proves an absolute name, a ".." segment and a
-// name that escapes through cleaning are all refused and write nothing outside
-// the destination.
 func TestFileServerExtractZipSlip(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -264,7 +245,6 @@ func TestFileServerExtractZipSlip(t *testing.T) {
 			if err := extract(t, server, RootVolumes, "evil.tar", ".", false); err == nil {
 				t.Fatalf("extract of %q succeeded, want a refusal", tc.name)
 			}
-			// Nothing landed at the root level beyond the archive itself.
 			for _, leaked := range []string{"evil.txt", "pwn.txt"} {
 				if _, err := os.Lstat(filepath.Join(root, leaked)); !os.IsNotExist(err) {
 					t.Fatalf("extract leaked %q: %v", leaked, err)
@@ -274,8 +254,6 @@ func TestFileServerExtractZipSlip(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractRefusesLinkAndSpecialEntries pins that symlink, hardlink,
-// device and FIFO entries are refused outright.
 func TestFileServerExtractRefusesLinkAndSpecialEntries(t *testing.T) {
 	t.Parallel()
 	cases := map[string]tarEntry{
@@ -296,7 +274,6 @@ func TestFileServerExtractRefusesLinkAndSpecialEntries(t *testing.T) {
 		})
 	}
 
-	// A zip member whose mode marks it a symlink is refused too.
 	t.Run("zip-symlink", func(t *testing.T) {
 		t.Parallel()
 		server, root := newTestFileServer(t)
@@ -309,8 +286,6 @@ func TestFileServerExtractRefusesLinkAndSpecialEntries(t *testing.T) {
 	})
 }
 
-// TestFileServerExtractSymlinkedParentEscape proves a name whose parent is a
-// symlink out of the root is refused and writes nothing outside.
 func TestFileServerExtractSymlinkedParentEscape(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -329,8 +304,6 @@ func TestFileServerExtractSymlinkedParentEscape(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractCaps proves the entry-count, size and compression-ratio
-// caps all refuse an over-limit archive.
 func TestFileServerExtractCaps(t *testing.T) {
 	t.Parallel()
 
@@ -363,8 +336,6 @@ func TestFileServerExtractCaps(t *testing.T) {
 	t.Run("ratio", func(t *testing.T) {
 		t.Parallel()
 		server, root := newTestFileServer(t)
-		// A 1 MiB run of zeroes gzips to a few hundred bytes: a ratio far above
-		// the 200:1 cap, well under the 4 GiB byte cap.
 		writeArchiveFile(t, root, "bomb.tar.gz", buildTarGz(t, []tarEntry{
 			{name: "bomb", typeflag: tar.TypeReg, mode: 0o644, body: bytes.Repeat([]byte{0}, 1<<20)},
 		}))
@@ -374,8 +345,6 @@ func TestFileServerExtractCaps(t *testing.T) {
 	})
 }
 
-// TestFileServerExtractStripsSpecialModeBits proves setuid, setgid and sticky
-// bits are stripped while the plain permission bits survive.
 func TestFileServerExtractStripsSpecialModeBits(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -397,8 +366,6 @@ func TestFileServerExtractStripsSpecialModeBits(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractConflictPolicy proves an existing file is refused
-// without overwrite and replaced with it, and that a directory is reused.
 func TestFileServerExtractConflictPolicy(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -426,8 +393,6 @@ func TestFileServerExtractConflictPolicy(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractProtectsAppDir proves an entry that would replace a
-// top-level application directory is refused.
 func TestFileServerExtractProtectsAppDir(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -450,8 +415,6 @@ func TestFileServerExtractProtectsAppDir(t *testing.T) {
 	}
 }
 
-// TestFileServerArchiveRefusesReadOnlyRoot proves both archive operations are
-// refused on a read-only root.
 func TestFileServerArchiveRefusesReadOnlyRoot(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -463,8 +426,6 @@ func TestFileServerArchiveRefusesReadOnlyRoot(t *testing.T) {
 	}
 }
 
-// TestFileServerArchiveUnknownFormat proves an extract refuses a source whose
-// extension selects no known format.
 func TestFileServerArchiveUnknownFormat(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -477,8 +438,6 @@ func TestFileServerArchiveUnknownFormat(t *testing.T) {
 	}
 }
 
-// TestFullAccessArchiveRoundTrip proves the archives work through the
-// whole-filesystem "system" root as well as the confined roots.
 func TestFullAccessArchiveRoundTrip(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
@@ -510,8 +469,6 @@ func TestFullAccessArchiveRoundTrip(t *testing.T) {
 	}
 }
 
-// TestFileServerArchiveHonoursCancelledContext proves a cancelled extract stops
-// rather than running to completion.
 func TestFileServerArchiveHonoursCancelledContext(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -526,7 +483,6 @@ func TestFileServerArchiveHonoursCancelledContext(t *testing.T) {
 	}
 }
 
-// TestArchiveEntryPath pins the name validation directly.
 func TestArchiveEntryPath(t *testing.T) {
 	t.Parallel()
 	valid := map[string]string{
@@ -547,11 +503,9 @@ func TestArchiveEntryPath(t *testing.T) {
 			t.Errorf("archiveEntryPath(%q) = %q, want %q", name, got, want)
 		}
 	}
-	// Zip normalises a Windows backslash separator into "/".
 	if got, err := archiveEntryPath(`a\b`, true); err != nil || got != "a/b" {
 		t.Errorf("zip archiveEntryPath(`a\\b`) = %q, %v, want a/b", got, err)
 	}
-	// A tar keeps backslashes: they are ordinary filename characters on Linux.
 	if got, err := archiveEntryPath(`a\b`, false); err != nil || got != `a\b` {
 		t.Errorf("tar archiveEntryPath(`a\\b`) = %q, %v, want literal", got, err)
 	}
@@ -561,8 +515,6 @@ func TestArchiveEntryPath(t *testing.T) {
 			t.Errorf("zip archiveEntryPath(%q) = nil, want an error", name)
 		}
 	}
-	// A backslash-escaped traversal is only a traversal for zip; for tar it is
-	// a literal name, not an escape.
 	if _, err := archiveEntryPath(`\..\a`, true); err == nil {
 		t.Errorf("zip archiveEntryPath(`\\..\\a`) = nil, want an error")
 	}
@@ -571,8 +523,6 @@ func TestArchiveEntryPath(t *testing.T) {
 	}
 }
 
-// TestFileServerCompressSkipsSpecialFiles proves a FIFO in the tree is skipped
-// and reported, not stored.
 func TestFileServerCompressSkipsSpecialFiles(t *testing.T) {
 	t.Parallel()
 	if os.Geteuid() == 0 {
@@ -595,7 +545,6 @@ func TestFileServerCompressSkipsSpecialFiles(t *testing.T) {
 	if got := stream.sent[len(stream.sent)-1].GetSkipped(); got != 1 {
 		t.Fatalf("skipped = %d, want 1 (the fifo)", got)
 	}
-	// The archive holds only the real file.
 	zr, err := zip.OpenReader(filepath.Join(root, "d.zip"))
 	if err != nil {
 		t.Fatal(err)
@@ -617,8 +566,6 @@ func TestFileServerCompressSkipsSpecialFiles(t *testing.T) {
 	}
 }
 
-// TestArchiveCounterRejectsInt64Overflow proves a declared size near MaxInt64
-// cannot wrap the byte total past the cap (H1).
 func TestArchiveCounterRejectsInt64Overflow(t *testing.T) {
 	t.Parallel()
 	counter := &archiveCounter{maxEntries: 100, maxBytes: 1 << 30}
@@ -630,8 +577,6 @@ func TestArchiveCounterRejectsInt64Overflow(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractCountsEveryEntry proves directory entries and names that
-// clean to nothing still count against the entry cap (H2).
 func TestFileServerExtractCountsEveryEntry(t *testing.T) {
 	t.Parallel()
 
@@ -678,8 +623,6 @@ func TestFileServerExtractCountsEveryEntry(t *testing.T) {
 	})
 }
 
-// corruptZipCRC flips a byte of the single entry's central-directory CRC32, so
-// the checksum the zip reader verifies at end-of-entry is wrong.
 func corruptZipCRC(t *testing.T, body []byte) []byte {
 	t.Helper()
 	idx := bytes.Index(body, []byte{'P', 'K', 1, 2})
@@ -690,9 +633,6 @@ func corruptZipCRC(t *testing.T, body []byte) []byte {
 	return body
 }
 
-// TestFileServerExtractRejectsCorruptZip keeps an existing file intact when a
-// corrupt entry fails: the CRC is only checked at EOF, and the extract stages
-// the body in a temp file rather than truncating the target in place (M1, H3).
 func TestFileServerExtractRejectsCorruptZip(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -711,9 +651,6 @@ func TestFileServerExtractRejectsCorruptZip(t *testing.T) {
 	}
 }
 
-// TestFileServerCompressRefusesSymlinkedSourceSelfInclusion proves a destination
-// routed through a symlinked parent into a source is refused, so the archive can
-// never enumerate its own temp file (OC H1).
 func TestFileServerCompressRefusesSymlinkedSourceSelfInclusion(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -728,10 +665,6 @@ func TestFileServerCompressRefusesSymlinkedSourceSelfInclusion(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractAppliesReadOnlyDirMode proves a read-only directory entry
-// still receives its children and ends with owner rwx forced (M6/OC N2): the
-// archived 0555 keeps its group/other bits but gains owner write, so the tree
-// stays usable.
 func TestFileServerExtractAppliesReadOnlyDirMode(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -754,10 +687,6 @@ func TestFileServerExtractAppliesReadOnlyDirMode(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractNormalisesNonExecutableDirMode proves a directory entry
-// whose archived mode lacks owner execute (0644) still yields a traversable tree
-// with its children readable — not a false success over an unusable directory
-// (OC N2).
 func TestFileServerExtractNormalisesNonExecutableDirMode(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -775,14 +704,11 @@ func TestFileServerExtractNormalisesNonExecutableDirMode(t *testing.T) {
 	if info.Mode().Perm()&0o700 != 0o700 {
 		t.Fatalf("dir mode = %o, want owner rwx", info.Mode().Perm())
 	}
-	// The tree is traversable and the child is reachable.
 	if got, err := os.ReadFile(filepath.Join(root, "dm", "f.txt")); err != nil || string(got) != "hi" {
 		t.Fatalf("child under a 0644 dir = %q, %v", got, err)
 	}
 }
 
-// TestFileServerExtractPaxGlobalHeader proves a pax global header (as git
-// archive and GitHub tarballs emit) is skipped, not refused (M7).
 func TestFileServerExtractPaxGlobalHeader(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -798,8 +724,6 @@ func TestFileServerExtractPaxGlobalHeader(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractTarKeepsBackslash proves a tar member whose name holds a
-// backslash keeps it (only zip rewrites the separator) (M8).
 func TestFileServerExtractTarKeepsBackslash(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -817,8 +741,6 @@ func TestFileServerExtractTarKeepsBackslash(t *testing.T) {
 	}
 }
 
-// TestFileServerCompressRejectsDuplicateSources proves duplicate, nested and
-// same-base-name sources are refused (L1).
 func TestFileServerCompressRejectsDuplicateSources(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -834,8 +756,6 @@ func TestFileServerCompressRejectsDuplicateSources(t *testing.T) {
 	}
 }
 
-// TestFileServerCompressOutputMode proves a fresh archive is readable (0644) and
-// a directory destination is refused up front (L2).
 func TestFileServerCompressOutputMode(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -860,8 +780,6 @@ func TestFileServerCompressOutputMode(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractRefusesSelfOverwrite proves an entry named like the
-// archive being read is refused (L3).
 func TestFileServerExtractRefusesSelfOverwrite(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -873,9 +791,6 @@ func TestFileServerExtractRefusesSelfOverwrite(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractRefusesSymlinkedAncestor proves an entry whose parent
-// chain holds a pre-existing in-root symlink is refused, so a write never lands
-// outside the requested destination (M5).
 func TestFileServerExtractRefusesSymlinkedAncestor(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -896,8 +811,6 @@ func TestFileServerExtractRefusesSymlinkedAncestor(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractRefusesDeepName proves an entry with too many path
-// segments is refused before any directory walk (M4).
 func TestFileServerExtractRefusesDeepName(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -910,10 +823,6 @@ func TestFileServerExtractRefusesDeepName(t *testing.T) {
 	}
 }
 
-// appendZip64EntryTail rewrites a small zip's tail so its zip64 end-of-central-
-// directory record declares `entries` members even though the file holds one. It
-// proves the pre-parse EOCD check refuses an archive that declares millions of
-// entries without zip.NewReader allocating any header (OC M1/OC N1).
 func appendZip64EntryTail(t *testing.T, body []byte, entries uint64) []byte {
 	t.Helper()
 	const eocdLen = 22
@@ -925,22 +834,19 @@ func appendZip64EntryTail(t *testing.T, body []byte, entries uint64) []byte {
 	var buf bytes.Buffer
 	buf.Write(base)
 
-	// zip64 end of central directory record.
 	record := make([]byte, 56)
 	binary.LittleEndian.PutUint32(record[0:4], 0x06064b50)
-	binary.LittleEndian.PutUint64(record[4:12], 44) // bytes of the record after this field
+	binary.LittleEndian.PutUint64(record[4:12], 44)
 	binary.LittleEndian.PutUint64(record[24:32], entries)
 	binary.LittleEndian.PutUint64(record[32:40], entries)
 	buf.Write(record)
 
-	// zip64 end of central directory locator, pointing at the record.
 	locator := make([]byte, 20)
 	binary.LittleEndian.PutUint32(locator[0:4], 0x07064b50)
 	binary.LittleEndian.PutUint64(locator[8:16], recordOffset)
 	binary.LittleEndian.PutUint32(locator[16:20], 1)
 	buf.Write(locator)
 
-	// EOCD whose 16/32-bit fields are all "see zip64", forcing the zip64 read.
 	eocd := make([]byte, eocdLen)
 	binary.LittleEndian.PutUint32(eocd[0:4], 0x06054b50)
 	binary.LittleEndian.PutUint16(eocd[8:10], 0xFFFF)
@@ -951,10 +857,6 @@ func appendZip64EntryTail(t *testing.T, body []byte, entries uint64) []byte {
 	return buf.Bytes()
 }
 
-// appendZip64HonestTail rewrites a small zip's tail into a valid zip64 archive:
-// the zip64 end-of-central-directory record carries the archive's real entry
-// count, central-directory size and offset, so the central directory ends
-// exactly at the zip64 record — the layout the pre-parse must accept.
 func appendZip64HonestTail(t *testing.T, body []byte, entries int) []byte {
 	t.Helper()
 	const eocdLen = 22
@@ -969,24 +871,21 @@ func appendZip64HonestTail(t *testing.T, body []byte, entries int) []byte {
 	var buf bytes.Buffer
 	buf.Write(base)
 
-	// zip64 end of central directory record, with the real directory metrics.
 	record := make([]byte, 56)
 	binary.LittleEndian.PutUint32(record[0:4], 0x06064b50)
-	binary.LittleEndian.PutUint64(record[4:12], 44) // bytes of the record after this field
+	binary.LittleEndian.PutUint64(record[4:12], 44)
 	binary.LittleEndian.PutUint64(record[24:32], uint64(entries))
 	binary.LittleEndian.PutUint64(record[32:40], uint64(entries))
 	binary.LittleEndian.PutUint64(record[40:48], uint64(cdSize))
 	binary.LittleEndian.PutUint64(record[48:56], uint64(cdOffset))
 	buf.Write(record)
 
-	// zip64 end of central directory locator, pointing at the record.
 	locator := make([]byte, 20)
 	binary.LittleEndian.PutUint32(locator[0:4], 0x07064b50)
 	binary.LittleEndian.PutUint64(locator[8:16], recordOffset)
 	binary.LittleEndian.PutUint32(locator[16:20], 1)
 	buf.Write(locator)
 
-	// EOCD whose 16/32-bit fields are all "see zip64", forcing the zip64 read.
 	zip64EOCD := make([]byte, eocdLen)
 	binary.LittleEndian.PutUint32(zip64EOCD[0:4], 0x06054b50)
 	binary.LittleEndian.PutUint16(zip64EOCD[8:10], 0xFFFF)
@@ -997,9 +896,6 @@ func appendZip64HonestTail(t *testing.T, body []byte, entries int) []byte {
 	return buf.Bytes()
 }
 
-// TestZipCentralDirectoryBounds proves the tail parser reads a normal zip's
-// declared entry count and central-directory size, and is not fooled by a
-// comment that embeds the EOCD signature.
 func TestZipCentralDirectoryBounds(t *testing.T) {
 	t.Parallel()
 	plain := buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: []byte("x")}})
@@ -1010,11 +906,9 @@ func TestZipCentralDirectoryBounds(t *testing.T) {
 	if dir.entries != 1 || dir.size <= 0 {
 		t.Fatalf("bounds = %d entries, %d bytes; want 1, >0", dir.entries, dir.size)
 	}
-	// The declared directory must end exactly at the EOCD record.
 	if dir.offset+dir.size != dir.recordOffset {
 		t.Fatalf("central directory ends at %d, want the EOCD record at %d", dir.offset+dir.size, dir.recordOffset)
 	}
-	// A comment containing the EOCD signature must not shadow the real record.
 	comment := []byte("PK\x05\x06 not the record")
 	commented := append([]byte{}, plain...)
 	binary.LittleEndian.PutUint16(commented[len(commented)-2:], uint16(len(comment)))
@@ -1025,14 +919,9 @@ func TestZipCentralDirectoryBounds(t *testing.T) {
 	}
 }
 
-// TestZipCentralDirectoryBoundsToleratesMaxCount proves a saturated 16-bit entry
-// count without a zip64 locator falls back to the 16-bit value (a plain
-// 65535-entry archive) instead of being refused, matching archive/zip (Claude L3).
 func TestZipCentralDirectoryBoundsToleratesMaxCount(t *testing.T) {
 	t.Parallel()
 	plain := buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: []byte("x")}})
-	// Saturate only the entry-count fields; keep the real central-directory size
-	// and offset, and leave no zip64 locator before the EOCD.
 	plain[len(plain)-14] = 0xFF
 	plain[len(plain)-13] = 0xFF
 	plain[len(plain)-12] = 0xFF
@@ -1046,11 +935,6 @@ func TestZipCentralDirectoryBoundsToleratesMaxCount(t *testing.T) {
 	}
 }
 
-// TestZipCentralDirectoryBoundsAcceptsMaxComment proves the tail window matches
-// archive/zip's widest search: an EOCD with the maximum 65535-byte comment sits
-// 65557 bytes from the end, past a 64 KiB window but inside the 65 KiB one
-// archive/zip uses, so both the pre-parse and zip.NewReader must accept it
-// (Claude L1).
 func TestZipCentralDirectoryBoundsAcceptsMaxComment(t *testing.T) {
 	t.Parallel()
 	body := buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: []byte("x")}})
@@ -1069,9 +953,6 @@ func TestZipCentralDirectoryBoundsAcceptsMaxComment(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractRejectsZipDeclaredEntryCount proves the declared entry
-// count is refused from the EOCD before zip.NewReader materialises anything
-// (OC M1/OC N1).
 func TestFileServerExtractRejectsZipDeclaredEntryCount(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1087,9 +968,6 @@ func TestFileServerExtractRejectsZipDeclaredEntryCount(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractRejectsOversizedInputArchive proves the compressed
-// archive's on-disk size is capped for every format before any parser runs
-// (OC M1).
 func TestFileServerExtractRejectsOversizedInputArchive(t *testing.T) {
 	t.Parallel()
 	body := bytes.Repeat([]byte("x"), 4096)
@@ -1111,8 +989,6 @@ func TestFileServerExtractRejectsOversizedInputArchive(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractRejectsTruncatedBody proves a truncated tar/gzip/zip body
-// is an invalid archive (InvalidArgument), not an internal error (Claude N3).
 func TestFileServerExtractRejectsTruncatedBody(t *testing.T) {
 	t.Parallel()
 	body := bytes.Repeat([]byte("x"), 2048)
@@ -1134,9 +1010,6 @@ func TestFileServerExtractRejectsTruncatedBody(t *testing.T) {
 	}
 }
 
-// TestExtractStateCachesAncestors proves the per-extract ancestor cache turns
-// repeated deep paths into O(depth) work rather than re-walking the chain for
-// every entry (Claude N1).
 func TestExtractStateCachesAncestors(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -1156,12 +1029,6 @@ func TestExtractStateCachesAncestors(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractDeepTreeIsLinear proves extracting thousands of entries
-// that share one deep directory stays linear: the ancestor cache turns each
-// entry's path check into O(depth) work once per directory instead of re-walking
-// the whole chain per entry (Claude N1). It asserts the Stat count on the real
-// extract path, so it fails without the cache instead of depending on a
-// wall-clock bound (Claude N3/OC N3).
 func TestFileServerExtractDeepTreeIsLinear(t *testing.T) {
 	t.Parallel()
 	server, rootDir := newTestFileServer(t)
@@ -1195,9 +1062,6 @@ func TestFileServerExtractDeepTreeIsLinear(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractLeavesExistingDirMode proves an archive entry that lands
-// on an already-existing directory does not have its mode rewritten, so a
-// world-writable entry cannot widen a private directory (Claude L2).
 func TestFileServerExtractLeavesExistingDirMode(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1221,17 +1085,12 @@ func TestFileServerExtractLeavesExistingDirMode(t *testing.T) {
 	}
 }
 
-// zipRawCentralHeader is the 46-byte fixed part of a central-directory file
-// header with an empty name, extra and comment. archive/zip accepts it, which
-// is what lets a crafted archive declare count=0 and still make the reader
-// materialise every header it physically contains.
 func zipRawCentralHeader() []byte {
 	h := make([]byte, zipCentralDirHeaderMinSize)
-	binary.LittleEndian.PutUint32(h[0:4], 0x02014b50) // central file header signature
+	binary.LittleEndian.PutUint32(h[0:4], 0x02014b50)
 	return h
 }
 
-// zipEOCD builds a comment-less end-of-central-directory record.
 func zipEOCD(entries uint16, cdSize, cdOffset uint32) []byte {
 	b := make([]byte, 22)
 	binary.LittleEndian.PutUint32(b[0:4], 0x06054b50)
@@ -1242,13 +1101,6 @@ func zipEOCD(entries uint16, cdSize, cdOffset uint32) []byte {
 	return b
 }
 
-// TestFileServerExtractRejectsZipCentralDirectoryBomb proves the zip pre-parse
-// bounds the header table by the central directory's declared size, not the
-// declared entry count. archive/zip reads headers until a bad one and only
-// compares the count modulo 2^16, so an archive with 65536×k empty headers and
-// an EOCD declaring 0 entries would otherwise materialise every header (Claude
-// H1). The tests assert both the refusal and that it happens before the reader
-// allocates, by comparing TotalAlloc across the extract.
 func TestFileServerExtractRejectsZipCentralDirectoryBomb(t *testing.T) {
 	cases := map[string]int{
 		"wraparound 65536 declared as 0":   65536,
@@ -1277,15 +1129,6 @@ func TestFileServerExtractRejectsZipCentralDirectoryBomb(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractRejectsZipUnderDeclaredCentralDir proves the pre-parse is
-// authoritative about the central-directory layout, not just the declared size:
-// an EOCD that under-declares cdSize (0 or a single header) in front of a
-// physically large central directory is refused before zip.NewReader runs.
-// archive/zip ignores cdSize and reads headers from directoryOffset until one is
-// bad, so without the cdOffset+cdSize==recordOffset check it materialises ~5.5x
-// the archive — the 4 MiB ceiling below fails on the old code (Claude H1).
-// The physical directory is 65536 empty headers (3 MiB), from which archive/zip
-// allocates ~16 MiB.
 func TestFileServerExtractRejectsZipUnderDeclaredCentralDir(t *testing.T) {
 	cases := map[string]struct{ cdSize, cdOffset uint32 }{
 		"cdSize 0":             {0, 0},
@@ -1297,9 +1140,6 @@ func TestFileServerExtractRejectsZipUnderDeclaredCentralDir(t *testing.T) {
 			server, root := newTestFileServer(t)
 			server.archiveMaxEntries = 1000
 			cd := bytes.Repeat(zipRawCentralHeader(), 65536)
-			// The declared directory ends far short of the EOCD record, so the
-			// layout check must refuse; the declared count is 0, so the entry cap
-			// alone would not.
 			body := append(cd, zipEOCD(0, tc.cdSize, tc.cdOffset)...)
 			writeArchiveFile(t, root, "bomb.zip", body)
 
@@ -1318,11 +1158,6 @@ func TestFileServerExtractRejectsZipUnderDeclaredCentralDir(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractAcceptsZip64WithEndingDirectory proves an honest zip64
-// archive whose central directory ends exactly at the zip64 end-of-central-
-// directory record still extracts: the layout check must use the zip64 record
-// offset, not the trailing EOCD offset, or every zip64 archive would be refused
-// (Claude H1).
 func TestFileServerExtractAcceptsZip64WithEndingDirectory(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1338,21 +1173,16 @@ func TestFileServerExtractAcceptsZip64WithEndingDirectory(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractZipTwoEOCDsPicksArchiveZipRecord proves the pre-parse
-// selects the same end-of-central-directory record archive/zip selects (the
-// last one, even with trailing bytes), so a polyglot cannot point the pre-parse
-// at a benign inner record while the reader uses a malicious outer one (Claude
-// H1).
 func TestFileServerExtractZipTwoEOCDsPicksArchiveZipRecord(t *testing.T) {
 	server, root := newTestFileServer(t)
 	server.archiveMaxEntries = 1000
 	const headers = 65536
 	cd := bytes.Repeat(zipRawCentralHeader(), headers)
 	var body []byte
-	body = append(body, zipEOCD(1, 46, 0)...)              // inner record an exact-match scanner would settle on
-	body = append(body, cd...)                             // the headers archive/zip will actually read
-	body = append(body, zipEOCD(0, uint32(len(cd)), 0)...) // outer record declaring 0 (wraparound)
-	body = append(body, 0x00)                              // trailing byte: archive/zip still accepts the outer record
+	body = append(body, zipEOCD(1, 46, 0)...)
+	body = append(body, cd...)
+	body = append(body, zipEOCD(0, uint32(len(cd)), 0)...)
+	body = append(body, 0x00)
 	writeArchiveFile(t, root, "poly.zip", body)
 
 	if err := extract(t, server, RootVolumes, "poly.zip", ".", false); status.Code(err) != codes.ResourceExhausted {
@@ -1360,7 +1190,6 @@ func TestFileServerExtractZipTwoEOCDsPicksArchiveZipRecord(t *testing.T) {
 	}
 }
 
-// tarBlock builds one raw 512-byte tar header block.
 func tarBlock(t *testing.T, typeflag byte, name string, size int64) [512]byte {
 	t.Helper()
 	var b [512]byte
@@ -1384,7 +1213,6 @@ func tarBlock(t *testing.T, typeflag byte, name string, size int64) [512]byte {
 	return b
 }
 
-// paxRecord formats a valid pax "length key=value\n" record.
 func paxRecord(key, value string) []byte {
 	body := key + "=" + value + "\n"
 	total := len(body) + 3
@@ -1397,9 +1225,6 @@ func paxRecord(key, value string) []byte {
 	}
 }
 
-// buildTarPaxHeaders builds a tar of count TypeXHeader records, which
-// tar.Reader consumes internally (they never reach extractTar), followed by the
-// end-of-archive marker.
 func buildTarPaxHeaders(t *testing.T, count, valueLen int) []byte {
 	t.Helper()
 	record := paxRecord("user.k", strings.Repeat("v", valueLen))
@@ -1416,9 +1241,6 @@ func buildTarPaxHeaders(t *testing.T, count, valueLen int) []byte {
 	return buf.Bytes()
 }
 
-// TestFileServerExtractCountsTarMetadataHeaders proves pax global headers count
-// against the entry cap, so a stream of metadata-only records cannot bypass it
-// (Claude M1).
 func TestFileServerExtractCountsTarMetadataHeaders(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -1442,10 +1264,6 @@ func TestFileServerExtractCountsTarMetadataHeaders(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractCapsTarStreamBytes proves the decompressed stream is
-// bounded on the bytes actually read, so pax/long-name records that tar.Reader
-// consumes internally cannot make the agent decompress an unbounded stream
-// (Claude M1).
 func TestFileServerExtractCapsTarStreamBytes(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)

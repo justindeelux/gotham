@@ -1,4 +1,3 @@
-// Unit tests for the servers list view helpers (JUS-24 split of ServersPage).
 
 import { describe, expect, it } from "vitest";
 

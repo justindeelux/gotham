@@ -9,7 +9,6 @@ import {
 import type { StrengthLocale } from "@/features/auth/utils/passwordStrength";
 
 interface Props {
-  /** Meter score 0-4 (0 renders the empty meter). */
   score: number;
 }
 
@@ -17,7 +16,6 @@ const props = defineProps<Props>();
 const { locale } = useI18n();
 
 const kind = computed<string>(() => strengthKindOf(props.score));
-/** label renders the meter score in the active locale, reactively. */
 const label = computed<string>(() =>
   strengthLabelOf(props.score, locale.value as StrengthLocale),
 );

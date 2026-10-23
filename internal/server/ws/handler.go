@@ -15,72 +15,41 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// TokenVerifier validates the query-string token. It mirrors
-// AuthService.VerifyAccessToken so the handler reuses the JWT validation from
-// internal/server/auth.go instead of inventing a new scheme.
 type TokenVerifier interface {
 	VerifyAccessToken(token string) (*auth.Claims, error)
 }
 
-// RealtimeEnv is the flag disabling Redis pub/sub in favour of the poll
-// fallback.
 const RealtimeEnv = "REALTIME_ENABLED"
 
-// RealtimeEnabled reports whether the Redis realtime path is active. Only an
-// explicit REALTIME_ENABLED=false disables it; anything else (including unset)
-// keeps it enabled.
 func RealtimeEnabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv(RealtimeEnv)), "false")
 }
 
-// Connection hardening defaults. writeWait bounds every frame write so a
-// non-reading client fails instead of pinning the handler; pingPeriod keeps a
-// write in flight so a dead peer is noticed even while the log is quiet.
 const (
 	writeWait                 = 10 * time.Second
 	pingPeriod                = 25 * time.Second
 	maxSubscriptionsPerClient = 32
-	// authCacheTTL bounds how long an accepted node authorization is reused on
-	// one connection. Denials are never cached, so a revoked user loses access
-	// within the TTL and a newly granted user is admitted immediately (U1).
-	authCacheTTL = 30 * time.Second
+	authCacheTTL              = 30 * time.Second
 )
 
-// SubscriptionAuthorizer authorizes one log subscription for the authenticated
-// user. Returning an error refuses the channel (the client gets a "denied"
-// frame and never joins the room). A nil authorizer keeps the pre-teams
-// behavior for tests and non-DB builds.
 type SubscriptionAuthorizer func(ctx context.Context, serverID, userID uuid.UUID) error
 
-// TaskAuthorizer authorizes one background-task subscription for the
-// authenticated user: teamID is the team suffix of a tasks:{teamID} channel.
-// A nil authorizer allows everything, matching the pre-teams compatibility
-// paths elsewhere.
 type TaskAuthorizer func(ctx context.Context, teamID string, userID uuid.UUID) error
 
-// Handler serves the WS /api/v1/ws endpoint.
 type Handler struct {
 	hub       *Hub
 	verify    TokenVerifier
 	authorize SubscriptionAuthorizer
 	logger    *slog.Logger
 
-	// taskAuthorize gates tasks:{teamID} subscriptions; taskSnapshot replays
-	// the team's running tasks right after the join, so a fresh mount and a
-	// reconnect restore state. Both are optional and set via SetTaskFeed.
 	taskAuthorize TaskAuthorizer
 	taskSnapshot  func(teamID string) []string
 
-	// writeWait, pingPeriod and authCacheTTL are fields so tests can shorten
-	// them; NewHandler sets the production defaults.
 	writeWait    time.Duration
 	pingPeriod   time.Duration
 	authCacheTTL time.Duration
 }
 
-// NewHandler builds a handler bound to hub. verify may be nil, in which case
-// every connection is rejected with 401. authorize may be nil (no per-channel
-// authorization).
 func NewHandler(hub *Hub, verifier TokenVerifier, logger *slog.Logger, authorize SubscriptionAuthorizer) *Handler {
 	if logger == nil {
 		logger = slog.Default()
@@ -96,15 +65,11 @@ func NewHandler(hub *Hub, verifier TokenVerifier, logger *slog.Logger, authorize
 	}
 }
 
-// SetTaskFeed wires background-task subscriptions: authorize gates
-// tasks:{teamID} joins, snapshot replays the team's running tasks after each
-// join (initial mount, navigation, reconnect). Either may be nil.
 func (h *Handler) SetTaskFeed(authorize TaskAuthorizer, snapshot func(teamID string) []string) {
 	h.taskAuthorize = authorize
 	h.taskSnapshot = snapshot
 }
 
-// ServeHTTP authenticates the query token, then upgrades to WebSocket.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" {
@@ -121,8 +86,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The authenticated user travels in the request context through the
-	// upgrade, so subscription frames can be authorized per channel.
 	if userID, parseErr := uuid.Parse(claims.Subject); parseErr == nil {
 		r = r.WithContext(context.WithValue(r.Context(), userIDKey{}, userID))
 	}
@@ -135,15 +98,11 @@ func writeUnauth(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
 }
 
-// clientRequest is a control frame sent by the client after connecting.
 type clientRequest struct {
 	Subscribe   string `json:"subscribe"`
 	Unsubscribe string `json:"unsubscribe"`
 }
 
-// serveConn runs one upgraded connection: optional ?channel= (repeatable) or
-// ?server=…&container=… preselects subscriptions, then {"subscribe":…} /
-// {"unsubscribe":…} frames adjust them while send pumps hub messages.
 func (h *Handler) serveConn(conn *websocket.Conn) {
 	defer func() { _ = conn.Close() }()
 
@@ -152,18 +111,12 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 
 	client := h.hub.newClient()
 	defer h.hub.remove(client)
-	// A connection that upgraded after the hub shut down must not linger: Run
-	// has returned, so nothing else will kick it (U9).
 	select {
 	case <-h.hub.done:
 		return
 	default:
 	}
 
-	// Per-connection state: the accepted subscriptions (also the cap), and the
-	// time-bounded authorization result per node. Caching an allow means N
-	// channels on one node cost one authorization instead of N DB reads
-	// (B1-10); denials are not cached so they can be re-checked (U1).
 	subs := make(map[string]bool, 8)
 	authorized := make(map[uuid.UUID]authDecision, 4)
 
@@ -218,8 +171,6 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 	}
 }
 
-// subscribeChannel validates and joins one channel, enforcing the
-// per-connection subscription cap.
 func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel string, ctx context.Context, userID uuid.UUID, subs map[string]bool, authorized map[uuid.UUID]authDecision) {
 	if subs[channel] {
 		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
@@ -237,9 +188,6 @@ func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel
 	}
 	h.hub.subscribe(client, channel)
 	subs[channel] = true
-	// A task join replays the running snapshot so the progress card restores
-	// after mount and reconnect. The frames go direct (not via the hub), so
-	// only the joining client sees them.
 	if teamID, ok := taskChannelTeamID(channel); ok && h.taskSnapshot != nil {
 		for _, frame := range h.taskSnapshot(teamID) {
 			_ = h.writeFrame(conn, []byte(frame))
@@ -248,13 +196,10 @@ func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel
 	_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
 }
 
-// writeMessage writes one JSON frame under the connection's write deadline.
 func (h *Handler) writeMessage(conn *websocket.Conn, msg Message) error {
 	return h.writeFrame(conn, mustJSON(msg))
 }
 
-// writeRaw writes a pre-marshalled frame under the connection's write
-// deadline. It reports false when the write failed or timed out.
 func (h *Handler) writeRaw(conn *websocket.Conn, payload []byte) bool {
 	return h.writeFrame(conn, payload) == nil
 }
@@ -270,8 +215,6 @@ func (h *Handler) writeFrame(conn *websocket.Conn, payload []byte) error {
 	return nil
 }
 
-// mustJSON marshals a frame; Message is always marshallable, so a failure is
-// impossible and is panicked rather than swallowed.
 func mustJSON(msg Message) []byte {
 	payload, err := json.Marshal(msg)
 	if err != nil {
@@ -280,10 +223,6 @@ func mustJSON(msg Message) []byte {
 	return payload
 }
 
-// pumpRequests forwards frames from receive into incoming until receive fails
-// or stop closes. The select on stop is what lets the reader exit
-// deterministically when the main loop has already returned while the reader
-// was blocked on a full incoming (B1-6).
 func pumpRequests(receive func(*clientRequest) error, incoming chan<- clientRequest, stop <-chan struct{}) {
 	for {
 		var req clientRequest
@@ -298,26 +237,13 @@ func pumpRequests(receive func(*clientRequest) error, incoming chan<- clientRequ
 	}
 }
 
-// userIDKey is the context key carrying the authenticated user through the
-// WebSocket upgrade.
 type userIDKey struct{}
 
-// authDecision is a cached allow for one node, valid until expiry.
 type authDecision struct {
 	allowed bool
 	expiry  time.Time
 }
 
-// channelAllowed authorizes one subscription, reusing a per-connection,
-// time-bounded cache of node decisions so repeat channels on one node do not
-// re-read the DB. Only logs:{serverID}:{containerID} channels reach a node;
-// every other channel is a pure client-side room name. A nil authorizer
-// (tests, non-DB builds) allows everything, matching the pre-teams
-// compatibility paths elsewhere.
-//
-// Denials are never cached (U1): a user removed from a team is re-checked and
-// loses access within authCacheTTL, and a user added after a denial is admitted
-// on the next attempt.
 func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uuid.UUID, authorized map[uuid.UUID]authDecision) bool {
 	if h.authorize == nil {
 		return true
@@ -350,8 +276,6 @@ func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uui
 	return true
 }
 
-// taskChannelTeamID extracts the team ID from a tasks:{teamID} channel.
-// Channels of any other shape are not task rooms.
 func taskChannelTeamID(channel string) (string, bool) {
 	if !strings.HasPrefix(channel, "tasks:") {
 		return "", false
@@ -363,8 +287,6 @@ func taskChannelTeamID(channel string) (string, bool) {
 	return teamID, true
 }
 
-// logChannelServerID extracts the server ID from a logs:{serverID}:{containerID}
-// channel. Channels of any other shape have no server to authorize.
 func logChannelServerID(channel string) (uuid.UUID, bool) {
 	parts := strings.SplitN(channel, ":", 3)
 	if len(parts) != 3 || parts[0] != "logs" {
@@ -377,8 +299,6 @@ func logChannelServerID(channel string) (uuid.UUID, bool) {
 	return id, true
 }
 
-// initialChannels reads the preselected subscriptions from the query string:
-// repeated ?channel=logs:s:c wins, else ?server=s&container=c builds one.
 func initialChannels(r *http.Request) []string {
 	query := r.URL.Query()
 	if channels := query["channel"]; len(channels) > 0 {

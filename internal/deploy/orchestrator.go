@@ -20,9 +20,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Orchestrator tunables. Every step runs under its own timeout; a build gets a
-// much larger budget than a clone or a container start because it streams a
-// whole toolchain run.
 const (
 	defaultWorkers       = 2
 	defaultQueueSize     = 64
@@ -33,78 +30,49 @@ const (
 	defaultHealthPoll    = 3 * time.Second
 )
 
-// job is one queued deployment together with everything its run needs: the
-// application snapshot taken at submit time, and the container the new
-// release retires (best-effort stop before the new one starts).
 type job struct {
 	app      Application
 	dep      Deployment
 	previous string
 }
 
-// proxySyncTimeout bounds one best-effort proxy resync. A sync that must
-// bootstrap the Traefik container (image pull) may exceed it; the node's
-// validation bootstrap or a manual POST /v1/proxy/sync completes it then.
 const proxySyncTimeout = time.Minute
 
-// ProxySync receives a node id after a change that affects its routing
-// configuration. It is implemented by *proxy.SyncService and wired by
-// internal/server; nil disables proxy synchronization.
 type ProxySync interface {
 	SyncServer(ctx context.Context, serverID uuid.UUID) error
 }
 
-// runState is the mutable state of one running deployment.
 type runState struct {
-	app      Application
-	dep      Deployment
-	node     Node
-	previous string
-	repoDir  string
-	target   Target
-	log      func(string)
-	// rec tees every emitted line for the persisted build log (JUS-84).
-	rec *logRecorder
-	// composeRaw is the unresolved compose document of a compose run
-	// (stored text or the file read from the checkout); composeYAML is the
-	// rendered document with the port mapping injected, composeImages the
-	// image references it declares, composeCommit the repo commit it was
-	// read from ("" for pasted sources), and composeEnv the project
-	// environment it was rendered with (which redacts node errors).
+	app           Application
+	dep           Deployment
+	node          Node
+	previous      string
+	repoDir       string
+	target        Target
+	log           func(string)
+	rec           *logRecorder
 	composeRaw    string
 	composeYAML   string
 	composeImages []string
 	composeCommit string
 	composeEnv    map[string]string
-	// commitInfo is the clone commit resolveComposeContent already read (a
-	// compose run); commitDone marks it final so recordCommit reuses it
-	// instead of forking git again.
-	commitInfo CommitInfo
-	commitDone bool
+	commitInfo    CommitInfo
+	commitDone    bool
 }
 
-// Orchestrator runs deployment state machines on a fixed worker pool. Each
-// run walks stepsFor(kind), persisting every transition and mirroring it to
-// the realtime log channel; only ErrAgentUnavailable is retried, and only
-// within the step that failed.
 type Orchestrator struct {
-	repo     Repository
-	source   Source
-	dial     DialFunc
-	emitter  *Emitter
-	tasks    *taskevents.Tracker
-	taskEmit *taskevents.Emitter
-	notifier Notifier
-	secret   string
-	logger   *slog.Logger
-	proxy    ProxySync
-	// toolStatus gates a deploy on the target node's installed build
-	// toolchains and steers auto-detection away from a missing engine (see
-	// Config.ToolStatus); nil disables both.
+	repo       Repository
+	source     Source
+	dial       DialFunc
+	emitter    *Emitter
+	tasks      *taskevents.Tracker
+	taskEmit   *taskevents.Emitter
+	notifier   Notifier
+	secret     string
+	logger     *slog.Logger
+	proxy      ProxySync
 	toolStatus ToolStatus
-	// gitLookup resolves git remote hostnames for the SSRF host policy
-	// (see pinGitRemoteHost); nil selects the system resolver.
-	gitLookup gitHostLookupFunc
+	gitLookup  gitHostLookupFunc
 
 	queue         chan job
 	workers       int
@@ -121,25 +89,17 @@ type Orchestrator struct {
 	closeOnce  sync.Once
 }
 
-// newOrchestrator wires an Orchestrator from cfg, filling every unset tunable
-// with its default.
 func newOrchestrator(cfg Config) *Orchestrator {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 	warnManagedVolumeRoot(logger)
-	// The repository doubles as the cloner's deploy-key resolver, so a key
-	// lookup and a deployment share one connection pool (and one secret).
 	repo := cfg.repository()
 	source := cfg.Source
 	if source == nil {
 		source = gitSource{keys: repo, appTokens: cfg.AppTokens, creds: repo, logger: logger, lookup: cfg.GitLookupHost}
 	}
-	// The allow-private setting is process-wide (creation validators are
-	// free functions): installing it here covers every service built from
-	// config. It is only ever enabled, never cleared, so a test default
-	// cannot switch a configured allow back off.
 	if cfg.GitAllowPrivateHosts {
 		SetGitAllowPrivateHosts(true)
 	}
@@ -181,8 +141,6 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 
-	// The https pin needs git >= 2.37; older binaries get a startup warning
-	// (the policy still resolves and refuses everywhere).
 	checkGitVersionForPin(logger)
 
 	return &Orchestrator{
@@ -210,9 +168,6 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	}
 }
 
-// enqueue queues a deployment for the worker pool, starting the pool on first
-// use. A full queue blocks until the caller's context ends, so a submit
-// never silently drops a deployment.
 func (o *Orchestrator) enqueue(ctx context.Context, j job) error {
 	o.start()
 	select {
@@ -225,7 +180,6 @@ func (o *Orchestrator) enqueue(ctx context.Context, j job) error {
 	}
 }
 
-// start boots the worker pool exactly once.
 func (o *Orchestrator) start() {
 	o.startOnce.Do(func() {
 		for i := 0; i < o.workers; i++ {
@@ -235,7 +189,6 @@ func (o *Orchestrator) start() {
 	})
 }
 
-// worker consumes queued jobs until the orchestrator shuts down.
 func (o *Orchestrator) worker() {
 	defer o.wg.Done()
 	for {
@@ -248,8 +201,6 @@ func (o *Orchestrator) worker() {
 	}
 }
 
-// Close stops the pool and waits for in-flight runs to finish (they observe
-// the cancelled base context and terminate their steps early).
 func (o *Orchestrator) Close() error {
 	o.closeOnce.Do(func() {
 		o.baseCancel()
@@ -258,8 +209,6 @@ func (o *Orchestrator) Close() error {
 	return nil
 }
 
-// run drives one deployment from queued to a terminal state: dial the node,
-// walk the steps, and on any error record it as the terminal failure.
 func (o *Orchestrator) run(ctx context.Context, j job) {
 	st := &runState{
 		app:      j.app,
@@ -272,11 +221,6 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		st.rec.record(line)
 		o.emitter.Log(ctx, st.target, line)
 	}
-	// A panic anywhere in the run must still leave a terminal row and card
-	// behind: without this a panicking step wedges the active-deployment
-	// index (no fail() runs) and replays a stuck running card forever. The
-	// panic still propagates after the best-effort record, preserving the
-	// crash semantics.
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			o.panicFail(st, recovered)
@@ -293,9 +237,6 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 
 	st.log("deployment " + string(st.dep.Kind) + " accepted")
 
-	// A compose rollback carries its release's stored raw document: check it
-	// resolves before anything touches the node, so the run re-renders
-	// exactly what the target release ran, with the current environment.
 	if isComposeApp(j.app) && j.dep.Kind == KindRollback {
 		if strings.TrimSpace(j.dep.ComposeDocument) == "" {
 			o.fail(ctx, st, fmt.Errorf("%w: rollback has no stored compose document", ErrValidation))
@@ -319,9 +260,6 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		return
 	}
 
-	// A compose run proves the node enforces confinement before its first
-	// document reaches it. The check runs after the dial so an unreachable
-	// node keeps its retryable error.
 	if isComposeApp(j.app) {
 		if err := o.probeComposeConfinement(ctx, st.node, st.app); err != nil {
 			o.fail(ctx, st, err)
@@ -341,23 +279,12 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		o.fail(ctx, st, err)
 		return
 	}
-	// execute persisted the terminal running state, so the deployment row is
-	// terminal here: removeRetired and syncProxy are idempotent best-effort
-	// follow-ups that cannot change the outcome.
-	//
-	// The replacement is live: remove the retired container so its layers do not
-	// accumulate. Best effort — rollback redeploys the registry image, not the
-	// container, and the removal preserves named volumes and bind directories.
 	o.removeRetired(ctx, st)
-	// A release reached running: the node's routing may now point at the new
-	// container's published port. Best effort, see syncProxy.
 	o.syncProxy(ctx, st.app)
 	o.logger.Info("deploy: deployment finished",
 		"deployment_id", st.dep.ID, "application_id", st.app.ID, "image", st.dep.ImageTag)
 }
 
-// syncProxy pushes the routing state of the node hosting app. Applications
-// without an enabled domain have no route to refresh, so they are skipped.
 func (o *Orchestrator) syncProxy(ctx context.Context, app Application) {
 	if app.PrimaryDomain == nil {
 		return
@@ -365,10 +292,6 @@ func (o *Orchestrator) syncProxy(ctx context.Context, app Application) {
 	o.syncProxyServer(ctx, app.ServerID)
 }
 
-// syncProxyServer pushes the routing state of one node, best effort:
-// configuration is a pure function of the database, so a failed push is
-// repaired by the next mutation or by POST /v1/proxy/sync, and it must never
-// fail the operation that triggered it.
 func (o *Orchestrator) syncProxyServer(ctx context.Context, serverID uuid.UUID) {
 	if o.proxy == nil || serverID == uuid.Nil {
 		return
@@ -380,8 +303,6 @@ func (o *Orchestrator) syncProxyServer(ctx context.Context, serverID uuid.UUID) 
 	}
 }
 
-// execute walks the deployment's steps, persisting each transition before the
-// step runs and stopping at the first failure.
 func (o *Orchestrator) execute(ctx context.Context, st *runState) error {
 	steps := stepsForApp(st.dep.Kind, st.app.SourceType, st.app.Provider)
 	for i, step := range steps {
@@ -404,7 +325,6 @@ func (o *Orchestrator) execute(ctx context.Context, st *runState) error {
 	return o.transition(ctx, st, StateRunning)
 }
 
-// runStep dispatches one state-machine step.
 func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) error {
 	if isComposeApp(st.app) {
 		switch step {
@@ -444,28 +364,8 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 	}
 }
 
-// cloneSource selects the fetch step by application source type (GS-2,
-// GS-7, GS-8). A pasted Dockerfile materializes as the build tree (no clone,
-// no build-pack detection); compose runs resolve through cloneCompose; the
-// remaining types share the deploy-key cloner. The git/container partition
-// lives in SourceTypeImplemented, so the switch here cannot drift from the
-// deploy gate: legacy rows with an empty type behave as before, and anything
-// unimplemented fails closed with ErrSourceNotImplemented before any
-// container is touched. Image sources pass the gate but never reach this
-// step: stepsForApp routes their deploys straight to pushing, where the pull
-// happens.
-// composeConfinementProbe is a minimal valid document the capability
-// probe validates: a node that enforces confinement answers success with
-// the enforcement flag set, while a pre-confinement node answers success
-// without it (its config check passes valid compose).
 const composeConfinementProbe = "services:\n  probe:\n    image: scratch\n"
 
-// probeComposeConfinement asks the node to validate a minimal valid
-// document and requires its explicit enforcement signal. It is shared by
-// the deploy run (which fails closed) and the best-effort teardown (which
-// logs and proceeds). The explicit signal — never the mere absence of an
-// error — is the version gate for mixed fleets: capability evidence, not
-// a version-string comparison.
 func (o *Orchestrator) probeComposeConfinement(ctx context.Context, node Node, app Application) error {
 	_, enforced, err := node.ComposeValidate(ctx, services.ProjectName(app.ID), []byte(composeConfinementProbe))
 	if err != nil {
@@ -478,16 +378,6 @@ func (o *Orchestrator) probeComposeConfinement(ctx context.Context, node Node, a
 	return nil
 }
 
-// cloneSource selects the fetch step by application source type (GS-2,
-// GS-7, GS-8). A pasted Dockerfile materializes as the build tree (no clone,
-// no build-pack detection); compose runs resolve through cloneCompose; the
-// remaining types share the deploy-key cloner. The git/container partition
-// lives in SourceTypeImplemented, so the switch here cannot drift from the
-// deploy gate: legacy rows with an empty type behave as before, and anything
-// unimplemented fails closed with ErrSourceNotImplemented before any
-// container is touched. Image sources pass the gate but never reach this
-// step: stepsForApp routes their deploys straight to pushing, where the pull
-// happens.
 func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir string, log func(string)) error {
 	if !ValidSourceType(app.SourceType) {
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
@@ -508,19 +398,12 @@ func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir str
 		return nil
 	}
 	if isComposeApp(app) {
-		// Compose runs resolve through cloneCompose (which stashes the
-		// document in the run state); a direct call only resolves and
-		// validates, discarding the document.
 		_, _, err := o.resolveComposeContent(ctx, app, dir, log)
 		return err
 	}
 	return o.source.Clone(ctx, app, dir, log)
 }
 
-// attempt runs op up to MaxAttempts times, retrying only ErrAgentUnavailable
-// (the agent being unreachable), and persists the attempt counter so the API
-// shows retries. Every other failure — a build error, a failed healthcheck, a
-// step timeout — is terminal.
 func (o *Orchestrator) attempt(ctx context.Context, st *runState, what string, op func() error) error {
 	var err error
 	for try := 1; try <= o.maxAttempts; try++ {
@@ -544,18 +427,12 @@ func (o *Orchestrator) attempt(ctx context.Context, st *runState, what string, o
 	return err
 }
 
-// installedTools returns the target node's catalog tool state for
-// auto-detection, or nil when the node is unset, the pack is not EngineAuto,
-// the toolchain surface is unwired, or the lookup fails. A nil set leaves
-// detection marker-only and buildtool.Available the last guard.
 func (o *Orchestrator) installedTools(ctx context.Context, serverID uuid.UUID, kind builds.EngineKind) map[string]bool {
 	if o.toolStatus == nil || kind != builds.EngineAuto || serverID == uuid.Nil {
 		return nil
 	}
 	tools, err := o.toolStatus.InstalledToolIDs(ctx, serverID)
 	if err != nil {
-		// Fail open to marker-only detection; buildtool.Available still guards
-		// the chosen engine, and the deploy log names the cause.
 		o.logger.Warn("deploy: tool lookup for auto-detection failed; using marker-only detection",
 			"server_id", serverID, "error", err)
 		return nil
@@ -563,16 +440,7 @@ func (o *Orchestrator) installedTools(ctx context.Context, serverID uuid.UUID, k
 	return tools
 }
 
-// build runs the application's build engine over the cloned tree. The node
-// builder streams the context to the agent (BuildImage), which builds and
-// pushes to the node-local registry; toolchain engines (railpack, buildpacks)
-// shell out on the control plane instead and leave the image in the local
-// daemon — the pushing step accounts for that difference.
 func (o *Orchestrator) build(ctx context.Context, st *runState) error {
-	// Dockerfile applications skip build-pack detection: the content
-	// materialized by cloneSource is the whole context, built with the
-	// Dockerfile engine and the application's --build-arg pairs through the
-	// same node BuildImage path as git builds.
 	kind := builds.EngineDockerfile
 	buildArgs := st.app.BuildArgs
 	if st.app.SourceType != SourceDockerfile {
@@ -621,12 +489,6 @@ func (o *Orchestrator) build(ctx context.Context, st *runState) error {
 	return nil
 }
 
-// push makes sure the built image is usable from the node before any running
-// container is retired. Every engine now builds through the node and returns a
-// registry reference, so a missing reference is a hard error: retiring the
-// previous container and only then discovering the image is absent would take
-// the application down with no replacement. Image sources pull the prebuilt
-// reference instead (there is nothing to build).
 func (o *Orchestrator) push(ctx context.Context, st *runState) error {
 	if NormalizeSourceType(st.app.SourceType, st.app.Provider) == SourceImage {
 		return o.pullImage(ctx, st)
@@ -646,19 +508,6 @@ func (o *Orchestrator) push(ctx context.Context, st *runState) error {
 	return nil
 }
 
-// pullImage fetches the prebuilt reference of an image source on the target
-// node. A fresh deploy pulls the application's reference (the tag may have
-// moved since the last release); a rollback pulls the digest-pinned reference
-// the rollback seeded, so it redeploys the exact previous bits. The resolved
-// digest is recorded on the deployment. The registry credential travels per
-// pull and is never persisted on the node; log lines and errors carry the
-// reference only, never the credential.
-//
-// The credential is bound to the registry host it was entered for (see the
-// update path): it is sent only when the pull reference is on the same host
-// as the application's current reference. A rollback to a release recorded
-// on another host pulls anonymously and says so, so the secret can never
-// follow a moved tag or an old release to a foreign registry.
 func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
 	ref := strings.TrimSpace(st.app.ImageRef)
 	if st.dep.Kind == KindRollback {
@@ -685,8 +534,6 @@ func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
 	if err != nil {
 		return err
 	}
-	// A pinned reference must resolve to its pin: the engine enforces the pin
-	// on pull, and this asserts the recorded digest agrees with it.
 	if parsed, parseErr := ParseImageReference(ref); parseErr == nil && parsed.Pinned() &&
 		digest != "" && !strings.EqualFold(digest, parsed.Digest) {
 		return fmt.Errorf("%w: pulled digest %s does not match the pinned %s", ErrValidation, digest, parsed.Digest)
@@ -698,14 +545,8 @@ func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
 	if digest != "" {
 		st.dep.Digest = digest
 	} else if st.dep.Kind == KindRollback {
-		// A rollback pulls its pinned reference, so a missing digest here
-		// means the node could not report one for the release being
-		// restored — never a silent fall-forward to another tag.
 		st.log("rollback pulled " + ref + " without a reported digest")
 	} else {
-		// No digest came back: the deployment still runs the pulled tag, but
-		// a rollback of this release would re-pull the moving tag, so the
-		// log says so while the release it describes is still a deploy.
 		st.log("image pulled without a recorded digest: a rollback of this release will re-pull the tag " + ref)
 	}
 	if _, err := o.repo.UpdateDeployment(ctx, st.dep); err != nil {
@@ -719,25 +560,11 @@ func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
 	return nil
 }
 
-// startContainer retires the container this deployment replaces, runs the new
-// one with the application's runtime payload, and gates success on the
-// post-start healthcheck.
-//
-// Ordering is a correctness property: the complete runtime payload is
-// assembled and validated (config queries, secret decryption, volume specs)
-// BEFORE the previous container is stopped, so a configuration failure fails
-// the deploy without taking the live release down. Retirement itself must be
-// confirmed — an unconfirmed stop would leave two releases running.
 func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	envVars, secrets, err := o.repo.ListEnvConfig(ctx, st.app.ID)
 	if err != nil {
 		return err
 	}
-	// Shared variables layer beneath the application's own (project <
-	// environment < application). The read lands before the payload is
-	// assembled and validated, so a failure still fails the deploy without
-	// retiring the live release. A preview inherits its base application's
-	// environment, so its deploys merge the same scopes.
 	sharedProject, sharedEnvironment, err := o.repo.ListSharedVariables(ctx, st.app.ProjectID, st.app.EnvironmentID)
 	if err != nil {
 		return err
@@ -748,9 +575,6 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 		return err
 	}
 	warnLegacyStorageResolution(o.logger, st.app.ID, storages)
-	// An application's published ports are the distinct target ports of its
-	// domains; an application with no domain publishes nothing and deploys
-	// without a route (JUS-233). The primary domain's port also seeds PORT.
 	domains, err := o.repo.ListApplicationDomains(ctx, st.app.ID)
 	if err != nil {
 		return err
@@ -760,10 +584,6 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	if err != nil {
 		return err
 	}
-	// A build that produced no registry reference has no image the node can
-	// pull: refuse before stopping the live release rather than discovering it
-	// after the replacement starts. This duplicates the push step's guard on
-	// purpose: startContainer is the retirement boundary and must stand alone.
 	if strings.TrimSpace(st.dep.RegistryImage) == "" {
 		return fmt.Errorf("%w: image %s was not pushed to the node registry; refusing to retire the running container",
 			ErrValidation, st.dep.ImageTag)
@@ -774,19 +594,11 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 			return err
 		}
 	}
-	// Clear any other container of this application before Run. A lost Run
-	// response whose id was never recorded would otherwise keep the
-	// deterministic name and, with a pinned host port, that port — wedging
-	// every later deploy. Detached and bounded like the other cleanup paths.
 	o.reconcileDetached(ctx, st)
 
 	st.log("starting container " + request.Name + " from " + request.Image)
 	containerID, err := st.node.Run(ctx, request)
 	if err != nil {
-		// The create may have succeeded before the failure; remove whatever it
-		// left so it cannot outlive the run untracked. reconcileDetached is
-		// itself detached and bounded, so a step timeout or shutdown (exactly
-		// when an untracked container is most likely) still cleans up.
 		o.reconcileDetached(ctx, st)
 		return err
 	}
@@ -801,10 +613,6 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	return o.waitHealthy(healthCtx, st, containerID)
 }
 
-// retirePrevious stops the container this deployment replaces and requires a
-// confirmed retirement: the stop succeeded, or the container is verifiably
-// already gone. Every other outcome fails the deploy closed, so a failed stop
-// can never leave two releases running.
 func (o *Orchestrator) retirePrevious(ctx context.Context, st *runState) error {
 	stopErr := st.node.Stop(ctx, st.previous)
 	if stopErr == nil {
@@ -819,8 +627,6 @@ func (o *Orchestrator) retirePrevious(ctx context.Context, st *runState) error {
 	return fmt.Errorf("deploy: failed to retire previous container %s: %w", shortID(st.previous), stopErr)
 }
 
-// containerPresent reports whether containerID (or its unambiguous prefix) is
-// still known to the node.
 func (o *Orchestrator) containerPresent(ctx context.Context, st *runState, containerID string) (bool, error) {
 	containers, err := st.node.Containers(ctx)
 	if err != nil {
@@ -834,8 +640,6 @@ func (o *Orchestrator) containerPresent(ctx context.Context, st *runState, conta
 	return false, nil
 }
 
-// sameContainer reports whether two Docker ids refer to the same container,
-// tolerating the short-id prefixes the agent may report.
 func sameContainer(a, b string) bool {
 	if a == "" || b == "" {
 		return a == b
@@ -843,24 +647,12 @@ func sameContainer(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
 
-// reconcileDetached runs reconcileApplicationContainers on a bounded context
-// detached from the run, so a cancelled step or shutdown still lets the
-// best-effort cleanup reach the node.
 func (o *Orchestrator) reconcileDetached(ctx context.Context, st *runState) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
 	defer cancel()
 	o.reconcileApplicationContainers(cleanupCtx, st)
 }
 
-// reconcileApplicationContainers removes every container of this application
-// except the one the deployment replaces (st.previous, already retired). It is
-// what clears an orphan left by a lost Run response whose deployment id was
-// never recorded: such an orphan keeps its deterministic name and, with a
-// pinned host port, that port, so it would otherwise wedge every later deploy.
-// It is safe under the current fencing — delete, a move and manual control are
-// refused while this deployment is non-terminal, so no other release of the
-// application can be live — and st.previous is kept until the replacement is
-// confirmed. Best effort: a listing or removal failure is logged, never fatal.
 func (o *Orchestrator) reconcileApplicationContainers(ctx context.Context, st *runState) {
 	containers, err := st.node.Containers(ctx)
 	if err != nil {
@@ -882,8 +674,6 @@ func (o *Orchestrator) reconcileApplicationContainers(ctx context.Context, st *r
 	}
 }
 
-// removeRetired removes the container this deployment replaced, once the new
-// release is running. Best effort: a failed removal only leaves layers behind.
 func (o *Orchestrator) removeRetired(ctx context.Context, st *runState) {
 	if st.previous == "" {
 		return
@@ -895,10 +685,6 @@ func (o *Orchestrator) removeRetired(ctx context.Context, st *runState) {
 	st.log("removed retired container " + shortID(st.previous))
 }
 
-// waitHealthy polls the node until the container reports healthy, exits or
-// the health window closes. A container without a Docker healthcheck is
-// healthy as soon as it is running, which is Docker's own semantics: only an
-// explicit "(unhealthy)" marker or a non-running state fails the deploy.
 func (o *Orchestrator) waitHealthy(ctx context.Context, st *runState, containerID string) error {
 	ticker := time.NewTicker(o.healthPoll)
 	defer ticker.Stop()
@@ -925,8 +711,6 @@ func (o *Orchestrator) waitHealthy(ctx context.Context, st *runState, containerI
 	}
 }
 
-// healthState inspects one container on the node and classifies it as
-// "healthy", "starting", "unhealthy" or "exited".
 func (o *Orchestrator) healthState(ctx context.Context, st *runState, containerID string) (string, error) {
 	containers, err := st.node.Containers(ctx)
 	if err != nil {
@@ -952,17 +736,10 @@ func (o *Orchestrator) healthState(ctx context.Context, st *runState, containerI
 	case info.GetState() != "running":
 		return "exited", nil
 	default:
-		// "(healthy)" or a container with no healthcheck configured at all.
 		return "healthy", nil
 	}
 }
 
-// transition persists one legal state-machine edge and mirrors it to the
-// realtime channel. The deployment clock starts when it leaves queued and
-// stops on a terminal state. In-memory state advances only after the write
-// succeeds: a failed persist must not leave the run believing it reached a
-// state the database never saw (which would make fail() unable to record the
-// terminal failure and wedge the active-deployment index).
 func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) error {
 	from := st.dep.State
 	if !CanTransition(from, to) {
@@ -982,9 +759,6 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 		return fmt.Errorf("deploy: persist state %s: %w", to, err)
 	}
 	st.dep = updated
-	// The stored log must be readable the moment the terminal event lands:
-	// persist before publishing, so a UI fetch on the state flip never sees
-	// an empty log. Still warn-only on failure (see persistBuildLog).
 	if to.Terminal() {
 		st.rec.record(stateLine(from, to))
 		o.persistBuildLog(ctx, st)
@@ -993,8 +767,6 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 	if to.Terminal() {
 		o.notify(ctx, st, to)
 		if to == StateRunning {
-			// Detached like the failure path: a cancel landing right
-			// after the terminal write must not drop the card flip.
 			detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			o.publishTask(detached, st.app, st.dep, taskevents.StatusSucceeded, "", 100, "")
 			cancel()
@@ -1003,8 +775,6 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 	return nil
 }
 
-// persistBuildLog stores the run's teed lines on the deployment row. Best
-// effort: a failure is logged and never fails the run it records.
 func (o *Orchestrator) persistBuildLog(ctx context.Context, st *runState) {
 	if o.repo == nil {
 		return
@@ -1017,53 +787,28 @@ func (o *Orchestrator) persistBuildLog(ctx context.Context, st *runState) {
 	}
 }
 
-// fail records the terminal failure: the error text on the row, the failed
-// transition and one log line. It uses a detached context so a cancelled run
-// (shutdown, step timeout) still leaves a terminal row behind — otherwise the
-// partial unique index would block every future deploy of the application. The
-// failed state is forced directly rather than routed through CanTransition, so
-// a run whose in-memory state was left terminal by a failed running write
-// still records the failure.
 func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
 	st.dep.Error = truncateError(cause)
 	o.logger.Error("deploy: deployment failed",
 		"deployment_id", st.dep.ID, "application_id", st.app.ID, "state", st.dep.State, "error", cause)
 
-	// Detached so a cancelled run (shutdown, step timeout) still leaves a
-	// terminal row behind — otherwise the partial unique index would block
-	// every future deploy of the application — and still publishes its
-	// terminal card, so no stuck running card is replayed on reconnect.
 	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	// The final line is part of the stored log, so it is recorded before the
-	// terminal write below persists it (and before its state event).
 	st.log("deployment failed: " + st.dep.Error)
 	adopted, err := o.forceFail(detached, st)
 	if err != nil {
 		o.logger.Error("deploy: could not persist failed state",
 			"deployment_id", st.dep.ID, "error", err)
 	}
-	// An adopted row already reached its terminal state (and its card) on
-	// another write: publishing failed here would flip a live card. Any other
-	// outcome — committed or not — publishes, so the tracker always drains.
 	if !adopted {
 		o.publishTask(detached, st.app, st.dep, taskevents.StatusFailed, "", 0, st.dep.Error)
 	}
 }
 
-// forceFail writes the terminal failed state unconditionally, emitting the
-// transition event only when it is a real edge. It is the failure-path
-// counterpart of transition: it must succeed even when the in-memory state no
-// longer admits a legal edge to failed. It refuses to downgrade a row that a
-// previous ambiguous write already committed terminal (running or failed),
-// reporting adopted=true so the caller skips the failed card for a run that
-// already has its terminal state.
 func (o *Orchestrator) forceFail(ctx context.Context, st *runState) (bool, error) {
 	from := st.dep.State
 	if current, err := o.repo.GetDeployment(ctx, st.dep.ApplicationID, st.dep.ID); err == nil && current.State.Terminal() {
 		st.dep = current
-		// Best effort: the outcome is committed, but this run's lines may
-		// not be stored yet.
 		o.persistBuildLog(ctx, st)
 		return true, nil
 	}
@@ -1081,8 +826,6 @@ func (o *Orchestrator) forceFail(ctx context.Context, st *runState) (bool, error
 	}
 	st.dep = updated
 	if from != StateFailed {
-		// Persist before the terminal event (see transition): a UI fetch on
-		// the state flip must see the log, not an empty row.
 		st.rec.record(stateLine(from, StateFailed))
 		o.persistBuildLog(ctx, st)
 		o.emitter.State(ctx, st.target, from, StateFailed)
@@ -1091,7 +834,6 @@ func (o *Orchestrator) forceFail(ctx context.Context, st *runState) (bool, error
 	return false, nil
 }
 
-// dialNode opens the agent of the deployment's server.
 func (o *Orchestrator) dialNode(ctx context.Context, serverID uuid.UUID) (Node, error) {
 	if o.dial == nil {
 		return nil, fmt.Errorf("%w: agent dialer is not configured", ErrAgentUnavailable)
@@ -1106,10 +848,6 @@ func (o *Orchestrator) dialNode(ctx context.Context, serverID uuid.UUID) (Node, 
 	return node, nil
 }
 
-// publishTask records one task lifecycle event in the running-task tracker
-// and fans it out on the application team's task channel. Terminal statuses
-// leave the tracker; the card auto-dismisses on success and stays on failure.
-// Realtime updates are best-effort and never fail the run they describe.
 func (o *Orchestrator) publishTask(ctx context.Context, app Application, dep Deployment, status taskevents.Status, step State, progress int, errMsg string) {
 	if o == nil || o.tasks == nil {
 		return
@@ -1136,8 +874,6 @@ func (o *Orchestrator) publishTask(ctx context.Context, app Application, dep Dep
 	}
 }
 
-// TaskTracker returns the running-task tracker feeding the progress card
-// snapshot. The server replays it on every task-channel (re)subscribe.
 func (s *Service) TaskTracker() *taskevents.Tracker {
 	if s == nil || s.Orchestrator == nil {
 		return nil
@@ -1145,9 +881,6 @@ func (s *Service) TaskTracker() *taskevents.Tracker {
 	return s.tasks
 }
 
-// panicFail records a panicking run as failed on a detached context and
-// publishes its terminal card. It runs from run's recovery defer, so it must
-// never panic itself: every step is best-effort.
 func (o *Orchestrator) panicFail(st *runState, recovered any) {
 	if o == nil || st == nil {
 		return
@@ -1168,21 +901,16 @@ func (o *Orchestrator) panicFail(st *runState, recovered any) {
 	}()
 }
 
-// lineLog accumulates streamed output and forwards complete lines to the
-// deploy log, so partial chunks from a build tool never split a log event.
 type lineLog struct {
 	mu      sync.Mutex
 	pending []byte
 	emit    func(string)
 }
 
-// newLineLog binds a line writer to one log function.
 func newLineLog(emit func(string)) *lineLog {
 	return &lineLog{emit: emit}
 }
 
-// io.Writer implementation used as builds.BuildOptions.LogWriter and for raw
-// build chunks.
 func (l *lineLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -1199,7 +927,6 @@ func (l *lineLog) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Flush emits whatever partial line is buffered.
 func (l *lineLog) Flush() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -1209,7 +936,6 @@ func (l *lineLog) Flush() {
 	}
 }
 
-// emitLine forwards one line to the log function, skipping blank ones.
 func (l *lineLog) emitLine(line string) {
 	if l.emit == nil || strings.TrimSpace(line) == "" {
 		return
@@ -1217,7 +943,6 @@ func (l *lineLog) emitLine(line string) {
 	l.emit(line)
 }
 
-// shortID renders the head of a Docker ID for log lines.
 func shortID(id string) string {
 	if len(id) > 12 {
 		return id[:12]

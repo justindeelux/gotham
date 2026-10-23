@@ -8,12 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// goldenRedirectID is a fixed rule id so generated names are stable.
 const goldenRedirectID = "dddddddd-1111-2222-3333-444444444444"
 
-// goldenRedirectYAML is the dynamic document for the redirect below: one
-// router + middleware pair on the web entrypoint, and the shared service with
-// no servers that Traefik requires on the router.
 const goldenRedirectYAML = `http:
   routers:
     gotham-redirect-dddddddd-1111-2222-3333-444444444444:
@@ -35,7 +31,6 @@ const goldenRedirectYAML = `http:
         permanent: true
 `
 
-// goldenRedirectTOML is the TOML form of goldenRedirectYAML.
 const goldenRedirectTOML = `[http]
 [http.routers]
 [http.routers.gotham-redirect-dddddddd-1111-2222-3333-444444444444]
@@ -57,7 +52,6 @@ replacement = 'https://new.example.com${1}'
 permanent = true
 `
 
-// goldenRedirect is the generation input the redirect goldens render from.
 func goldenRedirect() Redirect {
 	return Redirect{
 		ID:           uuid.MustParse(goldenRedirectID),
@@ -68,8 +62,6 @@ func goldenRedirect() Redirect {
 	}
 }
 
-// TestGenerateRedirectGolden locks the generated router/middleware/service
-// trio for a path-preserving permanent redirect in both document syntaxes.
 func TestGenerateRedirectGolden(t *testing.T) {
 	cases := []struct {
 		format  Format
@@ -92,10 +84,6 @@ func TestGenerateRedirectGolden(t *testing.T) {
 	}
 }
 
-// TestBuildConfigRedirectTerminatesWithoutBackend proves the two safety
-// properties of a redirect router: it references a service with no servers
-// (so it can never proxy anywhere), and its only middleware is the
-// redirectRegex that terminates the request before the service is consulted.
 func TestBuildConfigRedirectTerminatesWithoutBackend(t *testing.T) {
 	redirect := goldenRedirect()
 	cfg := BuildConfig(nil, []Redirect{redirect}, nil, "", "")
@@ -139,8 +127,6 @@ func TestBuildConfigRedirectTerminatesWithoutBackend(t *testing.T) {
 	}
 }
 
-// TestBuildConfigRedirectPathAndCodeMapping proves the preserve_path and code
-// mapping onto Traefik's redirectRegex semantics.
 func TestBuildConfigRedirectPathAndCodeMapping(t *testing.T) {
 	id := uuid.MustParse("eeeeeeee-1111-2222-3333-444444444444")
 	cases := []struct {
@@ -185,8 +171,6 @@ func TestBuildConfigRedirectPathAndCodeMapping(t *testing.T) {
 	}
 }
 
-// TestBuildConfigWithoutRedirectsIsUnchanged proves a redirect-free node emits
-// no service and no middleware, so BE-6.1/BE-6.2 documents are untouched.
 func TestBuildConfigWithoutRedirectsIsUnchanged(t *testing.T) {
 	cfg := BuildConfig(nil, nil, nil, "", "")
 	if len(cfg.Services) != 0 || len(cfg.Middlewares) != 0 || len(cfg.Routers) != 0 {
@@ -194,8 +178,6 @@ func TestBuildConfigWithoutRedirectsIsUnchanged(t *testing.T) {
 	}
 }
 
-// TestGenerateRedirectsDeterministic proves redirect generation is
-// order-independent: the same rules in any order yield identical bytes.
 func TestGenerateRedirectsDeterministic(t *testing.T) {
 	first := uuid.MustParse(goldenRedirectID)
 	second := uuid.MustParse("eeeeeeee-1111-2222-3333-444444444444")
@@ -221,13 +203,6 @@ func TestGenerateRedirectsDeterministic(t *testing.T) {
 	}
 }
 
-// TestRedirectRegexIsAuthorityAgnostic proves the match expression never
-// re-encodes the source host: the middleware is only attached to the matching
-// Host(source) router, so the router's canonicalization (case, one
-// fully-qualified trailing dot, bracketed authorities, numeric/empty/
-// non-numeric ports) is the single source of truth. A form the router accepts
-// but the regex misses falls through to the backend-less service and violates
-// the always-terminates guarantee, so the pattern must match every authority.
 func TestRedirectRegexIsAuthorityAgnostic(t *testing.T) {
 	pattern := regexp.MustCompile(RedirectRegexPattern(true))
 	if strings.Contains(pattern.String(), "example.com") {
@@ -246,11 +221,8 @@ func TestRedirectRegexIsAuthorityAgnostic(t *testing.T) {
 		"http://[old.example.com]:80/path",
 		"http://[old.example.com]/path",
 		"http://[OLD.EXAMPLE.COM.]:abc/path",
-		// Absolute-form request targets keep their URI scheme in the raw URL.
 		"https://old.example.com/path?q=1",
-		// An authority without a path still terminates.
 		"http://old.example.com",
-		// A query-only remainder is preserved, not dropped.
 		"http://old.example.com?q=1",
 	}
 	for _, rawURL := range matches {
@@ -259,8 +231,6 @@ func TestRedirectRegexIsAuthorityAgnostic(t *testing.T) {
 		}
 	}
 
-	// Only full http(s) URLs reach the middleware; anything else must not be
-	// rewritten by it.
 	nonMatches := []string{
 		"ftp://old.example.com/path",
 		"old.example.com/path",
@@ -273,8 +243,6 @@ func TestRedirectRegexIsAuthorityAgnostic(t *testing.T) {
 		}
 	}
 
-	// The drop-path variant matches the same authority class and discards the
-	// remainder.
 	dropPath := regexp.MustCompile(RedirectRegexPattern(false))
 	for _, rawURL := range matches {
 		if !dropPath.MatchString(rawURL) {
@@ -283,8 +251,6 @@ func TestRedirectRegexIsAuthorityAgnostic(t *testing.T) {
 	}
 }
 
-// TestRedirectRegexCapturesPathAndQuery proves the captured group keeps the
-// whole remainder after the authority (path and query) for every host form.
 func TestRedirectRegexCapturesPathAndQuery(t *testing.T) {
 	pattern := regexp.MustCompile(RedirectRegexPattern(true))
 	for _, rawURL := range []string{

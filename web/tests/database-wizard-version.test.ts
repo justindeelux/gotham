@@ -1,8 +1,3 @@
-// PE-8 (JUS-37): the create-database Version select was blank although
-// creation worked — form.version started as "" and only the placeholder
-// named the default. The engine default is now preselected, so the select
-// always shows a value. Fails on the old code ("" on open and on engine
-// switch).
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";

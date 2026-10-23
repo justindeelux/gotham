@@ -17,22 +17,7 @@ import { provideProviders } from "@/features/domains/composables/useProviders";
 import { provideRedirects } from "@/features/domains/composables/useRedirects";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
-/**
- * Domains & SSL page: DNS provider credentials, certificate configurations,
- * domain redirect rules and the generated Traefik router list, all backed by
- * the proxy API. Certificate status/expiry is observed live from the owning
- * node; the router list is regenerated from control-plane state on read and
- * an unreadable node is reported, never invented.
- *
- * Thin route component: the tab shell, page head and KPI tiles live here;
- * every section (panels, dialogs, state) lives in its own component or
- * composable.
- */
-
 const proxyStore = useProxyStore();
-// Per page instance: the panels and dialogs share this state via inject,
-// and it is dropped on unmount — a revisit starts with closed dialogs,
-// blank drafts and pending tiles.
 const { load } = provideDomainsOverview();
 const { openProviderCreate } = provideProviders();
 const { openCertificateCreate } = provideCertificates();

@@ -1,11 +1,3 @@
-// FX-14b frontend checks for the database pages.
-//
-// The repo has no web unit-test runner (no vitest/jsdom), so this script
-// bundles the pure helpers with the project's own esbuild and asserts their
-// behaviour directly. It covers the two frontend findings with pure logic:
-// D3-3 (future-aware relativeTime) and D3-5 (explicit target clear marker).
-//
-// Run from web/:  node scripts/db-web-check.mjs
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,7 +6,6 @@ import { pathToFileURL } from "node:url";
 
 import { build } from "esbuild";
 
-// ── tiny assertion harness ───────────────────────────────────────────────
 const results = [];
 
 async function check(name, fn) {
@@ -34,10 +25,8 @@ function assert(condition, message) {
   }
 }
 
-// Web source root for the "@" import alias (mirrors vite.config.ts).
 const srcDir = new URL("../src", import.meta.url).pathname;
 
-// ── load a TypeScript module through esbuild ─────────────────────────────
 async function loadModule(relativePath) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-db-check-"));
   const outfile = join(directory, "module.mjs");
@@ -58,7 +47,6 @@ async function loadModule(relativePath) {
   };
 }
 
-/** isoOffset returns an ISO timestamp offset from now by deltaSeconds. */
 function isoOffset(deltaSeconds) {
   return new Date(Date.now() + deltaSeconds * 1000).toISOString();
 }

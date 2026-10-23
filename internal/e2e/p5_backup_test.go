@@ -31,86 +31,45 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Phase 5 (BE-5.2) backup acceptance suite. It drives the production HTTP
-// surface (databases + backups) through the real control-plane services onto a
-// real node agent and the local Docker daemon: create a managed PostgreSQL,
-// back it up, drop only the disposable table, restore, and prove the rows come
-// back byte for byte. It reuses the Phase 4 harness vocabulary (agent, store,
-// Redis-free container service) instead of inventing another framework.
-//
-// The gate is explicit: without GOTHAM_E2E=1 the suite skips (a plain
-// `go test ./...` stays green on machines without Docker or Postgres), but an
-// enabled run treats every missing prerequisite as a failure — no skipped
-// scenario can masquerade as a passing acceptance run.
 const (
 	p5Secret = p4Secret
 
-	// p5StagingChunkProxy is the acceptance proxy for "larger than one staging
-	// chunk": the restore stages an artifact 90 000 raw bytes at a time
-	// (databases.stageChunkBytes), so an artifact above 97 KiB necessarily
-	// spans at least two chunks.
 	p5StagingChunkProxy = 97 << 10
 
-	// p5JobWait bounds one dump/restore job and the polling that waits for it.
 	p5JobWait      = 12 * time.Minute
 	p5PollInterval = 1 * time.Second
 	p5SQLWait      = 5 * time.Minute
 
-	// p5RestoreFailWait bounds how long a deliberately broken restore may take
-	// to surface its terminal failure; p5RestoreFailBound is the promptness
-	// expectation asserted for it.
 	p5RestoreFailWait  = 3 * time.Minute
 	p5RestoreFailBound = 90 * time.Second
 
-	// p5MinioImage is the disposable S3 endpoint. The upstream minio/minio
-	// image is no longer published on Docker Hub; elestio/minio is the
-	// maintained mirror and speaks the same S3 API.
 	p5MinioImage = "elestio/minio:latest"
 )
 
-// p5Suffix returns a short, Docker-safe, per-run identifier. Every resource
-// this suite creates (node, database, tables, MinIO container, bucket, target)
-// carries it so parallel workers on the same host cannot collide.
 func p5Suffix() string {
 	return strings.ReplaceAll(uuid.New().String(), "-", "")[:8]
 }
 
-// p5Harness is one control plane under test: the databases and backups HTTP
-// surface wired to a real PostgreSQL store, a real node agent and the local
-// Docker daemon. BackupManager resolves every object store itself, so a local
-// directory and an S3 target are exercised through the production code path.
 type p5Harness struct {
 	baseURL  string
 	client   *http.Client
 	serverID uuid.UUID
 	envID    uuid.UUID
-	// logs observes the control plane's own structured records so a restore
-	// that already failed terminally can end SQL polling immediately.
-	logs *p5LogWatcher
+	logs     *p5LogWatcher
 }
 
-// p5LogWatcher tees the control plane's slog records to the test logger and
-// records terminal restore outcomes keyed by backup id. It is how the suite
-// fails fast: the production service logs "databases: restore failed" with the
-// backup id before the test would notice through SQL polling.
 type p5LogWatcher struct {
-	next slog.Handler
-	// state is shared by every derived handler, so WithAttrs/WithGroup clones
-	// synchronize on the same mutex and maps.
-	state *p5LogWatcherState
-	// boundBackupID is the backup id attached with Logger.With, used when a
-	// record does not carry the attribute itself.
+	next          slog.Handler
+	state         *p5LogWatcherState
 	boundBackupID string
 }
 
-// p5LogWatcherState is the mutex-guarded outcome store shared by all clones.
 type p5LogWatcherState struct {
 	mu        sync.Mutex
 	failures  map[string]string
 	completed map[string]bool
 }
 
-// newP5LogWatcher wraps next with the restore-outcome recorder.
 func newP5LogWatcher(next slog.Handler) *p5LogWatcher {
 	return &p5LogWatcher{
 		next: next,
@@ -121,14 +80,10 @@ func newP5LogWatcher(next slog.Handler) *p5LogWatcher {
 	}
 }
 
-// Enabled implements slog.Handler.
 func (w *p5LogWatcher) Enabled(ctx context.Context, level slog.Level) bool {
 	return w.next.Enabled(ctx, level)
 }
 
-// Handle implements slog.Handler: it records restore outcomes and forwards
-// every record unchanged. A backup id bound with Logger.With is used when the
-// record itself does not carry one.
 func (w *p5LogWatcher) Handle(ctx context.Context, record slog.Record) error {
 	backupID, errText := w.boundBackupID, ""
 	record.Attrs(func(attr slog.Attr) bool {
@@ -155,8 +110,6 @@ func (w *p5LogWatcher) Handle(ctx context.Context, record slog.Record) error {
 	return w.next.Handle(ctx, record)
 }
 
-// WithAttrs implements slog.Handler: the clone shares the recorded state and
-// remembers a bound backup id.
 func (w *p5LogWatcher) WithAttrs(attrs []slog.Attr) slog.Handler {
 	clone := &p5LogWatcher{next: w.next.WithAttrs(attrs), state: w.state, boundBackupID: w.boundBackupID}
 	for _, attr := range attrs {
@@ -167,12 +120,10 @@ func (w *p5LogWatcher) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return clone
 }
 
-// WithGroup implements slog.Handler, sharing the recorded state.
 func (w *p5LogWatcher) WithGroup(name string) slog.Handler {
 	return &p5LogWatcher{next: w.next.WithGroup(name), state: w.state, boundBackupID: w.boundBackupID}
 }
 
-// restoreFailure reports the recorded terminal failure of a backup's restore.
 func (w *p5LogWatcher) restoreFailure(backupID string) (string, bool) {
 	w.state.mu.Lock()
 	defer w.state.mu.Unlock()
@@ -180,9 +131,6 @@ func (w *p5LogWatcher) restoreFailure(backupID string) (string, bool) {
 	return message, ok
 }
 
-// TestP5LogWatcherBoundBackupID proves a backup id attached with Logger.With is
-// honored when the record itself does not repeat the attribute, and that a
-// record-level attribute still wins.
 func TestP5LogWatcherBoundBackupID(t *testing.T) {
 	watcher := newP5LogWatcher(slog.NewTextHandler(io.Discard, nil))
 	logger := slog.New(watcher).With("backup_id", "backup-7")
@@ -197,9 +145,6 @@ func TestP5LogWatcherBoundBackupID(t *testing.T) {
 	}
 }
 
-// TestP5LogWatcherDerivedHandlerRace pins R4: a logger derived with With must
-// share the watcher's mutex with the original, so logging and polling cannot
-// race (run under -race).
 func TestP5LogWatcherDerivedHandlerRace(t *testing.T) {
 	watcher := newP5LogWatcher(slog.NewTextHandler(io.Discard, nil))
 	logger := slog.New(watcher).With("component", "backup")
@@ -220,7 +165,6 @@ func TestP5LogWatcherDerivedHandlerRace(t *testing.T) {
 	}
 }
 
-// p5Database is the database half of the API wire format.
 type p5Database struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -233,18 +177,15 @@ type p5Database struct {
 	Volume      string `json:"volume"`
 }
 
-// p5CreateDatabaseResponse carries the row and the generated credentials.
 type p5CreateDatabaseResponse struct {
 	Database    p5Database            `json:"database"`
 	Credentials databases.Credentials `json:"credentials"`
 }
 
-// p5DatabaseEnvelope wraps a single database, e.g. the start/lifecycle answer.
 type p5DatabaseEnvelope struct {
 	Database p5Database `json:"database"`
 }
 
-// p5Backup is the backup half of the API wire format.
 type p5Backup struct {
 	ID         string `json:"id"`
 	DatabaseID string `json:"database_id"`
@@ -255,17 +196,14 @@ type p5Backup struct {
 	Error      string `json:"error"`
 }
 
-// p5BackupEnvelope wraps a single backup.
 type p5BackupEnvelope struct {
 	Backup p5Backup `json:"backup"`
 }
 
-// p5BackupList wraps a backup list.
 type p5BackupList struct {
 	Backups []p5Backup `json:"backups"`
 }
 
-// p5RestoreEnvelope wraps a queued restore.
 type p5RestoreEnvelope struct {
 	Restore struct {
 		BackupID   string `json:"backup_id"`
@@ -275,7 +213,6 @@ type p5RestoreEnvelope struct {
 	} `json:"restore"`
 }
 
-// p5Target is the storage-target wire format.
 type p5Target struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
@@ -287,40 +224,27 @@ type p5Target struct {
 	HasCredentials bool   `json:"has_credentials"`
 }
 
-// p5TargetEnvelope wraps a single target.
 type p5TargetEnvelope struct {
 	Target p5Target `json:"target"`
 }
 
-// p5TargetCheck is the answer of the target connection test.
 type p5TargetCheck struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message"`
 }
 
-// p5TargetCheckEnvelope wraps a target connection test.
 type p5TargetCheckEnvelope struct {
 	Check p5TargetCheck `json:"check"`
 }
 
-// newP5Harness boots the backup stack for one Phase 5 test: real PostgreSQL
-// (migrated), the local Docker daemon, one node agent over mTLS, the databases
-// and backups domain services and the HTTP surface they are mounted on.
 func newP5Harness(t *testing.T) *p5Harness {
 	t.Helper()
 	requireE2E(t)
-	// The databases surface must be on, whatever the ambient environment says.
 	t.Setenv(databases.FeatureEnv, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// 1. PostgreSQL: the suite proves the real schema — databases, secrets,
-	// backups and targets. After an explicit GOTHAM_E2E=1 a broken database is
-	// a failure, not a skip. The diagnostic is deliberately generic: neither
-	// the DSN nor the raw connection/migration error may reach a log, whatever
-	// format the operator supplied (URL userinfo, keyword DSN or query
-	// password), because pgx/goose errors can embed the connection string.
 	dsn := p4DSN()
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("GOTHAM_E2E=1 requires a reachable, migrated Postgres (run: docker compose -f deploy/compose.dev.yml up -d); check GOTHAM_TEST_DSN")
@@ -332,8 +256,6 @@ func newP5Harness(t *testing.T) *p5Harness {
 	t.Cleanup(pool.Close)
 	st := store.New(pool)
 
-	// 2. Docker: the agent creates the database and runs every job container
-	// on the local daemon.
 	engine, err := agent.NewDockerClient(e2eDockerSock(), agent.WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("GOTHAM_E2E=1: docker client for %s: %v", e2eDockerSock(), err)
@@ -346,14 +268,12 @@ func newP5Harness(t *testing.T) *p5Harness {
 			e2eDockerSock(), err)
 	}
 
-	// 3. The node: one agent serving DockerService over mTLS.
 	suffix := p5Suffix()
 	nodeID := "p5-backup-smoke-" + suffix
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	t.Cleanup(agentCancel)
 	agentAddr, authority := startLocalAgent(t, agentCtx, engine, nodeID)
 
-	// 4. Rows: the caller and the node the database is assigned to.
 	user, err := st.CreateUser(ctx, fmt.Sprintf("p5-backup-smoke-%d@example.com", time.Now().UnixNano()), nil)
 	if err != nil {
 		t.Fatalf("create user: %v", err)
@@ -369,9 +289,6 @@ func newP5Harness(t *testing.T) *p5Harness {
 		t.Fatalf("create server: %v", err)
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
-	// No team middleware is mounted, so requests run creator-scoped; the
-	// personal team (ID = user ID, created with the account) scopes the
-	// environment validation.
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
 		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p5-backup-smoke",
 	})
@@ -388,8 +305,6 @@ func newP5Harness(t *testing.T) *p5Harness {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		// Deleting the user cascades to its databases, secrets, backups and
-		// targets; the node row has no owner and goes separately.
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
 			t.Logf("cleanup server row: %v", err)
 		}
@@ -398,9 +313,6 @@ func newP5Harness(t *testing.T) *p5Harness {
 		}
 	})
 
-	// 5. The shared container service, dialing the local agent exactly as the
-	// control plane does. NopCache keeps the run isolated from the shared dev
-	// Redis and from a parallel worker on the same box.
 	containersSvc := containers.NewService(containers.Config{
 		Registry: &staticRegistry{server: &servers.Server{ID: serverID}},
 		Cache:    containers.NopCache{},
@@ -411,9 +323,6 @@ func newP5Harness(t *testing.T) *p5Harness {
 	})
 	t.Cleanup(func() { _ = containersSvc.Close() })
 
-	// 6. The domain services and the HTTP surface, wired the way
-	// internal/server wires them. The scheduler is disabled so the suite drives
-	// every run itself; the logger is watched for terminal restore failures.
 	localDir := t.TempDir()
 	watcher := newP5LogWatcher(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	logger := slog.New(watcher)
@@ -456,9 +365,6 @@ func newP5Harness(t *testing.T) *p5Harness {
 	}
 }
 
-// api performs one API call against the harness control plane. body is sent as
-// JSON when non-nil; out is decoded only for a 2xx response, so error payloads
-// come back as raw text for the failure message.
 func (h *p5Harness) api(t *testing.T, method, path string, body, out any) (int, string) {
 	t.Helper()
 	var reader io.Reader
@@ -494,9 +400,6 @@ func (h *p5Harness) api(t *testing.T, method, path string, body, out any) (int, 
 	return response.StatusCode, string(raw)
 }
 
-// createDatabase provisions a managed PostgreSQL through the API and registers
-// cleanup of only the resources it owns: the container and volume of this
-// database id, never another worker's.
 func (h *p5Harness) createDatabase(t *testing.T, name string) (p5Database, databases.Credentials) {
 	t.Helper()
 	body := map[string]any{"name": name, "engine": "postgres", "environment_id": h.envID.String(), "server_id": h.serverID.String()}
@@ -516,9 +419,6 @@ func (h *p5Harness) createDatabase(t *testing.T, name string) (p5Database, datab
 	return out.Database, out.Credentials
 }
 
-// trackDatabase removes the container(s) and the volume of one database id
-// when the test ends. Job containers carry the same gotham.db_id label, so a
-// leaked staging or dump container is caught too.
 func (h *p5Harness) trackDatabase(t *testing.T, databaseID uuid.UUID) {
 	t.Helper()
 	label := "gotham.db_id=" + databaseID.String()
@@ -536,7 +436,6 @@ func (h *p5Harness) trackDatabase(t *testing.T, databaseID uuid.UUID) {
 	})
 }
 
-// databaseStatus returns one database's status through the API.
 func (h *p5Harness) databaseStatus(t *testing.T, databaseID string) string {
 	t.Helper()
 	var out p5DatabaseEnvelope
@@ -547,9 +446,6 @@ func (h *p5Harness) databaseStatus(t *testing.T, databaseID string) string {
 	return out.Database.Status
 }
 
-// assertDatabaseNotRunning pins the D2-2 contract after a failed restore: the
-// database is left stopped or error, never running on partial data. It returns
-// the observed status.
 func (h *p5Harness) assertDatabaseNotRunning(t *testing.T, databaseID string) string {
 	t.Helper()
 	status := h.databaseStatus(t, databaseID)
@@ -559,9 +455,6 @@ func (h *p5Harness) assertDatabaseNotRunning(t *testing.T, databaseID string) st
 	return status
 }
 
-// startDatabase starts a stopped/errored database through the API and waits for
-// it to report running again. A 409 is retried: the restore job that just
-// failed may still be releasing its lease for a moment.
 func (h *p5Harness) startDatabase(t *testing.T, databaseID string) {
 	t.Helper()
 	deadline := time.Now().Add(p5JobWait)
@@ -585,8 +478,6 @@ func (h *p5Harness) startDatabase(t *testing.T, databaseID string) {
 	t.Fatalf("database %s did not reach running after start", databaseID)
 }
 
-// createBackup queues a manual backup, to the local directory when targetID is
-// empty. 202 is the acceptance answer: the row is recorded and the job runs.
 func (h *p5Harness) createBackup(t *testing.T, databaseID, targetID string) p5Backup {
 	t.Helper()
 	body := map[string]any{}
@@ -601,8 +492,6 @@ func (h *p5Harness) createBackup(t *testing.T, databaseID, targetID string) p5Ba
 	return out.Backup
 }
 
-// waitBackup polls the backup list until the named run reaches a terminal
-// state and returns it.
 func (h *p5Harness) waitBackup(t *testing.T, databaseID, backupID string) p5Backup {
 	t.Helper()
 	deadline := time.Now().Add(p5JobWait)
@@ -629,8 +518,6 @@ func (h *p5Harness) waitBackup(t *testing.T, databaseID, backupID string) p5Back
 	}
 }
 
-// restore queues a restore of a completed backup and asserts the accepted
-// shape.
 func (h *p5Harness) restore(t *testing.T, databaseID, backupID string) {
 	t.Helper()
 	body := map[string]string{"backup_id": backupID}
@@ -647,8 +534,6 @@ func (h *p5Harness) restore(t *testing.T, databaseID, backupID string) {
 	}
 }
 
-// createTarget stores an S3 target pointing at the disposable MinIO and
-// asserts the endpoint is reported back with its explicit scheme.
 func (h *p5Harness) createTarget(t *testing.T, minioSrv *p5Minio) p5Target {
 	t.Helper()
 	body := map[string]any{
@@ -674,7 +559,6 @@ func (h *p5Harness) createTarget(t *testing.T, minioSrv *p5Minio) p5Target {
 	return out.Target
 }
 
-// testTarget runs the target connection check and returns its answer.
 func (h *p5Harness) testTarget(t *testing.T, targetID string) p5TargetCheck {
 	t.Helper()
 	var out p5TargetCheckEnvelope
@@ -685,10 +569,6 @@ func (h *p5Harness) testTarget(t *testing.T, targetID string) p5TargetCheck {
 	return out.Check
 }
 
-// psql runs one SQL statement inside the managed database container and
-// returns its trimmed output. It reads through the real running container, so
-// a stopped or still-initialising engine surfaces as an error the caller can
-// poll through.
 func (h *p5Harness) psql(t *testing.T, containerID string, creds databases.Credentials, sql string) (string, error) {
 	t.Helper()
 	docker, err := exec.LookPath("docker")
@@ -703,7 +583,6 @@ func (h *p5Harness) psql(t *testing.T, containerID string, creds databases.Crede
 	return strings.TrimSpace(string(out)), err
 }
 
-// psqlWait runs sql until it succeeds, failing the test after p5SQLWait.
 func (h *p5Harness) psqlWait(t *testing.T, containerID string, creds databases.Credentials, sql string) string {
 	t.Helper()
 	deadline := time.Now().Add(p5SQLWait)
@@ -720,10 +599,6 @@ func (h *p5Harness) psqlWait(t *testing.T, containerID string, creds databases.C
 	return ""
 }
 
-// waitRestore polls sql until it returns want, failing promptly when the
-// control plane itself reports the restore as terminally failed. The expected
-// checksum remains the success criterion; the watched failure record only
-// shortens the wait, so a broken restore can never look successful.
 func (h *p5Harness) waitRestore(t *testing.T, containerID string, creds databases.Credentials, sql, want, backupID string) {
 	t.Helper()
 	deadline := time.Now().Add(p5SQLWait)
@@ -746,9 +621,6 @@ func (h *p5Harness) waitRestore(t *testing.T, containerID string, creds database
 	t.Fatalf("psql output never became %q within %s; last: %s", want, p5SQLWait, last)
 }
 
-// awaitRestoreFailure waits for the control plane's own terminal restore
-// failure record of backupID and returns how long it took and what it logged.
-// It fails the test when no failure is observed within timeout.
 func (h *p5Harness) awaitRestoreFailure(t *testing.T, backupID string, timeout time.Duration) (time.Duration, string) {
 	t.Helper()
 	start := time.Now()
@@ -763,17 +635,11 @@ func (h *p5Harness) awaitRestoreFailure(t *testing.T, backupID string, timeout t
 	return 0, ""
 }
 
-// p5RowChecksumSQL builds the stability check of a table: its row count and the
-// md5 of its ordered rows. Comparing it before a backup and after a restore
-// proves the bytes survived the round trip, not just that some rows exist.
 func p5RowChecksumSQL(table, valueExpr string) string {
 	return "SELECT count(*)::text || ':' || coalesce(md5(string_agg(id::text || '|' || (" +
 		valueExpr + "), ',' ORDER BY id)), 'empty') FROM " + table
 }
 
-// TestP5BackupLocalRoundTrip is the BE-5.2 exit criterion: create a managed
-// PostgreSQL through the API, back it up locally, drop only the disposable
-// table, restore and verify the rows and their checksum are identical.
 func TestP5BackupLocalRoundTrip(t *testing.T) {
 	h := newP5Harness(t)
 	suffix := p5Suffix()
@@ -781,7 +647,6 @@ func TestP5BackupLocalRoundTrip(t *testing.T) {
 	containerID := database.ContainerID
 	table := "p5smoke_rows_" + suffix
 
-	// Seed a deterministic table and remember its exact checksum.
 	h.psqlWait(t, containerID, creds,
 		"CREATE TABLE "+table+" (id integer PRIMARY KEY, payload text NOT NULL)")
 	h.psqlWait(t, containerID, creds,
@@ -793,7 +658,6 @@ func TestP5BackupLocalRoundTrip(t *testing.T) {
 	}
 	t.Logf("before backup: rows+checksum = %s", before)
 
-	// Back it up to the local backup directory.
 	backup := h.waitBackup(t, database.ID, h.createBackup(t, database.ID, "").ID)
 	if backup.Status != "completed" {
 		t.Fatalf("backup did not complete: status %q error %q", backup.Status, backup.Error)
@@ -814,7 +678,6 @@ func TestP5BackupLocalRoundTrip(t *testing.T) {
 	}
 	t.Logf("backup artifact: location=%s bytes=%d", backup.Location, backup.Size)
 
-	// Drop ONLY our own disposable table.
 	h.psqlWait(t, containerID, creds, "DROP TABLE "+table)
 	gone := h.psqlWait(t, containerID, creds,
 		"SELECT count(*) FROM information_schema.tables WHERE table_name = '"+table+"'")
@@ -822,7 +685,6 @@ func TestP5BackupLocalRoundTrip(t *testing.T) {
 		t.Fatalf("table %s still exists after drop (count=%s)", table, gone)
 	}
 
-	// Restore and wait for the exact checksum to reappear.
 	h.restore(t, database.ID, backup.ID)
 	h.waitRestore(t, containerID, creds, checksumSQL, before, backup.ID)
 	after := h.psqlWait(t, containerID, creds, checksumSQL)
@@ -832,10 +694,6 @@ func TestP5BackupLocalRoundTrip(t *testing.T) {
 	}
 }
 
-// TestP5BackupChunkScaleArtifact proves the restore staging path survives an
-// artifact larger than one 90 000-byte chunk: a table of incompressible random
-// bytes produces a stored artifact comfortably above 97 KiB, and the restored
-// contents match byte for byte.
 func TestP5BackupChunkScaleArtifact(t *testing.T) {
 	h := newP5Harness(t)
 	suffix := p5Suffix()
@@ -843,9 +701,6 @@ func TestP5BackupChunkScaleArtifact(t *testing.T) {
 	containerID := database.ContainerID
 	table := "p5smoke_chunk_" + suffix
 
-	// 400 rows of 1 024 random bytes each: no runs, no repeats, so neither
-	// pg_dump's own compression nor the control plane's gzip can shrink it
-	// below the staging chunk size.
 	h.psqlWait(t, containerID, creds,
 		"CREATE TABLE "+table+" (id integer PRIMARY KEY, payload bytea NOT NULL)")
 	h.psqlWait(t, containerID, creds,
@@ -865,7 +720,6 @@ func TestP5BackupChunkScaleArtifact(t *testing.T) {
 	if backup.Size <= p5StagingChunkProxy {
 		t.Fatalf("artifact is %d bytes, not larger than one staging chunk proxy (%d bytes)", backup.Size, p5StagingChunkProxy)
 	}
-	// The recorded size must be the real local artifact, not just the row.
 	artifactPath := strings.TrimPrefix(backup.Location, "file://")
 	info, err := os.Stat(artifactPath)
 	if err != nil {
@@ -887,10 +741,6 @@ func TestP5BackupChunkScaleArtifact(t *testing.T) {
 	t.Logf("chunk-scale restore verified: rows+checksum = %s", after)
 }
 
-// TestP5BackupS3TargetMinIO proves the S3 target path against a disposable
-// MinIO over an explicit http:// endpoint: the target test succeeds, the
-// backup's object exists in the bucket with the recorded size, and a restore
-// from S3 reproduces the rows exactly.
 func TestP5BackupS3TargetMinIO(t *testing.T) {
 	h := newP5Harness(t)
 	minioSrv := startP5Minio(t)
@@ -939,12 +789,6 @@ func TestP5BackupS3TargetMinIO(t *testing.T) {
 	t.Logf("s3 restore verified: rows+checksum = %s", after)
 }
 
-// TestP5BackupRestoreRejectsCorruptArtifact is the F1 negative acceptance: the
-// real restore path rejects a truncated gzip footer and a truncated inner
-// archive, the failure is observed promptly through the control plane's own
-// structured log, no success marker is produced for corrupt data, and for the
-// inner case the native PostgreSQL single-transaction restore leaves the
-// pre-restore data untouched.
 func TestP5BackupRestoreRejectsCorruptArtifact(t *testing.T) {
 	t.Run("truncated gzip footer", func(t *testing.T) {
 		h := newP5Harness(t)
@@ -977,9 +821,6 @@ func TestP5BackupRestoreRejectsCorruptArtifact(t *testing.T) {
 		if elapsed > p5RestoreFailBound {
 			t.Fatalf("restore failure surfaced after %s, want under %s", elapsed, p5RestoreFailBound)
 		}
-		// D2-2: a failed restore leaves the database stopped/error, never
-		// running on partial data. Bring it back up explicitly to read the
-		// data assertions below.
 		state := h.assertDatabaseNotRunning(t, database.ID)
 		t.Logf("database status after failed restore: %s", state)
 		h.startDatabase(t, database.ID)
@@ -1011,9 +852,6 @@ func TestP5BackupRestoreRejectsCorruptArtifact(t *testing.T) {
 			t.Fatalf("corrupt inner archive: %v", err)
 		}
 
-		// The pre-restore table deliberately has no primary key: the corrupt
-		// CREATE TABLE is the only statement that can fail, and a rolled-back
-		// transaction must keep the marker row.
 		h.psqlWait(t, containerID, creds, "DROP TABLE "+table)
 		h.psqlWait(t, containerID, creds,
 			"CREATE TABLE "+table+" (id integer, payload text)")
@@ -1030,8 +868,6 @@ func TestP5BackupRestoreRejectsCorruptArtifact(t *testing.T) {
 		if !strings.Contains(message, "pg_restore") || !strings.Contains(message, "CREATX") {
 			t.Errorf("failure does not name the pg_restore SQL stage: %s", message)
 		}
-		// D2-2: the failed restore leaves the database stopped/error; start it
-		// explicitly before checking the rolled-back data.
 		state := h.assertDatabaseNotRunning(t, database.ID)
 		t.Logf("database status after failed restore: %s", state)
 		h.startDatabase(t, database.ID)
@@ -1043,10 +879,6 @@ func TestP5BackupRestoreRejectsCorruptArtifact(t *testing.T) {
 	})
 }
 
-// p5CorruptSQLKeyword rewrites a stored gzip artifact so the first
-// "CREATE TABLE " keyword of the inner archive becomes the same-length
-// "CREATX TABLE ": the container stays valid gzip and the archive stays
-// structurally readable, so pg_restore reaches its DDL stage and fails there.
 func p5CorruptSQLKeyword(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -1091,20 +923,14 @@ func p5CorruptSQLKeyword(path string) error {
 	return out.Close()
 }
 
-// p5Minio is a disposable MinIO server: one container on an ephemeral
-// loopback port with a bucket owned by this run. Nothing outside the run is
-// touched.
 type p5Minio struct {
-	apiEndpoint string // "http://127.0.0.1:PORT", the explicit-scheme value
+	apiEndpoint string
 	accessKey   string
 	secretKey   string
 	bucket      string
 	client      *minio.Client
 }
 
-// startP5Minio boots elestio/minio on the local Docker daemon, waits for its
-// readiness endpoint and creates a private bucket through the S3 API. The
-// container is removed when the test ends.
 func startP5Minio(t *testing.T) *p5Minio {
 	t.Helper()
 	docker, err := exec.LookPath("docker")
@@ -1163,7 +989,6 @@ func startP5Minio(t *testing.T) *p5Minio {
 	}
 }
 
-// waitMinioReady polls the MinIO readiness endpoint until the server answers.
 func waitMinioReady(t *testing.T, endpoint string) {
 	t.Helper()
 	url := "http://" + endpoint + "/minio/health/ready"
@@ -1186,8 +1011,6 @@ func waitMinioReady(t *testing.T, endpoint string) {
 	t.Fatalf("minio at %s never became ready; last: %s", endpoint, last)
 }
 
-// statObject returns the size of an object in the disposable bucket, failing
-// the test when the object is missing.
 func (m *p5Minio) statObject(t *testing.T, key string) int64 {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

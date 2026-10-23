@@ -12,7 +12,6 @@ const { form } = wizard;
 
 const { t } = useI18n();
 
-/** droppedText renders the 1/many grammar through library pluralization. */
 const droppedText = computed<string>(() =>
   String(
     t(

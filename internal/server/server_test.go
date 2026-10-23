@@ -25,7 +25,6 @@ import (
 	"github.com/justindeelux/gotham/internal/webhooks"
 )
 
-// stubPinger is a deterministic Pinger for tests.
 type stubPinger struct {
 	err error
 }
@@ -34,7 +33,6 @@ func (s stubPinger) Ping(context.Context) error {
 	return s.err
 }
 
-// newTestServer builds a Server with injected pingers, avoiding live services.
 func newTestServer(t *testing.T, db, redis Pinger) *Server {
 	t.Helper()
 
@@ -53,9 +51,6 @@ func newTestServer(t *testing.T, db, redis Pinger) *Server {
 	return s
 }
 
-// TestNewResolvesSecretKey pins the wiring invariant behind the empty-key fix:
-// a server constructed without GOTHAM_SECRET_KEY still holds a non-empty
-// credential key, so no sealing site can fall back to SHA-256("").
 func TestNewResolvesSecretKey(t *testing.T) {
 	s := newTestServer(t, stubPinger{}, stubPinger{})
 	if s.secretKey == "" {
@@ -63,7 +58,6 @@ func TestNewResolvesSecretKey(t *testing.T) {
 	}
 }
 
-// getHealthz performs GET /healthz against the server handler.
 func getHealthz(t *testing.T, s *Server) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -73,7 +67,6 @@ func getHealthz(t *testing.T, s *Server) *httptest.ResponseRecorder {
 	return rec
 }
 
-// decodeHealth decodes the /healthz JSON body.
 func decodeHealth(t *testing.T, rec *httptest.ResponseRecorder) healthResponse {
 	t.Helper()
 
@@ -155,8 +148,6 @@ func TestNewRejectsNilDependencies(t *testing.T) {
 	}
 }
 
-// TestNewWarnsOnBroadTrustedProxy pins M1: an overly broad trusted prefix logs
-// a warning that any host inside it can spoof the forwarded client address.
 func TestNewWarnsOnBroadTrustedProxy(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
@@ -177,8 +168,6 @@ func TestNewWarnsOnBroadTrustedProxy(t *testing.T) {
 	}
 }
 
-// TestNewWarnsOnMissingTrustedProxyForOAuth pins M2: an OAuth-enabled
-// deployment with no trusted proxies logs an upgrade warning.
 func TestNewWarnsOnMissingTrustedProxyForOAuth(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
@@ -200,10 +189,6 @@ func TestNewWarnsOnMissingTrustedProxyForOAuth(t *testing.T) {
 	}
 }
 
-// TestLogDisabledFeatures pins the startup diagnostic: one line per feature
-// switched off by its kill-switch flag, naming the module and the flag, and no
-// line for a feature that is on. Product copy points at the administrator, so
-// this log line is how that administrator diagnoses which module is off.
 func TestLogDisabledFeatures(t *testing.T) {
 	flags := []string{
 		deploy.FeatureEnv, webhooks.FeatureEnv, databases.FeatureEnv,
@@ -211,8 +196,6 @@ func TestLogDisabledFeatures(t *testing.T) {
 		notifications.FeatureEnv, proxy.FeatureEnv, servers.FeatureEnv,
 		updates.FeatureEnv,
 	}
-	// Every flag is set explicitly so the assertion does not depend on the
-	// caller's environment.
 	for _, flag := range flags {
 		t.Setenv(flag, "")
 	}

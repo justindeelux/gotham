@@ -11,8 +11,6 @@ const { form } = wizard;
 
 const { t } = useI18n();
 
-// The picker gates on the target node's toolchains, so point the toolchain
-// store at that node while this step (and its Install buttons) is live.
 onMounted(() => wizard.subscribeNodeTools());
 watch(() => form.serverId, () => wizard.subscribeNodeTools());
 useEventListener(window, "focus", () => wizard.subscribeNodeTools());

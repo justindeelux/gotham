@@ -13,15 +13,6 @@ import { useQuickCommandsStore } from "@/features/terminal/stores/quickCommands"
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalCommandFailure } from "@/features/terminal/transport/terminalRuntime";
 
-/**
- * Quick-command manager modal (JUS-264). The list and the editor are mutually
- * exclusive views inside one bounded Naive UI modal: the header and footer stay
- * fixed and only the body scrolls (shared `.app-modal` contract). Add and Edit
- * swap the list for the editor, so the form is always the first thing in the
- * scrollable body and can never be appended below the fold (JUS-267). Inserting
- * writes the command to the active PTY without Enter, closes the modal and lets
- * the surface return focus to the terminal.
- */
 interface Props {
   show: boolean;
   tabId: string;
@@ -41,7 +32,6 @@ const showForm = ref(false);
 const editingId = ref("");
 const formError = ref("");
 const insertError = ref("");
-/** bodyRef is the modal's content root; the editor replaces the list there. */
 const bodyRef = ref<HTMLElement | null>(null);
 const addButtonRef = ref<ComponentPublicInstance | null>(null);
 const editorRef = ref<InstanceType<typeof QuickCommandEditor> | null>(null);
@@ -51,7 +41,6 @@ const editing = computed<QuickCommand | null>(
 );
 const atLimit = computed<boolean>(() => store.commands.length >= QUICK_COMMANDS_MAX);
 
-/** failureText maps an insertion refusal onto localized guidance. */
 function failureText(failure?: TerminalCommandFailure): string {
   switch (failure) {
     case "multiline-no-paste":
@@ -65,17 +54,10 @@ function failureText(failure?: TerminalCommandFailure): string {
   }
 }
 
-/** close requests the modal to hide; after-leave owns focus restoration. */
 function close(): void {
   emit("update:show", false);
 }
 
-/**
- * onWindowKeydown owns Escape while the modal is open. The editor gets the
- * first Escape (the half-typed draft is discarded explicitly); a second
- * Escape closes the modal. NModal's own close-on-esc is off so it cannot
- * discard an in-progress form in one keystroke.
- */
 function onWindowKeydown(event: KeyboardEvent): void {
   if (!props.show || event.key !== "Escape") {
     return;
@@ -89,17 +71,11 @@ function onWindowKeydown(event: KeyboardEvent): void {
   close();
 }
 
-/** buttonElement unwraps a Naive button instance to its real <button>. */
 function buttonElement(instance: ComponentPublicInstance | null): HTMLElement | null {
   const element = instance?.$el;
   return element instanceof HTMLElement ? element : null;
 }
 
-/**
- * restoreListFocus puts the keyboard back where the editor was opened from:
- * Add for a new command, the edited row's Edit button otherwise. Focus is
- * restored after the list renders (JUS-267 fix round 1).
- */
 async function restoreListFocus(commandId: string): Promise<void> {
   await nextTick();
   if (commandId !== "") {
@@ -114,12 +90,6 @@ async function restoreListFocus(commandId: string): Promise<void> {
   buttonElement(addButtonRef.value)?.focus();
 }
 
-/**
- * openEditor swaps the list for the editor. The editor is the modal's only
- * body view (never appended below the list), so it is visible without
- * scrolling whatever the list length or viewport height; nextTick resets the
- * shared scroll container so the Label field starts at the top (JUS-267).
- */
 async function openEditor(): Promise<void> {
   showForm.value = true;
   await nextTick();
@@ -129,7 +99,6 @@ async function openEditor(): Promise<void> {
   }
 }
 
-/** startAdd opens a blank editor. */
 function startAdd(): void {
   if (atLimit.value) {
     return;
@@ -140,7 +109,6 @@ function startAdd(): void {
   void openEditor();
 }
 
-/** startEdit opens the editor on one saved command. */
 function startEdit(command: QuickCommand): void {
   editingId.value = command.id;
   formError.value = "";
@@ -148,11 +116,6 @@ function startEdit(command: QuickCommand): void {
   void openEditor();
 }
 
-/**
- * resetForm closes the editor without saving. Only the in-modal exits
- * (Cancel, Save, Escape-in-form) restore keyboard focus; closing the dialog
- * or reopening it must leave focus to the surface's own after-leave logic.
- */
 function resetForm(options: { restoreFocus?: boolean } = {}): void {
   const restoreId = editingId.value;
   showForm.value = false;
@@ -163,12 +126,10 @@ function resetForm(options: { restoreFocus?: boolean } = {}): void {
   }
 }
 
-/** saveFromFooter submits the pinned footer Save through the editor. */
 function saveFromFooter(): void {
   void editorRef.value?.submit();
 }
 
-/** saveCommand persists a validated draft and updates the list immediately. */
 function saveCommand(draft: QuickCommandDraft): void {
   if (editingId.value === "" && atLimit.value) {
     formError.value = t("terminal.quickCommands.atLimit");
@@ -185,7 +146,6 @@ function saveCommand(draft: QuickCommandDraft): void {
   resetForm({ restoreFocus: true });
 }
 
-/** insertCommand puts the command on the prompt without running it. */
 function insertCommand(command: QuickCommand): void {
   const result = terminal.insertCommand(props.tabId, command.command);
   if (!result.ok) {
@@ -197,7 +157,6 @@ function insertCommand(command: QuickCommand): void {
   close();
 }
 
-/** removeCommand deletes one saved command from this browser. */
 function removeCommand(id: string): void {
   store.remove(id);
   if (editingId.value === id) {
@@ -205,7 +164,6 @@ function removeCommand(id: string): void {
   }
 }
 
-// A reopened modal starts on the list, never on a stale editor.
 watch(
   () => props.show,
   (visible) => {
@@ -216,8 +174,6 @@ watch(
   },
 );
 
-// The capture listener only exists while the dialog is open, so Escape never
-// leaks into the shell or another surface after the modal closes.
 watch(
   () => props.show,
   (visible) => {
@@ -329,9 +285,6 @@ onBeforeUnmount(() => {
           </template>
           {{ t("terminal.quickCommands.add") }}
         </NButton>
-        <!-- The footer always keeps the mode actions visible: Add on the
-             list, Save + Cancel in the editor, so a primary action is never
-             below the fold on a short viewport (JUS-267). -->
         <template v-else>
           <NButton
             size="small"

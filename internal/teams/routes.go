@@ -15,15 +15,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxBodyBytes bounds a team request body.
 const maxBodyBytes = 1 << 20
 
-// UserIDFunc resolves the authenticated user from the request context. The
-// server passes its own accessor, so this package never imports the HTTP server
-// (it mirrors services.UserIDFunc for the same reason).
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// request bodies.
 type (
 	createTeamRequest struct {
 		Name string `json:"name"`
@@ -43,8 +38,6 @@ type (
 	}
 )
 
-// teamResponse is the wire representation of a team. role is the requesting
-// user's role in it.
 type teamResponse struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
@@ -54,7 +47,6 @@ type teamResponse struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
-// memberResponse is the wire representation of one membership.
 type memberResponse struct {
 	UserID    string    `json:"user_id"`
 	Email     string    `json:"email"`
@@ -62,8 +54,6 @@ type memberResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// inviteResponse is the wire representation of one invite. The token is never
-// part of it.
 type inviteResponse struct {
 	ID         string     `json:"id"`
 	TeamID     string     `json:"team_id"`
@@ -74,17 +64,12 @@ type inviteResponse struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
-// createdInviteResponse carries the raw token exactly once, when the invite is
-// created. accept_url names the endpoint the token is posted to (in the request
-// body, never a URL path, so access logs never see it); email delivery of the
-// link is a separate work package (BE-8.3).
 type createdInviteResponse struct {
 	inviteResponse
 	Token     string `json:"token"`
 	AcceptURL string `json:"accept_url"`
 }
 
-// envelope types.
 type (
 	teamEnvelope struct {
 		Team teamResponse `json:"team"`
@@ -103,39 +88,16 @@ type (
 	}
 )
 
-// errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
 }
 
-// handler serves the team routes for one TeamService.
 type handler struct {
 	svc    TeamService
 	userID UserIDFunc
 	logger *slog.Logger
 }
 
-// Mount registers the authenticated team-management endpoints under /api:
-//
-//	POST   /v1/teams
-//	GET    /v1/teams
-//	GET    /v1/teams/{id}
-//	PATCH  /v1/teams/{id}
-//	DELETE /v1/teams/{id}
-//	GET    /v1/teams/{id}/members
-//	PATCH  /v1/teams/{id}/members/{userID}
-//	DELETE /v1/teams/{id}/members/{userID}
-//	GET    /v1/teams/{id}/invites
-//	POST   /v1/teams/{id}/invites
-//	DELETE /v1/teams/{id}/invites/{inviteID}
-//	POST   /v1/invites/accept
-//
-// auth wraps the group. A nil svc or FEATURE_TEAMS=false mounts nothing, so the
-// control plane can call Mount unconditionally. The server passes its
-// admin-scoped chain: the team-management surface is an admin/platform surface
-// for API tokens (a read or deploy token is refused), while a JWT session holds
-// every scope. On top of that, every handler's authorization comes from the
-// caller's role in the team the path names.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc TeamService) {
 	if svc == nil || !Enabled() {
 		return
@@ -158,7 +120,6 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 	})
 }
 
-// create serves POST /v1/teams: 201 with the stored team; the caller is owner.
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -177,7 +138,6 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, teamEnvelope{Team: newTeamResponse(team)})
 }
 
-// list serves GET /v1/teams.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -195,7 +155,6 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// get serves GET /v1/teams/{id}: any member.
 func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -209,7 +168,6 @@ func (h *handler) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, teamEnvelope{Team: newTeamResponse(team)})
 }
 
-// rename serves PATCH /v1/teams/{id}: owner/admin.
 func (h *handler) rename(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -227,7 +185,6 @@ func (h *handler) rename(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, teamEnvelope{Team: newTeamResponse(team)})
 }
 
-// delete serves DELETE /v1/teams/{id}: owner; personal teams are refused.
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -240,7 +197,6 @@ func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// members serves GET /v1/teams/{id}/members: any member.
 func (h *handler) members(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -258,7 +214,6 @@ func (h *handler) members(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// updateMember serves PATCH /v1/teams/{id}/members/{userID}: owner/admin.
 func (h *handler) updateMember(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -287,8 +242,6 @@ func (h *handler) updateMember(w http.ResponseWriter, r *http.Request) {
 	}{Member: newMemberResponse(member)})
 }
 
-// removeMember serves DELETE /v1/teams/{id}/members/{userID}: owner/admin, or
-// the member themselves (leaving the team).
 func (h *handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -305,7 +258,6 @@ func (h *handler) removeMember(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// invites serves GET /v1/teams/{id}/invites: owner/admin.
 func (h *handler) invites(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -323,8 +275,6 @@ func (h *handler) invites(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// createInvite serves POST /v1/teams/{id}/invites: owner/admin. The response
-// carries the raw token once; email delivery is BE-8.3.
 func (h *handler) createInvite(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -351,7 +301,6 @@ func (h *handler) createInvite(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
-// revokeInvite serves DELETE /v1/teams/{id}/invites/{inviteID}: owner/admin.
 func (h *handler) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	userID, teamID, ok := h.teamParams(w, r)
 	if !ok {
@@ -368,9 +317,6 @@ func (h *handler) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// acceptInvite serves POST /v1/invites/accept: the authenticated account whose
-// email the invite names posts the raw token in the body. The token is never a
-// URL segment, so it cannot leak through access logs or referrers.
 func (h *handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -388,7 +334,6 @@ func (h *handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, teamEnvelope{Team: newTeamResponse(team)})
 }
 
-// currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -402,7 +347,6 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID
 	return userID, true
 }
 
-// teamParams resolves the authenticated user and the {id} path parameter.
 func (h *handler) teamParams(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -415,7 +359,6 @@ func (h *handler) teamParams(w http.ResponseWriter, r *http.Request) (uuid.UUID,
 	return userID, teamID, true
 }
 
-// pathUUID parses one UUID path parameter, answering 400 on a bad value.
 func pathUUID(w http.ResponseWriter, r *http.Request, name, label string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, name))
 	if err != nil {
@@ -425,7 +368,6 @@ func pathUUID(w http.ResponseWriter, r *http.Request, name, label string) (uuid.
 	return id, true
 }
 
-// writeError maps a teams sentinel to its HTTP response.
 func (h *handler) writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -447,13 +389,10 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 	}
 }
 
-// acceptURL is the relative API path a client posts the token to (in the body).
-// The frontend builds the absolute link from it; email delivery is BE-8.3.
 func acceptURL() string {
 	return "/v1/invites/accept"
 }
 
-// newTeamResponse maps a team to its wire representation.
 func newTeamResponse(team Team) teamResponse {
 	return teamResponse{
 		ID:         team.ID.String(),
@@ -465,7 +404,6 @@ func newTeamResponse(team Team) teamResponse {
 	}
 }
 
-// newMemberResponse maps a membership to its wire representation.
 func newMemberResponse(member Member) memberResponse {
 	return memberResponse{
 		UserID:    member.UserID.String(),
@@ -475,7 +413,6 @@ func newMemberResponse(member Member) memberResponse {
 	}
 }
 
-// newInviteResponse maps an invite to its wire representation (token-free).
 func newInviteResponse(invite Invite) inviteResponse {
 	return inviteResponse{
 		ID:         invite.ID.String(),
@@ -488,8 +425,6 @@ func newInviteResponse(invite Invite) inviteResponse {
 	}
 }
 
-// decodeBody decodes a required JSON body into dst. An empty or malformed body
-// answers 400.
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
@@ -509,7 +444,6 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

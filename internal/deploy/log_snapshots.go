@@ -22,7 +22,6 @@ import (
 
 const snapshotDeadline = 15 * time.Second
 
-// LogOptions limits the aggregate content, not each container independently.
 type LogOptions struct {
 	Tail     int    `json:"tail"`
 	MaxBytes int    `json:"max_bytes"`
@@ -49,7 +48,6 @@ func (o LogOptions) normalized() (LogOptions, error) {
 	return o, nil
 }
 
-// LogRead describes this finite read. nil Truncated means a cap stopped the read without EOF proof.
 type LogRead struct {
 	Log       string `json:"log"`
 	Complete  bool   `json:"complete"`
@@ -78,7 +76,6 @@ type DeploymentLogs struct {
 	LogRead
 }
 
-// logSnapshotNode is optional so existing build/control adapters keep their contract.
 type logSnapshotNode interface {
 	StreamLogs(context.Context, *agentv1.StreamLogsRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.LogChunk], error)
 }
@@ -120,7 +117,6 @@ func snapshotError(err error) string {
 	}
 }
 
-// readLogPrefix never reads past a cap just to prove EOF. A buffered extra byte proves truncation.
 func readLogPrefix(reader io.Reader, maxBytes, maxLines int) (LogRead, int) {
 	out := LogRead{}
 	r := bufio.NewReaderSize(reader, 4096)
@@ -167,14 +163,12 @@ var logBearer = regexp.MustCompile(`(?i)(bearer\s+)[^\s,"'}]+`)
 var logURLCredential = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s/]*[:@][^\s]*`)
 
 func maskLog(raw string, env map[string]string, incomplete bool, maxBytes int) string {
-	// Short/common values would erase ordinary diagnostics such as "retry 1 of 10".
 	maskValues := make(map[string]string, len(env))
 	for key, value := range env {
 		if len(value) >= 6 {
 			maskValues[key] = value
 		}
 	}
-	// Hide partial configured values at a cap too; never expose a credential prefix as a clipping artifact.
 	if incomplete {
 		cut := 0
 		for _, value := range maskValues {
@@ -267,7 +261,6 @@ func (s *Service) GetApplicationLogs(ctx context.Context, userID, appID uuid.UUI
 			out.SelectionTruncated = true
 			break
 		}
-		// Ownership does not establish deployment association; leave it explicitly unknown.
 		row := RuntimeContainer{ID: c.GetId(), Service: service, Replica: replica, State: c.GetState(), Health: c.GetHealth()}
 		out.Containers = append(out.Containers, ContainerLog{RuntimeContainer: row})
 	}
@@ -360,7 +353,6 @@ func (s *Service) GetDeploymentLogs(ctx context.Context, userID, appID, deployme
 		read.Complete = false
 		read.Truncated = new(true)
 	}
-	// SQL proves EOF when the full finite tail fits, including an exact cap.
 	if !more && len(stored) <= options.MaxBytes {
 		read.Complete = true
 		read.Truncated = new(false)

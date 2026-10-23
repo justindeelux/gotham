@@ -1,8 +1,3 @@
-// Toolchain App Store store (JUS-177, fix round 1): queue state,
-// enqueue/cancel actions, socket lifecycle (disconnect on unmount/sign-out),
-// reconnect resync, refresh race guards, and the JUS-178 modal hook point.
-// The API module and the realtime client are mocked; socket callbacks are
-// driven manually through the captured options.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -79,12 +74,10 @@ function job(overrides: Partial<ToolchainJob> = {}): ToolchainJob {
   };
 }
 
-/** frame wraps a payload as a realtime hub frame. */
 function frame(type: string, data: string): string {
   return JSON.stringify({ channel: "logs:srv-1:toolchain", type, data });
 }
 
-/** socketMessage builds the client message the store's handler reads. */
 function socketMessage(raw: string, kind: WebSocketMessage["kind"] = "data"): WebSocketMessage {
   return {
     raw,
@@ -95,7 +88,6 @@ function socketMessage(raw: string, kind: WebSocketMessage["kind"] = "data"): We
   };
 }
 
-/** deferred returns a promise with its settle functions exposed. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   let reject!: (_reason: unknown) => void;
@@ -153,7 +145,6 @@ describe("disconnect and reset", () => {
     expect(socketStub.unsubscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
     expect(socketStub.close).toHaveBeenCalled();
     expect(store.serverId).toBe("");
-    // A later subscribe dials a fresh socket instead of reusing the dead one.
     await store.subscribe("srv-1");
     expect(useWebSocketMock).toHaveBeenCalledTimes(2);
   });

@@ -1,9 +1,3 @@
-// Package buildtool runs the external language build toolchains (Railpack and
-// Cloud Native Buildpacks) and extracts a received build context. It is shared
-// by the control-plane build engines and the node agent so the same invocation
-// runs wherever a build is dispatched. It deliberately has no dependency on
-// either scope: agent/ must not import internal/, and the control plane must be
-// free to route a build to a node.
 package buildtool
 
 import (
@@ -24,70 +18,37 @@ import (
 	"github.com/justindeelux/gotham/toolcatalog"
 )
 
-// Engine identifies a toolchain. It mirrors the control plane's EngineKind for
-// the two engines that shell out to a CLI; the Dockerfile and static engines do
-// not use this package.
 type Engine string
 
 const (
-	// Railpack builds a language project from a generated plan.
-	Railpack Engine = "railpack"
-	// Buildpacks builds a project with the Cloud Native Buildpacks lifecycle.
+	Railpack   Engine = "railpack"
 	Buildpacks Engine = "buildpacks"
 )
 
-// CLI executable names.
 const (
 	RailpackCLI   = "railpack"
 	BuildpacksCLI = "pack"
 )
 
-// Install and prerequisite hints. They are quoted in every ErrCLIMissing error
-// so the deploy log — shown in the UI — is actionable. A deployed instance has
-// no repository and is never asked to install anything by hand, so the hints
-// point at the in-product installer (the App Store) instead of shell commands.
 const (
 	railpackInstallHint   = "install it from the App Store"
 	railpackBuildKitHint  = "install Docker from the App Store so Gotham can run its BuildKit container"
 	buildpacksInstallHint = "install it from the App Store"
 )
 
-// ErrCLIMissing reports a build whose external toolchain is unavailable on this
-// host: the CLI binary is not on PATH, or a prerequisite the CLI cannot run
-// without (Railpack's BUILDKIT_HOST) is not configured. Nothing is fabricated;
-// the build simply cannot run here.
 var ErrCLIMissing = errors.New("builds: build toolchain unavailable")
 
-// Options describes one toolchain invocation.
 type Options struct {
-	// Dir is the working directory, the extracted source tree.
-	Dir string
-	// Tag is the image reference the toolchain must build.
-	Tag string
-	// BuildArgs are passed as build-time environment (`--env KEY=VALUE`).
-	BuildArgs map[string]string
-	// LogWriter receives the tool's combined output. Nil discards it.
-	LogWriter io.Writer
-	// DockerHost, when non-empty, is exported to the child as DOCKER_HOST. The
-	// node agent sets its daemon endpoint; the control plane leaves it empty so
-	// the CLI inherits the process environment.
+	Dir        string
+	Tag        string
+	BuildArgs  map[string]string
+	LogWriter  io.Writer
 	DockerHost string
-	// StateDir is the agent state directory (GOTHAM_AGENT_CERT_DIR). When the
-	// process HOME is missing or not writable (the gotham-agent system user
-	// has no home), the toolchain runs with HOME pointed at
-	// <StateDir>/toolchain-home (mode 0700) instead. Empty selects a fallback
-	// under os.TempDir; the control-plane dev path leaves it empty.
-	StateDir string
+	StateDir   string
 
-	// buildKitHost is the BUILDKIT_HOST exported to Railpack; Run fills it.
 	buildKitHost string
 }
 
-// Available reports whether the toolchain can run at all, returning an
-// ErrCLIMissing error with the install hint when it cannot. Callers check it
-// before doing any work so a missing toolchain never looks like a failed build.
-// Presence is decided by the host tool catalog, the same detection the agent
-// reports, so a build is gated on exactly what the node's tool list shows.
 func Available(engine Engine) error {
 	switch engine {
 	case Railpack:
@@ -111,9 +72,6 @@ func Available(engine Engine) error {
 	}
 }
 
-// Run invokes the toolchain in opts.Dir, tagging the resulting image opts.Tag
-// and streaming the combined output to opts.LogWriter. It checks availability
-// first so a missing toolchain fails with ErrCLIMissing and an install hint.
 func Run(ctx context.Context, engine Engine, opts Options) error {
 	if err := Available(engine); err != nil {
 		return err
@@ -150,11 +108,6 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 	return run(ctx, name, args, opts, home)
 }
 
-// run executes the CLI in its working directory and streams stdout and stderr
-// to opts.LogWriter as they are produced, prefixed with the command line so the
-// deploy log shows what ran. A cancelled context stops the tool and reports the
-// context error. A failed tool reports the last lines of its output in the
-// error so the deploy row keeps the cause after the live log is gone.
 func run(ctx context.Context, name string, args []string, opts Options, home string) error {
 	sink := opts.LogWriter
 	if sink == nil {
@@ -164,15 +117,7 @@ func run(ctx context.Context, name string, args []string, opts Options, home str
 	tee := io.MultiWriter(tail, sink)
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = opts.Dir
-	// The toolchain is tenant-influenced, so it runs with a stripped
-	// environment: only what the CLI needs, never the agent's own secrets
-	// (the registry credential and the agent TLS key live in the state dir the
-	// process also reads). A toolchain compromise still means node compromise
-	// because it runs as the agent user; dedicated-user/userns sandboxing is a
-	// tracked follow-up.
 	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost, home)
-	// The same writer on both streams keeps the tool's output together;
-	// os/exec serialises the writes when Stdout and Stderr are equal.
 	command.Stdout = tee
 	command.Stderr = tee
 	_, _ = io.WriteString(sink, redactedCommandLine(name, args)+"\n")
@@ -188,33 +133,18 @@ func run(ctx context.Context, name string, args []string, opts Options, home str
 	return nil
 }
 
-// tailMaxLines and tailMaxBytes bound the failure tail kept from a toolchain's
-// combined output: the last lines, capped so one runaway log cannot bloat the
-// deployments row it ends up on. The byte cap stays well under truncateError's
-// 4 KiB limit so the `name build: …\n--- last output ---\n` prefix plus a full
-// tail always fit without cutting the cause lines off the end.
 const (
 	tailMaxLines = 20
 	tailMaxBytes = 3 << 10
 )
 
-// pendingMaxBytes bounds the unprocessed bytes held between line breaks, so
-// newline-less output (progress bars, binary) cannot grow memory without
-// limit. Past the cap the oldest bytes are dropped; they are a partial line
-// fragment at worst, and the tail still keeps the newest output.
 const pendingMaxBytes = 8 << 10
 
-// ansiEscape strips terminal colour and cursor sequences from captured output
-// so the persisted tail is plain text. oscEscape strips OSC sequences
-// (hyperlinks) terminated by BEL or ST, which the CSI pattern misses.
 var (
 	ansiEscape = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]")
 	oscEscape  = regexp.MustCompile("\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
 )
 
-// outputTail keeps the last lines written to it. It is not safe for concurrent
-// use; run shares one instance across both child streams so os/exec serialises
-// the writes.
 type outputTail struct {
 	lines   []string
 	pending strings.Builder
@@ -222,12 +152,6 @@ type outputTail struct {
 	masks   []string
 }
 
-// newOutputTail returns a tail that masks every non-empty value in secrets,
-// longest first so an overlapping shorter value cannot leak a longer one's
-// suffix. Each non-empty line of a multi-line value (a PEM key, for example)
-// is masked too, since masking runs per output line. Very short values mask
-// everywhere they appear (a value like "1" garbles the tail); that is accepted
-// as safe-but-noisy rather than adding matching rules.
 func newOutputTail(secrets []string) *outputTail {
 	masks := make([]string, 0, len(secrets))
 	for _, secret := range secrets {
@@ -241,10 +165,6 @@ func newOutputTail(secrets []string) *outputTail {
 	return &outputTail{masks: masks}
 }
 
-// Write buffers p, splitting complete lines into the bounded tail. Both \n
-// and \r end a line so progress bars that overwrite with \r still advance the
-// tail; a \r\n pair counts as one break. The pending buffer is capped at
-// pendingMaxBytes (oldest bytes dropped) and scanned in one pass.
 func (t *outputTail) Write(p []byte) (int, error) {
 	t.pending.Write(p)
 	if t.pending.Len() > pendingMaxBytes {
@@ -280,7 +200,6 @@ func (t *outputTail) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// String flushes a trailing partial line and returns the kept tail.
 func (t *outputTail) String() string {
 	if rest := t.pending.String(); rest != "" {
 		t.push(rest)
@@ -289,16 +208,12 @@ func (t *outputTail) String() string {
 	return strings.Join(t.lines, "\n")
 }
 
-// push cleans one raw line (ANSI stripped, secrets masked) and keeps the tail
-// within its line and byte bounds, dropping the oldest lines first. A single
-// line longer than the cap is kept truncated to its end rather than emptying
-// the tail.
 func (t *outputTail) push(raw string) {
 	line := oscEscape.ReplaceAllString(ansiEscape.ReplaceAllString(strings.TrimSuffix(raw, "\r"), ""), "")
 	for _, secret := range t.masks {
 		line = strings.ReplaceAll(line, secret, "***")
 	}
-	line = strings.ToValidUTF8(line, "\uFFFD") // the tail is stored in a text column
+	line = strings.ToValidUTF8(line, "\uFFFD")
 	if len(line) > tailMaxBytes {
 		line = line[len(line)-tailMaxBytes:]
 		for len(line) > 0 && line[0] >= 0x80 && line[0] < 0xC0 {
@@ -313,9 +228,6 @@ func (t *outputTail) push(raw string) {
 	}
 }
 
-// buildArgValues returns the secret values a toolchain may echo back: build
-// args travel as --env KEY=VALUE, so KEY=VALUE lines in the tool's own output
-// can carry them.
 func buildArgValues(args map[string]string) []string {
 	values := make([]string, 0, len(args))
 	for _, value := range args {
@@ -327,18 +239,6 @@ func buildArgValues(args map[string]string) []string {
 	return values
 }
 
-// toolchainEnv builds the minimal environment passed to a toolchain process.
-// Only PATH (to resolve the CLI and its own helpers), HOME and TMPDIR, the
-// BuildKit address Railpack needs, and the explicit Docker host are inherited;
-// every other variable — in particular agent/control-plane secrets — is
-// stripped. Env is never nil, so the child does not inherit the parent's
-// environment by default. home is the already-resolved toolchain home
-// (see toolchainHome); toolchainEnv does no disk I/O itself.
-//
-// HOME is the process HOME when it exists and is writable; otherwise the
-// toolchain gets its own home (see toolchainHome) because the Railpack/BuildKit
-// client must write cache under $HOME and the gotham-agent system user has no
-// writable home (/home/gotham-agent does not exist).
 func toolchainEnv(dockerHost, buildKitHost, home string) []string {
 	env := make([]string, 0, 6)
 	if buildKitHost != "" {
@@ -362,13 +262,6 @@ func toolchainEnv(dockerHost, buildKitHost, home string) []string {
 	return env
 }
 
-// toolchainHome returns a writable HOME for the toolchain: the process HOME
-// when it exists and is writable, otherwise a toolchain-owned directory under
-// the agent state dir (<stateDir>/toolchain-home, mode 0700, next to — never
-// inside — the agent's cert/credential files), falling back to a per-process
-// directory under os.TempDir when no state dir is configured or usable. It
-// returns "" only when HOME is empty and no fallback could be created, in
-// which case the child simply gets no HOME.
 func toolchainHome(stateDir string) string {
 	if home := os.Getenv("HOME"); homeUsable(home) {
 		return home
@@ -381,9 +274,6 @@ func toolchainHome(stateDir string) string {
 	return tempFallbackHome()
 }
 
-// tempFallback caches one MkdirTemp directory per process (keyed by TMPDIR so
-// tests isolating TMPDIR get a fresh dir). A fresh unique directory cannot be
-// pre-planted by another user, unlike a stable os.TempDir() child path.
 var (
 	tempFallbackMu  sync.Mutex
 	tempFallbackDir string
@@ -408,10 +298,6 @@ func tempFallbackHome() string {
 	return dir
 }
 
-// toolchainHomeUnder ensures dir exists as a toolchain-owned directory with
-// mode 0700 and returns it, or "" when it cannot be used. A pre-existing
-// symlink or non-directory is rejected, and an existing directory is
-// tightened to 0700 (MkdirAll alone neither follows that nor changes it).
 func toolchainHomeUnder(dir string) string {
 	if strings.TrimSpace(dir) == "" {
 		return ""
@@ -434,11 +320,6 @@ func toolchainHomeUnder(dir string) string {
 	return dir
 }
 
-// homeUsable reports whether home is an existing absolute directory the
-// process can write to, probed with a temp file so read-only mounts and
-// permission bits are both honoured (a stat-only check would miss them). A
-// relative HOME is unusable: the probe would resolve against the agent's
-// working directory while the child runs with command.Dir = opts.Dir.
 func homeUsable(home string) bool {
 	if strings.TrimSpace(home) == "" || !filepath.IsAbs(home) {
 		return false
@@ -456,9 +337,6 @@ func homeUsable(home string) bool {
 	return true
 }
 
-// logToolchainHomeFallback logs the HOME fallback once per Run so an operator
-// can tell which HOME the toolchain used. It stays silent when the process
-// HOME was kept or no writer is configured.
 func logToolchainHomeFallback(w io.Writer, processHome, home string) {
 	if w == nil || home == "" || home == processHome {
 		return
@@ -466,19 +344,10 @@ func logToolchainHomeFallback(w io.Writer, processHome, home string) {
 	_, _ = io.WriteString(w, "toolchain HOME="+home+" (process HOME unusable, using fallback)\n")
 }
 
-// buildKitContainer is the container ensureBuildKit creates on the node.
 const buildKitContainer = "buildkit"
 
-// buildKitMu serialises ensureBuildKit inside one process so two first builds
-// never both try to create the container.
 var buildKitMu sync.Mutex
 
-// ensureBuildKit returns the BUILDKIT_HOST Railpack should use. An address the
-// operator exported wins; otherwise it starts (or creates) a privileged
-// moby/buildkit container through the node's Docker so no manual setup is
-// needed, and waits until the daemon answers. The container restarts with
-// Docker, so this is a one-time cost.
-// ponytail: unpinned moby/buildkit image; pin a tag/digest for reproducibility.
 func ensureBuildKit(ctx context.Context, opts Options, home string) (string, error) {
 	if host := strings.TrimSpace(os.Getenv("BUILDKIT_HOST")); host != "" {
 		return host, nil
@@ -498,11 +367,11 @@ func ensureBuildKit(ctx context.Context, opts Options, home string) (string, err
 	out, err := docker("inspect", "-f", "{{.State.Running}}", buildKitContainer)
 	switch {
 	case err != nil && !strings.Contains(out, "No such object"):
-		return fail(err, out) // daemon down or permission denied: do not try to create
+		return fail(err, out)
 	case err != nil:
 		out, err = docker("run", "-d", "--privileged", "--restart", "unless-stopped",
 			"--name", buildKitContainer, "moby/buildkit")
-		if err != nil { // another process may have created it first
+		if err != nil {
 			if state, inspectErr := docker("inspect", "-f", "{{.State.Running}}", buildKitContainer); inspectErr != nil {
 				return fail(err, out)
 			} else if state != "true" {
@@ -517,7 +386,6 @@ func ensureBuildKit(ctx context.Context, opts Options, home string) (string, err
 	if err != nil {
 		return fail(err, out)
 	}
-	// The daemon needs a moment after create/start before it accepts builds.
 	for i := 0; i < 30; i++ {
 		if _, err = docker("exec", buildKitContainer, "buildctl", "debug", "workers"); err == nil {
 			return "docker-container://" + buildKitContainer, nil
@@ -531,9 +399,6 @@ func ensureBuildKit(ctx context.Context, opts Options, home string) (string, err
 	return fail(err, "BuildKit did not become ready within 30s")
 }
 
-// buildEnvFlags renders build arguments as sorted `--env KEY=VALUE` flag pairs.
-// Both CLIs take build-time environment that way, and sorting keeps the command
-// line deterministic in the deploy log.
 func buildEnvFlags(args map[string]string) []string {
 	if len(args) == 0 {
 		return nil
@@ -550,9 +415,6 @@ func buildEnvFlags(args map[string]string) []string {
 	return flags
 }
 
-// redactedCommandLine renders a command for the deploy log with build-arg
-// values masked. Build args may carry secrets, so only the key is logged; the
-// real value is still passed to the toolchain on the command line.
 func redactedCommandLine(name string, args []string) string {
 	redacted := make([]string, len(args))
 	copy(redacted, args)
@@ -567,8 +429,6 @@ func redactedCommandLine(name string, args []string) string {
 	return "$ " + name + " " + strings.Join(redacted, " ")
 }
 
-// redactBuildArg masks the value of a KEY=VALUE build argument, leaving the key
-// visible.
 func redactBuildArg(arg string) string {
 	key, _, ok := strings.Cut(arg, "=")
 	if !ok {
@@ -577,13 +437,6 @@ func redactBuildArg(arg string) string {
 	return key + "=***"
 }
 
-// ExtractTar writes an uncompressed build-context tar into dir. Entries that
-// escape dir (an absolute path or a `..` component) are rejected, so a
-// compromised control plane cannot write outside the extraction root. Symlinks
-// and other non-regular entries are skipped: the Dockerfile/static context may
-// carry symlinks for the Docker daemon, but recreating one here before later
-// entries are written would allow a tar-slip through the link target, so the
-// language-toolchain path deliberately drops them.
 func ExtractTar(dir string, source io.Reader) error {
 	if strings.TrimSpace(dir) == "" {
 		return errors.New("buildtool: empty extraction directory")
@@ -630,13 +483,10 @@ func ExtractTar(dir string, source io.Reader) error {
 				return fmt.Errorf("buildtool: close %s: %w", target, err)
 			}
 		default:
-			// Directories, regular files and skipped symlinks/devices only.
 		}
 	}
 }
 
-// safeArchivePath validates one archive entry name and returns it cleaned as a
-// slash-separated relative path, or an error when it escapes the root.
 func safeArchivePath(name string) (string, error) {
 	cleaned := filepath.ToSlash(strings.TrimSpace(name))
 	cleaned = strings.TrimPrefix(cleaned, "./")

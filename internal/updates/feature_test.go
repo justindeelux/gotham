@@ -10,7 +10,6 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// TestFeatureGetters covers the environment-driven configuration helpers.
 func TestFeatureGetters(t *testing.T) {
 	t.Setenv(FeatureEnv, "false")
 	if Enabled() {
@@ -108,7 +107,6 @@ func TestFeatureGetters(t *testing.T) {
 	}
 }
 
-// TestValidateURL covers the allowed and refused destinations.
 func TestValidateURL(t *testing.T) {
 	allowed := []string{
 		"https://api.github.com/repos/o/n/releases",
@@ -137,8 +135,6 @@ func TestValidateURL(t *testing.T) {
 	}
 }
 
-// TestFromEnv covers the environment assembly and the missing-key fail-closed
-// case.
 func TestFromEnv(t *testing.T) {
 	embedded, _, err := updatecore.GenerateKey()
 	if err != nil {

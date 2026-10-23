@@ -6,12 +6,6 @@ import { WizardKey } from "@/features/servers/composables/useAddServerWizard";
 import InstallJobLogPane from "@/features/toolchain/components/InstallJobLogPane.vue";
 import type { InstallLogPaneState } from "@/features/toolchain/components/InstallJobLogPane.vue";
 
-/**
- * Streamed log modal for the pre-agent Docker install (JUS-187). It reuses the
- * App Store's log pane (read-only: the stream is the source, so there is
- * nothing to refresh). The install runs on the node over the wizard's SSH
- * session, so no agent is required.
- */
 const wizard = inject(WizardKey);
 if (!wizard) {
   throw new Error("DockerInstallModal must be used inside AddServerWizard.");
@@ -28,7 +22,6 @@ const show = computed<boolean>({
 
 const running = computed<boolean>(() => wizard.dockerInstall.status.value === "running");
 
-/** paneState maps the stream lifecycle onto the shared log pane's states. */
 const paneState = computed<InstallLogPaneState>(() => {
   const status = wizard.dockerInstall.status.value;
   const count = wizard.dockerInstall.lines.value.length;
@@ -61,7 +54,6 @@ const paneState = computed<InstallLogPaneState>(() => {
         {{ wizard.dockerInstall.error.value }}
       </NAlert>
 
-      <!-- Read-only: re-running the installer is not a log refresh. -->
       <InstallJobLogPane
         :title="$t('servers.wizard.dockerInstallLog')"
         :state="paneState"
@@ -73,8 +65,6 @@ const paneState = computed<InstallLogPaneState>(() => {
     <template #footer>
       <div class="docker-install-foot">
         <span class="grow" />
-        <!-- Closing while running aborts the remote install, so the control
-             asks first instead of implying the node stopped work. -->
         <NPopconfirm v-if="running" @positive-click="wizard.closeDockerInstall()">
           <template #trigger>
             <NButton>{{ $t("servers.wizard.dockerInstallStop") }}</NButton>
@@ -98,8 +88,6 @@ const paneState = computed<InstallLogPaneState>(() => {
 </template>
 
 <style scoped>
-/* Width comes from the shared modal token; the .app-modal contract owns the
- * height bound and the scrolling region. */
 .docker-install-modal {
   width: min(var(--modal-width), 96vw);
 }

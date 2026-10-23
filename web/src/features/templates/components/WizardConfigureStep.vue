@@ -15,10 +15,6 @@ interface Props {
 
 defineProps<Props>();
 
-/**
- * t renders step copy in the active locale (tracks language switches).
- * The endpoint stays a raw parameter, never a translated key.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

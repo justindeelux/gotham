@@ -15,17 +15,11 @@ import {
   useCreateAppWizard,
 } from "@/features/applications/composables/useCreateAppWizard";
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
-// The build-pack picker enqueues installs through the toolchain store; the
-// JUS-178 progress modal (log/stdout/cancel/retry) reads the same store, so the
-// wizard mounts it here to show the install it started.
 import InstallQueueModal from "@/features/toolchain/components/InstallQueueModal.vue";
 
 interface Props {  show: boolean;
-  /** Project the application is created in (the route's, changeable). */
   projectId?: string;
-  /** Environment the application is created in (the route's, changeable). */
   environmentId?: string;
-  /** Source type preselected by the caller (an Add-resource card); empty keeps the selector. */
   sourceType?: string;
 }
 
@@ -44,7 +38,6 @@ provideCreateWizard(wizard);
 
 const { t } = useI18n();
 
-/** stepCounter renders the raw position; numbers stay locale-independent. */
 const stepCounter = computed<string>(() =>
   String(t("applications.wizard.counter", { current: wizard.stepPosition.value, total: wizard.stepTotal.value })),
 );
@@ -163,8 +156,6 @@ const stepCounter = computed<string>(() =>
       </div>
     </div>
 
-    <!-- The install-progress modal (JUS-178) for installs the picker started;
-         it reads the toolchain store directly. -->
     <InstallQueueModal />
   </NModal>
 </template>
@@ -173,10 +164,6 @@ const stepCounter = computed<string>(() =>
 .wizard {
   display: grid;
   grid-template-columns: 208px minmax(0, 1fr);
-  /* No min-height floor: the card is bounded to the viewport by the shared
-   * modal scroll contract (shared/styles/main.css, which also flexes .wizard)
-   * and the step body scrolls, so a floor would push the footer out on short
-   * viewports. */
   min-height: 0;
   margin-top: var(--space-3);
   border: 1px solid var(--border);

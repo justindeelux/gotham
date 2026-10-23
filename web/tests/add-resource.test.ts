@@ -1,9 +1,3 @@
-// GS-1 (JUS-57) checks: Add-resource brand marks, catalog parity, the
-// database wizard engine preselect the picker relies on, and the picker
-// page behavior (keyboard navigation, card opens wizard, scope names).
-// JUS-71/72/76: one card per application source type with the wizard
-// preselected and its selector hidden, engine preselect without a radio
-// group, and no implementation-speak copy in the picker.
 /* global document, Element, HTMLElement, HTMLInputElement: readonly */
 import { DOMWrapper, flushPromises, mount } from "@vue/test-utils";
 import { NEmpty, NMessageProvider, NRadio, NSelect } from "naive-ui";
@@ -43,8 +37,6 @@ const { listProjectsMock, getProjectMock } = vi.hoisted(() => ({
   getProjectMock: vi.fn(),
 }));
 
-// The scope summary inside the wizards loads projects through this API;
-// stub it so component mounts stay hermetic.
 vi.mock("@/features/projects/api/projects", () => ({
   listProjects: listProjectsMock,
   getProject: getProjectMock,
@@ -63,7 +55,6 @@ beforeEach(() => {
   getProjectMock.mockResolvedValue({ project: null, environments: [] });
 });
 
-/** shell mounts a harness under the Naive message provider the wizards need. */
 function shell(child: object) {
   return mount({
     render: () => h(NMessageProvider, null, { default: () => h(child as never) }),
@@ -77,7 +68,6 @@ describe("templateBrand", () => {
       letters: "N",
       color: "#0082c9",
     });
-    // Same mark as the template gallery renders for this template.
     expect(templateBrand("nextcloud", "Nextcloud").letters).toBe(cardMark("Nextcloud"));
     expect(templateBrand("uptime-kuma", "Uptime Kuma").logo).toBe("uptimekuma");
   });
@@ -230,7 +220,6 @@ const TEMPLATES = [
   { slug: "nextcloud", name: "Nextcloud", icon: "nextcloud", description: "nc" },
 ];
 
-/** mountPage mounts the picker with stubbed catalog data and a project scope. */
 async function mountPage(templates: typeof TEMPLATES, show = ref(true)) {
   const templatesStore = useTemplatesStore();
   vi.spyOn(templatesStore, "fetchTemplates").mockResolvedValue(undefined);
@@ -239,14 +228,11 @@ async function mountPage(templates: typeof TEMPLATES, show = ref(true)) {
     history: createMemoryHistory(),
     routes: [
       { path: "/", name: "home", component: { template: "<div />" } },
-      // The provider-flow alert links to the git sources page.
       { path: "/git-sources", name: "git-sources", component: { template: "<div />" } },
     ],
   });
   await router.push("/");
   await router.isReady();
-  // The embedded wizards call useMessage, so the picker mounts under the
-  // Naive message provider exactly as the real App shell provides it.
   const Parent = defineComponent({
     render: () =>
       h(NMessageProvider, null, {
@@ -457,7 +443,6 @@ describe("ResourcePicker", () => {
   });
 });
 
-/** mountSourceStep mounts the app Source step with a stubbed wizard state. */
 function mountSourceStep(locked: boolean) {
   const form = reactive({
     sourceType: locked ? "dockerfile" : "git_public",
@@ -570,7 +555,6 @@ describe("app wizard source preselect", () => {
   });
 });
 
-/** mountDatabaseWizard mounts the database wizard with one engine preselect. */
 async function mountDatabaseWizard(engine: string) {
   const serversStore = useServersStore();
   vi.spyOn(serversStore, "fetchServers").mockResolvedValue(undefined);
@@ -632,7 +616,6 @@ describe("database wizard engine preselect", () => {
   it("shows no engine select for a picked engine", async () => {
     const wrapper = await mountDatabaseWizard("postgres");
     expect(wrapper.findAllComponents(NRadio).length).toBe(0);
-    // The modal teleports to the body, so the summary reads off the document.
     expect(globalThis.document.body.textContent ?? "").toContain("Engine: PostgreSQL");
     wrapper.unmount();
   });
@@ -699,7 +682,6 @@ describe("picker marks and wizard overlay", () => {
 });
 
 describe("preselect fix round 1", () => {
-  /** stubNetwork keeps wizard-open fetches hermetic. */
   function stubNetwork() {
     vi.spyOn(useGitHubAppStore(), "fetchApps").mockResolvedValue(undefined);
     vi.spyOn(useProvidersStore(), "fetchProviders").mockResolvedValue(undefined);
@@ -727,7 +709,6 @@ describe("preselect fix round 1", () => {
     await wrapper.find('button[data-engine="postgres"]').trigger("click");
     await flushPromises();
     await nextTick();
-    // The modal teleports to the body, so its DOM reads off the document.
     const change = globalThis.document.body.querySelector(".preselected button");
     expect(change?.textContent ?? "").toContain("Change");
     expect(globalThis.document.body.textContent ?? "").toContain("Engine: PostgreSQL");

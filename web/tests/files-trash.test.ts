@@ -1,7 +1,3 @@
-// Recycle-bin surface (JUS-122): the response schemas, the API client's paths
-// and bodies (including the permanent delete flag) and the trash store's load /
-// restore / purge / empty actions. The axios layer is mocked, so the store runs
-// against the real api module without a DOM or network.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,7 +38,6 @@ const otherRoot = {
   free_bytes: 1,
 };
 
-/** deferred exposes the resolve of a promise. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -60,7 +55,6 @@ const restoredEntry = {
   etag: '"x"',
 };
 
-/** binEntry builds one recycle-bin row with sensible defaults. */
 function binEntry(overrides: Partial<TrashEntry> & { id: string }): TrashEntry {
   return {
     name: "app.yaml",
@@ -72,10 +66,6 @@ function binEntry(overrides: Partial<TrashEntry> & { id: string }): TrashEntry {
   };
 }
 
-/**
- * routeGet answers the file routes the store drives (roots, list, trash) so a
- * bound store can load; `trash` overrides the bin page and `roots` the root list.
- */
 function routeGet(
   trash?: { entries: TrashEntry[]; truncated: boolean },
   roots: (typeof root)[] = [root],
@@ -253,7 +243,6 @@ describe("trash store", () => {
     );
     expect(trash.entries).toEqual([]);
     expect(trash.acting).toBe(false);
-    // The browser listing was reloaded after the restore.
     expect(http.get).toHaveBeenCalledWith(
       "/servers/server-1/files/list",
       expect.anything(),
@@ -338,7 +327,6 @@ describe("trash store", () => {
 
     await files.setRoot("compose");
 
-    // The loaded listing now belongs to another root: not actionable.
     expect(trash.scopeMatches).toBe(false);
     await trash.restore(binEntry({ id: "t1" }));
     await trash.purge(binEntry({ id: "t1" }));
@@ -364,7 +352,6 @@ describe("trash store", () => {
     }) as never);
 
     const pending = trash.load();
-    // The stale rows are gone before the new listing resolves.
     expect(trash.entries).toEqual([]);
     expect(trash.scopeMatches).toBe(false);
 

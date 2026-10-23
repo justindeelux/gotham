@@ -1,16 +1,6 @@
-/**
- * Background-task realtime contract (JUS-91).
- *
- * The control plane publishes task lifecycle events on `tasks:{teamID}`
- * (`internal/taskevents`): live frames `{ channel, type: "task", data }`
- * where `data` is a JSON TaskEvent, plus a `task_snapshot` end marker
- * closing the running-task replay sent after every (re)subscribe.
- */
 
-/** Lifecycle state carried by a task event. */
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed";
 
-/** One background-task lifecycle event. */
 export interface TaskEvent {
   taskId: string;
   kind: string;
@@ -18,7 +8,6 @@ export interface TaskEvent {
   status: TaskStatus;
   step: string;
   progress: number;
-  /** Monotonic per-task sequence; 0 means the sender did not number frames. */
   seq: number;
   appId: string;
   deploymentId: string;
@@ -29,20 +18,14 @@ export interface TaskEvent {
   error: string;
 }
 
-/** taskChannel returns the realtime room of one team's task events. */
 export function taskChannel(teamId: string): string {
   return `tasks:${teamId}`;
 }
 
-/** isTerminalStatus reports whether a task reached its final state. */
 export function isTerminalStatus(status: TaskStatus): boolean {
   return status === "succeeded" || status === "failed";
 }
 
-/**
- * isTaskSnapshotMarker reports whether a raw frame is the snapshot end
- * marker closing a running-task replay batch.
- */
 export function isTaskSnapshotMarker(raw: string): boolean {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -79,10 +62,6 @@ function asStatus(value: unknown): TaskStatus | null {
     : null;
 }
 
-/**
- * parseTaskFrame decodes one realtime frame into a TaskEvent, or null when
- * the frame is not a task event (log frames, acks, the snapshot marker).
- */
 export function parseTaskFrame(raw: string): TaskEvent | null {
   let frame: TaskFrame;
   try {

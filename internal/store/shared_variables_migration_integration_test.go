@@ -13,9 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestSharedVariablesMigration applies 00036 on a scratch database and asserts
-// the table, the scope uniqueness index and the two cascades; then it rolls
-// 00036 back and asserts the table is gone.
 func TestSharedVariablesMigration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -82,8 +79,6 @@ func TestSharedVariablesMigration(t *testing.T) {
 		t.Fatal("00036 did not create the scope uniqueness index")
 	}
 
-	// Both cascades: deleting a project removes its project rows, deleting an
-	// environment removes its rows.
 	suffix := time.Now().UnixNano()
 	var userID, projectID, envID string
 	email := fmt.Sprintf("pe3-mig-%d@example.com", suffix)
@@ -102,16 +97,12 @@ func TestSharedVariablesMigration(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO shared_variables (project_id, key, value) VALUES ($1, 'A', '1')`, projectID); err != nil {
 		t.Fatalf("insert project variable: %v", err)
 	}
-	// The project level (NULL environment) and one environment row may share
-	// a key; two rows in the same scope may not.
 	if _, err := db.ExecContext(ctx, `INSERT INTO shared_variables (project_id, environment_id, key, value) VALUES ($1, $2, 'A', '2')`, projectID, envID); err != nil {
 		t.Fatalf("insert environment variable: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO shared_variables (project_id, key, value) VALUES ($1, 'A', '3')`, projectID); err == nil {
 		t.Fatal("duplicate project-level key inserted, want a uniqueness refusal")
 	}
-	// The composite foreign key: an environment of another project cannot
-	// back a row of this one.
 	var projectB, envB string
 	if err := db.QueryRowContext(ctx, `INSERT INTO projects (team_id, name) VALUES ($1, 'other') RETURNING id`, userID).Scan(&projectB); err != nil {
 		t.Fatalf("insert second project: %v", err)
@@ -152,7 +143,6 @@ func TestSharedVariablesMigration(t *testing.T) {
 	if exists {
 		t.Fatal("Down did not drop shared_variables")
 	}
-	// Down stays clean: the environments helper index goes with the table.
 	if err := db.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'environments_id_project_idx')`).Scan(&exists); err != nil {
 		t.Fatalf("check helper index after down: %v", err)

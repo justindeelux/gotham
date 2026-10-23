@@ -1,6 +1,3 @@
-// JUS-179 build-pack step UI: the disabled option, its reason, the Install
-// button (with a contextual accessible name), the loading/error notes and the
-// no-engine CTA. The wizard state is stubbed so the step renders deterministically.
 import { mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { computed, defineComponent, h, reactive } from "vue";
@@ -23,7 +20,6 @@ interface StepOptions {
   noEngine?: boolean;
 }
 
-/** mountStep renders the step against a stubbed wizard state. */
 function mountStep(options: StepOptions = {}) {
   const form = reactive({ buildPack: "", serverId: "srv-1" });
   const state = {
@@ -47,7 +43,6 @@ function mountStep(options: StepOptions = {}) {
   return mount(Harness, { global: { plugins: [i18n] } });
 }
 
-/** railpackChoice is a missing Railpack row the Install button targets. */
 function railpackChoice(overrides: Partial<BuildPackChoice> = {}): BuildPackChoice {
   return {
     value: "railpack",

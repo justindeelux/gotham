@@ -1,7 +1,3 @@
-// Differential test (JUS-23): templateFieldSchema must reproduce the
-// recorded outcomes of the hand-written checkTemplateValue it replaces.
-// Recorded 2026-10-04 from the pre-migration code; every row asserts
-// identical outcome AND identical message string.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -19,9 +15,6 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-// Validation messages resolve through the templates catalog: merge it once
-// and run English by default so the recorded literals below keep proving
-// the displayed behavior.
 beforeEach(() => {
   i18n.global.mergeLocaleMessage("en", { templates: templatesEn });
   i18n.global.mergeLocaleMessage("vi", { templates: templatesVi });
@@ -72,7 +65,6 @@ const probeValues: string[] = [
   "turbo",
 ];
 
-// [fieldIndex, valueIndex, recordedOutcome] from the old checkTemplateValue.
 const recorded: Array<[number, number, string | null]> = [
   [0,0,"This field is required."], [0,1,"This field is required."], [0,2,null], [0,3,"Does not match the required format."], [0,4,"Must be at most 5 characters."],
   [0,5,"Does not match the required format."], [0,6,"Does not match the required format."], [0,7,"Does not match the required format."], [0,8,"Does not match the required format."], [0,9,"Does not match the required format."],
@@ -127,9 +119,6 @@ describe("template field schemas match recorded outcomes", () => {
     for (const [fi, vi, expected] of recorded) {
       const field = fields[fi];
       const value = probeValues[vi];
-      // Schemas store namespaced keys since I18N-7; the gating outcome is
-      // pinned here while the displayed text is pinned through the
-      // locale-aware check below.
       const parsed = templateFieldSchema(field).safeParse(value);
       expect({ field: field.key, value, valid: parsed.success }).toEqual({
         field: field.key,

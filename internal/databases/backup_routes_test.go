@@ -14,8 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeBackupService is a scriptable BackupService for route tests: one error
-// and one canned answer for every method, plus the last call it saw.
 type fakeBackupService struct {
 	backup    Backup
 	backups   []Backup
@@ -27,18 +25,15 @@ type fakeBackupService struct {
 	restores  []Restore
 	check     TargetCheck
 
-	err   error
-	calls []string
-	// request echoes the payload of the last mutating call.
+	err             error
+	calls           []string
 	createBackupReq CreateBackupRequest
 	restoreReq      RestoreRequest
 	createSchedule  ScheduleRequest
 	targetReq       TargetRequest
-	// listLimit echoes the page size the last list call carried.
-	listLimit int
+	listLimit       int
 }
 
-// Compile-time guarantee.
 var _ BackupService = (*fakeBackupService)(nil)
 
 func (f *fakeBackupService) record(call string) {
@@ -169,10 +164,8 @@ func (f *fakeBackupService) Close() error {
 	return nil
 }
 
-// passthroughUser stands in for the server's UserIDFromContext.
 func passthroughUser(_ context.Context) (uuid.UUID, bool) { return uuid.Nil, false }
 
-// newBackupRouter mounts the backup routes behind a stub auth middleware.
 func newBackupRouter(svc BackupService, user uuid.UUID, present bool) http.Handler {
 	r := chi.NewRouter()
 	MountBackups(r, passthroughAuth, passthroughAuth, func(context.Context) (uuid.UUID, bool) {
@@ -184,7 +177,6 @@ func newBackupRouter(svc BackupService, user uuid.UUID, present bool) http.Handl
 	return r
 }
 
-// backupRequest issues one request against the router.
 func backupRequest(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *strings.Reader
@@ -262,7 +254,6 @@ func TestCreateBackupRoute(t *testing.T) {
 		t.Errorf("response = %+v", envelope.Backup)
 	}
 
-	// An optional target id travels in the body.
 	targetID := uuid.New().String()
 	rec = backupRequest(t, handler, http.MethodPost, "/v1/databases/"+id.String()+"/backup",
 		`{"target_id":"`+targetID+`"}`)
@@ -273,13 +264,11 @@ func TestCreateBackupRoute(t *testing.T) {
 		t.Errorf("target id = %s, want %s", svc.createBackupReq.TargetID, targetID)
 	}
 
-	// A malformed body is rejected before the service is called.
 	rec = backupRequest(t, handler, http.MethodPost, "/v1/databases/"+id.String()+"/backup", `{"nope":1}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
 
-	// A malformed database id is a 400 without touching the service.
 	rec = backupRequest(t, handler, http.MethodPost, "/v1/databases/not-a-uuid/backup", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
@@ -353,8 +342,6 @@ func TestRestoreRoute(t *testing.T) {
 	}
 }
 
-// TestListRestoresRoute is the D3-7 regression: the durable restore rows are
-// exposed so a client can follow a queued restore to its terminal state.
 func TestListRestoresRoute(t *testing.T) {
 	user := uuid.New()
 	id := uuid.New()
@@ -424,7 +411,6 @@ func TestBackupListGetDeleteRoutes(t *testing.T) {
 		t.Errorf("get status = %d", rec.Code)
 	}
 
-	// ?limit= reaches the service; a non-numeric limit is a 400.
 	rec = backupRequest(t, handler, http.MethodGet, "/v1/databases/"+id.String()+"/backups?limit=7", "")
 	if rec.Code != http.StatusOK {
 		t.Errorf("limited list status = %d", rec.Code)
@@ -488,7 +474,6 @@ func TestScheduleRoutes(t *testing.T) {
 		t.Errorf("delete status = %d", rec.Code)
 	}
 
-	// An invalid cron expression is reported as 400 by the service.
 	svc.err = ErrValidation
 	rec = backupRequest(t, handler, http.MethodPost, "/v1/databases/"+id.String()+"/schedules", `{"cron":"nope"}`)
 	if rec.Code != http.StatusBadRequest {
@@ -496,9 +481,6 @@ func TestScheduleRoutes(t *testing.T) {
 	}
 }
 
-// TestScheduleRouteTargetClearWireSemantics pins the JSON tri-state of
-// target_id on the update endpoint: an absent field arrives as nil (keep), an
-// empty string as a pointer to "" (clear) and a uuid as that id (replace).
 func TestScheduleRouteTargetClearWireSemantics(t *testing.T) {
 	user := uuid.New()
 	id := uuid.New()
@@ -551,11 +533,9 @@ func TestTargetRoutesNeverExposeCredentials(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", rec.Code, rec.Body)
 	}
-	// The service received the credentials so it can seal them…
 	if svc.targetReq.AccessKey != "AK" || svc.targetReq.SecretKey != "SK" {
 		t.Errorf("service got credentials %q / %q", svc.targetReq.AccessKey, svc.targetReq.SecretKey)
 	}
-	// …but the response must not carry them in any form.
 	body := rec.Body.String()
 	for _, forbidden := range []string{"AK", "SK", "access_key", "secret_key"} {
 		if strings.Contains(body, forbidden) {

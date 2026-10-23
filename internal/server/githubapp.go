@@ -11,13 +11,8 @@ import (
 	"github.com/justindeelux/gotham/internal/webhooks"
 )
 
-// errGitHubAppUnavailable is returned when the GitHub App service is absent
-// (no database) but a github_app flow needs it.
 var errGitHubAppUnavailable = errors.New("server: github app service is not configured")
 
-// githubAppTokenAdapter builds token-authenticated clone URLs for github_app
-// applications. It adapts the GitHub App service to the deploy cloner's
-// resolver seam; a nil service fails clones closed.
 type githubAppTokenAdapter struct {
 	svc *githubapp.Service
 }
@@ -29,9 +24,6 @@ func (a githubAppTokenAdapter) TokenCloneURL(ctx context.Context, userID, appID 
 	return a.svc.TokenCloneURL(ctx, userID, appID, repo, cloneURL)
 }
 
-// githubAppPushAdapter routes verified GitHub App push deliveries to
-// github_app applications. It adapts the GitHub App service to the webhook
-// push fallback seam; a nil service verifies nothing.
 type githubAppPushAdapter struct {
 	svc *githubapp.Service
 }

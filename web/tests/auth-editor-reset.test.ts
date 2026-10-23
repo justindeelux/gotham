@@ -1,6 +1,3 @@
-// JUS-232 fix round 1 (finding 4): logout and account changes must reset the
-// editor tabs and the window geometry, and a new account must load its own
-// persisted geometry instead of inheriting the previous one.
 /* global window:readonly */
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -12,7 +9,6 @@ import { useEditorWindowStore } from "../src/features/files/stores/editorWindow"
 import { setSession } from "../src/shared/api/token";
 import type { User } from "../src/shared/api/token";
 
-/** account builds one minimal signed-in user. */
 function account(id: string): User {
   return {
     id,
@@ -21,7 +17,6 @@ function account(id: string): User {
   };
 }
 
-/** makeTab builds one minimal open tab. */
 function makeTab(id: string): EditorTab {
   return {
     id,
@@ -46,7 +41,6 @@ function makeTab(id: string): EditorTab {
   };
 }
 
-/** signIn installs one account's session (which the auth listener observes). */
 function signIn(id: string): void {
   setSession({ user: account(id), accessToken: "a", refreshToken: "r" });
 }
@@ -77,19 +71,16 @@ describe("auth session changes reset the editor (JUS-232)", () => {
 
   it("loads the new account's geometry on an in-SPA account change", () => {
     signIn("u-1");
-    // The auth listener (registered on first store use) drives the reloads.
     useAuthStore();
     const windows = useEditorWindowStore();
     windows.setSize(900, 600);
 
     signIn("u-2");
-    // u-2 never saved geometry: factory defaults, never u-1's size.
     expect(windows.width).toBe(1331);
     expect(windows.minimized).toBe(false);
 
     windows.setSize(700, 500);
     signIn("u-1");
-    // u-1's own saved size is restored (900), not the default and not u-2's.
     expect(windows.width).toBe(900);
   });
 });

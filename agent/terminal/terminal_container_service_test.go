@@ -15,10 +15,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// The real-container terminal tests below drive the TerminalService over a real
-// Docker exec (gated by GOTHAM_E2E=1). They use a unique throwaway container
-// and never touch the shared dev containers.
-
 func e2eContainerClient(t *testing.T) *docker.DockerClient {
 	t.Helper()
 	if os.Getenv("GOTHAM_E2E") != "1" {
@@ -36,13 +32,10 @@ func e2eContainerClient(t *testing.T) *docker.DockerClient {
 	return client
 }
 
-// e2eContainer starts a unique throwaway alpine:3 container.
 func e2eContainer(t *testing.T, client *docker.DockerClient) string {
 	return e2eContainerImage(t, client, "alpine:3")
 }
 
-// e2eContainerImage starts a unique throwaway container of image and removes it
-// at the end of the test.
 func e2eContainerImage(t *testing.T, client *docker.DockerClient, image string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -69,8 +62,6 @@ func e2eContainerImage(t *testing.T, client *docker.DockerClient, image string) 
 	return id
 }
 
-// runContainerCommandArgs is runContainerCommand with positional arguments for
-// the script (kept out of the script text so a scan never matches itself).
 func runContainerCommandArgs(t *testing.T, client *docker.DockerClient, containerID, command string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -88,8 +79,6 @@ func runContainerCommandArgs(t *testing.T, client *docker.DockerClient, containe
 	return string(output)
 }
 
-// cmdlineScanScript lists pids whose command line contains $1. The scan shell
-// is skipped by its gotham-scan argv[0].
 const cmdlineScanScript = `exec 2>/dev/null
 for d in /proc/[0-9]*; do
   [ -r "$d/cmdline" ] || continue
@@ -100,13 +89,11 @@ for d in /proc/[0-9]*; do
   esac
 done`
 
-// cmdlineLeaks returns the /proc entries whose command line contains needle.
 func cmdlineLeaks(t *testing.T, client *docker.DockerClient, containerID, needle string) string {
 	t.Helper()
 	return strings.TrimSpace(runContainerCommandArgs(t, client, containerID, cmdlineScanScript, needle))
 }
 
-// waitNoCmdline polls until no process's command line contains needle.
 func waitNoCmdline(t *testing.T, client *docker.DockerClient, containerID, needle string) {
 	t.Helper()
 	const timeout = 10 * time.Second
@@ -122,7 +109,6 @@ func waitNoCmdline(t *testing.T, client *docker.DockerClient, containerID, needl
 	t.Fatalf("process %q still running inside the container:\n%s", needle, last)
 }
 
-// containerRunning reports the container's Docker state.
 func containerRunning(t *testing.T, client *docker.DockerClient, containerID string) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -139,9 +125,6 @@ func containerRunning(t *testing.T, client *docker.DockerClient, containerID str
 	return false
 }
 
-// TestDockerExecRealTransportLossKillsShell proves a cancelled terminal stream
-// (transport loss / revocation path) still runs the explicit cleanup through
-// the real terminal server.
 func TestDockerExecRealTransportLossKillsShell(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
@@ -173,10 +156,6 @@ func TestDockerExecRealTransportLossKillsShell(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealCtrlCResizeAndClose covers the interactive contract on a
-// real container: Ctrl-C interrupts the foreground job and leaves the shell
-// usable, resize is observed by stty, and closing the terminal removes the
-// running job without stopping the container.
 func TestDockerExecRealCtrlCResizeAndClose(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
@@ -233,9 +212,6 @@ func TestDockerExecRealCtrlCResizeAndClose(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealTransportLossTable repeats the hardest rows through the real
-// terminal server and a cancelled stream, then scans by command line because the
-// server owns the generated marker.
 func TestDockerExecRealTransportLossTable(t *testing.T) {
 	client := e2eContainerClient(t)
 	cases := []struct {
@@ -285,8 +261,6 @@ func TestDockerExecRealTransportLossTable(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealJobControl proves Ctrl-Z, jobs, bg and fg still behave
-// normally through the pid-recording wrapper on sh and bash.
 func TestDockerExecRealJobControl(t *testing.T) {
 	client := e2eContainerClient(t)
 	for _, image := range []string{"alpine:3", "debian:bookworm-slim"} {
@@ -316,7 +290,7 @@ func TestDockerExecRealJobControl(t *testing.T) {
 			}
 			send("sleep 7400\n")
 			time.Sleep(300 * time.Millisecond)
-			send(string([]byte{0x1a})) // Ctrl-Z
+			send(string([]byte{0x1a}))
 			time.Sleep(200 * time.Millisecond)
 			send("jobs\n")
 			waitForOutput(t, stream, "Stopped")
@@ -326,10 +300,8 @@ func TestDockerExecRealJobControl(t *testing.T) {
 			waitForOutput(t, stream, "Running")
 			send("fg\n")
 			time.Sleep(300 * time.Millisecond)
-			send(string([]byte{0x03})) // Ctrl-C interrupts the resumed job
+			send(string([]byte{0x03}))
 			time.Sleep(300 * time.Millisecond)
-			// The output marker is not the input text, so this proves the
-			// command actually ran after the interrupted fg.
 			send("echo JOB-$((6*7))\n")
 			waitForOutput(t, stream, "JOB-42")
 			send("exit\n")
@@ -342,8 +314,6 @@ func TestDockerExecRealJobControl(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealConcurrentCleanupPaths races CloseSend and cancellation on
-// the same session, then exercises the 8 h cap through a short MaxDuration.
 func TestDockerExecRealConcurrentCleanupPaths(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
@@ -379,7 +349,6 @@ func TestDockerExecRealConcurrentCleanupPaths(t *testing.T) {
 		t.Fatal("concurrent close/cancel stopped the application container")
 	}
 
-	// The lifetime cap uses the same terminate path.
 	capped := NewTerminalServer(TerminalConfig{
 		Logger:      discardLogger(),
 		Containers:  client,

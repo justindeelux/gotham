@@ -14,16 +14,10 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// guardOptions scopes the confinement allowlist to one application: its id
-// owns the managed binds, under the control plane's configured root.
 func guardOptions(appID uuid.UUID) composeguard.Options {
 	return composeguard.Options{AppID: appID.String(), ManagedRoot: managedVolumeRoot()}
 }
 
-// guardValidate runs the confinement allowlist and maps a rejection onto
-// the deploy validation sentinel, so the routes answer 400 instead of 500.
-// The message is preserved verbatim (with its offending path) for the
-// wizard and the deploy log.
 func guardValidate(content string, appID uuid.UUID) error {
 	if err := composeguard.Validate(content, guardOptions(appID)); err != nil {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
@@ -31,14 +25,6 @@ func guardValidate(content string, appID uuid.UUID) error {
 	return nil
 }
 
-// ValidateComposeContent checks pasted compose text without executing
-// anything: it must be non-empty, fit the size limit and pass the
-// confinement allowlist (at least one service with an image, no build
-// contexts, host namespaces, capabilities, devices, secrets, host binds
-// outside the application's managed directory, or any other key outside
-// the known-safe set). Anything deeper (a valid image, a working config)
-// is the node's `docker compose config` at deploy time, behind the same
-// allowlist enforced on the node.
 func ValidateComposeContent(content string, appID uuid.UUID) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("%w: compose content is required", ErrValidation)
@@ -52,17 +38,10 @@ func ValidateComposeContent(content string, appID uuid.UUID) error {
 	return guardValidate(content, appID)
 }
 
-// isComposeApp reports whether the application deploys through the compose
-// runner: the document (stored or repo-backed) runs on the node with
-// `pull + up -d`, and the routed web service's container is the release.
 func isComposeApp(app Application) bool {
 	return NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose
 }
 
-// cloneCompose resolves the raw compose document of a compose run into the
-// run state. A rollback resolves the target release's stored raw document
-// (re-rendered with the current environment at the build step); a fresh
-// deploy resolves the live row. Nothing is executed.
 func (o *Orchestrator) cloneCompose(ctx context.Context, st *runState) error {
 	if st.dep.Kind == KindRollback {
 		if strings.TrimSpace(st.dep.ComposeDocument) == "" {
@@ -70,8 +49,6 @@ func (o *Orchestrator) cloneCompose(ctx context.Context, st *runState) error {
 		}
 		st.composeRaw = st.dep.ComposeDocument
 		st.composeCommit = st.dep.ComposeCommit
-		// No clone happens here, so there is nothing for recordCommit to
-		// read: mark it done and keep the target's commit copied at creation.
 		st.commitDone = true
 		return nil
 	}
@@ -81,20 +58,11 @@ func (o *Orchestrator) cloneCompose(ctx context.Context, st *runState) error {
 	}
 	st.composeRaw = content
 	st.composeCommit = info.SHA
-	// The commit was just read: recordCommit reuses it, no second git read.
 	st.commitInfo = info
 	st.commitDone = true
 	return nil
 }
 
-// resolveComposeContent returns the raw compose document of an application
-// and, for repo-backed sources, the commit it was read from: the stored text
-// for pasted sources (validated, never logged), or the referenced file of a
-// repo-backed source cloned into dir. A preview inherits the base
-// document's shape with its managed binds rewritten to its own directory,
-// so it can never mount (or write) the base application's data. It is
-// shared by the deploy run and the best-effort teardown, so both resolve
-// the same file.
 func (o *Orchestrator) resolveComposeContent(ctx context.Context, app Application, dir string, log func(string)) (content string, info CommitInfo, err error) {
 	if strings.TrimSpace(app.ComposeContent) != "" {
 		content = app.ComposeContent
@@ -138,11 +106,6 @@ func (o *Orchestrator) resolveComposeContent(ctx context.Context, app Applicatio
 	return content, info, nil
 }
 
-// readComposeFile reads the referenced compose file out of a checkout,
-// keeping the read inside dir and under the size limit. The path was
-// validated relative and clean before the join, and the lexical check plus
-// the symlink walk below keep a hostile checkout from escaping through a
-// symlink component.
 func readComposeFile(dir, ref string) (string, error) {
 	joined := filepath.Join(dir, filepath.Clean(strings.TrimSpace(ref)))
 	rel, err := filepath.Rel(dir, joined)
@@ -167,11 +130,6 @@ func readComposeFile(dir, ref string) (string, error) {
 	return string(data), nil
 }
 
-// loadComposeEnv assembles the substitution environment of a compose run:
-// the application's plain env vars and opened secrets, layered over the
-// shared scopes exactly like a container start, plus the PORT default. The
-// map also redacts node errors on the compose path, so secret values the
-// CLI echoes never reach the deployment row or the log.
 func (o *Orchestrator) loadComposeEnv(ctx context.Context, app Application, port int32) (map[string]string, error) {
 	envVars, secrets, err := o.repo.ListEnvConfig(ctx, app.ID)
 	if err != nil {
@@ -184,11 +142,6 @@ func (o *Orchestrator) loadComposeEnv(ctx context.Context, app Application, port
 	return composeProjectEnv(envVars, secrets, sharedProject, sharedEnvironment, o.secret, port)
 }
 
-// composeDomainTargets resolves the (service, port) pairs every enabled
-// domain of a compose application must publish, and the primary port that
-// seeds PORT. A domain without an explicit service targets the release web
-// service. An application with no domain injects nothing and deploys
-// unchanged.
 func (o *Orchestrator) composeDomainTargets(ctx context.Context, app Application) ([]ComposePortTarget, int32, error) {
 	domains, err := o.repo.ListApplicationDomains(ctx, app.ID)
 	if err != nil {
@@ -218,12 +171,6 @@ func (o *Orchestrator) composeDomainTargets(ctx context.Context, app Application
 	return targets, primaryPort, nil
 }
 
-// renderComposeDocument renders the raw document against the merged project
-// environment (app env and secrets are the compose project env) and injects
-// every domain's target port mapping, so the per-domain routing reaches the
-// service it names. It answers the rendered document, the image references it
-// declares and the environment it was rendered with. A render failure is
-// redacted of environment values, exactly like the Services surface.
 func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Application, raw string) (rendered string, images []string, env map[string]string, err error) {
 	targets, primaryPort, err := o.composeDomainTargets(ctx, app)
 	if err != nil {
@@ -237,15 +184,9 @@ func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Applicatio
 	if err != nil {
 		return "", nil, nil, composeValidationError(services.RedactError(err, env))
 	}
-	// The rendered document must carry no live reference: every dollar the
-	// node will see is a `$$` escape. A lone `$` (a tagged scalar Render
-	// could not normalize, or a substituted value smuggled past the
-	// escaping) would interpolate on the node after validation.
 	if err := composeguard.CheckNoInterpolation(spec.ComposeYAML); err != nil {
 		return "", nil, nil, composeValidationError(err)
 	}
-	// The guard quotes the offending value, which now holds substituted
-	// secrets: redact it before it can reach the deployment row or log.
 	if err := guardValidate(spec.ComposeYAML, app.ID); err != nil {
 		return "", nil, nil, composeValidationError(services.RedactError(err, env))
 	}
@@ -257,10 +198,6 @@ func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Applicatio
 	if err != nil {
 		return "", nil, nil, err
 	}
-	// Declared and auto-declared named volumes become local binds under the
-	// application's managed directory, so their data lives where the file
-	// manager and backups reach it. The rewritten document is re-validated:
-	// the driver options are part of the confinement allowlist.
 	injected, err = RewriteComposeManagedVolumes(injected, managedVolumeRoot(), app.ID)
 	if err != nil {
 		return "", nil, nil, err
@@ -271,9 +208,6 @@ func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Applicatio
 	return injected, images, env, nil
 }
 
-// composeValidationError maps a Services compose error onto the deploy
-// validation sentinel, so the routes answer 400 instead of 500. The message
-// is preserved verbatim for the wizard and the deploy log.
 func composeValidationError(err error) error {
 	if err == nil {
 		return nil
@@ -281,14 +215,6 @@ func composeValidationError(err error) error {
 	return fmt.Errorf("%w: %v", ErrValidation, err)
 }
 
-// buildCompose renders the resolved document of a compose run into the run
-// state and records the raw document on the deployment row, so a rollback
-// re-applies this release's file with the environment current at that
-// time. Only the raw (uninterpolated) text is stored: secret values never
-// reach a stored row. The step is what assembles and validates the
-// complete runtime input (config reads, secret decryption, substitution)
-// before the previous release is touched, mirroring startContainer's
-// ordering guarantee.
 func (o *Orchestrator) buildCompose(ctx context.Context, st *runState) error {
 	if strings.TrimSpace(st.composeRaw) == "" {
 		return fmt.Errorf("%w: compose: no document resolved", ErrValidation)
@@ -309,22 +235,13 @@ func (o *Orchestrator) buildCompose(ctx context.Context, st *runState) error {
 	return nil
 }
 
-// pushCompose pulls every image the rendered document declares and runs the
-// project up on the node. A pull failure is best effort (the node's up still
-// runs, so a locally present image keeps deploying when the registry is
-// unreachable); an up failure is terminal. The document itself never reaches
-// the deploy log, and node errors are redacted of project secret values.
 func (o *Orchestrator) pushCompose(ctx context.Context, st *runState) error {
 	if strings.TrimSpace(st.composeYAML) == "" {
 		return fmt.Errorf("%w: compose: no rendered document", ErrValidation)
 	}
-	// The document the node is about to run carries no live reference,
-	// whether it was just rendered or restored from a stored release.
 	if err := composeguard.CheckNoInterpolation(st.composeYAML); err != nil {
 		return services.RedactError(composeValidationError(err), st.composeEnv)
 	}
-	// The guard quotes the offending value, which holds substituted
-	// secrets: redact it before it can reach the deployment row or log.
 	if err := guardValidate(st.composeYAML, st.app.ID); err != nil {
 		return services.RedactError(err, st.composeEnv)
 	}
@@ -343,11 +260,6 @@ func (o *Orchestrator) pushCompose(ctx context.Context, st *runState) error {
 	return nil
 }
 
-// startCompose records the routed web service's container as the release and
-// gates success on its health, like a container start. An up that left the
-// container untouched (no config change) retires nothing; otherwise the
-// replaced container is retired with the same confirmed-retirement rule as a
-// container start.
 func (o *Orchestrator) startCompose(ctx context.Context, st *runState) error {
 	project := services.ProjectName(st.app.ID)
 	containers, err := st.node.ComposePs(ctx, project)
@@ -375,8 +287,6 @@ func (o *Orchestrator) startCompose(ctx context.Context, st *runState) error {
 			return err
 		}
 	} else {
-		// The web container is the previous one: up changed nothing, so
-		// there is nothing to retire and nothing for removeRetired to do.
 		st.previous = ""
 		st.log("web service " + web + " unchanged")
 	}

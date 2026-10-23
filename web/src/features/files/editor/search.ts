@@ -1,12 +1,3 @@
-/**
- * Custom find/replace over CodeMirror's search state (JUS-231). The search UI
- * is Vue + Naive UI; this module is the only place that touches
- * `@codemirror/search`, so the commands, the match count and the highlight
- * decoration cannot drift from the state the queries are stored in.
- *
- * The default panel is deliberately never opened: the match highlighter below
- * is ours, because CodeMirror's only draws while its own panel is open.
- */
 import {
   SearchQuery,
   findNext,
@@ -25,18 +16,14 @@ import { validateSearchPattern } from "@/features/files/editor/searchPattern";
 
 export { isValidRegex } from "@/features/files/editor/searchPattern";
 
-/** MAX_SEARCH_MATCHES caps the counter; the bar shows "1000+" instead. */
 export const MAX_SEARCH_MATCHES = 1000;
 
-/** SEARCH_TIME_BUDGET_MS bounds one counter pass on a huge document. */
 const SEARCH_TIME_BUDGET_MS = 12;
 
-/** MAX_VISIBLE_MATCHES bounds the decorations one viewport can carry. */
 const MAX_VISIBLE_MATCHES = 4000;
 
 const EMPTY_STATUS: EditorSearchStatus = { total: 0, current: 0, capped: false };
 
-/** EditorSearchOptions is the find bar's query and toggles. */
 export interface EditorSearchOptions {
   query: string;
   caseSensitive: boolean;
@@ -44,16 +31,12 @@ export interface EditorSearchOptions {
   regexp: boolean;
 }
 
-/** EditorSearchStatus is the match count after a search action. `current` is
- *  1-based, or 0 when the cursor sits before no match / there are none.
- *  `capped` means the scan stopped at the match cap or the time budget. */
 export interface EditorSearchStatus {
   total: number;
   current: number;
   capped: boolean;
 }
 
-/** SearchableEditor is the surface both the file editor and the diff expose. */
 export interface SearchableEditor {
   search: EditorSearchController;
   lineInfo: () => { line: number; total: number };
@@ -61,9 +44,7 @@ export interface SearchableEditor {
   focus: () => void;
 }
 
-/** EditorSearchController drives one view's search state. */
 export interface EditorSearchController {
-  /** setOptions installs the query (and replacement) in every view. */
   setOptions: (_options: EditorSearchOptions, _replacement: string) => EditorSearchStatus;
   status: () => EditorSearchStatus;
   next: () => EditorSearchStatus;
@@ -73,7 +54,6 @@ export interface EditorSearchController {
   clear: () => void;
 }
 
-/** toQuery builds the CodeMirror query for one option set. */
 function toQuery(options: EditorSearchOptions, replacement = ""): SearchQuery {
   return new SearchQuery({
     search: options.query,
@@ -84,7 +64,6 @@ function toQuery(options: EditorSearchOptions, replacement = ""): SearchQuery {
   });
 }
 
-/** optionsFrom reads the query back out of the editor state. */
 function optionsFrom(state: EditorState): EditorSearchOptions {
   const query = getSearchQuery(state);
   return {
@@ -95,20 +74,11 @@ function optionsFrom(state: EditorState): EditorSearchOptions {
   };
 }
 
-/**
- * searchStatus counts the matches in `text` and locates the one at or after
- * `anchor`, so the bar can say "3 of 12" without owning a second copy of the
- * matching rules. A catastrophic pattern is rejected before it runs, the count
- * stops at {@link MAX_SEARCH_MATCHES}, and a time budget bounds the pass, so a
- * huge document degrades to "1000+" instead of blocking the editor.
- */
 export function searchStatus(
   text: Text,
   options: EditorSearchOptions,
   anchor: number,
 ): EditorSearchStatus {
-  // `validateSearchPattern` also catches the nested-quantifier shapes that can
-  // backtrack exponentially; never hand one to RegExp.exec.
   if (options.regexp && validateSearchPattern(options.query) !== null) {
     return EMPTY_STATUS;
   }
@@ -146,7 +116,6 @@ export function searchStatus(
 const matchMark = Decoration.mark({ class: "cm-searchMatch" });
 const selectedMatchMark = Decoration.mark({ class: "cm-searchMatch cm-searchMatch-selected" });
 
-/** matchDecorations marks every match in the visible ranges, not the whole doc. */
 function matchDecorations(view: EditorView): DecorationSet {
   const query = getSearchQuery(view.state);
   if (
@@ -161,8 +130,6 @@ function matchDecorations(view: EditorView): DecorationSet {
     const cursor = query.getCursor(view.state, from, to);
     for (let step = cursor.next(); !step.done; step = cursor.next()) {
       const match = step.value;
-      // Mark decorations cannot be empty; a zero-width regex match (/^/) still
-      // counts in the total, it just has nothing to paint.
       if (match.from === match.to) {
         continue;
       }
@@ -180,7 +147,6 @@ function matchDecorations(view: EditorView): DecorationSet {
   return Decoration.set(ranges, true);
 }
 
-/** searchMatchHighlighter repaints the matches, reusing the editor's tokens. */
 const searchMatchHighlighter = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
@@ -206,21 +172,14 @@ const searchMatchHighlighter = ViewPlugin.fromClass(
   { decorations: (value) => value.decorations },
 );
 
-/** customSearchExtensions installs the search state plus our highlighter. */
 export function customSearchExtensions(): Extension {
   return [search(), searchMatchHighlighter];
 }
 
-/**
- * createSearchController wraps one or more views (the diff has two panes but
- * navigates the current side). `views[0]` owns the selection, the match count
- * and the replacement; every view gets the query so both panes highlight.
- */
 export function createSearchController(views: EditorView[]): EditorSearchController {
   const primary = views[0];
   let replacement = "";
 
-  /** apply syncs the current query into every pane. */
   function apply(options: EditorSearchOptions): void {
     const query = toQuery(options, replacement);
     for (const view of views) {
@@ -230,7 +189,6 @@ export function createSearchController(views: EditorView[]): EditorSearchControl
     }
   }
 
-  /** usable reports whether a command may run: valid and not catastrophic. */
   function usable(view: EditorView | undefined): view is EditorView {
     if (!view) {
       return false;
@@ -242,8 +200,6 @@ export function createSearchController(views: EditorView[]): EditorSearchControl
     );
   }
 
-  /** selectionIsMatch reports whether the selection is exactly one match, so a
-   *  replace must not first walk to the next one. */
   function selectionIsMatch(): boolean {
     if (!primary) {
       return false;
@@ -265,7 +221,6 @@ export function createSearchController(views: EditorView[]): EditorSearchControl
     );
   }
 
-  /** statusOf counts matches in the primary pane. */
   function statusOf(): EditorSearchStatus {
     if (!primary) {
       return EMPTY_STATUS;
@@ -291,8 +246,6 @@ export function createSearchController(views: EditorView[]): EditorSearchControl
     },
     status: statusOf,
     next() {
-      // A command on an invalid query would make CodeMirror fall back to
-      // opening its default panel; never give it that chance.
       if (usable(primary)) {
         findNext(primary);
       }
@@ -312,7 +265,6 @@ export function createSearchController(views: EditorView[]): EditorSearchControl
       const query = toQuery(optionsFrom(primary.state), replacement);
       primary.dispatch({ effects: setSearchQuery.of(query) });
       if (!selectionIsMatch()) {
-        // Replace walks from the cursor when it is not already on a match.
         findNext(primary);
       }
       replaceNext(primary);

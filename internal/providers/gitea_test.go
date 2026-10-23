@@ -42,9 +42,6 @@ func TestGiteaSourceListRepos(t *testing.T) {
 	}
 }
 
-// TestGiteaSourceListReposBounded is the C1-8 regression for the third
-// provider: a self-hosted instance that keeps returning full pages cannot make
-// the listing loop forever.
 func TestGiteaSourceListReposBounded(t *testing.T) {
 	var requests int
 	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {

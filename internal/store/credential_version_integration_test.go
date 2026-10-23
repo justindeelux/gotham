@@ -16,21 +16,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// These tests exercise the P-A5 credential-version guarantee at the store
-// level: a password reset bumps the account's version and deletes its sessions
-// in one transaction, and any replacement a racing rotation still manages to
-// mint carries the pre-reset version, so it is stale once the reset commits.
-
-// openVersionTestStore opens the shared test database, skipping when Postgres
-// is unreachable (an explicit GOTHAM_TEST_DSN turns the skip into a failure).
 func openVersionTestStore(t *testing.T) (*store.Store, context.Context) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, testDSN()); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("open store: %v", err)
@@ -49,8 +40,6 @@ func openVersionTestStore(t *testing.T) (*store.Store, context.Context) {
 	return store.New(pool), ctx
 }
 
-// versionTestUser creates an account (credential version 1) and schedules its
-// removal, returning the stored row and its email.
 func versionTestUser(t *testing.T, ctx context.Context, st *store.Store, prefix string) (sqlc.User, string) {
 	t.Helper()
 
@@ -69,7 +58,6 @@ func versionTestUser(t *testing.T, ctx context.Context, st *store.Store, prefix 
 	return user, email
 }
 
-// versionTestSession mints a live refresh session carrying version.
 func versionTestSession(t *testing.T, ctx context.Context, st *store.Store, userID pgtype.UUID, version int32) sqlc.Session {
 	t.Helper()
 
@@ -85,12 +73,6 @@ func versionTestSession(t *testing.T, ctx context.Context, st *store.Store, user
 	return session
 }
 
-// rotateVersionedSession mirrors the store-level sequence of
-// auth.Service.Refresh including the P-A5 guard: read the session, revoke it
-// while it is live, read the account's current version, refuse a session whose
-// version is older, and mint the replacement with the version read. A returned
-// version of 0 means the rotation refused. The auth package's tests cover the
-// service path itself; this helper only lets the store tests stage the race.
 func rotateVersionedSession(ctx context.Context, st *store.Store, refreshHash string) (int32, error) {
 	session, err := st.GetSessionByRefreshHash(ctx, refreshHash)
 	if err != nil {
@@ -131,8 +113,6 @@ func rotateVersionedSession(ctx context.Context, st *store.Store, refreshHash st
 	return replacement.CredentialVersion, nil
 }
 
-// sessionsAtVersion counts the user's sessions carrying at least minVersion.
-// After a reset no session minted from the old chain may count.
 func sessionsAtVersion(ctx context.Context, t *testing.T, st *store.Store, userID pgtype.UUID, minVersion int32) int64 {
 	t.Helper()
 
@@ -145,8 +125,6 @@ func sessionsAtVersion(ctx context.Context, t *testing.T, st *store.Store, userI
 	return count
 }
 
-// TestStoreResetUserPasswordBumpsCredentialVersion proves the reset commits the
-// version bump and the session delete together with the hash update.
 func TestStoreResetUserPasswordBumpsCredentialVersion(t *testing.T) {
 	st, ctx := openVersionTestStore(t)
 	user, email := versionTestUser(t, ctx, st, "cred-reset")
@@ -172,13 +150,9 @@ func TestStoreResetUserPasswordBumpsCredentialVersion(t *testing.T) {
 	}
 }
 
-// TestStoreResetRacesRefreshMint covers both orderings of a reset against a
-// rotation of a pre-reset session.
 func TestStoreResetRacesRefreshMint(t *testing.T) {
 	st, ctx := openVersionTestStore(t)
 
-	// Rotation first: the reset must delete both the old session and the
-	// replacement it minted.
 	t.Run("replacement committed before the reset", func(t *testing.T) {
 		user, email := versionTestUser(t, ctx, st, "cred-race-before")
 		session := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
@@ -196,9 +170,6 @@ func TestStoreResetRacesRefreshMint(t *testing.T) {
 		}
 	})
 
-	// Reset first: a rotation that already passed its guard and read the
-	// account, but mints after the reset's delete, can only write a stale
-	// replacement — and rotating that replacement must refuse.
 	t.Run("reset committed before the replacement was minted", func(t *testing.T) {
 		user, email := versionTestUser(t, ctx, st, "cred-race-after")
 		session := versionTestSession(t, ctx, st, user.ID, user.CredentialVersion)
@@ -235,8 +206,6 @@ func TestStoreResetRacesRefreshMint(t *testing.T) {
 		}
 	})
 
-	// Both operations race for real; every surviving session must be stale
-	// against the post-reset account.
 	t.Run("concurrent", func(t *testing.T) {
 		for i := 0; i < 6; i++ {
 			user, email := versionTestUser(t, ctx, st, "cred-race-concurrent")
@@ -271,8 +240,6 @@ func TestStoreResetRacesRefreshMint(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetUserByID: %v", err)
 			}
-			// A refusing rotation returns 0; one that slipped in after the
-			// delete may only have minted the pre-reset version.
 			if minted != 0 && minted >= after.CredentialVersion {
 				t.Fatalf("rotation minted version %d, account is at %d: the old chain survived the reset",
 					minted, after.CredentialVersion)

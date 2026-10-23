@@ -1,11 +1,3 @@
-// JUS-249 real-shell proof. Every test starts a real PTY (Python's `pty`
-// module) and a real shell, feeds the actual output through the same
-// PromptScanner the runtime uses, types through the same QuickCommandEngine,
-// and accepts through prepareAcceptance. The bash/zsh runs use the shipped,
-// additive rc snippet; `sh` has no marks. Covers the review-r1 matrix: zsh,
-// bash vi normal/insert mode, Ctrl-R, history/Tab/arrow resets, word
-// boundaries, PS2, password prompts, alternate screen, a failing rc, and the
-// no-marks negative. Each suite skips with a warning when its shell is absent.
 /* global setTimeout:readonly, clearTimeout:readonly, setInterval:readonly, clearInterval:readonly, console:readonly, process:readonly */
 import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
@@ -23,7 +15,6 @@ import {
   shellIntegrationSnippet,
 } from "@/features/terminal/utils/quickCommandInsertion";
 
-/** PYTHON_RELAY bridges stdin/stdout to a child connected to a real PTY. */
 const PYTHON_RELAY = String.raw`
 import json, os, pty, select, subprocess, sys
 payload = json.loads(sys.argv[1])
@@ -74,12 +65,10 @@ finally:
         pass
 `;
 
-/** findShell returns the first existing absolute path, or "". */
 function findShell(candidates: string[]): string {
   return candidates.find((candidate) => existsSync(candidate)) ?? "";
 }
 
-/** supportsPty reports whether Python can open a pty on this host. */
 function supportsPty(): boolean {
   if (findShell(["/bin/sh", "/usr/bin/sh"]) === "") {
     return false;
@@ -99,11 +88,6 @@ const bashPath = findShell(["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
 ]);
 const shPath = findShell(["/bin/sh", "/usr/bin/sh"]);
 
-/**
- * CI sets GOTHAM_REQUIRE_PTY_SHELLS so a missing shell fails the suite instead
- * of silently skipping the proof. Locally the variable is unset and the
- * explicit console warning above is the only signal.
- */
 const requiredShells = (process.env.GOTHAM_REQUIRE_PTY_SHELLS ?? "")
   .split(",")
   .map((name) => name.trim())
@@ -127,7 +111,6 @@ if (requiredShells.length > 0) {
   }
 }
 
-// Real PTY startup and prompt transitions can exceed Vitest's 5s default.
 vi.setConfig({ testTimeout: 15_000 });
 
 if (!hasPty) {
@@ -140,7 +123,6 @@ if (!zshPath) {
   console.warn("[quick-command-pty] zsh not found; zsh proof skipped");
 }
 
-/** PtyProcess is one real PTY session driven through the relay. */
 class PtyProcess {
   private readonly child;
   private output = "";
@@ -158,17 +140,14 @@ class PtyProcess {
     });
   }
 
-  /** write sends raw bytes to the PTY. */
   write(data: string): void {
     this.child.stdin?.write(data);
   }
 
-  /** text returns everything received so far. */
   getText(): string {
     return this.output;
   }
 
-  /** waitFor resolves once the accumulated output matches. */
   waitFor(match: RegExp, timeoutMs = 5000): Promise<void> {
     if (match.test(this.output)) {
       return Promise.resolve();
@@ -182,7 +161,6 @@ class PtyProcess {
     });
   }
 
-  /** checkWaiters resolves every pattern that now matches. */
   private checkWaiters(): void {
     const pending = this.waiters;
     this.waiters = [];
@@ -196,7 +174,6 @@ class PtyProcess {
     }
   }
 
-  /** close kills the relay and its process group. */
   close(): void {
     for (const waiter of this.waiters) {
       clearTimeout(waiter.timer);
@@ -207,7 +184,6 @@ class PtyProcess {
   }
 }
 
-/** sessions tracks every live process for teardown. */
 const sessions: PtyProcess[] = [];
 let tempDirs: string[] = [];
 
@@ -220,12 +196,10 @@ afterEach(() => {
   }
 });
 
-/** sleep pauses without fake timers. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** countMatches counts non-overlapping occurrences of a literal needle. */
 function countMatches(haystack: string, needle: string): number {
   let count = 0;
   let index = 0;
@@ -236,12 +210,10 @@ function countMatches(haystack: string, needle: string): number {
   return count;
 }
 
-/** command builds one saved command for the engine. */
 function command(text: string, abbreviation: string): QuickCommand {
   return { id: "cmd-1", label: "PTY proof", command: text, abbreviation };
 }
 
-/** ShellSession wires a real PTY to the production scanner and engine. */
 class ShellSession {
   readonly engine: QuickCommandEngine;
   readonly scanner: PromptScanner;
@@ -262,7 +234,6 @@ class ShellSession {
     this.drain = setInterval(() => this.scan(), 10);
   }
 
-  /** scan feeds newly arrived output through the real scanner. */
   scan(): void {
     const text = this.pty.getText();
     if (text.length > this.consumed) {
@@ -271,7 +242,6 @@ class ShellSession {
     }
   }
 
-  /** waitUntil polls after scanning each newly arrived chunk. */
   async waitUntil(predicate: () => boolean, timeoutMs = 6000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (!predicate()) {
@@ -285,7 +255,6 @@ class ShellSession {
     }
   }
 
-  /** waitForPrompt waits for a NEW B mark and the engine's input phase. */
   async waitForPrompt(): Promise<void> {
     const start = this.pty.getText().length;
     await this.waitUntil(() => {
@@ -296,17 +265,14 @@ class ShellSession {
     });
   }
 
-  /** waitFor delegates to the raw output accumulator. */
   waitFor(match: RegExp, timeoutMs = 5000): Promise<void> {
     return this.pty.waitFor(match, timeoutMs);
   }
 
-  /** text returns the raw PTY output received so far. */
   text(): string {
     return this.pty.getText();
   }
 
-  /** key runs one onData chunk through the engine and writes what it returns. */
   key(data: string): void {
     this.scan();
     const forwarded = this.engine.handleInput(data);
@@ -315,20 +281,17 @@ class ShellSession {
     }
   }
 
-  /** typeText sends printable text one key at a time. */
   typeText(text: string): void {
     for (const char of text) {
       this.key(char);
     }
   }
 
-  /** run types a command and presses Enter. */
   run(text: string): void {
     this.typeText(text);
     this.key("\r");
   }
 
-  /** accept replaces the visible suggestion and returns the sent sequence. */
   accept(commandId = "cmd-1"): string {
     const acceptance = this.engine.accept(commandId);
     if (!acceptance) {
@@ -343,20 +306,17 @@ class ShellSession {
     return plan.sequence;
   }
 
-  /** expectNoSuggestion gives late marks a chance, then asserts silence. */
   async expectNoSuggestion(): Promise<void> {
     await sleep(100);
     this.scan();
     expect(this.engine.getState().suggestion).toBeNull();
   }
 
-  /** stop clears the drain interval (pty teardown is in afterEach). */
   stop(): void {
     clearInterval(this.drain);
   }
 }
 
-/** makeBashRc writes an rc file with a visible prompt and the shipped marks. */
 function makeBashRc(extra = ""): string {
   const dir = mkdtempSync(join(tmpdir(), "gotham-pty-"));
   tempDirs.push(dir);
@@ -373,7 +333,6 @@ function makeBashRc(extra = ""): string {
   return rc;
 }
 
-/** bashSession starts bash with one rc file. */
 function bashSession(
   commands: QuickCommand[],
   rc: string,
@@ -386,7 +345,6 @@ function bashSession(
   );
 }
 
-/** startBash starts a normal integrated bash and waits for its prompt. */
 async function startBash(
   commands: QuickCommand[],
   extraRc = "",
@@ -396,7 +354,6 @@ async function startBash(
   return session;
 }
 
-/** makeZshRc writes a ZDOTDIR/.zshrc with a visible prompt and marks. */
 function makeZshRc(): { dir: string; zdotdir: string } {
   const dir = mkdtempSync(join(tmpdir(), "gotham-zsh-"));
   tempDirs.push(dir);
@@ -411,7 +368,6 @@ function makeZshRc(): { dir: string; zdotdir: string } {
   return { dir, zdotdir: dir };
 }
 
-/** resetLine cancels any half-typed line and waits for a fresh prompt. */
 async function resetLine(session: ShellSession): Promise<void> {
   session.key("\x03");
   await session.waitForPrompt();
@@ -448,17 +404,13 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
       "set -o vi",
     );
     try {
-      // Insert mode: build an inert line, then Esc to vi normal mode.
       session.typeText("echo X ");
       session.key("\x1b");
       expect(session.engine.getState().suspended).toBe(true);
       session.typeText("gs");
       await session.expectNoSuggestion();
-      // The mint bytes were forwarded; normal-mode commands are ignored by
-      // the engine and the line is cleared before the positive check.
       await resetLine(session);
 
-      // A fresh prompt is insert mode: the same abbreviation is safe.
       session.typeText("gs");
       expect(session.engine.getState().suggestion).toMatchObject({ commandId: "cmd-1" });
       session.accept();
@@ -495,33 +447,28 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
   it("history/Tab/arrow resets cannot false-match a glued suffix", async () => {
     const session = await startBash([command("printf 'RESET_%s\\n' OK", "gs")]);
     try {
-      // Clean line: `foogs` is glued to real text, so no match.
       session.typeText("foogs");
       await session.expectNoSuggestion();
       await resetLine(session);
 
-      // History recall (Up) resets the mirror.
       session.typeText("echo foo");
       session.key("\x1b[A");
       session.typeText("gs");
       await session.expectNoSuggestion();
       await resetLine(session);
 
-      // Tab completion resets the mirror.
       session.typeText("echo foo");
       session.key("\t");
       session.typeText("gs");
       await session.expectNoSuggestion();
       await resetLine(session);
 
-      // Cursor movement resets the mirror.
       session.typeText("echo foo");
       session.key("\x05");
       session.typeText("gs");
       await session.expectNoSuggestion();
       await resetLine(session);
 
-      // A clean prompt still works.
       session.typeText("gs");
       expect(session.engine.getState().suggestion).not.toBeNull();
       session.accept();
@@ -559,14 +506,10 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
       await session.waitFor(/PW: /);
       session.typeText("gs");
       await session.expectNoSuggestion();
-      // A shell without PS0 (older bash) cannot emit C; Enter already
-      // suspended the mirror, which is the property that matters.
       expect(session.engine.getState().suspended).toBe(true);
       session.key("\r");
       await session.waitForPrompt();
 
-      // The password type-ahead may have been consumed by `read`; the next
-      // prompt is conservatively tainted. Submit the empty line once more.
       session.key("\r");
       await session.waitForPrompt();
 
@@ -587,7 +530,6 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
       await session.waitUntil(() => session.engine.getState().alternateScreen);
       session.typeText("gs");
       await session.expectNoSuggestion();
-      // Clear the inert `gs` from the line before leaving the alternate screen.
       session.key("\x15");
 
       session.run("printf '\\033[?1049l'");
@@ -625,8 +567,6 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
   it("type-ahead during a running command cannot false-match after the prompt", async () => {
     const session = await startBash([command("printf 'TA_%s\\n' OK", "gs")]);
     try {
-      // Submit a slow command, then type `foogs` while it still runs. That
-      // text is queued for the next prompt, so the next B is tainted.
       session.run("sleep 0.6");
       session.typeText("foogs");
       await session.waitForPrompt();
@@ -634,7 +574,6 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
       await session.expectNoSuggestion();
       expect(session.engine.getState().suspended).toBe(true);
 
-      // Submit the type-ahead, then the following prompt is clean.
       session.key("\r");
       await session.waitForPrompt();
       session.typeText("gs");
@@ -650,8 +589,6 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
   it("recall + Enter then type-ahead stays tainted on shells without a C mark", async () => {
     const session = await startBash([command("printf 'RECALL_%s\\n' OK", "gs")]);
     try {
-      // Establish history, then recall it and submit while the mirror is
-      // suspended. bash 3.2 emits no C mark, so Enter must set submitted.
       session.run("sleep 0.5");
       await session.waitForPrompt();
       session.key("\x1b[A");
@@ -696,8 +633,6 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
       await session.waitFor(/TWICE_%s/);
       session.key("\r");
       await session.waitFor(/TWICE_OK/);
-      // PS0 exists only on bash >= 4.4. Where it exists, sourcing twice must
-      // still emit exactly one C; on older bash there is no C at all.
       const cCount = countMatches(session.text(), "\x1b]133;C\x07");
       expect(cCount).toBeLessThanOrEqual(1);
       if (session.text().includes("\x1b]133;C\x07")) {
@@ -748,11 +683,8 @@ describe.skipIf(!hasPty || zshPath === "")("real PTY: zsh", () => {
       await session.waitForPrompt();
       session.typeText("gs");
       expect(session.engine.getState().suggestion).not.toBeNull();
-      // Let zsh finish processing the typed keys before interrupting.
       await sleep(150);
 
-      // Ctrl-C cancels the line; zle-line-init must emit a fresh B. Wait for
-      // the engine to leave the suspended state, not merely for a known phase.
       session.key("\x03");
       await sleep(150);
       await session.waitUntil(
@@ -787,7 +719,6 @@ describe.skipIf(!hasPty || shPath === "")("real PTY: sh/dash (no marks)", () => 
 
       session.typeText("gs");
       await session.expectNoSuggestion();
-      // Clear the line and run a marker; the terminal is unaffected.
       session.key("\x15");
       session.run("echo GOTHAM_NEG_OK");
       await session.waitFor(/GOTHAM_NEG_OK/);

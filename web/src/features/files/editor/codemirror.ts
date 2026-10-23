@@ -1,14 +1,3 @@
-/**
- * CodeMirror 6 bundle (P18 step 8). This module is imported *only* through a
- * dynamic `import()` in {@link ../composables/useCodeMirror}, so every
- * CodeMirror package lands in its own chunk and never in the entry bundle.
- *
- * Grammars are loaded through per-language dynamic imports: the editor chunk
- * carries only the shell + the loader table, and the first time a file (or the
- * status-bar picker) asks for a language its grammar chunk is fetched.
- * `@codemirror/language-data` is deliberately not a dependency, so the editor
- * never bundles a grammar catalogue it did not name.
- */
 import {
   defaultKeymap,
   history,
@@ -57,19 +46,13 @@ import type { EditorLineInfo } from "@/features/files/editor/goto";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
-/** EditorAccessibility is the live accessible surface of an editor session. */
 export interface EditorAccessibility {
-  /** ariaLabel names the contenteditable surface for screen readers. */
   ariaLabel: string;
-  /** placeholder is the empty-document hint in the active locale. */
   placeholder?: string;
-  /** invalid marks the current document as failing the caller's schema. */
   invalid: boolean;
-  /** describedBy links the validation message shown next to the editor. */
   describedBy?: string;
 }
 
-/** EditorSession is the imperative handle a Vue component keeps per tab. */
 export interface EditorSession {
   getDoc: () => string;
   setDoc: (_doc: string) => void;
@@ -79,36 +62,23 @@ export interface EditorSession {
   setAccessibility: (_accessibility: EditorAccessibility) => void;
   focus: () => void;
   requestMeasure: () => void;
-  /** search drives the custom find/replace bar over the CM search state. */
   search: EditorSearchController;
-  /** lineInfo reports the cursor line and the document line count. */
   lineInfo: () => EditorLineInfo;
-  /** gotoLine moves the cursor; a rejected dimension is returned, not clamped. */
   gotoLine: (_line: number, _column: number) => "line" | "column" | null;
   destroy: () => void;
 }
 
-/** EditorSessionOptions configures one CodeMirror instance. */
 export interface EditorSessionOptions {
   parent: HTMLElement;
   doc: string;
   language: EditorLanguageId;
-  /** ariaLabel names the contenteditable surface for screen readers. */
   ariaLabel: string;
-  /**
-   * placeholder is the empty-document hint; embedded editors pass their
-   * format example and fall back to the file editor wording.
-   */
   placeholder?: string;
-  /** invalid marks the document as failing the caller's schema. */
   invalid?: boolean;
-  /** describedBy links the validation message shown next to the editor. */
   describedBy?: string;
   readOnly: boolean;
   settings: EditorSettings;
   onChange: (_doc: string) => void;
-  /** The remaining handlers are optional so an embedded editor only pays for
-   *  the commands it implements; unbound ones are no-ops in the shared keymap. */
   onCursor?: (_line: number, _column: number) => void;
   onSave: () => void;
   onSaveAll?: () => void;
@@ -116,17 +86,13 @@ export interface EditorSessionOptions {
   onToggleWrap?: () => void;
   onNextTab?: () => void;
   onPreviousTab?: () => void;
-  /** The custom find/replace and go-to-line surfaces (JUS-231). Required so no
-   *  surface can fall back to the default CodeMirror panels. */
   onFind: () => void;
   onReplace: () => void;
   onGoToLine: () => void;
-  /** Walk the matches without opening the default search panel (Mod-G). */
   onFindNext?: () => void;
   onFindPrevious?: () => void;
 }
 
-/** logMode highlights the level, timestamp and quoted fields of a log line. */
 const logMode = simpleMode({
   start: [
     { regex: /\b(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL)\b/, token: "keyword" },
@@ -139,7 +105,6 @@ const logMode = simpleMode({
   ],
 });
 
-/** makefileMode highlights assignments and targets in a Makefile. */
 const makefileMode = simpleMode({
   start: [
     { regex: /#.*/, token: "comment" },
@@ -151,16 +116,10 @@ const makefileMode = simpleMode({
   ],
 });
 
-/** stream wraps one legacy mode as a StreamLanguage extension. */
 function stream(mode: Parameters<typeof StreamLanguage.define>[0]): Extension {
   return StreamLanguage.define(mode);
 }
 
-/**
- * languageLoaders fetches one grammar on first use. Each dynamic import puts
- * that grammar (and its parser) in its own chunk; Vite shares the common
- * CodeMirror runtime between them.
- */
 const languageLoaders: Record<EditorLanguageId, () => Promise<Extension>> = {
   json: async () => (await import("@codemirror/lang-json")).json(),
   yaml: async () => (await import("@codemirror/lang-yaml")).yaml(),
@@ -172,8 +131,6 @@ const languageLoaders: Record<EditorLanguageId, () => Promise<Extension>> = {
   markdown: async () => (await import("@codemirror/lang-markdown")).markdown(),
   css: async () => (await import("@codemirror/lang-css")).css(),
   scss: async () => stream((await import("@codemirror/legacy-modes/mode/sass")).sass),
-  // shortcut: the legacy sass mode also covers the CSS-superset parts of LESS;
-  // swap in a dedicated LESS parser if strict LESS nesting matters.
   less: async () => stream((await import("@codemirror/legacy-modes/mode/sass")).sass),
   html: async () => (await import("@codemirror/lang-html")).html(),
   vue: async () => (await import("@codemirror/lang-vue")).vue(),
@@ -191,7 +148,6 @@ const languageLoaders: Record<EditorLanguageId, () => Promise<Extension>> = {
   lua: async () => stream((await import("@codemirror/legacy-modes/mode/lua")).lua),
   ruby: async () => stream((await import("@codemirror/legacy-modes/mode/ruby")).ruby),
   nginx: async () => stream((await import("@codemirror/legacy-modes/mode/nginx")).nginx),
-  // Apache directives are close enough to nginx's `directive value;` shape.
   apache: async () => stream((await import("@codemirror/legacy-modes/mode/nginx")).nginx),
   ini: async () =>
     stream((await import("@codemirror/legacy-modes/mode/properties")).properties),
@@ -200,10 +156,8 @@ const languageLoaders: Record<EditorLanguageId, () => Promise<Extension>> = {
   plain: async () => [],
 };
 
-/** languageExtensions caches the loaded extension per language (one load each). */
 const languageExtensions = new Map<EditorLanguageId, Promise<Extension>>();
 
-/** loadLanguage resolves one language, falling back to no grammar on failure. */
 export function loadLanguage(language: EditorLanguageId): Promise<Extension> {
   let extension = languageExtensions.get(language);
   if (!extension) {
@@ -213,17 +167,10 @@ export function loadLanguage(language: EditorLanguageId): Promise<Extension> {
   return extension;
 }
 
-/** readOnlyExtensions bundles the two facets that gate typing, so a live
- *  session can be flipped read-only when the caller's role/root changes. */
 function readOnlyExtensions(readOnly: boolean): Extension {
   return [EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)];
 }
 
-/**
- * accessibilityExtensions keeps the label, empty-document hint and validation
- * attributes in one compartment, so a locale switch or a schema failure
- * reconfigures them without recreating the view (and losing the user's edits).
- */
 function accessibilityExtensions(accessibility: EditorAccessibility): Extension {
   const attributes: Record<string, string> = {
     "aria-label": accessibility.ariaLabel,
@@ -240,7 +187,6 @@ function accessibilityExtensions(accessibility: EditorAccessibility): Extension 
   ];
 }
 
-/** gothamHighlight maps syntax tags onto the app's dark palette. */
 const gothamHighlight = HighlightStyle.define([
   { tag: tags.keyword, color: "#c792ea" },
   { tag: [tags.string, tags.special(tags.string)], color: "#c3e88d" },
@@ -255,7 +201,6 @@ const gothamHighlight = HighlightStyle.define([
   { tag: tags.invalid, color: "#f23f43" },
 ]);
 
-/** gothamLightHighlight is the light-theme syntax palette (JUS-219). */
 const gothamLightHighlight = HighlightStyle.define([
   { tag: tags.keyword, color: "var(--editor-light-keyword)" },
   { tag: [tags.string, tags.special(tags.string)], color: "var(--editor-light-string)" },
@@ -274,11 +219,6 @@ const gothamLightHighlight = HighlightStyle.define([
   { tag: tags.invalid, color: "var(--editor-light-invalid)" },
 ]);
 
-/**
- * whitespaceDecorations marks leading spaces/tabs when "show invisibles" or
- * "indent guides" is on. Only the visible ranges are walked, so a huge file
- * costs no more than the screen.
- */
 function whitespaceDecorations(
   view: EditorView,
   tabSize: number,
@@ -315,7 +255,6 @@ function whitespaceDecorations(
   return Decoration.set(ranges, true);
 }
 
-/** whitespacePlugin recomputes the whitespace marks on edits and scrolling. */
 function whitespacePlugin(settings: EditorSettings): Extension {
   if (!settings.showInvisibles && !settings.indentGuides) {
     return [];
@@ -344,7 +283,6 @@ function whitespacePlugin(settings: EditorSettings): Extension {
   );
 }
 
-/** editorTheme keeps the editor on the app's surface tokens in both themes. */
 function editorTheme(settings: EditorSettings): Extension {
   const dark = settings.theme === "dark";
   const background = dark ? "var(--surface-warm)" : "var(--editor-light-bg)";
@@ -365,7 +303,6 @@ function editorTheme(settings: EditorSettings): Extension {
           overflow: "auto",
         },
         ".cm-content": { caretColor: "var(--accent)" },
-        // Multi-line format examples stay readable when the document is empty.
         ".cm-placeholder": { whiteSpace: "pre-wrap" },
         ".cm-gutters": {
           backgroundColor: background,
@@ -415,13 +352,6 @@ function editorTheme(settings: EditorSettings): Extension {
   ];
 }
 
-/**
- * editorSettingsExtensions builds the reconfigurable part of the editor:
- * theme, font, indentation, gutter toggles, whitespace marks, wrap and the
- * autocomplete/snippet layer for the active language. This is the value
- * swapped into the settings compartment, so a preference change keeps every
- * document and its undo history.
- */
 export function editorSettingsExtensions(
   settings: EditorSettings,
   language: EditorLanguageId = "plain",
@@ -438,19 +368,10 @@ export function editorSettingsExtensions(
     whitespacePlugin(settings),
     settings.wrap ? EditorView.lineWrapping : [],
     completionExtensions(settings, language),
-    // Always on, independent of the autocomplete switch (JUS-227 review).
     bracketExtensions(),
   ];
 }
 
-/**
- * createEditorSession builds one editor. The language, settings (theme, font,
- * indentation, gutters, whitespace, wrap) and read-only facets live in
- * Compartments so the settings popover (or a role change) can reconfigure them
- * without recreating the view, which would lose the undo history. It awaits the
- * first grammar so the first paint is already highlighted; later switches load
- * in the background.
- */
 export async function createEditorSession(
   options: EditorSessionOptions,
 ): Promise<EditorSession> {
@@ -458,8 +379,6 @@ export async function createEditorSession(
   const settingsCompartment = new Compartment();
   const readOnlyCompartment = new Compartment();
   const accessibilityCompartment = new Compartment();
-  // The completion sources follow the language, so both dimensions are kept
-  // here and the settings compartment is rebuilt when either one changes.
   let currentLanguage = options.language;
   let currentSettings = options.settings;
   let currentAccessibility: EditorAccessibility = {
@@ -470,9 +389,6 @@ export async function createEditorSession(
   };
   const initialLanguage = await loadLanguage(options.language);
 
-  // One keymap, built from the shared shortcut table, so the sheet and the
-  // real bindings cannot drift. It is installed before the CodeMirror defaults
-  // so an override such as go-to-line on Mod-l wins.
   const noop = (): void => {};
   const commandKeymap = keymap.of([
     ...editorCommandKeymap({
@@ -505,26 +421,14 @@ export async function createEditorSession(
         bracketMatching(),
         rectangularSelection(),
         highlightSelectionMatches(),
-        // The custom find bar keeps its query in CodeMirror's search state;
-        // this also installs our own match highlighter (no default panel).
         customSearchExtensions(),
         settingsCompartment.of(
           editorSettingsExtensions(options.settings, options.language),
         ),
         languageCompartment.of(initialLanguage),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly)),
-        // The contenteditable surface needs its own accessible name (axe
-        // aria-input-field-name); the window title is not enough.
         accessibilityCompartment.of(accessibilityExtensions(currentAccessibility)),
-        // indentWithTab is deliberately omitted: it binds Tab to indentation,
-        // which traps keyboard focus in the editor (WCAG 2.1.2). Tab now moves
-        // focus out of the editor as usual.
         commandKeymap,
-        // selectNextOccurrence used to come from searchKeymap, which is gone
-        // with the default search panel; the shortcut sheet still documents it.
-        // No searchKeymap binding is installed, so no key can fall back to a
-        // default panel: the match walkers and Mod-Alt-g route to the custom UI
-        // and Mod-Shift-l is a standalone command.
         keymap.of([
           { key: "Mod-d", run: selectNextOccurrence, preventDefault: true },
           {
@@ -567,7 +471,6 @@ export async function createEditorSession(
     }),
   });
 
-  // languageToken makes the last requested grammar win if several loads race.
   let languageToken = 0;
 
   return {
@@ -583,8 +486,6 @@ export async function createEditorSession(
       });
     },
     setLanguage(language: EditorLanguageId): void {
-      // A rapid second switch wins over the first grammar still loading; the
-      // compartment reconfigure keeps the existing state and undo history.
       currentLanguage = language;
       const token = ++languageToken;
       view.dispatch({

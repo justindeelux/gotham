@@ -8,12 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global URL, window:readonly */
-// Real-browser proof for the JUS-91 progress-card spacing: the committed
-// webdist is served statically with the control-plane API mocked, a session
-// is seeded in localStorage, and task frames are injected at the mocked
-// WebSocket endpoint. Real Chromium screenshots the stacked cards at
-// desktop and phone widths and measures the gaps (no overlap, header to
-// content >= 12px, body rows >= 8px, stack >= 12px). No backend is involved.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -85,7 +79,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -117,7 +110,6 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session, answers the shell calls, and injects tasks. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -174,7 +166,6 @@ test("stacked cards keep token gaps at 1280px", async ({ page }) => {
   await expect(page.locator('[data-task-id="dep-failed"]')).toBeVisible();
   await expect(page.locator('[data-task-id="dep-queued"]')).toBeVisible();
 
-  // Three stacked cards, left-aligned, separated by the stack token (12px).
   const ids = ["dep-running", "dep-failed", "dep-queued"];
   const cards: Box[] = [];
   for (const id of ids) {
@@ -188,7 +179,6 @@ test("stacked cards keep token gaps at 1280px", async ({ page }) => {
     expect(gap, `stack gap before ${ids[i]}`).toBeGreaterThanOrEqual(12);
   }
 
-  // Header to content keeps its own larger gap; body rows breathe evenly.
   const head = await boxOf('[data-task-id="dep-running"] .task-head', page);
   const body = await boxOf('[data-task-id="dep-running"] .task-body', page);
   expect(body.y - (head.y + head.height)).toBeGreaterThanOrEqual(12);
@@ -227,7 +217,6 @@ test("stacked cards fit without overflow at 480px", async ({ page }) => {
     if (box) {
       expect(box.x + box.width).toBeLessThanOrEqual(480);
       if (previous >= 0) {
-        // No overlap between stacked cards at phone width either.
         expect(box.y - previous).toBeGreaterThanOrEqual(12);
       }
       previous = box.y + box.height;

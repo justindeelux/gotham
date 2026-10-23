@@ -12,17 +12,6 @@ import {
 import { profileMessages } from "@/features/profile/schemas/profile";
 import type { AuthSession } from "@/features/profile/schemas/sessions";
 
-// Error convention (shared with the profile forms): failures keep a message
-// key and render in the NAlert above the panel through a computed, never
-// replacing the list, so a language switch refreshes the banner reactively.
-// A 404 on revoke means the session is already gone, so it refreshes
-// silently instead of erroring.
-
-/**
- * useSessionsPanel holds the active-sessions panel state. Created per panel
- * mount and dropped on unmount, so a remount always starts from a fresh load
- * and never shows a stale list.
- */
 export function useSessionsPanel() {
   const { t } = useI18n();
   const authStore = useAuthStore();
@@ -32,23 +21,16 @@ export function useSessionsPanel() {
   const sessions = ref<AuthSession[]>([]);
   const loading = ref(false);
   const loaded = ref(false);
-  /** errorKey is the banner message key; the display text renders via t. */
   const errorKey = ref<string | null>(null);
   const errorMessage = computed<string>(() =>
     errorKey.value === null ? "" : t(errorKey.value),
   );
   const revokingId = ref<string | null>(null);
   const revokingOthers = ref(false);
-  // needsReauth marks the 409 path: the token predates session management,
-  // so the server cannot tell which session is current.
   const needsReauth = ref(false);
 
-  // listSeq orders every list write. load and the post-revoke refreshes race
-  // (retry while a refresh is in flight, end-one vs end-others), so only the
-  // latest response may replace the list.
   let listSeq = 0;
 
-  /** others lists every session except the caller's. */
   const others = computed<AuthSession[]>(() =>
     sessions.value.filter((session) => !session.current),
   );
@@ -76,12 +58,6 @@ export function useSessionsPanel() {
     }
   }
 
-  /**
-   * refreshList reloads the list after a successful revoke. It runs outside
-   * the revoke try/catch: a failing refresh must not report a failed revoke.
-   * Returns false when the refresh failed (the caller then drops the row
-   * locally and shows the stale notice); a superseded response is true.
-   */
   async function refreshList(seq: number): Promise<boolean> {
     try {
       const list = await listSessions();
@@ -94,7 +70,6 @@ export function useSessionsPanel() {
     }
   }
 
-  /** statusOf extracts the HTTP status from a thrown ApiError, if present. */
   function statusOf(error: unknown): number | null {
     if (typeof error !== "object" || error === null) {
       return null;
@@ -103,25 +78,14 @@ export function useSessionsPanel() {
     return typeof status === "number" ? status : null;
   }
 
-  /** signOutHere ends the local session and returns to the sign-in page. */
   async function signOutHere(): Promise<void> {
     try {
       await authStore.logout();
     } catch {
-      // logout clears the local session in `finally`; a failed revoke must
-      // not block the redirect or surface as an unhandled rejection (B3-3,
-      // like AppTopbar/MeCard).
     }
     await router.push({ name: "login" });
   }
 
-  /**
-   * endSession revokes one session and refreshes the list. Ending the
-   * current session goes through the existing sign-out path so no half-valid
-   * session is left behind; an unknown id (404) is already gone, so it
-   * refreshes silently. A refresh that fails after a successful revoke drops
-   * the row locally and shows the stale notice instead of a revoke error.
-   */
   async function endSession(session: AuthSession): Promise<void> {
     if (revokingId.value !== null) {
       return;
@@ -153,11 +117,6 @@ export function useSessionsPanel() {
     }
   }
 
-  /**
-   * endOtherSessions revokes every session except the caller's and refreshes
-   * the list. A 409 means the token predates session management: the panel
-   * shows the re-auth explanation with a "Sign in again" action instead.
-   */
   async function endOtherSessions(): Promise<void> {
     if (revokingOthers.value) {
       return;

@@ -13,7 +13,6 @@ interface Props {
 const props = defineProps<Props>();
 const { t } = useI18n();
 
-/** containersText renders the container count tag in the display locale. */
 const containersText = computed<string>(() =>
   props.card.containerCount === 1
     ? t("dashboard.health.containersOne", { count: 1 })

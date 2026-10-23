@@ -1,9 +1,3 @@
-// JUS-208 round 2: mounting the real browser proves the grid bulk overlay's
-// inert contract — idle the overlay is inert (out of the a11y tree and tab
-// order) while the toolbar scroll content stays interactive; with a selection
-// the covered content goes inert and the overlay carries the controls; on
-// clear both return. The files API and useMessage are mocked, so the component
-// runs under a real pinia + i18n.
 /* global document:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -49,7 +43,6 @@ const root: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -61,7 +54,6 @@ function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   };
 }
 
-/** rootEntries sort to alpha (dir), beta, gamma. */
 const rootEntries: FilesEntry[] = [
   entry({ name: "alpha", kind: "directory", size: 0, mode: 0o040755 }),
   entry({ name: "beta" }),
@@ -92,11 +84,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** mountBrowser mounts the browser against the mocked store and settles it. */
 async function mountBrowser(): Promise<VueWrapper> {
-  // Bind the store before mount so onMounted's init does not reset the tab
-  // (which would fire the active-tab refocus watcher; jsdom has no
-  // scrollIntoView).
   await useFilesStore().init("server-1");
   const wrapper = mount(FilesBrowser, {
     props: { serverId: "server-1" },

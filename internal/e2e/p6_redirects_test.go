@@ -34,22 +34,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Phase 6 (BE-6.3) production acceptance. The test drives the real control
-// plane surface (store → proxy services → mTLS agent → Docker) against the
-// local Docker daemon and the dev Postgres database and proves:
-//
-//   - a per-application redirect rule answers the source host through the
-//     bootstrapped Traefik with the configured code, target and preserved
-//     path for every authority the router accepts (ports, trailing dot,
-//     brackets, case), and disappears when the rule is disabled,
-//   - a restarted proxy keeps serving the redirect without a control-plane
-//     action,
-//   - certificate status/expiry are read from the node's real acme.json
-//     through the agent RPC: absent without storage, present with the stored
-//     notAfter, unknown for an unreadable storage or an unreachable node.
-//
-// No ACME issuance happens: the storage fixture is written directly, so the
-// test never consumes production (or staging) certificate quota.
 func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	requireE2E(t)
 
@@ -110,7 +94,6 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 			t.Logf("cleanup server: %v", err)
 		}
 	})
-	// A second, agent-less node: its certificate status must report unknown.
 	ghostRow, err := st.CreateServer(ctx, sqlc.CreateServerParams{
 		Name:    "p6-redirects-ghost-" + suffix,
 		Ip:      "127.0.0.1",
@@ -203,8 +186,6 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	targetApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "redirect-target-"+suffix, targetDomain, 0, false)
 	p6CreateRunningDeployment(t, ctx, pool, targetApp, targetContainer)
 
-	// The real services over the real store: a redirect rule and a
-	// certificate intent for the target application.
 	redirectService := proxy.NewDefaultRedirectService(proxy.RedirectConfig{Store: proxy.NewStoreRedirect(st), Logger: logger})
 	certificateService := proxy.NewDefaultCertificateService(proxy.SSLConfig{Store: proxy.NewStoreSSL(st), Logger: logger})
 	if redirectService == nil || certificateService == nil {
@@ -228,23 +209,13 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	}
 	traefikID := trackCreated(p6WaitForContainer(t, ctx, engine))
 	p6AssertTraefikBootstrap(t, traefikID)
-	// The target route itself still serves plain HTTP here: no certificate
-	// intent exists yet, so the shared HTTP→HTTPS redirect is not attached.
 	p6ExpectHTTP(t, targetDomain, http.StatusOK)
 
-	// The redirect answers on the web entrypoint with the configured code,
-	// target and preserved path+query.
 	location := p6ExpectHostStatus(t, http.MethodGet, sourceDomain, http.StatusMovedPermanently)
 	if want := "https://" + targetDomain + p6RedirectProbePath; location != want {
 		t.Fatalf("redirect location = %q, want %q", location, want)
 	}
 
-	// Every authority the Host(source) router accepts must terminate in the
-	// redirect, never fall through to the backend-less noop service: numeric,
-	// empty and non-numeric ports, one fully-qualified trailing dot, bracketed
-	// authorities (with the router's port-stripping net.SplitHostPort), and
-	// any case. The middleware deliberately does not re-encode the host; these
-	// requests are the request-level proof.
 	for _, variant := range []string{
 		sourceDomain + ":80",
 		sourceDomain + ":",
@@ -264,12 +235,9 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		t.Fatalf("redirect location for an uppercase ported Host = %q, want %q", location, want)
 	}
 
-	// Traefik special-cases only GET: the permanent intent answers 301 to GET
-	// while HEAD and every other method answer 308.
 	p6ExpectHostStatus(t, http.MethodHead, sourceDomain, http.StatusPermanentRedirect)
 	p6ExpectHostStatus(t, http.MethodPost, sourceDomain, http.StatusPermanentRedirect)
 
-	// Pausing the rule removes the router; re-enabling restores it.
 	disabled := false
 	if _, err := redirectService.UpdateRedirect(ctx, redirect.ID, proxy.UpdateRedirectInput{Enabled: &disabled}); err != nil {
 		t.Fatalf("disable redirect: %v", err)
@@ -287,7 +255,6 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	}
 	p6ExpectHostStatus(t, http.MethodGet, sourceDomain, http.StatusMovedPermanently)
 
-	// The temporary intent answers 302 to GET and 307 to HEAD/other methods.
 	code := proxy.RedirectCodeTemporary
 	if _, err := redirectService.UpdateRedirect(ctx, redirect.ID, proxy.UpdateRedirectInput{Code: &code}); err != nil {
 		t.Fatalf("switch to temporary: %v", err)
@@ -306,14 +273,11 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		t.Fatalf("sync after permanent restore: %v", err)
 	}
 
-	// A restarted proxy keeps serving the redirect without any CP action.
 	if err := engine.Restart(ctx, traefikID); err != nil {
 		t.Fatalf("restart traefik: %v", err)
 	}
 	p6ExpectHostStatus(t, http.MethodGet, sourceDomain, http.StatusMovedPermanently)
 
-	// Now record the certificate intent the status read reports on. No sync
-	// is needed: the status is computed from the node storage on read.
 	certificate, err := certificateService.CreateCertificate(ctx, proxy.CreateCertificateInput{
 		ApplicationID: targetApp,
 		Challenge:     proxy.ChallengeHTTP01,
@@ -322,11 +286,6 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		t.Fatalf("create certificate intent: %v", err)
 	}
 
-	// Certificate status: the agent prepares the node's ACME storage file
-	// before Traefik starts (mode 0600, owned by the agent's user), so Traefik
-	// keeps it readable instead of creating a root-only file. The file exists
-	// and is empty, and the node holds no certificate yet: the intent is
-	// absent (never fabricated).
 	storagePath := filepath.Join(acmeDir, "acme.json")
 	if info, err := os.Stat(storagePath); err != nil || info.Size() != 0 {
 		t.Fatalf("agent-prepared acme storage = %v (%v), want an existing empty file", info, err)
@@ -349,10 +308,6 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		t.Fatalf("status with empty storage = %q, want absent", got)
 	}
 
-	// A storage file the agent cannot read (the mode a root-run Traefik would
-	// leave behind on a node without the agent's placeholder) is a genuine
-	// read failure: unknown, never a fabricated absent. Only an unprivileged
-	// process is subject to the permission check.
 	if os.Geteuid() != 0 {
 		if err := os.Chmod(storagePath, 0); err != nil {
 			t.Fatalf("chmod acme storage: %v", err)
@@ -366,16 +321,12 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		}
 	}
 
-	// A missing storage file is absent too (removal needs the directory, not
-	// the file, so an unreadable fixture cannot make this flaky).
 	p6RemoveACMEStorage(t, acmeDir)
 	statuses = statusService.CertificateStatuses(ctx, []proxy.DomainCertificate{certificate})
 	if got := statuses[certificate.ID].Status; got != proxy.CertificateStatusAbsent {
 		t.Fatalf("status with missing storage = %q, want absent", got)
 	}
 
-	// A real acme.json fixture for the recorded domain reports present with
-	// the stored expiry over the real agent RPC (no ACME quota burned).
 	expiry := time.Now().Add(45 * 24 * time.Hour).UTC().Truncate(time.Second)
 	fixture := p6ACMEStorage(t, certificate.Domain, expiry)
 	p6WriteACMEStorage(t, acmeDir, fixture)
@@ -388,16 +339,12 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		t.Fatalf("notAfter = %s, want %s", observed.NotAfter, expiry)
 	}
 
-	// A malformed storage file is unknown, and the intent never turns into a
-	// fabricated present/absent.
 	p6WriteACMEStorage(t, acmeDir, []byte(`{"letsencrypt": {"Certificates": [{"domain": {"main": "x"}, "certificate": "bad"}]}}`))
 	statuses = statusService.CertificateStatuses(ctx, []proxy.DomainCertificate{certificate})
 	if got := statuses[certificate.ID].Status; got != proxy.CertificateStatusUnknown {
 		t.Fatalf("status with malformed storage = %q, want unknown", got)
 	}
 
-	// A certificate on an unreachable node is unknown, while the reachable
-	// node's intent keeps its real observation in the same call.
 	p6WriteACMEStorage(t, acmeDir, fixture)
 	ghostDomain := "ghost-" + suffix + ".example.test"
 	ghostApp := p6CreateApplication(t, ctx, pool, userRow.ID, ghostRow.ID, envID, "redirect-ghost-"+suffix, ghostDomain, 0, false)
@@ -419,8 +366,6 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 		t.Fatalf("unknown status fabricated an expiry: %s", statuses[ghostCertificate.ID].NotAfter)
 	}
 
-	// The agent's RPC response itself carries only metadata: the fixture's
-	// private key material never crosses the node boundary.
 	client, err := servers.DialProxyClient(ctx, agentAddr, authority, servers.WithDockerServerName(nodeID))
 	if err != nil {
 		t.Fatalf("dial proxy service: %v", err)
@@ -443,13 +388,8 @@ func TestP6RedirectsAndCertificateStatus(t *testing.T) {
 	}
 }
 
-// p6RedirectProbePath is the path+query every redirect assertion requests, so
-// the preserved-path expectation is one constant.
 const p6RedirectProbePath = "/some/path?q=1"
 
-// p6ExpectHostStatus polls a route through Traefik with the given method and
-// Host header until it answers the wanted status and returns the Location
-// header (empty for non-redirect statuses).
 func p6ExpectHostStatus(t *testing.T, method, host string, wantStatus int) string {
 	t.Helper()
 	deadline := time.Now().Add(p6HTTPWait)
@@ -469,8 +409,6 @@ func p6ExpectHostStatus(t *testing.T, method, host string, wantStatus int) strin
 	return lastLocation
 }
 
-// p6HostRequest performs one request with the given method and Host header,
-// without following redirects, and returns the status and Location header.
 func p6HostRequest(t *testing.T, method, host, path string) (int, string) {
 	t.Helper()
 	client := &http.Client{
@@ -497,10 +435,6 @@ func p6HostRequest(t *testing.T, method, host, path string) (int, string) {
 	return response.StatusCode, response.Header.Get("Location")
 }
 
-// p6RemoveACMEStorage removes the node's ACME storage file if present.
-// Removal needs write permission on the directory, not on the file, so a
-// foreign-owned or unreadable file cannot make the test flaky; the directory
-// is never touched.
 func p6RemoveACMEStorage(t *testing.T, acmeDir string) {
 	t.Helper()
 	if err := os.Remove(filepath.Join(acmeDir, "acme.json")); err != nil && !os.IsNotExist(err) {
@@ -508,7 +442,6 @@ func p6RemoveACMEStorage(t *testing.T, acmeDir string) {
 	}
 }
 
-// p6WriteACMEStorage replaces the node's ACME storage file with content.
 func p6WriteACMEStorage(t *testing.T, acmeDir string, content []byte) {
 	t.Helper()
 	p6RemoveACMEStorage(t, acmeDir)
@@ -517,9 +450,6 @@ func p6WriteACMEStorage(t *testing.T, acmeDir string, content []byte) {
 	}
 }
 
-// p6ACMEStorage renders a Traefik-shaped acme.json body holding one
-// self-signed certificate for domain, plus account and certificate keys whose
-// payloads p6KeyMarkers can later search for.
 func p6ACMEStorage(t *testing.T, domain string, notAfter time.Time) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -564,8 +494,6 @@ func p6ACMEStorage(t *testing.T, domain string, notAfter time.Time) []byte {
 	return encoded
 }
 
-// p6KeyMarkers extracts the base64 body segment of every private key in the
-// fixture so a test can prove none of it crosses the agent boundary.
 func p6KeyMarkers(t *testing.T, fixture []byte) []string {
 	t.Helper()
 	var decoded map[string]struct {

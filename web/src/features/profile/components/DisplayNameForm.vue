@@ -16,9 +16,6 @@ const { formRef, submitting, errorMessage, form, rules, handleSubmit } =
     </NAlert>
 
     <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
-      <!-- No visible field label: the card title is the single heading. The
-        input keeps its accessible name via aria-label instead of a label
-        element, so no reserved label row renders above it. -->
       <NFormItem path="displayName" :show-label="false">
         <NSpace vertical :size="8" class="field-stack">
           <NInput
@@ -46,9 +43,6 @@ const { formRef, submitting, errorMessage, form, rules, handleSubmit } =
 </template>
 
 <style scoped>
-/* Same vertical field stack as the password fields (RegisterPage,
- * ChangePasswordForm): the input takes the full form-column width and the
- * hint always renders below it, at any container width. */
 .field-stack {
   width: 100%;
 }

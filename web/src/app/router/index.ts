@@ -9,10 +9,6 @@ const routes: RouteRecordRaw[] = [
     path: "",
     component: () => import("@/app/layouts/AuthLayout.vue"),
     children: [
-      // The bare root must land on the auth form. Without an index record this
-      // parent matches "/" and its empty router-view renders no form at all
-      // (the catch-all never fires), so `http://<host>:8000/` showed a blank
-      // right pane with no way to sign in or register.
       { path: "", redirect: { name: "login" } },
       {
         path: "/login",
@@ -72,7 +68,6 @@ const routes: RouteRecordRaw[] = [
           titleKey: "titles.files",
           requiresAuth: true,
           requiresPlatformAdmin: true,
-          // The file manager uses the full viewport width (JUS-206).
           wide: true,
         },
       },
@@ -84,10 +79,7 @@ const routes: RouteRecordRaw[] = [
           titleKey: "titles.serverFiles",
           requiresAuth: true,
           requiresPlatformAdmin: true,
-          // The file browser fills the viewport and scrolls its own entry list,
-          // so the page must not grow past the viewport (JUS-118).
           fillViewport: true,
-          // The file manager uses the full viewport width (JUS-206).
           wide: true,
         },
       },
@@ -99,7 +91,6 @@ const routes: RouteRecordRaw[] = [
           titleKey: "terminal.page.title",
           requiresAuth: true,
           requiresPlatformAdmin: true,
-          // The page pane owns its own scroll/fit region.
           fillViewport: true,
         },
       },
@@ -133,11 +124,6 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/features/databases/pages/DatabaseDetailPage.vue"),
         meta: { titleKey: "titles.databaseDetail", requiresAuth: true },
       },
-      // The flat list pages are gone since PE-5: old bookmarks land on Projects.
-      // The GitHub App callback landing (GS-5) is a static route above the
-      // applications redirect, so manifest and setup redirects resolve here.
-      // GS-10 owns the Connect/Install/Disconnect controls; this page only
-      // shows the callback result.
       {
         path: "applications/github-app/callback",
         name: "github-app-callback",
@@ -204,8 +190,6 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/features/updates/pages/UpdatesPage.vue"),
         meta: { titleKey: "titles.updates", requiresAuth: true, requiresPlatformAdmin: true },
       },
-      // The bare settings path keeps landing on notifications now that the
-      // settings section holds more than one page.
       { path: "settings", redirect: { name: "notifications" } },
       {
         path: "settings/profile",
@@ -219,19 +203,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/features/auth/pages/InviteAcceptPage.vue"),
         meta: { titleKey: "titles.inviteAccept", requiresAuth: true },
       },
-      // JUS-197: platform-admin-only routes land here instead of a silent
-      // dashboard redirect. This is not the 404 page (JUS-193 owns unknown
-      // routes); only the guard targets this name.
       {
         path: "forbidden",
         name: "forbidden",
         component: () => import("@/app/pages/NoPermissionPage.vue"),
         meta: { titleKey: "titles.forbidden", requiresAuth: true },
       },
-      // Unknown URLs render a real 404 inside the app shell instead of
-      // silently redirecting to the dashboard (JUS-193). The parent group's
-      // requiresAuth keeps the auth redirect intact: a signed-out visitor is
-      // still sent to login.
       {
         path: ":pathMatch(.*)*",
         name: "not-found",
@@ -255,8 +232,6 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.requiresPlatformAdmin && !authStore.isPlatformAdmin) {
-    // Login/refresh payloads omit the PLATFORM_ADMINS email match that
-    // /auth/me adds, so re-read the profile once before refusing.
     await authStore.fetchMe().catch(() => undefined);
     if (!authStore.isPlatformAdmin) {
       return { name: "forbidden" };
@@ -270,12 +245,6 @@ router.beforeEach(async (to) => {
   return true;
 });
 
-/**
- * applyRouteTitle mirrors the active route's titleKey onto document.title in
- * the current locale ("<page> — Gotham"). Keys (not English strings) live in
- * meta so a language switch re-renders the title without navigating; route
- * names, URLs, redirects and active-nav keys are unchanged.
- */
 export function applyRouteTitle(titleKey: unknown): void {
   if (typeof document === "undefined") {
     return;
@@ -290,8 +259,6 @@ router.afterEach((to) => {
   applyRouteTitle(to.meta.titleKey);
 });
 
-// A language switch re-applies the current title without navigating,
-// reloading or touching session state.
 onLocaleChange(() => {
   applyRouteTitle(router.currentRoute.value.meta.titleKey);
 });

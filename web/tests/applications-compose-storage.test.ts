@@ -1,7 +1,3 @@
-// JUS-273: the Storage tab is now shown for every source. Compose applications
-// get the read-only volume list plus a hint that declarations live in the
-// compose source (and never the single-container editor); non-compose sources
-// keep both the list and the editor. A stale selection no longer falls back.
 
 import { mount } from "@vue/test-utils";
 import { NMessageProvider, NTabs } from "naive-ui";
@@ -25,7 +21,6 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** composeApp is one stored compose source; the document itself is inert. */
 function composeApp(): Application {
   return {
     id: "app-compose",
@@ -53,7 +48,6 @@ function composeApp(): Application {
   } as Application;
 }
 
-/** imageApp is a non-compose source that keeps the Storage tab. */
 function imageApp(): Application {
   return {
     ...composeApp(),
@@ -67,11 +61,9 @@ function imageApp(): Application {
   } as Application;
 }
 
-/** Shared reactive detail state so tests can move from loading to loaded. */
 const applicationRef = ref<Application | null>(imageApp());
 const tabRef = ref("overview");
 
-/** setDetail replaces the mocked detail state before mounting. */
 function setDetail(application: Application | null, tab = "overview"): void {
   applicationRef.value = application;
   tabRef.value = tab;
@@ -81,7 +73,6 @@ vi.mock("@/features/applications/composables/useApplicationDetail", () => ({
   useApplicationDetail: () => mockDetail(),
 }));
 
-/** mockDetail stands in for the detail composable: real refs, no-op handlers. */
 function mockDetail() {
   const appsStore = {
     loading: false,
@@ -173,7 +164,6 @@ function mountDetailPage() {
   });
 }
 
-/** tabLabels returns the rendered tab headers. */
 function tabLabels(wrapper: ReturnType<typeof mountDetailPage>): string[] {
   return wrapper.findAll(".n-tabs-tab").map((tab) => tab.text());
 }
@@ -183,18 +173,14 @@ describe("application detail storage tab", () => {
     setDetail(null, "storage");
     const wrapper = mountDetailPage();
 
-    // Loading: the source is unknown, so the tab strip must not contain
-    // Storage and the stale selection resolves to Overview.
     expect(tabLabels(wrapper)).not.toContain("Storage");
     expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
 
-    // A loaded image app reveals the tab and keeps the ?tab=storage choice.
     applicationRef.value = imageApp();
     await nextTick();
     expect(tabLabels(wrapper)).toContain("Storage");
     expect(wrapper.findComponent(NTabs).props("value")).toBe("storage");
 
-    // A compose app keeps both the tab and the selection.
     applicationRef.value = composeApp();
     await nextTick();
     expect(tabLabels(wrapper)).toContain("Storage");

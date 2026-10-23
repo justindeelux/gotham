@@ -176,7 +176,6 @@ func TestRequestReplayConcurrentAllBoundaries(t *testing.T) {
 			if after != before+1 {
 				t.Fatalf("rows %d -> %d", before, after)
 			}
-			// A new connection after response loss recovers the same identity.
 			ctx := replayContext(t, team, team, tc.name, tc.target, "same-key", "canonical-input")
 			id, e := tc.create(ctx, other)
 			if e != nil || id != accepted || !requestreplay.Replayed(ctx) {
@@ -210,7 +209,6 @@ func TestRequestReplayRollbackExpiryIsolationAndDeletion(t *testing.T) {
 	request := func(key string) context.Context {
 		return replayContext(t, team, team, "create_project", uuid.Nil, key, "body")
 	}
-	// Resource, receipt, and deferred commit failures all roll back the entire acceptance.
 	for _, deferred := range []bool{false, true} {
 		trigger := `CREATE TRIGGER fail_receipt BEFORE INSERT ON request_receipts FOR EACH ROW EXECUTE FUNCTION reject_receipt()`
 		if deferred {
@@ -241,7 +239,6 @@ func TestRequestReplayRollbackExpiryIsolationAndDeletion(t *testing.T) {
 	if count != 0 {
 		t.Fatal("receipt survived resource rollback")
 	}
-	// Isolate same key by principal and team, without a global key namespace.
 	first, err := create(request("isolation"), "first")
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +257,6 @@ func TestRequestReplayRollbackExpiryIsolationAndDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A deleted target is a missing outcome and never a replacement creation.
 	if _, err := st.DB.Exec(ctx, "DELETE FROM projects WHERE id=$1", first.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +334,6 @@ func TestRequestReplayResourceLockTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = holder.Rollback(ctx) }()
-	// The environment insert's foreign-key check waits on this parent row.
 	if _, err := holder.Exec(ctx, "SELECT id FROM projects WHERE id=$1 FOR UPDATE", project.ID); err != nil {
 		t.Fatal(err)
 	}

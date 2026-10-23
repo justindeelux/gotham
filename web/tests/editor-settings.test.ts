@@ -1,7 +1,3 @@
-// Editor settings (JUS-219): the stored schema must accept good data and
-// degrade one bad field at a time; the storage helpers must survive blocked or
-// corrupt localStorage; and a live CodeMirror session must reconfigure through
-// its settings compartment without being recreated.
 /* global document:readonly */
 import { indentUnit } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
@@ -24,12 +20,10 @@ import {
   writeEditorSettings,
 } from "@/features/files/utils/editorSettings";
 
-/** settingsState builds a state with just the reconfigurable extensions. */
 function settingsState(settings: EditorSettings): EditorState {
   return EditorState.create({ extensions: [editorSettingsExtensions(settings)] });
 }
 
-/** memoryStorage is a Map-backed localStorage stand-in. */
 function memoryStorage() {
   const values = new Map<string, string>();
   return {

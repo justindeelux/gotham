@@ -23,8 +23,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// projectsDSNForDatabase points a DSN at another database on the same
-// server (the maintenance connection and the disposable database).
 func projectsDSNForDatabase(t *testing.T, dsn, database string) string {
 	t.Helper()
 	parsed, err := url.Parse(dsn)
@@ -35,10 +33,6 @@ func projectsDSNForDatabase(t *testing.T, dsn, database string) string {
 	return parsed.String()
 }
 
-// scratchProjectsStack builds a Server on a private scratch database with the
-// real auth and API-token services, and returns it with the store and the
-// owner's session pair. Unlike scratchProfileStack it wires the token
-// service, so API-token scope probes run through the real chain.
 func scratchProjectsStack(t *testing.T) (*Server, *store.Store, *auth.AuthResult) {
 	t.Helper()
 
@@ -89,9 +83,6 @@ func scratchProjectsStack(t *testing.T) (*Server, *store.Store, *auth.AuthResult
 		t.Fatalf("NewSigner: %v", err)
 	}
 	authSvc := auth.New(st, signer, logger)
-	// Registration closes after the bootstrap account; reopen it so the
-	// viewer account can register (test/dev override, same as the config
-	// flag the server would pass).
 	authSvc.AllowOpenRegistration = true
 
 	email := fmt.Sprintf("pe1-srv-%d@example.com", time.Now().UnixNano())
@@ -114,8 +105,6 @@ func scratchProjectsStack(t *testing.T) (*Server, *store.Store, *auth.AuthResult
 	return s, st, owner
 }
 
-// wiringProjectEnvelope decodes the project create/get responses just far
-// enough to prove the PE-1 mount is live through the real server chain.
 type wiringProjectEnvelope struct {
 	Project struct {
 		ID               string `json:"id"`
@@ -128,10 +117,6 @@ type wiringProjectEnvelope struct {
 	} `json:"environments"`
 }
 
-// TestProjectsWiringEndToEnd replays the PE-1 contract against the real
-// stack (real auth, real team chain, real service on a scratch database):
-// unauthenticated reads are refused, and a session creates, reads and
-// deletes a project with its production environment.
 func TestProjectsWiringEndToEnd(t *testing.T) {
 	s, _, pair := scratchProfileStack(t)
 	bearer := "Bearer " + pair.AccessToken
@@ -166,11 +151,6 @@ func TestProjectsWiringEndToEnd(t *testing.T) {
 	}
 }
 
-// TestProjectsWiringViewerAndTokenScopes probes the real withTeam chain: a
-// read_only member reads but cannot mutate (403 from teamWriteGate), and a
-// read-scoped API token reads but cannot mutate (403 from the scope
-// boundary). Both run against the scratch stack with real auth, teams and
-// tokens.
 func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 	s, st, owner := scratchProjectsStack(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -182,9 +162,6 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 	}
 	ownerBearer := "Bearer " + owner.AccessToken
 
-	// A second account joins a fresh team as read_only; the owner stays
-	// owner. Membership rows are seeded directly: the invite flow is a
-	// teams-package concern, not this probe's.
 	viewerEmail := fmt.Sprintf("pe1-viewer-%d@example.com", time.Now().UnixNano())
 	viewer, err := s.auth.Register(ctx, viewerEmail, "s3cret-password", "", nil, auth.SessionMeta{})
 	if err != nil {
@@ -212,7 +189,6 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 		return doTeamRequest(t, s, method, path, body, authorization, teamHeader)
 	}
 
-	// The owner creates a project in the team scope; the viewer reads it.
 	rec := doTeamRequest(t, s, http.MethodPost, "/api/v1/projects", `{"name":"Shop"}`, ownerBearer, teamHeader)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("owner create = %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -227,7 +203,6 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 	if code := doWithTeam(http.MethodGet, "/api/v1/projects/"+created.Project.ID, "", viewerBearer).Code; code != http.StatusOK {
 		t.Fatalf("viewer get = %d, want 200", code)
 	}
-	// Mutations are refused by the real teamWriteGate before the handler.
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/v1/projects", `{"name":"Other"}`},
 		{http.MethodPatch, "/api/v1/projects/" + created.Project.ID, `{"name":"x"}`},
@@ -238,8 +213,6 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 		}
 	}
 
-	// A read-scoped API token reads but cannot mutate: the scope boundary
-	// answers 403 with "insufficient scope".
 	tokens := auth.NewAPITokenService(st, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	minted, err := tokens.Create(ctx, ownerID, "probe-read", []string{auth.ScopeRead})
 	if err != nil {
@@ -262,8 +235,6 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 	}
 }
 
-// doTeamRequest runs one request against the server handler with the
-// X-Team-Id header set, selecting the request's active team.
 func doTeamRequest(t *testing.T, s *Server, method, path, body, authorization, teamID string) *httptest.ResponseRecorder {
 	t.Helper()
 

@@ -11,13 +11,11 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// fakeServiceSource is a canned, mutable ServiceSource.
 type fakeServiceSource struct {
 	services []ProxiedService
 	err      error
 }
 
-// ListProxiedServices returns the canned rows.
 func (f *fakeServiceSource) ListProxiedServices(context.Context) ([]ProxiedService, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -25,8 +23,6 @@ func (f *fakeServiceSource) ListProxiedServices(context.Context) ([]ProxiedServi
 	return append([]ProxiedService{}, f.services...), nil
 }
 
-// composeContainer builds a node container carrying Docker Compose's own
-// project/service labels and one published port.
 func composeContainer(project, service, containerPort, hostPort string) containers.Container {
 	return containers.Container{
 		ID:    "container-" + service,
@@ -41,9 +37,6 @@ func composeContainer(project, service, containerPort, hostPort string) containe
 	}
 }
 
-// TestServiceRoutesForServerResolution proves the domain map resolves to the
-// right compose service's running container and that every unroutable case is
-// isolated as a service diagnostic.
 func TestServiceRoutesForServerResolution(t *testing.T) {
 	serverID := uuid.New()
 	otherServer := uuid.New()
@@ -163,8 +156,6 @@ func TestServiceRoutesForServerResolution(t *testing.T) {
 					t.Fatalf("diagnostic kind = %q, want service", diagnostics[0].Kind)
 				}
 			}
-			// Every declared host joins the claimed set regardless of
-			// routability, so a redirect can never shadow one.
 			if tc.proxied[0].ServerID == serverID && len(tc.proxied[0].Domains) > 0 {
 				if len(hosts) == 0 {
 					t.Fatalf("hosts = %v, want the declared host", hosts)
@@ -174,8 +165,6 @@ func TestServiceRoutesForServerResolution(t *testing.T) {
 	}
 }
 
-// TestServiceRoutesDuplicateHosts proves two compose services declaring the
-// same host hold both bindings back.
 func TestServiceRoutesDuplicateHosts(t *testing.T) {
 	serverID := uuid.New()
 	firstID, secondID := uuid.New(), uuid.New()
@@ -201,9 +190,6 @@ func TestServiceRoutesDuplicateHosts(t *testing.T) {
 	}
 }
 
-// TestServiceRoutesReachTheGeneratedConfiguration proves the resolved service
-// route renders as its own router and service in the Traefik documents, with
-// the live published backend port.
 func TestServiceRoutesReachTheGeneratedConfiguration(t *testing.T) {
 	serverID := uuid.New()
 	serviceID := uuid.New()
@@ -234,8 +220,6 @@ func TestServiceRoutesReachTheGeneratedConfiguration(t *testing.T) {
 	}
 }
 
-// TestServiceHostBlocksRedirectSource proves a redirect rule can never claim a
-// host a compose service router answers for.
 func TestServiceHostBlocksRedirectSource(t *testing.T) {
 	serverID := uuid.New()
 	rule := RedirectRule{
@@ -249,16 +233,12 @@ func TestServiceHostBlocksRedirectSource(t *testing.T) {
 	if !strings.Contains(diagnostics[0].Reason, "base domain") {
 		t.Fatalf("diagnostic = %+v, want the service host treated as a claimed domain", diagnostics[0])
 	}
-	// Without the service host the rule is generated normally.
 	redirects, diagnostics = redirectsForServer(nil, []RedirectRule{rule}, serverID)
 	if len(redirects) != 1 || len(diagnostics) != 0 {
 		t.Fatalf("redirects = %+v, diagnostics = %+v", redirects, diagnostics)
 	}
 }
 
-// TestSyncServerRoutesServiceDomains proves the sync path includes the compose
-// service source end to end: the written dynamic document carries the service
-// router and its live backend.
 func TestSyncServerRoutesServiceDomains(t *testing.T) {
 	serverID := uuid.New()
 	serviceID := uuid.New()
@@ -281,8 +261,6 @@ func TestSyncServerRoutesServiceDomains(t *testing.T) {
 		t.Fatalf("dynamic document is missing the live backend:\n%s", dynamic)
 	}
 
-	// Stopping the project (no running container) removes the route while the
-	// healthy Traefik configuration is still pushed.
 	fixture.containers.list = []containers.Container{runningTraefik()}
 	if err := fixture.service.SyncServer(context.Background(), serverID); err == nil {
 		t.Fatal("a sync with a stopped service project must report a diagnostic")
@@ -293,8 +271,6 @@ func TestSyncServerRoutesServiceDomains(t *testing.T) {
 	}
 }
 
-// TestSyncServerApplicationWinsServiceHost proves a host claimed by an
-// application is not routed to a compose service.
 func TestSyncServerApplicationWinsServiceHost(t *testing.T) {
 	serverID := uuid.New()
 	appID := uuid.New()
@@ -330,7 +306,6 @@ func TestSyncServerApplicationWinsServiceHost(t *testing.T) {
 	}
 }
 
-// asPartial is errors.As for *PartialError.
 func asPartial(err error, target **PartialError) bool {
 	for err != nil {
 		if partial, ok := err.(*PartialError); ok {
@@ -346,7 +321,6 @@ func asPartial(err error, target **PartialError) bool {
 	return false
 }
 
-// dynamicFile returns the dynamic Traefik document written by the last sync.
 func (f *syncFixture) dynamicFile(t *testing.T) string {
 	t.Helper()
 	if len(f.agent.calls) == 0 {
@@ -362,7 +336,6 @@ func (f *syncFixture) dynamicFile(t *testing.T) string {
 	return ""
 }
 
-// keys returns the sorted keys of a router map.
 func keys[V any](m map[string]V) []string {
 	names := make([]string, 0, len(m))
 	for name := range m {

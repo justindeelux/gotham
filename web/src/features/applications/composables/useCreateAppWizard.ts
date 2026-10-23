@@ -55,41 +55,28 @@ import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
 import { extractComposeServiceNames } from "@/features/applications/utils/compose";
 
 export interface WizardForm {
-  /** GS-2 source model: which fetcher the orchestrator uses. */
   sourceType: SourceType;
   providerId: string;
   publicCloneUrl: string;
-  /** GS-4 provider-less private source: the ssh/scp-like/https clone URL. */
   privateCloneUrl: string;
-  /** GS-4 credential for the private URL: a generated deploy key or a token. */
   privateAuth: "ssh" | "https";
   httpsUsername: string;
   httpsToken: string;
   repoFullName: string;
   cloneUrl: string;
-  /** Pasted Dockerfile text for the dockerfile source type (GS-7). */
   dockerfileContent: string;
-  /** Optional --build-arg pairs for the dockerfile source type. */
   buildArgs: BuildArgRow[];
-  /** Compose input mode: pasted document text or a file in a repository (GS-8). */
   composeMode: ComposeMode;
-  /** Pasted compose document text for compose/paste sources. */
   composeContent: string;
-  /** In-repo compose file path for compose/repo sources. */
   composeFile: string;
-  /** Compose service the domain/port routing targets. */
   composeService: string;
   branch: string;
-  /** GS-9 prebuilt reference (registry/repo:tag, optionally digest-pinned). */
   imageRef: string;
-  /** GS-9 optional private-registry credential (sealed at rest). */
   registryUsername: string;
   registryPassword: string;
   name: string;
   buildPack: BuildPack;
-  /** Project the application is created in (read-only summary, changeable). */
   projectId: string;
-  /** Environment the application is created in (required by the API). */
   environmentId: string;
   serverId: string;
   env: EnvVar[];
@@ -104,28 +91,16 @@ export interface BuildPackOption {
   hint: string;
 }
 
-/**
- * BUILD_PACK_TOOLS maps a build pack to the catalog tools its engine shells
- * out to on the node, dependencies first (the Web mirror of
- * builds.EngineTools / toolcatalog.InstallOrder). Dockerfile and static need no
- * external CLI, and auto resolves at build time, so they carry none.
- */
 export const BUILD_PACK_TOOLS: Record<string, string[]> = {
   railpack: ["docker", "buildkit", "railpack"],
   buildpacks: ["pack"],
 };
 
-/** One build-pack row augmented with the target node's toolchain state. */
 export interface BuildPackChoice extends BuildPackOption {
-  /** Catalog tools the engine needs on the node (empty when it needs none). */
   tools: string[];
-  /** True when every needed tool is installed on the target node. */
   installed: boolean;
-  /** False when the row cannot be selected (a needed tool is missing). */
   selectable: boolean;
-  /** The first needed tool that is missing, or null when none is. */
   missing: string | null;
-  /** True while an install job for a needed tool is queued or running. */
   installing: boolean;
 }
 
@@ -157,8 +132,6 @@ export const BUILD_PACKS: BuildPackOption[] = [
   },
 ];
 
-/** buildArgsValid gates --build-arg drafts: named rows need a valid key and
- * a bounded value; nameless rows are dropped on submit like env rows. */
 export function buildArgsValid(rows: BuildArgRow[]): boolean {
   if (rows.length > 64) {
     return false;
@@ -172,7 +145,6 @@ export function buildArgsValid(rows: BuildArgRow[]): boolean {
     );
 }
 
-/** buildArgsPayload drops nameless draft rows for the create payload. */
 export function buildArgsPayload(
   rows: BuildArgRow[],
 ): Record<string, string> {
@@ -186,28 +158,17 @@ export function buildArgsPayload(
   return out;
 }
 
-/** WizardEvents mirrors the shell's emits for the composable. */
 export interface WizardEvents {
   (_event: "update:show", _value: boolean): void;
   (_event: "created", _application: Application): void;
 }
 
-/** WizardScope carries the project/environment the wizard creates in. */
 export interface WizardScope {
   projectId: string | Ref<string>;
   environmentId: string | Ref<string>;
-  /** Source type preselected by the caller (an Add-resource card); empty keeps the selector. */
   sourceType?: string | Ref<string>;
 }
 
-/**
- * Form state, validation and submission behind the create-application wizard.
- * The shell provides the returned state to the step components through
- * `createWizardKey`, so steps read one typed source instead of long prop lists.
- * `scope` is reactive (refs stay live): a route change while the wizard is
- * mounted re-seeds the form, so data can never be written to a stale
- * environment.
- */
 export function useCreateAppWizard(
   show: Ref<boolean>,
   emit: WizardEvents,
@@ -222,31 +183,10 @@ export function useCreateAppWizard(
 
   const step = ref(0);
   const submitting = ref(false);
-  /**
-   * submitFailure keeps the submit failure for the retained banner: a missing
-   * scope (curated key) or the raw thrown error. errorMessage derives the
-   * display text in the current locale, so a language switch refreshes the
-   * banner without clearing the draft.
-   */
   const submitFailure = ref<{ kind: "scope" } | { kind: "error"; error: unknown } | null>(null);
-  /**
-   * noSshUrl flags the private-repo-without-SSH-URL gap; sourceError derives
-   * its display text in the current locale.
-   */
   const noSshUrl = ref(false);
 
-  /**
-   * createdKey holds the SSH post-create state (GS-4): the application row
-   * already exists and its deploy key is generated, but the operator has
-   * not registered the public half yet, so the first deploy must wait for
-   * an explicit Test + Deploy instead of queueing blindly.
-   */
   const createdKey = ref<{ application: Application; publicKey: string } | null>(null);
-  /**
-   * keyRecovery parks the created application when its deploy key could not
-   * be generated: retrying the submit would hit a name conflict on the
-   * existing row, so the wizard offers key retry or rollback instead.
-   */
   const keyRecovery = ref<{ application: Application } | null>(null);
   const keyTesting = ref(false);
   const keyTestPassed = ref(false);
@@ -254,21 +194,15 @@ export function useCreateAppWizard(
   const keyConfirmed = ref(false);
   const keyDeploying = ref(false);
 
-  /** canDeployCreated gates Deploy on the key step: a passed test or an explicit confirm. */
   const canDeployCreated = computed<boolean>(
     () => createdKey.value !== null && (keyTestPassed.value || keyConfirmed.value),
   );
 
-  /**
-   * tr resolves one applications message in the current locale. Reading
-   * activeLocale pins the calling computed to the language switch.
-   */
   function tr(key: string, params?: Record<string, string | number>): string {
     void activeLocale.value;
     return String(i18n.global.t(key, params ?? {}));
   }
 
-  /** errorMessage derives the retained submit banner in the current locale. */
   const errorMessage = computed<string>(() => {
     if (submitFailure.value === null) {
       return "";
@@ -279,12 +213,10 @@ export function useCreateAppWizard(
     return describeApplicationError(submitFailure.value.error);
   });
 
-  /** sourceError derives the SSH-URL gap warning in the current locale. */
   const sourceError = computed<string>(() =>
     noSshUrl.value ? tr("applications.wizard.noSshUrl") : "",
   );
 
-  /** stepNames renders the rail labels in the current locale. */
   const stepNames = computed<string[]>(() => [
     tr("applications.wizard.steps.source"),
     tr("applications.wizard.steps.runtime"),
@@ -293,7 +225,6 @@ export function useCreateAppWizard(
     tr("applications.wizard.steps.deploy"),
   ]);
 
-  /** buildPacks renders the pack choices in the current locale. */
   const buildPacks = computed<BuildPackOption[]>(() => [
     {
       value: "",
@@ -322,12 +253,6 @@ export function useCreateAppWizard(
     },
   ]);
 
-  /**
-   * nodeTools is the target node's catalog as the toolchain store holds it.
-   * Empty until the store has subscribed to the wizard's node (the build-pack
-   * step calls subscribeNodeTools), which the gate reads as "unknown" and lets
-   * through so a slow fetch never blocks a valid choice.
-   */
   const nodeTools = computed<Map<string, ToolchainTool>>(() => {
     const map = new Map<string, ToolchainTool>();
     if (toolchainStore.serverId !== form.serverId || form.serverId === "") {
@@ -339,13 +264,11 @@ export function useCreateAppWizard(
     return map;
   });
 
-  /** toolInstalled reports a tool's detected state, or undefined when unknown. */
   function toolInstalled(toolId: string): boolean | undefined {
     const tool = nodeTools.value.get(toolId);
     return tool ? tool.installed : undefined;
   }
 
-  /** engineInstalled reports whether every tool of one engine is present. */
   function engineInstalled(tools: string[]): boolean | undefined {
     let unknown = false;
     for (const toolId of tools) {
@@ -359,13 +282,6 @@ export function useCreateAppWizard(
     return unknown ? undefined : true;
   }
 
-  /**
-   * cliEngineInstalled reports whether the node can run a build pack that needs
-   * an external CLI: true when Railpack or Buildpacks is fully installed, false
-   * when both are known-missing, undefined while the catalog is still loading.
-   * Auto resolves only among installed engines, so it remains available exactly
-   * while this is not false.
-   */
   const cliEngineInstalled = computed<boolean | undefined>(() => {
     const states = [
       engineInstalled(BUILD_PACK_TOOLS.railpack),
@@ -377,10 +293,8 @@ export function useCreateAppWizard(
     return states.some((state) => state === undefined) ? undefined : false;
   });
 
-  /** noBuildEngine is true when neither CLI build engine is on the node. */
   const noBuildEngine = computed<boolean>(() => cliEngineInstalled.value === false);
 
-  /** nodeToolsLoading is true while the target node's catalog is being fetched. */
   const nodeToolsLoading = computed<boolean>(
     () =>
       form.serverId !== "" &&
@@ -388,12 +302,6 @@ export function useCreateAppWizard(
       toolchainStore.loading,
   );
 
-  /**
-   * nodeToolsError is true when the target node's catalog could not be fetched.
-   * The gate stays fail-open (options remain selectable) and the step shows a
-   * retry, so a node the agent cannot be reached on never silently disables
-   * every pack.
-   */
   const nodeToolsError = computed<boolean>(
     () =>
       form.serverId !== "" &&
@@ -401,12 +309,6 @@ export function useCreateAppWizard(
       toolchainStore.failure !== null,
   );
 
-  /**
-   * buildPackChoices augments every build-pack row with the target node's
-   * toolchain state. A row whose tool is missing is not selectable and offers
-   * an Install button; auto stays selectable only while some CLI engine is
-   * installed (or still unknown); Dockerfile and static always stay available.
-   */
   const buildPackChoices = computed<BuildPackChoice[]>(() =>
     buildPacks.value.map((pack) => {
       const tools = BUILD_PACK_TOOLS[pack.value] ?? [];
@@ -432,11 +334,6 @@ export function useCreateAppWizard(
     }),
   );
 
-  /**
-   * buildPackValid gates the build-pack step and submit: the chosen pack must
-   * be selectable on the target node. Sources with no build pack (Dockerfile,
-   * image, compose) are always valid.
-   */
   const buildPackValid = computed<boolean>(() => {
     if (buildPackSkipped.value || isCompose.value) {
       return true;
@@ -445,19 +342,13 @@ export function useCreateAppWizard(
     return choice ? choice.selectable : true;
   });
 
-  /**
-   * preselectedSourceType is the caller's valid preselect (an Add-resource
-   * card), else empty: an unknown value falls back to the free selector.
-   */
   const preselectedSourceType = computed<string>(() => {
     const raw = toValue(scope.sourceType ?? "");
     return sourceTypeSchema.safeParse(raw).success ? raw : "";
   });
 
-  /** sourceTypeLocked hides the type selector behind a read-only summary. */
   const sourceTypeLocked = computed<boolean>(() => preselectedSourceType.value !== "");
 
-  /** seedSource copies the preselected type into the form. */
   function seedSource(): void {
     form.sourceType =
       preselectedSourceType.value === ""
@@ -496,10 +387,6 @@ export function useCreateAppWizard(
   seedSource();
 
   const providerOptions = computed<Array<{ label: string; value: string }>>(() => {
-    // The provider list follows the source type, so a gitlab connection can
-    // never be submitted under a github_app source (and the public sentinel
-    // stays out of the provider flow entirely). github_app lists GitHub App
-    // connections (GS-5); gitlab_app keeps the OAuth provider list.
     if (form.sourceType === "github_app") {
       return githubAppStore.apps.map((item) => ({
         label: `${item.name || item.slug} · ${item.connected ? tr("applications.wizard.connected") : tr("applications.wizard.notConnected")}`,
@@ -518,38 +405,24 @@ export function useCreateAppWizard(
 
   const isPublicRepo = computed<boolean>(() => form.sourceType === "git_public");
 
-  /** isPrivateRepo covers the provider-less private-git source (GS-4). */
   const isPrivateRepo = computed<boolean>(() => form.sourceType === "git_private");
 
-  /** isProviderFlow covers the connected-provider types (existing flow). */
   const isProviderFlow = computed<boolean>(
     () => form.sourceType === "github_app" || form.sourceType === "gitlab_app",
   );
 
-  /** isGitHubAppFlow covers the GitHub App type (GS-5): repos and branches
-   * come from the installation, not the OAuth provider list. */
   const isGitHubAppFlow = computed<boolean>(() => form.sourceType === "github_app");
 
-  /** isDockerfile covers the pasted-Dockerfile type (no repository, GS-7). */
   const isDockerfile = computed<boolean>(() => form.sourceType === "dockerfile");
 
-  /** isImage covers the prebuilt container image source (GS-9). */
   const isImage = computed<boolean>(() => form.sourceType === "image");
 
-  /** isCompose covers the compose source (GS-8). */
   const isCompose = computed<boolean>(() => form.sourceType === "compose");
 
-  /**
-   * isComposePaste is true for pasted compose documents: no repository, no
-   * branch, no build pack. Repo-backed compose sources keep the repository
-   * fields, branch and file path.
-   */
   const isComposePaste = computed<boolean>(
     () => isCompose.value && form.composeMode === "paste",
   );
 
-  /** sourceTypeOptions renders the GS-2 type selector in the current locale.
-   * Compose is the last enabled source type (GS-8). */
   const sourceTypeOptions = computed<Array<{ label: string; value: string; disabled?: boolean }>>(() => [
     { label: tr("applications.wizard.sourceGitPublic"), value: "git_public" },
     { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private" },
@@ -560,22 +433,17 @@ export function useCreateAppWizard(
     { label: tr("applications.wizard.sourceCompose"), value: "compose" },
   ]);
 
-  /**
-   * lockedSourceLabel names the preselected type in the read-only summary.
-   */
   const lockedSourceLabel = computed<string>(
     () =>
       sourceTypeOptions.value.find((item) => item.value === form.sourceType)?.label ??
       form.sourceType,
   );
 
-  /** composeModeOptions renders the paste/repo choice in the current locale. */
   const composeModeOptions = computed<Array<{ label: string; value: string }>>(() => [
     { label: tr("applications.wizard.composeModePaste"), value: "paste" },
     { label: tr("applications.wizard.composeModeRepo"), value: "repo" },
   ]);
 
-  /** composeServiceOptions suggests the web service from the pasted text. */
   const composeServiceOptions = computed<Array<{ label: string; value: string }>>(() =>
     extractComposeServiceNames(form.composeContent).map((name) => ({
       label: name,
@@ -593,8 +461,6 @@ export function useCreateAppWizard(
     }));
   });
 
-  /** branchOptions lists the branches of the selected repository: the   * installation branches for the GitHub App flow, the provider branches
-   * otherwise. */
   const branchOptions = computed<Array<{ label: string; value: string }>>(() => {
     const suffix = tr("applications.wizard.protectedSuffix");
     const branches = isGitHubAppFlow.value
@@ -606,7 +472,6 @@ export function useCreateAppWizard(
     }));
   });
 
-  /** reposTruncated flags a partial repository list, so the wizard says so. */
   const reposTruncated = computed<boolean>(
     () => isGitHubAppFlow.value && githubAppStore.reposTruncated(form.providerId),
   );
@@ -618,13 +483,10 @@ export function useCreateAppWizard(
     })),
   );
 
-  /** selectedProviderName resolves the provider slug for the create payload. */
   const selectedProviderName = computed<string>(() => {
     if (!isProviderFlow.value) {
       return "";
     }
-    // The GitHub App flow authenticates through the installation, but the
-    // application row still keys hooks and deploy keys off provider "github".
     if (isGitHubAppFlow.value) {
       return "github";
     }
@@ -634,8 +496,6 @@ export function useCreateAppWizard(
     );
   });
 
-  /** providerSlugOf resolves the slug of any picked provider, including the
-   * compose repo mode that reuses the connected-provider flow. */
   function providerSlugOf(providerId: string): string {
     return (
       providersStore.providers.find((item) => item.id === providerId)
@@ -643,29 +503,20 @@ export function useCreateAppWizard(
     );
   }
 
-  /** sourceValid gates the Source step: the type, its fields, branch, name. */
   const sourceValid = computed<boolean>(() => {
     if (!sourceTypeSchema.safeParse(form.sourceType).success) {
       return false;
     }
-    // Not-yet-implemented types render a not-yet-available placeholder, so
-    // the step cannot continue. All known types are implemented; this is
-    // the fail-closed fallback.
     if (!sourceTypeImplemented(form.sourceType)) {
       return false;
     }
     switch (form.sourceType) {
       case "git_public":
-        // Keyless by definition: only the anonymous http(s)/git schemes pass,
-        // so an SSH URL can never reach a clone on ambient credentials.
         if (!publicCloneUrlSchema.safeParse(form.publicCloneUrl).success) {
           return false;
         }
         break;
       case "git_private": {
-        // Provider-less by definition: an ssh/scp-like/https URL with no
-        // embedded credentials. The token transport needs an https URL and
-        // a token; the deploy key works with any of the shapes.
         if (!privateCloneUrlSchema.safeParse(form.privateCloneUrl).success) {
           return false;
         }
@@ -680,8 +531,6 @@ export function useCreateAppWizard(
         break;
       }
       case "dockerfile":
-        // No repository: pasted text (FROM required, 64 KiB cap) plus
-        // optional build args with non-empty keys.
         if (!dockerfileContentSchema.safeParse(form.dockerfileContent).success) {
           return false;
         }
@@ -690,9 +539,6 @@ export function useCreateAppWizard(
         }
         break;
       case "image":
-        // Prebuilt reference with optional digest pinning and credential; no
-        // branch or build pack (the API rejects them for this type). The
-        // credential is both-or-neither, like the server enforces.
         if (!imageRefSchema.safeParse(form.imageRef).success) {
           return false;
         }
@@ -704,9 +550,6 @@ export function useCreateAppWizard(
         }
         break;
       case "compose":
-        // Pasted documents carry no repository; repo-backed ones reuse the
-        // connected-provider flow when a provider is picked, else a public
-        // URL. Both name the routed web service.
         if (!composeModeSchema.safeParse(form.composeMode).success) {
           return false;
         }
@@ -737,26 +580,18 @@ export function useCreateAppWizard(
         }
         break;
       default: {
-        // github_app/gitlab_app keep the existing provider-backed flow.
         if (!providerSchema.safeParse(form.providerId).success) {
           return false;
         }
         if (!repoSchema.safeParse(form.repoFullName).success) {
           return false;
         }
-        // A private repository without a provider ssh_url is rejected rather than
-        // silently degraded to https: the keyed cloner would rewrite that URL and
-        // drop a self-hosted SSH port. sourceError names the gap.
         if (!cloneUrlSchema.safeParse(form.cloneUrl).success) {
           return false;
         }
         break;
       }
     }
-    // A git source with no branch pins the remote default at clone time
-    // (ls-remote); provider flows keep the required prefilled branch.
-    // Dockerfile, image and pasted-compose sources carry no branch at all
-    // (the field is hidden).
     if (form.sourceType === "image") {
       return appNameSchema.safeParse(form.name).success;
     }
@@ -771,21 +606,12 @@ export function useCreateAppWizard(
     return branchOk && appNameSchema.safeParse(form.name).success;
   });
 
-  /** runtimeValid gates the Runtime step: a node is required. Domains and
-   * their ports are attached after creation, on the Domains tab. */
   const runtimeValid = computed<boolean>(() =>
     serverSchema.safeParse(form.serverId).success,
   );
 
-  /** scopeValid gates the submit: the API requires an environment. */
   const scopeValid = computed<boolean>(() => form.environmentId !== "");
 
-  /**
-   * Environment names are warn-only: the API accepts any structurally valid
-   * name, so the wizard must not block one it accepts. The alert names rows that
-   * deviate from the convention; nameless rows are reported because the payload
-   * drops them.
-   */
   const envKeyWarnings = computed<boolean>(() => hasEnvKeyWarnings(form.env));
 
   const droppedEnvRows = computed<number>(() => countDroppedEnvRows(form.env));
@@ -804,24 +630,19 @@ export function useCreateAppWizard(
   });
 
   const buildPackLabel = computed<string>(() => {
-    // A Dockerfile source always builds with the Dockerfile engine; the
-    // review names the source instead of the hidden auto-detect choice.
     if (form.sourceType === "dockerfile") {
       return tr("applications.wizard.sourceDockerfile");
     }
-    // Image sources are prebuilt: the review shows that no build runs.
     if (form.sourceType === "image") {
       return tr("applications.wizard.packImageNone");
     }
     return buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto");
   });
 
-  /** buildPackSkipped hides the build-pack step for sources without a build. */
   const buildPackSkipped = computed<boolean>(
     () => form.sourceType === "dockerfile" || form.sourceType === "image",
   );
 
-  /** nextStep advances, jumping over the hidden build-pack step. */
   function nextStep(): void {
     step.value += 1;
     if (step.value === 2 && buildPackSkipped.value) {
@@ -829,7 +650,6 @@ export function useCreateAppWizard(
     }
   }
 
-  /** prevStep goes back, jumping over the hidden build-pack step. */
   function prevStep(): void {
     step.value -= 1;
     if (step.value === 2 && buildPackSkipped.value) {
@@ -837,31 +657,22 @@ export function useCreateAppWizard(
     }
   }
 
-  /** stepPosition renders the 1-based position among visited steps. */
   const stepPosition = computed<number>(() =>
     buildPackSkipped.value && step.value > 1 ? step.value : step.value + 1,
   );
 
-  /**
-   * visibleStepNames derives the rail from the same visited list as the
-   * counter: a skipped build pack hides its rail entry, so the rail length
-   * always equals stepTotal.
-   */
   const visibleStepNames = computed<string[]>(() =>
     buildPackSkipped.value
       ? [stepNames.value[0], stepNames.value[1], stepNames.value[3], stepNames.value[4]]
       : stepNames.value,
   );
 
-  /** visibleStepIndex maps the raw step onto its rail position. */
   const visibleStepIndex = computed<number>(() =>
     buildPackSkipped.value && step.value > 1 ? step.value - 1 : step.value,
   );
 
-  /** stepTotal renders the visited step count (4 without build pack). */
   const stepTotal = computed<number>(() => (buildPackSkipped.value ? 4 : 5));
 
-  /** reviewSource renders the repo headline on the review step. */
   const reviewSource = computed<string>(() => {
     if (form.sourceType === "dockerfile") {
       const count = Object.keys(buildArgsPayload(form.buildArgs)).length;
@@ -889,20 +700,13 @@ export function useCreateAppWizard(
     return `${repo} · ${branch === "" ? tr("applications.wizard.branchDefault") : branch}`;
   });
 
-  // Entering the wizard loads providers and nodes; changing provider loads repos.
   watch(
     show,
     (visible) => {
       if (visible) {
-        // Re-seed from the live scope: the route may have moved while the
-        // wizard was closed (or mounted), and reset-on-close alone would keep
-        // the stale environment for the next open.
         seedScope();
         seedSource();
         void providersStore.fetchProviders().catch(() => undefined);
-        // Same fetch as the source-type watcher below: reopening the same
-        // GitHub card leaves sourceType unchanged, so the watcher never
-        // fires and the connection list would go stale.
         if (form.sourceType === "github_app") {
           void githubAppStore.fetchApps().catch(() => undefined);
         }
@@ -913,8 +717,6 @@ export function useCreateAppWizard(
     },
   );
 
-  // A route change while the wizard is mounted re-seeds the scope, so the
-  // summary and the payload always name the current environment.
   watch(
     [() => toValue(scope.projectId), () => toValue(scope.environmentId)],
     () => seedScope(),
@@ -932,10 +734,6 @@ export function useCreateAppWizard(
     },
   );
 
-  // Switching the source type drops the previous type's fields, so a github
-  // provider picked under github_app can never leak into a gitlab_app
-  // payload (and the backend agreement check would reject it anyway).
-  // Entering the GitHub App flow loads the connections for the selector.
   watch(
     () => form.sourceType,
     () => {
@@ -963,7 +761,6 @@ export function useCreateAppWizard(
     },
   );
 
-  /** loadRepos fetches the selected provider's repositories; the store exposes any error. */
   async function loadRepos(): Promise<void> {
     if (form.providerId === "") {
       return;
@@ -975,8 +772,6 @@ export function useCreateAppWizard(
     await providersStore.fetchRepos(form.providerId).catch(() => undefined);
   }
 
-  /** loadBranches fetches the selected repository's branches; failures keep
-   * the free-text branch input (the store exposes the error). */
   async function loadBranches(): Promise<void> {
     if (form.providerId === "" || form.repoFullName === "") {
       return;
@@ -986,11 +781,6 @@ export function useCreateAppWizard(
       .catch(() => undefined);
   }
 
-  /** subscribeNodeTools points the toolchain store at the wizard's node, so the
-   * build-pack step can gate on that node's installed tools and enqueue an
-   * install through the same store (and its JUS-178 progress modal). Only a
-   * `ready` node has a live agent to report a catalog: a pending/offline node
-   * would 502 the tools route, so the picker stays fail-open for it. */
   function subscribeNodeTools(): void {
     const id = form.serverId;
     if (id === "") {
@@ -1007,9 +797,6 @@ export function useCreateAppWizard(
     void toolchainStore.subscribe(id).catch(() => undefined);
   }
 
-  /** installBuildPack enqueues the pack's tools (deps first) and opens the
-   * install-progress modal; the option re-enables when the store reloads the
-   * catalog after the job succeeds. */
   async function installBuildPack(value: BuildPack): Promise<void> {
     const tools = BUILD_PACK_TOOLS[value] ?? [];
     if (tools.length === 0 || form.serverId === "") {
@@ -1023,7 +810,6 @@ export function useCreateAppWizard(
     }
   }
 
-  /** retryNodeTools re-fetches the target node's catalog after a failed check. */
   async function retryNodeTools(): Promise<void> {
     if (form.serverId === "") {
       return;
@@ -1031,28 +817,20 @@ export function useCreateAppWizard(
     try {
       await toolchainStore.refresh();
     } catch {
-      // The failure surfaces through toolchainStore.failure (nodeToolsError).
     }
   }
 
-  /** disconnectNodeTools releases the toolchain socket the wizard opened and
-   * forgets the node, so the next open re-subscribes instead of reusing a dead
-   * socket. */
   function disconnectNodeTools(): void {
     toolchainStore.disconnect();
     toolchainStore.serverId = "";
   }
 
-  /** handleRepoSelect prefills branch, clone URL and a name from the repo. */
   function handleRepoSelect(fullName: string): void {
     if (isGitHubAppFlow.value) {
       const repo = githubAppStore.reposOf(form.providerId).find((item) => item.full_name === fullName);
       if (!repo) {
         return;
       }
-      // The installation token is injected at clone time, so the stored URL
-      // is always the https clone_url: an ssh_url would fail the token
-      // cloner, which only accepts http(s).
       form.cloneUrl = repo.clone_url;
       noSshUrl.value = false;
       if (repo.default_branch) {
@@ -1082,12 +860,8 @@ export function useCreateAppWizard(
     void loadBranches();
   }
 
-  /** buildPayload assembles the create-application body from the wizard state. */
   function buildPayload(): CreateApplicationInput {
     if (form.sourceType === "image") {
-      // Image sources deploy a prebuilt reference: no provider, repository,
-      // branch or build pack. The credential is optional (public images need
-      // none) and is sealed at rest.
       return {
         name: form.name.trim(),
         environment_id: form.environmentId,
@@ -1106,9 +880,6 @@ export function useCreateAppWizard(
       };
     }
     if (form.sourceType === "compose") {
-      // Pasted documents carry no repository, branch or build pack; repo
-      // mode reuses the connected-provider flow when a provider is picked,
-      // else the public URL.
       const repoSource =
         form.providerId !== ""
           ? { provider: providerSlugOf(form.providerId), repo: form.repoFullName, cloneUrl: form.cloneUrl }
@@ -1133,9 +904,6 @@ export function useCreateAppWizard(
         storage: form.storage.filter((row) => row.name.trim() !== ""),
       };
     }
-    // git_private is provider-less: the clone URL doubles as the repo label,
-    // like the git_public shape (the backend agreement check refuses any
-    // provider on this type).
     const source =
       form.sourceType === "git_public"
         ? { repo: form.publicCloneUrl.trim(), cloneUrl: form.publicCloneUrl.trim() }
@@ -1151,15 +919,10 @@ export function useCreateAppWizard(
       repo: source.repo,
       clone_url: source.cloneUrl,
       source_type: form.sourceType,
-      // The GitHub App flow links the application to its connection, so the
-      // clone takes the installation-token path; every other source stays
-      // unlinked on the legacy path.
       github_app_id: isGitHubAppFlow.value ? form.providerId : undefined,
       dockerfile_content: form.sourceType === "dockerfile" ? form.dockerfileContent : undefined,
       build_args: form.sourceType === "dockerfile" ? buildArgsPayload(form.buildArgs) : undefined,
       branch: form.branch.trim(),
-      // A Dockerfile source always builds with the Dockerfile engine; the
-      // build-pack choice is hidden and never sent.
       build_pack: form.sourceType === "dockerfile" ? "" : form.buildPack,
       image_ref: "",
       server_id: form.serverId,
@@ -1168,7 +931,6 @@ export function useCreateAppWizard(
     };
   }
 
-  /** handleSubmit posts the wizard payload, queues the first deploy and reports. */
   async function handleSubmit(): Promise<void> {
     submitFailure.value = null;
     if (!scopeValid.value) {
@@ -1178,19 +940,11 @@ export function useCreateAppWizard(
     submitting.value = true;
     try {
       const { application, webhook } = await createApplication(buildPayload());
-      // A provider-less private SSH source stops here: the key is generated
-      // and shown on the key step, and the first deploy waits for the
-      // operator to register it (Test + Deploy). Queueing immediately would
-      // always fail with permission denied. The HTTPS token needs no
-      // operator action, so it seals and falls through to the auto-deploy.
       if (form.sourceType === "git_private" && form.privateAuth === "ssh") {
         try {
           const key = await createDeployKey(application.id);
           createdKey.value = { application, publicKey: key.public_key };
         } catch (credError) {
-          // The application row already exists, so a plain retry of the
-          // submit would hit a name conflict: park the application for the
-          // recovery actions (retry the key, or delete and start over).
           submitFailure.value = { kind: "error", error: credError };
           keyRecovery.value = { application };
         } finally {
@@ -1210,8 +964,6 @@ export function useCreateAppWizard(
           );
         }
       }
-      // The create route only stores the row; "Create & deploy" must queue the
-      // first deployment explicitly and surface whether it was queued.
       try {
         await appsStore.deploy(application.id);
         message.success(
@@ -1245,13 +997,11 @@ export function useCreateAppWizard(
     }
   }
 
-  /** closeWizard closes the modal and resets the wizard state. */
   function closeWizard(): void {
     emit("update:show", false);
     resetWizard();
   }
 
-  /** runCreatedKeyTest probes the new SSH application with its stored key. */
   async function runCreatedKeyTest(): Promise<void> {    if (!createdKey.value) {
       return;
     }
@@ -1271,7 +1021,6 @@ export function useCreateAppWizard(
     }
   }
 
-  /** deployCreatedKey queues the first deploy of the SSH application. */
   async function deployCreatedKey(): Promise<void> {
     if (!createdKey.value) {
       return;
@@ -1299,7 +1048,6 @@ export function useCreateAppWizard(
     emit("update:show", false);
   }
 
-  /** closeCreatedKey leaves the key step for the detail page (same landing). */
   function closeCreatedKey(): void {
     if (!createdKey.value) {
       return;
@@ -1310,7 +1058,6 @@ export function useCreateAppWizard(
     emit("update:show", false);
   }
 
-  /** retryKeyCreation retries the deploy key for the parked application. */
   async function retryKeyCreation(): Promise<void> {
     if (!keyRecovery.value) {
       return;
@@ -1331,7 +1078,6 @@ export function useCreateAppWizard(
     }
   }
 
-  /** deleteRecoveryApp rolls the parked application back and restarts. */
   async function deleteRecoveryApp(): Promise<void> {
     if (!keyRecovery.value) {
       return;
@@ -1347,15 +1093,11 @@ export function useCreateAppWizard(
     resetWizard();
   }
 
-  /** seedScope copies the live route scope into the form. */
   function seedScope(): void {
     form.projectId = toValue(scope.projectId);
     form.environmentId = toValue(scope.environmentId);
   }
 
-  /** handleShowChange mirrors the modal visibility and resets when closing.
-   * Closing from the key step still emits created: the application exists,
-   * and without the event the list behind the modal goes stale. */
   function handleShowChange(value: boolean): void {
     emit("update:show", value);
     if (!value) {
@@ -1369,7 +1111,6 @@ export function useCreateAppWizard(
     }
   }
 
-  /** resetWizard returns every field to its initial value. */
   function resetWizard(): void {
     step.value = 0;
     seedSource();
@@ -1407,13 +1148,9 @@ export function useCreateAppWizard(
     keyTestMessage.value = "";
     keyConfirmed.value = false;
     keyDeploying.value = false;
-    // The provider store is a singleton: a stale repo error must not survive
-    // into the next wizard with a Retry that no longer applies.
     providersStore.reposError = null;
     githubAppStore.clearErrors();
     providersStore.reposErrorRaw = null;
-    // Release the toolchain socket/subscription and the install modal the
-    // wizard opened, so closing it leaves nothing live in the background.
     toolchainStore.closeQueueModal();
     disconnectNodeTools();
   }
@@ -1492,17 +1229,14 @@ export function useCreateAppWizard(
   };
 }
 
-/** CreateWizardState is the single typed source the step components inject. */
 export type CreateWizardState = ReturnType<typeof useCreateAppWizard>;
 
 export const createWizardKey: InjectionKey<CreateWizardState> = Symbol("create-wizard");
 
-/** provideCreateWizard shares the shell's wizard state with the step components. */
 export function provideCreateWizard(state: CreateWizardState): void {
   provide(createWizardKey, state);
 }
 
-/** useCreateWizardState reads the shell-provided wizard state in a step. */
 export function useCreateWizardState(): CreateWizardState {
   const state = inject(createWizardKey);
   if (!state) {

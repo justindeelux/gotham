@@ -1,8 +1,3 @@
-/**
- * Vietnamese catalog for the projects surface (I18N-3). Keys, identifiers
- * and interpolated raw values (names, counts, `production`, diagnostics)
- * stay English; only these message values are Vietnamese.
- */
 const vi = {
   list: {
     eyebrow: "Không gian làm việc",

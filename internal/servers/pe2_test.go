@@ -13,9 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestDeleteRefusesServerWithResources is the PE-2 delete guard: a node with
-// applications, services or databases answers 409 naming the blocking
-// resources, and deletes cleanly once they are gone.
 func TestDeleteRefusesServerWithResources(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -122,9 +119,6 @@ func isConflict(err error) bool {
 	return err != nil && strings.Contains(err.Error(), ErrConflict.Error())
 }
 
-// TestDeletePurgesTombstones pins F1 for nodes: a server holding only
-// soft-deleted workloads deletes cleanly (the tombstones are purged in the
-// same transaction), and the 409 names live blockers only.
 func TestDeletePurgesTombstones(t *testing.T) {
 	service, st := newTestService(t)
 

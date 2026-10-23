@@ -11,35 +11,12 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 )
 
-// PreviewApplicationInput is the system-path payload of a preview sibling: the
-// PR-derived name and host, and the head branch to build. Everything else is
-// cloned from the base application.
 type PreviewApplicationInput struct {
 	Name       string
 	Branch     string
 	BaseDomain string
 }
 
-// CreatePreviewApplication clones the configuration of a base application into
-// a new sibling application (BE-8.1). It is a system path: the PR webhook
-// established which base application may be built, so there is no caller to
-// authorize and the preview inherits the base application's team, creator and
-// server. Plain environment variables are copied verbatim and the base's
-// deploy key is re-registered on the sibling (same key material) so a private
-// repository stays cloneable.
-//
-// Sealed secrets and storages are deliberately NOT copied: a preview is served
-// publicly from a PR branch, so a contributor's code must not be able to read
-// the base application's production secrets or write its volumes. An operator
-// who wants shared configuration must move those values into plain env vars
-// (visible) or configure the preview application explicitly.
-//
-// Host port is never copied: the preview must not fight the base application
-// for a pinned host port.
-//
-// The returned application is a normal applications row flagged is_preview, so
-// the whole Phase 4 deploy path and the Phase 6 proxy sync work on it
-// unchanged.
 func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.UUID, in PreviewApplicationInput) (Application, error) {
 	if !Enabled() {
 		return Application{}, ErrDisabled
@@ -55,54 +32,35 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	if err != nil {
 		return Application{}, err
 	}
-	// Previews are per-branch siblings: an image source has no branches, so
-	// it cannot be previewed. Fail closed with a message that names the
-	// reason instead of tripping the branch validation below.
 	if NormalizeSourceType(base.SourceType, base.Provider) == SourceImage {
 		return Application{}, fmt.Errorf("%w: source type %q has no branches to preview",
 			ErrValidation, SourceImage)
 	}
 
 	app := Application{
-		UserID:        base.UserID,
-		TeamID:        base.TeamID,
-		ServerID:      base.ServerID,
-		EnvironmentID: base.EnvironmentID,
-		Name:          strings.TrimSpace(in.Name),
-		Provider:      base.Provider,
-		Repo:          base.Repo,
-		CloneURL:      base.CloneURL,
-		// Normalize a legacy empty type from the provider, exactly like
-		// creation does: the preview is a new row and must pass the
-		// provider/source agreement check below.
-		SourceType: NormalizeSourceType(base.SourceType, base.Provider),
-		// The link travels with the preview: it clones the same repo through
-		// the same connection.
-		GitHubAppID: base.GitHubAppID,
-		// A dockerfile base deploys from its stored text: the preview
-		// builds the same content, so it copies both fields.
+		UserID:            base.UserID,
+		TeamID:            base.TeamID,
+		ServerID:          base.ServerID,
+		EnvironmentID:     base.EnvironmentID,
+		Name:              strings.TrimSpace(in.Name),
+		Provider:          base.Provider,
+		Repo:              base.Repo,
+		CloneURL:          base.CloneURL,
+		SourceType:        NormalizeSourceType(base.SourceType, base.Provider),
+		GitHubAppID:       base.GitHubAppID,
 		DockerfileContent: base.DockerfileContent,
 		BuildArgs:         base.BuildArgs,
 		Branch:            strings.TrimSpace(in.Branch),
 		BuildPack:         base.BuildPack,
-		// The preview id is assigned before validation so a pasted
-		// document's managed binds rewrite to the preview's own directory
-		// (never the base application's) before the scope check runs. The
-		// project name derives from the application id, so the preview's
-		// named volumes stay isolated too.
-		ID:             uuid.New(),
-		ComposeContent: base.ComposeContent,
-		ComposeFile:    base.ComposeFile,
-		ComposeService: base.ComposeService,
-		IsPreview:      true,
+		ID:                uuid.New(),
+		ComposeContent:    base.ComposeContent,
+		ComposeFile:       base.ComposeFile,
+		ComposeService:    base.ComposeService,
+		IsPreview:         true,
 	}
 	if app.Branch == "" {
 		app.Branch = base.Branch
 	}
-	// A preview of a git source with no branch inherits the empty value so
-	// the clone resolves the remote default (GS-3, GS-4); every other source
-	// falls back to "main" like creation does. A pasted compose document has
-	// no branch at all (cleared below).
 	if app.Branch == "" && !BranchDefaultsToRemote(base.SourceType, base.Provider) {
 		app.Branch = defaultBranch
 	}
@@ -140,11 +98,6 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	if err != nil {
 		return Application{}, err
 	}
-	// The preview inherits the base's routing shape (target port, compose
-	// service and protocol) under its own host. It never shares the base's
-	// published bindings: every port is ephemeral on the node. A preview
-	// without a host stays domainless (the system path only creates one for a
-	// PR that has a host to serve).
 	if host == "" {
 		s.copyDeployKey(ctx, base, created)
 		s.copyGitCredential(ctx, base, created)
@@ -159,8 +112,6 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		Protocol:      base.PrimaryDomain.Protocol,
 	}
 	if _, err := s.repo.CreateApplicationDomain(ctx, domain); err != nil {
-		// A sibling without its route is unreachable; remove it so the
-		// binding never points at a half-provisioned application.
 		_ = s.repo.DeleteApplication(ctx, created.ID)
 		return Application{}, err
 	}
@@ -171,24 +122,6 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	return created, nil
 }
 
-// cloneWildcardCertificate copies the base application's enabled wildcard
-// DNS-01 certificate intent onto its preview sibling, so the preview is served
-// over HTTPS through the same DNS provider instead of staying HTTP-only. The
-// clone is deliberately narrow:
-//
-//   - only an enabled wildcard intent with a DNS provider is cloned (wildcards
-//     require DNS-01, and a plain HTTP-01 intent names the base host only);
-//   - the base intent must still record the base application's current
-//     primary domain (a stale record never activates the base route either);
-//   - the preview host must be certifiable through the provider's DNS zones,
-//     so the sibling never gets an intent that can only stay HTTP-only.
-//
-// The sibling's intent records the preview host, which is exactly what the
-// route generator needs to activate HTTPS for the sibling (the exact host is
-// always the main certificate name). Best effort: a failure logs and leaves
-// the preview HTTP-only. The row cascades away with the sibling application
-// (domain_certificates.application_id ON DELETE CASCADE), so teardown never
-// orphans an intent.
 func (s *Service) cloneWildcardCertificate(ctx context.Context, base, preview Application) {
 	intent, err := s.repo.GetCertificateIntent(ctx, base.ID)
 	if err != nil {
@@ -231,12 +164,6 @@ func (s *Service) cloneWildcardCertificate(ctx context.Context, base, preview Ap
 	}
 }
 
-// copyDeployKey re-registers the base application's deploy key on the preview
-// sibling (same key material, new mapping row) so a private repository stays
-// cloneable. The remote key is shared: teardown never removes it from the Git
-// host (see DeleteSystemApplication and DeleteApplication). Best effort: a
-// failure is logged, the sibling still deploys against a public repository,
-// and a private one reports the clone failure on its deployment row.
 func (s *Service) copyDeployKey(ctx context.Context, base, preview Application) {
 	key, err := s.repo.GetDeployKey(ctx, base.ID)
 	if err != nil {
@@ -267,13 +194,6 @@ func (s *Service) copyDeployKey(ctx context.Context, base, preview Application) 
 	}
 }
 
-// copyGitCredential copies the base application's sealed HTTPS credential
-// onto the preview sibling, so a token-authenticated private source stays
-// cloneable exactly like a key-authenticated one. Best effort like
-// copyDeployKey: a failure is logged, the sibling still stands, and a
-// private clone reports the failure on its deployment row. The copy carries
-// the sealed ciphertext (the plaintext never leaves the store); the
-// applications FK cascade removes it with the sibling.
 func (s *Service) copyGitCredential(ctx context.Context, base, preview Application) {
 	if err := s.repo.CopyGitCredential(ctx, base.ID, preview.ID); err != nil {
 		s.logger.Warn("deploy: could not copy the git credential to a preview",
@@ -281,17 +201,6 @@ func (s *Service) copyGitCredential(ctx context.Context, base, preview Applicati
 	}
 }
 
-// DeleteSystemApplication removes an application on a system path (the preview
-// teardown). There is no caller to authorize, and the Git host is never
-// touched: a preview reuses its base application's deploy key, so removing it
-// would break the base (and every sibling). The local deploy key rows are
-// deleted explicitly first — deleting the application only cascades the
-// mapping, which would strand the sealed private key row. A deployment that is
-// in flight is refused with ErrConflict (the teardown removes the container and
-// cascades the row); the callers retry or the preview sweep picks it up. An
-// unreachable node never blocks the teardown: the container removal stays best
-// effort, exactly like the user-facing delete. An application that is already
-// gone is a success (the teardown must be idempotent).
 func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
@@ -309,17 +218,9 @@ func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) 
 		}
 		return err
 	}
-	// Defence in depth: this system path exists for preview siblings only. An
-	// ordinary application must never be deleted through it, because the
-	// teardown deliberately skips the remote deploy-key detach.
 	if !app.IsPreview {
 		return fmt.Errorf("%w: application %s is not a preview", ErrValidation, appID)
 	}
-	// Serialize with deployment submission and manual control, and refuse while
-	// a deployment is in flight: the teardown removes the container and
-	// cascades the row, which would orphan a container the worker is replacing.
-	// Re-read under the lock so a concurrent move cannot leave the teardown
-	// targeting the previous node.
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
 	app, err = s.repo.GetApplication(ctx, appID)
@@ -332,9 +233,6 @@ func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) 
 	if err := s.rejectInFlight(ctx, app.ID); err != nil {
 		return err
 	}
-	// Local key rows go first: a failure aborts before the application row
-	// disappears, so the teardown (and its binding) stays retryable and no
-	// orphan private key is left behind.
 	switch key, err := s.repo.GetDeployKey(ctx, appID); {
 	case err == nil:
 		if err := s.deleteLocalDeployKey(ctx, key); err != nil {
@@ -347,8 +245,6 @@ func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) 
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
 	}
-	// The row is gone: refresh the node's routing so the deleted preview stops
-	// being served immediately.
 	if app.PrimaryDomain != nil {
 		s.syncProxyServer(ctx, app.ServerID)
 	}

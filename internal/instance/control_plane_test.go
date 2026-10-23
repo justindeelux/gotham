@@ -166,7 +166,6 @@ func TestControlPlaneURLConfirmClear(t *testing.T) {
 	}
 }
 
-// Background expiry uses a synchronized repository because it runs without an API request.
 type timerRepo struct {
 	mu  sync.Mutex
 	rec Stored

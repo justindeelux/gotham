@@ -5,13 +5,9 @@ import type { RouteLocationRaw } from "vue-router";
 
 interface Props {
   to: RouteLocationRaw;
-  /** Accessible name of the link; also the tooltip when `tip` is unset. */
   label: string;
-  /** Tooltip copy; defaults to the accessible name. */
   tip?: string;
-  /** Extra class for the link (e.g. rail-btn--add). */
   linkClass?: string;
-  /** Alert count badge; hidden when unset. Values above 9 render as "9+". */
   badgeCount?: number;
 }
 

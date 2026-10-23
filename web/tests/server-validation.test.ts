@@ -1,4 +1,3 @@
-// Unit tests for the shared server connection validation (JUS-24).
 
 import { describe, expect, it } from "vitest";
 
@@ -26,8 +25,6 @@ describe("isValidHost", () => {
   });
 
   it("accepts out-of-range IPv4-shaped input as a hostname (matches the forms)", () => {
-    // "999.1.1.1" fails the IPv4 check but passes the hostname check, so the
-    // forms accept it. Preserved as-is; flagged in the F2-servers report.
     expect(isValidHost("999.1.1.1")).toBe(true);
   });
 });

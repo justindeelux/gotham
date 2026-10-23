@@ -29,11 +29,8 @@ import ServerPicker from "@/features/projects/components/ServerPicker.vue";
 
 interface Props {
   show: boolean;
-  /** Project the database is created in (the route's, changeable). */
   projectId?: string;
-  /** Environment the database is created in (the route's, changeable). */
   environmentId?: string;
-  /** Engine preselected by the caller (the Add-resource card, else postgres). */
   engine?: string;
 }
 
@@ -54,7 +51,6 @@ const wizard = useCreateDatabaseWizard({
   engine: toRef(props, "engine"),
 });
 
-/** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
@@ -97,7 +93,6 @@ provide(wizardFormKey, wizard.form);
       />
 
       <template v-if="wizard.step.value === 0">
-        <!-- Preselected by the picker: read-only summary, Change goes back to the picker. -->
         <div v-if="wizard.engineLocked.value" class="preselected">
           <span>{{ t("databases.wizard.engineStep.preselected", { engine: wizard.selectedEngine.value.label }) }}</span>
           <NButton size="small" quaternary @click="wizard.handleClose(false)">

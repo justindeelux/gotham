@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// deployKeyPath renders the deploy-key route of an application.
 func deployKeyPath(appID uuid.UUID) string {
 	return "/v1/applications/" + appID.String() + "/deploy-key"
 }
@@ -95,9 +94,6 @@ func TestRoutesDeleteDeployKey(t *testing.T) {
 	})
 }
 
-// TestRoutesDeployKeyErrors pins the statuses the deploy-key routes answer:
-// a host failure is a gateway status without the provider's body, a missing
-// connection a conflict, bad input a 400.
 func TestRoutesDeployKeyErrors(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 	cases := []struct {
@@ -135,9 +131,6 @@ func TestRoutesDeployKeyErrors(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateDeployKeyConflictMessage pins C3-11: a conflict from
-// POST /deploy-key is the concurrent-create race, so the response must not
-// claim "a deployment is already in progress".
 func TestRoutesCreateDeployKeyConflictMessage(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 	svc := &fakeDeployService{createKeyErr: ErrConflict}
@@ -157,7 +150,6 @@ func TestRoutesCreateDeployKeyConflictMessage(t *testing.T) {
 	}
 }
 
-// containsMessage reports whether the response body carries a message.
 func containsMessage(body, needle string) bool {
 	var parsed errorBody
 	if err := json.Unmarshal([]byte(body), &parsed); err != nil {

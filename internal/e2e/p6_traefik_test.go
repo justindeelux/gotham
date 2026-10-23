@@ -28,21 +28,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Phase 6 (BE-6.1) production acceptance. The test drives the real control
-// plane service surface (store -> proxy.SyncService -> containers.Service ->
-// mTLS agent -> Docker) against the local Docker daemon and the dev Postgres
-// database, and asserts the generated HTTP routes with real requests through
-// the bootstrapped Traefik:
-//
-//   - bootstrap with the production port specs (including the loopback ping),
-//   - pinned and ephemeral (HostPort 0) application endpoints,
-//   - pending/invalid/disabled rows isolated as diagnostics,
-//   - route update and removal (the old route stops),
-//   - configuration history and fast revert,
-//   - repair of a pre-fix container and native restart policy,
-//   - an invalid document write that must NOT be presented as accepted.
-//
-// p6BaseURL is the production gateway served by the bootstrapped Traefik.
 const p6BaseURL = "http://127.0.0.1:80/"
 
 const (
@@ -53,9 +38,6 @@ const (
 	p6SyncTimeout  = 2 * time.Minute
 )
 
-// TestP6ProxySyncProduction is gated by GOTHAM_E2E=1. Docker must be reachable
-// (fatal, never skipped as green); Postgres follows the suite convention and
-// skips when unreachable.
 func TestP6ProxySyncProduction(t *testing.T) {
 	requireE2E(t)
 
@@ -75,8 +57,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	}
 	t.Logf("docker %s at %s", version, e2eDockerSock())
 
-	// GOTHAM_E2E=1 is an explicit opt-in to the production acceptance run: a
-	// missing prerequisite fails the test instead of skipping it green.
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Fatalf("docker CLI not found: %v", err)
 	}
@@ -122,12 +102,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 		}
 	})
 
-	// The node agent: DockerService + the real ProxyService rooted in a temp
-	// directory that the CP mounts into Traefik (a relocated node layout using
-	// the same production code paths).
 	nodeID := "p6-e2e-" + suffix
-	// macOS temp paths contain OS-level symlinks (/var -> /private/var); the
-	// agent's no-follow traversal from "/" needs canonical fixtures.
 	configDir := p6CanonicalTempDir(t)
 	acmeDir := configDir + "/acme"
 	if err := os.MkdirAll(acmeDir, 0o755); err != nil {
@@ -138,9 +113,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 		agent.WithProxyService(proxyAgent))
 
 	registry := p6Registry{server: &servers.Server{ID: serverID, IP: "127.0.0.1", NodeID: &nodeID}}
-	// R4: a pre-existing fixed-name container may be a live proxy this test
-	// cannot prove it owns, so refuse to run instead of deleting it. Only
-	// container IDs created by this run are cleaned up.
 	if existing := p6FindContainer(t, ctx, engine); existing != "" {
 		t.Fatalf("a gotham-traefik container already exists (%s); refusing to remove a possibly live proxy", existing)
 	}
@@ -170,10 +142,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = containerService.Close() })
 
-	// Linux nodes (production and CI) reach published ports through the
-	// bridge gateway. Docker Desktop for macOS does not route Docker-assigned
-	// (ephemeral) ports through 172.17.0.1, so the desktop equivalent is used
-	// locally; the production default stays in the generated configuration.
 	backendHost := proxy.DefaultBackendHost
 	if runtime.GOOS == "darwin" {
 		backendHost = "host.docker.internal"
@@ -217,10 +185,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	p6CreateRunningDeployment(t, ctx, pool, pinnedApp, pinnedContainer)
 	ephemeralApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "ephemeral-"+suffix, ephemeralDomain, 0, false)
 	p6CreateRunningDeployment(t, ctx, pool, ephemeralApp, ephemeralContainer)
-	// Pending: a domain without a running deployment.
 	p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "pending-"+suffix, pendingDomain, freeTCPPort(t), false)
-	// Invalid legacy domain and a migration-disabled duplicate: both must be
-	// isolated, not block the healthy rows.
 	invalidApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "invalid-"+suffix, invalidDomain, freeTCPPort(t), false)
 	p6CreateRunningDeployment(t, ctx, pool, invalidApp, invalidContainer)
 	disabledApp := p6CreateApplication(t, ctx, pool, userRow.ID, serverRow.ID, envID, "disabled-"+suffix, disabledDomain, freeTCPPort(t), true)
@@ -242,8 +207,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	t.Logf("first sync diagnostics: %v", partial.Diagnostics)
 
 	traefikID := trackCreated(p6WaitForContainer(t, ctx, engine))
-	// On failure, keep the diagnosis close: the proxy logs, the mounted
-	// configuration and the container's mounts are dumped before cleanup.
 	t.Cleanup(func() {
 		if !t.Failed() {
 			return
@@ -277,7 +240,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	p6ExpectHTTP(t, pendingDomain, http.StatusNotFound)
 	p6ExpectHTTP(t, disabledDomain, http.StatusNotFound)
 
-	// Route update: renaming the domain must move the route.
 	renamedDomain := "renamed-" + suffix + ".example.test"
 	if _, err := pool.Exec(ctx, "UPDATE application_domains SET domain = $2 WHERE application_id = $1 AND is_primary", pgType(pinnedApp), renamedDomain); err != nil {
 		t.Fatalf("update domain: %v", err)
@@ -288,8 +250,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 	p6ExpectHTTP(t, pinnedDomain, http.StatusNotFound)
 
-	// Removal: deleting the ephemeral application must stop its old route even
-	// while pending/invalid/disabled rows remain on the node.
 	if _, err := pool.Exec(ctx, "DELETE FROM applications WHERE id = $1", pgType(ephemeralApp)); err != nil {
 		t.Fatalf("delete ephemeral app: %v", err)
 	}
@@ -299,9 +259,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	p6ExpectHTTP(t, ephemeralDomain, http.StatusNotFound)
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 
-	// History and fast revert: reverting restores the version recorded before
-	// the update/removal pair, bringing the ephemeral route back and keeping
-	// the renamed one.
 	var versionCount int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM proxy_config_versions WHERE server_id = $1", serverRow.ID).Scan(&versionCount); err != nil {
 		t.Fatalf("count config versions: %v", err)
@@ -318,8 +275,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	p6ExpectHTTP(t, ephemeralDomain, http.StatusOK)
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 
-	// Repair: a container created before the host-IP binding fix (no loopback
-	// ping) is replaced by the sync and the proxy comes back verified.
 	currentID := p6FindContainer(t, ctx, engine)
 	if currentID == "" {
 		t.Fatal("managed proxy container disappeared before the repair step")
@@ -350,8 +305,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	p6AssertTraefikBootstrap(t, traefikID)
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 
-	// Restart: the native policy is present and a restart serves again without
-	// any control-plane action.
 	if policy := p6Inspect(t, traefikID, "{{.HostConfig.RestartPolicy.Name}}"); policy != proxy.TraefikRestartPolicy {
 		t.Fatalf("restart policy = %q, want %q", policy, proxy.TraefikRestartPolicy)
 	}
@@ -360,15 +313,8 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	}
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 
-	// R5 convergence: owned drift (correct ports, wrong mount / missing
-	// policy label / wrong image) is recreated, while an unowned same-name
-	// container is never removed and fails the sync with an actionable
-	// conflict.
 	p6AssertRepairsDrift(t, ctx, engine, proxyService, serverID, configDir, acmeDir, &traefikID, &createdIDs, renamedDomain)
 
-	// A malformed dynamic document must not be presented as accepted: the
-	// verified write only proves the ping answered, and Traefik keeps serving
-	// the last valid configuration.
 	client, err := servers.DialProxyClient(ctx, agentAddr, authority, servers.WithDockerServerName(nodeID))
 	if err != nil {
 		t.Fatalf("dial proxy service: %v", err)
@@ -389,9 +335,6 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	if !badResponse.GetReloaded() {
 		t.Fatalf("invalid write ping failed: %s", badResponse.GetPingError())
 	}
-	// Wait for the file provider to actually reject the malformed document
-	// before asserting the previous route survives: the verified write is a
-	// ping signal, not configuration acceptance.
 	rejection := p6WaitForLog(t, ctx, traefikID, []string{"error", "parse"}, []string{"error", "yaml"}, []string{"error", "gotham.yml"}, []string{"error", "unmarshal"})
 	t.Logf("traefik rejected the malformed document: %s", rejection)
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
@@ -402,12 +345,10 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	p6ExpectHTTP(t, renamedDomain, http.StatusOK)
 }
 
-// p6Registry resolves the one seeded node.
 type p6Registry struct {
 	server *servers.Server
 }
 
-// Get returns the seeded server or ErrNotFound.
 func (r p6Registry) Get(_ context.Context, id uuid.UUID) (*servers.Server, error) {
 	if r.server == nil || r.server.ID != id {
 		return nil, servers.ErrNotFound
@@ -415,7 +356,6 @@ func (r p6Registry) Get(_ context.Context, id uuid.UUID) (*servers.Server, error
 	return r.server, nil
 }
 
-// e2eDSN resolves the database DSN the suite uses.
 func e2eDSN() string {
 	if dsn := strings.TrimSpace(os.Getenv(e2eDSNEnv)); dsn != "" {
 		return dsn
@@ -423,7 +363,6 @@ func e2eDSN() string {
 	return defaultE2EDSN
 }
 
-// p6Sync runs one sync and tolerates the diagnostics of the mixed rows.
 func p6Sync(svc *proxy.SyncService, serverID uuid.UUID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), p6SyncTimeout)
 	defer cancel()
@@ -433,12 +372,6 @@ func p6Sync(svc *proxy.SyncService, serverID uuid.UUID) error {
 	return nil
 }
 
-// p6RunNginx starts an nginx container publishing the given spec. The agent
-// creates the container before starting it and returns the created ID together
-// with a start error (a port conflict, for example), so cleanup is registered
-// for any returned ID before the error is handled and a failed start cannot
-// leak the container. Removal of this owned container fails the test, like
-// every other owned-resource cleanup.
 func p6RunNginx(t *testing.T, ctx context.Context, engine *agent.DockerClient, name, portSpec string) string {
 	t.Helper()
 	id, err := engine.RunImage(ctx, &agentv1.CreateContainerRequest{
@@ -461,9 +394,6 @@ func p6RunNginx(t *testing.T, ctx context.Context, engine *agent.DockerClient, n
 	return id
 }
 
-// p6SeedEnvironment creates a team, project and environment for the direct
-// SQL application seeds below (environment_id is NOT NULL since PE-2) and
-// returns the environment id.
 func p6SeedEnvironment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st *store.Store, suffix string) pgtype.UUID {
 	t.Helper()
 	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
@@ -502,13 +432,9 @@ func p6SeedEnvironment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st
 	return environment.ID
 }
 
-// p6CreateApplication inserts an application row with a direct SQL write so
-// the test can seed legacy values (invalid domain, disabled duplicate) the
-// API validation would reject, and returns its id. The row is attributed to the
-// creator's personal team (team_id = user_id, see migration 00019).
 func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, serverID, envID pgtype.UUID, name, domain string, hostPort int32, disabled bool) uuid.UUID {
 	t.Helper()
-	_ = hostPort // routing reads the container's published binding of the domain port
+	_ = hostPort
 	var id pgtype.UUID
 	err := pool.QueryRow(ctx,
 		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack)
@@ -527,7 +453,6 @@ func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	return uuid.UUID(id.Bytes)
 }
 
-// p6CreateRunningDeployment records a running deployment with a container id.
 func p6CreateRunningDeployment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, appID uuid.UUID, containerID string) {
 	t.Helper()
 	if _, err := pool.Exec(ctx,
@@ -538,8 +463,6 @@ func p6CreateRunningDeployment(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 }
 
-// p6WaitForContainer returns the id of the managed proxy container on the
-// node.
 func p6WaitForContainer(t *testing.T, ctx context.Context, engine *agent.DockerClient) string {
 	t.Helper()
 	deadline := time.Now().Add(p6HTTPWait)
@@ -561,8 +484,6 @@ func p6WaitForContainer(t *testing.T, ctx context.Context, engine *agent.DockerC
 	}
 }
 
-// p6AssertTraefikBootstrap checks the production bindings, the read-only
-// config mount and the native restart policy of a freshly bootstrapped node.
 func p6AssertTraefikBootstrap(t *testing.T, traefikID string) {
 	t.Helper()
 	ports := p6Inspect(t, traefikID, "{{range $p, $conf := .NetworkSettings.Ports}}{{$p}}={{range $conf}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}")
@@ -580,7 +501,6 @@ func p6AssertTraefikBootstrap(t *testing.T, traefikID string) {
 	}
 }
 
-// p6Inspect renders one docker inspect template for the container.
 func p6Inspect(t *testing.T, containerID, format string) string {
 	t.Helper()
 	output, err := runDocker(context.Background(), "inspect", "--format", format, containerID)
@@ -590,7 +510,6 @@ func p6Inspect(t *testing.T, containerID, format string) string {
 	return output
 }
 
-// p6ExpectHTTP polls a route through Traefik until it answers want (or fails).
 func p6ExpectHTTP(t *testing.T, host string, want int) string {
 	t.Helper()
 	client := &http.Client{
@@ -627,7 +546,6 @@ func p6ExpectHTTP(t *testing.T, host string, want int) string {
 	return lastBody
 }
 
-// freeTCPPort asks the kernel for a free loopback port.
 func freeTCPPort(t *testing.T) int32 {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -638,7 +556,6 @@ func freeTCPPort(t *testing.T) int32 {
 	return int32(listener.Addr().(*net.TCPAddr).Port)
 }
 
-// runDocker runs one docker CLI command and returns its combined output.
 func runDocker(ctx context.Context, args ...string) (string, error) {
 	binary, err := exec.LookPath("docker")
 	if err != nil {
@@ -648,7 +565,6 @@ func runDocker(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(output)), err
 }
 
-// pgType converts a uuid.UUID for pgx parameters.
 func pgType(id uuid.UUID) pgtype.UUID {
 	if id == uuid.Nil {
 		return pgtype.UUID{}
@@ -656,9 +572,6 @@ func pgType(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-// p6CanonicalTempDir returns a temp directory with OS-level symlinks resolved
-// (macOS /var -> /private/var), matching the agent's no-follow traversal from
-// the trusted root.
 func p6CanonicalTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -668,7 +581,6 @@ func p6CanonicalTempDir(t *testing.T) string {
 	return dir
 }
 
-// p6FindContainer returns the managed proxy container's id, or "" when absent.
 func p6FindContainer(t *testing.T, ctx context.Context, engine *agent.DockerClient) string {
 	t.Helper()
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -685,8 +597,6 @@ func p6FindContainer(t *testing.T, ctx context.Context, engine *agent.DockerClie
 	return ""
 }
 
-// p6WaitForLog polls the proxy's logs until one line contains every keyword of
-// one group (case-insensitive), returning the matching line.
 func p6WaitForLog(t *testing.T, ctx context.Context, containerID string, groups ...[]string) string {
 	t.Helper()
 	deadline := time.Now().Add(p6HTTPWait)
@@ -718,10 +628,6 @@ func p6WaitForLog(t *testing.T, ctx context.Context, containerID string, groups 
 	}
 }
 
-// p6AssertRepairsDrift proves the managed-container convergence rules (R5):
-// owned drift (wrong mount, missing policy, wrong image) is repaired by
-// recreation, and an unowned same-name container is never removed — the sync
-// fails with an actionable conflict until the operator resolves it.
 func p6AssertRepairsDrift(
 	t *testing.T,
 	ctx context.Context,
@@ -807,8 +713,6 @@ func p6AssertRepairsDrift(
 			t.Fatalf("unowned container was replaced (%s -> %s)", *traefikID, current)
 		}
 
-		// The fixture belongs to this run: remove it and let the managed proxy
-		// converge again.
 		if err := engine.Remove(ctx, *traefikID); err != nil {
 			t.Fatalf("remove unowned fixture: %v", err)
 		}

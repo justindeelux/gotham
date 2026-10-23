@@ -15,11 +15,6 @@ import type {
 } from "@/features/applications/api/githubApp";
 import { onLocaleChange } from "@/shared/i18n/locale";
 
-/**
- * GitHub App connections (GS-5): apps created through the manifest flow,
- * their installations' repositories and branches. Mirrors the providers
- * store shape, so the wizard consumes both the same way.
- */
 export const useGitHubAppStore = defineStore("github-app", () => {
   const apps = ref<GitHubApp[]>([]);
   const reposByApp = ref<Record<string, GitHubRepo[]>>({});
@@ -33,8 +28,6 @@ export const useGitHubAppStore = defineStore("github-app", () => {
   const errorRaw = ref<unknown>(null);
   const reposErrorRaw = ref<unknown>(null);
 
-  // A retained failure banner re-derives its curated summary when the
-  // language changes; raw diagnostics inside re-resolve to passthrough text.
   onLocaleChange(() => {
     if (errorRaw.value !== null) {
       error.value = describeGitHubAppError(errorRaw.value);
@@ -44,7 +37,6 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     }
   });
 
-  /** fetchApps loads every GitHub App of the current user. */
   async function fetchApps(): Promise<void> {
     loading.value = true;
     error.value = null;
@@ -60,7 +52,6 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     }
   }
 
-  /** fetchRepos loads the repositories visible through one app installation. */
   async function fetchRepos(appId: string): Promise<void> {
     reposLoading.value = true;
     reposError.value = null;
@@ -78,7 +69,6 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     }
   }
 
-  /** fetchBranches loads the branches of one repository. */
   async function fetchBranches(appId: string, repo: string): Promise<void> {
     branchesLoading.value = true;
     try {
@@ -88,27 +78,22 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     }
   }
 
-  /** reposOf returns the cached repos of one app, or an empty list. */
   function reposOf(appId: string): GitHubRepo[] {
     return reposByApp.value[appId] ?? [];
   }
 
-  /** reposTruncated reports whether the cached list hit the server bound. */
   function reposTruncated(appId: string): boolean {
     return truncatedByApp.value[appId] ?? false;
   }
 
-  /** branchesOf returns the cached branches of one repository, or empty. */
   function branchesOf(appId: string, repo: string): GitHubBranch[] {
     return branchesByRepo.value[`${appId}/${repo}`] ?? [];
   }
 
-  /** connectedApps lists only apps with at least one installation. */
   function connectedApps(): GitHubApp[] {
     return apps.value.filter((item) => item.connected);
   }
 
-  /** disconnect deletes the stored credentials of one app. */
   async function disconnect(appId: string): Promise<number> {
     const result = await disconnectGitHubApp(appId);
     apps.value = apps.value.filter((item) => item.id !== appId);
@@ -116,10 +101,6 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     return result.applications_using;
   }
 
-  /**
-   * clearErrors drops the retained failure banners and their raw errors, so
-   * a later language change cannot resurrect a stale banner.
-   */
   function clearErrors(): void {
     error.value = null;
     reposError.value = null;
@@ -127,10 +108,6 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     reposErrorRaw.value = null;
   }
 
-  /**
-   * reset drops the cached apps and repos, so the next sign-in never sees
-   * the previous account's data. Called on sign-out (see the auth store).
-   */
   function reset(): void {
     apps.value = [];
     reposByApp.value = {};

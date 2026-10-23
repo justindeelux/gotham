@@ -1,7 +1,3 @@
-// Files browser tabs (JUS-123): each tab keeps its own root, path, listing,
-// selection, sort/filter and scroll offset; the clipboard is shared across tabs
-// (cut in one tab, paste in another); switching node resets to a single default
-// tab. The API module is mocked so the store is exercised without axios.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,7 +32,6 @@ const compose: FilesRoot = {
   free_bytes: 0,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -48,7 +43,6 @@ function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   };
 }
 
-/** listingFor returns one distinguishable row per (root, path) directory. */
 function listingFor(root: string, path: string) {
   return {
     entries: [entry({ name: `${root}:${path === "" ? "/" : path}` })],
@@ -57,7 +51,6 @@ function listingFor(root: string, path: string) {
   };
 }
 
-/** deferred returns a promise with its resolve exposed, for race tests. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -94,7 +87,6 @@ describe("files browser deep links", () => {
     await store.init("server-1");
     const previousId = store.tabs[0].id;
 
-    // The deep link opens its own tab and leaves the open one untouched.
     await store.openAt("volumes", "app-1/data");
     expect(store.tabs).toHaveLength(2);
     expect(store.tabs[0].id).toBe(previousId);
@@ -106,8 +98,6 @@ describe("files browser deep links", () => {
     await store.openTab({ root: "compose" });
     expect(store.tabs).toHaveLength(3);
 
-    // Re-opening the same link focuses the existing tab instead of stacking
-    // another one.
     await store.openAt("volumes", "app-1/data");
     expect(store.tabs).toHaveLength(3);
     expect(store.activeTabId).toBe(linkedId);
@@ -147,21 +137,18 @@ describe("files browser tabs", () => {
     const store = useFilesStore();
     await store.init("server-1");
 
-    // Tab A: descend, sort, select and scroll.
     await store.openDirectory("data");
     store.setSort("size");
     store.toggleSelection(store.entries[0].name);
     store.setScrollTop(120);
     const tabA = store.activeTabId;
 
-    // Tab B: a fresh root-level tab with its own root and filter.
     await store.openTab();
     expect(store.path).toBe("");
     store.setQuery("volumes");
     await store.setRoot("compose");
     expect(store.rootName).toBe("compose");
 
-    // Back to A: every bit of its state is intact.
     await store.switchTab(tabA);
     expect(store.path).toBe("data");
     expect(store.rootName).toBe("volumes");
@@ -176,17 +163,14 @@ describe("files browser tabs", () => {
     const store = useFilesStore();
     await store.init("server-1");
 
-    // Tab A filters to "app" (JUS-141: a tab switch is not a filter reset).
     store.setQuery("app");
     const tabA = store.activeTabId;
 
-    // Tab B carries its own needle.
     await store.openTab();
     const tabB = store.activeTabId;
     store.setQuery("data");
     expect(store.query).toBe("data");
 
-    // Switching back and forth restores each tab's own filter.
     await store.switchTab(tabA);
     expect(store.query).toBe("app");
     await store.switchTab(tabB);
@@ -204,7 +188,6 @@ describe("files browser tabs", () => {
     expect(store.tabs).toHaveLength(1);
     expect(store.activeTabId).toBe(a.id);
 
-    // Closing the last tab leaves a single default tab, never an empty browser.
     await store.closeTab(a.id);
     expect(store.tabs).toHaveLength(1);
     expect(store.activeTabId).toBe(store.tabs[0].id);
@@ -233,13 +216,11 @@ describe("files browser tabs", () => {
     await store.openTab();
     const tabB = store.activeTabId;
 
-    // Cut in A.
     await store.switchTab(tabA);
     const name = store.entries[0].name;
     store.cutSelection([name]);
     expect(store.clipboardMode).toBe("cut");
 
-    // The clipboard survives the switch and lands in B's directory.
     await store.switchTab(tabB);
     expect(store.hasClipboard).toBe(true);
     expect(store.pasteProblem).toBeNull();
@@ -251,7 +232,6 @@ describe("files browser tabs", () => {
       destination: name,
       overwrite: false,
     });
-    // A completed cut clears the clipboard for the moved name.
     expect(store.hasClipboard).toBe(false);
   });
 
@@ -277,8 +257,8 @@ describe("files browser tab races", () => {
     const slow = deferred<FilesRoot[]>();
     vi.mocked(listRoots)
       .mockReset()
-      .mockReturnValueOnce(slow.promise) // node-1 roots arrive late
-      .mockResolvedValue([compose]); // node-2 (and later) arrive first
+      .mockReturnValueOnce(slow.promise)
+      .mockResolvedValue([compose]);
     vi.mocked(listEntries).mockResolvedValue({
       entries: [],
       truncated: false,
@@ -290,8 +270,6 @@ describe("files browser tab races", () => {
     expect(store.serverId).toBe("server-2");
     expect(store.roots.map((root) => root.name)).toEqual(["compose"]);
 
-    // The node-1 response lands after the switch and must NOT replace the shared
-    // roots of the node now on screen (regression vs the pre-tab store).
     slow.resolve([volumes]);
     await first;
     expect(store.roots.map((root) => root.name)).toEqual(["compose"]);
@@ -305,7 +283,7 @@ describe("files browser tab races", () => {
     vi.mocked(listEntries).mockReturnValueOnce(slow.promise);
     const inflight = store.openDirectory("data");
 
-    await store.reload(); // resetBrowser bumps the discarded tab's generation
+    await store.reload();
     slow.resolve({
       entries: [entry({ name: "late.txt" })],
       truncated: false,
@@ -326,7 +304,7 @@ describe("files browser tab races", () => {
 
     const slow = deferred<Listing>();
     vi.mocked(listEntries).mockReturnValueOnce(slow.promise);
-    const inflight = store.openDirectory("data"); // in B
+    const inflight = store.openDirectory("data");
     expect(store.path).toBe("data");
 
     await store.switchTab(a.id);
@@ -337,7 +315,6 @@ describe("files browser tab races", () => {
     });
     await inflight;
 
-    // The landed listing belongs to B; the tab switched to is untouched.
     expect(store.activeTabId).toBe(a.id);
     expect(store.entries.map((item) => item.name)).toEqual(["volumes:/"]);
     expect(b.path).toBe("data");
@@ -352,7 +329,7 @@ describe("files browser tab races", () => {
 
     const slow = deferred<Listing>();
     vi.mocked(listEntries).mockReturnValueOnce(slow.promise);
-    const inflight = store.openDirectory("data"); // in B
+    const inflight = store.openDirectory("data");
 
     await store.closeTab(b.id);
     expect(store.activeTabId).toBe(a.id);
@@ -362,7 +339,7 @@ describe("files browser tab races", () => {
       truncated: false,
       cursor: "",
     });
-    await inflight; // must neither throw nor touch tab A
+    await inflight;
 
     expect(store.tabs).toHaveLength(1);
     expect(store.entries.map((item) => item.name)).toEqual(["volumes:/"]);
@@ -433,7 +410,6 @@ describe("files browser tab races", () => {
     expect(store.conflictPrompt?.tabId).toBe(tabA);
     expect(store.conflictPrompt?.root).toBe("volumes");
 
-    // Switch tabs, then resolve: the retry must still target tab A's directory.
     await store.openTab();
     expect(store.path).toBe("");
     const summary = await store.resolveConflictPrompt(true);
@@ -465,8 +441,6 @@ describe("files browser tab races", () => {
     vi.mocked(listEntries).mockClear();
     await store.paste();
 
-    // Both the destination tab (B, root "") and the source tab (A, "data") were
-    // reloaded, so neither keeps a stale listing after the move.
     const paths = vi
       .mocked(listEntries)
       .mock.calls.map(([, , options]) => options.path);

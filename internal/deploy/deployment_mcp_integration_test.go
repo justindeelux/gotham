@@ -18,7 +18,6 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Exercise S4 persistence and boot recovery through the actual MCP and REST surfaces.
 func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
 	st, user, team, env, node := replayDeployFixture(t)
 	ctx := context.Background()
@@ -29,7 +28,6 @@ func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
 	}
 	svc := NewService(Config{Store: st, Secret: testSecretKey, Logger: discardLogger()})
 	t.Cleanup(func() { _ = svc.Close() })
-	// Deterministic postcommit queue rejection produces a receipt-only acceptance.
 	svc.startOnce.Do(func() {})
 	svc.queue = make(chan job)
 	svc.baseCancel()
@@ -49,7 +47,6 @@ func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
 		api.With(auth).Get("/v1/mcp/context", func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = fmt.Fprintf(w, `{"team_id":%q,"capabilities":["context","strict_reads","strict_mutations","request_replay"]}`, team.String())
 		})
-		// Dereference svc per request to model a fresh control-plane process below.
 		api.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			routes := chi.NewRouter()
 			Mount(routes, auth, func(context.Context) (uuid.UUID, bool) { return user, true }, svc)
@@ -154,7 +151,6 @@ func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
 	if err != nil || !mismatched.IsError {
 		t.Fatalf("mismatched app/release visible: %+v %v", mismatched, err)
 	}
-	// Moving the application invalidates reads and replay in the original team's context.
 	otherTeam, otherEnv, _ := seedProjectEnvironment(t, ctx, st)
 	if otherTeam == team {
 		t.Fatal("fixture teams not distinct")

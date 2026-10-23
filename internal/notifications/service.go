@@ -19,72 +19,37 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// Service tunables. The queue is bounded on purpose: a stalled endpoint must
-// never grow the deploy/backup path's memory, so a full queue drops events
-// with a log line instead of blocking.
 const (
-	defaultWorkers   = 4
-	defaultQueueSize = 64
-	// defaultSendTimeout bounds one channel delivery.
-	defaultSendTimeout = 10 * time.Second
-	// dispatchReadTimeout bounds the channel lookup of one dispatched event.
-	dispatchReadTimeout = 5 * time.Second
-	// deliveryRecordTimeout bounds the history write of one attempt, so a slow
-	// database never holds a worker or a request.
+	defaultWorkers        = 4
+	defaultQueueSize      = 64
+	defaultSendTimeout    = 10 * time.Second
+	dispatchReadTimeout   = 5 * time.Second
 	deliveryRecordTimeout = 5 * time.Second
 )
 
-// NotificationService is the control-plane surface the HTTP layer depends on.
-// It is implemented by Service and by fakes in the route tests.
 type NotificationService interface {
-	// ListChannels returns the active team's channels, oldest first.
 	ListChannels(ctx context.Context, userID uuid.UUID) ([]ChannelView, error)
-	// GetChannel returns one channel of the active team (404 for others).
 	GetChannel(ctx context.Context, userID, channelID uuid.UUID) (ChannelView, error)
-	// CreateChannel validates, seals and stores a channel (owner/admin).
 	CreateChannel(ctx context.Context, userID uuid.UUID, req ChannelRequest) (ChannelView, error)
-	// UpdateChannel applies a partial update to a channel (owner/admin).
 	UpdateChannel(ctx context.Context, userID, channelID uuid.UUID, req ChannelRequest) (ChannelView, error)
-	// DeleteChannel removes a channel (owner/admin).
 	DeleteChannel(ctx context.Context, userID, channelID uuid.UUID) error
-	// TestChannel sends a synthetic deploy-success event to one channel and
-	// reports the delivery result without exposing any secret.
 	TestChannel(ctx context.Context, userID, channelID uuid.UUID) (TestResult, error)
-	// ListDeliveries returns one channel's newest delivery attempts, newest
-	// first (404 for another team's channel).
 	ListDeliveries(ctx context.Context, userID, channelID uuid.UUID) ([]DeliveryView, error)
 }
 
-// Config wires a Service. Store (or an explicit Repository) is required for
-// anything beyond tests; Secret is the key providers.SealSecret seals the
-// channel configs with. Mailer, HTTPClient and the worker tunables fall back
-// to their production defaults.
 type Config struct {
-	// Store is the PostgreSQL-backed repository. Ignored when Repository is
-	// set.
-	Store *store.Store
-	// Repository overrides Store (tests).
-	Repository Repository
-	// Secret is the deployment secret (GOTHAM_SECRET_KEY).
-	Secret string
-	// Logger defaults to slog.Default.
-	Logger *slog.Logger
-	// Mailer delivers email notifications; nil selects the net/smtp
-	// implementation.
-	Mailer Mailer
-	// HTTPClient delivers webhook and Telegram notifications; nil selects an
-	// http.Client bounded by SendTimeout.
-	HTTPClient *http.Client
-	// Workers is the delivery pool size, QueueSize the event buffer.
-	Workers   int
-	QueueSize int
-	// SendTimeout bounds one delivery.
+	Store       *store.Store
+	Repository  Repository
+	Secret      string
+	Logger      *slog.Logger
+	Mailer      Mailer
+	HTTPClient  *http.Client
+	Workers     int
+	QueueSize   int
 	SendTimeout time.Duration
-	// Now overrides the clock (tests).
-	Now func() time.Time
+	Now         func() time.Time
 }
 
-// repository resolves the configured repository implementation.
 func (c Config) repository() Repository {
 	if c.Repository != nil {
 		return c.Repository
@@ -95,9 +60,6 @@ func (c Config) repository() Repository {
 	return nil
 }
 
-// Service is the notifications domain service: it owns channel lifecycle and
-// the asynchronous delivery of deploy/backup events. It is safe for
-// concurrent use.
 type Service struct {
 	repo        Repository
 	secret      string
@@ -108,8 +70,6 @@ type Service struct {
 	sendTimeout time.Duration
 	now         func() time.Time
 
-	// factory builds the notifier of one channel. It is a field so tests can
-	// inject a fake without a network.
 	factory func(Channel) (Notifier, error)
 
 	baseCtx    context.Context
@@ -120,16 +80,12 @@ type Service struct {
 	closeOnce  sync.Once
 }
 
-// Compile-time guarantee that Service satisfies the route-level contract and
-// both domain hooks.
 var (
 	_ NotificationService      = (*Service)(nil)
 	_ deploy.Notifier          = (*Service)(nil)
 	_ databases.BackupNotifier = (*Service)(nil)
 )
 
-// NewService builds a Service from cfg. Construction starts no goroutines; the
-// worker pool boots on the first dispatched event.
 func NewService(cfg Config) *Service {
 	logger := cfg.Logger
 	if logger == nil {
@@ -161,8 +117,6 @@ func NewService(cfg Config) *Service {
 	}
 	secret := strings.TrimSpace(cfg.Secret)
 	if secret == "" {
-		// Mirror providers/servers: never seal under SHA-256(""). The cost is
-		// that stored configs do not survive a restart.
 		secret = randomSecret()
 		logger.Warn("notifications: GOTHAM_SECRET_KEY is empty; channel configs are sealed with an ephemeral key and will not survive a restart")
 	}
@@ -185,23 +139,14 @@ func NewService(cfg Config) *Service {
 	return service
 }
 
-// randomSecret returns a base64-encoded 32-byte random secret, the
-// GOTHAM_SECRET_KEY fallback for a deployment that configured none.
 func randomSecret() string {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		// crypto/rand.Read only fails on a broken system RNG; there is no
-		// safe fallback for key material.
 		panic(fmt.Sprintf("notifications: generate secret: %v", err))
 	}
 	return base64.StdEncoding.EncodeToString(buf)
 }
 
-// NewDefaultService builds the production service for the HTTP wiring and
-// primes its worker pool, so the server lifecycle owns start and close. It
-// returns nil (a nil NotificationService) when there is no database or
-// FEATURE_NOTIFICATIONS=false, so callers can pass its result to Mount
-// unconditionally and leave both domain hooks unwired.
 func NewDefaultService(cfg Config) NotificationService {
 	if cfg.repository() == nil || !Enabled() {
 		return nil
@@ -211,9 +156,6 @@ func NewDefaultService(cfg Config) NotificationService {
 	return service
 }
 
-// Start boots the delivery worker pool. It is idempotent: the server calls it
-// at wiring time and Dispatch starts the pool on first use for callers that
-// never do (tests).
 func (s *Service) Start() {
 	if s == nil {
 		return
@@ -221,9 +163,6 @@ func (s *Service) Start() {
 	s.start()
 }
 
-// Close stops the worker pool, abandoning queued events and letting in-flight
-// deliveries finish. It is idempotent and safe on a service that never
-// dispatched an event.
 func (s *Service) Close() error {
 	if s == nil {
 		return nil
@@ -235,8 +174,6 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// ready reports a service built without its repository, so the CRUD surface
-// fails with a clear error instead of panicking.
 func (s *Service) ready() error {
 	if s == nil || s.repo == nil {
 		return errNotReady
@@ -244,9 +181,6 @@ func (s *Service) ready() error {
 	return nil
 }
 
-// teamIDFor resolves the team a channel call operates in: the request's active
-// team, or the caller's personal team when no team context is present (the
-// pre-teams path), matching every other resource surface.
 func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
 	scope := teams.ScopeFor(ctx, userID)
 	if scope.Active() {
@@ -255,9 +189,6 @@ func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
 	return teams.PersonalTeamID(userID)
 }
 
-// authorizeWrite enforces the caller's team role: a read_only member can read
-// but never create, update, delete or test a channel. Without a team context
-// (non-HTTP callers, tests) the pre-teams behavior applies.
 func authorizeWrite(ctx context.Context, userID uuid.UUID) error {
 	if !teams.ScopeFor(ctx, userID).CanWrite() {
 		return ErrForbidden
@@ -265,7 +196,6 @@ func authorizeWrite(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-// view opens a stored channel into its redacted read representation.
 func (s *Service) view(channel Channel) (ChannelView, error) {
 	config, err := openConfig(s.secret, channel.SealedConfig)
 	if err != nil {
@@ -287,7 +217,6 @@ func (s *Service) view(channel Channel) (ChannelView, error) {
 	}, nil
 }
 
-// resourceIDString renders a resource id for the wire, empty when unset.
 func resourceIDString(id uuid.UUID) string {
 	if id == uuid.Nil {
 		return ""
@@ -295,7 +224,6 @@ func resourceIDString(id uuid.UUID) string {
 	return id.String()
 }
 
-// ListChannels implements NotificationService.
 func (s *Service) ListChannels(ctx context.Context, userID uuid.UUID) ([]ChannelView, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -318,7 +246,6 @@ func (s *Service) ListChannels(ctx context.Context, userID uuid.UUID) ([]Channel
 	return views, nil
 }
 
-// GetChannel implements NotificationService.
 func (s *Service) GetChannel(ctx context.Context, userID, channelID uuid.UUID) (ChannelView, error) {
 	if err := s.ready(); err != nil {
 		return ChannelView{}, err
@@ -333,8 +260,6 @@ func (s *Service) GetChannel(ctx context.Context, userID, channelID uuid.UUID) (
 	return s.view(channel)
 }
 
-// CreateChannel implements NotificationService: it validates the request,
-// seals the config and stores the row.
 func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req ChannelRequest) (ChannelView, error) {
 	if err := s.ready(); err != nil {
 		return ChannelView{}, err
@@ -407,9 +332,6 @@ func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req Chann
 	return s.view(created)
 }
 
-// UpdateChannel implements NotificationService: zero fields leave the stored
-// value unchanged; secrets are only replaced when the request carries new
-// ones. The channel kind is immutable.
 func (s *Service) UpdateChannel(ctx context.Context, userID, channelID uuid.UUID, req ChannelRequest) (ChannelView, error) {
 	if err := s.ready(); err != nil {
 		return ChannelView{}, err
@@ -474,9 +396,6 @@ func (s *Service) UpdateChannel(ctx context.Context, userID, channelID uuid.UUID
 	return s.view(updated)
 }
 
-// applyResourceUpdate resolves the tri-state resource pair of a PATCH: absent
-// leaves the override alone, an empty pair clears it, and a named pair sets
-// it. Naming only one half is rejected.
 func applyResourceUpdate(channel *Channel, resourceType, resourceID *string) error {
 	if (resourceType == nil) != (resourceID == nil) {
 		return fmt.Errorf("%w: resource_type and resource_id must be provided together", ErrValidation)
@@ -492,7 +411,6 @@ func applyResourceUpdate(channel *Channel, resourceType, resourceID *string) err
 	return nil
 }
 
-// DeleteChannel implements NotificationService.
 func (s *Service) DeleteChannel(ctx context.Context, userID, channelID uuid.UUID) error {
 	if err := s.ready(); err != nil {
 		return err
@@ -506,10 +424,6 @@ func (s *Service) DeleteChannel(ctx context.Context, userID, channelID uuid.UUID
 	return s.repo.DeleteChannel(ctx, teamIDFor(ctx, userID), channelID)
 }
 
-// TestChannel implements NotificationService: it delivers a synthetic
-// deploy-success event to the one channel and reports what happened. The
-// delivery is synchronous so the operator sees the result immediately, and
-// the answer never carries a secret.
 func (s *Service) TestChannel(ctx context.Context, userID, channelID uuid.UUID) (TestResult, error) {
 	if err := s.ready(); err != nil {
 		return TestResult{}, err
@@ -548,9 +462,6 @@ func (s *Service) TestChannel(ctx context.Context, userID, channelID uuid.UUID) 
 	return TestResult{OK: true, Message: "test event delivered"}, nil
 }
 
-// ListDeliveries implements NotificationService: the newest delivery attempts
-// of one channel, newest first. It is a read, so it needs no write role; a
-// channel of another team is a 404, exactly like a missing one.
 func (s *Service) ListDeliveries(ctx context.Context, userID, channelID uuid.UUID) ([]DeliveryView, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -573,16 +484,10 @@ func (s *Service) ListDeliveries(ctx context.Context, userID, channelID uuid.UUI
 	return views, nil
 }
 
-// recordDelivery persists one attempt, trimming the channel's history to the
-// retention cap. A write failure is logged, never surfaced: history is
-// diagnostic and must never change the delivery outcome or the answer an
-// operator sees.
 func (s *Service) recordDelivery(ctx context.Context, channelID uuid.UUID, eventType string, status DeliveryStatus, errorSummary string) {
 	if s == nil || s.repo == nil || channelID == uuid.Nil {
 		return
 	}
-	// Detached from the caller's cancellation so a response that is already
-	// being written cannot abort the record.
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deliveryRecordTimeout)
 	defer cancel()
 	if err := s.repo.CreateDelivery(writeCtx, Delivery{
@@ -598,8 +503,6 @@ func (s *Service) recordDelivery(ctx context.Context, channelID uuid.UUID, event
 	}
 }
 
-// DeployFinished implements deploy.Notifier: one terminal deployment result,
-// queued for asynchronous delivery. It never blocks the deploy path.
 func (s *Service) DeployFinished(_ context.Context, result deploy.DeployResult) {
 	if s == nil || !Enabled() {
 		return
@@ -621,8 +524,6 @@ func (s *Service) DeployFinished(_ context.Context, result deploy.DeployResult) 
 	})
 }
 
-// BackupFinished implements databases.BackupNotifier: one terminal backup
-// result, queued for asynchronous delivery.
 func (s *Service) BackupFinished(_ context.Context, result databases.BackupResult) {
 	if s == nil || !Enabled() {
 		return
@@ -643,9 +544,6 @@ func (s *Service) BackupFinished(_ context.Context, result databases.BackupResul
 	})
 }
 
-// Dispatch queues one event for asynchronous delivery. It never blocks: the
-// channel lookup and every send run on the worker pool, and a full queue drops
-// the event with a log line instead of stalling the caller.
 func (s *Service) Dispatch(event Event) {
 	if s == nil || s.repo == nil || !Enabled() {
 		return
@@ -665,7 +563,6 @@ func (s *Service) Dispatch(event Event) {
 	}
 }
 
-// start boots the worker pool exactly once.
 func (s *Service) start() {
 	s.startOnce.Do(func() {
 		for i := 0; i < s.workers; i++ {
@@ -675,7 +572,6 @@ func (s *Service) start() {
 	})
 }
 
-// worker consumes queued events until the service closes.
 func (s *Service) worker() {
 	defer s.wg.Done()
 	for {
@@ -688,8 +584,6 @@ func (s *Service) worker() {
 	}
 }
 
-// deliver resolves the channels one event covers and sends to each. Failures
-// are isolated: a broken channel is logged and never stops the others.
 func (s *Service) deliver(event Event) {
 	readCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
 	channels, err := s.repo.ListChannelsForEvent(readCtx, event.TeamID, event.ResourceType, event.ResourceID)
@@ -714,8 +608,6 @@ func (s *Service) deliver(event Event) {
 	}
 }
 
-// send builds the channel's notifier and delivers the event under its own
-// timeout.
 func (s *Service) send(channel Channel, event Event) {
 	notifier, err := s.factory(channel)
 	if err != nil {
@@ -723,8 +615,6 @@ func (s *Service) send(channel Channel, event Event) {
 			"channel_id", channel.ID.String(), "kind", string(channel.Kind), "error", err)
 		return
 	}
-	// Detached from the base context so a shutdown does not cut an in-flight
-	// delivery short with a spurious cancellation; the timeout still bounds it.
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(s.baseCtx), s.sendTimeout)
 	defer cancel()
 	if err := notifier.Notify(sendCtx, event); err != nil {
@@ -739,8 +629,6 @@ func (s *Service) send(channel Channel, event Event) {
 	s.recordDelivery(s.baseCtx, channel.ID, string(event.Key()), DeliverySucceeded, "")
 }
 
-// notifierFor builds the transport notifier of one stored channel, opening
-// its sealed config.
 func (s *Service) notifierFor(channel Channel) (Notifier, error) {
 	config, err := openConfig(s.secret, channel.SealedConfig)
 	if err != nil {

@@ -13,7 +13,6 @@ import { formatBytes } from "@/shared/utils/format";
 
 interface Props {
   show: boolean;
-  /** Files dropped onto the browser, queued as soon as the dialog opens. */
   initialFiles: File[];
 }
 
@@ -31,8 +30,6 @@ const upload = useFileUpload();
 const dragging = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-/** target is the directory the queue uploads into, frozen when the dialog
- *  opens, so a tab switch behind the modal cannot retarget the batch. */
 const target = ref({
   serverId: "",
   teamId: "",
@@ -59,7 +56,6 @@ watch(
   },
 );
 
-/** picked queues the files a user chose through the native picker. */
 function picked(event: Event): void {
   const input = event.target as HTMLInputElement;
   if (input.files) {
@@ -68,7 +64,6 @@ function picked(event: Event): void {
   input.value = "";
 }
 
-/** dropped queues files dropped on the drop zone (folders are rejected). */
 function dropped(event: DragEvent): void {
   dragging.value = false;
   if (!isFileDrag(event.dataTransfer?.types)) {
@@ -83,7 +78,6 @@ function dropped(event: DragEvent): void {
   }
 }
 
-/** close ends the batch, refreshing the directory it landed in. */
 function close(): void {
   if (upload.summary.value.done > 0) {
     void files.refreshDirectory(target.value.root, target.value.path);
@@ -91,7 +85,6 @@ function close(): void {
   emit("update:show", false);
 }
 
-/** start sends the queued files. */
 async function start(): Promise<void> {
   await upload.start(target.value);
   if (upload.summary.value.done > 0) {
@@ -99,7 +92,6 @@ async function start(): Promise<void> {
   }
 }
 
-/** percent reads one item's progress as 0–100. */
 function percent(item: UploadItem): number {
   if (item.status === "done") {
     return 100;
@@ -110,7 +102,6 @@ function percent(item: UploadItem): number {
   return Math.min(99, Math.round((item.loaded / item.total) * 100));
 }
 
-/** statusType maps an item's state onto an NProgress status. */
 function statusType(item: UploadItem): "default" | "success" | "error" | "warning" {
   if (item.status === "done") {
     return "success";
@@ -124,7 +115,6 @@ function statusType(item: UploadItem): "default" | "success" | "error" | "warnin
   return "default";
 }
 
-/** statusLabel renders one item's state. */
 function statusLabel(item: UploadItem): string {
   switch (item.status) {
     case "queued":

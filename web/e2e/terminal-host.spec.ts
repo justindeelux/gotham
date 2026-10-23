@@ -23,30 +23,9 @@ import {
 } from "./terminal-support";
 import type { SocketLog } from "./terminal-support";
 
-/**
- * JUS-251 host-terminal journeys against the REAL stack.
- *
- * The control plane is the embedded `gotham serve` the UI E2E workflow
- * started; the node is a real `gotham-agent` built from this repository and
- * registered to it; every shell below is a real PTY. The suite asserts what a
- * fake cannot: the exact create payload, session-creation counts, the create
- * response's session id against the WebSocket session id, real binary frames
- * (initial resize, zero banner input), real UTF-8 round-trips, and the real
- * process/fd cleanup on close.
- *
- * Tests skip with an explicit reason when this environment has no registered
- * node or the signed-in account is not a platform operator. The UI E2E
- * workflow provisions both, so CI always runs them.
- */
-
-// A viewport tall enough for the full 19-line logo AND for two banners to fit
-// on screen at once: the duplicate-banner regression (6b) then shows two title
-// rows instead of pushing the first copy out of the viewport. The compact form
-// below the minimum rows is by design; this suite pins the full form.
 test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 1200 } });
 
 const account = loadAccount();
-/** fresh is this file's own sign-in (see loginFresh). */
 let fresh: Awaited<ReturnType<typeof loginFresh>>;
 
 test.beforeAll(async ({ request }) => {
@@ -57,7 +36,6 @@ test.beforeEach(async ({ page }) => {
   await installSession(page, fresh);
 });
 
-/** requireTerminalNode skips when the real node is unavailable. */
 async function requireTerminalNode(request: Parameters<typeof terminalServer>[0]) {
   skipOrFail(
     !(await isPlatformAdmin(request, account)),
@@ -73,7 +51,6 @@ async function requireTerminalNode(request: Parameters<typeof terminalServer>[0]
   return server!;
 }
 
-/** openServerPage opens /terminal from the main menu and picks the test node. */
 async function openServerPage(page: import("@playwright/test").Page, name: string) {
   await page.goto("/dashboard");
   await page.locator("#app-nav").getByRole("link", { name: "Terminal" }).click();
@@ -84,13 +61,11 @@ async function openServerPage(page: import("@playwright/test").Page, name: strin
   await pickServer(page, name);
 }
 
-/** openQuickCommands opens the JUS-264 manager modal from the meta bar. */
 async function openQuickCommands(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Quick commands" }).click();
   await expect(page.locator(".term-quick-commands")).toBeVisible();
 }
 
-/** addQuickCommand fills the modal's add form and saves one command. */
 async function addQuickCommand(
   page: import("@playwright/test").Page,
   command: { label: string; command: string; abbreviation: string },
@@ -104,7 +79,6 @@ async function addQuickCommand(
   await expect(dialog.locator(".term-quick-commands-item")).toContainText(command.label);
 }
 
-/** inputFrames returns the client input frames of one terminal socket. */
 function inputFrames(socket: SocketLog): string[] {
   return socket.frames.filter((frame) => frame.opcode === 0x01).map((frame) => frame.text);
 }
@@ -121,8 +95,6 @@ test.describe("host terminal on the real stack", () => {
     await expect(
       page.getByRole("heading", { name: "Terminal", level: 1 }),
     ).toBeVisible();
-    // The server picker is lazy: loading the page (and its server list) must
-    // not create a session or open a socket.
     await page.waitForTimeout(1_000);
     expect(traffic.createCount()).toBe(0);
     expect(traffic.sockets).toHaveLength(0);
@@ -132,23 +104,17 @@ test.describe("host terminal on the real stack", () => {
 
     expect(create.status).toBe(201);
     expect(create.url).toContain(`/api/v1/servers/${server.id}/terminal/sessions`);
-    // JUS-253: a page host shell has no file root and no cwd. Sending empty
-    // root/cwd (or requiring them) was the regression the browser proof found.
     expect(create.body).toMatchObject({ target: "host" });
     expect(create.body).not.toHaveProperty("root");
     expect(create.body).not.toHaveProperty("cwd");
     expect(typeof create.body?.cols).toBe("number");
     expect(typeof create.body?.rows).toBe("number");
 
-    // Wait for the prompt and a quiet buffer before counting: a banner written
-    // on every output frame (mutation 6b) adds a second copy after the prompt.
     await expect
       .poll(async () => /[@#]/.test(await screenText(page)))
       .toBe(true);
     const text = await expectBanner(page, server.name);
     expect(text).toContain("server: " + server.name);
-    // Exactly one banner: both the title row and the first logo row appear
-    // once in the settled screen (a tall viewport keeps two copies visible).
     expect(countOccurrences(text, "server: " + server.name)).toBe(1);
     const firstLogoRow = terminalLogoLines()[0]!.trimEnd();
     expect(countOccurrences(text, firstLogoRow)).toBe(1);
@@ -159,7 +125,6 @@ test.describe("host terminal on the real stack", () => {
     expect(socket.sessionId).not.toBe("");
     expect(socket.sessionId).toBe(create.sessionId);
     expect(socket.url).toContain(`/terminal/sessions/${create.sessionId}/ws`);
-    // The banner is DISPLAY output; it never reaches the PTY.
     expect(traffic.inputFrames()).toBe(0);
     expect(lastResize(socket)).not.toBeNull();
   });
@@ -186,7 +151,6 @@ test.describe("host terminal on the real stack", () => {
     await page.getByRole("button", { name: "Open in window" }).first().click();
     await expect(page.locator(".term-window")).toBeVisible();
 
-    // One-way transfer: no second create, no reconnect, same buffer.
     expect(traffic.createCount()).toBe(1);
     expect(traffic.sockets).toHaveLength(1);
     expect(traffic.currentSocket()).toBe(socket);
@@ -195,7 +159,6 @@ test.describe("host terminal on the real stack", () => {
       .poll(() => screenText(page, ".term-window").then((text) => text.includes(marker)))
       .toBe(true);
 
-    // Minimize keeps the live shell and puts it on the rail.
     await page.getByRole("button", { name: "Minimize terminal window" }).click();
     await expect(page.locator(".term-window")).not.toBeVisible();
     expect(socket.closed).toBe(false);
@@ -208,7 +171,6 @@ test.describe("host terminal on the real stack", () => {
       .poll(() => screenText(page, ".term-window").then((text) => text.includes(marker)))
       .toBe(true);
 
-    // Cancel keeps the session, its socket and the window.
     await page.getByRole("button", { name: "Close terminal window" }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
@@ -219,8 +181,6 @@ test.describe("host terminal on the real stack", () => {
     expect(socket.closed).toBe(false);
     expect(traffic.deletes).toHaveLength(0);
 
-    // Confirm ends it: the socket closes (close frame or transport close) and
-    // the control plane deletes exactly that session.
     await page.getByRole("button", { name: "Close terminal window" }).click();
     await page
       .getByRole("dialog")
@@ -258,17 +218,12 @@ test.describe("host terminal on the real stack", () => {
     await trigger.click();
     const light = page.getByRole("radio", { name: "Gotham Light" });
     await expect(light).toBeVisible();
-    // Exercise every documented menu key path while the popover is open. None
-    // of ArrowDown/Space/Enter/Tab/a printable character may reach the PTY,
-    // and Escape must close the menu and return focus to the trigger.
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Space");
     await page.keyboard.press("Enter");
     await page.keyboard.type("x");
     await page.keyboard.press("Escape");
     await expect(trigger).toBeFocused();
-    // Re-open and exercise Tab while the menu owns focus too; the key must not
-    // reach the PTY even when focus leaves the radio group.
     await trigger.click();
     await expect(page.getByRole("radio", { name: "Gotham Light" })).toBeVisible();
     await page.keyboard.press("Tab");
@@ -279,14 +234,10 @@ test.describe("host terminal on the real stack", () => {
         page.locator(".term-window [data-theme]").first().getAttribute("data-theme"),
       )
       .not.toBe(beforeTheme);
-    // Choosing a theme is pure rendering: no keystroke reaches the PTY and no
-    // session is created or replaced.
     expect(traffic.inputFrames()).toBe(beforeInput);
     expect(traffic.createCount()).toBe(1);
     expect(traffic.currentSocket()).toBe(socket);
     expect(socket.closed).toBe(false);
-    // The key sequence never typed into the shell (zero input frames) and the
-    // trigger owned focus again after Escape.
     expect(traffic.inputFrames()).toBe(beforeInput);
   });
 
@@ -306,8 +257,6 @@ test.describe("host terminal on the real stack", () => {
       .poll(async () => (await screenText(page)).includes("@"))
       .toBe(true);
 
-    // BMP characters typed as real CDP key events (xterm ignores synthetic
-    // insertText), then the astral emoji through a real paste event.
     await runCommand(context, page, "echo TYPED-é✓ñ-$((6*7))");
     await expect
       .poll(async () => (await screenText(page)).includes("TYPED-é✓ñ-42"))
@@ -320,7 +269,6 @@ test.describe("host terminal on the real stack", () => {
       .poll(async () => (await screenText(page)).includes("PASTED-🚀-42"))
       .toBe(true);
 
-    // A viewport change must fit the PTY and the shell must agree.
     const before = lastResize(traffic.currentSocket());
     await page.setViewportSize({ width: 1100, height: 700 });
     await expect
@@ -342,7 +290,6 @@ test.describe("host terminal on the real stack", () => {
     ]);
     expect(sizes).toContainEqual([expected![1], expected![0]]);
 
-    // Ctrl-C interrupts a foreground sleep without ending the shell.
     await runCommand(context, page, "sleep 30");
     await page.locator(".xterm-helper-textarea").first().focus();
     await page.keyboard.press("Control+c");
@@ -351,7 +298,6 @@ test.describe("host terminal on the real stack", () => {
       .poll(async () => (await screenText(page)).includes("AFTER-2"))
       .toBe(true);
 
-    // An explicit shell exit ends the session with the exited overlay.
     await runCommand(context, page, "exit");
     await expect(page.getByText("Session ended")).toBeVisible();
   });
@@ -368,7 +314,6 @@ test.describe("host terminal on the real stack", () => {
     await waitForCreate(traffic);
     await expectBanner(page, server.name);
 
-    // JUS-264: the button opens one bounded dialog, not a floating popover.
     await openQuickCommands(page);
     const dialog = page.locator(".term-quick-commands");
     await expect(dialog).toBeVisible();
@@ -383,9 +328,6 @@ test.describe("host terminal on the real stack", () => {
     await expect(dialog).toContainText("docker-compose up -d --build");
     await expect(dialog.locator(".term-quick-commands-item .n-tag")).toContainText("dcup");
 
-    // JUS-267: Add swaps the list for the editor (never appends it below the
-    // list) and the footer keeps a visible action, so the click can never look
-    // dead; Cancel returns to the list with Add visible again.
     await dialog.getByRole("button", { name: "Add command" }).click();
     await expect(dialog.locator(".term-quick-commands-form")).toBeVisible();
     await expect(dialog.locator(".term-quick-commands-list")).toHaveCount(0);
@@ -399,7 +341,6 @@ test.describe("host terminal on the real stack", () => {
     await expect(
       dialog.getByRole("button", { name: "Add command" }),
     ).toBeVisible();
-    // Cancel puts the keyboard back on Add.
     await expect
       .poll(() =>
         page.evaluate(
@@ -408,8 +349,6 @@ test.describe("host terminal on the real stack", () => {
       )
       .toBe(true);
 
-    // The Insert path sends the exact reviewed bytes, never Enter, and hands
-    // focus back to the shell.
     const socket = traffic.currentSocket();
     const before = inputFrames(socket).length;
     await dialog
@@ -430,13 +369,11 @@ test.describe("host terminal on the real stack", () => {
       )
       .toBe(true);
 
-    // Edit keeps the same row and updates the label in place.
     await openQuickCommands(page);
     await dialog.getByRole("button", { name: "Edit Deploy" }).click();
     await dialog.locator(".term-quick-commands-form input").first().fill("Deploy stack");
     await dialog.getByRole("button", { name: "Save command" }).click();
     await expect(dialog.locator(".term-quick-commands-item")).toContainText("Deploy stack");
-    // Saving an edit returns the keyboard to that row's Edit button.
     await expect
       .poll(() =>
         page.evaluate(
@@ -445,7 +382,6 @@ test.describe("host terminal on the real stack", () => {
       )
       .toBe("Edit Deploy stack");
 
-    // Delete asks first, then removes the row.
     await dialog.getByRole("button", { name: "Delete Deploy stack" }).click();
     await page
       .locator(".n-popconfirm")
@@ -482,9 +418,6 @@ test.describe("host terminal on the real stack", () => {
     expect(box!.y + box!.height).toBeLessThanOrEqual(800);
     await expect(dialog.getByRole("button", { name: "Add command" })).toBeVisible();
 
-    // JUS-267 on a phone: Add opens the editor in place of the list, both
-    // primary actions stay in the fixed footer, and leaving the editor puts
-    // the keyboard back on the control that opened it.
     await dialog.getByRole("button", { name: "Add command" }).click();
     await expect(dialog.locator(".term-quick-commands-form")).toBeVisible();
     await expect(
@@ -495,7 +428,6 @@ test.describe("host terminal on the real stack", () => {
     await dialog.locator(".term-quick-commands-form textarea").fill("echo phone");
     await dialog.getByRole("button", { name: "Save command" }).click();
     await expect(dialog.locator(".term-quick-commands-item")).toHaveCount(1);
-    // Save returns focus to Add.
     await expect
       .poll(() =>
         page.evaluate(
@@ -504,7 +436,6 @@ test.describe("host terminal on the real stack", () => {
       )
       .toBe(true);
 
-    // Keyboard: Escape from the editor returns focus to that row's Edit button.
     await dialog.getByRole("button", { name: "Edit Phone command" }).click();
     await page.keyboard.press("Escape");
     await expect(dialog.locator(".term-quick-commands-form")).toHaveCount(0);
@@ -516,8 +447,6 @@ test.describe("host terminal on the real stack", () => {
       )
       .toBe("Edit Phone command");
 
-    // At 390x500 the footer keeps both Save and Cancel visible, and Cancel is
-    // reachable by pointer without scrolling the editor.
     await page.setViewportSize({ width: 390, height: 500 });
     await dialog.getByRole("button", { name: "Add command" }).click();
     await expect(
@@ -535,9 +464,6 @@ test.describe("host terminal on the real stack", () => {
       )
       .toBe(true);
 
-    // On a very short viewport (205px) the card scrolls as a whole, so the
-    // form body keeps a usable height instead of collapsing under the pinned
-    // header and footer.
     await page.setViewportSize({ width: 900, height: 205 });
     await dialog.getByRole("button", { name: "Add command" }).click();
     await expect
@@ -555,7 +481,6 @@ test.describe("host terminal on the real stack", () => {
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await page.setViewportSize({ width: 390, height: 800 });
 
-    // Tab cycles inside the dialog: the trap never lets focus escape.
     for (let index = 0; index < 12; index += 1) {
       await page.keyboard.press("Tab");
       const inside = await page.evaluate(
@@ -590,8 +515,6 @@ test.describe("host terminal on the real stack", () => {
     await waitForCreate(traffic);
     await expectBanner(page, server.name);
 
-    // Save the ticket's example through the real modal; it is browser-local
-    // to this account.
     await openQuickCommands(page);
     await addQuickCommand(page, {
       label: "Docker Compose up",
@@ -600,9 +523,6 @@ test.describe("host terminal on the real stack", () => {
     });
     await page.locator(".term-quick-commands").getByRole("button", { name: "Done" }).click();
 
-    // A real shell emits OSC 133 A/B at every prompt when its rc enables
-    // shell integration. Emit the same marks from the live bash prompt so the
-    // suggestion engine observes a genuine PTY byte stream.
     await runCommand(context, page, "printf '\\033]133;A\\007\\033]133;B\\007'");
     await page.waitForTimeout(500);
     await focusTerminal(page);
@@ -615,8 +535,6 @@ test.describe("host terminal on the real stack", () => {
     await expect(option).toContainText("Docker Compose up");
     await expect(option).toContainText("docker-compose up -d --build");
 
-    // Accepting replaces the typed abbreviation with the command and never
-    // presses Enter: one frame, exactly delete ×4 + the reviewed text.
     const beforeAccept = inputFrames(socket).length;
     expect(beforeAccept).toBe(beforeTyping + 4);
     await option.click();
@@ -628,8 +546,6 @@ test.describe("host terminal on the real stack", () => {
       .poll(async () => (await screenText(page)).includes("docker-compose up -d --build"))
       .toBe(true);
 
-    // Enter was never sent until the user asks for it: no frame after typing
-    // began (and no acceptance frame) carries CR.
     expect(
       inputFrames(socket)
         .slice(beforeTyping)
@@ -662,7 +578,6 @@ test.describe("host terminal on the real stack", () => {
   });
 });
 
-/** expectBanner waits for the host banner and proves it is the committed logo. */
 async function expectBanner(
   page: import("@playwright/test").Page,
   serverName: string,
@@ -676,14 +591,9 @@ async function expectBanner(
       { timeout: 25_000, intervals: [100, 250, 500] },
     )
     .toBe(true);
-  // The duplicate-banner assertion needs the SETTLED buffer, not the first
-  // frame that happens to contain the title.
   const text = await waitForScreenStable(page);
   expect(text).toContain(`server: ${serverName}`);
 
-  // The committed asset is the single source of the banner artwork. Its
-  // documented SHA-256 guards against an accidental edit and the rendered
-  // lines prove the browser painted exactly that file (not a lookalike).
   expect(terminalLogoSHA256()).toBe(
     "76a2f2e19ef0f58326c1f79c5ac837cc25df96f40b7a6d606d292f27b177a274",
   );
@@ -698,7 +608,6 @@ async function expectBanner(
   return text;
 }
 
-/** countOccurrences counts non-overlapping literal matches. */
 function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }

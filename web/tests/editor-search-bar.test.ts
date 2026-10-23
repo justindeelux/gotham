@@ -1,12 +1,9 @@
-// Find/replace bar (JUS-231): the counter is a live region, Enter walks the
-// matches, Escape closes only the bar, and a read-only tab cannot replace.
 /* global document:readonly, KeyboardEvent:readonly */
 import { mount } from "@vue/test-utils";
 import { flushPromises } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import EditorSearchBar from "@/features/files/components/EditorSearchBar.vue";
-// Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
@@ -19,7 +16,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** mountBar mounts the bar open with every prop at a working default. */
 function mountBar(overrides: Record<string, unknown> = {}) {
   return mount(EditorSearchBar, {
     attachTo: document.body,
@@ -43,7 +39,6 @@ function mountBar(overrides: Record<string, unknown> = {}) {
   });
 }
 
-/** findButton locates a control by its accessible name. */
 function findButton(wrapper: ReturnType<typeof mountBar>, name: string) {
   const button = wrapper.find(`button[aria-label="${name}"]`);
   expect(button.exists(), name).toBe(true);

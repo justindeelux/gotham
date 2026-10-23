@@ -1,14 +1,3 @@
-/**
- * Minimal sanitized Markdown renderer for release changelogs (JUS-102).
- * Release bodies are external content, so raw HTML must never reach the DOM:
- * the source is HTML-escaped first and only the markup below is re-emitted.
- * Links are http(s)-only with `target="_blank" rel="noopener noreferrer"`;
- * anything else renders as plain text.
- *
- * Supported: `#`–`###` headings, `-`/`*` and `1.` lists, fenced code blocks,
- * inline `code`, `**bold**`, links `[t](url)` and `#123` issue references
- * (linked against the release repo derived from the release page URL).
- */
 
 function escapeHtml(source: string): string {
   return source
@@ -19,7 +8,6 @@ function escapeHtml(source: string): string {
     .replace(/'/g, "&#39;");
 }
 
-/** True only for absolute http(s) URLs. */
 export function isSafeLink(url: string): boolean {
   const trimmed = url.trim();
   if (!/^https?:\/\//i.test(trimmed)) {
@@ -33,7 +21,6 @@ export function isSafeLink(url: string): boolean {
   }
 }
 
-/** Derive `https://host/owner/repo` from a release page URL, else "". */
 export function repoBaseFromReleaseUrl(releaseUrl: string): string {
   try {
     const parsed = new URL(releaseUrl);
@@ -54,7 +41,6 @@ function linkAttrs(href: string): string {
   return `<a href="${href}" target="_blank" rel="noopener noreferrer">`;
 }
 
-/** Render inline markup (code, bold, links, issue refs) over escaped text. */
 function renderInline(escaped: string, repoBase: string): string {
   const codes: string[] = [];
   let out = escaped.replace(/&#39;|&quot;|`([^`]+)`/g, (match, code: string | undefined) => {
@@ -73,8 +59,6 @@ function renderInline(escaped: string, repoBase: string): string {
     return `${linkAttrs(escapeHtml(raw))}${text}</a>`;
   });
   if (repoBase) {
-    // Only link issue refs in text nodes: never inside a tag (an href value can
-    // hold " #1") and never inside an existing link (no nested anchors).
     let inLink = false;
     out = out
       .split(/(<[^>]*>)/)
@@ -100,7 +84,6 @@ function renderInline(escaped: string, repoBase: string): string {
   return out;
 }
 
-/** Render a sanitized release body to HTML. */
 export function renderMarkdown(source: string, releaseUrl = ""): string {
   const repoBase = releaseUrl ? repoBaseFromReleaseUrl(releaseUrl) : "";
   const lines = source.replace(/\r\n?/g, "\n").split("\n");

@@ -1,10 +1,3 @@
-/**
- * Files English catalog. Keys are semantic whole sentences with named
- * parameters; raw technical values (paths, root names, byte counts, POSIX
- * modes, symlink targets) are interpolated, never translated. HTTP failures
- * are mapped to a key by status in `api/files.ts`, so no server English text
- * ever reaches the UI.
- */
 const en = {
   chooser: {
     eyebrow: "Operations · Remote file manager",
@@ -129,9 +122,6 @@ const en = {
     goTarget: "Go to target",
     recycleBin: "Recycle bin…",
   },
-  // JUS-248: the floating host shell is a platform-operator action, never a
-  // file action. Labels only; the terminal window owns session state and its
-  // own error copy.
   terminal: {
     label: "Terminal",
     openHere: "Open terminal here",

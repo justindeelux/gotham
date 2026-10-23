@@ -15,7 +15,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestRuntimeComposeReal uses only a unique throwaway project and always removes it.
 func TestRuntimeComposeReal(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 for the Docker/Compose runtime proof")

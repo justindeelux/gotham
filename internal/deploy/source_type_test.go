@@ -8,9 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestNormalizeSourceType keeps pre-GS-2 callers on their behaviour: an
-// explicit type passes through, an empty one derives from the provider like
-// the 00037 backfill.
 func TestNormalizeSourceType(t *testing.T) {
 	cases := []struct {
 		sourceType string
@@ -33,8 +30,6 @@ func TestNormalizeSourceType(t *testing.T) {
 	}
 }
 
-// TestValidSourceType accepts the seven GS-2 types plus the legacy empty
-// value, and rejects anything else.
 func TestValidSourceType(t *testing.T) {
 	for _, s := range []string{
 		"", SourceGitPublic, SourceGitPrivate, SourceGitHubApp,
@@ -51,13 +46,6 @@ func TestValidSourceType(t *testing.T) {
 	}
 }
 
-// TestValidateSourcePerType checks the per-type creation requirements: the
-// provider slug must agree with the type, git-backed types need a cloneable
-// URL (provider-backed ones also name the repository, git_private stays
-// provider-less), the dockerfile type needs pasted content with a FROM
-// instruction, image sources need a validated reference and no git fields,
-// and compose sources need pasted content or a repository with a compose
-// file plus the routed web service.
 func TestValidateSourcePerType(t *testing.T) {
 	base := Application{
 		Name:      "demo",
@@ -128,9 +116,6 @@ func TestValidateSourcePerType(t *testing.T) {
 	}
 }
 
-// TestCreateApplicationSourceType covers the service boundary: an unknown
-// type is a 400, a not-yet-implemented type is a 422, and an empty type
-// normalizes from the provider.
 func TestCreateApplicationSourceType(t *testing.T) {
 	t.Run("unknown type is rejected", func(t *testing.T) {
 		repo := &fakeRepository{}
@@ -197,11 +182,6 @@ func TestCreateApplicationSourceType(t *testing.T) {
 	})
 }
 
-// TestCloneSourceBranching pins the GS-2 orchestrator switch: implemented
-// git types (and legacy empty rows) clone through the shared cloner, and
-// anything unknown is a validation error. Dockerfile, image and compose
-// sources take their own fetch paths (see dockerfile_test.go,
-// compose_test.go and the image deploy tests).
 func TestCloneSourceBranching(t *testing.T) {
 	t.Run("implemented types clone", func(t *testing.T) {
 		for _, sourceType := range []string{
@@ -230,9 +210,6 @@ func TestCloneSourceBranching(t *testing.T) {
 	})
 }
 
-// TestPreviewOfLegacyProviderApp pins the no-behaviour-change rule: a legacy
-// base (empty type) with a provider that owns no dedicated type keeps its
-// preview flow, landing on git_public with the provider untouched.
 func TestPreviewOfLegacyProviderApp(t *testing.T) {
 	for _, provider := range []string{"gitea", "public", ""} {
 		t.Run("provider "+provider, func(t *testing.T) {

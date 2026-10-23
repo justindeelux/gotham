@@ -13,12 +13,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TestWriteRetryMarkerChmodRace is R4-M1: a path-based chmod on the temp file
-// can be redirected to a symlink target swapped in by the directory owner. The
-// mode is set on the file descriptor, so the swap cannot redirect it. The
-// attacker watches the directory with inotify (a polling attacker cannot win the
-// short window) and replaces the temp file with a symlink to a 0600 victim; the
-// test fails if the victim ever becomes world-readable.
 func TestWriteRetryMarkerChmodRace(t *testing.T) {
 	dir := t.TempDir()
 	victim := filepath.Join(dir, "victim")
@@ -59,8 +53,6 @@ func TestWriteRetryMarkerChmodRace(t *testing.T) {
 				name := strings.TrimRight(string(buf[off+unix.SizeofInotifyEvent:end]), "\x00")
 				if strings.HasPrefix(name, ".update.retry.") {
 					target := filepath.Join(dir, name)
-					// The link name must not itself match the temp prefix, or
-					// the attacker would loop on its own IN_CREATE events.
 					link := filepath.Join(dir, "attacker-"+name)
 					_ = os.Remove(link)
 					if err := os.Symlink(victim, link); err == nil {

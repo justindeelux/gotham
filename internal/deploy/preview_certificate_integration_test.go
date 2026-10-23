@@ -13,19 +13,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestCreatePreviewApplicationClonesCertificateIntent proves the HTTPS intent
-// clone against a real database: the repository adapter reads the base's
-// wildcard intent, the sibling gets its own row recorded for the preview host,
-// and the system teardown removes it through the application cascade. It skips
-// when no database is reachable.
 func TestCreatePreviewApplicationClonesCertificateIntent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
 	explicit := integrationDSNExplicit()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -37,8 +30,6 @@ func TestCreatePreviewApplicationClonesCertificateIntent(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -65,16 +56,11 @@ func TestCreatePreviewApplicationClonesCertificateIntent(t *testing.T) {
 		}
 	})
 
-	// The provider cleanup runs after the user cleanup (t.Cleanup is LIFO):
-	// deleting the user cascades the certificate rows, which releases the
-	// provider's RESTRICT reference.
 	sealed, err := providers.SealSecret(secret, "cf-token")
 	if err != nil {
 		t.Fatalf("seal provider credential: %v", err)
 	}
 	providerRow, err := st.CreateDNSProvider(ctx, sqlc.CreateDNSProviderParams{
-		// digitalocean: the store integration tests hold an enabled cloudflare
-		// provider while they run in a parallel package process.
 		Provider:   "digitalocean",
 		Name:       fmt.Sprintf("p8-preview-%d", suffix),
 		Zones:      []string{"example.com"},
@@ -159,7 +145,6 @@ func TestCreatePreviewApplicationClonesCertificateIntent(t *testing.T) {
 		t.Fatalf("cloned intent = %+v, want the base's wildcard configuration recorded for %s", intent, host)
 	}
 
-	// The teardown removes the sibling and its intent (the schema cascade).
 	if err := svc.DeleteSystemApplication(ctx, created.ID); err != nil {
 		t.Fatalf("DeleteSystemApplication: %v", err)
 	}

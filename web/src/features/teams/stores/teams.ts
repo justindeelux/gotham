@@ -12,29 +12,10 @@ import {
 import type { Team } from "@/features/teams/api/teams";
 import { activeTeamStorageKey } from "@/shared/api/token";
 
-/**
- * Teams: the caller's team list plus the active team selection.
- *
- * The active team is what the team-scoped surfaces (notification channels
- * today) send as `X-Team-Id`; when it is empty the control plane falls back to
- * the caller's personal team, which keeps every pre-teams surface unchanged.
- * The selection is persisted so it survives a reload, but it is validated
- * against the freshly read list on every load — a team the caller left can
- * never stay selected.
- *
- * `featureDisabled` is set when GET /teams answers 404 (FEATURE_TEAMS=false):
- * the pages then hide the team-management surface instead of rendering the
- * 404 as an error.
- */
 export const useTeamsStore = defineStore("teams", () => {
   const teams = ref<Team[]>([]);
   const loading = ref(false);
   const loaded = ref(false);
-  /**
-   * Raw failure behind the page alert. The display string derives from it
-   * plus the current locale, so a language switch refreshes a retained
-   * banner without a refetch; classification always sees the raw error.
-   */
   const errorRaw = ref<unknown>(null);
   const error = computed<string | null>(() =>
     errorRaw.value === null ? null : describeTeamError(errorRaw.value),
@@ -46,22 +27,15 @@ export const useTeamsStore = defineStore("teams", () => {
     () => teams.value.find((team) => team.id === activeTeamId.value) ?? null,
   );
 
-  /** roles reads the caller's role in a team, if it is known. */
   function roleOf(teamId: string): Team["role"] | null {
     return teams.value.find((team) => team.id === teamId)?.role ?? null;
   }
 
-  /** selectTeam switches the active team and persists the selection. */
   function selectTeam(teamId: string): void {
     activeTeamId.value = teamId;
     persistTeamId(teamId);
   }
 
-  /**
-   * applyTeams replaces the list and re-validates the active selection: the
-   * personal team wins, then a still-existing selection, then the first team.
-   * An empty list clears the selection back to the personal-team fallback.
-   */
   function applyTeams(next: Team[]): void {
     teams.value = next;
     const stillMember = next.some((team) => team.id === activeTeamId.value);
@@ -72,7 +46,6 @@ export const useTeamsStore = defineStore("teams", () => {
     selectTeam(fallback?.id ?? "");
   }
 
-  /** fetchTeams loads the caller's teams, newest first. */
   async function fetchTeams(): Promise<void> {
     loading.value = true;
     errorRaw.value = null;
@@ -95,7 +68,6 @@ export const useTeamsStore = defineStore("teams", () => {
     }
   }
 
-  /** ensureTeams loads the list once; later callers reuse the cache. */
   async function ensureTeams(): Promise<void> {
     if (loaded.value || loading.value) {
       return;
@@ -103,13 +75,6 @@ export const useTeamsStore = defineStore("teams", () => {
     await fetchTeams().catch(() => undefined);
   }
 
-  /**
-   * reset drops the cached teams and the persisted selection, so the next
-   * sign-in starts from an empty cache instead of the previous account's
-   * roles. Called on sign-out (see the auth store): without it the sidebar
-   * role can belong to the previous user, because ensureTeams returns early
-   * once `loaded` is set.
-   */
   function reset(): void {
     teams.value = [];
     loading.value = false;
@@ -120,7 +85,6 @@ export const useTeamsStore = defineStore("teams", () => {
     persistTeamId("");
   }
 
-  /** create stores a team and selects it. */
   async function create(name: string): Promise<Team> {
     const team = await createTeamRequest(name);
     applyTeams([
@@ -131,7 +95,6 @@ export const useTeamsStore = defineStore("teams", () => {
     return team;
   }
 
-  /** rename patches one team's name in the cached list. */
   async function rename(id: string, name: string): Promise<Team> {
     const team = await renameTeamRequest(id, name);
     applyTeams(
@@ -140,7 +103,6 @@ export const useTeamsStore = defineStore("teams", () => {
     return team;
   }
 
-  /** remove deletes a team and drops it from the cached list. */
   async function remove(id: string): Promise<void> {
     await deleteTeamRequest(id);
     applyTeams(teams.value.filter((item) => item.id !== id));
@@ -165,7 +127,6 @@ export const useTeamsStore = defineStore("teams", () => {
   };
 });
 
-/** readStoredTeamId reads the persisted selection, tolerating a dead store. */
 function readStoredTeamId(): string {
   try {
     return localStorage.getItem(activeTeamStorageKey) ?? "";
@@ -174,7 +135,6 @@ function readStoredTeamId(): string {
   }
 }
 
-/** persistTeamId writes the selection, tolerating a dead store. */
 function persistTeamId(teamId: string): void {
   try {
     if (teamId) {
@@ -183,6 +143,5 @@ function persistTeamId(teamId: string): void {
       localStorage.removeItem(activeTeamStorageKey);
     }
   } catch {
-    // A disabled localStorage must never break team switching.
   }
 }

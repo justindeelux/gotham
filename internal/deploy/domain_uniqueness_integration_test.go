@@ -13,17 +13,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestApplicationDomainUniquenessConcurrent proves the per-node normalized
-// domain index rejects a second binding even when two users write
-// concurrently (BE-6.1 F6). It skips when no database is reachable.
 func TestApplicationDomainUniquenessConcurrent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
 	explicit := integrationDSNExplicit()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -35,8 +30,6 @@ func TestApplicationDomainUniquenessConcurrent(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}

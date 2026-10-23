@@ -11,10 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 )
 
-// MountProxyRouters registers the read-only router list under /api. A nil
-// service mounts nothing. Like the proxy sync and DNS-provider surface it is
-// platform-global (every node's generated routers), so it runs behind the
-// platform admin chain: the server passes its RequirePlatformAdmin.
 func MountProxyRouters(r chi.Router, platformAuth func(http.Handler) http.Handler, svc proxy.RouterService) {
 	if svc == nil {
 		return

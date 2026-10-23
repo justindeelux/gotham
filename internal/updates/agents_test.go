@@ -17,31 +17,22 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// agentAsset is the agent release asset name for amd64.
 const agentAsset = "gotham-agent-linux-amd64"
 
-// agentFixture serves a GitHub-Releases-like API plus the signed agent manifest
-// and artifact for one release.
 type agentFixture struct {
-	server   *httptest.Server
-	public   ed25519.PublicKey
-	artifact []byte
-	manifest updatecore.Manifest
-	// releaseHits counts releases-API requests; fail makes the API answer 500.
+	server      *httptest.Server
+	public      ed25519.PublicKey
+	artifact    []byte
+	manifest    updatecore.Manifest
 	releaseHits atomic.Int64
 	fail        atomic.Bool
 }
 
-// newAgentFixture starts a release server for the default stable v1.2.0.
 func newAgentFixture(t *testing.T, tamperSig bool) *agentFixture {
 	t.Helper()
 	return newAgentFixtureRelease(t, "v1.2.0", "stable", false, tamperSig)
 }
 
-// newAgentFixtureRelease starts a release server for one release: tag is the
-// GitHub tag, manifestChannel the channel carried by the signed manifest and
-// prerelease the GitHub prerelease flag. tamperSig signs a different payload so
-// the manifest signature no longer verifies.
 func newAgentFixtureRelease(t *testing.T, tag, manifestChannel string, prerelease, tamperSig bool) *agentFixture {
 	t.Helper()
 	public, private, err := updatecore.GenerateKey()
@@ -97,14 +88,11 @@ func newAgentFixtureRelease(t *testing.T, tag, manifestChannel string, prereleas
 	return fixture
 }
 
-// newTestAgentUpdater points an AgentUpdater at a fixture.
 func newTestAgentUpdater(t *testing.T, fixture *agentFixture) *AgentUpdater {
 	t.Helper()
 	return newTestAgentUpdaterChannel(t, fixture, ChannelStable)
 }
 
-// newTestAgentUpdaterChannel points an AgentUpdater at a fixture with the given
-// subscriber channel (stable or beta).
 func newTestAgentUpdaterChannel(t *testing.T, fixture *agentFixture, channel Channel) *AgentUpdater {
 	t.Helper()
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
@@ -122,8 +110,6 @@ func newTestAgentUpdaterChannel(t *testing.T, fixture *agentFixture, channel Cha
 	return updater
 }
 
-// TestAgentUpdaterOffersVerifiedRelease proves a newer release is offered with
-// the verified manifest digest bound into the offer.
 func TestAgentUpdaterOffersVerifiedRelease(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater := newTestAgentUpdater(t, fixture)
@@ -143,7 +129,6 @@ func TestAgentUpdaterOffersVerifiedRelease(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterUpToDate proves no offer is made for a current agent.
 func TestAgentUpdaterUpToDate(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater := newTestAgentUpdater(t, fixture)
@@ -157,7 +142,6 @@ func TestAgentUpdaterUpToDate(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterUnknownArch proves an unsupported architecture is refused.
 func TestAgentUpdaterUnknownArch(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater := newTestAgentUpdater(t, fixture)
@@ -167,7 +151,6 @@ func TestAgentUpdaterUnknownArch(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterNonLinux proves a non-linux platform gets no offer.
 func TestAgentUpdaterNonLinux(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater := newTestAgentUpdater(t, fixture)
@@ -178,8 +161,6 @@ func TestAgentUpdaterNonLinux(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterRejectsTamperedManifest proves an unverifiable manifest is
-// never turned into an offer.
 func TestAgentUpdaterRejectsTamperedManifest(t *testing.T) {
 	fixture := newAgentFixture(t, true)
 	updater := newTestAgentUpdater(t, fixture)
@@ -189,10 +170,6 @@ func TestAgentUpdaterRejectsTamperedManifest(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterBetaChannel is M4: the offer carries the release's own
-// channel, so a beta-configured subscriber can take a newer stable release (or
-// a prerelease), while the offer→manifest channel binding and the stable
-// subscriber's prerelease filter stay fail-closed.
 func TestAgentUpdaterBetaChannel(t *testing.T) {
 	t.Run("beta subscriber takes a newer stable release", func(t *testing.T) {
 		fixture := newAgentFixtureRelease(t, "v1.2.0", "stable", false, false)
@@ -237,8 +214,6 @@ func TestAgentUpdaterBetaChannel(t *testing.T) {
 	})
 
 	t.Run("mismatched manifest channel is refused", func(t *testing.T) {
-		// The GitHub release is stable but the signed manifest claims beta: the
-		// offer→manifest binding must refuse it.
 		fixture := newAgentFixtureRelease(t, "v1.2.0", "beta", false, false)
 		updater := newTestAgentUpdaterChannel(t, fixture, ChannelBeta)
 
@@ -248,7 +223,6 @@ func TestAgentUpdaterBetaChannel(t *testing.T) {
 	})
 }
 
-// TestAgentUpdaterNoKey proves the updater is disabled without a public key.
 func TestAgentUpdaterNoKey(t *testing.T) {
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{Repo: "owner/name", BaseURL: "https://api.github.com"})
 	if err != nil {
@@ -264,8 +238,6 @@ func TestAgentUpdaterNoKey(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterCheckerError proves a release-API failure is an error, not a
-// silent no-update.
 func TestAgentUpdaterCheckerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -286,15 +258,11 @@ func TestAgentUpdaterCheckerError(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterCachesEmptyResult is L2: a "no release" answer is cached as
-// (nil, nil), so repeated calls do not flip to a release-server error.
 func TestAgentUpdaterCachesEmptyResult(t *testing.T) {
 	var hits atomic.Int64
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/owner/name/releases", func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		// A release at the floor is not newer than the floor, so Check returns
-		// (nil, nil): no eligible release.
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{"tag_name": "v0.0.0", "draft": false, "prerelease": false, "assets": []any{}},
@@ -330,8 +298,6 @@ func TestAgentUpdaterCachesEmptyResult(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterEmptyReleasesIsNotAnError is the empty-list nit: no published
-// releases is a "no release" answer, not a release-server error.
 func TestAgentUpdaterEmptyReleasesIsNotAnError(t *testing.T) {
 	var hits atomic.Int64
 	mux := http.NewServeMux()
@@ -364,8 +330,6 @@ func TestAgentUpdaterEmptyReleasesIsNotAnError(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterFromEnvFeatureOff proves FEATURE_UPDATES=false disables the
-// offerer entirely.
 func TestAgentUpdaterFromEnvFeatureOff(t *testing.T) {
 	t.Setenv(FeatureEnv, "false")
 	updater, err := AgentUpdaterFromEnv(slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -374,9 +338,6 @@ func TestAgentUpdaterFromEnvFeatureOff(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterUsesKeyRing proves the embedded current + next ring flows
-// through AgentUpdaterFromEnv into the offer verification: a manifest signed by
-// the pre-positioned next key verifies, and an unknown key is refused.
 func TestAgentUpdaterUsesKeyRing(t *testing.T) {
 	current, _, err := updatecore.GenerateKey()
 	if err != nil {
@@ -422,9 +383,6 @@ func TestAgentUpdaterUsesKeyRing(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterCachesReleaseAPI is M2: a fleet polling RequestUpdate must not
-// hit the release API on every call. Twenty offers within the TTL cause one
-// upstream releases fetch.
 func TestAgentUpdaterCachesReleaseAPI(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater := newTestAgentUpdater(t, fixture)
@@ -440,9 +398,6 @@ func TestAgentUpdaterCachesReleaseAPI(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterServesStaleOnTransientFailure is M2: once a release has been
-// verified, a transient release-API failure serves the last verified release
-// rather than a silent no-update. With no cached release it still fails.
 func TestAgentUpdaterServesStaleOnTransientFailure(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
@@ -458,7 +413,7 @@ func TestAgentUpdaterServesStaleOnTransientFailure(t *testing.T) {
 	if _, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64"); err != nil {
 		t.Fatalf("first Offer: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond) // let the cache TTL lapse
+	time.Sleep(5 * time.Millisecond)
 	fixture.fail.Store(true)
 
 	release, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64")
@@ -466,7 +421,6 @@ func TestAgentUpdaterServesStaleOnTransientFailure(t *testing.T) {
 		t.Fatalf("Offer after failure = (%+v, %v), want the stale v1.2.0", release, err)
 	}
 
-	// With no cache at all, a failure must still be an error (fail closed).
 	fresh, err := NewAgentUpdater(AgentUpdaterConfig{
 		Repo: "owner/name", BaseURL: fixture.server.URL, Channel: ChannelStable,
 		PublicKeys: []ed25519.PublicKey{fixture.public}, Client: fixture.server.Client(),
@@ -480,8 +434,6 @@ func TestAgentUpdaterServesStaleOnTransientFailure(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterTargetVersion proves the fleet target is resolved from the
-// agent release family, independent of any agent's running version.
 func TestAgentUpdaterTargetVersion(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater := newTestAgentUpdater(t, fixture)
@@ -493,7 +445,6 @@ func TestAgentUpdaterTargetVersion(t *testing.T) {
 	if got := fixture.releaseHits.Load(); got != 1 {
 		t.Fatalf("release-API hits = %d, want 1", got)
 	}
-	// A second call is served from the cache.
 	if _, err := updater.TargetVersion(context.Background()); err != nil {
 		t.Fatalf("TargetVersion (cached): %v", err)
 	}
@@ -502,8 +453,6 @@ func TestAgentUpdaterTargetVersion(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterNegativeCachesFailure is N1: with no verified release, a
-// failing upstream is hit at most once per negative TTL, not once per offer.
 func TestAgentUpdaterNegativeCachesFailure(t *testing.T) {
 	var hits atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -535,8 +484,6 @@ func TestAgentUpdaterNegativeCachesFailure(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterSingleFlightConcurrent is N1: concurrent cold polls fetch once
-// even when the upstream fails.
 func TestAgentUpdaterSingleFlightConcurrent(t *testing.T) {
 	var hits atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -572,9 +519,6 @@ func TestAgentUpdaterSingleFlightConcurrent(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterStaleServeDoesNotRefetch is N1: after a failure, repeated
-// offers within the negative TTL serve the stale verified release without
-// re-hitting the upstream.
 func TestAgentUpdaterStaleServeDoesNotRefetch(t *testing.T) {
 	fixture := newAgentFixture(t, false)
 	updater, err := NewAgentUpdater(AgentUpdaterConfig{
@@ -590,7 +534,7 @@ func TestAgentUpdaterStaleServeDoesNotRefetch(t *testing.T) {
 	if _, err := updater.Offer(context.Background(), "v1.0.0", "linux", "amd64"); err != nil {
 		t.Fatalf("first Offer: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond) // lapse the positive TTL
+	time.Sleep(5 * time.Millisecond)
 	fixture.fail.Store(true)
 
 	for i := 0; i < 10; i++ {
@@ -599,7 +543,6 @@ func TestAgentUpdaterStaleServeDoesNotRefetch(t *testing.T) {
 			t.Fatalf("Offer %d = (%+v, %v), want the stale release", i, release, err)
 		}
 	}
-	// One successful fetch plus one failed fetch; the rest are served stale.
 	if got := fixture.releaseHits.Load(); got != 2 {
 		t.Fatalf("release-API hits = %d, want 2 (stale serve must not refetch)", got)
 	}

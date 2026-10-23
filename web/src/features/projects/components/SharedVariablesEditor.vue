@@ -38,20 +38,11 @@ const props = withDefaults(
     saving: boolean;
     saveDisabled: boolean;
     canWrite: boolean;
-    /** storedSecrets holds the keys currently stored as secrets (keep hint). */
     storedSecrets?: string[];
-    /**
-     * problems lists the client-side draft problems blocking a save
-     * (duplicates, cap, secret without value). Rendered as a summary so Save
-     * is never disabled without an explanation.
-     */
     problems?: string[];
-    /** inherited renders read-only context rows above the editor, if any. */
     inherited?: InheritedVariable[];
     inheritedLoading?: boolean;
-    /** cardTitle overrides the localized editor title when provided. */
     cardTitle?: string;
-    /** precedenceHint overrides the localized precedence hint when set. */
     precedenceHint?: string;
   }>(),
   {
@@ -70,51 +61,31 @@ const emit = defineEmits<{
   retry: [];
 }>();
 
-/**
- * Shared-variables editor (PE-6, Linear JUS-35), used by the project tab, the
- * environment page section and (read-only) the application env tab context.
- * Secrets are write-only: a stored secret drafts with an empty value and a
- * masked placeholder, and saving it untouched keeps the sealed ciphertext.
- */
-
 const rows = computed<VariableDraft[]>(() => props.draft);
 const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
 const storedSet = computed<Set<string>>(() => new Set(props.storedSecrets));
 
-/**
- * t renders editor copy in the active locale (tracks language switches).
- * Called during render and inside computeds, so visible rows, aria names
- * and inline problems refresh without losing the dirty draft.
- */
 function t(key: string, params?: Record<string, string>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
 }
 
-/** titleText is the caller override or the localized editor title. */
 const titleText = computed<string>(
   () => props.cardTitle ?? t("projects.variables.title"),
 );
 
-/** hintText is the caller override or the localized precedence hint. */
 const hintText = computed<string>(
   () => props.precedenceHint ?? t("projects.variables.applicationPrecedence"),
 );
 
-/** isKeptSecret marks a stored secret the save would keep (empty value). */
 function isKeptSecret(row: VariableDraft): boolean {
   return row.secret && row.value === "" && storedSet.value.has(row.key);
 }
 
-/** keyStatus flags a row key against the contract rule (display-only). */
 function keyStatus(key: string): "error" | undefined {
   return key !== "" && !isSharedVariableKeyValid(key) ? "error" : undefined;
 }
 
-/**
- * duplicateKeyAt marks every occurrence after the first: the first row owns
- * the key, each later twin renders "Duplicate key." inline.
- */
 function duplicateKeyAt(index: number): boolean {
   const key = rows.value[index]?.key;
   return (
@@ -124,7 +95,6 @@ function duplicateKeyAt(index: number): boolean {
   );
 }
 
-/** rowProblem names one row's client-side problem for inline display. */
 function rowProblem(row: VariableDraft, index: number): string | null {
   if (row.key === "") {
     return t("projects.variables.row.keyRequired");
@@ -147,29 +117,15 @@ function rowProblem(row: VariableDraft, index: number): string | null {
   return null;
 }
 
-/**
- * serverRowKey extracts the row key a backend 400 names (if any), so the
- * refusal renders inline on the matching row as well as in the alert.
- */
 const serverRowKey = computed<string | null>(() =>
   props.saveError ? rowKeyFromServerError(props.saveError) : null,
 );
 
-/**
- * keyInputProps names the native key input for assistive tech (the NInput
- * `aria-label` prop lands on the wrapper, not the `<input>`) and opts it
- * out of password-manager autofill.
- */
 const keyInputProps = computed<Record<string, string>>(() => ({
   "aria-label": t("projects.variables.keyAria"),
   autocomplete: "off",
 }));
 
-/**
- * valueInputProps names the native value input after its key (so rows are
- * distinguishable) and steers password managers: secrets hint
- * `new-password`, plain values opt out.
- */
 function valueInputProps(row: VariableDraft): Record<string, string> {
   const name =
     row.key !== ""
@@ -183,14 +139,12 @@ function valueInputProps(row: VariableDraft): Record<string, string> {
   };
 }
 
-/** secretSwitchLabel names the secret toggle after its row key. */
 function secretSwitchLabel(row: VariableDraft): string {
   return row.key !== ""
     ? t("projects.variables.secretToggleFor", { key: row.key })
     : t("projects.variables.secretToggleBare");
 }
 
-/** updateRow replaces one row, keeping the array immutable for v-model. */
 function updateRow(index: number, patch: Partial<VariableDraft>): void {
   emit(
     "update:draft",
@@ -200,7 +154,6 @@ function updateRow(index: number, patch: Partial<VariableDraft>): void {
   );
 }
 
-/** addRow appends an empty row for the next variable. */
 function addRow(): void {
   if (rows.value.length >= maxSharedVariables) {
     return;
@@ -209,7 +162,6 @@ function addRow(): void {
   emit("update:draft", [...rows.value, { key: "", value: "", secret: false }]);
 }
 
-/** removeRow drops one row by index. */
 function removeRow(index: number): void {
   removeAt(index);
   emit(
@@ -218,7 +170,6 @@ function removeRow(index: number): void {
   );
 }
 
-/** inheritedShown renders only once its scope finished loading. */
 const inheritedShown = computed<InheritedVariable[]>(() =>
   props.inheritedLoading ? [] : props.inherited,
 );

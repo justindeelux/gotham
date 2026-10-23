@@ -12,11 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestBackupRepositoryRoundTrip exercises the SQL behind the backup
-// repository against a real PostgreSQL: the join that hides backups of a
-// deleted database, the due-time query the scheduler runs, the unique target
-// name and the upsert of sealed credentials. It skips when no database is
-// reachable, so CI stays green without one.
 func TestBackupRepositoryRoundTrip(t *testing.T) {
 	_, st := integrationEnv(t)
 	repo := newStoreBackupRepository(st)
@@ -44,7 +39,6 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		t.Fatalf("CreateDatabase: %v", err)
 	}
 
-	// --- backups ---------------------------------------------------------
 	backup, err := repo.CreateBackup(ctx, Backup{
 		ID:         uuid.New(),
 		DatabaseID: database.ID,
@@ -84,7 +78,6 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("GetBackup(missing) err = %v, want ErrNotFound", err)
 	}
 
-	// --- restores --------------------------------------------------------
 	restore, err := repo.CreateRestore(ctx, Restore{
 		ID:         uuid.New(),
 		DatabaseID: database.ID,
@@ -130,7 +123,6 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		}
 	}
 
-	// --- schedules -------------------------------------------------------
 	late, err := repo.CreateBackupSchedule(ctx, BackupSchedule{
 		ID:         uuid.New(),
 		DatabaseID: database.ID,
@@ -187,7 +179,6 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		}
 	}
 
-	// --- targets and sealed credentials ----------------------------------
 	target, err := repo.CreateBackupTarget(ctx, BackupTarget{
 		ID:       uuid.New(),
 		UserID:   ownerID,
@@ -226,7 +217,6 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("ciphertext = %q, want the replaced value", secrets[0].Ciphertext)
 	}
 
-	// --- ownership and cascade -------------------------------------------
 	if _, err := repo.DeleteBackupTarget(ctx, target.ID, uuid.New()); err != ErrNotFound {
 		t.Errorf("foreign DeleteBackupTarget err = %v, want ErrNotFound", err)
 	}
@@ -234,9 +224,6 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 		t.Fatalf("DeleteBackupTarget: %v", err)
 	}
 
-	// Soft-deleting the database hides its backups and schedules: the queries
-	// join on a live row, which is what keeps a deleted database's history
-	// out of every read.
 	if _, err := databaseRepo.SoftDeleteDatabase(ctx, database.ID); err != nil {
 		t.Fatalf("SoftDeleteDatabase: %v", err)
 	}
@@ -248,9 +235,6 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 	}
 }
 
-// TestBackupTargetWriteIsAtomic is the D2-11 regression against a real
-// PostgreSQL: a failing half of the write must roll the other half back, so no
-// mixed configuration/credential pair is observable.
 func TestBackupTargetWriteIsAtomic(t *testing.T) {
 	_, st := integrationEnv(t)
 	repo := newStoreBackupRepository(st)
@@ -277,7 +261,6 @@ func TestBackupTargetWriteIsAtomic(t *testing.T) {
 		t.Fatalf("CreateBackupTargetWithSecrets(second): %v", err)
 	}
 
-	// A config failure (duplicate name) must not leave the new credentials.
 	if _, err := repo.UpdateBackupTargetWithSecrets(ctx, BackupTarget{
 		ID: targetID, Name: secondName, Kind: TargetS3, Endpoint: "https://moved", Bucket: "moved",
 	}, []TargetSecret{
@@ -288,7 +271,6 @@ func TestBackupTargetWriteIsAtomic(t *testing.T) {
 	assertTargetState(t, repo, ctx, targetID, firstName, "https://old", "old")
 	assertSecret(t, repo, ctx, targetID, targetSecretAccessKey, "old-access")
 
-	// A credential failure (foreign target) must not leave the new config.
 	if _, err := repo.UpdateBackupTargetWithSecrets(ctx, BackupTarget{
 		ID: targetID, Name: firstName, Kind: TargetS3, Endpoint: "https://moved", Bucket: "moved",
 	}, []TargetSecret{
@@ -301,7 +283,6 @@ func TestBackupTargetWriteIsAtomic(t *testing.T) {
 	assertSecret(t, repo, ctx, targetID, targetSecretAccessKey, "old-access")
 }
 
-// assertTargetState checks the stored configuration of a target.
 func assertTargetState(t *testing.T, repo *storeBackupRepository, ctx context.Context, targetID uuid.UUID, name, endpoint, bucket string) {
 	t.Helper()
 	got, err := repo.GetBackupTarget(ctx, targetID)
@@ -313,7 +294,6 @@ func assertTargetState(t *testing.T, repo *storeBackupRepository, ctx context.Co
 	}
 }
 
-// assertSecret checks one stored sealed credential's ciphertext.
 func assertSecret(t *testing.T, repo *storeBackupRepository, ctx context.Context, targetID uuid.UUID, key, ciphertext string) {
 	t.Helper()
 	secrets, err := repo.ListTargetSecrets(ctx, targetID)
@@ -331,8 +311,6 @@ func assertSecret(t *testing.T, repo *storeBackupRepository, ctx context.Context
 	t.Errorf("secret %s is missing", key)
 }
 
-// TestListBackupsByDatabaseRespectsLimit is the D2-14 regression: the query
-// must never return more rows than the requested bound.
 func TestListBackupsByDatabaseRespectsLimit(t *testing.T) {
 	_, st := integrationEnv(t)
 	repo := newStoreBackupRepository(st)
@@ -381,9 +359,6 @@ func TestListBackupsByDatabaseRespectsLimit(t *testing.T) {
 	}
 }
 
-// TestListRestoresByDatabaseRespectsLimit is the D3-7 integration regression:
-// the query returns a database's restores newest first, hides a soft-deleted
-// database's rows, and never exceeds the requested bound.
 func TestListRestoresByDatabaseRespectsLimit(t *testing.T) {
 	_, st := integrationEnv(t)
 	repo := newStoreBackupRepository(st)
@@ -430,7 +405,6 @@ func TestListRestoresByDatabaseRespectsLimit(t *testing.T) {
 	}
 
 	older := seedRestore(live.ID)
-	// Distinct created_at values so the newest-first assertion is deterministic.
 	time.Sleep(2 * time.Millisecond)
 	newer := seedRestore(live.ID)
 	seedRestore(removed.ID)
@@ -466,9 +440,6 @@ func TestListRestoresByDatabaseRespectsLimit(t *testing.T) {
 	}
 }
 
-// TestHasBackupsForTargetCountsLiveRuns exercises the destination lock query:
-// a running run locks the target (it will record the old destination), and a
-// target with no live or completed run does not.
 func TestHasBackupsForTargetCountsLiveRuns(t *testing.T) {
 	_, st := integrationEnv(t)
 	repo := newStoreBackupRepository(st)
@@ -523,8 +494,6 @@ func TestHasBackupsForTargetCountsLiveRuns(t *testing.T) {
 	}
 }
 
-// seedRaceTarget creates a target and a database for the lock interleaving
-// tests and returns them.
 func seedRaceTarget(t *testing.T, st *store.Store, repo *storeBackupRepository, ownerID, serverID uuid.UUID) (BackupTarget, Database) {
 	t.Helper()
 	ctx := context.Background()
@@ -557,10 +526,6 @@ func seedRaceTarget(t *testing.T, st *store.Store, repo *storeBackupRepository, 
 	return target, database
 }
 
-// TestBackupRunWaitsForDestinationEditLock is the U3 regression, edit-first
-// direction: while a destination edit holds the target row, a run that
-// references the target blocks, and after the edit commits the run carries the
-// post-edit configuration.
 func TestBackupRunWaitsForDestinationEditLock(t *testing.T) {
 	_, st := integrationEnv(t)
 	repo := newStoreBackupRepository(st)
@@ -612,9 +577,6 @@ func TestBackupRunWaitsForDestinationEditLock(t *testing.T) {
 	}
 }
 
-// TestDestinationEditWaitsForRunLock is the U3 regression, run-first
-// direction: while a run holds the target row, the destination edit blocks;
-// once the run commits, the edit sees the running backup and is refused.
 func TestDestinationEditWaitsForRunLock(t *testing.T) {
 	_, st := integrationEnv(t)
 	repo := newStoreBackupRepository(st)
@@ -630,8 +592,6 @@ func TestDestinationEditWaitsForRunLock(t *testing.T) {
 		close(runLocked)
 		<-release
 	}
-	// LIFO: release the run before clearing the seam, so a t.Fatalf before the
-	// explicit release cannot leave the run goroutine blocking the pool close.
 	t.Cleanup(func() { st.BeforeBackupRunCommit = nil })
 	t.Cleanup(releaseRun)
 
@@ -677,9 +637,6 @@ func TestDestinationEditWaitsForRunLock(t *testing.T) {
 	assertTargetState(t, repo, ctx, target.ID, target.Name, "https://old", "old")
 }
 
-// TestBackupTargetValidationLeavesNoRow is the store-level half of the round-2
-// U1 fix: the ownership validation runs on the locked target before the run is
-// inserted, so a rejected target creates no running row.
 func TestBackupTargetValidationLeavesNoRow(t *testing.T) {
 	_, st := integrationEnv(t)
 	repo := newStoreBackupRepository(st)

@@ -11,25 +11,12 @@ import {
   terminalServer,
 } from "./terminal-support";
 
-/**
- * JUS-261 terminal UI polish on the REAL stack.
- *
- * Three production defects: the floating window's minimize/close controls did
- * not sit at the header's right edge, the File manager terminal action was an
- * icon-only button in the right-hand cluster instead of a labelled control
- * after "File operations", and the close-confirmation footer buttons touched.
- * The layout assertions below are pixel/box based (no text-only checks) at the
- * four reported widths, and every shell opened here is a real PTY.
- */
-// A 900px-tall window leaves the File manager toolbar above the floating
-// terminal window, so the ten real clicks are not intercepted by its body.
 test.use({
   storageState: storageStatePath,
   viewport: { width: 1366, height: 900 },
 });
 
 const account = loadAccount();
-/** fresh is this file's own sign-in (see loginFresh). */
 let fresh: Awaited<ReturnType<typeof loginFresh>>;
 
 test.beforeAll(async ({ request }) => {
@@ -40,7 +27,6 @@ test.beforeEach(async ({ page }) => {
   await installSession(page, fresh);
 });
 
-/** requireTerminalNode skips when the real node is unavailable. */
 async function requireTerminalNode(
   request: Parameters<typeof terminalServer>[0],
 ) {
@@ -58,7 +44,6 @@ async function requireTerminalNode(
   return server!;
 }
 
-/** boxOf returns a locator's box, failing loudly when it has none. */
 async function boxOf(locator: Locator, label: string) {
   const box = await locator.boundingBox();
   if (!box) {
@@ -67,7 +52,6 @@ async function boxOf(locator: Locator, label: string) {
   return box;
 }
 
-/** terminalButton is the labelled File manager action. */
 function terminalButton(page: Page): Locator {
   return page.getByRole("button", { name: "Open terminal here" });
 }
@@ -90,12 +74,9 @@ test.describe("terminal UI polish", () => {
       const operationsBox = await boxOf(operations, "File operations");
       const terminalBox = await boxOf(terminal, "Terminal");
 
-      // Directly after File operations, on the same row.
       expect(terminalBox.x).toBeGreaterThanOrEqual(
         operationsBox.x + operationsBox.width - 0.5,
       );
-      // Adjacent, not merely somewhere to the right: the old icon-only action
-      // lived in the far-right cluster, which this gap bound rules out.
       expect(
         terminalBox.x - (operationsBox.x + operationsBox.width),
       ).toBeLessThanOrEqual(16);
@@ -107,7 +88,6 @@ test.describe("terminal UI polish", () => {
         ),
       ).toBeLessThanOrEqual(1);
 
-      // DOM order as well: nothing sits between the two controls.
       const order = await page.evaluate(() =>
         [...document.querySelectorAll(".fm-toolbar-group button")].map(
           (button) =>
@@ -119,8 +99,6 @@ test.describe("terminal UI polish", () => {
       );
 
       if (width <= 640) {
-        // The shared toolbar breakpoint collapses labels; the aria-label and
-        // tooltip keep naming the control.
         await expect(terminal.locator(".fm-btn-label")).toBeHidden();
         await expect(terminal).toHaveAttribute(
           "aria-label",
@@ -131,8 +109,6 @@ test.describe("terminal UI polish", () => {
         await expect(terminal.locator(".fm-btn-label")).toHaveText("Terminal");
       }
 
-      // The toolbar never wraps badly: each group keeps its controls on one
-      // row and the whole bar stays within two rows (one at 1366px).
       const layout = await page.evaluate(() => {
         const rows = [...document.querySelectorAll(".fm-toolbar-group")].map(
           (group) => [
@@ -155,7 +131,6 @@ test.describe("terminal UI polish", () => {
         };
       });
       expect(layout.rows.every((centres) => centres.length === 1)).toBe(true);
-      // The labelled action keeps the whole toolbar on its 32px row.
       expect(layout.height).toBeLessThanOrEqual(44);
     }
   });
@@ -168,9 +143,6 @@ test.describe("terminal UI polish", () => {
     const server = await requireTerminalNode(request);
     await page.goto(fileManagerURL(server.id));
 
-    // Ten real PTYs make the 390px tab strip genuinely scroll. The button's
-    // own single-flight guard means each click waits for the previous create
-    // to settle; aria-busy is that settle signal.
     const open = terminalButton(page);
     for (let index = 1; index <= 10; index += 1) {
       await open.scrollIntoViewIfNeeded();
@@ -234,8 +206,6 @@ test.describe("terminal UI polish", () => {
         };
       });
 
-      // JUS-275: the sessions keep their own strip under the title bar, so the
-      // header only carries the pinned minimize/close pair at its right edge.
       expect(geometry.tabsInBar).toBe(false);
       expect(geometry.strip.top).toBeGreaterThanOrEqual(
         geometry.bar.bottom - 0.5,
@@ -265,14 +235,11 @@ test.describe("terminal UI polish", () => {
       }
     }
 
-    // Keyboard reachable: the active tab hands Tab to the add control, and the
-    // bar's minimize then close follow.
     await page.locator('.term-tab-name[aria-selected="true"]').focus();
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
       .toContain("term-add-tab");
-    // The strip is reachable in both directions from the active tab.
     await page.keyboard.press("Shift+Tab");
     await expect
       .poll(() =>
@@ -285,7 +252,6 @@ test.describe("terminal UI polish", () => {
       .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
       .toContain("term-window-close");
 
-    // Real-pointer minimize → rail restore, then close → dialog → cancel.
     await page.setViewportSize({ width: 1366, height: 900 });
     const minimize = page.locator(".term-window-min");
     const minimizeBox = await boxOf(minimize, "minimize");
@@ -306,8 +272,6 @@ test.describe("terminal UI polish", () => {
     const dialog = page.locator(".term-close-modal");
     await expect(dialog).toBeVisible();
 
-    // The footer gap is the spacing token (Naive zooms the card in, so wait
-    // for the settled scale before measuring).
     await expect
       .poll(async () =>
         page.evaluate(() => {
@@ -343,7 +307,6 @@ test.describe("terminal UI polish", () => {
     await expect(dialog).toBeHidden();
     await expect(page.locator(".term-tab")).toHaveCount(10);
 
-    // Cleanup through the UI: close every session and confirm.
     await close.click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Close all" }).click();

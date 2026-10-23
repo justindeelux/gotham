@@ -7,7 +7,6 @@ import {
 } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
 
-/** useInstanceSettings loads and holds the instance-settings state of the page. */
 export function useInstanceSettings() {
   const state = ref<InstanceState | null>(null);
   const loading = ref(false);

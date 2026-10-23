@@ -12,9 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestStoreRepositoryBuildLogRoundtrip persists a capped build log through
-// the repository and reads it back with the deployment: the stream lines a
-// finished run teed, the UTF-8 sanitized tail the API serves.
 func TestStoreRepositoryBuildLogRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -76,12 +73,10 @@ func TestStoreRepositoryBuildLogRoundtrip(t *testing.T) {
 		t.Fatalf("CreateDeployment: %v", err)
 	}
 
-	// A fresh deployment carries no log: the run is still in flight.
 	if got, err := repo.GetDeployment(ctx, appID, dep.ID); err != nil || got.BuildLog != "" {
 		t.Fatalf("GetDeployment = %q, %v; want empty, nil", got.BuildLog, err)
 	}
 
-	// An oversized log with invalid UTF-8 stores as the sanitized tail.
 	raw := strings.Repeat("H\n", maxBuildLogBytes) + "\xff\xfe broken\ntail line\n"
 	if err := repo.UpdateDeploymentBuildLog(ctx, dep.ID, sanitizeBuildLog(raw)); err != nil {
 		t.Fatalf("UpdateDeploymentBuildLog: %v", err)
@@ -97,7 +92,6 @@ func TestStoreRepositoryBuildLogRoundtrip(t *testing.T) {
 		t.Error("stored log does not keep the tail")
 	}
 
-	// State-machine writes never clobber the stored log.
 	dep.State = StateFailed
 	dep.Error = "boom"
 	if _, err := repo.UpdateDeployment(ctx, dep); err != nil {

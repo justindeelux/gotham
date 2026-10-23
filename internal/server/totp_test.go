@@ -10,7 +10,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// decodeAuthBody decodes an auth response body.
 func decodeAuthBody(t *testing.T, raw []byte) authResponse {
 	t.Helper()
 	var body authResponse
@@ -20,8 +19,6 @@ func decodeAuthBody(t *testing.T, raw []byte) authResponse {
 	return body
 }
 
-// TestLoginSecondFactorChallenge: with TOTP enabled, the password step returns
-// mfa_required with no token pair, and only /login/totp mints one.
 func TestLoginSecondFactorChallenge(t *testing.T) {
 	s := newTestAuthServer(t)
 	s.auth.(*fakeAuthService).mfaLogin = true
@@ -48,8 +45,6 @@ func TestLoginSecondFactorChallenge(t *testing.T) {
 		t.Fatalf("login/totp body = %+v, want a token pair", body)
 	}
 
-	// A wrong code, an unknown token and a missing code all answer the same
-	// generic 401 so nothing distinguishes the failure.
 	for name, body := range map[string]string{
 		"wrong code": `{"mfa_token":"mfa-token","code":"000000"}`,
 		"bad token":  `{"mfa_token":"nope","code":"123456"}`,
@@ -65,9 +60,6 @@ func TestLoginSecondFactorChallenge(t *testing.T) {
 	}
 }
 
-// TestTOTPLockoutMapsTo429: an account locked out after repeated wrong codes
-// answers 429 on both the login step and the profile routes, so the SPA shows
-// its rate-limit message rather than a plain "invalid code".
 func TestTOTPLockoutMapsTo429(t *testing.T) {
 	s := newTestAuthServer(t)
 	unlimitAuthLimiter(t, s)
@@ -88,8 +80,6 @@ func TestTOTPLockoutMapsTo429(t *testing.T) {
 	}
 }
 
-// TestLoginSecondFactorRateLimit: the second step shares the credential bucket,
-// so a six-digit code cannot be brute forced.
 func TestLoginSecondFactorRateLimit(t *testing.T) {
 	s := newTestAuthServer(t)
 
@@ -115,7 +105,6 @@ func TestLoginSecondFactorRateLimit(t *testing.T) {
 	}
 }
 
-// TestTOTPProfileRoutes exercises the profile endpoints and their error mapping.
 func TestTOTPProfileRoutes(t *testing.T) {
 	s := newTestAuthServer(t)
 	unlimitAuthLimiter(t, s)
@@ -177,8 +166,6 @@ func TestTOTPProfileRoutes(t *testing.T) {
 	}
 }
 
-// TestTOTPRejectsAPITokens: a scoped API token must never manage the second
-// factor, matching every other profile route.
 func TestTOTPRejectsAPITokens(t *testing.T) {
 	s, tokens := newTestProfileServer(t)
 	unlimitAuthLimiter(t, s)
@@ -207,8 +194,6 @@ func TestTOTPRejectsAPITokens(t *testing.T) {
 	}
 }
 
-// unlimitAuthLimiter swaps in an unlimited credential limiter so a test can
-// make more than the production burst of requests.
 func unlimitAuthLimiter(t *testing.T, s *Server) {
 	t.Helper()
 	old := s.authLimiter

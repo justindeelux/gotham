@@ -11,19 +11,10 @@ import type {
   Project,
 } from "@/features/projects/api/projects";
 import { useTeamsStore } from "@/features/teams";
-/**
- * Project/environment options behind the create-flow scope summary and the
- * resource move card (PE-5, Linear JUS-34).
- *
- * Page-local (per-mount refs): the projects store's detail is never touched,
- * so a select on a detail page cannot clobber the ProjectDetailPage state.
- * Environments load lazily per project and are cached for the mount.
- */
 export function useEnvironmentOptions() {
   const teamsStore = useTeamsStore();
 
   const projectsLoading = ref(false);
-  /** projectsFailure retains the raw list refusal for reactive display. */
   const projectsFailure: Ref<unknown> = ref(null);
   const projectsError = computed<string | null>(() =>
     projectsFailure.value === null
@@ -33,7 +24,6 @@ export function useEnvironmentOptions() {
   const projects = ref<Project[]>([]);
   const environmentsByProject = ref<Record<string, Environment[]>>({});
   const environmentsLoading = ref(false);
-  /** environmentsFailure retains the raw environments refusal. */
   const environmentsFailure: Ref<unknown> = ref(null);
   const environmentsError = computed<string | null>(() =>
     environmentsFailure.value === null
@@ -41,7 +31,6 @@ export function useEnvironmentOptions() {
       : describeProjectError(environmentsFailure.value),
   );
 
-  /** projectOptions lists every project of the active team for the selects. */
   const projectOptions = computed<Array<{ label: string; value: string }>>(() =>
     projects.value.map((project) => ({
       label: project.name,
@@ -49,13 +38,11 @@ export function useEnvironmentOptions() {
     })),
   );
 
-  /** canWrite follows the contract's roles: viewers read, members write. */
   const canWrite = computed<boolean>(() => {
     const role = teamsStore.activeTeam?.role ?? null;
     return role === null || role !== "read_only";
   });
 
-  /** environmentOptions lists the cached environments of one project. */
   function environmentOptions(projectId: string): Array<{ label: string; value: string }> {
     return (environmentsByProject.value[projectId] ?? []).map((environment) => ({
       label: environment.name,
@@ -63,12 +50,10 @@ export function useEnvironmentOptions() {
     }));
   }
 
-  /** projectNameOf resolves a project id to its display name. */
   function projectNameOf(projectId: string): string {
     return projects.value.find((project) => project.id === projectId)?.name ?? "";
   }
 
-  /** environmentNameOf resolves an environment id to its display name. */
   function environmentNameOf(projectId: string, environmentId: string): string {
     return (
       environmentsByProject.value[projectId]?.find(
@@ -77,7 +62,6 @@ export function useEnvironmentOptions() {
     );
   }
 
-  /** fetchProjects loads the active team's projects for the selects. */
   async function fetchProjects(): Promise<void> {
     projectsLoading.value = true;
     projectsFailure.value = null;
@@ -90,7 +74,6 @@ export function useEnvironmentOptions() {
     }
   }
 
-  /** fetchEnvironments loads (and caches) one project's environments. */
   async function fetchEnvironments(projectId: string): Promise<void> {
     if (projectId === "" || environmentsByProject.value[projectId]) {
       return;
@@ -127,5 +110,4 @@ export function useEnvironmentOptions() {
   };
 }
 
-/** EnvironmentOptions is the shared scope-select state. */
 export type EnvironmentOptions = ReturnType<typeof useEnvironmentOptions>;

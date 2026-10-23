@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeDNSProviderService is a canned DNSProviderService.
 type fakeDNSProviderService struct {
 	provider DNSProvider
 	err      error
@@ -64,7 +63,6 @@ func (f *fakeDNSProviderService) DeleteProvider(context.Context, uuid.UUID) erro
 	return f.err
 }
 
-// fakeCertificateService is a canned CertificateService.
 type fakeCertificateService struct {
 	certificate DomainCertificate
 	err         error
@@ -113,7 +111,6 @@ func (f *fakeCertificateService) DeleteCertificate(context.Context, uuid.UUID) e
 	return f.err
 }
 
-// sampleProvider is the provider the wire tests render.
 func sampleProvider() DNSProvider {
 	return DNSProvider{
 		ID:               uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001"),
@@ -127,7 +124,6 @@ func sampleProvider() DNSProvider {
 	}
 }
 
-// sampleCertificate is the certificate config the wire tests render.
 func sampleCertificate() DomainCertificate {
 	return DomainCertificate{
 		ID:            uuid.MustParse("cccccccc-0000-0000-0000-000000000003"),
@@ -140,15 +136,12 @@ func sampleCertificate() DomainCertificate {
 	}
 }
 
-// newSSLRoutes mounts the sync endpoint (without a service) plus the SSL CRUD
-// endpoints behind a no-op auth middleware.
 func newSSLRoutes(dns DNSProviderService, certs CertificateService) http.Handler {
 	r := chi.NewRouter()
 	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, dns, certs, nil, nil)
 	return r
 }
 
-// doJSON performs one JSON request against the handler.
 func doJSON(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *strings.Reader
@@ -240,7 +233,6 @@ func TestSSLRouteMappingsAndValidation(t *testing.T) {
 		})
 	}
 
-	// The service-level validation error surfaces verbatim with 400.
 	handler := newSSLRoutes(&fakeDNSProviderService{err: ErrValidation}, &fakeCertificateService{certificate: sampleCertificate()})
 	recorder := doJSON(t, handler, http.MethodPost, "/v1/proxy/dns-providers",
 		`{"provider":"cloudflare","zones":["example.com"],"credential":"t"}`)
@@ -290,9 +282,6 @@ func TestCertificateCRUDRoutes(t *testing.T) {
 	}
 }
 
-// TestStrictDecodingBodyLimitEdges pins the exact size boundary: trailing
-// whitespace padding up to and including the limit is accepted, one byte above
-// is rejected.
 func TestStrictDecodingBodyLimitEdges(t *testing.T) {
 	base := `{"enabled":false}`
 	padded := func(size int) string {
@@ -361,10 +350,6 @@ func TestMountSkipsSSLRoutesWithoutServices(t *testing.T) {
 	}
 }
 
-// TestSSLRoutesAreBehindAuthentication proves every SSL endpoint is mounted
-// behind its group's auth middleware (the platform boundary for the global
-// routes, the team chain for per-application certificates and redirects):
-// unauthenticated requests never reach the services.
 func TestSSLRoutesAreBehindAuthentication(t *testing.T) {
 	r := chi.NewRouter()
 	requireTestAuth := func(next http.Handler) http.Handler {
@@ -400,9 +385,6 @@ func TestSSLRoutesAreBehindAuthentication(t *testing.T) {
 	}
 }
 
-// TestPerApplicationRoutesMapTeamErrors proves the certificate and redirect
-// handlers answer 403 for a read_only member's mutation and 404 for a foreign
-// team's resource, which are the two errors the services produce (F3).
 func TestPerApplicationRoutesMapTeamErrors(t *testing.T) {
 	certs := &fakeCertificateService{certificate: sampleCertificate(), err: ErrForbidden}
 	redirects := &fakeRedirectService{redirect: sampleRedirect(), err: ErrNotFound}

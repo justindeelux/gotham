@@ -1,7 +1,3 @@
-// Shortcut sheet contract (JUS-228): every row the sheet lists must be a real
-// binding in the editor's keymap or a declared CodeMirror/browser default, and
-// every row must have an EN + VI label. The sheet and keymap share one table,
-// so this guards drift.
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { foldKeymap } from "@codemirror/language";
 import { searchKeymap } from "@codemirror/search";
@@ -32,7 +28,6 @@ const builtinBindings: KeyBindingLike[] = [
   ...foldKeymap,
 ];
 
-/** customKeymap builds the command bindings with no-op handlers. */
 function customKeymap() {
   const noop = vi.fn();
   return editorCommandKeymap({
@@ -48,7 +43,6 @@ function customKeymap() {
   });
 }
 
-/** isBound reports whether a key string is bound on either platform. */
 function isBound(
   key: string,
   custom: ReturnType<typeof editorCommandKeymap>,
@@ -68,7 +62,6 @@ function isBound(
   });
 }
 
-/** messageAt resolves a dotted message key on a locale catalog. */
 function messageAt(catalog: unknown, path: string): unknown {
   return path
     .split(".")
@@ -107,10 +100,8 @@ describe("editor shortcut table", () => {
       ...shortcut.keys,
       ...(shortcut.macKeys ?? []),
     ]);
-    // Ctrl+Tab / Ctrl+Shift+Tab never reach a page; the sheet must not list them.
     expect(keys).not.toContain("Ctrl-Tab");
     expect(keys).not.toContain("Ctrl-Shift-Tab");
-    // Cmd+H hides the app on macOS; replace uses the editor convention there.
     const replace = editorShortcuts.find((shortcut) => shortcut.id === "replace")!;
     expect(shortcutKeysFor(replace, "other")).toEqual(["Mod-h"]);
     expect(shortcutKeysFor(replace, "mac")).toEqual(["Mod-Alt-f"]);

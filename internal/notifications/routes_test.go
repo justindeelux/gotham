@@ -15,14 +15,10 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// alwaysUser returns a UserIDFunc for one user.
 func alwaysUser(id uuid.UUID) UserIDFunc {
 	return func(context.Context) (uuid.UUID, bool) { return id, true }
 }
 
-// newRouteServer mounts the channel routes with an auth middleware that
-// injects the given team scope, standing in for the server's RequireAuth +
-// RequireTeam chain.
 func newRouteServer(userID, teamID uuid.UUID, role teams.Role, svc NotificationService) http.Handler {
 	auth := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +31,6 @@ func newRouteServer(userID, teamID uuid.UUID, role teams.Role, svc NotificationS
 	return router
 }
 
-// doRequest runs one request against the router and returns the recorder.
 func doRequest(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
@@ -46,12 +41,10 @@ func doRequest(handler http.Handler, method, path, body string) *httptest.Respon
 	return rec
 }
 
-// discordBody is a valid create payload whose secret must never come back.
 func discordBody(secret string) string {
 	return `{"name":"team alerts","kind":"discord","config":{"webhook_url":"` + secret + `"}}`
 }
 
-// decodeChannel decodes the envelope of a single-channel response.
 func decodeChannel(t *testing.T, rec *httptest.ResponseRecorder) ChannelView {
 	t.Helper()
 	var envelope channelEnvelope
@@ -61,8 +54,6 @@ func decodeChannel(t *testing.T, rec *httptest.ResponseRecorder) ChannelView {
 	return envelope.Channel
 }
 
-// TestChannelRoutesLifecycleAndRedaction walks create, read, update and delete
-// and asserts the secret never appears in a response.
 func TestChannelRoutesLifecycleAndRedaction(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -119,7 +110,6 @@ func TestChannelRoutesLifecycleAndRedaction(t *testing.T) {
 	}
 }
 
-// TestChannelRouteValidation pins the 400 mapping for malformed requests.
 func TestChannelRouteValidation(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	service := newTestService(t, newFakeRepository())
@@ -149,8 +139,6 @@ func TestChannelRouteValidation(t *testing.T) {
 	}
 }
 
-// TestChannelRouteReadOnlyCannotWrite proves the read_only role reads but
-// every mutation is refused with 403.
 func TestChannelRouteReadOnlyCannotWrite(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -175,8 +163,6 @@ func TestChannelRouteReadOnlyCannotWrite(t *testing.T) {
 	}
 }
 
-// TestChannelRouteForeignTeamIsNotFound proves a channel of another team is a
-// 404 for every read and mutation.
 func TestChannelRouteForeignTeamIsNotFound(t *testing.T) {
 	ownerID, teamA := uuid.New(), uuid.New()
 	strangerID, teamB := uuid.New(), uuid.New()
@@ -203,14 +189,12 @@ func TestChannelRouteForeignTeamIsNotFound(t *testing.T) {
 		t.Fatalf("foreign list = %d %s, want an empty own-team list", list.Code, list.Body.String())
 	}
 
-	// The owner is unaffected.
 	ownerHandler := newRouteServer(ownerID, teamA, teams.RoleOwner, service)
 	if rec := doRequest(ownerHandler, http.MethodGet, path, ""); rec.Code != http.StatusOK {
 		t.Fatalf("owner get = %d, want 200", rec.Code)
 	}
 }
 
-// TestChannelRouteEmptyListIsArray proves an empty list serialises as [].
 func TestChannelRouteEmptyListIsArray(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	service := newTestService(t, newFakeRepository())
@@ -225,8 +209,6 @@ func TestChannelRouteEmptyListIsArray(t *testing.T) {
 	}
 }
 
-// TestChannelRouteTestDeliversMail proves the test endpoint sends through the
-// configured mailer and reports the result without secrets.
 func TestChannelRouteTestDeliversMail(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -267,13 +249,11 @@ func TestChannelRouteTestDeliversMail(t *testing.T) {
 	}
 }
 
-// TestChannelRouteTestHidesTransportSecret proves the authenticated send-test
-// response never carries the endpoint credential.
 func TestChannelRouteTestHidesTransportSecret(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	server, _ := newWebhookServer(t, http.StatusOK)
 	endpoint := server.URL + "/webhook/route-secret-token"
-	server.Close() // connections are refused
+	server.Close()
 
 	repo := newFakeRepository()
 	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint})
@@ -306,8 +286,6 @@ func TestChannelRouteTestHidesTransportSecret(t *testing.T) {
 	}
 }
 
-// TestChannelRouteMaskedConfigPatch proves a UI round-trip (GET, then PATCH
-// with the returned config) cannot wipe the stored secret.
 func TestChannelRouteMaskedConfigPatch(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -342,8 +320,6 @@ func TestChannelRouteMaskedConfigPatch(t *testing.T) {
 	}
 }
 
-// TestChannelRouteTestHidesStatusReasonPhrase proves the authenticated
-// send-test response never carries the remote-controlled HTTP reason phrase.
 func TestChannelRouteTestHidesStatusReasonPhrase(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	server := newReflectingStatusServer(t, http.StatusInternalServerError)
@@ -378,8 +354,6 @@ func TestChannelRouteTestHidesStatusReasonPhrase(t *testing.T) {
 	}
 }
 
-// TestChannelRoutesUnmountWhenDisabled proves the feature flag and a nil
-// service mount no routes.
 func TestChannelRoutesUnmountWhenDisabled(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	t.Setenv(FeatureEnv, "false")
@@ -398,9 +372,6 @@ func TestChannelRoutesUnmountWhenDisabled(t *testing.T) {
 	}
 }
 
-// TestChannelRouteDeliveriesHistory proves the history endpoint serves the
-// newest attempts, lets a read_only member read it, 404s a foreign channel and
-// never carries a channel secret.
 func TestChannelRouteDeliveriesHistory(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()

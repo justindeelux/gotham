@@ -1,17 +1,12 @@
 import { expect, test as base } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/** Guardrail findings collected while a page is exercised. */
 export interface Guardrails {
-  /** Every console error (and uncaught page error) seen on the page. */
   consoleErrors: string[];
-  /** Every /api/v1/* response with a 5xx status. */
   serverErrors: string[];
-  /** Every /api/v1/* response with a 4xx status or a failed request. */
   apiFailures: string[];
 }
 
-/** watchGuardrails wires the console/network guardrail onto one page. */
 function watchGuardrails(page: Page): Guardrails {
   const guardrails: Guardrails = {
     consoleErrors: [],
@@ -52,20 +47,9 @@ function watchGuardrails(page: Page): Guardrails {
 
 interface GuardrailFixtures {
   guardrails: Guardrails;
-  /**
-   * Console-error substrings a scenario provokes on purpose. Provoking a 404
-   * (the feature-flag path of a hidden surface) makes the browser log
-   * "Failed to load resource…"; the test still asserts the app renders no
-   * error of its own.
-   */
   expectedConsoleErrors: string[];
 }
 
-/**
- * `test` extends the base test with a guardrail fixture that is asserted on
- * teardown: any console error or 5xx /api/v1/* response fails the test.
- * Scenarios that must also prove no 4xx requests can assert `apiFailures`.
- */
 export const test = base.extend<GuardrailFixtures>({
   expectedConsoleErrors: [[], { option: true }],
   guardrails: async ({ page, expectedConsoleErrors }, use) => {

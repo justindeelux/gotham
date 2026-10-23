@@ -16,32 +16,24 @@ func serviceDoc(body string) string {
 	return "services:\n  web:\n    image: example.com/app:1.0\n" + body
 }
 
-// TestValidateBypassTable feeds every node-escape payload from the GS-8
-// review reports and asserts rejection naming the offending path. Each case
-// was verified against real `docker compose config` semantics by the
-// reviewers; the validator must refuse them all before they reach a node.
 func TestValidateBypassTable(t *testing.T) {
 	managed := guardRoot + "/" + guardAppID
 	cases := []struct {
 		name    string
 		content string
-		want    string // required substring of the error (the offending path)
+		want    string
 	}{
-		// Host root through volume driver_opts.
 		{"driver opts bind", "services:\n  web:\n    image: x\n    volumes:\n      - data:/mnt\nvolumes:\n  data:\n    driver_opts:\n      type: none\n      o: bind\n      device: /\n", "volumes.data"},
 		{"driver non-local", "services:\n  web:\n    image: x\n    volumes:\n      - data:/mnt\nvolumes:\n  data:\n    driver: nfs\n", "volumes.data"},
-		// Host files through secrets/configs file:.
 		{"secrets file", "services:\n  web:\n    image: x\n    secrets:\n      - s\nsecrets:\n  s:\n    file: /etc/hostname\n", "secrets"},
 		{"configs file", "services:\n  web:\n    image: x\n    configs:\n      - c\nconfigs:\n  c:\n    file: /etc/hostname\n", "configs"},
 		{"secrets external", "services:\n  web:\n    image: x\n    secrets:\n      - s\nsecrets:\n  s:\n    external: true\n", "secrets"},
-		// Relative bind escapes (compose treats leading ., /, ~ as paths).
 		{"parent bind", serviceDoc("    volumes:\n      - ..:/mnt\n"), "services.web"},
 		{"hidden bind", serviceDoc("    volumes:\n      - .hidden:/mnt\n"), "services.web"},
 		{"home bind", serviceDoc("    volumes:\n      - ~:/mnt\n"), "services.web"},
 		{"home user bind", serviceDoc("    volumes:\n      - ~root:/mnt\n"), "services.web"},
 		{"dot bind", serviceDoc("    volumes:\n      - .:/mnt\n"), "services.web"},
 		{"dot slash bind", serviceDoc("    volumes:\n      - ./data:/mnt\n"), "services.web"},
-		// Capabilities (case and prefix variants).
 		{"cap sys admin", serviceDoc("    cap_add:\n      - SYS_ADMIN\n"), "services.web"},
 		{"cap prefix", serviceDoc("    cap_add:\n      - CAP_SYS_ADMIN\n"), "services.web"},
 		{"cap lower", serviceDoc("    cap_add:\n      - cap_sys_admin\n"), "services.web"},
@@ -50,7 +42,6 @@ func TestValidateBypassTable(t *testing.T) {
 		{"cap sys ptrace", serviceDoc("    cap_add:\n      - SYS_PTRACE\n"), "services.web"},
 		{"cap dac override", serviceDoc("    cap_add:\n      - DAC_OVERRIDE\n"), "services.web"},
 		{"cap drop rejected", serviceDoc("    cap_drop:\n      - ALL\n"), "services.web"},
-		// LSM and misc host configuration.
 		{"security opt", serviceDoc("    security_opt:\n      - seccomp=unconfined\n"), "services.web"},
 		{"apparmor", serviceDoc("    security_opt:\n      - apparmor=unconfined\n"), "services.web"},
 		{"sysctls", serviceDoc("    sysctls:\n      net.core.somaxconn: 1024\n"), "services.web"},
@@ -59,7 +50,6 @@ func TestValidateBypassTable(t *testing.T) {
 		{"gpus", serviceDoc("    gpus: all\n"), "services.web"},
 		{"privileged", serviceDoc("    privileged: true\n"), "services.web"},
 		{"privileged one", serviceDoc("    privileged: 1\n"), "services.web"},
-		// Namespaces (host, container: and service: forms).
 		{"network host", serviceDoc("    network_mode: host\n"), "services.web"},
 		{"network container", serviceDoc("    network_mode: container:other\n"), "services.web"},
 		{"network service", serviceDoc("    network_mode: service:other\n"), "services.web"},
@@ -71,7 +61,6 @@ func TestValidateBypassTable(t *testing.T) {
 		{"uts host", serviceDoc("    uts: host\n"), "services.web"},
 		{"cgroup host", serviceDoc("    cgroup: host\n"), "services.web"},
 		{"cgroup parent", serviceDoc("    cgroup_parent: /\n"), "services.web"},
-		// Cross-container mounts and networks.
 		{"volumes from", serviceDoc("    volumes_from:\n      - container:other:rw\n"), "services.web"},
 		{"external object", "services:\n  web:\n    image: x\n    volumes:\n      - shared:/data\nvolumes:\n  shared:\n    external:\n      name: gotham-app-other-data\n", "volumes.shared"},
 		{"external bool", "services:\n  web:\n    image: x\n    volumes:\n      - shared:/data\nvolumes:\n  shared:\n    external: true\n", "volumes.shared"},
@@ -80,14 +69,11 @@ func TestValidateBypassTable(t *testing.T) {
 		{"networks external", "services:\n  web:\n    image: x\n    networks:\n      - n\nnetworks:\n  n:\n    external: true\n", "networks.n"},
 		{"networks driver", "services:\n  web:\n    image: x\n    networks:\n      - n\nnetworks:\n  n:\n    driver: macvlan\n", "networks.n"},
 		{"network undeclared", serviceDoc("    networks:\n      - ghost\n"), "services.web"},
-		// Agent environment inheritance.
 		{"env bare list", serviceDoc("    environment:\n      - INHERIT_ME\n"), "services.web"},
 		{"env null mapping", serviceDoc("    environment:\n      INHERIT_ME:\n"), "services.web"},
-		// Gotham label spoofing.
 		{"label app id map", serviceDoc("    labels:\n      gotham.app_id: 00000000-0000-0000-0000-000000000000\n"), "services.web"},
 		{"label app id list", serviceDoc("    labels:\n      - gotham.app_id=00000000-0000-0000-0000-000000000000\n"), "services.web"},
 		{"label domain", serviceDoc("    labels:\n      gotham.domain: evil.example.com\n"), "services.web"},
-		// Build and repo inputs the node never receives.
 		{"build", serviceDoc("    build: .\n"), "services.web"},
 		{"extends", serviceDoc("    extends:\n      service: base\n"), "services.web"},
 		{"env file", serviceDoc("    env_file: .env\n"), "services.web"},
@@ -102,7 +88,6 @@ func TestValidateBypassTable(t *testing.T) {
 		{"replicas", serviceDoc("    deploy:\n      replicas: 3\n"), "services.web"},
 		{"runtime", serviceDoc("    runtime: nvidia\n"), "services.web"},
 		{"ulimits", serviceDoc("    ulimits:\n      nofile: 100\n"), "services.web"},
-		// Binds outside the managed directory.
 		{"bind etc", serviceDoc("    volumes:\n      - /etc/passwd:/data:ro\n"), "services.web"},
 		{"docker sock", serviceDoc("    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n"), "services.web"},
 		{"docker sock renamed", serviceDoc("    volumes:\n      - /tmp/docker.sock:/sock\n"), "services.web"},
@@ -110,7 +95,6 @@ func TestValidateBypassTable(t *testing.T) {
 		{"nested bind", serviceDoc("    volumes:\n      - " + managed + "/a/b:/data\n"), "services.web"},
 		{"long bind type mismatch", "services:\n  web:\n    image: x\n    volumes:\n      - type: volume\n        source: /etc\n        target: /data\n", "services.web"},
 		{"subpath escape", "services:\n  web:\n    image: x\n    volumes:\n      - type: volume\n        source: data\n        target: /data\n        volume:\n          subpath: ../escape\nvolumes:\n  data: {}\n", "services.web"},
-		// Structure.
 		{"top name", "name: myproject\nservices:\n  web:\n    image: x\n", "top-level"},
 		{"top include", "include:\n  - other.yml\nservices:\n  web:\n    image: x\n", "top-level"},
 		{"top version", "version: \"3\"\nservices:\n  web:\n    image: x\n", "version"},
@@ -122,14 +106,10 @@ func TestValidateBypassTable(t *testing.T) {
 		{"multi document", "services:\n  web:\n    image: x\n---\nservices:\n  evil:\n    image: y\n    privileged: true\n", "single document"},
 		{"nul byte", "services:\n  web:\n    image: a\x00b\n", "NUL"},
 		{"invalid utf-8", "services:\n  web:\n    image: \xff\xfe\n", "UTF-8"},
-		// Round-4 I1: NUL via escape decodes to a real NUL the raw-text
-		// check never sees. Every spelling fails closed with the path.
 		{"nul escape", "services:\n  web:\n    image: x\n    environment:\n      A: \"x\\0y\"\n", "services.web.environment"},
 		{"nul hex escape", "services:\n  web:\n    image: x\n    environment:\n      A: \"x\\x00y\"\n", "services.web.environment"},
 		{"nul unicode escape", "services:\n  web:\n    image: x\n    environment:\n      A: \"x\\u0000y\"\n", "services.web.environment"},
 		{"nul escape key", "services:\n  web:\n    image: x\n    environment:\n      \"x\\u0000y\": v\n", "services.web.environment"},
-		// Round-2 N1: explicitly tagged scalars bypass substitution and
-		// interpolate on the node instead. Every non-core tag fails closed.
 		{"tagged image", "services:\n  web:\n    image: !x \"example.com/${TAG:-x}:latest\"\n", "!x"},
 		{"tagged env", "services:\n  web:\n    image: x\n    environment:\n      A: !x \"${AGENT_SECRET}\"\n", "!x"},
 		{"tagged command", "services:\n  web:\n    image: x\n    command: !custom [\"echo\", \"${AGENT_SECRET}\"]\n", "!custom"},
@@ -137,8 +117,6 @@ func TestValidateBypassTable(t *testing.T) {
 		{"tagged label", "services:\n  web:\n    image: x\n    labels:\n      note: !x \"${AGENT_SECRET}\"\n", "!x"},
 		{"binary scalar", "services:\n  web:\n    image: x\n    environment:\n      A: !!binary \"aGk=\"\n", "!!binary"},
 		{"timestamp scalar", "services:\n  web:\n    image: x\n    environment:\n      D: !!timestamp \"2024-01-01\"\n", "!!timestamp"},
-		// Round-4 M1: published host ports in the document obey the same
-		// reserved band as the application's own HostPort pin.
 		{"published 22", serviceDoc("    ports:\n      - \"22:22\"\n"), "services.web.ports"},
 		{"published 443", serviceDoc("    ports:\n      - \"443:443\"\n"), "services.web.ports"},
 		{"published loopback docker", serviceDoc("    ports:\n      - \"127.0.0.1:2375:2375\"\n"), "services.web.ports"},
@@ -151,18 +129,14 @@ func TestValidateBypassTable(t *testing.T) {
 		{"published long 443", "services:\n  web:\n    image: x\n    ports:\n      - target: 80\n        published: 443\n        host_ip: 0.0.0.0\n", "services.web.ports"},
 		{"published long range", "services:\n  web:\n    image: x\n    ports:\n      - target: 80\n        published: 800-900\n", "services.web.ports"},
 		{"published too many segments", serviceDoc("    ports:\n      - \"a:b:c:d\"\n"), "services.web.ports"},
-		// Round-2 N5/N6: short-form parsing matches compose-go: drive
-		// letters, propagation modes and relative targets fail closed.
 		{"drive letter", "services:\n  web:\n    image: x\n    volumes:\n      - C:/../../..:/m\nvolumes:\n  C: {}\n", "\"C\""},
 		{"drive letter long", "services:\n  web:\n    image: x\n    volumes:\n      - type: volume\n        source: C\n        target: /m\nvolumes:\n  C: {}\n", "\"C\""},
 		{"propagation mode", serviceDoc("    volumes:\n      - data:/m:rshared\n") + "volumes:\n  data: {}\n", "services.web"},
 		{"bad mode", serviceDoc("    volumes:\n      - data:/m:nonsense\n") + "volumes:\n  data: {}\n", "services.web"},
 		{"relative target", serviceDoc("    volumes:\n      - data:mnt\n") + "volumes:\n  data: {}\n", "services.web"},
 		{"long relative target", "services:\n  web:\n    image: x\n    volumes:\n      - type: volume\n        source: data\n        target: mnt\nvolumes:\n  data: {}\n", "services.web"},
-		// Bare and null environment entries inherit the node environment.
 		{"env bare list", serviceDoc("    environment:\n      - INHERIT_ME\n"), "services.web"},
 		{"env null mapping", serviceDoc("    environment:\n      INHERIT_ME:\n"), "services.web"},
-		// Structure: duplicates, leading markers, merge smuggling.
 		{"duplicate keys", "services:\n  web:\n    image: x\n    image: y\n", "already defined"},
 		{"leading marker multi", "---\nservices:\n  web:\n    image: x\n---\nservices:\n  evil:\n    image: y\n", "single document"},
 		{"merge smuggles privileged", "services:\n  web:\n    image: x\n    <<:\n      privileged: true\n", "services.web"},
@@ -180,9 +154,6 @@ func TestValidateBypassTable(t *testing.T) {
 	}
 }
 
-// TestValidatePublishedBandAccepts proves the band's allow side: ephemeral
-// mappings, high published ports and references judged after render all
-// pass the raw gate, like ordinary applications.
 func TestValidatePublishedBandAccepts(t *testing.T) {
 	accept := map[string]string{
 		"ephemeral bare":     serviceDoc("    ports:\n      - \"3000\"\n"),
@@ -204,9 +175,6 @@ func TestValidatePublishedBandAccepts(t *testing.T) {
 	}
 }
 
-// TestValidateUndeclaredVolume pins the relaxed reference rule: a named
-// volume used by a service needs no top-level declaration, while the
-// reserved namespace and malformed names stay rejected.
 func TestValidateUndeclaredVolume(t *testing.T) {
 	accepted := map[string]string{
 		"short":      serviceDoc("    volumes:\n      - missing:/data\n"),
@@ -234,9 +202,6 @@ func TestValidateUndeclaredVolume(t *testing.T) {
 	}
 }
 
-// TestValidateManagedVolumeOpts pins the driver options the deploy rewrite
-// writes: the exact managed bind shape passes, and any other device or
-// option set is a host bind in disguise.
 func TestValidateManagedVolumeOpts(t *testing.T) {
 	managed := guardRoot + "/" + guardAppID
 	doc := func(device, extra string) string {
@@ -264,8 +229,6 @@ func TestValidateManagedVolumeOpts(t *testing.T) {
 	}
 }
 
-// TestValidateBillionLaughs pins the alias bomb guard: hundreds of alias
-// references must fail before the decoder expands them without bound.
 func TestValidateBillionLaughs(t *testing.T) {
 	var bomb strings.Builder
 	bomb.WriteString("services:\n  web:\n    image: x\n    expose:\n      - &p \"3000\"\n")
@@ -279,14 +242,12 @@ func TestValidateBillionLaughs(t *testing.T) {
 	if !strings.Contains(err.Error(), "alias") {
 		t.Errorf("error = %q, want the alias guard named", err)
 	}
-	// A handful of aliases stays usable.
 	const few = "services:\n  web:\n    image: x\n    expose:\n      - &p \"3000\"\n      - *p\n      - *p\n"
 	if err := Validate(few, guardOpts()); err != nil {
 		t.Fatalf("Validate few aliases = %v, want nil", err)
 	}
 }
 
-// TestValidateDeepNesting pins the depth guard.
 func TestValidateDeepNesting(t *testing.T) {
 	deep := "services:\n  web:\n    image: x\n    labels:\n"
 	for i := 0; i < 200; i++ {
@@ -298,9 +259,6 @@ func TestValidateDeepNesting(t *testing.T) {
 	}
 }
 
-// TestValidateRealisticApp pins the allowlist's usable surface: a web +
-// database project with named volumes, healthchecks, dependencies, limits
-// and project-local networking must pass untouched.
 func TestValidateRealisticApp(t *testing.T) {
 	const app = `services:
   web:
@@ -375,9 +333,6 @@ volumes:
 networks:
   front: {}
 `
-	// POSTGRES_PASSWORD_FILE is a path, not a secret reference: file-based
-	// env values stay inside the container. The env_file entry is empty and
-	// must still be rejected (the key is never allowed).
 	if err := Validate(app, guardOpts()); err == nil {
 		t.Fatal("Validate accepted env_file, want rejection")
 	}
@@ -387,8 +342,6 @@ networks:
 	}
 }
 
-// TestValidateOptions pins the scope inputs: binds need a UUID app and an
-// absolute root, or every bind fails closed.
 func TestValidateOptions(t *testing.T) {
 	const doc = "services:\n  web:\n    image: x\n    volumes:\n      - /var/lib/gotham/volumes/11111111-1111-1111-1111-111111111111/data:/data\n"
 	if err := Validate(doc, guardOpts()); err != nil {
@@ -405,10 +358,6 @@ func TestValidateOptions(t *testing.T) {
 	}
 }
 
-// TestCheckNoInterpolation pins the rendered-document gate: every dollar
-// must be a $$ escape, wherever it hides (image, command, bind sources,
-// environment, labels, keys). Raw documents with live references fail it
-// by design; only rendered documents pass.
 func TestCheckNoInterpolation(t *testing.T) {
 	passing := []string{
 		"services:\n  web:\n    image: example.com/app:1.0\n",
@@ -446,10 +395,6 @@ func TestCheckNoInterpolation(t *testing.T) {
 	}
 }
 
-// TestValidateHiddenTail pins F1: a first valid document must not hide a
-// second one the decoder chokes on. yaml.v3 refuses implicit keys past
-// 1024 characters while compose accepts and merges them, so any decode
-// error after the first document fails closed instead of ending the scan.
 func TestValidateHiddenTail(t *testing.T) {
 	longKey := "x-" + strings.Repeat("k", 1100)
 	reviewer := "services: {web: {image: nginx}}\n---\nservices:\n  evil:\n    image: busybox\n    privileged: true\n    volumes: [\"/:/host\"]\n" + longKey + ": 1\n"
@@ -471,9 +416,6 @@ func TestValidateHiddenTail(t *testing.T) {
 		})
 	}
 
-	// Decode-error tails fail every scan closed: no loop may mistake them
-	// for end-of-stream. (A clean second document passes the per-document
-	// scans; Validate above is the single-document gate.)
 	t.Run("decode error tails fail all scans", func(t *testing.T) {
 		for _, tc := range cases {
 			if tc.name == "second valid document" {
@@ -489,9 +431,6 @@ func TestValidateHiddenTail(t *testing.T) {
 	})
 }
 
-// TestValidateEmptyTail pins L2: a trailing document marker with no content
-// (or only a comment) is genuinely empty and accepted, while any non-empty
-// extra document is rejected by the single-document gate above.
 func TestValidateEmptyTail(t *testing.T) {
 	accept := map[string]string{
 		"trailing marker": "services:\n  web:\n    image: x\n---\n",

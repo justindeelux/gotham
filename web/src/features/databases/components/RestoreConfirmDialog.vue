@@ -8,7 +8,6 @@ import { formatBytes, relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
 
-/** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
@@ -16,7 +15,6 @@ function t(key: string, params?: Record<string, string | number>): string {
 const detail = inject(databaseDetailKey)!;
 const backups = inject(databaseBackupsKey)!;
 
-/** restorePrompt keeps the database/backup identity inside one sentence. */
 const restorePrompt = computed<string>(() =>
   String(
     t("databases.backups.dialog.prompt", {

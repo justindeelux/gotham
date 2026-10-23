@@ -10,7 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 )
 
-// seedDomainApp stores one application with the given primary domain row.
 func seedDomainApp(t *testing.T, repo *fakeRepository, userID uuid.UUID, domain string) Application {
 	t.Helper()
 	app := testApplication(userID)
@@ -92,8 +91,6 @@ func TestAddDomainFirstBecomesPrimary(t *testing.T) {
 	}
 }
 
-// TestAddDomainProvisionsHTTPSIntent pins the explicit protocol: an https
-// domain records the default http-01 intent; an http domain records none.
 func TestAddDomainProvisionsHTTPSIntent(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}
@@ -130,9 +127,6 @@ func TestAddDomainProvisionsHTTPSIntent(t *testing.T) {
 	}
 }
 
-// TestAddDomainReusesExistingIntent pins the transaction safety: a
-// pre-existing intent for the host is left untouched and the attach still
-// succeeds.
 func TestAddDomainReusesExistingIntent(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}
@@ -152,8 +146,6 @@ func TestAddDomainReusesExistingIntent(t *testing.T) {
 	}
 }
 
-// TestAddDomainSkipsHTTP01UnderWildcard pins the wildcard guard: an enabled
-// wildcard intent already covers the new host.
 func TestAddDomainSkipsHTTP01UnderWildcard(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}
@@ -175,8 +167,6 @@ func TestAddDomainSkipsHTTP01UnderWildcard(t *testing.T) {
 	}
 }
 
-// TestRemoveDomainDeletesAutoIntent pins the cleanup: removing the host drops
-// its auto-created http-01 intent but never an operator's wildcard/dns-01 one.
 func TestRemoveDomainDeletesAutoIntent(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}
@@ -289,7 +279,6 @@ func TestRemoveDomainPromotesOldest(t *testing.T) {
 	if err := svc.RemoveDomain(context.Background(), userID, app.ID, primaryID); err != nil {
 		t.Fatalf("RemoveDomain: %v", err)
 	}
-	// b was added before a, so b is promoted deterministically.
 	domains, _ = svc.ListDomains(context.Background(), userID, app.ID)
 	if len(domains) != 2 || !domains[0].IsPrimary || domains[0].Domain != "b.example.com" {
 		t.Fatalf("domains = %#v, want b promoted", domains)
@@ -363,8 +352,6 @@ func TestSetPrimaryDomainFollowsRows(t *testing.T) {
 	}
 }
 
-// TestDomainServiceValidatesComposeService proves a domain may only name a
-// service the pasted compose document declares.
 func TestDomainServiceValidatesComposeService(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}
@@ -386,7 +373,6 @@ func TestDomainServiceValidatesComposeService(t *testing.T) {
 	}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("missing service err = %v, want ErrValidation", err)
 	}
-	// An empty service targets the release web service and is valid.
 	if _, err := svc.AddDomain(context.Background(), userID, app.ID, DomainInput{
 		Domain: "default.example.com", Port: 3000,
 	}); err != nil {
@@ -394,9 +380,6 @@ func TestDomainServiceValidatesComposeService(t *testing.T) {
 	}
 }
 
-// TestUpdateDomainReenablesDisabledRow proves editing the host of a
-// conflict-disabled row is the explicit resolution: a free host re-enables
-// it, while a port-only edit leaves the conflict flag untouched.
 func TestUpdateDomainReenablesDisabledRow(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}
@@ -410,7 +393,6 @@ func TestUpdateDomainReenablesDisabledRow(t *testing.T) {
 		t.Fatalf("seed disabled row: %v", err)
 	}
 
-	// A port-only edit keeps the conflict visible.
 	stillDisabled, err := svc.UpdateDomain(context.Background(), userID, app.ID, disabled.ID, DomainInput{
 		Domain: "conflict.example.com", Port: 8080, Protocol: ProtocolHTTP,
 	})
@@ -421,7 +403,6 @@ func TestUpdateDomainReenablesDisabledRow(t *testing.T) {
 		t.Fatalf("row = %#v, want the disabled flag preserved", stillDisabled)
 	}
 
-	// A new, unclaimed host resolves the conflict and routes again.
 	reenabled, err := svc.UpdateDomain(context.Background(), userID, app.ID, disabled.ID, DomainInput{
 		Domain: "fresh.example.com", Port: 8080, Protocol: ProtocolHTTPS,
 	})

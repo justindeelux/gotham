@@ -1,6 +1,3 @@
-// Recycle-bin dialog states (JUS-122): empty, truncated, load failure and the
-// restore 409 conflict. The files API is mocked so the store and dialog run
-// without axios; teleport is stubbed so the modal stays inside the wrapper.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h } from "vue";
@@ -52,7 +49,6 @@ const otherRoot: FilesRoot = {
   free_bytes: 1,
 };
 
-/** binEntry builds one recycle-bin row with sensible defaults. */
 function binEntry(overrides: Partial<TrashEntry> & { id: string }): TrashEntry {
   return {
     name: "app.yaml",
@@ -74,7 +70,6 @@ function dialogShell() {
   });
 }
 
-/** mountDialog binds a loaded store and mounts the dialog open. */
 async function mountDialog(): Promise<ReturnType<typeof mount>> {
   const files = useFilesStore();
   await files.init("server-1");
@@ -83,7 +78,6 @@ async function mountDialog(): Promise<ReturnType<typeof mount>> {
   });
 }
 
-/** buttonWith finds a button whose visible label contains `text`. */
 function buttonWith(
   wrapper: ReturnType<typeof mount>,
   text: string,
@@ -116,7 +110,6 @@ describe("recycle bin dialog", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("The recycle bin is empty");
-    // Empty bin: no footer Empty action to offer.
     expect(buttonWith(wrapper, "Empty bin")).toBeUndefined();
   });
 
@@ -130,7 +123,6 @@ describe("recycle bin dialog", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("app.yaml");
-    // JUS-155: the origin path column is gone.
     expect(wrapper.text()).not.toContain("storefront-8f2c1ab/app.yaml");
     expect(wrapper.text()).toContain("more entries than shown");
     expect(buttonWith(wrapper, "Restore")).toBeDefined();
@@ -176,7 +168,6 @@ describe("recycle bin dialog", () => {
     await flushPromises();
     expect(buttonWith(wrapper, "Restore")?.attributes("disabled")).toBeUndefined();
 
-    // Switch root: the loaded rows no longer belong to the current scope.
     await useFilesStore().setRoot("compose");
     await flushPromises();
 

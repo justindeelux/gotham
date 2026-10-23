@@ -17,13 +17,8 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// interruptedLog is appended to a job whose owning control plane died while it
-// was running: the half-finished install is not safe to retry automatically.
 const interruptedLog = "interrupted: the owning control plane stopped while this job was running\n"
 
-// Start launches the worker pool and the stale-job sweeper. It is idempotent:
-// a second call while running does nothing. Several workers claim independently
-// (parallel across nodes) and the schema keeps each node's jobs sequential.
 func (s *Service) Start() {
 	s.mu.Lock()
 	if s.running {
@@ -36,9 +31,6 @@ func (s *Service) Start() {
 	workers := s.workers
 	s.mu.Unlock()
 
-	// Reconcile jobs whose lease already lapsed before workers claim, so a
-	// crashed instance's node frees up without waiting for the first sweep tick.
-	// Workers wait on ready.
 	ready := make(chan struct{})
 	s.wg.Add(1)
 	go func() {
@@ -54,10 +46,6 @@ func (s *Service) Start() {
 	go s.sweeper(ctx)
 }
 
-// Close stops the pool and the sweeper, waits for in-flight jobs, then releases
-// the realtime publisher. It is idempotent and safe on a service that never
-// started. A job interrupted here stays running until its lease lapses, when a
-// sweeper (this instance or another) fails it.
 func (s *Service) Close() error {
 	s.mu.Lock()
 	cancel := s.cancel
@@ -74,10 +62,6 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// worker claims and runs jobs until ctx ends. It keeps draining while jobs are
-// claimable for nodes it is not already working (a claim excludes a node with a
-// running job), and idles between polls otherwise. It waits for boot recovery
-// (ready) before its first claim.
 func (s *Service) worker(ctx context.Context, ready <-chan struct{}) {
 	defer s.wg.Done()
 
@@ -100,8 +84,6 @@ func (s *Service) worker(ctx context.Context, ready <-chan struct{}) {
 				return
 			}
 		case errors.Is(err, store.ErrClaimContended):
-			// Another claimer won that node; try the next claimable job at once
-			// instead of sleeping a whole poll interval.
 			continue
 		case err != nil:
 			s.logger.Error("toolchain: claim queued job", "error", err)
@@ -114,8 +96,6 @@ func (s *Service) worker(ctx context.Context, ready <-chan struct{}) {
 	}
 }
 
-// idle waits for the next poll, an enqueue wakeup, or ctx cancellation, and
-// reports whether the worker should keep going.
 func (s *Service) idle(ctx context.Context, ticker *time.Ticker) bool {
 	select {
 	case <-ctx.Done():
@@ -127,8 +107,6 @@ func (s *Service) idle(ctx context.Context, ticker *time.Ticker) bool {
 	}
 }
 
-// sweeper reconciles stale jobs periodically: it fails jobs whose lease lapsed
-// (a crashed or stalled instance's job), leaving live instances' jobs untouched.
 func (s *Service) sweeper(ctx context.Context) {
 	defer s.wg.Done()
 
@@ -144,9 +122,6 @@ func (s *Service) sweeper(ctx context.Context) {
 	}
 }
 
-// recoverStale fails running jobs whose lease lapsed. Recovery is keyed only on
-// the lease, never on the instance id, so a restarted process can never fail a
-// job another (restart-overlapping) process still owns.
 func (s *Service) recoverStale(ctx context.Context) {
 	ids, err := s.store.FailStaleToolchainJobs(ctx)
 	if err != nil {
@@ -168,7 +143,6 @@ func (s *Service) recoverStale(ctx context.Context) {
 	}
 }
 
-// claimParams builds the claim's lease parameters.
 func (s *Service) claimParams() sqlc.ClaimNextQueuedToolchainJobParams {
 	return sqlc.ClaimNextQueuedToolchainJobParams{
 		ClaimedBy:    s.instanceID,
@@ -176,20 +150,14 @@ func (s *Service) claimParams() sqlc.ClaimNextQueuedToolchainJobParams {
 	}
 }
 
-// run executes one claimed job: it dials the node, opens the install/uninstall
-// stream, appends every output line and closes the job with the stream's
-// outcome. It never returns an error: a failure is recorded on the job.
 func (s *Service) run(ctx context.Context, job Job) {
-	s.events.Job(ctx, job) // announce the running transition (status already set)
+	s.events.Job(ctx, job)
 
 	log := &jobLog{svc: s, ctx: ctx, job: job}
 
 	streamCtx, cancelStream := context.WithTimeout(ctx, installTimeout)
 	defer cancelStream()
 
-	// If the lease lapses (the sweeper recovers the job) the renewer cancels the
-	// stream and flags it, so the worker stops instead of racing a job it no
-	// longer owns.
 	var lostLease atomic.Bool
 	stopLease := s.startLeaseRenewal(ctx, job.ID, func() {
 		lostLease.Store(true)
@@ -224,21 +192,16 @@ func (s *Service) run(ctx context.Context, job Job) {
 		return
 	}
 
-	// A stream that ends without an explicit success result is a failure: only
-	// "succeeded" is success.
 	outcome := StatusFailed
 	for {
 		event, recvErr := stream.Recv()
 		if recvErr != nil {
 			if lostLease.Load() {
-				// Already recovered (or recovered by a peer): nothing to close.
 				return
 			}
 			if errors.Is(recvErr, io.EOF) {
 				break
 			}
-			// A cancelled worker context is a shutdown, not a job failure: leave
-			// the job running so lease recovery records it as interrupted.
 			if ctx.Err() != nil {
 				return
 			}
@@ -263,10 +226,6 @@ func (s *Service) run(ctx context.Context, job Job) {
 	s.finish(ctx, job, outcome)
 }
 
-// startLeaseRenewal keeps a running job's lease fresh so recovery never fails a
-// live job. When a renew matches no rows the lease lapsed and the job was
-// recovered, so onLost is called once and the renewer stops. It returns a stop
-// function that cancels the renewer and waits.
 func (s *Service) startLeaseRenewal(ctx context.Context, jobID uuid.UUID, onLost func()) func() {
 	leaseCtx, cancel := context.WithCancel(ctx)
 	interval := s.renewInterval
@@ -307,11 +266,6 @@ func (s *Service) startLeaseRenewal(ctx context.Context, jobID uuid.UUID, onLost
 	}
 }
 
-// finish closes a job with its terminal status and publishes the transition. It
-// only matches the row while this instance still owns a running, unexpired
-// lease: a late finish (lease lapsed, job recovered, or a peer's job) is a
-// no-op, so a recovered job is never overwritten. The write retries on a
-// context that shutdown does not cancel, so a blip cannot strand the job.
 func (s *Service) finish(ctx context.Context, job Job, status Status) {
 	finishCtx := context.WithoutCancel(ctx)
 	params := sqlc.FinishToolchainJobParams{
@@ -332,8 +286,6 @@ func (s *Service) finish(ctx context.Context, job Job, status Status) {
 			return
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			// The lease lapsed and the job was recovered, or a peer now owns it:
-			// leave it alone rather than overwrite a terminal state.
 			s.logger.Warn("toolchain: finish skipped, job no longer owned",
 				"job_id", job.ID.String(), "status", string(status))
 			return
@@ -345,8 +297,6 @@ func (s *Service) finish(ctx context.Context, job Job, status Status) {
 	s.logger.Error("toolchain: finish job", "error", err, "job_id", job.ID.String(), "status", string(status))
 }
 
-// jobLog appends job output line by line, capping the persisted size: once the
-// cap is reached it stops and records a single truncation marker.
 type jobLog struct {
 	svc       *Service
 	ctx       context.Context
@@ -356,7 +306,6 @@ type jobLog struct {
 	truncated bool
 }
 
-// line appends one line of output (or the truncation marker once over the cap).
 func (l *jobLog) line(stream, text string) {
 	if l.truncated || l.ctx.Err() != nil {
 		return

@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// runToolctl runs the privileged tool helper in dry-run mode against a temp
-// root, returning its combined output and exit error.
 func runToolctl(t *testing.T, root string, extra []string, args ...string) (string, error) {
 	t.Helper()
 	if _, err := exec.LookPath("sh"); err != nil {
@@ -28,9 +26,6 @@ func runToolctl(t *testing.T, root string, extra []string, args ...string) (stri
 	return string(out), err
 }
 
-// TestToolctlRefusesUnlistedTools proves the id allow-list is the only thing
-// sudoers can name: a detect-only unit or an unknown id is refused before any
-// command is planned.
 func TestToolctlRefusesUnlistedTools(t *testing.T) {
 	root := t.TempDir()
 	for _, args := range [][]string{
@@ -50,7 +45,6 @@ func TestToolctlRefusesUnlistedTools(t *testing.T) {
 	}
 }
 
-// TestToolctlUsage proves a malformed invocation is rejected as usage.
 func TestToolctlUsage(t *testing.T) {
 	root := t.TempDir()
 	if out, err := runToolctl(t, root, nil); err == nil {
@@ -70,8 +64,6 @@ func TestToolctlRefusesPlatformToolUninstall(t *testing.T) {
 	}
 }
 
-// TestToolctlHostctlInstall proves the control-plane host helper installs from
-// the root-owned payload and a missing payload is refused (JUS-185).
 func TestToolctlHostctlInstall(t *testing.T) {
 	missing, err := runToolctl(t, t.TempDir(), nil, "install-tool", "gotham-hostctl")
 	if err == nil || !strings.Contains(missing, "payload is missing") {
@@ -99,9 +91,6 @@ func TestToolctlHostctlInstall(t *testing.T) {
 	}
 }
 
-// TestToolctlGitHasNoServiceUnit is the regression for the bogus
-// `systemctl enable --now git` step: git is a package only, docker gets the
-// enable.
 func TestToolctlGitHasNoServiceUnit(t *testing.T) {
 	root := t.TempDir()
 	out, err := runToolctl(t, root, nil, "install-tool", "git")
@@ -140,9 +129,6 @@ func TestToolctlGitPackageUpgradeCommands(t *testing.T) {
 	}
 }
 
-// TestToolctlRailpackIsPinnedAndVerified proves railpack uses a versioned
-// release tarball with a hard-coded sha256, per architecture, and never the
-// unpinned install.sh piped to a shell.
 func TestToolctlRailpackIsPinnedAndVerified(t *testing.T) {
 	root := t.TempDir()
 	out, err := runToolctl(t, root, nil, "install-tool", "railpack")
@@ -172,8 +158,6 @@ func TestToolctlRailpackIsPinnedAndVerified(t *testing.T) {
 	}
 }
 
-// TestToolctlPackIsVerifiedAndExtractsOneMember proves pack pins the release
-// digest and extracts only the pack binary from the archive.
 func TestToolctlPackIsVerifiedAndExtractsOneMember(t *testing.T) {
 	root := t.TempDir()
 	out, err := runToolctl(t, root, nil, "install-tool", "pack")
@@ -191,11 +175,6 @@ func TestToolctlPackIsVerifiedAndExtractsOneMember(t *testing.T) {
 	}
 }
 
-// TestToolctlBuildkitTagsLastAndIsIdempotent proves the detection tag is set
-// only after the container runs, that the tag source is the digest ref
-// (docker drops the tag on a digest-qualified pull, so `moby/buildkit:v0.34.0`
-// would not exist locally), and that the container is cleared first so a retry
-// after a failed run recovers.
 func TestToolctlBuildkitTagsLastAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	out, err := runToolctl(t, root, nil, "install-tool", "buildkit")
@@ -217,9 +196,6 @@ func TestToolctlBuildkitTagsLastAndIsIdempotent(t *testing.T) {
 	if !strings.Contains(out, buildkitDigestRef) {
 		t.Errorf("buildkit image is not digest-pinned: %q", out)
 	}
-	// The tag step must source the digest ref: after a digest-qualified pull the
-	// tag-only ref does not exist locally, so `docker tag moby/buildkit:v0.34.0`
-	// would always fail and leave the tool permanently "not installed".
 	tagLine := commandLine(out, "docker tag")
 	if tagLine == "" {
 		t.Fatalf("no docker tag step: %q", out)
@@ -228,8 +204,6 @@ func TestToolctlBuildkitTagsLastAndIsIdempotent(t *testing.T) {
 		t.Errorf("docker tag does not source the digest ref (a digest-qualified pull drops the tag): %q", tagLine)
 	}
 
-	// Uninstall must be symmetric: drop the detection ref first (it is what the
-	// agent probes) and then the repository digest left by pull.
 	uninstall, err := runToolctl(t, root, nil, "uninstall-tool", "buildkit")
 	if err != nil {
 		t.Fatalf("uninstall-tool buildkit: %v: %s", err, uninstall)
@@ -245,13 +219,6 @@ func TestToolctlBuildkitTagsLastAndIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestToolctlBuildkitUninstallMissingImageIsQuiet runs real uninstall logic
-// with Docker and flock functions so no host containers or locks are touched.
-// The fake mirrors the daemon's real reporting, which the JUS-182 fix missed:
-// on an absent ref `docker rmi -f` writes "No such image" to stderr *and still
-// exits 0*, so the exit status cannot mark it and the text has to be filtered
-// by hand. A full uninstall must therefore log no error line at all, while a
-// genuine daemon failure stays visible and fatal.
 func TestToolctlBuildkitUninstallMissingImageIsQuiet(t *testing.T) {
 	for _, mode := range []string{"full-install", "daemon-error"} {
 		t.Run(mode, func(t *testing.T) {
@@ -314,8 +281,6 @@ docker() {
 	}
 }
 
-// commandLine returns the first "+ " output line whose command contains
-// fragment, including the full line so a caller can inspect its arguments.
 func commandLine(out, fragment string) string {
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "+ ") && strings.Contains(line, fragment) {
@@ -325,8 +290,6 @@ func commandLine(out, fragment string) string {
 	return ""
 }
 
-// TestToolctlRootRedirects proves the test root redirects the install target,
-// so a dry-run never plans a write outside it.
 func TestToolctlRootRedirects(t *testing.T) {
 	root := t.TempDir()
 	out, err := runToolctl(t, root, nil, "install-tool", "pack")
@@ -339,9 +302,6 @@ func TestToolctlRootRedirects(t *testing.T) {
 	}
 }
 
-// TestToolctlReexecBoundsAndStopsUnit proves the sandbox escape runs the job in
-// a transient unit that is name-scoped, wall-clock bounded (RuntimeMaxSec) and
-// marked so it does not re-exec again.
 func TestToolctlReexecBoundsAndStopsUnit(t *testing.T) {
 	dir := t.TempDir()
 	record := filepath.Join(dir, "argv")
@@ -380,9 +340,6 @@ func TestToolctlReexecBoundsAndStopsUnit(t *testing.T) {
 	}
 }
 
-// TestToolctlRefusesConcurrentJob proves the node lock: a second job while the
-// lock is held is refused instead of overlapping the running one. It needs
-// flock, so it skips on a host without it (macOS).
 func TestToolctlRefusesConcurrentJob(t *testing.T) {
 	if _, err := exec.LookPath("flock"); err != nil {
 		t.Skip("flock is not available on this host")
@@ -410,7 +367,6 @@ func TestToolctlRefusesConcurrentJob(t *testing.T) {
 	}
 }
 
-// lastCommand returns the last "+ cmd" line's command word, for order checks.
 func lastCommand(out string) string {
 	var last string
 	for _, line := range strings.Split(out, "\n") {

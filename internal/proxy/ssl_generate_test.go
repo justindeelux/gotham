@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// sslGoldenProviders is the provider set the resolver goldens render from.
 func sslGoldenProviders() []DNSProvider {
 	return []DNSProvider{
 		{
@@ -106,8 +105,6 @@ storage = '/acme/acme.json'
 provider = 'digitalocean'
 `
 
-// goldenHTTPSCertificate is the resolved certificate activation of the
-// records below: an HTTP-01 route and a wildcard DNS-01 route.
 func http01Certificate() *RouteCertificate {
 	return &RouteCertificate{Resolver: DefaultResolverName}
 }
@@ -121,8 +118,6 @@ func wildcardCertificate() *RouteCertificate {
 	}
 }
 
-// wildcardSubCertificate requests the wildcard of the parent domain for a
-// multi-level host: the main name is still the exact routed host.
 func wildcardSubCertificate() *RouteCertificate {
 	return &RouteCertificate{
 		Resolver:        DNSResolverName(ProviderCloudflare),
@@ -254,9 +249,6 @@ scheme = 'https'
 permanent = true
 `
 
-// TestGenerateCAServerGolden pins the optional ACME directory override: the
-// staging endpoint renders into every resolver, and an empty value keeps the
-// production default (no caServer key at all).
 func TestGenerateCAServerGolden(t *testing.T) {
 	const staging = "https://acme-staging-v02.api.letsencrypt.org/directory"
 	cases := []struct {
@@ -276,7 +268,6 @@ func TestGenerateCAServerGolden(t *testing.T) {
 			t.Errorf("%s: staging static mismatch\n--- got ---\n%s\n--- want ---\n%s", tc.format, got, expandGolden(tc.golden))
 		}
 	}
-	// An empty caServer keeps every resolver on Traefik's production default.
 	for name, resolver := range BuildConfig(nil, nil, sslGoldenProviders(), "ops@example.com", "").CertificatesResolvers {
 		if resolver.ACME.CAServer != "" {
 			t.Errorf("resolver %s: caServer = %q, want empty", name, resolver.ACME.CAServer)
@@ -368,9 +359,6 @@ storage = '/acme/acme.json'
 provider = 'digitalocean'
 `
 
-// TestGenerateStaticResolverGoldens pins every resolver shape: the HTTP-01
-// default plus one DNS-01 resolver per enabled provider, with the shared
-// storage/email and the credential never rendered.
 func TestGenerateStaticResolverGoldens(t *testing.T) {
 	cases := []struct {
 		format Format
@@ -398,9 +386,6 @@ func TestGenerateStaticResolverGoldens(t *testing.T) {
 	}
 }
 
-// TestGenerateHTTPSActivationGoldens pins the HTTP-01 activation shape: the
-// HTTP router carries the redirect middleware and an HTTPS router with the
-// default resolver appears.
 func TestGenerateHTTPSActivationGoldens(t *testing.T) {
 	route := Route{
 		AppID:       uuid.MustParse(goldenAppID),
@@ -430,9 +415,6 @@ func TestGenerateHTTPSActivationGoldens(t *testing.T) {
 	}
 }
 
-// Multi-level host goldens: the main name is the exact routed host and the
-// wildcard SAN belongs to its most specific parent domain, so the requested
-// names cover app.sub.example.com (a single `*.example.com` would not).
 const goldenSSLWildcardSubDynamicYAML = `http:
   routers:
     app-11111111-2222-3333-4444-555555555555-web:
@@ -498,9 +480,6 @@ scheme = 'https'
 permanent = true
 `
 
-// TestGenerateWildcardActivationGoldens pins the DNS-01 wildcard shape: the
-// route resolves through the provider's resolver and requests the zone
-// wildcard via tls.domains main/sans.
 func TestGenerateWildcardActivationGoldens(t *testing.T) {
 	route := Route{
 		AppID:       uuid.MustParse(goldenAppID),
@@ -527,10 +506,6 @@ func TestGenerateWildcardActivationGoldens(t *testing.T) {
 	}
 }
 
-// TestGenerateWildcardMultiLevelHostGolden pins the coverage fix: for
-// app.sub.example.com the request is main=exact host plus `*.sub.example.com`
-// (the old `example.com` + `*.example.com` shape covered neither the host nor
-// its siblings).
 func TestGenerateWildcardMultiLevelHostGolden(t *testing.T) {
 	route := Route{
 		AppID:       uuid.MustParse(goldenAppID),
@@ -556,9 +531,6 @@ func TestGenerateWildcardMultiLevelHostGolden(t *testing.T) {
 	}
 }
 
-// TestGenerateInactiveCertificateKeepsHTTPOnly proves a route whose
-// certificate configuration is not active (nil resolution) keeps the exact
-// BE-6.1 plain-HTTP shape: no HTTPS router, no redirect middleware.
 func TestGenerateInactiveCertificateKeepsHTTPOnly(t *testing.T) {
 	route := Route{
 		AppID:  uuid.MustParse(goldenAppID),
@@ -577,7 +549,6 @@ func TestGenerateInactiveCertificateKeepsHTTPOnly(t *testing.T) {
 		t.Fatalf("inactive certificate emitted middleware definitions: %#v", cfg.Middlewares)
 	}
 
-	// And the rendered bytes contain no TLS section or redirect at all.
 	for _, format := range []Format{FormatYAML, FormatTOML} {
 		files, err := Generate(cfg, format)
 		if err != nil {
@@ -590,8 +561,6 @@ func TestGenerateInactiveCertificateKeepsHTTPOnly(t *testing.T) {
 	}
 }
 
-// TestGenerateResolverDeterminism proves the resolver set is a pure function
-// of state: reversing the provider input order changes nothing.
 func TestGenerateResolverDeterminism(t *testing.T) {
 	providers := sslGoldenProviders()
 	reversed := []DNSProvider{providers[1], providers[0]}
@@ -611,8 +580,6 @@ func TestGenerateResolverDeterminism(t *testing.T) {
 	}
 }
 
-// TestGenerateSkipsDisabledAndUnknownProviders proves disabled rows and
-// unknown types never become resolvers (defense in depth behind the API).
 func TestGenerateSkipsDisabledAndUnknownProviders(t *testing.T) {
 	providers := []DNSProvider{
 		{ID: uuid.New(), Provider: ProviderCloudflare, Zones: []string{"example.com"}, Enabled: false},

@@ -9,9 +9,6 @@ import (
 	"time"
 )
 
-// TestSweepStaleTerminalRcDirs proves the startup sweep removes only what it
-// should: old integration directories owned by us, never fresh ones, other
-// prefixes, regular files or symlinks.
 func TestSweepStaleTerminalRcDirs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TMPDIR", root)
@@ -63,8 +60,6 @@ func TestSweepStaleTerminalRcDirs(t *testing.T) {
 	}
 }
 
-// TestSweepStaleTerminalRcDirsIgnoresUnreadableTempDir proves a missing or
-// unreadable temp directory never blocks startup.
 func TestSweepStaleTerminalRcDirsIgnoresUnreadableTempDir(t *testing.T) {
 	sweepStaleTerminalRcDirsIn(filepath.Join(t.TempDir(), "missing"), time.Now())
 }

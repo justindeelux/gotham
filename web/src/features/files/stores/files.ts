@@ -52,54 +52,32 @@ import type {
 import { useTeamsStore } from "@/features/teams";
 import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
 
-/** FilesClipboard is a pending copy/cut of named entries from one directory. */
 export interface FilesClipboard {
   mode: "copy" | "cut";
   root: string;
   path: string;
   names: string[];
-  /** directories are the clipboard names that are folders, so pasting a folder
-   *  into its own subtree is refused before the agent call (400). */
   directories: string[];
 }
 
-/** ConflictPrompt waits for the user to replace or skip 409'd names. */
 export interface ConflictPrompt {
   op: "copy" | "move";
-  /** root is the root the transfer ran in, captured when the prompt opened. */
   root: string;
-  /** tabId binds the resolution to the tab that started the transfer, so a tab
-   *  switch while the prompt is open cannot retarget the retry. */
   tabId: string;
   source: string;
   destination: string;
   names: string[];
-  /** cutClipboard clears the clipboard for a cut once the prompt resolves. */
   cutClipboard: boolean;
 }
 
-/** TransferSummary reports one batch move/copy/delete outcome. */
 export interface TransferSummary {
   done: string[];
   conflicts: string[];
   failed: Array<{ name: string; error: string }>;
 }
 
-/**
- * SymlinkTargetResult classifies a "Go to target" attempt so the caller can
- * explain a failure accurately (JUS-141): "opened" when the target is shown (or
- * was already the current folder), "not-folder" when the target is a file, a
- * broken link or a missing path inside the root (400/404), and "error" for a
- * transient node/network failure a retry could clear.
- */
 export type SymlinkTargetResult = "opened" | "not-folder" | "error";
 
-/**
- * FilesTab is one browser tab's independent view state: its own root, path,
- * listing, selection, sort/filter, view mode and scroll offset. The write
- * clipboard and the replace/skip prompt stay store-level (shared) so a cut in
- * one tab can be pasted in another.
- */
 export interface FilesTab {
   id: string;
   rootName: string;
@@ -117,58 +95,26 @@ export interface FilesTab {
   sortKey: FilesSortKey;
   sortDir: FilesSortDirection;
   query: string;
-  /** recursive is the "Include subdirectories" switch: false keeps the input as
-   *  the client-side folder filter, true turns it into a server-side recursive
-   *  name search (JUS-163). */
   recursive: boolean;
-  /** searchActive is true while a server search's results are on screen. */
   searchActive: boolean;
-  /** searchQuery is the query the showed results were run with. */
   searchQuery: string;
-  /** searchResults are the matching entries with their root-relative paths. */
   searchResults: FilesSearchHit[];
-  /** searchTruncated reports a capped search (depth/result/scan cap hit). */
   searchTruncated: boolean;
   searchLoading: boolean;
-  /** searchGeneration supersedes an in-flight search on its own counter, kept
-   *  separate from the listing `generation` so a search and a listing load can
-   *  never cancel each other's loading flags (JUS-163 fix round 1). */
   searchGeneration: number;
   selected: Set<string>;
-  /** anchor is the last row a selection gesture left the cursor on: the fixed
-   *  end of a shift-click range (JUS-138). null until a row is clicked, and
-   *  reset by a folder/root, tab, filter or sort change, by clearSelection()
-   *  and by a listing refresh that drops the entry; a rename carries it to the
-   *  new name so a run is never left spanning a view change. */
   anchor: string | null;
-  /** scrollTop is the entry list's scroll offset, restored on tab switch. */
   scrollTop: number;
-  /** lastLoadedPath is the path of the last successful listing in this tab. */
   lastLoadedPath: string;
-  /** generation drops a listing whose tab navigated or reloaded since. */
   generation: number;
 }
 
-/**
- * EditorSync is the slice of the editor tab store the browser drives when a
- * mutation changes the filesystem under an open document. It is structural so
- * the store can be reached lazily (see {@link withEditor}) without a static
- * import.
- */
 interface EditorSync {
   applyRename: (_root: string, _dir: string, _oldName: string, _newName: string) => void;
   applyMove: (_root: string, _fromDir: string, _toDir: string, _names: string[]) => void;
   applyDelete: (_root: string, _dir: string, _names: string[]) => void;
 }
 
-/**
- * withEditor reaches the editor tab store through a dynamic import. The files
- * store must not import it statically: the auth store (in the entry chunk)
- * resets the files store on sign-out, so a static import would drag the editor
- * store and its helpers into the entry bundle. The lazy import keeps them in
- * the files-page chunk while every mutation still routes its tab sync through
- * one place.
- */
 async function withEditor(sync: (_editor: EditorSync) => void): Promise<void> {
   const { useEditorStore } = await import("@/features/files/stores/editor");
   sync(useEditorStore());
@@ -176,39 +122,16 @@ async function withEditor(sync: (_editor: EditorSync) => void): Promise<void> {
 
 let tabSeq = 0;
 
-/** nextTabId mints a stable per-session browser tab id. */
 function nextTabId(): string {
   tabSeq += 1;
   return `ft-${Date.now().toString(36)}-${tabSeq}`;
 }
 
-/**
- * Files browser store. Holds one server's browsable roots plus a list of
- * independent browser tabs (JUS-123): the active tab owns the directory page,
- * the selection, the sort/filter, the view mode and the scroll offset, while the
- * clipboard, the acting flag and the replace/skip prompt stay shared across
- * tabs. Every read and every write is team-scoped: the active team is read from
- * the teams store and sent as `X-Team-Id`.
- *
- * Concurrency: each tab carries its own generation counter that drops a
- * response which lost to a newer navigation in that tab, so a slow listing can
- * never overwrite the directory the user just opened. Reads are open to any
- * member; content, download and every mutation require the owner or admin role,
- * enforced a second time by the control plane.
- */
 export const useFilesStore = defineStore("files", () => {
   const serverId = ref("");
-  // roots are server-level (the same list for every tab); the selected root is
-  // per tab, so two tabs can browse different roots of the same server.
   const roots = ref<FilesRoot[]>([]);
-  /**
-   * rootsServerId names the server `roots` belongs to. The page gates a
-   * deep-link root against the CURRENT server's list, so roots left over from a
-   * node switch can never validate a target.
-   */
   const rootsServerId = ref("");
 
-  /** createTab seeds one independent browser tab. */
   function createTab(rootName = "", path = "", id = nextTabId()): FilesTab {
     return {
       id,
@@ -246,20 +169,14 @@ export const useFilesStore = defineStore("files", () => {
   const tabs = ref<FilesTab[]>([initialTab]);
   const activeTabId = ref(initialTab.id);
 
-  /** findTab resolves one tab by id. */
   function findTab(id: string): FilesTab | null {
     return tabs.value.find((tab) => tab.id === id) ?? null;
   }
 
-  /** activeTab is the focused tab; the list always keeps at least one. */
   const activeTab = computed<FilesTab>(
     () => findTab(activeTabId.value) ?? tabs.value[0],
   );
 
-  // ── Per-tab state, read/written through the active tab ────────────────
-  // Writable computed proxies keep the previous flat API (store.path,
-  // store.entries, …) while every read and write lands on the active tab, so
-  // the components, dialogs and the editor sync keep working unchanged.
   const rootName = computed<string>({
     get: () => activeTab.value.rootName,
     set: (value) => {
@@ -350,26 +267,20 @@ export const useFilesStore = defineStore("files", () => {
       activeTab.value.query = value;
     },
   });
-  /** recursive drives the "Include subdirectories" checkbox (JUS-163). */
   const recursive = computed<boolean>({
     get: () => activeTab.value.recursive,
     set: (value) => {
       activeTab.value.recursive = value;
     },
   });
-  /** searchActive is true while a server search's results are on screen. */
   const searchActive = computed<boolean>(() => activeTab.value.searchActive);
-  /** searchQuery is the query the shown results were run with. */
   const searchQuery = computed<string>(() => activeTab.value.searchQuery);
-  /** searchResults are the matching entries with their root-relative paths. */
   const searchResults = computed<FilesSearchHit[]>(
     () => activeTab.value.searchResults,
   );
-  /** searchTruncated reports a capped search. */
   const searchTruncated = computed<boolean>(
     () => activeTab.value.searchTruncated,
   );
-  /** searchLoading is true while a server search is in flight. */
   const searchLoading = computed<boolean>(() => activeTab.value.searchLoading);
   const selected = computed<Set<string>>({
     get: () => activeTab.value.selected,
@@ -377,7 +288,6 @@ export const useFilesStore = defineStore("files", () => {
       activeTab.value.selected = value;
     },
   });
-  /** scrollTop is the active tab's entry-list scroll offset. */
   const scrollTop = computed<number>({
     get: () => activeTab.value.scrollTop,
     set: (value) => {
@@ -385,63 +295,32 @@ export const useFilesStore = defineStore("files", () => {
     },
   });
 
-  // ── Shared (cross-tab) state ──────────────────────────────────────────
-  // The write surface mirrors the read gates: canWrite needs both a
-  // write-capable role and a writable root. A read_only member or a
-  // read-only root hides every mutation affordance and every mutating call
-  // is refused by the control plane regardless.
   const acting = ref(false);
   const clipboard = ref<FilesClipboard | null>(null);
-  /** conflictPrompt is set when a transfer met 409s and awaits replace/skip. */
   const conflictPrompt = ref<ConflictPrompt | null>(null);
-  /**
-   * searchAborts holds the in-flight search request per tab id, so a
-   * superseded, cleared or navigated-away search is aborted for real instead of
-   * only having its response ignored (JUS-163 fix round 1). It lives outside the
-   * reactive tab objects on purpose: the controller must not be proxied.
-   */
   const searchAborts = new Map<string, AbortController>();
-  /**
-   * pendingRestore holds restored tab ids whose stored path has not been
-   * validated yet (JUS-209). Only the active tab is checked on restore; a
-   * background tab is validated on its first switch, so mounting never fires
-   * one request per tab and a missing path falls back silently there too.
-   */
   const pendingRestore = new Set<string>();
 
-  /** error renders the retained read failure in the active locale. */
   const error = computed<string | null>(() =>
     errorRaw.value === null ? null : describeFilesError(errorRaw.value),
   );
 
-  /** currentRoot is the active tab's selected root object, if any. */
   const currentRoot = computed<FilesRoot | null>(
     () => roots.value.find((root) => root.name === rootName.value) ?? null,
   );
 
-  /** writable marks the selected root writable (compose roots are not). */
   const writable = computed<boolean>(() => currentRoot.value?.writable ?? false);
 
-  /** freeBytes is the selected root's free space (0 when unknown). */
   const freeBytes = computed<number>(() => currentRoot.value?.free_bytes ?? 0);
 
-  /** breadcrumb is root → … → current path. */
   const breadcrumb = computed<BreadcrumbSegment[]>(() =>
     breadcrumbSegments(rootName.value, path.value),
   );
 
-  /** hasMore reports a server cursor for the next page. */
   const hasMore = computed<boolean>(() => cursor.value !== "");
 
   const counts = computed(() => countByKind(entries.value));
 
-  /**
-   * visibleEntries applies the folder filter, then the active sort. The filter
-   * is a client-side one: it runs only when the input is in "filter this
-   * folder" mode (recursive off). With recursive on, the input drives a
-   * server-side search instead, so the underlying listing is shown unfiltered
-   * until the search runs (JUS-163).
-   */
   const visibleEntries = computed<FilesEntry[]>(() => {
     const filtering = !recursive.value && query.value.trim() !== "";
     const filtered = filtering
@@ -450,24 +329,16 @@ export const useFilesStore = defineStore("files", () => {
     return sortEntries(filtered, sortKey.value, sortDir.value);
   });
 
-  /** selectedNames is the current selection (insertion order). */
   const selectedNames = computed<string[]>(() => [...selected.value]);
 
-  /**
-   * visibleCounts tallies the rows actually on screen. While the folder filter
-   * narrows the list the footer breakdown reads from this, not {@link counts},
-   * so it never mixes the filtered rows with whole-folder totals (JUS-141).
-   */
   const visibleCounts = computed<Record<FileKind, number>>(() =>
     countByKind(visibleEntries.value),
   );
 
-  /** selectedEntries are the selected rows still present in the listing. */
   const selectedEntries = computed<FilesEntry[]>(() =>
     entries.value.filter((entry) => selected.value.has(entry.name)),
   );
 
-  /** selectedBytes totals the selected entries' sizes. */
   const selectedBytes = computed<number>(() =>
     selectedEntries.value.reduce((sum, entry) => sum + entry.size, 0),
   );
@@ -476,60 +347,33 @@ export const useFilesStore = defineStore("files", () => {
     visibleEntries.value.filter(isSelectable),
   );
 
-  /** allVisibleSelected drives the header select-all checkbox. */
   const allVisibleSelected = computed<boolean>(
     () =>
       selectableVisible.value.length > 0 &&
       selectableVisible.value.every((entry) => selected.value.has(entry.name)),
   );
 
-  /** someVisibleSelected drives the header checkbox's indeterminate state. */
   const someVisibleSelected = computed<boolean>(
     () =>
       !allVisibleSelected.value &&
       selectableVisible.value.some((entry) => selected.value.has(entry.name)),
   );
 
-  /**
-   * canReadContent gates the owner/admin-only affordances (content and the
-   * download ticket). An unknown role (teams not loaded) stays hidden rather
-   * than promising a read the control plane would refuse.
-   */
   const canReadContent = computed<boolean>(() => {
     const role = useTeamsStore().activeTeam?.role;
     return role === "owner" || role === "admin";
   });
 
-  /**
-   * canWrite gates every mutation: the caller must be able to write (owner or
-   * admin) and the selected root must be writable (a compose root is not). It
-   * is the single source of truth for hiding create/rename/delete/move/upload
-   * affordances; the control plane refuses the call regardless.
-   */
   const canWrite = computed<boolean>(() => canReadContent.value && writable.value);
 
-  /** hasClipboard reports a non-empty clipboard for the paste action. */
   const hasClipboard = computed<boolean>(
     () => (clipboard.value?.names.length ?? 0) > 0,
   );
 
-  /** clipboardMode reads the pending clipboard operation ("copy"/"cut"). */
   const clipboardMode = computed<"copy" | "cut" | null>(
     () => clipboard.value?.mode ?? null,
   );
 
-  /**
-   * pasteProblemAt explains why the clipboard cannot be pasted into
-   * `destination`: another root, the clipboard's own directory, or a folder
-   * inside a moved folder (all of which the agent refuses with 400). null means
-   * the paste is valid. It mirrors the old destination-picker pre-check so a
-   * paste never fires a doomed call.
-   *
-   * A copy into the clipboard's own directory is refused as "same-folder" too.
-   * A cut into itself is a no-op, and a same-folder copy needs a "name copy"
-   * rename the agent does not perform, so duplicating in place is deliberately
-   * left out rather than faked (a follow-up can add the auto-rename).
-   */
   function pasteProblemAt(
     destination: string,
   ): "cross-root" | TransferProblem | null {
@@ -547,18 +391,14 @@ export const useFilesStore = defineStore("files", () => {
     );
   }
 
-  /** pasteProblem is the current directory's paste validity. */
   const pasteProblem = computed<"cross-root" | TransferProblem | null>(() =>
     pasteProblemAt(path.value),
   );
 
-  /** teamId reads the active team the requests are scoped to. */
   function teamId(): string {
     return useTeamsStore().activeTeamId;
   }
 
-  /** applyErrorTo records a read failure on one tab; a 503 flips the disabled
-   *  state and a 403 the distinct permission-denied state. */
   function applyErrorTo(tab: FilesTab, err: unknown): void {
     if (isFilesDisabled(err)) {
       tab.disabled = true;
@@ -574,7 +414,6 @@ export const useFilesStore = defineStore("files", () => {
     tab.errorRaw = err;
   }
 
-  /** applyListingTo stores one page on one tab and marks it loaded. */
   function applyListingTo(
     tab: FilesTab,
     entriesPage: FilesEntry[],
@@ -588,16 +427,9 @@ export const useFilesStore = defineStore("files", () => {
     tab.disabled = false;
     tab.permissionDenied = false;
     tab.lastLoadedPath = tab.path;
-    // Drop selection names that no longer exist (a refresh after another
-    // session deleted them), so the bulk actions never count a phantom row.
     pruneSelectionToEntries(tab);
   }
 
-  /**
-   * pruneSelectionToEntries keeps only selected names still in the listing, and
-   * drops a range anchor whose entry a refresh removed (JUS-138) so a later
-   * shift-click never resolves a deleted name to a same-named row.
-   */
   function pruneSelectionToEntries(tab: FilesTab): void {
     if (tab.selected.size === 0 && tab.anchor === null) {
       return;
@@ -620,11 +452,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /**
-   * renameSelection follows a renamed selected entry to its new name, and
-   * carries the range anchor with it (JUS-138) so the next shift-click still
-   * starts from the row the user last clicked.
-   */
   function renameSelection(tab: FilesTab, oldName: string, nextName: string): void {
     if (tab.anchor === oldName) {
       tab.anchor = nextName;
@@ -638,13 +465,6 @@ export const useFilesStore = defineStore("files", () => {
     tab.selected = next;
   }
 
-  /**
-   * pruneClipboard drops names that no longer exist from the clipboard. It only
-   * touches a clipboard taken from the same directory (root+path), so a delete
-   * or rename in another directory never clears it or retargets it. The scope is
-   * explicit for the cut-paste flow, where the moved names left the source
-   * directory rather than the directory on screen.
-   */
   function pruneClipboard(names: string[], root: string, dir: string): void {
     const clip = clipboard.value;
     if (!clip || names.length === 0) {
@@ -668,34 +488,19 @@ export const useFilesStore = defineStore("files", () => {
           };
   }
 
-  /**
-   * revalidateRoots moves every tab off a root the refreshed list no longer
-   * has (see loadAll/initialLoad): the tab drops to the first root with a
-   * cleared filter, anchor and search, so a removed root never errors a tab.
-   */
   function revalidateRoots(list: FilesRoot[]): void {
     for (const item of tabs.value) {
       if (!list.some((root) => root.name === item.rootName)) {
         item.rootName = list[0]?.name ?? "";
         item.path = "";
-        // The tab drops to a fresh location, so its stale folder filter must
-        // go too: keeping the needle would hide the new root's listing behind
-        // a query typed for the vanished root. The range anchor goes with it
-        // (JUS-141).
         item.query = "";
         item.anchor = null;
         item.loaded = false;
-        // A root that vanished also invalidates any search results the tab
-        // was showing for it (JUS-163 fix round 1).
         resetSearch(item);
       }
     }
   }
 
-  /**
-   * loadAll loads the roots, then the active tab's directory. Used on first
-   * open and by retry; navigation uses {@link loadEntriesFor} alone.
-   */
   async function loadAll(): Promise<void> {
     const tab = activeTab.value;
     const server = serverId.value;
@@ -706,14 +511,9 @@ export const useFilesStore = defineStore("files", () => {
     tab.loading = true;
     tab.errorRaw = null;
     tab.disabled = false;
-    // A fresh listing invalidates every cached folder size: a refresh or a
-    // mutation may have changed what a folder holds.
     resetFolderSizes();
     try {
       const list = await listRoots(server, teamId());
-      // A node/team switch discards this tab and bumps its generation (see
-      // resetBrowser) and changes serverId, so a stale roots response can never
-      // overwrite the shared roots of the node now on screen.
       if (gen !== tab.generation || server !== serverId.value) {
         return;
       }
@@ -744,7 +544,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /** loadEntriesFor loads one tab's current directory (navigation/refresh). */
   async function loadEntriesFor(tab: FilesTab): Promise<void> {
     if (!serverId.value || tab.rootName === "") {
       tab.entries = [];
@@ -755,9 +554,6 @@ export const useFilesStore = defineStore("files", () => {
     const gen = ++tab.generation;
     tab.loading = true;
     tab.errorRaw = null;
-    // Navigation, refresh and every mutation reload the listing through here,
-    // so the cached folder sizes are dropped: the directory on screen is new
-    // and a folder's contents may have changed.
     resetFolderSizes();
     try {
       const listing = await listEntries(serverId.value, teamId(), {
@@ -773,8 +569,6 @@ export const useFilesStore = defineStore("files", () => {
         return;
       }
       applyErrorTo(tab, err);
-      // A failed navigation has no data for the new path; a failed refresh
-      // keeps the entries already on screen.
       if (tab.path !== tab.lastLoadedPath) {
         tab.entries = [];
         tab.cursor = "";
@@ -787,17 +581,10 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /** loadEntries loads the active tab's directory only. */
   async function loadEntries(): Promise<void> {
     await loadEntriesFor(activeTab.value);
   }
 
-  /**
-   * refreshTabsShowing reloads every other tab whose root+path shows one of the
-   * directories a mutation changed, so a cross-tab cut/paste (or a delete from
-   * another tab) never leaves a stale listing behind. `skipId` is the tab the
-   * caller has already refreshed.
-   */
   async function refreshTabsShowing(
     root: string,
     dirs: string[],
@@ -812,25 +599,8 @@ export const useFilesStore = defineStore("files", () => {
     await Promise.all(targets.map((tab) => loadEntriesFor(tab)));
   }
 
-  /**
-   * initPromise is the in-flight initial load, shared so concurrent inits join
-   * it instead of racing (JUS-209 fix round 1): a second init while the first
-   * listing is still slow awaits the same roots instead of restoring against
-   * an empty list. A server switch clears it — the stale load's guards discard
-   * it and a fresh load starts below.
-   */
   let initPromise: Promise<void> | null = null;
 
-  /**
-   * init binds the store to one server, restoring `snapshot` (when given)
-   * before anything loads: the snapshot is read from storage before the
-   * default tab is created, so the first listing goes straight to the restored
-   * tabs with one fetch for the active tab (no flash of the default root) and
-   * background tabs load lazily on first switch. Switching servers (nodes)
-   * resets every tab back to a single default tab so a node never inherits the
-   * previous node's tabs; a repeat call for the same server joins the
-   * in-flight load.
-   */
   function init(
     nextServerId: string,
     snapshot: FilesTabsSnapshot | null = null,
@@ -852,21 +622,8 @@ export const useFilesStore = defineStore("files", () => {
     return initPromise;
   }
 
-  /**
-   * touchedDuringInit is the user-touched guard for the initial restore
-   * (JUS-209 fix round 1): tab actions set it while the roots are loading, and
-   * the restore is skipped when it is set — a restore never overwrites
-   * tabs/paths the user changed since init began. It is reset at the start of
-   * every initial load.
-   */
   let touchedDuringInit = false;
 
-  /**
-   * rebuildTabsFromSnapshot validates the snapshot against the loaded roots
-   * and builds the replacement tabs (no fetch): unknown roots move to the
-   * default root, the active id falls back to the first tab. Null when nothing
-   * can be rebuilt.
-   */
   function rebuildTabsFromSnapshot(
     snapshot: FilesTabsSnapshot,
   ): { tabs: FilesTab[]; activeId: string } | null {
@@ -898,12 +655,6 @@ export const useFilesStore = defineStore("files", () => {
     };
   }
 
-  /**
-   * activateRebuiltTabs swaps the current tabs for restored ones, invalidating
-   * the discarded tabs (a listing still in flight for one must not write after
-   * the swap) and marking background tabs for lazy path validation on first
-   * switch. Returns the tab to load.
-   */
   function activateRebuiltTabs(
     rebuilt: FilesTab[],
     activeId: string,
@@ -926,12 +677,6 @@ export const useFilesStore = defineStore("files", () => {
     return findTab(activeTabId.value) ?? rebuilt[0];
   }
 
-  /**
-   * initialLoad fetches the roots, then loads straight into the restored tabs
-   * when the snapshot still applies. The fingerprint is captured before the
-   * first await: a user touch during the roots fetch skips the restore and the
-   * user's tabs load normally instead of being overwritten.
-   */
   async function initialLoad(snapshot: FilesTabsSnapshot | null): Promise<void> {
     const server = serverId.value;
     if (server === "") {
@@ -943,18 +688,12 @@ export const useFilesStore = defineStore("files", () => {
     tab.loading = true;
     tab.errorRaw = null;
     tab.disabled = false;
-    // A fresh listing invalidates every cached folder size: a refresh or a
-    // mutation may have changed what a folder holds.
     resetFolderSizes();
     try {
       const list = await listRoots(server, teamId());
       if (gen !== tab.generation || server !== serverId.value) {
         return;
       }
-      // A server whose roots are already loaded has live tabs in the store:
-      // they are newer than the stored snapshot (a remount, or a deep link the
-      // page opened before this init), so restoring over them would reopen a
-      // stale folder.
       const alreadyLoaded = rootsServerId.value === server;
       roots.value = list;
       rootsServerId.value = server;
@@ -971,8 +710,6 @@ export const useFilesStore = defineStore("files", () => {
         await loadEntriesFor(current);
         return;
       }
-      // The untouched default never loaded: swap it for the restored tabs and
-      // fetch the active one directly (one fetch, no flash of the root).
       const active = activateRebuiltTabs(rebuilt.tabs, rebuilt.activeId);
       await loadRestoredTab(active);
     } catch (err) {
@@ -987,23 +724,11 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /**
-   * refresh reloads the active tab's directory. It ends any active server search
-   * first — a refresh supersedes the search (and aborts its walk), so the freshly
-   * loaded listing is not left hidden behind stale results. The filter/search
-   * text is kept: a refresh re-runs against whatever the user typed.
-   */
   async function refresh(): Promise<void> {
     resetSearch(activeTab.value);
     await loadEntries();
   }
 
-  /**
-   * refreshDirectory reloads every tab showing root+dir (the active tab when
-   * none matches). Used by a background batch — an upload into a directory the
-   * user may have tabbed away from — so the directory it landed in is not left
-   * stale.
-   */
   async function refreshDirectory(root: string, dir: string): Promise<void> {
     const matching = tabs.value.filter(
       (tab) => tab.rootName === root && tab.path === dir,
@@ -1015,7 +740,6 @@ export const useFilesStore = defineStore("files", () => {
     await Promise.all(matching.map((tab) => loadEntriesFor(tab)));
   }
 
-  /** retry re-runs the first load after a failure. */
   async function retry(): Promise<void> {
     if (roots.value.length === 0) {
       await loadAll();
@@ -1024,7 +748,6 @@ export const useFilesStore = defineStore("files", () => {
     await loadEntries();
   }
 
-  /** loadMore appends the next cursor page to the active tab. */
   async function loadMore(): Promise<void> {
     const tab = activeTab.value;
     if (
@@ -1059,13 +782,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  // ── Tab actions (JUS-123) ─────────────────────────────────────────────
-
-  /**
-   * openTab opens a new independent tab at `path` under `root` (the active
-   * tab's root and its top level by default) and focuses it. It is the "+"
-   * button and the folder context menu's "Open in new tab".
-   */
   async function openTab(
     options: { root?: string; path?: string } = {},
   ): Promise<void> {
@@ -1077,23 +793,15 @@ export const useFilesStore = defineStore("files", () => {
     const created = createTab(root, options.path ?? "");
     tabs.value = [...tabs.value, created];
     activeTabId.value = created.id;
-    // Read the reactive proxy back: the raw object pushed above is not reactive
-    // on its own, so a mutation on it would never re-render the browser.
     await loadEntriesFor(findTab(created.id) ?? created);
   }
 
-  /**
-   * closeTab closes one tab and focuses a neighbour (the one to its left, else
-   * the one to its right). Closing the last tab leaves a single default tab, so
-   * the browser is never empty.
-   */
   async function closeTab(id: string): Promise<void> {
     touchedDuringInit = true;
     const index = tabs.value.findIndex((tab) => tab.id === id);
     if (index === -1) {
       return;
     }
-    // A closed tab must not leave its search walking on the node.
     searchAborts.get(id)?.abort();
     searchAborts.delete(id);
     pendingRestore.delete(id);
@@ -1112,13 +820,10 @@ export const useFilesStore = defineStore("files", () => {
     }
     tabs.value = remaining;
     if (wasActive) {
-      // Route through switchTab so a neighbour that was never loaded (or was
-      // invalidated by loadAll's root re-validation) is fetched, not shown blank.
       await switchTab(remaining[Math.min(index, remaining.length - 1)].id);
     }
   }
 
-  /** switchTab focuses one tab, loading it if it has never loaded. */
   async function switchTab(id: string): Promise<void> {
     touchedDuringInit = true;
     const tab = findTab(id);
@@ -1126,7 +831,6 @@ export const useFilesStore = defineStore("files", () => {
       return;
     }
     activeTabId.value = tab.id;
-    // A tab switch ends the range: the anchor belongs to the view it was set in.
     tab.anchor = null;
     if (pendingRestore.delete(tab.id)) {
       await loadRestoredTab(tab);
@@ -1135,12 +839,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /**
-   * collectTabsSnapshot reads the persistable browser state for localStorage
-   * (JUS-209): the open tabs (id, root, path), the active tab and its view
-   * mode. Null while nothing worth persisting is on screen (no server, no
-   * roots), so a blank intermediate state never overwrites a good snapshot.
-   */
   function collectTabsSnapshot(): FilesTabsSnapshot | null {
     if (serverId.value === "" || roots.value.length === 0) {
       return null;
@@ -1161,12 +859,6 @@ export const useFilesStore = defineStore("files", () => {
     };
   }
 
-  /**
-   * loadRestoredTab loads one restored tab, falling back silently when its
-   * stored path is gone: a missing/unreadable path walks up to the nearest
-   * existing parent, then the root. Transient failures keep the error state;
-   * nothing here toasts — a reload must never open with an error-toast storm.
-   */
   async function loadRestoredTab(tab: FilesTab): Promise<void> {
     if (serverId.value === "" || tab.rootName === "") {
       tab.entries = [];
@@ -1176,8 +868,6 @@ export const useFilesStore = defineStore("files", () => {
     }
     const gen = ++tab.generation;
     tab.errorRaw = null;
-    // Navigation lands on a new directory, so the cached folder sizes belong
-    // to the folder being left behind.
     resetFolderSizes();
     let target = tab.path;
     for (;;) {
@@ -1226,13 +916,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /**
-   * restorePersistedTabs rebuilds the tabs from a validated snapshot (JUS-209).
-   * Tabs bound to an unknown root move to the default root; a missing active
-   * id falls back to the first tab; an empty rebuild keeps the current tabs.
-   * The active tab loads with silent path fallback, background tabs on first
-   * switch. Returns true when tabs were rebuilt.
-   */
   async function restorePersistedTabs(snapshot: FilesTabsSnapshot): Promise<boolean> {
     if (serverId.value === "" || roots.value.length === 0) {
       return false;
@@ -1245,7 +928,6 @@ export const useFilesStore = defineStore("files", () => {
     return true;
   }
 
-  /** activateRelative focuses the tab `delta` places away, wrapping around. */
   async function activateRelative(delta: number): Promise<void> {
     if (tabs.value.length < 2) {
       return;
@@ -1255,30 +937,18 @@ export const useFilesStore = defineStore("files", () => {
     await switchTab(tabs.value[next].id);
   }
 
-  /** nextTab focuses the tab to the right (wrapping). */
   async function nextTab(): Promise<void> {
     await activateRelative(1);
   }
 
-  /** prevTab focuses the tab to the left (wrapping). */
   async function prevTab(): Promise<void> {
     await activateRelative(-1);
   }
 
-  /** setScrollTop records the active tab's entry-list scroll offset. */
   function setScrollTop(top: number): void {
     activeTab.value.scrollTop = top;
   }
 
-  // ── Write actions (P18 step 7) ────────────────────────────────────────
-  // Every mutation runs under `acting` (so the dialogs can disable their
-  // confirm button and spin), refreshes the acting tab's directory on success,
-  // and rethrows so the caller owns the localized error toast. A batch
-  // operation reports a per-name outcome instead of aborting on the first
-  // failure. Each mutation captures its tab up front, so a tab switch while the
-  // call is in flight cannot refresh or retarget another tab.
-
-  /** runMutation wraps one write in the acting flag. */
   async function runMutation<T>(task: () => Promise<T>): Promise<T> {
     acting.value = true;
     try {
@@ -1288,7 +958,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /** createEntry creates an empty file or a folder in the active directory. */
   async function createEntry(name: string, kind: NameKind): Promise<FilesEntry> {
     const tab = activeTab.value;
     const root = tab.rootName;
@@ -1311,7 +980,6 @@ export const useFilesStore = defineStore("files", () => {
     });
   }
 
-  /** rename changes one entry's name inside the active directory. */
   async function rename(entry: FilesEntry, nextName: string): Promise<void> {
     const tab = activeTab.value;
     const root = tab.rootName;
@@ -1323,9 +991,6 @@ export const useFilesStore = defineStore("files", () => {
         source: joinPath(dir, entry.name),
         destination: joinPath(dir, next),
       });
-      // Follow the rename in the selection and any pending clipboard that was
-      // taken from this same directory (root+path): a rename elsewhere must not
-      // retarget the clipboard to a file in another folder.
       renameSelection(tab, entry.name, next);
       await withEditor((editor) =>
         editor.applyRename(root, dir, entry.name, next),
@@ -1350,16 +1015,10 @@ export const useFilesStore = defineStore("files", () => {
     });
   }
 
-  /** isDirectory reports whether one entry needs a recursive delete. */
   function isDirectory(entry: FilesEntry): boolean {
     return entry.kind === "directory";
   }
 
-  /**
-   * chmod changes one entry's permission bits and refreshes the listing. Only
-   * the low 0o777 bits are sent; the agent refuses setuid/setgid/sticky. A
-   * successful call re-loads the directory so the new mode shows immediately.
-   */
   async function chmod(entry: FilesEntry, mode: number): Promise<void> {
     const tab = activeTab.value;
     const root = tab.rootName;
@@ -1375,11 +1034,6 @@ export const useFilesStore = defineStore("files", () => {
     });
   }
 
-  /**
-   * compress builds one archive from entries in the active directory and
-   * returns the created archive's entry. It refreshes the listing on success
-   * and rethrows so the dialog owns the localized error.
-   */
   async function compress(
     entries: FilesEntry[],
     name: string,
@@ -1402,10 +1056,6 @@ export const useFilesStore = defineStore("files", () => {
     });
   }
 
-  /**
-   * extract unpacks one archive into the active directory. It refreshes the
-   * listing on success and rethrows so the dialog owns the localized error.
-   */
   async function extract(entry: FilesEntry, overwrite: boolean): Promise<void> {
     const tab = activeTab.value;
     const root = tab.rootName;
@@ -1422,13 +1072,6 @@ export const useFilesStore = defineStore("files", () => {
     });
   }
 
-  /**
-   * remove deletes entries, recursing into folders. A delete always moves the
-   * entries to the root's recycle bin (permanent deletion happens only from the
-   * bin). It never aborts on one failure: the summary reports the names that
-   * were deleted and the ones that failed, so a partial batch still shows
-   * feedback for every entry.
-   */
   async function remove(entries: FilesEntry[]): Promise<TransferSummary> {
     const tab = activeTab.value;
     const root = tab.rootName;
@@ -1457,13 +1100,6 @@ export const useFilesStore = defineStore("files", () => {
     });
   }
 
-  /**
-   * runTransfer copies or moves names from source into destination (same root),
-   * one entry at a time so a single 409 or failure does not hide the rest. It
-   * does not prompt: callers that want the replace/skip flow call
-   * {@link promptTransfer}. The acting tab is passed in, so a prompt resolved
-   * after a tab switch still retries the tab that started the transfer.
-   */
   async function runTransfer(
     tab: FilesTab,
     op: "copy" | "move",
@@ -1499,21 +1135,11 @@ export const useFilesStore = defineStore("files", () => {
     }
     await loadEntriesFor(tab);
     if (op === "move" && summary.done.length > 0) {
-      // A move changes both the source and the destination directory. Refresh
-      // every other tab still showing either, so a cross-tab cut/paste leaves
-      // no stale listing (and no selection pointing at a moved path) behind.
       await refreshTabsShowing(root, [source, destination], tab.id);
     }
     return summary;
   }
 
-  /**
-   * promptTransfer runs a transfer with overwrite=false and, when names clash,
-   * opens the replace/skip prompt instead of silently failing them. cutClipboard
-   * marks a clipboard cut so the moved names are dropped from it; failed or
-   * skipped names stay for a later retry. The prompt records the acting tab, so
-   * a resolution after a tab switch still targets it.
-   */
   async function promptTransfer(
     op: "copy" | "move",
     source: string,
@@ -1537,27 +1163,20 @@ export const useFilesStore = defineStore("files", () => {
             cutClipboard,
           }
         : null;
-    // A cut clipboard is consumed only for the names that actually moved: a
-    // failed or skipped entry stays so the user can retry it. The scope is the
-    // source directory the names left, not the destination now on screen.
     if (cutClipboard && op === "move") {
       pruneClipboard(summary.done, tab.rootName, source);
     }
     return summary;
   }
 
-  /** resolveConflictPrompt retries the 409'd names, or drops them (skip). */
   async function resolveConflictPrompt(overwrite: boolean): Promise<TransferSummary> {
     const prompt = conflictPrompt.value;
     conflictPrompt.value = null;
     if (!prompt) {
       return { done: [], conflicts: [], failed: [] };
     }
-    // Resolve against the tab that started the transfer, even if the user has
-    // since switched (or closed) tabs.
     const tab = findTab(prompt.tabId) ?? activeTab.value;
     if (!overwrite) {
-      // Skipped names stay in a cut clipboard so a later paste can retry them.
       return { done: [], conflicts: prompt.names, failed: [] };
     }
     const summary = await runMutation(() =>
@@ -1569,21 +1188,14 @@ export const useFilesStore = defineStore("files", () => {
     return summary;
   }
 
-  /**
-   * copySelection copy-marks names (the active selection by default). A row
-   * menu passes the single row it acted on, so it never has to mutate the
-   * selection to stage a copy.
-   */
   function copySelection(names: string[] = selectedNames.value): void {
     markClipboard("copy", names);
   }
 
-  /** cutSelection cut-marks names (the active selection by default). */
   function cutSelection(names: string[] = selectedNames.value): void {
     markClipboard("cut", names);
   }
 
-  /** markClipboard stores a non-empty clipboard for the active directory. */
   function markClipboard(mode: "copy" | "cut", names: string[]): void {
     if (names.length === 0) {
       return;
@@ -1601,19 +1213,10 @@ export const useFilesStore = defineStore("files", () => {
     };
   }
 
-  /** clearClipboard drops any pending copy/cut. */
   function clearClipboard(): void {
     clipboard.value = null;
   }
 
-  /**
-   * pasteInto applies the clipboard into `destination` (a folder in the active
-   * root). It refuses an invalid destination up front (another root, the
-   * clipboard's own folder, or a folder inside a moved folder), so the agent's
-   * 400 is never reached; the caller reads {@link pasteProblemAt} to explain the
-   * refusal. A name clash opens the replace/skip prompt; a cut clipboard is
-   * consumed only for the names that actually moved.
-   */
   async function pasteInto(destination: string): Promise<TransferSummary> {
     const clip = clipboard.value;
     if (
@@ -1632,18 +1235,15 @@ export const useFilesStore = defineStore("files", () => {
     );
   }
 
-  /** paste applies the clipboard into the active directory. */
   async function paste(): Promise<TransferSummary> {
     return pasteInto(path.value);
   }
 
-  /** reload re-reads roots and the listing (a team switch changes both). */
   async function reload(): Promise<void> {
     resetBrowser();
     await loadAll();
   }
 
-  /** setRoot switches the active tab's root and returns to its top level. */
   async function setRoot(name: string): Promise<void> {
     touchedDuringInit = true;
     const tab = activeTab.value;
@@ -1659,7 +1259,6 @@ export const useFilesStore = defineStore("files", () => {
     await loadEntriesFor(tab);
   }
 
-  /** openDirectory descends into one directory in the active tab. */
   async function openDirectory(name: string): Promise<void> {
     touchedDuringInit = true;
     const tab = activeTab.value;
@@ -1671,14 +1270,6 @@ export const useFilesStore = defineStore("files", () => {
     await loadEntriesFor(tab);
   }
 
-  /**
-   * openAt opens one root-relative directory for a deep link
-   * (`?root=`/`?path=`) as a new browser tab, keeping the tabs already open
-   * (including the restored persisted ones). An existing tab already showing
-   * the target is focused instead, so a repeated visit never stacks duplicate
-   * tabs. The caller validated the root against the current server's list, so a
-   * forged target never gets here.
-   */
   async function openAt(root: string, dir: string): Promise<void> {
     touchedDuringInit = true;
     const existing = tabs.value.find(
@@ -1693,14 +1284,10 @@ export const useFilesStore = defineStore("files", () => {
     await openTab({ root, path: dir });
   }
 
-  /** goToPath navigates the active tab to an absolute (root-relative) path. */
   async function goToPath(next: string): Promise<void> {
     touchedDuringInit = true;
     const tab = activeTab.value;
     if (next === tab.path) {
-      // Clicking the current crumb is still a navigation: drop a stale filter
-      // so the folder is shown in full again, and end the range (a filter
-      // change resets the anchor).
       tab.query = "";
       tab.anchor = null;
       clearSearch();
@@ -1714,27 +1301,15 @@ export const useFilesStore = defineStore("files", () => {
     await loadEntriesFor(tab);
   }
 
-  /**
-   * openSymlinkTarget navigates to a symlink's resolved target. Unlike a folder
-   * row, the listing does not say whether the target is itself a directory, so
-   * the target is fetched first and the view is committed only on success: a
-   * target that is a regular file, a broken link or an unreadable folder leaves
-   * the current listing on screen (JUS-132). The result distinguishes that
-   * "not a folder" refusal from a transient failure, so the caller can show
-   * accurate copy for each (JUS-141).
-   */
   async function openSymlinkTarget(target: string): Promise<SymlinkTargetResult> {
     const tab = activeTab.value;
     if (!serverId.value || tab.rootName === "" || target === tab.path) {
-      // Same folder (or no root): still drop the filter, which ends the range.
       tab.query = "";
       tab.anchor = null;
       return "opened";
     }
     const gen = ++tab.generation;
     tab.loading = true;
-    // Navigating to the link's target lands on a different directory, so the
-    // cached sizes belong to the folder being left behind.
     resetFolderSizes();
     try {
       const listing = await listEntries(serverId.value, teamId(), {
@@ -1753,15 +1328,9 @@ export const useFilesStore = defineStore("files", () => {
       applyListingTo(tab, listing.entries, listing.cursor ?? "", listing.truncated);
       return "opened";
     } catch (err) {
-      // A newer navigation won, or the caller aborted: report the target as
-      // shown rather than a failure (JUS-141).
       if (gen !== tab.generation || isCanceledError(err)) {
         return "opened";
       }
-      // A file target, a broken link, a missing path (400/404) or an unreadable
-      // folder (403) is not a browsable folder inside this root — retrying will
-      // not help. Anything else (500, 501/502/503, a network failure) is
-      // transient and gets the retry copy.
       const key = filesErrorKey(err);
       return key === "files.errors.notFound" ||
         key === "files.errors.invalid" ||
@@ -1775,7 +1344,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /** goUp navigates to the parent directory (no-op at the root). */
   async function goUp(): Promise<void> {
     if (path.value === "") {
       return;
@@ -1783,10 +1351,7 @@ export const useFilesStore = defineStore("files", () => {
     await goToPath(parentPath(path.value));
   }
 
-  /** setSort cycles a column: same key flips the direction, a new key resets. */
   function setSort(key: FilesSortKey): void {
-    // A reorder moves every row, so the range anchor no longer refers to the
-    // same neighbours it did before.
     activeTab.value.anchor = null;
     if (sortKey.value === key) {
       sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
@@ -1796,35 +1361,16 @@ export const useFilesStore = defineStore("files", () => {
     sortDir.value = "asc";
   }
 
-  /** setViewMode switches the active tab between the list and grid layouts. */
   function setViewMode(mode: FilesViewMode): void {
     touchedDuringInit = true;
     viewMode.value = mode;
   }
 
-  /** setQuery updates the active tab's client-side folder filter. */
   function setQuery(next: string): void {
-    // The filter changes which rows are shown between the anchor and a later
-    // shift-click, so it ends the current range.
     activeTab.value.anchor = null;
     query.value = next;
   }
 
-  // ── Search (JUS-163) ─────────────────────────────────────────────────
-  // The nav-row input has two modes. With "Include subdirectories" off it is
-  // the client-side folder filter (JUS-141); the listing never leaves the node.
-  // With it on, submitting the query runs a bounded, server-side NAME search
-  // under the active directory. Results render in the panel and a capped run
-  // shows the truncated state; any navigation clears the search.
-
-  /**
-   * resetSearch drops one tab's server-search state and aborts any search still
-   * in flight, so a superseded walk never lands and a stuck "Searching…" cannot
-   * outlive the search that set it. It supersedes on the tab's own
-   * searchGeneration, which is deliberately separate from the listing
-   * `generation`: a search and a listing load must not cancel each other's
-   * loading flags (JUS-163 fix round 1).
-   */
   function resetSearch(tab: FilesTab): void {
     tab.searchGeneration += 1;
     searchAborts.get(tab.id)?.abort();
@@ -1836,23 +1382,12 @@ export const useFilesStore = defineStore("files", () => {
     tab.searchLoading = false;
   }
 
-  /**
-   * clearSearch ends a server search and empties its results on the tab, and
-   * empties the nav input the query was typed into. It is the "Clear search"
-   * action and the navigation reset; the "Include subdirectories" switch is left
-   * untouched so only the text is cleared (JUS-163 round 3).
-   */
   function clearSearch(): void {
     const tab = activeTab.value;
     resetSearch(tab);
     tab.query = "";
   }
 
-  /**
-   * setRecursive flips the "Include subdirectories" switch. Either way it ends
-   * any server search and empties the input (clearSearch), so the plain listing
-   * shows until a new query is typed or submitted.
-   */
   function setRecursive(next: boolean): void {
     const tab = activeTab.value;
     tab.recursive = next;
@@ -1860,23 +1395,13 @@ export const useFilesStore = defineStore("files", () => {
     tab.anchor = null;
   }
 
-  /**
-   * runSearch submits the input. With the subdirectories switch off it is a
-   * no-op (the client filter already applies) beyond ending a stale search;
-   * with it on the query runs a bounded server-side name search.
-   */
   async function runSearch(): Promise<void> {
     const tab = activeTab.value;
     const submitted = tab.query.trim();
-    // The switch off means the input is the client-side filter: submitting ends
-    // any stale server search but keeps the typed text. A blank query or a
-    // missing server/root has nothing to search either.
     if (!tab.recursive || !serverId.value || tab.rootName === "" || submitted === "") {
       resetSearch(tab);
       return;
     }
-    // The search owns its own generation and its own request, so a Refresh or a
-    // listing load neither drops the search's loading flag nor is dropped by it.
     const gen = ++tab.searchGeneration;
     const controller = new AbortController();
     searchAborts.get(tab.id)?.abort();
@@ -1918,11 +1443,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /**
-   * openSearchHit opens the directory a result lives in: the hit itself when it
-   * is a folder, its parent otherwise. Either way the search ends and the
-   * folder is shown, so the result leads to a normal browse.
-   */
   async function openSearchHit(hit: FilesSearchHit): Promise<void> {
     const target =
       hit.entry.kind === "directory" ? hit.path : parentPath(hit.path);
@@ -1930,58 +1450,31 @@ export const useFilesStore = defineStore("files", () => {
     await goToPath(target);
   }
 
-  /** isSelected reports whether one entry name is selected. */
   function isSelected(name: string): boolean {
     return selected.value.has(name);
   }
 
-  /**
-   * targetsForRow resolves a row-menu action's targets: the whole current
-   * selection when the row is part of it, otherwise just that row. It never
-   * toggles the selection, so cutting an already-selected row cannot deselect
-   * it and cut an empty set.
-   */
   function targetsForRow(entry: FilesEntry): FilesEntry[] {
     return selected.value.has(entry.name) ? selectedEntries.value : [entry];
   }
 
-  /**
-   * selectForRowContext applies the right-click selection rule: an unselected
-   * row becomes the sole selection, while a row already inside the selection
-   * keeps the whole multi-selection for the menu. A non-selectable entry is
-   * left untouched so the menu still resolves it through {@link targetsForRow}.
-   */
   function selectForRowContext(entry: FilesEntry): void {
     if (!isSelectable(entry) || selected.value.has(entry.name)) {
       return;
     }
     selected.value = new Set([entry.name]);
-    // Moving the sole selection moves the range anchor with it (JUS-138), so
-    // the next shift-click extends from the row the user just right-clicked.
     activeTab.value.anchor = entry.name;
   }
 
-  /**
-   * selectOnly makes one entry the sole selection. It is the plain single-click
-   * row rule (JUS-130): a click selects just that row, while Ctrl/⌘+click
-   * toggles it via {@link toggleSelection}. Both also move the shift-click range
-   * anchor (JUS-138).
-   */
   function selectOnly(name: string): void {
     selected.value = new Set([name]);
     activeTab.value.anchor = name;
   }
 
-  /**
-   * setAnchor moves the shift-range anchor without touching the selection. The
-   * keyboard roving focus (JUS-139) calls it as the cursor moves, so a following
-   * Shift+Arrow extends the run from the row the cursor left.
-   */
   function setAnchor(name: string | null): void {
     activeTab.value.anchor = name;
   }
 
-  /** toggleSelection adds or removes one entry from the selection. */
   function toggleSelection(name: string): void {
     const next = new Set(selected.value);
     if (next.has(name)) {
@@ -1993,15 +1486,6 @@ export const useFilesStore = defineStore("files", () => {
     activeTab.value.anchor = name;
   }
 
-  /**
-   * selectRange extends the selection from the last-clicked anchor to `name`
-   * over the current sorted+filtered order (JUS-138). `additive` (⌘/Ctrl+Shift)
-   * keeps the existing selection; a plain shift-click replaces it. A missing or
-   * filtered-away anchor falls back to selecting just the clicked row and adopts
-   * it as the new anchor. It refuses a non-selectable target itself (the store
-   * stays self-defending). The anchor never moves on a range click, so repeated
-   * shift-clicks grow or shrink the same run.
-   */
   function selectRange(name: string, additive: boolean): void {
     const tab = activeTab.value;
     const entries = visibleEntries.value;
@@ -2023,12 +1507,6 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /**
-   * toggleSelectAll adds every visible selectable entry, or clears them. When
-   * it selects all and no anchor exists yet, the anchor is seeded at the first
-   * selectable visible entry (JUS-138), so a following shift-click extends the
-   * run from the top instead of collapsing the whole selection to one row.
-   */
   function toggleSelectAll(): void {
     const next = new Set(selected.value);
     if (allVisibleSelected.value) {
@@ -2046,22 +1524,12 @@ export const useFilesStore = defineStore("files", () => {
     selected.value = next;
   }
 
-  /** clearSelection drops the whole selection and ends any range. */
   function clearSelection(): void {
     selected.value = new Set();
     activeTab.value.anchor = null;
   }
 
-  /**
-   * resetBrowser clears every tab and leaves one default tab, keeping the bound
-   * server id. It is the node-switch reset and the team-switch/ sign-out base.
-   */
   function resetBrowser(): void {
-    // Invalidate every tab being discarded: a listing (listRoots/listEntries)
-    // still in flight for one of them must not write after the switch. The
-    // shared `roots` is the dangerous one — a stale listRoots would replace the
-    // new node's roots with the previous node's. Pre-PR this was a single
-    // module-level counter bumped on reset; per-tab counters need the same bump.
     for (const discarded of tabs.value) {
       discarded.generation += 1;
       searchAborts.get(discarded.id)?.abort();
@@ -2078,26 +1546,18 @@ export const useFilesStore = defineStore("files", () => {
     conflictPrompt.value = null;
   }
 
-  /**
-   * reset clears the browser and unbinds the server, so the next sign-in never
-   * sees the previous account's listings. Called on sign-out (see the auth
-   * store).
-   */
   function reset(): void {
     resetBrowser();
     serverId.value = "";
   }
 
   return {
-    // state
     serverId,
     roots,
     rootsServerId,
-    // tabs
     tabs,
     activeTabId,
     activeTab,
-    // active-tab state
     rootName,
     path,
     entries,
@@ -2123,7 +1583,6 @@ export const useFilesStore = defineStore("files", () => {
     searchTruncated,
     searchLoading,
     scrollTop,
-    // derived
     error,
     errorRaw,
     currentRoot,
@@ -2144,7 +1603,6 @@ export const useFilesStore = defineStore("files", () => {
     hasClipboard,
     pasteProblem,
     pasteProblemAt,
-    // actions
     init,
     refresh,
     refreshDirectory,

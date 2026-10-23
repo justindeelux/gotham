@@ -40,7 +40,6 @@ func TestBackupStoresCompressedArtifact(t *testing.T) {
 		t.Error("the temporary container id must be recorded")
 	}
 
-	// The stored bytes are the gzip of what the job streamed.
 	if got := string(readArtifact(t, backup.Location)); got != dumpPayload {
 		t.Errorf("artifact = %q, want %q", got, dumpPayload)
 	}
@@ -52,8 +51,6 @@ func TestBackupStoresCompressedArtifact(t *testing.T) {
 		t.Errorf("file is %d bytes, row says %d", info.Size(), backup.Size)
 	}
 
-	// The database was paused for the dump and started again afterwards, and
-	// the job container was removed.
 	fixture.containers.mu.Lock()
 	stops, starts, runs, removes := fixture.containers.stops, fixture.containers.starts, len(fixture.containers.runs), fixture.containers.removes
 	fixture.containers.mu.Unlock()
@@ -97,9 +94,6 @@ func TestBackupFailureIsRecordedAndDatabaseRestarted(t *testing.T) {
 	}
 }
 
-// TestBackupFailsWhenLogStreamBreaks is the U3 guard for the A3-5 CP fix: a
-// terminal agent stream error must fail the backup instead of being treated as
-// a clean dump.
 func TestBackupFailsWhenLogStreamBreaks(t *testing.T) {
 	fixture := newBackupFixture(t)
 	fixture.containers.mu.Lock()
@@ -117,7 +111,6 @@ func TestBackupFailsWhenLogStreamBreaks(t *testing.T) {
 
 func TestBackupLeavesStoppedDatabaseStopped(t *testing.T) {
 	fixture := newBackupFixture(t)
-	// No container listed: the database is stopped before the job runs.
 	fixture.containers.listed = nil
 
 	backup := fixture.queueBackup(t)
@@ -163,9 +156,6 @@ func TestBackupEnforcesOwnership(t *testing.T) {
 	}
 }
 
-// TestListRestoresReturnsDurableHistory is the D3-7 service regression: the
-// restore rows of the database come back newest first, bounded by the page
-// size, and another database's rows are excluded.
 func TestListRestoresReturnsDurableHistory(t *testing.T) {
 	fixture := newBackupFixture(t)
 	older := fixture.backups.seedRestore(Restore{
@@ -208,8 +198,6 @@ func TestListRestoresReturnsDurableHistory(t *testing.T) {
 	}
 }
 
-// TestUpdateTargetClearsOptionalFields is the D3-5 regression: an explicit
-// empty region/prefix clears the stored value, while an absent field keeps it.
 func TestUpdateTargetClearsOptionalFields(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()
@@ -222,7 +210,6 @@ func TestUpdateTargetClearsOptionalFields(t *testing.T) {
 		t.Fatalf("CreateTarget: %v", err)
 	}
 
-	// Absent optional fields keep the stored values.
 	kept, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{Name: "renamed"})
 	if err != nil {
 		t.Fatalf("UpdateTarget(keep): %v", err)
@@ -231,7 +218,6 @@ func TestUpdateTargetClearsOptionalFields(t *testing.T) {
 		t.Errorf("region/prefix = %q/%q, want the stored values kept", kept.Region, kept.Prefix)
 	}
 
-	// An explicit empty value clears it.
 	cleared, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{
 		Region: strPtr(""), Prefix: strPtr(""),
 	})
@@ -340,7 +326,6 @@ func TestRestoreStagesArtifactAndRunsJob(t *testing.T) {
 		t.Fatal("no restore container ran")
 	}
 
-	// The staged chunk must carry the artifact byte for byte.
 	pattern := regexp.MustCompile(`printf '%s' '([A-Za-z0-9+/=]+)'`)
 	match := pattern.FindStringSubmatch(staged.Command[2])
 	if match == nil {
@@ -354,7 +339,6 @@ func TestRestoreStagesArtifactAndRunsJob(t *testing.T) {
 		t.Errorf("staged %d bytes, artifact is %d bytes (or they differ)", len(decoded), len(artifact))
 	}
 
-	// The restore job mounts the volume and knows where the artifact is.
 	if want := fixture.database.StoragePath + ":/var/lib/postgresql/data"; len(restored.Volumes) != 1 || restored.Volumes[0] != want {
 		t.Errorf("volumes = %v, want [%s]", restored.Volumes, want)
 	}
@@ -366,10 +350,6 @@ func TestRestoreStagesArtifactAndRunsJob(t *testing.T) {
 	}
 }
 
-// TestBackupPG18MountPath is the D1-7 backup/restore regression: the dump and
-// restore job containers (and the staging directory) must use the same
-// versioned mount the live container uses, or a PostgreSQL 18 job runs the
-// entrypoint against /var/lib/postgresql/data and refuses to start.
 func TestBackupPG18MountPath(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -404,10 +384,6 @@ func TestBackupPG18MountPath(t *testing.T) {
 	}
 }
 
-// TestPG18StageAndCleanupMounts pins the two job paths a partial revert misses:
-// stageChunk (the restore staging container) and removeStagedArtifact (the
-// post-failure cleanup container) must both use the versioned mount for
-// PostgreSQL 18, not only backupJobOptions/stagingDir.
 func TestPG18StageAndCleanupMounts(t *testing.T) {
 	fixture := newBackupFixture(t)
 	database := fixture.database
@@ -461,7 +437,6 @@ func TestRestoreEnforcesOwnership(t *testing.T) {
 		t.Errorf("missing backup id err = %v, want ErrValidation", err)
 	}
 
-	// A backup that belongs to another database is invisible here.
 	foreign := fixture.backups.seedBackup(Backup{DatabaseID: uuid.New(), Status: BackupCompleted})
 	if _, err := fixture.manager.RestoreBackup(context.Background(), fixture.userID, fixture.database.ID,
 		RestoreRequest{BackupID: foreign.ID}); !errors.Is(err, ErrNotFound) {
@@ -519,7 +494,6 @@ func TestTargetCredentialsAreSealed(t *testing.T) {
 		}
 	}
 
-	// The sealed rows open back to the original values.
 	accessKey, secretKey, err := openTargetSecrets(testSecret, secrets)
 	if err != nil {
 		t.Fatalf("openTargetSecrets: %v", err)
@@ -528,7 +502,6 @@ func TestTargetCredentialsAreSealed(t *testing.T) {
 		t.Errorf("opened %q / %q", accessKey, secretKey)
 	}
 
-	// A request without credentials keeps the stored ones.
 	if _, err := fixture.manager.UpdateTarget(context.Background(), fixture.userID, target.ID, TargetRequest{
 		Name: "r2-renamed",
 	}); err != nil {
@@ -588,9 +561,6 @@ func TestBackupNeverLogsCredentials(t *testing.T) {
 			t.Errorf("credentials leaked into the log: %q", secret)
 		}
 	}
-	// The job container carries the password in its environment — that is
-	// where the live database keeps it too — but the payload itself must be
-	// described without it.
 	if strings.Contains(output, "POSTGRES_PASSWORD") {
 		t.Error("the log must not echo the job environment")
 	}
@@ -641,7 +611,6 @@ func TestSchedulesLifecycle(t *testing.T) {
 		t.Fatalf("listed %d schedules, want 1", len(list))
 	}
 
-	// A schedule of another database is not ours to delete.
 	stranger := uuid.New()
 	if err := fixture.manager.DeleteSchedule(ctx, stranger, fixture.database.ID, schedule.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("foreign delete err = %v, want ErrNotFound", err)
@@ -654,9 +623,6 @@ func TestSchedulesLifecycle(t *testing.T) {
 	}
 }
 
-// TestScheduleUpdateTargetClearSemantics proves the tri-state target update:
-// an absent target_id keeps the stored target, an explicit empty string
-// clears it (runs fall back to the local directory) and an id replaces it.
 func TestScheduleUpdateTargetClearSemantics(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()
@@ -676,7 +642,6 @@ func TestScheduleUpdateTargetClearSemantics(t *testing.T) {
 		t.Fatalf("created target = %s, want %s", schedule.TargetID, s3.ID)
 	}
 
-	// Absent field: the stored target survives.
 	kept, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
 		Cron: "0 3 * * *",
 	})
@@ -687,7 +652,6 @@ func TestScheduleUpdateTargetClearSemantics(t *testing.T) {
 		t.Errorf("target = %s, want the stored %s (absent must not clear)", kept.TargetID, s3.ID)
 	}
 
-	// Explicit empty string: the target is cleared.
 	clear := ""
 	cleared, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
 		Cron:     "0 4 * * *",
@@ -700,7 +664,6 @@ func TestScheduleUpdateTargetClearSemantics(t *testing.T) {
 		t.Errorf("target = %s, want cleared to no target", cleared.TargetID)
 	}
 
-	// Explicit id: the target is replaced.
 	localID := local.ID.String()
 	replaced, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
 		Cron:     "0 5 * * *",
@@ -713,7 +676,6 @@ func TestScheduleUpdateTargetClearSemantics(t *testing.T) {
 		t.Errorf("target = %s, want %s", replaced.TargetID, local.ID)
 	}
 
-	// An id the caller does not own is rejected and the stored target stays.
 	foreign := fixture.backups.seedTarget(BackupTarget{UserID: uuid.New(), Name: "foreign", Kind: TargetLocal})
 	foreignID := foreign.ID.String()
 	if _, err := fixture.manager.UpdateSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID, ScheduleRequest{
@@ -737,9 +699,6 @@ func TestBackupManagerWithoutRepositoryFailsClearly(t *testing.T) {
 	}
 }
 
-// TestReconcileStaleBackups pins the crash recovery contract: a run left
-// running by a previous control plane process is swept to failed and its
-// database container is resumed.
 func TestReconcileStaleBackups(t *testing.T) {
 	fixture := newBackupFixture(t)
 	stale, err := fixture.backups.CreateBackup(context.Background(), Backup{
@@ -777,9 +736,6 @@ func TestReconcileStaleBackups(t *testing.T) {
 	}
 }
 
-// TestStageChunkFitsArgumentLimit pins Linux's per-argument limit
-// (MAX_ARG_STRLEN = 128 KiB): the base64 chunk plus script overhead must stay
-// under it, or restore fails with E2BIG for any artifact larger than ~97 KB.
 func TestStageChunkFitsArgumentLimit(t *testing.T) {
 	const maxArgStrlen = 128 * 1024
 	const scriptOverhead = 4096
@@ -790,9 +746,6 @@ func TestStageChunkFitsArgumentLimit(t *testing.T) {
 	}
 }
 
-// TestStageChunkDecodesBase64IntoStagedFile guards the staging contract: the
-// command argument carries base64, but the file the restore job reads must be
-// the decoded artifact bytes. Truncate on the first chunk, append after it.
 func TestStageChunkDecodesBase64IntoStagedFile(t *testing.T) {
 	fixture := newBackupFixture(t)
 	runID := fixture.database.ID
@@ -824,9 +777,6 @@ func TestStageChunkDecodesBase64IntoStagedFile(t *testing.T) {
 	}
 }
 
-// TestCreateTargetS3RequiresCredentials guards the target API: an s3 target
-// missing either key is rejected at create time instead of failing on the
-// first backup run.
 func TestCreateTargetS3RequiresCredentials(t *testing.T) {
 	fixture := newBackupFixture(t)
 	for _, req := range []TargetRequest{
@@ -840,10 +790,6 @@ func TestCreateTargetS3RequiresCredentials(t *testing.T) {
 	}
 }
 
-// TestUpdateTargetS3SwitchRequiresCredentials proves the update path has the
-// same credential requirement as the create path: switching a target to s3
-// without a complete pair is rejected and leaves the row untouched, while a
-// request that carries both halves switches and seals them.
 func TestUpdateTargetS3SwitchRequiresCredentials(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()
@@ -883,9 +829,6 @@ func TestUpdateTargetS3SwitchRequiresCredentials(t *testing.T) {
 	}
 }
 
-// TestUpdateTargetS3FieldsWithoutCredentialsKeepsStoredKeys proves a
-// non-credential update of an s3 target still works when the pair is already
-// stored, and that the stored keys survive it.
 func TestUpdateTargetS3FieldsWithoutCredentialsKeepsStoredKeys(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()

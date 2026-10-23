@@ -1,9 +1,3 @@
-/**
- * Common English catalog: shared actions, role labels, status fallbacks,
- * error summaries and validation fallbacks. Feature catalogs live in
- * `features/<module>/locales/en.ts` under their own namespace; this file
- * holds only strings two or more features share.
- */
 const en = {
   common: {
     actions: {
@@ -133,5 +127,4 @@ const en = {
 
 export default en;
 
-/** CommonMessages is the shape every locale must satisfy. */
 export type CommonMessages = typeof en;

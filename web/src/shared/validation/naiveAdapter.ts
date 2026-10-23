@@ -5,48 +5,11 @@ import { resolveValidationMessage } from "@/shared/i18n";
 import type { ValidationMessageParams } from "@/shared/i18n";
 
 export interface RuleFromOptions {
-  /**
-   * when gates a conditional-required field (e.g. V3 keyName/keyId/password
-   * required only for one authMode/keyMode). It reads the same reactive
-   * state the current computed rules read. When it returns false the rule
-   * passes without touching the schema.
-   */
   when?: () => boolean;
-  /**
-   * required sets the Naive `required` flag on the returned rule. Naive
-   * reads the flag only for the red asterisk label mark; validation still
-   * goes through `validator`, so this never changes what is accepted.
-   * Pass it wherever the pre-zod rule had `required: true`, or the mark
-   * silently disappears. For conditional fields pass the same mode check
-   * the `when` predicate uses (evaluated by the caller's computed, which
-   * re-runs on mode change) so the mark follows the mode.
-   */
   required?: boolean;
-  /**
-   * params interpolates a namespaced message key (e.g. `{min: 10}` for
-   * "mymodule.form.minLength"). Keys without placeholders ignore it;
-   * legacy strings ignore it too.
-   */
   params?: ValidationMessageParams;
 }
 
-/**
- * ruleFrom adapts a zod field schema to one Naive UI FormItemRule.
- * Sync schemas only: safeParse throws on async refinements, so schemas used
- * here must not contain async refinements. Success returns true; failure
- * returns Error(first issue message) so the schema's message string is what
- * the user sees. Trigger handling is unchanged by the caller. No form is
- * migrated yet.
- *
- * The stored schema message resolves to display text at invocation time
- * (see resolveValidationMessage): namespaced message keys translate in the
- * current locale while legacy English strings pass through byte-identical,
- * so existing feedback never changes until a feature migrates its catalog.
- *
- * The schema is typed on its output T with unknown input: plain field
- * schemas have identical input/output, and the validator always receives an
- * unknown form value.
- */
 export function ruleFrom<T>(
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   opts?: RuleFromOptions,
@@ -66,11 +29,6 @@ export function ruleFrom<T>(
   };
 }
 
-/**
- * rulesFor builds one rule per field from a shape of field schemas.
- * Keys match the form model so the result spreads straight into FormRules.
- * Sync schemas only, like ruleFrom.
- */
 export function rulesFor<T extends Record<string, z.ZodType<unknown, z.ZodTypeDef, unknown>>>(
   shape: T,
   opts?: Partial<Record<keyof T, RuleFromOptions>>,
@@ -82,12 +40,6 @@ export function rulesFor<T extends Record<string, z.ZodType<unknown, z.ZodTypeDe
   return rules;
 }
 
-/**
- * fieldErrors validates outside Naive UI (plain computed guards, submit
- * checks) and returns every issue message, empty on success. Messages
- * resolve through the same presentation path as ruleFrom. Sync schemas
- * only, like ruleFrom.
- */
 export function fieldErrors<T>(
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   value: unknown,
@@ -102,7 +54,6 @@ export function fieldErrors<T>(
   );
 }
 
-/** firstIssueMessage keeps the single user-visible string deterministic. */
 export function firstIssueMessage(
   error: z.ZodError,
   params?: ValidationMessageParams,

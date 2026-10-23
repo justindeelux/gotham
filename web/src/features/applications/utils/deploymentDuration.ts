@@ -1,6 +1,5 @@
 import type { Deployment } from "@/features/applications/api/applications";
 
-/** durationText renders started→finished (or started→now) as a short span. */
 export function durationText(deployment: Deployment): string {
   if (!deployment.started_at) {
     return "—";

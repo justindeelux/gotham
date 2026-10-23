@@ -1,7 +1,3 @@
-// GitHub App wizard flow (GS-5, JUS-61): the github_app source lists
-// repositories and branches of the installation through the github-app store,
-// while gitlab_app keeps the OAuth provider list. No network: stores are
-// seeded directly and only the derived state is asserted.
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -42,9 +38,6 @@ describe("github_app wizard flow", () => {
 
     w.handleRepoSelect("acme/web");
     expect(w.form.branch).toBe("main");
-    // The github_app flow stores the https clone_url even for private repos:
-    // the installation token is injected at clone time, and the token cloner
-    // only accepts http(s).
     expect(w.form.cloneUrl).toBe("https://github.com/acme/web.git");
 
     w.githubAppStore.branchesByRepo = {
@@ -53,7 +46,6 @@ describe("github_app wizard flow", () => {
         { name: "dev", commit: "def", protected: false },
       ],
     };
-    // The repo select (v-model) sets the full name; the branch list follows it.
     Object.assign(w.form, { repoFullName: "acme/web" });
     expect(w.branchOptions.value.map((item) => item.value)).toEqual(["main", "dev"]);
 
@@ -63,8 +55,6 @@ describe("github_app wizard flow", () => {
       provider: "github",
       repo: "acme/web",
       source_type: "github_app",
-      // The wizard links the application to its connection, so the clone
-      // takes the installation-token path.
       github_app_id: "g1",
     });
     wrapper.unmount();

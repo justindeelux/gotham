@@ -26,9 +26,6 @@ import {
   Users,
 } from "@lucide/vue";
 
-// Thin adapter over @lucide/vue: call sites keep using the Gotham names with
-// no changes. Per-icon imports keep tree-shaking intact — never import the
-// whole library here.
 export type IconName =
   | "server"
   | "shield"
@@ -86,9 +83,6 @@ const components: Record<IconName, Component> = {
 
 const component = computed<Component>(() => components[props.name]);
 
-// @lucide/vue v1 renders stroke-width verbatim (no 24px-grid scaling),
-// so :stroke-width="1.6" below matches the old hand-drawn paths exactly.
-// Do NOT add absolute-stroke-width: in v1 that flag enables the scaling.
 </script>
 
 <template>

@@ -31,25 +31,18 @@ const { t } = useI18n();
 
 const logTab = ref("deployment");
 
-/** deploymentPlaceholder names the in-flight deployment, if any. */
 const deploymentPlaceholder = computed<string>(() =>
   props.activeDeploymentId
     ? String(t("applications.logsTab.streaming", { id: props.activeDeploymentId.slice(0, 8) }))
     : String(t("applications.logsTab.selectDeployment")),
 );
 
-/** runtimeContainerId streams the running deployment's container, if any. */
 const runtimeContainerId = computed<string>(() => props.runtimeDeployment?.container_id ?? "");
 
-/**
- * runtimeServerId streams from the application node, never the shared Logs
- * pick: the container runs on the application's own node.
- */
 const runtimeServerId = computed<string>(
   () => props.application?.server_id || props.effectiveLogServerId,
 );
 
-/** runtimeNodeMismatch hints when the shared node pick is not the app node. */
 const runtimeNodeMismatch = computed<boolean>(() =>
   Boolean(
     props.application?.server_id &&
@@ -132,8 +125,6 @@ const runtimeTitle = computed<string>(() =>
 </template>
 
 <style scoped>
-/* Commit info sits on the same row as the picks; the picks stack
-   vertically. Wraps to one column on narrow widths. */
 .deploy-log-head {
   display: flex;
   align-items: flex-start;

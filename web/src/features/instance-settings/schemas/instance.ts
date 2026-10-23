@@ -1,11 +1,5 @@
 import { z } from "zod";
 
-/**
- * Instance-settings schemas. Field messages are namespaced i18n keys resolved
- * at display time (see shared/validation/naiveAdapter). They mirror the
- * server-side validation in internal/instance/validate.go, which stays the
- * source of truth: the server re-validates and answers field errors.
- */
 const m = (key: string): string => `instance-settings.validation.${key}`;
 
 const v4 = /^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
@@ -27,7 +21,6 @@ export function isIPv6(value: string): boolean {
 
 const isIP = (value: string): boolean => isIPv4(value) || isIPv6(value);
 
-/** splitList turns "a, b" input into trimmed non-empty entries. */
 export function splitList(value: string): string[] {
   return value
     .split(",")
@@ -81,39 +74,31 @@ export const timezoneSchema = z.string().trim().refine((value) => {
   }
 }, m("timezone"));
 
-/** dnsListSchema validates the comma separated resolver text. */
 export const dnsListSchema = z.string().refine((value) => {
   const items = splitList(value);
   return items.length <= 3 && new Set(items).size === items.length && items.every(isIP);
 }, m("dns"));
 
-/** dnsServerSchema validates one optional resolver input (Primary/Alternate). */
 export const dnsServerSchema = z
   .string()
   .trim()
   .refine((value) => value === "" || isIP(value), m("dnsSingle"));
 
-/** dnsPrimaryServerSchema validates the required Primary resolver input. */
 export const dnsPrimaryServerSchema = z
   .string()
   .trim()
   .refine(isIP, m("dnsSingle"));
 
-/** dnsServersValid checks the combined resolver list (distinct, at most 3). */
 export function dnsServersValid(list: string[]): boolean {
   const items = list.map((item) => item.trim()).filter((item) => item !== "");
   return items.length <= 3 && new Set(items).size === items.length && items.every(isIP);
 }
 
-/** InterfaceConfig is the interface half of a network configuration (DNS
- * excluded). NetworkSettings satisfies it structurally. */
 export interface InterfaceConfig {
   ipv4: { mode: string; address: string; gateway: string };
   ipv6: { enabled: boolean; mode: string; address: string; gateway: string };
 }
 
-/** sameInterface ignores DNS: only the interface configuration counts. The
- * server applies such a change DNS-only, without touching the interface file. */
 export function sameInterface(a: InterfaceConfig, b: InterfaceConfig): boolean {
   return (
     a.ipv4.mode === b.ipv4.mode &&
@@ -126,9 +111,6 @@ export function sameInterface(a: InterfaceConfig, b: InterfaceConfig): boolean {
   );
 }
 
-/** isRiskyInterfaceChange mirrors the server guard (JUS-100): touching a
- * live static family's mode/address/gateway needs an explicit confirmation,
- * otherwise a DNS edit can drop the host's address. */
 export function isRiskyInterfaceChange(prev: InterfaceConfig, next: InterfaceConfig): boolean {
   if (prev.ipv4.mode === "static" && prev.ipv4.address !== "") {
     if (
@@ -206,7 +188,6 @@ const networkSchema = z.object({
   }),
 });
 
-/** hostSchema reports the host-helper probe states (JUS-185). */
 const hostSchema = z.object({
   helper: z.enum(["ready", "missing", "denied"]),
   repair: z.boolean(),
@@ -216,7 +197,6 @@ const hostSchema = z.object({
   system: z.boolean(),
 });
 
-/** stateSettingsSchema is the shared settings shape of every instance response. */
 const stateSettingsSchema = z.object({
   general: z.object({
     control_plane_url: settingFieldSchema,
@@ -236,10 +216,8 @@ const stateSettingsSchema = z.object({
     .nullable(),
 });
 
-/** stateEnvelopeSchema checks the {settings} response envelope. */
 export const stateEnvelopeSchema = z.object({ settings: stateSettingsSchema });
 
-/** hostHelperEnvelopeSchema checks the {settings, log} install response. */
 export const hostHelperEnvelopeSchema = z.object({
   settings: stateSettingsSchema,
   log: z.string(),

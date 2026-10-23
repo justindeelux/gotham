@@ -1,7 +1,3 @@
-// JUS-273: opening a volume in File Manager constructs a deep link
-// (`/servers/:id/files?root=volumes&path=<dir>`). The target is untrusted
-// input to the File Manager, so both the application-side gate and the
-// browser-side root check reject forged or escaping values.
 
 import { describe, expect, it } from "vitest";
 
@@ -13,12 +9,9 @@ import {
   resolveFilesDeepLink,
 } from "@/features/files/utils/deepLink";
 
-/** roots is the node's answer for GET /servers/{id}/files/roots. */
 const roots: FilesRoot[] = [
-  // Confined agent roots.
   { name: "volumes", path: "/var/lib/gotham/volumes", writable: true, free_bytes: 1 },
   { name: "compose", path: "/var/lib/gotham-agent/compose", writable: false, free_bytes: 1 },
-  // Full-access agent: the only root is "system" at "/".
   { name: "system", path: "/", writable: true, free_bytes: 1 },
 ];
 

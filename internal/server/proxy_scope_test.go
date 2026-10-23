@@ -10,7 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// unsetPlatformAdmins clears the env var even when another test set it.
 func unsetPlatformAdmins(t *testing.T) error {
 	t.Helper()
 	previous, had := os.LookupEnv(PlatformAdminsEnv)
@@ -27,11 +26,6 @@ func unsetPlatformAdmins(t *testing.T) error {
 	return nil
 }
 
-// TestPlatformAdminBoundary proves the platform-global proxy surface (node-wide
-// sync, DNS-provider CRUD) is guarded by a real operator boundary instead of
-// "any JWT": an admin-scoped API token passes, an operator-listed session email
-// passes, and a plain session or a read/deploy token is refused without
-// reaching the service.
 func TestPlatformAdminBoundary(t *testing.T) {
 	s, tokens := newTestTokenServer(t)
 
@@ -40,7 +34,6 @@ func TestPlatformAdminBoundary(t *testing.T) {
 		calls++
 		w.WriteHeader(http.StatusOK)
 	})
-	// The exact chain internal/server mounts for POST /v1/proxy/sync.
 	handler := s.RequireAuth(s.RequirePlatformAdmin(next))
 
 	do := func(authorization string) *httptest.ResponseRecorder {
@@ -73,7 +66,6 @@ func TestPlatformAdminBoundary(t *testing.T) {
 		}
 	}
 
-	// A plain session (role "user") is refused by default: secure by default.
 	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusForbidden {
 		t.Fatalf("plain session status = %d, want 403", recorder.Code)
 	}
@@ -81,7 +73,6 @@ func TestPlatformAdminBoundary(t *testing.T) {
 		t.Fatalf("service called %d times for a plain session", calls)
 	}
 
-	// An operator-listed session email passes.
 	t.Setenv(PlatformAdminsEnv, "someone@example.com, User@Example.com ")
 	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusOK {
 		t.Fatalf("listed session status = %d, want 200", recorder.Code)
@@ -90,7 +81,6 @@ func TestPlatformAdminBoundary(t *testing.T) {
 		t.Fatalf("service calls = %d, want 1 after the listed session", calls)
 	}
 
-	// An admin-scoped API token passes regardless of the list.
 	if err := unsetPlatformAdmins(t); err != nil {
 		t.Fatalf("unset %s: %v", PlatformAdminsEnv, err)
 	}
@@ -106,10 +96,6 @@ func TestPlatformAdminBoundary(t *testing.T) {
 	}
 }
 
-// TestPlatformAdminRoleSessionPasses proves the JUS-21 session path: a
-// session whose access token carries the "admin" role claim (the first
-// account's sessions) passes RequirePlatformAdmin with PLATFORM_ADMINS unset,
-// while a plain "user" session is still refused.
 func TestPlatformAdminRoleSessionPasses(t *testing.T) {
 	s, _ := newTestTokenServer(t)
 
@@ -122,7 +108,6 @@ func TestPlatformAdminRoleSessionPasses(t *testing.T) {
 		calls++
 		w.WriteHeader(http.StatusOK)
 	})
-	// The exact chain internal/server mounts for POST /v1/proxy/sync.
 	handler := s.RequireAuth(s.RequirePlatformAdmin(next))
 
 	do := func(authorization string) *httptest.ResponseRecorder {

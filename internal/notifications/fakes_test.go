@@ -16,45 +16,34 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// testSecret is the deployment key every test service seals channel configs
-// with.
 const testSecret = "notifications-test-secret"
 
-// TestMain clears the feature flag so the suite runs with notifications
-// enabled; individual tests override it with t.Setenv.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv(FeatureEnv)
 	os.Exit(m.Run())
 }
 
-// discardLogger keeps the service's operational logging out of test output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// syncBuffer is a goroutine-safe log sink: workers log while the test reads.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-// Write implements io.Writer.
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
 }
 
-// String returns what was logged so far.
 func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
 
-// fakeRepository is an in-memory Repository that mimics the SQL semantics
-// tests care about: team scoping, enabled-only dispatcher reads and resource
-// override matching.
 type fakeRepository struct {
 	mu       sync.Mutex
 	channels map[uuid.UUID]Channel
@@ -72,14 +61,11 @@ type fakeRepository struct {
 	createDeliveryErr error
 	listDeliveriesErr error
 
-	// listForEventCalls and the last resource arguments let a test prove the
-	// dispatcher asked for exactly the event's resource.
 	listForEventCalls int
 	lastResourceType  string
 	lastResourceID    uuid.UUID
 }
 
-// Compile-time guarantee.
 var _ Repository = (*fakeRepository)(nil)
 
 func newFakeRepository() *fakeRepository {
@@ -89,7 +75,6 @@ func newFakeRepository() *fakeRepository {
 	}
 }
 
-// seed stores a channel directly, filling the fields the service would.
 func (r *fakeRepository) seed(channel Channel) Channel {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -107,7 +92,6 @@ func (r *fakeRepository) seed(channel Channel) Channel {
 	return channel
 }
 
-// get is the test-side accessor.
 func (r *fakeRepository) get(id uuid.UUID) (Channel, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -115,7 +99,6 @@ func (r *fakeRepository) get(id uuid.UUID) (Channel, bool) {
 	return channel, ok
 }
 
-// CreateChannel implements Repository.
 func (r *fakeRepository) CreateChannel(_ context.Context, channel Channel) (Channel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -127,7 +110,6 @@ func (r *fakeRepository) CreateChannel(_ context.Context, channel Channel) (Chan
 	return channel, nil
 }
 
-// GetChannel implements Repository.
 func (r *fakeRepository) GetChannel(_ context.Context, teamID, channelID uuid.UUID) (Channel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -141,7 +123,6 @@ func (r *fakeRepository) GetChannel(_ context.Context, teamID, channelID uuid.UU
 	return channel, nil
 }
 
-// ListChannels implements Repository.
 func (r *fakeRepository) ListChannels(_ context.Context, teamID uuid.UUID) ([]Channel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -151,9 +132,6 @@ func (r *fakeRepository) ListChannels(_ context.Context, teamID uuid.UUID) ([]Ch
 	return r.byTeam(teamID), nil
 }
 
-// ListChannelsForEvent implements Repository with the dispatcher query's
-// semantics: enabled channels of the team that are team-wide or scoped to the
-// exact resource.
 func (r *fakeRepository) ListChannelsForEvent(_ context.Context, teamID uuid.UUID, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -174,7 +152,6 @@ func (r *fakeRepository) ListChannelsForEvent(_ context.Context, teamID uuid.UUI
 	return matched, nil
 }
 
-// UpdateChannel implements Repository.
 func (r *fakeRepository) UpdateChannel(_ context.Context, channel Channel) (Channel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -189,7 +166,6 @@ func (r *fakeRepository) UpdateChannel(_ context.Context, channel Channel) (Chan
 	return channel, nil
 }
 
-// DeleteChannel implements Repository.
 func (r *fakeRepository) DeleteChannel(_ context.Context, teamID, channelID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -204,8 +180,6 @@ func (r *fakeRepository) DeleteChannel(_ context.Context, teamID, channelID uuid
 	return nil
 }
 
-// CreateDelivery implements Repository: it appends one attempt, applying the
-// same newest-first cap the SQL retention runs so unit tests see bounded rows.
 func (r *fakeRepository) CreateDelivery(_ context.Context, delivery Delivery) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -224,8 +198,6 @@ func (r *fakeRepository) CreateDelivery(_ context.Context, delivery Delivery) er
 	return nil
 }
 
-// ListDeliveries implements Repository with the SQL read's semantics: the
-// newest attempts of a channel that belongs to the team, newest first.
 func (r *fakeRepository) ListDeliveries(_ context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -244,14 +216,12 @@ func (r *fakeRepository) ListDeliveries(_ context.Context, teamID, channelID uui
 	return history, nil
 }
 
-// deliveriesFor is the test-side accessor for one channel's stored attempts.
 func (r *fakeRepository) deliveriesFor(channelID uuid.UUID) []Delivery {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]Delivery(nil), r.deliveries[channelID]...)
 }
 
-// sortDeliveries orders attempts newest first, matching the SQL read.
 func sortDeliveries(deliveries []Delivery) {
 	sort.Slice(deliveries, func(i, j int) bool {
 		if !deliveries[i].CreatedAt.Equal(deliveries[j].CreatedAt) {
@@ -261,7 +231,6 @@ func sortDeliveries(deliveries []Delivery) {
 	})
 }
 
-// byTeam returns a team's channels oldest first. Callers hold the lock.
 func (r *fakeRepository) byTeam(teamID uuid.UUID) []Channel {
 	channels := make([]Channel, 0, len(r.channels))
 	for _, channel := range r.channels {
@@ -278,9 +247,6 @@ func (r *fakeRepository) byTeam(teamID uuid.UUID) []Channel {
 	return channels
 }
 
-// fakeNotifier records the events delivered to it, optionally failing or
-// blocking so the dispatcher's isolation and non-blocking properties are
-// testable.
 type fakeNotifier struct {
 	mu      sync.Mutex
 	events  []Event
@@ -289,14 +255,12 @@ type fakeNotifier struct {
 	entered chan struct{}
 }
 
-// Compile-time guarantee.
 var _ Notifier = (*fakeNotifier)(nil)
 
 func newFakeNotifier() *fakeNotifier {
 	return &fakeNotifier{}
 }
 
-// Notify implements Notifier.
 func (n *fakeNotifier) Notify(_ context.Context, event Event) error {
 	if n.entered != nil {
 		select {
@@ -313,14 +277,12 @@ func (n *fakeNotifier) Notify(_ context.Context, event Event) error {
 	return n.err
 }
 
-// delivered returns the recorded events.
 func (n *fakeNotifier) delivered() []Event {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return append([]Event(nil), n.events...)
 }
 
-// fakeMailer records the mails handed to it.
 type fakeMailer struct {
 	mu      sync.Mutex
 	mails   []Mail
@@ -328,10 +290,8 @@ type fakeMailer struct {
 	entered chan struct{}
 }
 
-// Compile-time guarantee.
 var _ Mailer = (*fakeMailer)(nil)
 
-// Send implements Mailer.
 func (m *fakeMailer) Send(_ context.Context, mail Mail) error {
 	if m.entered != nil {
 		select {
@@ -345,15 +305,12 @@ func (m *fakeMailer) Send(_ context.Context, mail Mail) error {
 	return m.err
 }
 
-// delivered returns the recorded mails.
 func (m *fakeMailer) delivered() []Mail {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]Mail(nil), m.mails...)
 }
 
-// newTestService builds a Service over fakes with a fast timeout and a
-// deterministic clock. The worker pool is stopped at cleanup.
 func newTestService(t *testing.T, repo Repository) *Service {
 	t.Helper()
 	service := NewService(Config{
@@ -371,12 +328,10 @@ func newTestService(t *testing.T, repo Repository) *Service {
 	return service
 }
 
-// scopedCtx puts a team scope on the context, as RequireTeam does.
 func scopedCtx(userID, teamID uuid.UUID, role teams.Role) context.Context {
 	return teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: role})
 }
 
-// sampleChannel builds a stored channel with a sealed Discord config.
 func sampleChannel(t *testing.T, teamID uuid.UUID) Channel {
 	t.Helper()
 	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: "https://discord.com/api/webhooks/1184/8f2c-secret"})
@@ -397,7 +352,6 @@ func sampleChannel(t *testing.T, teamID uuid.UUID) Channel {
 	}
 }
 
-// sampleEvent builds a deploy-failure event.
 func sampleEvent(teamID uuid.UUID) Event {
 	return Event{
 		Kind:         EventDeploy,
@@ -412,7 +366,6 @@ func sampleEvent(teamID uuid.UUID) Event {
 	}
 }
 
-// waitFor blocks until cond holds, failing the test when it never does.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

@@ -15,14 +15,12 @@ import (
 const mcpContractHeader = "X-Gotham-MCP-Contract"
 const mcpTeamHeader = "X-Gotham-MCP-Team-Id"
 
-// requireMCPTeam fails closed; unlike legacy team resolution it never supplies a personal team.
 func (s *Server) requireMCPTeam(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(mcpContractHeader) != "1" {
 			writeJSON(w, http.StatusBadRequest, apiError{Message: "unsupported MCP contract"})
 			return
 		}
-		// Writes are admitted only through the four strict aliases.
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
 		if mutation && (r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/api/v1/mcp/")) {
 			writeJSON(w, http.StatusMethodNotAllowed, apiError{Message: "unsupported MCP operation"})

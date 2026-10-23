@@ -7,9 +7,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// TestLimiterKeyMasksIPv6To64: addresses inside one /64 share a bucket, a
-// different /64 gets its own, and IPv4 (including mapped) and unparseable keys
-// are used verbatim.
 func TestLimiterKeyMasksIPv6To64(t *testing.T) {
 	same := [][2]string{
 		{"2001:db8:1:2::1", "2001:db8:1:2:ffff:ffff:ffff:ffff"},
@@ -22,7 +19,7 @@ func TestLimiterKeyMasksIPv6To64(t *testing.T) {
 	}
 
 	distinct := [][2]string{
-		{"2001:db8:1:2::1", "2001:db8:1:3::1"}, // next /64
+		{"2001:db8:1:2::1", "2001:db8:1:3::1"},
 		{"1.2.3.4", "1.2.3.5"},
 		{"::ffff:1.2.3.4", "::ffff:1.2.3.5"},
 	}
@@ -37,9 +34,6 @@ func TestLimiterKeyMasksIPv6To64(t *testing.T) {
 	}
 }
 
-// TestIPRateLimiterSharesBucketAcrossIPv6Prefix proves the masking reaches the
-// bucket itself: two addresses in one /64 exhaust a burst of two, while a
-// different /64 is unaffected.
 func TestIPRateLimiterSharesBucketAcrossIPv6Prefix(t *testing.T) {
 	l := newIPRateLimiter(rate.Every(time.Hour), 2)
 	t.Cleanup(l.Close)

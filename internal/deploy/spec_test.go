@@ -38,8 +38,6 @@ func TestBuildRunRequest(t *testing.T) {
 	if !strings.HasPrefix(req.Name, "gotham-demo-app-") {
 		t.Errorf("Name = %q, want gotham-demo-app- prefix", req.Name)
 	}
-	// buildEnv sorts by key so the payload is deterministic regardless of
-	// whether a value came from an env var, a secret or the PORT default.
 	if want := []string{"API_TOKEN=hunter2", "FOO=bar", "PORT=3000"}; !equalStrings(req.Env, want) {
 		t.Errorf("Env = %v, want %v", req.Env, want)
 	}
@@ -105,10 +103,6 @@ func TestBuildRunRequestSecretWinsOverEnv(t *testing.T) {
 	}
 }
 
-// TestBuildRunRequestPortDefault pins the PORT fallback: the payload defaults
-// PORT to the application's container port, but an explicit env var or secret
-// always wins and a zero port injects nothing. The port mapping itself never
-// changes with the fallback.
 func TestBuildRunRequestPortDefault(t *testing.T) {
 	const secretKey = "test-secret-key"
 	dep := Deployment{ID: uuid.New(), ImageTag: "img"}
@@ -227,8 +221,6 @@ func TestBuildRunRequestValidation(t *testing.T) {
 		t.Errorf("empty container path error = %v, want ErrValidation", err)
 	}
 
-	// A non-absolute source is a Docker named volume: it is not a host bind
-	// and is namespaced to the application.
 	named := []Storage{{Name: "data", HostPath: "gotham-data", ContainerPath: "/var/lib/app"}}
 	req, err := buildRunRequest(app, dep, nil, nil, named, "", nil, 0)
 	if err != nil {
@@ -266,8 +258,6 @@ func TestContainerNameIsDockerSafe(t *testing.T) {
 	if strings.ContainsAny(name, " /!") {
 		t.Errorf("containerName = %q, contains illegal characters", name)
 	}
-	// A rollback reuses the application but not the deployment, so the name
-	// never collides with the container it replaces.
 	other := containerName(app, Deployment{ID: uuid.New()})
 	if other == name {
 		t.Errorf("deployment-specific names collided: %q", name)
@@ -291,8 +281,6 @@ func TestTruncateError(t *testing.T) {
 	}
 }
 
-// TestTruncateErrorRuneSafe is the JUS-81 round-2 regression: cutting a
-// multi-byte message at the byte limit must not store invalid UTF-8.
 func TestTruncateErrorRuneSafe(t *testing.T) {
 	message := strings.Repeat("x", 4095) + "日本語" + strings.Repeat("y", 100)
 	got := truncateError(errors.New(message))
@@ -307,7 +295,6 @@ func TestTruncateErrorRuneSafe(t *testing.T) {
 	}
 }
 
-// equalStrings compares two string slices order-sensitively.
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
@@ -320,8 +307,6 @@ func equalStrings(got, want []string) bool {
 	return true
 }
 
-// TestTruncateErrorInvalidUTF8 pins that invalid bytes are replaced instead of
-// persisted, and that a bad byte early in the message does not discard the rest.
 func TestTruncateErrorInvalidUTF8(t *testing.T) {
 	got := truncateError(errors.New("hdr\n\xff bin\n" + strings.Repeat("x", 5000)))
 	if !utf8.ValidString(got) || len(got) < 4000 {

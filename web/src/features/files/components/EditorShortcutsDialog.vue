@@ -23,7 +23,6 @@ const emit = defineEmits<{ "update:show": [value: boolean] }>();
 const { t } = useI18n();
 const platform = computed<ShortcutPlatform>(() => (isMacPlatform() ? "mac" : "other"));
 
-/** rowsFor renders one group's rows from the shared binding table. */
 function rowsFor(group: ShortcutGroup): Array<{ id: string; label: string; keys: string[] }> {
   return editorShortcuts
     .filter((shortcut) => shortcut.group === group)
@@ -36,7 +35,6 @@ function rowsFor(group: ShortcutGroup): Array<{ id: string; label: string; keys:
     }));
 }
 
-/** close hides the sheet; the parent returns focus to the trigger. */
 function close(): void {
   emit("update:show", false);
 }
@@ -71,8 +69,6 @@ function close(): void {
       </NButton>
     </div>
 
-    <!-- Read-only table. The scroll container is focusable so a keyboard user
-         can scroll the sheet without a pointer (axe scrollable-region-focusable). -->
     <div
       class="ed-shortcuts"
       tabindex="0"

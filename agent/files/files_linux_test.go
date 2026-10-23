@@ -12,11 +12,6 @@ import (
 	"github.com/justindeelux/gotham/agent/fsroot"
 )
 
-// TestListCursorNonUTF8RoundTrip pages a directory whose names straddle the
-// page boundary with invalid UTF-8, through the same encode/decode the List
-// RPC uses, and proves every name is visited exactly once and the walk
-// terminates. Linux is the only target that accepts non-UTF-8 filenames, so
-// this lives behind the linux build tag.
 func TestListCursorNonUTF8RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	names := []string{"a", "a\xff", "a\xffz", "b", "c\xfd", "d"}

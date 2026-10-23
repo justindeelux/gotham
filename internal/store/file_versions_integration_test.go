@@ -14,9 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestFileVersionRetentionAndConfinement exercises JUS-224 history storage:
-// the count and byte retention bounds are applied when a snapshot is inserted,
-// and every read/delete is scoped to its (server, root, path) file key.
 func TestFileVersionRetentionAndConfinement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -67,7 +64,6 @@ func TestFileVersionRetentionAndConfinement(t *testing.T) {
 		}
 	}
 
-	// Count retention: five saves, three kept, newest first.
 	for i := 0; i < 5; i++ {
 		snapshot("app/compose.yml", fmt.Sprintf("body-%d", i), 3, 1<<20)
 	}
@@ -99,7 +95,6 @@ func TestFileVersionRetentionAndConfinement(t *testing.T) {
 		t.Errorf("oldest retained body = %q, want body-2", oldest.Content)
 	}
 
-	// Byte retention: 10-byte bodies with a 25-byte cap keep the newest two.
 	for i := 0; i < 4; i++ {
 		snapshot("app/size.yml", "0123456789", 100, 25)
 	}
@@ -113,7 +108,6 @@ func TestFileVersionRetentionAndConfinement(t *testing.T) {
 		t.Fatalf("retained %d byte-bound versions, want 2", len(sizeList))
 	}
 
-	// Confinement: a version id only resolves under its own file key.
 	first := list[0]
 	if _, err := st.GetFileVersion(ctx, sqlc.GetFileVersionParams{
 		ID: first.ID, ServerID: pgUUID(serverID), Root: "compose", Path: "app/other.yml",

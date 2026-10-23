@@ -2,37 +2,14 @@ import { http, teamHeaders } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import { i18n } from "@/shared/i18n";
 
-/**
- * Typed client for the notification-channel routes served by
- * `internal/notifications` (see Mount in routes.go for the contract):
- *
- *   GET    /notification-channels          POST   /notification-channels
- *   GET    /notification-channels/{id}     PATCH  /notification-channels/{id}
- *   DELETE /notification-channels/{id}     POST   /notification-channels/{id}/test
- *
- * Channels are team-scoped: the control plane resolves the active team from
- * the optional `X-Team-Id` header (the caller's personal team when absent), so
- * every call here carries the team selected in the UI.
- *
- * Secrets are write-only: reads return them masked (at most the last four
- * characters) with `secrets_configured` telling a client one is stored. An
- * update replaces a secret only when the request carries a new value.
- *
- * Disabled (FEATURE_NOTIFICATIONS=false) every route is unmounted: reads
- * answer 404 and the surface is hidden rather than rendered as an error.
- */
-
-/** Transport of one channel (Kind in internal/notifications/model.go). */
 export type NotificationKind = "discord" | "slack" | "telegram" | "email";
 
-/** Subscribable event keys (EventKey in internal/notifications/model.go). */
 export type NotificationEventKey =
   | "deploy_success"
   | "deploy_failure"
   | "backup_success"
   | "backup_failure";
 
-/** Every event key in subscription order (AllEvents). */
 export const allNotificationEvents: NotificationEventKey[] = [
   "deploy_success",
   "deploy_failure",
@@ -40,10 +17,6 @@ export const allNotificationEvents: NotificationEventKey[] = [
   "backup_failure",
 ];
 
-/**
- * Transport configuration. Which fields are required depends on the channel
- * kind; secret fields (webhook_url, bot_token, password) are masked on read.
- */
 export interface ChannelConfig {
   webhook_url?: string;
   bot_token?: string;
@@ -56,7 +29,6 @@ export interface ChannelConfig {
   to?: string[];
 }
 
-/** One channel as the API returns it (ChannelView in model.go). */
 export interface NotificationChannel {
   id: string;
   team_id: string;
@@ -67,39 +39,26 @@ export interface NotificationChannel {
   resource_type?: string;
   resource_id?: string;
   config: ChannelConfig;
-  /** True when a secret is stored; the value itself is never returned. */
   secrets_configured: boolean;
   created_at: string;
   updated_at: string;
 }
 
-/**
- * Body of the create/update endpoints. On update a zero field leaves the
- * stored value unchanged and a secret is replaced only when a new value is
- * named; the kind is immutable after creation.
- */
 export interface ChannelInput {
   name?: string;
   kind?: NotificationKind;
   enabled?: boolean;
   events?: NotificationEventKey[];
-  /**
-   * Resource override pair: both empty (or omitted) means team-wide, an
-   * application/database pair scopes the channel to one resource. On update
-   * the two must be named together.
-   */
   resource_type?: string;
   resource_id?: string;
   config?: ChannelConfig;
 }
 
-/** Answer of the send-test action. It never carries the channel's secrets. */
 export interface TestResult {
   ok: boolean;
   message: string;
 }
 
-/** Wire envelopes. */
 interface ChannelEnvelope {
   channel: NotificationChannel;
 }
@@ -110,7 +69,6 @@ interface TestEnvelope {
   check: TestResult;
 }
 
-/** listChannels returns one team's channels, oldest first. */
 export async function listChannels(
   teamId: string,
 ): Promise<NotificationChannel[]> {
@@ -120,7 +78,6 @@ export async function listChannels(
   return response.data.channels ?? [];
 }
 
-/** createChannel stores a channel in one team. */
 export async function createChannel(
   teamId: string,
   input: ChannelInput,
@@ -133,7 +90,6 @@ export async function createChannel(
   return response.data.channel;
 }
 
-/** updateChannel patches one channel; omitted fields stay unchanged. */
 export async function updateChannel(
   teamId: string,
   id: string,
@@ -147,14 +103,12 @@ export async function updateChannel(
   return response.data.channel;
 }
 
-/** deleteChannel removes one channel. */
 export async function deleteChannel(teamId: string, id: string): Promise<void> {
   await http.delete(`/notification-channels/${id}`, {
     headers: teamHeaders(teamId),
   });
 }
 
-/** testChannel delivers a synthetic event and reports the outcome. */
 export async function testChannel(
   teamId: string,
   id: string,
@@ -167,16 +121,13 @@ export async function testChannel(
   return response.data.check;
 }
 
-/** Terminal result of one delivery attempt (DeliveryStatus in model.go). */
 export type DeliveryStatus = "success" | "failure";
 
-/** One persisted delivery attempt (DeliveryView in model.go). */
 export interface NotificationDelivery {
   id: string;
   channel_id: string;
   event_type: string;
   status: DeliveryStatus;
-  /** A bounded, classified failure reason; empty on success. Never a secret. */
   error_summary?: string;
   created_at: string;
 }
@@ -185,7 +136,6 @@ interface DeliveryListEnvelope {
   deliveries: NotificationDelivery[];
 }
 
-/** listDeliveries returns a channel's newest attempts, newest first. */
 export async function listDeliveries(
   teamId: string,
   id: string,
@@ -197,20 +147,8 @@ export async function listDeliveries(
   return response.data.deliveries ?? [];
 }
 
-/**
- * TextParams interpolates one curated display string (e.g. `{name}`).
- * Wire values (event keys, kinds, URLs) are never keys: they travel as
- * parameter values only.
- */
 export type TextParams = Record<string, string | number>;
 
-/**
- * channelText resolves one notifications namespaced key in the current
- * locale at invocation time, so a language switch refreshes every caller on
- * its next render. When the feature catalog is not registered (a unit
- * harness importing this module directly) it falls back to the English
- * literal, so existing behavior assertions keep passing.
- */
 export function channelText(
   key: string,
   fallback: string,
@@ -227,7 +165,6 @@ export function channelText(
   return out;
 }
 
-/** kindLabel renders a channel kind as display text. */
 export function kindLabel(kind: NotificationKind): string {
   switch (kind) {
     case "discord":
@@ -246,7 +183,6 @@ export function kindLabel(kind: NotificationKind): string {
   }
 }
 
-/** eventLabel renders an event key as display text. */
 export function eventLabel(event: NotificationEventKey): string {
   switch (event) {
     case "deploy_success":
@@ -274,11 +210,6 @@ export function eventLabel(event: NotificationEventKey): string {
   }
 }
 
-/**
- * deliveryEventLabel renders a delivery row's event type. A send-test row
- * carries the "test" marker instead of an event key; an unknown key renders
- * verbatim, like eventLabel.
- */
 export function deliveryEventLabel(eventType: string): string {
   if (eventType === "test") {
     return channelText("notifications.history.testEvent", "Test message");
@@ -289,19 +220,16 @@ export function deliveryEventLabel(eventType: string): string {
   return eventType;
 }
 
-/** deliveryStatusLabel renders a delivery row's terminal status. */
 export function deliveryStatusLabel(status: DeliveryStatus): string {
   return status === "success"
     ? channelText("notifications.history.delivered", "Delivered")
     : channelText("notifications.history.failed", "Failed");
 }
 
-/** isFeatureDisabled reports whether an error is the notifications 404. */
 export function isFeatureDisabled(error: unknown): boolean {
   return isApiError(error) && error.status === 404;
 }
 
-/** describeChannelError maps a thrown error to a user-facing message. */
 export function describeChannelError(error: unknown): string {
   if (isApiError(error)) {
     if (error.status === 401) {
@@ -343,11 +271,6 @@ export function describeChannelError(error: unknown): string {
   );
 }
 
-/**
- * withChannelStatusDiagnostic pairs an unknown API failure's raw diagnostic
- * with the localized request summary (`<summary>: <raw>`). An empty or
- * already-generic diagnostic renders the summary alone.
- */
 function withChannelStatusDiagnostic(raw: string): string {
   const summary = channelText(
     "notifications.errors.requestFailed",
@@ -360,12 +283,6 @@ function withChannelStatusDiagnostic(raw: string): string {
   return `${lead}: ${raw}`;
 }
 
-/**
- * withChannelDiagnostic pairs an unknown failure's raw diagnostic with a
- * localized summary (`<summary>: <raw>`). An empty or already-generic
- * diagnostic renders the summary alone. Known refusal branches above keep
- * their raw actionable text untouched.
- */
 function withChannelDiagnostic(raw: string): string {
   const summary = channelText(
     "notifications.errors.unexpected",

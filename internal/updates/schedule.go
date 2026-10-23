@@ -13,14 +13,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Schedule frequencies.
 const (
 	FrequencyInterval = "interval"
 	FrequencyDaily    = "daily"
 	FrequencyWeekly   = "weekly"
 )
 
-// Interval bounds for the "interval" frequency, in minutes (1h .. 30d).
 const (
 	minIntervalMinutes = 60
 	maxIntervalMinutes = 43200
@@ -28,29 +26,22 @@ const (
 
 var atTimePattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
-// Schedule is the operator-controlled check / auto-apply schedule.
 type Schedule struct {
-	CheckEnabled bool    `json:"check_enabled"`
-	AutoApply    bool    `json:"auto_apply"`
-	Channel      Channel `json:"channel"`
-	Frequency    string  `json:"frequency"`
-	// IntervalMinutes is used by the interval frequency. Zero (env defaults
-	// only) means "use the service's configured interval".
-	IntervalMinutes int `json:"interval_minutes"`
-	// AtTime is HH:MM in the instance timezone for daily/weekly.
-	AtTime string `json:"at_time"`
-	// Weekday is 0 (Sunday) .. 6 for weekly.
-	Weekday int `json:"weekday"`
+	CheckEnabled    bool    `json:"check_enabled"`
+	AutoApply       bool    `json:"auto_apply"`
+	Channel         Channel `json:"channel"`
+	Frequency       string  `json:"frequency"`
+	IntervalMinutes int     `json:"interval_minutes"`
+	AtTime          string  `json:"at_time"`
+	Weekday         int     `json:"weekday"`
 }
 
-// ScheduleError carries per-field validation messages.
 type ScheduleError struct {
 	Fields map[string]string
 }
 
 func (e *ScheduleError) Error() string { return "invalid update schedule" }
 
-// Validate checks a schedule submitted through the API.
 func (sc Schedule) Validate() error {
 	fields := map[string]string{}
 	if sc.Channel != ChannelStable && sc.Channel != ChannelBeta {
@@ -80,9 +71,6 @@ func (sc Schedule) Validate() error {
 	return nil
 }
 
-// nextRun returns the next time the scheduler should fire after from.
-// fallback is the interval used when IntervalMinutes is unset.
-// Daily/weekly times are evaluated in loc.
 func (sc Schedule) nextRun(from time.Time, fallback time.Duration, loc *time.Location) time.Time {
 	from = from.In(loc)
 	if sc.Frequency == FrequencyInterval {
@@ -107,7 +95,6 @@ func (sc Schedule) nextRun(from time.Time, fallback time.Duration, loc *time.Loc
 	return next
 }
 
-// ScheduleStore persists the schedule. Load returns (nil, nil) when none is saved.
 type ScheduleStore interface {
 	Load(ctx context.Context) (*Schedule, error)
 	Save(ctx context.Context, sc Schedule) error
@@ -115,7 +102,6 @@ type ScheduleStore interface {
 
 type storeSchedule struct{ store *store.Store }
 
-// NewStoreSchedule adapts the shared store to ScheduleStore.
 func NewStoreSchedule(st *store.Store) ScheduleStore { return storeSchedule{store: st} }
 
 func (s storeSchedule) Load(ctx context.Context) (*Schedule, error) {

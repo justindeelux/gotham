@@ -1,6 +1,3 @@
-// Files symlink "Go to target" resolution (JUS-132): the pure helper behind the
-// row action maps a symlink's raw target onto a browsable root-relative path,
-// and refuses (null) what cannot be addressed so the action is hidden.
 import { describe, expect, it } from "vitest";
 
 import { resolveSymlinkTarget } from "@/features/files/utils/files";
@@ -29,18 +26,15 @@ describe("resolveSymlinkTarget", () => {
     expect(resolveSymlinkTarget("", "greet", "/srv/shared", "/srv")).toBe(
       "shared",
     );
-    // A root of "/" (whole-filesystem) strips the single leading slash.
     expect(resolveSymlinkTarget("", "bin", "/usr/bin", "/")).toBe("usr/bin");
     expect(resolveSymlinkTarget("", "x", "/srv/a/b", "/srv/")).toBe("a/b");
   });
 
   it("resolves a target at the root's top level to \"\"", () => {
-    // The root itself is inside the root and browsable.
     expect(resolveSymlinkTarget("", "x", "/srv", "/srv")).toBe("");
     expect(resolveSymlinkTarget("", "x", "/", "/")).toBe("");
     expect(resolveSymlinkTarget("conf", "up", "..")).toBe("");
     expect(resolveSymlinkTarget("", "self", ".")).toBe("");
-    // A link to "." in a subfolder is that folder, not the root.
     expect(resolveSymlinkTarget("conf", "self", ".")).toBe("conf");
   });
 

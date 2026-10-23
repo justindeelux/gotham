@@ -15,11 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestBackupRejectsTargetOfAnotherTeamMember is the D2-7 regression: a team
-// member can back up a database they share, but only to a target their
-// database owner owns. Before the fix the member's own S3 target was accepted
-// and the read path — which resolves the target by the database owner — then
-// answered 404 on every restore.
 func TestBackupRejectsTargetOfAnotherTeamMember(t *testing.T) {
 	owner, member := uuid.New(), uuid.New()
 	teamID := uuid.New()
@@ -69,7 +64,6 @@ func TestBackupRejectsTargetOfAnotherTeamMember(t *testing.T) {
 		t.Fatalf("cross-member target CreateSchedule err = %v, want ErrNotFound", err)
 	}
 
-	// The owner's own target is accepted and completes.
 	ownerCtx := teams.WithScope(context.Background(), teams.Scope{
 		UserID: owner, TeamID: teamID, Role: teams.RoleOwner,
 	})
@@ -80,13 +74,8 @@ func TestBackupRejectsTargetOfAnotherTeamMember(t *testing.T) {
 	waitForBackupDone(t, backupRepo, queued.ID)
 }
 
-// pointerTo is a small helper for the tri-state target field.
 func pointerTo(value string) *string { return &value }
 
-// TestUpdateScheduleTargetOwnership is the U7/U5 regression: an explicit target
-// the database owner does not own is refused, but a legacy schedule that
-// already stores such a target can still be edited (and disabled) without
-// naming the target.
 func TestUpdateScheduleTargetOwnership(t *testing.T) {
 	owner, member := uuid.New(), uuid.New()
 	teamID := uuid.New()
@@ -119,8 +108,6 @@ func TestUpdateScheduleTargetOwnership(t *testing.T) {
 		UserID: member, TeamID: teamID, Role: teams.RoleAdmin,
 	})
 
-	// A cron-only update does not name the target, so the legacy stored target
-	// is not re-validated and the schedule can be disabled.
 	disabled := false
 	updated, err := manager.UpdateSchedule(ctx, member, database.ID, schedule.ID, ScheduleRequest{
 		Cron: "0 3 * * *", Enabled: &disabled,
@@ -132,7 +119,6 @@ func TestUpdateScheduleTargetOwnership(t *testing.T) {
 		t.Errorf("updated = %+v, want disabled with the stored target kept", updated)
 	}
 
-	// Naming the cross-owner target is refused.
 	if _, err := manager.UpdateSchedule(ctx, member, database.ID, schedule.ID, ScheduleRequest{
 		Cron: "0 4 * * *", TargetID: pointerTo(memberTarget.ID.String()),
 	}); !errors.Is(err, ErrNotFound) {
@@ -140,7 +126,6 @@ func TestUpdateScheduleTargetOwnership(t *testing.T) {
 	}
 }
 
-// waitForBackupDone blocks until a run reaches a terminal state.
 func waitForBackupDone(t *testing.T, repo *fakeBackupRepository, backupID uuid.UUID) Backup {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -154,10 +139,6 @@ func waitForBackupDone(t *testing.T, repo *fakeBackupRepository, backupID uuid.U
 	return Backup{}
 }
 
-// TestBackupValidatesTargetOwnershipUnderLock is the round-2 U1 regression: a
-// target that flips from a member's local target to their S3 target between the
-// caller's read and the run insert must still be refused, and the refusal must
-// leave no running row behind.
 func TestBackupValidatesTargetOwnershipUnderLock(t *testing.T) {
 	owner, member := uuid.New(), uuid.New()
 	teamID := uuid.New()
@@ -180,8 +161,6 @@ func TestBackupValidatesTargetOwnershipUnderLock(t *testing.T) {
 	t.Cleanup(func() { _ = manager.Close() })
 
 	target := backupRepo.seedTarget(BackupTarget{UserID: member, Name: "flip", Kind: TargetLocal})
-	// Between the caller's target read and the locked insert the target becomes
-	// an S3 target owned by the member.
 	backupRepo.beforeCreateBackupWithTarget = func() {
 		flipped := backupRepo.targets[target.ID]
 		flipped.Kind = TargetS3
@@ -201,15 +180,11 @@ func TestBackupValidatesTargetOwnershipUnderLock(t *testing.T) {
 	}
 }
 
-// TestNextCronTimeSurvivesSpringForward is the D2-8/U2 regression: a slot
-// inside the spring-forward gap must fire at the first valid instant after the
-// gap (not be skipped) and the scan must return promptly.
 func TestNextCronTimeSurvivesSpringForward(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skipf("tzdata unavailable: %v", err)
 	}
-	// 2025-03-09 02:00 local does not exist; the schedule asks for it.
 	after := time.Date(2025, 3, 9, 1, 0, 0, 0, loc)
 
 	type answer struct {
@@ -239,15 +214,11 @@ func TestNextCronTimeSurvivesSpringForward(t *testing.T) {
 	}
 }
 
-// TestNextCronTimeFallBackDoesNotRepeatHour pins the no-duplicate rule: a
-// wall-clock slot in the repeated fall-back hour fires once, not at both
-// occurrences.
 func TestNextCronTimeFallBackDoesNotRepeatHour(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skipf("tzdata unavailable: %v", err)
 	}
-	// 2025-11-02 02:00 EDT -> 01:00 EST: 01:00-01:59 occurs twice.
 	after := time.Date(2025, 11, 1, 12, 0, 0, 0, loc)
 
 	first, err := nextCronTime("30 1 * * *", after, loc)
@@ -258,8 +229,6 @@ func TestNextCronTimeFallBackDoesNotRepeatHour(t *testing.T) {
 	if !first.Equal(wantFirst) {
 		t.Fatalf("first = %v, want %v (EDT occurrence)", first, wantFirst)
 	}
-	// The second occurrence (01:30 EST) is the same wall-clock slot and must
-	// not fire again; the next run is the following day.
 	second, err := nextCronTime("30 1 * * *", first, loc)
 	if err != nil {
 		t.Fatalf("second nextCronTime: %v", err)
@@ -270,10 +239,6 @@ func TestNextCronTimeFallBackDoesNotRepeatHour(t *testing.T) {
 	}
 }
 
-// TestNextCronTimeSpringForwardDoesNotMissDay pins the no-missed rule: the
-// day whose slot is swallowed by the gap still produces exactly one run, at
-// the first valid instant after the gap, and the following day resumes the
-// normal wall clock.
 func TestNextCronTimeSpringForwardDoesNotMissDay(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -299,14 +264,12 @@ func TestNextCronTimeSpringForwardDoesNotMissDay(t *testing.T) {
 	}
 }
 
-// TestNextCronTimeStepsToNextTopOfHour is the U4 regression: the fallback
-// across a gap must land on the next top of the hour, not skip past it.
 func TestNextCronTimeStepsToNextTopOfHour(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skipf("tzdata unavailable: %v", err)
 	}
-	after := time.Date(2025, 3, 9, 1, 30, 0, 0, loc) // gap is 02:00-03:00
+	after := time.Date(2025, 3, 9, 1, 30, 0, 0, loc)
 	got, err := nextCronTime("0 3 * * *", after, loc)
 	if err != nil {
 		t.Fatalf("nextCronTime: %v", err)
@@ -317,9 +280,6 @@ func TestNextCronTimeStepsToNextTopOfHour(t *testing.T) {
 	}
 }
 
-// TestLocalStoreFlushesBeforeReturning is the D2-9 half that pins the flush:
-// Put must fsync both the file and its directory before reporting success, so
-// the completion write that follows cannot outlive the artifact.
 func TestLocalStoreFlushesBeforeReturning(t *testing.T) {
 	store, err := newLocalStore(t.TempDir())
 	if err != nil {
@@ -341,8 +301,6 @@ func TestLocalStoreFlushesBeforeReturning(t *testing.T) {
 	}
 }
 
-// TestLocalStoreRemovesArtifactWhenFlushFails proves a failed flush is not
-// reported as a stored artifact.
 func TestLocalStoreRemovesArtifactWhenFlushFails(t *testing.T) {
 	root := t.TempDir()
 	store, err := newLocalStore(root)
@@ -361,9 +319,6 @@ func TestLocalStoreRemovesArtifactWhenFlushFails(t *testing.T) {
 	}
 }
 
-// TestLocalStoreFlushesCreatedAncestors is the U6 regression: MkdirAll can
-// create several levels for one artifact, and each created level's directory
-// entry must be flushed for the artifact to be reachable after a crash.
 func TestLocalStoreFlushesCreatedAncestors(t *testing.T) {
 	root := t.TempDir()
 	store, err := newLocalStore(root)
@@ -398,19 +353,13 @@ func TestLocalStoreFlushesCreatedAncestors(t *testing.T) {
 	}
 }
 
-// TestNextRunTimeFallBackRecoveryDoesNotDoubleFire is the round-2 U2
-// regression: a catch-up run started during the repeated hour must not schedule
-// the second occurrence of the same wall-clock slot.
 func TestNextRunTimeFallBackRecoveryDoesNotDoubleFire(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skipf("tzdata unavailable: %v", err)
 	}
-	// The schedule was due at 01:30 EDT; the control plane restarts at 01:00
-	// EST (the second pass) and serves the slot late. Both instants are built
-	// in UTC because 01:00-01:59 local is ambiguous.
-	served := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC).In(loc) // 01:30 EDT
-	now := time.Date(2025, 11, 2, 6, 0, 0, 0, time.UTC).In(loc)     // 01:00 EST
+	served := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC).In(loc)
+	now := time.Date(2025, 11, 2, 6, 0, 0, 0, time.UTC).In(loc)
 	next, err := nextRunTime("30 1 * * *", served, now, loc)
 	if err != nil {
 		t.Fatalf("nextRunTime: %v", err)
@@ -424,47 +373,38 @@ func TestNextRunTimeFallBackRecoveryDoesNotDoubleFire(t *testing.T) {
 	}
 }
 
-// TestNextCronTimeWildcardHourSkipsRepeatedHour pins the documented fall-back
-// policy for wildcard-hour schedules: the repeated hour is served once, so the
-// second pass is skipped rather than fired again.
 func TestNextCronTimeWildcardHourSkipsRepeatedHour(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skipf("tzdata unavailable: %v", err)
 	}
-	after := time.Date(2025, 11, 2, 5, 59, 0, 0, time.UTC).In(loc) // 01:59 EDT, last minute of the first pass
+	after := time.Date(2025, 11, 2, 5, 59, 0, 0, time.UTC).In(loc)
 	next, err := nextCronTime("* * * * *", after, loc)
 	if err != nil {
 		t.Fatalf("nextCronTime: %v", err)
 	}
-	want := time.Date(2025, 11, 2, 7, 0, 0, 0, time.UTC).In(loc) // 02:00 EST, unique
+	want := time.Date(2025, 11, 2, 7, 0, 0, 0, time.UTC).In(loc)
 	if !next.Equal(want) {
 		t.Errorf("next = %v, want %v (the second pass of 01:00-01:59 must be skipped)", next, want)
 	}
 }
 
-// TestNextCronTimeSpringForwardEastOfUTC pins the gap behavior for a zone east
-// of UTC, where Go's time.Date lands on the far side of the gap from a western
-// zone.
 func TestNextCronTimeSpringForwardEastOfUTC(t *testing.T) {
 	loc, err := time.LoadLocation("Europe/Paris")
 	if err != nil {
 		t.Skipf("tzdata unavailable: %v", err)
 	}
-	after := time.Date(2025, 3, 30, 1, 0, 0, 0, loc) // 01:00 CET, gap is 02:00-03:00
+	after := time.Date(2025, 3, 30, 1, 0, 0, 0, loc)
 	next, err := nextCronTime("30 2 * * *", after, loc)
 	if err != nil {
 		t.Fatalf("nextCronTime: %v", err)
 	}
-	want := time.Date(2025, 3, 30, 3, 0, 0, 0, loc) // transition instant 03:00 CEST
+	want := time.Date(2025, 3, 30, 3, 0, 0, 0, loc)
 	if !next.Equal(want) {
 		t.Errorf("next = %v, want %v (the transition instant)", next, want)
 	}
 }
 
-// TestBackupFlushesArtifactBeforeRecordingCompletion is the D2-9 ordering
-// regression at the manager level: the run must not be marked completed before
-// the local store flushed the artifact.
 func TestBackupFlushesArtifactBeforeRecordingCompletion(t *testing.T) {
 	fixture := newBackupFixture(t)
 	originalFile := fsyncFile
@@ -488,9 +428,6 @@ func TestBackupFlushesArtifactBeforeRecordingCompletion(t *testing.T) {
 	}
 }
 
-// TestUpdateTargetLocksDestinationWithCompletedBackups is the D2-10
-// regression: moving where a target's artifacts live would strand every
-// completed backup that reads from the old destination.
 func TestUpdateTargetLocksDestinationWithCompletedBackups(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()
@@ -517,15 +454,12 @@ func TestUpdateTargetLocksDestinationWithCompletedBackups(t *testing.T) {
 		t.Errorf("bucket = %q, want the locked old value", stored.Bucket)
 	}
 
-	// Renaming and changing the (read-irrelevant) prefix stay allowed.
 	if _, err := fixture.manager.UpdateTarget(ctx, fixture.userID, target.ID, TargetRequest{
 		Name: "renamed", Prefix: strPtr("new-prefix/"),
 	}); err != nil {
 		t.Fatalf("name/prefix update: %v", err)
 	}
 
-	// A running run locks the destination too: it captured the old
-	// configuration and will record the old location when it finishes.
 	runningTarget, err := fixture.manager.CreateTarget(ctx, fixture.userID, TargetRequest{
 		Name: "s3-running", Kind: "s3", Endpoint: "https://s3.example.com", Bucket: "old",
 		AccessKey: "ak", SecretKey: "sk",
@@ -541,9 +475,6 @@ func TestUpdateTargetLocksDestinationWithCompletedBackups(t *testing.T) {
 	}
 }
 
-// TestUpdateTargetIsAtomicWhenSealingFails is the D2-11 regression: a failed
-// credential write must not leave the new configuration paired with the old
-// credentials.
 func TestUpdateTargetIsAtomicWhenSealingFails(t *testing.T) {
 	fixture := newBackupFixture(t)
 	ctx := context.Background()
@@ -567,9 +498,6 @@ func TestUpdateTargetIsAtomicWhenSealingFails(t *testing.T) {
 	}
 }
 
-// TestSweepJobContainers is the D2-13 regression: the startup sweep removes
-// leftover job containers but never the database container nor a container
-// whose run/database is still leased.
 func TestSweepJobContainers(t *testing.T) {
 	fixture := newBackupFixture(t)
 	fixture.backups.serverIDs = []uuid.UUID{fixture.serverID}
@@ -613,15 +541,11 @@ func TestSweepJobContainers(t *testing.T) {
 	if len(removes) != 1 || removes[0] != "leftover-backup" {
 		t.Errorf("removed %v, want exactly [leftover-backup]", removes)
 	}
-	// U1: the sweep must read the node directly, not the List cache (a cache
-	// hit can serve containers whose labels were dropped by an older cache
-	// encoding).
 	if freshLists == 0 {
 		t.Error("the sweep used the cached List instead of ListFresh")
 	}
 }
 
-// TestClampBackupListLimit pins the listing bound.
 func TestClampBackupListLimit(t *testing.T) {
 	cases := map[int]int{
 		0:                      defaultBackupListLimit,
@@ -638,8 +562,6 @@ func TestClampBackupListLimit(t *testing.T) {
 	}
 }
 
-// TestListBackupsRespectsLimit proves the service caps the page it asks the
-// repository for, so a database with a year of runs cannot load them all.
 func TestListBackupsRespectsLimit(t *testing.T) {
 	fixture := newBackupFixture(t)
 	for i := 0; i < 5; i++ {

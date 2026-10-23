@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeToolStatus returns a fixed installed-tool set (or an error) for any node.
 type fakeToolStatus struct {
 	installed map[string]bool
 	err       error
@@ -19,18 +18,12 @@ func (f fakeToolStatus) InstalledToolIDs(_ context.Context, _ uuid.UUID) (map[st
 	return f.installed, f.err
 }
 
-// gateService is a Service with just enough wired to exercise the build-pack
-// gate: the node-tool lookup and a logger for the fail-open warning path.
 func gateService(status ToolStatus) *Service {
 	return &Service{
 		Orchestrator: &Orchestrator{logger: slog.Default(), toolStatus: status},
 	}
 }
 
-// TestValidateBuildToolchain checks the JUS-179 deploy gate: a build pack whose
-// external tool is absent on the target node is refused with ErrValidation
-// (400), the engines that need no CLI always pass, and an inconclusive lookup
-// fails open so buildtool.Available stays the last guard.
 func TestValidateBuildToolchain(t *testing.T) {
 	node := uuid.New()
 	app := func(pack string) Application {
@@ -69,8 +62,6 @@ func TestValidateBuildToolchain(t *testing.T) {
 	}
 }
 
-// TestValidateBuildToolchainSkipsUnassignedNode keeps the gate out of the way
-// for an application with no node: validateDeployTarget reports that shape.
 func TestValidateBuildToolchainSkipsUnassignedNode(t *testing.T) {
 	svc := gateService(fakeToolStatus{installed: map[string]bool{}})
 	if err := svc.validateBuildToolchain(context.Background(), Application{BuildPack: "railpack"}); err != nil {
@@ -78,10 +69,6 @@ func TestValidateBuildToolchainSkipsUnassignedNode(t *testing.T) {
 	}
 }
 
-// TestValidateBuildToolchainSkipsNonBuildSources checks the JUS-179 review
-// follow-up: a dockerfile/compose/image row that still carries a stale
-// railpack/buildpacks build_pack (e.g. after a source-type change) must not get
-// a false 4xx, because those sources never build with that pack.
 func TestValidateBuildToolchainSkipsNonBuildSources(t *testing.T) {
 	node := uuid.New()
 	svc := gateService(fakeToolStatus{installed: map[string]bool{}})

@@ -9,9 +9,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// RestoreRequest describes one recycle-bin restore (POST /files/trash/restore).
-// Destination overrides the recorded original path when non-empty; Overwrite
-// permits replacing an existing destination.
 type RestoreRequest struct {
 	Root        string `json:"root"`
 	ID          string `json:"id"`
@@ -19,27 +16,20 @@ type RestoreRequest struct {
 	Overwrite   bool   `json:"overwrite"`
 }
 
-// PurgeRequest describes one recycle-bin purge (POST /files/trash/purge).
 type PurgeRequest struct {
 	Root string `json:"root"`
 	ID   string `json:"id"`
 }
 
-// EmptyTrashRequest describes one recycle-bin empty (POST /files/trash/empty).
 type EmptyTrashRequest struct {
 	Root string `json:"root"`
 }
 
-// TrashListing is one recycle-bin listing.
 type TrashListing struct {
-	Entries []TrashEntry `json:"entries"`
-	// Truncated is true when the node holds more entries than it returned; the
-	// oldest are omitted. It is never a silent cap.
-	Truncated bool `json:"truncated"`
+	Entries   []TrashEntry `json:"entries"`
+	Truncated bool         `json:"truncated"`
 }
 
-// Trash lists a root's recycle bin, newest first. Any team member may read it,
-// like List: it exposes deleted entry names, which the actor could already see.
 func (s *Service) Trash(ctx context.Context, serverID uuid.UUID, root string) (listing TrashListing, err error) {
 	defer func() { s.audit(ctx, serverID, "trash_list", root, "", err) }()
 	if !Enabled() {
@@ -66,10 +56,6 @@ func (s *Service) Trash(ctx context.Context, serverID uuid.UUID, root string) (l
 	return TrashListing{Entries: entries, Truncated: response.GetTruncated()}, nil
 }
 
-// Restore moves one bin entry back to its recorded original path (or an
-// explicit destination) and returns the restored entry. An existing destination
-// is a conflict (409) unless overwrite is set, so the browser can offer a
-// rename.
 func (s *Service) Restore(ctx context.Context, serverID uuid.UUID, root, id, destination string, overwrite bool) (entry Entry, err error) {
 	restoredPath := destination
 	defer func() {
@@ -106,8 +92,6 @@ func (s *Service) Restore(ctx context.Context, serverID uuid.UUID, root, id, des
 	if err != nil {
 		return Entry{}, mapRPCError(err)
 	}
-	// Record where the entry actually landed (the recorded original path when
-	// the request carried no destination), so the audit names the restored path.
 	if path := response.GetPath(); path != "" {
 		restoredPath = path
 	}
@@ -118,7 +102,6 @@ func (s *Service) Restore(ctx context.Context, serverID uuid.UUID, root, id, des
 	return newEntry(info), nil
 }
 
-// Purge permanently removes one bin entry.
 func (s *Service) Purge(ctx context.Context, serverID uuid.UUID, root, id string) (err error) {
 	defer func() { s.audit(ctx, serverID, "trash_purge", root, id, err) }()
 	if !Enabled() {
@@ -144,8 +127,6 @@ func (s *Service) Purge(ctx context.Context, serverID uuid.UUID, root, id string
 	return nil
 }
 
-// EmptyTrash permanently removes every entry in a root's bin, reporting how
-// many were removed. It is idempotent on an already-empty bin.
 func (s *Service) EmptyTrash(ctx context.Context, serverID uuid.UUID, root string) (removed uint64, err error) {
 	defer func() { s.audit(ctx, serverID, "trash_empty", root, "", err) }()
 	if !Enabled() {
@@ -169,7 +150,6 @@ func (s *Service) EmptyTrash(ctx context.Context, serverID uuid.UUID, root strin
 	return response.GetRemoved(), nil
 }
 
-// newTrashEntry maps the agent's TrashEntry onto the API DTO.
 func newTrashEntry(info *agentv1.TrashEntry) TrashEntry {
 	entry := TrashEntry{
 		ID:           info.GetId(),

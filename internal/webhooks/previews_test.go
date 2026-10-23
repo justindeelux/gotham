@@ -19,9 +19,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// githubPRBody is a GitHub-shaped pull_request delivery body. The head
-// repository is the delivery repository (a same-repository head), which the
-// fail-closed fork check requires.
 func githubPRBody(action string, number int, head, base, sha string) string {
 	return `{"action":"` + action + `","number":` + strconv.Itoa(number) +
 		`,"pull_request":{"number":` + strconv.Itoa(number) +
@@ -30,9 +27,6 @@ func githubPRBody(action string, number int, head, base, sha string) string {
 		`"repository":{"full_name":"octo/gotham"}}`
 }
 
-// githubHeadRepoPRBody is an "opened" GitHub pull_request body with an
-// explicit head repository object (fork detection). The branch facts are
-// fixed; only the head repository identity varies.
 func githubHeadRepoPRBody(headRepo string, fork bool) string {
 	return `{"action":"opened","number":7,` +
 		`"pull_request":{"number":7,"head":{"ref":"feat/x","sha":"abc",` +
@@ -41,8 +35,6 @@ func githubHeadRepoPRBody(headRepo string, fork bool) string {
 		`"repository":{"full_name":"octo/gotham"}}`
 }
 
-// gitLabMRBody is a GitLab-shaped merge request delivery body from the same
-// project (matching source/target project ids).
 func gitLabMRBody(action string, iid int, source, target, sha string) string {
 	return `{"object_attributes":{"iid":` + strconv.Itoa(iid) + `,"action":"` + action +
 		`","source_branch":"` + source + `","target_branch":"` + target +
@@ -51,8 +43,6 @@ func gitLabMRBody(action string, iid int, source, target, sha string) string {
 		`"project":{"path_with_namespace":"octo/gotham"}}`
 }
 
-// gitLabForkMRBody is the same with different source/target project ids (a
-// merge request from a fork).
 func gitLabForkMRBody(action string, iid int, source, target, sha string) string {
 	return `{"object_attributes":{"iid":` + strconv.Itoa(iid) + `,"action":"` + action +
 		`","source_branch":"` + source + `","target_branch":"` + target +
@@ -61,9 +51,6 @@ func gitLabForkMRBody(action string, iid int, source, target, sha string) string
 		`"project":{"path_with_namespace":"octo/gotham"}}`
 }
 
-// prRequest signs a GitHub pull_request delivery for the fake repository's
-// hook. GitLab and Gitea bodies are exercised at the parsing layer; the
-// service path is provider-agnostic below that.
 func prRequest(event, body string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/"+providers.NameGitHub, strings.NewReader(body))
 	req.Header.Set(headerGitHubSignature, githubSignaturePrefix+hmacHex(testHookSecret, []byte(body)))
@@ -73,8 +60,6 @@ func prRequest(event, body string) *http.Request {
 	return req
 }
 
-// newPreviewService wires a service with a commenting fake and previews
-// explicitly enabled.
 func newPreviewService(t *testing.T, repo *fakeRepository, deployer *fakeDeployer, commenter *fakeCommenter) *Service {
 	t.Helper()
 	t.Setenv(FeatureEnv, "true")
@@ -88,7 +73,6 @@ func newPreviewService(t *testing.T, repo *fakeRepository, deployer *fakeDeploye
 	})
 }
 
-// receive delivers one signed GitHub PR body and returns the outcome.
 func receive(t *testing.T, svc *Service, body string) (Delivery, error) {
 	t.Helper()
 	return svc.Receive(context.Background(), providers.NameGitHub, prRequest("pull_request", body))
@@ -145,7 +129,6 @@ func TestParsePullRequestDelivery(t *testing.T) {
 			wantNumber: 7, wantAction: "opened", wantHead: "feat/x", wantBase: "main", wantSHA: "abc", wantFork: true,
 		},
 		{
-			// Fail closed: a null head.repo cannot be proven same-repository.
 			name:     "github without the head repository",
 			provider: providers.NameGitHub, event: "pull_request",
 			body: `{"action":"opened","number":7,"pull_request":{"number":7,` +
@@ -154,7 +137,6 @@ func TestParsePullRequestDelivery(t *testing.T) {
 			wantNumber: 7, wantAction: "opened", wantHead: "feat/x", wantBase: "main", wantSHA: "abc", wantFork: true,
 		},
 		{
-			// Fail closed: GitLab must carry both project ids.
 			name:     "gitlab without project ids",
 			provider: providers.NameGitLab, event: "Merge Request Hook",
 			body: `{"object_attributes":{"iid":9,"action":"open","source_branch":"feat/z",` +
@@ -228,7 +210,6 @@ func TestParsePullRequestDelivery(t *testing.T) {
 	}
 }
 
-// deliveryHeaderName returns the event header of a provider.
 func deliveryHeaderName(provider string) string {
 	event, _ := deliveryHeaders(provider)
 	return event
@@ -284,11 +265,9 @@ func TestPreviewHostAndName(t *testing.T) {
 	if got, want := previewHost("", "apps.example.com", 3), "pr-3.apps.example.com"; got != want {
 		t.Errorf("previewHost(no name) = %q, want %q", got, want)
 	}
-	// A name with slashes and repeated separators collapses into one label.
 	if got, want := previewHost("feat//My_App", "example.com", 4), "pr-4-feat-my-app.example.com"; got != want {
 		t.Errorf("previewHost(slug) = %q, want %q", got, want)
 	}
-	// The label never exceeds 63 characters and never ends in a hyphen.
 	long := strings.Repeat("a", 80)
 	host := previewHost(long, "example.com", 1)
 	label := strings.TrimSuffix(host, ".example.com")
@@ -401,8 +380,6 @@ func TestReceivePullRequestRedeliveryIsDuplicate(t *testing.T) {
 	if _, err := receive(t, svc, body); err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
-	// A redelivery of the same body (same signed head SHA) is an anti-spam
-	// no-op.
 	delivery, err := receive(t, svc, body)
 	if err != nil {
 		t.Fatalf("Receive(redelivery): %v", err)
@@ -418,8 +395,6 @@ func TestReceivePullRequestRedeliveryIsDuplicate(t *testing.T) {
 	}
 }
 
-// TestReopenAtSameSHAAfterClose is the F2 regression: a close clears the PR's
-// reservations, so a reopen at the same head revision creates a fresh preview.
 func TestReopenAtSameSHAAfterClose(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -441,7 +416,6 @@ func TestReopenAtSameSHAAfterClose(t *testing.T) {
 		t.Errorf("reservations after close = %d, want 0", got)
 	}
 
-	// The same head revision, reopened: a new preview, not a duplicate.
 	delivery, err = receive(t, svc, open)
 	if err != nil {
 		t.Fatalf("Receive(reopen): %v", err)
@@ -461,8 +435,6 @@ func TestReopenAtSameSHAAfterClose(t *testing.T) {
 	}
 }
 
-// TestSecondPRAtSameSHADeploys is the F2 regression: two PRs of one
-// application sharing a head revision are independent previews.
 func TestSecondPRAtSameSHADeploys(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -488,9 +460,6 @@ func TestSecondPRAtSameSHADeploys(t *testing.T) {
 	}
 }
 
-// TestPushAtPRHeadSHAStillDeploys is the F2 push regression: the PR ledger and
-// the push webhook_events ledger are disjoint, so a push of a commit that also
-// heads a PR still deploys the base application.
 func TestPushAtPRHeadSHAStillDeploys(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -507,7 +476,6 @@ func TestPushAtPRHeadSHAStillDeploys(t *testing.T) {
 	if delivery.Status != StatusQueued {
 		t.Fatalf("push = %+v, want queued (the PR ledger must not suppress it)", delivery)
 	}
-	// The push still dedupes against itself through webhook_events.
 	if _, err := svc.Receive(context.Background(), providers.NameGitHub, prRequest("push", push)); err != nil {
 		t.Fatalf("Receive(push redelivery): %v", err)
 	}
@@ -516,9 +484,6 @@ func TestPushAtPRHeadSHAStillDeploys(t *testing.T) {
 	}
 }
 
-// TestBusyDeploymentIsRetryable is the F3 regression: a synchronize during an
-// active deployment is not recorded as handled — it answers retryable and
-// releases its reservation, and the retry deploys the new revision.
 func TestBusyDeploymentIsRetryable(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -544,8 +509,6 @@ func TestBusyDeploymentIsRetryable(t *testing.T) {
 	if !errors.Is(err, ErrRetryable) {
 		t.Fatalf("busy synchronize = %v, want ErrRetryable", err)
 	}
-	// The busy delivery released its in-flight lease: a redelivery of the
-	// revision must be claimable.
 	if got := repo.reservationCount(); got != 0 {
 		t.Errorf("reservations after the busy delivery = %d, want 0 (released)", got)
 	}
@@ -554,7 +517,6 @@ func TestBusyDeploymentIsRetryable(t *testing.T) {
 		t.Errorf("head sha after the busy delivery = %q, want the actually queued old-sha", preview.HeadSHA)
 	}
 
-	// The host redelivers the same revision once the deployment finished.
 	deployer.mu.Lock()
 	deployer.err = nil
 	deployer.mu.Unlock()
@@ -574,9 +536,6 @@ func TestBusyDeploymentIsRetryable(t *testing.T) {
 	}
 }
 
-// TestBindingWriteFailureCompensatesAndRetries is the F4 regression: a failed
-// binding write deletes the just-created sibling (so it cannot be orphaned)
-// and a retry provisions again and deploys.
 func TestBindingWriteFailureCompensatesAndRetries(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -600,7 +559,6 @@ func TestBindingWriteFailureCompensatesAndRetries(t *testing.T) {
 		t.Errorf("reservations = %d, want 0", got)
 	}
 
-	// Retry: the same delivery succeeds and re-provisions the (deleted) sibling.
 	repo.mu.Lock()
 	repo.promoteErr = nil
 	repo.mu.Unlock()
@@ -619,9 +577,6 @@ func TestBindingWriteFailureCompensatesAndRetries(t *testing.T) {
 	}
 }
 
-// TestRetryRecoversReservedSibling is the F4 recovery path: a sibling whose
-// binding exists (the previous attempt failed after persisting it) is reused,
-// never rejected as a name/host collision.
 func TestRetryRecoversReservedSibling(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -631,8 +586,6 @@ func TestRetryRecoversReservedSibling(t *testing.T) {
 	if _, err := receive(t, svc, open); err != nil {
 		t.Fatalf("Receive(open): %v", err)
 	}
-	// Simulate a binding left behind by a queue failure: the sibling is
-	// reserved, the revision was never queued.
 	deployer.mu.Lock()
 	deployer.err = deploy.ErrConflict
 	deployer.mu.Unlock()
@@ -656,15 +609,11 @@ func TestRetryRecoversReservedSibling(t *testing.T) {
 	}
 }
 
-// TestCapLimitsLivePreviews is the M3 regression: a new PR beyond the cap is
-// ignored, while refreshing an existing preview keeps working.
 func TestCapLimitsLivePreviews(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
-	// One live preview of the application's own, and the cap filled by four
-	// more live bindings of other pull requests.
 	if _, err := receive(t, svc, githubPRBody("opened", 1, "feat/one", "main", "sha-one")); err != nil {
 		t.Fatalf("Receive(PR 1): %v", err)
 	}
@@ -695,7 +644,6 @@ func TestCapLimitsLivePreviews(t *testing.T) {
 		t.Errorf("reservations = %d, want 0 (the capped delivery holds no lease)", got)
 	}
 
-	// The already-previewed PR refreshes despite the cap.
 	delivery, err = receive(t, svc, githubPRBody("synchronize", 1, "feat/one", "main", "sha-one-next"))
 	if err != nil {
 		t.Fatalf("Receive(PR 1 sync): %v", err)
@@ -705,8 +653,6 @@ func TestCapLimitsLivePreviews(t *testing.T) {
 	}
 }
 
-// TestForkPullRequestsAreIgnored is the M2 regression: a fork head is never
-// previewed, while a same-repository head is.
 func TestForkPullRequestsAreIgnored(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -748,7 +694,6 @@ func TestForkPullRequestsAreIgnored(t *testing.T) {
 		})
 	}
 
-	// A same-repository head (case-insensitive) still previews.
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
@@ -782,9 +727,6 @@ func TestReceivePullRequestIgnoresUnwatchedBaseBranch(t *testing.T) {
 	}
 }
 
-// TestReceivePullRequestBaseBranchMatchIsExact pins U3: PR base-branch
-// matching is case-sensitive like the push path, so a PR against "main" must
-// not provision a preview for an application watching "Main".
 func TestReceivePullRequestBaseBranchMatchIsExact(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	repo.app.Branch = "Main"
@@ -804,7 +746,6 @@ func TestReceivePullRequestBaseBranchMatchIsExact(t *testing.T) {
 			deployer.provisionCount(), repo.reservationCount())
 	}
 
-	// The exact watched base branch still provisions.
 	delivery, err = receive(t, svc, githubPRBody("opened", 8, "feat/y", "Main", "def456"))
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
@@ -898,7 +839,6 @@ func TestReceivePullRequestCloseDeletesSibling(t *testing.T) {
 		t.Errorf("comments = %d, want 2 (started and removed)", got)
 	}
 
-	// A redelivered close is idempotent: no second teardown.
 	delivery, err = receive(t, svc, closeBody)
 	if err != nil {
 		t.Fatalf("Receive(close redelivery): %v", err)
@@ -929,7 +869,6 @@ func TestReceivePullRequestCommentFailureDoesNotFailDelivery(t *testing.T) {
 		t.Errorf("deployments queued = %d, want 1", deployer.deployCount())
 	}
 
-	// The close path is equally resilient.
 	closeBody := githubPRBody("closed", 7, "feat/x", "main", "def456")
 	delivery, err = receive(t, svc, closeBody)
 	if err != nil {
@@ -957,7 +896,6 @@ func TestReceivePullRequestRecreatesMissingSibling(t *testing.T) {
 		t.Fatalf("GetPreview: %v", err)
 	}
 
-	// The sibling was deleted out of band: the next synchronize recreates it.
 	deployer.mu.Lock()
 	deployer.missing = map[uuid.UUID]bool{preview.PreviewApplicationID: true}
 	deployer.mu.Unlock()
@@ -1004,7 +942,6 @@ func TestPreviewsDisabledIgnoresPullRequests(t *testing.T) {
 		t.Errorf("reservations = %d, want 0", repo.reservationCount())
 	}
 
-	// Push deliveries are untouched by the preview flag.
 	push := pushBody("push-sha")
 	delivery, err = svc.Receive(context.Background(), providers.NameGitHub, prRequest("push", push))
 	if err != nil {
@@ -1051,9 +988,6 @@ func TestCreateWebhookEventsFollowPreviewsFlag(t *testing.T) {
 	}
 }
 
-// TestSweepIsOrphanOnly is the F6 regression: age alone never tears a live
-// preview down; a binding whose sibling is gone is marked deleted, and a
-// sibling application without a binding is deleted through the provisioner.
 func TestSweepIsOrphanOnly(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1063,7 +997,6 @@ func TestSweepIsOrphanOnly(t *testing.T) {
 		Provisioner: deployer, Logger: discardLogger(),
 	})
 
-	// A live, bound preview that has been idle for a year: untouched.
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
 		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
 		Repo: repo.app.Repo, PRNumber: 7, Branch: "feat/x", Host: "pr-7-gotham.apps.example.com",
@@ -1076,7 +1009,6 @@ func TestSweepIsOrphanOnly(t *testing.T) {
 	stale.UpdatedAt = time.Now().UTC().Add(-365 * 24 * time.Hour)
 	repo.previews[previewKey(repo.app.ID, 7)] = stale
 	repo.mu.Unlock()
-	// One orphaned binding (no sibling link).
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
 		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
 		Repo: repo.app.Repo, PRNumber: 8, Host: "pr-8-gotham.apps.example.com", State: PreviewDeploying,
@@ -1103,7 +1035,6 @@ func TestSweepIsOrphanOnly(t *testing.T) {
 		t.Errorf("orphaned binding = %+v, want deleted", orphaned)
 	}
 
-	// A sibling application with no binding is deleted through the provisioner.
 	orphanApp := uuid.New()
 	repo.mu.Lock()
 	repo.orphanApps = []uuid.UUID{orphanApp}
@@ -1123,9 +1054,6 @@ func TestSweepIsOrphanOnly(t *testing.T) {
 	}
 }
 
-// TestCleanupApplicationTearsDownBaseSiblings is the F5/H1 path: deleting a
-// base application tears its previews down first, and a failure aborts the
-// delete instead of erasing the bindings.
 func TestCleanupApplicationTearsDownBaseSiblings(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1157,7 +1085,6 @@ func TestCleanupApplicationTearsDownBaseSiblings(t *testing.T) {
 		}
 	}
 
-	// A teardown failure is reported so the caller can abort the base delete.
 	repo2 := newFakeRepository().withTarget()
 	deployer2 := &fakeDeployer{deleteErr: errors.New("database down")}
 	svc2 := newPreviewService(t, repo2, deployer2, &fakeCommenter{})
@@ -1175,7 +1102,6 @@ func TestCleanupApplicationTearsDownBaseSiblings(t *testing.T) {
 	if preview.State != PreviewClosing {
 		t.Errorf("preview after a failed cleanup = %+v, want the close intent kept", preview)
 	}
-	// Retry after the failure succeeds and marks the binding deleted.
 	deployer2.mu.Lock()
 	deployer2.deleteErr = nil
 	deployer2.mu.Unlock()
@@ -1188,9 +1114,6 @@ func TestCleanupApplicationTearsDownBaseSiblings(t *testing.T) {
 	}
 }
 
-// TestCleanupApplicationMarksSiblingBindingDeleted covers H1's audit path: a
-// preview application deleted directly by its owner keeps its binding, but the
-// binding is marked deleted instead of pointing at a gone sibling.
 func TestCleanupApplicationMarksSiblingBindingDeleted(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1205,8 +1128,6 @@ func TestCleanupApplicationMarksSiblingBindingDeleted(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertPreview: %v", err)
 	}
-	// A live lease a stale worker could still use to promote: the sibling
-	// delete must clear it with the binding.
 	repo.mu.Lock()
 	repo.reservations[ReservationKey(DeliveryReservation{
 		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "stale-head",
@@ -1250,18 +1171,15 @@ func TestListPreviewsEnforcesTeam(t *testing.T) {
 		t.Fatalf("UpsertPreview: %v", err)
 	}
 
-	// The creator (no team context) may read.
 	if previews, err := svc.ListPreviews(context.Background(), repo.app.UserID, repo.app.ID); err != nil || len(previews) != 1 {
 		t.Fatalf("creator ListPreviews = (%d, %v), want one preview", len(previews), err)
 	}
-	// Another team's member cannot even see the application.
 	stranger := teams.WithScope(context.Background(), teams.Scope{
 		UserID: uuid.New(), TeamID: uuid.New(), Role: teams.RoleOwner,
 	})
 	if _, err := svc.ListPreviews(stranger, uuid.New(), repo.app.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign ListPreviews = %v, want ErrNotFound", err)
 	}
-	// A read_only member of the application's team may read.
 	viewer := teams.WithScope(context.Background(), teams.Scope{
 		UserID: uuid.New(), TeamID: repo.app.TeamID, Role: teams.RoleReadOnly,
 	})
@@ -1294,7 +1212,6 @@ func TestPreviewRoutesListAndFlag(t *testing.T) {
 		t.Errorf("body = %s", rec.Body.String())
 	}
 
-	// Flag off: the preview surface (route included) does not exist.
 	t.Setenv(FeatureEnv, "false")
 	off := newRouteServer(svc, repo.app.UserID)
 	rec = httptest.NewRecorder()
@@ -1304,9 +1221,6 @@ func TestPreviewRoutesListAndFlag(t *testing.T) {
 	}
 }
 
-// TestRetryableDeliveryAnswers503 pins the route mapping: an unqueued preview
-// revision that hit a running deployment answers 503 (retryable), not a 2xx
-// that would silently drop it.
 func TestRetryableDeliveryAnswers503(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1341,9 +1255,6 @@ func TestPreviewsDisabledSkipsSweep(t *testing.T) {
 	}
 }
 
-// TestReturnToEarlierHeadDeploys is the N1 regression: a force-push back to a
-// revision that was already deployed queues again instead of being suppressed
-// by a permanent handled-SHA set.
 func TestReturnToEarlierHeadDeploys(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -1372,7 +1283,6 @@ func TestReturnToEarlierHeadDeploys(t *testing.T) {
 	if preview.HeadSHA != "head-a" {
 		t.Errorf("binding head = %q, want head-a (the latest queued revision)", preview.HeadSHA)
 	}
-	// The binding's current head is still a duplicate.
 	if delivery, err := receive(t, svc, githubPRBody("synchronize", 7, "feat/x", "main", "head-a")); err != nil {
 		t.Fatalf("Receive(current head): %v", err)
 	} else if delivery.Status != StatusDuplicate {
@@ -1383,10 +1293,6 @@ func TestReturnToEarlierHeadDeploys(t *testing.T) {
 	}
 }
 
-// TestCloseRetryClearsPoisonedLedger is the N2 regression: an already-deleted
-// close retry still completes the ledger cleanup, and a cleanup failure is
-// surfaced (so the delivery is retried) instead of reporting success over a
-// poisoned ledger that would block a reopen at the same revision.
 func TestCloseRetryClearsPoisonedLedger(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -1401,9 +1307,6 @@ func TestCloseRetryClearsPoisonedLedger(t *testing.T) {
 		t.Fatalf("first close = %+v / %v, want deleted", delivery, err)
 	}
 
-	// Simulate the poisoned state: the binding is deleted but a stale start
-	// lease survived (a crash between the old teardown and its ledger clear),
-	// and the cleanup now fails.
 	repo.mu.Lock()
 	repo.reservations[ReservationKey(DeliveryReservation{
 		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "head-a",
@@ -1421,8 +1324,6 @@ func TestCloseRetryClearsPoisonedLedger(t *testing.T) {
 		t.Fatalf("reservations after the failing close = %d, want the stale lease kept", got)
 	}
 
-	// The retry succeeds, clears the ledger, and reports the idempotent close
-	// without blocking the reopen.
 	repo.mu.Lock()
 	repo.markClosedErr = nil
 	repo.mu.Unlock()
@@ -1436,7 +1337,6 @@ func TestCloseRetryClearsPoisonedLedger(t *testing.T) {
 	if got := repo.reservationCount(); got != 0 {
 		t.Fatalf("reservations after the close retry = %d, want the ledger cleared", got)
 	}
-	// Reopening at the same revision queued before now works.
 	reopen, err := receive(t, svc, body)
 	if err != nil {
 		t.Fatalf("Receive(reopen): %v", err)
@@ -1446,11 +1346,6 @@ func TestCloseRetryClearsPoisonedLedger(t *testing.T) {
 	}
 }
 
-// TestCloseFailureIsRetriedByTheSweep is the hardening regression: a close
-// that fails after persisting its intent leaves the binding 'closing', and the
-// sweep re-attempts the teardown instead of leaving the preview running
-// forever. The teardown error is the in-flight refusal the deploy service now
-// answers (ErrConflict), which the sweep must tolerate and retry.
 func TestCloseFailureIsRetriedByTheSweep(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1475,7 +1370,6 @@ func TestCloseFailureIsRetriedByTheSweep(t *testing.T) {
 		t.Fatalf("binding after the failed close = %q, want closing", preview.State)
 	}
 
-	// The sweep's grace period passes; the teardown succeeds on the retry.
 	deployer.mu.Lock()
 	deployer.deleteErr = nil
 	deployer.mu.Unlock()
@@ -1501,10 +1395,6 @@ func TestCloseFailureIsRetriedByTheSweep(t *testing.T) {
 	}
 }
 
-// TestConcurrentDistinctPRsRespectTheCap is the N3 regression: concurrent
-// distinct-PR opens must not overshoot the live-preview cap. All writers go
-// through the same atomic claim gate, so the cap is enforced under
-// contention, not just sequentially.
 func TestConcurrentDistinctPRsRespectTheCap(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -1550,8 +1440,6 @@ func TestConcurrentDistinctPRsRespectTheCap(t *testing.T) {
 	}
 }
 
-// testClock is a controllable clock shared by the service and the fake
-// repository (lease expiry).
 type testClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -1569,10 +1457,6 @@ func (c *testClock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// blockingProvisioner holds the first preview-clone call until release, so a
-// test can expire its lease (or close the PR) while the worker is stuck.
-// Later calls are never blocked (a sync.Once would make them wait for the
-// first call to finish).
 type blockingProvisioner struct {
 	*fakeDeployer
 	started chan struct{}
@@ -1593,7 +1477,6 @@ func (b *blockingProvisioner) CreatePreviewApplication(ctx context.Context, base
 	return b.fakeDeployer.CreatePreviewApplication(ctx, baseAppID, in)
 }
 
-// blockingQueue holds the next DeploySystem call after arm() until release.
 type blockingQueue struct {
 	*fakeDeployer
 	mu      sync.Mutex
@@ -1620,9 +1503,6 @@ func (b *blockingQueue) DeploySystem(ctx context.Context, appID uuid.UUID) (depl
 	return b.fakeDeployer.DeploySystem(ctx, appID)
 }
 
-// TestClosingSameHeadReopenIsRetryable is the N4 regression: a reopen at the
-// closing binding's own head must answer retryable, not duplicate; after the
-// teardown completes the same delivery creates the preview again.
 func TestClosingSameHeadReopenIsRetryable(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1650,14 +1530,11 @@ func TestClosingSameHeadReopenIsRetryable(t *testing.T) {
 		t.Fatalf("binding = %q, want closing", preview.State)
 	}
 
-	// The same-SHA reopen while closing must be retryable (503), never a
-	// duplicate that acknowledges the delivery and loses the reopen.
 	_, err := receive(t, svc, body)
 	if !errors.Is(err, ErrRetryable) {
 		t.Fatalf("same-head reopen during closing = %v, want ErrRetryable", err)
 	}
 
-	// The sweep completes the close; the retry then recreates the preview.
 	deployer.mu.Lock()
 	deployer.deleteErr = nil
 	deployer.mu.Unlock()
@@ -1684,9 +1561,6 @@ func TestClosingSameHeadReopenIsRetryable(t *testing.T) {
 	}
 }
 
-// TestExpiredWorkerCannotExceedTheCap is the N5 regression: a worker whose
-// claim lease lapsed while it provisioned cannot promote a sixth live
-// preview; its sibling is compensated and the delivery answers retryable.
 func TestExpiredWorkerCannotExceedTheCap(t *testing.T) {
 	clock := &testClock{now: time.Now().UTC()}
 	repo := newFakeRepository().withTarget()
@@ -1703,7 +1577,6 @@ func TestExpiredWorkerCannotExceedTheCap(t *testing.T) {
 		Provisioner: blocking, Logger: discardLogger(), Now: clock.get,
 	})
 
-	// PR 1 gets stuck inside provisioning.
 	type result struct {
 		delivery Delivery
 		err      error
@@ -1715,7 +1588,6 @@ func TestExpiredWorkerCannotExceedTheCap(t *testing.T) {
 	}()
 	<-blocking.started
 
-	// Its lease lapses while it is stuck, and five other PRs fill the cap.
 	clock.advance(16 * time.Minute)
 	for pr := 2; pr <= 1+maxLivePreviewsPerApplication; pr++ {
 		delivery, err := receive(t, svc, githubPRBody("opened", pr, "feat/x", "main", "sha-"+strconv.Itoa(pr)))
@@ -1724,8 +1596,6 @@ func TestExpiredWorkerCannotExceedTheCap(t *testing.T) {
 		}
 	}
 
-	// The stale worker resumes: the fence refuses the promotion, its sibling
-	// is compensated, and the delivery is retryable.
 	close(blocking.release)
 	res := <-slow
 	if !errors.Is(res.err, ErrRetryable) {
@@ -1742,9 +1612,6 @@ func TestExpiredWorkerCannotExceedTheCap(t *testing.T) {
 	}
 }
 
-// TestCloseWinsOverRacingSynchronize is the R-1 regression: a synchronize
-// that was in flight when the close completed cannot resurrect the binding
-// through the ErrNotFound recreate branch.
 func TestCloseWinsOverRacingSynchronize(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1765,7 +1632,6 @@ func TestCloseWinsOverRacingSynchronize(t *testing.T) {
 	preview, _ := repo.GetPreview(context.Background(), repo.app.ID, 7)
 	sibling := preview.PreviewApplicationID
 
-	// Hold the synchronize inside its queue call.
 	queue.arm()
 	synced := make(chan error, 1)
 	go func() {
@@ -1774,8 +1640,6 @@ func TestCloseWinsOverRacingSynchronize(t *testing.T) {
 	}()
 	<-queue.started
 
-	// The PR closes while the synchronize is in flight: the teardown deletes
-	// the sibling and the atomic completion clears the ledger.
 	if _, err := receive(t, svc, githubPRBody("closed", 7, "feat/x", "main", "head-b")); err != nil {
 		t.Fatalf("Receive(close): %v", err)
 	}
@@ -1801,17 +1665,11 @@ func TestCloseWinsOverRacingSynchronize(t *testing.T) {
 	}
 }
 
-// TestOwnLeaseDoesNotDenyTheCap is the LOW regression: the quota excludes the
-// claiming PR's own in-flight lease, so a new head of an existing,
-// not-yet-bound PR is not falsely denied, while the cap still holds for a
-// different PR.
 func TestOwnLeaseDoesNotDenyTheCap(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
-	// Four live previews plus PR 9's own in-flight lease: the new head of PR 9
-	// must be approved (its lease already holds its slot).
 	seedLive := func(pr int) {
 		t.Helper()
 		if _, err := repo.UpsertPreview(context.Background(), Preview{
@@ -1842,7 +1700,6 @@ func TestOwnLeaseDoesNotDenyTheCap(t *testing.T) {
 		t.Fatalf("PR 9 new head = %+v, want queued (its own lease must not deny it)", delivery)
 	}
 
-	// A different PR at the full cap is still refused.
 	seedLive(5)
 	repo.mu.Lock()
 	repo.reservations[ReservationKey(DeliveryReservation{
@@ -1861,10 +1718,6 @@ func TestOwnLeaseDoesNotDenyTheCap(t *testing.T) {
 	}
 }
 
-// TestFinalPromotionFailureIsRetryable pins the LOW fix: when the final
-// (active) fenced write fails, the delivery must not answer 200 with the
-// revision unrecorded; it surfaces the error so the host redelivers, and the
-// lease is released for that retry.
 func TestFinalPromotionFailureIsRetryable(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -1872,7 +1725,7 @@ func TestFinalPromotionFailureIsRetryable(t *testing.T) {
 
 	repo.mu.Lock()
 	repo.promoteErr = errors.New("database down")
-	repo.promoteErrAt = 2 // the intermediate promotion succeeds; the final one fails
+	repo.promoteErrAt = 2
 	repo.mu.Unlock()
 
 	body := githubPRBody("opened", 7, "feat/x", "main", "head-a")
@@ -1886,7 +1739,6 @@ func TestFinalPromotionFailureIsRetryable(t *testing.T) {
 		t.Errorf("deployments = %d, want the deployment still queued", got)
 	}
 
-	// A redelivery after the transient failure converges.
 	repo.mu.Lock()
 	repo.promoteErr = nil
 	repo.promoteErrAt = 0
@@ -1903,9 +1755,6 @@ func TestFinalPromotionFailureIsRetryable(t *testing.T) {
 	}
 }
 
-// TestRetryableFailureReleasesTheReservation pins the generic path: any
-// delivery error (not just the busy case) releases the reservation so a retry
-// can reserve again, while the binding it may have persisted survives.
 func TestRetryableFailureReleasesTheReservation(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1931,16 +1780,10 @@ func TestRetryableFailureReleasesTheReservation(t *testing.T) {
 	}
 }
 
-// TestPreviewProvisionerContract pins the deploy seam the webhooks service
-// depends on to the methods the deploy service actually implements.
 func TestPreviewProvisionerContract(t *testing.T) {
 	var _ PreviewProvisioner = (*deploy.Service)(nil)
 }
 
-// TestNoBindingCloseBlocksTheRacingPromote is the F-1 regression at the domain
-// level: a close that claimed while no binding existed yet must refuse the
-// in-flight open's promotion, and no live binding may appear behind it. After
-// the close clears its ledger the same revision reopens.
 func TestNoBindingCloseBlocksTheRacingPromote(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
@@ -1950,8 +1793,6 @@ func TestNoBindingCloseBlocksTheRacingPromote(t *testing.T) {
 		Provisioner: deployer, Commenter: &fakeCommenter{}, Logger: discardLogger(),
 	})
 
-	// The open claimed first and holds its in-flight lease; the binding does
-	// not exist yet (the worker is provisioning).
 	openClaim, err := repo.ClaimPreviewDelivery(context.Background(), PreviewClaim{
 		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart,
 		HeadSHA: "head-a", LiveLimit: maxLivePreviewsPerApplication,
@@ -1959,7 +1800,6 @@ func TestNoBindingCloseBlocksTheRacingPromote(t *testing.T) {
 	if err != nil || !openClaim.Approved {
 		t.Fatalf("open claim = %+v / %v, want approved", openClaim, err)
 	}
-	// The close claimed second, still seeing no binding.
 	closeClaim, err := repo.ClaimPreviewDelivery(context.Background(), PreviewClaim{
 		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationClose,
 		LiveLimit: maxLivePreviewsPerApplication,
@@ -1968,7 +1808,6 @@ func TestNoBindingCloseBlocksTheRacingPromote(t *testing.T) {
 		t.Fatalf("close claim = %+v / %v, want approved", closeClaim, err)
 	}
 
-	// The in-flight open's promotion is refused: the close owns the PR.
 	promoted, err := repo.WritePreviewBinding(context.Background(), PreviewBindingWrite{
 		ApplicationID: repo.app.ID, PRNumber: 7,
 		ReservationID: openClaim.Reservation.ID, LeaseHeadSHA: "head-a", HeadSHA: "head-a",
@@ -1984,8 +1823,6 @@ func TestNoBindingCloseBlocksTheRacingPromote(t *testing.T) {
 		t.Fatalf("binding after the refused promotion = %v, want none", err)
 	}
 
-	// A start delivery arriving during the close answers retryable instead of
-	// provisioning a sibling the close cannot see.
 	body := githubPRBody("opened", 7, "feat/x", "main", "head-b")
 	if _, err := receive(t, svc, body); !errors.Is(err, ErrRetryable) {
 		t.Fatalf("open during the close = %v, want ErrRetryable", err)
@@ -1994,8 +1831,6 @@ func TestNoBindingCloseBlocksTheRacingPromote(t *testing.T) {
 		t.Fatalf("siblings provisioned = %d, want none while the close owns the PR", got)
 	}
 
-	// The close completes on its no-binding path: the ledger clear removes the
-	// marker (and the stale lease), so the same revision reopens normally.
 	if err := repo.ClearPreviewDeliveries(context.Background(), repo.app.ID, 7); err != nil {
 		t.Fatalf("ClearPreviewDeliveries: %v", err)
 	}
@@ -2019,10 +1854,6 @@ func TestNoBindingCloseBlocksTheRacingPromote(t *testing.T) {
 	}
 }
 
-// TestDeployFinishedUpdatesThePreviewComment is the terminal-state comment
-// regression: a terminal running/failed deploy of a preview sibling updates its
-// pull request's comment, while an unrelated application and a preview a close
-// already owns produce none.
 func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
@@ -2038,7 +1869,6 @@ func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
 		t.Fatalf("UpsertPreview: %v", err)
 	}
 
-	// A terminal running deploy reports success on the right PR.
 	svc.DeployFinished(context.Background(), deploy.DeployResult{
 		ApplicationID: sibling, State: deploy.StateRunning, Host: "pr-7-gotham.apps.example.com",
 	})
@@ -2055,7 +1885,6 @@ func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
 		t.Errorf("comment target = %+v, want the base application's identity", target)
 	}
 
-	// A terminal failed deploy reports the failure on the same PR.
 	svc.DeployFinished(context.Background(), deploy.DeployResult{
 		ApplicationID: sibling, State: deploy.StateFailed, Host: "pr-7-gotham.apps.example.com",
 	})
@@ -2069,7 +1898,6 @@ func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
 		t.Errorf("failed comment = PR %d %q, want PR 7 to report the failure", number, body)
 	}
 
-	// An unrelated application (no preview binding) comments nothing.
 	svc.DeployFinished(context.Background(), deploy.DeployResult{
 		ApplicationID: uuid.New(), State: deploy.StateRunning, Host: "other.example.com",
 	})
@@ -2077,7 +1905,6 @@ func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
 		t.Fatalf("comments after an unrelated deploy = %d, want no extra comment", got)
 	}
 
-	// A binding a close already owns is never overwritten.
 	repo.mu.Lock()
 	closing := repo.previews[previewKey(repo.app.ID, 7)]
 	closing.State = PreviewClosing
@@ -2091,16 +1918,11 @@ func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
 	}
 }
 
-// TestFailedNoBindingCloseKeepsTheFence is the MEDIUM-1 regression: when the
-// no-binding close's ledger clear fails, the close marker is the only fence
-// over a racing open, so it must survive the error, and a redelivered close
-// must re-run the ledger clear instead of being acked as a duplicate.
 func TestFailedNoBindingCloseKeepsTheFence(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	deployer := &fakeDeployer{}
 	svc := newPreviewService(t, repo, deployer, &fakeCommenter{})
 
-	// The open claimed first: its lease is live and no binding exists yet.
 	openClaim, err := repo.ClaimPreviewDelivery(context.Background(), PreviewClaim{
 		ApplicationID: repo.app.ID, PRNumber: 7, Kind: ReservationStart,
 		HeadSHA: "head-a", LiveLimit: maxLivePreviewsPerApplication,
@@ -2109,7 +1931,6 @@ func TestFailedNoBindingCloseKeepsTheFence(t *testing.T) {
 		t.Fatalf("open claim = %+v / %v, want approved", openClaim, err)
 	}
 
-	// The close claims, then its ledger clear fails transiently.
 	repo.mu.Lock()
 	repo.clearErr = errors.New("database down")
 	repo.mu.Unlock()
@@ -2123,7 +1944,6 @@ func TestFailedNoBindingCloseKeepsTheFence(t *testing.T) {
 		t.Fatal("the close marker was released by the failed clear")
 	}
 
-	// The in-flight open cannot promote behind the failed close.
 	promoted, err := repo.WritePreviewBinding(context.Background(), PreviewBindingWrite{
 		ApplicationID: repo.app.ID, PRNumber: 7, ReservationID: openClaim.Reservation.ID,
 		LeaseHeadSHA: "head-a", HeadSHA: "head-a", State: PreviewActive,
@@ -2139,8 +1959,6 @@ func TestFailedNoBindingCloseKeepsTheFence(t *testing.T) {
 		t.Fatalf("binding after the failed close = %v, want none", err)
 	}
 
-	// The redelivered close (the clear works now) completes the no-binding
-	// close instead of being acked as a duplicate.
 	repo.mu.Lock()
 	repo.clearErr = nil
 	repo.mu.Unlock()
@@ -2155,7 +1973,6 @@ func TestFailedNoBindingCloseKeepsTheFence(t *testing.T) {
 		t.Fatal("the close marker survived the completed close")
 	}
 
-	// The pull request can reopen normally afterwards.
 	reopen, err := receive(t, svc, githubPRBody("opened", 7, "feat/x", "main", "head-b"))
 	if err != nil || reopen.Status != StatusQueued {
 		t.Fatalf("reopen = %+v / %v, want queued", reopen, err)

@@ -8,16 +8,11 @@ import (
 	"time"
 )
 
-// HealthServer serves the loopback liveness endpoint the update wrapper probes
-// after a restart. It reports process liveness only (200 once serving); it
-// deliberately does not check the control-plane connection, so a node whose CP
-// is temporarily unreachable is never rolled back by an update.
 type HealthServer struct {
 	server   *http.Server
 	listener net.Listener
 }
 
-// StartHealthServer binds addr and serves /healthz until Close.
 func StartHealthServer(addr string, log *slog.Logger) (*HealthServer, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -37,7 +32,6 @@ func StartHealthServer(addr string, log *slog.Logger) (*HealthServer, error) {
 	return &HealthServer{server: server, listener: listener}, nil
 }
 
-// Close shuts the health server down.
 func (h *HealthServer) Close(ctx context.Context) error {
 	return h.server.Shutdown(ctx)
 }

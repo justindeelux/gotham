@@ -1,6 +1,3 @@
-// Differential tests for the V8 notifications zod migration (JUS-23).
-// canSubmit rows pin the old boolean outcomes. Recipient splitting stays
-// tested directly on parseRecipients in channel-helpers.test.ts.
 import { describe, expect, it } from "vitest";
 
 import {

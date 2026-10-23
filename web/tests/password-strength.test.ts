@@ -1,4 +1,3 @@
-// Password strength contract for RegisterPage.
 import { describe, expect, it } from "vitest";
 
 import {

@@ -1,6 +1,3 @@
-// File version history (JUS-224): the read-only diff tab in the editor store and
-// the history dialog's list/diff/restore/delete wiring. The files API is mocked
-// so the store and dialog run without axios.
 /* global document:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider, NPopconfirm } from "naive-ui";
@@ -71,7 +68,6 @@ const versions: FilesVersion[] = [
   version("v1", "2026-10-17T09:00:00Z", 12),
 ];
 
-/** dialogShell mounts the dialog open under a message provider. */
 function dialogShell(dirty = false) {
   return defineComponent({
     render() {
@@ -91,7 +87,6 @@ function dialogShell(dirty = false) {
   });
 }
 
-/** positiveClick fires a popconfirm's confirm action. */
 function positiveClick(component: { props: (_name: string) => () => void }): void {
   component.props("onPositiveClick")();
 }
@@ -153,7 +148,6 @@ describe("editor history diff tab", () => {
     await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "v1 · time");
     const first = editor.tabs[0];
 
-    // A reused diff re-reads both sides, so the right side is the current file.
     vi.mocked(getFileVersion).mockResolvedValue({
       version: versions[0],
       content: "old body",
@@ -260,7 +254,6 @@ describe("history in the editor", () => {
       "a.txt",
     );
 
-    // Opening the diff uses a localized title, not the raw locale default.
     vi.mocked(getFileVersion).mockResolvedValue({
       version: versions[0],
       content: "old",

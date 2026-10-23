@@ -1,7 +1,3 @@
-/**
- * Vietnamese updates catalog. Keys mirror `en.ts` exactly; only values are
- * translated.
- */
 const vi = {
   page: {
     eyebrow: "Cài đặt · Hệ thống",

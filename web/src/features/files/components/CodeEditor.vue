@@ -10,37 +10,21 @@ import type { EditorAccessibility } from "@/features/files/composables/useCodeMi
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { CODE_EDITOR_PRESETS } from "@/features/files/editor/presets";
 import type { CodeEditorPreset } from "@/features/files/editor/presets";
-// Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
-/**
- * Embedded code editor (JUS-230). A thin owner of one CodeMirror session for
- * config dialogs: it shares the file editor's settings store, shortcut table
- * and lazy chunk, but never touches the server — Ctrl/Cmd+S emits `save` and
- * the parent decides what that means.
- */
 interface Props {
-  /** modelValue is the document text (v-model). */
   modelValue: string;
-  /** language wins over preset when both are given. */
   language?: EditorLanguageId;
-  /** preset selects a grammar for a known config format. */
   preset?: CodeEditorPreset;
   readOnly?: boolean;
-  /** wrap overrides the shared word-wrap preference for this instance only. */
   wrap?: boolean;
-  /** height is any CSS length; the editor fills the box. */
   height?: string;
-  /** placeholder is shown while the document is empty. */
   placeholder?: string;
-  /** ariaLabel overrides the localized generic editor name. */
   ariaLabel?: string;
-  /** invalid marks the document as failing the caller's schema. */
   invalid?: boolean;
-  /** error is the visible validation message linked to the editor surface. */
   error?: string;
 }
 
@@ -67,8 +51,6 @@ const host = ref<HTMLElement | null>(null);
 let session: EditorSession | null = null;
 let disposed = false;
 
-// The embedded editor gets the same custom find/replace and go-to-line
-// surfaces as the file editor (JUS-231); its read-only flag also gates replace.
 const {
   findOpen,
   replaceExpanded,
@@ -108,19 +90,12 @@ const {
   canReplace: () => !props.readOnly,
 });
 
-/** errorId links the visible validation message to the editable surface. */
 const errorId = `code-editor-error-${useId()}`;
 
-/** ariaLabel is the caller label, else the localized generic editor name. */
 const ariaLabel = computed<string>(
   () => props.ariaLabel ?? t("files.editor.codeEditorLabel"),
 );
 
-/**
- * accessibility tracks the live label, hint and invalid state. The session
- * reconfigures its CodeMirror compartment from this value, so switching the UI
- * language updates the editor without remounting it or dropping the draft.
- */
 const accessibility = computed<EditorAccessibility>(() => ({
   ariaLabel: ariaLabel.value,
   placeholder: props.placeholder,
@@ -128,12 +103,10 @@ const accessibility = computed<EditorAccessibility>(() => ({
   describedBy: props.invalid && props.error ? errorId : undefined,
 }));
 
-/** language resolves the explicit prop, else the preset, else plain text. */
 const language = computed<EditorLanguageId>(
   () => props.language ?? (props.preset ? CODE_EDITOR_PRESETS[props.preset] : "plain"),
 );
 
-/** effectiveSettings applies the per-instance wrap override. */
 const effectiveSettings = computed<EditorSettings>(() =>
   props.wrap === undefined
     ? settingsStore.settings
@@ -172,15 +145,11 @@ onMounted(() => {
       previousMatch();
     },
   }).then((created) => {
-    // The chunk is lazy: a dialog can close before it resolves, and that
-    // instance must not outlive the component.
     if (disposed) {
       created.destroy();
       return;
     }
     session = created;
-    // Prop/store changes that landed during the chunk load happened before the
-    // session existed, so replay the current values onto it.
     created.setDoc(props.modelValue);
     created.setReadOnly(props.readOnly);
     created.setSettings(effectiveSettings.value);
@@ -198,8 +167,6 @@ watch(
   () => props.readOnly,
   (readOnly) => session?.setReadOnly(readOnly),
 );
-// A locale switch (or a schema change) reconfigures the live session, so the
-// label, hint and validation attrs follow without losing the typed document.
 watch(accessibility, (next) => session?.setAccessibility(next));
 
 onBeforeUnmount(() => {

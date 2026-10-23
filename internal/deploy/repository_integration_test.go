@@ -19,12 +19,8 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN: an explicit value turns a missing database or
-// a failed migration into a failure instead of a skip.
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
-// integrationDSN returns the DSN the repository integration test should use.
 func integrationDSN() string {
 	if dsn := os.Getenv("GOTHAM_TEST_DSN"); dsn != "" {
 		return dsn
@@ -32,25 +28,15 @@ func integrationDSN() string {
 	return defaultIntegrationDSN
 }
 
-// integrationDSNExplicit reports whether the operator opted in by setting
-// GOTHAM_TEST_DSN. An explicit opt-in turns a missing database into a failure
-// instead of a skip, so the acceptance lane can never pass green by skipping.
 func integrationDSNExplicit() bool {
 	return os.Getenv("GOTHAM_TEST_DSN") != ""
 }
 
-// TestStoreRepositoryDeployKeyRoundtrip exercises the deploy-key rows against a
-// real server: sealing the private half in private_keys, reading it back
-// through the Phase-2 contract, the unique one-key-per-application index and
-// the delete that takes the mapping and the private key together. It skips
-// when no database is reachable.
 func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -62,8 +48,6 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -105,7 +89,6 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 	}
 	appID := uuid.UUID(app.ID.Bytes)
 
-	// An application without a key: the cloner's anonymous default.
 	if pem, err := repo.DeployKeyPrivatePEM(ctx, appID); err != nil || pem != "" {
 		t.Fatalf("DeployKeyPrivatePEM = %q, %v; want empty, nil", pem, err)
 	}
@@ -135,8 +118,6 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 		t.Errorf("created key = %+v, want the fingerprint and public key stored", created)
 	}
 
-	// The private half is sealed at rest and stays readable by the Phase-2
-	// reader of private_keys.encrypted_key (servers.DecryptKey).
 	mapping, err := st.GetApplicationDeployKey(ctx, pgUUID(appID))
 	if err != nil {
 		t.Fatalf("GetApplicationDeployKey: %v", err)
@@ -167,8 +148,6 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 		t.Errorf("key = %+v, want the stored mapping", got)
 	}
 
-	// One key per application: a second write fails inside the transaction, so
-	// it must not leave an orphan private_keys row behind.
 	if _, err := repo.CreateDeployKey(ctx, DeployKey{
 		ApplicationID: appID,
 		Provider:      "github",
@@ -188,8 +167,6 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 		t.Errorf("private_keys rows = %d, want 1 (the failed insert must roll back)", orphanCheck)
 	}
 
-	// Deleting takes the mapping and the private key with it, once. The delete
-	// is fenced on the mapping ID that was read: replaying it is a no-op.
 	removed, err := repo.DeleteDeployKey(ctx, got)
 	if err != nil {
 		t.Fatalf("DeleteDeployKey: %v", err)
@@ -214,17 +191,11 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryDeleteDeployKeyFence pins U2 / C3-6 at the real store:
-// the delete is fenced on the mapping ID that was read, so a stale delete
-// (whose row was already removed and replaced) matches nothing and leaves the
-// replacement's mapping and sealed private key intact.
 func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -236,8 +207,6 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -281,8 +250,6 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
-		// private_keys has no application FK; clear the deploy-key rows so the
-		// test does not leak sealed keys across runs.
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM private_keys WHERE name = $1", deployKeyRowName(appID)); err != nil {
 			t.Logf("cleanup delete private keys: %v", err)
 		}
@@ -300,8 +267,6 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 		t.Fatalf("CreateDeployKey(key1): %v", err)
 	}
 
-	// The first delete reads key1 and removes it; a replacement is then
-	// installed behind it.
 	read1, err := repo.GetDeployKey(ctx, appID)
 	if err != nil || read1.ID != key1.ID {
 		t.Fatalf("GetDeployKey = %+v / %v, want key1", read1, err)
@@ -317,7 +282,6 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 		t.Fatalf("CreateDeployKey(key2): %v", err)
 	}
 
-	// The stale delete (still holding key1) must not touch key2.
 	if _, err := repo.DeleteDeployKey(ctx, read1); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("stale delete error = %v, want ErrNotFound", err)
 	}
@@ -333,10 +297,6 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 	}
 }
 
-// TestListApplicationsByEnvironmentPreviewsFlag pins the include_previews
-// plumbing end to end: the default environment listing hides preview
-// siblings while an explicit true returns them (the resources endpoint's
-// ?previews=1 rides this flag).
 func TestListApplicationsByEnvironmentPreviewsFlag(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -404,17 +364,11 @@ func TestListApplicationsByEnvironmentPreviewsFlag(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryActiveDeploymentIndex pins the partial unique index that
-// allows at most one active deployment per application (deployments_active_app_idx):
-// a second active submit must surface as ErrConflict, and a row that becomes
-// terminal — running or failed — releases the index for the next deploy.
 func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -426,8 +380,6 @@ func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -481,7 +433,6 @@ func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 		t.Fatalf("second active deployment error = %v, want ErrConflict", err)
 	}
 
-	// A running row is terminal: the index is released.
 	first.State = StateRunning
 	if _, err := repo.UpdateDeployment(ctx, first); err != nil {
 		t.Fatalf("mark first running: %v", err)
@@ -493,7 +444,6 @@ func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 		t.Fatalf("deployment after running release: %v", err)
 	}
 
-	// A failed row releases it too.
 	second.State = StateFailed
 	if _, err := repo.UpdateDeployment(ctx, second); err != nil {
 		t.Fatalf("mark second failed: %v", err)
@@ -505,18 +455,11 @@ func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryListDeploymentsByAppLimit proves the bounded deployments
-// read against a real Postgres: newest first (created_at DESC), id DESC on
-// equal timestamps, limit 1 returns exactly the newest, an oversized limit
-// returns every row, other applications' rows never leak, and an application
-// without deployments returns none.
 func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -528,8 +471,6 @@ func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -577,8 +518,6 @@ func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 	appB := newApp("limit-app-b")
 	appEmpty := newApp("limit-app-empty")
 
-	// Terminal states only: a second active row would trip the
-	// deployments_active_app_idx partial unique index.
 	seed := []Deployment{
 		{ApplicationID: appA, Kind: KindDeploy, State: StateFailed},
 		{ApplicationID: appA, Kind: KindDeploy, State: StateFailed},
@@ -592,8 +531,6 @@ func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 		}
 		created = append(created, row)
 	}
-	// Distinct timestamps, oldest first, so created_at DESC is unambiguous
-	// (now() could tie on a fast machine).
 	base := time.Now().UTC().Truncate(time.Second)
 	for i, row := range created {
 		ts := base.Add(time.Duration(i) * time.Second)
@@ -655,9 +592,6 @@ func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 	})
 
 	t.Run("equal timestamps fall back to id DESC", func(t *testing.T) {
-		// Fixed ids in ascending creation order: the id tiebreak is the only
-		// discriminator, so removing `id DESC` fails every run (without it
-		// the index scan returns insertion order) instead of passing by luck.
 		fixed := []string{
 			"11111111-1111-1111-1111-111111111111",
 			"22222222-2222-2222-2222-222222222222",
@@ -722,17 +656,11 @@ func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 	})
 }
 
-// TestSystemTeardownRemovesLocalKey is the F7 regression: deleting a preview
-// sibling through the system path removes its local deploy-key rows — the
-// mapping and the sealed private key it points at — while the base
-// application's key stays untouched (the remote key is shared).
 func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -744,8 +672,6 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -817,7 +743,6 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 		t.Fatalf("preview application still exists: %v", err)
 	}
 
-	// The preview's local rows are gone...
 	var previewKeys int
 	if err := pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM private_keys WHERE name = $1", deployKeyRowName(previewID),
@@ -827,7 +752,6 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 	if previewKeys != 0 {
 		t.Errorf("preview private_keys rows = %d, want 0", previewKeys)
 	}
-	// ...and the base's are untouched.
 	if _, err := repo.GetDeployKey(ctx, baseID); err != nil {
 		t.Errorf("base deploy key after the preview teardown: %v", err)
 	}
@@ -836,11 +760,6 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryGitCredentialRoundtrip exercises the HTTPS credential
-// rows against a real server: the sealed token round-trips through the
-// repository (metadata never carries ciphertext, opening returns the token),
-// the copy lands on the preview sibling, and deletes behave. It skips when
-// no database is reachable.
 func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -899,7 +818,6 @@ func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
 	}
 	appID := uuid.UUID(app.ID.Bytes)
 
-	// No credential: metadata is NotFound, the opener answers empty.
 	if _, err := repo.GetGitCredential(ctx, appID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetGitCredential error = %v, want ErrNotFound", err)
 	}
@@ -933,7 +851,6 @@ func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
 		t.Errorf("GitCredential = %q/%q, %v; want the opened token", username, token, err)
 	}
 
-	// The copy lands on the sibling with the same sealed row.
 	sibling, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID:        pgUUID(userID),
 		TeamID:        pgUUID(teamID),
@@ -957,12 +874,10 @@ func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
 	if _, token, err := repo.GitCredential(ctx, siblingID); err != nil || token != "s3cr3t-token" {
 		t.Errorf("sibling credential opens to %q, %v; want the token", token, err)
 	}
-	// Copying from an application without one is a silent success.
 	if err := repo.CopyGitCredential(ctx, uuid.New(), uuid.New()); err != nil {
 		t.Errorf("CopyGitCredential without a row: %v", err)
 	}
 
-	// Delete removes the row; repeating it answers NotFound.
 	if err := repo.DeleteGitCredential(ctx, appID); err != nil {
 		t.Fatalf("DeleteGitCredential: %v", err)
 	}
@@ -971,10 +886,6 @@ func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryListRecentDeploymentsScope proves the dashboard feed
-// (JUS-193) never crosses the team boundary on the real store: the team feed
-// returns only that team's non-preview deployments newest first, the limit
-// bounds the page, and the creator fallback stays inside the caller's rows.
 func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1045,8 +956,6 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 	appB := newApp(userB, teamB, envB, serverB, "feed-b", false)
 	previewA := newApp(userA, teamA, envA, serverA, "feed-a-preview", true)
 
-	// Terminal states only: a second active row would trip the
-	// deployments_active_app_idx partial unique index.
 	seedRows := []Deployment{
 		{ApplicationID: appA, Kind: KindDeploy, State: StateFailed},
 		{ApplicationID: appB, Kind: KindDeploy, State: StateFailed},
@@ -1060,7 +969,6 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 		}
 		created = append(created, row)
 	}
-	// Distinct timestamps so created_at DESC is unambiguous.
 	base := time.Now().UTC().Truncate(time.Second)
 	for i, row := range created {
 		ts := base.Add(time.Duration(i) * time.Second)
@@ -1084,7 +992,6 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 			rows[0].ApplicationID, rows[0].ApplicationName)
 	}
 
-	// The creator fallback (no team context) stays inside user A's rows.
 	userFeed, err := repo.ListRecentDeployments(ctx, teams.Scope{UserID: userA}, 10)
 	if err != nil {
 		t.Fatalf("creator feed: %v", err)
@@ -1093,7 +1000,6 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 		t.Fatalf("creator rows = %d, want user A's non-preview app only", len(userFeed))
 	}
 
-	// A non-positive limit selects one row, bounding the page.
 	limited, err := repo.ListRecentDeployments(ctx,
 		teams.Scope{UserID: userB, TeamID: teamB, Role: teams.RoleOwner}, 0)
 	if err != nil {

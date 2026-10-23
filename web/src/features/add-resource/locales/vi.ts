@@ -1,10 +1,5 @@
 import type en from "./en";
 
-/**
- * Vietnamese catalog for the Add-resource picker. Keys mirror `en.ts`
- * exactly; only values are translated. Template slugs, engine values,
- * image tags and ports stay untranslated by design.
- */
 const vi: typeof en = {
   tabs: {
     label: "Loại tài nguyên",

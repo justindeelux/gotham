@@ -2,71 +2,23 @@ package auth
 
 import "errors"
 
-// Typed errors returned by the auth Service. Callers map them to HTTP status
-// codes; anything else is an unexpected internal failure.
 var (
-	// ErrEmailTaken is returned by Register when the email already exists.
-	ErrEmailTaken = errors.New("auth: email already registered")
-	// ErrInvalidCredentials is returned by Login for an unknown email or a
-	// wrong password. The message is intentionally identical for both cases so
-	// callers cannot enumerate accounts.
-	ErrInvalidCredentials = errors.New("auth: invalid credentials")
-	// ErrUnauthorized is returned when a refresh token is missing, revoked,
-	// expired, or otherwise unusable.
-	ErrUnauthorized = errors.New("auth: unauthorized")
-	// ErrInvalidToken is returned when an access token fails verification.
-	ErrInvalidToken = errors.New("auth: invalid token")
-	// ErrValidation is returned when user-supplied input fails validation.
-	ErrValidation = errors.New("auth: validation failed")
-	// ErrNotFound is returned when a resource does not exist or is not owned by
-	// the caller.
-	ErrNotFound = errors.New("auth: not found")
-	// ErrProviderDisabled is returned when an OAuth provider is unknown or not
-	// configured.
-	ErrProviderDisabled = errors.New("auth: oauth provider disabled")
-	// ErrStateMismatch is returned when an OAuth state is missing, expired,
-	// already consumed, or does not match the initiating request.
-	ErrStateMismatch = errors.New("auth: oauth state mismatch")
-	// ErrMissingEmail is returned when an OAuth identity exposes no usable
-	// email address.
-	ErrMissingEmail = errors.New("auth: oauth identity missing email")
-	// ErrRegistrationClosed is returned by Register when the instance already
-	// has an account and no valid invite token is supplied (P-A2: exactly one
-	// admin account; members join through admin-created invites).
-	ErrRegistrationClosed = errors.New("auth: registration is closed")
-	// ErrCurrentPasswordIncorrect is returned by ChangePassword when the
-	// account has a password and the supplied current password does not match
-	// (or is missing), or when a concurrent change moved the credential after
-	// the check. The message is the API contract body, so handlers render it
-	// verbatim with a 400 (never 401/403: the web layer treats 401 as session
-	// expiry).
+	ErrEmailTaken               = errors.New("auth: email already registered")
+	ErrInvalidCredentials       = errors.New("auth: invalid credentials")
+	ErrUnauthorized             = errors.New("auth: unauthorized")
+	ErrInvalidToken             = errors.New("auth: invalid token")
+	ErrValidation               = errors.New("auth: validation failed")
+	ErrNotFound                 = errors.New("auth: not found")
+	ErrProviderDisabled         = errors.New("auth: oauth provider disabled")
+	ErrStateMismatch            = errors.New("auth: oauth state mismatch")
+	ErrMissingEmail             = errors.New("auth: oauth identity missing email")
+	ErrRegistrationClosed       = errors.New("auth: registration is closed")
 	ErrCurrentPasswordIncorrect = errors.New("current password is incorrect")
-	// ErrDisplayNameInvalid is returned by UpdateProfile when the trimmed name
-	// is not 1-64 characters. The message is the API contract body, rendered
-	// verbatim with a 400.
-	ErrDisplayNameInvalid = errors.New("display name must be 1-64 characters")
-	// ErrSessionUnknown is returned by RevokeOtherSessions when the caller's
-	// current session cannot be proven live: the access token carries no
-	// session id (minted before PF-2), or the sid row is stale, revoked,
-	// deleted, expired, or foreign. Nothing is revoked. The message is the
-	// API contract body, rendered verbatim with a 409.
-	ErrSessionUnknown = errors.New("sign in again to manage other sessions")
-	// ErrInvalidCode is returned when a submitted TOTP or recovery code does
-	// not verify (or was already used). The message is the API contract body.
-	ErrInvalidCode = errors.New("invalid code")
-	// ErrTOTPNotConfigured is returned when a second factor is submitted for an
-	// account whose TOTP was never enabled (or was disabled meanwhile).
-	ErrTOTPNotConfigured = errors.New("auth: two-factor authentication is not configured")
-	// ErrTOTPAlreadyEnabled is returned by BeginTOTPEnrollment when TOTP is
-	// already on: the caller must disable it first. The message is the API
-	// contract body, rendered verbatim with a 409.
-	ErrTOTPAlreadyEnabled = errors.New("two-factor authentication is already enabled")
-	// ErrTOTPNotEnrolled is returned by EnableTOTP when no pending secret
-	// exists. The message is the API contract body, rendered verbatim with a
-	// 409.
-	ErrTOTPNotEnrolled = errors.New("start two-factor setup first")
-	// ErrTOTPLocked is returned while the per-account second-factor lockout is
-	// active (too many consecutive wrong codes, from any source address). The
-	// message is the API contract body, rendered verbatim with a 429.
-	ErrTOTPLocked = errors.New("too many incorrect codes, try again later")
+	ErrDisplayNameInvalid       = errors.New("display name must be 1-64 characters")
+	ErrSessionUnknown           = errors.New("sign in again to manage other sessions")
+	ErrInvalidCode              = errors.New("invalid code")
+	ErrTOTPNotConfigured        = errors.New("auth: two-factor authentication is not configured")
+	ErrTOTPAlreadyEnabled       = errors.New("two-factor authentication is already enabled")
+	ErrTOTPNotEnrolled          = errors.New("start two-factor setup first")
+	ErrTOTPLocked               = errors.New("too many incorrect codes, try again later")
 )

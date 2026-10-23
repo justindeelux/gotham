@@ -15,14 +15,10 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// maxAuthBodyBytes bounds the size of an authentication request body.
-const maxAuthBodyBytes = 1 << 20 // 1 MiB
+const maxAuthBodyBytes = 1 << 20
 
-// tokenTypeBearer is the OAuth2 token type reported to clients.
 const tokenTypeBearer = "Bearer"
 
-// AuthService is the subset of auth.Service the HTTP layer depends on. Keeping
-// it an interface lets tests substitute a fake without a database.
 type AuthService interface {
 	Register(ctx context.Context, email, password, inviteToken string, invites auth.InviteAcceptor, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Login(ctx context.Context, email, password string, meta auth.SessionMeta) (*auth.AuthResult, error)
@@ -36,7 +32,6 @@ type AuthService interface {
 	RevokeSession(ctx context.Context, userID, id uuid.UUID) error
 	RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error
 	VerifyAccessToken(token string) (*auth.Claims, error)
-	// Two-factor authentication (JUS-196).
 	TOTPStatus(ctx context.Context, userID uuid.UUID) (*auth.TOTPStatus, error)
 	BeginTOTPEnrollment(ctx context.Context, userID uuid.UUID) (*auth.TOTPEnrollment, error)
 	EnableTOTP(ctx context.Context, userID uuid.UUID, password, code string, currentSessionID uuid.UUID) ([]string, error)
@@ -45,10 +40,8 @@ type AuthService interface {
 	CompleteMFALogin(ctx context.Context, mfaToken, code string, meta auth.SessionMeta) (*auth.AuthResult, error)
 }
 
-// contextKey is the unexported type for authenticated-request context values.
 type contextKey int
 
-// Context keys for values set by RequireAuth.
 const (
 	userIDKey contextKey = iota
 	roleKey
@@ -57,47 +50,31 @@ const (
 	sessionIDKey
 )
 
-// UserIDFromContext returns the authenticated user ID set by RequireAuth.
 func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	userID, ok := ctx.Value(userIDKey).(uuid.UUID)
 	return userID, ok
 }
 
-// RoleFromContext returns the authenticated role set by RequireAuth.
 func RoleFromContext(ctx context.Context) (string, bool) {
 	role, ok := ctx.Value(roleKey).(string)
 	return role, ok
 }
 
-// ScopesFromContext returns the API-token scopes set by RequireAuth. A JWT
-// request carries no scopes, so ok is false for it.
 func ScopesFromContext(ctx context.Context) ([]string, bool) {
 	scopes, ok := ctx.Value(scopesKey).([]string)
 	return scopes, ok
 }
 
-// IsAPITokenRequest reports whether the request was authenticated with a
-// scoped API token rather than an interactive JWT session. The self-service
-// profile routes (PATCH /me, POST /me/password, and the PF-2 session routes)
-// reject API tokens through the requireInteractiveSession middleware.
 func IsAPITokenRequest(ctx context.Context) bool {
 	apiToken, _ := ctx.Value(apiTokenKey).(bool)
 	return apiToken
 }
 
-// SessionIDFromContext returns the refresh-session id carried by the access
-// token's "sid" claim (PF-2). It is uuid.Nil when the token predates the
-// claim: "current unknown", never an authentication failure.
 func SessionIDFromContext(ctx context.Context) uuid.UUID {
 	sessionID, _ := ctx.Value(sessionIDKey).(uuid.UUID)
 	return sessionID
 }
 
-// requireInteractiveSession is chi middleware answering 403 unless the request
-// carries an interactive JWT session. A scoped API token (even admin) must
-// never change profile material. It lives on the profile route group so every
-// route mounted there (including the PF-2 session routes) is guarded without
-// per-handler code.
 func (s *Server) requireInteractiveSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if IsAPITokenRequest(r.Context()) {
@@ -108,22 +85,16 @@ func (s *Server) requireInteractiveSession(next http.Handler) http.Handler {
 	})
 }
 
-// credentialsRequest is the body of register and login. inviteToken carries
-// the admin-created invite (P-A2) for registration after the first account.
 type credentialsRequest struct {
 	Email       string `json:"email"`
 	Password    string `json:"password"`
 	InviteToken string `json:"inviteToken,omitempty"`
 }
 
-// refreshTokenRequest is the body of refresh and logout.
 type refreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-// authResponse is the token-pair body returned by register, login, and refresh.
-// When the account has TOTP enabled, login returns mfa_required with an empty
-// token pair and a half-authenticated mfa_token instead (JUS-196).
 type authResponse struct {
 	User         *auth.User `json:"user"`
 	AccessToken  string     `json:"access_token"`
@@ -134,52 +105,33 @@ type authResponse struct {
 	MFAToken     string     `json:"mfa_token,omitempty"`
 }
 
-// meResponse is the body returned by /auth/me.
 type meResponse struct {
 	User *auth.User `json:"user"`
 }
 
-// authConfigResponse is the public instance configuration the SPA needs
-// before it renders the register surface.
 type authConfigResponse struct {
 	RegistrationOpen bool `json:"registrationOpen"`
 }
 
-// inviteValidateResponse tells the invitee which team they are joining before
-// they create credentials.
 type inviteValidateResponse struct {
 	Team  string `json:"team"`
 	Email string `json:"email"`
 }
 
-// mountAuthRoutes registers the authentication endpoints under /api.
 func (s *Server) mountAuthRoutes(api chi.Router) {
 	api.Route("/v1/auth", func(r chi.Router) {
-		// Public surface: the SPA probes /config before rendering the register
-		// tab, and invite links validate before credentials. /config is a
-		// cheap, secret-free read the SPA calls on every auth render, so it
-		// stays off the credential rate limiter; validate keeps it (a token
-		// must not be brute-forceable).
 		r.Get("/config", s.handleAuthConfig)
 		r.With(s.rateLimit).Get("/invites/validate", s.handleInviteValidate)
 
 		r.With(s.rateLimit).Post("/register", s.handleRegister)
 		r.With(s.rateLimit).Post("/login", s.handleLogin)
-		// The second factor of a login is rate limited by the same credential
-		// bucket as the password step, so a six-digit code cannot be brute
-		// forced (JUS-196).
 		r.With(s.rateLimit).Post("/login/totp", s.handleLoginTOTP)
 		r.With(s.refreshRateLimit).Post("/refresh", s.handleRefresh)
 		r.With(s.refreshRateLimit).Post("/logout", s.handleLogout)
 
-		// Protected group: Phase 2+ can mount further authenticated routes here.
 		r.Group(func(protected chi.Router) {
 			protected.Use(s.RequireAuth)
 			protected.Get("/me", s.handleMe)
-			// Self-service profile group (PF-2 mounts its session routes
-			// here too): interactive JWT sessions only, behind the
-			// credential rate limiter. The API-token guard is middleware so
-			// a route mounted in this group cannot forget it.
 			protected.Group(func(profile chi.Router) {
 				profile.Use(s.rateLimit)
 				profile.Use(s.requireInteractiveSession)
@@ -188,9 +140,6 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 				profile.Get("/me/sessions", s.handleListSessions)
 				profile.Delete("/me/sessions/{id}", s.handleRevokeSession)
 				profile.Post("/me/sessions/revoke-others", s.handleRevokeOtherSessions)
-				// Two-factor authentication (JUS-196): status, enrollment and
-				// management. These routes are interactive-session only (the
-				// API-token guard is the group middleware above).
 				profile.Get("/me/totp", s.handleTOTPStatus)
 				profile.Post("/me/totp/enroll", s.handleTOTPEnroll)
 				profile.Post("/me/totp/enable", s.handleTOTPEnable)
@@ -201,12 +150,7 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 	})
 }
 
-// handleAuthConfig reports whether registration is open: it is open only on a
-// fresh instance with zero accounts (P-A2). Without a store the instance is
-// treated as closed, matching the closed-by-default registration rule.
 func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
-	// allowRegistration (GOTHAM_AUTH_ALLOW_REGISTRATION) is a test/dev escape
-	// hatch; production relies on the closed default.
 	open := s.allowRegistration
 	if s.persistence != nil {
 		count, err := s.persistence.CountUsers(r.Context())
@@ -220,9 +164,6 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, authConfigResponse{RegistrationOpen: open})
 }
 
-// handleInviteValidate looks up a pending invite token so the invitee sees
-// which team they are joining before they create credentials. Unknown,
-// expired and consumed tokens all answer 404, never a distinction.
 func (s *Server) handleInviteValidate(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if s.invites == nil || strings.TrimSpace(token) == "" {
@@ -238,10 +179,6 @@ func (s *Server) handleInviteValidate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, inviteValidateResponse{Team: team, Email: email})
 }
 
-// handleRegister creates an account and returns a token pair. On an instance
-// that already has accounts (P-A2) a valid admin-created invite token is
-// required; any registration refusal answers 403 without leaking whether the
-// token itself was the problem.
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if !s.decodeJSON(w, r, &req) {
@@ -264,13 +201,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A registration starts a fresh session: drop any pending OAuth exchange
-	// cookies so a stalled callback cannot overwrite it.
 	s.clearOAuthCookies(w, r)
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// handleLogin verifies credentials and returns a token pair.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if !s.decodeJSON(w, r, &req) {
@@ -291,13 +225,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A password login replaces any pending OAuth exchange: drop the protocol
-	// cookies so a paused callback link cannot redeem after the fact.
 	s.clearOAuthCookies(w, r)
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// handleRefresh rotates a refresh token and returns a fresh token pair.
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	var req refreshTokenRequest
 	if !s.decodeJSON(w, r, &req) {
@@ -318,18 +249,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// handleLogout deletes the presented session and clears the OAuth protocol
-// cookies on the 204, 400 and 500 responses it writes. The shared
-// refresh/logout rate limiter answers 429 before this handler runs, so that
-// response does not clear the cookies. A malformed body answers 400; a
-// well-formed unknown or already-deleted token answers 204, so clients cannot
-// probe which refresh tokens exist. A persistence failure answers 500:
-// reporting success would leave the refresh token usable while the client
-// believes it is signed out.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	// Clear the OAuth protocol cookies on the responses this handler writes
-	// (204, 400, 500): a browser that attempted to log out must never be able
-	// to redeem a pending OAuth exchange, whatever the outcome.
 	s.clearOAuthCookies(w, r)
 
 	var req refreshTokenRequest
@@ -346,9 +266,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleMe returns the authenticated account. is_platform_admin is the stored
-// flag or a PLATFORM_ADMINS allowlist match, using the same helper as the
-// admin gate, so an env-named operator sees the same bit the gate enforces.
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -371,10 +288,6 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meResponse{User: user})
 }
 
-// RequireAuth validates the bearer token and stores the user ID and role in the
-// request context. It accepts both a JWT and a scoped API token: a token with
-// the API-token prefix is resolved through the token service, everything else is
-// verified as a JWT. It answers 401 for a missing or invalid token.
 func (s *Server) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := bearerToken(r)
@@ -407,8 +320,6 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// authenticateAPIToken resolves an API token and stores its owner and scopes in
-// the request context. API tokens act as the default "user" role.
 func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request, next http.Handler, token string) {
 	if s.tokens == nil {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
@@ -428,7 +339,6 @@ func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request, ne
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
-// bearerToken extracts a bearer token from the Authorization header.
 func bearerToken(r *http.Request) (string, bool) {
 	const prefix = "Bearer "
 
@@ -444,7 +354,6 @@ func bearerToken(r *http.Request) (string, bool) {
 	return token, true
 }
 
-// decodeJSON decodes an authentication request body, answering 400 on failure.
 func (s *Server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := decodeJSONBody(w, r, dst); err != nil {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
@@ -453,10 +362,6 @@ func (s *Server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) boo
 	return true
 }
 
-// decodeJSONBody decodes a size-limited JSON body, rejecting unknown fields.
-// It requires exactly one JSON value: trailing input (a second document or
-// garbage after the first value) is an error, so a handler cannot succeed on a
-// body that is only partially valid.
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
 	decoder := json.NewDecoder(r.Body)
@@ -472,7 +377,6 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
 	return nil
 }
 
-// newAuthResponse maps an auth result to its wire representation.
 func newAuthResponse(result *auth.AuthResult) authResponse {
 	return authResponse{
 		User:         result.User,

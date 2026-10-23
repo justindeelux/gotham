@@ -9,18 +9,6 @@ import {
   useWindowInteraction,
 } from "@/shared/window/useWindowInteraction";
 
-/**
- * Shared floating-window frame (JUS-275).
- *
- * The code editor and the terminal are both floating tools: the same frame,
- * title bar with minimize/close, eight resize grips and a bound content area.
- * This component owns that chrome and the drag/resize/focus mechanics; the
- * feature supplies its identity, its extra header actions and its body, and
- * keeps its own store, persistence keys and close/confirmation path.
- *
- * `classNames` exists so each feature keeps its existing selectors (tests and
- * e2e rely on `.ed-window-min`, `.term-resize--se`, ...) on the shared markup.
- */
 interface FloatingWindowClassNames {
   bar?: string;
   min?: string;
@@ -34,7 +22,6 @@ interface Props {
   closeLabel: string;
   resizeLabel: string;
   resizeValueText?: string;
-  /** size is the displayed window size (see the feature store's fit). */
   size: { width: number; height: number };
   resizeLimits: WindowResizeLimits;
   classNames?: FloatingWindowClassNames;
@@ -61,7 +48,6 @@ const { frame, ...interaction } = useWindowInteraction({
     emit("resizeBy", deltaWidth, deltaHeight),
 });
 
-/** resizeAria keeps the keyboard slider honest on phone-sized viewports. */
 const resizeAria = computed(() => {
   const min = Math.min(props.resizeLimits.minWidth, props.size.width);
   return {
@@ -71,7 +57,6 @@ const resizeAria = computed(() => {
   };
 });
 
-/** resizeClass / min / close keep each feature's existing selectors. */
 const resizeClass = computed<string>(
   () => props.classNames.resize ?? "floating-window-resize",
 );
@@ -127,8 +112,6 @@ const resizeClass = computed<string>(
 
     <div class="floating-window-body"><slot /></div>
 
-    <!-- The SE grip carries the slider semantics (keyboard resize); the other
-         grips are pointer-only. -->
     <div
       :class="[
         resizeClass,
@@ -172,16 +155,12 @@ const resizeClass = computed<string>(
 
 <style scoped>
 .floating-window {
-  /* Positioning (fixed + inset) belongs to each feature's root class, so the
-     frame's default placement never races its consumer's stylesheet order. */
   display: flex;
   flex-direction: column;
   background: var(--surface);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  /* The shared elevation (JUS-270/JUS-275): it paints outside the border box,
-     so the frame's own overflow clip never trims it. */
   box-shadow: var(--elev-floating);
   overflow: hidden;
 }
@@ -236,7 +215,6 @@ const resizeClass = computed<string>(
   gap: var(--space-1);
 }
 
-/* The body is the only flexible region: the chrome always stays reachable. */
 .floating-window-body {
   flex: 1 1 auto;
   display: flex;
@@ -250,7 +228,6 @@ const resizeClass = computed<string>(
   min-height: 0;
 }
 
-/* Invisible hit strips on the frame; only the resize cursor signals them. */
 .floating-window-resize {
   position: absolute;
   z-index: 5;

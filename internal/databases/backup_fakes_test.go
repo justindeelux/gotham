@@ -18,13 +18,8 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// dumpPayload is what the scripted dump job "produces": the collector turns
-// it into the artifact, so tests can assert the stored bytes round-trip.
 const dumpPayload = "CREATE TABLE orders (id bigint PRIMARY KEY);\nINSERT INTO orders VALUES (1);\n"
 
-// testDatabase builds a live database row of the given engine. The storage
-// path follows the same convention the provisioning path uses, because every
-// job container mounts it.
 func testDatabase(engine, version string) Database {
 	id := uuid.New()
 	now := time.Now().UTC()
@@ -43,7 +38,6 @@ func testDatabase(engine, version string) Database {
 	}
 }
 
-// testCredentials returns the shape every engine expects.
 func testCredentials() Credentials {
 	return Credentials{
 		Username:     "gotham_app",
@@ -53,10 +47,8 @@ func testCredentials() Credentials {
 	}
 }
 
-// strPtr returns a pointer to s, for the tri-state optional target fields.
 func strPtr(s string) *string { return &s }
 
-// containsEnv reports whether the env list carries the given prefix.
 func containsEnv(env []string, prefix string) bool {
 	for _, entry := range env {
 		if len(entry) >= len(prefix) && entry[:len(prefix)] == prefix {
@@ -66,7 +58,6 @@ func containsEnv(env []string, prefix string) bool {
 	return false
 }
 
-// envValue returns the value of a KEY=VALUE entry.
 func envValue(env []string, key string) string {
 	prefix := key + "="
 	for _, entry := range env {
@@ -77,9 +68,6 @@ func envValue(env []string, key string) string {
 	return ""
 }
 
-// defaultJobLogs scripts a temporary container: dump jobs stream the payload
-// framed, restore and staging jobs announce an empty payload. The run id
-// comes from the job's own environment, exactly like the real script reads it.
 func defaultJobLogs(opts containers.RunOptions) [][]byte {
 	runID := envValue(opts.Env, "GOTHAM_RUN_ID")
 	switch opts.Labels[labelRole] {
@@ -93,29 +81,20 @@ func defaultJobLogs(opts containers.RunOptions) [][]byte {
 	}
 }
 
-// fakeBackupRepository is a scriptable in-memory BackupRepository.
 type fakeBackupRepository struct {
 	mu sync.Mutex
 
-	backups       map[uuid.UUID]Backup
-	backupOrder   []uuid.UUID
-	restores      map[uuid.UUID]Restore
-	restoreOrder  []uuid.UUID
-	schedules     map[uuid.UUID]BackupSchedule
-	scheduleOrder []uuid.UUID
-	targets       map[uuid.UUID]BackupTarget
-	targetOrder   []uuid.UUID
-	secrets       map[uuid.UUID][]TargetSecret
-	// serverIDs is what ListServerIDs answers for the container sweep.
-	serverIDs []uuid.UUID
-	// finishHook runs inside FinishBackup, before the row is written, so a
-	// test can assert an ordering (for example that the artifact was flushed
-	// before the run was marked completed).
-	finishHook func(Backup)
-	// beforeCreateBackupWithTarget runs just before CreateBackupWithTarget
-	// reads the target, while the fake's lock is held, so a test can flip the
-	// target between the caller's read and the locked insert. It must mutate
-	// the maps directly (calling locked methods would deadlock).
+	backups                      map[uuid.UUID]Backup
+	backupOrder                  []uuid.UUID
+	restores                     map[uuid.UUID]Restore
+	restoreOrder                 []uuid.UUID
+	schedules                    map[uuid.UUID]BackupSchedule
+	scheduleOrder                []uuid.UUID
+	targets                      map[uuid.UUID]BackupTarget
+	targetOrder                  []uuid.UUID
+	secrets                      map[uuid.UUID][]TargetSecret
+	serverIDs                    []uuid.UUID
+	finishHook                   func(Backup)
 	beforeCreateBackupWithTarget func()
 
 	createBackupErr   error
@@ -134,7 +113,6 @@ type fakeBackupRepository struct {
 	secretErr         error
 }
 
-// Compile-time guarantee.
 var _ BackupRepository = (*fakeBackupRepository)(nil)
 
 func newFakeBackupRepository() *fakeBackupRepository {
@@ -147,7 +125,6 @@ func newFakeBackupRepository() *fakeBackupRepository {
 	}
 }
 
-// seedRestore stores a restore directly, defaulting to a completed one.
 func (r *fakeBackupRepository) seedRestore(restore Restore) Restore {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -165,7 +142,6 @@ func (r *fakeBackupRepository) seedRestore(restore Restore) Restore {
 	return restore
 }
 
-// getRestore is the test-side accessor.
 func (r *fakeBackupRepository) getRestore(id uuid.UUID) (Restore, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -173,7 +149,6 @@ func (r *fakeBackupRepository) getRestore(id uuid.UUID) (Restore, bool) {
 	return restore, ok
 }
 
-// seedBackup stores a run directly, defaulting to a completed one.
 func (r *fakeBackupRepository) seedBackup(backup Backup) Backup {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -194,7 +169,6 @@ func (r *fakeBackupRepository) seedBackup(backup Backup) Backup {
 	return backup
 }
 
-// seedSchedule stores a schedule directly.
 func (r *fakeBackupRepository) seedSchedule(schedule BackupSchedule) BackupSchedule {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -215,7 +189,6 @@ func (r *fakeBackupRepository) seedSchedule(schedule BackupSchedule) BackupSched
 	return schedule
 }
 
-// seedTarget stores a target directly.
 func (r *fakeBackupRepository) seedTarget(target BackupTarget) BackupTarget {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -230,7 +203,6 @@ func (r *fakeBackupRepository) seedTarget(target BackupTarget) BackupTarget {
 	return target
 }
 
-// getBackup is the test-side accessor.
 func (r *fakeBackupRepository) getBackup(id uuid.UUID) (Backup, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -238,7 +210,6 @@ func (r *fakeBackupRepository) getBackup(id uuid.UUID) (Backup, bool) {
 	return backup, ok
 }
 
-// getSchedule is the test-side accessor.
 func (r *fakeBackupRepository) getSchedule(id uuid.UUID) (BackupSchedule, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -246,14 +217,12 @@ func (r *fakeBackupRepository) getSchedule(id uuid.UUID) (BackupSchedule, bool) 
 	return schedule, ok
 }
 
-// countBackups reports how many rows exist.
 func (r *fakeBackupRepository) countBackups() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.backups)
 }
 
-// CreateBackup implements BackupRepository.
 func (r *fakeBackupRepository) CreateBackup(_ context.Context, backup Backup) (Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -263,10 +232,6 @@ func (r *fakeBackupRepository) CreateBackup(_ context.Context, backup Backup) (B
 	return r.seedBackupLocked(backup), nil
 }
 
-// CreateBackupWithTarget implements BackupRepository: a run that references a
-// target returns the target row a locked read would observe, after running the
-// caller's validation on it (and before recording the run, so a rejected
-// target leaves no row behind).
 func (r *fakeBackupRepository) CreateBackupWithTarget(_ context.Context, backup Backup, validate func(*BackupTarget) error) (Backup, *BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -292,7 +257,6 @@ func (r *fakeBackupRepository) CreateBackupWithTarget(_ context.Context, backup 
 	return stored, &target, nil
 }
 
-// seedBackupLocked is seedBackup for callers already holding the lock.
 func (r *fakeBackupRepository) seedBackupLocked(backup Backup) Backup {
 	if backup.ID == uuid.Nil {
 		backup.ID = uuid.New()
@@ -305,7 +269,6 @@ func (r *fakeBackupRepository) seedBackupLocked(backup Backup) Backup {
 	return backup
 }
 
-// GetBackup implements BackupRepository.
 func (r *fakeBackupRepository) GetBackup(_ context.Context, backupID uuid.UUID) (Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -319,8 +282,6 @@ func (r *fakeBackupRepository) GetBackup(_ context.Context, backupID uuid.UUID) 
 	return backup, nil
 }
 
-// ListBackupsByDatabase implements BackupRepository, newest first, capped at
-// limit (zero means unbounded, matching the repository seam).
 func (r *fakeBackupRepository) ListBackupsByDatabase(_ context.Context, databaseID uuid.UUID, limit int) ([]Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -340,7 +301,6 @@ func (r *fakeBackupRepository) ListBackupsByDatabase(_ context.Context, database
 	return list, nil
 }
 
-// ListRunningBackups implements BackupRepository.
 func (r *fakeBackupRepository) ListRunningBackups(_ context.Context) ([]Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -357,8 +317,6 @@ func (r *fakeBackupRepository) ListRunningBackups(_ context.Context) ([]Backup, 
 	return list, nil
 }
 
-// FinishBackup implements BackupRepository. Like the SQL update, it touches
-// only the terminal columns, so the was_running observation survives the write.
 func (r *fakeBackupRepository) FinishBackup(_ context.Context, backup Backup) (Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -382,7 +340,6 @@ func (r *fakeBackupRepository) FinishBackup(_ context.Context, backup Backup) (B
 	return stored, nil
 }
 
-// DeleteBackup implements BackupRepository.
 func (r *fakeBackupRepository) DeleteBackup(_ context.Context, backupID uuid.UUID) (Backup, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -403,7 +360,6 @@ func (r *fakeBackupRepository) DeleteBackup(_ context.Context, backupID uuid.UUI
 	return backup, nil
 }
 
-// SetBackupWasRunning implements BackupRepository.
 func (r *fakeBackupRepository) SetBackupWasRunning(_ context.Context, backupID uuid.UUID, wasRunning bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -419,7 +375,6 @@ func (r *fakeBackupRepository) SetBackupWasRunning(_ context.Context, backupID u
 	return nil
 }
 
-// CreateRestore implements BackupRepository.
 func (r *fakeBackupRepository) CreateRestore(_ context.Context, restore Restore) (Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -437,8 +392,6 @@ func (r *fakeBackupRepository) CreateRestore(_ context.Context, restore Restore)
 	return restore, nil
 }
 
-// FinishRestore implements BackupRepository. Like the SQL update, it touches
-// only the terminal columns.
 func (r *fakeBackupRepository) FinishRestore(_ context.Context, restore Restore) (Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -456,7 +409,6 @@ func (r *fakeBackupRepository) FinishRestore(_ context.Context, restore Restore)
 	return stored, nil
 }
 
-// ListRunningRestores implements BackupRepository, oldest first.
 func (r *fakeBackupRepository) ListRunningRestores(_ context.Context) ([]Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -472,8 +424,6 @@ func (r *fakeBackupRepository) ListRunningRestores(_ context.Context) ([]Restore
 	return list, nil
 }
 
-// ListRestoresByDatabase implements BackupRepository, newest first and bounded
-// like the SQL query.
 func (r *fakeBackupRepository) ListRestoresByDatabase(_ context.Context, databaseID uuid.UUID, limit int) ([]Restore, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -493,7 +443,6 @@ func (r *fakeBackupRepository) ListRestoresByDatabase(_ context.Context, databas
 	return list, nil
 }
 
-// CreateBackupSchedule implements BackupRepository.
 func (r *fakeBackupRepository) CreateBackupSchedule(_ context.Context, schedule BackupSchedule) (BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -508,7 +457,6 @@ func (r *fakeBackupRepository) CreateBackupSchedule(_ context.Context, schedule 
 	return schedule, nil
 }
 
-// GetBackupSchedule implements BackupRepository.
 func (r *fakeBackupRepository) GetBackupSchedule(_ context.Context, scheduleID uuid.UUID) (BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -519,7 +467,6 @@ func (r *fakeBackupRepository) GetBackupSchedule(_ context.Context, scheduleID u
 	return schedule, nil
 }
 
-// ListBackupSchedulesByDatabase implements BackupRepository, newest first.
 func (r *fakeBackupRepository) ListBackupSchedulesByDatabase(_ context.Context, databaseID uuid.UUID) ([]BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -533,7 +480,6 @@ func (r *fakeBackupRepository) ListBackupSchedulesByDatabase(_ context.Context, 
 	return list, nil
 }
 
-// UpdateBackupSchedule implements BackupRepository.
 func (r *fakeBackupRepository) UpdateBackupSchedule(_ context.Context, schedule BackupSchedule) (BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -545,7 +491,6 @@ func (r *fakeBackupRepository) UpdateBackupSchedule(_ context.Context, schedule 
 	return schedule, nil
 }
 
-// DeleteBackupSchedule implements BackupRepository.
 func (r *fakeBackupRepository) DeleteBackupSchedule(_ context.Context, scheduleID uuid.UUID) (BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -563,7 +508,6 @@ func (r *fakeBackupRepository) DeleteBackupSchedule(_ context.Context, scheduleI
 	return schedule, nil
 }
 
-// ListDueBackupSchedules implements BackupRepository: enabled and due.
 func (r *fakeBackupRepository) ListDueBackupSchedules(_ context.Context, now time.Time) ([]BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -580,7 +524,6 @@ func (r *fakeBackupRepository) ListDueBackupSchedules(_ context.Context, now tim
 	return due, nil
 }
 
-// MarkBackupScheduleRun implements BackupRepository.
 func (r *fakeBackupRepository) MarkBackupScheduleRun(_ context.Context, scheduleID uuid.UUID, lastRun, nextRun time.Time) (BackupSchedule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -598,7 +541,6 @@ func (r *fakeBackupRepository) MarkBackupScheduleRun(_ context.Context, schedule
 	return schedule, nil
 }
 
-// CreateBackupTarget implements BackupRepository.
 func (r *fakeBackupRepository) CreateBackupTarget(_ context.Context, target BackupTarget) (BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -619,8 +561,6 @@ func (r *fakeBackupRepository) CreateBackupTarget(_ context.Context, target Back
 	return target, nil
 }
 
-// CreateBackupTargetWithSecrets implements BackupRepository as one atomic
-// step: a credential failure leaves no target behind.
 func (r *fakeBackupRepository) CreateBackupTargetWithSecrets(_ context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -650,7 +590,6 @@ func (r *fakeBackupRepository) CreateBackupTargetWithSecrets(_ context.Context, 
 	return target, nil
 }
 
-// GetBackupTarget implements BackupRepository.
 func (r *fakeBackupRepository) GetBackupTarget(_ context.Context, targetID uuid.UUID) (BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -661,7 +600,6 @@ func (r *fakeBackupRepository) GetBackupTarget(_ context.Context, targetID uuid.
 	return target, nil
 }
 
-// ListBackupTargetsByUser implements BackupRepository, newest first.
 func (r *fakeBackupRepository) ListBackupTargetsByUser(_ context.Context, userID uuid.UUID) ([]BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -675,7 +613,6 @@ func (r *fakeBackupRepository) ListBackupTargetsByUser(_ context.Context, userID
 	return list, nil
 }
 
-// UpdateBackupTarget implements BackupRepository.
 func (r *fakeBackupRepository) UpdateBackupTarget(_ context.Context, target BackupTarget) (BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -686,9 +623,6 @@ func (r *fakeBackupRepository) UpdateBackupTarget(_ context.Context, target Back
 	return target, nil
 }
 
-// UpdateBackupTargetWithSecrets implements BackupRepository as one atomic
-// step: a credential failure leaves the previous configuration in place, and a
-// destination change while a run references the target is refused.
 func (r *fakeBackupRepository) UpdateBackupTargetWithSecrets(_ context.Context, target BackupTarget, secrets []TargetSecret) (BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -716,7 +650,6 @@ func (r *fakeBackupRepository) UpdateBackupTargetWithSecrets(_ context.Context, 
 	return target, nil
 }
 
-// fakeDestinationChanged mirrors the store's destination comparison.
 func fakeDestinationChanged(current, next BackupTarget) bool {
 	return current.Kind != next.Kind ||
 		current.Endpoint != next.Endpoint ||
@@ -724,7 +657,6 @@ func fakeDestinationChanged(current, next BackupTarget) bool {
 		current.Bucket != next.Bucket
 }
 
-// HasBackupsForTarget implements BackupRepository.
 func (r *fakeBackupRepository) HasBackupsForTarget(_ context.Context, targetID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -736,7 +668,6 @@ func (r *fakeBackupRepository) HasBackupsForTarget(_ context.Context, targetID u
 	return false, nil
 }
 
-// ListServerIDs implements backupServerLister for the container sweep.
 func (r *fakeBackupRepository) ListServerIDs(_ context.Context) ([]uuid.UUID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -745,8 +676,6 @@ func (r *fakeBackupRepository) ListServerIDs(_ context.Context) ([]uuid.UUID, er
 	return ids, nil
 }
 
-// DeleteBackupTarget implements BackupRepository with the owner filter of the
-// SQL query.
 func (r *fakeBackupRepository) DeleteBackupTarget(_ context.Context, targetID, userID uuid.UUID) (BackupTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -764,7 +693,6 @@ func (r *fakeBackupRepository) DeleteBackupTarget(_ context.Context, targetID, u
 	return target, nil
 }
 
-// CreateTargetSecret implements BackupRepository.
 func (r *fakeBackupRepository) CreateTargetSecret(_ context.Context, secret TargetSecret) (TargetSecret, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -778,7 +706,6 @@ func (r *fakeBackupRepository) CreateTargetSecret(_ context.Context, secret Targ
 	return secret, nil
 }
 
-// UpsertTargetSecret implements BackupRepository.
 func (r *fakeBackupRepository) UpsertTargetSecret(_ context.Context, secret TargetSecret) (TargetSecret, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -788,8 +715,6 @@ func (r *fakeBackupRepository) UpsertTargetSecret(_ context.Context, secret Targ
 	return r.upsertSecretLocked(secret), nil
 }
 
-// upsertSecretLocked is the replace-or-insert of one sealed credential for
-// callers already holding the lock.
 func (r *fakeBackupRepository) upsertSecretLocked(secret TargetSecret) TargetSecret {
 	stored := r.secrets[secret.TargetID]
 	for i, item := range stored {
@@ -807,7 +732,6 @@ func (r *fakeBackupRepository) upsertSecretLocked(secret TargetSecret) TargetSec
 	return secret
 }
 
-// ListTargetSecrets implements BackupRepository.
 func (r *fakeBackupRepository) ListTargetSecrets(_ context.Context, targetID uuid.UUID) ([]TargetSecret, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -820,7 +744,6 @@ func (r *fakeBackupRepository) ListTargetSecrets(_ context.Context, targetID uui
 	return secrets, nil
 }
 
-// getSecrets is the test-side accessor for a target's sealed rows.
 func (r *fakeBackupRepository) getSecrets(targetID uuid.UUID) []TargetSecret {
 	secrets, err := r.ListTargetSecrets(context.Background(), targetID)
 	if err != nil {
@@ -829,8 +752,6 @@ func (r *fakeBackupRepository) getSecrets(targetID uuid.UUID) []TargetSecret {
 	return secrets
 }
 
-// backupFixture wires a BackupManager over fakes: one database, its
-// repository, a scriptable container service and a local backup directory.
 type backupFixture struct {
 	manager    *BackupManager
 	databases  *fakeRepository
@@ -842,14 +763,11 @@ type backupFixture struct {
 	database   Database
 }
 
-// newBackupFixture builds the fixture with a silent logger.
 func newBackupFixture(t *testing.T) *backupFixture {
 	t.Helper()
 	return newBackupFixtureWith(t, discardLogger())
 }
 
-// newBackupFixtureWith builds the fixture with the given logger so a test can
-// assert on what was written.
 func newBackupFixtureWith(t *testing.T, logger *slog.Logger) *backupFixture {
 	t.Helper()
 
@@ -884,7 +802,6 @@ func newBackupFixtureWith(t *testing.T, logger *slog.Logger) *backupFixture {
 	return fixture
 }
 
-// waitBackup blocks until the run reaches a terminal state (or the deadline).
 func (f *backupFixture) waitBackup(t *testing.T, backupID uuid.UUID) Backup {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -898,7 +815,6 @@ func (f *backupFixture) waitBackup(t *testing.T, backupID uuid.UUID) Backup {
 	return Backup{}
 }
 
-// queueBackup runs CreateBackup and waits for the job to finish.
 func (f *backupFixture) queueBackup(t *testing.T) Backup {
 	t.Helper()
 	queued, err := f.manager.CreateBackup(context.Background(), f.userID, f.database.ID, CreateBackupRequest{})
@@ -908,7 +824,6 @@ func (f *backupFixture) queueBackup(t *testing.T) Backup {
 	return f.waitBackup(t, queued.ID)
 }
 
-// readArtifact gunzips a stored local artifact and returns its bytes.
 func readArtifact(t *testing.T, location string) []byte {
 	t.Helper()
 	path := strings.TrimPrefix(location, locationFilePrefix)
@@ -929,7 +844,6 @@ func readArtifact(t *testing.T, location string) []byte {
 	return data
 }
 
-// waitFor blocks until cond holds, failing the test when it never does.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -942,8 +856,6 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// fakeObjectStore is the S3 seam: it records what was written instead of
-// talking to a network.
 type fakeObjectStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
@@ -954,17 +866,14 @@ type fakeObjectStore struct {
 	getErr  error
 }
 
-// Compile-time guarantee.
 var _ ObjectStore = (*fakeObjectStore)(nil)
 
 func newFakeObjectStore() *fakeObjectStore {
 	return &fakeObjectStore{objects: make(map[string][]byte)}
 }
 
-// Kind implements ObjectStore.
 func (f *fakeObjectStore) Kind() string { return "s3" }
 
-// Put implements ObjectStore.
 func (f *fakeObjectStore) Put(_ context.Context, key string, data io.Reader, size int64) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -983,7 +892,6 @@ func (f *fakeObjectStore) Put(_ context.Context, key string, data io.Reader, siz
 	return locationS3Prefix + "bucket/" + key, nil
 }
 
-// Get implements ObjectStore.
 func (f *fakeObjectStore) Get(_ context.Context, location string) (io.ReadCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -999,7 +907,6 @@ func (f *fakeObjectStore) Get(_ context.Context, location string) (io.ReadCloser
 	return io.NopCloser(bytes.NewReader(payload)), nil
 }
 
-// Delete implements ObjectStore.
 func (f *fakeObjectStore) Delete(_ context.Context, location string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

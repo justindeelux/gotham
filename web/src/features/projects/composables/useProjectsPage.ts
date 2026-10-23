@@ -15,12 +15,6 @@ import {
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useTeamsStore } from "@/features/teams";
 
-/**
- * List page state for `/projects` (PE-4, Linear JUS-33). Created per mount
- * and dropped on unmount: the search query, the create dialog draft and the
- * submit guard never survive a route change. Data lives in the projects
- * store; this composable owns the UI state above it.
- */
 export interface ProjectsPageState {
   query: Ref<string>;
   filtered: ComputedRef<import("@/features/projects/api/projects").Project[]>;
@@ -28,7 +22,6 @@ export interface ProjectsPageState {
   createName: Ref<string>;
   createDescription: Ref<string>;
   createBusy: Ref<boolean>;
-  /** createError derives display text from the retained raw failure. */
   createError: ComputedRef<string | null>;
   createConflict: NameConflictState;
   canCreate: ComputedRef<boolean>;
@@ -52,24 +45,16 @@ export function useProjectsPage(): ProjectsPageState {
   const createName = ref("");
   const createDescription = ref("");
   const createBusy = ref(false);
-  /**
-   * createFailure retains the raw create refusal; createError derives its
-   * display text reactively so an open dialog refreshes on a language
-   * switch without losing the typed draft.
-   */
   const createFailure: Ref<unknown> = ref(null);
   const createError = computed<string | null>(() =>
     createFailure.value === null
       ? null
       : describeProjectError(createFailure.value),
   );
-  /** createConflict shows a 409 name-taken message on the name field. */
   const createConflict = useNameConflict();
 
-  /** canCreate gates the create dialog on the writer role (viewers read). */
   const canCreate = computed<boolean>(() => projectsStore.canWrite);
 
-  /** openCreate resets the create dialog draft. */
   function openCreate(): void {
     createName.value = "";
     createDescription.value = "";
@@ -78,11 +63,6 @@ export function useProjectsPage(): ProjectsPageState {
     createOpen.value = true;
   }
 
-  /**
-   * handleCreate stores the project and opens its detail page. The busy
-   * flag is the single submit guard: a second submit while one is in flight
-   * is ignored, so double-clicks and Enter-key repeats create one project.
-   */
   async function handleCreate(): Promise<void> {
     if (
       createBusy.value ||
@@ -106,8 +86,6 @@ export function useProjectsPage(): ProjectsPageState {
       createOpen.value = false;
       await router.push({ name: "project-detail", params: { projectId: project.id } });
     } catch (error) {
-      // A taken name renders inline on the field; the rest stays in the
-      // dialog alert.
       if (!createConflict.take(error)) {
         createFailure.value = error;
       }
@@ -116,12 +94,10 @@ export function useProjectsPage(): ProjectsPageState {
     }
   }
 
-  /** reload refetches the list (the alert renders the store error). */
   async function reload(): Promise<void> {
     try {
       await projectsStore.fetchProjects();
     } catch {
-      // The store exposes the error; the alert renders it.
     }
   }
 
@@ -129,20 +105,13 @@ export function useProjectsPage(): ProjectsPageState {
     try {
       await teamsStore.ensureTeams();
     } catch {
-      // The teams surface reports its own failure; projects still load.
     }
-    // Always refetch: the held list may belong to another team when the
-    // selection switched while this page was unmounted (its watcher was
-    // torn down), and a teamless first read may have gone stale.
     await reload();
   });
 
   watch(
     () => teamsStore.activeTeamId,
     () => {
-      // ensureTeams can return early while another surface loads the teams,
-      // leaving the first read teamless and stale; the switch to the real
-      // selection refetches here so the page always converges.
       void reload();
     },
   );

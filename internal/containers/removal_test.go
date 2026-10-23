@@ -9,8 +9,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestRemoveVolumeRoutesToAgent proves the service forwards the volume name
-// and rejects an empty one before dialing.
 func TestRemoveVolumeRoutesToAgent(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed()
@@ -30,8 +28,6 @@ func TestRemoveVolumeRoutesToAgent(t *testing.T) {
 	}
 }
 
-// TestRemoveVolumeRejectsEmptyName: a blank name is a validation error and
-// never reaches the agent.
 func TestRemoveVolumeRejectsEmptyName(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed()
@@ -46,7 +42,6 @@ func TestRemoveVolumeRejectsEmptyName(t *testing.T) {
 	}
 }
 
-// TestNewContainerCarriesHealth pins the DTO mapping the readiness gate reads.
 func TestNewContainerCarriesHealth(t *testing.T) {
 	container := newContainer(&agentv1.ContainerInfo{
 		Id:     "abc123",
@@ -63,7 +58,6 @@ func TestNewContainerCarriesHealth(t *testing.T) {
 	}
 }
 
-// TestHealthcheckToProto pins the seconds conversion and the disabled cases.
 func TestHealthcheckToProto(t *testing.T) {
 	proto := (&Healthcheck{
 		Test:        []string{"pg_isready", "-U", "app"},

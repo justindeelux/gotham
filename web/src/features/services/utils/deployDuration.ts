@@ -1,6 +1,5 @@
 import type { ServiceDeploy } from "@/features/services/api/services";
 
-/** durationText renders created→finished (or created→now) as a short span. */
 export function durationText(deploy: ServiceDeploy): string {
   const start = new Date(deploy.created_at).getTime();
   const end = deploy.finished_at

@@ -5,7 +5,6 @@ import { nextTick, ref, watch } from "vue";
 
 import type { QueuedLogLine } from "@/features/toolchain/composables/useInstallQueueLog";
 
-/** Render state of the log pane, decided by the modal from job + tail state. */
 export type InstallLogPaneState =
   | "idle"
   | "loading"
@@ -19,11 +18,6 @@ const props = withDefaults(
     title: string;
     state: InstallLogPaneState;
     lines: QueuedLogLine[];
-    /**
-     * When false the pane is read-only: the reload control is hidden, because
-     * the consumer has no separate log source to re-fetch (the stream itself is
-     * the source, and re-running the installer is not a log refresh).
-     */
     showReload?: boolean;
   }>(),
   { showReload: true },
@@ -31,20 +25,14 @@ const props = withDefaults(
 
 const emit = defineEmits<{ reload: [] }>();
 
-// Follow-tail state: appended lines auto-scroll until the reader scrolls up
-// (48px off the tail), and a jump button offers the way back down. The
-// watcher keys on the last line's seq, not the buffer length, so rotation
-// under the client-side cap keeps following.
 const logBody = ref<HTMLElement | null>(null);
 const following = ref(true);
 
-/** lastSeq is the tail watermark; length would freeze once the cap fills. */
 const lastSeq = (): number | null => {
   const tail = props.lines[props.lines.length - 1];
   return tail ? tail.seq : null;
 };
 
-/** handleLogScroll leaves follow mode once the reader scrolls off the tail. */
 function handleLogScroll(): void {
   const el = logBody.value;
   if (!el) {
@@ -53,7 +41,6 @@ function handleLogScroll(): void {
   following.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
 }
 
-/** jumpToLatest resumes the tail and scrolls to it. */
 function jumpToLatest(): void {
   following.value = true;
   const el = logBody.value;
@@ -62,11 +49,6 @@ function jumpToLatest(): void {
   }
 }
 
-/**
- * toggleFollow pauses the tail (the reader scrolled up to inspect history)
- * or resumes it. The label already flips (Follow/Following), so no
- * aria-pressed: a screen reader would otherwise hear "Following, pressed".
- */
 function toggleFollow(): void {
   if (following.value) {
     following.value = false;
@@ -108,9 +90,6 @@ watch(lastSeq, () => {
       </span>
     </div>
 
-    <!-- aria-live is off on the stream itself: a 500-line tail is too chatty
-         for a live region, and the modal's status region announces state
-         changes instead. The pane stays keyboard-scrollable. -->
     <div
       ref="logBody"
       class="log-pane"
@@ -137,8 +116,6 @@ watch(lastSeq, () => {
       <p v-else-if="props.state === 'empty'" class="muted log-hint">
         {{ $t("toolchain.modal.logEmpty") }}
       </p>
-      <!-- Plain text interpolation only: log content is untrusted agent
-           output and must never render as HTML. -->
       <template v-else>
         <div
           v-for="line in props.lines"

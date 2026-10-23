@@ -48,10 +48,6 @@ func TestVerifyPasswordTamperedHash(t *testing.T) {
 		t.Fatalf("HashPassword: %v", err)
 	}
 
-	// Tamper with the first character of the encoded key. The final base64
-	// character of a 32-byte key carries only padding bits, so flipping it can
-	// leave the decoded hash identical; the first key character is always
-	// significant.
 	keyStart := strings.LastIndex(encoded, "$") + 1
 	tampered := encoded[:keyStart] + flipBase64(encoded[keyStart]) + encoded[keyStart+1:]
 
@@ -103,7 +99,6 @@ func TestDecodeHashParsesParameters(t *testing.T) {
 	}
 }
 
-// flipBase64 returns a different, still-valid base64 character.
 func flipBase64(c byte) string {
 	if c == 'A' {
 		return "B"

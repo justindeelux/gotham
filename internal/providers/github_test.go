@@ -80,8 +80,6 @@ func TestGitHubSourceListReposPagination(t *testing.T) {
 	}
 }
 
-// TestGitHubSourceListReposBounded is the C1-8 regression: a provider that
-// never returns a short page must not make the listing loop forever.
 func TestGitHubSourceListReposBounded(t *testing.T) {
 	var requests int
 	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -160,7 +158,6 @@ func TestGitHubSourceExchangeToken(t *testing.T) {
 	}
 }
 
-// newWebhookHook returns the hook every provider webhook test installs.
 func webhookUnderTest() Webhook {
 	return Webhook{
 		URL:    "https://cp.gotham.dev/api/v1/webhooks/github",
@@ -244,7 +241,6 @@ func TestGitHubSourceDeleteWebhook(t *testing.T) {
 		t.Errorf("request = %s %s, want DELETE /repos/o/r/hooks/4242", gotMethod, gotPath)
 	}
 
-	// An already-removed hook is a success: deleting stays idempotent.
 	status = http.StatusNotFound
 	if err := source.DeleteWebhook(context.Background(), staticToken, "o/r", "4242"); err != nil {
 		t.Errorf("DeleteWebhook on 404: %v, want nil", err)

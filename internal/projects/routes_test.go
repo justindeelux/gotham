@@ -14,15 +14,10 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// alwaysUser returns a UserIDFunc for one user.
 func alwaysUser(id uuid.UUID) UserIDFunc {
 	return func(context.Context) (uuid.UUID, bool) { return id, true }
 }
 
-// newRouteServer mounts the project routes with an auth middleware that
-// injects the given team scope, standing in for the server's RequireAuth +
-// RequireTeam chain (without the write gate, so the service's own role
-// check is what answers 403 here).
 func newRouteServer(userID, teamID uuid.UUID, role teams.Role, svc ProjectService) http.Handler {
 	auth := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +30,6 @@ func newRouteServer(userID, teamID uuid.UUID, role teams.Role, svc ProjectServic
 	return router
 }
 
-// doRequest runs one request against the router and returns the recorder.
 func doRequest(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {
@@ -46,7 +40,6 @@ func doRequest(handler http.Handler, method, path, body string) *httptest.Respon
 	return rec
 }
 
-// errorMessage decodes the {"message": ...} failure body.
 func errorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	var body errorBody
@@ -56,8 +49,6 @@ func errorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return body.Message
 }
 
-// TestProjectRoutesLifecycle walks the contract's project and environment
-// routes and asserts the exact response shapes.
 func TestProjectRoutesLifecycle(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
@@ -137,8 +128,6 @@ func TestProjectRoutesLifecycle(t *testing.T) {
 		t.Fatalf("env patch = %d (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// The last environment cannot be deleted: remove staging, then the
-	// production delete is refused.
 	rec = doRequest(handler, http.MethodDelete, "/v1/environments/"+stagingID, "")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("env delete = %d (body %s), want 204", rec.Code, rec.Body.String())
@@ -164,7 +153,6 @@ func TestProjectRoutesLifecycle(t *testing.T) {
 	}
 }
 
-// TestProjectRoutesConflicts asserts the contract's exact 409 bodies.
 func TestProjectRoutesConflicts(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
@@ -201,7 +189,6 @@ func TestProjectRoutesConflicts(t *testing.T) {
 	}
 }
 
-// TestProjectRoutesAuthorization asserts viewer 403s and cross-team 404s.
 func TestProjectRoutesAuthorization(t *testing.T) {
 	owner, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -232,7 +219,6 @@ func TestProjectRoutesAuthorization(t *testing.T) {
 			t.Errorf("%s %s as viewer = %d, want 403", tc.method, tc.path, rec.Code)
 		}
 	}
-	// Viewer reads stay open.
 	if rec := doRequest(viewer, http.MethodGet, "/v1/projects", ""); rec.Code != http.StatusOK {
 		t.Errorf("viewer list = %d, want 200", rec.Code)
 	}
@@ -258,14 +244,11 @@ func TestProjectRoutesAuthorization(t *testing.T) {
 			t.Errorf("%s %s cross-team body = %q, want not found", tc.method, tc.path, message)
 		}
 	}
-	// A stranger's list is empty, not forbidden: team isolation, not an
-	// error.
 	if rec := doRequest(stranger, http.MethodGet, "/v1/projects", ""); rec.Code != http.StatusOK {
 		t.Errorf("stranger list = %d, want 200", rec.Code)
 	}
 }
 
-// TestProjectRoutesBadInput asserts malformed IDs and bodies answer 400.
 func TestProjectRoutesBadInput(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
@@ -285,8 +268,6 @@ func TestProjectRoutesBadInput(t *testing.T) {
 	}
 }
 
-// TestMountNilServiceMountsNothing asserts the server can call Mount
-// unconditionally when there is no database.
 func TestMountNilServiceMountsNothing(t *testing.T) {
 	router := chi.NewRouter()
 	Mount(router, func(next http.Handler) http.Handler { return next }, alwaysUser(uuid.New()), nil)

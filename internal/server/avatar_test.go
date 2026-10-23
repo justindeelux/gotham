@@ -10,11 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// TestContentSecurityPolicyMatchesAvatarAllowlist proves the served img-src
-// hosts are exactly the validator's allowlist: the two share one definition
-// (auth.AvatarImgSources), so a stored avatar always renders and no other
-// host can sneak into the policy. The viewer blob: scheme (JUS-204) is not a
-// host and is skipped like 'self' and data:.
 func TestContentSecurityPolicyMatchesAvatarAllowlist(t *testing.T) {
 	s := newTestAuthServer(t)
 
@@ -35,8 +30,6 @@ func TestContentSecurityPolicyMatchesAvatarAllowlist(t *testing.T) {
 	}
 }
 
-// TestAuthMeReturnsAvatar proves /me exposes the stored avatar the header
-// renders.
 func TestAuthMeReturnsAvatar(t *testing.T) {
 	s := newTestAuthServer(t)
 

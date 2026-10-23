@@ -10,56 +10,25 @@ import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
 import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
-/**
- * App-level host for page sessions (JUS-246).
- *
- * A page terminal outlives the route that opened it: the runtime keeps the
- * live PTY, and this dock renders a paused card for every page tab that no
- * mounted pane currently owns. That makes the session reachable from every
- * route (resume the source page, move it one-way into the window, or close it
- * through the shared confirmation) instead of leaving it alive but invisible.
- *
- * The dock never attaches the xterm host: the card is the paused state, not
- * a second view of the session, so the buffer keeps running in the runtime.
- * It is hidden for non-operators (the backend remains the real guard) and
- * collapses to a compact bar on phone widths so it cannot cover page content.
- */
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const terminal = useTerminalStore();
 
-/** expanded is false by default on narrow viewports (compact dock). */
 const expanded = ref(true);
 const narrow = ref(false);
 let mediaQuery: MediaQueryList | null = null;
 
-/** syncViewport collapses the dock when the layout moves to a phone. */
 function syncViewport(matches: boolean): void {
   narrow.value = matches;
   expanded.value = !matches;
 }
 
-/** onMediaChange follows the same breakpoint the shell uses for the rail. */
 function onMediaChange(event: MediaQueryListEvent): void {
   syncViewport(event.matches);
 }
 
-/**
- * pausedTabs filters page tabs without a live pane. A tab whose source route
- * is already on screen is intentionally excluded: the page is mounting its
- * pane (or showing a connection/offline state), so a dock card would only
- * duplicate the same session. Non-operators never see the cards, even if a
- * demotion left a tab in memory for the backend to revoke.
- */
-/**
- * visibleTabs applies the capability split: a host shell is a platform
- * operator surface, while a container shell belongs to the application's team
- * (the backend enforces application write access on every handshake). A
- * container card therefore stays reachable for a non-operator team member; a
- * read_only account loses the tab at the demotion boundary instead.
- */
 const visibleTabs = computed<TerminalTab[]>(() =>
   terminal.pageTabs.filter((tab) =>
     isContainerTerminalTarget(tab.target) ? true : authStore.isPlatformAdmin,
@@ -72,7 +41,6 @@ const pausedTabs = computed<TerminalTab[]>(() =>
   ),
 );
 
-/** target describes the target and location of one paused tab. */
 function target(tab: TerminalTab): string {
   if (isContainerTerminalTarget(tab.target)) {
     const label = tab.targetLabel || tab.containerName;
@@ -82,7 +50,6 @@ function target(tab: TerminalTab): string {
   return where ? `${tab.serverName || tab.serverId} · ${where}` : tab.serverName || tab.serverId;
 }
 
-/** resume navigates back to the page/tab that owns the session. */
 function resume(tab: TerminalTab): void {
   if (tab.sourcePath !== "") {
     void router.push(tab.sourcePath);
@@ -91,19 +58,15 @@ function resume(tab: TerminalTab): void {
   void router.push({ name: "terminal" });
 }
 
-/** openInWindow is the same one-way transfer the pane offers. */
 function openInWindow(tab: TerminalTab): void {
   terminal.detachToWindow(tab.id);
 }
 
-/** close asks through the one shared close confirmation. */
 async function close(tab: TerminalTab): Promise<void> {
   const closed = await terminal.requestClose([tab.id]);
   if (!closed) {
     return;
   }
-  // The dock button may have just been removed; land focus on the next row or
-  // the rail control instead of document.body.
   void nextTick(() => {
     const next =
       document.querySelector<HTMLElement>(".term-dock-resume") ??
@@ -312,7 +275,6 @@ onBeforeUnmount(() => {
 .term-dock-meta {
   display: flex;
   flex-direction: column;
-  /* 1px from the token scale, not a raw pixel. */
   gap: calc(var(--space-1) / 4);
   min-width: 0;
   flex: 1 1 auto;
@@ -349,8 +311,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1024px) {
-  /* The dock collapses to its header on phones; the list only opens on an
-     explicit tap, so it cannot blanket the page content. */
   .term-dock {
     left: var(--space-2);
     right: var(--space-2);

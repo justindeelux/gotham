@@ -14,8 +14,6 @@ import (
 const observationDeadline = 15 * time.Second
 const staleAfter = 30 * time.Second
 
-// Node deliberately excludes SSH credentials, fingerprints and credential flags.
-// LastSeen is the source of heartbeat data; CollectedAt never replaces it.
 type Node struct {
 	ID                     string     `json:"id"`
 	Name                   string     `json:"name"`
@@ -242,8 +240,6 @@ func (c *Client) nodeOverview(ctx context.Context, input NodeInput) (NodeOutput,
 	}, nil
 }
 
-// observationError preserves local categories and status. Authorization and
-// contract failures must never be softened into a partially successful tool.
 func observationError(err error) (*Error, error) {
 	if err == nil {
 		return nil, nil
@@ -262,7 +258,6 @@ func observationError(err error) (*Error, error) {
 func (c *Client) systemOverview(ctx context.Context) (SystemOutput, error) {
 	ctx, cancel := context.WithTimeout(ctx, observationDeadline)
 	defer cancel()
-	// Public health and instance version alone cannot establish team authority.
 	if _, err := c.Context(ctx); err != nil {
 		return SystemOutput{}, err
 	}
@@ -336,7 +331,6 @@ func (c *Client) nodeMetrics(ctx context.Context, input MetricsInput) (MetricsOu
 		}
 		return out, nil
 	}
-	// Unaligned ranges may include one more epoch-aligned bucket.
 	maxPoints := int((input.To.Sub(input.From.Truncate(bucket)) + bucket - 1) / bucket)
 	if data.Step != input.Step || data.Points == nil || len(data.Points) > maxPoints {
 		return MetricsOutput{}, &Error{Code: "invalid_response"}

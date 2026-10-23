@@ -1,8 +1,3 @@
-// Files menu builders + right-click selection rule (JUS-117 / JUS-124): the row
-// menu carries no duplicate "Move" (cut + paste is the move), the folder menu
-// offers create/paste/upload/refresh, and right-clicking a row applies the
-// multi-select rule. The builders are plain functions and the rule is a store
-// method, so both run without mounting a component.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -11,7 +6,6 @@ import { useFilesStore } from "@/features/files/stores/files";
 import { folderMenuOptions, rowMenuOptions } from "@/features/files/utils/filesMenu";
 import type { FilesMenuContext } from "@/features/files/utils/filesMenu";
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -23,7 +17,6 @@ function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   };
 }
 
-/** ctx builds a fully-writable menu context with a key-echo translator. */
 function ctx(overrides: Partial<FilesMenuContext> = {}): FilesMenuContext {
   return {
     canWrite: true,
@@ -35,12 +28,10 @@ function ctx(overrides: Partial<FilesMenuContext> = {}): FilesMenuContext {
   };
 }
 
-/** keys reduces a menu to its dispatch keys. */
 function keys(options: Array<{ key?: string | number }>): string[] {
   return options.map((option) => String(option.key));
 }
 
-/** byKey finds one option by its dispatch key. */
 function byKey(
   options: Array<{ key?: string | number; disabled?: boolean }>,
   key: string,
@@ -56,7 +47,6 @@ describe("rowMenuOptions", () => {
   it("offers the clipboard pair and never a duplicate Move on a file", () => {
     const options = rowMenuOptions(entry({ name: "app.yaml" }), ctx());
 
-    // A file row has no destination, so it carries no Paste.
     expect(keys(options)).toEqual([
       "edit",
       "download",
@@ -111,11 +101,8 @@ describe("rowMenuOptions", () => {
       "open-tab",
       "open-terminal",
     ]);
-    // The row action names its target, so two open folders stay distinct.
     expect(labelled).toContain("files.terminal.openIn:config");
 
-    // Files and special entries never masquerade as directories. A symlink is
-    // handled separately below (only with a proven directory target).
     for (const kind of ["file", "special"] as const) {
       const row = entry({ name: "item", kind, mode: 0o100644 });
       expect(
@@ -138,7 +125,6 @@ describe("rowMenuOptions", () => {
     const item = byKey(unknown, "open-terminal") as
       | { disabled?: boolean; props?: Record<string, unknown> }
       | undefined;
-    // Visible but disabled, with an explanatory native hint for the operator.
     expect(item?.disabled).toBe(true);
     expect(item?.props?.title).toBe("files.terminal.symlinkTargetUnknown");
 
@@ -152,7 +138,6 @@ describe("rowMenuOptions", () => {
     expect(enabled?.disabled).toBe(false);
     expect(enabled?.props?.title).toBeUndefined();
 
-    // A non-operator never sees even the disabled explanation.
     expect(
       keys(rowMenuOptions(link, ctx({ canOpenTerminal: false }))),
     ).not.toContain("open-terminal");
@@ -216,22 +201,18 @@ describe("rowMenuOptions", () => {
     const reachable = rowMenuOptions(symlink, ctx({ symlinkTargetPath: "usr/bin" }));
     expect(keys(reachable)[0]).toBe("go-target");
 
-    // "" (the root's top level) is a valid target, not a hidden one.
     const root = rowMenuOptions(symlink, ctx({ symlinkTargetPath: "" }));
     expect(keys(root)[0]).toBe("go-target");
 
-    // An unresolvable target (outside the root) hides the action.
     const elsewhere = rowMenuOptions(symlink, ctx({ symlinkTargetPath: null }));
     expect(keys(elsewhere)).not.toContain("go-target");
 
-    // A regular file never grows the action, even with a stray path.
     const file = rowMenuOptions(
       entry({ name: "app.yaml" }),
       ctx({ symlinkTargetPath: "usr/bin" }),
     );
     expect(keys(file)).not.toContain("go-target");
 
-    // A symlink with no reported target never grows the action.
     const bare = rowMenuOptions(
       entry({ name: "current", kind: "symlink", mode: 0o120777 }),
       ctx({ symlinkTargetPath: "usr/bin" }),
@@ -258,7 +239,6 @@ describe("rowMenuOptions", () => {
     expect(byKey(options, "cut")?.disabled).toBe(true);
     expect(byKey(options, "copy")?.disabled).toBe(true);
     expect(byKey(options, "delete")?.disabled).toBe(true);
-    // Open/download stay available without a write role.
     expect(byKey(options, "download")?.disabled).toBe(false);
   });
 
@@ -298,13 +278,11 @@ describe("folderMenuOptions", () => {
     const operator = folderMenuOptions(ctx({ canOpenTerminal: true }));
     expect(keys(operator)).toContain("open-terminal");
     expect(byKey(operator, "open-terminal")?.disabled).toBe(false);
-    // A read-only root does not hide the shell: it is not a file write.
     const readOnly = folderMenuOptions(
       ctx({ canOpenTerminal: true, canWrite: false }),
     );
     expect(byKey(readOnly, "open-terminal")?.disabled).toBe(false);
 
-    // A non-operator never sees the action (file read access is not a shell).
     expect(keys(folderMenuOptions(ctx()))).not.toContain("open-terminal");
   });
 
@@ -315,7 +293,6 @@ describe("folderMenuOptions", () => {
     expect(byKey(options, "new-folder")?.disabled).toBe(true);
     expect(byKey(options, "paste")?.disabled).toBe(true);
     expect(byKey(options, "upload")?.disabled).toBe(true);
-    // Listing the bin needs no write role; only restore/purge inside it do.
     expect(byKey(options, "recycle-bin")?.disabled).toBe(false);
     expect(byKey(options, "refresh")?.disabled).toBe(false);
   });

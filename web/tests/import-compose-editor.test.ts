@@ -1,5 +1,3 @@
-// JUS-237: the compose import dialog edits YAML in the shared code editor and
-// hands the typed document to the import payload unchanged.
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";

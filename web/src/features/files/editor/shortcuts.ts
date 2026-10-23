@@ -1,21 +1,6 @@
-/**
- * One binding table for the file editor's keyboard shortcuts. The shortcut
- * sheet renders it, and the CodeMirror keymap is built from the same rows, so
- * a documented key cannot drift from the bound one (JUS-228).
- *
- * Rows carry their provenance:
- * - `command`: this module builds the actual CodeMirror binding.
- * - `default`: a CodeMirror built-in keymap already binds it.
- * - `native`: the browser handles it; the editor deliberately adds nothing.
- *
- * Keys use CodeMirror's syntax (`Mod-s`, `Shift-ArrowLeft`); `Mod` is Cmd on
- * macOS and Ctrl elsewhere, and the sheet labels it per platform.
- */
 
-/** ShortcutGroup is the sheet's grouping, mirroring the aaPanel inventory. */
 export type ShortcutGroup = "common" | "cursor" | "selection" | "edit";
 
-/** EDITOR_SHORTCUT_GROUPS is the sheet's display order. */
 export const EDITOR_SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
   "common",
   "cursor",
@@ -23,7 +8,6 @@ export const EDITOR_SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
   "edit",
 ];
 
-/** EditorCommandId names the bindings the editor itself implements. */
 export type EditorCommandId =
   | "save"
   | "saveAll"
@@ -38,30 +22,22 @@ export type EditorCommandId =
 interface ShortcutBase {
   id: string;
   group: ShortcutGroup;
-  /** label is the `files.editor.shortcuts.*` message key. */
   label: string;
   keys: readonly string[];
-  /** macKeys overrides keys on macOS when CodeMirror's binding differs. */
   macKeys?: readonly string[];
 }
 
-/** CommandShortcut is a row this module turns into a real binding. */
 export interface CommandShortcut extends ShortcutBase {
   id: EditorCommandId;
   source: "command";
 }
 
-/** BuiltinShortcut is a row covered by CodeMirror or the browser. */
 export interface BuiltinShortcut extends ShortcutBase {
   source: "default" | "native";
 }
 
 export type EditorShortcut = CommandShortcut | BuiltinShortcut;
 
-/**
- * NATIVE_SHORTCUT_KEYS are the browser-owned keys the sheet lists. They are
- * asserted by the unit test so a typo cannot advertise an unbound key.
- */
 export const NATIVE_SHORTCUT_KEYS: readonly string[] = [
   "Mod-x",
   "Mod-c",
@@ -69,9 +45,7 @@ export const NATIVE_SHORTCUT_KEYS: readonly string[] = [
   "Escape",
 ];
 
-/** editorShortcuts is the single source of truth for the sheet and keymap. */
 export const editorShortcuts: readonly EditorShortcut[] = [
-  // Common
   { id: "save", group: "common", label: "files.editor.shortcuts.save", keys: ["Mod-s"], source: "command" },
   {
     id: "saveAll",
@@ -88,8 +62,6 @@ export const editorShortcuts: readonly EditorShortcut[] = [
     source: "command",
   },
   {
-    // Ctrl+Tab / Cmd+Option+Arrow are reserved by browsers, and Alt+Arrow is a
-    // CodeMirror cursor command, so tab cycling uses Mod+Alt+Page keys.
     id: "nextTab",
     group: "common",
     label: "files.editor.shortcuts.nextTab",
@@ -109,7 +81,6 @@ export const editorShortcuts: readonly EditorShortcut[] = [
     group: "common",
     label: "files.editor.shortcuts.replace",
     keys: ["Mod-h"],
-    // Ctrl+H is preventable on Windows/Linux; on macOS Cmd+H is the OS "Hide".
     macKeys: ["Mod-Alt-f"],
     source: "command",
   },
@@ -135,7 +106,6 @@ export const editorShortcuts: readonly EditorShortcut[] = [
     source: "native",
   },
 
-  // Cursor
   {
     id: "cursorChar",
     group: "cursor",
@@ -172,7 +142,6 @@ export const editorShortcuts: readonly EditorShortcut[] = [
     source: "default",
   },
 
-  // Selection
   {
     id: "selectAll",
     group: "selection",
@@ -203,7 +172,6 @@ export const editorShortcuts: readonly EditorShortcut[] = [
     source: "default",
   },
 
-  // Edit
   { id: "undo", group: "edit", label: "files.editor.shortcuts.undo", keys: ["Mod-z"], source: "default" },
   {
     id: "redo",
@@ -239,7 +207,6 @@ export const editorShortcuts: readonly EditorShortcut[] = [
   },
 ];
 
-/** EditorKeyBinding is the CodeMirror-compatible shape built from the table. */
 export interface EditorKeyBinding {
   key: string;
   mac?: string;
@@ -247,11 +214,6 @@ export interface EditorKeyBinding {
   run: () => boolean;
 }
 
-/**
- * editorCommandKeymap turns every `command` row into its CodeMirror binding.
- * Bindings are returned in table order so a row that overrides a default keymap
- * entry (go-to-line on `Mod-l`) wins by being installed first.
- */
 export function editorCommandKeymap(
   handlers: Record<EditorCommandId, () => void>,
 ): EditorKeyBinding[] {
@@ -272,10 +234,8 @@ export function editorCommandKeymap(
   });
 }
 
-/** ShortcutPlatform is the label flavour: macOS says Cmd/Option. */
 export type ShortcutPlatform = "mac" | "other";
 
-/** isMacPlatform reports whether the editor runs on a Mac-like platform. */
 export function isMacPlatform(): boolean {
   if (typeof navigator === "undefined") {
     return false;
@@ -285,7 +245,6 @@ export function isMacPlatform(): boolean {
   return /Mac|iPhone|iPad|iPod/.test(platform) || /Mac OS X/.test(userAgent);
 }
 
-/** shortcutKeysFor returns the keys to show/bind on one platform. */
 export function shortcutKeysFor(
   shortcut: EditorShortcut,
   platform: ShortcutPlatform,
@@ -303,7 +262,6 @@ const KEY_NAMES: Record<string, string> = {
   Escape: "Esc",
 };
 
-/** keyName shortens a key token for display. */
 function keyName(token: string): string {
   const named = KEY_NAMES[token];
   if (named) {
@@ -312,7 +270,6 @@ function keyName(token: string): string {
   return token.length === 1 ? token.toUpperCase() : token;
 }
 
-/** modifierName renders one modifier token for the platform. */
 function modifierName(token: string, platform: ShortcutPlatform): string {
   if (token === "Mod") {
     return platform === "mac" ? "Cmd" : "Ctrl";
@@ -326,7 +283,6 @@ function modifierName(token: string, platform: ShortcutPlatform): string {
   return token;
 }
 
-/** shortcutLabel renders a CodeMirror key string for the sheet. */
 export function shortcutLabel(key: string, platform: ShortcutPlatform): string {
   const parts = key.split("-");
   const last = parts.pop() ?? key;

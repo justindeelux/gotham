@@ -35,7 +35,6 @@ const emit = defineEmits<{
 
 const { locale, t } = useI18n();
 
-/** stateCell renders the container's lifecycle state as a coloured tag. */
 function stateCell(row: Container): VNode {
   const title = row.status || row.state || t("servers.containers.unknown");
   return h("span", { title }, [
@@ -47,7 +46,6 @@ function stateCell(row: Container): VNode {
   ]);
 }
 
-/** portsCell renders the declared port mappings, or an em dash when empty. */
 function portsCell(row: Container): VNode {
   if (!row.ports || row.ports.length === 0) {
     return h(NText, { depth: 3 }, { default: () => "—" });
@@ -55,12 +53,6 @@ function portsCell(row: Container): VNode {
   return h("span", { class: "mono" }, row.ports.join(", "));
 }
 
-/**
- * statCell renders a per-container metric. The agent ContainerInfo contract
- * carries no CPU/RAM reading yet, so the mockup's columns render an explicit
- * em dash rather than a fabricated value. The aria-label keeps the dash from
- * reading as punctuation alone.
- */
 function statCell(): VNode {
   const note = t("servers.containers.notReported");
   return h(
@@ -74,12 +66,10 @@ function statCell(): VNode {
   );
 }
 
-/** uptimeCell renders Docker's human uptime/status string for the row. */
 function uptimeCell(row: Container): VNode {
   return h("span", { class: "mono muted" }, row.status || "—");
 }
 
-/** actionButton renders one start/stop/restart control for a row. */
 function actionButton(
   row: Container,
   action: ContainerAction,
@@ -101,7 +91,6 @@ function actionButton(
   );
 }
 
-/** logsButton opens the log drawer without triggering the row click. */
 function logsButton(row: Container): VNode {
   const label = t("servers.containers.logs");
   return h(
@@ -118,7 +107,6 @@ function logsButton(row: Container): VNode {
   );
 }
 
-/** actionsCell renders the per-row lifecycle controls. */
 function actionsCell(row: Container): VNode {
   const controls: VNode[] = [];
   if (isRunning(row.state)) {
@@ -188,19 +176,10 @@ const columns = computed<DataTableColumns<Container>>(() => [
   },
 ]);
 
-/** rowKey identifies a row by its container id. */
 function rowKey(row: Container): string {
   return row.id;
 }
 
-/**
- * rowProps makes the whole row clickable for the mouse. There is deliberately
- * no keyboard affordance on the row: every row already has a focusable Logs
- * button, and a keydown handler on the row would double-fire when focus sits
- * on an inner Start/Stop/Restart/Logs button (while swallowing Space's native
- * activation). A `role="button"` would be invalid here for the same reason —
- * a button must not contain interactive descendants.
- */
 function rowProps(row: Container): HTMLAttributes {
   return {
     style: "cursor: pointer;",

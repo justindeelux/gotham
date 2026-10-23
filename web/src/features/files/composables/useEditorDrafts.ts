@@ -14,10 +14,8 @@ import type { EditorDraftStorage } from "@/features/files/utils/editorDrafts";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
 
-/** EDITOR_DRAFT_DEBOUNCE_MS batches a burst of keystrokes into one write. */
 export const EDITOR_DRAFT_DEBOUNCE_MS = 800;
 
-/** EditorDraftPrompt is one stored draft offered for a freshly loaded file. */
 export interface EditorDraftPrompt {
   tabId: string;
   name: string;
@@ -27,25 +25,12 @@ export interface EditorDraftPrompt {
   eol: EditorEol;
   bom: boolean;
   savedAt: number;
-  /** baseEtag is the version the draft was typed against (may be unknown). */
   baseEtag: string;
-  /** loadedEtag is the server etag the tab showed when the draft was offered. */
   loadedEtag: string;
-  /** baseDoc is the clean buffer the tab held when the draft was offered. */
   baseDoc: string;
-  /** conflict is true when the server etag moved past the draft's base. */
   conflict: boolean;
 }
 
-/**
- * useEditorDrafts recovers unsaved editor buffers after a reload or crash
- * (JUS-229). A dirty, writable, fully loaded tab is written to localStorage
- * behind a short debounce (plus a flush on pagehide/unmount); a successful save
- * or an explicit discard removes its entry. Reopening a file with a stored
- * draft raises {@link EditorDraftPrompt}, and the caller renders Restore /
- * Discard. Read-only, over-cap and history-diff buffers are never stored, and
- * every storage failure degrades to "no drafts" instead of breaking the editor.
- */
 export function useEditorDrafts(getServerId: () => string): {
   prompt: ComputedRef<EditorDraftPrompt | null>;
   restore: () => void;
@@ -59,13 +44,10 @@ export function useEditorDrafts(getServerId: () => string): {
   const prompt = computed<EditorDraftPrompt | null>(
     () => prompts.value[0] ?? null,
   );
-  /** stored maps a live tab id onto the draft key currently on disk. */
   const stored = new Map<string, string>();
-  /** checked holds the tab ids whose reopen prompt was already decided. */
   const checked = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
-  /** storage reaches localStorage without throwing when it is blocked. */
   function storage(): EditorDraftStorage | null {
     try {
       return window.localStorage;
@@ -74,16 +56,10 @@ export function useEditorDrafts(getServerId: () => string): {
     }
   }
 
-  /** draftPrefix is scoped by server and user; empty means "do not persist". */
   function draftPrefix(): string {
     return editorDraftStoragePrefix(getServerId(), auth.user?.id ?? "");
   }
 
-  /**
-   * flush writes every eligible dirty tab and removes entries whose tab was
-   * saved, reverted, closed or reloaded. A demoted caller keeps the last draft
-   * already on disk: the buffer is still theirs, only new writes stop.
-   */
   function flush(): void {
     if (timer !== null) {
       clearTimeout(timer);
@@ -137,7 +113,6 @@ export function useEditorDrafts(getServerId: () => string): {
     }
   }
 
-  /** schedule batches rapid edits behind one debounced write. */
   function schedule(): void {
     if (timer !== null) {
       return;
@@ -148,16 +123,10 @@ export function useEditorDrafts(getServerId: () => string): {
     }, EDITOR_DRAFT_DEBOUNCE_MS);
   }
 
-  /** dropPrompt settles one offered draft and shows the next queued one. */
   function dropPrompt(item: EditorDraftPrompt): void {
     prompts.value = prompts.value.filter((entry) => entry !== item);
   }
 
-  /**
-   * pruneSaved drops the entry of a tab that stopped being dirty (a successful
-   * save) or left the store (closed) without waiting for the debounce, so a
-   * save never leaves a draft behind that could be offered on the next reload.
-   */
   function pruneSaved(): void {
     const store = storage();
     if (store === null || draftPrefix() === "") {
@@ -177,11 +146,6 @@ export function useEditorDrafts(getServerId: () => string): {
     }
   }
 
-  /**
-   * checkDrafts offers a stored draft when a file finishes loading clean. A
-   * buffer that is already dirty in memory wins over the stored copy (it is
-   * newer), so it is never replaced by a stale draft.
-   */
   function checkDrafts(): void {
     const live = new Set(editor.tabs.map((tab) => tab.id));
     if (prompts.value.some((item) => !live.has(item.tabId))) {
@@ -225,20 +189,12 @@ export function useEditorDrafts(getServerId: () => string): {
           baseEtag: draft.etag,
           loadedEtag: tab.etag,
           baseDoc: tab.doc,
-          // An unknown etag on either side is treated as a possible conflict:
-          // silently overwriting a newer server version is worse than a warning.
           conflict: draft.etag !== tab.etag,
         },
       ];
     }
   }
 
-  /**
-   * restore applies the offered draft only while the tab still shows the exact
-   * clean buffer the prompt compared against. A reload, save or external
-   * refresh while the modal was open makes the stored draft stale, so it is
-   * re-offered against the new base instead of clobbering the newer buffer.
-   */
   function restore(): void {
     const item = prompt.value;
     if (!item) {
@@ -262,14 +218,11 @@ export function useEditorDrafts(getServerId: () => string): {
       doc: item.doc,
       eol: item.eol,
       bom: item.bom,
-      // Under a conflict, save from the draft's original base so the write
-      // meets the normal 409 prompt instead of overwriting the newer version.
       etag: item.conflict && item.baseEtag !== "" ? item.baseEtag : undefined,
     });
     dropPrompt(item);
   }
 
-  /** discard drops the stored draft and leaves the server version in place. */
   function discard(): void {
     const item = prompt.value;
     if (!item) {

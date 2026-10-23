@@ -1,14 +1,3 @@
-// FX-15b frontend checks.
-//
-// Like the other web checks, this bundles the changed modules with the
-// project's own esbuild (there is no vitest/jsdom runner) and asserts the
-// behaviour the fixes introduce:
-//   · C4-18 — a 404 on stop/start is "no container in that state", not
-//     "application not found".
-//   · C4-14 — editor row keys stay stable across a middle removal/insert.
-//   · B4-13 — one danger threshold shared by the dashboard and server list.
-//
-// Run from web/:  node scripts/fx15b-check.mjs
 
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,12 +25,8 @@ function assert(condition, message) {
   }
 }
 
-// Web source root for the "@" import alias (mirrors vite.config.ts).
 const srcDir = new URL("../src", import.meta.url).pathname;
 
-// Vue SFCs are re-exported through feature indexes, so a bundled helper can
-// pull one into the module graph. The Node harnesses never execute them;
-// stub the default export instead of teaching esbuild to compile SFCs.
 const vueStubPlugin = {
   name: "stub-vue-sfc",
   setup(vueBuild) {
@@ -58,9 +43,6 @@ const vueStubPlugin = {
 
 async function loadModule(relativePath) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-fx15b-check-"));
-  // CJS output: applications.ts pulls in axios, whose transitive form-data
-  // uses require("util"); an ESM bundle turns that into an unsupported dynamic
-  // require. A CJS bundle keeps native require, and import() still loads it.
   const outfile = join(directory, "module.cjs");
   await build({
     entryPoints: [new URL(relativePath, import.meta.url).pathname],
@@ -80,13 +62,6 @@ async function loadModule(relativePath) {
   };
 }
 
-/**
- * loadLocalizedApplications bundles the applications API together with its
- * English catalog in one module graph (a separate bundle would carry its own
- * composer copy). The Node harness has no import.meta.glob discovery, so the
- * catalog is merged explicitly; the curated English assertions below then
- * prove the exact shipped copy instead of a missing-key fallback.
- */
 async function loadLocalizedApplications() {
   const directory = await mkdtemp(join(tmpdir(), "gotham-fx15b-check-"));
   const outfile = join(directory, "localized.cjs");
@@ -136,7 +111,6 @@ async function loadInline(contents, resolveDir) {
   };
 }
 
-/** apiError builds the normalized shape isApiError accepts. */
 function apiError(status, message = "") {
   return { status, message, cause: null };
 }
@@ -220,7 +194,6 @@ async function main() {
       const { keys } = useStableRowKeys(() => count.value);
       const before = [...keys.value];
       count.value = 4;
-      // The watcher is sync, so a length change is reflected immediately.
       assert(keys.value.length === 4, "keys grow with the loaded collection");
       assert(keys.value[0] === before[0], "existing head is preserved");
     });
@@ -232,7 +205,7 @@ async function main() {
     });
 
     await check("B4-13: dashboard and server list share the threshold (no hard-coded 80)", async () => {
-      const pages = ["../src/features/dashboard/pages/DashboardPage.vue", "../src/features/servers/pages/ServersPage.vue"];
+      const pages = ["../src/features/dashboard/pages/DashboardPage.vue", "../src/features/servers/components/ServerCard.vue"];
       for (const page of pages) {
         const source = await readFile(new URL(page, import.meta.url), "utf8");
         assert(
@@ -249,7 +222,7 @@ async function main() {
     });
 
     await check("B4-13: exactly 80% counts as danger (inclusive >=)", async () => {
-      for (const page of ["../src/features/dashboard/pages/DashboardPage.vue", "../src/features/servers/pages/ServersPage.vue"]) {
+      for (const page of ["../src/features/dashboard/pages/DashboardPage.vue", "../src/features/servers/components/ServerCard.vue"]) {
         const source = await readFile(new URL(page, import.meta.url), "utf8");
         assert(
           source.includes(">= USAGE_DANGER_PERCENT") ||
@@ -258,8 +231,6 @@ async function main() {
           `${page} must compare with >= (a node at exactly 80% is danger-red)`,
         );
       }
-      // Boundary behaviour through the shared normalizer: 0.8 lands exactly
-      // on the threshold, so an inclusive comparison flags it.
       assert(
         toPercent(0.8) >= USAGE_DANGER_PERCENT,
         "0.8 must reach the danger threshold",

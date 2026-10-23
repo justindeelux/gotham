@@ -1,11 +1,5 @@
 import type en from "./en";
 
-/**
- * Databases Vietnamese catalog. Keys mirror `en.ts` exactly; only values
- * are translated. Engine names, versions, DSNs, cron expressions, bucket
- * names, paths, dumps, wire enums and server diagnostics stay untranslated
- * by design (they ride as `{param}` values).
- */
 const vi: typeof en = {
   validation: {
     nameRule:

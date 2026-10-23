@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// TestParseMetricsQuery pins the range-query contract: the accepted steps, the
-// default step, and the window caps that keep one request from materializing an
-// unbounded series.
 func TestParseMetricsQuery(t *testing.T) {
 	from := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
 
@@ -52,8 +49,6 @@ func TestParseMetricsQuery(t *testing.T) {
 	}
 }
 
-// TestMetricsEnabledFlag pins the kill-switch semantics: only an explicit false
-// disables metrics.
 func TestMetricsEnabledFlag(t *testing.T) {
 	for value, want := range map[string]bool{"": true, "true": true, "false": false, "FALSE": false, " false ": false} {
 		t.Setenv(FeatureEnv, value)

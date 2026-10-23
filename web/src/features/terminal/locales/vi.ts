@@ -1,7 +1,3 @@
-/**
- * Terminal Vietnamese catalog (JUS-245). Same key shape and named parameters
- * as the English reference; see `terminal/locales/en.ts`.
- */
 const vi = {
   window: {
     label: "Cửa sổ terminal",

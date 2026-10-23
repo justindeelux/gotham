@@ -1,9 +1,3 @@
-/**
- * English catalog for the services surface (I18N-7). Display copy only:
- * service names, compose documents, environment keys/values, domains,
- * container output, deploy errors and API payloads stay raw values
- * interpolated as parameters, never translated keys.
- */
 const en = {
   validation: {
     nameRequired: "Enter a service name.",

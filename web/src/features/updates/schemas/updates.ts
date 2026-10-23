@@ -4,12 +4,6 @@ import { z } from "zod";
 import { intInRange } from "@/shared/validation/primitives";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
-/**
- * Update schemas (JUS-93). Response schemas validate the API envelopes
- * (warn-only through parseWith); field schemas back the schedule form and
- * carry namespaced i18n keys as messages. Bounds mirror Schedule.Validate in
- * internal/updates/schedule.go.
- */
 export const updateMessages = {
   intervalRange: "updates.validation.intervalRange",
   timeFormat: "updates.validation.timeFormat",
@@ -81,7 +75,6 @@ export const scheduleStateSchema = z.object({
 });
 export type ScheduleState = z.infer<typeof scheduleStateSchema>;
 
-/** scheduleRules validates the editable form fields (interval hours, time). */
 export function scheduleRules(): FormRules {
   return {
     intervalHours: [ruleFrom(intervalHoursSchema)],

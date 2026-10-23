@@ -14,12 +14,8 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN; an explicit value turns a missing database
-// into a failure instead of a skip.
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
-// integrationDSN returns the DSN the repository integration test should use.
 func integrationDSN() string {
 	if dsn := os.Getenv("GOTHAM_TEST_DSN"); dsn != "" {
 		return dsn
@@ -27,24 +23,15 @@ func integrationDSN() string {
 	return defaultIntegrationDSN
 }
 
-// integrationDSNExplicit reports whether the operator opted in by setting
-// GOTHAM_TEST_DSN: an explicit opt-in turns a missing database or a failed
-// migration into a failure instead of a skip, so the lane cannot pass green by
-// skipping.
 func integrationDSNExplicit() bool {
 	return os.Getenv("GOTHAM_TEST_DSN") != ""
 }
 
-// TestStoreRepositoryRoundtrip exercises the PostgreSQL adapter, including
-// credential encryption at rest, against a real server. It skips when no
-// database is reachable.
 func TestStoreRepositoryRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -56,8 +43,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -95,7 +80,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Fatalf("created credentials = %q / %q, want plaintext roundtrip", created.ClientSecret, created.AccessToken)
 	}
 
-	// The columns must hold ciphertext, not the plaintext credentials.
 	var storedSecret, storedToken string
 	if err := pool.QueryRow(ctx,
 		"SELECT client_secret, access_token FROM providers WHERE id = $1", created.ID,
@@ -156,16 +140,11 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryReplaceReposIsAtomic is the C1-9 regression: a refresh
-// that fails after clearing the cache must roll back, leaving the previous
-// complete list intact instead of an empty or partial one.
 func TestStoreRepositoryReplaceReposIsAtomic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -177,8 +156,6 @@ func TestStoreRepositoryReplaceReposIsAtomic(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -212,7 +189,6 @@ func TestStoreRepositoryReplaceReposIsAtomic(t *testing.T) {
 		t.Fatalf("ReplaceRepos: %v", err)
 	}
 
-	// Force a failure after the clear; the transaction must roll back.
 	st.BeforeRepoCacheInsert = func() error { return errors.New("boom") }
 	if err := repo.ReplaceRepos(ctx, provider.ID, []Repo{{ExternalID: "3", FullName: "o/three"}}); err == nil {
 		t.Fatal("ReplaceRepos with a failing insert: no error, want rollback")
@@ -228,16 +204,11 @@ func TestStoreRepositoryReplaceReposIsAtomic(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryReplaceReposSerializes is the U8 regression for the
-// provider-row lock: two concurrent replacements must serialize, so the second
-// fully replaces the first instead of interleaving into a merged list.
 func TestStoreRepositoryReplaceReposSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -249,8 +220,6 @@ func TestStoreRepositoryReplaceReposSerializes(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -297,7 +266,7 @@ func TestStoreRepositoryReplaceReposSerializes(t *testing.T) {
 		}
 	}()
 
-	<-aInSeam // A holds the row lock, blocked inside the seam
+	<-aInSeam
 
 	wg.Add(1)
 	go func() {
@@ -307,7 +276,6 @@ func TestStoreRepositoryReplaceReposSerializes(t *testing.T) {
 		}
 	}()
 
-	// Let B reach the row lock, then let A commit.
 	time.Sleep(100 * time.Millisecond)
 	close(release)
 	wg.Wait()
@@ -321,9 +289,6 @@ func TestStoreRepositoryReplaceReposSerializes(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryDelete disconnects a connection: the row goes, its
-// cached repositories cascade, a repeat is a success, and another user's row
-// is untouched. It skips when no database is reachable.
 func TestStoreRepositoryDelete(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -382,7 +347,6 @@ func TestStoreRepositoryDelete(t *testing.T) {
 		t.Fatalf("Create foreign: %v", err)
 	}
 
-	// Another user cannot disconnect this connection.
 	if err := repo.Delete(ctx, provider.ID, foreignID); err != nil {
 		t.Fatalf("foreign Delete: %v", err)
 	}

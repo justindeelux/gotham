@@ -16,13 +16,8 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// integrationDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN, e.g. to force a skip in CI with
-// GOTHAM_TEST_DSN=postgres://nope.
 const integrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
-// newTestStore opens the dev database and skips the test when it is not
-// reachable, matching the other DB-backed suites.
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -33,8 +28,6 @@ func newTestStore(t *testing.T) *store.Store {
 	if !explicit {
 		dsn = integrationDSN
 	}
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -46,19 +39,12 @@ func newTestStore(t *testing.T) *store.Store {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
 	return store.New(pool)
 }
 
-// TestSetMemberRoleSerializesConcurrentDemotions is the F4 regression against
-// the real database: two owners demoting each other must not leave the team
-// with zero owners. The team-row lock (SELECT ... FOR UPDATE) serializes the
-// two policy transactions, so the second one observes the first demotion and
-// is refused by the last-owner rule.
 func TestSetMemberRoleSerializesConcurrentDemotions(t *testing.T) {
 	st := newTestStore(t)
 
@@ -110,7 +96,6 @@ func TestSetMemberRoleSerializesConcurrentDemotions(t *testing.T) {
 
 	svc := NewService(Config{Store: st, Logger: discardLogger()})
 
-	// Both owners demote the other at the same time.
 	var wg sync.WaitGroup
 	results := make([]error, 2)
 	for i, pair := range [][2]pgtype.UUID{{alice, bob}, {bob, alice}} {
@@ -129,8 +114,6 @@ func TestSetMemberRoleSerializesConcurrentDemotions(t *testing.T) {
 		case err == nil:
 			succeeded++
 		case errors.Is(err, ErrLastOwner), errors.Is(err, ErrForbidden):
-			// The second transaction sees the first demotion: either the
-			// last-owner rule fires or the demoted actor no longer manages.
 		default:
 			t.Fatalf("unexpected concurrent demotion error: %v", err)
 		}
@@ -148,11 +131,6 @@ func TestSetMemberRoleSerializesConcurrentDemotions(t *testing.T) {
 	}
 }
 
-// TestDeleteTeamSerializesWithConcurrentInsert is the R2 regression: a resource
-// committed by a concurrent transaction must never be cascaded away by a team
-// delete. The insert transaction holds the team row's foreign-key share lock,
-// so the delete waits for it and then counts the committed row; with
-// ON DELETE RESTRICT no resource can be lost even if the delete wins the race.
 func TestDeleteTeamSerializesWithConcurrentInsert(t *testing.T) {
 	st := newTestStore(t)
 
@@ -220,8 +198,6 @@ func TestDeleteTeamSerializesWithConcurrentInsert(t *testing.T) {
 		}
 	})
 
-	// The racing insert is uncommitted when the delete starts; its foreign-key
-	// share lock makes the delete's SELECT ... FOR UPDATE wait.
 	tx, err := st.DB.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin insert tx: %v", err)
@@ -237,7 +213,6 @@ func TestDeleteTeamSerializesWithConcurrentInsert(t *testing.T) {
 	deleted := make(chan error, 1)
 	go func() { deleted <- svc.Delete(ctx, uuid.UUID(user.ID.Bytes), uuid.UUID(team.ID.Bytes)) }()
 
-	// Let the delete reach the locked team row, then commit the insert.
 	time.Sleep(200 * time.Millisecond)
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit racing insert: %v", err)

@@ -45,12 +45,6 @@ export const useProxyStore = defineStore("proxy", () => {
   const certificatesLoading = ref(false);
   const redirectsLoading = ref(false);
   const routersLoading = ref(false);
-  /**
-   * Raw failures behind the page alerts. The display strings below derive
-   * from these plus the current locale, so a language switch refreshes a
-   * retained banner without a refetch; classification always sees the raw
-   * error inside describeProxyError, never translated text.
-   */
   const errorRaw = ref<unknown>(null);
   const certificatesErrorRaw = ref<unknown>(null);
   const redirectsErrorRaw = ref<unknown>(null);
@@ -78,7 +72,6 @@ export const useProxyStore = defineStore("proxy", () => {
       : describeProxyError(routersErrorRaw.value);
   });
 
-  /** fetchProviders loads every DNS provider (credentials never returned). */
   async function fetchProviders(): Promise<void> {
     loading.value = true;
     errorRaw.value = null;
@@ -92,7 +85,6 @@ export const useProxyStore = defineStore("proxy", () => {
     }
   }
 
-  /** fetchCertificates loads every certificate configuration. */
   async function fetchCertificates(): Promise<void> {
     certificatesLoading.value = true;
     certificatesErrorRaw.value = null;
@@ -106,7 +98,6 @@ export const useProxyStore = defineStore("proxy", () => {
     }
   }
 
-  /** fetchApplications loads the applications certificates can target. */
   async function fetchApplications(): Promise<void> {
     try {
       applications.value = await listApplications();
@@ -116,7 +107,6 @@ export const useProxyStore = defineStore("proxy", () => {
     }
   }
 
-  /** fetchRedirects loads every domain redirect rule. */
   async function fetchRedirects(): Promise<void> {
     redirectsLoading.value = true;
     redirectsErrorRaw.value = null;
@@ -130,7 +120,6 @@ export const useProxyStore = defineStore("proxy", () => {
     }
   }
 
-  /** fetchRouters loads the generated Traefik routers of every node. */
   async function fetchRouters(): Promise<void> {
     routersLoading.value = true;
     routersErrorRaw.value = null;
@@ -145,12 +134,10 @@ export const useProxyStore = defineStore("proxy", () => {
       routersLoading.value = false;
     }
   }
-  /** providerOf returns one provider from the cache, if loaded. */
   function providerOf(providerId: string): DNSProvider | null {
     return providers.value.find((item) => item.id === providerId) ?? null;
   }
 
-  /** certificateOf returns the application's certificate config, if any. */
   function certificateOf(applicationId: string): Certificate | null {
     return (
       certificates.value.find((item) => item.application_id === applicationId) ??
@@ -158,12 +145,10 @@ export const useProxyStore = defineStore("proxy", () => {
     );
   }
 
-  /** applicationOf returns one application from the cache, if loaded. */
   function applicationOf(applicationId: string): Application | null {
     return applications.value.find((item) => item.id === applicationId) ?? null;
   }
 
-  /** createProvider stores a provider and refreshes the list. */
   async function createProvider(
     input: CreateDNSProviderInput,
   ): Promise<DNSProvider> {
@@ -172,7 +157,6 @@ export const useProxyStore = defineStore("proxy", () => {
     return created;
   }
 
-  /** updateProvider patches a provider and refreshes the list. */
   async function updateProvider(
     id: string,
     input: UpdateDNSProviderInput,
@@ -182,13 +166,11 @@ export const useProxyStore = defineStore("proxy", () => {
     return updated;
   }
 
-  /** removeProvider deletes a provider and refreshes the list. */
   async function removeProvider(id: string): Promise<void> {
     await deleteDNSProvider(id);
     await fetchProviders();
   }
 
-  /** createCertificate stores a configuration and refreshes the list. */
   async function createCertificateConfig(
     input: CreateCertificateInput,
   ): Promise<Certificate> {
@@ -197,7 +179,6 @@ export const useProxyStore = defineStore("proxy", () => {
     return created;
   }
 
-  /** updateCertificateConfig patches a configuration and refreshes the list. */
   async function updateCertificateConfig(
     id: string,
     input: UpdateCertificateInput,
@@ -207,13 +188,11 @@ export const useProxyStore = defineStore("proxy", () => {
     return updated;
   }
 
-  /** removeCertificate deletes a configuration and refreshes the list. */
   async function removeCertificate(id: string): Promise<void> {
     await deleteCertificate(id);
     await fetchCertificates();
   }
 
-  /** createRedirectRule stores a rule and refreshes the list. */
   async function createRedirectRule(
     input: CreateRedirectInput,
   ): Promise<DomainRedirect> {
@@ -222,7 +201,6 @@ export const useProxyStore = defineStore("proxy", () => {
     return created;
   }
 
-  /** updateRedirectRule patches a rule and refreshes the list. */
   async function updateRedirectRule(
     id: string,
     input: UpdateRedirectInput,
@@ -232,16 +210,11 @@ export const useProxyStore = defineStore("proxy", () => {
     return updated;
   }
 
-  /** removeRedirectRule deletes a rule and refreshes the list. */
   async function removeRedirectRule(id: string): Promise<void> {
     await deleteRedirect(id);
     await fetchRedirects();
   }
 
-  /**
-   * reset drops every cached list, so the next sign-in never sees the
-   * previous account's proxy data. Called on sign-out (see the auth store).
-   */
   function reset(): void {
     providers.value = [];
     certificates.value = [];

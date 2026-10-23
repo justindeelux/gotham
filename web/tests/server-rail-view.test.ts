@@ -1,4 +1,3 @@
-// Unit tests for the server rail view helpers (JUS-24 split of ServerRail).
 
 import { describe, expect, it } from "vitest";
 

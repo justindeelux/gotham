@@ -43,8 +43,6 @@ const searchQuery = ref("");
 const checkedKeys = ref<string[]>([]);
 const pendingTools = ref<Record<string, boolean>>({});
 const busyBulk = ref(false);
-// activeCategory is the selected tab; checkedKeys lives outside the tabs so
-// multi-select survives tab switches and one bulk install covers every tab.
 const activeCategory = ref("");
 
 const nodeOptions = computed<SelectOption[]>(() =>
@@ -58,19 +56,16 @@ const errorText = computed<string | null>(() =>
   store.failure ? describeToolchainError(store.failure) : null,
 );
 
-/** matchesQuery is the client-side search predicate (name, id, category). */
 function matchesQuery(tool: ToolchainTool, query: string): boolean {
   return tool.name.toLowerCase().includes(query) ||
     tool.id.toLowerCase().includes(query) ||
     (tool.category ?? "").toLowerCase().includes(query);
 }
 
-/** categoryOf normalizes the catalog grouping (blank sorts as Other). */
 function categoryOf(tool: ToolchainTool): string {
   return tool.category?.trim() || t("toolchain.page.uncategorized");
 }
 
-/** groupedTools buckets the full catalog once per render (not once per tab). */
 const groupedTools = computed<Map<string, ToolchainTool[]>>(() => {
   const groups = new Map<string, ToolchainTool[]>();
   for (const tool of store.tools) {
@@ -85,13 +80,10 @@ const groupedTools = computed<Map<string, ToolchainTool[]>>(() => {
   return groups;
 });
 
-/** categories lists every tab from the full catalog (not the search filter). */
 const categories = computed<string[]>(() =>
   [...groupedTools.value.keys()].sort((a, b) => a.localeCompare(b)),
 );
 
-// The tab list follows the catalog: an unknown active tab (node switch,
-// locale change) falls back to the first category.
 watch(
   categories,
   (names) => {
@@ -102,10 +94,8 @@ watch(
   { immediate: true },
 );
 
-/** searching is true while the header box filters every tab's badge. */
 const searching = computed<boolean>(() => searchQuery.value.trim() !== "");
 
-/** selectableIds are the checked rows that can actually be installed. */
 const selectableIds = computed<string[]>(() =>
   checkedKeys.value.filter((id) => {
     const tool = store.tools.find((item) => item.id === id);
@@ -113,7 +103,6 @@ const selectableIds = computed<string[]>(() =>
   }),
 );
 
-/** matchesIn reports how many tools of one tab pass the current search. */
 function matchesIn(category: string): number {
   const query = searchQuery.value.trim().toLowerCase();
   const tools = groupedTools.value.get(category) ?? [];
@@ -123,14 +112,11 @@ function matchesIn(category: string): number {
   return tools.filter((tool) => matchesQuery(tool, query)).length;
 }
 
-/** selectableInTab counts the actually-installable checked rows of one tab. */
 function selectableInTab(category: string): number {
   const ids = new Set(selectableIds.value);
   return (groupedTools.value.get(category) ?? []).filter((tool) => ids.has(tool.id)).length;
 }
 
-/** tabLabel names a tab with its counts: total, matches while searching, selected.
-    The category renders UPPERCASE (BUILD (4)); counts and suffix keep i18n case. */
 function tabLabel(category: string): string {
   const total = groupedTools.value.get(category)?.length ?? 0;
   const matched = matchesIn(category);
@@ -144,7 +130,6 @@ function tabLabel(category: string): string {
   return `${category.toUpperCase()} (${count})${suffix}`;
 }
 
-/** activeTools shows only the active tab, filtered by the header search. */
 const activeTools = computed<ToolchainTool[]>(() => {
   const query = searchQuery.value.trim().toLowerCase();
   return (groupedTools.value.get(activeCategory.value) ?? [])
@@ -152,8 +137,6 @@ const activeTools = computed<ToolchainTool[]>(() => {
     .sort((a, b) => a.name.localeCompare(b.name));
 });
 
-/** tabPropsFor carries the tab semantics NTabs omits (2.45.3 renders
-    plain divs): each tab is a roving-tabindex tab owned by the tablist. */
 function tabPropsFor(category: string): Record<string, string | number | boolean> {
   const selected = category === activeCategory.value;
   return {
@@ -163,8 +146,6 @@ function tabPropsFor(category: string): Record<string, string | number | boolean
   };
 }
 
-/** handleTabKeydown moves and activates tabs with arrows/Home/End
-    (NTabs 2.45.3 has no key handling of its own). */
 function handleTabKeydown(event: KeyboardEvent): void {
   const names = categories.value;
   if (names.length === 0) {
@@ -193,22 +174,18 @@ function handleTabKeydown(event: KeyboardEvent): void {
     return;
   }
   activeCategory.value = names[next];
-  // Roving tabindex: focus follows the selection after re-render (the
-  // currentTarget is captured now: it reads null once dispatch ends).
   const tablist = event.currentTarget as HTMLElement | null;
   nextTick(() => {
     tablist?.querySelectorAll<HTMLElement>(".n-tabs-tab")[next]?.focus();
   });
 }
 
-/** footerText announces the bulk selection for the sticky footer status. */
 const footerText = computed<string>(() =>
   selectableIds.value.length > 0
     ? String(t("toolchain.page.footerSelected", { count: selectableIds.value.length }))
     : String(t("toolchain.page.footerEmpty")),
 );
 
-/** queueType maps a job status to one Naive tag. */
 function queueType(status: ToolchainJob["status"]): "default" | "info" | "success" | "error" {
   switch (status) {
     case "running":
@@ -222,7 +199,6 @@ function queueType(status: ToolchainJob["status"]): "default" | "info" | "succes
   }
 }
 
-/** runToolAction enqueues one tool action with a per-row spinner. */
 async function runToolAction(tool: ToolchainTool, action: ToolchainAction): Promise<void> {
   pendingTools.value = { ...pendingTools.value, [tool.id]: true };
   try {
@@ -231,8 +207,6 @@ async function runToolAction(tool: ToolchainTool, action: ToolchainAction): Prom
       message.warning(t("toolchain.page.skipped", { tools: skipped.join(", ") }));
     } else {
       message.success(t("toolchain.page.enqueued", { count: 1 }));
-      // The progress modal owns its markup and subscribes to the same
-      // store: opening it shows the new job's live output immediately.
       store.openQueueModal();
     }
   } catch (err) {
@@ -305,9 +279,6 @@ async function handleRetry(): Promise<void> {
 const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
   {
     type: "selection",
-    // Detect-only and already-installed rows cannot be installed: their
-    // checkbox is disabled, and the row itself shows why (the detect-only
-    // note or the installed badge).
     disabled: (row) => !isToolSelectable(row),
   },
   {
@@ -407,9 +378,6 @@ onMounted(() => {
   if (serversStore.servers.length > 0 && store.serverId === "") {
     void selectNode(serversStore.servers[0].id);
   } else if (store.serverId !== "") {
-    // Remount with a kept node (route leave + return): disconnect() released
-    // the socket on unmount, so a bare refresh() would leave realtime dead —
-    // resubscribe to re-establish the socket and channel, then reload.
     void store
       .subscribe(store.serverId)
       .catch((err: unknown) => message.error(describeToolchainError(err)));
@@ -417,9 +385,6 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  // Release the socket and the channel: without this the realtime client
-  // (created outside a component scope) would keep buffering log lines in
-  // the background after the route is left.
   store.disconnect();
 });
 
@@ -432,8 +397,6 @@ watch(
   },
 );
 
-// A tool that becomes installed (or detect-only) while checked must not
-// stay selected: drop rows that are no longer installable.
 watch(
   () => store.tools,
   (tools) => {
@@ -503,11 +466,6 @@ watch(
           <template #extra>{{ $t("toolchain.page.emptyToolsHint") }}</template>
         </NEmpty>
 
-        <!-- Category tabs are Naive NTabs (line type, like the other
-             pages): one shared checked-keys model keeps the bulk selection
-             across tabs, and one table below renders the active tab. NTabs
-             2.45.3 renders plain divs, so tab roles, roving tabindex and
-             arrow-key handling ride along via tab-props + keydown. -->
         <template v-else>
           <NTabs
             v-model:value="activeCategory"
@@ -546,8 +504,6 @@ watch(
           </div>
         </template>
 
-        <!-- The footer outlives the list: Queue stays reachable while the
-             tools fail to load or come back empty (jobs may still run). -->
         <div class="table-footer">
           <p class="footer-status" role="status" aria-live="polite">
             {{ footerText }}
@@ -579,8 +535,6 @@ watch(
       </NSpace>
     </NCard>
 
-    <!-- Install progress modal (JUS-178): renders from the same store and
-         opens via the queueModalOpen hook (Queue button, post-enqueue). -->
     <InstallQueueModal />
   </div>
 </template>

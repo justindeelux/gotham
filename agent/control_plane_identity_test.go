@@ -25,9 +25,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestControlPlaneIdentityLiteral pins the duplicated control-plane identity:
-// internal/servers cannot be imported here (cross-scope rule), so this literal
-// and internal/servers.ControlPlaneURI must stay equal.
 func TestControlPlaneIdentityLiteral(t *testing.T) {
 	if controlPlaneURI != "spiffe://gotham/control-plane" {
 		t.Errorf("controlPlaneURI = %q, want spiffe://gotham/control-plane", controlPlaneURI)
@@ -37,9 +34,6 @@ func TestControlPlaneIdentityLiteral(t *testing.T) {
 	}
 }
 
-// issueTestLeaf issues a CA-signed leaf with an explicit key usage, URI/DNS SANs
-// and validity window, so a test can model the control-plane credential, a node
-// leaf, an expired credential or a legacy credential.
 func issueTestLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, cn string, ekus []x509.ExtKeyUsage, uris []*url.URL, dns []string, notBefore, notAfter time.Time) (certPEM, keyPEM []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -68,8 +62,6 @@ func issueTestLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateK
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 }
 
-// controlPlaneLeaf returns a CA-signed credential carrying the control-plane URI
-// SAN (the shape internal/servers.IssueClientCert produces).
 func controlPlaneLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) (certPEM, keyPEM []byte) {
 	t.Helper()
 	uri, err := url.Parse(controlPlaneURI)
@@ -81,8 +73,6 @@ func controlPlaneLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.Priva
 		[]string{controlPlaneClientName}, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 }
 
-// nodeLeaf returns a CA-signed node certificate (serverAuth + clientAuth, no
-// control-plane URI), exactly what the control plane now issues to a node.
 func nodeLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, nodeID string) (certPEM, keyPEM []byte) {
 	t.Helper()
 	return issueTestLeaf(t, caCert, caKey, nodeID,
@@ -90,9 +80,6 @@ func nodeLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, n
 		[]string{nodeID}, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 }
 
-// startTestAgentTLS starts an agent listener that verifies client certificates
-// against caPEM, with the mandatory control-plane interceptor (unless an opt-out
-// is passed).
 func startTestAgentTLS(t *testing.T, caPEM []byte, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, options ...ServerOption) string {
 	t.Helper()
 	caPath := filepath.Join(t.TempDir(), "ca.pem")
@@ -107,13 +94,9 @@ func startTestAgentTLS(t *testing.T, caPEM []byte, caCert *x509.Certificate, caK
 	return startAgentWithCreds(t, creds, options...)
 }
 
-// startAgentWithCreds starts an agent listener from creds and returns its
-// address.
 func startAgentWithCreds(t *testing.T, creds credentials.TransportCredentials, options ...ServerOption) string {
 	t.Helper()
 	docker := &fakeDockerClient{version: "24.0.7", containers: []*agentv1.ContainerInfo{{Id: "c1"}}}
-	// No control-plane option is passed: NewServer installs the check for any TLS
-	// listener (M4), which is what these tests also prove.
 	server, err := NewServer("127.0.0.1:0", creds, NewDockerServer(docker, discardLogger()), discardLogger(), options...)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -124,7 +107,6 @@ func startAgentWithCreds(t *testing.T, creds credentials.TransportCredentials, o
 	return server.Addr().String()
 }
 
-// listOverMTLS dials addr with the given client keypair and lists containers.
 func listOverMTLS(t *testing.T, addr string, pool *x509.CertPool, certPEM, keyPEM []byte) (*agentv1.ListContainersResponse, error) {
 	t.Helper()
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -155,9 +137,6 @@ func testPool(t *testing.T, caPEM []byte) *x509.CertPool {
 	return pool
 }
 
-// TestAgentListenerRejectsNodeLeaf is the F1 regression: a node leaf chains to
-// the same CA and now carries clientAuth, but it must not act as the control
-// plane toward another agent. The control-plane credential is accepted.
 func TestAgentListenerRejectsNodeLeaf(t *testing.T) {
 	caPEM, caCert, caKey := testCA(t)
 	pool := testPool(t, caPEM)
@@ -178,8 +157,6 @@ func TestAgentListenerRejectsNodeLeaf(t *testing.T) {
 	}
 }
 
-// TestAgentListenerRejectsExpiredAndCACredentials covers the other credential
-// shapes: an expired control-plane leaf and the CA certificate itself.
 func TestAgentListenerRejectsExpiredAndCACredentials(t *testing.T) {
 	caPEM, caCert, caKey := testCA(t)
 	pool := testPool(t, caPEM)
@@ -202,16 +179,10 @@ func TestAgentListenerRejectsExpiredAndCACredentials(t *testing.T) {
 	}
 }
 
-// TestAgentListenerControlPlaneCheckIsMandatory proves the interceptor is a real
-// gate with exactly one opt-out: a TLS listener that does not verify client
-// certificates still refuses an uncertified peer unless the caller explicitly
-// passes WithoutControlPlanePeer (the dev/test escape production must not use).
-// The credential-level check is separate and stays in place.
 func TestAgentListenerControlPlaneCheckIsMandatory(t *testing.T) {
 	caPEM, caCert, caKey := testCA(t)
 	pool := testPool(t, caPEM)
 	serverCert, serverKey := testLeaf(t, caCert, caKey)
-	// No CA => the listener does not request a client certificate at all.
 	creds, err := ServerCredentials(serverCert, serverKey, "", false)
 	if err != nil {
 		t.Fatalf("ServerCredentials: %v", err)
@@ -228,16 +199,11 @@ func TestAgentListenerControlPlaneCheckIsMandatory(t *testing.T) {
 	}
 }
 
-// mustKeyPEM encodes a key as PEM for a client keypair in a test.
 func mustKeyPEM(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	t.Helper()
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mustMarshalPKCS8(t, key)})
 }
 
-// TestAgentAcceptsLegacyControlPlaneCredential is the rollout grace path: a
-// control plane upgraded after the agent still presents the pre-change
-// credential (clientAuth only, control-plane name), which must keep working. A
-// node leaf never matches it (its key usage includes serverAuth).
 func TestAgentAcceptsLegacyControlPlaneCredential(t *testing.T) {
 	caPEM, caCert, caKey := testCA(t)
 	pool := testPool(t, caPEM)
@@ -251,9 +217,6 @@ func TestAgentAcceptsLegacyControlPlaneCredential(t *testing.T) {
 	}
 }
 
-// TestRequireControlPlanePeerFromContext proves the gRPC interceptor is a second
-// gate: it refuses a peer whose certificate is not the control plane even if the
-// transport were misconfigured.
 func TestRequireControlPlanePeerFromContext(t *testing.T) {
 	_, caCert, caKey := testCA(t)
 
@@ -270,8 +233,6 @@ func TestRequireControlPlanePeerFromContext(t *testing.T) {
 	}
 }
 
-// peerWithCert returns a context whose peer carries certPEM as the verified
-// client certificate, as the interceptor reads it.
 func peerWithCert(t *testing.T, certPEM []byte) context.Context {
 	t.Helper()
 	block, _ := pem.Decode(certPEM)

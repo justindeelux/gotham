@@ -1,7 +1,3 @@
-// JUS-138 shift-click range selection. The range is computed from the entry
-// order (a pure helper), never the DOM, so it spans rows a windowed list has not
-// rendered; the store owns the anchor and the reset rules. These tests pin both
-// halves: the pure range maths and the store's anchor lifecycle.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,7 +29,6 @@ const root: FilesRoot = {
   free_bytes: 1024 ** 3,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(
   overrides: Partial<FilesEntry> & { name: string },
 ): FilesEntry {
@@ -47,9 +42,6 @@ function entry(
   };
 }
 
-// Directories lead (kind rank), then files, then the symlink and the special
-// file. The sorted order the tests reason about is:
-//   alpha, beta, charlie, delta, echo, link, sock
 const listing = {
   entries: [
     entry({ name: "alpha", kind: "directory", size: 0, mode: 0o040755 }),
@@ -159,7 +151,6 @@ describe("files store range selection", () => {
     store.selectRange("charlie", false);
     expect(store.selectedNames).toHaveLength(3);
 
-    // The anchor is still alpha: this narrows the run.
     store.selectRange("beta", false);
     expect(store.selectedNames.sort()).toEqual(["alpha", "beta"]);
 
@@ -180,7 +171,6 @@ describe("files store range selection", () => {
     store.selectRange("delta", false);
 
     expect(store.selectedNames).toEqual(["delta"]);
-    // ...and it becomes the anchor for the next range click.
     store.selectRange("echo", false);
     expect(store.selectedNames.sort()).toEqual(["delta", "echo"]);
   });
@@ -189,7 +179,6 @@ describe("files store range selection", () => {
     const store = useFilesStore();
     await store.init("server-1");
 
-    // Size ascending reorders the files: delta (100), echo (200), charlie (300).
     store.setSort("size");
     expect(store.visibleEntries.map((item) => item.name)).toEqual([
       "alpha",
@@ -298,7 +287,6 @@ describe("files store range selection", () => {
     const charlie = store.entries.find((item) => item.name === "charlie")!;
     store.selectForRowContext(charlie);
 
-    // Already selected: the multi-selection and the anchor both survive.
     expect(store.selectedNames).toHaveLength(5);
     expect(store.activeTab.anchor).toBe("alpha");
   });
@@ -311,7 +299,6 @@ describe("files store range selection", () => {
     expect(store.selectedNames).toHaveLength(5);
     expect(store.activeTab.anchor).toBe("alpha");
 
-    // Not collapsed to the clicked row: the run starts at the first entry.
     store.selectRange("beta", false);
     expect(store.selectedNames.sort()).toEqual(["alpha", "beta"]);
   });

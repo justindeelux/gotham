@@ -9,8 +9,6 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// builtinSamples is one valid input per built-in template, restricted to its
-// required fields so the defaults are exercised as well.
 var builtinSamples = map[string]map[string]any{
 	"wordpress": {
 		"domain":           "blog.example.test",
@@ -32,7 +30,6 @@ var builtinSamples = map[string]map[string]any{
 	},
 }
 
-// TestBuiltinCatalog proves the shipped templates load, validate and list.
 func TestBuiltinCatalog(t *testing.T) {
 	catalog, err := Load(builtin.FS)
 	if err != nil {
@@ -56,10 +53,6 @@ func TestBuiltinCatalog(t *testing.T) {
 	}
 }
 
-// TestBuiltinRender renders every shipped template from sample input and
-// proves the document is deployable through the BE-7.1 path: services.Parse
-// accepts it, the services interpolation leaves it intact and the routing
-// label maps to the requested domain.
 func TestBuiltinRender(t *testing.T) {
 	catalog, err := Load(builtin.FS)
 	if err != nil {
@@ -94,13 +87,9 @@ func TestBuiltinRender(t *testing.T) {
 					t.Errorf("mount %+v is not a named volume", mount)
 				}
 			}
-			// The deploy path's own render must accept the document with the
-			// returned environment and resolve every secret reference.
 			if _, err := services.Render(result.ComposeYAML, result.Env); err != nil {
 				t.Fatalf("services.Render: %v", err)
 			}
-			// No secret value may appear in the document: every secret field
-			// is a ${field} reference and its value travels in Env.
 			for key, value := range result.Env {
 				if strings.Contains(result.ComposeYAML, value) {
 					t.Errorf("secret %q leaked into the rendered document", key)
@@ -113,8 +102,6 @@ func TestBuiltinRender(t *testing.T) {
 	}
 }
 
-// TestBuiltinExpectedValues pins the observable values the plan's acceptance
-// names: the domain and the environment a sample render produces.
 func TestBuiltinExpectedValues(t *testing.T) {
 	catalog, err := Load(builtin.FS)
 	if err != nil {
@@ -219,8 +206,6 @@ func TestBuiltinExpectedValues(t *testing.T) {
 	})
 }
 
-// TestBuiltinSecretFieldsAreNotBakedIn proves no shipped template carries a
-// password default: every secret must be supplied at render time.
 func TestBuiltinSecretFieldsAreNotBakedIn(t *testing.T) {
 	catalog, err := Load(builtin.FS)
 	if err != nil {
@@ -235,8 +220,6 @@ func TestBuiltinSecretFieldsAreNotBakedIn(t *testing.T) {
 	}
 }
 
-// TestNewDefaultService proves the production constructor ships the catalog
-// and honors the services kill switch.
 func TestNewDefaultService(t *testing.T) {
 	t.Setenv(services.FeatureEnv, "")
 	svc := NewDefaultService(nil)

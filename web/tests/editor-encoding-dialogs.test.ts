@@ -1,13 +1,9 @@
-// Encoding dialogs (JUS-222): the save-encoding picker emits the chosen
-// charset, and the unsupported-characters prompt lists them and offers the
-// UTF-8 retry. Teleport is stubbed so the Naive modal stays in the wrapper.
 /* global HTMLInputElement:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 
 import EditorEncodingDialog from "@/features/files/components/EditorEncodingDialog.vue";
 import EditorEncodingUnsupportedDialog from "@/features/files/components/EditorEncodingUnsupportedDialog.vue";
-// Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import {
   i18n,
@@ -20,7 +16,6 @@ registerDiscoveredCatalogs();
 resetLocaleState();
 syncComposerLocale("en");
 
-/** buttonWith finds the button whose label contains `text`. */
 function buttonWith(
   wrapper: ReturnType<typeof mount>,
   text: string,

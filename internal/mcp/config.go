@@ -1,4 +1,3 @@
-// Package mcp implements the isolated stdio adapter to a fixed Gotham REST origin.
 package mcp
 
 import (
@@ -11,14 +10,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// Config binds one process to an instance, API token, and explicit team.
 type Config struct {
 	URL    string
 	Token  string
 	TeamID uuid.UUID
 }
 
-// ConfigFromEnv reads only MCP settings, never control-plane configuration.
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	team, err := uuid.Parse(getenv("GOTHAM_MCP_TEAM_ID"))
 	if err != nil || team == uuid.Nil {

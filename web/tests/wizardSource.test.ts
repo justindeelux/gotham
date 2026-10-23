@@ -1,5 +1,3 @@
-// Unit tests for the wizard source-selection helpers extracted from
-// CreateAppWizard during the JUS-24 split (F2-applications).
 
 import { describe, expect, it } from "vitest";
 

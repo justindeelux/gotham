@@ -18,15 +18,8 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN; an explicit value turns a missing database or
-// a failed migration into a test failure instead of a skip, matching
-// internal/databases' integration test.
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
-// integrationEnv runs the embedded migrations and returns a repository backed
-// by a real PostgreSQL. It skips only when GOTHAM_TEST_DSN is unset; an
-// explicit DSN makes an unreachable database or a failed migration fatal.
 func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	t.Helper()
 
@@ -39,8 +32,6 @@ func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -51,10 +42,7 @@ func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	// Registered first so LIFO order closes the pool after the row cleanups.
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -63,7 +51,6 @@ func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	return newStoreRepository(st), st
 }
 
-// seedUserAndServer registers the owner and the node a test service needs.
 func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
@@ -101,8 +88,6 @@ func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	return uuidFromPG(user.ID), uuidFromPG(server.ID)
 }
 
-// seedProjectEnvironment creates a team, a project and an environment on the
-// shared test database and returns their IDs, cleaning them up at test end.
 func seedProjectEnvironment(t *testing.T, st *store.Store) (teamID, projectID, envID uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
@@ -149,10 +134,6 @@ func seedProjectEnvironment(t *testing.T, st *store.Store) (teamID, projectID, e
 	return uuidFromPG(team.ID), uuidFromPG(project.ID), uuidFromPG(environment.ID)
 }
 
-// TestProxySourceRendersDomainMap proves the proxy adapter derives the routing
-// input from the stored document and environment (no stored copy), reports an
-// unrenderable routing document as unroutable, and skips services without
-// domains.
 func TestProxySourceRendersDomainMap(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()
@@ -178,7 +159,7 @@ func TestProxySourceRendersDomainMap(t *testing.T) {
 	broken, err := repo.CreateService(ctx, Service{
 		ID: uuid.New(), UserID: ownerID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
 		Name: "broken", Status: StatusRunning,
-		ComposeYAML: testDocument, Env: map[string]string{}, // DOMAIN/PASSWORD unresolved
+		ComposeYAML: testDocument, Env: map[string]string{},
 	})
 	if err != nil {
 		t.Fatalf("CreateService(broken): %v", err)
@@ -215,10 +196,6 @@ func TestProxySourceRendersDomainMap(t *testing.T) {
 	}
 }
 
-// TestUpdateServiceConfigKeepsUnsetPlacement pins F3 at the SQL level: a
-// Nil environment or server (the service zeroes placement the request
-// leaves alone) keeps the stored values instead of writing NULL, while a
-// set value moves the row.
 func TestUpdateServiceConfigKeepsUnsetPlacement(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()
@@ -311,9 +288,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("compose_yaml = %q", fetched.ComposeYAML)
 	}
 
-	// Same name, same environment → conflict (per-environment uniqueness);
-	// same name, other user, same environment → still conflict; a different
-	// environment allows the name.
 	duplicate := created
 	duplicate.ID = uuid.New()
 	if _, err := repo.CreateService(ctx, duplicate); !errors.Is(err, ErrConflict) {
@@ -324,7 +298,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("same-environment duplicate for another user error = %v, want ErrConflict", err)
 	}
 
-	// Status vocabulary is enforced by the CHECK constraint.
 	created.Status = "not-a-status"
 	if _, err := repo.UpdateServiceStatus(ctx, created.ID, created.Status); err == nil {
 		t.Error("an unknown status must be rejected by the CHECK constraint")
@@ -345,7 +318,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Fatalf("UpdateServiceStatus (again): %v", err)
 	}
 
-	// Deploy history: newest first, snapshot preserved, error recorded.
 	first, err := repo.CreateServiceDeploy(ctx, Deploy{
 		ID: uuid.New(), ServiceID: created.ID, State: DeployDeploying, ComposeYAML: "services: {}\n",
 		CreatedAt: now, UpdatedAt: now,
@@ -379,7 +351,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("finished_at = zero, want the recorded time")
 	}
 
-	// Soft delete hides the row and frees the name for reuse.
 	deleted, err := repo.SoftDeleteService(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("SoftDeleteService: %v", err)
@@ -404,7 +375,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("GetService(nil) = %v, want ErrNotFound", err)
 	}
 
-	// The owner sees only their live rows.
 	list, err := repo.ListServices(ctx, teams.Scope{UserID: ownerID})
 	if err != nil {
 		t.Fatalf("ListServicesByUser: %v", err)
@@ -413,7 +383,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("owner list = %+v, want only the recreated row", list)
 	}
 
-	// ServerExists resolves registered and unknown nodes.
 	if exists, err := repo.ServerExists(ctx, serverID, teams.Scope{UserID: ownerID}); err != nil || !exists {
 		t.Errorf("ServerExists(seeded) = %v, %v, want true", exists, err)
 	}

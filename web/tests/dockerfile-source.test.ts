@@ -1,4 +1,3 @@
-// GS-7 Dockerfile source: schema gates, wizard Source step and detail editor.
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -38,11 +37,8 @@ beforeEach(() => {
 describe("dockerfile schemas", () => {
   it("enables dockerfile in sourceTypeImplemented", () => {
     expect(sourceTypeImplemented("dockerfile")).toBe(true);
-    // Private git deploys since GS-4 (merged after this test was written).
     expect(sourceTypeImplemented("git_private")).toBe(true);
-    // Compose deploys since GS-8, last of the source types.
     expect(sourceTypeImplemented("compose")).toBe(true);
-    // Image sources deploy since GS-9.
     expect(sourceTypeImplemented("image")).toBe(true);
   });
 
@@ -62,14 +58,12 @@ describe("dockerfile schemas", () => {
       dockerfileContentSchema.safeParse(`FROM scratch\n${"x".repeat(64 * 1024)}`).success,
     ).toBe(false);
     expect(dockerfileContentSchema.safeParse("FROM scratch\n").success).toBe(true);
-    // Multi-byte text: under 64K chars but over 64 KiB, matching the server.
     expect(
       dockerfileContentSchema.safeParse(`FROM scratch\n# ${"é".repeat(32 * 1024)}`).success,
     ).toBe(false);
     expect(
       dockerfileContentSchema.safeParse(`FROM scratch\n# ${"é".repeat(100)}`).success,
     ).toBe(true);
-    // Trailing whitespace counts: the server measures raw bytes.
     expect(
       dockerfileContentSchema.safeParse(`FROM scratch\n${" ".repeat(64 * 1024)}`).success,
     ).toBe(false);
@@ -80,10 +74,8 @@ describe("dockerfile schemas", () => {
     expect(buildArgKeySchema.safeParse("  ").success).toBe(false);
     expect(buildArgValueSchema.safeParse("production").success).toBe(true);
     expect(buildArgValueSchema.safeParse("x".repeat(4 * 1024 + 1)).success).toBe(false);
-    // Multi-byte values are measured in bytes, like the server.
     expect(buildArgValueSchema.safeParse("é".repeat(2 * 1024)).success).toBe(true);
     expect(buildArgValueSchema.safeParse("é".repeat(2 * 1024 + 1)).success).toBe(false);
-    // NUL is refused: Postgres jsonb rejects it with a 500 otherwise.
     expect(buildArgValueSchema.safeParse("a\0b").success).toBe(false);
     expect(buildArgsValid([{ key: "A", value: "1" }])).toBe(true);
     expect(buildArgsValid([{ key: "", value: "" }])).toBe(true);
@@ -111,7 +103,6 @@ function mountWizard() {
   return { w: wiz!, wrapper };
 }
 
-/** mountSourceStep renders the wizard Source step for one source type. */
 function mountSourceStep(sourceType: string) {
   setActivePinia(createPinia());
   let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
@@ -457,8 +448,6 @@ describe("detail dockerfile editor", () => {
     const editor = useDockerfileEditor(app);
     expect(editor.isDirty.value).toBe(false);
 
-    // An unrelated row change (domain save, rename) bumps updated_at: a
-    // clean draft follows, a dirty draft survives.
     app.value = {
       ...app.value,
       dockerfile_content: "FROM alpine:3.22\n",
@@ -507,8 +496,6 @@ describe("detail dockerfile editor", () => {
     const editor = useDockerfileEditor(app);
     expect(editor.content.value).toBe("FROM a\n");
 
-    // An unsaved draft of A must not survive the navigation to B, and
-    // saving afterwards writes B's text, never A's draft.
     editor.content.value = "FROM a-edited\n";
     app.value = { ...appB } as never;
     await nextTick();

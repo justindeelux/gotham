@@ -32,10 +32,8 @@ const emit = defineEmits<{
 }>();
 
 const { locale } = useI18n();
-/** isNarrow stacks the two-column descriptions on small screens. */
 const isNarrow = useMediaQuery("(max-width: 640px)");
 
-/** descColumns renders descriptions in one column below 640px. */
 const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 </script>
 

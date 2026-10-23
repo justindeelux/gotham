@@ -8,12 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global URL, window, getComputedStyle:readonly */
-// Real-browser proof for the JUS-71/72/76 fix round 2: every picker tile
-// renders an explicit, pairwise distinct brand mark, and opening a wizard
-// hides the picker modal (no card bleeds through behind the wizard) until
-// the wizard closes. Same static-webdist + mocked-API harness as
-// environment-layout.spec.ts; assertions measure the rendered DOM
-// (bounding boxes, visibility), never source strings.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -134,7 +128,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -168,7 +161,6 @@ test.afterAll(async () => {
 
 const envPath = `${projectId}/environments/${environmentId}`;
 
-/** mockApi seeds the session and answers the calls the picker makes. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -213,13 +205,10 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
-/** openPicker loads the environment page and opens the Add resource modal. */
 async function openPicker(page: Page) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
   await page.goto(`${baseURL}/projects/${envPath}`);
-  // Empty resources render an Add action both in the header and the empty
-  // state; either opens the same picker modal.
   await page.getByRole("button", { name: "Add resource" }).first().click();
   const picker = page.locator(".n-modal.app-modal");
   await expect(picker.getByRole("tab", { name: "Application", exact: true })).toBeVisible();
@@ -228,8 +217,6 @@ async function openPicker(page: Page) {
 
 test("picker tiles render the approved monochrome brand glyphs", async ({ page }) => {
   const picker = await openPicker(page);
-  // Frame hues per tab, in card order. Repeated glyphs are intentional: both
-  // generic Git sources show Git and every Docker source shows Docker.
   const expected: Record<string, { colors: string[]; glyphs: number }> = {
     Application: {
       colors: [
@@ -279,9 +266,6 @@ test("picker tiles render the approved monochrome brand glyphs", async ({ page }
       const frame = await glyph.locator("xpath=..").boundingBox();
       expect(box, "glyph renders a box").not.toBeNull();
       expect(frame, "frame renders a box").not.toBeNull();
-      // The approved treatment: a white silhouette at roughly 62% of the
-      // frame (the 1px token ring counts toward the frame), optically
-      // centered inside it.
       expect(box!.width / frame!.width).toBeGreaterThan(0.55);
       expect(box!.width / frame!.width).toBeLessThan(0.65);
       expect(box!.x - frame!.x).toBeCloseTo((frame!.width - box!.width) / 2, 0);
@@ -299,8 +283,6 @@ test("picker tiles render the approved monochrome brand glyphs", async ({ page }
     }
   }
   await picker.getByRole("tab", { name: "Service", exact: true }).click();
-  // Unknown future catalog entries keep the letter fallback, never an empty
-  // frame or a broken image.
   const fallback = picker.locator('button.res-card[data-template="mystery"]');
   await expect(fallback.locator(".brand-icon__glyph")).toHaveCount(0);
   await expect(fallback.locator(".brand-icon__letters")).toHaveText("M");
@@ -315,13 +297,10 @@ test("an open wizard hides the picker until Change closes it", async ({ page }) 
   await expect(
     wizard.getByRole("heading", { name: "Create application", exact: true }),
   ).toBeVisible();
-  // The picker modal leaves the layout: no visible card can intersect
-  // the wizard box. toBeHidden retries through the modal leave transition.
   await expect(picker).toBeHidden();
   await expect(cards.first()).toBeHidden();
   const wizardBox = await wizard.boundingBox();
   expect(wizardBox, "wizard has a box").not.toBeNull();
-  // Change closes the wizard and restores the mounted picker.
   await wizard.locator(".preselected button").click();
   await expect(wizard).toBeHidden();
   await expect(cards.first()).toBeVisible();

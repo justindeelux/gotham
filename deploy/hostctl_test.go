@@ -8,13 +8,10 @@ import (
 	"testing"
 )
 
-// runHostctl executes the helper in dry-run mode against a temp root.
 func runHostctl(t *testing.T, root, stdin string, verb string) (string, error) {
 	return runHostctlEnv(t, root, stdin, verb, nil)
 }
 
-// runHostctlEnv is runHostctl with extra environment entries (e.g. a PATH
-// stub dir for the `ip`/`resolvectl` probes).
 func runHostctlEnv(t *testing.T, root, stdin, verb string, extra []string) (string, error) {
 	t.Helper()
 	if _, err := exec.LookPath("sh"); err != nil {
@@ -28,10 +25,6 @@ func runHostctlEnv(t *testing.T, root, stdin, verb string, extra []string) (stri
 	return string(out), err
 }
 
-// stubProbes writes fake `ip`/`resolvectl` binaries reporting a static host
-// (JUS-100: netplan-owned 103.176.22.225/24 via 103.176.22.1; JUS-101: the
-// netplan file lives in /run like the real generator and carries per-link
-// DNS 8.8.8.8 8.8.4.4) and returns a PATH entry for them.
 func stubProbes(t *testing.T, root string) []string {
 	t.Helper()
 	bin := filepath.Join(root, "bin")
@@ -116,11 +109,6 @@ func TestHostctlStatusReportsHostTruth(t *testing.T) {
 	}
 }
 
-// TestHostctlDNSOnlyOverridesLinkDNS is the JUS-101 regression test: on a
-// netplan-style host with per-link DNS the DNS-only apply must set the link
-// DNS too (global drop-in + DNS-only networkd drop-in + runtime resolvectl),
-// without touching Address/Gateway/routes, and revert must restore the link
-// and global DNS exactly.
 func TestHostctlDNSOnlyOverridesLinkDNS(t *testing.T) {
 	root := t.TempDir()
 	extra := stubProbes(t, root)
@@ -172,7 +160,6 @@ func TestHostctlDNSOnlyOverridesLinkDNS(t *testing.T) {
 		t.Errorf("dns-only revert must not reconfigure the interface:\n%s", out)
 	}
 
-	// A pre-existing link drop-in is restored byte for byte.
 	old := "[Network]\nDNS=8.8.8.8 8.8.4.4\n"
 	if err := os.MkdirAll(filepath.Dir(dropin), 0o755); err != nil {
 		t.Fatal(err)
@@ -190,7 +177,6 @@ func TestHostctlDNSOnlyOverridesLinkDNS(t *testing.T) {
 		t.Fatalf("revert altered the link drop-in: %v %q", err, data)
 	}
 
-	// Clearing the servers removes the link drop-in and reverts the runtime.
 	clear := strings.Replace(dnsOnly, "dns=1.1.1.1,1.0.0.1", "dns=", 1)
 	out, err = runHostctlEnv(t, root, clear, "apply-network", extra)
 	if err != nil {
@@ -210,10 +196,6 @@ func TestHostctlDNSOnlyOverridesLinkDNS(t *testing.T) {
 	}
 }
 
-// TestHostctlDNSOnlyLeavesInterfaceAlone is the JUS-100 regression test: a
-// resolver-only apply on a static host must write only the resolved drop-in
-// and never touch the interface file, even when the request carries DHCP
-// values (the old form defaults).
 func TestHostctlDNSOnlyLeavesInterfaceAlone(t *testing.T) {
 	root := t.TempDir()
 	extra := stubProbes(t, root)
@@ -248,7 +230,6 @@ func TestHostctlDNSOnlyLeavesInterfaceAlone(t *testing.T) {
 		t.Errorf("dns-only revert must not reconfigure the interface:\n%s", out)
 	}
 
-	// With a pre-existing interface file the DNS-only revert keeps it intact.
 	managed := "# Managed by Gotham (gotham-hostctl).\n[Match]\nName=eth0\n"
 	if err := os.WriteFile(netFile, []byte(managed), 0o644); err != nil {
 		t.Fatal(err)

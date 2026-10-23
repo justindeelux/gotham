@@ -1,6 +1,3 @@
-// Files editor window geometry (JUS-129): the drag clamp must keep the whole
-// floating window inside the viewport, so a drag can never strand the title
-// bar (and its controls) off-screen. Pure helper, no DOM.
 import { describe, expect, it } from "vitest";
 
 import { clampEditorOffset } from "@/features/files/utils/editor";
@@ -26,7 +23,6 @@ describe("clampEditorOffset", () => {
   });
 
   it("keeps the window flush right/bottom after a viewport shrink", () => {
-    // A position valid at 1440x900 must be pulled back into a 800x600 viewport.
     expect(clampEditorOffset(1000, 560, 1024, 720, 1440, 900)).toEqual({ x: 416, y: 180 });
     expect(clampEditorOffset(1000, 560, 1024, 720, 800, 600)).toEqual({ x: 0, y: 0 });
   });

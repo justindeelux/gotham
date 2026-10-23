@@ -14,9 +14,6 @@ import (
 	"time"
 )
 
-// fakeCLI writes an executable shell stub named name and puts its directory at
-// the front of PATH for the rest of the test, so the engines shell out to the
-// stub instead of a real toolchain.
 func fakeCLI(t *testing.T, name, body string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -30,7 +27,6 @@ func fakeCLI(t *testing.T, name, body string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// readFakeCLI returns the contents of a file a fake CLI wrote.
 func readFakeCLI(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile(path)
@@ -40,10 +36,6 @@ func readFakeCLI(t *testing.T, path string) string {
 	return string(content)
 }
 
-// assertSameDir compares the working directory reported by a fake CLI with the
-// engine's repository directory, resolving symlinks first: macOS temp
-// directories are reached through /var -> /private/var, so `pwd` reports the
-// physical path.
 func assertSameDir(t *testing.T, got, want string) {
 	t.Helper()
 	resolvedGot, err := filepath.EvalSymlinks(strings.TrimSpace(got))
@@ -59,7 +51,6 @@ func assertSameDir(t *testing.T, got, want string) {
 	}
 }
 
-// railpackMarkerRepo returns a repository the Railpack engine detects.
 func railpackMarkerRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -132,7 +123,6 @@ func TestRailpackBuildRequiresBuildKit(t *testing.T) {
 	ranFile := filepath.Join(t.TempDir(), "ran")
 	fakeCLI(t, railpackCLI, fmt.Sprintf(`echo ran > '%s'`, ranFile))
 	t.Setenv("BUILDKIT_HOST", "")
-	// Only the fake railpack on PATH: with no docker either, BuildKit cannot start.
 	t.Setenv("PATH", filepath.Dir(mustLookPath(t, railpackCLI)))
 
 	builder := &mockBuilder{}
@@ -188,8 +178,6 @@ echo started > '%s'
 while :; do :; done`, startedFile))
 	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
 
-	// The stub stays inside the shell: a `sleep` grandchild would inherit the
-	// output pipe and keep the build from stopping when the context is done.
 	var logs bytes.Buffer
 	opts := testOptions(repoDir)
 	opts.LogWriter = &logs
@@ -227,8 +215,6 @@ while :; do :; done`, startedFile))
 	}
 }
 
-// TestRailpackEngineE2E builds a small Go application with a real railpack
-// installation against the local Docker daemon.
 func TestRailpackEngineE2E(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live builds")
@@ -239,9 +225,6 @@ func TestRailpackEngineE2E(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("BUILDKIT_HOST")) == "" {
 		t.Skip("BUILDKIT_HOST is not set; start a BuildKit daemon first")
 	}
-	// railpack pipes its image into the local daemon (`docker load`), so the
-	// daemon has to be reachable even though this engine never calls the
-	// ImageBuilder seam.
 	requireDocker(t)
 
 	dir := t.TempDir()

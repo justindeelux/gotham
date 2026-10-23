@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeProxyService records the route calls and returns canned outcomes.
 type fakeProxyService struct {
 	syncCalls   []uuid.UUID
 	syncErr     error
@@ -37,8 +36,6 @@ func (f *fakeProxyService) RevertServer(_ context.Context, serverID uuid.UUID) e
 	return f.revertErr
 }
 
-// newRoutes returns a router with the proxy routes mounted behind a no-op
-// auth middleware.
 func newRoutes(svc ProxyService) http.Handler {
 	r := chi.NewRouter()
 	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, svc, nil, nil, nil, nil)
@@ -239,6 +236,4 @@ func TestSyncRouteAllNodesPartialDiagnostics(t *testing.T) {
 	}
 }
 
-// passthroughAuth applies no authentication: the route tests exercise the
-// handlers, not the server's middleware chain.
 func passthroughAuth(next http.Handler) http.Handler { return next }

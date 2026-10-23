@@ -9,8 +9,6 @@ const props = defineProps<{
   show: boolean;
   row: GitSourceRow | null;
   working: boolean;
-  /** False while the usage lookup is pending or failed: the list below is
-   * not trustworthy, so disconnecting needs an explicit acknowledgement. */
   usageKnown: boolean;
   blockedNames: string[];
   blockedError: string;
@@ -21,7 +19,6 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-/** acknowledged lets an unknown-usage disconnect through explicitly. */
 const acknowledged = ref(false);
 
 watch(
@@ -33,7 +30,6 @@ watch(
   },
 );
 
-/** displayName names the connection in the confirmation. */
 function displayName(): string {
   if (props.row === null) {
     return "";
@@ -43,7 +39,6 @@ function displayName(): string {
     : `${props.row.title} ${props.row.account}`.trim();
 }
 
-/** confirmBlocked disables the button until unknown usage is acknowledged. */
 function confirmBlocked(): boolean {
   return props.row === null || (!props.usageKnown && !acknowledged.value);
 }

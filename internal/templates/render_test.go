@@ -10,7 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// renderDemo renders the sample template with the given values.
 func renderDemo(t *testing.T, values map[string]any) RenderResult {
 	t.Helper()
 	catalog := mustCatalog(t, sampleFiles())
@@ -21,7 +20,6 @@ func renderDemo(t *testing.T, values map[string]any) RenderResult {
 	return result
 }
 
-// decodeMap parses a document into generic YAML values.
 func decodeMap(t *testing.T, document string) map[string]any {
 	t.Helper()
 	var doc map[string]any
@@ -31,7 +29,6 @@ func decodeMap(t *testing.T, document string) map[string]any {
 	return doc
 }
 
-// serviceMap returns one compose service of a decoded document.
 func serviceMap(t *testing.T, doc map[string]any, name string) map[string]any {
 	t.Helper()
 	services, ok := doc["services"].(map[string]any)
@@ -45,7 +42,6 @@ func serviceMap(t *testing.T, doc map[string]any, name string) map[string]any {
 	return service
 }
 
-// envValue returns one environment value of a decoded compose service.
 func envValue(t *testing.T, doc map[string]any, service, key string) string {
 	t.Helper()
 	environment, ok := serviceMap(t, doc, service)["environment"].(map[string]any)
@@ -59,8 +55,6 @@ func envValue(t *testing.T, doc map[string]any, service, key string) string {
 	return value
 }
 
-// TestRenderSample proves defaults fill every optional field, the parsed spec
-// carries the domain route, and rendering is deterministic.
 func TestRenderSample(t *testing.T) {
 	values := map[string]any{"domain": "app.example.com", "password": "p$ss"}
 	result := renderDemo(t, values)
@@ -91,8 +85,6 @@ func TestRenderSample(t *testing.T) {
 	if got := envValue(t, doc, "web", "NOTE"); got != "hello" {
 		t.Errorf("NOTE = %q", got)
 	}
-	// A secret never enters the document: it is a reference the services
-	// pipeline resolves from Env (and redacts from every error).
 	if got := envValue(t, doc, "web", "PASSWORD"); got != "${password}" {
 		t.Errorf("PASSWORD = %q, want the ${password} reference", got)
 	}
@@ -102,8 +94,6 @@ func TestRenderSample(t *testing.T) {
 	if strings.Contains(result.ComposeYAML, "p$ss") {
 		t.Fatalf("the rendered document contains the secret:\n%s", result.ComposeYAML)
 	}
-	// The services pipeline resolves the reference and escapes it exactly
-	// like a service environment value.
 	rendered, err := services.Render(result.ComposeYAML, result.Env)
 	if err != nil {
 		t.Fatalf("services.Render: %v", err)
@@ -119,8 +109,6 @@ func TestRenderSample(t *testing.T) {
 	}
 }
 
-// TestRenderAcceptScalars proves JSON strings, whole numbers and booleans are
-// accepted for a typed field.
 func TestRenderAcceptScalars(t *testing.T) {
 	result := renderDemo(t, map[string]any{
 		"domain":   "app.example.com",
@@ -141,8 +129,6 @@ func TestRenderAcceptScalars(t *testing.T) {
 	}
 }
 
-// TestRenderRejectsBadValues proves strict validation: missing required values,
-// unknown fields and values that fail their type's rules are all errors.
 func TestRenderRejectsBadValues(t *testing.T) {
 	cases := map[string]struct {
 		values map[string]any
@@ -180,9 +166,6 @@ func TestRenderRejectsBadValues(t *testing.T) {
 	}
 }
 
-// TestRenderRejectsOversizedDocument proves the rendered-size budget stops a
-// document with repeated placeholders before the oversized string is built
-// (the budget is shared across the whole document, like services.Interpolate).
 func TestRenderRejectsOversizedDocument(t *testing.T) {
 	repeats := services.MaxComposeYAML/MaxFieldValue + 2
 	files := sampleFiles()
@@ -203,7 +186,6 @@ func TestRenderRejectsOversizedDocument(t *testing.T) {
 	}
 }
 
-// TestRenderUnknownSlug proves an absent template is ErrNotFound.
 func TestRenderUnknownSlug(t *testing.T) {
 	catalog := mustCatalog(t, sampleFiles())
 	if _, err := catalog.Render("nope", nil); !errors.Is(err, ErrNotFound) {
@@ -211,15 +193,10 @@ func TestRenderUnknownSlug(t *testing.T) {
 	}
 }
 
-// TestRenderEscapesValuesForServices proves a non-secret value can never be
-// read as a ${VAR} reference by the service pipeline and can never inject YAML
-// structure: quotes, newlines, colons and dollars stay one scalar.
 func TestRenderEscapesValuesForServices(t *testing.T) {
 	note := "p$a$$b\n  injected: yes\n  - list\n${SECRET}\"quote\\\""
 	result := renderDemo(t, map[string]any{"domain": "app.example.com", "password": "x", "note": note})
 
-	// The render output is valid YAML: no injected top-level key, no second
-	// service, exactly one volume.
 	doc := decodeMap(t, result.ComposeYAML)
 	if _, ok := doc["injected"]; ok {
 		t.Fatalf("the value injected a top-level key: %s", result.ComposeYAML)
@@ -231,14 +208,10 @@ func TestRenderEscapesValuesForServices(t *testing.T) {
 		t.Fatalf("NOTE = %q, want %q", got, escapeDollar(note))
 	}
 
-	// The services pipeline renders the document without resolving anything
-	// out of the value: every dollar is already escaped.
 	rendered, err := services.Render(result.ComposeYAML, result.Env)
 	if err != nil {
 		t.Fatalf("services.Render: %v", err)
 	}
-	// The node's compose run unescapes $$ back to $, so the escaped form is
-	// exactly what must arrive on disk.
 	final := decodeMap(t, rendered.ComposeYAML)
 	deployed := envValue(t, final, "web", "NOTE")
 	if deployed != escapeDollar(note) {
@@ -249,9 +222,6 @@ func TestRenderEscapesValuesForServices(t *testing.T) {
 	}
 }
 
-// TestRenderSecretBecomesEnvReference proves the secret boundary: the value
-// travels in Env, the document carries only the reference, and the services
-// pipeline resolves and escapes it exactly like a service environment value.
 func TestRenderSecretBecomesEnvReference(t *testing.T) {
 	secret := "p$a$$b\n${SECRET}\"quote"
 	result := renderDemo(t, map[string]any{"domain": "app.example.com", "password": secret})
@@ -280,9 +250,6 @@ func TestRenderSecretBecomesEnvReference(t *testing.T) {
 	}
 }
 
-// TestRenderSecretNeverInErrors proves no error the renderer returns echoes a
-// secret, even when the template places the placeholder in a parse-visible
-// position (a service name) and the parser rejects the reference.
 func TestRenderSecretNeverInErrors(t *testing.T) {
 	files := sampleFiles()
 	files["demo/compose.yaml"] = strings.Replace(sampleComposeYAML, "  web:", "  \"{{ .password }}\":", 1)
@@ -291,7 +258,6 @@ func TestRenderSecretNeverInErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("Render succeeded, want a parser error")
 	}
-	// A parse failure is a validation-class error for the routes either way.
 	if !errors.Is(err, ErrValidation) && !errors.Is(err, services.ErrValidation) {
 		t.Errorf("error = %v, want a validation sentinel", err)
 	}
@@ -303,8 +269,6 @@ func TestRenderSecretNeverInErrors(t *testing.T) {
 	}
 }
 
-// TestRenderIsNotRecursive proves a value that itself looks like a placeholder
-// is inserted literally once; the engine never re-scans its own output.
 func TestRenderIsNotRecursive(t *testing.T) {
 	result := renderDemo(t, map[string]any{"domain": "app.example.com", "password": "x", "note": "{{ .domain }}"})
 	doc := decodeMap(t, result.ComposeYAML)
@@ -313,8 +277,6 @@ func TestRenderIsNotRecursive(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsTemplateSyntax proves the placeholder syntax is the only
-// mechanism: template actions, pipes, functions and blocks are load errors.
 func TestLoadRejectsTemplateSyntax(t *testing.T) {
 	for name, replacement := range map[string]string{
 		"action":  "{{ if .count }}",
@@ -337,8 +299,6 @@ func TestLoadRejectsTemplateSyntax(t *testing.T) {
 	}
 }
 
-// TestRenderPlaceholderSpacing proves the documented whitespace tolerance:
-// {{.field}}, {{ .field}} and {{ .field }} are equivalent.
 func TestRenderPlaceholderSpacing(t *testing.T) {
 	for _, form := range []string{"{{.domain}}", "{{ .domain}}", "{{.domain }}", "{{ .domain }}"} {
 		files := sampleFiles()

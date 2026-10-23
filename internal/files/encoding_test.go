@@ -12,7 +12,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// gbkFixture returns s encoded as GBK, failing the test on an unsupported rune.
 func gbkFixture(t *testing.T, s string) []byte {
 	t.Helper()
 	encoded, err := gbkEncoding.NewEncoder().Bytes([]byte(s))
@@ -22,7 +21,6 @@ func gbkFixture(t *testing.T, s string) []byte {
 	return encoded
 }
 
-// big5Fixture returns s encoded as BIG5.
 func big5Fixture(t *testing.T, s string) []byte {
 	t.Helper()
 	encoded, err := big5Encoding.NewEncoder().Bytes([]byte(s))
@@ -32,8 +30,6 @@ func big5Fixture(t *testing.T, s string) []byte {
 	return encoded
 }
 
-// newEncodingTestService builds a service whose editor ceiling fits the
-// multi-byte fixtures below (newTestService keeps an 8-byte ceiling).
 func newEncodingTestService(t *testing.T, registry Registry, client FileClient) *Service {
 	t.Helper()
 	svc := newTestService(t, registry, client)
@@ -69,7 +65,6 @@ func TestDetectEncoding(t *testing.T) {
 			if text != test.text {
 				t.Fatalf("text = %q, want %q", text, test.text)
 			}
-			// Fixtures round-trip byte-identically when unchanged.
 			if test.body != nil && encodingName != EncodingUTF8 {
 				encoded, err := encodeContent(encodingName, text)
 				if err != nil {
@@ -109,15 +104,11 @@ func TestLegacyFixturesRoundTripByteIdentically(t *testing.T) {
 	}
 }
 
-// TestDetectEncodingRejectsNonRoundTripBytes proves a candidate whose decode
-// does not re-encode byte-identically is never accepted as that charset. BIG5
-// A2CC decodes to U+5341 and re-encodes to A451, so an unchanged save would
-// rewrite the file.
 func TestDetectEncodingRejectsNonRoundTripBytes(t *testing.T) {
 	body := []byte{0xA2, 0xCC}
 	encodingName, text, err := detectEncoding(body)
 	if errors.Is(err, ErrNotEditable) {
-		return // refusing the body is the other safe outcome
+		return
 	}
 	if err != nil {
 		t.Fatalf("detect: %v", err)

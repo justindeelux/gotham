@@ -21,27 +21,22 @@ const props = defineProps<{ serverId: string }>();
 
 const proxyStore = useProxyStore();
 
-/** routersOfNode filters the shared router cache to this node. */
 const routersOfNode = computed<ProxyRouter[]>(() =>
   proxyStore.routers.filter((router) => router.server_id === props.serverId),
 );
 
-/** nodeState is this node's reported read outcome, if any. */
 const nodeState = computed(
   () =>
     proxyStore.routerNodes.find((node) => node.server_id === props.serverId) ??
     null,
 );
 
-/** syncStatus is the node's reported sync state, never invented. */
 const syncStatus = computed<string>(() => nodeState.value?.sync_status ?? "unknown");
 
-/** refresh loads the generated routers (shared cache, all nodes). */
 async function refresh(): Promise<void> {
   await proxyStore.fetchRouters().catch(() => undefined);
 }
 
-/** kindLabel renders the owning-resource kind in the current locale. */
 function kindLabel(kind: ProxyRouter["kind"]): string {
   switch (kind) {
     case "service":
@@ -53,7 +48,6 @@ function kindLabel(kind: ProxyRouter["kind"]): string {
   }
 }
 
-/** syncLabel renders the node sync status; unknown is never a success. */
 function syncLabel(status: string): string {
   switch (status) {
     case "synced":
@@ -65,7 +59,6 @@ function syncLabel(status: string): string {
   }
 }
 
-/** syncTagType maps the node sync status onto a tag style. */
 function syncTagType(status: string): "success" | "warning" | "default" {
   switch (status) {
     case "synced":
@@ -77,7 +70,6 @@ function syncTagType(status: string): "success" | "warning" | "default" {
   }
 }
 
-/** hostCell renders the host with its backend target. */
 function hostCell(router: ProxyRouter): VNode {
   return h("div", { class: "cell-main" }, [
     h("span", { class: "mono cell-name" }, router.host),
@@ -87,7 +79,6 @@ function hostCell(router: ProxyRouter): VNode {
   ]);
 }
 
-/** sourceCell renders the owning-resource kind and name. */
 function sourceCell(router: ProxyRouter): VNode {
   return h("div", { class: "cell-main" }, [
     h(NTag, { size: "small" }, { default: () => kindLabel(router.kind) }),
@@ -97,7 +88,6 @@ function sourceCell(router: ProxyRouter): VNode {
   ]);
 }
 
-/** tlsCell renders the TLS resolver, or plain HTTP when there is none. */
 function tlsCell(router: ProxyRouter): VNode {
   if (!router.tls_resolver) {
     return h(NText, { depth: 3 }, { default: () => proxyText("domains.routers.httpOnly", "HTTP") });

@@ -28,16 +28,6 @@ import type { GitSourceRow } from "@/features/applications/composables/useGitSou
 import { useTeamsStore } from "@/features/teams";
 import { formatDate } from "@/shared/utils/format";
 
-/**
- * Git sources management (GS-10, JUS-66): the Settings page listing every
- * connected Git source. GitHub App connections and GitLab connections are
- * managed here through the GS-5/GS-6 automatic flows; legacy OAuth rows list
- * read-only. Connections belong to the signed-in account and the API guards
- * mutations by token scope, so the page shows its actions to every
- * authenticated user instead of gating on team role. Secrets never render:
- * the admin token and client secrets are write-only dialog fields, cleared
- * on submit.
- */
 const { t } = useI18n();
 const message = useMessage();
 const teamsStore = useTeamsStore();
@@ -51,10 +41,8 @@ const showGitLab = ref(false);
 const disconnectRow = ref<GitSourceRow | null>(null);
 const disconnectWorking = ref(false);
 
-/** githubNameValid gates the manifest start on a non-empty name. */
 const githubNameValid = computed<boolean>(() => githubName.value.trim() !== "");
 
-/** eyebrow shows the team name when one is selected. */
 const eyebrow = computed<string>(() => {
   const team = teamsStore.activeTeam?.name ?? "";
   return team === ""
@@ -62,7 +50,6 @@ const eyebrow = computed<string>(() => {
     : t("applications.gitSources.eyebrowTeam", { team });
 });
 
-/** connectedCount/attentionCount summarize the table header. */
 const connectedCount = computed<number>(
   () => page.rows.value.filter((row) => row.connected).length,
 );
@@ -70,14 +57,12 @@ const attentionCount = computed<number>(
   () => page.rows.value.length - connectedCount.value,
 );
 
-/** rowName renders the connection name for messages. */
 function rowName(row: GitSourceRow): string {
   return row.kind === "github-app"
     ? `${row.title} ${row.subtitle}`.trim()
     : `${row.title} ${row.account}`.trim();
 }
 
-/** appsCell renders the Applications column for the usage lookup state. */
 function appsCell(row: GitSourceRow): string {
   if (page.usageLoading.value) {
     return t("applications.gitSources.appsPending");
@@ -99,14 +84,12 @@ watch(
   },
 );
 
-/** openGitHub resets the name draft and its error. */
 function openGitHub(): void {
   githubName.value = "gotham";
   githubError.value = null;
   showGitHub.value = true;
 }
 
-/** submitGitHub starts the manifest flow; the browser leaves for the host. */
 async function submitGitHub(): Promise<void> {
   if (!githubNameValid.value || githubWorking.value) {
     return;
@@ -123,7 +106,6 @@ async function submitGitHub(): Promise<void> {
   }
 }
 
-/** reconnectRow resumes the Install/Authorize step; the browser leaves. */
 async function reconnectRow(row: GitSourceRow): Promise<void> {
   try {
     await page.reconnect(row);
@@ -134,16 +116,12 @@ async function reconnectRow(row: GitSourceRow): Promise<void> {
   }
 }
 
-/** askDisconnect opens the confirmation listing the using applications. */
 function askDisconnect(row: GitSourceRow): void {
   page.disconnectError.value = null;
   page.disconnectNames.value = [];
   disconnectRow.value = row;
 }
 
-/** confirmDisconnect forgets the connection. Failures (including the 409
- * naming the applications) stay in page.disconnectError with the dialog
- * open; the rejection is handled here, never unhandled. */
 async function confirmDisconnect(): Promise<void> {
   const row = disconnectRow.value;
   if (row === null || disconnectWorking.value) {
@@ -164,7 +142,6 @@ async function confirmDisconnect(): Promise<void> {
       message.success(t("applications.gitSources.disconnected", { name: rowName(row) }));
     }
   } catch {
-    // Surfaced through page.disconnectError inside the open dialog.
   } finally {
     disconnectWorking.value = false;
   }
@@ -455,11 +432,6 @@ async function confirmDisconnect(): Promise<void> {
 }
 </style>
 
-<!--
-  Unscoped on purpose: NModal teleports the card to <body>, so scoped
-  selectors (which compile to a [data-v] ancestor match) never reach it.
-  Every rule stays behind the .connect-modal class owned by this dialog.
--->
 <style>
 .connect-modal.n-modal.n-card {
   max-height: calc(100vh - 64px);

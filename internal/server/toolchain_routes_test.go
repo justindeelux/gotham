@@ -17,7 +17,6 @@ import (
 func TestToolchainUninstallRefusalReturnsBadRequestWithImpact(t *testing.T) {
 	for _, id := range []string{"git", "docker"} {
 		s, _ := newToolchainTestServer(t, &fakeToolchainService{})
-		// The real service must refuse before dialing an agent or creating a job.
 		service := toolchain.NewService(toolchain.Config{})
 		s.toolchain = service
 		t.Cleanup(func() { _ = service.Close() })
@@ -29,7 +28,6 @@ func TestToolchainUninstallRefusalReturnsBadRequestWithImpact(t *testing.T) {
 	}
 }
 
-// fakeToolchainService is an in-memory ToolchainService for the route tests.
 type fakeToolchainService struct {
 	tools   []toolchain.Tool
 	listErr error
@@ -68,8 +66,6 @@ func (f *fakeToolchainService) List(context.Context, uuid.UUID, int) ([]toolchai
 	return nil, f.jobErr
 }
 
-// newToolchainTestServer builds the fake-auth server, injects the toolchain
-// service, and rebuilds the router so the toolchain routes mount.
 func newToolchainTestServer(t *testing.T, fake *fakeToolchainService) (*Server, *fakeTokenService) {
 	t.Helper()
 	s, tokens := newScopeTestServer(t)
@@ -82,9 +78,6 @@ func newToolchainTestServer(t *testing.T, fake *fakeToolchainService) (*Server, 
 	return s, tokens
 }
 
-// TestToolchainRoutesScopeContainment is the RBAC matrix for the toolchain
-// surface: it rides the same chain as server management, so a read token may
-// list tools but not enqueue jobs, while a deploy token and a JWT session may.
 func TestToolchainRoutesScopeContainment(t *testing.T) {
 	fake := &fakeToolchainService{
 		tools:         []toolchain.Tool{{ID: "docker", Name: "Docker", Installable: true}},
@@ -125,8 +118,6 @@ func TestToolchainRoutesScopeContainment(t *testing.T) {
 	}
 }
 
-// TestToolchainRouteErrorMapping pins the domain-error to status-code mapping
-// the Web UI depends on.
 func TestToolchainRouteErrorMapping(t *testing.T) {
 	serverID := uuid.New().String()
 	jobsPath := "/api/v1/servers/" + serverID + "/toolchain/jobs"
@@ -191,8 +182,6 @@ func TestToolchainInvalidJobIDIsBadRequest(t *testing.T) {
 	}
 }
 
-// TestToolchainGetJobReturnsLogAndCursor covers the job-detail shape: the log
-// is returned separately with a next_seq cursor, and ?after= is passed through.
 func TestToolchainGetJobReturnsLogAndCursor(t *testing.T) {
 	fake := &fakeToolchainService{
 		job:     toolchain.Job{ID: uuid.New(), ToolID: "docker", Status: toolchain.StatusRunning},

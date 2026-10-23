@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// TestResolveGitHubRedirectURL pins the precedence: the explicit redirect env
-// wins when set, otherwise the control-plane base names the callback path,
-// and empty stays empty (today's behavior).
 func TestResolveGitHubRedirectURL(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -31,9 +28,6 @@ func TestResolveGitHubRedirectURL(t *testing.T) {
 	}
 }
 
-// TestGitHubProviderControlPlaneSource pins that the authorization URL
-// carries the derived redirect when the explicit value is unset, and that an
-// explicit value or an unset base keeps today's behavior.
 func TestGitHubProviderControlPlaneSource(t *testing.T) {
 	derived, ok := NewGitHubProvider("id", "secret", "").(*GitHubProvider)
 	if !ok {
@@ -71,8 +65,6 @@ func TestGitHubProviderControlPlaneSource(t *testing.T) {
 	}
 }
 
-// TestOAuthServiceGitHubControlPlaneSource pins that the service forwards the
-// source to its GitHub provider.
 func TestOAuthServiceGitHubControlPlaneSource(t *testing.T) {
 	provider, ok := NewGitHubProvider("id", "secret", "").(*GitHubProvider)
 	if !ok {

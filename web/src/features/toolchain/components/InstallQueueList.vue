@@ -21,19 +21,16 @@ const { t } = useI18n();
 const message = useMessage();
 const store = useToolchainStore();
 
-/** toolLabel renders the catalog name, falling back to the raw tool id. */
 function toolLabel(job: ToolchainJob): string {
   return store.tools.find((tool) => tool.id === job.tool_id)?.name ?? job.tool_id;
 }
 
-/** actionLabel renders install/uninstall in the display locale. */
 function actionLabel(job: ToolchainJob): string {
   return job.action === "install"
     ? t("toolchain.actions.install")
     : t("toolchain.actions.uninstall");
 }
 
-/** tagType maps a job status to one Naive tag (mirrors the page badges). */
 function tagType(status: ToolchainJob["status"]): "default" | "info" | "success" | "error" {
   switch (status) {
     case "running":
@@ -47,7 +44,6 @@ function tagType(status: ToolchainJob["status"]): "default" | "info" | "success"
   }
 }
 
-/** statusIcon names the per-status icon; running renders a spinner instead. */
 function statusIcon(status: ToolchainJob["status"]): Component | null {
   switch (status) {
     case "queued":
@@ -63,7 +59,6 @@ function statusIcon(status: ToolchainJob["status"]): Component | null {
   }
 }
 
-/** pending tracks per-job cancel/retry spinners by job id. */
 const pending = ref<Record<string, boolean>>({});
 
 function setPending(jobId: string, on: boolean): void {
@@ -76,11 +71,6 @@ function setPending(jobId: string, on: boolean): void {
   pending.value = next;
 }
 
-/**
- * handleCancel cancels a queued job. When the job just started (409) the
- * row would lie until a frame arrives, so the job is re-fetched and the
- * queue row resyncs immediately.
- */
 async function handleCancel(job: ToolchainJob): Promise<void> {
   setPending(job.id, true);
   try {
@@ -91,7 +81,6 @@ async function handleCancel(job: ToolchainJob): Promise<void> {
         const detail = await getJob(store.serverId, job.id);
         store.applyJob(detail.job);
       } catch {
-        // Best-effort: the toast below still explains the conflict.
       }
     }
     message.error(describeToolchainError(err));
@@ -100,12 +89,6 @@ async function handleCancel(job: ToolchainJob): Promise<void> {
   }
 }
 
-/**
- * handleRetry re-enqueues a failed job's tool action as a fresh job and
- * focuses the new attempt so its output starts streaming immediately. When
- * the API reports the action as already active, the existing job is focused
- * instead of leaving the click with no visible effect.
- */
 async function handleRetry(job: ToolchainJob): Promise<void> {
   setPending(job.id, true);
   try {

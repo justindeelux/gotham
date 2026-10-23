@@ -7,14 +7,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestP4DeployRunning proves the core Phase 4 (M4) scenario end to end: a
-// fixture repository is cloned by the control plane, built on the node by the
-// Dockerfile engine through BuildImage, pushed to the node registry, started,
-// and finally reached over its host port.
-//
-// Everything runs against real infrastructure — PostgreSQL, Redis, a mTLS
-// agent and the local Docker daemon — so it is gated by GOTHAM_E2E=1 and fails
-// when any precondition is missing; only the feature-off default run skips.
 func TestP4DeployRunning(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
@@ -50,8 +42,6 @@ func TestP4DeployRunning(t *testing.T) {
 		t.Error("running deployment has no container")
 	}
 
-	// The build streamed into the realtime deployment log before the container
-	// started, and the application answers on its published host port.
 	h.waitForDeployLog(t, queued.ID, "image built: ")
 	waitForHTTPBody(t, h.appURL(t, app.ID), fixture.marker)
 
@@ -59,17 +49,11 @@ func TestP4DeployRunning(t *testing.T) {
 		app.ID, running.ID, running.ImageTag, h.publishedHostPort(t, app.ID, p4ContainerPort))
 }
 
-// TestP4FailedBuild proves the failure half of the state machine: a Dockerfile
-// that cannot build leaves the deployment `failed` with an actionable error on
-// the row, and the build output it produced before failing is attached to the
-// deployment's log.
 func TestP4FailedBuild(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
 	fixture := newBrokenP4Fixture(t, "e2e/p4-broken-"+suffix, "gotham-p4-broken-"+suffix)
 
-	// The legacy Docker builder leaves the failed RUN step's scratch container
-	// behind without any label, so cleanup must match it by command text.
 	t.Cleanup(func() { removeContainersMatchingCommand(t, "P4-BUILD-BOOM") })
 
 	app := h.createApplication(t, p4CreateApplication{
@@ -98,8 +82,6 @@ func TestP4FailedBuild(t *testing.T) {
 		t.Errorf("error = %q, want the Docker build failure detail", failed.Error)
 	}
 
-	// The failure is logged on the deployment, together with the build output
-	// the engine streamed before the daemon reported the error.
 	h.waitForDeployLog(t, queued.ID, "step building failed")
 	buildLog := h.deployLogs(queued.ID)
 	if !containsAny(buildLog, "P4-BUILD-BOOM", "busybox", "Step ") {
@@ -109,9 +91,6 @@ func TestP4FailedBuild(t *testing.T) {
 	t.Logf("failed build ok: error=%q", failed.Error)
 }
 
-// TestP4Rollback proves the release history is usable: v1 runs, the fixture
-// moves to v2 and deploys, then POST /applications/{id}/rollback redeploys the
-// image v1 built and the original page is served again.
 func TestP4Rollback(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
@@ -131,7 +110,6 @@ func TestP4Rollback(t *testing.T) {
 	})
 	h.addDomain(t, app.ID, "p4-rollback-"+suffix+".example.test", p4ContainerPort)
 
-	// 1. Release v1.
 	first := h.deploy(t, app.ID)
 	running1 := h.waitForTerminal(t, app.ID, first.ID)
 	if running1.State != "running" {
@@ -139,7 +117,6 @@ func TestP4Rollback(t *testing.T) {
 	}
 	waitForHTTPBody(t, h.appURL(t, app.ID), v1Marker)
 
-	// 2. Publish v2 and release it over the same application.
 	fixture.commit(t, v2Marker, p4Dockerfile)
 	second := h.deploy(t, app.ID)
 	running2 := h.waitForTerminal(t, app.ID, second.ID)
@@ -151,7 +128,6 @@ func TestP4Rollback(t *testing.T) {
 	}
 	waitForHTTPBody(t, h.appURL(t, app.ID), v2Marker)
 
-	// 3. Roll back to the previous release.
 	rollback := h.rollback(t, app.ID, nil)
 	if rollback.Kind != "rollback" {
 		t.Errorf("rollback kind = %q, want rollback", rollback.Kind)

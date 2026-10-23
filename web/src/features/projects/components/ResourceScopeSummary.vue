@@ -9,10 +9,6 @@ const props = withDefaults(
   defineProps<{
     projectId: string;
     environmentId: string;
-    /**
-     * Leading verb override (a translated sentence fragment). When absent
-     * the creation wording renders in the active locale.
-     */
     verb?: string;
   }>(),
   { verb: undefined },
@@ -23,25 +19,15 @@ const emit = defineEmits<{
   "update:environmentId": [value: string];
 }>();
 
-/**
- * Read-only project/environment summary with a change link, shared by every
- * create flow and the resource move card (PE-5, Linear JUS-34). The first
- * step of each creation shows where the resource lands; Change scope swaps
- * the summary for project and environment selects.
- */
 const options = useEnvironmentOptions();
 
-// Without a preselected scope (the flat template library) the selects show
-// immediately instead of an empty summary.
 const changing = ref(props.projectId === "" || props.environmentId === "");
 
-/** t renders scope copy in the active locale (tracks language switches). */
 function t(key: string): string {
   void activeLocale.value;
   return String(i18n.global.t(key));
 }
 
-/** verbText is the caller override or the localized creation wording. */
 const verbText = computed<string>(() => props.verb ?? t("projects.scope.creatingIn"));
 
 watch(
@@ -64,12 +50,10 @@ const environmentLabel = computed<string>(
     (options.environmentsLoading.value ? t("projects.scope.loading") : props.environmentId.slice(0, 8)),
 );
 
-/** changeReady gates Done: both selects must name a scope. */
 const changeReady = computed<boolean>(
   () => props.projectId !== "" && props.environmentId !== "",
 );
 
-/** handleProjectChange swaps the project and clears the stale environment. */
 function handleProjectChange(projectId: string): void {
   emit("update:projectId", projectId);
   emit("update:environmentId", "");

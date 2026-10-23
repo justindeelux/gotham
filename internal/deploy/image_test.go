@@ -97,13 +97,10 @@ func TestPinnedImageReference(t *testing.T) {
 	if want := "registry.example.com/team/app@" + digest; got != want {
 		t.Errorf("got %q; want %q", got, want)
 	}
-	// An empty digest keeps the tag: releases recorded before digest
-	// resolution still roll back.
 	got, err = PinnedImageReference("nginx:1.25", "")
 	if err != nil || got != "nginx:1.25" {
 		t.Errorf("empty digest = %q, %v; want the tag unchanged", got, err)
 	}
-	// A pinned reference re-pins to the new digest, dropping the old one.
 	got, err = PinnedImageReference("nginx:1.25@"+digest, "sha256:"+strings.Repeat("f", 64))
 	if err != nil {
 		t.Fatalf("re-pin: %v", err)

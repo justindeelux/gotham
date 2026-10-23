@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// mustParse parses entries and fails the test on a malformed value.
 func mustParse(t *testing.T, entries ...string) []netip.Prefix {
 	t.Helper()
 	prefixes, err := Parse(entries)

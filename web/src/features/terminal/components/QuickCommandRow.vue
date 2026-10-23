@@ -5,7 +5,6 @@ import { useI18n } from "vue-i18n";
 
 import type { QuickCommand } from "@/features/terminal/schemas/quickCommands";
 
-/** One saved command row (JUS-249): insert, edit or delete. */
 interface Props {
   command: QuickCommand;
 }

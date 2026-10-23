@@ -18,8 +18,6 @@ import { RouterLink } from "vue-router";
           <NButton quaternary @click="navigate">{{ $t("dashboard.header.viewServers") }}</NButton>
         </template>
       </RouterLink>
-      <!-- The add-server wizard lives on the servers page (no dedicated
-           route), so this links there with a forward-compatible flag. -->
       <RouterLink :to="{ name: 'servers', query: { add: '1' } }" custom>
         <template #default="{ navigate }">
           <NButton type="primary" @click="navigate">{{ $t("dashboard.header.addServer") }}</NButton>

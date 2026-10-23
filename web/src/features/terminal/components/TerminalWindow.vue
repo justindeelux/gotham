@@ -26,14 +26,6 @@ import FloatingWindow from "@/shared/ui/FloatingWindow.vue";
 import type { WindowBox } from "@/shared/window/geometry";
 import { windowResizeLimits } from "@/shared/window/geometry";
 
-/**
- * App-level floating terminal window (JUS-245).
- *
- * It mounts once in AppLayout (next to the code editor) and collapses with
- * `v-show`, so every PTY survives route navigation, tab switches and
- * minimize/restore. Multiple tabs are independent sessions; the geometry is
- * the same shared math the editor uses (move, eight grips, viewport bound).
- */
 const { t } = useI18n();
 const terminal = useTerminalStore();
 const windowStore = useTerminalWindowStore();
@@ -50,7 +42,6 @@ const activeTab = computed(() => {
   return tabs.value.find((tab) => tab.id === id) ?? tabs.value[0] ?? null;
 });
 
-/** displayedSize is the fitted size for the current viewport. */
 const displayedSize = computed<{ width: number; height: number }>(() => {
   const fitted = windowStore.displayGeometry(
     viewport.value.width,
@@ -59,7 +50,6 @@ const displayedSize = computed<{ width: number; height: number }>(() => {
   return { width: fitted.width, height: fitted.height };
 });
 
-/** resizeLimits is the terminal's resize band for the current viewport. */
 const resizeLimits = computed(() =>
   windowResizeLimits(
     viewport.value.width,
@@ -73,7 +63,6 @@ const resizeLimits = computed(() =>
   ),
 );
 
-/** windowStyle applies the displayed size and the dragged position. */
 const windowStyle = computed<CSSProperties>(() => {
   const fitted = windowStore.displayGeometry(
     viewport.value.width,
@@ -94,17 +83,14 @@ const windowStyle = computed<CSSProperties>(() => {
   return style as CSSProperties;
 });
 
-/** onWindowResize records the viewport for display-only fitting. */
 function onWindowResize(): void {
   viewport.value = { width: window.innerWidth, height: window.innerHeight };
 }
 
-/** focusWindow raises this window above the editor until focus leaves it. */
 function focusWindow(): void {
   windowStore.raise();
 }
 
-/** onDocumentPointerDown lowers the window when a click lands elsewhere. */
 function onDocumentPointerDown(event: PointerEvent): void {
   if (
     !windowStore.raised ||
@@ -115,7 +101,6 @@ function onDocumentPointerDown(event: PointerEvent): void {
   windowStore.lower();
 }
 
-/** onWindowDrag applies a title-bar drag, clamped by the store. */
 function onWindowDrag(x: number, y: number): void {
   windowStore.setPosition(
     x,
@@ -125,12 +110,10 @@ function onWindowDrag(x: number, y: number): void {
   );
 }
 
-/** onWindowResize applies a grip resize; the store keeps the opposite edge. */
 function onWindowResizeMove(box: WindowBox): void {
   windowStore.resizeTo(box, viewport.value.width, viewport.value.height);
 }
 
-/** onWindowResizeBy applies one keyboard resize step from the slider. */
 function onWindowResizeBy(deltaWidth: number, deltaHeight: number): void {
   windowStore.resizeBy(
     deltaWidth,
@@ -140,7 +123,6 @@ function onWindowResizeBy(deltaWidth: number, deltaHeight: number): void {
   );
 }
 
-/** minimizeWindow collapses into the rail and moves focus to its icon. */
 function minimizeWindow(): void {
   windowStore.setMinimized(true);
   void nextTick(() => {
@@ -150,12 +132,10 @@ function minimizeWindow(): void {
   });
 }
 
-/** restoreWindow reopens the window and re-fits the active renderer. */
 function restoreWindow(): void {
   windowStore.setMinimized(false);
 }
 
-/** focusRestoredWindow lands focus on the active tab after a restore. */
 function focusRestoredWindow(): void {
   const tab = activeTab.value;
   if (!tab) {
@@ -174,8 +154,6 @@ watch(
   },
 );
 
-// Switching tabs re-measures the newly visible xterm host and keeps focus on
-// the tab the user chose.
 watch(
   () => activeTab.value?.id,
   () => {
@@ -190,22 +168,18 @@ watch(
   },
 );
 
-/** requestCloseTab uses the shared confirmation path. */
 function requestCloseTab(id: string): void {
   terminal.requestClose([id]);
 }
 
-/** requestCloseWindow confirms all window tabs. */
 function requestCloseWindow(): void {
   terminal.requestClose(tabs.value.map((tab) => tab.id));
 }
 
-/** activateTab selects one tab and reveals its panel. */
 function activateTab(id: string): void {
   terminal.activate(id);
 }
 
-/** focusTab moves focus to one tab button (roving tablist). */
 function focusTab(index: number): void {
   const tab = tabs.value[index];
   if (!tab) {
@@ -217,7 +191,6 @@ function focusTab(index: number): void {
   });
 }
 
-/** revealActiveTab keeps the active tab visible in a scrolling strip. */
 function revealActiveTab(): void {
   const strip = tabsElement.value;
   const active = activeTab.value;
@@ -237,7 +210,6 @@ function revealActiveTab(): void {
   }
 }
 
-/** onTabKeydown implements roving focus and the Delete close path. */
 function onTabKeydown(event: KeyboardEvent, index: number): void {
   const count = tabs.value.length;
   if (count === 0) {
@@ -261,15 +233,6 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
   }
 }
 
-/**
- * onGlobalKeydown owns the terminal-wide shortcuts. They deliberately avoid
- * Alt+W (the editor's close-tab binding) and are scoped to focus inside the
- * window/page chrome, never inside the live shell: readline, vim and tmux
- * need their Meta bindings, and xterm's `macOptionIsMeta` turns Option into
- * Meta instead of a composed character. Alt+Shift+W closes the window; Alt+M
- * minimizes it; both go through the dialog/document path and are listed in
- * the surface shortcuts popover.
- */
 function onGlobalKeydown(event: KeyboardEvent): void {
   if (
     event.defaultPrevented ||
@@ -284,8 +247,6 @@ function onGlobalKeydown(event: KeyboardEvent): void {
     return;
   }
   const active = document.activeElement;
-  // The xterm textarea (and its helper nodes) owns Alt/Option chords while
-  // the shell has focus, so vim/tmux Meta bindings reach the PTY.
   if (active instanceof Element && active.closest(".xterm") !== null) {
     return;
   }
@@ -310,7 +271,6 @@ function onGlobalKeydown(event: KeyboardEvent): void {
   }
 }
 
-/** onConfirmed returns focus after the dialog removes its trigger. */
 function onConfirmed(): void {
   void nextTick(() => {
     const active = activeTab.value;
@@ -323,8 +283,6 @@ function onConfirmed(): void {
       terminal.focus(pageTab.id);
       return;
     }
-    // Nothing terminal is left: prefer the dock/rail control if one still
-    // renders instead of an arbitrary rail tile.
     const fallback =
       document.querySelector<HTMLElement>(".term-dock-resume") ??
       document.querySelector<HTMLElement>(".rail-btn--terminal") ??
@@ -333,7 +291,6 @@ function onConfirmed(): void {
   });
 }
 
-/** onBeforeUnload warns when a browser unload would kill a live PTY. */
 function onBeforeUnload(event: BeforeUnloadEvent): void {
   if (!terminal.hasLiveSessions) {
     return;
@@ -342,13 +299,10 @@ function onBeforeUnload(event: BeforeUnloadEvent): void {
   event.returnValue = "";
 }
 
-// A newly opened window tab (from a page transfer or an entry point) restores
-// the window without stealing focus from the pane that requested it.
 watch(
   () => tabs.value.length,
   (count, previous) => {
     if (count > (previous ?? 0)) {
-      // A new session (entry point or page transfer) comes to the front.
       windowStore.raise();
     }
     if (count > (previous ?? 0) && (previous === 0 || windowStore.minimized)) {
@@ -359,8 +313,6 @@ watch(
 
 onMounted(() => {
   window.addEventListener("resize", onWindowResize);
-  // Capture phase: xterm consumes some modified keys before they bubble, so
-  // the documented terminal chords must see them first.
   window.addEventListener("keydown", onGlobalKeydown, true);
   window.addEventListener("pointerdown", onDocumentPointerDown, true);
   window.addEventListener("beforeunload", onBeforeUnload);
@@ -374,7 +326,6 @@ onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", onBeforeUnload);
 });
 
-// Expose restore for the rail integration; the rail toggles the same method.
 defineExpose({ restoreWindow });
 </script>
 
@@ -417,9 +368,6 @@ defineExpose({ restoreWindow });
       </span>
     </template>
 
-    <!-- JUS-275: sessions live on their own strip below the title bar, with
-         the add-tab (+) control directly after the last tab. The strip scrolls
-         instead of pushing minimize/close or the add control off-screen. -->
     <template #tabs>
       <div class="term-tabstrip">
         <div
@@ -435,10 +383,6 @@ defineExpose({ restoreWindow });
             :class="{ 'is-active': tab.id === activeTab?.id }"
             role="presentation"
           >
-            <!-- The tablist owns only role=tab elements: the close control is a
-                 non-interactive span inside the tab (like the file tabs), so
-                 aria-required-children stays valid. Keyboard users close the
-                 focused tab with Delete, which the tab announces. -->
             <button
               :id="`term-tab-${tab.id}`"
               type="button"
@@ -501,8 +445,6 @@ defineExpose({ restoreWindow });
   max-height: calc(100dvh - var(--space-6) * 2);
 }
 
-/* The identity copy in the shared title bar: the heading already names the
-   tool, so the active session's title follows it as context. */
 .term-window-context {
   min-width: 0;
   overflow: hidden;
@@ -512,9 +454,6 @@ defineExpose({ restoreWindow });
   font-size: var(--text-xs);
 }
 
-/* JUS-275: sessions sit on their own row under the title bar. The strip takes
-   the free width, scrolls when tabs overflow, and keeps the add-tab control
-   immediately after the last tab. */
 .term-tabstrip {
   flex: 0 0 auto;
   display: flex;
@@ -647,7 +586,6 @@ defineExpose({ restoreWindow });
     bottom: var(--space-2);
   }
 
-  /* A phone keeps the tab labels legible: the status dots yield. */
   .term-tab-status {
     display: none;
   }

@@ -8,8 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestCreateRequiresEnvironment pins the contract: no environment is a 400,
-// a foreign one a 404.
 func TestCreateRequiresEnvironment(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
@@ -30,8 +28,6 @@ func TestCreateRequiresEnvironment(t *testing.T) {
 	}
 }
 
-// TestUpdateMovesEnvironment pins the move: same-team relocation works and a
-// name the target already holds is a 409.
 func TestUpdateMovesEnvironment(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
@@ -65,8 +61,6 @@ func TestUpdateMovesEnvironment(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesServerChangeWhileBusy pins the 409 guard: a node change
-// while a backup holds the database is refused, and succeeds once released.
 func TestUpdateRefusesServerChangeWhileBusy(t *testing.T) {
 	repo := newFakeRepository()
 	leases := NewJobLeases()
@@ -98,8 +92,6 @@ func TestUpdateRefusesServerChangeWhileBusy(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesServerChangeOnceCreated pins F2: a database that ever
-// provisioned a container cannot change node, even when idle.
 func TestUpdateRefusesServerChangeOnceCreated(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
@@ -121,9 +113,6 @@ func TestUpdateRefusesServerChangeOnceCreated(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesServerChangeWhileCreating pins R1: a row stuck in
-// creating with an empty container is still provisioning (its Run
-// continues against the old node), so a server change is refused.
 func TestUpdateRefusesServerChangeWhileCreating(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(repo, &fakeContainers{runID: "container-1"})
@@ -140,9 +129,6 @@ func TestUpdateRefusesServerChangeWhileCreating(t *testing.T) {
 	}
 }
 
-// TestUpdateHoldsLease pins F3: the service holds the database's job lease
-// for the whole update, so a backup starting mid-update serializes against
-// it, and the lease is released afterwards.
 func TestUpdateHoldsLease(t *testing.T) {
 	repo := newFakeRepository()
 	leases := NewJobLeases()
@@ -170,8 +156,6 @@ func TestUpdateHoldsLease(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusedWhileBackupHoldsLease pins F3: a backup that owns the
-// volume refuses even a rename, instead of racing it.
 func TestUpdateRefusedWhileBackupHoldsLease(t *testing.T) {
 	repo := newFakeRepository()
 	leases := NewJobLeases()
@@ -193,7 +177,6 @@ func TestUpdateRefusedWhileBackupHoldsLease(t *testing.T) {
 	leases.Release(created.ID)
 }
 
-// TestListFilters scopes the list to one environment or project.
 func TestListFilters(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(repo, &fakeContainers{runID: "container-1"})

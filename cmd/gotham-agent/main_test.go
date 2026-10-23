@@ -6,9 +6,6 @@ import (
 	"github.com/justindeelux/gotham/agent"
 )
 
-// TestNewTerminalConfigMapsConfig proves the agent config is carried into the
-// terminal service, including the GOTHAM_AGENT_TERMINAL_INTEGRATION off switch
-// (TerminalIntegration -> IntegrationDisabled).
 func TestNewTerminalConfigMapsConfig(t *testing.T) {
 	cfg := agent.Config{
 		TerminalShell:       "/bin/zsh",
@@ -33,9 +30,6 @@ func TestNewTerminalConfigMapsConfig(t *testing.T) {
 	}
 }
 
-// TestNewTerminalConfigHonoursIntegrationEnv proves the environment switch is
-// carried end to end: Load reads GOTHAM_AGENT_TERMINAL_INTEGRATION and the
-// config-to-server mapping disables the integration.
 func TestNewTerminalConfigHonoursIntegrationEnv(t *testing.T) {
 	t.Setenv("GOTHAM_AGENT_CA", "/etc/gotham/ca.pem")
 	t.Setenv("GOTHAM_AGENT_TERMINAL_INTEGRATION", "false")

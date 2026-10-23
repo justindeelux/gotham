@@ -1,14 +1,11 @@
 import { expect, test } from "./fixtures";
 import { nestedURL, storageStatePath } from "./support";
 
-// Every scenario starts from the session global setup created.
 test.use({ storageState: storageStatePath });
 
 const dbId = "11111111-1111-1111-1111-111111111111";
 const scheduleId = "22222222-2222-2222-2222-222222222222";
 const targetId = "33333333-3333-3333-3333-333333333333";
-// The mocked database rides a fixed scope so the nested URL resolves; the
-// breadcrumb reads the grouping fields, never the typed URL.
 const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const environmentId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const cron = "0 2 * * *";
@@ -35,8 +32,6 @@ const database = {
   updated_at: now,
 };
 
-// The schedule points at a target that no longer exists: this is the D3-2
-// case (deleted target must not block pausing the schedule).
 const schedule = {
   id: scheduleId,
   database_id: dbId,
@@ -80,14 +75,6 @@ const restores = [
   },
 ];
 
-/**
- * D3-16 — browser coverage for the database backup flows.
- *
- * The UI smoke job has no node agent, so provisioning a real database is
- * impossible here; like the previews-tab smoke, the API boundary is mocked
- * and the assertions are about the rendered contract and the exact mutation
- * bodies the page sends (schedule toggle, target clear, restore list).
- */
 test.describe("database backups", () => {
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/v1/databases", (route) =>
@@ -159,7 +146,6 @@ test.describe("database backups", () => {
   }) => {
     const row = page.locator(".backup-row").filter({ hasText: cron });
     await expect(row).toBeVisible();
-    // The destination no longer exists; the row says so instead of failing.
     await expect(row).toContainText("deleted target");
 
     const patch = page.waitForRequest(
@@ -178,7 +164,6 @@ test.describe("database backups", () => {
     );
     await row.locator(".n-switch").click();
 
-    // D3-2: pausing must not resend the dead target id, or the PATCH 404s.
     expect((await patch).postDataJSON()).toEqual({ cron, enabled: false });
 
     expect(guardrails.apiFailures).toEqual([]);
@@ -192,7 +177,6 @@ test.describe("database backups", () => {
     await expect(row).toBeVisible();
     await row.getByRole("button", { name: "Edit" }).click();
 
-    // Naive puts aria-label on the input wrapper; drill into the native input.
     const prefix = page.getByLabel("Key prefix").locator("input");
     await expect(prefix).toHaveValue("logs/");
 
@@ -211,8 +195,6 @@ test.describe("database backups", () => {
     await prefix.fill("");
     await page.getByRole("button", { name: "Save target" }).click();
 
-    // D3-5: the clear marker must reach the server; blank credentials stay
-    // omitted so the stored keys survive.
     const body = (await patch).postDataJSON() as Record<string, unknown>;
     expect(body["prefix"]).toBe("");
     expect(body).not.toHaveProperty("access_key");
@@ -225,13 +207,10 @@ test.describe("database backups", () => {
     page,
     guardrails,
   }) => {
-    // The future next-run renders forward-looking (D3-3), not "just now".
     await expect(
       page.locator(".backup-row").filter({ hasText: cron }),
     ).toContainText("in 2h");
 
-    // D3-7: the 202 queue acknowledgement is not the end of the story; the
-    // durable rows render with their terminal states.
     const history = page.locator(".n-card").filter({ hasText: "Restore history" });
     await expect(history).toBeVisible();
     await expect(history).toContainText("completed");

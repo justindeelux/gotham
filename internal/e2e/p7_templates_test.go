@@ -16,21 +16,8 @@ import (
 	"github.com/justindeelux/gotham/internal/templates"
 )
 
-// Phase 7 (BE-7.2) production acceptance: the one-click template engine. The
-// test renders the WordPress template through the production catalog, creates
-// a service from the rendered document through the real BE-7.1 path
-// (store -> services.Service -> mTLS agent ComposeServer -> `docker compose`
-// CLI -> Docker), and proves the declared domain is served through the real
-// Traefik on the node.
-//
-// The plan's verify line: "render WordPress from sample input -> compose
-// contains the right domain/env; 1-click deploy succeeds".
-//
-// Gated by GOTHAM_E2E=1 like the rest of the Phase 7 acceptance.
 const p7WordPressImage = "wordpress:6-apache"
 
-// p7TemplateSamples is one valid input per built-in template, mirroring the
-// catalog tests: required fields only, so the defaults are exercised too.
 var p7TemplateSamples = map[string]map[string]any{
 	"wordpress": {
 		"domain":           "blog.example.test",
@@ -52,11 +39,6 @@ var p7TemplateSamples = map[string]map[string]any{
 	},
 }
 
-// TestP7TemplateCatalogComposeConfig proves every shipped template renders to
-// a document the node's own compose CLI accepts, without pulling any image:
-// `docker compose config` performs the same schema validation the agent runs
-// before `compose up`. The WordPress end-to-end deploy is the sibling test
-// below; this one covers the templates no CI run can afford to start.
 func TestP7TemplateCatalogComposeConfig(t *testing.T) {
 	requireE2E(t)
 
@@ -77,9 +59,6 @@ func TestP7TemplateCatalogComposeConfig(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
-			// Secret values travel in Env; the document references them, so
-			// the compose CLI needs the environment to resolve them (exactly
-			// as the services pipeline supplies it at deploy time).
 			for key, value := range rendered.Env {
 				if strings.Contains(rendered.ComposeYAML, value) {
 					t.Fatalf("secret %q leaked into the rendered document", key)
@@ -97,7 +76,6 @@ func TestP7TemplateCatalogComposeConfig(t *testing.T) {
 	}
 }
 
-// TestP7TemplateWordPressProduction is gated by GOTHAM_E2E=1.
 func TestP7TemplateWordPressProduction(t *testing.T) {
 	requireE2E(t)
 
@@ -105,8 +83,6 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	defer cancel()
 	h := newP7Harness(t, ctx)
 
-	// The production constructor the HTTP wiring uses (FEATURE_SERVICES is
-	// forced on, whatever the ambient environment says).
 	t.Setenv(services.FeatureEnv, "")
 	catalog := templates.NewDefaultService(h.logger)
 	if catalog == nil {
@@ -120,9 +96,6 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 		"db_root_password": "root-" + h.suffix,
 	}
 
-	// 1. The render: the document carries the requested domain and the
-	// template's named volumes, references the secrets as ${field}, and has
-	// already passed the BE-7.1 schema check.
 	rendered, err := catalog.Render("wordpress", values)
 	if err != nil {
 		t.Fatalf("render wordpress: %v", err)
@@ -141,7 +114,6 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 			t.Fatalf("the rendered document does not contain %q:\n%s", expected, rendered.ComposeYAML)
 		}
 	}
-	// The secrets travel in the returned environment, never in the document.
 	for key, value := range rendered.Env {
 		if strings.Contains(rendered.ComposeYAML, value) {
 			t.Fatalf("secret %q leaked into the rendered document", key)
@@ -151,7 +123,6 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 		t.Fatalf("Env = %v, want both supplied secrets", rendered.Env)
 	}
 
-	// 2. Pull first with a generous timeout: the deploy below runs compose up.
 	pullCtx, pullCancel := context.WithTimeout(ctx, 10*time.Minute)
 	for _, image := range []string{p7WordPressImage, "mysql:8.4"} {
 		if _, err := h.engine.PullImage(pullCtx, image, "", ""); err != nil {
@@ -161,8 +132,6 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	}
 	pullCancel()
 
-	// 3. The gallery flow: a service is created from the rendered document and
-	// its environment, then deployed through the existing services surface.
 	created, err := h.compose.Create(ctx, h.userID, services.CreateRequest{
 		Name:          "p7-wp-" + h.suffix,
 		EnvironmentID: h.envID,
@@ -178,14 +147,9 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cleanupCancel()
-		// A failure between Deploy and Delete leaves the project up; stop it
-		// first so the volumes can actually be removed. A service the test
-		// already deleted is not an error.
 		if err := h.compose.Delete(cleanupCtx, h.userID, created.ID); err != nil && !errors.Is(err, services.ErrNotFound) {
 			t.Logf("cleanup service: %v", err)
 		}
-		// The project is down by now; remove the fixture's own volumes so
-		// nothing leaks.
 		for _, volume := range volumes {
 			if output, err := runDocker(cleanupCtx, "volume", "rm", volume); err != nil {
 				t.Logf("cleanup volume %s: %v: %s", volume, err, output)
@@ -203,26 +167,17 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	containers := p7WaitForRunning(t, ctx, h.compose, h.userID, created.ID)
 	t.Logf("containers: %+v", containers)
 
-	// 4. The domain label becomes a real Traefik route on this node and the
-	// WordPress instance answers there.
 	p7Sync(t, ctx, h.proxy, h.serverID)
 	if traefikID := p6FindContainer(t, ctx, h.engine); traefikID != "" {
 		h.trackContainer(traefikID)
 	}
 	p7WaitForWordPress(t, domain)
 
-	// 5. Delete stops the project; the cleanup above removes the volumes.
 	if err := h.compose.Delete(ctx, h.userID, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 }
 
-// p7WaitForWordPress polls the routed domain until it proves WordPress is the
-// backend: the root request either serves the installer markup directly (200
-// with the WordPress page) or redirects to the WordPress installer
-// (/wp-admin/install.php), whose page must then carry the WordPress markup.
-// A bare 302 to anywhere else, or any other status - including the 500 of an
-// unreachable database - is retried until the deadline.
 func p7WaitForWordPress(t *testing.T, domain string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Minute)
@@ -251,9 +206,6 @@ func p7WaitForWordPress(t *testing.T, domain string) {
 	t.Fatalf("the WordPress domain never proved the installer: last status %d (body %.300s)", lastStatus, lastBody)
 }
 
-// p7GetRouted performs one GET through the local Traefik gateway with the
-// domain as the Host header, without following redirects. It returns the
-// status, the Location header and the bounded body.
 func p7GetRouted(t *testing.T, domain, path string) (int, string, string) {
 	t.Helper()
 	client := &http.Client{

@@ -8,14 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global URL, window:readonly */
-// JUS-122 recycle-bin proof: the committed webdist is served statically with
-// the control-plane file API mocked in real Chromium. Measured claims:
-//   - the toolbar's Recycle bin button opens the bin dialog for the root.
-//   - the dialog lists entries (name, size, kind, deleted-at) and says so
-//     when the listing is truncated, offering Restore / Delete / Empty bin.
-//     JUS-155: the entry's original path is no longer shown.
-//   - an empty bin shows the empty state, and the folder-level context menu
-//     also opens the bin.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -71,7 +63,6 @@ const root = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/** binEntry builds one recycle-bin row the mocked API returns. */
 function binEntry(overrides: Record<string, unknown> = {}) {
   return {
     id: "trash-1",
@@ -124,7 +115,6 @@ test.afterAll(async () => {
   });
 });
 
-/** openFiles seeds a session, mocks the file API and lands on the browser. */
 async function openFiles(
   page: Page,
   trash: { entries: Array<Record<string, unknown>>; truncated: boolean },
@@ -192,23 +182,18 @@ test("the toolbar opens the recycle bin with entries and a truncation note", asy
 
   const dialog = page.locator(".n-modal.app-modal");
   await expect(dialog).toBeVisible();
-  // Column headers and the entry's name; the origin path is not shown (JUS-155).
   await expect(dialog.getByText("Original path")).toHaveCount(0);
   await expect(dialog.getByRole("cell", { name: "app.yaml", exact: true })).toBeVisible();
   await expect(
     dialog.getByRole("cell", { name: "storefront-8f2c1ab/app.yaml" }),
   ).toHaveCount(0);
-  // The node's cap is stated, never hidden.
   await expect(dialog.getByText(/more entries than shown/)).toBeVisible();
-  // Row actions and the bin-wide Empty action.
   await expect(
     dialog.getByRole("button", { name: "Restore app.yaml" }),
   ).toBeVisible();
   await expect(
     dialog.getByRole("button", { name: "Delete app.yaml permanently" }),
   ).toBeVisible();
-  // JUS-210: the icon-only purge control keeps its aria-label and shows no
-  // tooltip (and no native title).
   const purge = dialog.getByRole("button", {
     name: "Delete app.yaml permanently",
   });

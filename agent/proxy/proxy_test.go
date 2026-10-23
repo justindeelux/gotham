@@ -16,9 +16,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// canonicalTempDir returns a temp directory with OS-level symlinks resolved
-// (macOS /var -> /private/var), so the agent's no-follow traversal from "/"
-// sees real components only. Production roots are canonical by construction.
 func canonicalTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -28,8 +25,6 @@ func canonicalTempDir(t *testing.T) string {
 	return dir
 }
 
-// newTestProxyServer wires a Server rooted in a temp directory and
-// pinging the given URL.
 func newTestProxyServer(t *testing.T, pingURL string) (*Server, string) {
 	t.Helper()
 	root := canonicalTempDir(t)
@@ -235,9 +230,6 @@ func TestSanitizeProxyPath(t *testing.T) {
 	}
 }
 
-// TestWriteProxyConfigRejectsSymlinkedParents proves the confinement promise:
-// a symlinked parent (or root) is refused and nothing is written outside the
-// proxy directory (BE-6.1 F7).
 func TestWriteProxyConfigRejectsSymlinkedParents(t *testing.T) {
 	root := canonicalTempDir(t)
 	outside := t.TempDir()
@@ -277,8 +269,6 @@ func TestWriteProxyConfigRejectsSymlinkedParents(t *testing.T) {
 	}
 }
 
-// TestWriteProxyConfigValidatesWholeBatchBeforeWriting proves a rejected later
-// entry cannot leave an earlier document installed (BE-6.1 F7).
 func TestWriteProxyConfigValidatesWholeBatchBeforeWriting(t *testing.T) {
 	server, root := newTestProxyServer(t, "")
 	_, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
@@ -293,10 +283,6 @@ func TestWriteProxyConfigValidatesWholeBatchBeforeWriting(t *testing.T) {
 	}
 }
 
-// TestWriteProxyConfigNULPathPreservesEarlierDocuments proves a later entry
-// whose filename contains a NUL byte is rejected during path validation, so an
-// earlier document in the same batch keeps its existing content instead of
-// being replaced before the write pass fails (L2).
 func TestWriteProxyConfigNULPathPreservesEarlierDocuments(t *testing.T) {
 	server, root := newTestProxyServer(t, "")
 	target := filepath.Join(root, "dynamic", "gotham.yml")
@@ -332,9 +318,6 @@ func TestWriteProxyConfigNULPathPreservesEarlierDocuments(t *testing.T) {
 	}
 }
 
-// TestWriteProxyConfigRejectsSymlinkedIntermediates proves no component under
-// the root is followed: an intermediate symlink is rejected before anything is
-// created on the other side (R3 trust anchor "/").
 func TestWriteProxyConfigRejectsSymlinkedIntermediates(t *testing.T) {
 	root := canonicalTempDir(t)
 	outside := t.TempDir()
@@ -348,8 +331,6 @@ func TestWriteProxyConfigRejectsSymlinkedIntermediates(t *testing.T) {
 		Logger:      discardLogger(),
 	})
 
-	// A missing child directory under the symlinked parent must not be created
-	// outside the root.
 	_, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
 		"dynamic/sub/gotham.yml": "http: {}\n",
 	}, false))
@@ -361,9 +342,6 @@ func TestWriteProxyConfigRejectsSymlinkedIntermediates(t *testing.T) {
 	}
 }
 
-// TestWriteProxyConfigBatchRejectsSymlinkedLaterTarget proves the whole batch
-// is validated before the first replacement: a valid first document must not
-// replace existing content when a later document's parent is symlinked (R3).
 func TestWriteProxyConfigBatchRejectsSymlinkedLaterTarget(t *testing.T) {
 	root := canonicalTempDir(t)
 	outside := t.TempDir()

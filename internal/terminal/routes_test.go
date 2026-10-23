@@ -70,13 +70,10 @@ type bufTerminalClient struct {
 
 func (c *bufTerminalClient) Close() error { return c.conn.Close() }
 
-// sharedBufClient lets several sessions reuse one test connection. Closing a
-// session must not tear down the connection other sessions use.
 type sharedBufClient struct{ *bufTerminalClient }
 
 func (sharedBufClient) Close() error { return nil }
 
-// fakeAuthorizer is a controllable terminal.Authorizer for relay tests.
 type fakeAuthorizer struct {
 	mu           sync.Mutex
 	allow        bool
@@ -126,7 +123,6 @@ func (f *fakeAuthorizer) setErr(err error) {
 	f.err = err
 }
 
-// failingClient stands in for an agent that predates TerminalService.
 type failingClient struct{ err error }
 
 func (c failingClient) OpenTerminal(context.Context, ...grpc.CallOption) (agentv1.TerminalService_OpenTerminalClient, error) {
@@ -342,8 +338,6 @@ func TestCreateAndCloseRoutes(t *testing.T) {
 func TestCreateHostWithoutRootRoute(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, fixtureOptions{operator: true})
-	// Exactly what the Terminal page and the Server detail Terminal tab send:
-	// no File manager context at all.
 	body := `{"target":"host","cols":120,"rows":32}`
 	response, err := http.Post(f.server.URL+"/v1/servers/"+f.serverID.String()+"/terminal/sessions",
 		"application/json", strings.NewReader(body))
@@ -366,10 +360,6 @@ func TestCreateHostWithoutRootRoute(t *testing.T) {
 	}
 }
 
-// TestCreateResponseJSONShape pins the key set of the 201 body: root/cwd are
-// omitted when empty (a rootless host session and every container session),
-// while the required fields are always present. The web fixtures in
-// terminal-api.test.ts use the same shape.
 func TestCreateResponseJSONShape(t *testing.T) {
 	t.Parallel()
 	base := Session{
@@ -616,8 +606,6 @@ func TestMalformedResizeEndsStream(t *testing.T) {
 		var payload []byte
 		err := websocket.Message.Receive(conn, &payload)
 		if err == nil {
-			// Prompt or echo output may already be buffered; keep reading until
-			// the server closes the stream.
 			continue
 		}
 		var netErr net.Error
@@ -758,11 +746,6 @@ func TestOriginSchemeMustMatch(t *testing.T) {
 	}
 }
 
-// TestOriginAllowedForwardedScheme is the JUS-260 regression table: Traefik
-// reports a WebSocket upgrade as `wss` (or `ws`), which must compare as the
-// page's own `https` (or `http`) scheme. An unknown value may never turn a
-// cross-origin request into a pass, and a genuinely different host or scheme
-// is refused in every combination.
 func TestOriginAllowedForwardedScheme(t *testing.T) {
 	t.Parallel()
 	const host = "gotham.example"
@@ -811,9 +794,6 @@ func TestOriginAllowedForwardedScheme(t *testing.T) {
 	}
 }
 
-// TestOriginAllowedExplicitAllowList keeps TERMINAL_ALLOWED_ORIGINS working
-// independently of the request scheme: an exact scheme/host entry is accepted,
-// while a different scheme, a port or another host stays refused.
 func TestOriginAllowedExplicitAllowList(t *testing.T) {
 	t.Setenv(AllowedOriginsEnv, "https://panel.example, http://legacy.example")
 	const host = "gotham.example"
@@ -867,8 +847,6 @@ func TestTransientRevalidationErrorKeepsShell(t *testing.T) {
 		t.Fatalf("first frame opcode = %#x, want opened", opcode)
 	}
 
-	// A database blip must not end the shell; fewer than the fail-closed
-	// threshold of consecutive errors keeps it alive.
 	f.authorizer.setErr(errors.New("database is down"))
 	time.Sleep(40 * time.Millisecond)
 	sendFrameTest(t, conn, opInput, []byte("echo survived-blip\r"))
@@ -899,10 +877,8 @@ func TestPersistentRevalidationErrorFailsClosed(t *testing.T) {
 func TestCloseDoesNotSendRevokedFrame(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, fixtureOptions{
-		operator:   true,
-		revalidate: 10 * time.Millisecond,
-		// Emulate a lookup that fails because the relay context was cancelled
-		// by the normal close: that must not be reported as a revocation.
+		operator:     true,
+		revalidate:   10 * time.Millisecond,
 		revalidateFn: func(ctx context.Context) (bool, error) { return ctx.Err() == nil, nil },
 	})
 	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
@@ -914,8 +890,6 @@ func TestCloseDoesNotSendRevokedFrame(t *testing.T) {
 	if opcode, _ := readFrame(t, conn); opcode != opOpened {
 		t.Fatalf("first frame opcode = %#x, want opened", opcode)
 	}
-	// Let a few revalidation ticks pass, then close while a tick may be in
-	// flight.
 	time.Sleep(25 * time.Millisecond)
 	sendFrameTest(t, conn, opClose, nil)
 
@@ -956,9 +930,6 @@ func TestShellSurvivesAccessTokenExpiry(t *testing.T) {
 		t.Fatalf("first frame opcode = %#x, want opened", opcode)
 	}
 
-	// The handshake token expires; the browser cannot refresh it on an open
-	// socket, so the live shell must survive while its session/operator state
-	// is valid.
 	valid.Store(false)
 	time.Sleep(3 * 40 * time.Millisecond)
 
@@ -1026,8 +997,6 @@ func TestSessionsAreIsolated(t *testing.T) {
 	sendFrameTest(t, secondConn, opInput, []byte("echo iso-two\r"))
 	readUntilOutput(t, secondConn, "iso-two")
 
-	// Force a marker on the first stream and inspect everything it emitted:
-	// the second session's marker must never appear there.
 	output := ""
 	sendFrameTest(t, firstConn, opInput, []byte("echo iso-three\r"))
 	for !strings.Contains(output, "iso-three") {
@@ -1047,7 +1016,6 @@ func TestSessionsAreIsolated(t *testing.T) {
 func TestGoroutinesReleasedAfterRelay(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, fixtureOptions{operator: true})
-	// Warm up so lazily-created gRPC and WebSocket goroutines are not counted.
 	runExitSession(t, f)
 	baseline := runtime.NumGoroutine()
 	for i := 0; i < 3; i++ {
@@ -1126,12 +1094,6 @@ func TestRelayErrorWorkingDirectory(t *testing.T) {
 	}
 }
 
-// TestAttachThroughTraefikWebSocketProxy is the JUS-260 end-to-end proof: a
-// real WebSocket attach crosses a reverse-proxy hop shaped exactly like
-// Traefik (public Host, X-Forwarded-Proto: wss, X-Forwarded-Host,
-// X-Forwarded-Port: 443) before reaching the control plane. The https Origin
-// must be accepted; another host or a genuinely different scheme must still
-// be refused through the same chain.
 func TestAttachThroughTraefikWebSocketProxy(t *testing.T) {
 	t.Parallel()
 	const publicHost = "gotham.deelux.dev"
@@ -1169,8 +1131,6 @@ func TestAttachThroughTraefikWebSocketProxy(t *testing.T) {
 	}
 }
 
-// newTraefikProxy fronts the control-plane test server with the forwarded
-// header shape Traefik produces for an upgraded WebSocket request.
 func newTraefikProxy(t *testing.T, backend *httptest.Server, publicHost, forwardedProto string) *httptest.Server {
 	t.Helper()
 	target, err := url.Parse(backend.URL)
@@ -1192,7 +1152,6 @@ func newTraefikProxy(t *testing.T, backend *httptest.Server, publicHost, forward
 	return server
 }
 
-// dialTerminalThrough opens the terminal WebSocket through proxy with origin.
 func dialTerminalThrough(t *testing.T, proxy *httptest.Server, path, origin string) (*websocket.Conn, error) {
 	t.Helper()
 	config, err := websocket.NewConfig("ws"+strings.TrimPrefix(proxy.URL, "http")+path, origin)
@@ -1203,9 +1162,6 @@ func dialTerminalThrough(t *testing.T, proxy *httptest.Server, path, origin stri
 	return websocket.DialConfig(config)
 }
 
-// handshakeStatusThrough sends a raw WebSocket handshake through proxy and
-// returns the HTTP status, so a refused upgrade can be asserted as 403 (the
-// browser cannot observe this status, but the server contract can).
 func handshakeStatusThrough(t *testing.T, proxy *httptest.Server, path, origin string) int {
 	t.Helper()
 	address := strings.TrimPrefix(proxy.URL, "http://")
@@ -1239,8 +1195,6 @@ func handshakeStatusThrough(t *testing.T, proxy *httptest.Server, path, origin s
 	return code
 }
 
-// rawWS is a minimal RFC 6455 client used to send protocol-level ping and close
-// control frames, which golang.org/x/net/websocket's public client cannot do.
 type rawWS struct {
 	conn net.Conn
 	br   *bufio.Reader
@@ -1364,8 +1318,6 @@ func TestProtocolPingAfterWriteDeadlineKeepsSession(t *testing.T) {
 		t.Fatalf("first frame = ws %#x payload %x, want a binary opened frame", wsOpcode, payload)
 	}
 
-	// Wait past the server's write deadline. A stale deadline would make the
-	// read path's pong write fail and kill the shell.
 	time.Sleep(200 * time.Millisecond)
 	if err := client.writeFrame(0x9, []byte("hi")); err != nil {
 		t.Fatalf("send protocol ping: %v", err)
@@ -1383,7 +1335,6 @@ func TestProtocolPingAfterWriteDeadlineKeepsSession(t *testing.T) {
 		}
 	}
 
-	// The data path must still work after the ping.
 	input := append([]byte{opInput}, []byte("echo ping-ok\r")...)
 	if err := client.writeFrame(0x2, input); err != nil {
 		t.Fatalf("send input: %v", err)
@@ -1403,7 +1354,6 @@ func TestProtocolPingAfterWriteDeadlineKeepsSession(t *testing.T) {
 		t.Fatalf("output = %q, want ping-ok", output.String())
 	}
 
-	// A client close still ends the session cleanly.
 	if err := client.writeFrame(0x8, []byte{0x03, 0xe8}); err != nil {
 		t.Fatalf("send close: %v", err)
 	}

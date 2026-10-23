@@ -13,8 +13,6 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// sessionMetadataColumns reports the sessions columns of interest: name to
-// "type nullable" (nullable is YES/NO).
 func sessionMetadataColumns(t *testing.T, ctx context.Context, conn *pgx.Conn) map[string]string {
 	t.Helper()
 
@@ -42,9 +40,6 @@ func sessionMetadataColumns(t *testing.T, ctx context.Context, conn *pgx.Conn) m
 	return out
 }
 
-// TestSessionMetadataMigrationUpDownBackfill rolls a scratch database to
-// migration 32, seeds a pre-PF-2 session row, and proves 00033 adds the
-// columns, backfills last_used_at from created_at, and rolls back cleanly.
 func TestSessionMetadataMigrationUpDownBackfill(t *testing.T) {
 	base := os.Getenv("GOTHAM_TEST_DSN")
 	if base == "" {
@@ -87,7 +82,6 @@ func TestSessionMetadataMigrationUpDownBackfill(t *testing.T) {
 	parsed.Path = "/" + name
 	dsn := parsed.String()
 
-	// Roll to 32 only, then seed a session row with no metadata columns.
 	sqldb, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -118,7 +112,6 @@ func TestSessionMetadataMigrationUpDownBackfill(t *testing.T) {
 	}
 	_ = conn.Close(ctx)
 
-	// The product up path applies 00033.
 	if err := Migrate(ctx, dsn, MigrateUp); err != nil {
 		t.Fatalf("migrate up: %v", err)
 	}
@@ -152,10 +145,6 @@ func TestSessionMetadataMigrationUpDownBackfill(t *testing.T) {
 		t.Errorf("backfilled metadata = %v/%v, want NULL/NULL", uaStr, ipStr)
 	}
 
-	// DownTo(32) rolls 00034 and 00033 back in version order, so a later
-	// migration can never strand this test one single-step Down short of
-	// the columns again. (00034 only truncates resource tables and drops
-	// its own tables on the way down; it leaves sessions alone.)
 	if _, err := provider.DownTo(ctx, 32); err != nil {
 		t.Fatalf("migrate down to 32: %v", err)
 	}
@@ -163,7 +152,6 @@ func TestSessionMetadataMigrationUpDownBackfill(t *testing.T) {
 		t.Errorf("columns after down = %v, want none", cols)
 	}
 
-	// Up again restores them.
 	if err := Migrate(ctx, dsn, MigrateUp); err != nil {
 		t.Fatalf("migrate up again: %v", err)
 	}

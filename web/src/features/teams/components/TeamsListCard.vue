@@ -6,7 +6,6 @@ import { useTeamsStore } from "@/features/teams/stores/teams";
 import { relativeTime } from "@/shared/utils/format";
 import { useTeamsPageContext } from "@/features/teams/composables/useTeamsPage";
 
-/** TeamsListCard renders the "Your teams" selector card. */
 const teamsStore = useTeamsStore();
 const { teamActionError, deleting, openRename, handleDelete } = useTeamsPageContext();
 </script>

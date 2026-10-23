@@ -8,15 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global getComputedStyle:readonly */
-// getComputedStyle runs inside page.evaluate (browser context); the repo
-// lint envs do not cover tests/, so the global is declared here.
-
-// Behavioural proof for the sessions panel (JUS-28 fix round 1): real
-// Chromium boots the REAL built app (committed webdist, served locally),
-// the session routes are mocked by interception, and every row is measured.
-// Created and Last active must be fully inside the row box at every width,
-// and the stack keys off the PANEL container width (480px threshold), not
-// the viewport.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const distDir = resolve(testsDir, "../../internal/server/webdist");
@@ -82,8 +73,6 @@ const user = {
   is_platform_admin: false,
 };
 
-// Long IPv6 plus a long agent stress the phone layout; the blank ip/agent
-// row covers the "unknown"/"Unknown device" fallbacks.
 const sessions = [
   {
     id: "s-current",
@@ -115,7 +104,6 @@ const sessions = [
   },
 ];
 
-/** openProfile boots the built app at width with the API mocked. */
 async function openProfile(page: Page, width: number): Promise<void> {
   await page.setViewportSize({ width, height: 900 });
   await page.addInitScript((seed: string) => {
@@ -151,7 +139,6 @@ for (const width of [375, 480, 600, 700, 900, 1280]) {
     const rows = page.locator(".session-row");
     await expect(rows).toHaveCount(3);
 
-    // The stack follows the panel container, not the viewport.
     const panelWidth = await page
       .locator(".sessions-panel")
       .evaluate((panel) => panel.clientWidth);
@@ -164,7 +151,6 @@ for (const width of [375, 480, 600, 700, 900, 1280]) {
 
     for (let index = 0; index < 3; index += 1) {
       const row = rows.nth(index);
-      // Both <time> values sit fully inside the row box (no clipping).
       const boxes = await row.evaluate((element) => {
         const times = element.querySelectorAll("time");
         const rowBox = element.getBoundingClientRect();
@@ -187,7 +173,6 @@ for (const width of [375, 480, 600, 700, 900, 1280]) {
           box.rowRight + 1,
         );
       }
-      // In the stacked layout the facts wrap instead of ellipsizing.
       if (direction === "column") {
         const meta = await row
           .locator(".session-meta")

@@ -9,14 +9,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeProxySync records the nodes the deploy lifecycle asked to resync.
 type fakeProxySync struct {
 	mu      sync.Mutex
 	servers []uuid.UUID
 	err     error
 }
 
-// SyncServer records the call and returns the canned error.
 func (f *fakeProxySync) SyncServer(_ context.Context, serverID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -24,14 +22,12 @@ func (f *fakeProxySync) SyncServer(_ context.Context, serverID uuid.UUID) error 
 	return f.err
 }
 
-// calls returns a copy of the recorded server ids.
 func (f *fakeProxySync) calls() []uuid.UUID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]uuid.UUID{}, f.servers...)
 }
 
-// newProxyTestService builds a Service with the proxy hook wired.
 func newProxyTestService(t *testing.T, repo *fakeRepository, proxySync ProxySync) *Service {
 	t.Helper()
 	svc := NewService(Config{
@@ -58,7 +54,6 @@ func TestDomainChangesSyncProxy(t *testing.T) {
 	proxySync := &fakeProxySync{}
 	svc := newProxyTestService(t, repo, proxySync)
 
-	// Create is domainless: no route, no sync.
 	in := validCreateInput(uuid.New())
 	created, err := svc.CreateApplication(context.Background(), userID, in)
 	if err != nil {
@@ -106,7 +101,6 @@ func TestServiceUpdateApplicationMovedBetweenNodesSyncsBoth(t *testing.T) {
 	proxySync := &fakeProxySync{}
 	svc := newProxyTestService(t, repo, proxySync)
 
-	// A rename does not touch routing.
 	name := "renamed app"
 	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{Name: &name}); err != nil {
 		t.Fatalf("rename: %v", err)

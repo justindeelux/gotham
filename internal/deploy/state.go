@@ -1,26 +1,12 @@
 package deploy
 
-// Kind discriminates deployment intent.
 type Kind string
 
 const (
-	// KindDeploy is a normal deployment of the current revision.
-	KindDeploy Kind = "deploy"
-	// KindRollback re-runs a previous deployment's revision.
+	KindDeploy   Kind = "deploy"
 	KindRollback Kind = "rollback"
 )
 
-// State is the deploy orchestration state machine:
-//
-//	queued → cloning → building → pushing → starting → running
-//	                                                    ↘ failed
-//
-// A rollback reuses an image that was already built, so it skips cloning and
-// building:
-//
-//	queued → pushing → starting → running
-//
-// Any non-terminal state may go to failed. Re-queued implies a prior failure.
 type State string
 
 const (
@@ -33,12 +19,8 @@ const (
 	StateFailed   State = "failed"
 )
 
-// Terminal reports whether the state ends the deployment lifecycle.
 func (s State) Terminal() bool { return s == StateRunning || s == StateFailed }
 
-// transitions is the allowed state machine edge set. StateQueued carries both
-// deploy (cloning) and rollback (pushing) successors; stepsFor(kind) narrows
-// the walk to the single legal path for a run.
 var transitions = map[State][]State{
 	StateQueued:   {StateCloning, StatePushing, StateFailed},
 	StateCloning:  {StateBuilding, StateFailed},
@@ -47,7 +29,6 @@ var transitions = map[State][]State{
 	StateStarting: {StateRunning, StateFailed},
 }
 
-// CanTransition reports whether from → to is a legal state machine edge.
 func CanTransition(from, to State) bool {
 	if from == to {
 		return false
@@ -67,22 +48,10 @@ func CanTransition(from, to State) bool {
 	return false
 }
 
-// stepsFor returns the ordered non-terminal states for a deployment run of
-// the given kind, ending just before running (the caller transitions to
-// running on success). KindRollback skips cloning and building because it
-// redeploys an image an earlier deployment already pushed.
 func stepsFor(kind Kind) []State {
 	return stepsForApp(kind, "", "")
 }
 
-// stepsForApp narrows the walk to the single legal path for a run. Compose
-// sources (GS-8) have no image to reuse, so both kinds walk the full path:
-// a fresh deploy resolves the live row (stored text or a fresh clone)
-// while a rollback resolves the target release's stored raw document, and
-// both render with the current environment before pull + up. Image
-// sources (GS-9) have no repository to clone and nothing to build, so their
-// deploys walk the rollback path (pushing, where the pull happens, then
-// starting); queued → pushing is a legal edge.
 func stepsForApp(kind Kind, sourceType, provider string) []State {
 	if NormalizeSourceType(sourceType, provider) == SourceCompose {
 		return []State{StateCloning, StateBuilding, StatePushing, StateStarting}

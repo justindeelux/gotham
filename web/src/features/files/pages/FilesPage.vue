@@ -6,11 +6,6 @@ import { useI18n } from "vue-i18n";
 
 import { useServersStore } from "@/features/servers";
 
-/**
- * Files server chooser (`/files`). Lists the managed servers and links each to
- * its read-only file browser. With a single server it forwards straight to
- * that server (the plan's "chooser → last-used/only server").
- */
 const { t } = useI18n();
 const router = useRouter();
 const serversStore = useServersStore();

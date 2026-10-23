@@ -1,8 +1,3 @@
-// PE-6 (JUS-35) shared variables: the contract's key/value rules, the
-// keep-ciphertext payload mapping, the override helper, and the API paths
-// (warn-only parsing). Pins the backend rules in internal/projects/variables.go:
-// key ^[A-Za-z_][A-Za-z0-9_]*$, 128 keys per scope, 128-char keys, NUL
-// rejected, secrets write-only, omitted value keeps an existing secret.
 import { describe, expect, it, vi } from "vitest";
 import { afterEach, beforeEach } from "vitest";
 
@@ -47,8 +42,6 @@ import {
 const projectId = "11111111-1111-4111-8111-111111111111";
 const environmentId = "22222222-2222-4222-8222-222222222222";
 
-// Display helpers resolve through the projects catalog: merge it once and
-// run English by default so the pinned copy below keeps proving behavior.
 beforeEach(() => {
   i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
   i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });
@@ -99,7 +92,6 @@ describe("findDuplicateVariableKey", () => {
         { key: "A", value: "2", secret: false },
       ]),
     ).toBe("A");
-    // Lowercase differs from uppercase: no duplicate.
     expect(
       findDuplicateVariableKey([
         { key: "Ab", value: "1", secret: false },
@@ -142,14 +134,12 @@ describe("validateVariableDrafts", () => {
   });
 
   it("keeps an untouched stored secret but blocks a new valueless secret", () => {
-    // Stored secret with an empty value: valid, the save omits the value.
     expect(
       validateVariableDrafts(
         [{ key: "SENTRY_DSN", value: "", secret: true }],
         new Set(["SENTRY_DSN"]),
       ),
     ).toEqual([]);
-    // Plain-to-secret without a value is a 400 backend-side: blocked up front.
     const problems = validateVariableDrafts(
       [{ key: "FRESH", value: "", secret: true }],
       new Set(["SENTRY_DSN"]),
@@ -159,22 +149,18 @@ describe("validateVariableDrafts", () => {
   });
 
   it("blocks a secret-to-plain toggle that would silently clear the secret", () => {
-    // Toggling a stored secret to plain with an empty value writes an empty
-    // plain value (the backend allows it): require an explicit value.
     const problems = validateVariableDrafts(
       [{ key: "SENTRY_DSN", value: "", secret: false }],
       new Set(["SENTRY_DSN"]),
     );
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('Saving "SENTRY_DSN" as plain');
-    // The same toggle with a replacement value is an explicit overwrite.
     expect(
       validateVariableDrafts(
         [{ key: "SENTRY_DSN", value: "rotated", secret: false }],
         new Set(["SENTRY_DSN"]),
       ),
     ).toEqual([]);
-    // An empty plain value for a key that was never a secret stays valid.
     expect(
       validateVariableDrafts(
         [{ key: "EMPTY_PLAIN", value: "", secret: false }],
@@ -234,7 +220,6 @@ describe("inherited display helpers", () => {
     expect(isOverriddenBy("LOG_LEVEL", [{ key: "LOG_LEVEL", value: "debug" }])).toBe(true);
     expect(isOverriddenBy("LOG_LEVEL", [{ key: "OTHER", value: "x" }])).toBe(false);
     expect(isOverriddenBy("LOG_LEVEL", [{ key: "", value: "x" }])).toBe(false);
-    // Case-sensitive like the deploy merge.
     expect(isOverriddenBy("LOG_LEVEL", [{ key: "log_level", value: "x" }])).toBe(false);
   });
 
@@ -246,7 +231,6 @@ describe("inherited display helpers", () => {
       { key: "SHSEC", origin: "environment" as const },
       { key: "ONLY_PROJ", origin: "project" as const },
     ];
-    // Plain-vs-plain and secret-vs-plain across levels both shadow.
     expect(isShadowedByEnvironment("SHARED", inherited)).toBe(true);
     expect(isShadowedByEnvironment("SHSEC", inherited)).toBe(true);
     expect(isShadowedByEnvironment("ONLY_PROJ", inherited)).toBe(false);

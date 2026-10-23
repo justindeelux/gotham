@@ -8,7 +8,6 @@ import DeploymentHistoryTable from "@/features/applications/components/Deploymen
 interface Props {
   deployments: Deployment[];
   loading: boolean;
-  /** isCompose switches the footer: a compose rollback re-applies the file. */
   isCompose?: boolean;
 }
 

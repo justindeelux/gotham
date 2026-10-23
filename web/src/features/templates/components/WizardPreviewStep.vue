@@ -13,16 +13,11 @@ interface Props {
 
 defineProps<Props>();
 
-/**
- * t renders preview copy in the active locale (tracks language switches).
- * The rendered compose document and secret values stay raw and untranslated.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
 }
 
-/** unit picks the singular/plural unit label for a count. */
 function unit(one: string, other: string, count: number): string {
   return t(count === 1 ? one : other, { count });
 }

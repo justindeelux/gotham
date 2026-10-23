@@ -21,7 +21,6 @@ interface Props {
 const props = defineProps<Props>();
 const emit = defineEmits<{
   "update:show": [value: boolean];
-  /** renamed reports the entry's new name so the browser can reveal it. */
   renamed: [name: string];
 }>();
 
@@ -49,7 +48,6 @@ const nameError = computed<string>(() =>
   errorKey.value ? String(t(errorKey.value)) : "",
 );
 
-/** unchanged reports a no-op rename (the same name was left in the field). */
 const unchanged = computed<boolean>(
   () =>
     props.entry !== null &&
@@ -59,7 +57,6 @@ const valid = computed<boolean>(
   () => validateEntryName(name.value) === null && !unchanged.value,
 );
 
-/** submit renames the entry and surfaces any failure in a toast. */
 async function submit(): Promise<void> {
   if (files.acting) {
     return;

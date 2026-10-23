@@ -1,6 +1,3 @@
-// PE-5 fix round 1 (H2): create wizards stay reactive to the route scope.
-// Flipping the scope refs while a wizard is mounted re-seeds the form, so
-// the summary and the payload always name the current environment.
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -139,11 +136,9 @@ describe("create wizards follow the live route scope", () => {
       },
     });
     const wrapper = shell(Harness);
-    // The route moves before submit: the payload must follow it.
     environmentId.value = "env-b";
     await nextTick();
     form.name = "web";
-    // git_public carries the pasted URL, not a provider selection.
     form.publicCloneUrl = "https://github.com/o/r.git";
     await submit();
     expect(create).toHaveBeenCalledTimes(1);

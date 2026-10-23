@@ -5,16 +5,6 @@ import { useAuthStore } from "@/features/auth";
 import type { Server } from "@/features/servers";
 import { useTerminalStore } from "@/features/terminal";
 
-/**
- * Session lifecycle for the server detail Terminal tab (JUS-246).
- *
- * Extracted from ServerDetailPage so the page keeps only tab/URL concerns.
- * The tab is lazy: nothing is created until `active` is true and the node is
- * ready. A close leaves the explicit restart card in place; re-entering the
- * tab never auto-creates (`closed` survives until the operator presses the
- * button). A sign-out is not a demotion: only a still-authenticated account
- * whose operator flag turned false resets the tab and reports `onBlocked`.
- */
 export interface ServerTerminalTabOptions {
   serverId: () => string;
   server: () => Server | null;
@@ -30,7 +20,6 @@ export function useServerTerminalTab(options: ServerTerminalTabOptions) {
 
   const tabId = ref<string>("");
   const starting = ref(false);
-  /** closed marks a tab that vanished under the mounted pane. */
   const closed = ref(false);
 
   const canUse = computed<boolean>(
@@ -40,7 +29,6 @@ export function useServerTerminalTab(options: ServerTerminalTabOptions) {
     tabId.value === "" ? null : terminal.findTab(tabId.value),
   );
 
-  /** sourcePath is the route the app dock resumes for this session. */
   function sourcePath(id: string): string {
     return router.resolve({
       name: "server-detail",
@@ -49,14 +37,12 @@ export function useServerTerminalTab(options: ServerTerminalTabOptions) {
     }).fullPath;
   }
 
-  /** reset forgets the current pane without touching a live store tab. */
   function reset(): void {
     tabId.value = "";
     starting.value = false;
     closed.value = false;
   }
 
-  /** open creates or reuses the shell; `fresh` is the explicit restart. */
   async function open(fresh: boolean): Promise<void> {
     const server = options.server();
     if (
@@ -94,13 +80,10 @@ export function useServerTerminalTab(options: ServerTerminalTabOptions) {
     }
   }
 
-  /** startNew is the only restart path; it never runs automatically. */
   function startNew(): void {
     void open(true);
   }
 
-  // A tab removed by any route (close confirmation, logout reset) must not
-  // leave the host pointing at a dead id.
   watch(tab, (current) => {
     if (tabId.value !== "" && current === null) {
       tabId.value = "";
@@ -109,9 +92,6 @@ export function useServerTerminalTab(options: ServerTerminalTabOptions) {
     }
   });
 
-  // First activation creates; a revisit reuses. `closed` is deliberately NOT
-  // cleared here, so switching tabs after a close keeps the restart card and
-  // issues zero POSTs until the operator presses it.
   watch(
     [
       () => options.active(),
@@ -134,8 +114,6 @@ export function useServerTerminalTab(options: ServerTerminalTabOptions) {
     { immediate: true },
   );
 
-  // Demotion, not sign-out: a logout empties the account but is owned by the
-  // auth flow. Only a still-authenticated non-operator resets this tab.
   watch(canUse, (allowed) => {
     if (!allowed && authStore.isAuthenticated) {
       reset();

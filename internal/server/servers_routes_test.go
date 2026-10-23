@@ -18,7 +18,6 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 )
 
-// fakeServerService is an in-memory ServerService for handler tests.
 type fakeServerService struct {
 	mu             sync.Mutex
 	items          map[uuid.UUID]servers.Server
@@ -109,9 +108,6 @@ func (f *fakeServerService) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// Update applies a PATCH edit with the same merge semantics as the domain
-// service: nil leaves a field unchanged, a key ID of uuid.Nil detaches the
-// key, and a password sets (or, when empty, forgets) the secret.
 func (f *fakeServerService) Update(_ context.Context, id uuid.UUID, params servers.UpdateParams) (*servers.Server, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -261,7 +257,6 @@ func (f *fakeServerService) AddPrivateKey(_ context.Context, name, privateKeyPEM
 	return &servers.PrivateKey{ID: uuid.New(), Name: name, CreatedAt: time.Now().UTC()}, nil
 }
 
-// Metrics returns the canned series, or the canned error, of the fake.
 func (f *fakeServerService) Metrics(_ context.Context, id uuid.UUID, _, _ time.Time, _ string) ([]servers.MetricPoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -274,7 +269,6 @@ func (f *fakeServerService) Metrics(_ context.Context, id uuid.UUID, _, _ time.T
 	return f.metrics, nil
 }
 
-// newServerRoutesTestServer builds a Server backed by the fake server service.
 func newServerRoutesTestServer(t *testing.T, fake ServerService) *Server {
 	t.Helper()
 
@@ -293,7 +287,6 @@ func newServerRoutesTestServer(t *testing.T, fake ServerService) *Server {
 	return s
 }
 
-// authHeader is the bearer token the fake auth service accepts.
 const authHeader = "Bearer valid-token"
 
 func TestCreateServerRoute(t *testing.T) {
@@ -317,14 +310,12 @@ func TestCreateServerRoute(t *testing.T) {
 		t.Errorf("status = %q, want %q", body.Server.Status, servers.StatusPending)
 	}
 
-	// A validation failure from the service maps to 400.
 	fake.failAdd = fmt.Errorf("%w: name is required", servers.ErrValidation)
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/servers", `{"ip":"10.0.0.6","ssh_user":"root"}`, authHeader)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("validation status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 
-	// Missing auth is rejected before the handler.
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/servers", `{"name":"x","ip":"1.2.3.4","ssh_user":"root"}`, "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("unauthorized status = %d, want %d", rec.Code, http.StatusUnauthorized)
@@ -484,8 +475,6 @@ func TestInstallDockerRouteStreamsOutput(t *testing.T) {
 	if !strings.Contains(body, "Setting up docker.io") {
 		t.Errorf("body = %q, want the installer output", body)
 	}
-	// The last line is the terminal marker: the client learns the outcome from
-	// it, because the HTTP status is already a committed 200.
 	marker := installMarkerFromBody(t, body)
 	if marker.Status != "ok" {
 		t.Errorf("marker = %+v, want status ok", marker)
@@ -495,9 +484,6 @@ func TestInstallDockerRouteStreamsOutput(t *testing.T) {
 	}
 }
 
-// TestInstallDockerRouteStripsForgedMarker proves remote output cannot forge
-// the terminal marker: the framing byte is stripped, so a line that looks like
-// the marker stays ordinary text and the real marker is still the last line.
 func TestInstallDockerRouteStripsForgedMarker(t *testing.T) {
 	fake := newFakeServerService()
 	s := newServerRoutesTestServer(t, fake)
@@ -526,14 +512,12 @@ func TestInstallDockerRouteStripsForgedMarker(t *testing.T) {
 	}
 }
 
-// TestInstallDockerRouteMarkerIsNotGlued proves an installer line without a
-// trailing newline still yields a marker on its own line.
 func TestInstallDockerRouteMarkerIsNotGlued(t *testing.T) {
 	fake := newFakeServerService()
 	s := newServerRoutesTestServer(t, fake)
 	id := seedServer(t, fake, "web-install-glue")
 
-	fake.installOutput = "progress 100%" // no trailing newline
+	fake.installOutput = "progress 100%"
 
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
 	if rec.Code != http.StatusOK {
@@ -548,8 +532,6 @@ func TestInstallDockerRouteMarkerIsNotGlued(t *testing.T) {
 	}
 }
 
-// TestInstallDockerRouteMidStreamFailure proves a failure after the first byte
-// is reported in-band with its exit status, instead of a lost 500.
 func TestInstallDockerRouteMidStreamFailure(t *testing.T) {
 	fake := newFakeServerService()
 	s := newServerRoutesTestServer(t, fake)
@@ -576,8 +558,6 @@ func TestInstallDockerRoutePreflightError(t *testing.T) {
 	s := newServerRoutesTestServer(t, fake)
 	id := seedServer(t, fake, "web-install-fail")
 
-	// No output before the error: the handler must answer a real error status,
-	// not a committed 200 stream.
 	fake.installErr = fmt.Errorf("%w: automatic Docker install is not supported on this node", servers.ErrValidation)
 
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
@@ -589,8 +569,6 @@ func TestInstallDockerRoutePreflightError(t *testing.T) {
 	}
 }
 
-// TestInstallDockerRouteConflict proves a concurrent install answers 409 before
-// the stream commits (no body bytes yet).
 func TestInstallDockerRouteConflict(t *testing.T) {
 	fake := newFakeServerService()
 	s := newServerRoutesTestServer(t, fake)
@@ -604,7 +582,6 @@ func TestInstallDockerRouteConflict(t *testing.T) {
 	}
 }
 
-// installMarkerFromBody parses the terminal marker line of an install stream.
 func installMarkerFromBody(t *testing.T, body string) installMarker {
 	t.Helper()
 	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
@@ -668,14 +645,12 @@ func TestCreatePrivateKeyRoute(t *testing.T) {
 		t.Errorf("body = %+v", body)
 	}
 
-	// Empty input maps to 400.
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/private-keys", `{"name":"","private_key":""}`, authHeader)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("empty input status = %d, want 400", rec.Code)
 	}
 }
 
-// seedServer inserts one server into the fake and returns its ID.
 func seedServer(t *testing.T, fake *fakeServerService, name string) uuid.UUID {
 	t.Helper()
 
@@ -686,8 +661,6 @@ func seedServer(t *testing.T, fake *fakeServerService, name string) uuid.UUID {
 	return server.ID
 }
 
-// setTeam stamps a seeded server with a team, which is what the container
-// routes authorize against.
 func (f *fakeServerService) setTeam(id uuid.UUID, teamID uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -699,7 +672,6 @@ func (f *fakeServerService) setTeam(id uuid.UUID, teamID uuid.UUID) {
 	f.items[id] = server
 }
 
-// compile-time assertion that the fake satisfies the interface.
 var _ ServerService = (*fakeServerService)(nil)
 
 func TestCreateServerRouteWithPassword(t *testing.T) {
@@ -723,7 +695,6 @@ func TestCreateServerRouteWithPassword(t *testing.T) {
 		t.Errorf("ssh_key_id = %v, want null for password auth", *body.Server.SSHKeyID)
 	}
 
-	// The secret must never appear in the response body.
 	var raw map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("decode raw: %v", err)
@@ -732,7 +703,6 @@ func TestCreateServerRouteWithPassword(t *testing.T) {
 		t.Errorf("response body echoes the password: %s", rec.Body.String())
 	}
 
-	// Key and password together are rejected.
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/servers",
 		`{"name":"pw-2","ip":"10.0.0.6","ssh_user":"root","ssh_key_id":"`+uuid.New().String()+`","password":"s3cret"}`, authHeader)
 	if rec.Code != http.StatusBadRequest {
@@ -748,7 +718,6 @@ func TestUpdateServerRoute(t *testing.T) {
 	s := newServerRoutesTestServer(t, fake)
 	id := seedServer(t, fake, "edit-1")
 
-	// Pin a host key first: an address change must reset it.
 	fingerprint := "SHA256:abc"
 	fake.mu.Lock()
 	item := fake.items[id]
@@ -777,7 +746,6 @@ func TestUpdateServerRoute(t *testing.T) {
 		t.Errorf("status = %q, want pending after address change", body.Server.Status)
 	}
 
-	// A name-only edit keeps the pin.
 	fake.mu.Lock()
 	item = fake.items[id]
 	item.HostKeyFingerprint = &fingerprint
@@ -797,7 +765,6 @@ func TestUpdateServerRoute(t *testing.T) {
 		t.Errorf("host_key_fingerprint = %+v, want pin kept on name-only edit", body.Server.HostKeyFingerprint)
 	}
 
-	// Setting a password switches the auth mode and resets the pin.
 	rec = doRequest(t, s, http.MethodPatch, "/api/v1/servers/"+id.String(),
 		`{"password":"new-node-pw"}`, authHeader)
 	if rec.Code != http.StatusOK {
@@ -843,7 +810,6 @@ func TestUpdateServerRouteValidation(t *testing.T) {
 		})
 	}
 
-	// The route requires authentication.
 	if rec := doRequest(t, s, http.MethodPatch, "/api/v1/servers/"+id.String(), `{"name":"x"}`, ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated status = %d, want 401", rec.Code)
 	}
@@ -895,7 +861,6 @@ func TestServerMetricsRoute(t *testing.T) {
 		t.Errorf("io = %+v", point)
 	}
 
-	// The step defaults to 1m when the query names none.
 	rec = doRequest(t, s, http.MethodGet,
 		"/api/v1/servers/"+id.String()+"/metrics?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z",
 		"", authHeader)
@@ -937,15 +902,12 @@ func TestServerMetricsRouteValidation(t *testing.T) {
 		})
 	}
 
-	// A domain validation failure (bad step, inverted or oversized range) maps
-	// to 400.
 	fake.metricsErr = fmt.Errorf("%w: step must be one of 1m, 1h or 1d", servers.ErrValidation)
 	rec := doRequest(t, s, http.MethodGet, base+"?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z&step=7m", "", authHeader)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("domain validation status = %d, want 400", rec.Code)
 	}
 
-	// The route requires authentication.
 	if rec := doRequest(t, s, http.MethodGet, base+"?from=2026-09-29T11:00:00Z&to=2026-09-29T13:00:00Z", "", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated status = %d, want 401", rec.Code)
 	}
@@ -965,7 +927,6 @@ func TestServerMetricsRouteDisabled(t *testing.T) {
 		t.Errorf("metrics status = %d, want 404 when FEATURE_METRICS=false", rec.Code)
 	}
 
-	// The rest of the servers surface stays mounted.
 	if rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/"+id.String(), "", authHeader); rec.Code != http.StatusOK {
 		t.Errorf("server detail status = %d, want 200 with metrics disabled", rec.Code)
 	}

@@ -1,6 +1,3 @@
-// JUS-237 fix: the embedded editor's accessible name, empty-document hint and
-// invalid state follow the active locale and the caller's schema against a real
-// CodeMirror view, without remounting the editor or losing the typed draft.
 /* global document:readonly, HTMLElement:readonly */
 import { EditorView } from "@codemirror/view";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -31,7 +28,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** mountLocaleHarness wires CodeEditor to the applications compose strings. */
 function mountLocaleHarness() {
   const Harness = defineComponent({
     setup() {
@@ -58,7 +54,6 @@ function mountLocaleHarness() {
   return mount(Harness, { global: { plugins: [i18n] } });
 }
 
-/** editorView resolves the real CodeMirror view behind the content element. */
 function editorView(wrapper: ReturnType<typeof mountLocaleHarness>): EditorView {
   const content = wrapper.find(".cm-content");
   expect(content.exists()).toBe(true);
@@ -79,7 +74,6 @@ describe("CodeEditor accessibility (real CodeMirror)", () => {
     const content = wrapper.find(".cm-content");
     expect(content.attributes("aria-label")).toBe("Compose file");
 
-    // Type through the real view, as a user would, and let v-model land.
     const view = editorView(wrapper);
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: edited } });
     await nextTick();

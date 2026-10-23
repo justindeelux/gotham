@@ -12,24 +12,10 @@ import {
 } from "@/features/files/utils/explorer";
 import { parentPath } from "@/features/files/utils/files";
 
-/**
- * ARIA tree keyboard model for the editor explorer (JUS-223).
- *
- * The tree container owns DOM focus and points `aria-activedescendant` at the
- * active row, so the model survives windowing: an off-screen row needs no live
- * element. The component supplies the row list and the store actions; this
- * composable only decides where the roving index goes and what Enter/F2/
- * Delete/ContextMenu do.
- */
-
 export interface TreeKeyboardOptions {
-  /** rows is the current flat row list (tree mode or search results). */
   rows: () => ExplorerRow[];
-  /** activeIndex is the roving row index owned by the component. */
   activeIndex: Ref<number>;
-  /** scrollEl is the windowed scroll container (for reveal and height). */
   scrollEl: Ref<HTMLElement | null>;
-  /** rowHeight is the shared row height in px. */
   rowHeight: number;
   select: (_path: string) => void;
   expand: (_path: string) => Promise<void>;
@@ -46,12 +32,10 @@ export interface TreeKeyboardOptions {
 export function useTreeKeyboard(options: TreeKeyboardOptions) {
   const { rows, activeIndex, scrollEl, rowHeight } = options;
 
-  /** activeRow is the row the tree's aria-activedescendant points at. */
   const activeRow = computed<ExplorerRow | null>(
     () => rows()[activeIndex.value] ?? null,
   );
 
-  /** revealIndex scrolls one row into the virtual window. */
   function revealIndex(index: number): void {
     const el = scrollEl.value;
     if (!el) {
@@ -66,7 +50,6 @@ export function useTreeKeyboard(options: TreeKeyboardOptions) {
     }
   }
 
-  /** setActive moves the roving row, selects it and keeps it rendered. */
   function setActive(index: number): void {
     const list = rows();
     if (index < 0 || index >= list.length) {
@@ -80,7 +63,6 @@ export function useTreeKeyboard(options: TreeKeyboardOptions) {
     revealIndex(index);
   }
 
-  /** onTreeFocus lands the roving row on the first entry when focus arrives. */
   function onTreeFocus(): void {
     if (activeRow.value?.type === "entry") {
       return;
@@ -92,7 +74,6 @@ export function useTreeKeyboard(options: TreeKeyboardOptions) {
     }
   }
 
-  /** onTreeKeydown implements the ARIA tree keyboard model. */
   function onTreeKeydown(event: KeyboardEvent): void {
     const list = rows();
     if (list.length === 0) {

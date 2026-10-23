@@ -11,17 +11,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// discardLogger keeps the service's operational logging out of the test output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// newTestService wires the real service onto the in-memory repository.
 func newTestService(repo *fakeRepository) *Service {
 	return NewService(Config{Repository: repo, Logger: discardLogger()})
 }
 
-// seedTeam creates a team owned by owner with the given extra members.
 func seedTeam(t *testing.T, repo *fakeRepository, owner uuid.UUID, members map[uuid.UUID]Role) uuid.UUID {
 	t.Helper()
 	repo.seedUser(owner, "owner@example.com")
@@ -145,10 +142,6 @@ func TestServiceDeleteTeamRBAC(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteTeamRefusedWhileOwningResources is the F7 regression: a team
-// that still owns resources or nodes must never be deleted, because its nodes
-// would fall back to the shared legacy state and its workloads would lose their
-// control-plane records.
 func TestServiceDeleteTeamRefusedWhileOwningResources(t *testing.T) {
 	owner := uuid.New()
 	repo := newFakeRepository()
@@ -165,9 +158,6 @@ func TestServiceDeleteTeamRefusedWhileOwningResources(t *testing.T) {
 	}
 }
 
-// TestPersonalOwnerMembershipIsImmutable is the F5 regression: the user whose
-// ID equals a personal team's ID is resolved as its owner without a stored
-// lookup, so no API call may demote or remove that membership.
 func TestPersonalOwnerMembershipIsImmutable(t *testing.T) {
 	personal, other := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -178,23 +168,19 @@ func TestPersonalOwnerMembershipIsImmutable(t *testing.T) {
 	svc := newTestService(repo)
 	ctx := context.Background()
 
-	// The second owner cannot demote the personal owner...
 	if _, err := svc.SetMemberRole(ctx, other, personalTeam, personal, RoleReadOnly); !errors.Is(err, ErrPersonalOwner) {
 		t.Fatalf("demote personal owner = %v, want ErrPersonalOwner", err)
 	}
-	// ...nor remove them, not even the personal owner themselves.
 	if err := svc.RemoveMember(ctx, other, personalTeam, personal); !errors.Is(err, ErrPersonalOwner) {
 		t.Fatalf("remove personal owner = %v, want ErrPersonalOwner", err)
 	}
 	if err := svc.RemoveMember(ctx, personal, personalTeam, personal); !errors.Is(err, ErrPersonalOwner) {
 		t.Fatalf("persona owner self-removal = %v, want ErrPersonalOwner", err)
 	}
-	// The stored membership is untouched and the resolved role stays owner.
 	member, err := repo.GetMember(ctx, personalTeam, personal)
 	if err != nil || member.Role != RoleOwner {
 		t.Fatalf("stored membership = %+v, %v; want owner", member, err)
 	}
-	// Other memberships of a personal team stay manageable.
 	if _, err := svc.SetMemberRole(ctx, personal, personalTeam, other, RoleAdmin); err != nil {
 		t.Fatalf("personal owner may manage other members: %v", err)
 	}
@@ -215,7 +201,6 @@ func TestServiceMemberManagement(t *testing.T) {
 	svc := newTestService(repo)
 	ctx := context.Background()
 
-	// An admin may not touch an owner, nor hand out ownership.
 	if _, err := svc.SetMemberRole(ctx, admin, teamID, owner, RoleReadOnly); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("admin demote owner = %v, want ErrForbidden", err)
 	}
@@ -225,21 +210,18 @@ func TestServiceMemberManagement(t *testing.T) {
 	if err := svc.RemoveMember(ctx, admin, teamID, owner); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("admin remove owner = %v, want ErrForbidden", err)
 	}
-	// An admin manages non-owner members.
 	if member, err := svc.SetMemberRole(ctx, admin, teamID, otherAdmin, RoleReadOnly); err != nil || member.Role != RoleReadOnly {
 		t.Fatalf("admin demote admin = %+v, %v; want read_only", member, err)
 	}
 	if err := svc.RemoveMember(ctx, admin, teamID, otherAdmin); err != nil {
 		t.Fatalf("admin remove read_only: %v", err)
 	}
-	// The last owner can never be demoted or removed.
 	if _, err := svc.SetMemberRole(ctx, owner, teamID, owner, RoleAdmin); !errors.Is(err, ErrLastOwner) {
 		t.Fatalf("last owner demote = %v, want ErrLastOwner", err)
 	}
 	if err := svc.RemoveMember(ctx, owner, teamID, owner); !errors.Is(err, ErrLastOwner) {
 		t.Fatalf("last owner remove = %v, want ErrLastOwner", err)
 	}
-	// The owner may promote a second owner, and then leave.
 	if _, err := svc.SetMemberRole(ctx, owner, teamID, admin, RoleOwner); err != nil {
 		t.Fatalf("owner promote: %v", err)
 	}
@@ -272,7 +254,6 @@ func TestServiceReadOnlyCannotManage(t *testing.T) {
 	if err := svc.Delete(ctx, viewer, teamID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("read_only delete = %v, want ErrForbidden", err)
 	}
-	// Any member may leave, including a read_only one.
 	if err := svc.RemoveMember(ctx, viewer, teamID, viewer); err != nil {
 		t.Fatalf("read_only leave: %v", err)
 	}
@@ -311,11 +292,9 @@ func TestServiceInviteLifecycle(t *testing.T) {
 		t.Fatalf("accepted team = %+v, want the team with the invited role", team)
 	}
 
-	// Replaying the token is refused.
 	if _, err := svc.Accept(ctx, invitee, token); !errors.Is(err, ErrInviteUsed) {
 		t.Fatalf("replayed Accept = %v, want ErrInviteUsed", err)
 	}
-	// An unknown token is not found.
 	if _, err := svc.Accept(ctx, invitee, "not-a-token"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown Accept = %v, want ErrNotFound", err)
 	}
@@ -331,14 +310,12 @@ func TestServiceInviteRejections(t *testing.T) {
 	svc := newTestService(repo)
 	ctx := context.Background()
 
-	// A read_only member cannot invite, a stranger cannot even see the team.
 	if _, _, err := svc.Invite(ctx, viewer, teamID, invitee.String()+"@example.com", RoleAdmin); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("read_only Invite = %v, want ErrForbidden", err)
 	}
 	if _, _, err := svc.Invite(ctx, stranger, teamID, "x@example.com", RoleAdmin); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("stranger Invite = %v, want ErrNotFound", err)
 	}
-	// Ownership can never be handed out through an invite.
 	if _, _, err := svc.Invite(ctx, owner, teamID, "x@example.com", RoleOwner); !errors.Is(err, ErrValidation) {
 		t.Fatalf("owner-role Invite = %v, want ErrValidation", err)
 	}
@@ -346,7 +323,6 @@ func TestServiceInviteRejections(t *testing.T) {
 		t.Fatalf("bad email Invite = %v, want ErrValidation", err)
 	}
 
-	// An invite addressed to someone else cannot be accepted.
 	invite, token, err := svc.Invite(ctx, owner, teamID, "invitee@example.com", RoleAdmin)
 	if err != nil {
 		t.Fatalf("Invite: %v", err)
@@ -355,13 +331,11 @@ func TestServiceInviteRejections(t *testing.T) {
 		t.Fatalf("foreign Accept = %v, want ErrForbidden", err)
 	}
 
-	// An expired invite is refused.
 	repo.expireInvite(invite.ID)
 	if _, err := svc.Accept(ctx, invitee, token); !errors.Is(err, ErrInviteExpired) {
 		t.Fatalf("expired Accept = %v, want ErrInviteExpired", err)
 	}
 
-	// A revoked invite is gone.
 	revoked, revokedToken, err := svc.Invite(ctx, owner, teamID, "invitee@example.com", RoleAdmin)
 	if err != nil {
 		t.Fatalf("Invite: %v", err)
@@ -373,7 +347,6 @@ func TestServiceInviteRejections(t *testing.T) {
 		t.Fatalf("revoked Accept = %v, want ErrNotFound", err)
 	}
 
-	// Listing invites is a management action.
 	if _, err := svc.Invites(ctx, viewer, teamID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("read_only Invites = %v, want ErrForbidden", err)
 	}

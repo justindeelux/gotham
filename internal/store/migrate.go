@@ -12,33 +12,21 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	// The pgx database/sql driver registers itself as "pgx", which goose uses.
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// Migrate subcommands. "up" applies every pending migration, "down" rolls back
-// only the most recently applied migration, and "status" reports state without
-// changing the schema.
 const (
 	MigrateUp     = "up"
 	MigrateDown   = "down"
 	MigrateStatus = "status"
 )
 
-// ErrUnknownMigrateCommand is returned by Migrate for an unsupported subcommand.
 var ErrUnknownMigrateCommand = errors.New("unknown migration command")
 
-// ErrMigrationInProgress is returned when another `gotham migrate` holds the
-// migration lock. The schema is shared, so the second run fails instead of
-// interleaving goose's bookkeeping with the first.
 var ErrMigrationInProgress = errors.New("another migration is already in progress")
 
-// migrationLockID is the session-level advisory lock that serializes migration
-// runs across processes. It is the CRC-32 of "gotham-migrate", kept distinct
-// from goose's own lock ID so an unrelated goose locker never collides.
 const migrationLockID int64 = 1026152518
 
-// IsMigrateCommand reports whether command is a supported migrate subcommand.
 func IsMigrateCommand(command string) bool {
 	switch command {
 	case MigrateUp, MigrateDown, MigrateStatus:
@@ -48,28 +36,14 @@ func IsMigrateCommand(command string) bool {
 	}
 }
 
-// Migrate runs the embedded migrations against dsn. The schema is forward-only:
-// "down" exists for local development and rolls back a single version.
-//
-// "up" and "down" mutate the shared schema, so they hold a session-level
-// PostgreSQL advisory lock for the whole run and wait for any concurrent run to
-// finish, respecting ctx. The lock is released when the connection closes
-// (including on a crash). "status" only reads, so it runs without the lock.
-//
-// Callers that must not wait use MigrateFailFast.
 func Migrate(ctx context.Context, dsn, command string) error {
 	return migrate(ctx, dsn, command, false)
 }
 
-// MigrateFailFast is Migrate without the wait: when another run holds the
-// migration lock it returns ErrMigrationInProgress immediately. The CLI uses it
-// so a second `gotham migrate` fails clearly instead of queueing behind the
-// first. Test setup uses Migrate so parallel packages serialize on the lock.
 func MigrateFailFast(ctx context.Context, dsn, command string) error {
 	return migrate(ctx, dsn, command, true)
 }
 
-// migrate is the shared implementation behind Migrate and MigrateFailFast.
 func migrate(ctx context.Context, dsn, command string, failFast bool) error {
 	if !IsMigrateCommand(command) {
 		return fmt.Errorf("%w: %q", ErrUnknownMigrateCommand, command)
@@ -94,8 +68,6 @@ func migrate(ctx context.Context, dsn, command string, failFast bool) error {
 	if err != nil {
 		return fmt.Errorf("open migration lock connection: %w", err)
 	}
-	// Closing the connection ends the session and releases the advisory lock;
-	// no explicit unlock is needed, so a killed process cannot leave it held.
 	defer func() { _ = conn.Close() }()
 
 	if failFast {
@@ -116,7 +88,6 @@ func migrate(ctx context.Context, dsn, command string, failFast bool) error {
 	return migrateDown(ctx, provider)
 }
 
-// migrateUp applies every pending migration and reports what ran.
 func migrateUp(ctx context.Context, provider *goose.Provider) error {
 	results, err := provider.Up(ctx)
 	if err != nil {
@@ -132,8 +103,6 @@ func migrateUp(ctx context.Context, provider *goose.Provider) error {
 	return nil
 }
 
-// migrateDown rolls back the most recently applied migration, printing it first
-// so the operator can see what is about to be reverted.
 func migrateDown(ctx context.Context, provider *goose.Provider) error {
 	target, err := lastApplied(ctx, provider)
 	if err != nil {
@@ -153,7 +122,6 @@ func migrateDown(ctx context.Context, provider *goose.Provider) error {
 	return nil
 }
 
-// migrateStatus prints one row per known migration.
 func migrateStatus(ctx context.Context, provider *goose.Provider) error {
 	statuses, err := provider.Status(ctx)
 	if err != nil {
@@ -181,7 +149,6 @@ func migrateStatus(ctx context.Context, provider *goose.Provider) error {
 	return w.Flush()
 }
 
-// lastApplied returns the highest applied migration, or nil when none ran.
 func lastApplied(ctx context.Context, provider *goose.Provider) (*goose.MigrationStatus, error) {
 	statuses, err := provider.Status(ctx)
 	if err != nil {

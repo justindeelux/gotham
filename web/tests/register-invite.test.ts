@@ -1,4 +1,3 @@
-// useRegisterInvite: token hold, validation, team/email fill.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

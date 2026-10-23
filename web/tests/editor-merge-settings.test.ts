@@ -1,27 +1,19 @@
-// History diff views (JUS-219 fix round 2): the merge panes must be built with
-// the current editor settings and follow later changes through their own
-// compartments, like the editable tabs. JUS-231 fix round: the shared
-// find/replace and go-to-line shortcuts must reach the custom UI with focus in
-// a read-only diff pane.
 /* global document:readonly, Element:readonly, HTMLElement:readonly, KeyboardEvent:readonly */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMergeSession } from "@/features/files/editor/merge";
 import { DEFAULT_EDITOR_SETTINGS } from "@/features/files/schemas/editorSettings";
 
-/** makeHost appends a detached diff host to the document. */
 function makeHost(): HTMLElement {
   const host = document.createElement("div");
   document.body.append(host);
   return host;
 }
 
-/** shortcuts are the custom UI callbacks a diff session wires into its panes. */
 function shortcuts() {
   return { onFind: vi.fn(), onReplace: vi.fn(), onGoToLine: vi.fn() };
 }
 
-/** press dispatches one keydown at a pane's content element. */
 function press(content: Element, key: string, code: string): void {
   content.dispatchEvent(
     new KeyboardEvent("keydown", {

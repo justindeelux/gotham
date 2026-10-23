@@ -13,27 +13,13 @@ import {
 } from "@/features/terminal/utils/containerRecovery";
 import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
-/**
- * Session lifecycle for the application Terminal tab (JUS-247).
- *
- * Discovery is lazy and owned by `useApplicationTerminalTargets`; this module
- * decides what a fresh target set means: exactly one runnable container opens
- * automatically, several show the explicit selector, none render the empty
- * state. Every recovery path (pane Retry, Start new session, Refresh) reads the
- * targets again first, so a replaced container is never re-POSTed by id. A
- * service switch runs the shared close confirmation, and a close leaves the
- * explicit restart card (even across a route remount).
- */
 export interface ApplicationTerminalTabOptions {
   applicationId: () => string;
   applicationName: () => string;
-  /** canUse mirrors the known, write-level access gate. */
   canUse: () => boolean;
-  /** active is true only while the Terminal tab is selected. */
   active: () => boolean;
 }
 
-/** tabTargetKey is the key read back from a live tab. */
 function tabTargetKey(tab: TerminalTab): string {
   return containerTargetKey({
     service: tab.service,
@@ -56,7 +42,6 @@ export function useApplicationTerminalTab(
   const selection = ref("");
   const tabId = ref("");
   const starting = ref(false);
-  /** closed marks a tab that vanished under the mounted pane. */
   const closed = ref(false);
 
   const tab = computed<TerminalTab | null>(() =>
@@ -93,7 +78,6 @@ export function useApplicationTerminalTab(
       return "empty";
     }
     if (discovery.loaded.value && targetCount.value === 1) {
-      // The single target is opening; never flash an empty selector.
       return "loading";
     }
     if (discovery.loaded.value && targetCount.value > 1) {
@@ -102,7 +86,6 @@ export function useApplicationTerminalTab(
     return "idle";
   });
 
-  /** sourcePath is the route the app dock resumes for this page session. */
   function sourcePath(): string {
     return router.resolve({
       name: "application-detail",
@@ -115,7 +98,6 @@ export function useApplicationTerminalTab(
     }).fullPath;
   }
 
-  /** resetLocal forgets the pane but keeps the store tab untouched. */
   function resetLocal(): void {
     tabId.value = "";
     starting.value = false;
@@ -124,7 +106,6 @@ export function useApplicationTerminalTab(
     discovery.reset();
   }
 
-  /** openTarget creates (or reuses) the page session for one exact target. */
   async function openTarget(target: ApplicationTerminalTarget): Promise<void> {
     const applicationId = options.applicationId();
     if (!canUse.value || applicationId === "") {
@@ -134,9 +115,6 @@ export function useApplicationTerminalTab(
     if (current !== null && current.mode !== "window") {
       return;
     }
-    // A detached tab is explicitly retained in the window: a restart opens a
-    // NEW page session for the two together (one-way close stays automatic
-    // only through the shared confirmation).
     const detached = current !== null;
     closed.value = false;
     terminal.clearContainerRestart(applicationId);
@@ -172,7 +150,6 @@ export function useApplicationTerminalTab(
     }
   }
 
-  /** selectedTarget resolves the current selection in one target list. */
   function selectedTarget(
     targets: ApplicationTerminalTarget[],
   ): ApplicationTerminalTarget | null {
@@ -187,11 +164,6 @@ export function useApplicationTerminalTab(
     );
   }
 
-  /**
-   * applyFreshTargets turns one fresh discovery into the next state:
-   * a single runnable container reopens, several keep the selector, none
-   * surface the empty/error state. It never creates more than one shell.
-   */
   async function applyFreshTargets(
     result: TargetsLoadResult,
     autoOpen: boolean,
@@ -201,8 +173,6 @@ export function useApplicationTerminalTab(
     }
     const live = tab.value;
     if (live !== null) {
-      // A refresh never starts a second shell; the live tab stays selected
-      // even when the list was reordered or a replica was replaced.
       selection.value = tabTargetKey(live);
       return;
     }
@@ -211,24 +181,18 @@ export function useApplicationTerminalTab(
       selection.value = "";
     }
     if (closed.value) {
-      return; // the explicit restart card owns the next create
+      return;
     }
     if (result.targets.length === 1 && autoOpen) {
       await openTarget(result.targets[0]!);
     }
   }
 
-  /** discover loads and applies the targets (no duplicates on flapping). */
   async function discover(autoOpen: boolean): Promise<void> {
     const result = await discovery.load();
     await applyFreshTargets(result, autoOpen);
   }
 
-  /**
-   * restart re-reads the targets before reconnecting. A replaced container is
-   * resolved from the fresh response (one target opens, several show the
-   * selector, none stays empty); a refused id is never re-POSTed.
-   */
   async function restart(): Promise<void> {
     closed.value = false;
     terminal.clearContainerRestart(options.applicationId());
@@ -248,22 +212,14 @@ export function useApplicationTerminalTab(
     }
   }
 
-  /** startNew is the closed-card action; it always rediscovers first. */
   async function startNew(): Promise<void> {
     await restart();
   }
 
-  /** retry is the explicit recovery from a bounded discovery error. */
   async function retry(): Promise<void> {
     await discover(true);
   }
 
-  /**
-   * refresh re-reads the list. A healthy/live shell is never recreated; a
-   * failed container tab is recovered through the same rediscovery path as
-   * Retry, so the visible "Refresh services" control can never re-POST a
-   * refused container id either.
-   */
   async function refresh(): Promise<void> {
     const live = tab.value;
     if (
@@ -278,11 +234,6 @@ export function useApplicationTerminalTab(
     await discover(live === null && !closed.value);
   }
 
-  /**
-   * retryFromPane is registered with the store for this tab: Retry on a
-   * container pane must release the failed tab, rediscover and re-resolve the
-   * target instead of re-POSTing the refused container id.
-   */
   async function retryFromPane(): Promise<void> {
     if (tabId.value !== "") {
       terminal.closeTabs([tabId.value]);
@@ -297,8 +248,6 @@ export function useApplicationTerminalTab(
     ([current, tabMode]) => {
       unbindRetry?.();
       unbindRetry = null;
-      // A detached tab is retried by the floating window; the store's bounded
-      // recovery keeps its window mode. This page resolver owns page tabs only.
       if (current !== "" && tabMode === "page") {
         unbindRetry = terminal.registerRetryHandler(current, retryFromPane);
       }
@@ -306,12 +255,6 @@ export function useApplicationTerminalTab(
     { immediate: true },
   );
 
-  /**
-   * selectTarget is the explicit service/replica choice. While a shell is
-   * live it runs the shared confirmation: Cancel keeps the current session
-   * (and restores the selector), Confirm releases exactly that session and
-   * opens the chosen target.
-   */
   async function selectTarget(key: string): Promise<void> {
     const target =
       discovery.targets.value.find(
@@ -325,9 +268,6 @@ export function useApplicationTerminalTab(
       return;
     }
     const live = tab.value;
-    // A detached window shell is retained, never closed by a selection: the
-    // chosen target opens as a new page session beside it. A visible page
-    // shell still uses the shared confirmation (Cancel keeps it).
     if (live !== null && live.mode === "page") {
       if (tabTargetKey(live) === key) {
         selection.value = key;
@@ -335,7 +275,6 @@ export function useApplicationTerminalTab(
       }
       const confirmed = await terminal.requestClose([live.id]);
       if (!confirmed) {
-        // Cancel keeps the live shell: restore the visible selection to it.
         selection.value = tabTargetKey(live);
         return;
       }
@@ -346,8 +285,6 @@ export function useApplicationTerminalTab(
     await openTarget(target);
   }
 
-  // Reset before the activation watcher for the same id change: otherwise a
-  // remount adoption (which sets tabId) would be cleared by this watcher.
   watch(
     () => options.applicationId(),
     () => {
@@ -355,8 +292,6 @@ export function useApplicationTerminalTab(
     },
   );
 
-  // First activation discovers. A revisit reuses `attempted`, and a closed
-  // tab keeps its restart card with zero creates until the operator acts.
   watch(
     [
       () => options.active(),
@@ -382,8 +317,6 @@ export function useApplicationTerminalTab(
           candidate.applicationId === applicationId,
       );
       if (existing) {
-        // A remount (route change and back) adopts the live store tab before
-        // discovery, so re-entering never opens a second shell.
         tabId.value = existing.id;
         selection.value = tabTargetKey(existing);
         void discover(false);
@@ -391,8 +324,6 @@ export function useApplicationTerminalTab(
       }
       const dismissed = terminal.containerRestartTarget(applicationId);
       if (dismissed !== null) {
-        // The explicit close survives the remount: show the restart card and
-        // create nothing until the operator asks.
         closed.value = true;
         selection.value = dismissed;
         discovery.markAttempted();
@@ -403,9 +334,6 @@ export function useApplicationTerminalTab(
     { immediate: true },
   );
 
-  // A tab removed by any route (close confirmation, logout reset) must not
-  // leave the host pointing at a dead id. The selection survives so the
-  // explicit restart card can offer the same target.
   watch(tab, (current) => {
     if (tabId.value !== "" && current === null) {
       tabId.value = "";

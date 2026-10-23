@@ -21,9 +21,7 @@ import ServerPicker from "@/features/projects/components/ServerPicker.vue";
 
 interface Props {
   show: boolean;
-  /** Project the service is created in (the route's, changeable). */
   projectId?: string;
-  /** Environment the service is created in (the route's, changeable). */
   environmentId?: string;
 }
 
@@ -34,14 +32,6 @@ const emit = defineEmits<{
   created: [service: Service];
 }>();
 
-/**
- * ImportComposeDialog renders the compose import modal and its form. Hosted
- * by the environment page with the route's scope (PE-5, Linear JUS-34).
- */
-/**
- * t renders dialog copy in the active locale (tracks language switches).
- * Called during render, so labels refresh without losing the typed draft.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

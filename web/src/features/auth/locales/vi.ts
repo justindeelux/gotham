@@ -1,10 +1,5 @@
 import type { AuthMessages } from "./en";
 
-/**
- * Vietnamese auth catalog. Keys mirror `en.ts` exactly; only values are
- * translated. Technical tokens (JWT, Ed25519, gRPC, TLS, protobuf, mono
- * product names, ports) stay untranslated by design.
- */
 const vi: AuthMessages = {
   shell: {
     eyebrow: "PaaS tự host",

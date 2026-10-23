@@ -14,7 +14,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// logBuffer is a goroutine-safe buffer for capturing bridge logs.
 type logBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -32,9 +31,6 @@ func (b *logBuffer) String() string {
 	return b.buf.String()
 }
 
-// TestBridgeReconnectsAfterFailures is the B1-5 regression: an unreachable
-// Redis must not kill the bridge. The supervisor retries with backoff, logs
-// each failure, and forwards again once the subscription comes back.
 func TestBridgeReconnectsAfterFailures(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -67,7 +63,6 @@ func TestBridgeReconnectsAfterFailures(t *testing.T) {
 		return attempts.Load() >= 3
 	})
 
-	// Once reconnected, messages reach hub subscribers again.
 	messages <- &redis.Message{Channel: channel, Payload: "recovered"}
 
 	select {
@@ -84,9 +79,6 @@ func TestBridgeReconnectsAfterFailures(t *testing.T) {
 	})
 }
 
-// TestBridgeBackoffAfterCycle is the U8 regression: the reconnect backoff is
-// reset only after a subscription stayed up for stableAfter, so a Redis that
-// accepts then immediately drops keeps backing off.
 func TestBridgeBackoffAfterCycle(t *testing.T) {
 	bridge := NewBridge(NewHub(), nil, slog.Default())
 	bridge.minBackoff = 250 * time.Millisecond
@@ -101,8 +93,6 @@ func TestBridgeBackoffAfterCycle(t *testing.T) {
 	}
 }
 
-// TestBridgeRunStopsOnCancel verifies the supervisor returns promptly once its
-// context ends, so Realtime.Close does not hang on the bridge goroutine.
 func TestBridgeRunStopsOnCancel(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()

@@ -12,7 +12,6 @@ interface Props {
   displayName: string;
   appId: string;
   shortId: string;
-  /** Identity derived from the application's source/provider metadata. */
   brand: BrandMark;
   latest: Deployment | null;
   containerStopped: boolean;

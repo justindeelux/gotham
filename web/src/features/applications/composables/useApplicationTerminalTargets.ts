@@ -6,20 +6,11 @@ import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
 import { listApplicationTerminalTargets } from "@/features/terminal/api/terminal";
 import type { ApplicationTerminalTarget } from "@/features/terminal/schemas/terminal";
 
-/**
- * Lazy, single-flight discovery of an application's running containers
- * (JUS-247). It owns only the GET and its loading/error state; the session
- * composable decides whether one target auto-opens, a selector is shown, or
- * the empty/error state renders. `attempted` makes discovery explicitly lazy:
- * a bounded failure never retries itself.
- */
 export interface ApplicationTerminalTargetsOptions {
   applicationId: () => string;
-  /** enabled mirrors the known, write-level access gate. */
   enabled: () => boolean;
 }
 
-/** TargetsLoadResult is the outcome of one discovery read. */
 export type TargetsLoadResult =
   | {
       ok: true;
@@ -36,11 +27,8 @@ export interface ApplicationTerminalTargetsState {
   loaded: Ref<boolean>;
   error: Ref<TerminalErrorCode | null>;
   attempted: Ref<boolean>;
-  /** load performs one GET; concurrent callers share the same request. */
   load: () => Promise<TargetsLoadResult>;
-  /** reset aborts an in-flight read and forgets the previous application. */
   reset: () => void;
-  /** markAttempted records that the current application already discovered. */
   markAttempted: () => void;
 }
 
@@ -58,7 +46,6 @@ export function useApplicationTerminalTargets(
   let pending: Promise<TargetsLoadResult> | null = null;
   let token = 0;
 
-  /** load reads the targets once; flapping joins the in-flight request. */
   function load(): Promise<TargetsLoadResult> {
     if (pending) {
       return pending;
@@ -112,7 +99,6 @@ export function useApplicationTerminalTargets(
     return pending;
   }
 
-  /** reset aborts and clears every target field for a new application. */
   function reset(): void {
     controller?.abort();
     controller = null;
@@ -126,7 +112,6 @@ export function useApplicationTerminalTargets(
     attempted.value = false;
   }
 
-  /** markAttempted blocks an automatic rediscovery after a bounded failure. */
   function markAttempted(): void {
     attempted.value = true;
   }

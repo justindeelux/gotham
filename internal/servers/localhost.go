@@ -7,11 +7,8 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// localhostAgentServerName separates the local agent certificate from CP listener SANs.
 const localhostAgentServerName = "localhost.agent.gotham.invalid"
 
-// EnsureLocalhost repairs the mandatory registry entry without replacing its
-// UUID, inventory or heartbeat status. Readiness still requires a live agent.
 func (s *ServerService) EnsureLocalhost(ctx context.Context) error {
 	tx, err := s.store.DB.Begin(ctx)
 	if err != nil {
@@ -22,7 +19,6 @@ func (s *ServerService) EnsureLocalhost(ctx context.Context) error {
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM servers WHERE node_id = 'localhost')`).Scan(&exists); err != nil {
 		return fmt.Errorf("find localhost node: %w", err)
 	}
-	// An agent's later registration must not prevent restarting an established CP.
 	if !exists {
 		if _, err := tx.Exec(ctx, store.ReconcileLocalhostSQL); err != nil {
 			return fmt.Errorf("reconcile localhost node: %w", err)

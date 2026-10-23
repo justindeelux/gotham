@@ -20,11 +20,6 @@ const statusTypes: Record<ServerStatus, TagType> = {
   error: "error",
 };
 
-/**
- * statusDots maps each lifecycle state to its dot color modifier. The Server
- * type exposes no agent-version field, so there is no "agent update needed"
- * state here — it is omitted, never invented.
- */
 const statusDots: Record<ServerStatus, string> = {
   pending: "dot--pending",
   validating: "dot--validating",
@@ -33,7 +28,6 @@ const statusDots: Record<ServerStatus, string> = {
   error: "dot--error",
 };
 
-/** Transient states pulse; steady states render a static dot. */
 const pulsing: ReadonlySet<ServerStatus> = new Set(["validating", "offline"]);
 
 const props = withDefaults(defineProps<Props>(), { size: "small" });

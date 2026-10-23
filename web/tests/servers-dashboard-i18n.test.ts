@@ -1,9 +1,3 @@
-// I18N-5 live-switch and raw-behavior checks for servers and dashboard.
-//
-// Pure helpers stay byte-identical in English when no locale is passed and
-// render translated display text for Vietnamese. Raw classifiers
-// (isApiError, stripErrorPrefix, conflictDetail) and the describe* detail
-// paths keep their exact semantics; only empty fallbacks localize.
 
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
@@ -232,8 +226,6 @@ describe("live locale switch", () => {
     const Harness = defineComponent({
       name: "SwitchHarness",
       setup() {
-        // The selected container id lives beside its display label: a
-        // language switch must re-render the label without touching it.
         const selected = ref("ctr-9");
         return { selected };
       },

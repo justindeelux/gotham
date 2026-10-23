@@ -13,9 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// enrollTOTP registers an account, enrolls it and turns the second factor on,
-// returning the user id, the secret and the mutable clock the test advances by
-// hand.
 func enrollTOTP(t *testing.T, svc *Service, st *store.Store) (uuid.UUID, string, *time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -43,16 +40,11 @@ func enrollTOTP(t *testing.T, svc *Service, st *store.Store) (uuid.UUID, string,
 	return userID, enrollment.Secret, &clock
 }
 
-// TestTOTPLockoutAfterRepeatedFailures: consecutive wrong codes — TOTP and
-// recovery alike — lock the account, a locked attempt is refused even with a
-// correct code, and the lock expires on its own.
 func TestTOTPLockoutAfterRepeatedFailures(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
 	userID, secret, clock := enrollTOTP(t, svc, st)
 
-	// Four wrong TOTP-shaped codes and one wrong recovery-shaped code: the two
-	// types share one counter, so the fifth miss arms the lock.
 	for i := 0; i < totpMaxFailures-1; i++ {
 		if _, err := svc.verifySecondFactor(ctx, pgUUID(userID), "000000"); !errors.Is(err, ErrInvalidCode) {
 			t.Fatalf("wrong TOTP miss %d = %v, want ErrInvalidCode", i, err)
@@ -62,8 +54,6 @@ func TestTOTPLockoutAfterRepeatedFailures(t *testing.T) {
 		t.Fatalf("wrong recovery miss = %v, want ErrInvalidCode", err)
 	}
 
-	// A correct code now buys nothing: the account is locked, and a further
-	// attempt stays locked (no reset by repeated probing).
 	if _, err := svc.verifySecondFactor(ctx, pgUUID(userID), codeForSecret(t, secret, *clock)); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("correct code while locked = %v, want ErrTOTPLocked", err)
 	}
@@ -71,7 +61,6 @@ func TestTOTPLockoutAfterRepeatedFailures(t *testing.T) {
 		t.Fatalf("miss while locked = %v, want ErrTOTPLocked", err)
 	}
 
-	// Once the window elapses a correct code works again and clears the count.
 	*clock = clock.Add(totpLockoutWindow + time.Second)
 	if _, err := svc.verifySecondFactor(ctx, pgUUID(userID), codeForSecret(t, secret, *clock)); err != nil {
 		t.Fatalf("correct code after the lock expired = %v, want nil", err)
@@ -85,11 +74,6 @@ func TestTOTPLockoutAfterRepeatedFailures(t *testing.T) {
 	}
 }
 
-// TestTOTPLockoutBurstIsBounded: a parallel burst of wrong codes cannot slip a
-// guess past the threshold. Every attempt is either counted or refused as
-// locked, so exactly totpMaxFailures reach the verifier, the counter stops at
-// the threshold, and a correct code in the same window still buys nothing
-// (JUS-198).
 func TestTOTPLockoutBurstIsBounded(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -129,14 +113,11 @@ func TestTOTPLockoutBurstIsBounded(t *testing.T) {
 		t.Fatalf("burst misses refused as locked = %d, want %d", locked.Load(), burst-int64(totpMaxFailures))
 	}
 
-	// A correct code in the same window buys nothing: the account is locked.
 	if _, err := svc.verifySecondFactor(ctx, pgUUID(userID), codeForSecret(t, secret, *clock)); !errors.Is(err, ErrTOTPLocked) {
 		t.Fatalf("correct code after the burst = %v, want ErrTOTPLocked", err)
 	}
 }
 
-// TestTOTPFailureCounterResetsOnSuccess: a correct code between misses clears
-// the count, so four wrong codes either side of a success never lock.
 func TestTOTPFailureCounterResetsOnSuccess(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -155,8 +136,6 @@ func TestTOTPFailureCounterResetsOnSuccess(t *testing.T) {
 	}
 }
 
-// TestTOTPLockoutBlocksEnrollmentCode: the enrollment confirmation counts the
-// same misses, so a guesser cannot use the setup step to bypass the lock.
 func TestTOTPLockoutBlocksEnrollmentCode(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()

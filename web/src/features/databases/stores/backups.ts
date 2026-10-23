@@ -48,11 +48,6 @@ export const useBackupsStore = defineStore("backups", () => {
   const targetsLoading = ref(false);
   const targetsActing = ref(false);
 
-  /**
-   * Retained tab errors keep the raw failure and derive display text in the
-   * current locale, so a language switch refreshes a visible banner without
-   * a refetch. Toasts still use the invocation-time locale and are not replayed.
-   */
   const backupsErrorRaw = ref<unknown>(null);
   const restoresErrorRaw = ref<unknown>(null);
   const schedulesErrorRaw = ref<unknown>(null);
@@ -78,22 +73,18 @@ export const useBackupsStore = defineStore("backups", () => {
       : describeBackupError(targetsErrorRaw.value),
   );
 
-  /** backupsOf returns the cached runs of one database, if any. */
   function backupsOf(databaseId: string): DatabaseBackup[] {
     return backupsById.value[databaseId] ?? [];
   }
 
-  /** restoresOf returns the cached restore runs of one database, if any. */
   function restoresOf(databaseId: string): DatabaseRestore[] {
     return restoresById.value[databaseId] ?? [];
   }
 
-  /** schedulesOf returns the cached cron entries of one database, if any. */
   function schedulesOf(databaseId: string): BackupSchedule[] {
     return schedulesById.value[databaseId] ?? [];
   }
 
-  /** targetOf resolves a target by id for the schedule labels. */
   function targetOf(targetId: string | undefined): BackupTarget | null {
     if (!targetId) {
       return null;
@@ -101,7 +92,6 @@ export const useBackupsStore = defineStore("backups", () => {
     return targets.value.find((item) => item.id === targetId) ?? null;
   }
 
-  /** fetchBackups loads the runs of one database, toggling the loading flag. */
   async function fetchBackups(databaseId: string): Promise<void> {
     backupsLoading.value = true;
     backupsErrorRaw.value = null;
@@ -119,7 +109,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** refreshBackups reloads the runs without toggling the loading flag. */
   async function refreshBackups(databaseId: string): Promise<void> {
     try {
       const server = await listBackups(databaseId);
@@ -133,7 +122,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** fetchRestores loads the durable restore runs of one database. */
   async function fetchRestores(databaseId: string): Promise<void> {
     restoresLoading.value = true;
     restoresErrorRaw.value = null;
@@ -147,7 +135,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** refreshRestores reloads the restore runs without toggling the flag. */
   async function refreshRestores(databaseId: string): Promise<void> {
     try {
       restoresById.value[databaseId] = await listRestores(databaseId);
@@ -157,10 +144,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /**
-   * backupNow queues a manual backup and prepends the recorded `running` row,
-   * so the list shows the pending state immediately.
-   */
   async function backupNow(
     databaseId: string,
     targetId?: string,
@@ -181,7 +164,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** removeBackup deletes one run (artifact first, then the row). */
   async function removeBackup(
     databaseId: string,
     backupId: string,
@@ -200,7 +182,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** restoreBackup queues a restore of one completed backup. */
   async function restore(
     databaseId: string,
     backupId: string,
@@ -216,7 +197,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** fetchSchedules loads the cron entries of one database. */
   async function fetchSchedules(databaseId: string): Promise<void> {
     schedulesLoading.value = true;
     schedulesErrorRaw.value = null;
@@ -230,7 +210,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** applySchedule merges one schedule into the cached list in place. */
   function applySchedule(databaseId: string, updated: BackupSchedule): void {
     const list = schedulesById.value[databaseId] ?? [];
     const index = list.findIndex((item) => item.id === updated.id);
@@ -242,7 +221,6 @@ export const useBackupsStore = defineStore("backups", () => {
     schedulesById.value[databaseId] = [...list];
   }
 
-  /** addSchedule stores one cron entry and merges the row. */
   async function addSchedule(
     databaseId: string,
     input: CreateBackupScheduleInput,
@@ -260,7 +238,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** editSchedule changes one cron entry and merges the row. */
   async function editSchedule(
     databaseId: string,
     scheduleId: string,
@@ -279,7 +256,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** removeSchedule deletes one cron entry and drops it from the cache. */
   async function removeSchedule(
     databaseId: string,
     scheduleId: string,
@@ -298,7 +274,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** fetchTargets loads the caller's storage targets. */
   async function fetchTargets(): Promise<void> {
     targetsLoading.value = true;
     targetsErrorRaw.value = null;
@@ -312,7 +287,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** applyTarget merges one target into the cached list in place. */
   function applyTarget(updated: BackupTarget): void {
     const index = targets.value.findIndex((item) => item.id === updated.id);
     if (index === -1) {
@@ -322,7 +296,6 @@ export const useBackupsStore = defineStore("backups", () => {
     targets.value[index] = updated;
   }
 
-  /** addTarget stores one target and merges the row. */
   async function addTarget(
     input: CreateBackupTargetInput,
   ): Promise<BackupTarget> {
@@ -339,7 +312,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** editTarget changes one target and merges the row. */
   async function editTarget(
     targetId: string,
     input: UpdateBackupTargetInput,
@@ -357,7 +329,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** removeTarget deletes one target and drops it from the cache. */
   async function removeTarget(targetId: string): Promise<void> {
     targetsActing.value = true;
     try {
@@ -371,7 +342,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /** checkTarget tests one target's connection without touching the cache. */
   async function checkTarget(targetId: string): Promise<TargetCheck> {
     try {
       return await testTarget(targetId);
@@ -380,10 +350,6 @@ export const useBackupsStore = defineStore("backups", () => {
     }
   }
 
-  /**
-   * reset drops every cached collection, so the next sign-in never sees the
-   * previous account's backups. Called on sign-out (see the auth store).
-   */
   function reset(): void {
     backupsById.value = {};
     backupsLoading.value = false;

@@ -13,14 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestApplicationDomainsMigrationBackfillsAndConstrains builds a disposable
-// database at the pre-JUS-89 schema, seeds legacy single-domain bindings
-// (including a cross-node duplicate, which the old per-node index allowed),
-// then applies the multi-domain migrations and asserts the backfill and the
-// new invariants: every stored base_domain becomes the primary row, the
-// oldest binding of a legacy conflict stays enabled while the newer one
-// fails closed (disabled, value preserved), a domainless application gets no
-// rows, and the three new indexes reject conflicting writes.
 func TestApplicationDomainsMigrationBackfillsAndConstrains(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -126,8 +118,6 @@ func TestApplicationDomainsMigrationBackfillsAndConstrains(t *testing.T) {
 		}
 		return id
 	}
-	// The cross-node duplicate the old per-node index allowed: the oldest
-	// binding must stay enabled, the newer one fails closed.
 	appOld := insertApp(userA, serverA, "legacy-old", "shared.example.com", "2026-01-01T00:00:00Z")
 	appNew := insertApp(userB, serverB, "legacy-new", "Shared.Example.com", "2026-02-01T00:00:00Z")
 	appSolo := insertApp(userA, serverA, "healthy", "solo.example.com", "2026-01-15T00:00:00Z")
@@ -180,25 +170,21 @@ func TestApplicationDomainsMigrationBackfillsAndConstrains(t *testing.T) {
 		t.Fatalf("domainless app has rows: %#v", byApp[appBare])
 	}
 
-	// The global index rejects a newly enabled conflicting binding.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO application_domains (application_id, domain, is_primary) VALUES ($1, 'SOLO.example.com', false)`,
 		appNew); err == nil {
 		t.Fatal("globally conflicting domain was accepted")
 	}
-	// The per-app index is case-insensitive.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO application_domains (application_id, domain) VALUES ($1, 'SOLO.EXAMPLE.COM')`,
 		appSolo); err == nil {
 		t.Fatal("duplicate domain inside one application was accepted")
 	}
-	// One primary per application.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO application_domains (application_id, domain, is_primary) VALUES ($1, 'second.example.com', true)`,
 		appSolo); err == nil {
 		t.Fatal("second primary domain was accepted")
 	}
-	// Certificates are unique per domain, not per application.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO domain_certificates (application_id, domain, challenge) VALUES ($1, 'solo.example.com', 'http-01')`,
 		appSolo); err != nil {

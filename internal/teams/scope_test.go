@@ -85,7 +85,6 @@ func TestScopeAuthorizeOptionalTeam(t *testing.T) {
 		t.Errorf("other team row = %v, want ErrNotFound", err)
 	}
 
-	// No team context: pre-teams behavior, nodes are shared.
 	legacy := Scope{UserID: userID}
 	if err := legacy.AuthorizeOptionalTeam(teamB, true); err != nil {
 		t.Errorf("legacy scope on any row = %v, want allowed", err)
@@ -95,7 +94,6 @@ func TestScopeAuthorizeOptionalTeam(t *testing.T) {
 func TestScopeForFallsBackAndFillsUser(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 
-	// No scope stored: the creator scope (pre-teams behavior).
 	scope := ScopeFor(context.Background(), userID)
 	if scope.Active() || scope.UserID != userID {
 		t.Fatalf("ScopeFor(no scope) = %+v, want the creator scope", scope)
@@ -104,7 +102,6 @@ func TestScopeForFallsBackAndFillsUser(t *testing.T) {
 		t.Fatal("a scope without a team context must keep write access")
 	}
 
-	// A stored scope wins, and a missing user ID is filled in from the call.
 	ctx := WithScope(context.Background(), Scope{TeamID: teamID, Role: RoleReadOnly})
 	scope = ScopeFor(ctx, userID)
 	if scope.UserID != userID || scope.TeamID != teamID || scope.Role != RoleReadOnly {

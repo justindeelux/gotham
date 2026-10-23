@@ -1,20 +1,8 @@
 import { expect, test } from "./fixtures";
 import { storageStatePath } from "./support";
 
-// Start authenticated (session from global setup); the WebSocket is mocked
-// so no realtime backend is needed.
 test.use({ storageState: storageStatePath });
 
-/**
- * JUS-91: the background-task progress card.
- *
- * A webhook-triggered run has no watching client, so the spec injects the
- * task frame the control plane would publish (queued/running on
- * tasks:{teamID}) at the mocked WS endpoint and proves the shell renders a
- * fixed, non-blocking card with name, step, status and log link — on load,
- * across navigation, and with the failed card surviving dismissal of the
- * successful one.
- */
 test.describe("background task progress card", () => {
   test("shows the card for a running task and keeps it across navigation", async ({
     page,
@@ -60,7 +48,6 @@ test.describe("background task progress card", () => {
     await expect(card).toContainText("Running");
     await expect(card.getByRole("link", { name: "View logs" })).toBeVisible();
 
-    // The card lives in the app shell: navigating keeps it on screen.
     await page.goto("/projects");
     await expect(page.locator('[data-task-id="dep-1"]')).toBeVisible();
   });
@@ -101,7 +88,6 @@ test.describe("background task progress card", () => {
     await expect(failed).toBeVisible();
     await expect(failed).toContainText("Boom");
     await expect(page.locator('[data-task-id="dep-succeeded"]')).toBeVisible();
-    // The success card auto-dismisses; the failure stays until closed.
     await expect(page.locator('[data-task-id="dep-succeeded"]')).toBeHidden({
       timeout: 15_000,
     });

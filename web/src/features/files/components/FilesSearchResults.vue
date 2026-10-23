@@ -9,14 +9,10 @@ import type { FilesSearchHit } from "@/features/files/schemas/files";
 import { entryIconKind, parentPath } from "@/features/files/utils/files";
 
 interface Props {
-  /** results are the name-search hits with their root-relative paths. */
   results: FilesSearchHit[];
-  /** truncated reports a capped search (depth/result/scan cap hit). */
   truncated: boolean;
   loading: boolean;
-  /** query is the submitted search text. */
   query: string;
-  /** path is the directory the search ran under ("" = the root itself). */
   path: string;
 }
 
@@ -27,39 +23,24 @@ const emit = defineEmits<{
   clear: [];
 }>();
 
-/** folderOf is the containing folder of one hit, for the row's location line. */
 function folderOf(hit: FilesSearchHit): string {
   return parentPath(hit.path) || "/";
 }
 
 const scope = computed<string>(() => props.path || "/");
 
-/**
- * selectedPath is the row a single click (or focus) left active. Like the normal
- * list, a single click only selects — it never opens — so a real double-click
- * cannot fire its second click on the listing the first click navigated to
- * (JUS-163 round 3). Opening is the double-click or Enter/Space.
- */
 const selectedPath = ref<string | null>(null);
 
-/** selectHit marks one row as the current one without opening it. */
 function selectHit(hit: FilesSearchHit): void {
   selectedPath.value = hit.path;
 }
 
-/** openHit opens one hit's location (double-click / Enter / Space). */
 function openHit(hit: FilesSearchHit): void {
   emit("open", hit);
 }
 
 const { t } = useI18n();
 
-/**
- * liveMessage is the single polite announcement for the whole search: searching,
- * the result count (with the truncated note appended), or the empty state. It
- * stays mounted across loading → done, so a screen reader hears the outcome
- * after Enter even though focus never leaves the input.
- */
 const liveMessage = computed<string>(() => {
   if (props.loading) {
     return String(t("files.search.loading"));
@@ -145,8 +126,6 @@ const liveMessage = computed<string>(() => {
 </template>
 
 <style scoped>
-/* The results take over the panel's content region while a search is active
-   (JUS-163). Tokens only — no hard-coded colors or pixel sizes. */
 .fm-search-results {
   flex: 1 1 auto;
   min-height: 0;
@@ -183,8 +162,6 @@ const liveMessage = computed<string>(() => {
   flex: 0 0 auto;
 }
 
-/* The single polite live region: clipped out of view but in the a11y tree, so
-   the count / empty / searching outcome is announced without a visible line. */
 .fm-search-live {
   position: absolute;
   width: 1px;
@@ -257,8 +234,6 @@ const liveMessage = computed<string>(() => {
   color: var(--fg-2);
 }
 
-/* The shared ring is outward and would be clipped by the list's edge; keep it
-   inside the row, like the tab strip does. */
 .fm-search-row:focus-visible {
   outline-offset: -2px;
 }

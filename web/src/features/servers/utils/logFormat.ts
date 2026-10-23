@@ -1,4 +1,3 @@
-// Pure formatting helpers for the log viewer (extracted from LogViewer).
 
 import type { WebSocketMessage } from "@/shared/composables/useWebSocket";
 import { activeLocale } from "@/shared/i18n/locale";
@@ -6,12 +5,10 @@ import { activeLocale } from "@/shared/i18n/locale";
 import enCatalog from "../locales/en";
 import viCatalog from "../locales/vi";
 
-/** catalogFor selects the servers display dictionary for one locale. */
 function catalogFor(locale?: string | null): typeof enCatalog {
   return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
 }
 
-/** One rendered log line. */
 export interface LogLine {
   id: number;
   ts: string;
@@ -19,7 +16,6 @@ export interface LogLine {
   kind: "line" | "notice";
 }
 
-/** splitLines breaks a chunk into lines, dropping a single trailing newline. */
 export function splitLines(text: string): string[] {
   const parts = text.split(/\r?\n/);
   if (parts.length > 1 && parts[parts.length - 1] === "") {
@@ -28,7 +24,6 @@ export function splitLines(text: string): string[] {
   return parts;
 }
 
-/** formatTimestamp renders a hub timestamp as HH:MM:SS. */
 export function formatTimestamp(ts: unknown, receivedAt: number): string {
   if (typeof ts === "string" && /^\d{2}:\d{2}:\d{2}$/.test(ts)) {
     return ts;
@@ -46,7 +41,6 @@ export function formatTimestamp(ts: unknown, receivedAt: number): string {
   return value.toTimeString().slice(0, 8);
 }
 
-/** noticeText extracts the server's own notice copy when provided. */
 export function noticeText(message: WebSocketMessage, locale?: string | null): string {
   const payload = message.payload;
   const candidate =

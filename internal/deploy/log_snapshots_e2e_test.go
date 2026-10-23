@@ -13,7 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 )
 
-// TestLogSnapshotDockerAgentReal uses only a unique stopped throwaway container and loopback agent.
 func TestLogSnapshotDockerAgentReal(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 for the disposable Docker/agent proof")

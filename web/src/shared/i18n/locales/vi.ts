@@ -1,10 +1,5 @@
 import type { CommonMessages } from "./en";
 
-/**
- * Common Vietnamese catalog. Keys mirror `en.ts` exactly; only values are
- * translated. Technical units (B/KiB/MiB, compact m/h/d/mo/y suffixes) and
- * wire values stay untranslated by design.
- */
 const vi: CommonMessages = {
   common: {
     actions: {

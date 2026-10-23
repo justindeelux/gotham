@@ -20,7 +20,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// composeTestProject is the only project-name shape the agent accepts.
 const composeTestProject = "gotham-3f2a4b6c-8d0e-4f1a-9b2c-3d4e5f607182"
 
 const composeTestDocument = `services:
@@ -34,10 +33,6 @@ volumes:
   data:
 `
 
-// fakeDockerCLI installs a fake `docker` binary on PATH that records every
-// invocation in a file and answers with canned compose output. Using a script
-// keeps the tests on the real exec path (arguments, working directory, DOCKER_HOST,
-// exit codes) without a Docker daemon.
 func fakeDockerCLI(t *testing.T, script string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "bin")
@@ -60,7 +55,6 @@ func fakeDockerCLI(t *testing.T, script string) string {
 	return logPath
 }
 
-// composeCalls returns every recorded invocation.
 func composeCalls(t *testing.T, logPath string) []string {
 	t.Helper()
 	content, err := os.ReadFile(logPath)
@@ -76,9 +70,6 @@ func composeCalls(t *testing.T, logPath string) []string {
 	return lines
 }
 
-// newTestComposeServer builds a ComposeServer rooted in a canonical temp dir
-// (macOS /var is a symlink, and the agent's no-follow traversal needs real
-// directories).
 func newTestComposeServer(t *testing.T, cfg ComposeServerConfig) *ComposeServer {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -92,9 +83,6 @@ func newTestComposeServer(t *testing.T, cfg ComposeServerConfig) *ComposeServer 
 	return NewComposeServer(cfg)
 }
 
-// TestComposeValidateWritesAndInspects proves validation writes the document
-// (mode 0600) into the project directory and returns the CLI's own service and
-// volume lists.
 func TestComposeValidateWritesAndInspects(t *testing.T) {
 	logPath := fakeDockerCLI(t, `
 case "$7" in
@@ -147,8 +135,6 @@ exit 0
 	}
 }
 
-// TestComposeProjectValidation proves every path-like project name is rejected
-// before anything is written.
 func TestComposeProjectValidation(t *testing.T) {
 	for _, name := range []string{
 		"",
@@ -172,7 +158,6 @@ func TestComposeProjectValidation(t *testing.T) {
 	}
 }
 
-// TestComposeInputBounds proves the document size and emptiness are bounded.
 func TestComposeInputBounds(t *testing.T) {
 	server := newTestComposeServer(t, ComposeServerConfig{})
 	if _, err := server.ComposeValidate(context.Background(), &agentv1.ComposeValidateRequest{
@@ -192,8 +177,6 @@ func TestComposeInputBounds(t *testing.T) {
 	}
 }
 
-// TestComposeUpDownCommands proves the exact compose verbs: up recreates with
-// orphan cleanup, restart restarts, and down never removes volumes.
 func TestComposeUpDownCommands(t *testing.T) {
 	logPath := fakeDockerCLI(t, "exit 0")
 	server := newTestComposeServer(t, ComposeServerConfig{})
@@ -234,7 +217,6 @@ func TestComposeUpDownCommands(t *testing.T) {
 			t.Errorf("down must never remove volumes: %q", call)
 		}
 	}
-	// Every call must reference the project's compose file and name.
 	for _, call := range calls {
 		if !strings.Contains(call, filepath.Join(server.root, composeTestProject, "compose.yaml")) &&
 			!strings.Contains(call, "-f ") {
@@ -243,8 +225,6 @@ func TestComposeUpDownCommands(t *testing.T) {
 	}
 }
 
-// managedVolumeDocument renders the document the control plane sends for a
-// named volume: a local driver bind whose device is the managed path.
 func managedVolumeDocument(device string) []byte {
 	return []byte(fmt.Sprintf(`services:
   web:
@@ -261,9 +241,6 @@ volumes:
 `, device))
 }
 
-// TestComposeUpCreatesManagedVolumeDirs proves the node creates the device
-// directory a rewritten named volume points at before compose up runs, so the
-// local driver can mount it on the first deploy.
 func TestComposeUpCreatesManagedVolumeDirs(t *testing.T) {
 	logPath := fakeDockerCLI(t, "exit 0")
 	volumeRoot, err := filepath.EvalSymlinks(t.TempDir())
@@ -294,9 +271,6 @@ func TestComposeUpCreatesManagedVolumeDirs(t *testing.T) {
 	}
 }
 
-// TestComposeUpManagedVolumeDirRejectsOutsideRoot pins the agent-side scope:
-// a device outside <root>/<appID> or behind a symlink is refused before
-// anything is created or executed.
 func TestComposeUpManagedVolumeDirRejectsOutsideRoot(t *testing.T) {
 	volumeRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -382,8 +356,6 @@ volumes:
 	})
 }
 
-// TestComposeDockerHost proves the agent's Docker endpoint reaches the CLI as
-// a normalized DOCKER_HOST.
 func TestComposeDockerHost(t *testing.T) {
 	logPath := fakeDockerCLI(t, "exit 0")
 	server := newTestComposeServer(t, ComposeServerConfig{DockerHost: "/var/run/docker.sock"})
@@ -401,7 +373,6 @@ func TestComposeDockerHost(t *testing.T) {
 		t.Errorf("DOCKER_HOST not forwarded as a unix URL:\n%s", content)
 	}
 
-	// A TCP endpoint passes through unchanged.
 	logPath = fakeDockerCLI(t, "exit 0")
 	server = newTestComposeServer(t, ComposeServerConfig{DockerHost: "tcp://127.0.0.1:2375"})
 	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
@@ -419,8 +390,6 @@ func TestComposeDockerHost(t *testing.T) {
 	}
 }
 
-// TestComposePsParsesJSONLines proves the ps output parser handles the CLI's
-// JSON-lines shape, both name fields and comma-separated ports.
 func TestComposePsParsesJSONLines(t *testing.T) {
 	fakeDockerCLI(t, `
 printf '%s\n' '{"ID":"abc123","Name":"proj-web-1","Service":"web","Image":"nginx:1.23","State":"running","Status":"Up 2 minutes","Health":"healthy","Ports":"0.0.0.0:8080->80/tcp, 443/tcp"}'
@@ -456,7 +425,6 @@ exit 0
 		t.Errorf("worker = %+v", worker)
 	}
 
-	// ps before any deploy reports a clear precondition error.
 	if _, err := server.ComposePs(context.Background(), &agentv1.ComposePsRequest{
 		ProjectName: "gotham-00000000-0000-4000-8000-000000000000",
 	}); status.Code(err) != codes.FailedPrecondition {
@@ -464,8 +432,6 @@ exit 0
 	}
 }
 
-// TestComposePsIgnoresStderrWarnings proves a CLI warning on stderr cannot
-// corrupt a parsed output (compose prints warnings there).
 func TestComposePsIgnoresStderrWarnings(t *testing.T) {
 	fakeDockerCLI(t, `
 printf 'WARN[0000] a warning that must not corrupt the output\n' >&2
@@ -488,7 +454,6 @@ exit 0
 	}
 }
 
-// TestComposePsAcceptsJSONArray proves the newer array shape decodes too.
 func TestComposePsAcceptsJSONArray(t *testing.T) {
 	containers, err := parseComposePs([]byte(`[{"ID":"a","Service":"web","State":"running","Ports":"80/tcp"}]`))
 	if err != nil {
@@ -502,8 +467,6 @@ func TestComposePsAcceptsJSONArray(t *testing.T) {
 	}
 }
 
-// fakeComposeStream is the send side of ComposeLogs for tests; the unused
-// grpc.ServerStream methods come from the embedded interface.
 type fakeComposeStream struct {
 	grpc.ServerStream
 	ctx     context.Context
@@ -523,10 +486,6 @@ func (s *fakeComposeStream) Send(chunk *agentv1.ComposeLogChunk) error {
 	return nil
 }
 
-// TestComposeLogsRefusesUnknownServiceBeforeCLI proves a syntactically valid
-// but unknown selector is rejected before the logs command runs: otherwise
-// compose's stderr refusal would be forwarded as the first output chunk and the
-// control plane would commit a successful stream for a failed command.
 func TestComposeLogsRefusesUnknownServiceBeforeCLI(t *testing.T) {
 	logPath := fakeDockerCLI(t, `
 case "$6" in
@@ -556,9 +515,6 @@ exit 0
 	}
 }
 
-// TestComposeLogsQuietDescendantCancellation proves context cancellation ends
-// a stream even when a quiet descendant of the CLI keeps the inherited pipes
-// open: the drain must not wait for it before reaping the command.
 func TestComposeLogsQuietDescendantCancellation(t *testing.T) {
 	fakeDockerCLI(t, `
 case "$6" in
@@ -601,9 +557,6 @@ exit 0
 	}
 }
 
-// TestComposeFailedVerbOutputIsDiagnosticBounded proves a verb whose stdout is
-// only ever quoted into a diagnostic (up/down) does not retain the parsed
-// output budget: a failing up writing megabytes stays bounded.
 func TestComposeFailedVerbOutputIsDiagnosticBounded(t *testing.T) {
 	fakeDockerCLI(t, `
 case "$6" in
@@ -637,8 +590,6 @@ exit 0
 	}
 }
 
-// acceptanceFailStream fails the acceptance Send once the CLI has written its
-// pid file, so a test can prove the started command was reaped.
 type acceptanceFailStream struct {
 	grpc.ServerStream
 	ctx     context.Context
@@ -664,9 +615,6 @@ func (s *acceptanceFailStream) Send(chunk *agentv1.ComposeLogChunk) error {
 	return s.sendErr
 }
 
-// TestComposeLogsAcceptanceFailureReapsCLI proves a client that disappears
-// during acceptance does not leave an unreaped child in the long-lived agent:
-// the started command is cancelled and waited before the RPC returns.
 func TestComposeLogsAcceptanceFailureReapsCLI(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "cli.pid")
 	t.Setenv("FAKE_PID_FILE", pidFile)
@@ -714,8 +662,6 @@ exit 0
 	}
 }
 
-// TestComposeLogsStreams proves logs stream chunk by chunk, that a service
-// selector is passed through and that the first frame is the acceptance frame.
 func TestComposeLogsStreams(t *testing.T) {
 	logPath := fakeDockerCLI(t, `
 case "$6" in
@@ -765,7 +711,6 @@ exit 0
 		t.Errorf("service selector not forwarded:\n%v", calls)
 	}
 
-	// An invalid service name is rejected before the CLI runs.
 	if err := server.ComposeLogs(&agentv1.ComposeLogsRequest{
 		ProjectName: composeTestProject,
 		Service:     "bad service",
@@ -773,8 +718,6 @@ exit 0
 		t.Errorf("invalid service code = %v, want InvalidArgument", status.Code(err))
 	}
 
-	// A follow request forwards --follow (the fake CLI exits immediately, so
-	// the stream closes without needing a cancel).
 	if err := server.ComposeLogs(&agentv1.ComposeLogsRequest{
 		ProjectName: composeTestProject,
 		Follow:      true,
@@ -786,8 +729,6 @@ exit 0
 	}
 }
 
-// TestComposeCLIFailureIsBounded proves a failing CLI invocation becomes an
-// Internal status whose message is bounded and never carries the command line.
 func TestComposeCLIFailureIsBounded(t *testing.T) {
 	fakeDockerCLI(t, `
 printf 'error: service "web" refers to undefined volume\n' >&2
@@ -815,9 +756,6 @@ exit 1
 	}
 }
 
-// TestComposeOperationsAreSerializedPerProject proves a concurrent request
-// cannot replace the document between another request's write and its CLI run:
-// the agent serializes complete document-dependent operations per project.
 func TestComposeOperationsAreSerializedPerProject(t *testing.T) {
 	dir := t.TempDir()
 	started := filepath.Join(dir, "started")
@@ -825,8 +763,6 @@ func TestComposeOperationsAreSerializedPerProject(t *testing.T) {
 	t.Setenv("FAKE_STARTED", started)
 	t.Setenv("FAKE_RESUME", resume)
 
-	// The script re-reads the compose file after the gate, so it reports the
-	// document that is on disk when its command actually runs.
 	fakeDockerCLI(t, `
 doc=$(cat "$3")
 case "$doc" in
@@ -858,7 +794,6 @@ exit 0
 		firstDone <- response.GetServices()
 	}()
 
-	// Wait until request A's CLI is running against its own document.
 	waitForFile(t, started)
 
 	secondDone := make(chan []string, 1)
@@ -875,8 +810,6 @@ exit 0
 		secondDone <- response.GetServices()
 	}()
 
-	// Request B must not have replaced the document while A holds the
-	// project lock.
 	time.Sleep(300 * time.Millisecond)
 	select {
 	case services := <-secondDone:
@@ -909,8 +842,6 @@ exit 0
 	}
 }
 
-// TestComposeValidateAndUpAreSerialized proves a validate overlapping an up
-// cannot have its document replaced between the write and the CLI run either.
 func TestComposeValidateAndUpAreSerialized(t *testing.T) {
 	dir := t.TempDir()
 	started := filepath.Join(dir, "started")
@@ -958,8 +889,6 @@ exit 0
 		upDone <- err
 	}()
 
-	// The up must not replace the document while the validate holds the
-	// project lock.
 	time.Sleep(300 * time.Millisecond)
 	select {
 	case err := <-upDone:
@@ -987,7 +916,6 @@ exit 0
 	}
 }
 
-// waitForFile polls until path exists.
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -1000,12 +928,7 @@ func waitForFile(t *testing.T, path string) {
 	t.Fatalf("file %s never appeared", path)
 }
 
-// TestComposeLogsDrainsSlowConsumer proves the full CLI output is delivered
-// even when the consumer is slow: the pipes are drained to EOF before Wait,
-// and a send failure cancels the CLI promptly.
 func TestComposeLogsDrainsSlowConsumer(t *testing.T) {
-	// ~2 MiB of output, far past the pipe buffer, so a Wait-first order would
-	// discard the tail. Only the logs subcommand produces the payload.
 	const totalBytes = 2 << 20
 	fakeDockerCLI(t, `
 case "$6" in
@@ -1029,8 +952,6 @@ exit 0
 		t.Fatalf("delivered %d bytes of %d: the tail was truncated", received, totalBytes)
 	}
 
-	// A consumer that fails cancels the CLI and the drain returns instead of
-	// hanging.
 	stream = &slowComposeStream{ctx: context.Background(), failAfter: 1, sendErr: errors.New("client gone")}
 	done := make(chan error, 1)
 	go func() {
@@ -1046,8 +967,6 @@ exit 0
 	}
 }
 
-// TestComposeLogsFollowCancellation proves a follow stream ends cleanly when
-// the client cancels and does not leave the CLI running.
 func TestComposeLogsFollowCancellation(t *testing.T) {
 	fakeDockerCLI(t, `
 case "$6" in
@@ -1088,10 +1007,6 @@ exit 0
 	}
 }
 
-// TestComposeOutputCaptureIsBounded proves the CLI diagnostic capture is
-// capped while it is written: a failing CLI writing megabytes retains only the
-// bound, and a parsed output that exceeds its cap fails instead of being
-// truncated.
 func TestComposeOutputCaptureIsBounded(t *testing.T) {
 	fakeDockerCLI(t, `
 head -c 4194304 /dev/zero | tr '\0' 'x' 1>&2
@@ -1115,7 +1030,6 @@ exit 1
 		t.Fatalf("the CLI diagnostic capture allocated %d bytes for a 4 MiB stream", grown)
 	}
 
-	// A parsed output beyond the cap fails instead of producing a wrong list.
 	fakeDockerCLI(t, `
 head -c 2097152 /dev/zero | tr '\0' 'y'
 exit 0
@@ -1130,8 +1044,6 @@ exit 0
 	}
 }
 
-// slowComposeStream is a fake ComposeLogs stream with a controllable consumer:
-// an optional per-chunk delay, a byte counter and a scripted send failure.
 type slowComposeStream struct {
 	grpc.ServerStream
 	ctx       context.Context
@@ -1139,8 +1051,6 @@ type slowComposeStream struct {
 	failAfter int
 	sendErr   error
 
-	// mu guards the counters: Send runs on the agent's copy goroutines while
-	// the test polls from its own goroutine (go test -race).
 	mu       sync.Mutex
 	sends    int
 	received int
@@ -1162,14 +1072,12 @@ func (s *slowComposeStream) Send(chunk *agentv1.ComposeLogChunk) error {
 	return nil
 }
 
-// receivedBytes returns the number of data bytes sent so far.
 func (s *slowComposeStream) receivedBytes() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.received
 }
 
-// waitForBytes polls until the stream received at least want bytes.
 func waitForBytes(t *testing.T, stream *slowComposeStream, want int) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -1182,7 +1090,6 @@ func waitForBytes(t *testing.T, stream *slowComposeStream, want int) {
 	t.Fatalf("stream received %d bytes, want at least %d", stream.receivedBytes(), want)
 }
 
-// joinChunks flattens streamed chunks.
 func joinChunks(chunks [][]byte) []byte {
 	var out []byte
 	for _, chunk := range chunks {
@@ -1191,12 +1098,6 @@ func joinChunks(chunks [][]byte) []byte {
 	return out
 }
 
-// TestComposeConfinedEnforcesAllowlist pins the node-side defence in depth:
-// a confined (application) document outside the allowlist is refused with
-// InvalidArgument before anything is written or executed. The requests omit
-// the scope flag, proving the absent flag confines: the safe state is the
-// zero value. The fake docker call log must stay empty: validation precedes
-// execution.
 func TestComposeConfinedEnforcesAllowlist(t *testing.T) {
 	hostiles := map[string]string{
 		"privileged":        "services:\n  web:\n    image: x\n    privileged: true\n",
@@ -1227,9 +1128,6 @@ func TestComposeConfinedEnforcesAllowlist(t *testing.T) {
 	}
 }
 
-// TestComposeConfinedRejectsTags pins N1 on the node: a tagged scalar that
-// would skip substitution and interpolate on the node is refused before
-// anything is written or executed, with the tag named.
 func TestComposeConfinedRejectsTags(t *testing.T) {
 	tagged := map[string]string{
 		"tagged env":  "services:\n  web:\n    image: x\n    environment:\n      LEAK: !x \"${AGENT_PROBE:-nothing}\"\n",
@@ -1253,9 +1151,6 @@ func TestComposeConfinedRejectsTags(t *testing.T) {
 	}
 }
 
-// TestComposeConfinedAcceptsSafe pins that a confined realistic document
-// passes node input validation (the CLI itself is the fake's canned
-// answer, so this exercises the gate, not the daemon).
 func TestComposeConfinedAcceptsSafe(t *testing.T) {
 	server := newTestComposeServer(t, ComposeServerConfig{})
 	if _, _, err := server.validateComposeInput(context.Background(), composeTestProject,
@@ -1264,9 +1159,6 @@ func TestComposeConfinedAcceptsSafe(t *testing.T) {
 	}
 }
 
-// TestComposeSweepLabelsRejected pins the unconfined baseline: sweep labels
-// are refused on every document (Services documents legitimately use
-// gotham.domain for routing, which keeps passing when unconfined).
 func TestComposeSweepLabelsRejected(t *testing.T) {
 	server := newTestComposeServer(t, ComposeServerConfig{})
 	spoofed := "services:\n  web:\n    image: x\n    labels:\n      gotham.app_id: 00000000-0000-0000-0000-000000000000\n"
@@ -1285,9 +1177,6 @@ func TestComposeSweepLabelsRejected(t *testing.T) {
 	}
 }
 
-// TestComposeUnconfinedKeepsServicesWorking pins the inverted polarity's
-// other half: a Services document outside the application allowlist passes
-// input validation when the caller opts out explicitly.
 func TestComposeUnconfinedKeepsServicesWorking(t *testing.T) {
 	server := newTestComposeServer(t, ComposeServerConfig{})
 	document := `services:
@@ -1309,11 +1198,6 @@ func TestComposeUnconfinedKeepsServicesWorking(t *testing.T) {
 	}
 }
 
-// TestComposeValidateReportsEnforcement pins L1: the Validate response
-// carries the explicit enforcement signal the control-plane probe gates
-// on — true for a default (confined) request, false for an explicit
-// unconfined one. A regression to a constant would defeat the probe while
-// passing every allowlist test.
 func TestComposeValidateReportsEnforcement(t *testing.T) {
 	script := `
 case "$7" in
@@ -1354,8 +1238,6 @@ exit 0
 	})
 }
 
-// TestComposeVolumeRootDefaults pins the managed bind root the confined
-// validation enforces when the config leaves it empty.
 func TestComposeVolumeRootDefaults(t *testing.T) {
 	server := newTestComposeServer(t, ComposeServerConfig{})
 	if server.volumeRoot != DefaultManagedVolumeRoot {

@@ -14,29 +14,21 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestMain clears the feature flag so the suite runs with the services surface
-// enabled; individual tests override it with t.Setenv.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv(FeatureEnv)
 	os.Exit(m.Run())
 }
 
-// discardLogger keeps the service's operational logging out of the test
-// output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeRepository is a scriptable in-memory Repository. Rows live in insertion
-// order so lists stay deterministic, and soft deletes flip a flag instead of
-// dropping the row — exactly the visibility rule the SQL queries implement.
 type fakeRepository struct {
-	mu       sync.Mutex
-	services map[uuid.UUID]Service
-	order    []uuid.UUID
-	deploys  map[uuid.UUID][]Deploy
-	servers  map[uuid.UUID]bool
-	// serverTeams maps a registered server to its team (zero = legacy node).
+	mu          sync.Mutex
+	services    map[uuid.UUID]Service
+	order       []uuid.UUID
+	deploys     map[uuid.UUID][]Deploy
+	servers     map[uuid.UUID]bool
 	serverTeams map[uuid.UUID]uuid.UUID
 
 	createErr     error
@@ -46,16 +38,11 @@ type fakeRepository struct {
 	softDeleteErr error
 	deployErr     error
 	serverErr     error
-	// environments holds the seeded environments ResolveEnvironment answers
-	// with; resolveErr fails every environment and project resolution.
-	environments map[uuid.UUID]EnvironmentRef
-	resolveErr   error
-	// activeDeploy, when set, makes HasActiveDeploy report a deploy in
-	// flight (the server-change guard tests).
-	activeDeploy map[uuid.UUID]bool
+	environments  map[uuid.UUID]EnvironmentRef
+	resolveErr    error
+	activeDeploy  map[uuid.UUID]bool
 }
 
-// Compile-time guarantee that fakeRepository satisfies the seam.
 var _ Repository = (*fakeRepository)(nil)
 
 func newFakeRepository() *fakeRepository {
@@ -66,7 +53,6 @@ func newFakeRepository() *fakeRepository {
 	}
 }
 
-// seedServer registers a server the service can deploy onto.
 func (r *fakeRepository) seedServer() uuid.UUID {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -75,12 +61,10 @@ func (r *fakeRepository) seedServer() uuid.UUID {
 	return id
 }
 
-// live reports whether a row is visible to reads (not soft-deleted).
 func (r *fakeRepository) live(service Service) bool {
 	return service.DeletedAt.IsZero()
 }
 
-// CreateService implements Repository.
 func (r *fakeRepository) CreateService(_ context.Context, service Service) (Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -101,7 +85,6 @@ func (r *fakeRepository) CreateService(_ context.Context, service Service) (Serv
 	return service, nil
 }
 
-// GetService implements Repository.
 func (r *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -115,8 +98,6 @@ func (r *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (Ser
 	return service, nil
 }
 
-// ListServices implements Repository: the active team's services, or the
-// creator's when the scope has no team context (pre-teams behavior).
 func (r *fakeRepository) ListServices(_ context.Context, scope teams.Scope) ([]Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -139,8 +120,6 @@ func (r *fakeRepository) ListServices(_ context.Context, scope teams.Scope) ([]S
 	return services, nil
 }
 
-// UpdateServiceConfig implements Repository. Only the configuration fields
-// are written; the status column is left alone.
 func (r *fakeRepository) UpdateServiceConfig(_ context.Context, service Service) (Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -151,8 +130,6 @@ func (r *fakeRepository) UpdateServiceConfig(_ context.Context, service Service)
 	if !ok || !r.live(existing) {
 		return Service{}, ErrNotFound
 	}
-	// The conflict check runs against the effective environment: an
-	// unchanged placement arrives Nil (the SQL write is conditional).
 	effectiveEnv := service.EnvironmentID
 	if effectiveEnv == uuid.Nil {
 		effectiveEnv = existing.EnvironmentID
@@ -166,8 +143,6 @@ func (r *fakeRepository) UpdateServiceConfig(_ context.Context, service Service)
 	existing.Name = service.Name
 	existing.ComposeYAML = service.ComposeYAML
 	existing.Env = service.Env
-	// Placement columns arrive Nil when the request leaves them alone (the
-	// SQL write is conditional); only a set value moves the row.
 	if service.EnvironmentID != uuid.Nil {
 		existing.EnvironmentID = service.EnvironmentID
 	}
@@ -178,7 +153,6 @@ func (r *fakeRepository) UpdateServiceConfig(_ context.Context, service Service)
 	return existing, nil
 }
 
-// UpdateServiceStatus implements Repository. Only the status is written.
 func (r *fakeRepository) UpdateServiceStatus(_ context.Context, serviceID uuid.UUID, status Status) (Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -191,7 +165,6 @@ func (r *fakeRepository) UpdateServiceStatus(_ context.Context, serviceID uuid.U
 	return service, nil
 }
 
-// SoftDeleteService implements Repository.
 func (r *fakeRepository) SoftDeleteService(_ context.Context, serviceID uuid.UUID) (Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -208,7 +181,6 @@ func (r *fakeRepository) SoftDeleteService(_ context.Context, serviceID uuid.UUI
 	return service, nil
 }
 
-// CreateServiceDeploy implements Repository.
 func (r *fakeRepository) CreateServiceDeploy(_ context.Context, deploy Deploy) (Deploy, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -222,7 +194,6 @@ func (r *fakeRepository) CreateServiceDeploy(_ context.Context, deploy Deploy) (
 	return deploy, nil
 }
 
-// UpdateServiceDeploy implements Repository.
 func (r *fakeRepository) UpdateServiceDeploy(_ context.Context, deploy Deploy) (Deploy, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -237,7 +208,6 @@ func (r *fakeRepository) UpdateServiceDeploy(_ context.Context, deploy Deploy) (
 	return Deploy{}, ErrNotFound
 }
 
-// ListServiceDeploys implements Repository.
 func (r *fakeRepository) ListServiceDeploys(_ context.Context, serviceID uuid.UUID, limit int32) ([]Deploy, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -248,8 +218,6 @@ func (r *fakeRepository) ListServiceDeploys(_ context.Context, serviceID uuid.UU
 	return append([]Deploy{}, deploys...), nil
 }
 
-// ServerExists implements Repository: the node must be known and actionable by
-// the caller's active team.
 func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -265,8 +233,6 @@ func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, sco
 	return true, nil
 }
 
-// seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
-// legacy shared node).
 func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
 	id := r.seedServer()
 	r.mu.Lock()
@@ -278,8 +244,6 @@ func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
 	return id
 }
 
-// seedEnvironment registers an environment the service accepts on create and
-// move; resolveErr fails every resolution instead.
 func (r *fakeRepository) seedEnvironment() (uuid.UUID, uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -291,7 +255,6 @@ func (r *fakeRepository) seedEnvironment() (uuid.UUID, uuid.UUID) {
 	return envID, projectID
 }
 
-// ListServicesByEnvironment implements Repository.
 func (r *fakeRepository) ListServicesByEnvironment(_ context.Context, environmentID uuid.UUID) ([]Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -305,7 +268,6 @@ func (r *fakeRepository) ListServicesByEnvironment(_ context.Context, environmen
 	return services, nil
 }
 
-// ListServicesByProject implements Repository.
 func (r *fakeRepository) ListServicesByProject(_ context.Context, projectID uuid.UUID) ([]Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -319,7 +281,6 @@ func (r *fakeRepository) ListServicesByProject(_ context.Context, projectID uuid
 	return services, nil
 }
 
-// NameInEnvironment implements Repository.
 func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -332,7 +293,6 @@ func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid
 	return false, nil
 }
 
-// ResolveEnvironment implements Repository.
 func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (EnvironmentRef, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -345,7 +305,6 @@ func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ 
 	return EnvironmentRef{ID: environmentID}, nil
 }
 
-// ResolveProject implements Repository.
 func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -355,7 +314,6 @@ func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUI
 	return projectID, nil
 }
 
-// HasActiveDeploy implements Repository.
 func (r *fakeRepository) HasActiveDeploy(_ context.Context, serviceID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -370,15 +328,12 @@ func (r *fakeRepository) HasActiveDeploy(_ context.Context, serviceID uuid.UUID)
 	return false, nil
 }
 
-// HasDeploys implements Repository.
 func (r *fakeRepository) HasDeploys(_ context.Context, serviceID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.deploys[serviceID]) > 0, nil
 }
 
-// environmentProject returns the project of a seeded environment (zero for
-// unknown IDs). Callers hold r.mu.
 func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
 	if ref, ok := r.environments[environmentID]; ok {
 		return ref.ProjectID
@@ -386,7 +341,6 @@ func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
 	return uuid.Nil
 }
 
-// fakeAgent is a scriptable ComposeAgent recording every call.
 type fakeAgent struct {
 	mu sync.Mutex
 
@@ -404,11 +358,9 @@ type fakeAgent struct {
 	psCalls   []string
 	logCalls  []fakeLogs
 	chunks    [][]byte
-	// closes counts Close calls; ups and downs may block on their gate so
-	// tests can set up an interleaving.
-	closes   int
-	upGate   chan struct{}
-	downGate chan struct{}
+	closes    int
+	upGate    chan struct{}
+	downGate  chan struct{}
 }
 
 type fakeUp struct {
@@ -417,7 +369,6 @@ type fakeUp struct {
 	restart bool
 }
 
-// fakeDown records one Down call.
 type fakeDown struct {
 	project string
 	yaml    string
@@ -430,7 +381,6 @@ type fakeLogs struct {
 	follow  bool
 }
 
-// Compile-time guarantee that fakeAgent satisfies the seam.
 var _ ComposeAgent = (*fakeAgent)(nil)
 
 func (a *fakeAgent) Validate(_ context.Context, project string, composeYAML []byte) ([]string, error) {
@@ -500,7 +450,6 @@ func (a *fakeAgent) Logs(_ context.Context, project, service string, tail int64,
 	return stream, nil
 }
 
-// Close implements ComposeAgent.
 func (a *fakeAgent) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -508,15 +457,12 @@ func (a *fakeAgent) Close() error {
 	return nil
 }
 
-// currentCloses returns the number of Close calls recorded so far.
 func (a *fakeAgent) currentCloses() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.closes
 }
 
-// fakeLogStream is the fake LogStream with a scriptable terminal error and
-// close callback.
 type fakeLogStream struct {
 	chunks    <-chan []byte
 	streamErr error
@@ -532,7 +478,6 @@ func (s *fakeLogStream) Close() error {
 	return nil
 }
 
-// lastUp returns the most recent Up call.
 func (a *fakeAgent) lastUp(t *testing.T) fakeUp {
 	t.Helper()
 	a.mu.Lock()
@@ -543,14 +488,12 @@ func (a *fakeAgent) lastUp(t *testing.T) fakeUp {
 	return a.ups[len(a.ups)-1]
 }
 
-// fakeRouteSync records the proxy resyncs a lifecycle change triggers.
 type fakeRouteSync struct {
 	mu        sync.Mutex
 	serverIDs []uuid.UUID
 	err       error
 }
 
-// SyncServer implements RouteSync.
 func (f *fakeRouteSync) SyncServer(_ context.Context, serverID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -558,13 +501,10 @@ func (f *fakeRouteSync) SyncServer(_ context.Context, serverID uuid.UUID) error 
 	return f.err
 }
 
-// calls returns the recorded server ids.
 func (f *fakeRouteSync) calls() []uuid.UUID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]uuid.UUID{}, f.serverIDs...)
 }
 
-// nowUTC is a tiny indirection so tests do not import time just for a
-// timestamp.
 func nowUTC() time.Time { return time.Now().UTC() }

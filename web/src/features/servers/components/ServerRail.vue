@@ -38,50 +38,34 @@ const alertsLabelText = computed<string>(() =>
   t("servers.rail.alerts", { text: alertText.value }),
 );
 
-/** editorCount is the rail badge: the number of open editor tabs (JUS-232). */
 const editorCount = computed<number>(() => editor.tabs.length);
 
-/** editorLabel names the rail editor button with its open-tab count. */
 const editorLabel = computed<string>(() =>
   t("servers.rail.editorWithCount", { count: editorCount.value }),
 );
 
-/** toggleEditor minimizes the window, or restores it when collapsed. */
 function toggleEditor(): void {
   editorWindow.setMinimized(!editorWindow.minimized);
 }
 
-/**
- * terminalTabs applies the same capability split as the dock: host shells stay
- * operator-only, container shells belong to the application team. A demotion
- * disposes container tabs at its boundary, so a hidden shell can never linger.
- */
 const terminalTabs = computed(() =>
   terminal.tabs.filter((tab) =>
     isContainerTerminalTarget(tab.target) ? true : authStore.isPlatformAdmin,
   ),
 );
 
-/** terminalCount is the rail badge: every live session, page or window. */
 const terminalCount = computed<number>(() => terminalTabs.value.length);
 
-/** terminalWindowCount names the tabs the floating window currently holds. */
 const terminalWindowCount = computed<number>(
   () => terminalTabs.value.filter((tab) => tab.mode === "window").length,
 );
 
-/** terminalLabel names the rail terminal button with its open-session count. */
 const terminalLabel = computed<string>(() =>
   terminalWindowCount.value > 0
     ? t("terminal.rail.openWithCount", { count: terminalCount.value })
     : t("terminal.rail.pageWithCount", { count: terminalCount.value }),
 );
 
-/**
- * toggleTerminal restores, raises, or minimizes the terminal window. With
- * page-only sessions there is no window to toggle, so the rail resumes the
- * owning page instead of hiding a live shell.
- */
 function toggleTerminal(): void {
   if (terminalWindowCount.value === 0) {
     const pageTab = terminalTabs.value.find((tab) => tab.mode === "page");
@@ -104,16 +88,9 @@ function toggleTerminal(): void {
   terminalWindow.setMinimized(true);
 }
 
-// The shared server poll is owned by the app shell (AppLayout), which stays
-// mounted for the whole session: the rail itself unmounts below the tablet
-// breakpoint (it becomes a drawer), so it must never start or stop the shared
-// timer. The rail only seeds the list when nothing has loaded it yet and no
-// load is in flight (JUS-143: the shell seeds too, so this guard avoids a
-// duplicate request).
 onMounted(() => {
   if (serversStore.servers.length === 0 && !serversStore.loading) {
     void serversStore.fetchServers().catch(() => {
-      // Read-only rail: the servers page surfaces load errors.
     });
   }
 });
@@ -172,8 +149,6 @@ onMounted(() => {
 
     <div class="rail-foot">
       <div class="rail-sep" aria-hidden="true"></div>
-      <!-- JUS-232: the minimized editor parks here as an icon with a badge
-           counting the open tabs; a click restores the window. -->
       <div v-if="editorCount > 0" class="rail-item">
         <button
           type="button"
@@ -198,10 +173,6 @@ onMounted(() => {
           }}</span>
         </button>
       </div>
-      <!-- JUS-245: the minimized terminal window parks beside the editor with
-           its own count badge; a click restores the same live sessions.
-           JUS-246/247: terminalTabs applies the capability split (host shells
-           operator-only, container shells to the application's team). -->
       <div v-if="terminalCount > 0" class="rail-item">
         <button
           type="button"
@@ -275,10 +246,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* :deep() on .rail-btn/.rail-badge: those elements render inside
- * RailIconButton, so the parent scope alone cannot reach them; the deep
- * selector keeps one rule covering both the icon buttons and the inline
- * server avatars with identical computed styles. */
 .rail {
   background: var(--surface-warm);
   display: flex;
@@ -345,10 +312,6 @@ onMounted(() => {
   height: 22px;
 }
 
-/* JUS-239: the rail home tile carries the brand monogram. The artwork is
- * two-tone (accent blue + near-white), so it is painted as a mask instead of
- * an image: the glyph then follows the tile's foreground and stays legible in
- * every state — idle, hover and the accent-filled active tile. */
 .rail-brand {
   display: block;
   height: var(--brand-mark-h);
@@ -363,9 +326,6 @@ onMounted(() => {
   color: var(--success);
 }
 
-/* JUS-232: the editor restore is a button, not a link, so it resets the
-   native button chrome to match the link-styled rail buttons.
-   JUS-245: the terminal restore uses the same button reset. */
 .rail-btn--editor,
 .rail-btn--terminal {
   border: 0;
@@ -374,12 +334,6 @@ onMounted(() => {
   cursor: pointer;
 }
 
-/* JUS-232 fix round 1: the editor badge rides the button's top-right edge
-   instead of the shared inset, so it only touches the icon's corner and never
-   covers its centre (the alert badges keep the shared inset).
-   JUS-241: the editor badge is a perfect circle for every digit count — the
-   shared padding is dropped so the badge box stays square, and the radius
-   turns the square into a circle. */
 .rail-btn--editor .rail-badge,
 .rail-btn--terminal .rail-badge {
   top: calc(-1 * var(--space-1));

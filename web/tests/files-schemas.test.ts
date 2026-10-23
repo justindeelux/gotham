@@ -1,5 +1,3 @@
-// Files schemas, pure formatting helpers and the HTTP status -> i18n key
-// mapping (P18 step 6). The catalog parity check keeps en/vi in step.
 import { describe, expect, it } from "vitest";
 
 import { filesErrorKey } from "@/features/files/api/files";
@@ -41,7 +39,6 @@ import {
 } from "@/features/files/utils/files";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 
-/** entry builds one row for the helper assertions. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -124,19 +121,15 @@ describe("filesErrorKey maps every status to a curated key", () => {
   });
 
   it("prefers a stable server code over the status", () => {
-    // An archive limit is a 413 but must not read as "file too large to edit".
     expect(filesErrorKey({ message: "x", status: 413, code: "archive_limit" })).toBe(
       "files.errors.archiveLimit",
     );
-    // A refused archive member is a 409 but must not read as a conflict.
     expect(filesErrorKey({ message: "x", status: 409, code: "archive_entry" })).toBe(
       "files.errors.archiveEntry",
     );
-    // A corrupt archive is a 400 but must not read as a generic invalid request.
     expect(filesErrorKey({ message: "x", status: 400, code: "invalid_archive" })).toBe(
       "files.errors.invalidArchive",
     );
-    // An unknown code falls back to the status mapping.
     expect(filesErrorKey({ message: "x", status: 409, code: "other" })).toBe(
       "files.errors.conflict",
     );
@@ -255,9 +248,6 @@ describe("entry predicates and labels", () => {
     expect(entryIconKind(entry({ name: "backup.tar.gz" }))).toBe("archive");
     expect(entryIconKind(entry({ name: "server.log" }))).toBe("terminal");
     expect(entryIconKind(entry({ name: "current", kind: "symlink" }))).toBe("link");
-    // JUS-210: every symlink keeps the link icon — a link to a file, a link
-    // to a directory, and a dangling link — until the agent reports the
-    // target kind.
     expect(
       entryIconKind(entry({ name: "linkfile", kind: "symlink", symlink_target: "a.txt" })),
     ).toBe("link");
@@ -314,7 +304,6 @@ describe("validateEntryName", () => {
     expect(validateEntryName("a".repeat(MAX_NAME_BYTES + 1))).toBe(
       "files.name.tooLong",
     );
-    // Bytes, not code points: a 4-byte emoji overflows sooner.
     expect(validateEntryName("😀".repeat(64))).toBe("files.name.tooLong");
   });
 });
@@ -417,15 +406,12 @@ describe("permission bit helpers", () => {
   });
 
   it("formats the display octal, adding a special-bits digit when set", () => {
-    // Files and directories stay three digits; the type bits are ignored.
     expect(formatOctalModeFull(0o100644)).toBe("644");
     expect(formatOctalModeFull(0o040755)).toBe("755");
     expect(formatOctalModeFull(0)).toBe("000");
-    // setuid, setgid and sticky each take the fourth digit.
     expect(formatOctalModeFull(0o4755)).toBe("4755");
     expect(formatOctalModeFull(0o2755)).toBe("2755");
     expect(formatOctalModeFull(0o1777)).toBe("1777");
-    // Type + special + permission bits combine for a real st_mode.
     expect(formatOctalModeFull(0o104755)).toBe("4755");
   });
 

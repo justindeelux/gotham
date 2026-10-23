@@ -11,8 +11,6 @@ interface Props {
   rollingBack: boolean;
   rollbackTarget: string;
   runningDeployments: Deployment[];
-  /** isCompose switches the copy: a compose rollback re-applies the stored
-   * file instead of an image tag. */
   isCompose?: boolean;
 }
 
@@ -26,7 +24,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** confirmText names the actual rollback target; plain text, never HTML. */
 const confirmText = computed<string>(() =>
   String(t("applications.rollback.confirm", { id: props.rollbackTarget.slice(0, 8) })),
 );

@@ -1,5 +1,3 @@
-// Unit tests (JUS-62 fix round 1): the GitLab provider API client and store
-// actions for branches, disconnect, auto-provision and setup-info.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

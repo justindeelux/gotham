@@ -1,11 +1,3 @@
-// Form feedback styling contract (JUS-16/17/18), component half.
-//
-// Computed-style behaviour lives in the Playwright suite
-// (form-feedback.spec.ts, run via npm run test:css): jsdom never applies
-// stylesheets, so this suite only asserts what jsdom can prove — the real
-// Naive UI DOM provides the structural hooks the global rules rely on
-// (:empty wrapper when valid, .n-form-item-blank--error when in error,
-// single-line feedback swap in DynamicForm), plus the theme token value.
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -50,14 +42,10 @@ describe("JUS-17 no reserved feedback height when valid", () => {
     const wrapper = mount(NFormItem, {
       props: { label: "Node name" },
       slots: { default: () => h(NInput, { value: "" }) },
-      // Disable the test-utils Transition stub: in real browsers the
-      // Transition renders nothing here, leaving only a comment node.
       global: { stubs: { transition: false } },
     });
     const feedback = wrapper.find(".n-form-item-feedback-wrapper");
     expect(feedback.exists()).toBe(true);
-    // No element children and no text: matches :empty in real browsers, so
-    // the global collapse rule applies and no blank line renders.
     expect(feedback.element.children.length).toBe(0);
     expect(feedback.element.textContent).toBe("");
   });
@@ -78,9 +66,6 @@ describe("JUS-18 hint hidden while error shown", () => {
         ],
       },
     });
-    // The hook the global hide rule keys on; the error line stays in the
-    // accessibility tree next to the input (not color-only, still
-    // associated), while the hint returns as soon as the status clears.
     expect(
       wrapper.find(".n-form-item-blank--error").exists(),
     ).toBe(true);

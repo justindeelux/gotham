@@ -1,10 +1,5 @@
 import type { Deployment, DeploymentState } from "@/features/applications/api/applications";
 
-/**
- * PIPELINE_ORDER is the canonical state walk from `internal/deploy/state.go`:
- * queued → cloning → building → pushing → starting → running. A rollback skips
- * cloning and building because it redeploys an already-pushed image.
- */
 export const PIPELINE_ORDER: DeploymentState[] = [
   "queued",
   "cloning",
@@ -14,21 +9,11 @@ export const PIPELINE_ORDER: DeploymentState[] = [
   "running",
 ];
 
-/** One rendered node of the deploy pipeline. */
 export interface PipelineStep {
   name: DeploymentState;
   mood: "is-done" | "is-active" | "is-failed" | "";
 }
 
-/**
- * pipelineStepsFor maps a deployment onto the rendered pipeline nodes.
- *
- * A failed deployment's row does not record which stage failed, so no stage
- * can be reported as completed: every stage is rendered as pending and a
- * terminal `failed` node carries the failure. The previous implementation
- * treated `failed` as if it were the last step, which marked every unexecuted
- * stage as done.
- */
 export function pipelineStepsFor(current: Deployment | null): PipelineStep[] {
   if (!current) {
     return [];

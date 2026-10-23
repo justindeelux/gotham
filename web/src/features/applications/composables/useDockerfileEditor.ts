@@ -9,14 +9,6 @@ import {
 import { useApplicationsStore } from "@/features/applications/stores/applications";
 import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
 
-/**
- * Draft state behind the Dockerfile editor of one dockerfile application
- * (the detail page). The stored text and the --build-arg collection save
- * together through the applications API; a redeploy always builds the
- * latest stored text. An unrelated update to the row (domain save, rename)
- * bumps updated_at without touching the draft: re-seeding only lands while
- * the draft matches the last seeded snapshot, so in-progress edits survive.
- */
 export function useDockerfileEditor(source: Ref<Application | null> | Application | null) {
   const appsStore = useApplicationsStore();
 
@@ -24,11 +16,9 @@ export function useDockerfileEditor(source: Ref<Application | null> | Applicatio
   const args = ref<BuildArgRow[]>([]);
   const saving = ref(false);
   const saveError = ref("");
-  /** savedContent/savedArgs snapshot the last seeded row for dirty checks. */
   const savedContent = ref("");
   const savedArgs = ref<BuildArgRow[]>([]);
 
-  /** seed copies the stored row into the draft and snapshots it clean. */
   function seed(): void {
     const app = toValue(source);
     content.value = app?.dockerfile_content ?? "";
@@ -41,7 +31,6 @@ export function useDockerfileEditor(source: Ref<Application | null> | Applicatio
     saveError.value = "";
   }
 
-  /** isDirty reports whether the draft differs from the last seeded row. */
   const isDirty = computed<boolean>(() => {
     if (content.value !== savedContent.value) {
       return true;
@@ -59,10 +48,6 @@ export function useDockerfileEditor(source: Ref<Application | null> | Applicatio
   watch(
     () => [toValue(source)?.id, toValue(source)?.updated_at] as const,
     ([id], prev) => {
-      // A different application always re-seeds: a dirty draft of app A
-      // must never be shown for, or saved onto, app B. Same-app updates
-      // re-seed only while the draft is clean. prev is undefined on the
-      // immediate first run, which always seeds.
       if (prev === undefined || id !== prev[0] || !isDirty.value) {
         seed();
       }
@@ -70,12 +55,10 @@ export function useDockerfileEditor(source: Ref<Application | null> | Applicatio
     { immediate: true },
   );
 
-  /** contentValid mirrors the backend creation gate (FROM required, 64 KiB cap). */
   const contentValid = computed<boolean>(
     () => dockerfileContentSchema.safeParse(content.value).success,
   );
 
-  /** argsValid mirrors the backend gate: named rows need a valid key and value. */
   const argsValid = computed<boolean>(() =>
     args.value
       .filter((row) => row.key.trim() !== "" || row.value !== "")
@@ -86,7 +69,6 @@ export function useDockerfileEditor(source: Ref<Application | null> | Applicatio
       ),
   );
 
-  /** saveDisabled gates the save on a valid draft and a loaded row. */
   const saveDisabled = computed<boolean>(
     () =>
       saving.value ||
@@ -95,7 +77,6 @@ export function useDockerfileEditor(source: Ref<Application | null> | Applicatio
       !argsValid.value,
   );
 
-  /** handleSave writes the draft; the store merges the row, so the page refreshes. */
   async function handleSave(): Promise<void> {
     const app = toValue(source);
     if (!app || saveDisabled.value) {

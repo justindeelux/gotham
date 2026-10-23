@@ -13,47 +13,27 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Repository persists notification channels. It is implemented over
-// *store.Store (sqlc) in production and by fakes in tests.
 type Repository interface {
-	// CreateChannel stores a new channel and returns the stored row.
 	CreateChannel(ctx context.Context, channel Channel) (Channel, error)
-	// GetChannel returns one channel of a team, or ErrNotFound when the row
-	// is missing or belongs to another team.
 	GetChannel(ctx context.Context, teamID, channelID uuid.UUID) (Channel, error)
-	// ListChannels returns a team's channels, oldest first.
 	ListChannels(ctx context.Context, teamID uuid.UUID) ([]Channel, error)
-	// ListChannelsForEvent returns the enabled channels of a team that cover
-	// one resource: team-wide rows plus the overrides scoped to exactly that
-	// resource.
 	ListChannelsForEvent(ctx context.Context, teamID uuid.UUID, resourceType string, resourceID uuid.UUID) ([]Channel, error)
-	// UpdateChannel persists the mutable fields and returns the stored row.
 	UpdateChannel(ctx context.Context, channel Channel) (Channel, error)
-	// DeleteChannel removes one channel of a team, or ErrNotFound when no row
-	// matched.
 	DeleteChannel(ctx context.Context, teamID, channelID uuid.UUID) error
-	// CreateDelivery appends one attempt and trims the channel's history to
-	// the retention cap, in one transaction.
 	CreateDelivery(ctx context.Context, delivery Delivery) error
-	// ListDeliveries returns the newest attempts of one team-scoped channel,
-	// newest first. A foreign team's channel matches no row.
 	ListDeliveries(ctx context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error)
 }
 
-// storeRepository adapts *store.Store to Repository.
 type storeRepository struct {
 	store *store.Store
 }
 
-// Compile-time guarantee.
 var _ Repository = (*storeRepository)(nil)
 
-// newStoreRepository builds the PostgreSQL-backed repository.
 func newStoreRepository(st *store.Store) *storeRepository {
 	return &storeRepository{store: st}
 }
 
-// CreateChannel implements Repository.
 func (r *storeRepository) CreateChannel(ctx context.Context, channel Channel) (Channel, error) {
 	row, err := r.store.CreateNotificationChannel(ctx, sqlc.CreateNotificationChannelParams{
 		ID:           pgUUID(channel.ID),
@@ -72,7 +52,6 @@ func (r *storeRepository) CreateChannel(ctx context.Context, channel Channel) (C
 	return channelFromRow(row), nil
 }
 
-// GetChannel implements Repository, mapping a missing row to ErrNotFound.
 func (r *storeRepository) GetChannel(ctx context.Context, teamID, channelID uuid.UUID) (Channel, error) {
 	row, err := r.store.GetNotificationChannel(ctx, sqlc.GetNotificationChannelParams{
 		ID:     pgUUID(channelID),
@@ -87,7 +66,6 @@ func (r *storeRepository) GetChannel(ctx context.Context, teamID, channelID uuid
 	return channelFromRow(row), nil
 }
 
-// ListChannels implements Repository.
 func (r *storeRepository) ListChannels(ctx context.Context, teamID uuid.UUID) ([]Channel, error) {
 	rows, err := r.store.ListNotificationChannels(ctx, pgUUID(teamID))
 	if err != nil {
@@ -96,7 +74,6 @@ func (r *storeRepository) ListChannels(ctx context.Context, teamID uuid.UUID) ([
 	return channelsFromRows(rows), nil
 }
 
-// ListChannelsForEvent implements Repository.
 func (r *storeRepository) ListChannelsForEvent(ctx context.Context, teamID uuid.UUID, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
 	rows, err := r.store.ListNotificationChannelsForEvent(ctx, sqlc.ListNotificationChannelsForEventParams{
 		TeamID:       pgUUID(teamID),
@@ -109,7 +86,6 @@ func (r *storeRepository) ListChannelsForEvent(ctx context.Context, teamID uuid.
 	return channelsFromRows(rows), nil
 }
 
-// UpdateChannel implements Repository, mapping a missing row to ErrNotFound.
 func (r *storeRepository) UpdateChannel(ctx context.Context, channel Channel) (Channel, error) {
 	row, err := r.store.UpdateNotificationChannel(ctx, sqlc.UpdateNotificationChannelParams{
 		ID:           pgUUID(channel.ID),
@@ -131,8 +107,6 @@ func (r *storeRepository) UpdateChannel(ctx context.Context, channel Channel) (C
 	return channelFromRow(row), nil
 }
 
-// DeleteChannel implements Repository, mapping zero affected rows to
-// ErrNotFound.
 func (r *storeRepository) DeleteChannel(ctx context.Context, teamID, channelID uuid.UUID) error {
 	affected, err := r.store.DeleteNotificationChannel(ctx, sqlc.DeleteNotificationChannelParams{
 		ID:     pgUUID(channelID),
@@ -147,12 +121,6 @@ func (r *storeRepository) DeleteChannel(ctx context.Context, teamID, channelID u
 	return nil
 }
 
-// CreateDelivery implements Repository: it appends one attempt and trims the
-// channel's history to the retention cap in a single transaction, so a write
-// can never leave the channel over the cap. The per-channel advisory lock
-// serializes concurrent writers of the same channel: without it, two
-// READ COMMITTED transactions would each keep their own newest row and leave
-// the channel at cap+1.
 func (r *storeRepository) CreateDelivery(ctx context.Context, delivery Delivery) error {
 	return r.store.InTx(ctx, func(tx *store.Store) error {
 		if err := tx.LockNotificationChannelHistory(ctx, delivery.ChannelID.String()); err != nil {
@@ -178,7 +146,6 @@ func (r *storeRepository) CreateDelivery(ctx context.Context, delivery Delivery)
 	})
 }
 
-// ListDeliveries implements Repository.
 func (r *storeRepository) ListDeliveries(ctx context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error) {
 	rows, err := r.store.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
 		ChannelID: pgUUID(channelID),
@@ -195,7 +162,6 @@ func (r *storeRepository) ListDeliveries(ctx context.Context, teamID, channelID 
 	return deliveries, nil
 }
 
-// deliveryFromRow maps a sqlc row to the domain delivery.
 func deliveryFromRow(row sqlc.NotificationDelivery) Delivery {
 	return Delivery{
 		ID:           uuidFromPG(row.ID),
@@ -207,7 +173,6 @@ func deliveryFromRow(row sqlc.NotificationDelivery) Delivery {
 	}
 }
 
-// channelFromRow maps a sqlc row to the domain channel.
 func channelFromRow(row sqlc.NotificationChannel) Channel {
 	events := make([]EventKey, 0, len(row.Events))
 	for _, event := range row.Events {
@@ -231,7 +196,6 @@ func channelFromRow(row sqlc.NotificationChannel) Channel {
 	return channel
 }
 
-// channelsFromRows maps a page of sqlc rows.
 func channelsFromRows(rows []sqlc.NotificationChannel) []Channel {
 	channels := make([]Channel, 0, len(rows))
 	for _, row := range rows {
@@ -240,7 +204,6 @@ func channelsFromRows(rows []sqlc.NotificationChannel) []Channel {
 	return channels
 }
 
-// stringsFromEvents converts the event subscription for sqlc.
 func stringsFromEvents(events []EventKey) []string {
 	values := make([]string, 0, len(events))
 	for _, event := range events {
@@ -249,7 +212,6 @@ func stringsFromEvents(events []EventKey) []string {
 	return values
 }
 
-// nullableText maps an empty string to a SQL NULL.
 func nullableText(value string) *string {
 	if value == "" {
 		return nil
@@ -257,7 +219,6 @@ func nullableText(value string) *string {
 	return &value
 }
 
-// pgUUID converts a domain UUID for sqlc; the zero UUID becomes NULL.
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	if id == uuid.Nil {
 		return pgtype.UUID{}
@@ -265,7 +226,6 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-// uuidFromPG converts a sqlc UUID column to the domain type (NULL → zero).
 func uuidFromPG(v pgtype.UUID) uuid.UUID {
 	if !v.Valid {
 		return uuid.Nil

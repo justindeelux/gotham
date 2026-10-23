@@ -11,9 +11,6 @@ import (
 	"github.com/justindeelux/gotham/agent/fsroot"
 )
 
-// requireUnreadable fails the test unless the entry is genuinely unreadable by
-// this process, so a root (or otherwise privileged) run skips instead of
-// asserting a recovery it cannot exercise.
 func requireUnreadable(t *testing.T, path string) {
 	t.Helper()
 	f, err := os.Open(path)
@@ -26,9 +23,6 @@ func requireUnreadable(t *testing.T, path string) {
 	}
 }
 
-// TestChmodEntryRecoversUnreadableFile pins the recovery contract: a file the
-// agent chmod-ed to 000 (so it can no longer be opened O_RDONLY) can still be
-// chmod-ed back through the O_PATH descriptor.
 func TestChmodEntryRecoversUnreadableFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -55,9 +49,6 @@ func TestChmodEntryRecoversUnreadableFile(t *testing.T) {
 	}
 }
 
-// TestChmodEntryRecoversUnsearchableDirectory pins the same contract for a
-// directory: a directory left at 000 by another actor (the product itself
-// refuses to remove a directory's owner execute) must still be recoverable.
 func TestChmodEntryRecoversUnsearchableDirectory(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -81,10 +72,6 @@ func TestChmodEntryRecoversUnsearchableDirectory(t *testing.T) {
 	}
 }
 
-// TestChmodEntryFollowsIntermediateSymlink pins that a symlinked parent is
-// resolved inside the root (as os.Root did) rather than refused. The manual
-// component walk used when openat2 is unavailable refuses it, so that case is
-// skipped.
 func TestChmodEntryFollowsIntermediateSymlink(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -110,9 +97,6 @@ func TestChmodEntryFollowsIntermediateSymlink(t *testing.T) {
 	}
 }
 
-// TestChmodEntryUnderUnsearchableParent pins that resolving the parent needs
-// only search (execute) permission, not read: a file inside a 0o111 directory
-// can still be chmod-ed and its entry returned.
 func TestChmodEntryUnderUnsearchableParent(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -125,11 +109,9 @@ func TestChmodEntryUnderUnsearchableParent(t *testing.T) {
 	}
 	root := openRoot(t, dir)
 
-	// 0o111: traversable but not listable/readable.
 	if _, err := root.ChmodEntry("d", 0o111, false); err != nil {
 		t.Fatalf("chmod parent to 0o111: %v", err)
 	}
-	// Restore before t.TempDir's RemoveAll, which must list the directory.
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
 	requireUnreadable(t, parent)
 

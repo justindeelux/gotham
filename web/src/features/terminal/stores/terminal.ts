@@ -41,39 +41,8 @@ import type {
   QuickCommandSuggestionState,
 } from "@/features/terminal/utils/quickCommandEngine";
 
-/**
- * Terminal tabs and live sessions (JUS-245).
- *
- * The reactive tabs are the window's data; the renderer/transport lives in a
- * non-reactive map so a pane or route unmount never tears down a shell. The
- * public methods below are the entry points later work packages call:
- *
- *   - openPageSession({ serverId, root, cwd })  page mode, idempotent per target
- *   - openWindowSession({ serverId, root, cwd }) floating window, one new tab
- *                                               per deliberate call; a same-target
- *                                               create already in flight is shared
- *   - detachToWindow(tabId)                     one-way page → window transfer
- *   - requestClose([tabId])                     same confirmation path as the UI
- *   - isDisplayed(tabId)                        a page pane owns the live host
- *
- * A transfer reuses the SAME session id, renderer and socket: it only moves
- * the host element. There is deliberately no window → page action.
- *
- * A page session outlives its route: the runtime keeps the renderer when the
- * pane unmounts (`displayed` drops), and the app-level page dock shows the
- * paused session so it stays reachable and closable from every route.
- */
-
-/** TerminalMode is where one live session is shown. */
 export type TerminalMode = "page" | "window";
 
-/**
- * TerminalTab is the reactive metadata of one live terminal. Host tabs leave
- * every container field empty; a container tab keeps the server-resolved
- * identity (application, service, container id/name and the display label) so
- * the pane, the paused dock and the window tab cannot confuse it with a host
- * shell.
- */
 export interface TerminalTab {
   id: string;
   serverId: string;
@@ -82,15 +51,11 @@ export interface TerminalTab {
   root: string;
   cwd: string;
   title: string;
-  /** applicationId is set only for a container target. */
   applicationId: string;
-  /** applicationName labels a container session beside its target label. */
   applicationName: string;
-  /** service is the Compose service, empty for a single-container app. */
   service: string;
   containerId: string;
   containerName: string;
-  /** targetLabel is the server-resolved "service · container name" label. */
   targetLabel: string;
   mode: TerminalMode;
   sessionId: string;
@@ -103,23 +68,13 @@ export interface TerminalTab {
   exitSignal: string;
   errorCode: TerminalErrorCode | null;
   createdAt: number;
-  /**
-   * sourcePath is the route that owns this page session, used by the app
-   * dock to resume a paused page tab after a route change. It is display
-   * metadata only and never part of the idempotency key.
-   */
   sourcePath: string;
-  /** promptPhase is the shell's OSC 133/633 state (JUS-249). */
   promptPhase: PromptPhase;
-  /** integrationDetected is true once this shell emitted a prompt mark. */
   integrationDetected: boolean;
-  /** alternateScreen is true while a fullscreen TUI owns the screen. */
   alternateScreen: boolean;
-  /** suggestion is the current abbreviation match, if any. */
   suggestion: QuickCommandSuggestion | null;
 }
 
-/** TerminalOpenOptions is the public entry-point input. */
 export interface TerminalOpenOptions {
   serverId: string;
   serverName?: string;
@@ -129,52 +84,28 @@ export interface TerminalOpenOptions {
   cols?: number;
   rows?: number;
   title?: string;
-  /** Container target identity (JUS-247); all empty for a host session. */
   applicationId?: string;
   applicationName?: string;
   service?: string;
   containerId?: string;
   containerName?: string;
   targetLabel?: string;
-  /** sourcePath is the fullPath of the page/tab that opened the session. */
   sourcePath?: string;
-  /**
-   * fresh asks for a new page tab even when a detached tab for the same
-   * target exists. Hosts use it only for an explicit "start a new session"
-   * action (for example after the page session moved into the window);
-   * ordinary opens still reuse the live shell.
-   */
   fresh?: boolean;
 }
 
-/** TerminalCloseRequest is the pending confirmation (always one at a time). */
 export interface TerminalCloseRequest {
   ids: string[];
   scope: "tab" | "window";
 }
 
-/** DEFAULT_TERMINAL_COLS/ROWS seed the create call before the renderer fits. */
 const DEFAULT_TERMINAL_COLS = 120;
 const DEFAULT_TERMINAL_ROWS = 32;
 
-/**
- * WINDOW_SINGLE_FLIGHT_HOLD_MS keeps a window target's single-flight key (and
- * its busy state) after a create settles, so a human-speed double-click whose
- * second click lands after a fast create still joins the first gesture
- * (JUS-248 fix round 2). A deliberate activation after this window opens a new
- * independent tab, as documented.
- */
 export const WINDOW_SINGLE_FLIGHT_HOLD_MS = 600;
 
-/**
- * PAGE_SINGLE_FLIGHT_HOLD_MS aligns the page create's settle window with the
- * window's (JUS-248 r2): a popover double activation whose second click lands
- * just after a fast create still joins the first gesture instead of opening a
- * second shell. A deliberate later open is a new page tab.
- */
 export const PAGE_SINGLE_FLIGHT_HOLD_MS = WINDOW_SINGLE_FLIGHT_HOLD_MS;
 
-/** tabId returns a stable local id without requiring a secure context. */
 function tabId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -182,12 +113,6 @@ function tabId(): string {
   return `term-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-/**
- * targetKey identifies a page session request for idempotent opens. A
- * container target includes the application and the exact container identity:
- * two replicas of one service are distinct targets, and the same server never
- * lets a container shell collide with a host shell.
- */
 function targetKey(options: TerminalOpenOptions): string {
   return [
     options.serverId,
@@ -200,7 +125,6 @@ function targetKey(options: TerminalOpenOptions): string {
   ].join("\u0000");
 }
 
-/** terminalTitle names one tab in the window strip. */
 function terminalTitle(options: TerminalOpenOptions): string {
   if (options.title) {
     return options.title;
@@ -221,69 +145,24 @@ function terminalTitle(options: TerminalOpenOptions): string {
 export const useTerminalStore = defineStore("terminal", () => {
   const tabs = ref<TerminalTab[]>([]);
   const activeTabId = ref<string>("");
-  /**
-   * activePageTabId is the page surface's selected tab. Page tabs can now be
-   * several at once (JUS-265 add-tab), so the floating window's activeTabId is
-   * deliberately separate: switching a window tab never changes what the page
-   * shows, and vice versa.
-   */
   const activePageTabId = ref<string>("");
   const closeRequest = ref<TerminalCloseRequest | null>(null);
   const appearance = useTerminalAppearanceStore();
 
-  /** runtimes holds one live renderer/transport per tab (non-reactive). */
   const runtimes = new Map<string, TerminalRuntime>();
-  /**
-   * surfaces remembers the element each tab is displayed in. It queues a
-   * surface that mounted before the socket, and lets an explicit retry put the
-   * new renderer into the still-mounted pane.
-   */
   const surfaces = new Map<string, HTMLElement>();
-  /**
-   * displayed is the reactive companion of `surfaces`: the page dock shows a
-   * paused card for every page tab without a live pane, while window tabs are
-   * surfaced by the floating window and the rail.
-   */
   const displayed = ref<Set<string>>(new Set());
-  /** inflight deduplicates rapid page opens for the same target. */
   const inflight = new Map<string, Promise<TerminalTab>>();
-  /** pageHoldTimers owns the page settle windows so teardown can clear them. */
   const pageHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  /**
-   * windowInflight keeps one window create per target. The entry survives for
-   * WINDOW_SINGLE_FLIGHT_HOLD_MS after the create settles so an accidental
-   * second click from the same gesture cannot start another shell even when
-   * the create was fast. A deliberate later activation opens a new tab.
-   */
   const windowInflight = new Map<string, Promise<TerminalTab>>();
-  /** windowHoldTimers owns the settle windows so teardown can clear them. */
   const windowHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  /** windowBusyKeys is the reactive busy state the toolbar reads per target. */
   const windowBusyKeys = ref<Set<string>>(new Set());
-  /** controllers aborts an in-flight create when its tab/window closes. */
   const controllers = new Map<string, AbortController>();
-  /** createTargets maps each live tab to its single-flight key and mode. */
   const createTargets = new Map<string, { key: string; mode: TerminalMode }>();
-  /** retrying guards a second explicit retry while the first is running. */
   const retrying = new Set<string>();
-  /**
-   * retryHandlers lets an owning page re-resolve a container target before a
-   * retry (JUS-247 r1). A container tab's Retry must discover the fresh target
-   * set, not re-POST an id the control plane already refused; the application
-   * tab registers that resolver while it is mounted. Without one (a window tab
-   * after the page left), `retry` falls back to a bounded rediscovery.
-   */
   const retryHandlers = new Map<string, () => void | Promise<void>>();
-  /**
-   * dismissedContainerRestarts remembers an application whose container tab
-   * the operator explicitly closed, keyed to the closed target. It lives in the
-   * store lifetime, so logout/account switch clears it and a later user never
-   * inherits a previous account's restart card.
-   */
   const dismissedContainerRestarts = new Map<string, string>();
-  /** closeResolve settles an awaited close confirmation (logout path). */
   let closeResolve: ((_confirmed: boolean) => void) | null = null;
-  /** closePromise is shared by overlapping awaited close requests. */
   let closePromise: Promise<boolean> | null = null;
 
   const activeTab = computed<TerminalTab | null>(
@@ -292,11 +171,6 @@ export const useTerminalStore = defineStore("terminal", () => {
   const pageTabs = computed<TerminalTab[]>(() =>
     tabs.value.filter((tab) => tab.mode === "page"),
   );
-  /**
-   * pageActiveTab is the page's displayed tab. It resolves only among page
-   * tabs, so a window tab that happens to share the activePageTabId (or a
-   * detach) can never be shown in the page pane.
-   */
   const pageActiveTab = computed<TerminalTab | null>(
     () =>
       pageTabs.value.find((tab) => tab.id === activePageTabId.value) ??
@@ -307,32 +181,17 @@ export const useTerminalStore = defineStore("terminal", () => {
     tabs.value.filter((tab) => tab.mode === "window"),
   );
   const windowOpenCount = computed<number>(() => windowTabs.value.length);
-  /**
-   * sessionCount is the total number of live tabs: page sessions count too,
-   * so the rail badge never hides a page-only shell from the operator.
-   */
   const sessionCount = computed<number>(() => tabs.value.length);
-  /**
-   * hasLiveSessions is the beforeunload guard: a browser unload terminates an
-   * attached PTY just like a tab close, so it must warn the same way.
-   */
   const hasLiveSessions = computed<boolean>(() =>
     tabs.value.some(
       (tab) => tab.status === "connecting" || tab.status === "connected",
     ),
   );
 
-  /** findTab resolves one tab by local id. */
   function findTab(id: string): TerminalTab | null {
     return tabs.value.find((tab) => tab.id === id) ?? null;
   }
 
-  /**
-   * findTabForTarget returns an existing session for one page target. A live
-   * page tab wins over a detached copy of the same target: after an explicit
-   * "start a new page session", later opens must reuse the page tab instead of
-   * jumping back to the old window tab.
-   */
   function findTabForTarget(options: TerminalOpenOptions): TerminalTab | null {
     const key = targetKey(options);
     const matches = tabs.value.filter((tab) => targetKey(tab) === key);
@@ -341,7 +200,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     );
   }
 
-  /** releasePageKey drops one page target's settle window at once. */
   function releasePageKey(key: string): void {
     const timer = pageHoldTimers.get(key);
     if (timer !== undefined) {
@@ -351,7 +209,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     inflight.delete(key);
   }
 
-  /** holdPageKey keeps a settled page create joinable for one gesture window. */
   function holdPageKey(key: string, created: Promise<TerminalTab>): void {
     if (inflight.get(key) !== created) {
       return;
@@ -365,7 +222,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     pageHoldTimers.set(key, timer);
   }
 
-  /** releaseWindowKey drops one target's hold, timer and busy flag at once. */
   function releaseWindowKey(key: string): void {
     const timer = windowHoldTimers.get(key);
     if (timer !== undefined) {
@@ -376,12 +232,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     windowBusyKeys.value.delete(key);
   }
 
-  /** holdWindowKey starts the short settle window once a create resolves. */
   function holdWindowKey(
     key: string,
     created: Promise<TerminalTab>,
   ): void {
-    // An abort/close released the key while the create was settling.
     if (windowInflight.get(key) !== created) {
       return;
     }
@@ -395,16 +249,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     windowHoldTimers.set(key, timer);
   }
 
-  /**
-   * isWindowOpening reports whether one window target is creating or inside
-   * its settle window. The toolbar uses it to stay busy/disabled for the same
-   * target only; a different target is unaffected (JUS-248 r2).
-   */
   function isWindowOpening(options: TerminalOpenOptions): boolean {
     return windowBusyKeys.value.has(targetKey(options));
   }
 
-  /** applyPatch merges a runtime lifecycle patch into one tab. */
   function applyPatch(tab: TerminalTab, patch: TerminalStatePatch): void {
     if (!findTab(tab.id)) {
       return;
@@ -435,7 +283,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /** applySuggestion mirrors the runtime's prompt/suggestion snapshot. */
   function applySuggestion(
     tab: TerminalTab,
     state: QuickCommandSuggestionState,
@@ -449,12 +296,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.suggestion = state.suggestion;
   }
 
-  /**
-   * requestSession creates the HTTP session for one tab. A container tab uses
-   * only the application route with the exact discovered target — there is no
-   * host fallback, ever, and the create response's websocket path is the one
-   * the runtime attaches to.
-   */
   async function requestSession(
     tab: TerminalTab,
     signal: AbortSignal,
@@ -469,8 +310,6 @@ export const useTerminalStore = defineStore("terminal", () => {
           rows: tab.rows,
         },
         signal,
-        // The application route is team-scoped; the same header the
-        // discovery read used must travel with the create (JUS-265).
         useTeamsStore().activeTeamId,
       );
     }
@@ -487,7 +326,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     );
   }
 
-  /** closeSession releases one tab's session through its owning route. */
   function closeSession(tab: TerminalTab, sessionId: string): Promise<void> {
     if (isContainerTerminalTarget(tab.target)) {
       return closeApplicationTerminalSession(
@@ -499,7 +337,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     return closeTerminalSession(tab.serverId, sessionId);
   }
 
-  /** startSession creates the HTTP session and starts its runtime. */
   async function startSession(tab: TerminalTab): Promise<void> {
     tab.status = "connecting";
     tab.errorCode = null;
@@ -512,26 +349,17 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.alternateScreen = false;
     tab.suggestion = null;
     try {
-      // The version lookup runs beside the HTTP create and never gates the
-      // session: a hung /version only drops the banner's version tag. A
-      // container exec never gets the Gotham host banner.
       const hostSession = isHostTerminalTarget(tab.target);
       const versionRequest = hostSession ? runningGothamVersion() : null;
       const session = await requestSession(tab, controller.signal);
-      // A closed tab/window aborts the create; never revive its state.
       if (controller.signal.aborted) {
         return;
       }
-      // A tab can be closed while the create call is in flight.
       if (!findTab(tab.id)) {
         await closeSession(tab, session.id).catch(() => {
-          // The tab is gone; the server expires an unattached session anyway.
         });
         return;
       }
-      // The control plane echoes the resolved target identity; trust it over
-      // the request so a replaced/re-labelled container is displayed exactly
-      // as the session was authorized.
       if (isContainerTerminalTarget(session.target)) {
         tab.applicationId = session.application_id ?? tab.applicationId;
         tab.service = session.service ?? tab.service;
@@ -579,13 +407,10 @@ export const useTerminalStore = defineStore("terminal", () => {
       }
       await runtime.connect();
     } catch (error) {
-      // An abort is a deliberate close: it is not an error state to show.
       if (controller.signal.aborted) {
         return;
       }
       tab.status = "error";
-      // Container failures use the application classifier: the host classes
-      // would claim a server/operator cause the container route never has.
       tab.errorCode = isContainerTerminalTarget(tab.target)
         ? applicationTerminalFailure(error).code
         : terminalFailure(error).code;
@@ -594,7 +419,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /** createTab appends one tab and starts its session. */
   async function createTab(
     options: TerminalOpenOptions,
     mode: TerminalMode,
@@ -631,15 +455,10 @@ export const useTerminalStore = defineStore("terminal", () => {
       suggestion: null,
     };
     tabs.value.push(tab);
-    // Read the tab back from the reactive array: Vue wraps the raw object on
-    // access, and every later mutation (runtime patches included) must go
-    // through that proxy or the UI never re-renders.
     const stored = tabs.value[tabs.value.length - 1]!;
     if (mode === "window") {
       activeTabId.value = stored.id;
     } else {
-      // A new page session becomes the page's selected tab (JUS-265); the
-      // window's own selection is untouched.
       activePageTabId.value = stored.id;
     }
     createTargets.set(stored.id, { key: targetKey(options), mode });
@@ -647,26 +466,12 @@ export const useTerminalStore = defineStore("terminal", () => {
     return stored;
   }
 
-  /**
-   * openPageSession opens (or reuses) the page-mode session for one target.
-   * Reuse is keyed by server + target + root + cwd, so revisiting the pane or
-   * remounting the page cannot spawn a duplicate shell. A session that was
-   * detached is returned as-is: the caller renders its "open in window" state
-   * instead of creating a second session.
-   *
-   * `fresh: true` is the explicit exception: the host asked for a brand-new
-   * page shell (for example from the moved-to-window notice), so the detached
-   * tab is left in the window and a page tab is created. Rapid repeated fresh
-   * opens for one target still share the in-flight promise.
-   */
   function openPageSession(
     options: TerminalOpenOptions,
   ): Promise<TerminalTab> {
     if (options.fresh !== true) {
       const existing = findTabForTarget(options);
       if (existing) {
-        // Another entry point (menu page, server tab) reused this shell: keep
-        // the latest source so the dock can resume the pane the user came from.
         if (options.sourcePath) {
           existing.sourcePath = options.sourcePath;
         }
@@ -688,13 +493,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     return created;
   }
 
-  /**
-   * openWindowSession opens a new tab in the floating window. A deliberate
-   * later call is intentional (each call is a new independent shell); a second
-   * activation for the SAME target while the first create is still in flight
-   * is an accident from one gesture and joins that call instead of starting a
-   * second shell.
-   */
   async function openWindowSession(
     options: TerminalOpenOptions,
   ): Promise<TerminalTab> {
@@ -704,27 +502,17 @@ export const useTerminalStore = defineStore("terminal", () => {
       return pending;
     }
     const windowStore = useTerminalWindowStore();
-    // Restore a minimized window and bring it to the front so a new shell
-    // opened from another surface is actually visible (JUS-248).
     windowStore.setMinimized(false);
     windowStore.raise();
     const created = createTab(options, "window");
     windowInflight.set(key, created);
     windowBusyKeys.value.add(key);
-    // Hold the target's single-flight key briefly after settle so a fast create
-    // cannot turn one human double-click into two shells (JUS-248 r2). The
-    // catch keeps this scheduling chain quiet when the create itself rejects;
-    // the caller still receives the rejection through `created`.
     void created
       .catch(() => undefined)
       .then(() => holdWindowKey(key, created));
     return created;
   }
 
-  /**
-   * detachToWindow performs the one-way transfer: the SAME tab, session id,
-   * renderer and buffer move into the window. No HTTP create is issued.
-   */
   function detachToWindow(id: string): void {
     const tab = findTab(id);
     if (!tab || tab.mode === "window") {
@@ -739,14 +527,12 @@ export const useTerminalStore = defineStore("terminal", () => {
     useTerminalWindowStore().setMinimized(false);
   }
 
-  /** activate makes one window tab active. */
   function activate(id: string): void {
     if (findTab(id)) {
       activeTabId.value = id;
     }
   }
 
-  /** activatePage selects one page tab; a window tab is ignored. */
   function activatePage(id: string): void {
     const tab = findTab(id);
     if (tab?.mode === "page") {
@@ -754,18 +540,12 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /** attach offers a surface element to the live runtime (or queues it). */
   function attach(id: string, container: HTMLElement): void {
     surfaces.set(id, container);
     displayed.value.add(id);
     runtimes.get(id)?.attach(container);
   }
 
-  /**
-   * detach drops a pane's remembered element when that pane unmounts. The
-   * runtime keeps its own host, so a later mount (or a transfer) re-attaches;
-   * the store never holds a removed DOM node.
-   */
   function detach(id: string, container: HTMLElement): void {
     if (surfaces.get(id) === container) {
       surfaces.delete(id);
@@ -773,41 +553,26 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /** isDisplayed reports whether a mounted pane currently owns the host. */
   function isDisplayed(id: string): boolean {
     return displayed.value.has(id);
   }
 
-  /** focus focuses the live renderer of one tab. */
   function focus(id: string): void {
     runtimes.get(id)?.focus();
   }
 
-  /** fit refits one live renderer (after a restore or a window resize). */
   function fit(id: string): void {
     runtimes.get(id)?.fit();
   }
 
-  /**
-   * cursorRow reports the rendered cursor cell (client coordinates) for one
-   * tab, so an overlay can be placed clear of the prompt line.
-   */
   function cursorRow(id: string): { top: number; height: number } | null {
-    // Optional calls keep test fakes (which do not model the renderer) and
-    // restored page hosts working: no cursor means the overlay anchors safely.
     return runtimes.get(id)?.getCursorRow?.() ?? null;
   }
 
-  /** watchCursor subscribes to one tab's cursor moves; returns a disposer. */
   function watchCursor(id: string, listener: () => void): () => void {
     return runtimes.get(id)?.watchCursor?.(listener) ?? (() => {});
   }
 
-  /**
-   * setTheme applies one named theme to every live renderer and persists it
-   * for this account. It never recreates a session: xterm repaints the same
-   * buffer and the PTY keeps its id/process.
-   */
   function setTheme(next: TerminalThemeName): void {
     appearance.setTheme(next);
     for (const runtime of runtimes.values()) {
@@ -815,7 +580,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /** acceptSuggestion inserts the matched command without running it. */
   function acceptSuggestion(id: string): TerminalCommandResult {
     const runtime = runtimes.get(id);
     if (!runtime) {
@@ -824,7 +588,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     return runtime.acceptSuggestion();
   }
 
-  /** insertCommand inserts saved text at the prompt without running it. */
   function insertCommand(id: string, text: string): TerminalCommandResult {
     const runtime = runtimes.get(id);
     if (!runtime) {
@@ -833,21 +596,14 @@ export const useTerminalStore = defineStore("terminal", () => {
     return runtime.insertCommand(text);
   }
 
-  /** dismissSuggestion hides the abbreviation suggestion. */
   function dismissSuggestion(id: string): void {
     runtimes.get(id)?.dismissSuggestion();
   }
 
-  /** setComposing suspends suggestions while an IME composition is open. */
   function setComposing(id: string, composing: boolean): void {
     runtimes.get(id)?.setComposing(composing);
   }
 
-  /**
-   * registerRetryHandler installs the owning page's container retry resolver.
-   * The returned disposer only removes the exact handler it registered, so a
-   * remount cannot clear a newer page's handler.
-   */
   function registerRetryHandler(
     id: string,
     handler: () => void | Promise<void>,
@@ -860,7 +616,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     };
   }
 
-  /** dismissContainerRestart records an explicit close for one application. */
   function dismissContainerRestart(
     applicationId: string,
     target: string,
@@ -871,17 +626,14 @@ export const useTerminalStore = defineStore("terminal", () => {
     dismissedContainerRestarts.set(applicationId, target);
   }
 
-  /** containerRestartTarget reads the closed target, or null when none. */
   function containerRestartTarget(applicationId: string): string | null {
     return dismissedContainerRestarts.get(applicationId) ?? null;
   }
 
-  /** clearContainerRestart forgets the marker for an explicit restart. */
   function clearContainerRestart(applicationId: string): void {
     dismissedContainerRestarts.delete(applicationId);
   }
 
-  /** applyContainerTarget replaces a tab's identity from a fresh discovery. */
   function applyContainerTarget(
     tab: TerminalTab,
     target: ApplicationTerminalTarget,
@@ -893,12 +645,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.title = containerTabTitle(tab.applicationName, tab.targetLabel);
   }
 
-  /**
-   * recoverContainerTab is the fallback when no page resolver is mounted: it
-   * rediscovers the running set and only reconnects an exact or unambiguous
-   * target. It never re-POSTs a refused id, and a multi-target set stays in the
-   * bounded error state for the operator to choose from on the application tab.
-   */
   async function recoverContainerTab(
     id: string,
     tab: TerminalTab,
@@ -911,7 +657,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     try {
       if (previousSession !== "") {
         await closeSession(tab, previousSession).catch(() => {
-          // Best-effort: an ended session answers 404, which is success here.
         });
       }
       if (!findTab(id)) {
@@ -927,8 +672,6 @@ export const useTerminalStore = defineStore("terminal", () => {
         true,
       );
       if (choice.target === null) {
-        // Zero containers is gone; several need an explicit choice back on the
-        // application tab. Both stay bounded and issue no create.
         tab.status = "error";
         tab.errorCode = "containerGone";
         return;
@@ -943,7 +686,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /** retry is the ONLY reconnect path: it creates a new session, no replay. */
   async function retry(id: string): Promise<void> {
     const tab = findTab(id);
     if (!tab || retrying.has(id)) {
@@ -974,7 +716,6 @@ export const useTerminalStore = defineStore("terminal", () => {
       tab.sessionId = "";
       if (previousSession !== "") {
         await closeSession(tab, previousSession).catch(() => {
-          // Best-effort: an ended session answers 404, which is success here.
         });
       }
       if (!findTab(id)) {
@@ -986,12 +727,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /**
-   * requestClose asks for confirmation before releasing the given tabs. The
-   * returned promise lets a session-terminating flow (logout) wait for the
-   * user's answer: true means the listed sessions were released, false means
-   * the user kept them. UI callers that do not care can ignore it.
-   */
   function requestClose(ids: string[]): Promise<boolean> {
     if (closeRequest.value !== null) {
       return closePromise ?? Promise.resolve(false);
@@ -1010,7 +745,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     return closePromise;
   }
 
-  /** settleClose resolves the awaited confirmation exactly once. */
   function settleClose(confirmed: boolean): void {
     const resolve = closeResolve;
     closeResolve = null;
@@ -1018,13 +752,11 @@ export const useTerminalStore = defineStore("terminal", () => {
     resolve?.(confirmed);
   }
 
-  /** cancelClose keeps every session intact and returns to the window. */
   function cancelClose(): void {
     closeRequest.value = null;
     settleClose(false);
   }
 
-  /** confirmClose releases exactly the sessions the dialog listed. */
   function confirmClose(): void {
     const request = closeRequest.value;
     closeRequest.value = null;
@@ -1034,12 +766,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     settleClose(request !== null);
   }
 
-  /**
-   * confirmCloseAll runs the shared close path until no live session remains.
-   * It is the logout gate: a cancel returns false and aborts the sign-out; an
-   * already-open dialog is awaited and, if it targeted a subset, the remaining
-   * live sessions get their own confirmation rather than being killed silently.
-   */
   async function confirmCloseAll(): Promise<boolean> {
     while (hasLiveSessions.value) {
       const confirmed = await requestClose(tabs.value.map((tab) => tab.id));
@@ -1050,16 +776,12 @@ export const useTerminalStore = defineStore("terminal", () => {
     return true;
   }
 
-  /** closeTabs disposes renderers and removes the tabs (no prompt). */
   function closeTabs(ids: string[]): void {
     for (const id of ids) {
       const tab = findTab(id);
       if (!tab) {
         continue;
       }
-      // A create still in flight belongs to this tab: abort it and release its
-      // single-flight key immediately instead of waiting for the HTTP timeout.
-      // A settled tab's key is owned by the hold timer, never by this close.
       const target = createTargets.get(id);
       const controller = controllers.get(id);
       controller?.abort();
@@ -1069,8 +791,6 @@ export const useTerminalStore = defineStore("terminal", () => {
         releaseWindowKey(target.key);
       }
       if (target?.mode === "page") {
-        // Also release a settled create's hold: reopening a just-closed page
-        // tab must start a shell, never hand back the removed tab.
         releasePageKey(target.key);
       }
       const runtime = runtimes.get(id);
@@ -1082,7 +802,6 @@ export const useTerminalStore = defineStore("terminal", () => {
       retryHandlers.delete(id);
       if (tab.sessionId !== "") {
         void closeSession(tab, tab.sessionId).catch(() => {
-          // The server also revokes an ended session; cleanup is best-effort.
         });
       }
       const index = tabs.value.findIndex((item) => item.id === id);
@@ -1108,19 +827,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /** closeAll strips every session through the same cleanup path. */
   function closeAll(): void {
     closeTabs(tabs.value.map((tab) => tab.id));
   }
 
-  /**
-   * closeContainerSessions releases container tabs without a prompt. It is the
-   * security-boundary path (team switch or a demotion to read_only): the
-   * backend already refuses the session on its next revalidation, so the UI
-   * drops the tab instead of leaving a shell that can no longer be authorized
-   * reachable from the dock or the rail. Host tabs are never touched, and a
-   * logout still uses `reset` (no DELETE).
-   */
   function closeContainerSessions(applicationId = ""): void {
     const ids = tabs.value
       .filter(
@@ -1134,11 +844,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /**
-   * reset disposes every renderer and socket for logout. It never issues a
-   * DELETE (the sign-out already revokes the lineage) and keeps no transcript
-   * or credential: the tabs array, runtimes and queued hosts are dropped.
-   */
   function reset(): void {
     for (const controller of controllers.values()) {
       controller.abort();

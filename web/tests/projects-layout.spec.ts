@@ -8,10 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global URL, getComputedStyle, window:readonly */
-// Real-browser proof for the PE-4 projects surface: the committed webdist is
-// served statically with the control-plane API mocked, a session is seeded
-// in localStorage, and real Chromium measures the real Naive UI DOM. No
-// backend is involved. Same harness as profile-layout.spec.ts.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -86,7 +82,6 @@ const detail = {
   ],
 };
 
-// PE-6: one plain variable plus one write-only secret (value never returned).
 const projectVariables = [
   { key: "NODE_ENV", value: "production", secret: false },
   { key: "SENTRY_DSN", secret: true },
@@ -101,7 +96,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -133,7 +127,6 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session and answers the calls the projects surface makes. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -162,7 +155,6 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
-/** gridColumns counts the rendered grid columns of the project cards. */
 async function gridColumns(page: Page): Promise<number> {
   return page.locator(".project-grid").evaluate((grid) => {
     const columns = getComputedStyle(grid).gridTemplateColumns.split(" ");
@@ -189,7 +181,6 @@ test("projects grid collapses to one column at 480px", async ({ page }) => {
   await page.goto(`${baseURL}/projects`);
   await page.locator(".project-grid").waitFor();
   expect(await gridColumns(page)).toBe(1);
-  // The search and the create button stay usable at phone width.
   await expect(page.getByPlaceholder("Search projects")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "New project" }).first(),
@@ -209,13 +200,10 @@ test("project detail shows the breadcrumb and environments at both widths", asyn
     );
     await expect(page.locator(".project-page .title")).toHaveText("storefront");
     await expect(page.locator(".env-table")).toContainText("production");
-    // The shared-variables tab is the PE-6 editor with its precedence hint:
-    // plain values edit in place, secrets stay masked and write-only.
     await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
     await expect(page.locator(".project-page")).toContainText(
       "An environment variable overrides a project one",
     );
-    // Editor rows are inputs: assert their values, not text content.
     const editor = page.locator(".project-page .variables-card");
     await expect(editor.locator("input").nth(0)).toHaveValue("NODE_ENV");
     await expect(editor.locator("input").nth(2)).toHaveValue("SENTRY_DSN");
@@ -232,8 +220,6 @@ test("environment actions stay inside the viewport at 480px", async ({
   await mockApi(page);
   await page.goto(`${baseURL}/projects/${projects[0].id}`);
   await page.locator(".env-table").waitFor();
-  // Narrow rows stack into cards: Rename and Delete need no horizontal
-  // scroll to be tapped.
   for (const name of ["Rename", "Delete"]) {
     const button = page
       .locator(".env-table tbody tr", { hasText: "production" })

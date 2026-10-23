@@ -1,8 +1,3 @@
-/**
- * Toolchain English catalog: App Store screen copy. Display copy only:
- * tool ids, versions, paths and API payloads stay raw values interpolated
- * as parameters.
- */
 const en = {
   page: {
     eyebrow: "Operations · Host tools",

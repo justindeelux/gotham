@@ -10,9 +10,6 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// stagedUpdaterConfig plants a staged update (target already swapped, backup
-// present, pending=staged) and returns a Config whose paths live in a temp dir
-// together with the pending-marker path.
 func stagedUpdaterConfig(t *testing.T, restart updatecore.RestartFunc) (Config, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -30,9 +27,6 @@ func stagedUpdaterConfig(t *testing.T, restart updatecore.RestartFunc) (Config, 
 	return updaterTestConfig(t, target, restart), pending
 }
 
-// TestAgentResumeStagedRelaunchesOnce is the BE-9.1 M2 analogue on the agent: a
-// staged marker left by a crash makes agent startup relaunch the wrapper exactly
-// once (marker rewritten to resuming), never in a loop.
 func TestAgentResumeStagedRelaunchesOnce(t *testing.T) {
 	public, _, err := updatecore.GenerateKey()
 	if err != nil {
@@ -59,16 +53,12 @@ func TestAgentResumeStagedRelaunchesOnce(t *testing.T) {
 		t.Fatalf("pending = %+v, want resuming", status)
 	}
 
-	// A second startup must not relaunch (no loop).
 	_ = newTestUpdater(t, cfg)
 	if launches != 1 {
 		t.Fatalf("wrapper relaunched on a resuming marker (loop): %d", launches)
 	}
 }
 
-// TestAgentResumeSkipsWhileLockHeld is the BE-9.1 C1 analogue: while the
-// privileged wrapper holds the update lock, startup resume must not wait for it
-// and must not touch the staged marker.
 func TestAgentResumeSkipsWhileLockHeld(t *testing.T) {
 	public, _, err := updatecore.GenerateKey()
 	if err != nil {

@@ -1,12 +1,3 @@
-// Modal scroll contract (JUS-69), structural half.
-//
-// The header and footer of every card modal stay fixed, only the body
-// scrolls, and the modal never exceeds the viewport. jsdom never applies
-// stylesheets, so the contract is asserted as CSS text (same pattern as the
-// JUS-16/17/18 and JUS-19 suites); modal membership is structural — the
-// NModal must carry the contract class. The computed-style half lives in
-// modal-scroll.spec.ts (Playwright, no backend) and the real-DOM half in
-// environment-layout.spec.ts (Playwright, mocked API).
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -17,12 +8,10 @@ import { describe, expect, it } from "vitest";
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const mainCss = readFileSync(resolve(webRoot, "src/shared/styles/main.css"), "utf8");
 
-/** readSfc returns the raw source of one single-file component. */
 function readSfc(relativePath: string): string {
   return readFileSync(resolve(webRoot, relativePath), "utf8");
 }
 
-/** ruleBody returns the declaration block of the first rule naming selector. */
 function ruleBody(source: string, selector: string): string {
   const at = source.indexOf(selector);
   expect(at, `expected a rule naming ${selector}`).not.toBe(-1);

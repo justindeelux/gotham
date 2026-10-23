@@ -24,27 +24,17 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// --- fakes ------------------------------------------------------------------
-
-// fakeStore is an in-memory Store that reproduces the SQL queue's semantics:
-// the active-uniqueness de-dupe, oldest-first per-node claiming, lease-based
-// recovery, the append-only log, and the state guards on cancel and finish.
 type fakeStore struct {
-	mu    sync.Mutex
-	jobs  map[uuid.UUID]*sqlc.ToolchainJob
-	logs  map[uuid.UUID][]sqlc.ListToolchainJobLogsRow
-	order []uuid.UUID
-	seq   int64
-	// finished records terminal job ids in completion order.
-	finished []uuid.UUID
-	// finishFailures makes the next N FinishToolchainJob calls fail.
+	mu             sync.Mutex
+	jobs           map[uuid.UUID]*sqlc.ToolchainJob
+	logs           map[uuid.UUID][]sqlc.ListToolchainJobLogsRow
+	order          []uuid.UUID
+	seq            int64
+	finished       []uuid.UUID
 	finishFailures int
 	failStaleErr   error
-	// renewZero makes RenewToolchainJobLease report 0 rows (lost lease).
-	renewZero bool
-	// contendedOnce makes the next claim of a real candidate report the
-	// per-node race once, so the worker's immediate retry can be exercised.
-	contendedOnce bool
+	renewZero      bool
+	contendedOnce  bool
 }
 
 func newFakeStore() *fakeStore {
@@ -182,7 +172,7 @@ func (f *fakeStore) AppendToolchainJobLog(_ context.Context, p sqlc.AppendToolch
 	defer f.mu.Unlock()
 	for _, row := range f.logs[p.JobID.Bytes] {
 		if row.Seq == p.Seq {
-			return nil // ON CONFLICT DO NOTHING
+			return nil
 		}
 	}
 	f.logs[p.JobID.Bytes] = append(f.logs[p.JobID.Bytes], sqlc.ListToolchainJobLogsRow{Seq: p.Seq, Stream: p.Stream, Line: p.Line})
@@ -230,7 +220,6 @@ func (f *fakeStore) FinishToolchainJob(_ context.Context, p sqlc.FinishToolchain
 	if !ok {
 		return sqlc.ToolchainJob{}, pgx.ErrNoRows
 	}
-	// Guard: only the owning instance, while running on an unexpired lease.
 	leased := !job.LeaseExpiresAt.Valid || job.LeaseExpiresAt.Time.After(time.Now())
 	if job.Status != string(StatusRunning) || job.ClaimedBy != p.ClaimedBy || !leased {
 		return sqlc.ToolchainJob{}, pgx.ErrNoRows
@@ -260,14 +249,12 @@ func (f *fakeStore) status(t *testing.T, id uuid.UUID) Status {
 	return Status(f.jobs[id].Status)
 }
 
-// job returns a copy of one stored job row.
 func (f *fakeStore) job(id uuid.UUID) sqlc.ToolchainJob {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return *f.jobs[id]
 }
 
-// logText joins the stored log lines of a job.
 func (f *fakeStore) logText(id uuid.UUID) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -294,9 +281,6 @@ func (f *fakeStore) finishOrder() []uuid.UUID {
 	return append([]uuid.UUID(nil), f.finished...)
 }
 
-// seedRunning inserts an already-running job owned by claimedBy with the given
-// lease expiry (zero means a NULL lease), simulating a control plane that died
-// (or is still alive).
 func (f *fakeStore) seedRunning(serverID uuid.UUID, toolID, claimedBy string, lease time.Time) uuid.UUID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -319,7 +303,6 @@ func (f *fakeStore) seedRunning(serverID uuid.UUID, toolID, claimedBy string, le
 	return id
 }
 
-// fakeStream feeds a fixed event slice and then EOF.
 type fakeStream struct {
 	events []*agentv1.ToolEvent
 	i      int
@@ -341,10 +324,6 @@ func (s *fakeStream) Context() context.Context     { return context.Background()
 func (s *fakeStream) SendMsg(any) error            { return nil }
 func (s *fakeStream) RecvMsg(any) error            { return nil }
 
-// fakeAgent is an AgentConn serving a fixed catalog and per-tool event streams.
-// delay lets a test make one tool slow, and block makes one tool's stream hang
-// until its context is cancelled, so parallel/lost-lease behaviour is
-// observable.
 type fakeAgent struct {
 	mu      sync.Mutex
 	catalog []*agentv1.ToolInfo
@@ -393,8 +372,6 @@ func (f *fakeAgent) Close() error {
 	return nil
 }
 
-// blockingStream hangs on Recv until its context is cancelled, then returns the
-// cancellation error — used to exercise the lease-lost abort.
 type blockingStream struct {
 	ctx context.Context
 }
@@ -411,7 +388,6 @@ func (s *blockingStream) Context() context.Context     { return s.ctx }
 func (s *blockingStream) SendMsg(any) error            { return nil }
 func (s *blockingStream) RecvMsg(any) error            { return nil }
 
-// fakeRegistry resolves every id to a server, optionally on a team.
 type fakeRegistry struct {
 	teamID  uuid.UUID
 	missing bool
@@ -424,7 +400,6 @@ func (r *fakeRegistry) Get(_ context.Context, id uuid.UUID) (*servers.Server, er
 	return &servers.Server{ID: id, TeamID: r.teamID}, nil
 }
 
-// memPublisher records published frames per channel.
 type memPublisher struct {
 	mu     sync.Mutex
 	frames map[string][]Frame
@@ -484,8 +459,6 @@ func okStream(lines ...string) []*agentv1.ToolEvent {
 	}})
 }
 
-// --- tests ------------------------------------------------------------------
-
 func TestNormalizeToolIDs(t *testing.T) {
 	got := normalizeToolIDs([]string{" a ", "", "b", "a", "  ", "b"})
 	want := []string{"a", "b"}
@@ -520,7 +493,6 @@ func TestEnqueueRejectsUnknownAndDetectOnlyTools(t *testing.T) {
 	if _, err := svc.Enqueue(context.Background(), serverID, Action("frobnicate"), []string{"docker"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("bad action err = %v, want ErrValidation", err)
 	}
-	// A rejected request must not have queued anything.
 	if len(st.order) != 0 {
 		t.Fatalf("expected no jobs queued, got %d", len(st.order))
 	}
@@ -565,7 +537,6 @@ func TestEnqueueDedupesWithinRequestAndAgainstActiveJobs(t *testing.T) {
 	if len(first.Jobs) != 1 || len(first.Skipped) != 0 {
 		t.Fatalf("first enqueue = %+v, want 1 job, 0 skipped", first)
 	}
-	// The same tool is already active: it is skipped, not duplicated.
 	second, err := svc.Enqueue(context.Background(), serverID, ActionInstall, []string{"docker"})
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
@@ -581,17 +552,14 @@ func TestEnqueueRequiresTeamMembership(t *testing.T) {
 	st := newFakeStore()
 	svc := testService(st, agent, &fakeRegistry{teamID: team}, nil)
 
-	// A caller scoped to another team cannot see the node: not-found.
 	foreign := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: uuid.New(), Role: teams.RoleOwner})
 	if _, err := svc.Enqueue(foreign, uuid.New(), ActionInstall, []string{"docker"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign team err = %v, want ErrNotFound", err)
 	}
-	// A read-only member of the node's team cannot mutate.
 	readOnly := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: team, Role: teams.RoleReadOnly})
 	if _, err := svc.Enqueue(readOnly, uuid.New(), ActionInstall, []string{"docker"}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("read-only err = %v, want ErrForbidden", err)
 	}
-	// An owner of the node's team can.
 	owner := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: team, Role: teams.RoleOwner})
 	if _, err := svc.Enqueue(owner, uuid.New(), ActionInstall, []string{"docker"}); err != nil {
 		t.Fatalf("owner enqueue: %v", err)
@@ -617,18 +585,14 @@ func TestCancelOnlyCancelsQueuedJobs(t *testing.T) {
 	if canceled.Status != StatusCanceled {
 		t.Fatalf("canceled status = %s, want canceled", canceled.Status)
 	}
-	// Cancelling again is a conflict (it is terminal, not queued).
 	if _, err := svc.Cancel(context.Background(), serverID, job.ID); !errors.Is(err, ErrConflict) {
 		t.Fatalf("re-cancel err = %v, want ErrConflict", err)
 	}
-	// A job on another node answers not-found, not conflict.
 	if _, err := svc.Cancel(context.Background(), uuid.New(), job.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign node cancel err = %v, want ErrNotFound", err)
 	}
 }
 
-// TestGetReturnsJobAndPagedLog covers the new job-detail shape: the log lives
-// outside the Job and is fetched in pages via the after cursor.
 func TestGetReturnsJobAndPagedLog(t *testing.T) {
 	agent := &fakeAgent{catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)}}
 	st := newFakeStore()
@@ -665,7 +629,6 @@ func TestGetReturnsJobAndPagedLog(t *testing.T) {
 	}
 }
 
-// waitTerminal polls a job until it reaches a terminal status.
 func waitTerminal(t *testing.T, st *fakeStore, id uuid.UUID) Status {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

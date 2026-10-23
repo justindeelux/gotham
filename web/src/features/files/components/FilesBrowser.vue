@@ -124,26 +124,18 @@ const auth = useAuthStore();
 const serversStore = useServersStore();
 const terminal = useTerminalStore();
 const { download } = useFileDownload();
-/** initBrowser loads the listing, then restores this user+server's tabs. */
 const { initBrowser } = useFilesTabsPersist(() => props.serverId);
 
 watch(
   () => props.serverId,
   (next) => {
-    // A node switch changes the bin's scope; drop any loaded listing first so
-    // the dialog can never show (or act on) the previous node's entries. Cached
-    // folder sizes (and any in-flight walk) belong to the old node too.
     trash.reset();
     resetFolderSizes();
     void initBrowser(next);
   },
 );
-/** coarseNow is the shared minute clock behind the Modified column's age. */
 const coarseNow = useCoarseNow();
 
-// A team switch changes the caller's role and the server's visibility, so the
-// listing must reload rather than keep the previous team's directory. It also
-// changes the bin's scope.
 watch(
   () => teams.activeTeamId,
   () => {
@@ -151,7 +143,6 @@ watch(
     void files.reload();
   },
 );
-// The bin is per root: a root switch invalidates the loaded listing.
 watch(
   () => files.rootName,
   () => {
@@ -161,7 +152,6 @@ watch(
 );
 onMounted(() => void initBrowser(props.serverId));
 
-// ── Dialog state ──────────────────────────────────────────────────────────
 const createOpen = ref(false);
 const createKind = ref<NameKind>("directory");
 const renameOpen = ref(false);
@@ -176,33 +166,23 @@ const compressOpen = ref(false);
 const compressTargets = ref<FilesEntry[]>([]);
 const extractOpen = ref(false);
 const extractTarget = ref<FilesEntry | null>(null);
-/** recycleOpen shows the recycle-bin dialog for the current root (JUS-122). */
 const recycleOpen = ref(false);
-/** actionTargets are the entries the delete/transfer dialogs act on. */
 const actionTargets = ref<FilesEntry[]>([]);
 
-/** filterModel binds the NInput to the store's client-side filter. */
 const filterModel = computed<string>({
   get: () => files.query,
   set: (value) => files.setQuery(value ?? ""),
 });
 
-/** recursiveModel binds the "Include subdirectories" checkbox (JUS-163). */
 const recursiveModel = computed<boolean>({
   get: () => files.recursive,
   set: (value) => files.setRecursive(value === true),
 });
 
-/** submitSearch runs the input as a bounded server-side name search. */
 function submitSearch(): void {
   void files.runSearch();
 }
 
-/**
- * onSearchKeydown submits on Enter, ignoring the Enter that ends an IME
- * composition (Vietnamese Telex/VNI input) so a composition confirm never
- * fires a search.
- */
 function onSearchKeydown(event: KeyboardEvent): void {
   if (event.key !== "Enter" || event.isComposing) {
     return;
@@ -211,7 +191,6 @@ function onSearchKeydown(event: KeyboardEvent): void {
   submitSearch();
 }
 
-/** rootOptions labels each root with its writable/read-only access. */
 const rootOptions = computed(() =>
   files.roots.map((root) => ({
     value: root.name,
@@ -219,34 +198,17 @@ const rootOptions = computed(() =>
   })),
 );
 
-/** selectedRoot binds NSelect to the store's root selection. */
 const selectedRoot = computed<string>({
   get: () => files.rootName,
   set: (value) => void files.setRoot(value ?? ""),
 });
 
-/** hasSelection gates the header's bulk bar and its focus hand-off (JUS-128). */
 const hasSelection = computed<boolean>(() => files.selectedNames.length > 0);
 
-/**
- * gridBulkVisible shows the grid toolbar's overlay bulk bar (JUS-208 round 2):
- * the grid has no column-header row for the bulk bar to replace (as in list),
- * so while a selection exists the cluster overlays the toolbar row instead of
- * growing it — selecting never shifts the tiles.
- */
 const gridBulkVisible = computed<boolean>(
   () => files.viewMode === "grid" && hasSelection.value,
 );
 
-/**
- * countReserve is the widest selection summary the current folder can produce:
- * its full entry count (digit-monotonic, so never fewer digits than a subset)
- * and the widest byte label any subset can format to ({@link widestBytesLabel},
- * because formatBytes is non-monotonic across unit boundaries). It is a hidden
- * sizer in the count cell in BOTH selection states, so the cell width is
- * max(reserve, live) no matter what is selected and the bar's row height can
- * never depend on the selection (JUS-134/JUS-141).
- */
 const countReserve = computed<string>(
   () =>
     `${t("files.browser.selectionCount", { count: files.entries.length })} · ${widestBytesLabel(
@@ -254,13 +216,6 @@ const countReserve = computed<string>(
     )}`,
 );
 
-/**
- * selectionAnnouncement is the text of the always-mounted polite live region
- * (JUS-146). The region is in the tree before any selection (empty), so the
- * first selection is announced — unlike a region that appears with its content.
- * The text is debounced to the settled count, so a range select over thousands
- * of rows announces once instead of chattering on every step.
- */
 const selectionAnnouncement = ref("");
 let selectionAnnounceTimer: ReturnType<typeof setTimeout> | null = null;
 watch(
@@ -284,30 +239,20 @@ onBeforeUnmount(() => {
   if (selectionAnnounceTimer !== null) {
     clearTimeout(selectionAnnounceTimer);
   }
-  // Leaving the page aborts any in-flight size walk and drops the cached
-  // results. Done at browser level, never per row: row windowing unmounts cells
-  // that must keep their state.
   resetFolderSizes();
 });
 
-/** footSummary is the "12 entries · 4 folders · 6 files…" footer line. */
 const footSummary = computed<string>(() => {
-  // While the folder filter is narrowing the list, the leading count reports
-  // "shown of total" so a filtered view never reads as the whole folder.
   const filtering = files.query.trim() !== "";
   const parts = [
     filtering
       ? t("files.browser.entryCountFiltered", {
           shown: files.visibleEntries.length,
           total: files.entries.length,
-          // The total picks the plural form: "1 of 1 entry", not "1 of 1 entries".
           count: files.entries.length,
         })
       : t("files.browser.entryCount", { count: files.entries.length }),
   ];
-  // The breakdown follows the rows on screen: while filtering it tallies the
-  // visible rows, never mixing a filtered count with whole-folder totals
-  // (JUS-141).
   const counts = filtering ? files.visibleCounts : files.counts;
   if (counts.directory > 0) {
     parts.push(t("files.browser.folderCount", { count: counts.directory }));
@@ -324,12 +269,10 @@ const footSummary = computed<string>(() => {
   return parts.join(" · ");
 });
 
-/** currentPath is the "root/relative/path" the footer renders. */
 const currentPath = computed<string>(() =>
   files.path === "" ? files.rootName : `${files.rootName}/${files.path}`,
 );
 
-/** pasteProblemMessage explains why the clipboard cannot land at one destination. */
 function pasteProblemMessage(
   problem: "cross-root" | TransferProblem | null,
 ): string {
@@ -345,40 +288,24 @@ function pasteProblemMessage(
   }
 }
 
-/** pasteProblemText explains why the clipboard cannot be pasted here. */
 const pasteProblemText = computed<string>(() =>
   pasteProblemMessage(files.pasteProblem),
 );
 
-/**
- * pasteLabel is the Paste button's visible label ("Paste (2)"), optionally
- * followed by the problem explaining why it is disabled. The accessible name
- * must contain that visible text (WCAG label-in-name), so one computed feeds
- * the visible label and the accessible name (JUS-140).
- */
 const pasteLabel = computed<string>(() => {
   const count = files.clipboard?.names.length ?? 0;
   const base = `${String(t("files.actions.paste"))} (${count})`;
   return pasteProblemText.value ? `${base} — ${pasteProblemText.value}` : base;
 });
 
-/** typeLabel resolves the Type column through the active locale. */
 function typeLabel(entry: FilesEntry): string {
   return entryTypeLabel(entry, locale.value);
 }
 
-/** iconKind resolves the marker icon family for one entry. */
-// Symlinks always resolve to the link icon — even a link into the browsable
-// root — until the agent reports the target kind (backend follow-up); the
-// listing never says whether a target is a directory, so guessing drew folder
-// icons for file and dangling links.
 function iconKind(entry: FilesEntry): ReturnType<typeof entryIconKind> {
   return entryIconKind(entry);
 }
 
-/** entrySubtitle is the grid tile's second line (type + symlink target). The
- * list view has a Type column and keeps only {@link entryTarget}, so the type
- * is never repeated there. */
 function entrySubtitle(entry: FilesEntry): string {
   if (entry.kind === "symlink") {
     return entry.symlink_target
@@ -388,23 +315,12 @@ function entrySubtitle(entry: FilesEntry): string {
   return typeLabel(entry);
 }
 
-/**
- * entryTarget is the list row's inline hint: a symlink's target, or "" — the
- * type already lives in the Type column, so it is not repeated under the name
- * (JUS-134).
- */
 function entryTarget(entry: FilesEntry): string {
   return entry.kind === "symlink" && entry.symlink_target
     ? `→ ${entry.symlink_target}`
     : "";
 }
 
-/**
- * symlinkTargetPath resolves a symlink row's target to the root-relative path
- * "Go to target" opens ("" is the root's top level), or null when the target
- * lives outside the browsable root (the action is then hidden). A non-symlink
- * row resolves to null.
- */
 function symlinkTargetPath(entry: FilesEntry): string | null {
   if (entry.kind !== "symlink" || !entry.symlink_target) {
     return null;
@@ -417,13 +333,6 @@ function symlinkTargetPath(entry: FilesEntry): string | null {
   );
 }
 
-/**
- * goToSymlinkTarget opens a symlink's resolved target. The listing does not say
- * whether the target is a directory, so a target that turns out to be a file,
- * a broken link or an unreadable folder keeps the current view and reports it
- * with a non-blocking warning; a transient node/network failure gets its own
- * retry copy instead (JUS-132, JUS-141).
- */
 async function goToSymlinkTarget(entry: FilesEntry): Promise<void> {
   const target = symlinkTargetPath(entry);
   if (target === null) {
@@ -441,7 +350,6 @@ async function goToSymlinkTarget(entry: FilesEntry): Promise<void> {
   }
 }
 
-/** ariaSort reflects the store's sort for one column header. */
 function ariaSort(key: string): "ascending" | "descending" | "none" {
   if (files.sortKey !== key) {
     return "none";
@@ -449,12 +357,6 @@ function ariaSort(key: string): "ascending" | "descending" | "none" {
   return files.sortDir === "asc" ? "ascending" : "descending";
 }
 
-/**
- * activate performs an entry's default action for a double-click (or Enter) on
- * a row (JUS-130). The dispatch rule lives in {@link entryAction} so it is
- * unit-tested; every branch reuses the existing open/extract path rather than
- * duplicating it. Images bypass the dispatch into the viewer (JUS-204).
- */
 function activate(entry: FilesEntry): void {
   if (isImageFile(entry) && files.canReadContent) {
     openViewer(entry);
@@ -480,16 +382,10 @@ function activate(entry: FilesEntry): void {
   }
 }
 
-/** isRowControl reports a press that belongs to a row's own control, not the row. */
 function isRowControl(event: Event): boolean {
   return isRowControlEvent(event);
 }
 
-/**
- * extendRange applies a Shift+click's range selection from the anchor to `entry`
- * over the current sorted+filtered order (JUS-138). ⌘/Ctrl+Shift keeps the
- * existing selection; Shift alone replaces it.
- */
 function extendRange(event: MouseEvent, entry: FilesEntry): void {
   if (!isSelectable(entry)) {
     return;
@@ -497,17 +393,6 @@ function extendRange(event: MouseEvent, entry: FilesEntry): void {
   files.selectRange(entry.name, event.ctrlKey || event.metaKey);
 }
 
-/**
- * onRowClick selects a row. A plain click makes it the sole selection;
- * Ctrl/⌘+click toggles it in the current selection; Shift+click extends the
- * selection from the last-clicked anchor (⌘/Ctrl+Shift keeps it, Shift alone
- * replaces it). Activation is left to the double-click (or Enter), so a press on
- * a checkbox/action never changes the selection and two clicks never open the
- * entry twice. The row-control guard runs FIRST, so Shift+click on an inline
- * action or the ⋮ menu behaves exactly as without Shift (the control runs, the
- * selection is untouched); the checkbox's own capture handler covers the other
- * row control.
- */
 function onRowClick(event: MouseEvent, entry: FilesEntry): void {
   if (isRowControl(event) || !isSelectable(entry)) {
     return;
@@ -515,8 +400,6 @@ function onRowClick(event: MouseEvent, entry: FilesEntry): void {
   if (event.shiftKey) {
     event.preventDefault();
     extendRange(event, entry);
-    // A Shift+mousedown cancelled the browser's focus (onListMouseDown), so
-    // move the roving focus to the clicked row here (JUS-139).
     focusRow(entry.name);
     return;
   }
@@ -525,20 +408,9 @@ function onRowClick(event: MouseEvent, entry: FilesEntry): void {
     return;
   }
   files.selectOnly(entry.name);
-  // A plain click/tap on a selectable row also moves the roving row to the
-  // pressed entry, so the roving tab stop (and the shared accessible description
-  // that tracks it) describes the row the user just clicked (JUS-140). It moves
-  // the tab stop only — no scroll/focus nudge (JUS-130/137), unlike the
-  // Shift+click arm above, which has to restore the focus its press cancelled.
   rovingName.value = entry.name;
 }
 
-/**
- * onCheckboxCapture routes a Shift+click on a row's checkbox into the range
- * selection. Capture runs before the checkbox, and swallowing the press stops it
- * toggling that one row as well, so a Shift+click on the checkbox behaves like
- * one on the row itself. A plain click is left to the checkbox (JUS-138).
- */
 function onCheckboxCapture(event: MouseEvent, entry: FilesEntry): void {
   if (!event.shiftKey) {
     return;
@@ -549,19 +421,7 @@ function onCheckboxCapture(event: MouseEvent, entry: FilesEntry): void {
   focusRow(entry.name);
 }
 
-/**
- * onListMouseDown suppresses the browser's text selection for a Shift+press in
- * the list/grid: without it a Shift+click starts selecting the rows' text
- * instead of a run of entries (JUS-138). It also cancels the default focus a
- * press would move; the Shift+click handlers move the roving focus explicitly
- * (JUS-139), so the row the user clicks still becomes the focused row.
- */
 function onListMouseDown(event: MouseEvent): void {
-  // A Shift+press starts a range gesture, not a text selection (JUS-138).
-  // JUS-146: a press outside the header that would move focus OUT of a focused
-  // header control is prevented too — otherwise the press blurs the control to
-  // <body> BEFORE the header→bar swap runs, so the swap's focus hand-off could
-  // never see it. Keeping the focus lets the hand-off move it to the roving row.
   const pressOutsideHeader =
     (event.target as Element | null)?.closest(".fm-head") === null;
   if (
@@ -572,12 +432,6 @@ function onListMouseDown(event: MouseEvent): void {
   }
 }
 
-/**
- * onRowDblclick performs a row's default action, ignoring its own controls and
- * a Shift+double-click (JUS-138): Shift is a range gesture, so a shift-double
- * click must not open a folder (which would clear the selection) or activate an
- * entry. A plain double-click (JUS-130) is unchanged.
- */
 function onRowDblclick(event: MouseEvent, entry: FilesEntry): void {
   if (event.shiftKey || isRowControl(event)) {
     return;
@@ -585,7 +439,6 @@ function onRowDblclick(event: MouseEvent, entry: FilesEntry): void {
   activate(entry);
 }
 
-/** openInEditor opens one text file in the editor (owner/admin only). */
 function openInEditor(entry: FilesEntry): void {
   if (entry.kind !== "file" || !files.canReadContent) {
     return;
@@ -598,75 +451,26 @@ function openInEditor(entry: FilesEntry): void {
   );
 }
 
-// ── Tabs (JUS-123) ────────────────────────────────────────────────────────
-// The tab bar lists every open directory tab. Each tab owns its path, root,
-// selection, sort/filter and scroll offset (the store keeps them per tab); the
-// clipboard stays shared, so a cut in one tab pastes in another.
-/** tabListEl is the role=tablist strip, refocused after an arrow-key move. */
 const tabListEl = ref<HTMLElement | null>(null);
-/** scrollEl is the mounted entry-list scroll container (list or grid). */
 const scrollEl = ref<HTMLElement | null>(null);
 
-// ── Windowing (JUS-137) ───────────────────────────────────────────────────
-// A long directory renders only the visible window plus overscan, with
-// pixel-exact spacers standing in for the unrendered rows so the scrollbar (and
-// the sticky header, selection, filter and footer) keep working across rows that
-// are not in the DOM. Below the threshold every row renders, so a small folder
-// keeps exactly the DOM it always had and both paths behave identically.
-/** VIRTUAL_THRESHOLD is the entry count above which the list/grid window. */
 const VIRTUAL_THRESHOLD = 100;
-/** rowHeight caches --fm-row-height (px) for the window maths. */
 const rowHeight = ref(36);
-/** tileMetrics caches the .fm-grid tile size/gap (px) for the window maths. */
 const tileMetrics = ref({ min: 176, gap: 12, height: 132 });
-/** localScrollTop mirrors the entry list's offset (the store keeps it per tab). */
 const localScrollTop = ref(0);
-/** headEl measures the sticky header the window must not count as visible. */
 const headEl = ref<HTMLElement | null>(null);
 const scrollSize = useElementSize(scrollEl);
-// border-box: a revealed row must clear the header's padding and border too.
 const headSize = useElementSize(headEl, undefined, { box: "border-box" });
-/**
- * scrollerWidthPx is the visible entry-list width, exposed to the sticky bulk
- * bar as --fm-scroller-w. The bar is constrained to it so, when the table is
- * wider than the scroller, its actions scroll in their own row instead of
- * hiding off-screen behind the table scroll (JUS-146).
- */
 const scrollerWidthPx = computed<string>(() => `${scrollSize.width.value}px`);
 
-// ── Focus retention (JUS-137 review rounds 1-2; JUS-139 roving) ───────────
-// Windowing unmounts off-window rows, which used to drop keyboard focus to
-// <body> when the focused row scrolled away. The row that owns focus (or the
-// row whose context menu is open) is PINNED into the rendered set: it stays
-// mounted wherever it is, rendered absolutely at its true offset so it never
-// disturbs the flow spacers, and keeps focus/menu. Keyboard focus that crosses
-// the window edge advances the window through scrollEntryIntoView
-// (onListFocusIn), so the next entry is already rendered; the roving tabindex
-// (JUS-139) then walks the rendered rows.
-/** focusedName is the entry that last received focus inside the list/grid. */
 const focusedName = ref<string | null>(null);
-/** menuRowName is the row whose context menu is open. */
 const menuRowName = ref<string | null>(null);
-/**
- * pinnedName is the one entry kept rendered outside the window: the row whose
- * context menu is open, else the row that owns focus. It is DERIVED, so every
- * route that drops a pin source (menu closed/Escape, focus left, directory or
- * tab change, entry gone) releases the pin — there is no stale flag to leak.
- */
 const pinnedName = computed<string | null>(
   () => menuRowName.value ?? focusedName.value,
 );
-/**
- * restorePending is armed only by a render WE schedule (see the arm watcher
- * below) and consumed once after it. Chromium blurs a node the keyed diff moves
- * as well as one the user clicks away from, and both report relatedTarget=null;
- * the arm is what tells the two apart, so a plain click never steals focus back.
- */
 let restorePending = false;
-/** lastFocusWasPointer marks a click's focus so it never nudges the scroll. */
 let lastFocusWasPointer = false;
 
-/** pinnedIndex is the pinned entry's index in the current listing, or -1. */
 const pinnedIndex = computed<number>(() => {
   const name = pinnedName.value;
   if (name === null) {
@@ -675,11 +479,6 @@ const pinnedIndex = computed<number>(() => {
   return files.visibleEntries.findIndex((entry) => entry.name === name);
 });
 
-/**
- * parsePx reads a CSS px length ("36px") with a numeric fallback. A non-px token
- * (rem, calc) fails loudly to the fallback rather than mis-parsing to a tiny
- * size that would window the whole listing.
- */
 function parsePx(value: string, fallback: number): number {
   const text = value.trim();
   if (!text.endsWith("px")) {
@@ -689,11 +488,6 @@ function parsePx(value: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-/**
- * readVirtualMetrics re-reads the row/tile sizes from the live CSS tokens, so
- * the window maths tracks the one-value density change and never duplicates a
- * size (JUS-134 kept --fm-row-height as the single list-row height).
- */
 function readVirtualMetrics(): void {
   const el = scrollEl.value;
   if (el === null) {
@@ -712,8 +506,6 @@ function readVirtualMetrics(): void {
       tileMetrics.value.height,
     ),
   };
-  // Assign only on a real change: a fresh object every resize tick would
-  // invalidate every metric-dependent computed for nothing.
   if (
     tiles.min !== tileMetrics.value.min ||
     tiles.gap !== tileMetrics.value.gap ||
@@ -726,20 +518,15 @@ watch(
   () => scrollEl.value,
   (el) => {
     readVirtualMetrics();
-    // A list↔grid switch mounts a fresh scroller at offset 0; resync so the
-    // window does not render around the previous view's offset (a blank list).
     localScrollTop.value = el?.scrollTop ?? 0;
   },
   { flush: "post" },
 );
-// Re-read the row/tile metrics when the scroller is resized (a viewport or zoom
-// change), not only when it mounts or swaps view.
 watch(
   [() => scrollSize.width.value, () => scrollSize.height.value],
   () => readVirtualMetrics(),
 );
 
-/** isListVirtual / isGridVirtual gate windowing on a long listing. */
 const isListVirtual = computed<boolean>(
   () =>
     files.viewMode === "list" &&
@@ -751,7 +538,6 @@ const isGridVirtual = computed<boolean>(
     files.visibleEntries.length > VIRTUAL_THRESHOLD,
 );
 
-/** listWindow is the list slice to render (the whole list when not windowing). */
 const listWindow = computed(() => {
   const count = files.visibleEntries.length;
   if (!isListVirtual.value) {
@@ -770,17 +556,12 @@ const listWindow = computed(() => {
   );
 });
 
-/**
- * RenderedRow is one row/tile in the DOM: its listing index and whether it is
- * the pinned (out-of-window, focus- or menu-holding) element.
- */
 interface RenderedRow {
   entry: FilesEntry;
   index: number;
   pinned: boolean;
 }
 
-/** windowRows is the rendered slice plus the pinned row, in listing order. */
 function windowRows(
   entries: FilesEntry[],
   start: number,
@@ -801,7 +582,6 @@ function windowRows(
   return rows;
 }
 
-/** listRows is the windowed list slice plus the pinned row. */
 const listRows = computed<RenderedRow[]>(() => {
   const entries = files.visibleEntries;
   if (!isListVirtual.value) {
@@ -811,22 +591,11 @@ const listRows = computed<RenderedRow[]>(() => {
   return windowRows(entries, win.start, win.end);
 });
 
-/** pinnedListStyle places the pinned list row at its true offset inside
- *  .fm-table (position: relative), just below the in-flow sticky header. */
 function pinnedListStyle(index: number): Record<string, string> {
   return { top: `${headSize.height.value + index * rowHeight.value}px` };
 }
 
-/**
- * gridColumns is the resolved auto-fill column count. Reading the used
- * grid-template-columns keeps the window maths in step with the CSS (a
- * responsive token change included) instead of re-deriving the auto-fill
- * formula; the formula is the fallback before the grid is laid out.
- */
 const gridColumns = computed<number>(() => {
-  // Touch the reactive width/metrics FIRST: the resolved-value path below must
-  // still re-evaluate when the container resizes, and getComputedStyle alone is
-  // not a reactive dependency (it would freeze the count at the first layout).
   const width = scrollSize.width.value;
   const { min, gap } = tileMetrics.value;
   const el = scrollEl.value;
@@ -842,16 +611,13 @@ const gridColumns = computed<number>(() => {
   }
   return gridColumnCount(width, min, gap);
 });
-/** gridPitch is one tile row's height plus the row gap. */
 const gridPitch = computed<number>(
   () => tileMetrics.value.height + tileMetrics.value.gap,
 );
-/** gridContentHeight is the full grid's pixel height (no trailing row gap). */
 function gridContentHeight(count: number): number {
   const rows = Math.ceil(count / gridColumns.value);
   return rows > 0 ? rows * gridPitch.value - tileMetrics.value.gap : 0;
 }
-/** gridWindowRange is the grid slice (whole rows) to render. */
 const gridWindowRange = computed(() => {
   const count = files.visibleEntries.length;
   if (!isGridVirtual.value) {
@@ -869,7 +635,6 @@ const gridWindowRange = computed(() => {
     scrollSize.height.value,
   );
 });
-/** gridRows is the windowed grid slice plus the pinned tile in listing order. */
 const gridRows = computed<RenderedRow[]>(() => {
   const entries = files.visibleEntries;
   if (!isGridVirtual.value) {
@@ -879,11 +644,6 @@ const gridRows = computed<RenderedRow[]>(() => {
   return windowRows(entries, win.start, win.end);
 });
 
-/**
- * renderedKeys identifies the rows/tiles currently in the DOM. The restore arm
- * is keyed on this rendered-set identity, not on the data slice, so a data-only
- * change that re-renders nothing never arms a refocus.
- */
 const renderedKeys = computed<string>(() =>
   renderedKey(
     (files.viewMode === "grid" ? gridRows.value : listRows.value).map(
@@ -892,7 +652,6 @@ const renderedKeys = computed<string>(() =>
   ),
 );
 
-/** gridTileWidth is one tile's width for the current column count. */
 const gridTileWidth = computed<number>(() => {
   const cols = Math.max(1, gridColumns.value);
   return (
@@ -900,7 +659,6 @@ const gridTileWidth = computed<number>(() => {
   );
 });
 
-/** pinnedTileStyle places the pinned grid tile at its true row/column offset. */
 function pinnedTileStyle(index: number): Record<string, string> {
   const cols = Math.max(1, gridColumns.value);
   const gap = tileMetrics.value.gap;
@@ -911,12 +669,6 @@ function pinnedTileStyle(index: number): Record<string, string> {
   };
 }
 
-/**
- * The grid spacers span every column, so the CSS row gap also sits between a
- * spacer and the first/last tile row. Subtracting one gap keeps the rendered
- * rows exactly on their true pixel offsets. (The list uses in-flow spacers with
- * no gap, so its pads are used as-is.)
- */
 const gridSpacerTop = computed<number>(() =>
   gridWindowRange.value.padTop > 0
     ? gridWindowRange.value.padTop - tileMetrics.value.gap
@@ -928,29 +680,18 @@ const gridSpacerBottom = computed<number>(() =>
     : 0,
 );
 
-/**
- * tabLabels caches every tab's unique visible label. The pure rule lives in
- * {@link disambiguatedTabLabels}; caching it as a computed recomputes the
- * labels only when the tab set (or a tab's root/path) changes, not for every
- * tab on every render.
- */
 const tabLabels = computed<Map<string, string>>(() =>
   disambiguatedTabLabels(files.tabs),
 );
 
-/** tabLabel is a tab's cached, unique visible name. */
 function tabLabel(tab: FilesTab): string {
   return tabLabels.value.get(tab.id) ?? tabBasename(tab);
 }
 
-/** tabBasename is a tab's own folder name (the root name at the top level). */
 function tabBasename(tab: FilesTab): string {
   return tab.path === "" ? tab.rootName : (tab.path.split("/").pop() ?? tab.rootName);
 }
 
-/** modifiedLabel renders the Modified column as a localized relative age that
- * refreshes on the shared coarse clock, so it never goes stale on an idle page
- * (JUS-134). */
 function modifiedLabel(entry: FilesEntry): string {
   return relativeTime(
     entry.modified_at,
@@ -959,11 +700,6 @@ function modifiedLabel(entry: FilesEntry): string {
   );
 }
 
-/**
- * rowDetails is the symbolic mode and the absolute modified time — the two
- * values the Mode/Modified cells keep only in a native `title`, unreachable for
- * keyboard and touch users (JUS-140).
- */
 function rowDetails(entry: FilesEntry): string {
   return String(
     t("files.browser.rowDetails", {
@@ -973,17 +709,8 @@ function rowDetails(entry: FilesEntry): string {
   );
 }
 
-/** ROW_DETAILS_ID is the single, visually hidden description target. */
 const ROW_DETAILS_ID = "fm-row-details";
 
-/**
- * rovingEntry is the entry that owns the list's one tab stop. The description
- * is exposed through `aria-describedby` at this ONE shared node rather than an
- * `aria-description`/hidden node per row: `aria-describedby` is the widely
- * supported mechanism (ARIA 1.3 `aria-description` is not announced by every
- * screen reader), and one node keeps the windowed list at zero extra DOM per
- * rendered row (JUS-140).
- */
 const rovingEntry = computed<FilesEntry | null>(() => {
   const name = rovingTabName.value;
   if (name === null) {
@@ -993,31 +720,19 @@ const rovingEntry = computed<FilesEntry | null>(() => {
   return rendered.find((row) => row.entry.name === name)?.entry ?? null;
 });
 
-/** rovingDetails is the roving row's accessible description text (localized). */
 const rovingDetails = computed<string>(() => {
   const entry = rovingEntry.value;
   return entry === null ? "" : rowDetails(entry);
 });
 
-/** rowDescribedBy points only the roving row's control at the shared node. */
 function rowDescribedBy(entry: FilesEntry): string | undefined {
   return entry.name === rovingTabName.value ? ROW_DETAILS_ID : undefined;
 }
 
-/**
- * NARROW_TAB_PX is the sample's icon-only threshold: a tab narrower than this
- * hides its title (and an inactive one its close), like Chrome.
- */
 const NARROW_TAB_PX = 90;
 
-/**
- * narrowTabs are the tab ids currently rendered below the icon-only width.
- * The class MUST be binding-driven (a render would wipe a manual toggle), so
- * the measured ids live in a reactive set swapped wholesale per pass.
- */
 const narrowTabs = ref<ReadonlySet<string>>(new Set());
 
-/** updateNarrowTabs re-measures every tab against the icon-only threshold. */
 function updateNarrowTabs(): void {
   const strip = tabListEl.value;
   if (!strip) {
@@ -1037,8 +752,6 @@ function updateNarrowTabs(): void {
 
 let narrowObserver: ResizeObserver | null = null;
 onMounted(() => {
-  // jsdom (unit tests) has no ResizeObserver; the watcher below still covers
-  // tab-set changes there.
   if (typeof ResizeObserver !== "undefined") {
     narrowObserver = new ResizeObserver(() => updateNarrowTabs());
     if (tabListEl.value) {
@@ -1051,29 +764,20 @@ onBeforeUnmount(() => {
   narrowObserver?.disconnect();
   narrowObserver = null;
 });
-// A tab add/remove/rename changes every tab's share of the strip; re-measure
-// once the patch lands. Showing a title only ever grows its tab, so the pass
-// converges instead of flapping.
 watch(
   () => files.tabs.map((tab) => `${tab.id}:${tabLabel(tab)}`),
   () => void nextTick(() => updateNarrowTabs()),
   { flush: "post" },
 );
 
-/** tabTitle is the tab accessible name: the full root-relative path. */
 function tabTitle(tab: FilesTab): string {
   return tab.path === "" ? tab.rootName : `${tab.rootName}/${tab.path}`;
 }
 
-/** openNewTab opens a tab at the active root's top level. */
 function openNewTab(): void {
-  // JUS-207: intentionally leaves DOM focus where it is. The active-tab
-  // watcher above only refocuses after a close or when focus is already in
-  // the tablist, so pressing + never pulls the keyboard into the new tab.
   void files.openTab();
 }
 
-/** focusActiveTab moves DOM focus onto the active tab and keeps it in view. */
 async function focusActiveTab(): Promise<void> {
   await nextTick();
   const active = tabListEl.value?.querySelector<HTMLElement>(
@@ -1083,34 +787,19 @@ async function focusActiveTab(): Promise<void> {
   active?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
-/** neighbourTabId returns the tab `delta` places from `id`, wrapping around. */
 function neighbourTabId(id: string, delta: number): string {
   const count = files.tabs.length;
   const index = files.tabs.findIndex((tab) => tab.id === id);
   return files.tabs[(index + delta + count) % count]?.id ?? id;
 }
 
-/**
- * closeFocusArmed moves DOM focus after a tab close drops it to <body>.
- * A mouse click focuses the new tab natively (never :focus-visible), and
- * keyboard arrows keep focus inside the tablist, so the watcher below only
- * steps in for the close routes — the close removes the focused button and
- * focus would otherwise strand on <body> (JUS-206 round 2 keeps the
- * reference's ring-free tabs while the keyboard ring stays).
- */
 let closeFocusArmed = false;
 
-/** closeTabFromButton closes one tab from its × or middle-click. */
 function closeTabFromButton(id: string): void {
-  // JUS-207: arm the close refocus only when the close retires the active
-  // tab. Closing an inactive tab leaves activeTabId untouched, so the flag
-  // must not stay armed for a later switch from outside the tablist (the +
-  // button) — that switch would otherwise steal keyboard focus into the tab.
   closeFocusArmed = id === files.activeTabId;
   void files.closeTab(id);
 }
 
-/** onTabKeydown drives the roving-tabindex tablist (arrows, Home/End, Delete). */
 function onTabKeydown(event: KeyboardEvent, tab: FilesTab): void {
   switch (event.key) {
     case "ArrowRight":
@@ -1132,8 +821,6 @@ function onTabKeydown(event: KeyboardEvent, tab: FilesTab): void {
       void files.switchTab(files.tabs[files.tabs.length - 1].id);
       break;
     case "Delete":
-      // Closing the only tab would silently recreate it at the root (the × is
-      // hidden for a single tab), so Delete is a no-op there too.
       if (files.tabs.length > 1) {
         event.preventDefault();
         closeTabFromButton(tab.id);
@@ -1142,7 +829,6 @@ function onTabKeydown(event: KeyboardEvent, tab: FilesTab): void {
   }
 }
 
-/** onTabAuxClick closes a tab on a middle-button click. */
 function onTabAuxClick(event: MouseEvent, id: string): void {
   if (event.button !== 1) {
     return;
@@ -1151,22 +837,12 @@ function onTabAuxClick(event: MouseEvent, id: string): void {
   closeTabFromButton(id);
 }
 
-/**
- * onListScroll records the active tab's entry-list scroll offset and drives the
- * windowed range (the store owns the per-tab offset for tab-restore).
- */
 function onListScroll(event: Event): void {
   const el = event.currentTarget as HTMLElement;
   localScrollTop.value = el.scrollTop;
   files.setScrollTop(el.scrollTop);
 }
 
-/**
- * scrollEntryIntoView brings one entry into the list's visible band, scrolling
- * when the row is outside the current window or below the fold. It is how a row
- * that must be seen (a just-created or renamed entry) stays reachable when the
- * listing is windowed and the row itself is not rendered (JUS-137).
- */
 function scrollEntryIntoView(name: string): void {
   const index = files.visibleEntries.findIndex((entry) => entry.name === name);
   const el = scrollEl.value;
@@ -1178,7 +854,6 @@ function scrollEntryIntoView(name: string): void {
     ? tileMetrics.value.height + tileMetrics.value.gap
     : rowHeight.value;
   const row = grid ? Math.floor(index / gridColumns.value) : index;
-  // The sticky header shares the scrollport, so the usable band starts below it.
   const lead = grid ? 0 : headSize.height.value;
   const top = lead + row * itemSize;
   const bottom = top + itemSize;
@@ -1188,35 +863,14 @@ function scrollEntryIntoView(name: string): void {
     el.scrollTop = bottom - el.clientHeight;
   }
   localScrollTop.value = el.scrollTop;
-  // Record the new offset in the store too: a create/rename changes
-  // entries.length, and the replay watcher below would otherwise restore the
-  // stale pre-reveal offset over this scroll.
   files.setScrollTop(el.scrollTop);
 }
 
-// ── Row keyboard navigation (JUS-139) ─────────────────────────────────────
-// The list/grid is one roving tabindex: the focused row's name control carries
-// tabindex 0 and every other row's carries -1, so Tab enters the listing once
-// and the arrows move within it. The per-row controls (checkbox, inline
-// actions, ⋮) keep their own tab stops, so Tab still walks a row's controls and
-// crosses the window edge — the JUS-137 focus pin above keeps that crossing and
-// a scroll-away safe, so it stays.
-/** rovingName is the entry whose name control holds the list's tab stop. */
 const rovingName = ref<string | null>(null);
-/** TYPEAHEAD_RESET_MS is the idle gap after which a type-to-focus run resets. */
 const TYPEAHEAD_RESET_MS = 1000;
-/** typeBuffer accumulates type-to-focus keystrokes; typeTimer clears it. */
 let typeBuffer = "";
 let typeTimer: ReturnType<typeof setTimeout> | null = null;
 
-/**
- * rovingTabName is the entry that owns tabindex 0. It follows the focused row
- * when that row is RENDERED (the windowed slice plus any pinned row), so the
- * listing always has exactly one tab stop; when the roving row has scrolled out
- * of the rendered slice the stop falls back to the first rendered row, and to
- * null for an empty list. It never points at an unrendered row (that used to
- * leave the list with zero tab stops after a blur + scroll).
- */
 const rovingTabName = computed<string | null>(() => {
   const entries = files.visibleEntries;
   if (entries.length === 0) {
@@ -1232,12 +886,10 @@ const rovingTabName = computed<string | null>(() => {
   return rendered[0]?.entry.name ?? null;
 });
 
-/** rowTabindex is the roving tabindex for one row's name control. */
 function rowTabindex(name: string): 0 | -1 {
   return name === rovingTabName.value ? 0 : -1;
 }
 
-/** isTextTarget reports a keystroke aimed at a text field, not the listing. */
 function isTextTarget(target: HTMLElement | null): boolean {
   if (target === null) {
     return false;
@@ -1251,7 +903,6 @@ function isTextTarget(target: HTMLElement | null): boolean {
   );
 }
 
-/** focusedListIndex is the listing index of the row that owns focus, or -1. */
 function focusedListIndex(): number {
   const active = document.activeElement as HTMLElement | null;
   const row = active?.closest<HTMLElement>("[data-entry]");
@@ -1261,7 +912,6 @@ function focusedListIndex(): number {
     : files.visibleEntries.findIndex((entry) => entry.name === name);
 }
 
-/** pageStep is how many entries one PageUp/PageDown moves (a viewport of rows). */
 function pageStep(itemSize: number, columns: number): number {
   const rows = Math.max(
     1,
@@ -1270,7 +920,6 @@ function pageStep(itemSize: number, columns: number): number {
   return rows * columns;
 }
 
-/** entryAt clamps one listing index to a real entry, or null. */
 function entryAt(index: number): FilesEntry | null {
   const entries = files.visibleEntries;
   if (entries.length === 0) {
@@ -1279,12 +928,6 @@ function entryAt(index: number): FilesEntry | null {
   return entries[Math.min(Math.max(index, 0), entries.length - 1)] ?? null;
 }
 
-/**
- * focusRowAt moves the roving focus to one listing index, materialising the row
- * first (scrollEntryIntoView + nextTick) so a row outside the rendered window
- * can still take focus. The pin is released first so the keyed re-render cannot
- * pull focus back to the row being left.
- */
 async function focusRowAt(index: number): Promise<void> {
   const entry = entryAt(index);
   if (entry === null) {
@@ -1297,18 +940,12 @@ async function focusRowAt(index: number): Promise<void> {
   focusEntry(entry.name);
 }
 
-/**
- * focusRow moves the roving focus to one entry by name. Shift+click cancels the
- * browser's own focus (onListMouseDown preventDefault), so the click handler
- * calls this to move the roving focus to the clicked row (JUS-139).
- */
 function focusRow(name: string): void {
   rovingName.value = name;
   scrollEntryIntoView(name);
   void nextTick(() => focusEntry(name));
 }
 
-/** clearTypeTimer stops a pending type-to-focus reset timer. */
 function clearTypeTimer(): void {
   if (typeTimer !== null) {
     clearTimeout(typeTimer);
@@ -1316,17 +953,11 @@ function clearTypeTimer(): void {
   }
 }
 
-/**
- * resetTypeahead drops any pending type-to-focus run. It runs on unmount and
- * whenever the listing identity changes (folder/tab/root, filter, sort), so a
- * prefix typed in one view never matches into the next.
- */
 function resetTypeahead(): void {
   clearTypeTimer();
   typeBuffer = "";
 }
 
-/** typeToFocus jumps the roving focus to the next typed-prefix match. */
 function typeToFocus(char: string): void {
   clearTypeTimer();
   typeBuffer += char;
@@ -1342,19 +973,6 @@ function typeToFocus(char: string): void {
   }
 }
 
-/**
- * onListKeydown drives the roving row focus: arrows (the grid adds Left/Right),
- * Home/End, PageUp/PageDown, Space to toggle the focused row's selection,
- * Shift+Arrow to extend the range from the anchor, Ctrl/Cmd+A to select every
- * visible entry, and type-to-focus for a printable prefix. Enter opens the
- * focused row. It acts ONLY on a key whose target is inside a row (or a
- * row-owned control), so the sticky header's sort buttons, the select-all
- * checkbox and any other control inside the scroller keep their native
- * Enter/Space/arrow behaviour; keys typed into a field or a dialog/menu never
- * reach here either (the handler is on the list, and both are guarded). A row
- * control (checkbox, inline action, ⋮) keeps its native Enter/Space too, via
- * {@link isRowControl}.
- */
 function onListKeydown(event: KeyboardEvent): void {
   if (event.defaultPrevented) {
     return;
@@ -1366,14 +984,10 @@ function onListKeydown(event: KeyboardEvent): void {
   ) {
     return;
   }
-  // Only a row target drives row keys: the header's sort buttons and the
-  // select-all checkbox sit inside the scroller, so Enter/Space/arrows there
-  // must pass straight through.
   if (!(target instanceof Element) || target.closest("[data-entry]") === null) {
     return;
   }
   const meta = event.ctrlKey || event.metaKey;
-  // Ctrl/Cmd+A selects every visible entry (the header checkbox's set).
   if (meta && !event.altKey && event.key.toLowerCase() === "a") {
     event.preventDefault();
     if (!files.allVisibleSelected) {
@@ -1461,10 +1075,6 @@ function onListKeydown(event: KeyboardEvent): void {
   event.preventDefault();
   const targetEntry = entryAt(next);
   if (event.shiftKey) {
-    // The store resets the range anchor on a sort/filter/folder/tab change, so
-    // the first Shift+Arrow after one would otherwise drop the origin row and
-    // select only the target. Seed the anchor at the focused row first, so the
-    // run always includes the row the cursor is on.
     if (files.activeTab.anchor === null && current >= 0) {
       files.setAnchor(files.visibleEntries[current]?.name ?? null);
     }
@@ -1477,19 +1087,14 @@ function onListKeydown(event: KeyboardEvent): void {
   void focusRowAt(next);
 }
 
-/** restoringFocus marks a programmatic focus restore so it does not re-scroll. */
 let restoringFocus = false;
-/** focusedEl is the exact control that held focus, restored after a re-render. */
 let focusedEl: HTMLElement | null = null;
 
-/** focusEntry restores focus to the exact control that had it, else the row. */
 function focusEntry(name: string | null): void {
   const el = scrollEl.value;
   if (name === null || el === null) {
     return;
   }
-  // Prefer the very control that held focus (a row's ⋮, checkbox, action): the
-  // keyed window keeps that node, so Tab continues from where it was.
   if (
     focusedEl !== null &&
     focusedEl.isConnected &&
@@ -1506,7 +1111,6 @@ function focusEntry(name: string | null): void {
     }
     const target = node.querySelector<HTMLElement>(".fm-label, .fm-tile");
     if (target !== null) {
-      // The row may be off-screen (pinned): never yank the user's scroll.
       restoringFocus = true;
       target.focus({ preventScroll: true });
       restoringFocus = false;
@@ -1515,26 +1119,13 @@ function focusEntry(name: string | null): void {
   }
 }
 
-/**
- * onListFocusIn remembers the focused row and keeps it visible. The focus pin
- * keeps the row mounted when the user scrolls it out of the window (so focus is
- * never dropped to <body>), and the scroll clears the sticky header a Shift+Tab
- * or a programmatic focus left the row under. A restored focus must not
- * re-scroll, and neither must a click: a pointer focus should never nudge the
- * list, so the scroll only runs for keyboard-initiated focus.
- */
 function onListFocusIn(event: FocusEvent): void {
   const target = event.target as HTMLElement | null;
   const row = target?.closest<HTMLElement>("[data-entry]");
   const name = row?.dataset.entry ?? null;
-  // The flag describes THIS focus transition only: read it, then reset it, so a
-  // later programmatic focus is not misread as the earlier click's.
   const pointer = lastFocusWasPointer;
   lastFocusWasPointer = false;
   if (name === null) {
-    // Focus moved to an in-scroller control that is not a row (a header sort
-    // button, the select-all checkbox): the pin no longer guards focus, so drop
-    // the stale row instead of leaving focusedName/focusedEl pointing at it.
     releaseFocus();
     return;
   }
@@ -1545,21 +1136,11 @@ function onListFocusIn(event: FocusEvent): void {
   }
 }
 
-/** releaseFocus drops the focus pin along with its remembered control. */
 function releaseFocus(): void {
   focusedName.value = null;
   focusedEl = null;
 }
 
-/**
- * onListFocusOut keeps the pin only while focus stays in the list (another row)
- * or moves into its (teleported) row menu, and drops it when focus leaves.
- *
- * A `relatedTarget` of null is ambiguous — Chromium reports it both for a node
- * our window re-render moved or unmounted and for a press on non-focusable
- * content — so the pin is kept only when `restorePending` was armed by our own
- * render; a plain blur releases it (and never refocuses).
- */
 function onListFocusOut(event: FocusEvent): void {
   const next = event.relatedTarget as Element | null;
   if (next !== null) {
@@ -1574,16 +1155,10 @@ function onListFocusOut(event: FocusEvent): void {
   }
 }
 
-/** closeRowMenu drops the menu's pin; a still-focused row stays pinned. */
 function closeRowMenu(): void {
   menuRowName.value = null;
 }
 
-/**
- * onContextShow keeps the context dropdown's model in step and releases the menu
- * pin on every close route the dropdown itself drives (Escape, click-away), not
- * just the ones we call closeRowMenu() from.
- */
 function onContextShow(show: boolean): void {
   contextOpen.value = show;
   if (!show) {
@@ -1591,14 +1166,6 @@ function onContextShow(show: boolean): void {
   }
 }
 
-// Arm a one-shot refocus for a render WE schedule, and consume it after the
-// patch. The arm is keyed on the RENDERED-set identity, not the data slice, so a
-// data-only change that re-renders nothing never arms it. A keyed window change
-// moves or unmounts the focused node and Chromium blurs it; `restorePending`
-// (armed pre-flush, before the patch) is what tells that blur apart from a user
-// press on the very next focusout. The post-flush consumer runs whether or not
-// the component re-rendered, so the arm can never go stale. A pointerdown/keydown
-// clears the arm first, so a user gesture wins.
 watch(
   renderedKeys,
   () => {
@@ -1621,11 +1188,6 @@ watch(
   { flush: "post" },
 );
 
-// A directory, tab or root change, a filter or a sort moves every row: the
-// focused/menu name from the previous listing must not survive (it could pin a
-// same-named entry there), and neither must the roving tab stop or a pending
-// type-to-focus run (JUS-139) — a same-named entry in the new view would
-// otherwise inherit the stop.
 watch(
   () =>
     [
@@ -1644,8 +1206,6 @@ watch(
   },
 );
 
-// The pinned entry itself disappearing (deleted, renamed, filtered out) releases
-// the pin rather than leaving a name that a same-named entry could match later.
 watch(pinnedIndex, (index) => {
   if (index === -1) {
     releaseFocus();
@@ -1653,15 +1213,6 @@ watch(pinnedIndex, (index) => {
   }
 });
 
-// Either variant of the header row can hide with the selection: the bulk bar
-// when the last row is unchecked (Clear, or the bar collapsing), the column
-// headers when the first row is selected (the bar replaces them). Both are
-// hidden with `visibility` — not removed — so Chromium blurs the focused
-// control and focus falls to <body>; hand it to the roving row instead
-// (JUS-140/146). The pre-flush watcher reads who held focus BEFORE the swap; the
-// post-flush one moves it, keeping the JUS-139 one-tab-stop rule (focusEntry
-// targets the roving row). The leading select-all checkbox lives outside both
-// variants, so focusing it is unaffected.
 let swapHadFocus = false;
 watch(
   hasSelection,
@@ -1669,12 +1220,6 @@ watch(
     if (previous === active) {
       return;
     }
-    // The variant about to hide: the column headers when the selection appears,
-    // the whole bulk bar when it clears. The selector must cover BOTH hosts of
-    // the selection bar — the list's `.fm-head-bulk` (count + sort + actions) and
-    // the grid's bar inside the toolbar, which only exposes `.fm-selection-actions`
-    // (JUS-148 fix round 1: narrowing it to `.fm-head-bulk` dropped grid focus to
-    // <body>).
     const hiding = active ? ".fm-head-cols" : ".fm-head-bulk, .fm-selection-actions";
     swapHadFocus = Boolean(document.activeElement?.closest(hiding));
   },
@@ -1693,19 +1238,12 @@ watch(
   { flush: "post" },
 );
 
-// Move focus to the active tab only when the switch needs it (JUS-206 round 2;
-// see the watcher body).
 watch(() => files.activeTabId, async () => {
   await nextTick();
   const active = tabListEl.value?.querySelector<HTMLElement>(
     '[role="tab"][aria-selected="true"]',
   );
   if (!active || document.activeElement === active) {
-    // A mouse click focuses the tab natively (never :focus-visible, so no
-    // ring); a fresh page leaves focus alone too. Only a keyboard switch
-    // (focus still inside the tablist) or a close (focus dropped to <body>,
-    // armed by the close routes) moves DOM focus — JUS-206 round 2 keeps the
-    // reference's ring-free tabs while the keyboard ring stays (JUS-152).
     return;
   }
   if (tabListEl.value?.contains(document.activeElement) === true) {
@@ -1718,13 +1256,6 @@ watch(() => files.activeTabId, async () => {
   }
 });
 
-// Replay the active tab's scroll offset after a switch, and after a load
-// completes (a restore that landed while the rows were still unrendered would
-// clamp to 0), plus back to the top on navigation (the store zeroes it). The
-// windowed range reads localScrollTop, so it is kept in step here too. The
-// visible-entry count is in the key so a shrinking filter re-clamps the offset.
-// `scrollEntryIntoView` writes the store offset back, so a create/rename reveal
-// always wins over this replay.
 watch(
   () =>
     [
@@ -1743,12 +1274,6 @@ watch(
   },
 );
 
-/**
- * blockedByDirty refuses a rename/move/delete of entries with unsaved editor
- * tabs, so the user's edits are never dropped by a file operation. `dir`
- * defaults to the directory on screen; a paste passes the clipboard's source
- * directory.
- */
 function blockedByDirty(names: string[], dir = files.path): boolean {
   const blocked = editor.blockingNames(files.rootName, dir, names);
   if (blocked.length === 0) {
@@ -1760,7 +1285,6 @@ function blockedByDirty(names: string[], dir = files.path): boolean {
   return true;
 }
 
-/** startDownload mints a ticket and hands the file to the browser. */
 async function startDownload(entry: FilesEntry): Promise<void> {
   if (!files.canReadContent) {
     return;
@@ -1774,7 +1298,6 @@ async function startDownload(entry: FilesEntry): Promise<void> {
   );
 }
 
-/** downloadSelected downloads every selected file, one ticket each. */
 async function downloadSelected(): Promise<void> {
   for (const entry of files.selectedEntries) {
     if (entry.kind !== "file") {
@@ -1790,16 +1313,13 @@ async function downloadSelected(): Promise<void> {
   }
 }
 
-// ── Dialog openers ────────────────────────────────────────────────────────
 function openCreate(kind: NameKind): void {
   createKind.value = kind;
   createOpen.value = true;
 }
 
-/** newMenuOpen tracks the New dropdown disclosure state (aria-expanded). */
 const newMenuOpen = ref(false);
 
-/** newMenuOptions groups New file / New folder under one toolbar dropdown. */
 const newMenuOptions = computed(() =>
   [
     {
@@ -1815,31 +1335,22 @@ const newMenuOptions = computed(() =>
   ].map((option) => ({ ...option, props: { role: "menuitem" } })),
 );
 
-/** onNewMenu maps the New dropdown's key back to a create kind. */
 function onNewMenu(key: string): void {
   openCreate(key === "directory" ? "directory" : "file");
 }
 
-/** fileOpsOpen tracks the File Operations dropdown disclosure state (aria-expanded). */
 const fileOpsOpen = ref(false);
 
-/**
- * fileOpsSelection are the writable-safe selected entries the toolbar's File
- * Operations dropdown acts on — the same set the bulk bar (FilesSelectionBar)
- * uses, so both surfaces target identical entries (JUS-160).
- */
 const fileOpsSelection = computed<FilesEntry[]>(() =>
   files.selectedEntries.filter(isSelectable),
 );
 
-/** fileOpsExtractTarget is the first selected extractable archive, or null. */
 const fileOpsExtractTarget = computed<FilesEntry | null>(
   () =>
     fileOpsSelection.value.find((entry) => isExtractableArchive(entry)) ??
     null,
 );
 
-/** fileOpsPermissionsTarget is the first selected chmod-able entry, or null. */
 const fileOpsPermissionsTarget = computed<FilesEntry | null>(
   () =>
     fileOpsSelection.value.find(
@@ -1847,13 +1358,6 @@ const fileOpsPermissionsTarget = computed<FilesEntry | null>(
     ) ?? null,
 );
 
-/**
- * fileOpsOptions lists the selection-scoped file operations (JUS-160): cut,
- * copy, paste (into the directory on screen), compress, extract and
- * permissions. Disabled states mirror the row menu (write-gated, paste validity
- * from the store) and the bulk bar (a selectable selection, no mutation
- * running), so no surface offers an action another would refuse.
- */
 const fileOpsOptions = computed(() => {
   const names = fileOpsSelection.value.map((entry) => entry.name);
   const canAct = files.canWrite && !files.acting && names.length > 0;
@@ -1863,9 +1367,6 @@ const fileOpsOptions = computed(() => {
     disabled,
     props: { role: "menuitem" },
   });
-  // Icons reuse the row context-menu glyphs for the same actions (JUS-210),
-  // so both menus read as one set; compress has no row action and takes the
-  // archive glyph the bulk bar already uses for it.
   const iconFor = (key: string) => {
     switch (key) {
       case "cut":
@@ -1887,9 +1388,6 @@ const fileOpsOptions = computed(() => {
   return [
     item(String(t("files.actions.cut")), "cut", !canAct),
     item(String(t("files.actions.copy")), "copy", !canAct),
-    // Paste lands in the directory on screen; its label carries the blocked
-    // reason exactly like the old toolbar button ({@link pasteLabel}). With an
-    // empty clipboard there is nothing to paste, so it stays disabled too.
     item(
       files.hasClipboard
         ? pasteLabel.value
@@ -1911,7 +1409,6 @@ const fileOpsOptions = computed(() => {
   ].map((option) => ({ ...option, icon: iconFor(option.key) }));
 });
 
-/** onFileOps dispatches one File Operations dropdown action on the selection. */
 function onFileOps(key: string): void {
   const names = fileOpsSelection.value.map((entry) => entry.name);
   switch (key) {
@@ -1948,48 +1445,20 @@ function onFileOps(key: string): void {
   }
 }
 
-/**
- * JUS-145: the list headers carry the sort controls, but the compact layout
- * hides the Modified / Owner-Mode headers — and the grid has no headers at
- * all — so this toolbar control keeps every column sortable there. It is shown
- * only when the headers are hidden and mirrors the active column + direction.
- */
 const sortMenuOpen = ref(false);
-/**
- * bulkSortMenuOpen is the bulk bar's sort dropdown open state, kept separate
- * from `sortMenuOpen` (the toolbar toggle's) so the two can never open together
- * if a future layout ever mounts both (JUS-148 fix round 1).
- */
 const bulkSortMenuOpen = ref(false);
 const isCompactList = useMediaQuery("(max-width: 860px)");
-/**
- * showSortControl keeps the toolbar sort control reachable exactly where the
- * column headers cannot carry the sort: the compact layout (headers hidden
- * ≤860px) and the grid (no headers at all). It is RENDERED only in those states
- * (v-if), never merely reserved — a hidden control must not occupy a toolbar row
- * (JUS-147). It never depends on the selection, so selecting never reflows the
- * toolbar (JUS-130/134); while a selection hides the headers the bulk bar
- * carries the sort instead.
- */
 const showSortControl = computed<boolean>(
   () => isCompactList.value || files.viewMode === "grid",
 );
 
-/**
- * columnCount is the number of columns the table exposes to assistive tech
- * (JUS-148): the leading select-all cell plus the columns not collapsed at this
- * width. It keeps aria-colcount and the bulk bar's aria-colspan honest against
- * the rendered body rows. JUS-161: the desktop table is select + name +
- * owner/mode + size + modified + actions.
- */
 const columnCount = computed<number>(() => {
   if (isCompactList.value) {
-    return 4; // select + name + size + actions
+    return 4;
   }
   return 6;
 });
 
-/** sortColumnLabel maps a sort key to its column header copy. */
 function sortColumnLabel(key: FilesSortKey): string {
   switch (key) {
     case "name":
@@ -2005,7 +1474,6 @@ function sortColumnLabel(key: FilesSortKey): string {
   }
 }
 
-/** sortDirection is the localized active sort direction. */
 const sortDirection = computed<string>(() =>
   String(
     t(
@@ -2016,18 +1484,11 @@ const sortDirection = computed<string>(() =>
   ),
 );
 
-/** sortLabel mirrors the active sort in the control's visible + accessible name. */
 const sortLabel = computed<string>(
   () =>
     `${t("files.browser.sortBy")}: ${sortColumnLabel(files.sortKey)} — ${sortDirection.value}`,
 );
 
-/**
- * sortMenuOptions lists the five sortable columns plus both directions, with
- * the active column and direction checked. Choosing a different column goes
- * through the store's setSort (which resets the range anchor); re-choosing the
- * active column is a no-op so the direction only changes from a direction item.
- */
 const sortMenuOptions = computed(() => {
   const check = (): ReturnType<typeof h> => h(Check, { size: 14, "aria-hidden": "true" });
   return [
@@ -2055,7 +1516,6 @@ const sortMenuOptions = computed(() => {
   ];
 });
 
-/** onSortMenu applies a sort-menu choice (a column, or a direction). */
 function onSortMenu(key: string): void {
   if (key === "dir:asc") {
     files.sortDir = "asc";
@@ -2081,7 +1541,6 @@ function openRename(entry: FilesEntry): void {
   renameOpen.value = true;
 }
 
-/** openPermissions opens the chmod dialog for one file or folder. */
 function openPermissions(entry: FilesEntry): void {
   permissionsTarget.value = entry;
   permissionsOpen.value = true;
@@ -2100,7 +1559,6 @@ function openUpload(dropped: File[] = []): void {
   uploadOpen.value = true;
 }
 
-/** openCompress builds an archive from the current selection. */
 function openCompress(entries: FilesEntry[]): void {
   if (entries.length === 0) {
     return;
@@ -2109,7 +1567,6 @@ function openCompress(entries: FilesEntry[]): void {
   compressOpen.value = true;
 }
 
-/** openExtract unpacks one archive into the current directory. */
 function openExtract(entry: FilesEntry): void {
   if (!isExtractableArchive(entry)) {
     return;
@@ -2118,11 +1575,9 @@ function openExtract(entry: FilesEntry): void {
   extractOpen.value = true;
 }
 
-/** viewerOpen/viewerEntry own the image viewer (JUS-204). */
 const viewerOpen = ref(false);
 const viewerEntry = ref<FilesEntry | null>(null);
 
-/** openViewer shows one image in the viewer (owner/admin only). */
 function openViewer(entry: FilesEntry): void {
   if (entry.kind !== "file" || !files.canReadContent) {
     return;
@@ -2131,13 +1586,10 @@ function openViewer(entry: FilesEntry): void {
   viewerOpen.value = true;
 }
 
-/** onDragOver highlights the zone only for a file drag on a writable root. */
 function onDragOver(event: DragEvent): void {
   if (!isFileDrag(event.dataTransfer?.types)) {
     return;
   }
-  // A file drag must preventDefault to allow the drop, even when the root is
-  // read-only (otherwise the browser opens the dropped file).
   event.preventDefault();
   if (files.canWrite) {
     dragActive.value = true;
@@ -2148,12 +1600,6 @@ function onDragLeave(): void {
   dragActive.value = false;
 }
 
-/**
- * onDrop opens the upload dialog queued with the dropped files. A drop is only
- * honoured on a writable root, a non-file drag is ignored, and a dropped
- * directory is rejected with a clear message instead of uploaded as an empty
- * file.
- */
 function onDrop(event: DragEvent): void {
   dragActive.value = false;
   if (!isFileDrag(event.dataTransfer?.types)) {
@@ -2173,11 +1619,6 @@ function onDrop(event: DragEvent): void {
   }
 }
 
-/**
- * pasteAction applies the clipboard into `destination` (the current directory
- * by default), with feedback. A folder-row Paste passes that folder's path, so
- * right-clicking a folder pastes into it rather than into the folder on screen.
- */
 async function pasteAction(destination = files.path): Promise<void> {
   const problem = files.pasteProblemAt(destination);
   if (problem !== null) {
@@ -2212,35 +1653,14 @@ async function pasteAction(destination = files.path): Promise<void> {
   }
 }
 
-/**
- * serverName labels a terminal tab with the node on screen. The server list is
- * seeded by the app shell; before it resolves the id still names the target
- * unambiguously.
- */
 const serverName = computed<string>(
   () =>
     serversStore.servers.find((server) => server.id === props.serverId)?.name ??
     props.serverId,
 );
 
-/**
- * terminalRequesting is the immediate gesture guard for a synchronous second
- * click; terminalOpening is the store's slightly longer single-flight state
- * (create + ~600 ms settle window) that keeps the control busy for the SAME
- * target only (JUS-248 r2).
- */
 const terminalRequesting = ref(false);
 
-/**
- * terminalTarget is the root-relative folder an "Open terminal here" action
- * would use, or null when the action must not be offered. It mirrors the
- * backend gate (JUS-243/248): only a platform operator may open a host shell
- * (the team file role and root writability deliberately do not count), the root
- * must still be in this node's allow-list, and the view must match the last
- * SUCCESSFULLY loaded listing. A failed navigation leaves `path` on a dead
- * folder, so the action disappears rather than opening a doomed shell; a failed
- * refresh keeps the listing on screen and stays usable.
- */
 const terminalTarget = computed<string | null>(() => {
   if (
     !auth.isPlatformAdmin ||
@@ -2256,10 +1676,8 @@ const terminalTarget = computed<string | null>(() => {
   return tab.lastLoadedPath;
 });
 
-/** canOpenTerminal is the single gate for the toolbar and both menus. */
 const canOpenTerminal = computed<boolean>(() => terminalTarget.value !== null);
 
-/** terminalOpening is the shared store's per-target busy/settle state. */
 const terminalOpening = computed<boolean>(() => {
   if (terminalTarget.value === null || files.rootName === "") {
     return false;
@@ -2272,7 +1690,6 @@ const terminalOpening = computed<boolean>(() => {
   });
 });
 
-/** symlinkDirectory reports whether the listing proves a link targets a folder. */
 function symlinkDirectory(entry: FilesEntry): boolean {
   return symlinkTargetsDirectory(
     entry,
@@ -2282,16 +1699,6 @@ function symlinkDirectory(entry: FilesEntry): boolean {
   );
 }
 
-/**
- * openTerminalHere opens a floating-window host session in the folder on
- * screen, in a directory row's own folder, or in a symlink row whose listing
- * target is a known directory. The relative path travels in the create-session
- * payload for the agent to resolve and validate; no `cd` command string is ever
- * built from a file name, so spaces, quotes, Unicode and shell metacharacters
- * stay data. A failure (deleted folder, stale root, offline node, unsupported
- * agent, role change) lands in the new tab, whose error overlay names the
- * reason.
- */
 async function openTerminalHere(entry: FilesEntry | null = null): Promise<void> {
   if (
     !canOpenTerminal.value ||
@@ -2322,7 +1729,6 @@ async function openTerminalHere(entry: FilesEntry | null = null): Promise<void> 
   }
 }
 
-/** menuContext is the gate set both menus read, rebuilt as the gates change. */
 const menuContext = computed(() => ({
   canWrite: files.canWrite,
   canReadContent: files.canReadContent,
@@ -2332,11 +1738,6 @@ const menuContext = computed(() => ({
     String(t(key, named ?? {})),
 }));
 
-/**
- * rowMenu builds the per-row (⋮ and right-click) actions menu. Paste is offered
- * on a folder row only, and pastes INTO that folder, so its validity is checked
- * against the folder rather than the directory on screen.
- */
 function rowMenu(entry: FilesEntry): FilesMenuItem[] {
   const base = menuContext.value;
   const canPaste =
@@ -2351,18 +1752,15 @@ function rowMenu(entry: FilesEntry): FilesMenuItem[] {
   });
 }
 
-/** onRowMenu dispatches one row action on the row or the whole selection. */
 function onRowMenu(key: string, entry: FilesEntry): void {
   switch (key) {
     case "open":
       void files.openDirectory(entry.name);
       break;
     case "open-tab":
-      // Open the folder in a new tab, leaving this one where it is.
       void files.openTab({ root: files.rootName, path: joinPath(files.path, entry.name) });
       break;
     case "open-terminal":
-      // Only a real directory row carries this key; the helper re-checks it.
       void openTerminalHere(entry);
       break;
     case "edit":
@@ -2401,93 +1799,48 @@ function onRowMenu(key: string, entry: FilesEntry): void {
   }
 }
 
-// ── Context menu (JUS-124) ────────────────────────────────────────────────
-// One controlled NDropdown serves the row right-click, the empty-space
-// right-click and the Shift+F10 / menu key on every row. The ⋮ button keeps its
-// own click dropdown; both reuse the same builders.
 const contextOpen = ref(false);
 const contextX = ref(0);
 const contextY = ref(0);
-/** contextEntry is the row the menu acts on; null means the folder itself. */
 const contextEntry = ref<FilesEntry | null>(null);
 
-/** contextOptions is the row menu when a row is targeted, else the folder menu. */
 const contextOptions = computed<FilesMenuItem[]>(() =>
   contextEntry.value
     ? rowMenu(contextEntry.value)
     : folderMenuOptions(menuContext.value),
 );
 
-/** contextAria names the menu for the row it opened on, or the folder. */
 const contextAria = computed<string>(() =>
   contextEntry.value
     ? String(t("files.browser.moreActions", { name: contextEntry.value.name }))
     : String(t("files.browser.folderActions")),
 );
 
-/** rowMenuOpenName is the row whose ⋮ dropdown is open (aria-expanded). */
 const rowMenuOpenName = ref<string | null>(null);
 
-/**
- * closeRowContext closes the context / Shift+F10 row menu and releases its pin.
- * The context menu is a separate controlled dropdown that shares the row's
- * `rowMenu` options, so it must be closed through the same reset path.
- */
 function closeRowContext(): void {
   contextOpen.value = false;
   contextEntry.value = null;
   closeRowMenu();
 }
 
-/**
- * resetRowMenu closes EVERY row-menu surface — the ⋮ dropdown, the context /
- * Shift+F10 menu, and the menu pin — because they all show the same `rowMenu`
- * options for one row. It runs on a listing LAYOUT change (view-mode flip,
- * folder / tab / root change) and when the open row leaves the rendered set, so
- * a menu can never survive into a listing where it would act on the wrong file.
- *
- * A reorder / filter that keeps the same row mounted is deliberately excluded:
- * the ⋮ dropdown stays open with `aria-expanded="true"` (documented keep-open).
- * The context menu, whose pin cannot survive a reorder, is closed separately by
- * the listing-identity watcher via {@link closeRowContext}.
- */
 function resetRowMenu(): void {
   rowMenuOpenName.value = null;
   closeRowContext();
 }
 
-/**
- * layoutKey identifies the listing LAYOUT — a list↔grid flip or a folder / tab /
- * root change — as opposed to a reorder / filter that keeps the same rows. It is
- * bound as the per-row ⋮ dropdown's `key`, so a layout change remounts the
- * uncontrolled dropdowns closed (they have no imperative close) while the
- * watcher clears the tracked state, keeping the popup and `aria-expanded` in
- * step (JUS-140).
- */
 const layoutKey = computed<string>(
   () =>
     `${files.viewMode}:${files.activeTabId}:${files.rootName}:${files.path}`,
 );
 watch(layoutKey, resetRowMenu);
 
-/**
- * resetSortMenu clears the sort dropdowns' tracked open state. The NDropdowns are
- * controlled through `v-model:show`, so clearing these refs closes them; a layout
- * change that remounts a trigger (a compact↔desktop or list↔grid flip) or hides
- * the bulk bar (all selections cleared) would otherwise leave one open — and the
- * remounted trigger would reopen its menu by itself (JUS-148, mirroring
- * resetRowMenu).
- */
 function resetSortMenu(): void {
   sortMenuOpen.value = false;
   bulkSortMenuOpen.value = false;
 }
 watch([layoutKey, showSortControl, hasSelection], resetSortMenu);
 
-// The open row can leave the rendered set without its dropdown closing (drawn
-// out of the window, deleted or renamed by a refresh): close the menus as soon
-// as that row is no longer rendered, so a later render of the same name is never
-// stale. Both surfaces count — the ⋮ dropdown and the context menu.
 watch(renderedKeys, () => {
   const openName =
     rowMenuOpenName.value ??
@@ -2501,11 +1854,6 @@ watch(renderedKeys, () => {
   }
 });
 
-/**
- * isRowMenuOpen reports whether a row's menu is open by EITHER trigger — the ⋮
- * dropdown or the right-click / Shift+F10 context route (they show the same
- * menu), so the ⋮'s aria-expanded reflects the real open state (JUS-140).
- */
 function isRowMenuOpen(entry: FilesEntry): boolean {
   return (
     rowMenuOpenName.value === entry.name ||
@@ -2513,7 +1861,6 @@ function isRowMenuOpen(entry: FilesEntry): boolean {
   );
 }
 
-/** onRowMenuShow tracks one row's ⋮ dropdown open/close (Escape, click-away, select). */
 function onRowMenuShow(name: string, show: boolean): void {
   rowMenuOpenName.value = show
     ? name
@@ -2522,22 +1869,18 @@ function onRowMenuShow(name: string, show: boolean): void {
       : rowMenuOpenName.value;
 }
 
-/** openRowContext opens the row menu at the pointer and applies the selection rule. */
 function openRowContext(event: MouseEvent, entry: FilesEntry): void {
-  // A special/unspecified row has no actions, so suppress the empty menu.
   if (rowMenu(entry).length === 0) {
     return;
   }
   files.selectForRowContext(entry);
   contextEntry.value = entry;
-  // Pin the row so its menu keeps its anchor while the list scrolls (JUS-137).
   menuRowName.value = entry.name;
   contextX.value = event.clientX;
   contextY.value = event.clientY;
   contextOpen.value = true;
 }
 
-/** openFolderContext opens the folder-level menu at the pointer. */
 function openFolderContext(event: MouseEvent): void {
   contextEntry.value = null;
   closeRowMenu();
@@ -2546,7 +1889,6 @@ function openFolderContext(event: MouseEvent): void {
   contextOpen.value = true;
 }
 
-/** onRowKeydown opens the row menu on Shift+F10 or the dedicated menu key. */
 function onRowKeydown(event: KeyboardEvent, entry: FilesEntry): void {
   const isMenuKey =
     event.key === "ContextMenu" || (event.shiftKey && event.key === "F10");
@@ -2563,15 +1905,6 @@ function onRowKeydown(event: KeyboardEvent, entry: FilesEntry): void {
   contextOpen.value = true;
 }
 
-/**
- * onDocumentPointerDown closes the context menu on a press outside it. A
- * manual-trigger popover never auto-closes and naive's clickoutside misfires on
- * the menu's own items, so the listener is owned here: a press inside the
- * dropdown is ignored, anything else closes the menu.
- *
- * It also marks the press: a user gesture always wins over an armed refocus (the
- * blur it causes is deliberate and must not snap focus back to a stale row).
- */
 function onDocumentPointerDown(event: PointerEvent): void {
   restorePending = false;
   lastFocusWasPointer = true;
@@ -2586,7 +1919,6 @@ function onDocumentPointerDown(event: PointerEvent): void {
   closeRowMenu();
 }
 
-/** onDocumentKeyDown marks keyboard-initiated focus (and any key as a gesture). */
 function onDocumentKeyDown(): void {
   restorePending = false;
   lastFocusWasPointer = false;
@@ -2602,7 +1934,6 @@ onBeforeUnmount(() => {
   resetTypeahead();
 });
 
-/** onContextSelect dispatches a context-menu action and closes the menu. */
 function onContextSelect(key: string): void {
   const entry = contextEntry.value;
   contextOpen.value = false;
@@ -2614,7 +1945,6 @@ function onContextSelect(key: string): void {
   onFolderMenu(key);
 }
 
-/** onFolderMenu dispatches a folder-level action. */
 function onFolderMenu(key: string): void {
   switch (key) {
     case "new-file":
@@ -2652,20 +1982,9 @@ function onFolderMenu(key: string): void {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- Header band (JUS-206 round 4): browser-style tabs on the left, the
-         agent-node switcher at the right end of the same row. -->
     <div class="fm-topbar">
-    <!-- Tab bar (JUS-123/126): one tab per open directory. A middle-click or
-         the × closes a tab; the + lives at the strip's end in the tab flow and
-         stays visible there while tabs scroll under it (sticky), so + is
-         always reachable. The tablist owns only role=tab buttons (the × is a
-         span inside the tab) so it satisfies aria-required-children; keyboard
-         users close with Delete. -->
     <div class="fm-tabs">
       <div ref="tabListEl" class="fm-tabstrip">
-        <!-- The tablist owns only the tabs (the + stays a sibling inside the
-             scroll strip so it can stick to the visible end); the strip
-             itself carries no role. -->
         <div class="fm-tablist" role="tablist" :aria-label="$t('files.tabs.list')">
         <button
           v-for="tab in files.tabs"
@@ -2720,10 +2039,6 @@ function onFolderMenu(key: string): void {
       </div>
     </div>
 
-    <!-- Navigation row (JUS-159/JUS-206): one Naive NInputGroup row merges
-         back, breadcrumb and an attached refresh button (32px); long paths
-         truncate from the left (the crumb strip clips at its start edge). The
-         right side of the row keeps the folder filter + JUS-163 search. -->
     <div class="fm-bar fm-pathbar">
       <NInputGroup class="fm-navfield">
         <NButton
@@ -2796,20 +2111,7 @@ function onFolderMenu(key: string): void {
       </div>
     </div>
 
-    <!-- Toolbar (JUS-160): the left group carries Upload, the New menu, a
-         separator, the Root selector, the File Operations dropdown (cut,
-         copy, paste, compress, extract, permissions) and the terminal action
-         directly after it (JUS-261); the right group pins the recycle bin and
-         the list/grid toggle to the right edge. Both groups always have
-         content, so the toolbar can never wrap onto an empty second row
-         (JUS-147). Labels collapse to icon-only <=640px, each keeping its
-         aria-label.
-         JUS-208 round 2: in grid view the selection cluster overlays this row
-         while a selection exists (see .fm-grid-bulk below) instead of joining
-         it, so selecting never grows the toolbar or shifts the tiles. -->
     <div class="fm-bar fm-toolbar" :class="{ 'is-grid': files.viewMode === 'grid' }">
-      <!-- inert is presence-based (inert="false" would still count as inert),
-           so a false arm binds undefined and the attribute is omitted. -->
       <div class="fm-toolbar-scroll" :inert="gridBulkVisible || undefined">
         <div class="fm-toolbar-group">
           <NButton
@@ -2884,9 +2186,6 @@ function onFolderMenu(key: string): void {
               <ChevronDown class="fm-caret" :size="12" :stroke-width="1.8" aria-hidden="true" />
             </NButton>
           </NDropdown>
-          <!-- JUS-261: the terminal action sits directly after File operations
-               and carries a visible label. Same platform-operator gate and
-               single-flight guard as before (JUS-248). -->
           <span v-if="canOpenTerminal" class="fm-terminal-action-wrap">
             <NButton
               size="small"
@@ -2905,12 +2204,6 @@ function onFolderMenu(key: string): void {
           <span v-if="files.hasClipboard" class="small muted clipboard-hint">
             {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
           </span>
-          <!-- JUS-145/147: compact sort control, RENDERED only where the column
-               headers cannot carry the sort — the compact layout (Modified / Owner-Mode
-               headers hidden) and the grid (no headers at all). It is never
-               reserved while hidden, so it can never tip the first toolbar row onto
-               an empty second row (JUS-147); while a selection hides the headers the
-               bulk bar carries its own sort control (below). -->
           <NDropdown
             v-if="showSortControl"
             v-model:show="sortMenuOpen"
@@ -2940,8 +2233,6 @@ function onFolderMenu(key: string): void {
         </div>
 
         <div class="fm-toolbar-group fm-toolbar-end">
-          <!-- The bin belongs to the root, not the folder: any member may open
-               it, while restore/purge inside need write. -->
           <NButton
             size="small"
             :disabled="files.rootName === ''"
@@ -2979,15 +2270,6 @@ function onFolderMenu(key: string): void {
         </div>
       </div>
 
-      <!-- JUS-208 round 2: the grid has no column-header row for the bulk bar
-           to replace (as in list view), so while a selection exists the shared
-           cluster overlays this toolbar row as a contextual action bar instead
-           of joining it: the toolbar keeps its single 32px row and the tiles
-           never shift. Idle it is visibility-hidden and inert (out of the a11y
-           tree and tab order). While it shows, the covered scroll content goes
-           inert with it — Tab skips the hidden Upload/New/Root/File-operations,
-           Recycle bin and view toggle, and the tree exposes only the bar, so
-           Clear is the way back (Escape still only dismisses menus). -->
       <div
         v-if="files.viewMode === 'grid'"
         class="fm-grid-bulk"
@@ -3004,8 +2286,6 @@ function onFolderMenu(key: string): void {
       </div>
     </div>
 
-    <!-- The tab's content region: one panel shared by every tab (aria-controls
-         points at it), labelled by the active tab. -->
     <div
       id="fm-tabpanel"
       class="fm-panel"
@@ -3021,8 +2301,6 @@ function onFolderMenu(key: string): void {
       </NButton>
     </div>
 
-    <!-- Search results (JUS-163): while a name search is on screen it takes
-         over the content region. Any navigation or Clear ends it. -->
     <FilesSearchResults
       v-else-if="files.searchActive"
       :results="files.searchResults"
@@ -3106,17 +2384,6 @@ function onFolderMenu(key: string): void {
                 @update:checked="files.toggleSelectAll()"
               />
             </span>
-            <!-- JUS-146: the sticky header row swaps between the column
-                 headers and the bulk bar while entries are selected. Both
-                 variants are always mounted and overlap the SAME grid cells
-                 (one row), so the row's height is max(columns, bar) in every
-                 selection state — selecting never reflows the list (JUS-130/
-                 134) and no row is permanently reserved. The variants hide
-                 with visibility, so hidden controls are neither focusable nor
-                 announced; the JUS-140 focus hand-off still finds the focused
-                 bulk control. The leading select-all checkbox stays visible in
-                 both states, so select-all/deselect-all stay reachable; the
-                 sort buttons (and their aria-sort) come back on Clear. -->
             <div
               class="fm-head-cols"
               :class="{ 'is-hidden': hasSelection }"
@@ -3128,9 +2395,6 @@ function onFolderMenu(key: string): void {
                   <ChevronDown v-if="files.sortKey === 'name'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
-              <!-- JUS-161: Name, Owner/Mode, Size, Modified, Operation. The
-                   cell shows owner/mode (JUS-214); the owner is empty from an
-                   older agent, so the cell falls back to the octal mode. -->
               <div class="fm-cell--mode" role="columnheader" :aria-sort="ariaSort('mode')">
                 <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'mode' }" @click="files.setSort('mode')">
                   {{ $t("files.browser.columnMode") }}
@@ -3152,24 +2416,12 @@ function onFolderMenu(key: string): void {
               <div role="columnheader" class="right fm-actions-cell">{{ $t("files.browser.columnActions") }}</div>
             </div>
 
-            <!-- The bulk bar (the former toolbar cluster, JUS-128/134/146):
-                 it replaces the column headers in the same sticky row while
-                 entries are selected. It is always mounted (hidden with
-                 visibility), so the row height stays put and the JUS-141 count
-                 reserve keeps the count cell content-derived. Its count is
-                 announced politely (aria-live). JUS-148: it spans every column
-                 but the leading select-all cell, so aria-colspan keeps the row's
-                 semantics consistent with the body rows. -->
             <div
               class="fm-head-bulk"
               :class="{ 'is-visible': hasSelection }"
               role="columnheader"
               :aria-colspan="columnCount - 1"
             >
-              <!-- JUS-147: while the bar replaces the headers the sort must live
-                   here. It is the desktop-list affordance only (≥861px); the
-                   compact layout and the grid keep the toolbar control above, so
-                   exactly one sort control is on screen at every width. -->
               <NDropdown
                 v-if="!isCompactList"
                 v-model:show="bulkSortMenuOpen"
@@ -3207,8 +2459,6 @@ function onFolderMenu(key: string): void {
             </div>
           </div>
 
-          <!-- Windowed list (JUS-137): the spacers stand in for the unrendered
-               rows so the scrollbar still spans the whole listing. -->
           <div
             v-if="listWindow.padTop > 0"
             class="fm-pad"
@@ -3251,12 +2501,6 @@ function onFolderMenu(key: string): void {
               >
                 <b>{{ entry.name }}</b>
               </button>
-              <!-- JUS-134/148: on the desktop row the name and its (optional)
-                   symlink target share one line (`.fm-name-sub` is
-                   `display: contents` there). On the compact row the target
-                   moves to the secondary line beside the relative modified time,
-                   so the name keeps priority instead of both truncating
-                   ("br… → /none…"). -->
               <span class="fm-name-sub">
                 <span v-if="entryTarget(entry)" class="fm-target" :title="entryTarget(entry)">
                   {{ entryTarget(entry) }}
@@ -3275,10 +2519,6 @@ function onFolderMenu(key: string): void {
             </div>
             <div class="fm-cell fm-date fm-cell--modified" role="cell" :title="formatTimestamp(entry.modified_at)">{{ modifiedLabel(entry) }}</div>
             <div class="fm-actions" role="cell">
-              <!-- The inline actions (.fm-action) stay hover/focus-revealed on
-                   pointer devices; the ⋮ menu button below stays visible
-                   whenever the row has actions, so touch and keyboard users
-                   reach the row menu without a hover (JUS-133). -->
               <NButton
                 v-if="entry.kind === 'directory'"
                 class="fm-action"
@@ -3340,8 +2580,6 @@ function onFolderMenu(key: string): void {
                   <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </template>
               </NButton>
-              <!-- A row with no actions (a special/unspecified entry) has no
-                   menu, so there is deliberately no ⋮ to open an empty menu. -->
               <NDropdown
                 v-if="rowMenu(entry).length > 0"
                 :key="`${layoutKey}:${entry.name}`"
@@ -3391,9 +2629,6 @@ function onFolderMenu(key: string): void {
         @focusout="onListFocusOut"
         @contextmenu.prevent="openFolderContext"
       >
-        <!-- The spacers span every column and stand in for the unrendered rows
-             (JUS-137). A spacer, not padding: a huge padding-bottom would stop
-             the flex column from shrinking the scroller to its viewport. -->
         <div
           v-if="gridSpacerTop > 0"
           class="fm-pad"
@@ -3434,10 +2669,6 @@ function onFolderMenu(key: string): void {
             :tabindex="rowTabindex(entry.name)"
             :aria-describedby="rowDescribedBy(entry)"
           >
-            <!-- JUS-216: the file-type icon sits top-left directly before the
-                 name (one line); the bottom area keeps the type, owner/mode
-                 and size lines. Directories show no size line (their grid
-                 behaviour is unchanged). -->
             <span class="fm-tile-top">
               <FileTypeIcon :kind="iconKind(entry)" />
               <span class="fm-label fm-tile-name">
@@ -3452,16 +2683,9 @@ function onFolderMenu(key: string): void {
               </span>
             </span>
           </button>
-          <!-- JUS-232: the relative modified age shares the selection row at
-               the tile's bottom-left reserve: the checkbox sits left, the age
-               rides the same row's right end. -->
           <span class="fm-tile-foot">
             <span class="fm-tile-ago">{{ modifiedLabel(entry) }}</span>
           </span>
-          <!-- JUS-145: the tile's ⋮ row menu — the same trigger contract as the
-               list (aria-haspopup/expanded, one open at a time, closes on a
-               layout change), as a sibling of the tile button (never nested
-               inside it) so a tap opens the menu without a hover. -->
           <div v-if="rowMenu(entry).length > 0" class="fm-tile-actions">
             <NDropdown
               :key="`${layoutKey}:${entry.name}`"
@@ -3511,14 +2735,8 @@ function onFolderMenu(key: string): void {
     </template>
     </div>
 
-    <!-- One shared, visually hidden description target for the roving row's
-         symbolic mode + absolute modified time (aria-describedby; JUS-140). A
-         single node — never one per row. -->
     <span :id="ROW_DETAILS_ID" class="fm-sr-only">{{ rovingDetails }}</span>
 
-    <!-- JUS-146: the selection count is announced from an always-mounted polite
-         live region (empty until the selection settles), so the first selection
-         is announced and a range select does not chatter. -->
     <span
       class="fm-sr-only"
       role="status"
@@ -3549,10 +2767,6 @@ function onFolderMenu(key: string): void {
     />
     <ConflictDialog />
 
-    <!-- One controlled dropdown serves the row / empty-space context menu and
-         the Shift+F10 / menu key; x/y place it at the pointer or the row. The
-         explicit update:show handler releases the menu pin on the dropdown's
-         own close routes (Escape, click-away), not just our calls. -->
     <NDropdown
       :show="contextOpen"
       trigger="manual"
@@ -3568,24 +2782,14 @@ function onFolderMenu(key: string): void {
 </template>
 
 <style scoped>
-/* File manager styles; only tokens from styles/tokens.css are used. */
 .files-browser {
   position: relative;
-  /* JUS-134: the single row-height token every list row reads. JUS-137 can
-   * size its virtual rows from it. JUS-206: 42px, the reference row height.
-   * JUS-207: the remaining sample-geometry values with no token fit live
-   * here too, defined once — every rule below reads these vars: the 34px
-   * header height, the 34px checkbox column, the 25px file-type mark, the
-   * 6px toolbar-button radius and the 6px row vertical padding. */
   --fm-row-height: 42px;
   --fm-head-h: 34px;
   --fm-check-col: 34px;
   --fm-mark-size: 25px;
   --fm-btn-radius: 6px;
   --fm-row-pad-y: 6px;
-  /* The panel is a flex column that fills whatever height its parent gives it
-   * (JUS-118): toolbar/bar/footer stay fixed while the entry list is the
-   * only scrolling region (`flex: 1` on .table-wrap / .fm-grid / .fm-state). */
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -3600,10 +2804,6 @@ function onFolderMenu(key: string): void {
   overflow: hidden;
 }
 
-/* JUS-154: the header slot renders inside Naive's `.n-card-header`, whose
- * `.n-card-header__main` sets the card-title size (18px). The captions had no
- * `.small` rule of their own, so they inherited that 18px; this scoped rule
- * sets the mockup's `--text-xs` (12px) caption directly. */
 .small {
   font-size: var(--text-xs);
 }
@@ -3612,35 +2812,17 @@ function onFolderMenu(key: string): void {
   width: 220px;
 }
 
-/* Tab bar (JUS-123/150, JUS-206 round 2-5): the sample's Chrome-style tabs,
-   mapped to tokens. Inactive tabs are transparent; hovering paints an inset
-   rounded fill behind the content; 1px dividers separate neighbours (hidden
-   around the active/hovered tab via :has). The active tab uses the card body
-   colour with rounded TOP corners only and concave flares joining it to the
-   content below — no ring, no outline, no accent border. The strip scrolls
-   horizontally at narrow widths instead of wrapping the layout. */
-/* Header band (JUS-206 round 4): the dark strip from the card top to the tab
-   row. It bleeds to the card's side edges (the card content has no top
-   padding, so no top compensation is needed) and keeps the 16px rhythm below
-   the tabs; the top corners follow the card radius. End-aligned like the
-   sample so the active tab sits flush on the content. */
 .fm-topbar {
   display: flex;
-  /* Round 10: centred on the tab row's horizontal axis (the tabs define the
-     row height, so the shorter switcher centres on the 34px tab middle). */
   align-items: center;
   gap: var(--space-3);
   flex: 0 0 auto;
   background: var(--surface-warm);
-  /* Round 7: zero below the tabs — the band ends exactly at the tab bottom
-     so the active tab touches the card body and flows into the content. */
   margin: 0 calc(-1 * var(--space-6)) 0;
   padding: var(--space-2) var(--space-2) 0;
   border-radius: var(--n-border-radius, var(--radius-md)) var(--n-border-radius, var(--radius-md)) 0 0;
 }
 
-/* Context cluster (JUS-159/JUS-206 round 4): the agent-node switcher pinned to
-   the right end of the tab row. Plain, no border of its own. */
 .fm-contextbar {
   display: flex;
   align-items: center;
@@ -3651,9 +2833,6 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-tabs {
-  /* Sample geometry, defined once: the 34px tab height, 240px flex basis,
-     56px shrink floor and 28px + button have no token fit. Everything else
-     below reads space/radius tokens. */
   --fm-tab-h: 34px;
   --fm-tab-w: 240px;
   --fm-tab-min: 56px;
@@ -3671,22 +2850,12 @@ function onFolderMenu(key: string): void {
   display: flex;
   align-items: flex-end;
   gap: 0;
-  /* The strip fills the row like the sample's .tabs (flex 1 1 auto): tabs
-     keep their 240px basis while there is room and shrink (scrolling the
-     strip) when there is not. A hugging strip would collapse to the tabs'
-     content minimum instead of their basis (round 6 probe). */
   flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
 }
 
-/* The tablist owns only the tabs (the + is a strip-level sibling in the tab
-   flow): it is display:contents so the tabs lay out directly in the strip —
-   the round-6/9 verified behaviour (240px basis kept while there is room,
-   shrinking to the icon-only floor, strip scrolling past that). A real flex
-   box here would either collapse the basis (hug) or push + to the far right
-   (fill). */
 .fm-tablist {
   display: contents;
 }
@@ -3710,8 +2879,6 @@ function onFolderMenu(key: string): void {
   isolation: isolate;
 }
 
-/* Inactive hover (sample ::before): an inset rounded fill behind the content,
-   gapped on all four sides. */
 .fm-tab:not(.is-active)::before {
   content: "";
   position: absolute;
@@ -3730,8 +2897,6 @@ function onFolderMenu(key: string): void {
   color: var(--fg-2);
 }
 
-/* Divider between neighbours: a 1px x 16px rule centred in the tab height.
-   Hidden at the strip end and around the hovered/active tab (sample :has). */
 .fm-tab::after {
   content: "";
   position: absolute;
@@ -3754,13 +2919,6 @@ function onFolderMenu(key: string): void {
   color: var(--warn-ink);
 }
 
-/* The active tab is the card body colour with rounded TOP corners only, in
-   the normal text colour — no ring, no outline, no accent border. Its concave
-   bottom flares (the card body colour over the warm band, sample geometry)
-   join it to the content below. Like the sample, the left flare is ::before
-   and the right flare is a real element (.fm-tab-corner): ::after is the
-   divider, which the :has()/:hover rules above hide next to a hovered tab and
-   would take the flare with it. */
 .fm-tab.is-active {
   background: var(--n-color);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -3793,9 +2951,6 @@ function onFolderMenu(key: string): void {
   background: radial-gradient(circle at 100% 0, transparent var(--radius-md), var(--n-color) calc(var(--radius-md) + 0.5px));
 }
 
-/* Icon-only narrow tabs (sample .narrow, measured in updateNarrowTabs). The
-   title stays in the DOM (clipped and transparent) so the tab keeps its
-   accessible name and never reads as an empty icon-only button. */
 .fm-tab.is-narrow {
   justify-content: center;
   gap: 0;
@@ -3811,10 +2966,6 @@ function onFolderMenu(key: string): void {
   display: none;
 }
 
-/* The strip scrolls (overflow-x: auto) and clips its descendants at its edge,
-   and the shared focus outline would read as a loud box here — keyboard focus
-   (only; mouse clicks and fresh loads never move DOM focus, see the watcher)
-   draws a thin ring just inside the tab instead (JUS-152). */
 .fm-tab:focus-visible {
   outline: 1px solid var(--accent-ink);
   outline-offset: -1px;
@@ -3825,7 +2976,6 @@ function onFolderMenu(key: string): void {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  /* Sample fade mask instead of an ellipsis. */
   -webkit-mask-image: linear-gradient(90deg, #000 80%, transparent);
   mask-image: linear-gradient(90deg, #000 80%, transparent);
 }
@@ -3852,12 +3002,6 @@ function onFolderMenu(key: string): void {
   place-items: center;
   width: var(--fm-add-size);
   height: var(--fm-add-size);
-  /* Round 10: in the tab flow right after the last tab (sample gap 6px —
-     no token fits, so the literal stands with this comment), bottom-centred
-     in the tab height. Sticky at the strip's visible end so tabs scroll under
-     it; the band-coloured fill keeps scrolled tabs from showing through
-     (invisible against the band itself). Above an open active tab (z-index 2).
-     */
   margin: 0 0 calc((var(--fm-tab-h) - var(--fm-add-size)) / 2) 0;
   margin-left: 6px;
   position: sticky;
@@ -3880,8 +3024,6 @@ function onFolderMenu(key: string): void {
   cursor: not-allowed;
 }
 
-/* The tabpanel: one flex column shared by every tab, so the entry list stays
-   the single scrolling region and the footer stays pinned (JUS-118/123). */
 .fm-panel {
   display: flex;
   flex-direction: column;
@@ -3889,14 +3031,10 @@ function onFolderMenu(key: string): void {
   min-height: 0;
 }
 
-/* Round 10: the header band is flush with the card top — Naive gives the
-   first-child content 20px of top padding, which would push the band down. */
 .files-browser :deep(.n-card-content:first-child) {
   padding-top: 0;
 }
 
-/* The single shared aria-describedby target for the roving row (JUS-140):
-   clipped out of view but still in the accessibility tree. */
 .fm-sr-only {
   position: absolute;
   width: 1px;
@@ -3918,12 +3056,6 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-4);
 }
 
-/* Left group (Upload, New menu, Root selector, File Operations) wraps
-   internally and may shrink, so a long group never overflows/clips at narrow
-   widths — every action stays reachable instead of spilling past the panel.
-   The right-aligned group never wraps internally (JUS-208); both groups always
-   have content, so the toolbar can never wrap onto an empty second row
-   (JUS-147/JUS-160). */
 .fm-toolbar-group {
   display: flex;
   align-items: center;
@@ -3932,19 +3064,10 @@ function onFolderMenu(key: string): void {
   min-width: 0;
 }
 
-/* The toolbar's scrolling content row: transparent on desktop (display:
-   contents, so the two groups lay out as the toolbar's own flex items exactly
-   as before), the horizontal scrollport on the phone (<=480px rules below).
-   Splitting the scrollport out of the toolbar box lets the grid bulk overlay
-   (JUS-208 round 2) anchor to the visible row instead of scrolling with the
-   content. */
 .fm-toolbar-scroll {
   display: contents;
 }
 
-/* JUS-160: the divider between the New menu and the Root selector in the left
-   group. A token-only 1px rule, hidden with the create actions on read-only
-   roots so it never leads a row. */
 .fm-toolbar-sep {
   width: 1px;
   height: var(--space-5);
@@ -3952,62 +3075,31 @@ function onFolderMenu(key: string): void {
   background: var(--border);
 }
 
-/* The toolbar's Root selector keeps its desktop width but never forces the
-   toolbar past the panel: it may shrink to its content on narrow rows (the
-   phone rule below takes over <=640px). */
 .fm-toolbar .fm-root-select {
   max-width: 100%;
 }
 
-/* JUS-261: the labelled terminal action adds a full button to the left group.
-   Up to 1400px the Root selector gives up some of its 220px desktop width (the
-   value truncates, the aria-label stays) so the two groups keep one row at
-   1280px and the grid toolbar keeps one row at 1366px instead of dropping the
-   whole end group to a second line. The phone rules below take over <=640px. */
 @media (max-width: 1400px) {
   .fm-toolbar .fm-root-select {
     width: calc(var(--space-12) * 4 - var(--space-2));
   }
 }
 
-/* JUS-261: the terminal action sits after File operations with an icon and the
-   visible "Terminal" label (the shared <=640px rule collapses .fm-btn-label to
-   the icon, like every other toolbar button). */
 .fm-terminal-action {
   flex: 0 0 auto;
 }
 
-/* JUS-268: the terminal action keeps only its layout wrapper — the hover/focus
-   tooltip was dropped once the button gained a visible label. */
 .fm-terminal-action-wrap {
   display: inline-flex;
   align-items: center;
 }
 
-/* JUS-153: the right-hand cluster now follows the per-root actions directly
-   (the filter/refresh that used to push it right moved to the path bar), so the
-   group carries its own auto margin to stay pinned to the right edge. */
-/* JUS-208: the end group never wraps internally — when the row genuinely
-   cannot fit, the whole group moves to the next row and the selection actions
-   scroll inside it, instead of the group splitting across two rows and the
-   toolbar growing a third one. It ties with .fm-toolbar-group above, so this
-   rule must stay after it. */
 .fm-toolbar-end {
   margin-left: auto;
   justify-content: flex-end;
   flex-wrap: nowrap;
 }
 
-/* JUS-208 round 2: the grid bulk bar overlays the toolbar row while a
-   selection exists (mirroring how the list bar replaces the column headers),
-   so selecting never grows the toolbar or shifts the tiles. The row keeps its
-   height from the in-flow groups; the overlay is absolutely positioned over it
-   with the card colour, its action row scrolling inside when it cannot fit.
-   Idle it stays mounted but visibility-hidden and inert — out of the layout,
-   the a11y tree and the tab order. While it shows it swallows the whole row's
-   pointer events (a tap on the count or a gap must never fire the invisible
-   control underneath) and the covered toolbar content goes inert with it, so
-   Tab skips the hidden controls and Clear is the way back. */
 .fm-bar.fm-toolbar.is-grid {
   position: relative;
 }
@@ -4015,11 +3107,6 @@ function onFolderMenu(key: string): void {
 .fm-grid-bulk {
   position: absolute;
   inset: 0;
-  /* Above every in-flow toolbar control (naive's select creates its own
-     stacking context): the bar's own buttons must win the hit test against the
-     covered controls. Teleported menus and dialogs live outside this stacking
-     context with far higher z-indexes, and the later-DOM drop overlay wins
-     ties, so nothing else is buried. */
   z-index: 5;
   display: flex;
   align-items: center;
@@ -4033,9 +3120,6 @@ function onFolderMenu(key: string): void {
   visibility: visible;
 }
 
-/* The clipboard hint (Paste (N) / Cut clipboard) is its own compact chip so
-   the words never wrap vertically when the toolbar is narrow (JUS-146): it
-   refuses to shrink and never breaks inside a word. */
 .clipboard-hint {
   margin-left: var(--space-1);
   flex: 0 0 auto;
@@ -4047,10 +3131,6 @@ function onFolderMenu(key: string): void {
   color: var(--muted);
 }
 
-/* Small screens drop the toolbar labels, leaving icon-only buttons whose
-   accessible name comes from each button's aria-label.
-   JUS-135's phone layout rules live at the end of this stylesheet (after the
-   base rules they override). */
 @media (max-width: 640px) {
   .fm-btn-label {
     display: none;
@@ -4095,11 +3175,6 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-3);
 }
 
-/* The path field owns its border; space separates the chrome bands.
-   Round 8: the breathing room above the row is n-colored PADDING inside the
-   body (margins cannot paint, so a margin gap could read as a dark seam) —
-   the tab bottom touches the body top and flows into it, then 16px of the
-   same body colour before the row, like the sample's toolbar band. */
 .fm-bar.fm-pathbar {
   margin-bottom: var(--space-8);
   padding-top: var(--space-4);
@@ -4112,8 +3187,6 @@ function onFolderMenu(key: string): void {
   border-radius: var(--fm-btn-radius);
 }
 
-/* JUS-206: default outlined toolbar buttons — 32px high, 12px labels, the
-   reference padding. The 6px radius is the reference value. */
 .fm-toolbar :deep(.n-button .n-button__content) {
   font-size: var(--text-xs);
 }
@@ -4122,19 +3195,7 @@ function onFolderMenu(key: string): void {
   padding: 0 var(--space-3);
 }
 
-/* Context bar (JUS-159): the home of the header-tools slot (the agent-node
-   selector) after the card header went away. Plain row, no border of its own;
-   the Root selector and the view toggle moved into the toolbar (JUS-160). */
-/* Merged navigation field (JUS-159/JUS-206): a Naive NInputGroup row, 32px
-   high — a back icon button, the breadcrumb strip and an attached refresh
-   button joined into one bordered row. The group collapses the buttons'
-   adjoining borders; the borderless crumb strip draws only its top/bottom so
-   the row reads as one field. Long paths truncate from the left (the crumb
-   strip clips at its start edge) while back and refresh stay pinned. */
 .fm-navfield {
-  /* JUS-206 round 1: naive's .n-input-group is width:100% — reset to auto so
-     the row shares the desktop path bar with the search block (~half each);
-     the phone rules below still take their own full-width rows. */
   width: auto;
   flex: 1 1 50%;
   min-width: 0;
@@ -4162,15 +3223,11 @@ function onFolderMenu(key: string): void {
   align-self: stretch;
   min-width: 0;
   flex-wrap: nowrap;
-  /* JUS-206 round 1: crumbs start right after the back button (reference:
-     [back] | Root dir > www > ... [refresh]), truncating from the left. */
   justify-content: flex-start;
   overflow: hidden;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   border-radius: 0;
-  /* Vertical rhythm comes from the `.fm-path` base; only widen the sides. The
-     strip stretches the row's full 32px (its own borders complete it). */
   padding-block: 0;
   padding-inline: var(--space-2);
 }
@@ -4184,8 +3241,6 @@ function onFolderMenu(key: string): void {
   align-items: center;
   gap: var(--space-1);
   flex-wrap: wrap;
-  /* JUS-150: the breadcrumb rides the card surface — no background or border —
-     but keeps its own box metrics so the shared :focus-visible ring has room. */
   padding: var(--space-1);
   min-height: var(--space-8);
 }
@@ -4224,9 +3279,6 @@ function onFolderMenu(key: string): void {
   color: var(--meta);
 }
 
-/* The nav-row right slot hosts the search input with its "Include
-   subdirectories" switch and submit button (JUS-163). The group takes the
-   right edge; the input keeps its own width. */
 .fm-search-group {
   display: flex;
   align-items: center;
@@ -4240,9 +3292,6 @@ function onFolderMenu(key: string): void {
   margin-left: 0;
 }
 
-/* The Include-subdirectories switch shrinks with its label ellipsized, so the
-   group never overflows the nav row at a phone width where it shares the row
-   with Refresh (JUS-163 fix round 2). */
 .fm-search-recursive {
   flex: 0 1 auto;
   min-width: 0;
@@ -4265,20 +3314,12 @@ function onFolderMenu(key: string): void {
   margin-left: auto;
 }
 
-/* The count cell and the bulk actions live in FilesSelectionBar (scoped there),
-   because the same cluster is hosted by the list header and the grid toolbar. */
-
 .fm-state {
-  /* A state view owns the whole entry area, which is why it scrolls
-     internally instead of growing the panel. */
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-8) var(--space-4);
   color: var(--muted);
-  /* JUS-151: the state view fills the panel, so center its content on both
-     axes (the mockup's .empty component). `safe` keeps the top reachable if
-     the panel is ever shorter than the state. */
   display: grid;
   justify-items: center;
   align-content: safe center;
@@ -4326,8 +3367,6 @@ function onFolderMenu(key: string): void {
 }
 
 .table-wrap {
-  /* The entry list is the panel's single scrolling region (JUS-118). JUS-161:
-     the framed card around the table — a thin token border + radius. */
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: auto;
@@ -4340,34 +3379,25 @@ function onFolderMenu(key: string): void {
   min-width: 760px;
 }
 
-/* JUS-137: the pinned (out-of-window) row is absolutely positioned, so the
-   table is its containing block. */
 .fm-table.is-virtual {
   position: relative;
 }
 
-/* JUS-137: the windowed list replaces the unrendered rows with these exact-px
-   spacers, so the scrollbar (and cross-row select-all) still spans the listing.
-   role=presentation keeps them invisible to assistive tech. */
 .fm-pad {
   display: block;
   width: 100%;
 }
 
-/* In the grid a spacer spans every column so it never lands in a tile cell. */
 .fm-grid > .fm-pad {
   grid-column: 1 / -1;
 }
 
 .fm-row {
   display: grid;
-  /* JUS-161: checkbox, Name, Owner/Mode, Size, Modified, Operation. */
   grid-template-columns: var(--fm-check-col) minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
-  /* JUS-206: the reference cell padding. */
   padding: var(--fm-row-pad-y) var(--space-2);
-  /* JUS-134: one compact, tokenised row height instead of the old 52px. */
   min-height: var(--fm-row-height);
   border-bottom: 1px solid var(--border);
   position: relative;
@@ -4386,18 +3416,11 @@ function onFolderMenu(key: string): void {
   background: var(--accent-softer);
 }
 
-/* JUS-137: a windowed row takes exactly the token height so the fixed-size
-   window maths never drifts (the un-windowed list keeps its min-height).
-   JUS-145: `overflow: clip`, not `hidden` — `hidden` would make the row (not
-   `.table-wrap`) the scroll container, so the pinned actions cell could not
-   stay pinned inside a windowed row. `clip` still clips to the exact height. */
 .fm-table.is-virtual .fm-row:not(.fm-head) {
   height: var(--fm-row-height);
   overflow: clip;
 }
 
-/* The pinned row (focus/menu holder) is rendered outside the flow window but at
-   its true offset, so it never disturbs the spacers. */
 .fm-table.is-virtual .fm-row.is-pinned {
   position: absolute;
   left: 0;
@@ -4406,29 +3429,17 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-head {
-  /* JUS-132: the column header stays pinned to the top of the entry list's
-     scroll region so the active sort column is visible in long folders. The
-     header band matches the reference (a tone below the card) so rows scroll
-     under it cleanly. */
   position: sticky;
   top: 0;
   z-index: 2;
   background: var(--surface-warm);
   color: var(--muted);
   border-bottom: 1px solid var(--border-soft);
-  /* JUS-146: the row height is max(column headers, bulk bar). Both variants
-     are always mounted and overlap the same cells, so the height never depends
-     on the selection — no reserved band, no row shift (JUS-130/134). */
-  /* JUS-206: the reference header is 34px (--fm-head-h). */
   min-height: var(--fm-head-h);
   padding-block: 0;
   align-items: center;
 }
 
-/* JUS-146: the column-header variant occupies columns 2-7 (the leading
-   select-all checkbox cell, column 1, stays visible in both states). The bulk
-   bar below reuses exactly the same cells, so the two overlap and the row
-   keeps one constant height. */
 .fm-head-cols {
   grid-column: 2 / -1;
   grid-row: 1;
@@ -4436,8 +3447,6 @@ function onFolderMenu(key: string): void {
   grid-template-columns: minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
-  /* JUS-206: the reference headers are normal-case 12px/500 body text with
-     sort arrows — not tiny uppercase mono. */
   font-family: var(--font-body);
   font-size: var(--text-xs);
   font-weight: 500;
@@ -4449,9 +3458,6 @@ function onFolderMenu(key: string): void {
   visibility: hidden;
 }
 
-/* JUS-145/146: mirror the compact row grid inside the column-header variant so
-   the header columns line up with the rows at ≤860px (Modified/Owner-Mode are
-   hidden there; the name/size/actions tracks match .fm-row). */
 @media (max-width: 860px) {
   .fm-head-cols {
     grid-template-columns: minmax(0, 1fr) 64px 64px;
@@ -4459,10 +3465,6 @@ function onFolderMenu(key: string): void {
   }
 }
 
-/* JUS-146: the bulk bar (count + bulk actions) replaces the column headers in
-   the same sticky row while entries are selected. Its controls self-hide with
-   visibility, so the row keeps the same height and the hidden controls are
-   neither focusable nor announced. */
 .fm-head-bulk {
   grid-column: 2 / -1;
   grid-row: 1;
@@ -4470,10 +3472,6 @@ function onFolderMenu(key: string): void {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  /* JUS-146: the bar overlaps the column headers (same cells), so while nothing
-     is selected it is hidden with `visibility` — not just transparent — so it is
-     neither clickable nor an extra empty columnheader in the accessibility tree.
-     `visibility` keeps the layout, so the row height never changes. */
   visibility: hidden;
 }
 
@@ -4482,18 +3480,10 @@ function onFolderMenu(key: string): void {
   background: var(--surface-warm);
 }
 
-/* JUS-147: the bulk bar's sort control keeps the desktop list sortable while the
-   bar replaces the column headers. It never shrinks — the action row scrolls. */
 .fm-bulk-sort {
   flex: 0 0 auto;
 }
 
-/* JUS-146: above the compact breakpoint the desktop table can be wider than the
-   scroller, so the bar is pinned to the scroller's left edge and constrained to
-   the VISIBLE scroller width (--fm-scroller-w) — its actions then scroll in
-   their OWN row instead of hiding off-screen behind the table scroll. Below 861px
-   the table fits (min-width: 0) so the bar just fills its cell. 58px = the
-   header inline padding + the select-all cell + the grid gap. */
 @media (min-width: 861px) {
   .fm-head-bulk {
     position: sticky;
@@ -4507,8 +3497,6 @@ function onFolderMenu(key: string): void {
   text-align: right;
 }
 
-/* Hovering the pinned header must not reveal the rows scrolling under it:
-   keep the solid header band instead of the row hover tint. */
 .fm-head:hover {
   background: var(--surface-warm);
 }
@@ -4560,14 +3548,6 @@ function onFolderMenu(key: string): void {
   cursor: pointer;
 }
 
-/* JUS-134/148: on the desktop row the name and its (optional) symlink target
- * share one line so every row keeps the single tokenised height and the type is
- * not repeated (the Type column carries it). `.fm-name-sub` dissolves into the
- * name's flex row on the desktop (`display: contents`), so the target sits right
- * after the name; on the compact row it becomes the secondary line.
- * The name↔target offset keeps its original --space-2 (the flex gap that used to
- * live inside `.fm-label`): the row gap is --space-3 (icon↔name), so trim the
- * label's trailing gap back by 4px. */
 .fm-name .fm-label {
   display: block;
   flex: 0 1 auto;
@@ -4582,7 +3562,6 @@ function onFolderMenu(key: string): void {
 .fm-label b {
   display: block;
   min-width: 0;
-  /* JUS-206: the reference rows are 12px/400 body text. */
   font-weight: 400;
   color: var(--fg);
   font-size: var(--text-xs);
@@ -4598,20 +3577,15 @@ function onFolderMenu(key: string): void {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--muted);
-  /* A long symlink target must not wrap or spill the name column (JUS-132);
-     the full text stays reachable through the span's title tooltip. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* JUS-145/148: the compact row's secondary modified line. Hidden on the desktop
-   layout, where the Modified column shows it. */
 .fm-row-sub {
   display: none;
 }
 
-/* The row checkbox is revealed on hover / focus / selection. */
 .fm-select {
   display: flex;
   align-items: center;
@@ -4631,7 +3605,6 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-cell {
-  /* JUS-206: the reference cells are normal 12px body text, not mono. */
   font-family: var(--font-body);
   font-size: var(--text-xs);
   color: var(--muted);
@@ -4641,18 +3614,11 @@ function onFolderMenu(key: string): void {
   text-align: right;
 }
 
-/* JUS-134: the mode and date cells are one line; the rwx form is the mode
-   cell's tooltip. */
 .fm-mode,
 .fm-date {
   white-space: nowrap;
 }
 
-/* JUS-214: the Owner/Mode track is a fixed 110px, so a long owner
-   ("systemd-network/755" or a 10-digit uid) must clip instead of spilling into
-   the right-aligned Size cell. min-width: 0 lets the grid item shrink below its
-   min-content width; the full owner/mode text stays in the DOM for screen
-   readers (no title is added — JUS-210 removes file-manager tooltips). */
 .fm-mode {
   min-width: 0;
   overflow: hidden;
@@ -4666,14 +3632,6 @@ function onFolderMenu(key: string): void {
   justify-content: flex-end;
 }
 
-/* JUS-145: the action cell (the ⋮ and its inline buttons) is pinned to the
-   right edge of the list's scrollport, so the row menu is reachable at EVERY
-   width where the desktop table overflows horizontally — the row's track
-   min-content is ~984px, far above the compact breakpoint the columns collapse
-   at. The background is OPAQUE: the card surface plus the row-state tint
-   composited on top (the tokens are translucent), so the columns scrolling
-   under the pinned cell never show through; the hairline marks the pinned
-   edge. */
 .fm-row > .fm-actions {
   position: sticky;
   right: 0;
@@ -4702,10 +3660,6 @@ function onFolderMenu(key: string): void {
   background-image: linear-gradient(var(--accent-softer), var(--accent-softer));
 }
 
-/* Inline row actions (open/download/extract/rename/delete) reveal on row hover
-   or keyboard focus / selection; the ⋮ menu button is never hidden when the row
-   has actions, so touch and keyboard users reach the row menu without a hover
-   (JUS-133). */
 .fm-actions .fm-action {
   opacity: 0;
   transition: opacity var(--motion-base) var(--ease-standard);
@@ -4717,10 +3671,6 @@ function onFolderMenu(key: string): void {
   opacity: 1;
 }
 
-/* A blocked action (a file's Download without the content role) keeps naive's
-   dimmed opacity when revealed: these selectors out-specify both the reveal
-   rule above and naive's own .n-button--disabled rule. The action stays
-   focusable ([aria-disabled], not [disabled]). */
 .fm-row:hover .fm-actions .fm-action.n-button--disabled,
 .fm-row:hover .fm-actions .fm-action[aria-disabled="true"],
 .fm-row:focus-within .fm-actions .fm-action.n-button--disabled,
@@ -4740,15 +3690,12 @@ function onFolderMenu(key: string): void {
   --fm-tile-height: 132px;
   grid-template-columns: repeat(auto-fill, minmax(var(--fm-tile-min), 1fr));
   gap: var(--space-3);
-  /* Grid view scrolls internally too, keeping tiles top-aligned. */
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   align-content: start;
 }
 
-/* JUS-137: windowed tiles are pinned to the token height so the fixed row maths
-   stays exact (the un-windowed grid keeps its min-height and natural flow). */
 .fm-grid.is-virtual {
   position: relative;
 }
@@ -4757,7 +3704,6 @@ function onFolderMenu(key: string): void {
   height: var(--fm-tile-height);
 }
 
-/* The pinned tile (focus holder) sits at its true row/column offset. */
 .fm-grid.is-virtual .fm-tile-wrap.is-pinned {
   position: absolute;
   z-index: 1;
@@ -4778,13 +3724,10 @@ function onFolderMenu(key: string): void {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-3);
-  /* JUS-215: the bottom-left checkbox overlays this reserve, so selecting
-     never changes the tile size. */
   padding-bottom: 28px;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  /* JUS-137: the one tile-height source the window maths reads too. */
   min-height: var(--fm-tile-height);
   cursor: pointer;
   transition: border-color var(--motion-base) var(--ease-standard), background var(--motion-base) var(--ease-standard);
@@ -4799,10 +3742,6 @@ function onFolderMenu(key: string): void {
   background: var(--accent-soft);
 }
 
-/* JUS-216: the icon sits top-left directly before the name (one line, the name
-   keeps its ellipsis); the bottom area keeps the metadata lines. The ⋮ stays
-   top-right, so the top row keeps its right clearance. The relative modified
-   age shares the selection row below (JUS-232). */
 .fm-tile-top {
   display: flex;
   align-items: center;
@@ -4850,8 +3789,6 @@ function onFolderMenu(key: string): void {
   min-width: 0;
 }
 
-/* Every metadata line clips with an ellipsis instead of overflowing the tile
-   or wrapping it taller (JUS-215 keeps the stable tile height). */
 .fm-tile-type,
 .fm-tile-ownermode,
 .fm-tile-size {
@@ -4864,10 +3801,6 @@ function onFolderMenu(key: string): void {
   white-space: nowrap;
 }
 
-/* JUS-145: the tile's ⋮ row menu sits in the top-right corner as a sibling of
-   the tile button (never nested inside it). The selection checkbox shifts left
-   of it so both stay tappable; on touch both grow to a 44px target (see the
-   compact media block below). */
 .fm-tile-actions {
   position: absolute;
   top: 6px;
@@ -4880,9 +3813,6 @@ function onFolderMenu(key: string): void {
   height: 30px;
 }
 
-/* JUS-232: the modified age shares the selection row in the tile's bottom
-   reserve: it overlays the band's right end while the checkbox sits left, so
-   selecting never changes the tile size and both stay on one row. */
 .fm-tile-foot {
   position: absolute;
   left: 6px;
@@ -4895,8 +3825,6 @@ function onFolderMenu(key: string): void {
   pointer-events: none;
 }
 
-/* JUS-215: the tile checkbox is a bare control in the bottom-left corner — no
-   background tile — so selecting never changes the tile size. */
 .fm-tile-check {
   position: absolute;
   left: 6px;
@@ -4957,12 +3885,6 @@ function onFolderMenu(key: string): void {
   pointer-events: none;
 }
 
-/* ── JUS-206 round 3: desktop one-row path bar ───────────────────────────
-   At >=1024px the path group (~half the row) and the search block share ONE
-   row: the bar never wraps, the breadcrumb clips from the left and the filter
-   input shrinks instead (its 120px floor plus the compact search controls fit
-   every desktop width). Below 1024px the bar may wrap; the phone rules below
-   take over at <=640px. */
 @media (min-width: 1024px) {
   .fm-bar.fm-pathbar {
     flex-wrap: nowrap;
@@ -4973,18 +3895,6 @@ function onFolderMenu(key: string): void {
   }
 }
 
-/* ── JUS-135: phone layout ────────────────────────────────────────────────
-   At 390px the toolbar used to wrap to four rows and the selection cluster
-   squeezed the list to ~1.5 rows. The rules below (deliberately last, so they
-   win over the desktop base rules):
-   - trim the card padding and the inter-block rhythm so the fixed chrome is
-     a thin band;
-   - put the selection cluster (count + Download/Copy/Cut/Compress/Delete/
-     Clear) on its own full-width row that never wraps and scrolls
-     horizontally when a long selection or touch-sized targets overflow it, so
-     every action stays reachable and the row count (hence the list height) is
-     the same with and without a selection (JUS-130);
-   - keep Root/view toggle/tabs to one or two compact rows. */
 @media (max-width: 640px) {
   .files-browser :deep(.n-card-header) {
     padding: var(--space-2) var(--space-3);
@@ -4994,9 +3904,6 @@ function onFolderMenu(key: string): void {
     padding: 0 var(--space-3) var(--space-2);
   }
 
-  /* The "Root" caption is redundant at this width: the control keeps its
-     accessible name through aria-label. (The slotted "Agent node" caption is
-     hidden by ServerFilesPage, which owns that slot content.) */
   .fm-field-label {
     display: none;
   }
@@ -5007,14 +3914,12 @@ function onFolderMenu(key: string): void {
     flex: 1 1 90px;
   }
 
-  /* Keep the roomier band gaps while reducing the path-to-toolbar gap on phones. */
   .fm-toolbar,
   .fm-bar.fm-pathbar {
     row-gap: var(--space-2);
     margin-bottom: var(--space-4);
   }
 
-  /* Path bar row 1: the breadcrumb takes the whole row (scrolls, never wraps). */
   .fm-path {
     flex: 1 1 100%;
     min-width: 0;
@@ -5023,10 +3928,6 @@ function onFolderMenu(key: string): void {
     scrollbar-width: thin;
   }
 
-  /* Path bar: at phone the navigation field gives the search group room so the
-     three controls share ONE row with Refresh (JUS-135 ≥60% list). The
-     breadcrumb scrolls, so it can shrink; the search group keeps the input and
-     the switch readable instead of overflowing (JUS-163 fix round 2). */
   .fm-navfield {
     flex: 1 1 110px;
   }
@@ -5037,9 +3938,6 @@ function onFolderMenu(key: string): void {
     margin-left: 0;
   }
 
-  /* The switch keeps only its box on a phone: a full label would crowd the
-     input to nothing. The label text still names the control for assistive tech
-     (aria-labelledby). */
   .fm-search-recursive :deep(.n-checkbox__label) {
     position: absolute;
     width: 1px;
@@ -5059,17 +3957,12 @@ function onFolderMenu(key: string): void {
     margin-left: 0;
   }
 
-  /* Toolbar: the clipboard (Paste + its nowrap hint chip) takes its own
-     full-width row. The bulk actions moved into the header bar (JUS-146), so
-     nothing competes for this row. */
   .fm-toolbar-end {
     flex: 1 1 100%;
     justify-content: flex-start;
     flex-wrap: nowrap;
   }
 
-  /* Compact phone footer: the entry summary is the useful line; the path and
-     the free-space readout duplicate the breadcrumb/root. */
   .fm-foot {
     gap: var(--space-3);
     margin-top: 2px;
@@ -5083,10 +3976,6 @@ function onFolderMenu(key: string): void {
 }
 
 @media (max-width: 480px) {
-  /* JUS-206 round 7: single band row on the phone too — the compact
-     switcher (icon hidden, truncated select) shares the row while the strip
-     keeps its own horizontal scroll, so nothing overflows and no second band
-     row appears between the tabs and the body. */
   .fm-topbar {
     flex-wrap: nowrap;
     margin: 0 calc(-1 * var(--space-3)) 0;
@@ -5097,11 +3986,6 @@ function onFolderMenu(key: string): void {
     display: none;
   }
 
-  /* JUS-206 round 9: the horizontal strip must never reserve scrollbar layout
-     space on the phone (a classic scrollbar gutter sits the tabs above the
-     band bottom and clips the feet). The strip stays scrollable by touch,
-     wheel and keyboard; the + button lives outside it. Desktop keeps its
-     thin scrollbar and is untouched. */
   .fm-tabstrip {
     scrollbar-width: none;
   }
@@ -5110,8 +3994,6 @@ function onFolderMenu(key: string): void {
     display: none;
   }
 
-  /* JUS-215: single-column tiles on a phone — two narrow columns would squeeze
-     the top name and the right-side age into truncation. */
   .fm-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -5121,9 +4003,6 @@ function onFolderMenu(key: string): void {
     flex-basis: 100%;
   }
 
-  /* JUS-135 phone toolbar: the groups ride one scrolling row (the outer
-     toolbar keeps the row box, so the grid bulk overlay anchors to the visible
-     area instead of the scrolled content). */
   .fm-toolbar-scroll {
     display: flex;
     align-items: center;
@@ -5147,20 +4026,11 @@ function onFolderMenu(key: string): void {
     flex: 0 0 auto;
   }
 
-  /* Keep keyboard focus visible inside the horizontal scrollport. */
   .fm-toolbar :deep(button:focus-visible) {
     outline-offset: calc(-1 * var(--space-1));
   }
 }
 
-/* ── JUS-145: compact list (a density optimisation, not the reachability fix) ─
-   The Actions cell is pinned sticky at every width the table overflows (see
-   .fm-row > .fm-actions), so the ⋮ is always on screen. Below 860px the
-   low-value columns (Modified, Owner/Mode) additionally collapse so Name, Size
-   and the ⋮ fit a phone scrollport without a sideways scroll and the rows stay
-   dense. Modified is not lost — it rides under the name as a muted line — and
-   the toolbar sort control keeps Modified / Owner-Mode sortable because their
-   headers are hidden here. */
 @media (max-width: 860px) {
   .fm-table {
     min-width: 0;
@@ -5173,8 +4043,6 @@ function onFolderMenu(key: string): void {
   .fm-row {
     grid-template-columns: 30px minmax(0, 1fr) 64px 64px;
     gap: var(--space-2);
-    /* 3px block padding so the 44px ⋮ fits inside a 52px windowed row (the
-       4px base would leave 43px of content and clip it by 1px). */
     padding-block: 3px;
   }
 
@@ -5183,10 +4051,6 @@ function onFolderMenu(key: string): void {
     display: none;
   }
 
-  /* The name cell becomes a two-row grid: the type icon spans both rows, the
-     name takes the first line and the secondary line carries the symlink target
-     next to the relative modified time (JUS-145/148). The name no longer shares
-     its line with the target, so it is never squeezed to "br…". */
   .fm-name {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -5204,11 +4068,9 @@ function onFolderMenu(key: string): void {
 
   .fm-name .fm-label {
     grid-area: label;
-    /* The desktop name↔target trim does not apply to the grid cell. */
     margin-right: 0;
   }
 
-  /* The secondary line: the target (when any) then the relative time. */
   .fm-name-sub {
     grid-area: sub;
     display: flex;
@@ -5229,8 +4091,6 @@ function onFolderMenu(key: string): void {
     white-space: nowrap;
   }
 
-  /* The inline buttons fold into the ⋮ menu (same actions) and the ⋮ is a 44px
-     target in every compact layout. */
   .fm-actions .fm-action {
     display: none;
   }
@@ -5241,9 +4101,6 @@ function onFolderMenu(key: string): void {
   }
 }
 
-/* JUS-145: above the compact range a coarse pointer still needs a 44px ⋮ and a
-   row tall enough for it; the inline actions keep their density, because a set
-   of 44px inline buttons would overflow the fixed actions track. */
 @media (hover: none) and (min-width: 861px) {
   .files-browser {
     --fm-row-height: 52px;

@@ -16,8 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/updates"
 )
 
-// runUpdate implements `gotham update <check|apply|rollback>`: the operator
-// path for the same check/apply/rollback chain the HTTP routes expose.
 func runUpdate(args []string) int {
 	if len(args) == 0 {
 		updateUsage(os.Stderr)
@@ -81,7 +79,6 @@ func runUpdate(args []string) int {
 	}
 }
 
-// runUpdateCheck reports the available version, if any.
 func runUpdateCheck(ctx context.Context, svc updates.Service) int {
 	release, err := svc.Check(ctx)
 	if err != nil {
@@ -96,7 +93,6 @@ func runUpdateCheck(ctx context.Context, svc updates.Service) int {
 	return exitOK
 }
 
-// runUpdateApply applies the newest release, optionally on a chosen channel.
 func runUpdateApply(ctx context.Context, svc updates.Service, args []string) int {
 	flags := flag.NewFlagSet("apply", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
@@ -122,21 +118,10 @@ func runUpdateApply(ctx context.Context, svc updates.Service, args []string) int
 	return exitOK
 }
 
-// requireBinaryOwner refuses to swap a binary the invoking user does not own.
-// Run as root, the atomic swap installs a root:root 0755 binary over the
-// service user's binary, and the next service-run apply then fails at the
-// hardlink backup step (fs.protected_hardlinks=1 -> EPERM). Refusing is safer
-// than silently poisoning ownership; run as the service user instead:
-//
-//	sudo -u gotham /var/lib/gotham/bin/gotham update apply
-//
-// A missing binary (fresh install) is allowed: there is nothing to compare yet.
 func requireBinaryOwner(command string) error {
 	return checkBinaryOwner(updates.BinaryPathFromEnv(), os.Geteuid(), command)
 }
 
-// checkBinaryOwner is the testable core of requireBinaryOwner: it compares the
-// binary owner to euid and returns a clear message on a mismatch.
 func checkBinaryOwner(path string, euid int, command string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -156,7 +141,6 @@ func checkBinaryOwner(path string, euid int, command string) error {
 		path, stat.Uid, owner, euid, owner, path, command)
 }
 
-// updateUsage prints the `gotham update` help.
 func updateUsage(w io.Writer) {
 	fmt.Fprintf(w, `gotham update <command>
 

@@ -1,39 +1,16 @@
-/**
- * Pure helpers behind the file code editor (P18 step 8): EOL/BOM detection
- * and re-serialisation for a byte-identical round trip, the language table
- * for the explicit CodeMirror set (no `language-data`), and the path
- * arithmetic that retargets an open tab through a rename or move. Kept
- * DOM-free so the store and the vitest suite can exercise them directly.
- */
 import { clampWindowOffset } from "@/shared/window/geometry";
 
-/** EditorEol is the dominant line terminator of an opened document. */
 export type EditorEol = "\n" | "\r\n";
 
-/** DocShape is the decoded shape of one text body. */
 export interface DocShape {
-  /** doc is the text with a leading BOM stripped and every EOL normalised to LF. */
   doc: string;
   eol: EditorEol;
   bom: boolean;
-  /**
-   * faithful is false when the body mixes CRLF with lone LF, or contains a
-   * lone CR: re-serialising such a body with a single `eol` cannot reproduce
-   * the original bytes. The store opens those files read-only instead of
-   * silently normalising them on the next save.
-   */
   faithful: boolean;
 }
 
 const BOM = "\uFEFF";
 
-/**
- * splitDoc decodes one text body into editor text plus the line-ending and
- * BOM metadata needed to reproduce the original bytes on save. A body whose
- * terminators are all one kind (LF, or CRLF) round-trips byte-identically;
- * a mixed body (CRLF + lone LF, or any lone CR) is flagged `faithful: false`
- * so it is never silently rewritten.
- */
 export function splitDoc(content: string): DocShape {
   const bom = content.startsWith(BOM);
   const body = bom ? content.slice(BOM.length) : content;
@@ -46,13 +23,6 @@ export function splitDoc(content: string): DocShape {
   return { doc, eol, bom, faithful };
 }
 
-/**
- * serializeDoc re-encodes editor text with its original line endings and BOM,
- * so a load followed by an unchanged save writes the same bytes. It takes the
- * round-trippable subset of {@link DocShape} (a mixed-EOL body is never saved).
- * A BOM is only meaningful for UTF-8; a legacy charset drops it, since the
- * server would refuse U+FEFF there.
- */
 export function serializeDoc(
   shape: Pick<DocShape, "doc" | "eol" | "bom"> & { encoding?: string },
 ): string {
@@ -61,7 +31,6 @@ export function serializeDoc(
   return bom ? BOM + body : body;
 }
 
-/** EditorLanguageId is the explicit language set the editor ships. */
 export type EditorLanguageId =
   | "json"
   | "yaml"
@@ -94,16 +63,12 @@ export type EditorLanguageId =
   | "log"
   | "plain";
 
-/** EditorLanguage is one pickable language with its display names. */
 export interface EditorLanguage {
   id: EditorLanguageId;
-  /** name is the full name shown in the picker. */
   name: string;
-  /** label is the short uppercase tag shown in the status bar. */
   label: string;
 }
 
-/** editorLanguages is the status-bar picker order. */
 export const editorLanguages: readonly EditorLanguage[] = [
   { id: "plain", name: "Plain text", label: "TEXT" },
   { id: "json", name: "JSON", label: "JSON" },
@@ -221,11 +186,6 @@ const byExtension: Record<string, EditorLanguageId> = {
   txt: "plain",
 };
 
-/**
- * byName matches the whole basename first, so a dotless file (Dockerfile,
- * Makefile, Gemfile) and a dotted special name (nginx.conf, .htaccess) never
- * depend on extension extraction.
- */
 const byName: Record<string, EditorLanguageId> = {
   ".htaccess": "apache",
   ".htpasswd": "apache",
@@ -247,22 +207,18 @@ const byName: Record<string, EditorLanguageId> = {
   "compose.yaml": "yaml",
 };
 
-/** filenameRules cover a basename family whose extension is not enough. */
 const filenameRules: ReadonlyArray<{
   test: (_name: string) => boolean;
   language: EditorLanguageId;
 }> = [
-  // "Dockerfile", "Dockerfile.prod", "app.Dockerfile".
   {
     test: (name) => name.startsWith("dockerfile.") || name.endsWith(".dockerfile"),
     language: "dockerfile",
   },
-  // "Makefile.am", "Makefile.in", "app.Makefile".
   {
     test: (name) => name.startsWith("makefile.") || name.endsWith(".makefile"),
     language: "makefile",
   },
-  // ".env", ".env.local", "dev.env".
   {
     test: (name) => name.startsWith(".env.") || name.endsWith(".env"),
     language: "ini",
@@ -273,20 +229,12 @@ const filenameRules: ReadonlyArray<{
   },
 ];
 
-/** extensionOf returns the lowercased extension after the last dot. */
 function extensionOf(name: string): string {
   const base = name.slice(name.lastIndexOf("/") + 1);
   const dot = base.lastIndexOf(".");
-  // A leading dot (".env") is a hidden file, not an extension.
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 }
 
-/**
- * detectLanguage maps a file path onto the explicit editor language set. The
- * basename is resolved first (exact special names, then filename families),
- * then the extension, so "Dockerfile" and "nginx.conf" do not fall back to
- * plain text.
- */
 export function detectLanguage(path: string): EditorLanguageId {
   const lower = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
   const named = byName[lower];
@@ -300,13 +248,11 @@ export function detectLanguage(path: string): EditorLanguageId {
   return byExtension[extensionOf(lower)] ?? "plain";
 }
 
-/** tabTitle is the basename shown on an editor tab. */
 export function tabTitle(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash === -1 ? path : path.slice(slash + 1);
 }
 
-/** pathWithin reports whether path is dir itself or a descendant of dir. */
 export function pathWithin(path: string, dir: string): boolean {
   if (dir === "") {
     return true;
@@ -314,12 +260,6 @@ export function pathWithin(path: string, dir: string): boolean {
   return path === dir || path.startsWith(`${dir}/`);
 }
 
-/**
- * rebasedPath re-bases an open document's path when its ancestor directory
- * moves from `from` to `to`. Returns null when the tab is outside the moved
- * subtree, so the caller can leave it untouched. A root-level move ("") keeps
- * the tab's own directory prefix.
- */
 export function rebasedPath(
   path: string,
   from: string,
@@ -335,13 +275,6 @@ export function rebasedPath(
   return rest === "" ? to : `${to}/${rest}`;
 }
 
-/**
- * clampEditorOffset keeps the floating editor window fully inside the viewport
- * after a title-bar drag: the window may never hang off an edge, so its title
- * bar (and the controls in it) can always be grabbed again. A window larger
- * than the viewport (a small screen) pins to the top-left corner instead of
- * producing a negative maximum.
- */
 export function clampEditorOffset(
   x: number,
   y: number,
@@ -360,13 +293,8 @@ export function clampEditorOffset(
   );
 }
 
-/** TabCloseScope is the tab-strip command a context-menu entry runs. */
 export type TabCloseScope = "self" | "others" | "all" | "right";
 
-/**
- * tabsToClose returns the ids a close command targets, in strip order. "right"
- * is every tab after the target; an unknown target closes nothing.
- */
 export function tabsToClose<T extends { id: string }>(
   tabs: T[],
   scope: TabCloseScope,
@@ -388,12 +316,6 @@ export function tabsToClose<T extends { id: string }>(
   }
 }
 
-/**
- * scrollTabIntoView returns the scrollLeft that brings `tab` fully inside the
- * horizontal tab strip, keeping `pad` px of breathing room at either edge. It
- * takes viewport rects, so it works with the strip's own scroll offset already
- * applied; a tab that is already visible leaves the offset untouched.
- */
 export function scrollTabIntoView(
   strip: { left: number; right: number; scrollLeft: number },
   tab: { left: number; right: number },
@@ -408,24 +330,16 @@ export function scrollTabIntoView(
   return Math.max(0, next);
 }
 
-/** languageLabel is the short uppercase tag shown in the status bar. */
 export function languageLabel(language: EditorLanguageId): string {
   return byLanguage.get(language)?.label ?? language.toUpperCase();
 }
 
-/** languageName is the full display name shown in the language picker. */
 export function languageName(language: EditorLanguageId): string {
   return byLanguage.get(language)?.name ?? language;
 }
 
-/**
- * EditorEncoding is the save charset of one open document. UTF-8 is the only
- * one a browser produces natively; the legacy charsets are transcoded by the
- * control plane (internal/files/encoding.go).
- */
 export type EditorEncoding = "ascii" | "utf-8" | "gbk" | "gb2312" | "big5";
 
-/** editorEncodings is the encoding picker order (reference panel parity). */
 export const editorEncodings: readonly EditorEncoding[] = [
   "ascii",
   "utf-8",
@@ -434,7 +348,6 @@ export const editorEncodings: readonly EditorEncoding[] = [
   "big5",
 ];
 
-/** editorEncodingNames maps each charset to its display label in the UI. */
 const editorEncodingNames: Record<EditorEncoding, string> = {
   ascii: "ASCII",
   "utf-8": "UTF-8",
@@ -443,7 +356,6 @@ const editorEncodingNames: Record<EditorEncoding, string> = {
   big5: "BIG5",
 };
 
-/** isEditorEncoding reports a charset name this editor knows how to save. */
 export function isEditorEncoding(value: unknown): value is EditorEncoding {
   return (
     typeof value === "string" &&
@@ -451,28 +363,15 @@ export function isEditorEncoding(value: unknown): value is EditorEncoding {
   );
 }
 
-/**
- * normalizeEditorEncoding maps a server-reported charset onto a known one,
- * falling back to UTF-8 for a server that predates encoding detection.
- */
 export function normalizeEditorEncoding(value: unknown): EditorEncoding {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : value;
   return isEditorEncoding(normalized) ? normalized : "utf-8";
 }
 
-/** encodingLabel is the status-bar and picker label of one charset. */
 export function encodingLabel(encoding: EditorEncoding): string {
   return editorEncodingNames[encoding];
 }
 
-/**
- * unrepresentableChars returns the characters of `text` the target charset
- * cannot hold. The check is deliberately conservative: every legacy encoding
- * here is BMP-only, so a non-BMP code point (an emoji) is always refused, and
- * ASCII refuses every non-ASCII rune. A BMP character outside a CJK charset is
- * not detectable in the browser; the control plane refuses it with a clear
- * error, so the text is still never silently dropped.
- */
 export function unrepresentableChars(
   text: string,
   encoding: EditorEncoding,

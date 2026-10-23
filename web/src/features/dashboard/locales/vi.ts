@@ -1,10 +1,5 @@
 import type { DashboardMessages } from "./en";
 
-/**
- * Dashboard Vietnamese catalog. Keys mirror `en.ts` exactly; only values
- * are translated. Counts, wire values and technical source notes stay
- * untranslated by design.
- */
 const vi: DashboardMessages = {
   header: {
     eyebrow: "Tổng quan",

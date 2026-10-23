@@ -1,4 +1,3 @@
-// Unit tests for the containers view helpers (JUS-24 split of ContainersPage).
 
 import { describe, expect, it } from "vitest";
 

@@ -50,9 +50,6 @@ func TestServiceUpdateProfile(t *testing.T) {
 		t.Error("Me is_platform_admin = false, want true for the bootstrap account")
 	}
 
-	// The wire body carries the new fields and omits an unset display name.
-	// The override opens the plain-insert path for the second account, which
-	// is not the bootstrap admin.
 	svc.AllowOpenRegistration = true
 	second, err := svc.Register(ctx, uniqueEmail("profile-plain"), "s3cret-password", "", nil, SessionMeta{})
 	if err != nil {
@@ -127,9 +124,6 @@ func TestServiceUpdateProfileTrimBoundsClear(t *testing.T) {
 	}
 }
 
-// TestServiceUpdateProfileRejectsUnstorableText: NUL, invalid UTF-8, control
-// characters and invisible format/bidi-override characters are 400s, not
-// stored values (F1/F3). NUL would otherwise reach Postgres and answer 500.
 func TestServiceUpdateProfileRejectsUnstorableText(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
@@ -161,7 +155,6 @@ func TestServiceUpdateProfileRejectsUnstorableText(t *testing.T) {
 			t.Errorf("%s: error = %v, want ErrDisplayNameInvalid", name, err)
 		}
 	}
-	// Storable multibyte text still works.
 	for _, value := range []string{"Ada Lovelace", "王小明", "Ada 😀"} {
 		updated, err := svc.UpdateProfile(ctx, userID, strptr(value))
 		if err != nil {
@@ -172,9 +165,6 @@ func TestServiceUpdateProfileRejectsUnstorableText(t *testing.T) {
 	}
 }
 
-// TestServiceUpdateProfileFormatChars (PF-2 F5): ZWNJ and ZWJ are allowed
-// (Persian/Hindi names and ZWJ emoji sequences need them) while every other
-// invisible formatting character is rejected.
 func TestServiceUpdateProfileFormatChars(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
@@ -190,8 +180,6 @@ func TestServiceUpdateProfileFormatChars(t *testing.T) {
 		t.Fatalf("parse user ID: %v", err)
 	}
 
-	// Allowed: a Persian name joined with ZWNJ (U+200C) and a ZWJ (U+200D)
-	// emoji sequence.
 	for name, value := range map[string]string{
 		"ZWNJ Persian name": "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627",
 		"ZWJ emoji":         "\U0001F468\u200d\U0001F469\u200d\U0001F467",
@@ -204,7 +192,6 @@ func TestServiceUpdateProfileFormatChars(t *testing.T) {
 		}
 	}
 
-	// Denied: every other invisible formatting class.
 	for name, value := range map[string]string{
 		"zero-width space U+200B":    "a\u200bb",
 		"bidi mark U+200E":           "a\u200eb",
@@ -243,7 +230,6 @@ func TestServiceChangePassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse user ID: %v", err)
 	}
-	// A second session on another device that must die with the change.
 	other, err := svc.Login(ctx, email, oldPassword, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
@@ -274,7 +260,6 @@ func TestServiceChangePassword(t *testing.T) {
 		t.Fatalf("changed user = %q, want %q", changed.User.ID, first.User.ID)
 	}
 
-	// Both pre-change sessions are dead; the returned pair works.
 	for name, token := range map[string]string{"register": first.RefreshToken, "other": other.RefreshToken} {
 		if _, err := svc.Refresh(ctx, token, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 			t.Fatalf("Refresh(%s session) error = %v, want ErrUnauthorized", name, err)
@@ -294,8 +279,6 @@ func TestServiceChangePassword(t *testing.T) {
 	}
 }
 
-// TestServiceChangePasswordOAuthOnly: a passwordless (OAuth-created) account
-// sets a password without a current one; a supplied current one is ignored.
 func TestServiceChangePasswordOAuthOnly(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
@@ -320,8 +303,6 @@ func TestServiceChangePasswordOAuthOnly(t *testing.T) {
 	}
 }
 
-// TestServiceChangePasswordRacesLogin: a login that verified the old password
-// while a change commits must not mint a session under the new credential.
 func TestServiceChangePasswordRacesLogin(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
@@ -349,8 +330,6 @@ func TestServiceChangePasswordRacesLogin(t *testing.T) {
 		loginErr <- err
 	}()
 
-	// The login verified the old password and is parked before its
-	// credential-version re-read; the change commits underneath it.
 	<-entered
 	if _, err := svc.ChangePassword(ctx, userID, oldPassword, "new-s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
@@ -362,8 +341,6 @@ func TestServiceChangePasswordRacesLogin(t *testing.T) {
 	}
 }
 
-// TestServiceChangePasswordRacesRefresh: a refresh in flight while a change
-// commits is refused; the old chain cannot mint a replacement.
 func TestServiceChangePasswordRacesRefresh(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
@@ -386,10 +363,6 @@ func TestServiceChangePasswordRacesRefresh(t *testing.T) {
 		refreshErr <- err
 	}()
 
-	// Whichever interleaving wins, the old chain is refused: either the
-	// change commits first and the read misses the deleted row, or the
-	// refresh reads the live row and its rotation finds nothing to revoke.
-	// The hook only parks the in-flight path so no goroutine leaks.
 	if _, err := svc.ChangePassword(ctx, userID, oldPassword, "new-s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
@@ -400,9 +373,6 @@ func TestServiceChangePasswordRacesRefresh(t *testing.T) {
 	}
 }
 
-// TestServiceChangePasswordConcurrent: two simultaneous changes with the same
-// current password serialize; exactly one wins and the loser is told its
-// current password is stale.
 func TestServiceChangePasswordConcurrent(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()

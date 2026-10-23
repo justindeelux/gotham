@@ -11,19 +11,7 @@ import {
   uniqueSuffix,
 } from "./support";
 
-// Reuse the authenticated session from global setup.
 test.use({ storageState: storageStatePath });
-
-/**
- * Focused regressions for the FE-7.1 fix round (R1–R3).
- *
- * This file deliberately uses the plain Playwright `test` instead of the
- * guardrail-wrapped one in `./fixtures`: each scenario forces the failure it
- * asserts on — a lifecycle response held past the shared read timeout, a held
- * re-render, an aborted deploy-history read — and the fixture's teardown would
- * flag exactly that forced failure. The guardrail-wrapped happy path lives in
- * `./services.spec.ts`.
- */
 
 const sampleCompose = [
   "services:",
@@ -47,7 +35,6 @@ interface SeededService {
   environmentId: string;
 }
 
-/** seedServer registers a node row and returns its id and generated name. */
 async function seedServer(
   api: APIRequestContext,
   headers: Record<string, string>,
@@ -66,7 +53,6 @@ async function seedServer(
   return { id: server.id, name: server.name };
 }
 
-/** createService stores one service with a distinct document and env marker. */
 async function createService(
   api: APIRequestContext,
   headers: Record<string, string>,
@@ -93,7 +79,6 @@ async function createService(
   return service;
 }
 
-/** seedService stores a compose service on a fresh server row. */
 async function seedService(
   api: APIRequestContext,
   headers: Record<string, string>,
@@ -121,7 +106,6 @@ async function seedService(
   };
 }
 
-/** serviceDetail reads one service through the API. */
 async function serviceDetail(
   api: APIRequestContext,
   headers: Record<string, string>,
@@ -136,8 +120,6 @@ async function serviceDetail(
 }
 
 test.describe("services fix regressions", () => {
-  // The whole services surface is FEATURE_SERVICES-gated. Verify it is mounted
-  // before seeding, so a feature-off control plane skips instead of failing.
   test.beforeEach(async ({ request }) => {
     const account = loadAccount();
     const catalog = await request.get("/api/v1/templates", {
@@ -153,8 +135,6 @@ test.describe("services fix regressions", () => {
     page,
     request,
   }) => {
-    // The held response is released after 16s; the test needs room for the
-    // Playwright timeout plus the page interactions around it.
     test.setTimeout(60_000);
 
     const account = loadAccount();
@@ -164,9 +144,6 @@ test.describe("services fix regressions", () => {
 
     let responseHeld = false;
     await page.route("**/api/v1/services/*/deploy", async (route) => {
-      // Hold the REAL backend response — a 502 on this agent-less control
-      // plane — for longer than the shared 15s read timeout. Nothing is
-      // synthesized and no deploy result is faked.
       const response = await route.fetch();
       responseHeld = true;
       await new Promise((resolve) => setTimeout(resolve, 16_000));
@@ -179,8 +156,6 @@ test.describe("services fix regressions", () => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "Deploy" }).click();
 
-    // Past 15s the request must still be in flight, so the UI reports what the
-    // backend answered instead of aborting with the shared read timeout.
     await expect(page.getByText(/Node agent error/)).toBeVisible({
       timeout: 30_000,
     });
@@ -223,7 +198,6 @@ test.describe("services fix regressions", () => {
     const preview = step2.locator('[data-testid="compose-preview"]');
     await expect(preview).toContainText(oldDomain);
 
-    // Back, change the domain, then hold the actual re-render response.
     await wizard.getByRole("button", { name: "Back" }).click();
     await step1.locator(".field-domain input").fill(newDomain);
     const hold: { release: (() => void) | null } = { release: null };
@@ -237,8 +211,6 @@ test.describe("services fix regressions", () => {
     await wizard.getByRole("button", { name: "Next" }).click();
     await expect.poll(() => hold.release !== null).toBe(true);
 
-    // The previous preview is invalidated the moment the new render starts, so
-    // forward navigation is blocked while the response is pending.
     await expect(wizard.getByRole("button", { name: "Next" })).toBeDisabled();
 
     const release = hold.release;
@@ -250,13 +222,9 @@ test.describe("services fix regressions", () => {
     await expect(preview).toContainText(newDomain);
     await expect(preview).not.toContainText(oldDomain);
 
-    // Create from the refreshed preview and prove the persisted document
-    // carries the value the operator last entered. The wizard takes the
-    // scope through its picker (PE-5): the seeded project and environment.
     await wizard.getByRole("button", { name: "Next" }).click();
     const step3 = wizard.locator('[data-testid="wizard-step-3"]');
     await step3.locator(".field-service-name input").fill(serviceName);
-    // The picker preselects the seeded scope; the summary names it.
     await expect(step3).toContainText(`${projectName} / production`);
     await step3.locator(".wizard__metaform .n-select").click();
     await page
@@ -301,14 +269,9 @@ test.describe("services fix regressions", () => {
     );
     const { serviceId } = seeded;
 
-    // Abort only the history read; the service detail response still arrives.
     const historyPattern = "**/api/v1/services/*/deploys";
     await page.route(historyPattern, (route) => route.abort("failed"));
 
-    // ── detail page: unavailable + retry, never the empty claims ─────────
-    // (PE-5 fix round 1: the list half of this regression went away with
-    // the flat Services page; the environment table shows the service
-    // status, not the history availability.)
     await page.goto(
       nestedURL(seeded.projectId, seeded.environmentId, "services", serviceId),
     );
@@ -320,7 +283,6 @@ test.describe("services fix regressions", () => {
     await expect(page.getByText("Nothing has been deployed yet.")).toHaveCount(0);
     await expect(page.getByText(/\d+ attempts/)).toHaveCount(0);
 
-    // ── retry after the API is reachable: a real empty read is claimed ───
     await page.unroute(historyPattern);
     await unavailable.getByRole("button", { name: "Retry" }).click();
     await expect(page.locator('[data-testid="history-empty"]')).toBeVisible();
@@ -359,8 +321,6 @@ test.describe("services fix regressions", () => {
       domainB,
     );
 
-    // Hold A's genuine detail response so A's load is still in flight when the
-    // SPA route moves to B.
     const hold: { release: (() => void) | null } = { release: null };
     let held = false;
     await page.route(
@@ -381,8 +341,6 @@ test.describe("services fix regressions", () => {
     );
     await expect.poll(() => held).toBe(true);
 
-    // Move to B inside the SPA (no reload), so A's load keeps running in the
-    // same component instance and its completion races B's.
     const nestedB = nestedURL(projectId, environmentId, "services", serviceB.id);
     await page.evaluate((url: string) => {
       window.history.pushState({}, "", url);
@@ -398,20 +356,16 @@ test.describe("services fix regressions", () => {
     await expect(composeView).toContainText(domainB);
     await expect(envValue).toHaveValue("route-b");
 
-    // Release A's response: it must not seed B's editable drafts.
     const release = hold.release;
     if (release === null) {
       throw new Error("the detail response was never held");
     }
     release();
-    // Let the released response land so the assertions below compare after the
-    // race settled (a stale completion would have overwritten the drafts).
     await page.waitForTimeout(300);
     await expect(composeView).toContainText(domainB);
     await expect(composeView).not.toContainText(domainA);
     await expect(envValue).toHaveValue("route-b");
 
-    // Saving B persists B's values; A's document and env never move across.
     await page.getByRole("button", { name: "Save environment" }).click();
     await expect(
       page.getByText("Environment saved. It applies to the next deploy."),
@@ -425,8 +379,6 @@ test.describe("services fix regressions", () => {
     expect(storedA.env.MARK).toBe("route-a");
     expect(storedA.compose_yaml).toContain(domainA);
 
-    // The compose editor round-trips B's own document (the guarded compose
-    // save path).
     await page.getByRole("button", { name: "Edit" }).click();
     const editor = page.locator(".compose-editor__input .cm-content");
     await expect(editor).toContainText(domainB);
@@ -457,9 +409,6 @@ test.describe("services fix regressions", () => {
     );
     const { serviceId } = seeded;
 
-    // The log endpoint answers 401 on every call (the first try and the retry
-    // after a real refresh), so the reader's own refresh path runs against the
-    // live refresh endpoint.
     await page.route("**/api/v1/services/*/logs*", (route) =>
       route.fulfill({
         status: 401,
@@ -481,7 +430,6 @@ test.describe("services fix regressions", () => {
     await expect(
       page.getByText("Your session expired. Please sign in again."),
     ).toBeVisible();
-    // Exactly one refresh attempt: the reader retries once, never in a loop.
     expect(refreshes).toBe(1);
   });
 });

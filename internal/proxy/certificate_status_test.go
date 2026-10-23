@@ -13,7 +13,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// fakeStatusStore is an in-memory CertificateStatusStore.
 type fakeStatusStore struct {
 	targets []CertificateStatusTarget
 	err     error
@@ -26,7 +25,6 @@ func (s *fakeStatusStore) ListCertificateStatusTargets(context.Context) ([]Certi
 	return s.targets, nil
 }
 
-// fakeACMEReader answers one canned response (or error).
 type fakeACMEReader struct {
 	response *agentv1.ReadACMEStorageResponse
 	err      error
@@ -47,12 +45,10 @@ func (r *fakeACMEReader) Close() error {
 	return nil
 }
 
-// statusCertificate builds a certificate intent fixture.
 func statusCertificate(domain string) DomainCertificate {
 	return DomainCertificate{ID: uuid.New(), ApplicationID: uuid.New(), Domain: domain, Challenge: ChallengeHTTP01}
 }
 
-// storedCertificate builds one agent metadata entry.
 func storedCertificate(resolver, main string, sans []string, notAfter time.Time) *agentv1.ACMECertificateInfo {
 	return &agentv1.ACMECertificateInfo{
 		Resolver: resolver,
@@ -150,8 +146,6 @@ func TestCertificateStatusesMapsPresentAbsentUnknown(t *testing.T) {
 		}
 	}
 
-	// One dial and one close per reachable node, shared by its certificates;
-	// the unreachable node is dialed once too.
 	if dials[serverStored] != 1 || dials[serverEmpty] != 1 || dials[serverDown] != 1 || dials[serverError] != 1 {
 		t.Fatalf("dials = %v, want exactly one per node", dials)
 	}
@@ -185,10 +179,6 @@ func TestCertificateStatusesWildcardIsOneLabel(t *testing.T) {
 	}
 }
 
-// TestCertificateStatusesWildcardPrimaryName proves the one-label wildcard
-// rule applies to a stored certificate's main name too, not only to SANs: the
-// RPC reads every certificate the node stored, and a manually configured
-// wildcard main is a valid cover. The apex and multi-label rejections hold.
 func TestCertificateStatusesWildcardPrimaryName(t *testing.T) {
 	server := uuid.New()
 	expiry := time.Now().Add(12 * time.Hour).UTC().Truncate(time.Second)

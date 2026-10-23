@@ -300,7 +300,6 @@ func TestObservationProtocolAndAfterInitDisablement(t *testing.T) {
 		}
 		result, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: name, Arguments: args})
 		if err == nil && !result.IsError {
-			// node_metrics returns explicit unavailable state; it must contain no samples.
 			body, _ := json.Marshal(result.StructuredContent)
 			if name != "node_metrics" || !strings.Contains(string(body), `"state":"unavailable"`) {
 				t.Fatalf("disabled context leaked %s: %s", name, body)

@@ -14,7 +14,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// fakeProxyServer is an in-process ProxyService implementation.
 type fakeProxyServer struct {
 	agentv1.UnimplementedProxyServiceServer
 }
@@ -27,9 +26,6 @@ func (fakeProxyServer) WriteProxyConfig(_ context.Context, req *agentv1.WritePro
 	return &agentv1.WriteProxyConfigResponse{Written: written, Reloaded: req.GetVerify()}, nil
 }
 
-// startFakeProxyServer serves fakeProxyServer over bufconn and returns the
-// dial target plus a context dialer option. serverCreds may be nil for an
-// insecure listener.
 func startFakeProxyServer(t *testing.T, serverCreds credentials.TransportCredentials) (string, grpc.DialOption) {
 	t.Helper()
 
@@ -57,7 +53,6 @@ func startFakeProxyServer(t *testing.T, serverCreds credentials.TransportCredent
 	return "passthrough:///bufnet", dialer
 }
 
-// exerciseProxyClient calls WriteProxyConfig with both verify values.
 func exerciseProxyClient(t *testing.T, ctx context.Context, client agentv1.ProxyServiceClient) {
 	t.Helper()
 

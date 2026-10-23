@@ -15,87 +15,31 @@ import (
 	"github.com/google/uuid"
 )
 
-// downloadWriteTimeout bounds one chunk write to a stalled client. It is reset
-// before every chunk, so a progressing (however slow) transfer is never cut and
-// only a client that stops reading is dropped.
 const downloadWriteTimeout = 60 * time.Second
 
-// rootsEnvelope wraps the root list.
 type rootsEnvelope struct {
 	Roots []Root `json:"roots"`
 }
 
-// statEnvelope wraps a single entry.
 type statEnvelope struct {
 	Entry Entry `json:"entry"`
 }
 
-// ticketEnvelope carries a freshly minted download ticket.
 type ticketEnvelope struct {
 	Ticket string `json:"ticket"`
 }
 
-// errorBody is the JSON body returned for failures. Code is a stable,
-// machine-readable token the browser maps to a localized message, so the
-// server's English text is never shown; it is absent when only status matters.
 type errorBody struct {
 	Message string `json:"message"`
 	Code    string `json:"code,omitempty"`
 }
 
-// handler serves the file routes for one FileService.
 type handler struct {
 	svc    FileService
 	logger *slog.Logger
-	// spool stages a streamed upload body to a temp file (the agent's write
-	// header must declare an exact size, which a multipart part or a chunked
-	// PUT does not carry). It bounds concurrent staging, checks free space and
-	// sweeps stale files; see spool.go.
-	spool *spooler
+	spool  *spooler
 }
 
-// Mount registers the file endpoints on r:
-//
-//	GET    /v1/servers/{id}/files/roots
-//	GET    /v1/servers/{id}/files/list?root=&path=&cursor=
-//	GET    /v1/servers/{id}/files/stat?root=&path=
-//	GET    /v1/servers/{id}/files/size?root=&path=
-//	GET    /v1/servers/{id}/files/search?root=&path=&query=&recursive=
-//	GET    /v1/servers/{id}/files/content?root=&path=
-//	PUT    /v1/servers/{id}/files/content?root=&path=&encoding=   (If-Match / ?overwrite)
-//	GET    /v1/servers/{id}/files/history?root=&path=
-//	GET    /v1/servers/{id}/files/history/{version}?root=&path=
-//	POST   /v1/servers/{id}/files/history/{version}/restore?root=&path=
-//	DELETE /v1/servers/{id}/files/history/{version}?root=&path=
-//	POST   /v1/servers/{id}/files/upload?root=&path=&overwrite=
-//	POST   /v1/servers/{id}/files/mkdir
-//	POST   /v1/servers/{id}/files/create
-//	POST   /v1/servers/{id}/files/rename
-//	POST   /v1/servers/{id}/files/move
-//	POST   /v1/servers/{id}/files/copy
-//	POST   /v1/servers/{id}/files/chmod
-//	POST   /v1/servers/{id}/files/compress
-//	POST   /v1/servers/{id}/files/extract
-//	DELETE /v1/servers/{id}/files/entry?root=&path=&recursive=&permanent=
-//	GET    /v1/servers/{id}/files/trash?root=
-//	POST   /v1/servers/{id}/files/trash/restore
-//	POST   /v1/servers/{id}/files/trash/purge
-//	POST   /v1/servers/{id}/files/trash/empty
-//	POST   /v1/servers/{id}/files/download-ticket?root=&path=
-//	GET    /v1/servers/{id}/files/download?ticket=
-//
-// auth wraps the group: the server passes its team chain (RequireAuth +
-// RequireTeam + the write gate), and the service authorizes the target node's
-// team and role before any agent read. The download route is deliberately
-// outside the auth group: the single-use ticket is its credential, because a
-// native browser download cannot attach the bearer token. logger is the
-// control plane's configured logger; a nil logger falls back to slog.Default().
-// A nil svc mounts nothing, so the control plane can call Mount unconditionally;
-// the routes are mounted whenever the service exists, and answer 503 ErrDisabled
-// while FEATURE_FILES is off.
-//
-// The ticket rides the query string. The control plane's request logger records
-// r.URL.Path only, never the query, so the ticket never reaches the access log.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, logger *slog.Logger) {
 	if svc == nil {
 		return
@@ -136,7 +80,6 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 	})
 }
 
-// roots serves GET .../files/roots.
 func (h *handler) roots(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -153,7 +96,6 @@ func (h *handler) roots(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rootsEnvelope{Roots: roots})
 }
 
-// list serves GET .../files/list.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -171,7 +113,6 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, listing)
 }
 
-// stat serves GET .../files/stat.
 func (h *handler) stat(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -186,7 +127,6 @@ func (h *handler) stat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, statEnvelope{Entry: entry})
 }
 
-// content serves GET .../files/content.
 func (h *handler) content(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -201,7 +141,6 @@ func (h *handler) content(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, content)
 }
 
-// issueTicket serves POST .../files/download-ticket.
 func (h *handler) issueTicket(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -216,7 +155,6 @@ func (h *handler) issueTicket(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, ticketEnvelope{Ticket: ticket})
 }
 
-// download serves GET .../files/download?ticket=.
 func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -237,15 +175,9 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(download.Size, 10))
 	w.Header().Set("Content-Disposition", contentDisposition(download.Name))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// A file body can hold secrets and the ticket URL is capability-bearing, so
-	// neither the browser nor an intermediary may cache the response.
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 
-	// The response controller extends the write deadline per chunk and flushes,
-	// so the browser starts writing the file before the stream ends and a
-	// stalled client is dropped instead of pinning a connection. Both calls are
-	// no-ops on a recorder that does not support deadlines (the handler tests).
 	controller := http.NewResponseController(w)
 	var written int64
 	for {
@@ -254,10 +186,6 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 			return
 		case chunk, open := <-download.Chunks:
 			if !open {
-				// The stream ended. A terminal error, or a byte count that does
-				// not match the Content-Length already sent, cannot become a JSON
-				// response, so the connection is aborted: the browser marks the
-				// short body as a failed download rather than a complete file.
 				streamErr, hasErr := <-download.Err
 				if (hasErr && streamErr != nil) || written != download.Size {
 					h.logger.Error("files: download failed mid-stream",
@@ -277,9 +205,6 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeError maps service sentinels to HTTP responses. The body carries a
-// stable code token the browser maps to a localized message; the English
-// message is a fallback and is never shown by the UI.
 func (h *handler) writeError(w http.ResponseWriter, err error) {
 	var maxBytes *http.MaxBytesError
 	switch {
@@ -288,27 +213,16 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrForbidden):
 		writeJSON(w, http.StatusForbidden, errorBody{Message: "forbidden", Code: "forbidden"})
 	case errors.Is(err, ErrValidation) && errors.As(err, &maxBytes):
-		// A body that overran the ceiling while being read (a lying or chunked
-		// Content-Length) is 413, not 400.
 		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "file is too large to edit", Code: "too_large"})
 	case errors.Is(err, ErrUnrepresentable):
-		// The body holds a character the chosen save encoding cannot represent.
-		// It is refused, never substituted, so the user can switch to UTF-8.
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "text cannot be represented in the save encoding", Code: "unrepresentable"})
 	case errors.Is(err, ErrValidation):
-		// A fixed message: the underlying error can carry raw gRPC/agent text
-		// (mapRPCError wraps the agent error), which must not reach the client.
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request", Code: "invalid"})
 	case errors.Is(err, ErrInvalidArchive):
-		// A truncated or corrupt archive is a 400 with its own copy, not the
-		// generic "invalid request" and never a 500.
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "archive is invalid or truncated", Code: "invalid_archive"})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "conflict", Code: "conflict"})
 	case errors.Is(err, ErrArchiveEntry):
-		// A refused archive member (link/device/FIFO/unsupported type) is a
-		// conflict-shaped refusal but not an existing-name clash, so it carries
-		// its own copy instead of the generic "conflict".
 		writeJSON(w, http.StatusConflict, errorBody{Message: "archive contains an entry that cannot be extracted", Code: "archive_entry"})
 	case errors.Is(err, ErrTooLarge):
 		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "file is too large to edit", Code: "too_large"})
@@ -334,7 +248,6 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 	}
 }
 
-// serverIDParam parses the {id} path parameter, answering 400 on a bad UUID.
 func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -344,9 +257,6 @@ func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// contentDisposition builds an RFC 6266 attachment header: an ASCII fallback
-// plus the UTF-8 filename*. The name is reduced to its base component so a
-// surprising entry name cannot inject header content.
 func contentDisposition(name string) string {
 	name = filepath.Base(strings.TrimSpace(name))
 	if name == "" || name == "." || name == "/" || name == string(filepath.Separator) {
@@ -361,7 +271,6 @@ func contentDisposition(name string) string {
 	return `attachment; filename="` + ascii + `"; filename*=UTF-8''` + url.PathEscape(name)
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

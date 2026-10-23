@@ -11,14 +11,8 @@ import (
 	"unicode/utf8"
 )
 
-// maxCommitMessageLen bounds the stored commit subject: the first line of the
-// message, kept short for the Deployment section of the UI.
 const maxCommitMessageLen = 200
 
-// CommitInfo is the git commit a deployment cloned: the full SHA, the subject
-// (first message line, sanitised and truncated), the author name (never the
-// email) and the committer date as RFC3339. Zero when the source never cloned
-// or the checkout has nothing to report.
 type CommitInfo struct {
 	SHA       string
 	Message   string
@@ -26,11 +20,6 @@ type CommitInfo struct {
 	Committed string
 }
 
-// sanitizeCommitText makes s safe for the text column and the deploy log:
-// invalid UTF-8 is replaced (Postgres text rejects it), control characters
-// are stripped (keeping tab; newline is split before this runs) and Unicode
-// format characters (category Cf: bidi overrides, zero-width marks) are
-// stripped so a hostile commit message cannot spoof the log line.
 func sanitizeCommitText(s string) string {
 	s = strings.ToValidUTF8(s, string(utf8.RuneError))
 	return strings.Map(func(r rune) rune {
@@ -44,9 +33,6 @@ func sanitizeCommitText(s string) string {
 	}, s)
 }
 
-// parseCommit builds a CommitInfo from raw git output: the rev-parse SHA, the
-// log subject line, the author name and the committer date. Anything
-// unparseable stays empty rather than failing the deploy.
 func parseCommit(sha, subject, author, date string) CommitInfo {
 	var info CommitInfo
 	if isCommitSHA(strings.TrimSpace(sha)) {
@@ -62,8 +48,6 @@ func parseCommit(sha, subject, author, date string) CommitInfo {
 	return info
 }
 
-// isCommitSHA reports whether s is a full commit SHA (40 hex for SHA-1,
-// 64 hex for SHA-256 repos).
 func isCommitSHA(s string) bool {
 	if len(s) != 40 && len(s) != 64 {
 		return false
@@ -77,7 +61,6 @@ func isCommitSHA(s string) bool {
 	return true
 }
 
-// truncateRunes cuts s to at most n characters (runes, not bytes).
 func truncateRunes(s string, n int) string {
 	if utf8.RuneCountInString(s) <= n {
 		return s
@@ -85,11 +68,6 @@ func truncateRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
-// gitCmd builds an isolated git read of dir: --git-dir pins the checkout so
-// a non-repo directory never resolves a parent checkout (a Dockerfile source
-// must record nothing, never the control plane's own commit), the -c flags
-// disable config-driven execution from a hostile clone, and the scrubbed env
-// drops inherited GIT_* overrides (GIT_DIR, GIT_WORK_TREE, ...) and pagers.
 func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	full := make([]string, 0, len(args)+5)
 	full = append(full,
@@ -110,12 +88,6 @@ func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	return cmd
 }
 
-// readCommit resolves the checked-out commit of a repo directory: the SHA via
-// rev-parse and the subject, author name and committer date via a single log
-// call. It only reads the local checkout, so no credential is ever involved.
-// A failure (a fake source in tests) answers the zero value rather than
-// failing the deploy; a log failure keeps the SHA, which is all the compose
-// provenance needs.
 func readCommit(dir string) CommitInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -138,8 +110,6 @@ func readCommit(dir string) CommitInfo {
 	return parseCommit(sha, subject, author, date)
 }
 
-// cutCommitLog splits one "%s%x00%an%x00%cI" log record on NUL bytes: %an may
-// itself contain a newline, so newline-splitting would shift the date line.
 func cutCommitLog(out string) (subject, author, date string, ok bool) {
 	parts := strings.SplitN(strings.TrimSuffix(out, "\n"), "\x00", 3)
 	if len(parts) != 3 {
@@ -148,12 +118,6 @@ func cutCommitLog(out string) (subject, author, date string, ok bool) {
 	return parts[0], parts[1], parts[2], true
 }
 
-// recordCommit carries the clone's commit into the deployment, persists it
-// and logs one "commit <sha7> <subject>" line. A compose run reuses the
-// commit resolveComposeContent already read (see cloneCompose) instead of
-// forking git again. An empty checkout (a fake source) leaves the deployment
-// untouched. The metadata is best effort: a persist failure is logged and
-// the deploy continues, because later steps persist the same row again.
 func (o *Orchestrator) recordCommit(ctx context.Context, st *runState) error {
 	info := st.commitInfo
 	if !st.commitDone {

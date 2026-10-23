@@ -7,9 +7,6 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// TestAdminPasswordHashEncodesArgon2id guards the P1 where the CLI stored the
-// plaintext: adminPasswordHash must return an argon2id hash that verifies, so a
-// CLI-provisioned account can actually sign in.
 func TestAdminPasswordHashEncodesArgon2id(t *testing.T) {
 	const password = "Gotham-E2E-Password1"
 
@@ -32,9 +29,6 @@ func TestAdminPasswordHashEncodesArgon2id(t *testing.T) {
 	}
 }
 
-// TestCheckAdminPasswordFlags pins the mutual exclusivity of the three
-// password sources: --password, --password-stdin and --generate-password.
-// An explicitly passed --password counts even when empty.
 func TestCheckAdminPasswordFlags(t *testing.T) {
 	if err := checkAdminPasswordFlags(false, false, false); err != nil {
 		t.Fatalf("no source: %v", err)
@@ -66,9 +60,6 @@ func TestCheckAdminPasswordFlags(t *testing.T) {
 	}
 }
 
-// TestReadPasswordLineStripsOneNewline guards the --password-stdin contract:
-// a single line is read, only the trailing newline goes, and every other
-// byte (including spaces) is significant.
 func TestReadPasswordLineStripsOneNewline(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"s3cret pass\n", "s3cret pass"},
@@ -95,9 +86,6 @@ func TestReadPasswordLineStripsOneNewline(t *testing.T) {
 	}
 }
 
-// TestPrintGeneratedPasswordOnce pins the generated-password stdout contract:
-// exactly one machine-readable line on the given writer (the caller passes
-// os.Stdout only after a successful insert; failures never reach it).
 func TestPrintGeneratedPasswordOnce(t *testing.T) {
 	var buf strings.Builder
 	printGeneratedPassword(&buf, "s3cret-value")
@@ -106,9 +94,6 @@ func TestPrintGeneratedPasswordOnce(t *testing.T) {
 	}
 }
 
-// TestGenerateAdminPasswordIsStrongAndValid pins the --generate-password
-// contract: 24+ URL-safe characters that pass the shared password policy,
-// and a fresh value on every call.
 func TestGenerateAdminPasswordIsStrongAndValid(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 4; i++ {
@@ -142,8 +127,6 @@ func TestGenerateAdminPasswordIsStrongAndValid(t *testing.T) {
 	}
 }
 
-// TestAdminHashPlaintextNeverPrompts pins that a resolved password is only
-// validated and hashed: an empty value fails instead of opening a prompt.
 func TestAdminHashPlaintextNeverPrompts(t *testing.T) {
 	if _, err := adminHashPlaintext(""); err == nil {
 		t.Fatal("empty password: expected a validation error")

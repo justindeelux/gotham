@@ -9,18 +9,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// StoreCounter implements ResourceCounter over the resource tables: it
-// tallies the applications, services and databases attached to a project or
-// an environment (Phase 13, PE-2). Previews count: they are rows that block
-// a delete like any other workload.
 type StoreCounter struct {
 	Store *store.Store
 }
 
-// Compile-time guarantee.
 var _ ResourceCounter = StoreCounter{}
 
-// CountProjectResources implements ResourceCounter.
 func (c StoreCounter) CountProjectResources(ctx context.Context, projectID uuid.UUID) (ResourceCounts, error) {
 	applications, err := c.Store.CountApplicationsByProject(ctx, pgUUID(projectID))
 	if err != nil {
@@ -41,7 +35,6 @@ func (c StoreCounter) CountProjectResources(ctx context.Context, projectID uuid.
 	}, nil
 }
 
-// CountEnvironmentResources implements ResourceCounter.
 func (c StoreCounter) CountEnvironmentResources(ctx context.Context, environmentID uuid.UUID) (ResourceCounts, error) {
 	applications, err := c.Store.CountApplicationsByEnvironment(ctx, pgUUID(environmentID))
 	if err != nil {
@@ -62,7 +55,6 @@ func (c StoreCounter) CountEnvironmentResources(ctx context.Context, environment
 	}, nil
 }
 
-// CountProjectPreviews implements ResourceCounter.
 func (c StoreCounter) CountProjectPreviews(ctx context.Context, projectID uuid.UUID) (int, error) {
 	count, err := c.Store.CountPreviewApplicationsByProject(ctx, pgUUID(projectID))
 	if err != nil {
@@ -71,7 +63,6 @@ func (c StoreCounter) CountProjectPreviews(ctx context.Context, projectID uuid.U
 	return int(count), nil
 }
 
-// CountEnvironmentPreviews implements ResourceCounter.
 func (c StoreCounter) CountEnvironmentPreviews(ctx context.Context, environmentID uuid.UUID) (int, error) {
 	count, err := c.Store.CountPreviewApplicationsByEnvironment(ctx, pgUUID(environmentID))
 	if err != nil {

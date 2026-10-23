@@ -12,9 +12,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// fakeSource is a deterministic SourceProvider for runWithToken and truncation
-// tests. Every call records the token it was given and, when mutate is set,
-// rotates it to simulate an oauth2 refresh.
 type fakeSource struct {
 	mutate    bool
 	truncated bool
@@ -72,13 +69,10 @@ func (f *fakeSource) RemoveDeployKey(_ context.Context, tok *oauth2.Token, _, _ 
 	return nil
 }
 
-// Token reports the last token the source saw, without refreshing.
 func (f *fakeSource) Token() *oauth2.Token { return f.latest }
 
-// Truncated reports whether the last listing hit a bound.
 func (f *fakeSource) Truncated() bool { return f.truncated }
 
-// seedProvider stores a connected provider in repo and returns it.
 func seedProvider(t *testing.T, repo *fakeRepo, p Provider) Provider {
 	t.Helper()
 	if p.ID == uuid.Nil {
@@ -305,7 +299,6 @@ func TestServiceDeleteWebhookRemovesHook(t *testing.T) {
 		t.Errorf("request = %s %s, want DELETE /repos/o/r/hooks/5150", gotMethod, gotPath)
 	}
 
-	// The host having already forgotten the hook stays a success.
 	status = http.StatusNotFound
 	if err := svc.DeleteWebhook(context.Background(), target, "5150"); err != nil {
 		t.Errorf("DeleteWebhook on 404: %v, want nil", err)
@@ -396,9 +389,6 @@ func TestChooseConnection(t *testing.T) {
 	}
 }
 
-// TestServicePersistsRefreshedToken is the C1-10 regression: oauth2 refreshes
-// an expired token in memory during a call, and the service must write the
-// rotated pair back so the next call does not present a consumed refresh token.
 func TestServicePersistsRefreshedToken(t *testing.T) {
 	tokenSrv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSONTest(t, w, map[string]any{
@@ -439,8 +429,6 @@ func TestServicePersistsRefreshedToken(t *testing.T) {
 	}
 }
 
-// TestServiceCreateProvider is the C1-11 regression: a connection can be
-// created through the production service path.
 func TestServiceCreateProvider(t *testing.T) {
 	repo := newFakeRepo()
 	userID := uuid.New()
@@ -463,7 +451,6 @@ func TestServiceCreateProvider(t *testing.T) {
 	}
 }
 
-// TestServiceRejectsUnsafeBaseURL covers C1-15 at the create and use boundary.
 func TestServiceRejectsUnsafeBaseURL(t *testing.T) {
 	repo := newFakeRepo()
 	svc := NewService(Config{Repository: repo, Logger: discardLogger()})
@@ -476,15 +463,12 @@ func TestServiceRejectsUnsafeBaseURL(t *testing.T) {
 		t.Fatalf("Create with a metadata base_url: error = %v, want ErrValidation", err)
 	}
 
-	// A row written out of band with a loopback base_url is refused at use.
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "http://127.0.0.1:1"})
 	if _, err := svc.ListRepos(context.Background(), provider.UserID, provider.ID); !errors.Is(err, ErrValidation) {
 		t.Fatalf("ListRepos with a loopback base_url: error = %v, want ErrValidation", err)
 	}
 }
 
-// TestServiceAuthorizeAndConnect is the C1-11 regression: the OAuth start and
-// completion path exchanges the code and stores the tokens.
 func TestServiceAuthorizeAndConnect(t *testing.T) {
 	var gotCode string
 	tokenSrv := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -539,14 +523,11 @@ func TestServiceAuthorizeAndConnect(t *testing.T) {
 		t.Fatalf("provider saw code %q, want the-code", gotCode)
 	}
 
-	// The state is single-use: replaying it is refused.
 	if _, err := svc.Connect(context.Background(), userID, provider.ID, "the-code", state); !errors.Is(err, ErrValidation) {
 		t.Fatalf("replayed Connect: error = %v, want ErrValidation", err)
 	}
 }
 
-// TestServiceConnectRejectsForgedState proves a state that was never issued
-// cannot complete a connection.
 func TestServiceConnectRejectsForgedState(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "https://api.github.com"})
@@ -557,9 +538,6 @@ func TestServiceConnectRejectsForgedState(t *testing.T) {
 	}
 }
 
-// TestServicePersistsRefreshedTokenDespiteCancelledContext is the U4
-// regression: the persist must survive a request whose context was cancelled
-// (client disconnect / HTTP cap), or GitLab's rotated refresh token is lost.
 func TestServicePersistsRefreshedTokenDespiteCancelledContext(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "https://api.github.com"})
@@ -569,14 +547,11 @@ func TestServicePersistsRefreshedTokenDespiteCancelledContext(t *testing.T) {
 	svc := NewService(Config{
 		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
 		Factories: map[string]Factory{NameGitHub: func(Provider) (SourceProvider, error) {
-			// Simulate the client disconnecting during the call.
 			cancel()
 			return source, nil
 		}},
 	})
 
-	// The factory cancels the context while the source is built; the persist
-	// after the call must still run on a detached context.
 	if _, err := svc.ListRepos(ctx, provider.UserID, provider.ID); err != nil {
 		t.Fatalf("ListRepos: %v", err)
 	}
@@ -587,8 +562,6 @@ func TestServicePersistsRefreshedTokenDespiteCancelledContext(t *testing.T) {
 	}
 }
 
-// TestServiceTruncatedListingSkipsCache is the U5 regression: a truncated
-// listing must not overwrite the previous complete cache.
 func TestServiceTruncatedListingSkipsCache(t *testing.T) {
 	repo := newFakeRepo()
 	provider := seedProvider(t, repo, Provider{Name: NameGitHub, BaseURL: "https://api.github.com"})
@@ -615,8 +588,6 @@ func TestServiceTruncatedListingSkipsCache(t *testing.T) {
 	}
 }
 
-// TestRunWithTokenPersistsAcrossPaths is the U8 table test: every provider call
-// path persists a rotated token, and an unchanged token is not written.
 func TestRunWithTokenPersistsAcrossPaths(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -712,15 +683,11 @@ func TestRunWithTokenPersistsAcrossPaths(t *testing.T) {
 	}
 }
 
-// TestConnectStatePerUserCapAndRedeem covers U7/U8: one account cannot exhaust
-// the store, redeem is bound to the exact user and provider, and redeeming
-// frees a slot.
 func TestConnectStatePerUserCapAndRedeem(t *testing.T) {
 	states := newConnectState()
 	user := uuid.New()
 	provider := uuid.New()
 
-	// A foreign user or provider cannot redeem its own guess.
 	foreignUser, err := states.new(user, provider, "")
 	if err != nil {
 		t.Fatalf("new: %v", err)
@@ -736,7 +703,6 @@ func TestConnectStatePerUserCapAndRedeem(t *testing.T) {
 		t.Error("redeem with a foreign provider returned true")
 	}
 
-	// Fill to the per-user cap.
 	var last string
 	for i := 0; i < connectStatePerUser; i++ {
 		state, err := states.new(user, provider, "")
@@ -749,7 +715,6 @@ func TestConnectStatePerUserCapAndRedeem(t *testing.T) {
 		t.Fatalf("over-cap new: error = %v, want ErrTooManyRequests", err)
 	}
 
-	// The correct pair redeems once and frees a slot.
 	if _, ok := states.redeem(last, user, provider); !ok {
 		t.Fatal("redeem with the bound pair returned false")
 	}
@@ -760,7 +725,6 @@ func TestConnectStatePerUserCapAndRedeem(t *testing.T) {
 		t.Fatalf("new after redeem: %v", err)
 	}
 
-	// Another user is unaffected by the first user's cap.
 	if _, err := states.new(uuid.New(), uuid.New(), ""); err != nil {
 		t.Fatalf("new for another user: %v", err)
 	}

@@ -17,27 +17,20 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeAPI implements GitHubAPI without network access, recording how often
-// each method runs so tests can prove token caching.
 type fakeAPI struct {
-	mu         sync.Mutex
-	pem        string
-	tokenCalls int
-	tokenFor   []int64
-	token      string
-	expiresAt  time.Time
-	repos      []Repo
-	reposErr   error
-	// reposErrFor fails one installation's listing (keyed by token), so a
-	// test can break an unrelated connection while the linked one works.
-	reposErrFor map[string]error
-	// reposFor serves per-token listings when set (keyed by token).
+	mu            sync.Mutex
+	pem           string
+	tokenCalls    int
+	tokenFor      []int64
+	token         string
+	expiresAt     time.Time
+	repos         []Repo
+	reposErr      error
+	reposErrFor   map[string]error
 	reposFor      map[string][]Repo
 	branches      map[string][]Branch
 	conversionErr error
-	// installations is the fake's installation registry by id.
 	installations map[int64]InstallationInfo
-	// webhookSecret overrides the conversion secret per fake.
 	webhookSecret string
 }
 
@@ -67,7 +60,6 @@ func (f *fakeAPI) CreateInstallationToken(_ context.Context, installationID int6
 	defer f.mu.Unlock()
 	f.tokenCalls++
 	f.tokenFor = append(f.tokenFor, installationID)
-	// Per-installation tokens prove which installation a token came from.
 	token := f.token
 	if token == "" {
 		token = fmt.Sprintf("tok-%d", installationID)
@@ -75,9 +67,6 @@ func (f *fakeAPI) CreateInstallationToken(_ context.Context, installationID int6
 	return InstallationToken{Token: token, ExpiresAt: f.expiresAt}, nil
 }
 
-// GetInstallation verifies the installation against the fake's registry:
-// only installations the fake knows for this app verify, so a foreign id
-// fails exactly like GitHub's 404.
 func (f *fakeAPI) GetInstallation(_ context.Context, installationID int64, _ string) (InstallationInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -114,7 +103,6 @@ func (f *fakeAPI) calls() int {
 	return f.tokenCalls
 }
 
-// memoryRepo implements Repository in memory for service tests.
 type memoryRepo struct {
 	mu        sync.Mutex
 	apps      map[uuid.UUID]SealedApp
@@ -122,8 +110,7 @@ type memoryRepo struct {
 	byInstall map[int64][]uuid.UUID
 	cache     map[string][]Repo
 	appsUsing []string
-	// watched repos per app for PushTargets, keyed by lower(repo).
-	watched map[string][]AppPushTarget
+	watched   map[string][]AppPushTarget
 }
 
 func newMemoryRepo() *memoryRepo {
@@ -264,7 +251,6 @@ func (m *memoryRepo) ListApplicationNamesForApp(_ context.Context, _, _ uuid.UUI
 	return append([]string(nil), m.appsUsing...), nil
 }
 
-// watch records that appID's owner watches repo (a github_app application).
 func (m *memoryRepo) watch(appID uuid.UUID, repo, branch string) AppPushTarget {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -280,7 +266,6 @@ func (m *memoryRepo) PushTargets(_ context.Context, appID, _ uuid.UUID, repo str
 	return append([]AppPushTarget(nil), m.watched[appID.String()+"\x00"+strings.ToLower(repo)]...), nil
 }
 
-// testKeyPEM generates an RSA private key in PKCS#1 PEM form.
 func testKeyPEM(t *testing.T) string {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -315,7 +300,6 @@ func testFixture() (*Service, *memoryRepo, *fakeAPI, uuid.UUID) {
 	return svc, repo, api, userID
 }
 
-// connect runs the manifest flow end to end against the fake.
 func connect(t *testing.T, svc *Service, userID uuid.UUID) GitHubApp {
 	t.Helper()
 	manifest, err := svc.StartManifest(context.Background(), userID, "", "gotham-test", "https://gotham.example")
@@ -392,15 +376,12 @@ func TestManifestStateSingleUse(t *testing.T) {
 	if _, err := svc.Callback(context.Background(), userID, "code", manifest.State); err != nil {
 		t.Fatal(err)
 	}
-	// Replay of the same state must fail: states are single-use.
 	if _, err := svc.Callback(context.Background(), userID, "code", manifest.State); err == nil {
 		t.Fatal("replayed state was accepted")
 	}
-	// A forged state must fail too.
 	if _, err := svc.Callback(context.Background(), userID, "code", "forged-state"); err == nil {
 		t.Fatal("forged state was accepted")
 	}
-	// A state issued for another user must fail.
 	other := uuid.New()
 	manifest2, err := svc.StartManifest(context.Background(), other, "", "", "https://gotham.example")
 	if err != nil {
@@ -421,11 +402,9 @@ func TestInstallStateBoundToApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The install state is bound to appA: recording it against appB fails.
 	if _, err := svc.RecordInstallation(context.Background(), userID, appB.ID, 111, state); err == nil {
 		t.Fatal("install state was accepted for another app")
 	}
-	// ...and replaying it against appA fails too (redeem consumed it).
 	if _, err := svc.RecordInstallation(context.Background(), userID, appA.ID, 111, state); err == nil {
 		t.Fatal("install state replay was accepted")
 	}
@@ -450,7 +429,6 @@ func TestInstallationTokenCached(t *testing.T) {
 	if _, _, err := svc.ListRepos(context.Background(), userID, app.ID); err != nil {
 		t.Fatal(err)
 	}
-	// The install-time mint is reused: no new token crosses the wire.
 	if got := api.calls() - callsAfterInstall; got != 0 {
 		t.Fatalf("installation token minted %d extra times, want 0 (cached)", got)
 	}
@@ -459,9 +437,6 @@ func TestInstallationTokenCached(t *testing.T) {
 	}
 }
 
-// TestRecordInstallationVerifiesWithGitHub proves a recorded installation id
-// is verified against the GitHub API: an id the app does not own is refused,
-// so replaying another installation's integer id records nothing.
 func TestRecordInstallationVerifiesWithGitHub(t *testing.T) {
 	svc, _, api, userID := testFixture()
 	api.pem = testKeyPEM(t)
@@ -471,20 +446,14 @@ func TestRecordInstallationVerifiesWithGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 4242 is unknown to the fake GitHub: recording it must fail.
 	if _, err := svc.RecordInstallation(context.Background(), userID, app.ID, 4242, state); err == nil {
 		t.Fatal("unverified installation was recorded")
 	}
-	// The consumed state cannot be reused for the real installation either:
-	// states stay single-use even when verification fails.
 	if _, err := svc.RecordInstallation(context.Background(), userID, app.ID, 999, state); err == nil {
 		t.Fatal("consumed state was reused")
 	}
 }
 
-// TestCrossUserInstallationTakeover reproduces the reviewer repro: user B
-// records user A's installation id and sends a signed deleted delivery. The
-// delivery must verify against B's app only and leave A's installation alone.
 func TestCrossUserInstallationTakeover(t *testing.T) {
 	ctx := context.Background()
 
@@ -507,15 +476,12 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 		return svc, api, userID
 	}
 
-	// Both services share one repository: installation 999 resolves to both
-	// apps, so the test proves scoping instead of isolation by separation.
 	shared := newMemoryRepo()
 	svcA, apiA, userA := newService("a", shared)
 	svcB, apiB, userB := newService("b", shared)
 	apiA.pem = testKeyPEM(t)
 	apiB.pem = testKeyPEM(t)
 
-	// B's GitHub knows no installation 999 for B's app: recording fails.
 	appB := connect(t, svcB, userB)
 	_, installState, err := svcB.InstallURL(ctx, userB, appB.ID)
 	if err != nil {
@@ -526,7 +492,6 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 		t.Fatal("B recorded an installation its app does not own")
 	}
 
-	// A installs 999 legitimately.
 	appA := connect(t, svcA, userA)
 	_, installStateA, err := svcA.InstallURL(ctx, userA, appA.ID)
 	if err != nil {
@@ -536,9 +501,6 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// B holds a stale row for 999 (recorded before verification existed), so
-	// the shared repository resolves 999 to BOTH apps. B's signed deleted
-	// delivery still verifies against B's app only...
 	if _, err := shared.UpsertInstallation(ctx, appB.ID, 999, "acme"); err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +514,6 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 	if err := svcB.HandleAppEvent(ctx, verifiedApp, "installation", deleted); err != nil {
 		t.Fatal(err)
 	}
-	// ...and A's installation survives it.
 	insts, err := shared.ListInstallations(ctx, appA.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -560,7 +521,6 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 	if len(insts) != 1 || insts[0].InstallationID != 999 {
 		t.Fatalf("A's installation after B's delivery = %+v", insts)
 	}
-	// B's own row is gone.
 	insts, err = shared.ListInstallations(ctx, appB.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -570,8 +530,6 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 	}
 }
 
-// TestVerifyPushAndTargets proves an app-signed push verifies to the owning
-// app and maps to the github_app applications watching the repository.
 func TestVerifyPushAndTargets(t *testing.T) {
 	svc, repo, api, userID := testFixture()
 	api.pem = testKeyPEM(t)
@@ -590,8 +548,6 @@ func TestVerifyPushAndTargets(t *testing.T) {
 		`"repository":{"full_name":"acme/web"},"installation":{"id":999}}`)
 	header := http.Header{}
 	header.Set("X-Hub-Signature-256", signBody("wh-secret", push))
-	// The hook target header names the APP id (123), not the installation:
-	// real-shaped deliveries verify through the payload installation id.
 	header.Set("X-GitHub-Hook-Installation-Target-ID", "123")
 	verifiedApp, ok := svc.VerifyPush(header, push)
 	if !ok || verifiedApp != app.ID {
@@ -606,15 +562,12 @@ func TestVerifyPushAndTargets(t *testing.T) {
 		t.Fatalf("targets = %+v", targets)
 	}
 
-	// A push signed with another secret verifies against nothing.
 	forged := http.Header{}
 	forged.Set("X-Hub-Signature-256", signBody("attacker-secret", push))
 	if _, ok := svc.VerifyPush(forged, push); ok {
 		t.Fatal("forged push was verified")
 	}
 
-	// A target header naming another app fails closed: the hint selects no
-	// candidate, so even a valid signature verifies against nothing.
 	mismatched := http.Header{}
 	mismatched.Set("X-Hub-Signature-256", signBody("wh-secret", push))
 	mismatched.Set("X-GitHub-Hook-Installation-Target-ID", "456")
@@ -623,19 +576,13 @@ func TestVerifyPushAndTargets(t *testing.T) {
 	}
 }
 
-// TestTokenCloneURLResolvesGrant proves the clone URL carries a minted token
-// for the installation granting the repo: two installations, the repo granted
-// to the second, and the token minted for the second installation id. A clone
-// URL on a foreign host is refused before any token is minted.
 func TestTokenCloneURLResolvesGrant(t *testing.T) {
 	svc, _, api, userID := testFixture()
 	api.pem = testKeyPEM(t)
-	api.token = "" // per-installation tokens prove the granting installation
+	api.token = ""
 	ctx := context.Background()
 
 	app := connect(t, svc, userID)
-	// Installation 999 grants nothing; 1000 grants acme/web. The fake serves
-	// per-token listings because the service always refreshes.
 	api.reposFor = map[string][]Repo{
 		"tok-1000": {{ExternalID: "2", Name: "web", FullName: "acme/web", CloneURL: "https://github.com/acme/web.git"}},
 	}
@@ -657,14 +604,9 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The token belongs to installation 1000: per-installation tokens prove
-	// the clone used the granting installation, not Installations[0].
 	if tokenURL != "https://x-access-token:tok-1000@github.com/acme/web.git" {
 		t.Fatalf("token url = %q", tokenURL)
 	}
-	// The granting installation (1000) was already minted at install time and
-	// its cached token is reused: the clone lookup mints nothing new, and 999
-	// (which grants nothing) is never consulted.
 	if len(api.tokenFor) != mintsBefore {
 		t.Fatalf("clone lookup minted tokens: %v", api.tokenFor)
 	}
@@ -676,12 +618,9 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 		t.Fatalf("no token was ever minted for installation 1000: %v", api.tokenFor)
 	}
 
-	// A foreign host is refused before minting.
 	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/web", "https://evil.example/acme/web.git"); err == nil {
 		t.Fatal("foreign-host clone url was accepted")
 	}
-	// A transient GitHub failure fails the lookup instead of the sentinel:
-	// the deploy must fail, never silently clone anonymously.
 	api.reposErr = errors.New("502 Bad Gateway")
 	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/web", "https://github.com/acme/web.git"); !errors.Is(err, ErrGrantsUnverifiable) {
 		t.Fatalf("transient failure err = %v, want ErrGrantsUnverifiable", err)
@@ -690,33 +629,23 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 		t.Fatal("transient failure degraded to the no-grant sentinel")
 	}
 	api.reposErr = nil
-	// An ungranted repo fails with the sentinel the cloner surfaces.
 	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/unknown", "https://github.com/acme/unknown.git"); !errors.Is(err, ErrNoInstallationGrant) {
 		t.Fatalf("ungranted repo err = %v, want ErrNoInstallationGrant", err)
 	}
-	// A plaintext http URL is refused even though the host matches, before
-	// any grant is listed: with GitHub failing, the error stays the
-	// validation refusal, never the unverifiable-grants failure.
 	api.reposErr = errors.New("502 Bad Gateway")
 	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/web", "http://github.com/acme/web.git"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("http clone url err = %v, want ErrValidation", err)
 	}
 	api.reposErr = nil
-	// A foreign connection id answers not-found, so one user's link can
-	// never resolve through another user's connection.
 	if _, err := svc.TokenCloneURL(ctx, userID, uuid.New(), "acme/web", "https://github.com/acme/web.git"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign app id err = %v, want ErrNotFound", err)
 	}
 }
 
-// TestTokenCloneURLUsesOnlyTheLinkedConnection proves resolution stays
-// inside the linked connection: two connections both grant acme/web, yet the
-// token comes from the linked connection's installation, and a broken
-// listing on the unrelated connection does not fail the lookup.
 func TestTokenCloneURLUsesOnlyTheLinkedConnection(t *testing.T) {
 	svc, _, api, userID := testFixture()
 	api.pem = testKeyPEM(t)
-	api.token = "" // per-installation tokens prove which installation minted
+	api.token = ""
 	ctx := context.Background()
 
 	linked := connect(t, svc, userID)
@@ -737,8 +666,6 @@ func TestTokenCloneURLUsesOnlyTheLinkedConnection(t *testing.T) {
 	record(linked, 1000)
 	record(other, 2000)
 
-	// The unrelated connection's listing breaks after recording: the linked
-	// lookup must not notice.
 	api.reposErrFor = map[string]error{"tok-2000": errors.New("500 Internal Server Error")}
 	tokenURL, err := svc.TokenCloneURL(ctx, userID, linked.ID, "acme/web", "https://github.com/acme/web.git")
 	if err != nil {
@@ -749,8 +676,6 @@ func TestTokenCloneURLUsesOnlyTheLinkedConnection(t *testing.T) {
 	}
 }
 
-// TestEmbedTokenShapes pins the token URL builder: userinfo replaced,
-// anything else refused.
 func TestEmbedTokenShapes(t *testing.T) {
 	got, err := embedToken("https://github.com/acme/demo.git", "tok")
 	if err != nil {

@@ -8,13 +8,7 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, URL, window:readonly, getComputedStyle:readonly */
-// JUS-197 overflow proof: the members table and the Domains tab strip must
-// scroll inside their own containers at phone widths — never the page. The
 // global `body { overflow-x: hidden }` mask would hide a break, so these
-// specs prove the container-level scroller directly: from the wide inner
-// element upwards, the first `overflow-x: auto|scroll` ancestor must itself
-// scroll (scrollWidth > clientWidth). A page-level scrollWidth check rides
-// along as a smoke assertion only.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -52,8 +46,6 @@ const team = {
   updated_at: "2026-10-01T00:00:00Z",
 };
 
-// Long unbreakable values force the 760px table floor past the 390px
-// viewport, so the test exercises the scroller instead of a fitting table.
 const members = [
   {
     user_id: "u-1",
@@ -97,7 +89,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -128,12 +119,10 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session and answers enough for the pages to render. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
-  // Catch-all first so the specific routes registered after it win.
   await page.route("**/api/v1/**", async (route) => {
     await route.fulfill({ json: {} });
   });
@@ -172,7 +161,6 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
-/** pageOverflowX is the smoke check: the page itself never scrolls sideways. */
 async function pageOverflowX(page: Page): Promise<number> {
   return page.evaluate(() => {
     const doc = document.scrollingElement as HTMLElement;
@@ -186,13 +174,6 @@ interface ScrollProof {
   at: string;
 }
 
-/**
- * ownScrollProof walks up from the wide inner element and reports the first
- * `overflow-x: auto|scroll` ancestor: it must exist below the page level and
- * must itself scroll (scrollWidth > clientWidth). This proves the wide
- * content scrolls inside its own container even where the global
- * `body { overflow-x: hidden }` mask would hide a page-level break.
- */
 async function ownScrollProof(page: Page, innerSelector: string): Promise<ScrollProof> {
   return page.evaluate((selector: string) => {
     const inner = document.querySelector(selector) as HTMLElement | null;
@@ -228,7 +209,6 @@ test("members table scrolls inside its own container at 390px", async ({
     "teams page never scrolls horizontally",
   ).toBeLessThanOrEqual(1);
 
-  // The dedicated wrapper is the overflow container by contract.
   const wrapperOverflow = await page
     .locator('[data-testid="members-table"]')
     .evaluate((node) => {
@@ -268,8 +248,6 @@ test("every domains tab fits the viewport at 390px", async ({ page }) => {
 
   for (const tab of ["Routers", "Certificates", "DNS providers", "Redirects"]) {
     await page.locator(".n-tabs-tab", { hasText: new RegExp(`^${tab}$`) }).click();
-    // The tab strip itself never pushes past the viewport: it scrolls
-    // internally through the tabs scroll wrapper.
     const navRight = await page.locator(".n-tabs-nav").evaluate((node) => {
       const box = (node as HTMLElement).getBoundingClientRect();
       return box.right - window.innerWidth;

@@ -9,8 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// deletedRow seeds a soft-deleted database whose volume is named by the
-// gotham-db-{id} convention.
 func deletedRow(repo *fakeRepository, serverID uuid.UUID, deletedAt time.Time) Database {
 	id := uuid.New()
 	return repo.seed(Database{
@@ -26,10 +24,6 @@ func deletedRow(repo *fakeRepository, serverID uuid.UUID, deletedAt time.Time) D
 	})
 }
 
-// TestRetentionSweepExpiresOnlyPastWindow is the D1-9 regression: only rows
-// deleted longer ago than VolumeRetention are selected, their volume is
-// removed through the container service and the row is purged. A fresh delete
-// and a live row are untouched.
 func TestRetentionSweepExpiresOnlyPastWindow(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -73,9 +67,6 @@ func TestRetentionSweepExpiresOnlyPastWindow(t *testing.T) {
 	}
 }
 
-// TestRetentionSweepKeepsRowWhenVolumeRemovalFails: the row is only purged
-// after the volume is gone, so an agent outage cannot leak a volume by
-// discarding the row that names it.
 func TestRetentionSweepKeepsRowWhenVolumeRemovalFails(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -98,8 +89,6 @@ func TestRetentionSweepKeepsRowWhenVolumeRemovalFails(t *testing.T) {
 	}
 }
 
-// TestRetentionSweepKeepsRowWhenPurgeFails: the volume is removed, then the
-// purge fails; the sweep reports no expiry and the row stays for a retry.
 func TestRetentionSweepKeepsRowWhenPurgeFails(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
@@ -126,9 +115,6 @@ func TestRetentionSweepKeepsRowWhenPurgeFails(t *testing.T) {
 	}
 }
 
-// TestRetentionSweeperLifecycle covers the started loop and the Close/Start
-// latch: the loop sweeps once at startup, Close stops it, and a later Start
-// must be refused so a stopped sweeper cannot silently run again.
 func TestRetentionSweeperLifecycle(t *testing.T) {
 	repo := newFakeRepository()
 	sweeper := newRetentionSweeper(repo, &fakeContainers{}, discardLogger())
@@ -142,7 +128,6 @@ func TestRetentionSweeperLifecycle(t *testing.T) {
 	if repo.expiredCalls() == 0 {
 		t.Fatal("the started loop never ran its startup sweep")
 	}
-	// Start is idempotent while running.
 	sweeper.Start()
 	if calls := repo.expiredCalls(); calls == 0 {
 		t.Fatal("second Start stopped the loop")
@@ -157,8 +142,6 @@ func TestRetentionSweeperLifecycle(t *testing.T) {
 	}
 }
 
-// TestRetentionSweepPurgesWhenServerGone: a row whose node is gone has no
-// reachable volume, so the sweep purges it without an agent call.
 func TestRetentionSweepPurgesWhenServerGone(t *testing.T) {
 	repo := newFakeRepository()
 	now := time.Now().UTC()

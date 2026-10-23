@@ -23,21 +23,6 @@ import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services";
 import { useTemplatesStore } from "@/features/templates/stores/templates";
 
-/**
- * Template deploy wizard state: dynamic config form (step 1) → rendered
- * compose preview (step 2) → name + node (step 3).
- *
- * The render contract is the critical part (see templates.ts): secret field
- * values arrive in `render.env` and are sent, unchanged and only there, as the
- * service's environment on create. They are never rendered, logged or copied
- * anywhere else, and the preview shows only the `${key}` references that stay
- * in `compose_yaml`.
- *
- * Deploy is a separate, explicit action after the create: it answers with the
- * finished attempt (the API deploys synchronously), so the live log pane
- * streams the project's container log via the services logs endpoint
- * afterwards. A failed deploy is shown as it comes back — never faked.
- */
 export function useTemplateWizard(
   show: Ref<boolean>,
   slug: Ref<string>,
@@ -87,11 +72,6 @@ export function useTemplateWizard(
   const step = ref(1);
   const detail = ref<TemplateDetail | null>(null);
   const detailLoading = ref(false);
-  /**
-   * Raw refusals retained per surface; each display error derives from its
-   * refusal in the active locale (see retained below), so an open wizard
-   * refreshes on a language switch without losing values or refetching.
-   */
   const detailFailure: Ref<unknown> = ref(null);
   const detailError = retained(detailFailure, describeTemplateError);
   const values = ref<TemplateValues>({});
@@ -117,26 +97,18 @@ export function useTemplateWizard(
   const deployError = retained(deployFailure, describeServiceError);
   const deployed = ref(false);
 
-  /**
-   * renderToken invalidates obsolete renders: every request captures the token
-   * it started with, and a completion whose token no longer matches (a newer
-   * render, or a reset/close) is dropped instead of overwriting the state.
-   */
   let renderToken = 0;
 
   const fields = computed<TemplateField[]>(() => detail.value?.fields ?? []);
 
-  /** allErrors is the full field validation result; see showErrors below. */
   const allErrors = computed<Record<string, string>>(() =>
     validateTemplateValues(fields.value, values.value),
   );
 
-  /** formErrors reveals messages only after the first Next attempt. */
   const formErrors = computed<Record<string, string>>(() =>
     showErrors.value ? allErrors.value : {},
   );
 
-  /** secretKeys names the environment keys render held back from the document. */
   const secretKeys = computed<string[]>(() =>
     Object.keys(render.value?.env ?? {}).sort(),
   );
@@ -149,23 +121,16 @@ export function useTemplateWizard(
     !createAttempted.value ? "" : (fieldErrors(serviceNodeSchema, serverId.value)[0] ?? ""),
   );
 
-  /** scopeValid gates the create: the API requires an environment. */
   const scopeValid = computed<boolean>(() => scopeEnvironmentId.value !== "");
 
   const scopeError = computed<string>(() => {
     if (!createAttempted.value || scopeValid.value) {
       return "";
     }
-    // Tracks the locale when called during render or inside a computed.
     void activeLocale.value;
     return String(i18n.global.t("templates.target.scopeError"));
   });
 
-  /**
-   * retained derives display text from a raw refusal in the active locale
-   * through the caller's describe helper, so an open wizard refreshes on a
-   * language switch without losing values or refetching.
-   */
   function retained(
     failure: Ref<unknown>,
     describe: (_error: unknown) => string,
@@ -174,13 +139,11 @@ export function useTemplateWizard(
       if (failure.value === null) {
         return null;
       }
-      // Tracks the locale when called during render or inside a computed.
       void activeLocale.value;
       return describe(failure.value);
     });
   }
 
-  /** open loads the template schema and seeds the form with its defaults. */
   async function open(): Promise<void> {
     reset();
     detailLoading.value = true;
@@ -198,10 +161,7 @@ export function useTemplateWizard(
     void serversStore.fetchServers().catch(() => undefined);
   }
 
-  /** reset drops every wizard value, including the secret-bearing ones. */
   function reset(): void {
-    // Invalidate any in-flight render first: its response must not land in a
-    // wizard that has been closed or reopened for another template.
     renderToken += 1;
     step.value = 1;
     detail.value = null;
@@ -223,19 +183,11 @@ export function useTemplateWizard(
     deployed.value = false;
   }
 
-  /** seedScope copies the live route scope into the form. */
   function seedScope(): void {
     scopeProjectId.value = toValue(scope.projectId);
     scopeEnvironmentId.value = toValue(scope.environmentId);
   }
 
-  /**
-   * loadRender renders the form values and shows the preview document. The
-   * previous preview is invalidated immediately, so nothing can be created from
-   * an obsolete document while this request is in flight; navigation and create
-   * are blocked on `renderLoading` instead. A completion that lost its token is
-   * ignored.
-   */
   async function loadRender(): Promise<void> {
     if (!detail.value) {
       return;
@@ -266,7 +218,6 @@ export function useTemplateWizard(
     }
   }
 
-  /** next validates step 1 and moves forward. */
   function next(): void {
     if (step.value === 1) {
       showErrors.value = true;
@@ -286,7 +237,6 @@ export function useTemplateWizard(
     }
   }
 
-  /** handleCreate stores the service with the rendered document and its env. */
   async function handleCreate(): Promise<void> {
     createAttempted.value = true;
     if (creating.value) {
@@ -320,7 +270,6 @@ export function useTemplateWizard(
     }
   }
 
-  /** handleDeploy sends the project to the node and reports what came back. */
   async function handleDeploy(): Promise<void> {
     const service = created.value;
     if (service === null) {
@@ -343,17 +292,12 @@ export function useTemplateWizard(
     () => show.value,
     (visible) => {
       if (visible) {
-        // Re-seed from the live scope: the route may have moved while the
-        // wizard was closed, and reset-on-close alone would keep the stale
-        // environment for the next open.
         seedScope();
         void open();
       }
     },
   );
 
-  // A route change while the wizard is mounted re-seeds the scope, so the
-  // summary and the payload always name the current environment.
   watch(
     [() => toValue(scope.projectId), () => toValue(scope.environmentId)],
     () => seedScope(),

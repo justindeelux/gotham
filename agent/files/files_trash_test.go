@@ -17,12 +17,10 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// listTrash reads a root's recycle bin.
 func listTrash(t *testing.T, server *FileServer) []*agentv1.TrashEntry {
 	return listTrashResponse(t, server).GetEntries()
 }
 
-// listTrashResponse reads a root's recycle bin with its truncation flag.
 func listTrashResponse(t *testing.T, server *FileServer) *agentv1.ListTrashResponse {
 	t.Helper()
 	resp, err := server.ListTrash(context.Background(), &agentv1.ListTrashRequest{Root: RootVolumes})
@@ -32,9 +30,6 @@ func listTrashResponse(t *testing.T, server *FileServer) *agentv1.ListTrashRespo
 	return resp
 }
 
-// TestFileServerDeleteMovesToTrash pins the core recycle behaviour: a delete
-// moves the entry into the root's bin, the bin is hidden from List, and every
-// normal file operation refuses the reserved name.
 func TestFileServerDeleteMovesToTrash(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -74,7 +69,6 @@ func TestFileServerDeleteMovesToTrash(t *testing.T) {
 		t.Fatal("trash entry has no deleted_at")
 	}
 
-	// The bin is not browsable through List.
 	listing, err := server.List(context.Background(), &agentv1.ListRequest{Root: RootVolumes})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -86,15 +80,12 @@ func TestFileServerDeleteMovesToTrash(t *testing.T) {
 	}
 }
 
-// TestFileServerRefusesReservedTrashPath pins that the reserved tree cannot be
-// read, listed, written, renamed or deleted through the normal entry APIs.
 func TestFileServerRefusesReservedTrashPath(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
 	if _, err := write(t, server, RootVolumes, "a.txt", "", false, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	// Delete it so a real bin exists.
 	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "a.txt", Recursive: true}, &collectProgressStream{}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,14 +110,11 @@ func TestFileServerRefusesReservedTrashPath(t *testing.T) {
 	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: RootVolumes, Path: fileTrashDir + "/evil"}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("Mkdir inside the bin = %v, want InvalidArgument", err)
 	}
-	// The painstakingly deleted entry is still there.
 	if _, err := os.Stat(filepath.Join(root, fileTrashDir, item.GetId(), fileTrashData)); err != nil {
 		t.Fatalf("bin item vanished: %v", err)
 	}
 }
 
-// TestFileServerTrashRestore pins restore to the original path, the overwrite
-// conflict, and restore to an explicit destination.
 func TestFileServerTrashRestore(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -152,7 +140,6 @@ func TestFileServerTrashRestore(t *testing.T) {
 		t.Fatalf("trash has %d entries after restore, want 0", len(got))
 	}
 
-	// A restore over an existing target is a conflict without overwrite.
 	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "a.txt"}, &collectProgressStream{}); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +150,6 @@ func TestFileServerTrashRestore(t *testing.T) {
 	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{Root: RootVolumes, Id: id}); status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("restore over an existing file = %v, want AlreadyExists", err)
 	}
-	// Overwrite replaces it, and an explicit destination restores elsewhere.
 	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{
 		Root: RootVolumes, Id: id, Destination: "b.txt", Overwrite: true,
 	}); err != nil {
@@ -174,8 +160,6 @@ func TestFileServerTrashRestore(t *testing.T) {
 	}
 }
 
-// TestFileServerTrashPurgeAndEmpty pins permanent delete of one item and of the
-// whole bin.
 func TestFileServerTrashPurgeAndEmpty(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -215,15 +199,12 @@ func TestFileServerTrashPurgeAndEmpty(t *testing.T) {
 	if got := listTrash(t, server); len(got) != 0 {
 		t.Fatalf("trash has %d entries after empty, want 0", len(got))
 	}
-	// Emptying an already-empty bin is a no-op success.
 	resp, err = server.EmptyTrash(context.Background(), &agentv1.EmptyTrashRequest{Root: RootVolumes})
 	if err != nil || resp.GetRemoved() != 0 {
 		t.Fatalf("EmptyTrash on an empty bin = %+v, %v", resp, err)
 	}
 }
 
-// TestFileServerTrashNonRecursiveRefuses pins that routing to trash keeps the
-// non-recursive delete semantics: a non-empty directory is still refused.
 func TestFileServerTrashNonRecursiveRefuses(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -241,8 +222,6 @@ func TestFileServerTrashNonRecursiveRefuses(t *testing.T) {
 	}
 }
 
-// TestFileServerTrashPermanentDelete pins that the permanent flag still removes
-// an entry outright without touching the bin.
 func TestFileServerTrashPermanentDelete(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -263,9 +242,6 @@ func TestFileServerTrashPermanentDelete(t *testing.T) {
 	}
 }
 
-// TestFileServerTrashSymlinkEscape pins confinement: a symlink pointing outside
-// the root is moved to the bin as a link (its target is untouched), and a
-// restore destination that escapes the root is refused.
 func TestFileServerTrashSymlinkEscape(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -277,7 +253,6 @@ func TestFileServerTrashSymlinkEscape(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	// Deleting the link moves the link itself, never its outside target.
 	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "escape"}, &collectProgressStream{}); err != nil {
 		t.Fatalf("Delete of a link: %v", err)
 	}
@@ -286,15 +261,12 @@ func TestFileServerTrashSymlinkEscape(t *testing.T) {
 	}
 	id := listTrash(t, server)[0].GetId()
 
-	// A restore destination that escapes the root is refused, lexically...
 	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{Root: RootVolumes, Id: id, Destination: "../escape"}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("Restore to an escaping destination = %v, want InvalidArgument", err)
 	}
-	// ...and a destination that resolves back into the bin is refused too.
 	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{Root: RootVolumes, Id: id, Destination: fileTrashDir + "/x"}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("Restore into the bin = %v, want InvalidArgument", err)
 	}
-	// Clearing the recorded original path is still possible by naming one.
 	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{Root: RootVolumes, Id: id, Destination: "back"}); err != nil {
 		t.Fatalf("Restore to a safe destination: %v", err)
 	}
@@ -303,9 +275,6 @@ func TestFileServerTrashSymlinkEscape(t *testing.T) {
 	}
 }
 
-// TestFileServerTrashSymlinkParentBypass pins review finding 1: a create-shaped
-// target under a symlink whose parent points into the bin (leaf not existing)
-// must still be refused, for every entry-creating operation.
 func TestFileServerTrashSymlinkParentBypass(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -317,8 +286,6 @@ func TestFileServerTrashSymlinkParentBypass(t *testing.T) {
 	}
 	item := listTrash(t, server)[0]
 
-	// A hostile pre-existing symlink into the bin, at the root and nested, plus
-	// one pointing straight at an item directory.
 	if err := os.Symlink(fileTrashDir, filepath.Join(root, "up")); err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +323,6 @@ func TestFileServerTrashSymlinkParentBypass(t *testing.T) {
 		t.Errorf("Restore into a symlinked bin = %v, want InvalidArgument", err)
 	}
 
-	// Nothing was planted in the bin.
 	if _, err := os.Stat(filepath.Join(root, fileTrashDir, "forged.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a forged entry landed in the bin: %v", err)
 	}
@@ -365,9 +331,6 @@ func TestFileServerTrashSymlinkParentBypass(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractTrashMemberRefused pins review finding 2: an archive
-// member whose path enters the bin is refused and cannot forge or overwrite a
-// bin entry's metadata or payload.
 func TestFileServerExtractTrashMemberRefused(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -410,11 +373,7 @@ func TestFileServerExtractTrashMemberRefused(t *testing.T) {
 	}
 }
 
-// TestFileServerTrashListTruncatedAndPhantom pins review findings 3/4: a capped
-// listing reports truncation instead of silently dropping entries, and a
-// metadata-only (half-written) item is not listed as a phantom.
 func TestFileServerTrashListTruncatedAndPhantom(t *testing.T) {
-	// Not parallel: it lowers the global page cap.
 	defer func(old int) { fileTrashMaxList = old }(fileTrashMaxList)
 	fileTrashMaxList = 2
 
@@ -435,7 +394,6 @@ func TestFileServerTrashListTruncatedAndPhantom(t *testing.T) {
 		t.Fatalf("capped listing returned %d entries, want 2", len(resp.GetEntries()))
 	}
 
-	// A metadata-only item (a crash between the record and the move) is skipped.
 	ghostID := "00112233445566778899aabbccddeeff"
 	ghostDir := filepath.Join(root, fileTrashDir, ghostID)
 	if err := os.MkdirAll(ghostDir, 0o700); err != nil {
@@ -451,9 +409,6 @@ func TestFileServerTrashListTruncatedAndPhantom(t *testing.T) {
 	}
 }
 
-// TestFileServerTrashRestorePurgeRace pins review finding 2 (locks): a restore
-// and a purge of the same item must serialise, so the purge can never remove
-// the payload mid-restore. Run with -race.
 func TestFileServerTrashRestorePurgeRace(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

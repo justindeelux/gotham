@@ -19,7 +19,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// setFactory routes every channel to the fake notifier of its ID.
 func setFactory(t *testing.T, service *Service, notifiers map[uuid.UUID]*fakeNotifier) {
 	t.Helper()
 	service.factory = func(channel Channel) (Notifier, error) {
@@ -31,9 +30,6 @@ func setFactory(t *testing.T, service *Service, notifiers map[uuid.UUID]*fakeNot
 	}
 }
 
-// TestDeployFailureDeliversFormattedDiscordMessage runs the whole path the
-// phase's verification names: a failed deploy result reaches a mock Discord
-// webhook with the formatted message.
 func TestDeployFailureDeliversFormattedDiscordMessage(t *testing.T) {
 	teamID, appID := uuid.New(), uuid.New()
 	server, call := newWebhookServer(t, http.StatusOK)
@@ -81,9 +77,6 @@ func TestDeployFailureDeliversFormattedDiscordMessage(t *testing.T) {
 	}
 }
 
-// TestDispatchSelectsTeamWideAndResourceOverride proves the dispatcher delivers
-// to the team-wide channels plus the override scoped to the event's resource,
-// and skips disabled channels, other resources and unsubscribed events.
 func TestDispatchSelectsTeamWideAndResourceOverride(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	appID := uuid.New()
@@ -142,13 +135,10 @@ func TestDispatchSelectsTeamWideAndResourceOverride(t *testing.T) {
 	_ = userID
 }
 
-// duplicateListRepository returns the first channel twice, which a well-formed
-// SQL read can never do; the dispatcher must still deliver once.
 type duplicateListRepository struct {
 	*fakeRepository
 }
 
-// ListChannelsForEvent implements Repository by duplicating the page.
 func (r *duplicateListRepository) ListChannelsForEvent(ctx context.Context, teamID uuid.UUID, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
 	channels, err := r.fakeRepository.ListChannelsForEvent(ctx, teamID, resourceType, resourceID)
 	if err != nil || len(channels) == 0 {
@@ -157,8 +147,6 @@ func (r *duplicateListRepository) ListChannelsForEvent(ctx context.Context, team
 	return append(channels, channels[0]), nil
 }
 
-// TestDispatchDeduplicatesChannels proves a channel returned twice is delivered
-// once.
 func TestDispatchDeduplicatesChannels(t *testing.T) {
 	teamID := uuid.New()
 	repo := newFakeRepository()
@@ -176,8 +164,6 @@ func TestDispatchDeduplicatesChannels(t *testing.T) {
 	}
 }
 
-// TestDispatchIsNonBlocking proves Dispatch returns while a notifier is stuck
-// and while the queue is saturated: the deploy path can never be held up.
 func TestDispatchIsNonBlocking(t *testing.T) {
 	teamID := uuid.New()
 	repo := newFakeRepository()
@@ -198,7 +184,6 @@ func TestDispatchIsNonBlocking(t *testing.T) {
 	blocked.entered = make(chan struct{}, 1)
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: blocked})
 
-	// The first event occupies the single worker.
 	service.Dispatch(sampleEvent(teamID))
 	select {
 	case <-blocked.entered:
@@ -206,8 +191,6 @@ func TestDispatchIsNonBlocking(t *testing.T) {
 		t.Fatal("the notifier was never entered")
 	}
 
-	// The queue is bounded: the second event fills it and the third is
-	// dropped, and none of the calls may block.
 	done := make(chan struct{})
 	go func() {
 		service.Dispatch(sampleEvent(teamID))
@@ -223,8 +206,6 @@ func TestDispatchIsNonBlocking(t *testing.T) {
 	close(blocked.block)
 }
 
-// TestFailingChannelDoesNotStopOthers proves one broken endpoint does not
-// affect the deliveries of the other channels.
 func TestFailingChannelDoesNotStopOthers(t *testing.T) {
 	teamID := uuid.New()
 	repo := newFakeRepository()
@@ -243,8 +224,6 @@ func TestFailingChannelDoesNotStopOthers(t *testing.T) {
 	})
 }
 
-// TestDeployFinishedMapsTerminalOutcome proves the deploy hook derives the
-// event from the terminal state.
 func TestDeployFinishedMapsTerminalOutcome(t *testing.T) {
 	teamID, appID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -284,10 +263,6 @@ func TestDeployFinishedMapsTerminalOutcome(t *testing.T) {
 	}
 }
 
-// TestBackupFinishedMapsTerminalOutcome proves the backup hook derives the
-// event from the backup status. It runs a single worker and asserts by
-// subscription key: the production pool has several workers, so completion
-// order is unspecified.
 func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
 	teamID, databaseID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -341,8 +316,6 @@ func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
 	}
 }
 
-// TestDeployFinishedWithoutNotifierIsSafe pins the flag-off hook path: an
-// unwired or disabled service delivers nothing and never panics.
 func TestDeployFinishedWithoutNotifierIsSafe(t *testing.T) {
 	var nilService *Service
 	nilService.DeployFinished(context.Background(), deploy.DeployResult{State: deploy.StateFailed})
@@ -366,8 +339,6 @@ func TestDeployFinishedWithoutNotifierIsSafe(t *testing.T) {
 	}
 }
 
-// TestEnabledFlag pins the kill-switch semantics: only an explicit false
-// disables the feature.
 func TestEnabledFlag(t *testing.T) {
 	tests := map[string]bool{"": true, "true": true, "false": false, "FALSE": false, "0": true}
 	for value, want := range tests {
@@ -380,8 +351,6 @@ func TestEnabledFlag(t *testing.T) {
 	}
 }
 
-// TestCreateChannelSealsAndRedacts proves the stored config is sealed and the
-// read view never carries the secret.
 func TestCreateChannelSealsAndRedacts(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -430,8 +399,6 @@ func TestCreateChannelSealsAndRedacts(t *testing.T) {
 	}
 }
 
-// TestCreateChannelValidation rejects unknown kinds, malformed config and
-// inconsistent resource overrides.
 func TestCreateChannelValidation(t *testing.T) {
 	validDiscord := ChannelConfig{WebhookURL: "https://discord.com/api/webhooks/1/abc"}
 	cases := map[string]ChannelRequest{
@@ -460,11 +427,8 @@ func TestCreateChannelValidation(t *testing.T) {
 	}
 }
 
-// ptr returns a pointer to value.
 func ptr[T any](value T) *T { return &value }
 
-// TestChannelMutationsRequireWriteRole proves a read_only member reads but
-// every mutation is refused.
 func TestChannelMutationsRequireWriteRole(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -491,8 +455,6 @@ func TestChannelMutationsRequireWriteRole(t *testing.T) {
 	}
 }
 
-// TestChannelTeamIsolation proves a channel of another team is indistinguishable
-// from a missing one and lists never cross teams.
 func TestChannelTeamIsolation(t *testing.T) {
 	ownerID, teamA := uuid.New(), uuid.New()
 	strangerID, teamB := uuid.New(), uuid.New()
@@ -518,7 +480,6 @@ func TestChannelTeamIsolation(t *testing.T) {
 		t.Errorf("DeleteChannel err = %v, want ErrNotFound", err)
 	}
 
-	// The owner still sees it.
 	ownerCtx := scopedCtx(ownerID, teamA, teams.RoleOwner)
 	ownerChannels, err := service.ListChannels(ownerCtx, ownerID)
 	if err != nil || len(ownerChannels) != 1 {
@@ -526,8 +487,6 @@ func TestChannelTeamIsolation(t *testing.T) {
 	}
 }
 
-// TestUpdateChannelPartialAndKindImmutable proves zero fields keep stored
-// values, secrets merge field-wise and the kind cannot change.
 func TestUpdateChannelPartialAndKindImmutable(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -576,7 +535,6 @@ func TestUpdateChannelPartialAndKindImmutable(t *testing.T) {
 	}
 }
 
-// eventsToStrings renders event keys for comparisons.
 func eventsToStrings(events []EventKey) []string {
 	out := make([]string, 0, len(events))
 	for _, event := range events {
@@ -585,8 +543,6 @@ func eventsToStrings(events []EventKey) []string {
 	return out
 }
 
-// TestTestChannelDelivers proves the send-test action delivers through the
-// injected mailer and reports the result without secrets.
 func TestTestChannelDelivers(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -621,7 +577,6 @@ func TestTestChannelDelivers(t *testing.T) {
 		t.Errorf("message = %q, want no transport detail", result.Message)
 	}
 
-	// A failing mailer is reported, not returned as an error.
 	mailer.err = errors.New("connection refused")
 	result, err = service.TestChannel(scopedCtx(userID, teamID, teams.RoleOwner), userID, channel.ID)
 	if err != nil {
@@ -632,7 +587,6 @@ func TestTestChannelDelivers(t *testing.T) {
 	}
 }
 
-// TestServiceWithoutRepositoryFailsClearly pins the not-ready path.
 func TestServiceWithoutRepositoryFailsClearly(t *testing.T) {
 	service := NewService(Config{Secret: testSecret, Logger: discardLogger()})
 	t.Cleanup(func() { _ = service.Close() })
@@ -644,9 +598,6 @@ func TestServiceWithoutRepositoryFailsClearly(t *testing.T) {
 	}
 }
 
-// TestMaskedResendKeepsStoredSecrets proves a client echoing back the redacted
-// read DTO (the masked secret values) cannot overwrite the stored credentials,
-// while a deliberate new credential still replaces them.
 func TestMaskedResendKeepsStoredSecrets(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
@@ -692,8 +643,6 @@ func TestMaskedResendKeepsStoredSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create discord: %v", err)
 	}
-	// The masked webhook is not a valid URL: retaining the stored value is
-	// what keeps this update from failing validation.
 	if _, err := service.UpdateChannel(ctx, userID, discord.ID, ChannelRequest{
 		Name: "discord renamed", Config: discord.Config,
 	}); err != nil {
@@ -733,7 +682,6 @@ func TestMaskedResendKeepsStoredSecrets(t *testing.T) {
 		t.Errorf("password = %q, want the stored one", openedEmail.Password)
 	}
 
-	// A deliberate new credential is still a replacement.
 	if _, err := service.UpdateChannel(ctx, userID, telegram.ID, ChannelRequest{
 		Config: ChannelConfig{BotToken: "999:AAH-new-token", ChatID: "-2002"},
 	}); err != nil {
@@ -749,13 +697,11 @@ func TestMaskedResendKeepsStoredSecrets(t *testing.T) {
 	}
 }
 
-// TestDispatcherLogHidesTransportSecret proves the delivery-failure log line
-// never carries the credential-bearing endpoint.
 func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 	teamID := uuid.New()
 	server, _ := newWebhookServer(t, http.StatusOK)
 	endpoint := server.URL + "/webhook/log-secret-token"
-	server.Close() // connections are refused
+	server.Close()
 
 	repo := newFakeRepository()
 	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: endpoint})
@@ -785,8 +731,6 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 	}
 }
 
-// TestDispatcherLogHidesStatusReasonPhrase proves the delivery-failure log line
-// never carries the remote-controlled HTTP reason phrase.
 func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
 	teamID := uuid.New()
 	server := newReflectingStatusServer(t, http.StatusInternalServerError)
@@ -818,8 +762,6 @@ func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
 	}
 }
 
-// TestTelegramTokenNormalized proves a padded token is trimmed before it is
-// stored and used, while a genuinely malformed token is still rejected.
 func TestTelegramTokenNormalized(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
@@ -859,7 +801,6 @@ func TestTelegramTokenNormalized(t *testing.T) {
 		t.Errorf("notifier token = %q, want the trimmed value", telegram.token)
 	}
 
-	// The update path normalizes too.
 	if _, err := service.UpdateChannel(ctx, userID, view.ID, ChannelRequest{
 		Config: ChannelConfig{BotToken: " 999:AAH-second "},
 	}); err != nil {
@@ -874,7 +815,6 @@ func TestTelegramTokenNormalized(t *testing.T) {
 		t.Errorf("token after update = %q, want the trimmed replacement", opened.BotToken)
 	}
 
-	// Whitespace inside the token is still a validation error.
 	if _, err := service.CreateChannel(ctx, userID, ChannelRequest{
 		Name: "bad", Kind: KindTelegram,
 		Config: ChannelConfig{BotToken: "7184:AAH bad", ChatID: "-1"},
@@ -883,8 +823,6 @@ func TestTelegramTokenNormalized(t *testing.T) {
 	}
 }
 
-// TestEmptySecretKeyUsesEphemeralSecret mirrors providers/servers: an empty
-// GOTHAM_SECRET_KEY must never seal under SHA-256("").
 func TestEmptySecretKeyUsesEphemeralSecret(t *testing.T) {
 	logs := &syncBuffer{}
 	service := NewService(Config{
@@ -912,9 +850,6 @@ func TestEmptySecretKeyUsesEphemeralSecret(t *testing.T) {
 	}
 }
 
-// TestDispatchRecordsDeliveryHistory proves every dispatched attempt lands in
-// the channel's history: a success with no summary and a failure with the
-// classified reason.
 func TestDispatchRecordsDeliveryHistory(t *testing.T) {
 	teamID := uuid.New()
 	repo := newFakeRepository()
@@ -941,8 +876,6 @@ func TestDispatchRecordsDeliveryHistory(t *testing.T) {
 	}
 }
 
-// TestTestChannelRecordsDelivery proves the send-test action leaves a history
-// row labelled as a test, for both outcomes, and that its summary is bounded.
 func TestTestChannelRecordsDelivery(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
@@ -983,8 +916,6 @@ func TestTestChannelRecordsDelivery(t *testing.T) {
 	}
 }
 
-// TestListDeliveriesIsTeamScopedAndReadable proves the history read needs no
-// write role, returns newest-first, and hides another team's channel.
 func TestListDeliveriesIsTeamScoped(t *testing.T) {
 	ownerID, teamA := uuid.New(), uuid.New()
 	strangerID, teamB := uuid.New(), uuid.New()
@@ -1024,8 +955,6 @@ func TestListDeliveriesIsTeamScoped(t *testing.T) {
 	}
 }
 
-// TestDeliveryHistoryIsBounded proves the repository caps a channel's history
-// at the retention limit.
 func TestDeliveryHistoryIsBounded(t *testing.T) {
 	repo := newFakeRepository()
 	channelID := uuid.New()
@@ -1044,9 +973,6 @@ func TestDeliveryHistoryIsBounded(t *testing.T) {
 	}
 }
 
-// TestTestEventIsClearlyLabelledAndNeverDispatched pins the send-test event: a
-// recipient sees a test headline and the event maps to no subscription key, so
-// it can never fan out to other channels.
 func TestTestEventIsClearlyLabelledAndNeverDispatched(t *testing.T) {
 	event := Event{Kind: EventTest, Outcome: OutcomeSuccess, Name: "Deploy alerts", At: time.Now().UTC()}
 	if got := event.Summary(); got != "Test notification: Deploy alerts" {

@@ -8,16 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global URL, document, getComputedStyle, window:readonly */
-// URL builds request URLs in the static server; document, getComputedStyle
-// and window run in browser context (page.evaluate, addInitScript) — same
-// pattern as form-layout.spec.ts, since the repo lint envs do not cover tests/.
-
-// Real-browser proof for the PF-3b profile fixes (F1/F2): the committed
-// webdist is served statically with the control-plane API mocked, a session
-// is seeded in localStorage, and real Chromium measures the real Naive UI
-// DOM. No backend is involved. Viewports mirror the r1 review measurements:
-// 480/520/560/600px viewports yield identity-facts containers of
-// 338/378/418/458px (below the 480px query threshold); 700px yields 538px.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -55,7 +45,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -87,7 +76,6 @@ test.afterAll(async () => {
   });
 });
 
-/** openProfile loads /settings/profile with a seeded session and mocked API. */
 async function openProfile(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -105,7 +93,6 @@ async function openProfile(page: Page): Promise<void> {
   await page.locator(".identity-facts-wrap").waitFor();
 }
 
-/** factBoxes returns each fact row's header and value boxes in order. */
 async function factBoxes(page: Page) {
   return page.locator(".identity-facts-wrap .n-descriptions-table-row").evaluateAll((rows) =>
     rows.map((row) => {
@@ -125,22 +112,16 @@ async function factBoxes(page: Page) {
   );
 }
 
-// JUS-135: below the tablet breakpoint the app shell no longer reserves the
-// 72px server rail, so the content column (and this card) is ~60px wider at a
-// given viewport. The 480px container threshold therefore now sits at a
-// viewport of ~560px; the narrow cases below stay safely under it.
 for (const width of [420, 480, 540]) {
   test(`identity facts stack label-over-value at ${width}px viewport`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openProfile(page);
     const wrapWidth = await page.locator(".identity-facts-wrap").evaluate((wrap) => wrap.clientWidth);
-    // The container sits below the 480px query threshold at these viewports.
     expect(wrapWidth).toBeLessThan(480);
     const facts = await factBoxes(page);
     expect(facts).toHaveLength(3);
     for (const fact of facts) {
       expect(fact.headerDisplay).toBe("block");
-      // Label above value, both full container width, value never squeezed.
       expect(fact.content.y).toBeGreaterThanOrEqual(fact.header.y);
       expect(Math.abs(fact.header.width - wrapWidth)).toBeLessThanOrEqual(2);
       expect(Math.abs(fact.content.width - wrapWidth)).toBeLessThanOrEqual(2);
@@ -157,7 +138,6 @@ test("identity facts sit side by side at a wide viewport", async ({ page }) => {
   const facts = await factBoxes(page);
   expect(facts).toHaveLength(3);
   for (const fact of facts) {
-    // Same row: label left, value right, vertically overlapping.
     expect(Math.abs(fact.header.y - fact.content.y)).toBeLessThanOrEqual(2);
     expect(fact.header.x).toBeLessThan(fact.content.x);
   }
@@ -186,8 +166,6 @@ test("display-name input sits right under the card title", async ({ page }) => {
       account: gapOf(".n-card:has(.identity-facts-wrap)", ".identity-row"),
     };
   });
-  // No reserved label row: the input is the first thing in the card content.
   expect(gaps.display.contentToFirst).toBeLessThanOrEqual(2);
-  // Same title-to-content rhythm as the Account card: only shared card chrome.
   expect(Math.abs(gaps.display.titleToFirst - gaps.account.titleToFirst)).toBeLessThanOrEqual(1);
 });

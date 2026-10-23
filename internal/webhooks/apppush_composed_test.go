@@ -21,9 +21,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// composedFakeAPI implements githubapp.GitHubAPI with real shapes and no
-// network: the manifest conversion returns a plain-string webhook secret,
-// the installation object carries account and app id.
 type composedFakeAPI struct {
 	pem           string
 	webhookSecret string
@@ -68,7 +65,6 @@ func (e composedError) Error() string { return "webhooks: composed fake: " + str
 
 func errComposed(msg string) error { return composedError(msg) }
 
-// composedRepo is an in-memory githubapp.Repository for the composed test.
 type composedRepo struct {
 	mu      sync.Mutex
 	apps    map[uuid.UUID]githubapp.SealedApp
@@ -193,9 +189,6 @@ func (m *composedRepo) PushTargets(_ context.Context, _, _ uuid.UUID, repo strin
 	return append([]githubapp.AppPushTarget(nil), m.targets[strings.ToLower(repo)]...), nil
 }
 
-// realAppPush adapts the REAL githubapp.Service to AppPushHandler: only the
-// transport (fake API + memory repo) is fake, verification and targeting run
-// the production code.
 type realAppPush struct {
 	svc *githubapp.Service
 }
@@ -231,9 +224,6 @@ func signComposed(secret string, body []byte) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-// TestComposedAppPushToDeploy runs the real chain with no fakes for the
-// service: manifest connect -> install -> application row -> real-shaped
-// signed push through Receive -> deployment queued.
 func TestComposedAppPushToDeploy(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
@@ -253,7 +243,6 @@ func TestComposedAppPushToDeploy(t *testing.T) {
 		AllowUnsafeBaseURL: true,
 	})
 
-	// Connect through the manifest flow against the fake.
 	manifest, err := appSvc.StartManifest(ctx, userID, "", "gotham", "https://gotham.example")
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +259,6 @@ func TestComposedAppPushToDeploy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The application row a user would create from the wizard.
 	hookRepo := newFakeRepository()
 	hookRepo.app.Repo = "acme/web"
 	hookRepo.app.Branch = "main"
@@ -291,8 +279,6 @@ func TestComposedAppPushToDeploy(t *testing.T) {
 		AppPush:     realAppPush{svc: appSvc},
 	})
 
-	// A real-shaped push delivery: event + delivery headers, the app-id hook
-	// target header, installation payload, app-secret signature.
 	body := `{"ref":"refs/heads/main","after":"abc123def456",` +
 		`"repository":{"id":1,"full_name":"acme/web"},` +
 		`"installation":{"id":999,"account":{"login":"acme"}}`

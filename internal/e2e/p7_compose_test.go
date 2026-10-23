@@ -14,30 +14,12 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// Phase 7 (BE-7.1) production acceptance. The test drives the real control
-// plane service surface (store -> services.Service -> mTLS agent
-// ComposeServer -> `docker compose` CLI -> Docker) against the local Docker
-// daemon and the dev Postgres database, and asserts the observable compose
-// behavior:
-//
-//   - a two-service project with a named volume deploys and ps reports both
-//     containers running,
-//   - per-service logs stream and carry the substituted environment value,
-//   - the domain label maps to the right compose service,
-//   - down keeps the named volume (and its data) across stop/deploy,
-//   - deleting the service keeps the volume.
-//
-// Gated by GOTHAM_E2E=1 like the Phase 6 acceptance: with the gate set, a
-// missing prerequisite fails the test instead of skipping it green.
 const (
 	p7BusyboxImage = "busybox:1.36"
 	p7NginxImage   = "nginx:1.23"
 	p7PollTimeout  = 3 * time.Minute
 )
 
-// TestP7ComposeServiceProduction is gated by GOTHAM_E2E=1. Docker and the
-// compose plugin must be reachable (fatal, never skipped as green); Postgres
-// follows the suite convention and skips when unreachable.
 func TestP7ComposeServiceProduction(t *testing.T) {
 	requireE2E(t)
 
@@ -45,9 +27,6 @@ func TestP7ComposeServiceProduction(t *testing.T) {
 	defer cancel()
 	h := newP7Harness(t, ctx)
 
-	// The document exercises the label convention, env substitution and a
-	// named volume. `$${MESSAGE}` escapes this control plane's interpolation
-	// so the container's shell expands the substituted value at runtime.
 	domain := "p7-" + h.suffix + ".example.test"
 	message := "p7-alive-" + h.suffix
 	document := fmt.Sprintf(`services:
@@ -69,7 +48,6 @@ volumes:
   data:
 `, p7NginxImage, p7BusyboxImage)
 
-	// The domain map maps the labeled compose service to its validated host.
 	rendered, err := services.Render(document, map[string]string{"DOMAIN": domain, "MESSAGE": message})
 	if err != nil {
 		t.Fatalf("render sample compose: %v", err)
@@ -105,8 +83,6 @@ volumes:
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cleanupCancel()
-		// The project's containers are down by the end of the test; remove
-		// the fixture's own volume so nothing leaks.
 		if output, err := runDocker(cleanupCtx, "volume", "rm", volume); err != nil {
 			t.Logf("cleanup volume %s: %v: %s", volume, err, output)
 		}
@@ -120,13 +96,9 @@ volumes:
 		t.Fatalf("deployed = %+v, deploy = %+v", deployed, deploy)
 	}
 
-	// ps reports both compose services running.
 	containerList := p7WaitForRunning(t, ctx, h.compose, h.userID, created.ID)
 	t.Logf("containers: %+v", containerList)
 
-	// The domain label becomes a real Traefik route on this node: the
-	// generated router points at the project's published backend port and a
-	// Host-header request serves the nginx page.
 	p7Sync(t, ctx, h.proxy, h.serverID)
 	if traefikID := p6FindContainer(t, ctx, h.engine); traefikID != "" {
 		h.trackContainer(traefikID)
@@ -135,13 +107,11 @@ volumes:
 		t.Fatalf("the service domain served %q, want nginx", body)
 	}
 
-	// Per-service logs carry the substituted environment value.
 	logs := p7ReadLogs(t, ctx, h.compose, h.userID, created.ID, "worker")
 	if !strings.Contains(logs, message) {
 		t.Fatalf("worker logs do not contain %q:\n%s", message, logs)
 	}
 
-	// Data written into the named volume must survive stop and redeploy.
 	p7WriteMarker(t, ctx, volume, "marker-"+h.suffix)
 	stopped, err := h.compose.Stop(ctx, h.userID, created.ID)
 	if err != nil {
@@ -156,7 +126,6 @@ volumes:
 	if containers := p7ListContainers(t, ctx, h.compose, h.userID, created.ID); len(containers) != 0 {
 		t.Fatalf("down left containers behind: %+v", containers)
 	}
-	// Stop removes the route: the same host now answers 404 through Traefik.
 	p7Sync(t, ctx, h.proxy, h.serverID)
 	p6ExpectHTTP(t, domain, 404)
 
@@ -170,7 +139,6 @@ volumes:
 	p7Sync(t, ctx, h.proxy, h.serverID)
 	p6ExpectHTTP(t, domain, 200)
 
-	// The deploy history snapshots every attempt.
 	deploys, err := h.compose.Deploys(ctx, h.userID, created.ID)
 	if err != nil {
 		t.Fatalf("Deploys: %v", err)
@@ -179,8 +147,6 @@ volumes:
 		t.Fatalf("deploys = %+v", deploys)
 	}
 
-	// Restart restarts the running project in place and keeps the volume
-	// data.
 	restarted, err := h.compose.Restart(ctx, h.userID, created.ID)
 	if err != nil {
 		t.Fatalf("Restart: %v", err)
@@ -193,7 +159,6 @@ volumes:
 		t.Fatalf("volume data did not survive the restart: %q", marker)
 	}
 
-	// Delete stops the project and keeps the data.
 	if err := h.compose.Delete(ctx, h.userID, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -203,13 +168,10 @@ volumes:
 	if _, err := h.compose.Get(ctx, h.userID, created.ID); err == nil {
 		t.Fatal("deleted service is still readable")
 	}
-	// The deleted service's host is no longer claimed.
 	p7Sync(t, ctx, h.proxy, h.serverID)
 	p6ExpectHTTP(t, domain, 404)
 }
 
-// p7Sync runs one proxy sync, tolerating the diagnostics a stopped or deleted
-// project produces (the sync still pushes the healthy configuration).
 func p7Sync(t *testing.T, ctx context.Context, svc proxy.ProxyService, serverID uuid.UUID) {
 	t.Helper()
 	syncCtx, cancel := context.WithTimeout(ctx, p7PollTimeout)
@@ -219,7 +181,6 @@ func p7Sync(t *testing.T, ctx context.Context, svc proxy.ProxyService, serverID 
 	}
 }
 
-// p7ListContainers reads the project's container list through the service.
 func p7ListContainers(t *testing.T, ctx context.Context, svc services.ServiceService, userID, serviceID uuid.UUID) []services.ComposeContainer {
 	t.Helper()
 	listCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -231,9 +192,6 @@ func p7ListContainers(t *testing.T, ctx context.Context, svc services.ServiceSer
 	return containers
 }
 
-// p7WaitForRunning polls ps until every compose service of the project is
-// running. The expected count comes from the stored document, so a project
-// that declares more services cannot pass the wait with one still down.
 func p7WaitForRunning(t *testing.T, ctx context.Context, svc services.ServiceService, userID, serviceID uuid.UUID) []services.ComposeContainer {
 	t.Helper()
 	service, err := svc.Get(ctx, userID, serviceID)
@@ -265,8 +223,6 @@ func p7WaitForRunning(t *testing.T, ctx context.Context, svc services.ServiceSer
 	}
 }
 
-// p7ReadLogs reads one compose service's logs (tail, no follow) through the
-// service and returns the collected text.
 func p7ReadLogs(t *testing.T, ctx context.Context, svc services.ServiceService, userID, serviceID uuid.UUID, composeService string) string {
 	t.Helper()
 	logCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -283,9 +239,6 @@ func p7ReadLogs(t *testing.T, ctx context.Context, svc services.ServiceService, 
 	return builder.String()
 }
 
-// p7WriteMarker writes a marker file into the project's named volume through
-// the Docker CLI (the suite drives Docker through the agent; the CLI is used
-// only for fixture setup and cleanup, like the Phase 6 failure dumps).
 func p7WriteMarker(t *testing.T, ctx context.Context, volume, content string) {
 	t.Helper()
 	output, err := runDocker(ctx, "run", "--rm", "-v", volume+":/data", p7BusyboxImage,
@@ -295,7 +248,6 @@ func p7WriteMarker(t *testing.T, ctx context.Context, volume, content string) {
 	}
 }
 
-// p7ReadMarker reads the marker file back from the volume.
 func p7ReadMarker(t *testing.T, ctx context.Context, volume string) string {
 	t.Helper()
 	output, err := runDocker(ctx, "run", "--rm", "-v", volume+":/data", p7BusyboxImage,
@@ -306,7 +258,6 @@ func p7ReadMarker(t *testing.T, ctx context.Context, volume string) string {
 	return output
 }
 
-// p7VolumeExists reports whether the named volume exists on the node.
 func p7VolumeExists(t *testing.T, ctx context.Context, volume string) bool {
 	t.Helper()
 	output, err := runDocker(ctx, "volume", "ls", "--format", "{{.Name}}")

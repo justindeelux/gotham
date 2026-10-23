@@ -1,17 +1,4 @@
-/* ═══════════════════════════════════════════════════════════════════════════
- * Gotham — design token contract.
- *
- * The UI design-token source of truth.
- * Every later UI package builds on these tokens; do not introduce new
- * colors, radii, or type values in component CSS — add a token here first.
- *
- * Fonts are self-hosted under web/public/fonts (no Google Fonts hotlink,
- * per the self-hosted principle and the CSP style-src 'self' policy).
- * Both families are variable fonts (wght axis), so one file per subset
- * covers weights 400-700 via the font-weight range descriptor.
- * ═════════════════════════════════════════════════════════════════════════ */
 
-/* ── Self-hosted fonts ─────────────────────────────────────────────────── */
 @font-face {
   font-family: "Google Sans";
   font-style: normal;
@@ -56,63 +43,47 @@
     U+0329, U+032A, U+032E-032F, U+1EA0-1EF9;
 }
 
-/* ── Block 1 — design-system tokens ───── */
 :root {
-  /* ─── Surface ──────────────────────────────────────────────────── */
-  --bg: #313338; /* chat surface / primary dark */
-  --surface: #2b2d31; /* channel sidebar, settings sidebar */
-  --surface-warm: #1e1f22; /* server list rail — deepest layer */
+  --bg: #313338;
+  --surface: #2b2d31;
+  --surface-warm: #1e1f22;
 
-  /* ─── Foreground ───────────────────────────────────────────────── */
-  --fg: #dbdee1; /* text-normal — slightly cooler than white */
-  --fg-2: #f2f3f5; /* header-primary — modal titles */
-  --muted: #949ba4; /* text-muted — timestamps, server names */
-  --meta: #80848e; /* channels-default — inactive sidebar names */
+  --fg: #dbdee1;
+  --fg-2: #f2f3f5;
+  --muted: #949ba4;
+  --meta: #80848e;
 
-  /* ─── Border ───────────────────────────────────────────────────── */
-  --border: rgba(255, 255, 255, 0.06); /* standard divider */
-  --border-soft: #3f4147; /* solid divider for cards */
+  --border: rgba(255, 255, 255, 0.06);
+  --border-soft: #3f4147;
 
-  /* ─── Accent ───────────────────────────────────────────────────── */
-  --accent: #5865f2; /* Blurple — brand primary CTA */
+  --accent: #5865f2;
   --accent-on: #ffffff;
-  --accent-hover: #4752c4; /* darker hover */
+  --accent-hover: #4752c4;
   --accent-active: color-mix(in oklab, var(--accent), black 14%);
 
-  /* ─── Semantic ─────────────────────────────────────────────────── */
-  --success: #23a55a; /* status-online green */
-  --warn: #f0b232; /* status-idle yellow */
-  --danger: #f23f43; /* status-dnd / destructive red */
+  --success: #23a55a;
+  --warn: #f0b232;
+  --danger: #f23f43;
 
-  /* ─── Typography ───────────────────────────────────────────────── */
   --font-display: "Google Sans", "Helvetica Neue", Helvetica, Arial,
     sans-serif;
   --font-body: "Google Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", Consolas, "Andale Mono", "Courier New",
     Courier, monospace;
 
-  /* Type scale — Discord: 56px display, 24px page heading, 16px body
-   * (never shrinks). Schema spine: xs=12 (timestamp/caption), base=16,
-   * 4xl=56. */
-  --text-xs: 12px; /* timestamp / caption / meta */
-  --text-sm: 14px; /* compact metadata */
-  --text-base: 16px; /* message body — never below 16px */
-  --text-lg: 18px; /* feature heading */
-  --text-xl: 20px; /* sub-heading */
-  --text-2xl: 24px; /* page heading — settings/profile */
-  --text-3xl: 32px; /* section heading */
-  --text-4xl: 56px; /* display hero — marketing */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+  --text-4xl: 56px;
 
-  /* Leading + tracking.
-   * --leading-tight=1.10: 56px hero compression.
-   * h2 (32px) → 1.20; h3 (24px) → 1.25 per brand feel.
-   * --tracking-display: -0.02em (display 56px). */
   --leading-body: 1.375;
   --leading-tight: 1.1;
   --tracking-display: -0.02em;
 
-  /* ─── Spacing ──────────────────────────────────────────────────── */
-  /* 4px base grid. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -122,34 +93,19 @@
   --space-8: 32px;
   --space-12: 40px;
 
-  /* Section rhythm. */
   --section-y-desktop: 80px;
   --section-y-tablet: 48px;
   --section-y-phone: 32px;
 
-  /* ─── Radius ───────────────────────────────────────────────────── */
-  /* 4px for buttons/inputs; 8px for cards. Rounded but not balloon-soft. */
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 16px;
   --radius-pill: 9999px;
 
-  /* ─── Brand avatars ────────────────────────────────────────────── */
-  /* Frame edge lengths for resource marks: environment list, Add
-   * resource picker, application detail. */
   --brand-icon-sm: 28px;
   --brand-icon-md: 40px;
   --brand-icon-lg: 44px;
 
-  /* ─── Elevation ────────────────────────────────────────────────── */
-  /* Dark surfaces: luminance stepping; semi-transparent white borders
-     as depth signal rather than drop shadows.
-     --elev-floating lifts the full-window surfaces (code editor, terminal)
-     off the page: three wide, low-alpha layers with a negative spread so the
-     halo stays soft instead of forming a hard dark rim. The layers carry the
-     drop (JUS-275) so a floating window reads clearly above page content and
-     above another floating window, while the window border still draws the
-     1px edge — the shadow carries no ring of its own. */
   --elev-flat: none;
   --elev-ring: 0 0 0 1px var(--border);
   --elev-raised: rgba(0, 0, 0, 0.4) 0px 2px 4px,
@@ -158,48 +114,28 @@
     rgba(0, 0, 0, 0.42) 0px 8px 22px -8px,
     rgba(0, 0, 0, 0.24) 0px 2px 6px -2px;
 
-  /* ─── Focus ────────────────────────────────────────────────────── */
-  /* Accent mixed toward white: >=5.3:1 on every app surface, so keyboard
-   * focus is never a ~1.36:1 30%-alpha wash (B3-9). */
   --focus-ring: 0 0 0 3px var(--accent-ink);
 
-  /* ─── Motion ───────────────────────────────────────────────────── */
   --motion-fast: 80ms;
   --motion-base: 200ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 
-  /* ─── Layout ───────────────────────────────────────────────────── */
   --container-max: 1200px;
   --container-gutter-desktop: 24px;
   --container-gutter-tablet: 16px;
   --container-gutter-phone: 16px;
 
-  /* Card modal width for a single-column body (a form or a streamed log).
-     Modals that set an explicit width use this instead of a bare px value. */
   --modal-width: 720px;
 }
 
-/* ── Block 2 — app shell aliases (layout geometry + derived tones) ─────── */
 :root {
   --rail-w: 72px;
   --sidebar-w: 260px;
   --context-w: 240px;
   --topbar-h: 48px;
 
-  /* Single item-to-item rhythm shared by every form (JUS-17): stacked NForm
-   * fields, connect groups, and inline/grid rows all reuse this token so the
-   * vertical rhythm is one value everywhere. */
   --form-item-gap: var(--space-4);
 
-  /* ── Typography override ──────────────────────────────────────────
-   * Block 1 above stays the reference for the design system; the font
-   * stacks below are intentional overrides:
-   *   · body/display: Google Sans (self-hosted woff2, weights 400-700).
-   *     Discord's "gg sans" is not publicly released, so the officially
-   *     released Google font is used; the Helvetica Neue fallback stays.
-   *   · mono: JetBrains Mono for logs, metrics, and labels.
-   * Google Sans ships no weight 800, so every former 800 usage drops to
-   * 700 to avoid synthetic bold. */
   --font-display: "Google Sans", "Helvetica Neue", Helvetica, Arial,
     sans-serif;
   --font-body: "Google Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -207,8 +143,8 @@
     monospace;
 
   --fg-soft: color-mix(in oklab, var(--fg) 6%, transparent);
-  --hover-row: rgba(78, 80, 88, 0.3); /* Background Modifier Hover */
-  --selected-row: rgba(78, 80, 88, 0.6); /* Background Modifier Selected */
+  --hover-row: rgba(78, 80, 88, 0.3);
+  --selected-row: rgba(78, 80, 88, 0.6);
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
   --accent-softer: color-mix(in oklab, var(--accent) 18%, transparent);
   --accent-ink: color-mix(in oklab, var(--accent) 62%, white);
@@ -223,11 +159,6 @@
   --float: color-mix(in oklab, var(--surface-warm) 78%, black);
   --ease-morph: cubic-bezier(0.215, 0.61, 0.355, 1);
 
-  /* ── Editor light palette (JUS-219) ──────────────────────────────
-   * The app shell is dark-only; the code editor's "light" theme inverts the
-   * surface tokens and uses these fixed syntax colors, which are readable on
-   * --editor-light-bg. Add a token here before using another light-editor
-   * color. */
   --editor-light-bg: var(--fg-2);
   --editor-light-fg: var(--surface-warm);
   --editor-light-keyword: #7c3aed;
@@ -241,25 +172,11 @@
   --editor-light-link: #0e7490;
   --editor-light-invalid: #dc2626;
 
-  /* ── Brand assets (JUS-239) ────────────────────────────────────────
-   * The brand set ships as static files under /logo (web/public/logo).
-   * Only the height is a token: every lockup keeps the asset's own
-   * intrinsic ratio, so no width is hard-coded anywhere.
-   *   · --brand-mark-h      "GO" monogram (rail home tile)
-   *   · --brand-wordmark-h  "GOthan" wordmark (sidebar head)
-   *   · --brand-wordmark-sm-h  compact wordmark (phone auth header)
-   *   · --brand-logo-h      stacked lockup (auth shell) */
   --brand-mark-h: 20px;
   --brand-wordmark-h: 18px;
   --brand-wordmark-sm-h: 16px;
   --brand-logo-h: 120px;
 
-  /* ── Terminal palettes (JUS-250) ──────────────────────────────────
-   * Named xterm themes are defined here (and only here): the runtime maps
-   * these tokens onto xterm's ITheme, so the renderer has no literal colors
-   * of its own. The dark set is the app's own surfaces plus a Discord-like
-   * ANSI ramp; the light set is a legible day palette. A theme change only
-   * repaints xterm — the shell, its id and buffer are untouched. */
   --term-dark-bg: var(--surface-warm);
   --term-dark-fg: var(--fg);
   --term-dark-cursor: #7b87ff;

@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// versionedFakeServerService is the handler-test fake registry plus a build
-// version, so the version endpoint can be exercised without a database.
 type versionedFakeServerService struct {
 	ServerService
 	version string
@@ -16,7 +14,6 @@ type versionedFakeServerService struct {
 
 func (f *versionedFakeServerService) Version() string { return f.version }
 
-// newVersionTestServer builds a Server whose registry reports version.
 func newVersionTestServer(t *testing.T, version string) *Server {
 	t.Helper()
 	return newServerRoutesTestServer(t, &versionedFakeServerService{
@@ -25,7 +22,6 @@ func newVersionTestServer(t *testing.T, version string) *Server {
 	})
 }
 
-// decodeVersion decodes a GET /api/v1/version JSON body.
 func decodeVersion(t *testing.T, rec *httptest.ResponseRecorder) versionResponse {
 	t.Helper()
 	var body versionResponse

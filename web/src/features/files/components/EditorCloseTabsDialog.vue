@@ -5,11 +5,8 @@ import { useI18n } from "vue-i18n";
 
 interface Props {
   show: boolean;
-  /** paths are the root-relative paths of the dirty tabs being closed. */
   paths: string[];
-  /** canSave is false when the caller has no write access to the root. */
   canSave: boolean;
-  /** saving blocks every choice while the dirty buffers are being written. */
   saving: boolean;
 }
 
@@ -29,7 +26,6 @@ const saveLabel = computed<string>(() =>
     : String(t("files.editor.closeDirtySave")),
 );
 
-/** onShow closes the prompt only when it is dismissed while idle. */
 function onShow(value: boolean): void {
   if (!value && !props.saving) {
     emit("cancel");

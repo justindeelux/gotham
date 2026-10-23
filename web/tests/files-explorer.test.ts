@@ -1,6 +1,3 @@
-// In-editor file explorer (JUS-223): lazy tree caching, inline errors, recursive
-// search, rename/delete tab sync, ARIA keyboard navigation and windowing. The
-// files API is mocked so the store and the panel run without axios.
 /* global document:readonly, KeyboardEvent:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
@@ -50,7 +47,6 @@ const root: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(
   overrides: Partial<FilesEntry> & { name: string },
 ): FilesEntry {
@@ -64,12 +60,10 @@ function entry(
   };
 }
 
-/** dir builds one folder row. */
 function dir(name: string): FilesEntry {
   return entry({ name, kind: "directory", size: 0, mode: 0o040755 });
 }
 
-/** makeTab builds one ready editor tab at `path`. */
 function makeTab(path: string, dirty = false): EditorTab {
   return {
     id: `tab-${path}`,
@@ -93,7 +87,6 @@ function makeTab(path: string, dirty = false): EditorTab {
   };
 }
 
-/** dirState builds one cached directory for the pure flatten tests. */
 function dirState(
   path: string,
   entries: FilesEntry[],
@@ -111,7 +104,6 @@ function dirState(
   };
 }
 
-/** setupStores seeds the pinia stores the explorer reads (team, roots, editor). */
 function setupStores(): {
   explorer: ReturnType<typeof useExplorerStore>;
   editor: ReturnType<typeof useEditorStore>;
@@ -156,7 +148,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** deferred builds a promise a test can settle after starting a request. */
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (_value: T) => void;
@@ -466,7 +457,6 @@ describe("editor explorer catalogs", () => {
 });
 
 describe("EditorExplorer panel", () => {
-  /** mountPanel mounts the panel under the message provider. */
   function mountPanel() {
     const stores = setupStores();
     const shell = defineComponent({
@@ -590,13 +580,11 @@ describe("EditorExplorer panel", () => {
     await nextTick();
     expect(wrapper.findAll('[role="treeitem"]')).toHaveLength(3);
 
-    // ArrowDown walks into the expanded child, ArrowLeft returns to its folder.
     await tree.trigger("keydown", { key: "ArrowDown" });
     expect(tree.attributes("aria-activedescendant")).toBe("ex-row-1");
     await tree.trigger("keydown", { key: "ArrowLeft" });
     expect(tree.attributes("aria-activedescendant")).toBe("ex-row-0");
 
-    // End reaches the last sibling; Home returns to the first row.
     await tree.trigger("keydown", { key: "End" });
     expect(tree.attributes("aria-activedescendant")).toBe("ex-row-2");
     await tree.trigger("keydown", { key: "Home" });
@@ -630,7 +618,6 @@ describe("EditorExplorer panel", () => {
     await nextTick();
     expect(document.body.textContent ?? "").toContain("Rename a.ts");
 
-    // Cancel the rename, then Delete opens the same kind of confirmation.
     const cancel = wrapper.findAll("button").find((button) =>
       button.text() === "Cancel",
     );
@@ -656,7 +643,6 @@ describe("EditorExplorer panel", () => {
     await flushPromises();
     expect(document.body.textContent ?? "").toContain("Set as root");
 
-    // Close the menu and reopen it with the dedicated ContextMenu key.
     document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await flushPromises();
     await tree.trigger("keydown", { key: "ContextMenu" });

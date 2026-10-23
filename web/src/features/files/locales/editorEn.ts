@@ -1,11 +1,3 @@
-/**
- * Files editor English catalog, split out of `locales/en.ts` so the editor
- * messages live in the lazy files-page chunk instead of the eager feature
- * catalog (which is bundled into the entry chunk). Merged under
- * `files.editor` by `locales/editorMessages.ts` when the editor loads.
- * The filename is deliberately not `en.ts` or `vi.ts`, so the eager catalog
- * scan (which globs those exact names) never picks it up.
- */
 const en = {
   heading: "Editor",
   windowLabel: "Code editor window",

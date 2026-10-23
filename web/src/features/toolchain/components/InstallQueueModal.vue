@@ -14,11 +14,6 @@ import { useToolchainStore } from "@/features/toolchain/stores/toolchain";
 const { t } = useI18n();
 const store = useToolchainStore();
 
-/**
- * show mirrors the JUS-178 hook flag: any screen flips it via
- * `openQueueModal`, and closing here only hides the modal — the queue keeps
- * running in the background (footer copy says so).
- */
 const show = computed<boolean>({
   get: () => store.queueModalOpen,
   set: (value: boolean) => {
@@ -28,25 +23,16 @@ const show = computed<boolean>({
   },
 });
 
-/** selectedJobId names the job whose log renders; null shows the hint. */
 const selectedJobId = ref<string | null>(null);
 
-/**
- * manualJobId names the job the user pinned after opening (a click, or the
- * open-request id). A pin survives status changes and progress frames and
- * is released only when the job leaves the list or the modal reopens.
- */
 const manualJobId = ref<string | null>(null);
 
-/** lastWanted tracks the open-request id already honored (open only). */
 const lastWanted = ref<string | null | undefined>(undefined);
 
-/** selectedJob resolves the selection against the live queue. */
 const selectedJob = computed<ToolchainJob | null>(
   () => store.jobs[selectedJobId.value ?? ""] ?? null,
 );
 
-/** logActive gates the cursor catch-up poll while the selection runs. */
 const logActive = computed<boolean>(
   () => selectedJob.value !== null && !isTerminalJobStatus(selectedJob.value.status),
 );
@@ -58,10 +44,6 @@ const log = useInstallQueueLog({
   active: logActive,
 });
 
-/**
- * voiceStatus announces the selection in a polite live region (the queue
- * list itself is too chatty to be live: every realtime frame re-renders it).
- */
 const voiceStatus = computed<string>(() => {
   if (selectedJob.value === null) {
     return "";
@@ -79,7 +61,6 @@ const voiceStatus = computed<string>(() => {
   });
 });
 
-/** paneTitle heads the log pane with the selected job, or the generic label. */
 const paneTitle = computed<string>(() => {
   if (selectedJob.value === null) {
     return t("toolchain.modal.logLabel");
@@ -94,7 +75,6 @@ const paneTitle = computed<string>(() => {
   return t("toolchain.modal.selectedJob", { tool, action });
 });
 
-/** paneState maps job + tail state onto the log pane's render states. */
 const paneState = computed<InstallLogPaneState>(() => {
   if (selectedJob.value === null) {
     return "idle";
@@ -111,8 +91,6 @@ const paneState = computed<InstallLogPaneState>(() => {
   return "ready";
 });
 
-// pickFollowedId prefers the newest running job, else the newest queued
-// job, else the newest job (jobsList is newest first).
 function pickFollowedId(jobs: ToolchainJob[]): string | null {
   return (
     jobs.find((job) => job.status === "running")?.id ??
@@ -122,17 +100,11 @@ function pickFollowedId(jobs: ToolchainJob[]): string | null {
   );
 }
 
-/**
- * onSelect pins a user pick after opening; the jobs watcher keeps it while
- * the job still exists, whatever its status.
- */
 function onSelect(id: string | null): void {
   selectedJobId.value = id;
   manualJobId.value = id;
 }
 
-// Opening follows the requested job (or the active job); closing resets so
-// a reopen never lands on a stale finished job (JUS-184).
 watch(
   show,
   (open) => {
@@ -145,8 +117,6 @@ watch(
     lastWanted.value = store.queueModalJobId;
     const jobs = store.jobsList;
     const wanted = store.queueModalJobId;
-    // An explicitly requested job is pinned like a user pick, so it
-    // survives later frames; otherwise follow the active job.
     const pinned = wanted !== null && jobs.some((job) => job.id === wanted) ? wanted : null;
     manualJobId.value = pinned;
     selectedJobId.value = pinned ?? pickFollowedId(jobs);
@@ -154,10 +124,6 @@ watch(
   { immediate: true },
 );
 
-// While open, a new open-request wins once; otherwise a pinned job is kept
-// while it still exists (any status, so a finished log stays readable
-// while the queue runs) and everything else follows the active job, so a
-// fresh open or a new enqueue lands on the running job (JUS-184).
 watch(
   [() => store.jobsList, () => store.queueModalJobId],
   ([jobs, wanted]) => {
@@ -234,8 +200,6 @@ watch(
   font-size: var(--text-xs);
   margin-right: auto;
 }
-/* Visually-hidden live region (scoped: shared styles are owned outside
- * this feature, so the shared tooltip class is not reused here). */
 .modal-sr {
   position: absolute;
   width: 1px;

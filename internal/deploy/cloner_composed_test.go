@@ -19,8 +19,6 @@ import (
 	"github.com/justindeelux/gotham/internal/githubapp"
 )
 
-// composedFakeAPI implements githubapp.GitHubAPI with per-installation tokens
-// and no network.
 type composedFakeAPI struct {
 	mu            sync.Mutex
 	pem           string
@@ -65,8 +63,6 @@ func (f *composedFakeAPI) ListInstallationRepos(_ context.Context, token string)
 	}
 	var id int64
 	_, _ = fmt.Sscanf(token, "tok-%d", &id)
-	// failFor breaks one installation's listing, so a test can prove an
-	// unrelated broken connection never affects a linked application.
 	if err, ok := f.failFor[id]; ok {
 		return nil, false, err
 	}
@@ -77,7 +73,6 @@ func (f *composedFakeAPI) ListBranches(_ context.Context, _ string, _ string) ([
 	return nil, nil
 }
 
-// composedAppRepo is an in-memory githubapp.Repository.
 type composedAppRepo struct {
 	mu      sync.Mutex
 	apps    map[uuid.UUID]githubapp.SealedApp
@@ -227,10 +222,6 @@ func composedTestKey(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
 }
 
-// TestCloneSshWithGrantKeepsDeployKey runs a linked application with an SSH
-// clone URL and a deploy key through the REAL service and cloner: the repo
-// is granted, but SSH URLs never take the token path, so the clone uses the
-// deploy key and mints no token.
 func TestCloneSshWithGrantKeepsDeployKey(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
@@ -315,9 +306,6 @@ func TestCloneSshWithGrantKeepsDeployKey(t *testing.T) {
 	}
 }
 
-// TestCloneLegacyHttpAppNeverTouchesService runs an unlinked https
-// application through the REAL service as resolver: no grant lookup happens,
-// no token is minted, the anonymous clone proceeds.
 func TestCloneLegacyHttpAppNeverTouchesService(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
@@ -362,9 +350,6 @@ func TestCloneLegacyHttpAppNeverTouchesService(t *testing.T) {
 	}
 }
 
-// TestCloneTransientFailureFailsNoSilentClone proves a transient GitHub
-// failure on a linked application fails the deploy: no plain-URL clone is
-// attempted, so a private repo never degrades to an anonymous clone.
 func TestCloneTransientFailureFailsNoSilentClone(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
@@ -411,7 +396,6 @@ func TestCloneTransientFailureFailsNoSilentClone(t *testing.T) {
 	app.Repo = "acme/web"
 	app.CloneURL = "https://github.com/acme/web.git"
 
-	// GitHub 502s the grant listing while the cache holds a stale grant.
 	api.reposErr = errors.New("502 Bad Gateway")
 	ran := false
 	source := gitSource{
@@ -430,10 +414,6 @@ func TestCloneTransientFailureFailsNoSilentClone(t *testing.T) {
 	}
 }
 
-// TestCloneThroughRealAppService runs connect -> install -> github_app
-// application -> Clone through the REAL githubapp.Service and the REAL
-// gitSource: only the git binary is faked. The clone URL must carry the
-// token minted for the installation granting the repo.
 func TestCloneThroughRealAppService(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New()
@@ -441,7 +421,6 @@ func TestCloneThroughRealAppService(t *testing.T) {
 	api := &composedFakeAPI{
 		pem: composedTestKey(t),
 		repos: map[int64][]githubapp.Repo{
-			// Installation 999 grants nothing; 1000 grants acme/web.
 			1000: {{ExternalID: "2", Name: "web", FullName: "acme/web", DefaultBranch: "main", CloneURL: "https://github.com/acme/web.git"}},
 		},
 		installations: map[int64]githubapp.InstallationInfo{
@@ -478,9 +457,6 @@ func TestCloneThroughRealAppService(t *testing.T) {
 		}
 	}
 
-	// The deploy application the wizard would create: https clone URL for a
-	// private repo, github_app source. Its UUID is unrelated to any
-	// github_apps row: resolution runs by repository grant.
 	app := testApplication(userID)
 	app.SourceType = SourceGitHubApp
 	app.GitHubAppID = apps[0].ID
@@ -516,9 +492,6 @@ func TestCloneThroughRealAppService(t *testing.T) {
 	}
 }
 
-// mustLinkConnection runs manifest + install + record for one connection
-// through the REAL service and returns it. repos are what the installation
-// grants; the fake serves them per installation with no network.
 func mustLinkConnection(t *testing.T, ctx context.Context, svc *githubapp.Service, userID uuid.UUID, api *composedFakeAPI, installationID int64, repos []githubapp.Repo) githubapp.GitHubApp {
 	t.Helper()
 	manifest, err := svc.StartManifest(ctx, userID, "", "gotham", "https://gotham.example")
@@ -584,9 +557,6 @@ func webRepo() githubapp.Repo {
 	return githubapp.Repo{ExternalID: "2", Name: "web", FullName: "acme/web", DefaultBranch: "main", CloneURL: "https://github.com/acme/web.git"}
 }
 
-// TestCloneLinkedConnectionWinsOverAnotherGrant runs a linked application
-// whose repo is granted by TWO connections through the REAL service and
-// cloner: the clone authenticates as the linked connection, never the other.
 func TestCloneLinkedConnectionWinsOverAnotherGrant(t *testing.T) {
 	ctx, userID, api, svc := linkedComposedFixture(t)
 	other := mustLinkConnection(t, ctx, svc, userID, api, 1000, []githubapp.Repo{webRepo()})
@@ -618,14 +588,9 @@ func TestCloneLinkedConnectionWinsOverAnotherGrant(t *testing.T) {
 	}
 }
 
-// TestCloneLinkedRevokedGrantFails runs a linked application whose
-// connection no longer grants the repo (revoked upstream): the deploy fails
-// with the no-grant error and git never runs: no other connection is
-// consulted and no anonymous clone is attempted.
 func TestCloneLinkedRevokedGrantFails(t *testing.T) {
 	ctx, userID, api, svc := linkedComposedFixture(t)
 	linked := mustLinkConnection(t, ctx, svc, userID, api, 1000, []githubapp.Repo{webRepo()})
-	// Revoked upstream: the next listing is empty.
 	api.repos[1000] = nil
 
 	app := testApplication(userID)
@@ -655,9 +620,6 @@ func TestCloneLinkedRevokedGrantFails(t *testing.T) {
 	}
 }
 
-// TestCloneBrokenUnrelatedInstallationIgnored runs a linked application next
-// to another connection whose listing is broken: the clone still
-// authenticates through the linked connection.
 func TestCloneBrokenUnrelatedInstallationIgnored(t *testing.T) {
 	ctx, userID, api, svc := linkedComposedFixture(t)
 	mustLinkConnection(t, ctx, svc, userID, api, 1000, []githubapp.Repo{webRepo()})
@@ -687,9 +649,6 @@ func TestCloneBrokenUnrelatedInstallationIgnored(t *testing.T) {
 	}
 }
 
-// TestCloneLinkedHTTPURLRefused runs a linked application with a plaintext
-// http clone URL: the clone fails with a validation error and git never
-// runs, so no token is ever embedded in a plaintext URL.
 func TestCloneLinkedHTTPURLRefused(t *testing.T) {
 	ctx, userID, api, svc := linkedComposedFixture(t)
 	linked := mustLinkConnection(t, ctx, svc, userID, api, 1000, []githubapp.Repo{webRepo()})
@@ -727,9 +686,6 @@ func TestCloneLinkedHTTPURLRefused(t *testing.T) {
 	}
 }
 
-// TestCloneUnlinkedGitHubAppLogsNoConnection runs a github_app application
-// with no linked connection (as after a disconnect unlinks the row) through
-// the REAL service: it clones anonymously and says so on the deploy log.
 func TestCloneUnlinkedGitHubAppLogsNoConnection(t *testing.T) {
 	ctx, userID, api, svc := linkedComposedFixture(t)
 

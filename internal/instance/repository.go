@@ -12,20 +12,14 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Section names used for audit rows and Repository.Save.
 const (
 	SectionGeneral = "general"
 	SectionNetwork = "network"
 	SectionSystem  = "system"
 )
 
-// Repository persists the settings record. It is implemented over
-// *store.Store in production and by a fake in tests.
 type Repository interface {
-	// Load returns the stored record.
 	Load(ctx context.Context) (Stored, error)
-	// Save persists one section of rec and appends an audit row with the
-	// given change description. actor is uuid.Nil for system actions.
 	Save(ctx context.Context, actor uuid.UUID, section string, rec Stored, changes any) error
 }
 
@@ -33,7 +27,6 @@ type storeRepository struct{ store *store.Store }
 
 var _ Repository = (*storeRepository)(nil)
 
-// NewStoreRepository builds the PostgreSQL-backed repository.
 func NewStoreRepository(st *store.Store) Repository { return &storeRepository{store: st} }
 
 func (r *storeRepository) Load(ctx context.Context) (Stored, error) {

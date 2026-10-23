@@ -18,15 +18,11 @@ import (
 	"testing"
 )
 
-// newTestDockerClient returns a DockerClient bound to server with a fresh
-// registry state directory.
 func newTestDockerClient(t *testing.T, handler http.Handler) *DockerClient {
 	t.Helper()
 	return newTestDockerClientWithStateDir(t, handler, t.TempDir())
 }
 
-// newTestDockerClientWithStateDir returns a DockerClient bound to server using
-// stateDir for registry credentials, so a test can pre-seed and inspect it.
 func newTestDockerClientWithStateDir(t *testing.T, handler http.Handler, stateDir string) *DockerClient {
 	t.Helper()
 	server := httptest.NewServer(handler)
@@ -39,9 +35,6 @@ func newTestDockerClientWithStateDir(t *testing.T, handler http.Handler, stateDi
 	return client
 }
 
-// seedRegistryState pre-creates the registry credential in a fresh state dir so
-// a pre-existing container is treated as reusable, and returns the dir and the
-// htpasswd mount source the container must report.
 func seedRegistryState(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -52,7 +45,6 @@ func seedRegistryState(t *testing.T) (string, string) {
 	return dir, htpasswdPath
 }
 
-// writeJSONStream writes Docker-style JSON messages followed by a newline.
 func writeJSONStream(t *testing.T, w http.ResponseWriter, messages ...any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -177,9 +169,6 @@ func TestDockerClientBuildReportsDaemonError(t *testing.T) {
 	}
 }
 
-// TestDockerClientBuildRedactsBuildArgsInError is the U5 regression: a failing
-// build must not echo the buildargs JSON (which can carry secrets) in its
-// error.
 func TestDockerClientBuildRedactsBuildArgsInError(t *testing.T) {
 	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -216,9 +205,6 @@ func TestRedactQuerySecrets(t *testing.T) {
 	}
 }
 
-// TestDockerClientBuildRedactsBuildArgsInTransportError is the round-2 U1
-// regression: a dead daemon's *url.Error embeds the request URL (including the
-// buildargs query); the returned error must not expose the value.
 func TestDockerClientBuildRedactsBuildArgsInTransportError(t *testing.T) {
 	client, err := NewDockerClient("http://127.0.0.1:1")
 	if err != nil {
@@ -316,8 +302,6 @@ func TestDockerClientPushImage(t *testing.T) {
 	if gotTag != "dep-1" {
 		t.Errorf("tag = %q", gotTag)
 	}
-	// Docker 28+ rejects a push with no X-Registry-Auth header at all
-	// (moby/moby#50614); the agent must always send the anonymous config.
 	if gotAuthHdr != anonymousRegistryAuth {
 		t.Errorf("%s = %q, want the anonymous auth config %q", registryAuthHeader, gotAuthHdr, anonymousRegistryAuth)
 	}
@@ -374,33 +358,25 @@ func TestDockerClientImageDigestMissing(t *testing.T) {
 	}
 }
 
-// registryTestEngine is a fake Docker engine that supports registry
-// bootstrap: inspect, pull, create, start and remove of the registry
-// container. hostPort is the configured host port ("" for an auto-assigned
-// one), publishedPort is what the daemon reports once running.
 type registryTestEngine struct {
-	mu            sync.Mutex
-	exists        bool
-	running       bool
-	managed       bool
-	hostPort      string
-	publishedPort string
-	created       dockerCreateBody
-	pulls         int
-	starts        int
-	creates       int
-	removals      int
-	startFails    bool
-	networkExists bool
-	networkCreate int
-	networkMode   string
-	// htpasswdSource is the bind source the running container reports for the
-	// htpasswd mount. Empty means no mount is reported (a container that must
-	// be recreated).
+	mu             sync.Mutex
+	exists         bool
+	running        bool
+	managed        bool
+	hostPort       string
+	publishedPort  string
+	created        dockerCreateBody
+	pulls          int
+	starts         int
+	creates        int
+	removals       int
+	startFails     bool
+	networkExists  bool
+	networkCreate  int
+	networkMode    string
 	htpasswdSource string
 }
 
-// inspectPayload renders a GET /containers/{name}/json response.
 func (e *registryTestEngine) inspectPayload() map[string]any {
 	startedAt := "0000-00-00T00:00:00Z"
 	if e.running {
@@ -549,7 +525,6 @@ func (e *registryTestEngine) handler(t *testing.T) http.Handler {
 	})
 }
 
-// registryPortInRange reports whether port is inside the probed range.
 func registryPortInRange(t *testing.T, port string) int {
 	t.Helper()
 	value, err := strconv.Atoi(port)
@@ -639,10 +614,6 @@ func TestDockerClientEnsureRegistryReusesRunningContainer(t *testing.T) {
 	}
 }
 
-// TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount isolates the
-// mount-source guard: the credential is seeded and matches (reused=true), but
-// the running container mounts a different htpasswd path, so only
-// registryMountsPath can trigger recreation.
 func TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount(t *testing.T) {
 	stateDir, _ := seedRegistryState(t)
 	staleSource := filepath.Join(t.TempDir(), registryHtpasswdFilename)
@@ -669,10 +640,6 @@ func TestDockerClientEnsureRegistryRecreatesOnStaleCredentialMount(t *testing.T)
 	}
 }
 
-// TestDockerClientEnsureRegistryRecreatesOnRewrittenCredential isolates the
-// !reused guard: the credential is seeded and the mount path still matches, but
-// the htpasswd file is deleted, so prepareRegistryAuth must rewrite it (a new
-// inode) and the container must be recreated to pick it up.
 func TestDockerClientEnsureRegistryRecreatesOnRewrittenCredential(t *testing.T) {
 	stateDir, htpasswdPath := seedRegistryState(t)
 	engine := &registryTestEngine{
@@ -719,8 +686,6 @@ func TestDockerClientEnsureRegistryRestartsStoppedContainer(t *testing.T) {
 }
 
 func TestDockerClientEnsureRegistryRepairsAutoAssignedPort(t *testing.T) {
-	// A container created with an auto-assigned host port is unreachable from
-	// some daemons, so it must be replaced by one on an explicit probed port.
 	engine := &registryTestEngine{
 		exists: true, running: true, managed: true,
 		hostPort: "", publishedPort: "32768",
@@ -741,9 +706,6 @@ func TestDockerClientEnsureRegistryRepairsAutoAssignedPort(t *testing.T) {
 	}
 }
 
-// TestDockerClientEnsureRegistryIsolatesLegacyContainer checks a registry left
-// on the default bridge by an older agent is recreated on the dedicated
-// network, so workloads can no longer reach it by container IP.
 func TestDockerClientEnsureRegistryIsolatesLegacyContainer(t *testing.T) {
 	engine := &registryTestEngine{
 		exists: true, running: true, managed: true,
@@ -798,7 +760,6 @@ func TestDockerClientEnsureRegistryDropsContainerThatNeverStarted(t *testing.T) 
 		t.Fatalf("removals = %d, want 1", engine.removals)
 	}
 
-	// The next call bootstraps a fresh registry.
 	engine.startFails = false
 	address, err := client.EnsureRegistry(context.Background())
 	if err != nil {
@@ -840,8 +801,6 @@ func TestStripImageTag(t *testing.T) {
 	}
 }
 
-// TestRegistryAuthFilesArePrivate checks the credential is persisted 0600 and
-// the htpasswd only carries a bcrypt hash, never the plaintext password.
 func TestRegistryAuthFilesArePrivate(t *testing.T) {
 	dir := t.TempDir()
 	auth, htpasswdPath, reused, err := prepareRegistryAuth(dir)
@@ -860,8 +819,6 @@ func TestRegistryAuthFilesArePrivate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat %s: %v", path, err)
 		}
-		// Literal 0600: comparing against the constant would keep the test
-		// green if the constant changed.
 		if got := info.Mode().Perm(); got != os.FileMode(0o600) {
 			t.Errorf("%s mode = %#o, want %#o", path, got, os.FileMode(0o600))
 		}
@@ -878,10 +835,6 @@ func TestRegistryAuthFilesArePrivate(t *testing.T) {
 		t.Errorf("htpasswd = %q; want a gotham bcrypt entry", string(htpasswd))
 	}
 
-	// A matching credential must not be rewritten (the bind mount's inode and
-	// bytes stay put), and must stay stable across reloads. Compare the bytes:
-	// an in-place rewrite keeps the inode, so only a fresh bcrypt salt in the
-	// content reveals one.
 	before, err := os.ReadFile(htpasswdPath)
 	if err != nil {
 		t.Fatalf("read htpasswd before reload: %v", err)
@@ -905,9 +858,6 @@ func TestRegistryAuthFilesArePrivate(t *testing.T) {
 	}
 }
 
-// TestPrepareRegistryAuthRejectsRelativeStateDirStillResolves checks a relative
-// state dir is absolutised, so the htpasswd bind source is not treated as a
-// named volume by Docker.
 func TestPrepareRegistryAuthRejectsRelativeStateDirStillResolves(t *testing.T) {
 	root := t.TempDir()
 	wd, err := os.Getwd()
@@ -935,9 +885,6 @@ func TestPrepareRegistryAuthRejectsRelativeStateDirStillResolves(t *testing.T) {
 	}
 }
 
-// TestRegistryAuthHeaderScope checks the node credential is only sent to the
-// node registry, never to another registry (for example the registry:2
-// bootstrap pull from Docker Hub).
 func TestRegistryAuthHeaderScope(t *testing.T) {
 	client, err := NewDockerClient("http://unused", WithRegistryStateDir(t.TempDir()))
 	if err != nil {
@@ -972,8 +919,6 @@ func TestRegistryAuthHeaderScope(t *testing.T) {
 	}
 }
 
-// TestDockerClientPushImageUsesCredential checks a push carries the node
-// credential in X-Registry-Auth, not the anonymous config.
 func TestDockerClientPushImageUsesCredential(t *testing.T) {
 	var gotAuth string
 	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -990,8 +935,6 @@ func TestDockerClientPushImageUsesCredential(t *testing.T) {
 	}
 }
 
-// TestEnsureRegistryRequiresStateDir checks the registry bootstrap fails closed
-// rather than serving an unauthenticated registry when no state dir is set.
 func TestEnsureRegistryRequiresStateDir(t *testing.T) {
 	client := newTestDockerClientWithoutStateDir(t)
 	if _, err := client.EnsureRegistry(context.Background()); err == nil || !strings.Contains(err.Error(), "state dir") {
@@ -999,10 +942,6 @@ func TestEnsureRegistryRequiresStateDir(t *testing.T) {
 	}
 }
 
-// TestEnsureRegistryCredentialRequiresLiveRegistry checks the lazy credential
-// load only attaches the credential when a live, gotham-managed registry
-// actually publishes the address named by the image, so a stale reference or a
-// same-named container cannot be handed the node credential.
 func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 	image := "127.0.0.1:5000/gotham/web:dep"
 
@@ -1015,7 +954,6 @@ func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 		return newTestDockerClientWithStateDir(t, engine.handler(t), stateDir)
 	}
 
-	// No container: no credential.
 	absent := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)
 	}))
@@ -1026,7 +964,6 @@ func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 		t.Error("credential attached without a live registry")
 	}
 
-	// A non-gotham container with the right port must not get the credential.
 	unmanaged := newClient(false, "5000")
 	if err := unmanaged.ensureRegistryCredentialFor(context.Background(), image); err != nil {
 		t.Fatalf("unmanaged registry: %v", err)
@@ -1035,7 +972,6 @@ func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 		t.Error("credential attached to a container gotham does not manage")
 	}
 
-	// A managed registry on a different port than the image: no credential.
 	mismatch := newClient(true, "5001")
 	if err := mismatch.ensureRegistryCredentialFor(context.Background(), image); err != nil {
 		t.Fatalf("mismatched registry: %v", err)
@@ -1044,7 +980,6 @@ func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 		t.Error("credential attached for a mismatched registry address")
 	}
 
-	// A managed registry publishing the image's address: credential attached.
 	live := newClient(true, "5000")
 	if err := live.ensureRegistryCredentialFor(context.Background(), image); err != nil {
 		t.Fatalf("live registry: %v", err)
@@ -1054,9 +989,6 @@ func TestEnsureRegistryCredentialRequiresLiveRegistry(t *testing.T) {
 	}
 }
 
-// TestEnsureRegistryCredentialPullPathDoesNotWrite checks the pull path never
-// generates or rewrites the credential: with no stored credential it stays
-// anonymous and creates no files.
 func TestEnsureRegistryCredentialPullPathDoesNotWrite(t *testing.T) {
 	stateDir := t.TempDir()
 	engine := &registryTestEngine{exists: true, running: true, managed: true, hostPort: "5000", publishedPort: "5000"}
@@ -1077,10 +1009,6 @@ func TestEnsureRegistryCredentialPullPathDoesNotWrite(t *testing.T) {
 	}
 }
 
-// TestEnsureRegistryCredentialStaysAnonymousWhenHtpasswdStale pins the
-// registryHtpasswdMatches guard in persistedRegistryAuth: a stored credential
-// whose htpasswd no longer matches must not be attached, and the pull path must
-// not repair or recreate anything.
 func TestEnsureRegistryCredentialStaysAnonymousWhenHtpasswdStale(t *testing.T) {
 	stateDir, htpasswdPath := seedRegistryState(t)
 	engine := &registryTestEngine{exists: true, running: true, managed: true, hostPort: "5000", publishedPort: "5000"}
@@ -1109,8 +1037,6 @@ func TestEnsureRegistryCredentialStaysAnonymousWhenHtpasswdStale(t *testing.T) {
 	}
 }
 
-// TestRegistryIsolated pins the isolation predicate: only the dedicated
-// registry network counts, so a container on the default bridge is recreated.
 func TestRegistryIsolated(t *testing.T) {
 	var isolated containerRuntimeInfo
 	isolated.HostConfig.NetworkMode = registryNetworkName
@@ -1135,8 +1061,6 @@ func TestRegistryIsolated(t *testing.T) {
 	}
 }
 
-// TestRegistryBindingExplicit pins the loopback requirement: a wildcard, empty
-// or non-loopback host IP must be recreated rather than trusted.
 func TestRegistryBindingExplicit(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -1162,9 +1086,6 @@ func TestRegistryBindingExplicit(t *testing.T) {
 	}
 }
 
-// TestEnsureRegistryNetworkConflictRechecksLabel checks a 409 from the network
-// create is followed by a label verification, so a concurrent create that lost
-// the race to an unrelated network is still refused.
 func TestEnsureRegistryNetworkConflictRechecksLabel(t *testing.T) {
 	gets := 0
 	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1193,8 +1114,6 @@ func TestEnsureRegistryNetworkConflictRechecksLabel(t *testing.T) {
 	}
 }
 
-// TestEnsureRegistryRejectsUnmanagedNetwork checks a same-named network that
-// gotham did not create is refused rather than adopted.
 func TestEnsureRegistryRejectsUnmanagedNetwork(t *testing.T) {
 	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/networks/"+registryNetworkName {
@@ -1213,8 +1132,6 @@ func TestEnsureRegistryRejectsUnmanagedNetwork(t *testing.T) {
 	}
 }
 
-// newTestDockerClientWithoutStateDir returns a client with no registry state
-// directory, for the fail-closed assertion.
 func newTestDockerClientWithoutStateDir(t *testing.T) *DockerClient {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1228,7 +1145,6 @@ func newTestDockerClientWithoutStateDir(t *testing.T) *DockerClient {
 	return client
 }
 
-// containsString reports whether values contains want.
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

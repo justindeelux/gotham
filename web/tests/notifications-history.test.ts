@@ -1,7 +1,3 @@
-// JUS-195 delivery history: label helpers and the ChannelCard panel.
-//
-// The panel is lazy (it reads the history only when opened), so the harness
-// proves the click triggers exactly one read and renders the returned rows.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -72,7 +68,6 @@ function attempt(overrides: Partial<NotificationDelivery>): NotificationDelivery
   };
 }
 
-/** deferred builds a promise a test resolves by hand. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -87,7 +82,6 @@ describe("JUS-195 delivery labels", () => {
     expect(deliveryStatusLabel("failure")).toBe("Failed");
     expect(deliveryEventLabel("deploy_failure")).toBe("Deploy failed");
     expect(deliveryEventLabel("test")).toBe("Test message");
-    // An unknown future key renders verbatim, like eventLabel.
     expect(deliveryEventLabel("deploy_exploded")).toBe("deploy_exploded");
 
     setLocale("vi", null);
@@ -141,7 +135,6 @@ describe("JUS-195 channel history panel", () => {
     ]);
     const wrapper = await cardHarness();
 
-    // Lazy: nothing is fetched until the panel opens.
     expect(vi.mocked(listDeliveries)).not.toHaveBeenCalled();
     await openHistory(wrapper);
 
@@ -164,7 +157,7 @@ describe("JUS-195 channel history panel", () => {
     expect(wrapper.text()).toContain("No delivery attempts yet.");
 
     vi.mocked(listDeliveries).mockRejectedValueOnce({ message: "", status: 403 });
-    await openHistory(wrapper); // closes, then reopens
+    await openHistory(wrapper);
     await openHistory(wrapper);
     expect(wrapper.find("[data-test-channel-history-error]").text()).toBe(
       "Your team role does not allow this action.",
@@ -186,11 +179,9 @@ describe("JUS-195 channel history panel", () => {
     const button = (label: string) =>
       wrapper.findAll("button").find((item) => item.text() === label)!;
 
-    // The toggle is disabled while a read is in flight, so the realistic
-    // overlap is the send-test refresh racing an open panel's pending read.
-    await button("Delivery history").trigger("click"); // read 1 (pending)
+    await button("Delivery history").trigger("click");
     await button("Send test").trigger("click");
-    await flushPromises(); // the test resolves and refreshes the open panel
+    await flushPromises();
     expect(vi.mocked(listDeliveries)).toHaveBeenCalledTimes(2);
 
     second.resolve([
@@ -200,7 +191,6 @@ describe("JUS-195 channel history panel", () => {
     expect(wrapper.findAll("[data-test-channel-history-row]")).toHaveLength(1);
     expect(wrapper.text()).toContain("Test message");
 
-    // The stale first read resolves late and must be ignored.
     first.resolve([attempt({ id: "old", error_summary: "stale failure" })]);
     await flushPromises();
     expect(wrapper.findAll("[data-test-channel-history-row]")).toHaveLength(1);
@@ -223,7 +213,6 @@ describe("JUS-195 channel history panel", () => {
     expect(result.exists()).toBe(true);
     expect(result.attributes("role")).toBe("status");
     expect(result.attributes("aria-live")).toBe("polite");
-    // No history read is triggered by a send-test while the panel is closed.
     expect(vi.mocked(listDeliveries)).not.toHaveBeenCalled();
     wrapper.unmount();
   });

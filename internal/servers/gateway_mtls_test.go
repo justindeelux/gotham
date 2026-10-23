@@ -24,8 +24,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// testKeyPEM encodes a test private key as PEM so a test can build a client
-// keypair for the node certificate it was issued.
 func testKeyPEM(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	t.Helper()
 	der, err := x509.MarshalECPrivateKey(key)
@@ -35,8 +33,6 @@ func testKeyPEM(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
 }
 
-// dialWithClientCert dials the gateway presenting certPEM/keyPEM as the client
-// certificate (the mutual-TLS agent connection).
 func dialWithClientCert(t *testing.T, addr string, authority *Authority, certPEM, keyPEM []byte) *grpc.ClientConn {
 	t.Helper()
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -56,8 +52,6 @@ func dialWithClientCert(t *testing.T, addr string, authority *Authority, certPEM
 	return conn
 }
 
-// dialNoClientCert dials the gateway presenting no client certificate, as the
-// one bootstrap registration does.
 func dialNoClientCert(t *testing.T, addr string, authority *Authority) *grpc.ClientConn {
 	t.Helper()
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(authority.Pool(), "")))
@@ -68,9 +62,6 @@ func dialNoClientCert(t *testing.T, addr string, authority *Authority) *grpc.Cli
 	return conn
 }
 
-// peerWithClientCert returns ctx with certPEM attached as the verified client
-// certificate, exactly as the gateway reads it from a mutual-TLS peer. It lets
-// the direct-call (no listener) tests exercise the certificate path.
 func peerWithClientCert(ctx context.Context, certPEM []byte) context.Context {
 	block, _ := pem.Decode(certPEM)
 	cert, err := x509.ParseCertificate(block.Bytes)
@@ -84,9 +75,6 @@ func peerWithClientCert(ctx context.Context, certPEM []byte) context.Context {
 	})
 }
 
-// issueNodeCert mints a node certificate signed by authority for a key that may
-// or may not be enrolled, so a test can model a forged, rotated, expired or
-// legacy (serverAuth-only) credential.
 func issueNodeCert(t *testing.T, authority *Authority, commonName string, key *ecdsa.PrivateKey, usages []x509.ExtKeyUsage, validity time.Duration) []byte {
 	t.Helper()
 	cert, err := authority.sign(commonName, []string{commonName}, nil, nil, usages, validity, &key.PublicKey)
@@ -96,14 +84,11 @@ func issueNodeCert(t *testing.T, authority *Authority, commonName string, key *e
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
 }
 
-// csrFor builds a CSR for nodeID signed by key.
 func csrFor(t *testing.T, nodeID string, key *ecdsa.PrivateKey) []byte {
 	t.Helper()
 	return testCSR(t, key, &x509.CertificateRequest{Subject: pkix.Name{CommonName: nodeID}, DNSNames: []string{nodeID}})
 }
 
-// enrollNodeKey bootstraps a fresh node with the given key and returns the node
-// certificate PEM, leaving the node bound to the key.
 func enrollNodeKey(t *testing.T, addr string, authority *Authority, nodeID string, key *ecdsa.PrivateKey) []byte {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -117,14 +102,12 @@ func enrollNodeKey(t *testing.T, addr string, authority *Authority, nodeID strin
 	return resp.GetCert()
 }
 
-// enrollNode bootstraps a fresh node and returns its node certificate and key PEM.
 func enrollNode(t *testing.T, addr string, authority *Authority, nodeID string) (certPEM, keyPEM []byte) {
 	t.Helper()
 	key := testKey(t)
 	return enrollNodeKey(t, addr, authority, nodeID, key), testKeyPEM(t, key)
 }
 
-// cleanupNode removes the node row at test cleanup.
 func cleanupNode(t *testing.T, service *ServerService, nodeID string) {
 	t.Helper()
 	store := service.store
@@ -139,8 +122,6 @@ func cleanupNode(t *testing.T, service *ServerService, nodeID string) {
 	})
 }
 
-// assertHeartbeatRejected opens a heartbeat with the given keypair and expects it
-// to be refused with want.
 func assertHeartbeatRejected(t *testing.T, addr string, authority *Authority, certPEM, keyPEM []byte, want codes.Code) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -156,8 +137,6 @@ func assertHeartbeatRejected(t *testing.T, addr string, authority *Authority, ce
 	}
 }
 
-// startGatewayConfig starts a gateway over a real TCP listener with cfg and
-// returns its address, for tests that need a specific config.
 func startGatewayConfig(t *testing.T, cfg GatewayConfig) string {
 	t.Helper()
 	if cfg.Addr == "" {
@@ -179,8 +158,6 @@ func startGatewayConfig(t *testing.T, cfg GatewayConfig) string {
 	return gateway.listener.Addr().String()
 }
 
-// heartbeatWithClaim opens a heartbeat with the given keypair claiming nodeID
-// and returns the resulting error.
 func heartbeatWithClaim(t *testing.T, addr string, authority *Authority, certPEM, keyPEM []byte, claimed string) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -194,9 +171,6 @@ func heartbeatWithClaim(t *testing.T, addr string, authority *Authority, certPEM
 	return err
 }
 
-// TestGatewayRejectsControlPlaneCredentialAsNode: the CP's own client credential
-// (the agent-direction identity) is not a node credential, even though it chains
-// to the same CA.
 func TestGatewayRejectsControlPlaneCredentialAsNode(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startGatewayConfig(t, GatewayConfig{Authority: authority, Service: service, AllowOpenEnrollment: true})
@@ -208,7 +182,6 @@ func TestGatewayRejectsControlPlaneCredentialAsNode(t *testing.T) {
 	if err := heartbeatWithClaim(t, addr, authority, cpCert, cpKey, "victim"); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("control-plane credential presented as a node = %v, want Unauthenticated", err)
 	}
-	// ... and it cannot register either.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, regErr := agentv1.NewAgentServiceClient(dialWithClientCert(t, addr, authority, cpCert, cpKey)).Register(
@@ -218,9 +191,6 @@ func TestGatewayRejectsControlPlaneCredentialAsNode(t *testing.T) {
 	}
 }
 
-// TestGatewayEnrollmentFailsClosedWithoutToken: with a CA and neither an
-// enrollment token nor the open-enrollment opt-in, a certificate-less first
-// registration is refused and creates no row.
 func TestGatewayEnrollmentFailsClosedWithoutToken(t *testing.T) {
 	service, st, authority := newTestServiceWithAuthority(t)
 	addr := startGatewayConfig(t, GatewayConfig{Authority: authority, Service: service})
@@ -238,9 +208,6 @@ func TestGatewayEnrollmentFailsClosedWithoutToken(t *testing.T) {
 	}
 }
 
-// TestGatewayEnrollmentRefusalsAreUniform: a caller with no or a wrong token
-// gets the same refusal whether or not the node id exists, so enrollment cannot
-// be used to enumerate node ids.
 func TestGatewayEnrollmentRefusalsAreUniform(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startGatewayConfig(t, GatewayConfig{Authority: authority, Service: service, EnrollmentToken: "tok"})
@@ -256,8 +223,6 @@ func TestGatewayEnrollmentRefusalsAreUniform(t *testing.T) {
 	unknownID := uniqueNodeID("node-uniform-unknown")
 	_, errUnknown := client.Register(wrong, &agentv1.RegisterRequest{NodeId: unknownID, Csr: csrFor(t, unknownID, testKey(t))})
 
-	// The node stays enrolled for this call (cleanupNode only registers the
-	// cleanup), so the "enrolled" case is genuinely an existing node.
 	enrolledID := uniqueNodeID("node-uniform-enrolled")
 	if _, err := client.Register(valid, &agentv1.RegisterRequest{NodeId: enrolledID, Csr: csrFor(t, enrolledID, testKey(t))}); err != nil {
 		t.Fatalf("enroll with the token: %v", err)
@@ -279,8 +244,6 @@ func TestGatewayEnrollmentRefusalsAreUniform(t *testing.T) {
 	}
 }
 
-// TestGatewayKeyErrorsAreUniform: an unknown node and a key mismatch return the
-// same refusal, so a CA-valid certificate holder cannot probe the registry.
 func TestGatewayKeyErrorsAreUniform(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startGatewayConfig(t, GatewayConfig{Authority: authority, Service: service, AllowOpenEnrollment: true})
@@ -307,9 +270,6 @@ func TestGatewayKeyErrorsAreUniform(t *testing.T) {
 	}
 }
 
-// TestGatewayLegacyLeafSunset is the M5 sunset: a pre-mutual-TLS
-// (serverAuth-only) node leaf is accepted, logged and recorded before the
-// configured deadline and refused after it, on a fake clock.
 func TestGatewayLegacyLeafSunset(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	deadline := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
@@ -324,8 +284,6 @@ func TestGatewayLegacyLeafSunset(t *testing.T) {
 	keyPEM := testKeyPEM(t, key)
 	legacy := issueNodeCert(t, authority, nodeID, key, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, time.Hour)
 
-	// Enroll normally first (a dual-EKU leaf), then present the legacy leaf with
-	// the same key: the node is enrolled, so only the leaf kind differs.
 	bootstrapAddr := startGatewayConfig(t, GatewayConfig{
 		Authority: authority, Service: service, AllowOpenEnrollment: true,
 		LegacyLeafDeadline: deadline, Now: func() time.Time { return before },
@@ -337,7 +295,6 @@ func TestGatewayLegacyLeafSunset(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Before the sunset: accepted, logged, and recorded for the operator count.
 	if _, err := agentv1.NewAgentServiceClient(dialWithClientCert(t, bootstrapAddr, authority, legacy, keyPEM)).Register(
 		ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csrFor(t, nodeID, key)}); err != nil {
 		t.Fatalf("a legacy leaf before the sunset = %v, want success", err)
@@ -349,7 +306,6 @@ func TestGatewayLegacyLeafSunset(t *testing.T) {
 		t.Fatalf("legacy node count = %d (err %v), want >= 1", count, err)
 	}
 
-	// After the sunset: the same leaf is refused.
 	afterAddr := startGatewayConfig(t, GatewayConfig{
 		Authority: authority, Service: service, AllowOpenEnrollment: true,
 		LegacyLeafDeadline: deadline, Now: func() time.Time { return after },
@@ -360,7 +316,6 @@ func TestGatewayLegacyLeafSunset(t *testing.T) {
 		t.Fatalf("a legacy leaf after the sunset = %v, want Unauthenticated", err)
 	}
 
-	// A modern dual-EKU leaf keeps working after the sunset and clears the flag.
 	modern := issueNodeCert(t, authority, nodeID, key, nodeCertUsages, time.Hour)
 	if _, err := agentv1.NewAgentServiceClient(dialWithClientCert(t, afterAddr, authority, modern, keyPEM)).Register(
 		ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csrFor(t, nodeID, key)}); err != nil {
@@ -371,8 +326,6 @@ func TestGatewayLegacyLeafSunset(t *testing.T) {
 	}
 }
 
-// TestGatewayRejectsUnauthenticatedHeartbeatWhenTLSRequired is the JUS-194 core:
-// a client that presents no certificate cannot heartbeat on the TLS listener.
 func TestGatewayRejectsUnauthenticatedHeartbeatWhenTLSRequired(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -390,8 +343,6 @@ func TestGatewayRejectsUnauthenticatedHeartbeatWhenTLSRequired(t *testing.T) {
 	}
 }
 
-// TestGatewayRejectsUnauthenticatedRequestUpdate proves every RPC on the TLS
-// listener requires a client certificate, not just the agent stream.
 func TestGatewayRejectsUnauthenticatedRequestUpdate(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -404,8 +355,6 @@ func TestGatewayRejectsUnauthenticatedRequestUpdate(t *testing.T) {
 	}
 }
 
-// TestGatewayRejectsPlaintextDialWhenTLSRequired proves a plaintext client
-// cannot reach the authenticated agent channel.
 func TestGatewayRejectsPlaintextDialWhenTLSRequired(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -422,8 +371,6 @@ func TestGatewayRejectsPlaintextDialWhenTLSRequired(t *testing.T) {
 	}
 }
 
-// TestGatewayRejectsExpiredClientCertificate: a CA-signed leaf outside its
-// validity window is not a credential.
 func TestGatewayRejectsExpiredClientCertificate(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -433,8 +380,6 @@ func TestGatewayRejectsExpiredClientCertificate(t *testing.T) {
 	assertHeartbeatRejected(t, addr, authority, certPEM, testKeyPEM(t, key), codes.Unauthenticated)
 }
 
-// TestGatewayRejectsForeignCAClientCertificate: a certificate signed by another
-// CA does not chain to the control-plane authority.
 func TestGatewayRejectsForeignCAClientCertificate(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -448,8 +393,6 @@ func TestGatewayRejectsForeignCAClientCertificate(t *testing.T) {
 	assertHeartbeatRejected(t, addr, authority, certPEM, testKeyPEM(t, key), codes.Unauthenticated)
 }
 
-// TestGatewayRejectsCACertificateAsNodeCredential: the CA certificate itself is
-// not a node credential.
 func TestGatewayRejectsCACertificateAsNodeCredential(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -462,9 +405,6 @@ func TestGatewayRejectsCACertificateAsNodeCredential(t *testing.T) {
 	assertHeartbeatRejected(t, addr, authority, authority.CACertPEM(), keyPEM, codes.Unauthenticated)
 }
 
-// TestGatewayAcceptsServerAuthOnlyLeafUpgrade is the upgrade path: a leaf issued
-// before mutual TLS carries only serverAuth and must keep authenticating until
-// the node renews.
 func TestGatewayAcceptsServerAuthOnlyLeafUpgrade(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -483,8 +423,6 @@ func TestGatewayAcceptsServerAuthOnlyLeafUpgrade(t *testing.T) {
 	}
 }
 
-// TestGatewayRejectsRotatedNodeKey: once a node is bound to a key, a certificate
-// for a different key cannot act as that node.
 func TestGatewayRejectsRotatedNodeKey(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -498,8 +436,6 @@ func TestGatewayRejectsRotatedNodeKey(t *testing.T) {
 	assertHeartbeatRejected(t, addr, authority, otherCert, testKeyPEM(t, otherKey), codes.PermissionDenied)
 }
 
-// TestGatewayClosesRevokedNodeStream: removing a node invalidates its
-// credential and closes its live heartbeat stream.
 func TestGatewayClosesRevokedNodeStream(t *testing.T) {
 	service, st, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -527,7 +463,6 @@ func TestGatewayClosesRevokedNodeStream(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	// Revoke: removing the node row invalidates the credential.
 	if _, err := st.DB.Exec(ctx, "DELETE FROM servers WHERE node_id = $1", nodeID); err != nil {
 		t.Fatalf("delete node: %v", err)
 	}
@@ -537,8 +472,6 @@ func TestGatewayClosesRevokedNodeStream(t *testing.T) {
 	}
 }
 
-// TestGatewayBootstrapRequiresEnrollmentToken: with an enrollment token
-// configured, a certificate-less first registration must present it.
 func TestGatewayBootstrapRequiresEnrollmentToken(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -581,7 +514,6 @@ func TestGatewayBootstrapRequiresEnrollmentToken(t *testing.T) {
 	}
 	cleanupNode(t, service, nodeID)
 
-	// The enrolled node still needs its certificate for a second enrollment.
 	if _, err := client.Register(callCtx, &agentv1.RegisterRequest{NodeId: nodeID, Csr: csr}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("second certificate-less Register = %v, want PermissionDenied", err)
 	}

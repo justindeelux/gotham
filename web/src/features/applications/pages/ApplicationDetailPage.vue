@@ -24,13 +24,6 @@ const detail = useApplicationDetail();
 
 const { t } = useI18n();
 
-/**
- * Terminal access mirrors the backend's owner/admin team role and, crucially,
- * waits until that role is known (JUS-247 r1): the projects store reads
- * writable while the teams list is loading, so acting on it early would send a
- * read_only account a discovery/create it may never make. Demotion disposal is
- * owned once by the app shell (AppLayout); this page only decides visibility.
- */
 const {
   accessKnown,
   accessError,
@@ -43,33 +36,20 @@ const {
   () => detail.application.value !== null,
 );
 
-/** deploymentsTab names the deployment count; 0/1/many all render. */
 const deploymentsTab = computed<string>(() =>
   String(t("applications.tabs.deployments", { count: detail.deployments.value.length })),
 );
 
-/** previewsTab names the preview count once loaded; 0/1/many all render. */
 const previewsTab = computed<string>(() =>
   detail.previewsLoaded.value
     ? String(t("applications.tabs.previews", { count: detail.previews.value.length }))
     : String(t("applications.tabs.previewsPlain")),
 );
 
-/**
- * showStorageTab gates the Storage tab on the loaded row: until the
- * application arrives its source type is unknown, so rendering the tab then
- * would flash it. Every source shows the read-only volume list; only
- * non-compose sources also get the mapping editor (the tab itself decides).
- */
 const showStorageTab = computed<boolean>(
   () => detail.application.value !== null,
 );
 
-/**
- * activeTab falls back to Overview while the Storage tab does not exist: the
- * row is still loading, or it is a compose source. A stale ?tab=storage or a
- * programmatic selection therefore never renders a missing pane.
- */
 const activeTab = computed<string>({
   get: () => {
     const selected =
@@ -330,8 +310,6 @@ const activeTab = computed<string>({
 }
 
 .application-terminal {
-  /* The shared stage needs a bounded pane; 60vh stays inside the modal-free
-     page on phones and leaves the tab strip reachable. */
   display: flex;
   flex-direction: column;
   min-height: min(60vh, 34rem);

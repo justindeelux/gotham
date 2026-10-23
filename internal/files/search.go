@@ -10,26 +10,16 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// SearchHit is one search result: the matching entry plus its root-relative
-// path, so two same-named files in different directories stay distinct.
 type SearchHit struct {
 	Path  string `json:"path"`
 	Entry Entry  `json:"entry"`
 }
 
-// SearchListing is one bounded search result set. Truncated reports that a
-// depth, result or scan cap stopped the walk, so the browser can say the list
-// is partial instead of showing it as complete.
 type SearchListing struct {
 	Results   []SearchHit `json:"results"`
 	Truncated bool        `json:"truncated"`
 }
 
-// Search returns the entries under one directory whose NAME contains query
-// (case-insensitive; name-only, never file content). Any team member may read
-// it, like List. The agent confines the walk to the requested root, never
-// follows a symbolic link and bounds it by depth, result and scan caps; a
-// capped set comes back with Truncated set.
 func (s *Service) Search(ctx context.Context, serverID uuid.UUID, root, path, query string, recursive bool) (SearchListing, error) {
 	if !Enabled() {
 		return SearchListing{}, ErrDisabled

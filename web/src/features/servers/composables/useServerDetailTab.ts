@@ -4,7 +4,6 @@ import { useRoute, useRouter } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
 
-/** DETAIL_TABS is the tab order shared with the URL `tab` query. */
 const DETAIL_TABS = [
   "overview",
   "containers",
@@ -16,7 +15,6 @@ const DETAIL_TABS = [
 ] as const;
 export type DetailTab = (typeof DETAIL_TABS)[number];
 
-/** isDetailTab narrows one untrusted query value. */
 function isDetailTab(value: unknown): value is DetailTab {
   return (
     typeof value === "string" &&
@@ -24,20 +22,11 @@ function isDetailTab(value: unknown): value is DetailTab {
   );
 }
 
-/**
- * Tab selection and URL sync for the server detail page (JUS-246).
- *
- * The page keeps the URL contract (`?tab=terminal`) so the app dock can resume
- * a paused session and a reload lands on the same pane. Operator-only tabs are
- * ignored for a caller who cannot see them; a crafted `?tab=terminal` deep
- * link instead exposes the clear blocked notice.
- */
 export function useServerDetailTab(serverId: ComputedRef<string>) {
   const route = useRoute();
   const router = useRouter();
   const authStore = useAuthStore();
 
-  /** tabFromQuery restores the tab after a reload or a dock resume. */
   function tabFromQuery(): DetailTab {
     const value = route.query.tab;
     if (!isDetailTab(value)) {
@@ -53,7 +42,6 @@ export function useServerDetailTab(serverId: ComputedRef<string>) {
   }
 
   const activeTab = ref<DetailTab>(tabFromQuery());
-  /** blockedTerminal backs the clear notice for a non-operator deep link. */
   const blockedTerminal = computed<boolean>(
     () => route.query.tab === "terminal" && !authStore.isPlatformAdmin,
   );
@@ -105,7 +93,6 @@ export function useServerDetailTab(serverId: ComputedRef<string>) {
     activeTab.value = tabFromQuery();
   });
 
-  /** showOverview leaves an operator tab after a demotion or block. */
   function showOverview(): void {
     if (activeTab.value === "terminal" || activeTab.value === "files") {
       activeTab.value = "overview";

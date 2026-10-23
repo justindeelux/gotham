@@ -57,10 +57,6 @@ func TestBuildContextTarMissingDir(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarHonorsDockerIgnore is the C1-1 regression: the Docker
-// daemon does not apply .dockerignore to a tar context, so the control plane
-// must. An ignored credential must not reach the built context while an
-// ordinary file must.
 func TestBuildContextTarHonorsDockerIgnore(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "# secrets\n.env\n*.pem\n!keep.pem\nconfig/secrets/\n")
@@ -87,8 +83,6 @@ func TestBuildContextTarHonorsDockerIgnore(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDockerIgnoreNestedPatterns pins the glob semantics: `**`
-// crosses directories, `*` does not, and a bare name matches only the root.
 func TestBuildContextTarDockerIgnoreNestedPatterns(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "**/node_modules\n*.log\ncache\n")
@@ -109,7 +103,6 @@ func TestBuildContextTarDockerIgnoreNestedPatterns(t *testing.T) {
 			t.Errorf("context must not contain ignored %s", unwanted)
 		}
 	}
-	// `*.log` and the bare `cache` match only at the context root.
 	for _, want := range []string{"app/app.log", "app/cache/x"} {
 		if _, ok := files[want]; !ok {
 			t.Errorf("context is missing %s", want)
@@ -117,8 +110,6 @@ func TestBuildContextTarDockerIgnoreNestedPatterns(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarPreservesSymlink is the C1-7 regression: a tracked symlink
-// survives into the context as a symlink entry instead of disappearing.
 func TestBuildContextTarPreservesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "real.txt"), "real\n")
@@ -147,8 +138,6 @@ func TestBuildContextTarPreservesSymlink(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDropsSymlinkToIgnoredTarget proves the ignore rules apply
-// to a symlink's target as well as the link itself.
 func TestBuildContextTarDropsSymlinkToIgnoredTarget(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "secret.txt\n")
@@ -174,8 +163,6 @@ func TestBuildContextTarDropsSymlinkToIgnoredTarget(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarBoundsSize is the C1-6 regression: an oversized context
-// fails with a clear validation error instead of growing without bound.
 func TestBuildContextTarBoundsSize(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "big.bin"), string(make([]byte, 8192)))
@@ -186,9 +173,6 @@ func TestBuildContextTarBoundsSize(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarKeepsIgnoredDockerfile pins that a repository's own
-// Dockerfile stays in the context even when .dockerignore lists it (Docker
-// allows that line), because the builder must read it.
 func TestBuildContextTarKeepsIgnoredDockerfile(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "Dockerfile\nsecret.txt\n")
@@ -209,9 +193,6 @@ func TestBuildContextTarKeepsIgnoredDockerfile(t *testing.T) {
 	}
 }
 
-// readTarHeaders decodes a context tar into name -> header (the body is not
-// read). It lets a test inspect symlink entries that readContextTar would see
-// as empty regular files.
 func readTarHeaders(t *testing.T, data []byte) map[string]tar.Header {
 	t.Helper()
 	out := make(map[string]tar.Header)
@@ -229,8 +210,6 @@ func readTarHeaders(t *testing.T, data []byte) map[string]tar.Header {
 	return out
 }
 
-// TestBuildContextTarDockerIgnoreBOM is the U1 regression: a BOM-encoded
-// .dockerignore must not turn its first rule into a non-matching pattern.
 func TestBuildContextTarDockerIgnoreBOM(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "\ufeff.env\n")
@@ -250,9 +229,6 @@ func TestBuildContextTarDockerIgnoreBOM(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarFollowsSymlinkedDockerIgnore is the round-2 U3 regression:
-// the Docker CLI follows a symlinked .dockerignore, so gotham applies its rules
-// rather than packing ignored files.
 func TestBuildContextTarFollowsSymlinkedDockerIgnore(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "real-ignore"), ".env\n")
@@ -275,9 +251,6 @@ func TestBuildContextTarFollowsSymlinkedDockerIgnore(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarRejectsNonRegularDockerIgnore pins the memory guard: a
-// .dockerignore whose target is not a regular file (for example a directory or
-// a device) is treated as absent rather than read.
 func TestBuildContextTarRejectsNonRegularDockerIgnore(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "ignoredir"), 0o755); err != nil {
@@ -297,8 +270,6 @@ func TestBuildContextTarRejectsNonRegularDockerIgnore(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarRejectsOversizedDockerIgnore is the U2 memory-bound
-// regression: a huge .dockerignore fails with a clear validation error.
 func TestBuildContextTarRejectsOversizedDockerIgnore(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), strings.Repeat("a", int(maxDockerIgnoreBytes)+1))
@@ -309,11 +280,6 @@ func TestBuildContextTarRejectsOversizedDockerIgnore(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDockerIgnoreRepoRelative is the U3 regression: when the
-// ignore file lives above the context root, patterns are matched
-// repository-relative, so `public/.env` excludes public/.env while a bare
-// `index.html` matches only the repository root and does not break a public/
-// site.
 func TestBuildContextTarDockerIgnoreRepoRelative(t *testing.T) {
 	repo := t.TempDir()
 	writeTestFile(t, filepath.Join(repo, ".dockerignore"), ".env\npublic/secret.txt\nindex.html\n")
@@ -341,9 +307,6 @@ func TestBuildContextTarDockerIgnoreRepoRelative(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDockerIgnoreNegationReincludes is the U6 regression:
-// `docs` + `!docs/keep.md` must keep docs/keep.md (the Docker oracle keeps it)
-// while dropping the rest of the subtree.
 func TestBuildContextTarDockerIgnoreNegationReincludes(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "docs\n!docs/keep.md\n")
@@ -367,9 +330,6 @@ func TestBuildContextTarDockerIgnoreNegationReincludes(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDockerIgnoreTrailingSlashMatchesFile is the U7 regression:
-// Docker Cleans `cache/` to `cache`, so it excludes a regular file named cache
-// as well as a directory.
 func TestBuildContextTarDockerIgnoreTrailingSlashMatchesFile(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "cache/\n")
@@ -389,10 +349,6 @@ func TestBuildContextTarDockerIgnoreTrailingSlashMatchesFile(t *testing.T) {
 	}
 }
 
-// TestMatchContextPatternBoundedTime is the round-2 U4 regression: many `**`
-// segments must not make matching exponential. The input does NOT match, so a
-// recursive implementation must explore every split and runs for hours; the DP
-// returns instantly. The timeout fails the test instead of hanging CI.
 func TestMatchContextPatternBoundedTime(t *testing.T) {
 	pattern := strings.Repeat("**/", 25) + "needle"
 	name := strings.Repeat("a/", 60) + "b"
@@ -409,10 +365,6 @@ func TestMatchContextPatternBoundedTime(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDockerIgnoreOrder is the round-2 U2 regression: patterns
-// are evaluated in file order with ancestor inheritance, so a later ancestor
-// exclusion beats an earlier full-path negation (both cases verified against
-// the Docker CLI).
 func TestBuildContextTarDockerIgnoreOrder(t *testing.T) {
 	t.Run("negation then directory", func(t *testing.T) {
 		dir := t.TempDir()
@@ -447,9 +399,6 @@ func TestBuildContextTarDockerIgnoreOrder(t *testing.T) {
 	})
 }
 
-// TestBuildContextTarDockerIgnoreCleansPatterns is the round-2 U6 regression:
-// patterns are path.Clean-ed like Docker, so `a//b`, `./a/b` and `/a/./b` all
-// match a/b.
 func TestBuildContextTarDockerIgnoreCleansPatterns(t *testing.T) {
 	for _, pattern := range []string{"a//b", "./a/b", "/a/./b", "a/b/"} {
 		t.Run(pattern, func(t *testing.T) {
@@ -473,12 +422,6 @@ func TestBuildContextTarDockerIgnoreCleansPatterns(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDockerIgnoreChildVersusAncestor is the round-3 U1
-// regression: the threaded per-pattern state machine must match the Docker CLI
-// for a child exclusion plus a later/earlier ancestor negation. The previous
-// "match path or ancestor, last pattern wins" rule let `!logs` re-include
-// `logs/secret.log`; Docker keeps it excluded (and vice versa, so ordering does
-// not matter here).
 func TestBuildContextTarDockerIgnoreChildVersusAncestor(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -509,8 +452,6 @@ func TestBuildContextTarDockerIgnoreChildVersusAncestor(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDockerIgnoreDirectoryVariant is the round-3 U1 directory
-// variant: `logs/tmp` + `!logs` keeps logs/tmp excluded.
 func TestBuildContextTarDockerIgnoreDirectoryVariant(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, ".dockerignore"), "logs/tmp\n!logs\n")
@@ -530,9 +471,6 @@ func TestBuildContextTarDockerIgnoreDirectoryVariant(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarIgnoresEscapingSymlinkedDockerIgnore is the round-3 U2
-// regression: a .dockerignore symlink that resolves outside the repository must
-// be ignored, so a hostile repo cannot read an arbitrary host file as patterns.
 func TestBuildContextTarIgnoresEscapingSymlinkedDockerIgnore(t *testing.T) {
 	outside := t.TempDir()
 	writeTestFile(t, filepath.Join(outside, "host-ignore"), ".env\n")
@@ -552,10 +490,6 @@ func TestBuildContextTarIgnoresEscapingSymlinkedDockerIgnore(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarDockerIgnoreTrailingDoubleStar is the round-4 U1
-// regression: moby compiles a literal trailing `/**` to a prefix match on
-// `dir/`, so it matches the subtree but not the directory itself. Without the
-// special case, `secrets/**` + `!secrets` re-included the whole subtree.
 func TestBuildContextTarDockerIgnoreTrailingDoubleStar(t *testing.T) {
 	t.Run("prefix match does not include the dir itself", func(t *testing.T) {
 		dir := t.TempDir()
@@ -604,8 +538,6 @@ func TestBuildContextTarDockerIgnoreTrailingDoubleStar(t *testing.T) {
 		}
 	})
 
-	// Round-5 U1: a glob prefix must also require a proper ancestor, so
-	// `*.js/**` does not match a file named `a.js` (Docker includes it).
 	t.Run("glob prefix does not match the prefix itself", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTestFile(t, filepath.Join(dir, ".dockerignore"), "*.js/**\n")
@@ -625,7 +557,6 @@ func TestBuildContextTarDockerIgnoreTrailingDoubleStar(t *testing.T) {
 		}
 	})
 
-	// Round-5 U1 fail-open side: `*.js/**` + `!d.js` must still exclude d.js/x.
 	t.Run("glob prefix with negation excludes the child", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTestFile(t, filepath.Join(dir, ".dockerignore"), "*.js/**\n!d.js\n")
@@ -641,10 +572,6 @@ func TestBuildContextTarDockerIgnoreTrailingDoubleStar(t *testing.T) {
 	})
 }
 
-// TestLiteralTrailingDoubleStarFastPathAllocs is the round-6 U1 regression: a
-// literal `dir/**` must take the allocation-free fast path on the file
-// (excludedOnly) hot path; the glob-prefix path may allocate via the ancestor
-// splits.
 func TestLiteralTrailingDoubleStarFastPathAllocs(t *testing.T) {
 	ignore := parseDockerIgnore("node_modules/**\n")
 	if !ignore.excludedOnly("node_modules/pkg/index.js", nil) {
@@ -661,9 +588,6 @@ func TestLiteralTrailingDoubleStarFastPathAllocs(t *testing.T) {
 	}
 }
 
-// TestBuildContextTarWalkerStateBounded is the round-4/5 U2 regression: it
-// drives the real walker over a wide tree and asserts the peak retained
-// per-pattern match state stays O(tree depth), not O(number of directories).
 func TestBuildContextTarWalkerStateBounded(t *testing.T) {
 	const (
 		dirs     = 200
@@ -683,8 +607,6 @@ func TestBuildContextTarWalkerStateBounded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildContextTarPeak: %v", err)
 	}
-	// The walker must have retained at least the depth-0 state (otherwise the
-	// probe is not observing it), and at most a couple of pattern-sized states.
 	if peak < patterns {
 		t.Fatalf("peak retained match state = %d; want >= %d (walker did not record state)", peak, patterns)
 	}

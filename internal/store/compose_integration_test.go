@@ -13,10 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestStoreApplicationComposeRoundtrip runs the embedded migrations and
-// verifies the GS-8 columns through Postgres: the pasted text, in-repo file
-// path and web service round-trip on write and update, and direct sqlc
-// callers that predate the columns get empty defaults, never NULL.
 func TestStoreApplicationComposeRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -134,9 +130,7 @@ func TestStoreApplicationComposeRoundtrip(t *testing.T) {
 			ComposeContent: "services:\n  web:\n    image: example.com/app:2.0\n",
 			ComposeFile:    "",
 			ComposeService: "web",
-			// The merged schema (GS-7) holds build_args NOT NULL: pass the
-			// empty object like the repository's marshalBuildArgs does.
-			BuildArgs: []byte("{}"),
+			BuildArgs:      []byte("{}"),
 		})
 		if err != nil {
 			t.Fatalf("UpdateApplication: %v", err)

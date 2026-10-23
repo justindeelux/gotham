@@ -23,7 +23,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Session and password policy.
 const (
 	refreshTokenBytes = 32
 	refreshTokenTTL   = 30 * 24 * time.Hour
@@ -33,7 +32,6 @@ const (
 	adminRole         = "admin"
 )
 
-// User is the public representation of an account, safe to serialise to JSON.
 type User struct {
 	ID              string    `json:"id"`
 	Email           string    `json:"email"`
@@ -45,13 +43,6 @@ type User struct {
 	IsPlatformAdmin bool      `json:"is_platform_admin"`
 }
 
-// AuthResult bundles the account and the freshly issued token pair.
-//
-// MFARequired/ (with MFAToken) is the half-authenticated state (JUS-196): the
-// password was correct (or the OAuth identity resolved) but the account has
-// TOTP enabled, so no session, access token or refresh token is issued until
-// CompleteMFALogin verifies the second factor. The token is a signed
-// single-purpose JWT that VerifyAccessToken refuses.
 type AuthResult struct {
 	User         *User  `json:"user"`
 	AccessToken  string `json:"access_token"`
@@ -61,66 +52,31 @@ type AuthResult struct {
 	MFAToken     string `json:"mfa_token,omitempty"`
 }
 
-// Service implements the core authentication flows on top of the store and the
-// JWT signer.
 type Service struct {
-	store  *store.Store
-	signer *Signer
-	logger *slog.Logger
-	now    func() time.Time
-	// secretKey seals TOTP secrets at rest, via the shared credential-encryption
-	// facility (providers.SealSecret). Set at startup with WithSecretKey; an
-	// empty key makes enrollment fail closed.
-	secretKey string
-	// AllowOpenRegistration reopens self-registration after the first account.
-	// Test/dev only (GOTHAM_AUTH_ALLOW_REGISTRATION): production relies on the
-	// closed default, where members join through admin invites (P-A2).
+	store                 *store.Store
+	signer                *Signer
+	logger                *slog.Logger
+	now                   func() time.Time
+	secretKey             string
 	AllowOpenRegistration bool
-	// afterPasswordVerified is a test seam: Login runs it after verifying the
-	// password and before re-reading the credential version, so a test can
-	// commit a password reset into that window deterministically.
 	afterPasswordVerified func()
-	// beforeRotate is a test seam: Refresh runs it after the credential
-	// checks and before the atomic rotation, so a test can commit a reset
-	// plus a fresh login into that window deterministically.
-	beforeRotate func()
-	// verifyPassword is a seam over VerifyPassword so a test can observe that
-	// the unknown-email and passwordless paths still run a real verification.
-	verifyPassword func(encoded, password string) (bool, error)
+	beforeRotate          func()
+	verifyPassword        func(encoded, password string) (bool, error)
 }
 
-// New builds a Service. The clock is injectable so tests can exercise expiry
-// without sleeping.
 func New(st *store.Store, signer *Signer, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	// Warm the dummy hash once here so the first login miss does not pay an
-	// extra argon2 derivation and reveal itself through timing.
 	_ = dummyPasswordHash()
 	return &Service{store: st, signer: signer, logger: logger, now: time.Now, verifyPassword: VerifyPassword}
 }
 
-// InviteAcceptor is the teams-domain slice the invite-registration path
-// (P-A2) needs from the caller: peek a pending invite before the account
-// exists, then consume it for the fresh account. auth never imports the teams
-// package; the HTTP wiring passes the teams service at call time.
 type InviteAcceptor interface {
-	// PeekInvite returns the invited team name and target email behind a
-	// pending invite token, or an error when the token is unknown, expired,
-	// or already consumed.
 	PeekInvite(ctx context.Context, token string) (teamName, email string, err error)
-	// AcceptInvite consumes a pending invite for the freshly created account.
 	AcceptInvite(ctx context.Context, userID uuid.UUID, token string) error
 }
 
-// Register creates a new account and returns an authenticated token pair.
-//
-// Registration is open only while the instance has no account (the bootstrap
-// of exactly one admin account, P-A2). Afterwards a valid, pending, unused
-// invite token issued to the same email is required; any token problem
-// answers ErrRegistrationClosed so token validity is never publicly
-// distinguishable from a closed instance.
 func (s *Service) Register(ctx context.Context, email, password, inviteToken string, invites InviteAcceptor, meta SessionMeta) (*AuthResult, error) {
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
@@ -135,16 +91,10 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 		return nil, err
 	}
 
-	// Bootstrap vs invite. On an empty instance the account is created through
-	// CreateFirstUser, whose emptiness check and insert share one transaction,
-	// so two concurrent first registrations cannot both win (P-A2).
 	count, err := s.store.CountUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("auth: count users: %w", err)
 	}
-	// An invite token is honoured whenever one is supplied, even when ordinary
-	// registration is also open (test/dev override) or the instance is empty:
-	// the invitee must still join the team, not just get a personal account.
 	consumeInvite := inviteToken != ""
 	if !consumeInvite && count > 0 && !s.AllowOpenRegistration {
 		return nil, ErrRegistrationClosed
@@ -160,17 +110,11 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 	case consumeInvite:
 		user, err = s.store.CreateUser(ctx, normalized, &hash)
 	case count == 0:
-		// Bootstrap: the emptiness check and the insert share one transaction,
-		// so only one of two concurrent first registrations can win.
 		user, err = s.store.CreateFirstUser(ctx, normalized, &hash)
 		if errors.Is(err, store.ErrInstanceHasAccount) {
-			// Lost the race (or the table filled between the count and the
-			// insert): the instance now has an account and an invite is needed.
 			return nil, ErrRegistrationClosed
 		}
 	default:
-		// Registration is forced open (test/dev override) on a populated
-		// instance: a plain insert.
 		user, err = s.store.CreateUser(ctx, normalized, &hash)
 	}
 	if err != nil {
@@ -182,10 +126,6 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 
 	if consumeInvite {
 		if err := invites.AcceptInvite(ctx, uuid.UUID(user.ID.Bytes), inviteToken); err != nil {
-			// AcceptInvite reports failure only when nothing was committed
-			// (teams.Accept never fails after a successful membership write),
-			// so the fresh account and its personal team are rolled back with a
-			// context that survives request cancellation.
 			cleanup := context.WithoutCancel(ctx)
 			if delErr := s.store.DeleteUserAndPersonalTeam(cleanup, user.ID); delErr != nil {
 				s.logger.Error("auth: invite rollback failed", "error", delErr, "user_id", uuid.UUID(user.ID.Bytes))
@@ -198,8 +138,6 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 	return s.issue(ctx, user, meta)
 }
 
-// checkInvite reports whether the pending invite token admits email to
-// register. Every token problem maps to ErrRegistrationClosed.
 func checkInvite(ctx context.Context, email, token string, invites InviteAcceptor) error {
 	if token == "" || invites == nil {
 		return ErrRegistrationClosed
@@ -214,25 +152,18 @@ func checkInvite(ctx context.Context, email, token string, invites InviteAccepto
 	return nil
 }
 
-// Login verifies credentials and returns an authenticated token pair. Unknown
-// emails and wrong passwords return the same ErrInvalidCredentials.
 func (s *Service) Login(ctx context.Context, email, password string, meta SessionMeta) (*AuthResult, error) {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 
 	user, err := s.store.GetUserByEmail(ctx, normalized)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Burn a real argon2id verification so an unknown email costs the
-			// same as a known one; otherwise response latency is an account
-			// oracle (A2-5).
 			s.spendPasswordCheck(password)
 			return nil, ErrInvalidCredentials
 		}
 		return nil, fmt.Errorf("auth: get user: %w", err)
 	}
 	if user.PasswordHash == nil {
-		// A passwordless (OAuth-only) account must be indistinguishable from a
-		// wrong password, including its timing.
 		s.spendPasswordCheck(password)
 		return nil, ErrInvalidCredentials
 	}
@@ -249,10 +180,6 @@ func (s *Service) Login(ctx context.Context, email, password string, meta Sessio
 		s.afterPasswordVerified()
 	}
 
-	// A password reset may have committed while the (deliberately slow) hash
-	// verification ran: re-read the credential version and refuse when it
-	// moved, so a login that verified the old password cannot mint a session
-	// under the new credential (P-A5). Issue from the fresh read.
 	current, err := s.store.GetUserByID(ctx, user.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -267,12 +194,6 @@ func (s *Service) Login(ctx context.Context, email, password string, meta Sessio
 	return s.issueOrChallenge(ctx, current, meta)
 }
 
-// dummyPasswordHash is a fixed argon2id hash with the production parameters,
-// computed once (warmed by New). The login miss paths verify against it so they
-// pay the same argon2id cost as a genuine check and cannot be timed to reveal
-// whether an account exists (A2-5). A failure to hash is effectively impossible
-// (crypto/rand); an empty value simply makes the dummy check return early
-// rather than weakening the real paths.
 var dummyPasswordHash = sync.OnceValue(func() string {
 	hash, err := HashPassword("gotham-login-timing-placeholder")
 	if err != nil {
@@ -281,24 +202,12 @@ var dummyPasswordHash = sync.OnceValue(func() string {
 	return hash
 })
 
-// spendPasswordCheck runs one argon2id verification against the dummy hash.
-// The result is always false; only the work matters.
 func (s *Service) spendPasswordCheck(password string) {
 	if _, err := s.verifyPassword(dummyPasswordHash(), password); err != nil {
 		s.logger.Error("auth: dummy password verification", "error", err)
 	}
 }
 
-// Refresh rotates a refresh token: the presented session is revoked and a new
-// session plus token pair is issued in one atomic store operation, so a failed
-// replacement cannot consume the user's only token. Any unusable token returns
-// ErrUnauthorized. Presenting a session that is still on record but already
-// revoked (a rotated-away token) is treated as refresh-token theft: every live
-// session for the account is revoked and the event is logged without token
-// material. A merely expired token is not proof of theft and gets a plain 401.
-// A session whose credential version is older than the account's current
-// version (a password reset committed after it was minted) is refused as well,
-// so the old chain cannot mint a replacement under the new credential.
 func (s *Service) Refresh(ctx context.Context, refreshToken string, meta SessionMeta) (*AuthResult, error) {
 	if refreshToken == "" {
 		return nil, ErrUnauthorized
@@ -313,14 +222,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string, meta Session
 		return nil, fmt.Errorf("auth: get session: %w", err)
 	}
 	if session.RevokedAt.Valid {
-		// A replayed revoked token. Classify and revoke atomically: only
-		// genuine reuse ends the family; a stale post-reset chain is a plain
-		// 401 so freshly authenticated sessions survive.
 		s.maybeRevokeFamily(ctx, session.UserID, hash)
 		return nil, ErrUnauthorized
 	}
 	if !session.ExpiresAt.Valid || s.now().After(session.ExpiresAt.Time) {
-		// A merely expired token is not proof of theft: no family action.
 		return nil, ErrUnauthorized
 	}
 
@@ -331,13 +236,6 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string, meta Session
 		}
 		return nil, fmt.Errorf("auth: get user: %w", err)
 	}
-	// A password reset bumps the account's credential version and deletes its
-	// sessions in one transaction. When the reset commits between the session
-	// read above and this user read, the delete finds the session already
-	// revoked (or gone), so only the version comparison stops the old chain
-	// from minting a replacement under the new credential (P-A5). Revoke the
-	// raced row so it cannot sit live until the sweep; a store failure is not
-	// fatal, as the version check refuses it on every retry anyway.
 	if session.CredentialVersion < user.CredentialVersion {
 		if err := s.store.RevokeSession(ctx, hash); err != nil {
 			s.logger.Error("auth: revoke stale session", "error", err, "user_id", uuid.UUID(user.ID.Bytes))
@@ -345,10 +243,6 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string, meta Session
 		return nil, ErrUnauthorized
 	}
 
-	// Rotate first, then sign the access token from the replacement row so it
-	// carries the new session's id (the "sid" claim). Signing cannot fail in a
-	// way rotation would need to undo (deterministic EdDSA, no I/O); a signer
-	// failure after rotation answers 401 and the caller logs in again.
 	refreshTokenNext, refreshHashNext, err := newRefreshToken()
 	if err != nil {
 		return nil, err
@@ -366,18 +260,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string, meta Session
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// The row stopped being live between the read and the rotation.
-			// Classify it atomically: a rotation race (row revoked, current
-			// version) is reuse, while a reset purge (row deleted) or a stale
-			// post-reset chain is a plain 401 that leaves fresh sessions be.
 			s.maybeRevokeFamily(ctx, session.UserID, hash)
 			return nil, ErrUnauthorized
 		}
 		return nil, fmt.Errorf("auth: rotate session: %w", err)
 	}
 
-	// The replacement row records the fresh device metadata and now() as its
-	// last use; the access token binds to it.
 	accessToken, err := s.signAccessToken(user, uuid.UUID(rotated.ID.Bytes))
 	if err != nil {
 		return nil, err
@@ -391,12 +279,6 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string, meta Session
 	}, nil
 }
 
-// maybeRevokeFamily classifies a replayed revoked token under the per-user
-// session lock and revokes the family only for genuine reuse (the row still
-// exists, is revoked, and carries the account's current credential version).
-// The classification and the revocation are one store transaction, so a
-// password reset cannot interleave. A store failure is logged and swallowed
-// because the caller is answering 401 either way.
 func (s *Service) maybeRevokeFamily(ctx context.Context, userID pgtype.UUID, refreshHash string) {
 	stolen, err := s.store.RevokeFamilyIfStolen(ctx, userID, refreshHash)
 	if err != nil {
@@ -408,13 +290,6 @@ func (s *Service) maybeRevokeFamily(ctx context.Context, userID pgtype.UUID, ref
 	}
 }
 
-// Logout deletes the live session behind refreshToken. Deleting rather than
-// revoking keeps a replayed logged-out token a plain 401: the reuse classifier
-// only attributes theft to a still-existing revoked row, so an old token from a
-// logged-out browser cannot revoke the account's other live sessions. A token
-// that was already rotated away is left revoked, preserving its reuse evidence.
-// It is idempotent: an unknown or already-revoked token deletes nothing and is
-// not an error.
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	if refreshToken == "" {
 		return nil
@@ -422,7 +297,6 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	return s.store.DeleteSession(ctx, hashRefreshToken(refreshToken))
 }
 
-// Me returns the public account for userID.
 func (s *Service) Me(ctx context.Context, userID uuid.UUID) (*User, error) {
 	user, err := s.store.GetUserByID(ctx, pgUUID(userID))
 	if err != nil {
@@ -434,28 +308,14 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (*User, error) {
 	return toUser(user), nil
 }
 
-// VerifyAccessToken delegates to the signer so the HTTP layer can validate
-// bearer tokens without depending on the signer directly.
 func (s *Service) VerifyAccessToken(token string) (*Claims, error) {
 	return s.signer.VerifyAccessToken(token)
 }
 
-// IssueSession creates a refresh session and signs an access token for user. It
-// exposes the internal issue path so alternative flows (for example OAuth2
-// logins) mint sessions exactly like a password login, without duplicating the
-// token logic — including the half-authenticated challenge when the account has
-// TOTP enabled (the second factor is then verified through CompleteMFALogin).
-// A zero meta records unknown device metadata (the OAuth HTTP layer lives
-// outside this package's session contract); the first refresh rotation
-// backfills it.
 func (s *Service) IssueSession(ctx context.Context, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
 	return s.issueOrChallenge(ctx, user, meta)
 }
 
-// issueOrChallenge mints a session, or a half-authenticated MFA challenge when
-// the account has TOTP enabled: no refresh session, access token or WS token is
-// created until the second factor is verified (JUS-196). Every login path
-// (password and OAuth) goes through here, so enabling TOTP cannot be bypassed.
 func (s *Service) issueOrChallenge(ctx context.Context, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
 	row, err := s.store.GetUserTOTP(ctx, user.ID)
 	switch {
@@ -471,18 +331,10 @@ func (s *Service) issueOrChallenge(ctx context.Context, user sqlc.User, meta Ses
 	return s.issue(ctx, user, meta)
 }
 
-// issue creates a refresh session and signs an access token for user. The
-// session records the account's credential version, so a later password reset
-// invalidates it, plus the caller's device metadata. The access token carries
-// the new session's id as its "sid" claim so the sessions list can mark the
-// caller's row.
 func (s *Service) issue(ctx context.Context, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
 	return s.issueWith(ctx, s.store, user, meta)
 }
 
-// issueWith is issue against a caller-supplied store, so a flow that must mint
-// the session inside its own transaction (a recovery-code login, JUS-198) can
-// pass the tx-scoped Store.
 func (s *Service) issueWith(ctx context.Context, st *store.Store, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
 	refreshToken, refreshHash, err := newRefreshToken()
 	if err != nil {
@@ -514,19 +366,11 @@ func (s *Service) issueWith(ctx context.Context, st *store.Store, user sqlc.User
 	}, nil
 }
 
-// signAccessToken mints the short-lived JWT for user. The role claim reflects
-// the account's current platform-admin flag, so the first account's sessions
-// pass isPlatformOperator while every other account stays "user". Login and
-// Refresh both sign from a fresh read, so a role change in the database takes
-// effect at the next refresh: a stale role never outlives the access-token TTL
-// (a demoted admin's old access token expires within 15 minutes and its refresh
-// chain mints "user" tokens from then on).
 func (s *Service) signAccessToken(user sqlc.User, sessionID uuid.UUID) (string, error) {
 	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), roleFor(user), sessionID)
 	return accessToken, err
 }
 
-// roleFor maps a stored row to its access-token role claim.
 func roleFor(user sqlc.User) string {
 	if user.IsPlatformAdmin {
 		return adminRole
@@ -534,8 +378,6 @@ func roleFor(user sqlc.User) string {
 	return defaultRole
 }
 
-// newRefreshToken generates an opaque refresh token and the SHA-256 hash that is
-// persisted in sessions.refresh_hash.
 func newRefreshToken() (token string, hash string, err error) {
 	buf := make([]byte, refreshTokenBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -545,14 +387,11 @@ func newRefreshToken() (token string, hash string, err error) {
 	return token, hashRefreshToken(token), nil
 }
 
-// hashRefreshToken returns the hex-encoded SHA-256 of a refresh token.
 func hashRefreshToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-// NormalizeEmail trims, lowercases, and syntactically validates an email. It
-// is shared by registration and the admin CLI.
 func NormalizeEmail(email string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" {
@@ -566,8 +405,6 @@ func NormalizeEmail(email string) (string, error) {
 	return normalized, nil
 }
 
-// ValidatePassword enforces the password length bounds. It is shared by
-// registration and the admin CLI (P-A3).
 func ValidatePassword(password string) error {
 	if len(password) < minPasswordLength || len(password) > maxPasswordLength {
 		return fmt.Errorf("%w: password must be between %d and %d characters",
@@ -576,14 +413,11 @@ func ValidatePassword(password string) error {
 	return nil
 }
 
-// isUniqueViolation reports whether err is a PostgreSQL unique-constraint
-// violation (SQLSTATE 23505).
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// toUser converts a stored row into the public representation.
 func toUser(user sqlc.User) *User {
 	return &User{
 		ID:              uuid.UUID(user.ID.Bytes).String(),
@@ -597,12 +431,10 @@ func toUser(user sqlc.User) *User {
 	}
 }
 
-// pgUUID converts a uuid.UUID into its pgtype form.
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-// pgTimestamp converts a time.Time into its pgtype form.
 func pgTimestamp(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }

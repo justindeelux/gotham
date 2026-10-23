@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// TestStatusStoreRoundtrip covers write/read and the missing-file case.
 func TestStatusStoreRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run", "update.status")
 	store := NewStatusStore(path)
@@ -34,7 +33,6 @@ func TestStatusStoreRoundtrip(t *testing.T) {
 	}
 }
 
-// TestStatusStoreEmptyPath proves a nil store is a no-op.
 func TestStatusStoreEmptyPath(t *testing.T) {
 	if store := NewStatusStore("  "); store != nil {
 		t.Fatal("NewStatusStore(blank) != nil")
@@ -48,8 +46,6 @@ func TestStatusStoreEmptyPath(t *testing.T) {
 	}
 }
 
-// TestStatusStoreReadIgnoresNonRegular proves the control-plane read of the
-// pending/status file never blocks on a planted FIFO or follows a symlink.
 func TestStatusStoreReadIgnoresNonRegular(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "fifo")
@@ -91,7 +87,6 @@ func TestStatusStoreReadIgnoresNonRegular(t *testing.T) {
 	}
 }
 
-// TestStatusStoreMalformed proves a status file without a result is an error.
 func TestStatusStoreMalformed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "update.status")
 	if err := os.WriteFile(path, []byte("version=v1.2.0\n"), 0o644); err != nil {

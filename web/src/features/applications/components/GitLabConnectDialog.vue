@@ -24,14 +24,11 @@ const scopes = ref("");
 const redirectUri = ref("");
 const working = ref(false);
 const rawError = ref<unknown>(null);
-/** savedReconnect flags a provision/store that succeeded while the PKCE
- * start that follows failed: the row exists with a Reconnect action. */
 const savedReconnect = ref(false);
 const loadError = computed<string>(() =>
   rawError.value === null ? "" : describeProviderError(rawError.value),
 );
 
-/** instanceValid gates submit on an http(s) URL with a host. */
 const instanceValid = computed<boolean>(() => {
   try {
     const parsed = new URL(baseUrl.value.trim());
@@ -41,9 +38,6 @@ const instanceValid = computed<boolean>(() => {
   }
 });
 
-/** canSubmit gates the active mode: a token for auto, id+secret+redirect
- * for manual. The redirect URI comes from setup-info: without it the manual
- * OAuth app cannot be registered, so submit stays closed (fail-closed). */
 const canSubmit = computed<boolean>(() => {
   if (!instanceValid.value || working.value) {
     return false;
@@ -58,7 +52,6 @@ const canSubmit = computed<boolean>(() => {
   return adminToken.value.trim() !== "";
 });
 
-/** clearSecrets drops every write-only field, so nothing survives the dialog. */
 function clearSecrets(): void {
   adminToken.value = "";
   clientSecret.value = "";
@@ -86,7 +79,6 @@ watch(
   },
 );
 
-/** toggleManual switches modes and loads the manual-application details. */
 async function toggleManual(): Promise<void> {
   manual.value = !manual.value;
   rawError.value = null;
@@ -104,11 +96,6 @@ async function toggleManual(): Promise<void> {
   }
 }
 
-/** submit provisions (auto) or stores (manual), then starts the PKCE sign-in.
- * Secrets clear on every attempt, success or failure: the admin token is
- * consumed by the single provisioning call either way. When the store
- * succeeded but the sign-in start failed, the dialog names the Reconnect
- * action instead of only the raw error. */
 async function submit(): Promise<void> {
   if (!canSubmit.value) {
     return;
@@ -263,11 +250,6 @@ async function submit(): Promise<void> {
 }
 </style>
 
-<!--
-  Unscoped on purpose: NModal teleports the card to <body>, so scoped
-  selectors (which compile to a [data-v] ancestor match) never reach it.
-  Every rule stays behind the .connect-modal class owned by this dialog.
--->
 <style>
 .connect-modal.n-modal.n-card {
   max-height: calc(100vh - 64px);

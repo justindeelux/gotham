@@ -18,11 +18,6 @@ interface Props {
 
 defineProps<Props>();
 
-/**
- * t renders target-form copy in the active locale (tracks language
- * switches). Called during render, so labels refresh without losing the
- * typed name or node choice.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

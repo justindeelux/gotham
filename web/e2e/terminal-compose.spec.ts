@@ -11,26 +11,9 @@ import {
 } from "./terminal-support";
 import type { APIRequestContext } from "@playwright/test";
 
-/**
- * JUS-251 + JUS-256: a REAL `docker compose` application (two services)
- * deployed by the node agent, then opened from the browser Terminal tab.
- *
- * The compose project is started by the platform through the agent's
- * ComposeService — the same path a production deploy uses — and torn down by
- * the cleanup hook. The scenario pins the JUS-256 regression: compose targets
- * must carry the FULL 64-hex container id (a 12-hex CLI id was rejected by the
- * agent), each service must be selectable, and the shell must run in the real
- * container without stopping it on close.
- *
- * JUS-256 / PR #405 is merged: the control plane resolves Compose targets to
- * full 64-hex ids. A 12-hex id is a REGRESSION and must fail this test, never
- * turn into a skip.
- */
-
 test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 900 } });
 
 const account = loadAccount();
-/** fresh is this file's own sign-in (see loginFresh). */
 let fresh: Awaited<ReturnType<typeof loginFresh>>;
 
 test.beforeAll(async ({ request }) => {
@@ -70,7 +53,6 @@ test.afterEach(async ({ request }) => {
     .catch(() => undefined);
 });
 
-/** seedComposeApplication deploys a two-service compose app on the real node. */
 async function seedComposeApplication(request: APIRequestContext): Promise<ComposeSeed> {
   const me = await request.get("/api/v1/auth/me", { headers: authHeaders(account) });
   const body = me.ok()
@@ -97,9 +79,6 @@ async function seedComposeApplication(request: APIRequestContext): Promise<Compo
   const projectId = projectBody.project.id;
   const environmentId = projectBody.environments[0]!.id;
 
-  // A run-unique label on every service lets the CI cleanup remove only this
-  // test's containers/network/volumes — never another Compose project (and
-  // never gotham-dev-postgres/gotham-dev-redis).
   const runLabel = process.env.GOTHAM_E2E_RUN_ID ?? "local-run";
   const composeContent = [
     "services:",
@@ -175,8 +154,6 @@ test("a real compose project lists every service with a full id and opens a shel
 }) => {
   test.setTimeout(300_000);
   const current = await seedComposeApplication(request);
-  // JUS-256: the API must already return full ids; a short id is the exact
-  // regression this scenario exists for.
   expect(current.webId).toMatch(/^[0-9a-f]{64}$/);
   expect(current.workerId).toMatch(/^[0-9a-f]{64}$/);
 
@@ -199,7 +176,6 @@ test("a real compose project lists every service with a full id and opens a shel
   expect(calls).toEqual([]);
   await page.locator(".n-tabs-tab", { hasText: /^Terminal$/ }).first().click();
 
-  // Two services: discovery runs, but no shell starts until one is chosen.
   await expect
     .poll(() => calls.filter((call) => call.startsWith("GET")).length, {
       timeout: 20_000,
@@ -224,7 +200,6 @@ test("a real compose project lists every service with a full id and opens a shel
   expect(String(create.body?.container_id)).toMatch(/^[0-9a-f]{64}$/);
   expect(calls.filter((call) => call.startsWith("POST"))).toHaveLength(1);
 
-  // A real shell in the compose container: busybox's prompt, no host banner.
   await expect
     .poll(
       async () =>
@@ -246,7 +221,6 @@ test("a real compose project lists every service with a full id and opens a shel
     .poll(async () => (await page.locator(".xterm-rows").first().innerText()).includes(marker))
     .toBe(true);
 
-  // Closing the exec must never stop the application containers.
   await page.getByRole("button", { name: "Close terminal" }).click();
   await page
     .getByRole("dialog")

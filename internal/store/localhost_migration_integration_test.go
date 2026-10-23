@@ -14,7 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestLocalhostNodeMigration preserves workload references and leaves remote nodes alone.
 func TestLocalhostNodeMigration(t *testing.T) {
 	for _, scenario := range []struct {
 		name, ip, hint, wantError, nodeID string
@@ -106,7 +105,6 @@ func TestLocalhostNodeMigration(t *testing.T) {
 			if err != nil {
 				t.Fatalf("init migrations: %v", err)
 			}
-			// Stop at the last release before the localhost identity migration.
 			if scenario.startVersion == 0 {
 				scenario.startVersion = 48
 			}

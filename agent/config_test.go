@@ -61,11 +61,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsPlaintextWithoutOptIn is the FX-3 item-9 guard: no CA and no
-// explicit insecure opt-in must fail closed rather than dial/serve plaintext.
 func TestLoadRejectsPlaintextWithoutOptIn(t *testing.T) {
-	// Loopback listen address so the failure is the missing opt-in, not the
-	// loopback check.
 	clearAgentEnv(t)
 	t.Setenv(envListenAddr, "127.0.0.1:9443")
 
@@ -73,7 +69,6 @@ func TestLoadRejectsPlaintextWithoutOptIn(t *testing.T) {
 		t.Fatal("Load(no CA, no insecure) = nil error, want fail-closed")
 	}
 
-	// The opt-in alone is not enough: the listener must stay on loopback.
 	clearAgentEnv(t)
 	t.Setenv(envInsecure, "true")
 	t.Setenv(envListenAddr, "0.0.0.0:9443")
@@ -165,8 +160,6 @@ func TestLoadArchiveLimitsFromEnv(t *testing.T) {
 	if cfg.FileArchiveMaxBytes != 12345 || cfg.FileArchiveMaxEntries != 42 || cfg.FileArchiveMaxInputBytes != 678 {
 		t.Fatalf("archive limits = %d/%d/%d, want 12345/42/678", cfg.FileArchiveMaxBytes, cfg.FileArchiveMaxEntries, cfg.FileArchiveMaxInputBytes)
 	}
-	// An unparseable or non-positive value falls back to the default rather
-	// than disabling the cap.
 	clearAgentEnv(t)
 	t.Setenv(envInsecure, "true")
 	t.Setenv(envListenAddr, "127.0.0.1:9443")
@@ -223,8 +216,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-// TestValidNodeID mirrors the control plane's node-id gate so the agent rejects
-// identities the CP would always refuse.
 func TestValidNodeID(t *testing.T) {
 	for _, ok := range []string{"node-1", "10.0.0.9", "2001:db8::1", "cp.example.com"} {
 		if !validNodeID(ok) {

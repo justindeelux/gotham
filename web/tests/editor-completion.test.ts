@@ -1,6 +1,3 @@
-// Editor autocomplete and snippets (JUS-227): per-language sources, the
-// word-in-document fallback, the two settings switches, and the live
-// compartment removal when autocomplete is turned off.
 /* global document:readonly, KeyboardEvent:readonly, setTimeout:readonly */
 import { completionStatus, startCompletion } from "@codemirror/autocomplete";
 import { Compartment, EditorState } from "@codemirror/state";
@@ -22,12 +19,10 @@ import {
   parseEditorSettings,
 } from "@/features/files/schemas/editorSettings";
 
-/** wait leaves the autocomplete plugin time to resolve its sources. */
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** makeView attaches one editor view with the given extensions. */
 function makeView(extensions: Extension, doc = "do"): EditorView {
   const host = document.createElement("div");
   document.body.append(host);
@@ -41,7 +36,6 @@ function makeView(extensions: Extension, doc = "do"): EditorView {
   });
 }
 
-/** expandSnippet applies one snippet at the start of an empty document. */
 function expandSnippet(language: "shell" | "dockerfile" | "yaml" | "nginx", label: string): string {
   const completion = snippetCompletions(language).find((item) => item.label === label);
   if (typeof completion?.apply !== "function") {
@@ -111,13 +105,11 @@ describe("completion sources", () => {
         const placeholders = [...spec.template.matchAll(/\$\{([^}]*)\}/g)];
         placeholders.forEach(([, body = ""], index) => {
           if (body === "") {
-            // A bare `${}` is the final cursor stop and must come last.
             expect(index, `${language}/${spec.label}: empty field before the end`).toBe(
               placeholders.length - 1,
             );
             return;
           }
-          // `${1}` is an empty tab stop; digits must carry a default.
           expect(body, `${language}/${spec.label}: ${body}`).not.toMatch(/^\d+$/);
         });
         expect(expandSnippet(language, spec.label)).not.toContain("${");

@@ -1,11 +1,3 @@
-// Mock realtime-hub integration check for web/src/shared/composables/useWebSocket.ts.
-//
-// The repo has no web test runner (no vitest/jsdom), so this script stands in
-// for a unit test: it bundles the composable with the project's own esbuild,
-// starts a minimal RFC 6455 WebSocket server on a random port, then exercises
-// the merged BE-3.2 contract end to end.
-//
-// Run from web/:  node scripts/mock-ws-check.mjs
 
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -18,12 +10,8 @@ import { build } from "esbuild";
 
 const wsGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-// Web source root for the "@" import alias (mirrors vite.config.ts).
 const srcDir = new URL("../src", import.meta.url).pathname;
 
-// Vue SFCs are re-exported through feature indexes, so a bundled helper can
-// pull one into the module graph. The Node harnesses never execute them;
-// stub the default export instead of teaching esbuild to compile SFCs.
 const vueStubPlugin = {
   name: "stub-vue-sfc",
   setup(vueBuild) {
@@ -38,7 +26,6 @@ const vueStubPlugin = {
   },
 };
 
-// ── tiny assertion harness ───────────────────────────────────────────────
 const results = [];
 
 async function check(name, fn) {
@@ -73,7 +60,6 @@ async function waitFor(predicate, { timeout = 2000, interval = 10 } = {}) {
   throw new Error("timed out waiting for condition");
 }
 
-// ── minimal RFC 6455 server ──────────────────────────────────────────────
 function acceptKey(key) {
   return createHash("sha1").update(key + wsGuid).digest("base64");
 }
@@ -186,7 +172,6 @@ async function startMockServer() {
       ),
     );
     socket.on("close", () => {
-      // keep the client entry: tests need connection counts, not liveness.
     });
     socket.on("error", () => {});
   });
@@ -217,7 +202,6 @@ const subscribeFrames = (state) =>
     }
   });
 
-// ── load a TypeScript module through esbuild ─────────────────────────────
 async function loadModule(relativePath) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-ws-check-"));
   const outfile = join(directory, "module.mjs");
@@ -239,13 +223,6 @@ async function loadModule(relativePath) {
   };
 }
 
-// ── load the real servers store with a stubbed API ───────────────────────
-// The pure ordering guard alone does not prove the store wires it up: deleting
-// markMutation() from addServer/removeServer/validate, or bypassing admit() in
-// loadServerList, would still pass the pure checks. esbuild stubs
-// features/servers/api/servers so the real store runs against a controllable
-// API, and pinia
-// is bundled in the same module graph so setActivePinia reaches the instance.
 async function loadServersStore() {
   const directory = await mkdtemp(join(tmpdir(), "gotham-servers-check-"));
   const outfile = join(directory, "store.mjs");
@@ -301,7 +278,6 @@ async function loadServersStore() {
   };
 }
 
-/** deferred returns a promise with external resolve/reject handles. */
 function deferred() {
   let resolve;
   let reject;
@@ -312,7 +288,6 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-/** makeServersApi returns a controllable stub of features/servers/api/servers. */
 function makeServersApi() {
   return {
     listServers: async () => [],
@@ -570,7 +545,7 @@ async function main() {
   await check("max retries settle into the error state", async () => {
     const dead = await startMockServer();
     const deadUrl = dead.url;
-    await dead.close(); // port now refuses connections
+    await dead.close();
     const failing = useWebSocket({
       url: deadUrl,
       token: "t",
@@ -588,7 +563,6 @@ async function main() {
     assert(failing.messages.value.length === 0, "no fabricated frames");
   });
 
-  // ── FX-12b regressions ─────────────────────────────────────────────────
   console.log("token refresh on reconnect (B2-3)");
   await check("a reconnect re-resolves the token getter", async () => {
     const tokenServer = await startMockServer();
@@ -734,7 +708,7 @@ async function main() {
   await check("a failing reconnect refreshes the session once per streak", async () => {
     const dead = await startMockServer();
     const deadUrl = dead.url;
-    await dead.close(); // port now refuses connections
+    await dead.close();
     let refreshes = 0;
     const failing = useWebSocket({
       url: deadUrl,
@@ -847,7 +821,6 @@ async function main() {
   await check("a deleted row is not resurrected by an in-flight poll", () => {
     const sync = createServerListSync();
     const poll = sync.begin();
-    // removeServer filters the row locally while the poll is in flight.
     sync.markMutation();
     assert(sync.admit(poll) === false, "stale list with the deleted row refused");
     const next = sync.begin();
@@ -856,7 +829,6 @@ async function main() {
   await check("a validate merge is not clobbered by an in-flight poll", () => {
     const sync = createServerListSync();
     const poll = sync.begin();
-    // validate() merges the updated row and invalidates the poll.
     sync.markMutation();
     assert(sync.admit(poll) === false, "pre-validate poll refused");
   });
@@ -880,7 +852,6 @@ async function main() {
 
     const fetch = store.fetchServers();
     await store.removeServer("s1");
-    // The poll was in flight before the delete and still carries the row.
     pending.resolve([row]);
     await fetch;
 
@@ -914,7 +885,6 @@ async function main() {
     const fetch = store.fetchServers();
     await store.validate("s1");
     assert(store.servers[0].status === "ready", "the validate merge was not applied");
-    // The pre-validate poll resolves with the old state.
     pending.resolve([original]);
     await fetch;
 
@@ -1022,7 +992,7 @@ async function main() {
     const generation = createRequestGeneration();
     const inFlight = generation.current();
     assert(generation.isCurrent(inFlight), "in-flight request is current");
-    generation.bump(); // application switch / wizard close
+    generation.bump();
     assert(!generation.isCurrent(inFlight), "the late response is discarded");
     assert(generation.isCurrent(generation.current()), "new owner is current");
   });
@@ -1100,7 +1070,7 @@ async function main() {
     };
     try {
       const pending = store.fetchDeployments("store-app-a");
-      store.stopAllPolling(); // the user left the page while the load was in flight
+      store.stopAllPolling();
       resolveList([
         {
           id: "d1",

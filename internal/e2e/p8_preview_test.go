@@ -17,20 +17,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// TestP8PreviewLifecycle is the gated end-to-end proof of BE-8.1: a signed
-// pull_request delivery creates a sibling application cloned from the base
-// configuration, deploys the PR head branch through the real Phase 4
-// orchestrator, records the preview binding, and a closed PR deletes the
-// sibling again. The Git host is never called: the hook is seeded as a row and
-// deliveries are replayed by hand (the badge comment is the only provider
-// call, and it is best effort by design).
 func TestP8PreviewLifecycle(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
 	fixture := newP4Fixture(t, "e2e/p8-preview-"+suffix, "gotham-p8-base-"+suffix)
 
-	// A distinct head branch proves the preview builds the PR head, not the
-	// base application's watched branch.
 	git(t, fixture.dir, "checkout", "-b", "feature/preview")
 	fixture.commit(t, "gotham-p8-head-"+suffix, p4Dockerfile)
 	git(t, fixture.dir, "checkout", "main")
@@ -50,7 +41,6 @@ func TestP8PreviewLifecycle(t *testing.T) {
 	hookSecret := "p8-e2e-secret-" + suffix
 	h.seedWebhook(t, app, hookSecret)
 
-	// 1. PR opened: the delivery queues the preview and reports its host.
 	headSHA := p4CommitSHA("p8-head-" + suffix)
 	status, opened, raw := h.deliverGitHubPR(t, hookSecret, "p8-pr-open-"+suffix, map[string]any{
 		"action": "opened",
@@ -70,16 +60,11 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		t.Fatalf("preview host = %q, want %q", opened.Host, wantHost)
 	}
 
-	// 2. The sibling application is a real row cloned from the base config,
-	// resolved through its binding (previews stay out of the default
-	// application listing).
 	preview := h.previewRow(t, app.ID, 7)
 	if preview.PreviewApplicationID == "" {
 		t.Fatalf("preview row = %+v, want a linked sibling", preview)
 	}
 	sibling := h.applicationByID(t, preview.PreviewApplicationID)
-	// The webhook service created the sibling, not createApplication, so its
-	// containers and built images need their own cleanup.
 	h.removeAppArtifacts(t, sibling.ID)
 	if sibling.Branch != "feature/preview" || sibling.PrimaryDomain != wantHost {
 		t.Fatalf("sibling = %+v, want the PR branch on %s", sibling, wantHost)
@@ -88,7 +73,6 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		t.Fatalf("sibling did not inherit the base config: %+v", sibling)
 	}
 
-	// 3. The binding row is active and points at the sibling.
 	if preview.State != "active" || preview.Host != wantHost ||
 		preview.Branch != "feature/preview" || preview.HeadSHA != headSHA {
 		t.Fatalf("preview row = %+v", preview)
@@ -97,7 +81,6 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		t.Fatalf("preview points at %s, want the sibling %s", preview.PreviewApplicationID, sibling.ID)
 	}
 
-	// 4. The preview actually deploys through the Phase 4 orchestrator.
 	deployments := h.deployments(t, sibling.ID)
 	if len(deployments) != 1 {
 		t.Fatalf("sibling has %d deployments, want 1: %+v", len(deployments), deployments)
@@ -107,7 +90,6 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		t.Fatalf("preview deployment state = %q, want running (error: %s)", running.State, running.Error)
 	}
 
-	// 5. A redelivered synchronize of the same commit is an anti-spam no-op.
 	status, duplicate, _ := h.deliverGitHubPR(t, hookSecret, "p8-pr-sync-"+suffix, map[string]any{
 		"action": "synchronize",
 		"number": 7,
@@ -125,7 +107,6 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		t.Fatalf("sibling has %d deployments after the redelivery, want 1", len(got))
 	}
 
-	// 6. Closing the PR tears the sibling down and marks the binding deleted.
 	status, closed, raw := h.deliverGitHubPR(t, hookSecret, "p8-pr-close-"+suffix, map[string]any{
 		"action": "closed",
 		"number": 7,
@@ -147,7 +128,6 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		t.Fatalf("preview after close = %+v, want deleted", preview)
 	}
 
-	// 7. The base application is untouched.
 	if _, err := h.st.GetApplication(context.Background(), pgUUID(uuid.MustParse(app.ID))); err != nil {
 		t.Fatalf("base application after the close: %v", err)
 	}
@@ -155,7 +135,6 @@ func TestP8PreviewLifecycle(t *testing.T) {
 	t.Logf("preview ok: app=%s sibling=%s host=%s", app.ID, sibling.ID, wantHost)
 }
 
-// p8PreviewRow mirrors the preview_deploys row the test asserts on.
 type p8PreviewRow struct {
 	State                string
 	Host                 string
@@ -165,7 +144,6 @@ type p8PreviewRow struct {
 	DeletedAt            *time.Time
 }
 
-// previewRow reads one preview binding straight from the schema.
 func (h *p4Harness) previewRow(t *testing.T, appID string, prNumber int) p8PreviewRow {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -190,9 +168,6 @@ func (h *p4Harness) previewRow(t *testing.T, appID string, prNumber int) p8Previ
 	return row
 }
 
-// applicationByID loads one application row by ID (previews included: the
-// default listing hides them, so the binding's PreviewApplicationID is the
-// way to reach a sibling).
 func (h *p4Harness) applicationByID(t *testing.T, id string) p4Application {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -230,7 +205,6 @@ func (h *p4Harness) applicationByID(t *testing.T, id string) p4Application {
 	}
 }
 
-// deliverGitHubPR replays one signed GitHub pull_request delivery.
 func (h *p4Harness) deliverGitHubPR(t *testing.T, secret, delivery string, payload map[string]any) (int, p4Delivery, string) {
 	t.Helper()
 	encoded, err := json.Marshal(payload)

@@ -13,7 +13,6 @@ import (
 
 var mutationKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
-// mutateJSON sends once: an uncertain result must be retried with the same request ID.
 func (c *Client) mutateJSON(ctx context.Context, path, requestID string, input, out any) error {
 	if !mutationKeyPattern.MatchString(requestID) || !strings.HasPrefix(path, "/api/v1/mcp/") || strings.ContainsAny(path, "?#\\%") || strings.Contains(path, "..") {
 		return &Error{Code: "invalid_request"}
@@ -26,7 +25,6 @@ func (c *Client) mutateJSON(ctx context.Context, path, requestID string, input, 
 	if err != nil {
 		return &Error{Code: "invalid_request"}
 	}
-	// Idempotency-Key otherwise lets net/http replay a POST after a lost response.
 	req.GetBody = nil
 	req.Header.Set("Authorization", "Bearer "+c.config.Token)
 	req.Header.Set("X-Team-Id", c.config.TeamID.String())
@@ -61,7 +59,6 @@ func (c *Client) mutateJSON(ctx context.Context, path, requestID string, input, 
 		case 429:
 			code = "rate_limited"
 		}
-		// Only known replay codes are safe to expose, never the upstream message.
 		if resp.Header.Get(contractHeader) == "1" && resp.Header.Get(teamHeader) == c.config.TeamID.String() {
 			var failure struct {
 				Code string `json:"code"`

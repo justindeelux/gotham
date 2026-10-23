@@ -17,61 +17,35 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// OAuth protocol cookie names. On a secure request the server uses the
-// __Host- prefixed names: browsers require Secure, Path=/ and no Domain for a
-// __Host- cookie, so a sibling subdomain cannot plant a shadowing cookie. The
-// plain names are used over insecure (development) HTTP, where the __Host-
-// prefix cannot be enforced.
 const (
-	// StateCookieName is the anti-CSRF state cookie on insecure requests.
-	StateCookieName = "gotham_oauth_state"
-	// FlowCookieName binds a login flow to the browser on insecure requests.
-	FlowCookieName = "gotham_oauth_flow"
-	// StateCookieNameSecure is the __Host- state cookie used over HTTPS.
+	StateCookieName       = "gotham_oauth_state"
+	FlowCookieName        = "gotham_oauth_flow"
 	StateCookieNameSecure = "__Host-gotham_oauth_state"
-	// FlowCookieNameSecure is the __Host- flow cookie used over HTTPS.
-	FlowCookieNameSecure = "__Host-gotham_oauth_flow"
+	FlowCookieNameSecure  = "__Host-gotham_oauth_flow"
 )
 
-// OAuth state bookkeeping. A state is single-use and expires after stateTTL;
-// expired entries are swept by a background goroutine.
 const (
 	oauthStateTTL           = 10 * time.Minute
 	oauthStateCleanupPeriod = time.Minute
 	oauthStateBytes         = 32
-	// oauthStateCapacity bounds how many outstanding states the store keeps, so
-	// a flood of login starts cannot grow it without limit. NewState refuses
-	// once the cap is hit; the caller answers a generic error.
-	oauthStateCapacity = 10000
+	oauthStateCapacity      = 10000
 )
 
-// errStateStoreFull reports that the OAuth state store hit its capacity cap.
 var errStateStoreFull = errors.New("auth: oauth state store full")
 
-// OAuthProvider abstracts an OAuth2 identity provider so the service can drive
-// several of them uniformly.
 type OAuthProvider interface {
-	// Name is the stable provider identifier used in URLs ("github").
 	Name() string
-	// AuthCodeURL is the provider authorization URL for the given state.
 	AuthCodeURL(state string) string
-	// Exchange swaps an authorization code for an access token.
 	Exchange(ctx context.Context, code string) (*oauth2.Token, error)
-	// Identity resolves the authenticated account behind tok.
 	Identity(ctx context.Context, tok *oauth2.Token) (*OAuthIdentity, error)
 }
 
-// OAuthIdentity is the provider-supplied account information. Email is required;
-// the remaining fields are optional.
 type OAuthIdentity struct {
 	Email     string
 	Name      string
 	AvatarURL string
 }
 
-// OAuthService coordinates the OAuth2 login flow: it mints and validates the
-// anti-CSRF state, delegates the provider round-trip, and then issues a session
-// through the shared auth Service.
 type OAuthService struct {
 	providers map[string]OAuthProvider
 	auth      *Service
@@ -79,9 +53,6 @@ type OAuthService struct {
 	states    *stateStore
 }
 
-// NewOAuthService builds an OAuthService from the enabled providers. Nil
-// providers are ignored, so callers may pass a provider constructor's nil
-// return directly. The auth Service mints the resulting sessions.
 func NewOAuthService(auth *Service, logger *slog.Logger, providers ...OAuthProvider) *OAuthService {
 	if logger == nil {
 		logger = slog.Default()
@@ -103,10 +74,6 @@ func NewOAuthService(auth *Service, logger *slog.Logger, providers ...OAuthProvi
 	}
 }
 
-// SetGitHubControlPlaneURLSource gives the GitHub provider the effective
-// control-plane base URL ("" when unset) used to derive its redirect URL when
-// the explicit one is empty. Providers without the seam are skipped, so this
-// is safe to call unconditionally.
 func (s *OAuthService) SetGitHubControlPlaneURLSource(src func() string) {
 	for _, provider := range s.providers {
 		if g, ok := provider.(interface{ SetControlPlaneURLSource(func() string) }); ok {
@@ -115,14 +82,6 @@ func (s *OAuthService) SetGitHubControlPlaneURLSource(src func() string) {
 	}
 }
 
-// Begin starts an authorization flow. It returns the provider URL to redirect
-// the browser to and the freshly minted state that must be bound to the browser
-// (as the state cookie) and echoed back by the provider. An unknown or disabled
-// provider yields ErrProviderDisabled.
-//
-// redirectBase is the post-login origin the browser will return to; the flow
-// stores nothing server-side for it because the HTTP layer derives the same
-// value from configuration, but it is logged for diagnostics.
 func (s *OAuthService) Begin(ctx context.Context, providerName, redirectBase string) (url string, state string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
@@ -145,12 +104,6 @@ func (s *OAuthService) Begin(ctx context.Context, providerName, redirectBase str
 	return provider.AuthCodeURL(state), state, nil
 }
 
-// Callback completes an authorization flow. It consumes state (single-use),
-// exchanges code for a provider token, resolves the identity, and finds or
-// creates the local account before issuing a token pair through the same path as
-// a password login. A missing, expired, or foreign state yields ErrStateMismatch;
-// an identity without an email yields ErrMissingEmail. meta records the
-// calling browser's device metadata on the new session, like a login does.
 func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFromQuery string, meta SessionMeta) (*AuthResult, error) {
 	provider, ok := s.providers[providerName]
 	if !ok {
@@ -180,7 +133,6 @@ func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFr
 	user, err := s.auth.store.GetUserByEmail(ctx, email)
 	switch {
 	case err == nil:
-		// Existing account: log in below.
 	case errors.Is(err, pgx.ErrNoRows):
 		user, err = s.createOAuthUser(ctx, email)
 	default:
@@ -190,10 +142,6 @@ func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFr
 		return nil, err
 	}
 
-	// Persist the provider avatar end to end: first login stores it and later
-	// logins refresh it, so /me (and the header behind it) renders the image
-	// the CSP allowlist permits. An invalid provider value stores nothing and
-	// never blocks the login; a storage failure is logged, not fatal.
 	if avatar, ok := SanitizeAvatarURL(identity.AvatarURL); ok {
 		if user.Avatar == nil || *user.Avatar != avatar {
 			if updated, updErr := s.auth.store.UpdateUserAvatar(ctx, user.ID, &avatar); updErr != nil {
@@ -207,15 +155,7 @@ func (s *OAuthService) Callback(ctx context.Context, providerName, code, stateFr
 	return s.auth.IssueSession(ctx, user, meta)
 }
 
-// createOAuthUser inserts an account for an OAuth-only identity (no local
-// password). The avatar is synced by Callback after this returns, so every
-// path (created, existing, race-winner re-read) stores or refreshes it
-// uniformly. A concurrent insert of the same email is resolved by
-// re-reading the row rather than failing the login.
 func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.User, error) {
-	// Closed registration applies to every account-creation path (P-A2): an
-	// unseen OAuth identity may only bootstrap an empty instance, or sign up
-	// while the test/dev override is on. Existing accounts keep signing in.
 	count, err := s.auth.store.CountUsers(ctx)
 	if err != nil {
 		return sqlc.User{}, fmt.Errorf("auth: oauth count users: %w", err)
@@ -224,11 +164,6 @@ func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.
 		return sqlc.User{}, ErrRegistrationClosed
 	}
 
-	// An empty instance bootstraps through CreateFirstUser whether or not the
-	// override is on, so the first OAuth sign-up is the platform admin
-	// (JUS-21) exactly like the first web registration. The advisory lock +
-	// NOT EXISTS guard inside admits exactly one winner, so the override can
-	// never mint a second admin here.
 	var user sqlc.User
 	if count == 0 {
 		user, err = s.auth.store.CreateFirstUser(ctx, email, nil)
@@ -240,16 +175,11 @@ func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.
 	}
 	if errors.Is(err, store.ErrInstanceHasAccount) {
 		if s.auth.AllowOpenRegistration {
-			// Lost the bootstrap race while the override is on: registration
-			// stays open, so join as a plain account instead of refusing.
-			// The winner is already the admin (see above).
 			user, err = s.auth.store.CreateUser(ctx, email, nil)
 			if err == nil {
 				return user, nil
 			}
 		} else {
-			// We lost the bootstrap race. If the winner is this same identity, the
-			// callback is a valid login, not a closed registration.
 			if existing, readErr := s.auth.store.GetUserByEmail(ctx, email); readErr == nil {
 				return existing, nil
 			}
@@ -267,16 +197,12 @@ func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.
 	return user, nil
 }
 
-// Close stops the background state-cleanup goroutine. It is safe to call more
-// than once.
 func (s *OAuthService) Close() {
 	if s.states != nil {
 		s.states.Close()
 	}
 }
 
-// stateStore keeps issued OAuth states in memory, each bound to the provider
-// that started the flow. Entries are single-use and expire after oauthStateTTL.
 type stateStore struct {
 	mu      sync.Mutex
 	entries map[string]oauthStateEntry
@@ -285,14 +211,11 @@ type stateStore struct {
 	once    sync.Once
 }
 
-// oauthStateEntry is one pending authorization.
 type oauthStateEntry struct {
 	provider  string
 	expiresAt time.Time
 }
 
-// newStateStore builds a store and starts its cleanup goroutine. Callers must
-// Close it to stop that goroutine.
 func newStateStore() *stateStore {
 	s := &stateStore{
 		entries: make(map[string]oauthStateEntry),
@@ -303,8 +226,6 @@ func newStateStore() *stateStore {
 	return s
 }
 
-// NewState mints a random state bound to provider and remembers it until TTL
-// expiry. It refuses with errStateStoreFull once the store is at capacity.
 func (s *stateStore) NewState(provider string) (string, error) {
 	buf := make([]byte, oauthStateBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -325,9 +246,6 @@ func (s *stateStore) NewState(provider string) (string, error) {
 	return state, nil
 }
 
-// Validate consumes state (delete-on-read) and reports the provider that started
-// the flow. It returns ok=false for an unknown, already-consumed, or expired
-// state.
 func (s *stateStore) Validate(state string) (provider string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -344,7 +262,6 @@ func (s *stateStore) Validate(state string) (provider string, ok bool) {
 	return entry.provider, true
 }
 
-// cleanupLoop evicts expired states until Close is called.
 func (s *stateStore) cleanupLoop() {
 	ticker := time.NewTicker(oauthStateCleanupPeriod)
 	defer ticker.Stop()
@@ -359,7 +276,6 @@ func (s *stateStore) cleanupLoop() {
 	}
 }
 
-// cleanup drops states whose expiry has passed.
 func (s *stateStore) cleanup(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -371,7 +287,6 @@ func (s *stateStore) cleanup(now time.Time) {
 	}
 }
 
-// Close stops the cleanup goroutine. It is safe to call more than once.
 func (s *stateStore) Close() {
 	s.once.Do(func() { close(s.stop) })
 }

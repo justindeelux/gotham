@@ -7,12 +7,6 @@ import { useServiceDetailContext } from "@/features/services/composables/useServ
 import { activeLocale, i18n } from "@/shared/i18n";
 import { computed } from "vue";
 
-/** ServiceContainersCard renders the on-demand node containers card. */
-
-/**
- * t renders card copy in the active locale (tracks language switches).
- * Called during render, so labels refresh without reloading containers.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
@@ -26,12 +20,10 @@ const {
   loadContainers,
 } = useServiceDetailContext();
 
-/** containerRowKey identifies a container row by its container id. */
 function containerRowKey(row: ComposeServiceContainer): string {
   return row.container_id;
 }
 
-/** containerColumns resolves headers in the active locale. */
 const containerColumns = computed<DataTableColumns<ComposeServiceContainer>>(() => [
   { title: t("services.containers.columns.service"), key: "service", width: 140 },
   { title: t("services.containers.columns.container"), key: "name", minWidth: 220 },

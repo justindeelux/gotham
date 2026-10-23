@@ -35,22 +35,18 @@ const statusDots: Record<DatabaseStatus, string> = {
   deleting: "dot--deleting",
 };
 
-/** Transient states pulse; steady states render a static dot. */
 const pulsing: ReadonlySet<DatabaseStatus> = new Set(["creating"]);
 
 const props = withDefaults(defineProps<Props>(), { size: "small" });
 
-
 import { i18n } from "@/shared/i18n";
 
-/** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
 const tagType = computed<TagType>(() => statusTypes[props.status] ?? "default");
 
-/** Unknown statuses render the raw wire value; known ones localize. */
 const label = computed<string>(() =>
   props.status in statusKeys
     ? String(t(statusKeys[props.status]))

@@ -1,9 +1,3 @@
-// Page-instance state regression tests for the domains split (JUS-24 fix 1).
-//
-// The dialog drafts, open flags and statsReady must be created per page mount
-// and dropped on unmount: a typed credential must never survive a route
-// change, dialogs must not re-open, and KPI tiles must show a dash until the
-// first load settles. Teleport is stubbed so dialog content renders inline.
 import { NButton, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -50,7 +44,6 @@ import { provideRedirects } from "@/features/domains/composables/useRedirects";
 import type { RedirectsState } from "@/features/domains/composables/useRedirects";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
-/** Catalogs render through the real composer: register before mounting. */
 beforeEach(() => {
   resetLocaleState();
   i18n.global.mergeLocaleMessage("en", { domains: domainsEn });
@@ -94,7 +87,6 @@ async function mountPage() {
   return wrapper;
 }
 
-/** stateHarness mounts a bare provider for direct composable tests. */
 async function providersHarness(): Promise<{ wrapper: VueWrapper; state: ProvidersState }> {
   let state!: ProvidersState;
   const Inner = defineComponent({
@@ -125,7 +117,6 @@ async function redirectsHarness(): Promise<{ wrapper: VueWrapper; state: Redirec
   return { wrapper, state };
 }
 
-/** clickButton clicks the first naive button with the exact label. */
 async function clickButton(wrapper: VueWrapper, label: string): Promise<void> {
   const buttons = wrapper.findAllComponents(NButton);
   const target = buttons.find((button) => button.text() === label);
@@ -164,7 +155,6 @@ describe("domains page instance state", () => {
     expect((credential.element as unknown as { value: string }).value).toBe("SECRET-TOKEN");
     wrapper.unmount();
 
-    // A fresh mount reopens with a blank draft: the token is gone.
     wrapper = await mountPage();
     expect(wrapper.html()).not.toContain("field-credential");
     await clickButton(wrapper, "Add DNS provider");
@@ -183,7 +173,6 @@ describe("domains page instance state", () => {
     vi.mocked(listApps).mockReturnValue(never());
 
     let wrapper = await mountPage();
-    // Tiles show a dash while the first load is pending.
     expect(wrapper.html()).toContain("stat-value num\">—");
     await clickButton(wrapper, "Add certificate");
     expect(wrapper.html()).toContain("Add certificate");
@@ -217,7 +206,6 @@ describe("useProviders", () => {
       "prov-1",
       expect.objectContaining({ credential: "ROTATED-TOKEN" }),
     );
-    // A successful write drops the plaintext token from memory.
     expect(state.providerForm.value.credential).toBe("");
     expect(state.providerOpen.value).toBe(false);
     wrapper.unmount();

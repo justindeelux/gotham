@@ -10,9 +10,6 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-// TestPeerRateLimiterBoundsMemory proves the limiter's map cannot grow past
-// maxPeerBuckets under a flood of fresh peers and that the least-recently-seen
-// bucket is the one evicted.
 func TestPeerRateLimiterBoundsMemory(t *testing.T) {
 	limiter := newPeerRateLimiter(rate.Limit(1), 1)
 
@@ -39,10 +36,6 @@ func TestPeerRateLimiterBoundsMemory(t *testing.T) {
 	}
 }
 
-// TestPeerHostKeysByHost proves the limiter key drops the ephemeral port, so
-// port rotation cannot mint unlimited keys, while the address itself is kept
-// whole (an IPv6 /64 is not folded, which would let one neighbour starve the
-// prefix).
 func TestPeerHostKeysByHost(t *testing.T) {
 	v4 := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("203.0.113.9"), Port: 5555}})
 	if got := peerHost(v4); got != "203.0.113.9" {

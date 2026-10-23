@@ -1,9 +1,3 @@
-// File manager tab restore races (JUS-209 fix round 1): the snapshot is read
-// before the default tab loads (one fetch, no flash), writes are gated until
-// the restore decision finishes (slow nodes never lose the stored snapshot),
-// a user touch during init forfeits the restore, concurrent inits share one
-// load, and server/user switches never leak across keys. Fake timers drive the
-// 250ms debounce; the API module is mocked.
 /* global document:readonly, Event:readonly, window:readonly */
 import { createPinia, setActivePinia } from "pinia";
 import type { Pinia } from "pinia";
@@ -44,7 +38,6 @@ const compose: FilesRoot = {
   free_bytes: 0,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -56,7 +49,6 @@ function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   };
 }
 
-/** snapshot builds a valid snapshot with sensible defaults. */
 function snapshot(overrides: Partial<FilesTabsSnapshot> = {}): FilesTabsSnapshot {
   return {
     version: 1,
@@ -70,7 +62,6 @@ function snapshot(overrides: Partial<FilesTabsSnapshot> = {}): FilesTabsSnapshot
   };
 }
 
-/** deferred exposes a manually-resolved promise (slow-node roots/listing). */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   let reject!: (_reason?: unknown) => void;
@@ -106,7 +97,6 @@ function mountHarness(serverId: string): VueWrapper {
   return wrapper;
 }
 
-/** listedCalls records every (root, path) listing the store requested. */
 let listedCalls: Array<{ root: string; path: string }> = [];
 
 beforeEach(() => {
@@ -167,8 +157,6 @@ describe("slow first listing", () => {
     const vm = wrapper.vm as unknown as HarnessVm;
     const pending = vm.initBrowser("server-1");
 
-    // The debounce (250ms) fires while the roots are still in flight: the
-    // gated write must not persist the blank default tab over the snapshot.
     await vi.advanceTimersByTimeAsync(1000);
     expect(window.localStorage.getItem(key)).toBe(before);
 
@@ -181,7 +169,6 @@ describe("slow first listing", () => {
     expect(files.activeTabId).toBe("tab-a");
     expect(files.activeTab.path).toBe("data");
 
-    // The stored snapshot survives (restored state persists back unchanged).
     await vi.advanceTimersByTimeAsync(1000);
     expect(window.localStorage.getItem(key)).toBe(before);
   });
@@ -195,7 +182,6 @@ describe("slow first listing", () => {
     await vm.initBrowser("server-1");
     await flushPromises();
 
-    // One listing for the restored path; the default root ("") is never shown.
     expect(listedCalls).toEqual([{ root: "volumes", path: "data" }]);
     expect(useFilesStore().entries[0]?.name).toBe("hit:data");
   });
@@ -214,7 +200,6 @@ describe("restore guards", () => {
     const pending = vm.initBrowser("server-1");
     await flushPromises();
 
-    // The user opens a tab while the roots are still loading.
     const files = useFilesStore();
     await files.openTab({ root: "volumes", path: "sandbox" });
     const userTabId = files.activeTabId;
@@ -223,7 +208,6 @@ describe("restore guards", () => {
     await pending;
     await flushPromises();
 
-    // The user's tabs win; the snapshot never overwrites them.
     expect(files.activeTabId).toBe(userTabId);
     expect(files.tabs.some((tab) => tab.path === "sandbox")).toBe(true);
     expect(files.tabs.some((tab) => tab.id === "tab-a")).toBe(false);
@@ -280,17 +264,14 @@ describe("debounce and flush", () => {
     const files = useFilesStore();
     await files.goToPath("data/photos");
 
-    // Inside the debounce window nothing is written yet.
     await vi.advanceTimersByTimeAsync(100);
     expect(window.localStorage.getItem(key)).toBe(baseline);
 
-    // pagehide flushes the latest state immediately.
     window.dispatchEvent(new Event("pagehide"));
     const flushed = window.localStorage.getItem(key);
     expect(flushed).not.toBe(baseline);
     expect(flushed).toContain("data/photos");
 
-    // The debounce timer was consumed by the flush: no second write appears.
     await files.goToPath("data/music");
     await vi.advanceTimersByTimeAsync(1000);
     expect(window.localStorage.getItem(key)).toContain("data/music");
@@ -344,11 +325,9 @@ describe("server and user isolation", () => {
     await flushPromises();
     await vi.advanceTimersByTimeAsync(1000);
 
-    // server-2 starts from defaults and persists under its own key.
     expect(useFilesStore().activeTab.path).toBe("");
     const keyTwo = filesTabsStorageKey("server-2", "user-1");
     expect(window.localStorage.getItem(keyTwo)).toContain('"path":""');
-    // server-1's snapshot is untouched by the switch.
     expect(window.localStorage.getItem(keyOne)).toContain('"path":"data"');
   });
 
@@ -363,8 +342,6 @@ describe("server and user isolation", () => {
     await flushPromises();
     expect(useFilesStore().activeTab.path).toBe("data");
 
-    // A different user on the same browser starts from defaults (sign-out
-    // resets the browser, so the next sign-in loads fresh).
     const auth = useAuthStore();
     auth.user = {
       id: "user-2",
@@ -378,8 +355,6 @@ describe("server and user isolation", () => {
     expect(useFilesStore().activeTab.path).toBe("");
     expect(window.localStorage.getItem(keyOne)).toBe(stored);
 
-    // Logout keeps the persisted state (keys are user-scoped; re-login
-    // restores the same layout). No wipe, no leak, page keeps working.
     auth.user = null;
     useFilesStore().reset();
     await vm.initBrowser("server-1");
@@ -388,7 +363,6 @@ describe("server and user isolation", () => {
     expect(useFilesStore().activeTab.path).toBe("");
     expect(window.localStorage.getItem(keyOne)).toBe(stored);
 
-    // Re-login restores the kept layout.
     auth.user = {
       id: "user-1",
       email: "user-1@example.com",

@@ -28,38 +28,23 @@ import (
 )
 
 const (
-	// fileListLimit caps one List page. A larger directory is paginated with
-	// the cursor so one call cannot make the agent build an unbounded
-	// response.
 	fileListLimit = 5000
-	// fileChunkSize bounds a Read chunk; it must stay under the agent's 2 MiB
-	// receive cap so a client never has to raise its buffer.
 	fileChunkSize = 256 << 10
 )
 
-// rootNames are the fixed identifiers the two built-in roots are addressed by.
 const (
 	RootVolumes = "volumes"
 	RootCompose = "compose"
-	// RootSystem is the whole-filesystem root of the full-access mode.
-	RootSystem = "system"
+	RootSystem  = "system"
 )
 
-// dangerousFileTrees are whole trees the file service must never expose: the
-// system configuration and runtime directories, the package and home trees and
-// Docker's data root. A browsable root at or under any of them is refused.
 var dangerousFileTrees = []string{
 	"/etc", "/proc", "/sys", "/dev", "/run", "/boot", "/usr", "/home", "/root",
 	"/var/lib/docker",
 }
 
-// dockerDaemonConfig is Docker's daemon configuration file, read to learn a
-// non-default data root. It is a variable so a test can point it at a fixture.
 var dockerDaemonConfig = "/etc/docker/daemon.json"
 
-// dockerDataRoot returns the data root Docker is configured with: the
-// data-root from daemon.json when it declares an absolute one, else the
-// default /var/lib/docker.
 func dockerDataRoot() string {
 	const fallback = "/var/lib/docker"
 	data, err := os.ReadFile(dockerDaemonConfig)
@@ -75,94 +60,45 @@ func dockerDataRoot() string {
 	return filepath.Clean(cfg.DataRoot)
 }
 
-// protectedPath is a location a browsable root must not collide with. A root
-// that is, or is an ancestor of, path is always refused (so a parent that
-// contains the location cannot be browsed around it). exclusive paths also
-// refuse a root nested inside them, which protects a directory whose children
-// are all sensitive (the certificate and proxy directories).
 type protectedPath struct {
 	path      string
 	exclusive bool
 }
 
-// fileRootConfig is one allow-listed root before validation.
 type fileRootConfig struct {
-	name     string
-	path     string
-	writable bool
-	// builtin marks the two managed roots, whose absence is normal (Docker and
-	// the compose service create them lazily) and must not abort startup.
-	builtin bool
-	// unrestricted skips the dangerous-tree and protected-path checks: the
-	// operator opted into whole-filesystem access (root "/").
+	name         string
+	path         string
+	writable     bool
+	builtin      bool
 	unrestricted bool
 }
 
-// FileServer implements agentv1.FileServiceServer against the node's
-// allow-listed roots. It is constructed only when the file service is enabled;
-// a disabled agent never registers it.
 type FileServer struct {
 	agentv1.UnimplementedFileServiceServer
 
-	log   *slog.Logger
-	roots map[string]*fsroot.Root
-	order []string
-	// volumeRootPath is the canonical path of the writable managed-volumes
-	// root, whose top-level application directories are protected from rename
-	// and delete because running containers bind-mount them.
-	volumeRootPath string
-	// volumeRootRel is the managed-volumes root relative to the whole-filesystem
-	// "system" root (full-access mode), or "" when that mode is off. It keeps the
-	// application-directory guard working when the volumes root is no longer a
-	// root of its own.
-	volumeRootRel string
-	// maxUpload bounds one upload in bytes; uploads over it are refused.
-	maxUpload int64
-	// archiveMaxBytes bounds the total uncompressed bytes one archive
-	// operation (Compress/Extract) may read or write.
-	archiveMaxBytes int64
-	// archiveMaxEntries bounds the entry count one archive operation may walk
-	// or unpack.
-	archiveMaxEntries int64
-	// archiveMaxInputBytes bounds the on-disk size of an archive file that
-	// extract may read, checked before any parser runs.
+	log                  *slog.Logger
+	roots                map[string]*fsroot.Root
+	order                []string
+	volumeRootPath       string
+	volumeRootRel        string
+	maxUpload            int64
+	archiveMaxBytes      int64
+	archiveMaxEntries    int64
 	archiveMaxInputBytes int64
-	// transfers is a counting semaphore bounding concurrent file transfers.
-	transfers chan struct{}
-	// sizeWalks bounds concurrent DirectorySize walks. Each walk is up to the
-	// entry cap's worth of lstats, so a burst (many Calculate clicks, or many
-	// users) is throttled and the excess answers 429 (ResourceExhausted)
-	// instead of piling up unbounded work.
-	sizeWalks chan struct{}
-	// sizeMaxEntries is the per-server copy of fileSizeMaxEntries, so a test
-	// can lower the cap without racing other tests that read the default.
-	sizeMaxEntries int64
-	// locks are striped mutexes serialising the commit of a write to one
-	// (root, path), so a concurrent writer sees the previous commit's etag.
-	locks []sync.Mutex
-	// stop closes to end the background staging-file sweeper; closeOnce makes
-	// Close idempotent.
-	stop      chan struct{}
-	closeOnce sync.Once
+	transfers            chan struct{}
+	sizeWalks            chan struct{}
+	sizeMaxEntries       int64
+	locks                []sync.Mutex
+	stop                 chan struct{}
+	closeOnce            sync.Once
 }
 
-// fileTempSweepAge is how old a leaked staging file must be before the sweeper
-// removes it: old enough that no in-flight upload could still own it.
 const fileTempSweepAge = 24 * time.Hour
 
-// fileTempSweepInterval is how often the background sweeper runs.
 const fileTempSweepInterval = time.Hour
 
-// fileLockStripes is the number of striped path locks. A stripe is shared by
-// unrelated paths, which only adds contention; the map-free design keeps the
-// lock set bounded no matter how many paths a node serves.
 const fileLockStripes = 64
 
-// NewFileServer validates and opens the configured roots. It fails closed: a
-// root that is not absolute, resolves into a dangerous tree or collides with a
-// protected path aborts startup rather than being dropped. A built-in root
-// that does not exist yet is skipped with a warning, because Docker and the
-// compose service create those directories lazily.
 func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 	if log == nil {
 		log = slog.Default()
@@ -223,10 +159,6 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 	return server, nil
 }
 
-// withinPath reports whether path is base or a descendant of it. Keep this
-// byte-for-byte in sync with agent/docker/volumes.go (bind validation) and the
-// test helper in agent/terminal/helpers_test.go; there is deliberately no
-// shared-utils package.
 func withinPath(base, path string) bool {
 	if base == "" || path == "" || !filepath.IsAbs(base) || !filepath.IsAbs(path) {
 		return false
@@ -238,8 +170,6 @@ func withinPath(base, path string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }
 
-// overlapRoot reports the first already-opened root that is equal to, contains
-// or is contained by real, so two browsable roots can never shadow each other.
 func overlapRoot(real string, opened []string) (string, bool) {
 	for _, other := range opened {
 		if withinPath(other, real) || withinPath(real, other) {
@@ -249,7 +179,6 @@ func overlapRoot(real string, opened []string) (string, bool) {
 	return "", false
 }
 
-// Close releases every root descriptor and stops the staging-file sweeper.
 func (s *FileServer) Close() error {
 	s.closeOnce.Do(func() { close(s.stop) })
 	var errs []error
@@ -261,8 +190,6 @@ func (s *FileServer) Close() error {
 	return errors.Join(errs...)
 }
 
-// sweepTempFilesLoop sweeps once at startup and then hourly until Close. A
-// crashed upload could otherwise leave a ".gotham-tmp-*" file behind forever.
 func (s *FileServer) sweepTempFilesLoop() {
 	s.sweepTempFiles(time.Now().Add(-fileTempSweepAge))
 	ticker := time.NewTicker(fileTempSweepInterval)
@@ -277,9 +204,6 @@ func (s *FileServer) sweepTempFilesLoop() {
 	}
 }
 
-// sweepTempFiles removes staging files older than cutoff from every writable
-// root. It never follows a symlink, so a link planted in the tree cannot make
-// the sweep reach outside the root.
 func (s *FileServer) sweepTempFiles(cutoff time.Time) {
 	for _, name := range s.order {
 		root := s.roots[name]
@@ -293,10 +217,6 @@ func (s *FileServer) sweepTempFiles(cutoff time.Time) {
 	}
 }
 
-// configuredFileRoots returns the allow-list in a stable order: the managed
-// volumes root (writable) first, then the read-only compose root, then every
-// operator-added root (read-only, because writes have no owner-configured
-// intent yet).
 func configuredFileRoots(cfg Config) []fileRootConfig {
 	if cfg.FileFullAccess {
 		return []fileRootConfig{{name: RootSystem, path: string(filepath.Separator), writable: true, unrestricted: true}}
@@ -319,31 +239,12 @@ func configuredFileRoots(cfg Config) []fileRootConfig {
 	return roots
 }
 
-// fileProtectedPaths lists the locations a root must not overlap: the agent's
-// own state, certificate, binary and proxy directories, the control plane's
-// data root and its config directory.
 func fileProtectedPaths(cfg Config) []protectedPath {
 	paths := []protectedPath{
-		// The control plane's data root: browsing it directly is refused, but
-		// its managed-volume child is exactly the writable root the node
-		// exposes, so a descendant is allowed.
 		{path: "/var/lib/gotham", exclusive: false},
-		// The agent's own state directory: a root that is or contains it is
-		// refused, while the compose child stays browsable read-only.
 		{path: cfg.AgentStateRoot, exclusive: false},
-		// The proxy directory holds the ACME private keys, so nothing under it
-		// may be browsed.
 		{path: cfg.ProxyRoot, exclusive: true},
 	}
-	// The agent's secret and state locations come from config, so a non-default
-	// install is protected too. The cert dir is protected non-exclusively, like
-	// the state root above: a root that is or contains it is refused, but the
-	// default compose root, a child of it, stays browsable (the shipped unit
-	// sets GOTHAM_AGENT_CERT_DIR=/var/lib/gotham-agent, the very dir the
-	// default compose root lives in). The certificate and key files directly
-	// under it are protected individually, so a root that would otherwise
-	// contain one is still refused. Entries are relative-safe: one that cannot
-	// be made absolute is skipped rather than widened.
 	for _, p := range []struct {
 		path      string
 		exclusive bool
@@ -373,10 +274,6 @@ func fileProtectedPaths(cfg Config) []protectedPath {
 	return paths
 }
 
-// secretFilePath returns the path of one of the agent's secret files directly
-// under certDir, or "" when certDir is unset. The guard matters: filepath.Join
-// would turn an empty cert dir into a relative "agent.key" and, once made
-// absolute, silently protect an unrelated path under the working directory.
 func secretFilePath(certDir, name string) string {
 	if certDir == "" {
 		return ""
@@ -384,8 +281,6 @@ func secretFilePath(certDir, name string) string {
 	return filepath.Join(certDir, name)
 }
 
-// relativeToRoot returns dir (resolved through symlinks when it exists) as a
-// slash path relative to root, or "" when it is not inside root.
 func relativeToRoot(root, dir string) string {
 	if resolved, err := filepath.EvalSymlinks(filepath.Clean(dir)); err == nil {
 		dir = resolved
@@ -397,9 +292,6 @@ func relativeToRoot(root, dir string) string {
 	return filepath.ToSlash(rel)
 }
 
-// resolveFileRoot is validateFileRoot without the safety checks, used only for
-// the operator-approved whole-filesystem root: it still requires an absolute
-// path that resolves to a directory.
 func resolveFileRoot(dir string, _ []protectedPath) (string, os.FileInfo, error) {
 	if !filepath.IsAbs(dir) {
 		return "", nil, fmt.Errorf("file root %q must be an absolute path", dir)
@@ -415,14 +307,6 @@ func resolveFileRoot(dir string, _ []protectedPath) (string, os.FileInfo, error)
 	return real, identity, nil
 }
 
-// validateFileRoot returns the canonical absolute path of a browsable root and
-// the directory identity (both captured from the same stat), or an error when
-// it must not be browsed. The path is resolved through symlinks first (so a
-// root that is a symlink into /etc is judged by where it really points, and the
-// legitimate /var → /private/var link on macOS does not block an operator
-// root), then checked against the dangerous trees and the protected paths. The
-// identity travels to fsroot.Open so the descriptor actually opened is proven
-// to be the directory that was validated.
 func validateFileRoot(dir string, protected []protectedPath) (string, os.FileInfo, error) {
 	if !filepath.IsAbs(dir) {
 		return "", nil, fmt.Errorf("file root %q must be an absolute path", dir)
@@ -438,14 +322,9 @@ func validateFileRoot(dir string, protected []protectedPath) (string, os.FileInf
 	if err != nil {
 		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
 	}
-	// The default Docker data root plus whatever daemon.json declares; the
-	// three-index slice keeps the shared slice from being mutated by append.
 	trees := append(dangerousFileTrees[:len(dangerousFileTrees):len(dangerousFileTrees)], dockerDataRoot())
 	for _, tree := range trees {
 		treeReal := canonicalPath(tree)
-		// A root inside a dangerous tree, or an ancestor of one (such as "/"),
-		// is refused; the ancestor direction keeps a broad parent from
-		// exposing a system tree it contains.
 		if withinPath(tree, real) || withinPath(treeReal, real) ||
 			withinPath(real, tree) || withinPath(real, treeReal) {
 			return "", nil, fmt.Errorf("file root %q overlaps %s", dir, tree)
@@ -466,9 +345,6 @@ func validateFileRoot(dir string, protected []protectedPath) (string, os.FileInf
 	return real, identity, nil
 }
 
-// canonicalPath resolves p to its real absolute path, falling back to the
-// cleaned absolute path when it does not exist yet (a path that is only
-// protected in the future still needs a stable comparison value).
 func canonicalPath(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
@@ -480,8 +356,6 @@ func canonicalPath(p string) string {
 	return abs
 }
 
-// uniqueRootName returns base, suffixed when an earlier root already claimed
-// it, so every root keeps a stable, unique identifier.
 func uniqueRootName(existing map[string]*fsroot.Root, base string) string {
 	name := base
 	for i := 2; ; i++ {
@@ -492,7 +366,6 @@ func uniqueRootName(existing map[string]*fsroot.Root, base string) string {
 	}
 }
 
-// ListRoots returns the allow-listed roots with their free space.
 func (s *FileServer) ListRoots(context.Context, *agentv1.ListRootsRequest) (*agentv1.ListRootsResponse, error) {
 	response := &agentv1.ListRootsResponse{}
 	for _, name := range s.order {
@@ -507,10 +380,6 @@ func (s *FileServer) ListRoots(context.Context, *agentv1.ListRootsRequest) (*age
 	return response, nil
 }
 
-// List returns one page of a directory under a root. The cursor is an opaque
-// base64 token so a boundary name that is not valid UTF-8 round-trips: proto3
-// strings must be valid UTF-8, so a raw name (legal on Linux) could not be
-// echoed back. A malformed cursor is rejected, never treated as "start over".
 func (s *FileServer) List(_ context.Context, req *agentv1.ListRequest) (*agentv1.ListResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -538,9 +407,6 @@ func (s *FileServer) List(_ context.Context, req *agentv1.ListRequest) (*agentv1
 	}, nil
 }
 
-// encodeCursor encodes the raw boundary name as base64 so arbitrary bytes
-// survive the proto3 UTF-8 requirement. An empty name (no more pages) stays
-// empty so the wire contract "truncated implies a non-empty cursor" holds.
 func encodeCursor(name string) string {
 	if name == "" {
 		return ""
@@ -548,8 +414,6 @@ func encodeCursor(name string) string {
 	return base64.StdEncoding.EncodeToString([]byte(name))
 }
 
-// decodeCursor reverses encodeCursor. An empty token means the first page; any
-// other token must be valid base64 or the request is malformed.
 func decodeCursor(token string) (string, error) {
 	if token == "" {
 		return "", nil
@@ -561,7 +425,6 @@ func decodeCursor(token string) (string, error) {
 	return string(raw), nil
 }
 
-// Stat returns one entry under a root.
 func (s *FileServer) Stat(_ context.Context, req *agentv1.StatRequest) (*agentv1.StatResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -577,11 +440,6 @@ func (s *FileServer) Stat(_ context.Context, req *agentv1.StatRequest) (*agentv1
 	return &agentv1.StatResponse{Entry: fileEntry(entry)}, nil
 }
 
-// Read streams one regular file's bytes. A truncated or failed read ends the
-// stream with an error, never with a clean end, so the control plane can tell
-// a partial body from a complete one. Offset/Limit select a byte range for the
-// editor's read-only tail of an over-limit file; a limit ending the stream
-// early is the requested range, not a failure.
 func (s *FileServer) Read(req *agentv1.ReadRequest, stream grpc.ServerStreamingServer[agentv1.ReadChunk]) error {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -626,7 +484,6 @@ func (s *FileServer) Read(req *agentv1.ReadRequest, stream grpc.ServerStreamingS
 	}
 }
 
-// root resolves a caller-supplied root name.
 func (s *FileServer) root(name string) (*fsroot.Root, error) {
 	root, ok := s.roots[name]
 	if !ok {
@@ -635,9 +492,6 @@ func (s *FileServer) root(name string) (*fsroot.Root, error) {
 	return root, nil
 }
 
-// fileEntries converts a listing page, sharing one owner cache across the
-// page so a directory full of files owned by the same user does not repeat the
-// passwd/group lookup.
 func fileEntries(entries []fsroot.Entry) []*agentv1.FileEntry {
 	if len(entries) == 0 {
 		return nil
@@ -650,14 +504,10 @@ func fileEntries(entries []fsroot.Entry) []*agentv1.FileEntry {
 	return out
 }
 
-// fileEntry converts one entry with a fresh owner cache.
 func fileEntry(entry fsroot.Entry) *agentv1.FileEntry {
 	return fileEntryWith(entry, newNameCache())
 }
 
-// nameCache memoizes uid and gid lookups to names for one listing. A lookup
-// that cannot resolve keeps the numeric id string, so an entry is always
-// reported and a listing never fails because a name is missing.
 type nameCache struct {
 	users  map[uint32]string
 	groups map[uint32]string
@@ -691,12 +541,6 @@ func (c *nameCache) group(gid uint32) string {
 	return name
 }
 
-// fileEntryWith converts one entry. Proto3 string fields must be valid UTF-8,
-// so a filename, symlink target or owner name holding arbitrary bytes (legal on
-// Linux) is scrubbed rather than making the whole message fail to marshal. The
-// scrubbed name may therefore differ from the bytes on disk and cannot be fed
-// back to Stat or Read; the List cursor is base64 precisely so paging still
-// addresses the real names.
 func fileEntryWith(entry fsroot.Entry, names *nameCache) *agentv1.FileEntry {
 	out := &agentv1.FileEntry{
 		Name:          validUTF8(entry.Name),
@@ -714,13 +558,10 @@ func fileEntryWith(entry fsroot.Entry, names *nameCache) *agentv1.FileEntry {
 	return out
 }
 
-// validUTF8 replaces the invalid byte sequences proto3 string fields reject
-// with the Unicode replacement character.
 func validUTF8(s string) string {
 	return strings.ToValidUTF8(s, "\uFFFD")
 }
 
-// fileKind maps an fsroot kind onto the wire enum.
 func fileKind(kind fsroot.Kind) agentv1.FileKind {
 	switch kind {
 	case fsroot.KindRegular:
@@ -734,12 +575,6 @@ func fileKind(kind fsroot.Kind) agentv1.FileKind {
 	}
 }
 
-// fileError maps an fsroot error onto a gRPC status error. A path shape
-// problem is InvalidArgument, an escape attempt and an unreadable entry are
-// PermissionDenied, a special file is FailedPrecondition, and the resource
-// errnos (ENOSPC, EDQUOT, EFBIG) are ResourceExhausted. An error that is
-// already a gRPC status is passed through unchanged so a handler's own status
-// is not demoted to Internal.
 func fileError(action string, err error) error {
 	if err == nil {
 		return nil
@@ -761,8 +596,6 @@ func fileError(action string, err error) error {
 	case errors.Is(err, fsroot.ErrExists):
 		return status.Errorf(codes.AlreadyExists, "%s: %v", action, err)
 	case errors.Is(err, fsroot.ErrNotEmpty):
-		// A non-recursive delete of a non-empty directory is a failed
-		// precondition, not a name conflict.
 		return status.Errorf(codes.FailedPrecondition, "%s: %v", action, err)
 	case errors.Is(err, fsroot.ErrConflict):
 		return status.Errorf(codes.Aborted, "%s: %v", action, err)
@@ -771,15 +604,12 @@ func fileError(action string, err error) error {
 	case errors.Is(err, fsroot.ErrTooLarge):
 		return status.Errorf(codes.ResourceExhausted, "%s: %v", action, err)
 	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT), errors.Is(err, syscall.EFBIG):
-		// Out of space, over quota, or over the file-size limit: the caller can
-		// free space and retry.
 		return status.Errorf(codes.ResourceExhausted, "%s: %v", action, err)
 	case errors.Is(err, syscall.ENAMETOOLONG):
 		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
 	case errors.Is(err, syscall.EISDIR), errors.Is(err, syscall.ENOTDIR):
 		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
 	case errors.Is(err, syscall.EROFS):
-		// A read-only filesystem follows the read-only-root convention.
 		return status.Errorf(codes.PermissionDenied, "%s: %v", action, err)
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, action+": context canceled")
@@ -790,8 +620,6 @@ func fileError(action string, err error) error {
 	}
 }
 
-// freeBytes reports the free space on dir's filesystem, or 0 when it cannot be
-// read (the caller treats 0 as unknown).
 func freeBytes(dir string) uint64 {
 	var stat unix.Statfs_t
 	if err := unix.Statfs(dir, &stat); err != nil {
@@ -800,8 +628,6 @@ func freeBytes(dir string) uint64 {
 	return uint64(stat.Bavail) * uint64(stat.Bsize)
 }
 
-// totalBytes reports the total size of dir's filesystem, or 0 when it cannot
-// be read.
 func totalBytes(dir string) uint64 {
 	var stat unix.Statfs_t
 	if err := unix.Statfs(dir, &stat); err != nil {

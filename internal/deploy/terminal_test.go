@@ -16,7 +16,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// terminalFixture seeds one application and its newest deployment.
 func terminalFixture(t *testing.T, app Application, dep Deployment) (*Service, *mockNode) {
 	t.Helper()
 	repo := &fakeRepository{app: app}
@@ -59,7 +58,6 @@ func TestTerminalContainersSingleContainer(t *testing.T) {
 	if err != nil || resolved.ContainerID != "cid" {
 		t.Fatalf("resolve = (%+v, %v)", resolved, err)
 	}
-	// A forged id is never attached.
 	if _, _, err := svc.ResolveTerminalContainer(context.Background(), userID, app.ID, "", "someone-else"); !errors.Is(err, ErrContainerNotFound) {
 		t.Fatalf("forged target = %v, want ErrContainerNotFound", err)
 	}
@@ -91,8 +89,6 @@ func TestTerminalContainersComposeServicesAreDeterministic(t *testing.T) {
 		composeContainerInfo(project, "web", webTwo, "shop-web-2", "running"),
 		composeContainerInfo(project, "db", dbOne, "shop-db-1", "running"),
 		composeContainerInfo(project, "web", webOne, "shop-web-1", "running"),
-		// A stopped container of this project that shares web-1's prefix is
-		// never a candidate, even though the node's label filter returns it.
 		composeContainerInfo(project, "web", "aaaaaaaaaaaab"+strings.Repeat("0", 51), "shop-web-stopped", "exited"),
 	}
 	set, err := svc.ListTerminalContainers(context.Background(), userID, app.ID)
@@ -102,7 +98,6 @@ func TestTerminalContainersComposeServicesAreDeterministic(t *testing.T) {
 	if len(set.Containers) != 3 {
 		t.Fatalf("containers = %+v, want the three running services only", set.Containers)
 	}
-	// Deterministic order: service, then name, and every id is the full id.
 	wantOrder := []string{dbOne, webOne, webTwo}
 	for i, want := range wantOrder {
 		if set.Containers[i].ContainerID != want {
@@ -120,19 +115,14 @@ func TestTerminalContainersComposeServicesAreDeterministic(t *testing.T) {
 	if err != nil || resolved.Service != "web" || resolved.Name != "shop-web-2" {
 		t.Fatalf("resolve = (%+v, %v)", resolved, err)
 	}
-	// The CLI's short id is not a terminal target even though it is a prefix.
 	if _, _, err := svc.ResolveTerminalContainer(context.Background(), userID, app.ID, "web", "bbbbbbbbbbbb"); !errors.Is(err, ErrContainerNotFound) {
 		t.Fatalf("short id = %v, want ErrContainerNotFound", err)
 	}
-	// A container is never attached under another service's label.
 	if _, _, err := svc.ResolveTerminalContainer(context.Background(), userID, app.ID, "db", webTwo); !errors.Is(err, ErrContainerNotFound) {
 		t.Fatalf("service mismatch = %v, want ErrContainerNotFound", err)
 	}
 }
 
-// composeContainerInfo builds a node container summary carrying the Compose
-// labels Docker assigns. The tests use it to model exactly what the node's
-// label-filtered list returns.
 func composeContainerInfo(project, service, id, name, state string) *agentv1.ContainerInfo {
 	return &agentv1.ContainerInfo{
 		Id: id, Name: name, State: state,
@@ -143,18 +133,11 @@ func composeContainerInfo(project, service, id, name, state string) *agentv1.Con
 	}
 }
 
-// capturedComposePs is the shape real `docker compose ps --format json` emits
-// for a Compose application: ID is the 12-character short id, every row carries
-// the project/service labels, and replicas repeat the service. The values are
-// from the test box's web-demo Compose app.
 const capturedComposePs = `{"Command":"\"/docker-entrypoint.…\"","CreatedAt":"2026-10-20 08:04:32 +0000 UTC","ExitCode":0,"Health":"","ID":"88f32c9135cd","Image":"nginx:alpine","Labels":"com.docker.compose.project=gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986,com.docker.compose.service=web-demo","LocalVolumes":"0","Mounts":"","Name":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986-web-demo-1","Names":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986-web-demo-1","Networks":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986_default","Ports":"0.0.0.0:8080->80/tcp, [::]:8080->80/tcp","Project":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986","Publishers":[],"RunningFor":"2 hours ago","Service":"web-demo","Size":"0B","State":"running","Status":"Up 2 hours"}
 {"Command":"\"/docker-entrypoint.…\"","CreatedAt":"2026-10-20 08:04:33 +0000 UTC","ExitCode":0,"Health":"","ID":"4c7d9e1a2b3f","Image":"nginx:alpine","Labels":"com.docker.compose.project=gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986,com.docker.compose.service=web-demo","LocalVolumes":"0","Mounts":"","Name":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986-web-demo-2","Names":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986-web-demo-2","Networks":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986_default","Ports":"","Project":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986","Publishers":[],"RunningFor":"2 hours ago","Service":"web-demo","Size":"0B","State":"running","Status":"Up 2 hours"}
 {"Command":"\"docker-entrypoint.sh\"","CreatedAt":"2026-10-20 08:04:30 +0000 UTC","ExitCode":0,"Health":"healthy","ID":"1f0a2b3c4d5e","Image":"redis:7-alpine","Labels":"com.docker.compose.project=gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986,com.docker.compose.service=db","LocalVolumes":"0","Mounts":"","Name":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986-db-1","Names":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986-db-1","Networks":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986_default","Ports":"6379/tcp","Project":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986","Publishers":[],"RunningFor":"2 hours ago","Service":"db","Size":"0B","State":"running","Status":"Up 2 hours (healthy)"}
 {"Command":"\"/docker-entrypoint.…\"","CreatedAt":"2026-10-20 07:04:32 +0000 UTC","ExitCode":0,"Health":"","ID":"deadbeef0000","Image":"nginx:alpine","Labels":"com.docker.compose.project=gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986,com.docker.compose.service=web-demo","LocalVolumes":"0","Mounts":"","Name":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986-web-demo-3","Names":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986-web-demo-3","Networks":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986_default","Ports":"","Project":"gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986","Publishers":[],"RunningFor":"3 hours ago","Service":"web-demo","Size":"0B","State":"exited","Status":"Exited (0) 1 hour ago"}`
 
-// composeContainersFromCaptured parses the captured CLI output the same way the
-// agent's ComposePs adapter does, so the test feeds the control plane the exact
-// rows a real node returns.
 func composeContainersFromCaptured(t *testing.T, output string) []ComposeContainer {
 	t.Helper()
 	rows := []ComposeContainer{}
@@ -183,10 +166,6 @@ func composeContainersFromCaptured(t *testing.T, output string) []ComposeContain
 	return rows
 }
 
-// TestTerminalComposeTargetsUseFullIDsFromCapturedPs is the regression for
-// JUS-256: a real Compose listing reports 12-character ids, but the targets
-// list, the create match and the attach re-resolution must use the full
-// 64-character id the agent validates.
 func TestTerminalComposeTargetsUseFullIDsFromCapturedPs(t *testing.T) {
 	const capturedProject = "gotham-8e6ba4a6-dd2d-4eab-89ab-4bd813e68986"
 	webShort := "88f32c9135cd"
@@ -207,7 +186,6 @@ func TestTerminalComposeTargetsUseFullIDsFromCapturedPs(t *testing.T) {
 	if project := services.ProjectName(app.ID); project != capturedProject {
 		t.Fatalf("project = %q, want the captured %q", project, capturedProject)
 	}
-	// An existing Compose deployment recorded the CLI's short id.
 	svc, node := terminalFixture(t, app, Deployment{State: StateRunning, ContainerID: webShort})
 	node.composeContainers = composeContainersFromCaptured(t, capturedComposePs)
 	node.listed = []*agentv1.ContainerInfo{
@@ -246,8 +224,6 @@ func TestTerminalComposeTargetsUseFullIDsFromCapturedPs(t *testing.T) {
 		t.Fatalf("label = %q", set.Containers[1].Label)
 	}
 
-	// Create and attach both re-resolve through the same path and accept the
-	// full id the list returned.
 	for attempt := 1; attempt <= 2; attempt++ {
 		_, resolved, err := svc.ResolveTerminalContainer(context.Background(), userID, app.ID, "web-demo", webFull)
 		if err != nil || resolved.ContainerID != webFull || resolved.Service != "web-demo" {
@@ -255,8 +231,6 @@ func TestTerminalComposeTargetsUseFullIDsFromCapturedPs(t *testing.T) {
 		}
 	}
 
-	// The client-supplied short id (the old buggy list value), a container name
-	// and a foreign id are all refused before any exec.
 	for _, forged := range []string{webShort, capturedProject + "-web-demo-1", testFullContainerID("ffffffffffff")} {
 		if _, _, err := svc.ResolveTerminalContainer(context.Background(), userID, app.ID, "web-demo", forged); !errors.Is(err, ErrContainerNotFound) {
 			t.Fatalf("forged target %q = %v, want ErrContainerNotFound", forged, err)
@@ -264,8 +238,6 @@ func TestTerminalComposeTargetsUseFullIDsFromCapturedPs(t *testing.T) {
 	}
 }
 
-// testFullContainerID expands a 12-character Docker id prefix into the full
-// lowercase 64-character id the terminal contract requires.
 func testFullContainerID(short string) string {
 	const suffix = "0123456789abcdef0123456789abcdef0123456789abcdef0123"
 	id := short + suffix
@@ -275,10 +247,6 @@ func testFullContainerID(short string) string {
 	return id
 }
 
-// TestResolveComposeTargetIDsNeverSelectsForeignContainers drives the resolver
-// with a node-wide list (every project, stopped and running) and proves the
-// project/service/state scoping is what decides: a same-name foreign container
-// or a stopped replica never supplies the id.
 func TestResolveComposeTargetIDsNeverSelectsForeignContainers(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
@@ -288,14 +256,9 @@ func TestResolveComposeTargetIDsNeverSelectsForeignContainers(t *testing.T) {
 	project := services.ProjectName(app.ID)
 	short := "88f32c9135cd"
 	ownID := testFullContainerID(short)
-	// All three share the target's short prefix; only the scoping (foreign
-	// project, stopped, other service) keeps them out of the result.
 	foreignRunning := "88f32c9135cdffff" + strings.Repeat("0", 48)
 	foreignStopped := "88f32c9135cdeeee" + strings.Repeat("0", 48)
 	otherService := "88f32c9135cddddd" + strings.Repeat("0", 48)
-	// The first entry is a foreign project's container with the same name and
-	// the same short prefix; a node-wide name/prefix scan would find it (and
-	// with the stopped and other-service rows become ambiguous).
 	listed := []*agentv1.ContainerInfo{
 		composeContainerInfo("gotham-99999999-8888-4777-8666-555555555555", "web", foreignRunning, "shop-web-1", "running"),
 		composeContainerInfo(project, "web", foreignStopped, "shop-web-1", "exited"),
@@ -308,14 +271,11 @@ func TestResolveComposeTargetIDsNeverSelectsForeignContainers(t *testing.T) {
 	if len(resolved) != 1 || resolved[0].ContainerID != ownID {
 		t.Fatalf("resolved = %+v, want only this project's running %s", resolved, ownID)
 	}
-	// A list holding only foreign containers resolves nothing.
 	if resolved := svc.resolveComposeTargetIDs(targets, listed[:3], project, app.ID); len(resolved) != 0 {
 		t.Fatalf("foreign-only list resolved = %+v, want none", resolved)
 	}
 }
 
-// TestTerminalComposeTargetsResolveByPrefix proves the fallback when Compose
-// prints no name, and that an ambiguous prefix is refused rather than guessed.
 func TestTerminalComposeTargetsResolveByPrefix(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
@@ -332,39 +292,26 @@ func TestTerminalComposeTargetsResolveByPrefix(t *testing.T) {
 	if err != nil || len(set.Containers) != 1 || set.Containers[0].ContainerID != webFull {
 		t.Fatalf("prefix resolution = (%+v, %v)", set.Containers, err)
 	}
-	// The label falls back to the short form of the full id.
 	if set.Containers[0].Label != "web · aaaaaaaaaaaa" {
 		t.Fatalf("label = %q", set.Containers[0].Label)
 	}
 
-	// Two project containers sharing the prefix make it ambiguous: the target
-	// is dropped, and the whole list has no resolvable target.
 	node.listed = append(node.listed, composeContainerInfo(project, "web", "aaaaaaaaaaaa1"+strings.Repeat("0", 51), "", "running"))
 	if _, err := svc.ListTerminalContainers(context.Background(), userID, app.ID); !errors.Is(err, ErrContainerNotFound) {
 		t.Fatalf("ambiguous prefix = %v, want ErrContainerNotFound", err)
 	}
 }
 
-// TestComposeContainerCandidatesScopeToProjectServiceAndState pins the candidate
-// set itself: a foreign project, a foreign service, a stopped container and a
-// non-full id are never candidates, even when the node's answer is wider than
-// requested.
 func TestComposeContainerCandidatesScopeToProjectServiceAndState(t *testing.T) {
 	const project = "gotham-11111111-2222-4333-8444-555555555555"
 	webShort := "88f32c9135cd"
 	own := composeContainerInfo(project, "web", testFullContainerID(webShort), "proj-web-1", "running")
 	listed := []*agentv1.ContainerInfo{
 		own,
-		// Foreign project, same 12-hex prefix, running.
 		composeContainerInfo("gotham-99999999-8888-4777-8666-555555555555", "web", testFullContainerID(webShort), "foreign-web-1", "running"),
-		// Foreign project, stopped.
 		composeContainerInfo("gotham-99999999-8888-4777-8666-555555555555", "web", "88f32c9135cdffff"+strings.Repeat("0", 48), "foreign-stopped", "exited"),
-		// Same project, another service.
 		composeContainerInfo(project, "db", testFullContainerID("1f0a2b3c4d5e"), "proj-db-1", "running"),
-		// Same project and service, stopped.
 		composeContainerInfo(project, "web", "88f32c9135cd0000"+strings.Repeat("0", 48), "proj-web-stopped", "exited"),
-		// Same project and service, but the node reported a short id: never a
-		// candidate, so a short id can never be returned as a full one.
 		composeContainerInfo(project, "web", webShort, "proj-web-short", "running"),
 	}
 
@@ -373,7 +320,6 @@ func TestComposeContainerCandidatesScopeToProjectServiceAndState(t *testing.T) {
 		t.Fatalf("candidates = %+v, want only the project's running web container", candidates)
 	}
 
-	// The resolution step refuses an id that is outside the accepted shape.
 	for _, id := range []string{webShort + "F", "88F32C9135CD", "d", ""} {
 		if resolved, ok := resolveComposeTargetID(TerminalContainer{Service: "web", ContainerID: id, Name: "proj-web-1"}, candidates); ok {
 			t.Fatalf("target id %q resolved to %q, want a refusal", id, resolved)
@@ -381,14 +327,9 @@ func TestComposeContainerCandidatesScopeToProjectServiceAndState(t *testing.T) {
 	}
 }
 
-// TestResolveComposeTargetIDNameAndPrefix pins the name and prefix rules: a name
-// must match exactly (web never matches web-2), a name miss never falls through
-// to a prefix scan, and only a unique prefix among the scoped candidates
-// resolves.
 func TestResolveComposeTargetIDNameAndPrefix(t *testing.T) {
 	short := "88f32c9135cd"
 	full := testFullContainerID(short)
-	// The second replica shares the short prefix but has a different full id.
 	webTwo := composeContainerInfo("proj", "web", "88f32c9135cd1"+strings.Repeat("0", 51), "proj-web-2", "running")
 	web := composeContainerInfo("proj", "web", full, "proj-web-1", "running")
 
@@ -406,7 +347,6 @@ func TestResolveComposeTargetIDNameAndPrefix(t *testing.T) {
 			wantID:     full, wantOK: true,
 		},
 		{
-			// A prefix-based name comparison would match proj-web-2 here.
 			name:       "name is a prefix of another name",
 			target:     TerminalContainer{Service: "web", ContainerID: short, Name: "proj-web"},
 			candidates: []*agentv1.ContainerInfo{webTwo},
@@ -443,8 +383,6 @@ func TestResolveComposeTargetIDNameAndPrefix(t *testing.T) {
 			wantID:     full, wantOK: true,
 		},
 		{
-			// A node answer that still carries a short id must never be
-			// returned as the resolved target.
 			name:       "non-full candidate is never returned",
 			target:     TerminalContainer{Service: "web", ContainerID: short, Name: ""},
 			candidates: []*agentv1.ContainerInfo{composeContainerInfo("proj", "web", short, "proj-web-short", "running")},
@@ -461,9 +399,6 @@ func TestResolveComposeTargetIDNameAndPrefix(t *testing.T) {
 	}
 }
 
-// TestTerminalComposeTargetsOmitUnresolvableReplica proves a replica that
-// vanished between ComposePs and the container list is omitted (with a WARN log
-// carrying the application id) instead of failing the whole targets list.
 func TestTerminalComposeTargetsOmitUnresolvableReplica(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
@@ -478,7 +413,6 @@ func TestTerminalComposeTargetsOmitUnresolvableReplica(t *testing.T) {
 		{ID: webOneShort, Service: "web", Name: "shop-web-1", State: "running"},
 		{ID: "bbbbbbbbbbbb", Service: "web", Name: "shop-web-2", State: "running"},
 	}
-	// Only replica 1 is still on the node; replica 2 vanished.
 	node.listed = []*agentv1.ContainerInfo{
 		composeContainerInfo(project, "web", webOneFull, "shop-web-1", "running"),
 	}
@@ -505,15 +439,12 @@ func TestTerminalComposeTargetsOmitUnresolvableReplica(t *testing.T) {
 	}
 }
 
-// capturedLog is one slog record captured by recordHandler.
 type capturedLog struct {
 	level   slog.Level
 	message string
 	attrs   map[string]string
 }
 
-// recordHandler is a minimal in-memory slog handler for asserting the
-// resolution warnings.
 type recordHandler struct {
 	mu      sync.Mutex
 	records []capturedLog
@@ -627,11 +558,6 @@ func TestTerminalContainersRequireApplicationWriteAccess(t *testing.T) {
 	}
 }
 
-// TestComposeResolutionIgnoresNonComposeAndForeignProjects is the JUS-251
-// cross-resolution regression for the JUS-256 scoping fix: a node-wide list
-// from TWO Compose projects plus a non-Compose container (no compose labels)
-// that all share the target's 12-hex prefix must resolve only this project's
-// running service, never the first prefix/name match.
 func TestComposeResolutionIgnoresNonComposeAndForeignProjects(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
@@ -643,11 +569,8 @@ func TestComposeResolutionIgnoresNonComposeAndForeignProjects(t *testing.T) {
 	short := "abc123def456"
 	own := testFullContainerID(short)
 	listed := []*agentv1.ContainerInfo{
-		// A plain container from another source, no compose labels, same prefix.
 		{Id: testFullContainerID(short), Name: "unrelated-web", Image: "nginx:1", State: "running"},
-		// A second Compose project's running web, same prefix and name suffix.
 		composeContainerInfo(otherProject, "web", testFullContainerID(short), "shop-web-1", "running"),
-		// This application's own running web container.
 		composeContainerInfo(project, "web", own, "shop-web-1", "running"),
 	}
 

@@ -1,4 +1,3 @@
-// Mobile drawer state: per-mount lifecycle, focus trap, route/viewport close.
 import { mount } from "@vue/test-utils";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";

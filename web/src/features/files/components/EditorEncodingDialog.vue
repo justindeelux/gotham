@@ -10,7 +10,6 @@ import type { EditorEncoding } from "@/features/files/utils/editor";
 
 interface Props {
   show: boolean;
-  /** encoding is the tab's current save charset. */
   encoding: EditorEncoding;
 }
 
@@ -23,12 +22,10 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** close dismisses the dialog without changing the encoding. */
 function close(): void {
   emit("update:show", false);
 }
 
-/** pick applies one charset and closes; the caller performs the re-save. */
 function pick(value: string | number): void {
   if (value !== props.encoding) {
     emit("select", value as EditorEncoding);

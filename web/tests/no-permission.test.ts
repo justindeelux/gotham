@@ -13,7 +13,6 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-/** RouterLink stub honoring the `custom` + scoped-slot contract. */
 const RouterLinkStub = defineComponent({
   props: ["to"],
   template: `<a href="#" @click.prevent="() => undefined"><slot :navigate="() => undefined" /></a>`,
@@ -53,8 +52,6 @@ describe("platform-admin route guard (JUS-197)", () => {
     const forbidden = byName.get("forbidden");
     expect(forbidden?.path).toBe("/forbidden");
     expect(forbidden?.meta.titleKey).toBe("titles.forbidden");
-    // The unknown-route catch-all keeps redirecting to the dashboard:
-    // the 404 page owns it (JUS-193), not this guard.
     const catchAll = router.getRoutes().find((route) => route.path === "/:pathMatch(.*)*");
     expect(catchAll).toBeDefined();
   });

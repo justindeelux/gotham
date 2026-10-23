@@ -51,8 +51,6 @@ func TestGitLabSourceListRepos(t *testing.T) {
 	}
 }
 
-// TestGitLabSourceListReposMembership is the C1-8 regression: the listing must
-// ask only for the user's member projects instead of the whole catalogue.
 func TestGitLabSourceListReposMembership(t *testing.T) {
 	var requests int
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -78,8 +76,6 @@ func TestGitLabSourceListReposMembership(t *testing.T) {
 	}
 }
 
-// TestGitLabSourceListReposSpurious400Fails proves a mid-listing 400 is a real
-// failure, not a silently truncated success.
 func TestGitLabSourceListReposSpurious400Fails(t *testing.T) {
 	var requests int
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -104,8 +100,6 @@ func TestGitLabSourceListReposSpurious400Fails(t *testing.T) {
 	}
 }
 
-// TestGitLabSourceListReposBounded proves the loop is bounded even when the
-// instance keeps returning full pages, and marks the result truncated.
 func TestGitLabSourceListReposBounded(t *testing.T) {
 	var requests int
 	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -178,9 +172,6 @@ func TestGitLabSourceExchangeToken(t *testing.T) {
 }
 
 func TestGitLabSourceCreateWebhook(t *testing.T) {
-	// F1 regression: the events list must translate "pull_request" into
-	// merge_requests_events, or a previews-enabled hook never delivers MR
-	// notifications.
 	cases := []struct {
 		name         string
 		events       []string

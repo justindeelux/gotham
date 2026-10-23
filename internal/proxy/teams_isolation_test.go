@@ -10,10 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestCertificateTeamIsolation is the F3 regression for certificate configs:
-// a per-application resource only exists for the application's team. A
-// stranger's read/update/delete answers ErrNotFound, a read_only member's
-// mutation answers ErrForbidden, and the list is filtered to the active team.
 func TestCertificateTeamIsolation(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	appInB := ApplicationInfo{ID: uuid.New(), TeamID: teamB, BaseDomain: "app.example.com", ServerID: uuid.New()}
@@ -28,14 +24,11 @@ func TestCertificateTeamIsolation(t *testing.T) {
 	}
 	bg := context.Background()
 
-	// A member of another team cannot create, read, update or delete.
 	stranger := teams.WithScope(bg, teams.Scope{UserID: uuid.New(), TeamID: teamA, Role: teams.RoleOwner})
 	if _, err := svc.CreateCertificate(stranger, CreateCertificateInput{ApplicationID: appInB.ID}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign CreateCertificate = %v, want ErrNotFound", err)
 	}
 
-	// The owning team creates one; a read_only member may read it but not
-	// mutate it.
 	owner := teams.WithScope(bg, teams.Scope{UserID: uuid.New(), TeamID: teamB, Role: teams.RoleOwner})
 	certificate, err := svc.CreateCertificate(owner, CreateCertificateInput{ApplicationID: appInB.ID})
 	if err != nil {
@@ -51,7 +44,6 @@ func TestCertificateTeamIsolation(t *testing.T) {
 	if err := svc.DeleteCertificate(viewer, certificate.ID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("read_only DeleteCertificate = %v, want ErrForbidden", err)
 	}
-	// A stranger cannot even see it.
 	if _, err := svc.GetCertificate(stranger, certificate.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign GetCertificate = %v, want ErrNotFound", err)
 	}
@@ -62,7 +54,6 @@ func TestCertificateTeamIsolation(t *testing.T) {
 		t.Fatalf("foreign DeleteCertificate = %v, want ErrNotFound", err)
 	}
 
-	// Lists only contain the active team's certificates.
 	if all, err := svc.ListCertificates(owner); err != nil || len(all) != 1 || all[0].ID != certificate.ID {
 		t.Fatalf("team B list = %+v, %v; want only its certificate", all, err)
 	}
@@ -71,8 +62,6 @@ func TestCertificateTeamIsolation(t *testing.T) {
 	}
 }
 
-// TestRedirectTeamIsolation is the F3 regression for redirect rules, which had
-// the same global read/CRUD surface.
 func TestRedirectTeamIsolation(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	appInB := ApplicationInfo{ID: uuid.New(), TeamID: teamB, BaseDomain: "app.example.com", ServerID: uuid.New()}

@@ -8,17 +8,8 @@ import (
 	"strings"
 )
 
-// defaultDockerSock is the conventional Docker Engine socket path.
 const defaultDockerSock = "/var/run/docker.sock"
 
-// newDockerTransport resolves a Docker endpoint into an HTTP transport and base
-// URL. Accepted forms:
-//
-//   - ""                     → unix:///var/run/docker.sock
-//   - "unix:///path.sock"    → unix socket
-//   - "/path.sock"           → unix socket
-//   - "tcp://host:port"      → TCP
-//   - "http(s)://host:port"  → TCP
 func newDockerTransport(target string) (*http.Transport, string, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
@@ -43,7 +34,6 @@ func newDockerTransport(target string) (*http.Transport, string, error) {
 	}
 }
 
-// unixTransport builds a transport that dials the Docker unix socket at path.
 func unixTransport(path string) (*http.Transport, string, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, "", fmt.Errorf("docker: empty unix socket path")

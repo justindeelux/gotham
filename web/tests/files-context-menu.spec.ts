@@ -8,13 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, MouseEvent:readonly, URL, window:readonly */
-// JUS-124 context-menu proof: the committed webdist is served statically with
-// the control-plane file API mocked in real Chromium. Measured claims:
-//   - right-click on a file, a folder and empty space opens the custom menu,
-//     never the browser's native one (the handler cancels the event).
-//   - right-click applies the selection rule: a lone unselected row becomes the
-//     selection, a selected row keeps its multi-selection.
-//   - Shift+F10 opens the same menu on the focused row.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -70,7 +63,6 @@ const root = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/** listing builds a mixed file/folder listing the menu tests act on. */
 function listing() {
   return [
     { name: "app.yaml", kind: "file", size: 2458, mode: 0o100644, modified_at: "2026-10-12T09:02:00Z", etag: '"a"' },
@@ -120,7 +112,6 @@ test.afterAll(async () => {
   });
 });
 
-/** openFiles seeds a session, mocks the file API and lands on the browser. */
 async function openFiles(page: Page, entries = listing()): Promise<void> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript((value) => {
@@ -155,7 +146,6 @@ async function openFiles(page: Page, entries = listing()): Promise<void> {
   await expect(page.locator(".fm-label b").first()).toBeVisible();
 }
 
-/** rowFor returns the browser row whose name matches. */
 function rowFor(page: Page, name: string) {
   return page.locator(".fm-table .fm-row", { has: page.locator(`b:text-is("${name}")`) });
 }
@@ -171,14 +161,11 @@ test("right-click on a file opens the custom menu, not the native one", async ({
   await expect(menu.getByRole("menuitem", { name: "Edit in editor" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Cut" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Copy" })).toBeVisible();
-  // No duplicate Move: cut + paste is the move now.
   await expect(menu.getByRole("menuitem", { name: "Move", exact: true })).toHaveCount(0);
 
-  // Esc closes it.
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
 
-  // Outside click closes it too.
   await rowFor(page, "app.yaml").click({ button: "right" });
   await expect(menu).toBeVisible();
   await page.locator(".fm-topbar").click();
@@ -194,8 +181,6 @@ test("right-click on a special entry opens no menu", async ({ page }) => {
 test("the custom menu cancels the native context menu", async ({ page }) => {
   await openFiles(page);
 
-  // dispatchEvent returns false when a cancelable event was preventDefault-ed,
-  // which is exactly how the browser's native menu is suppressed.
   const prevented = await page.evaluate(() => {
     const row = document.querySelector(
       ".fm-table .fm-row:not(.fm-head)",
@@ -246,8 +231,6 @@ test("folder-row Paste copies into that folder", async ({ page }) => {
     });
   });
 
-  // Stage a copy from a row menu, then paste from the folder's row menu. Wait
-  // for each menu to settle so the click lands on the item, not the row behind.
   await rowFor(page, "app.yaml").click({ button: "right" });
   const fileMenu = page.getByRole("menu", { name: "More actions for app.yaml" });
   await expect(fileMenu).toBeVisible();
@@ -272,7 +255,6 @@ test("right-click on empty space opens the folder-level menu", async ({ page }) 
   const wrap = page.locator(".table-wrap");
   const box = await wrap.boundingBox();
   expect(box).not.toBeNull();
-  // A point below the last row: still inside the list, not on any row.
   await wrap.click({
     button: "right",
     position: { x: box!.width / 2, y: box!.height - 24 },
@@ -301,20 +283,17 @@ test("right-click keeps a multi-selection but selects a lone unselected row", as
   await openFiles(page);
   const selected = page.locator(".fm-table .fm-row.is-selected");
 
-  // Folders sort first, so pick by name. Select config and data.
   await rowFor(page, "config").hover();
   await rowFor(page, "config").locator(".n-checkbox").click();
   await rowFor(page, "data").hover();
   await rowFor(page, "data").locator(".n-checkbox").click();
   await expect(selected).toHaveCount(2);
 
-  // Right-clicking a selected row keeps the whole selection.
   await rowFor(page, "config").click({ button: "right" });
   await expect(page.getByRole("menu")).toBeVisible();
   await expect(selected).toHaveCount(2);
   await page.keyboard.press("Escape");
 
-  // Right-clicking an unselected row makes it the sole selection.
   await rowFor(page, "app.yaml").click({ button: "right" });
   await expect(page.getByRole("menu")).toBeVisible();
   await expect(selected).toHaveCount(1);

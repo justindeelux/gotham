@@ -4,7 +4,6 @@ import type {
   DatabaseRestore,
 } from "@/features/databases/api/backups";
 
-/** statusTagType maps a backup or restore status to a Naive UI tag type. */
 export function statusTagType(
   status: DatabaseBackup["status"] | DatabaseRestore["status"],
 ): "success" | "warning" | "error" {
@@ -17,11 +16,6 @@ export function statusTagType(
   return "warning";
 }
 
-/**
- * runDisplay renders a wire run status/type through the catalog when it is a
- * known value, and falls back to the raw wire string otherwise (same pattern
- * as DatabaseStatusTag): an unknown future value never renders a message key.
- */
 export function runDisplay(
   namespace: "runStatus" | "runType",
   value: string,

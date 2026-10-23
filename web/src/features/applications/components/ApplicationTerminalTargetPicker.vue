@@ -2,12 +2,6 @@
 import { NButton, NSelect } from "naive-ui";
 import { useI18n } from "vue-i18n";
 
-/**
- * Target selector + explicit refresh for the application Terminal tab
- * (JUS-247). The same control is used before the first shell and as the
- * service switch while one is live; only one instance is rendered at a time so
- * the shared label/input id stays unique.
- */
 interface Props {
   options: Array<{ label: string; value: string }>;
   value: string;

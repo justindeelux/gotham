@@ -11,18 +11,10 @@ import (
 	"time"
 )
 
-// mockSMTP is a minimal SMTP server that records the envelope of one
-// conversation and captures the DATA payload. It speaks just enough of the
-// protocol for net/smtp: greeting, EHLO, MAIL, RCPT, DATA, QUIT — no STARTTLS
-// and no AUTH, so the mailer's TLS/auth branches stay out of this test.
 type mockSMTP struct {
 	listener net.Listener
 
-	// rcptReject, when set, makes RCPT TO answer 501 with that text instead
-	// of accepting the recipient.
-	rcptReject string
-	// advertiseAuth makes EHLO offer AUTH PLAIN, which lets a test exercise
-	// the credential path (loopback plaintext is allowed by design).
+	rcptReject    string
 	advertiseAuth bool
 
 	mu           sync.Mutex
@@ -35,7 +27,6 @@ type mockSMTP struct {
 	done chan struct{}
 }
 
-// startMockSMTP listens on a loopback port and serves one conversation.
 func startMockSMTP(t *testing.T) *mockSMTP {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -51,7 +42,6 @@ func startMockSMTP(t *testing.T) *mockSMTP {
 	return server
 }
 
-// serve runs the conversation until QUIT or EOF.
 func (s *mockSMTP) serve() {
 	defer close(s.done)
 	conn, err := s.listener.Accept()
@@ -128,24 +118,18 @@ func (s *mockSMTP) serve() {
 	}
 }
 
-// envelope returns the recorded conversation.
 func (s *mockSMTP) envelope() (from string, rcpt []string, data string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.from, append([]string(nil), s.rcpt...), s.data
 }
 
-// auth returns how many AUTH attempts arrived and the payload of the last.
 func (s *mockSMTP) auth() (attempts int, payload string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.authAttempts, s.authPayload
 }
 
-// TestSMTPMailerSendsBareEnvelopeAddresses runs the real net/smtp path against
-// the local mock: display-name addresses must reach MAIL FROM/RCPT TO as bare
-// addresses (a relay answers a raw display string with 501), while the
-// rendered headers keep the display form.
 func TestSMTPMailerSendsBareEnvelopeAddresses(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -214,9 +198,6 @@ func TestSMTPMailerSendsBareEnvelopeAddresses(t *testing.T) {
 	}
 }
 
-// TestSMTPMailerHidesRelayText proves a relay's rejection text (arbitrary
-// remote content) never reaches the delivery error: only the step and numeric
-// status survive.
 func TestSMTPMailerHidesRelayText(t *testing.T) {
 	server := startMockSMTP(t)
 	server.rcptReject = "5.1.1 rejected: secret-relay-token"
@@ -243,9 +224,6 @@ func TestSMTPMailerHidesRelayText(t *testing.T) {
 	}
 }
 
-// TestSMTPMailerRejectsInvalidEnvelopeAddress proves an address that slipped
-// past config validation is refused locally instead of producing a malformed
-// SMTP command.
 func TestSMTPMailerRejectsInvalidEnvelopeAddress(t *testing.T) {
 	server := startMockSMTP(t)
 	host, portText, _ := net.SplitHostPort(server.listener.Addr().String())
@@ -268,9 +246,6 @@ func TestSMTPMailerRejectsInvalidEnvelopeAddress(t *testing.T) {
 	}
 }
 
-// TestCredentialsRequireTLS pins the STARTTLS policy: a remote relay that did
-// not negotiate TLS is refused when credentials are configured, a loopback
-// relay is exempt.
 func TestCredentialsRequireTLS(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -302,8 +277,6 @@ func TestCredentialsRequireTLS(t *testing.T) {
 	}
 }
 
-// TestSMTPMailerAuthenticatesOnLoopback proves the loopback exemption works
-// end to end: a local relay without STARTTLS still accepts PLAIN auth.
 func TestSMTPMailerAuthenticatesOnLoopback(t *testing.T) {
 	server := startMockSMTP(t)
 	server.advertiseAuth = true

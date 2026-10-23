@@ -13,24 +13,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// maxUserAgentLength bounds the stored User-Agent in characters (PF-2).
 const maxUserAgentLength = 256
 
-// SessionMeta carries the device metadata recorded with a refresh session at
-// creation (login, register, OAuth, password change) and refreshed on every
-// refresh-token rotation. The zero value means unknown: nothing is stored.
-// There is no write per authenticated request; last_used_at moves on rotation
-// only.
 type SessionMeta struct {
 	UserAgent string
 	IP        string
 }
 
-// cleanUserAgent truncates the User-Agent to 256 characters and drops invalid
-// UTF-8 rather than failing the login. Control characters (below 0x20 except
-// tab, plus DEL) are stripped after the UTF-8 repair so a NUL can never reach
-// Postgres, which rejects it. Empty (or all-invalid) input stores NULL, which
-// the list renders as "".
 func cleanUserAgent(ua string) *string {
 	ua = strings.ToValidUTF8(ua, "")
 	ua = strings.Map(func(r rune) rune {
@@ -51,10 +40,6 @@ func cleanUserAgent(ua string) *string {
 	return &ua
 }
 
-// parseSessionIP parses the client IP for the inet column. Empty or
-// unparseable input (a unix-socket peer, a test double) stores NULL, which
-// the list renders as "". Zones cannot be stored in inet and are stripped;
-// IPv4-mapped IPv6 addresses are unmapped to their IPv4 form.
 func parseSessionIP(ip string) *netip.Addr {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
@@ -68,7 +53,6 @@ func parseSessionIP(ip string) *netip.Addr {
 	return &addr
 }
 
-// SessionInfo is one live refresh session for the active-sessions list.
 type SessionInfo struct {
 	ID         uuid.UUID `json:"id"`
 	UserAgent  string    `json:"user_agent"`
@@ -78,9 +62,6 @@ type SessionInfo struct {
 	Current    bool      `json:"current"`
 }
 
-// ListSessions returns the caller's live sessions (not revoked, not expired),
-// newest last use first, at most 50 rows. currentSessionID marks the caller's
-// row; uuid.Nil (a token minted before PF-2) marks none rather than guessing.
 func (s *Service) ListSessions(ctx context.Context, userID, currentSessionID uuid.UUID) ([]SessionInfo, error) {
 	rows, err := s.store.ListSessionsByUser(ctx, pgUUID(userID), s.now())
 	if err != nil {
@@ -106,17 +87,6 @@ func (s *Service) ListSessions(ctx context.Context, userID, currentSessionID uui
 	return out, nil
 }
 
-// SessionSignInAt resolves the sign-in lineage (created_at) of one session
-// row, including a row that refresh-token rotation has already revoked: those
-// rows stay on record for the reuse-detection window, while logout and
-// password reset delete them. The lookup is scoped to userID, so another
-// account's sid resolves to nothing. found is false when no row exists; the
-// caller must then refuse rather than guess.
-//
-// The terminal attach path uses this to authorize a pre-rotation access token
-// whose sid is no longer live: it matches the resolved lineage against the
-// user's live sessions, exactly as revalidation does. An unrelated second
-// sign-in therefore never authorizes the stale token.
 func (s *Service) SessionSignInAt(ctx context.Context, userID, sessionID uuid.UUID) (signInAt time.Time, found bool, err error) {
 	if userID == uuid.Nil || sessionID == uuid.Nil {
 		return time.Time{}, false, nil
@@ -131,18 +101,6 @@ func (s *Service) SessionSignInAt(ctx context.Context, userID, sessionID uuid.UU
 	return signInAt, true, nil
 }
 
-// RevokeSession ends one of the caller's sessions by deleting its row, like
-// logout does. It answers ErrNotFound when the id is unknown, belongs to
-// another user, is already dead (revoked or deleted), or is expired (never a
-// 403, so a probe cannot distinguish them). Ending the caller's own session
-// is allowed; the web signs out afterwards.
-//
-// Deletion means a replayed refresh token is unknown: a plain 401 that can
-// never trigger the reuse-detection family revoke, so revoking a stolen
-// session cannot log the owner out everywhere (F1). Already-rotated rows stay
-// untouched, preserving genuine-theft evidence. Access tokens already issued
-// live out their 15-minute life (the same documented window as
-// reset-password and the PF-1 password change).
 func (s *Service) RevokeSession(ctx context.Context, userID, id uuid.UUID) error {
 	deleted, err := s.store.DeleteSessionByID(ctx, pgUUID(id), pgUUID(userID))
 	if err != nil {
@@ -155,17 +113,6 @@ func (s *Service) RevokeSession(ctx context.Context, userID, id uuid.UUID) error
 	return nil
 }
 
-// RevokeOtherSessions ends every live session of the caller except the
-// current one, by deleting those rows. The current session id must itself be
-// a live session of the caller; a missing, stale (post-rotation), revoked,
-// deleted, expired, or foreign sid answers ErrSessionUnknown ("sign in again
-// to manage other sessions") and deletes nothing, rather than guessing which
-// row is current (F2).
-//
-// Deletion means replayed refresh tokens are unknown: plain 401s that can
-// never trigger the reuse-detection family revoke (F1). Access tokens already
-// issued live out their 15-minute life (the same documented window as
-// reset-password and the PF-1 password change).
 func (s *Service) RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error {
 	if currentSessionID == uuid.Nil {
 		return ErrSessionUnknown

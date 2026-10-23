@@ -11,7 +11,6 @@ if (!wizard) {
   throw new Error("WizardValidateStep must be used inside AddServerWizard.");
 }
 
-/** dotClass renders the SSH status dot for the current probe state. */
 const dotClass = computed<string>(() => {
   if (wizard.validating.value) {
     return "dot--running";
@@ -55,8 +54,6 @@ const dotClass = computed<string>(() => {
     </div>
     <NText depth="3">{{ wizard.checkSummary.value }}</NText>
 
-    <!-- The node has no agent yet, so the App Store cannot help here: the
-         install runs over the same SSH session the probes use. -->
     <NButton
       v-if="wizard.dockerInstallOffer.value"
       type="primary"

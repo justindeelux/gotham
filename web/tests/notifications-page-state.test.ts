@@ -1,8 +1,3 @@
-// Page-instance state regression tests for the notifications split (JUS-24 fix 1).
-//
-// The channel draft, open flag, secrets and resource lists must be created per
-// page mount and dropped on unmount. Teleport is stubbed so dialog content
-// renders inline.
 import { NButton, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h, nextTick } from "vue";
@@ -35,7 +30,6 @@ import { listDatabases } from "@/features/databases";
 import { useTeamsStore } from "@/features/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
-/** Catalogs render through the real composer: register before mounting. */
 beforeEach(() => {
   resetLocaleState();
   i18n.global.mergeLocaleMessage("en", { notifications: notificationsEn });
@@ -51,7 +45,6 @@ function shell(child: object) {
   });
 }
 
-/** seedTeams presets the teams store before the page mounts. */
 function seedTeams(): void {
   const teams = useTeamsStore();
   (teams as unknown as Record<string, unknown>).ensureTeams = vi
@@ -74,7 +67,6 @@ async function mountPage() {
   return wrapper;
 }
 
-/** dialogHarness mounts a bare provider for direct composable tests. */
 async function dialogHarness(): Promise<{ wrapper: VueWrapper; state: ChannelDialogState }> {
   let state!: ChannelDialogState;
   const Inner = defineComponent({
@@ -90,7 +82,6 @@ async function dialogHarness(): Promise<{ wrapper: VueWrapper; state: ChannelDia
   return { wrapper, state };
 }
 
-/** clickButton clicks the first naive button with the exact label. */
 async function clickButton(wrapper: VueWrapper, label: string): Promise<void> {
   const buttons = wrapper.findAllComponents(NButton);
   const target = buttons.find((button) => button.text() === label);
@@ -127,7 +118,6 @@ describe("notifications page instance state", () => {
     expect((webhook.element as unknown as { value: string }).value).toBe("SECRET-HOOK");
     wrapper.unmount();
 
-    // A fresh mount reopens with a blank draft: the secret is gone.
     wrapper = await mountPage();
     expect(wrapper.html()).not.toContain("New notification channel");
     await clickButton(wrapper, "New channel");
@@ -171,7 +161,6 @@ describe("useChannelDialog.loadResources", () => {
     const pending = deferred<Array<{ id: string; name: string }>>();
     vi.mocked(listApplications).mockReturnValue(pending.promise);
     const read = state.loadResources("team-b");
-    // The switch drops the old team's list before the read settles.
     expect(state.resourceApplications.value).toEqual([]);
     pending.resolve([{ id: "app-b", name: "B" }]);
     await read;

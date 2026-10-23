@@ -23,15 +23,12 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// acceptToken accepts any WebSocket query token; the test proves the stream
-// wiring, while token validation lives in internal/auth.
 type acceptToken struct{}
 
 func (acceptToken) VerifyAccessToken(string) (*auth.Claims, error) {
 	return &auth.Claims{}, nil
 }
 
-// scriptedLogStream replays chunks, then ends with io.EOF.
 type scriptedLogStream struct {
 	grpc.ServerStreamingClient[agentv1.LogChunk]
 	chunks [][]byte
@@ -47,8 +44,6 @@ func (s *scriptedLogStream) Recv() (*agentv1.LogChunk, error) {
 	return chunk, nil
 }
 
-// fakeDockerStreamer satisfies agentv1.DockerServiceClient enough to serve a
-// scripted log stream.
 type fakeDockerStreamer struct {
 	agentv1.DockerServiceClient
 	stream grpc.ServerStreamingClient[agentv1.LogChunk]
@@ -58,7 +53,6 @@ func (f fakeDockerStreamer) StreamLogs(context.Context, *agentv1.StreamLogsReque
 	return f.stream, nil
 }
 
-// fakeLogDialer is a ServerService that also implements the container dialer.
 type fakeLogDialer struct {
 	*fakeServerService
 	stream grpc.ServerStreamingClient[agentv1.LogChunk]
@@ -72,8 +66,6 @@ func (f *fakeLogDialer) DialDockerClient(context.Context, uuid.UUID, ...servers.
 	return &servers.DockerClient{DockerServiceClient: fakeDockerStreamer{stream: f.stream}}, nil
 }
 
-// startLogStreamRequest builds the POST request with chi URL params and the
-// authenticated user in its context.
 func startLogStreamRequest(serverID string, userID uuid.UUID) *http.Request {
 	const containerID = "ctr"
 	req := httptest.NewRequest(http.MethodPost,
@@ -86,10 +78,6 @@ func startLogStreamRequest(serverID string, userID uuid.UUID) *http.Request {
 	return req.WithContext(ctx)
 }
 
-// TestHandleStartLogStreamWiresPublisher is the B1-2/B2-1 server-side e2e: the
-// start endpoint drives the realtime manager, which runs PublishStream against
-// the (fake) agent, and a subscribed WebSocket client receives the log frame.
-// No test code publishes log content directly.
 func TestHandleStartLogStreamWiresPublisher(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	base := newFakeServerService()
@@ -144,8 +132,6 @@ func TestHandleStartLogStreamWiresPublisher(t *testing.T) {
 	}
 }
 
-// TestHandleStartLogStreamRejectsUnknownNode verifies the endpoint authorizes
-// the node before starting an agent stream.
 func TestHandleStartLogStreamRejectsUnknownNode(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	rt := ws.Mount(chi.NewRouter(), nil, "", logger, nil)
@@ -160,9 +146,6 @@ func TestHandleStartLogStreamRejectsUnknownNode(t *testing.T) {
 	}
 }
 
-// TestHandleStartLogStreamForeignNodeIsNotFound is the U5 regression: a node
-// the caller cannot access is indistinguishable from a missing one (both 404),
-// matching the server's node-existence policy.
 func TestHandleStartLogStreamForeignNodeIsNotFound(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	base := newFakeServerService()
@@ -177,7 +160,6 @@ func TestHandleStartLogStreamForeignNodeIsNotFound(t *testing.T) {
 	rt := ws.Mount(chi.NewRouter(), nil, "", logger, nil)
 	t.Cleanup(rt.Close)
 
-	// A team service with no membership for the caller denies the node.
 	s := &Server{servers: base, realtime: rt, logger: logger, teamService: newFakeTeamService()}
 	rec := httptest.NewRecorder()
 	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), uuid.New()))
@@ -187,8 +169,6 @@ func TestHandleStartLogStreamForeignNodeIsNotFound(t *testing.T) {
 	}
 }
 
-// TestHandleStartLogStreamTransientErrorIs500 is the U2 regression: a lookup
-// failure that is not "not found" is a real error (500 + logged), not a 404.
 func TestHandleStartLogStreamTransientErrorIs500(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	rt := ws.Mount(chi.NewRouter(), nil, "", logger, nil)
@@ -207,8 +187,6 @@ func TestHandleStartLogStreamTransientErrorIs500(t *testing.T) {
 	}
 }
 
-// failingGetServerService is a ServerService whose node lookup fails with a
-// transient (non-not-found) error.
 type failingGetServerService struct {
 	*fakeServerService
 }
@@ -217,8 +195,6 @@ func (f *failingGetServerService) Get(context.Context, uuid.UUID) (*servers.Serv
 	return nil, errors.New("database unavailable")
 }
 
-// TestHandleStartLogStreamRequiresAgentDialer verifies a registry without the
-// mTLS dialer is reported as an unavailable agent rather than a silent success.
 func TestHandleStartLogStreamRequiresAgentDialer(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	base := newFakeServerService()

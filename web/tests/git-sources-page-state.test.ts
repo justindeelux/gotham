@@ -1,8 +1,3 @@
-// GitSourcesPage component states (GS-10 fix round 1): loading, empty,
-// error/Retry, Connect GitHub submit, reconnect, the 409 dialog (kept open,
-// no unhandled rejection), the wizard shortcut and the callback back-links.
-// The page composable is mocked; the row mapping it feeds is covered in
-// git-sources-page.test.ts.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h, ref } from "vue";
@@ -79,7 +74,6 @@ interface PageFixture {
   disconnect: ReturnType<typeof vi.fn>;
 }
 
-/** fixture returns the mocked composable shape the page consumes. */
 function fixture(over: Partial<PageFixture> = {}): PageFixture {
   return {
     rows: ref<GitSourceRow[]>([gitHubRow, gitLabRow]),
@@ -128,8 +122,6 @@ beforeEach(() => {
   seedTeams();
 });
 
-/** dialogConfirm finds the disconnect dialog confirm button (row buttons
- * share its label, so scope to the open dialog). */
 function dialogConfirm(wrapper: VueWrapper) {
   const cards = wrapper.findAll(".app-modal");
   for (const card of cards) {
@@ -230,9 +222,7 @@ describe("GitSourcesPage states", () => {
       await dialogConfirm(wrapper)?.trigger("click");
       await flushPromises();
       await new Promise((resolve) => setTimeout(resolve, 50));
-      // The dialog stays open with the server-named applications…
       expect(wrapper.text()).toContain("Applications still use this connection: shop, blog");
-      // …and the rejection is handled, never unhandled.
       expect(rejections).toEqual([]);
       expect(fx.disconnect).toHaveBeenCalled();
     } finally {

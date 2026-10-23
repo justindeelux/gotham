@@ -10,10 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeRepository is an in-memory Repository with the same observable rules as
-// the SQL implementation: memberships are unique per (team, user), an invite
-// is consumed exactly once, and unknown rows answer ErrNotFound. Its mutex is
-// what the SQL transaction's team-row lock provides in production.
 type fakeRepository struct {
 	mu             sync.Mutex
 	teams          map[uuid.UUID]Team
@@ -23,14 +19,11 @@ type fakeRepository struct {
 	resourceCounts map[uuid.UUID]int64
 }
 
-// storedInvite pairs an invite with its token hash, the way the database keeps
-// the hash in a separate column.
 type storedInvite struct {
 	invite Invite
 	hash   string
 }
 
-// newFakeRepository builds an empty repository.
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
 		teams:          map[uuid.UUID]Team{},
@@ -41,22 +34,18 @@ func newFakeRepository() *fakeRepository {
 	}
 }
 
-// seedResourceCount records how many resources a team owns, which is what the
-// delete guard counts.
 func (f *fakeRepository) seedResourceCount(teamID uuid.UUID, count int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resourceCounts[teamID] = count
 }
 
-// seedUser registers an account email, as the users table does.
 func (f *fakeRepository) seedUser(userID uuid.UUID, email string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.users[userID] = email
 }
 
-// seedTeam stores a team with its owner membership, bypassing the service.
 func (f *fakeRepository) seedTeam(team Team, ownerID uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -71,7 +60,6 @@ func (f *fakeRepository) seedTeam(team Team, ownerID uuid.UUID) {
 	f.members[team.ID][ownerID] = Member{UserID: ownerID, Email: f.users[ownerID], Role: RoleOwner, CreatedAt: team.CreatedAt}
 }
 
-// seedMember adds one membership.
 func (f *fakeRepository) seedMember(teamID, userID uuid.UUID, role Role) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -81,7 +69,6 @@ func (f *fakeRepository) seedMember(teamID, userID uuid.UUID, role Role) {
 	f.members[teamID][userID] = Member{UserID: userID, Email: f.users[userID], Role: role, CreatedAt: time.Now().UTC()}
 }
 
-// member returns the stored membership (caller must hold the lock).
 func (f *fakeRepository) member(teamID, userID uuid.UUID) (Member, bool) {
 	byUser, ok := f.members[teamID]
 	if !ok {
@@ -91,9 +78,6 @@ func (f *fakeRepository) member(teamID, userID uuid.UUID) (Member, bool) {
 	return member, ok
 }
 
-// DeleteTeamIfEmpty implements Repository: the mutex makes the count and the
-// delete one critical section, exactly like the SQL transaction's team-row
-// lock.
 func (f *fakeRepository) DeleteTeamIfEmpty(_ context.Context, teamID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -106,15 +90,12 @@ func (f *fakeRepository) DeleteTeamIfEmpty(_ context.Context, teamID uuid.UUID) 
 	return f.deleteTeam(teamID)
 }
 
-// CountTeamResources reports how many resources a team owns (test helper).
 func (f *fakeRepository) CountTeamResources(_ context.Context, teamID uuid.UUID) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.resourceCounts[teamID], nil
 }
 
-// MutateMembership implements Repository: the mutex makes the read-policy-write
-// sequence atomic, exactly like the SQL transaction's team-row lock.
 func (f *fakeRepository) MutateMembership(_ context.Context, teamID uuid.UUID, fn func(*MembershipTx) error) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -152,7 +133,6 @@ func (f *fakeRepository) MutateMembership(_ context.Context, teamID uuid.UUID, f
 	return fn(tx)
 }
 
-// CreateTeam implements Repository.
 func (f *fakeRepository) CreateTeam(_ context.Context, team Team, ownerID uuid.UUID) (Team, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -167,7 +147,6 @@ func (f *fakeRepository) CreateTeam(_ context.Context, team Team, ownerID uuid.U
 	return team, nil
 }
 
-// GetTeam implements Repository.
 func (f *fakeRepository) GetTeam(_ context.Context, teamID uuid.UUID) (Team, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -178,7 +157,6 @@ func (f *fakeRepository) GetTeam(_ context.Context, teamID uuid.UUID) (Team, err
 	return team, nil
 }
 
-// GetTeamForUser implements Repository.
 func (f *fakeRepository) GetTeamForUser(_ context.Context, teamID, userID uuid.UUID) (Team, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -194,7 +172,6 @@ func (f *fakeRepository) GetTeamForUser(_ context.Context, teamID, userID uuid.U
 	return team, nil
 }
 
-// ListTeamsByUser implements Repository.
 func (f *fakeRepository) ListTeamsByUser(_ context.Context, userID uuid.UUID) ([]Team, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -217,7 +194,6 @@ func (f *fakeRepository) ListTeamsByUser(_ context.Context, userID uuid.UUID) ([
 	return out, nil
 }
 
-// RenameTeam implements Repository.
 func (f *fakeRepository) RenameTeam(_ context.Context, teamID uuid.UUID, name string) (Team, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -231,8 +207,6 @@ func (f *fakeRepository) RenameTeam(_ context.Context, teamID uuid.UUID, name st
 	return team, nil
 }
 
-// DeleteTeam removes a team and its memberships/invites (test helper: the
-// service always goes through DeleteTeamIfEmpty).
 func (f *fakeRepository) DeleteTeam(_ context.Context, teamID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -242,7 +216,6 @@ func (f *fakeRepository) DeleteTeam(_ context.Context, teamID uuid.UUID) error {
 	return f.deleteTeam(teamID)
 }
 
-// deleteTeam removes the team rows (caller must hold the lock).
 func (f *fakeRepository) deleteTeam(teamID uuid.UUID) error {
 	delete(f.teams, teamID)
 	delete(f.resourceCounts, teamID)
@@ -255,7 +228,6 @@ func (f *fakeRepository) deleteTeam(teamID uuid.UUID) error {
 	return nil
 }
 
-// CreateMember implements Repository.
 func (f *fakeRepository) CreateMember(_ context.Context, teamID, userID uuid.UUID, role Role) (Member, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -270,7 +242,6 @@ func (f *fakeRepository) CreateMember(_ context.Context, teamID, userID uuid.UUI
 	return member, nil
 }
 
-// GetMember implements Repository.
 func (f *fakeRepository) GetMember(_ context.Context, teamID, userID uuid.UUID) (Member, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -281,7 +252,6 @@ func (f *fakeRepository) GetMember(_ context.Context, teamID, userID uuid.UUID) 
 	return member, nil
 }
 
-// ListMembers implements Repository.
 func (f *fakeRepository) ListMembers(_ context.Context, teamID uuid.UUID) ([]Member, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -297,7 +267,6 @@ func (f *fakeRepository) ListMembers(_ context.Context, teamID uuid.UUID) ([]Mem
 	return out, nil
 }
 
-// UpdateMemberRole implements Repository.
 func (f *fakeRepository) UpdateMemberRole(_ context.Context, teamID, userID uuid.UUID, role Role) (Member, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -310,7 +279,6 @@ func (f *fakeRepository) UpdateMemberRole(_ context.Context, teamID, userID uuid
 	return member, nil
 }
 
-// DeleteMember implements Repository.
 func (f *fakeRepository) DeleteMember(_ context.Context, teamID, userID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -321,7 +289,6 @@ func (f *fakeRepository) DeleteMember(_ context.Context, teamID, userID uuid.UUI
 	return nil
 }
 
-// CountOwners implements Repository.
 func (f *fakeRepository) CountOwners(_ context.Context, teamID uuid.UUID) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -334,7 +301,6 @@ func (f *fakeRepository) CountOwners(_ context.Context, teamID uuid.UUID) (int64
 	return owners, nil
 }
 
-// CreateInvite implements Repository.
 func (f *fakeRepository) CreateInvite(_ context.Context, invite Invite, tokenHash string) (Invite, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -347,7 +313,6 @@ func (f *fakeRepository) CreateInvite(_ context.Context, invite Invite, tokenHas
 	return invite, nil
 }
 
-// ListInvites implements Repository.
 func (f *fakeRepository) ListInvites(_ context.Context, teamID uuid.UUID) ([]Invite, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -361,7 +326,6 @@ func (f *fakeRepository) ListInvites(_ context.Context, teamID uuid.UUID) ([]Inv
 	return out, nil
 }
 
-// GetInviteByTokenHash implements Repository.
 func (f *fakeRepository) GetInviteByTokenHash(_ context.Context, tokenHash string) (Invite, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -373,8 +337,6 @@ func (f *fakeRepository) GetInviteByTokenHash(_ context.Context, tokenHash strin
 	return Invite{}, ErrNotFound
 }
 
-// AcceptInvite implements Repository: it consumes a pending, unexpired invite
-// and inserts the membership, refusing an already-consumed token.
 func (f *fakeRepository) AcceptInvite(_ context.Context, tokenHash string, userID uuid.UUID) (Invite, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -405,7 +367,6 @@ func (f *fakeRepository) AcceptInvite(_ context.Context, tokenHash string, userI
 	return Invite{}, ErrInviteUsed
 }
 
-// DeleteInvite implements Repository.
 func (f *fakeRepository) DeleteInvite(_ context.Context, teamID, inviteID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -417,7 +378,6 @@ func (f *fakeRepository) DeleteInvite(_ context.Context, teamID, inviteID uuid.U
 	return nil
 }
 
-// UserEmail implements Repository.
 func (f *fakeRepository) UserEmail(_ context.Context, userID uuid.UUID) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -428,8 +388,6 @@ func (f *fakeRepository) UserEmail(_ context.Context, userID uuid.UUID) (string,
 	return email, nil
 }
 
-// inviteFor finds a stored invite by its raw token, hashing it the way the
-// service does; it lets a test inspect the stored row.
 func (f *fakeRepository) inviteFor(token string) (Invite, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -441,8 +399,6 @@ func (f *fakeRepository) inviteFor(token string) (Invite, bool) {
 	return Invite{}, false
 }
 
-// expireInvite rewrites an invite's expiry, which is how the tests exercise the
-// expired path without sleeping.
 func (f *fakeRepository) expireInvite(inviteID uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

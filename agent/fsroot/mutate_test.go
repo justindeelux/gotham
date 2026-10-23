@@ -15,8 +15,6 @@ import (
 	"github.com/justindeelux/gotham/agent/fsroot"
 )
 
-// TestRenameExclusiveRefusesExisting pins the non-replacing rename: an existing
-// destination is refused and left untouched, and a free destination moves.
 func TestRenameExclusiveRefusesExisting(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -51,8 +49,6 @@ func TestRenameExclusiveRefusesExisting(t *testing.T) {
 	}
 }
 
-// TestResolveSymlinks pins Resolve: it follows in-root links to a canonical
-// path and refuses an absolute, escaping or looping link.
 func TestResolveSymlinks(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -96,9 +92,6 @@ func TestResolveSymlinks(t *testing.T) {
 	}
 }
 
-// TestCopyRefusesSymlinkedSelfCopy pins the identity guard: a destination whose
-// resolved parent is the source (or inside it) is refused, even though the
-// lexical path does not look like a self-copy.
 func TestCopyRefusesSymlinkedSelfCopy(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -122,14 +115,11 @@ func TestCopyRefusesSymlinkedSelfCopy(t *testing.T) {
 	if err := root.Copy(context.Background(), "src", "deep/inner", true, nil); !errors.Is(err, fsroot.ErrInvalid) {
 		t.Fatalf("copy into a symlink inside the source = %v, want ErrInvalid", err)
 	}
-	// A normal copy still works.
 	if err := root.Copy(context.Background(), "src", "dst", false, nil); err != nil {
 		t.Fatalf("normal copy: %v", err)
 	}
 }
 
-// TestCopyHonoursContext pins that a cancelled copy aborts before creating its
-// output.
 func TestCopyHonoursContext(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -154,11 +144,6 @@ func TestCopyHonoursContext(t *testing.T) {
 	}
 }
 
-// TestCopyRefusesCopyOntoItselfThroughSymlinkedParent pins the round-2 fix: a
-// destination that resolves onto the source through a symlinked parent ("up"
-// -> ".") is refused for a file and for a directory, so the overwrite never
-// deletes the source. Under the old guard the destination's resolved parent was
-// compared against the source itself, which missed "f" -> "up/f".
 func TestCopyRefusesCopyOntoItselfThroughSymlinkedParent(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -188,7 +173,6 @@ func TestCopyRefusesCopyOntoItselfThroughSymlinkedParent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "A", "a.txt")); err != nil {
 		t.Fatalf("the source directory was destroyed: %v", err)
 	}
-	// A legitimate overwriting copy through the same link still works.
 	if err := root.Copy(context.Background(), "f", "up/g", true, nil); err != nil {
 		t.Fatalf("legitimate copy through the link: %v", err)
 	}
@@ -197,11 +181,6 @@ func TestCopyRefusesCopyOntoItselfThroughSymlinkedParent(t *testing.T) {
 	}
 }
 
-// TestCopyFailureLeavesDestinationIntact pins finding B: the copy is staged in
-// a temporary sibling and only renamed into place on success, so a directory
-// copy that fails partway leaves the pre-existing destination exactly as it was
-// (no partially merged tree) and leaks no staging entry. The old direct copy
-// merged the first child into dst before failing on the second.
 func TestCopyFailureLeavesDestinationIntact(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -226,7 +205,7 @@ func TestCopyFailureLeavesDestinationIntact(t *testing.T) {
 	onEntry := func(string, fsroot.Entry) error {
 		copies++
 		if copies == 1 {
-			cancel() // abort before the second child is copied
+			cancel()
 		}
 		return nil
 	}
@@ -251,8 +230,6 @@ func TestCopyFailureLeavesDestinationIntact(t *testing.T) {
 	}
 }
 
-// TestRemoveStaleTemps pins the sweeper: it removes old staging files, keeps
-// fresh ones, and never follows a symlink out of the tree.
 func TestRemoveStaleTemps(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -287,9 +264,6 @@ func TestRemoveStaleTemps(t *testing.T) {
 	if err := os.Chtimes(subOld, old, old); err != nil {
 		t.Fatal(err)
 	}
-	// A symlink with a staging name must be removed as a link, never followed:
-	// an old link to a directory that itself holds a staging-named file must
-	// not cause that file to be removed.
 	outsideTemp := filepath.Join(outside, fsroot.TempPrefix+"hidden")
 	if err := os.WriteFile(outsideTemp, []byte("safe"), 0o600); err != nil {
 		t.Fatal(err)
@@ -333,11 +307,6 @@ func TestRemoveStaleTemps(t *testing.T) {
 	}
 }
 
-// TestRemoveStaleTempsSweepsStaleDirectories pins finding 1: a staging
-// directory left by a crashed directory copy (or a failed staged-copy cleanup)
-// is removed whole with its children, decided by its own prefix and age before
-// the sweep descends, while a fresh staging directory and a non-prefixed
-// directory are kept.
 func TestRemoveStaleTempsSweepsStaleDirectories(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -389,11 +358,6 @@ func TestRemoveStaleTempsSweepsStaleDirectories(t *testing.T) {
 	}
 }
 
-// TestCopyDirectoryModeExact pins finding 2: a copied directory carries the
-// exact source mode rather than the umask-masked one, and a read-only source
-// directory (0o555) still copies with its children. The test narrows the umask
-// so the old masking (0o770 -> 0o750) is observable; it is deliberately not run
-// in parallel because the umask is process-wide.
 func TestCopyDirectoryModeExact(t *testing.T) {
 	dir := t.TempDir()
 	writable := filepath.Join(dir, "writable")
@@ -412,7 +376,6 @@ func TestCopyDirectoryModeExact(t *testing.T) {
 	if err := os.Chmod(readonly, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	// t.TempDir's cleanup must be able to descend into the read-only copies.
 	t.Cleanup(func() {
 		for _, p := range []string{readonly, filepath.Join(dir, "readonly-dst"), filepath.Join(dir, "writable-dst")} {
 			if err := os.Chmod(p, 0o755); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -449,7 +412,6 @@ func TestCopyDirectoryModeExact(t *testing.T) {
 	}
 }
 
-// modeOf returns the permission bits of dir/name.
 func modeOf(t *testing.T, dir, name string) os.FileMode {
 	t.Helper()
 	info, err := os.Stat(filepath.Join(dir, name))
@@ -459,9 +421,6 @@ func modeOf(t *testing.T, dir, name string) os.FileMode {
 	return info.Mode().Perm()
 }
 
-// TestChmodEntryUpdatesMode pins the user-facing chmod: it sets the exact
-// permission bits on a regular file and a directory and returns the fresh
-// entry (with the new mode and etag).
 func TestChmodEntryUpdatesMode(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -492,8 +451,6 @@ func TestChmodEntryUpdatesMode(t *testing.T) {
 	}
 }
 
-// TestChmodEntryRefusesSymlinkWithoutFollowing pins the no-follow contract: a
-// symlink entry is refused and its target's mode is left untouched.
 func TestChmodEntryRefusesSymlinkWithoutFollowing(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -513,7 +470,6 @@ func TestChmodEntryRefusesSymlinkWithoutFollowing(t *testing.T) {
 	}
 }
 
-// TestChmodEntryRefusesSpecialFile pins the refusal of a FIFO.
 func TestChmodEntryRefusesSpecialFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -527,7 +483,6 @@ func TestChmodEntryRefusesSpecialFile(t *testing.T) {
 	}
 }
 
-// TestChmodEntryRefusesRoot pins that the root itself cannot be chmod-ed.
 func TestChmodEntryRefusesRoot(t *testing.T) {
 	t.Parallel()
 	root := openRoot(t, t.TempDir())
@@ -536,8 +491,6 @@ func TestChmodEntryRefusesRoot(t *testing.T) {
 	}
 }
 
-// TestChmodEntryReadOnlyRoot pins that a read-only root refuses the chmod
-// before touching the filesystem.
 func TestChmodEntryReadOnlyRoot(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -562,17 +515,12 @@ func TestChmodEntryReadOnlyRoot(t *testing.T) {
 	}
 }
 
-// TestChmodEntryPreservesSpecialBits pins that a chmod changes only the plain
-// permission bits: an existing setuid/setgid/sticky bit survives (it is never
-// created, but it must not be silently dropped either).
 func TestChmodEntryPreservesSpecialBits(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "shared"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The test process must be able to set the special bits; a restrictive
-	// environment (no group membership, a filesystem that refuses them) skips.
 	if err := os.Chmod(filepath.Join(dir, "shared"), 0o755|os.ModeSetgid|os.ModeSticky); err != nil {
 		t.Skipf("cannot set special bits: %v", err)
 	}
@@ -600,10 +548,6 @@ func TestChmodEntryPreservesSpecialBits(t *testing.T) {
 	}
 }
 
-// TestChmodEntryRefusesHardlinkInConfinedRoot pins the confined-root hard-link
-// guard: a regular file with more than one link shares its inode, so it is
-// refused there, while the whole-filesystem root (refuseHardlink=false) allows
-// it.
 func TestChmodEntryRefusesHardlinkInConfinedRoot(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -629,8 +573,6 @@ func TestChmodEntryRefusesHardlinkInConfinedRoot(t *testing.T) {
 	}
 }
 
-// TestChmodEntryRefusesDirectoryWithoutOwnerExecute pins the self-lockout
-// guard: a directory must keep its owner execute bit so it stays traversable.
 func TestChmodEntryRefusesDirectoryWithoutOwnerExecute(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

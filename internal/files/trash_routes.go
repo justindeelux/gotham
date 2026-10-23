@@ -2,12 +2,10 @@ package files
 
 import "net/http"
 
-// emptyTrashEnvelope reports how many entries an empty call removed.
 type emptyTrashEnvelope struct {
 	Removed uint64 `json:"removed"`
 }
 
-// trash serves GET .../files/trash?root=: list a root's recycle bin.
 func (h *handler) trash(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -24,7 +22,6 @@ func (h *handler) trash(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, listing)
 }
 
-// restoreTrash serves POST .../files/trash/restore.
 func (h *handler) restoreTrash(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -42,7 +39,6 @@ func (h *handler) restoreTrash(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, statEnvelope{Entry: entry})
 }
 
-// purgeTrash serves POST .../files/trash/purge.
 func (h *handler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -59,7 +55,6 @@ func (h *handler) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// emptyTrash serves POST .../files/trash/empty.
 func (h *handler) emptyTrash(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {

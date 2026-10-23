@@ -6,12 +6,6 @@ import { serviceStatusLabel, serviceStatusTagType } from "@/features/services/ap
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
 import { activeLocale, i18n } from "@/shared/i18n";
 
-/** ServiceDetailHeader renders the back link, title tags and actions. */
-
-/**
- * t renders header copy in the active locale (tracks language switches).
- * Called during render, so labels refresh without reloading the service.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

@@ -15,92 +15,52 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// Agent release asset family. The node agent binary is published as
-// gotham-agent-linux-<arch> with its own signed manifest
-// gotham-agent-manifest-<arch>.txt, distinct from the control-plane binary so a
-// single release can carry both.
 const (
 	AgentAssetPrefix    = "gotham-agent-linux-"
 	AgentManifestPrefix = "gotham-agent-manifest-"
 )
 
-// Bounds for the small signed-manifest fetches the offer verification performs.
 const (
-	maxAgentManifestBytes  = 64 << 10
-	maxAgentSignatureBytes = 4 << 10
-	// defaultOfferCacheTTL bounds how long a resolved, verified release is
-	// reused. The cache is shared by every agent the CP serves, so a fleet
-	// polling RequestUpdate causes one release-API fetch per TTL, not one per
-	// poll: GitHub's anonymous limit is 60 requests/hour per egress IP, shared
-	// with the control plane's own update check.
-	defaultOfferCacheTTL = 10 * time.Minute
-	// minNegativeOfferCacheTTL is the floor for the failure backoff so a failing
-	// upstream is retried at most once per interval even with a tiny TTL.
+	maxAgentManifestBytes    = 64 << 10
+	maxAgentSignatureBytes   = 4 << 10
+	defaultOfferCacheTTL     = 10 * time.Minute
 	minNegativeOfferCacheTTL = time.Second
-	// agentFloorVersion is the version floor used to resolve the newest agent
-	// release regardless of any particular agent's running version.
-	agentFloorVersion = "v0.0.0"
+	agentFloorVersion        = "v0.0.0"
 )
 
-// SupportedAgentArches are the architectures the agent build publishes.
 var SupportedAgentArches = []string{"amd64", "arm64"}
 
-// AgentUpdaterConfig wires the control-plane side of the agent update flow.
 type AgentUpdaterConfig struct {
-	Repo    string
-	BaseURL string
-	Channel Channel
-	// PublicKeys is the release key ring (current first, then the
-	// pre-positioned next key). A manifest verifies when any key signed it.
+	Repo       string
+	BaseURL    string
+	Channel    Channel
 	PublicKeys []ed25519.PublicKey
-	// Client overrides the HTTP client used for the release API and manifest
-	// fetches (tests).
-	Client  *http.Client
-	Timeout time.Duration
-	Logger  *slog.Logger
-	// CacheTTL bounds offer caching; zero uses the default.
-	CacheTTL time.Duration
+	Client     *http.Client
+	Timeout    time.Duration
+	Logger     *slog.Logger
+	CacheTTL   time.Duration
 }
 
-// AgentUpdater resolves and verifies agent update offers. It owns the trust
-// chain on the control-plane side: an offer is only ever returned after the
-// release API has been queried and the signed manifest has been fetched and
-// verified with the release public key. It never returns an unverified offer.
 type AgentUpdater struct {
-	checker  Checker
-	verifier *Verifier
-	client   *http.Client
-	logger   *slog.Logger
-	ttl      time.Duration
-	// negativeTTL suppresses re-fetching after a failed lookup so a failing
-	// upstream is hit at most once per interval (N1).
+	checker     Checker
+	verifier    *Verifier
+	client      *http.Client
+	logger      *slog.Logger
+	ttl         time.Duration
 	negativeTTL time.Duration
 
-	mu    sync.Mutex
-	cache map[string]*cachedEntry
-	// fetchMu serializes upstream fetches (a single-flight per process) so
-	// concurrent cold polls fetch once instead of once per poll.
+	mu      sync.Mutex
+	cache   map[string]*cachedEntry
 	fetchMu sync.Mutex
 }
 
-// cachedEntry is the per-arch cache state. It keeps the last verified release
-// (which stays servable when stale) together with the freshness window and the
-// failure backoff.
 type cachedEntry struct {
-	// release is the last manifest-verified release; nil before any success.
-	release *Release
-	// freshUntil is when release stops being served without a refetch.
+	release    *Release
 	freshUntil time.Time
-	// failure is the last lookup error (nil when the last lookup succeeded).
-	failure error
-	// retryAt suppresses a refetch until it passes.
-	retryAt time.Time
+	failure    error
+	retryAt    time.Time
 }
 
-// NewAgentUpdater builds an updater. It returns (nil, nil) when no public key
-// is configured: without a key the control plane cannot prove an offer is
-// signed, so it must not make one (the agent embeds its own key and fails
-// closed too).
 func NewAgentUpdater(cfg AgentUpdaterConfig) (*AgentUpdater, error) {
 	logger := cfg.Logger
 	if logger == nil {
@@ -133,9 +93,6 @@ func NewAgentUpdater(cfg AgentUpdaterConfig) (*AgentUpdater, error) {
 	return updater, nil
 }
 
-// AgentUpdaterFromEnv assembles an AgentUpdater from the environment. It
-// returns (nil, nil) when FEATURE_UPDATES=false or no public key is embedded:
-// the update surface is then off.
 func AgentUpdaterFromEnv(logger *slog.Logger) (*AgentUpdater, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -159,11 +116,6 @@ func AgentUpdaterFromEnv(logger *slog.Logger) (*AgentUpdater, error) {
 	})
 }
 
-// Offer resolves the newest agent release above agentVersion for the given
-// platform. It returns (nil, nil) when the agent is current, the platform is
-// unsupported, or no offer can be verified. A release-API or manifest failure
-// is returned as an error so the caller can log it, but it is never turned into
-// a partial offer.
 func (a *AgentUpdater) Offer(ctx context.Context, agentVersion, goos, goarch string) (*Release, error) {
 	if a == nil || a.verifier == nil {
 		return nil, nil
@@ -181,9 +133,6 @@ func (a *AgentUpdater) Offer(ctx context.Context, agentVersion, goos, goarch str
 		return nil, err
 	}
 
-	// The resolved release is the newest one; compare it against the reporting
-	// agent's version here. An unparsable running version fails closed (no
-	// offer) rather than offering something the agent cannot order.
 	current, err := updatecore.ParseVersion(agentVersion)
 	if err != nil {
 		return nil, nil
@@ -198,10 +147,6 @@ func (a *AgentUpdater) Offer(ctx context.Context, agentVersion, goos, goarch str
 	return release, nil
 }
 
-// TargetVersion returns the newest agent release version across the supported
-// architectures, or "" when the updater is disabled. It is what an "update all
-// agents" rollout targets; the control plane's own running version is
-// irrelevant (the fleet is usually behind the CP).
 func (a *AgentUpdater) TargetVersion(ctx context.Context) (string, error) {
 	if a == nil || a.verifier == nil {
 		return "", nil
@@ -220,19 +165,11 @@ func (a *AgentUpdater) TargetVersion(ctx context.Context) (string, error) {
 	return "", lastErr
 }
 
-// resolve returns the newest verified release for arch, served from cache when
-// fresh. On a release-API or manifest failure it serves the last verified
-// release if one exists (stale but signed and digest-bound) and negative-caches
-// the failure, so a failing upstream is hit at most once per negative TTL. It
-// fails closed only when there is nothing valid to serve and the negative cache
-// has lapsed.
 func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, error) {
 	if release, err, ok := a.cached(arch, time.Now()); ok {
 		return release, err
 	}
 
-	// Single-flight: concurrent cold polls fetch once. Re-check the cache after
-	// acquiring the lock because another goroutine may have populated it.
 	a.fetchMu.Lock()
 	defer a.fetchMu.Unlock()
 	if release, err, ok := a.cached(arch, time.Now()); ok {
@@ -241,9 +178,6 @@ func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, erro
 
 	release, err := a.fetchRelease(ctx, arch)
 	if err != nil {
-		// An empty releases list (nothing published yet) is a "no release"
-		// answer, not a release-server error, so the operator sees a consistent
-		// no-update rather than a misleading 502.
 		if errors.Is(err, ErrNoRelease) {
 			a.storeEmpty(arch)
 			return nil, nil
@@ -257,9 +191,6 @@ func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, erro
 		return nil, err
 	}
 	if release == nil {
-		// No eligible release: cache the empty result so repeated calls answer
-		// (nil, nil) instead of alternating 503 and a 502 "release server
-		// error" during the negative-cache window (L2).
 		a.storeEmpty(arch)
 		return nil, nil
 	}
@@ -267,10 +198,6 @@ func (a *AgentUpdater) resolve(ctx context.Context, arch string) (*Release, erro
 	return release, nil
 }
 
-// cached reports whether the cache answers without a fetch: a fresh verified
-// release, a stale verified release while a failure backoff is active, the
-// cached failure itself, or a cached "no release" (nil, nil). ok is false when
-// a fetch should be attempted.
 func (a *AgentUpdater) cached(arch string, now time.Time) (*Release, error, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -287,13 +214,11 @@ func (a *AgentUpdater) cached(arch string, now time.Time) (*Release, error, bool
 			clone := *entry.release
 			return &clone, nil, true
 		}
-		// A nil failure is a cached "no release"; a non-nil one is a real error.
 		return nil, entry.failure, true
 	}
 	return nil, nil, false
 }
 
-// stale returns the last verified release for arch regardless of expiry, or nil.
 func (a *AgentUpdater) stale(arch string) *Release {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -305,7 +230,6 @@ func (a *AgentUpdater) stale(arch string) *Release {
 	return &clone
 }
 
-// store caches a verified release for arch and clears any failure backoff.
 func (a *AgentUpdater) store(arch string, release *Release) {
 	clone := *release
 	now := time.Now()
@@ -318,8 +242,6 @@ func (a *AgentUpdater) store(arch string, release *Release) {
 	}
 }
 
-// storeFailure negative-caches a lookup failure for arch while preserving the
-// last verified release so it stays servable (stale) during the backoff.
 func (a *AgentUpdater) storeFailure(arch string, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -332,9 +254,6 @@ func (a *AgentUpdater) storeFailure(arch string, err error) {
 	entry.retryAt = time.Now().Add(a.negativeTTL)
 }
 
-// storeEmpty negative-caches a "no release" result for arch: cached then returns
-// (nil, nil), so the operator-facing answer is a consistent no-update rather
-// than flipping to a release-server error for the negative-cache window.
 func (a *AgentUpdater) storeEmpty(arch string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -347,8 +266,6 @@ func (a *AgentUpdater) storeEmpty(arch string) {
 	entry.retryAt = time.Now().Add(a.negativeTTL)
 }
 
-// negativeCacheTTL derives the failure backoff from the offer TTL (a fifth,
-// floored at minNegativeOfferCacheTTL).
 func negativeCacheTTL(configured time.Duration) time.Duration {
 	ttl := defaultDuration(configured, defaultOfferCacheTTL) / 5
 	if ttl < minNegativeOfferCacheTTL {
@@ -357,8 +274,6 @@ func negativeCacheTTL(configured time.Duration) time.Duration {
 	return ttl
 }
 
-// fetchRelease resolves the newest release for arch and verifies its signed
-// manifest before returning it.
 func (a *AgentUpdater) fetchRelease(ctx context.Context, arch string) (*Release, error) {
 	checker := a.checker
 	checker.GOARCH = arch
@@ -377,9 +292,6 @@ func (a *AgentUpdater) fetchRelease(ctx context.Context, arch string) (*Release,
 	return release, nil
 }
 
-// verifyManifest downloads the signed manifest and its detached signature,
-// verifies the Ed25519 signature and binds the manifest to the resolved
-// release (version, arch, file, channel).
 func (a *AgentUpdater) verifyManifest(ctx context.Context, release *Release) (updatecore.Manifest, error) {
 	manifestBytes, err := a.get(ctx, release.ManifestURL, maxAgentManifestBytes)
 	if err != nil {
@@ -409,7 +321,6 @@ func (a *AgentUpdater) verifyManifest(ctx context.Context, release *Release) (up
 	return manifest, nil
 }
 
-// get performs a bounded GET against a verified destination.
 func (a *AgentUpdater) get(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
 	if err := updatecore.ValidateURL(rawURL); err != nil {
 		return nil, err
@@ -441,7 +352,6 @@ func (a *AgentUpdater) get(ctx context.Context, rawURL string, maxBytes int64) (
 	return data, nil
 }
 
-// supportedAgentArch reports whether arch is a published agent architecture.
 func supportedAgentArch(arch string) bool {
 	for _, candidate := range SupportedAgentArches {
 		if arch == candidate {

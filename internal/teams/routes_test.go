@@ -12,9 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// testRouter mounts the team routes for one authenticated user. The auth
-// middleware is a pass-through: authentication itself is RequireAuth's job and
-// is covered by the server package's tests.
 func testRouter(svc *Service, userID uuid.UUID) http.Handler {
 	r := chi.NewRouter()
 	pass := func(next http.Handler) http.Handler { return next }
@@ -23,7 +20,6 @@ func testRouter(svc *Service, userID uuid.UUID) http.Handler {
 	return r
 }
 
-// request drives one JSON request through h and returns the recorder.
 func request(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var payload []byte
@@ -39,7 +35,6 @@ func request(t *testing.T, h http.Handler, method, path string, body any) *httpt
 	return rec
 }
 
-// decode unmarshals a response body into a generic map.
 func decode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	out := map[string]any{}
@@ -178,7 +173,6 @@ func TestRoutesInviteAndAccept(t *testing.T) {
 		t.Fatal("the response must not carry the token hash")
 	}
 
-	// The invite is listed for the team.
 	rec = request(t, ownerRouter, http.MethodGet, "/v1/teams/"+teamID.String()+"/invites", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list invites = %d", rec.Code)
@@ -187,13 +181,11 @@ func TestRoutesInviteAndAccept(t *testing.T) {
 		t.Fatalf("invites = %v, want one", invites)
 	}
 
-	// A different account cannot accept it.
 	rec = request(t, ownerRouter, http.MethodPost, "/v1/invites/accept", map[string]string{"token": token})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("foreign accept = %d, want 403", rec.Code)
 	}
 
-	// The invited account joins with the invited role.
 	rec = request(t, inviteeRouter, http.MethodPost, "/v1/invites/accept", map[string]string{"token": token})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("accept = %d, body %s", rec.Code, rec.Body)
@@ -201,16 +193,13 @@ func TestRoutesInviteAndAccept(t *testing.T) {
 	if team := decode(t, rec)["team"].(map[string]any); team["role"] != string(RoleReadOnly) {
 		t.Fatalf("accepted team = %+v", team)
 	}
-	// A replay is refused.
 	rec = request(t, inviteeRouter, http.MethodPost, "/v1/invites/accept", map[string]string{"token": token})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("replayed accept = %d, want 409", rec.Code)
 	}
-	// The token travels in the body only: the path never carries it.
 	if rec := request(t, inviteeRouter, http.MethodPost, "/v1/invites/"+token+"/accept", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("token-in-path accept = %d, want 404 (route removed)", rec.Code)
 	}
-	// The membership is visible to the owner.
 	rec = request(t, ownerRouter, http.MethodGet, "/v1/teams/"+teamID.String()+"/members", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("members = %d", rec.Code)
@@ -220,8 +209,6 @@ func TestRoutesInviteAndAccept(t *testing.T) {
 	}
 }
 
-// TestRoutesNonEmptyTeamDeleteIsRefused is the R2 HTTP contract: a team that
-// still owns resources answers 409, never a silent cascade.
 func TestRoutesNonEmptyTeamDeleteIsRefused(t *testing.T) {
 	repo := newFakeRepository()
 	owner := uuid.New()

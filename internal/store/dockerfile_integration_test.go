@@ -14,10 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestStoreApplicationDockerfileRoundtrip runs the embedded migrations and
-// verifies the GS-7 columns through Postgres: pasted text and --build-arg
-// pairs round-trip on write and update, and direct sqlc callers that predate
-// the columns get the COALESCE defaults (” and '{}', never NULL).
 func TestStoreApplicationDockerfileRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -160,8 +156,6 @@ func TestStoreApplicationDockerfileRoundtrip(t *testing.T) {
 	})
 }
 
-// decodeBuildArgs parses a build_args jsonb value for comparison (Postgres
-// normalizes whitespace, so string equality is too strict).
 func decodeBuildArgs(t *testing.T, data []byte) map[string]string {
 	t.Helper()
 	var args map[string]string

@@ -12,15 +12,6 @@ import (
 	"github.com/justindeelux/gotham/agent"
 )
 
-// TestGS8ComposeDeployRollbackDelete drives a compose application through
-// the real stack (API -> deploy service -> mTLS agent ComposeServer ->
-// `docker compose` CLI -> Docker): pasted v1 deploys, an edit to v2
-// redeploys, a rollback to the v1 deployment re-applies the v1 document,
-// and deleting the application tears the project down. A hostile document
-// is refused at the API with a 400.
-//
-// The marker is an environment value read back out of the running web
-// container, so each phase proves which document the node actually runs.
 func TestGS8ComposeDeployRollbackDelete(t *testing.T) {
 	h := newP4HarnessWithAgentOptions(t, agent.WithComposeService(agent.NewComposeServer(
 		agent.ComposeServerConfig{
@@ -66,7 +57,6 @@ func TestGS8ComposeDeployRollbackDelete(t *testing.T) {
 		t.Fatalf("v1 marker = %q, want v1", got)
 	}
 
-	// Edit to v2 and redeploy: the node runs the new document.
 	h.updateApplication(t, app.ID, map[string]any{"compose_content": v2})
 	queuedV2 := h.deploy(t, app.ID)
 	v2Running := h.waitForTerminal(t, app.ID, queuedV2.ID)
@@ -77,8 +67,6 @@ func TestGS8ComposeDeployRollbackDelete(t *testing.T) {
 		t.Fatalf("v2 marker = %q, want v2", got)
 	}
 
-	// Roll back to the v1 deployment: the v1 document is re-applied, not
-	// the live v2 file.
 	rolled := h.rollback(t, app.ID, map[string]any{"deployment_id": v1Running.ID})
 	back := h.waitForTerminal(t, app.ID, rolled.ID)
 	if back.State != "running" {
@@ -88,18 +76,12 @@ func TestGS8ComposeDeployRollbackDelete(t *testing.T) {
 		t.Fatalf("rollback marker = %q, want v1", got)
 	}
 
-	// Deleting the application tears the compose project down: no container
-	// of the project may survive.
 	h.deleteApplication(t, app.ID)
 	if leftovers := gs8ProjectContainers(t, app.ID); len(leftovers) != 0 {
 		t.Errorf("project containers survive the delete: %v", leftovers)
 	}
 }
 
-// TestGS8ComposeHostileRejected proves the confinement gate at the seam
-// that matters: hostile documents through the real API are 400s and queue
-// nothing, including a YAML-tagged scalar smuggling a live reference (the
-// tag skips substitution, so it must fail closed at the gate).
 func TestGS8ComposeHostileRejected(t *testing.T) {
 	h := newP4HarnessWithAgentOptions(t, agent.WithComposeService(agent.NewComposeServer(
 		agent.ComposeServerConfig{
@@ -131,9 +113,6 @@ func TestGS8ComposeHostileRejected(t *testing.T) {
 	}
 }
 
-// gs8ComposeRoot returns a canonical temp directory for the test agent's
-// compose projects (macOS temp paths carry /var -> /private/var symlinks
-// the agent's no-follow traversal rejects).
 func gs8ComposeRoot(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -143,7 +122,6 @@ func gs8ComposeRoot(t *testing.T) string {
 	return root
 }
 
-// gs8ContainerMarker reads the MARKER value out of a running container.
 func gs8ContainerMarker(t *testing.T, containerID string) string {
 	t.Helper()
 	out, err := runDocker(context.Background(), "exec", containerID, "printenv", "MARKER")
@@ -153,8 +131,6 @@ func gs8ContainerMarker(t *testing.T, containerID string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// gs8ProjectContainers lists the containers still carrying the project's
-// compose label.
 func gs8ProjectContainers(t *testing.T, appID string) []string {
 	t.Helper()
 	out, err := runDocker(context.Background(), "ps", "-a", "--filter", "label=com.docker.compose.project=gotham-"+appID,
@@ -171,7 +147,6 @@ func gs8ProjectContainers(t *testing.T, appID string) []string {
 	return ids
 }
 
-// updateApplication applies a partial update through the API (200).
 func (h *p4Harness) updateApplication(t *testing.T, appID string, body map[string]any) {
 	t.Helper()
 	var out map[string]any
@@ -180,7 +155,6 @@ func (h *p4Harness) updateApplication(t *testing.T, appID string, body map[strin
 	}
 }
 
-// deleteApplication removes the application through the API (204).
 func (h *p4Harness) deleteApplication(t *testing.T, appID string) {
 	t.Helper()
 	if status, raw := h.api(t, http.MethodDelete, "/v1/applications/"+appID, nil, nil); status != http.StatusNoContent {

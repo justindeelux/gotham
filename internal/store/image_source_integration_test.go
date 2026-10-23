@@ -15,10 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestApplicationImageSourceColumnsRoundtrip stores an image-source
-// application and asserts the GS-9 columns round-trip: the reference, the
-// registry username and the sealed password ciphertext survive create, read
-// and update unchanged.
 func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -98,9 +94,7 @@ func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 		ImageRef:                   "registry.example.com/team/app:2.0",
 		RegistryUsername:           "robot",
 		RegistryPasswordCiphertext: "rotated-credential",
-		// The merged schema (GS-7) holds build_args NOT NULL: pass the
-		// empty object like the repository's marshalBuildArgs does.
-		BuildArgs: []byte("{}"),
+		BuildArgs:                  []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("UpdateApplication: %v", err)
@@ -111,8 +105,6 @@ func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 	}
 }
 
-// seedImageScope creates the user/team/project/environment/server rows an
-// application insert requires.
 func seedImageScope(t *testing.T, ctx context.Context, st *store.Store) (userID, teamID, envID, serverID pgtype.UUID) {
 	t.Helper()
 	user, err := st.CreateUser(ctx, fmt.Sprintf("gs9-%d@example.com", time.Now().UnixNano()), nil)

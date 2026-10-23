@@ -16,9 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 )
 
-// fakeFileServer is a ServerService stand-in that exposes the FileService dial
-// seam. The embedded nil interface supplies the unused methods; the two used
-// here (Get and DialFileClient) are overridden.
 type fakeFileServer struct {
 	ServerService
 	server  *servers.Server
@@ -39,10 +36,6 @@ func (f fakeFileServer) DialFileClient(context.Context, uuid.UUID, ...servers.Do
 	return nil, fmt.Errorf("%w: no agent in test", files.ErrAgentUnavailable)
 }
 
-// TestFilesServiceWiring proves the files package is mounted through the real
-// server chain with the mTLS dial seam plugged in: fileService() is non-nil,
-// the read route is mounted behind auth (401, not 404), and the service routes
-// its dial through the registry's DialFileClient.
 func TestFilesServiceWiring(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "true")
 
@@ -62,29 +55,21 @@ func TestFilesServiceWiring(t *testing.T) {
 		t.Fatal("fileService() = nil, want a mounted service")
 	}
 
-	// The dial seam is wired: a request reaches DialFileClient, which fails in
-	// the test, surfacing as ErrAgentUnavailable.
 	if _, err := svc.Roots(context.Background(), server.ID); !errors.Is(err, files.ErrAgentUnavailable) {
 		t.Fatalf("Roots err = %v, want ErrAgentUnavailable", err)
 	}
 
-	// The authenticated read route is mounted: without a bearer token the real
-	// chain answers 401, not the API 404.
 	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/"+server.ID.String()+"/files/roots", "", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated roots = %d, want 401 (route mounted)", rec.Code)
 	}
 
-	// The download route is public (the ticket is its credential); an unknown
-	// ticket is refused by the service, proving the route reaches it.
 	rec = doRequest(t, s, http.MethodGet, "/api/v1/servers/"+server.ID.String()+"/files/download?ticket=unknown", "", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown ticket = %d, want 404", rec.Code)
 	}
 }
 
-// TestFilesServiceWiringDisabled proves FEATURE_FILES=false disables the routes through
-// the real chain: a mounted route answers 503, not 404.
 func TestFilesServiceWiringDisabled(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "false")
 
@@ -103,8 +88,6 @@ func TestFilesServiceWiringDisabled(t *testing.T) {
 	}
 }
 
-// TestFilesServiceNilWithoutRegistry proves the service stays absent when no
-// node registry is wired, so Mount is a no-op.
 func TestFilesServiceNilWithoutRegistry(t *testing.T) {
 	s := newTestServer(t, stubPinger{}, stubPinger{})
 	if svc := s.fileService(); svc != nil {
@@ -112,9 +95,6 @@ func TestFilesServiceNilWithoutRegistry(t *testing.T) {
 	}
 }
 
-// TestFilesRoutesRequirePlatformAdmin proves the file surface is limited to
-// platform operators: a plain session is refused with 403 before the file
-// service runs, while an admin-scoped API token reaches it.
 func TestFilesRoutesRequirePlatformAdmin(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "true")
 	t.Setenv(PlatformAdminsEnv, "")

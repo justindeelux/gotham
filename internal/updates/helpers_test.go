@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// TestServiceLastStatus proves the durable outcome is surfaced through the
-// service.
 func TestServiceLastStatus(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "update.status")
@@ -37,7 +35,6 @@ func TestServiceLastStatus(t *testing.T) {
 	}
 }
 
-// TestServiceReset clears a stale pending marker.
 func TestServiceReset(t *testing.T) {
 	dir := t.TempDir()
 	pendingPath := filepath.Join(dir, "update.pending")
@@ -66,8 +63,6 @@ func TestServiceReset(t *testing.T) {
 	}
 }
 
-// TestDefaultRestartSuccess proves the wrapper is launched (detached) when it
-// exists and a waiter is returned.
 func TestDefaultRestartSuccess(t *testing.T) {
 	dir := t.TempDir()
 	fakeBin := filepath.Join(dir, "fakebin")

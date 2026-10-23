@@ -15,10 +15,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestFileProtectedPathsProtectsCertSecrets pins the JUS-105 follow-up: the
-// cert dir is protected non-exclusively (so the default compose root, a child
-// of it, stays browsable) while the key, certificate, override key and CA files
-// are protected individually, so a root that would contain one is refused.
 func TestFileProtectedPathsProtectsCertSecrets(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
@@ -43,9 +39,6 @@ func TestFileProtectedPathsProtectsCertSecrets(t *testing.T) {
 	}
 }
 
-// TestValidateFileRootCertDirComposeChild proves the default compose root
-// (inside the cert dir) validates, while the cert dir itself and any ancestor
-// of it stay refused.
 func TestValidateFileRootCertDirComposeChild(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
@@ -66,9 +59,6 @@ func TestValidateFileRootCertDirComposeChild(t *testing.T) {
 	}
 }
 
-// TestNewFileServerDefaultCertDirStarts proves the shipped unit's layout
-// (GOTHAM_AGENT_CERT_DIR = the agent state root, compose root = <certdir>/compose)
-// constructs the file service instead of aborting startup with files enabled.
 func TestNewFileServerDefaultCertDirStarts(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
@@ -109,11 +99,6 @@ func TestNewFileServerDefaultCertDirStarts(t *testing.T) {
 	}
 }
 
-// TestFileServiceCertSecretsUnreachable proves the read service cannot reach an
-// agent secret from an allowed root: not by "..", not through a symlink file
-// or symlink directory (also the copy-source primitive), and the secret is not
-// listed. The cert dir is the compose root's parent, so allowlisting the child
-// must not widen access to the siblings.
 func TestFileServiceCertSecretsUnreachable(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
@@ -144,8 +129,6 @@ func TestFileServiceCertSecretsUnreachable(t *testing.T) {
 		if err := os.Symlink(filepath.Join("..", keyFileName), link); err != nil {
 			t.Fatal(err)
 		}
-		// The Read RPC and the OpenRegular primitive a Copy source would use
-		// both refuse the link that leaves the root.
 		if _, _, err := server.roots[RootCompose].OpenRegular("leak"); !errors.Is(err, fsroot.ErrEscape) {
 			t.Fatalf("OpenRegular(leak) = %v, want ErrEscape", err)
 		}
@@ -164,10 +147,6 @@ func TestFileServiceCertSecretsUnreachable(t *testing.T) {
 	})
 }
 
-// TestFileServiceConfinedAfterParentRename proves renaming the cert dir (the
-// compose root's parent) after construction cannot retarget the open root at
-// the secret: the root holds the directory descriptor it validated, so it keeps
-// serving the original compose directory only.
 func TestFileServiceConfinedAfterParentRename(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()

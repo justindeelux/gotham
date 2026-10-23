@@ -40,7 +40,6 @@ import EditorSettingsPopover from "@/features/files/components/EditorSettingsPop
 import EditorShortcutsDialog from "@/features/files/components/EditorShortcutsDialog.vue";
 import EditorStatusBar from "@/features/files/components/EditorStatusBar.vue";
 import AppTooltip from "@/shared/ui/AppTooltip.vue";
-// Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
@@ -88,7 +87,6 @@ const props = withDefaults(defineProps<Props>(), { serverId: "" });
 
 const { t } = useI18n();
 const message = useMessage();
-// The host shell always provides a router, but unit mounts may not: the
 // global dirty guard only registers when one is injected (JUS-232).
 const router = inject<Router | null>(routerKey as InjectionKey<Router | null>, null);
 const editor = useEditorStore();
@@ -97,118 +95,63 @@ const editorSettings = useEditorSettingsStore();
 const files = useFilesStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
-// activeServerId is the file's server: the page prop while the browser owns
-// it, the editor store once the window outlives the page (JUS-232 app host).
 const activeServerId = computed<string>(() =>
   props.serverId !== "" ? props.serverId : editor.serverId,
 );
-// Unsaved drafts survive a reload/crash; reopening a file offers Restore /
-// Discard (JUS-229). Kept out of the store so this component stays a view.
 const {
   prompt: draftPrompt,
   restore: restoreDraftPrompt,
   discard: discardDraftPrompt,
 } = useEditorDrafts(() => activeServerId.value);
 
-/** sessions holds one live CodeMirror instance per opened tab. */
 const sessions = new Map<string, EditorSession>();
-/** hosts maps a tab id onto its editor host element. */
 const hosts = new Map<string, HTMLElement>();
-/** sessionLanguages remembers the grammar a live session was last set to. */
 const sessionLanguages = new Map<string, EditorLanguageId>();
-/** sessionHosts remembers the host a session was created against. */
 const sessionHosts = new Map<string, HTMLElement>();
-/** creating holds the in-flight session build per tab (rapid re-entry guard). */
 const creating = new Map<string, Promise<void>>();
-/** mergeSessions holds one live MergeView per open history diff tab. */
 const mergeSessions = new Map<string, MergeSession>();
-/** mergeHosts maps a diff tab id onto its diff host element. */
 const mergeHosts = new Map<string, HTMLElement>();
-/** mergeCreating holds the in-flight diff build per tab. */
 const mergeCreating = new Map<string, Promise<void>>();
-/** mergeSources remembers the two docs a live merge view was built from, so a
- *  refreshed diff tab rebuilds instead of showing stale sides. */
 const mergeSources = new Map<string, { base: string; current: string }>();
 const cursor = ref<{ line: number; column: number }>({ line: 1, column: 1 });
-// Window geometry (JUS-232) lives in the app-level host store so it survives
-// route navigation and reloads: `editorWindow.minimized` collapses the window
-// into the rail icon, the window stays mounted (v-show) so every live session
-// survives. The template reads the store directly.
-// explorerOpen toggles the in-editor file explorer; explorerWidth is its
-// dragged width (the panel clamps it to 200–480 px on the way back).
 const explorerOpen = ref(true);
 const explorerWidth = ref(260);
-// offset is the window's dragged top-left position, or null while it still sits
-// at the CSS default (pinned bottom-right). It is kept in the host store while
-// the window stays open and cleared on a dock restore, a narrow viewport, or a
-// close-all.
 const offset = computed<{ x: number; y: number } | null>(() =>
   editorWindow.x !== null && editorWindow.y !== null
     ? { x: editorWindow.x, y: editorWindow.y }
     : null,
 );
-// viewport mirrors the window size for display-only fitting: the persisted
-// size is never rewritten by a resize event, only fitted on screen.
 const viewport = ref({
   width: typeof window === "undefined" ? 0 : window.innerWidth,
   height: typeof window === "undefined" ? 0 : window.innerHeight,
 });
-// closeAllOpen arms the "close all with unsaved files" confirmation.
 const closeAllOpen = ref(false);
-// historyOpen shows the version-history dialog for the active file tab.
 const historyOpen = ref(false);
-// encodingOpen shows the save-encoding dialog for the active file tab.
 const encodingOpen = ref(false);
-// shortcutsOpen shows the read-only shortcut sheet (one instance).
 const shortcutsOpen = ref(false);
-// surfaceTrigger remembers the control that opened the current dialog, so
-// closing it returns keyboard focus there instead of dropping it on <body>.
 const surfaceTrigger = ref<HTMLElement | null>(null);
-// historyDialog is the dialog instance, so a restore can refresh its list.
 const historyDialog = ref<InstanceType<typeof EditorHistoryDialog> | null>(null);
-// historyCounts caches the revision count per tab for the status bar. A file
-// whose history cannot be read simply shows no count.
 const historyCounts = ref<Record<string, number>>({});
 
-// Tab management (JUS-220): one controlled dropdown serves the tab context
-// menu, and one close prompt guards every path that would drop a dirty buffer.
 const tabsElement = ref<HTMLElement | null>(null);
 const tabMenuOpen = ref(false);
 const tabMenuX = ref(0);
 const tabMenuY = ref(0);
 const tabMenuId = ref("");
-/** pendingClose holds the tab ids a close command is about to close; null = no prompt. */
 const pendingClose = ref<string[] | null>(null);
-/** pendingKeepId is the tab a scoped close (others/right) keeps active. */
 const pendingKeepId = ref("");
 const closeSaving = ref(false);
 const { copyText } = useCopyText();
 
-/**
- * displayedSize is the fitted window size for the current viewport (see
- * displayGeometry, which already honors the side and chrome margins): the
- * single source for rendering, aria and resize seeds, so a resize always
- * starts where the user sees the window.
- */
 const displayedSize = computed<{ width: number; height: number }>(() => {
   const fitted = editorWindow.displayGeometry(viewport.value.width, viewport.value.height);
   return { width: fitted.width, height: fitted.height };
 });
 
-/**
- * resizeLimits is the resize band for the current viewport: the shared frame
- * clamps every grip/keyboard step against it (JUS-275).
- */
 const resizeLimits = computed(() =>
   editorResizeLimits(viewport.value.width, viewport.value.height),
 );
 
-/**
- * windowStyle applies the displayed size and dragged position. Until the
- * window is dragged the CSS default (pinned bottom-right) applies, so a
- * fresh open is always as designed. The chrome margin rides along as a
- * custom property so the stylesheet never duplicates the pixel value.
- */
 const windowStyle = computed<CSSProperties>(() => {
   const fitted = editorWindow.displayGeometry(viewport.value.width, viewport.value.height);
   const style: Record<string, string> = {
@@ -230,17 +173,12 @@ const readyTabs = computed(() =>
   editor.tabs.filter((tab) => tab.kind === "file" && tab.status === "ready"),
 );
 
-/** readyDiffTabs are the read-only history diffs with a loaded MergeView. */
 const readyDiffTabs = computed(() =>
   editor.tabs.filter((tab) => tab.kind === "diff" && tab.status === "ready"),
 );
 
-/** activeTab is the store's focused tab (convenience for the template). */
 const activeTab = computed(() => editor.activeTab);
 
-// Custom find/replace and go-to-line surfaces (JUS-231). One instance serves
-// the whole window; the composable keeps each tab's query and restores it on a
-// switch, while the matches live in that tab's CodeMirror search state.
 const {
   findOpen,
   replaceExpanded,
@@ -286,38 +224,29 @@ const {
     files.canWrite,
 });
 
-/** historyTarget is the editable tab the history dialog acts on, if any. */
 const historyTarget = computed<EditorTab | null>(() =>
   activeTab.value?.kind === "file" ? activeTab.value : null,
 );
 
-/** historyCount is the active file's cached revision count. */
 const historyCount = computed<number>(() =>
   activeTab.value ? (historyCounts.value[activeTab.value.id] ?? 0) : 0,
 );
 
-/**
- * historyTooltip carries the revision count that the visible badge loses when
- * the icon-only layout hides the button's content (JUS-286 fix round 1).
- */
 const historyTooltip = computed<string>(() =>
   historyCount.value > 0
     ? t("files.editor.historyWithCount", { count: historyCount.value })
     : t("files.editor.history"),
 );
 
-/** pendingCloseDirty is the dirty subset of the tabs awaiting a close prompt. */
 const pendingCloseDirty = computed<EditorTab[]>(() => {
   const ids = pendingClose.value ?? [];
   return editor.tabs.filter((tab) => ids.includes(tab.id) && editor.isDirty(tab));
 });
 
-/** pendingClosePaths feeds the close prompt's unsaved-file list. */
 const pendingClosePaths = computed<string[]>(() =>
   pendingCloseDirty.value.map((tab) => tab.path),
 );
 
-/** tabMenuOptions is the context menu for the tab it was opened on. */
 const tabMenuOptions = computed<DropdownOption[]>(() => {
   const tabs = editor.tabs;
   const index = tabs.findIndex((tab) => tab.id === tabMenuId.value);
@@ -342,17 +271,6 @@ const tabMenuOptions = computed<DropdownOption[]>(() => {
   ];
 });
 
-// A dirty buffer must never be dropped by a destructive path — a server or
-// team switch, or a user-initiated logout — without an explicit confirmation
-// (beforeunload still covers a browser close/reload; forced sign-outs reset
-// directly). Route navigation never drops buffers: the window mounts once in
-// the app shell and outlives the page. The confirmation dialog renders once
-// here and is shared through the editor store, so the account menu's logout
-// path prompts through the same dialog.
-// A server switch moves the browser to another node while this window may
-// hold that node's dirty tabs: confirm before dropping them, and browse back
-// when the user stays (mirroring the team-switch revert below). A discard
-// resets the window so the next open starts clean on the new server.
 watch(
   () => files.serverId,
   (next) => {
@@ -364,8 +282,6 @@ watch(
         editor.reset();
         return;
       }
-      // "stay" browses back to the tab's server; "aborted" (a forced sign-out
-      // landing mid-prompt) does nothing.
       if (outcome === "stay" && editor.serverId !== "") {
         void router?.push({ name: "server-files", params: { id: editor.serverId } });
       }
@@ -373,10 +289,6 @@ watch(
   },
 );
 
-// A team switch changes the caller's role and the server's visibility; ask
-// before dropping dirty buffers, and revert the selection if the user stays.
-// Reverting writes activeTeamId back, which re-triggers this watcher: swallow
-// that echo (teamRevertTarget) instead of prompting again forever.
 let teamRevertTarget: string | null = null;
 watch(
   () => teams.activeTeamId,
@@ -394,16 +306,12 @@ watch(
       teams.selectTeam(prev);
       return;
     }
-    // "aborted" (a forced sign-out landing mid-prompt) selects nothing: the
-    // session teardown already reset the stores.
     if (outcome === "leave") {
       editor.reset();
     }
   },
 );
 
-// A tab switch, or a tab finishing its load, creates the CodeMirror instance
-// the first time a ready tab is shown.
 watch(
   () => [editor.activeId, editor.activeTab?.status] as const,
   async () => {
@@ -416,9 +324,6 @@ watch(
   { flush: "post" },
 );
 
-// Drop sessions whose tab was closed, pull external doc changes (a reload)
-// back into a live instance, and re-apply the grammar after a rename/save-as
-// retargets a tab.
 watch(
   () => editor.tabs,
   () => {
@@ -481,7 +386,6 @@ watch(
   { deep: true },
 );
 
-// Editor settings are one global preference applied to every open instance.
 watch(
   () => editorSettings.settings,
   (settings) => {
@@ -495,9 +399,6 @@ watch(
   { deep: true },
 );
 
-// A role or writable-root change flips the write gate; a live session must
-// follow it, or a demoted caller could still type into an already-open buffer.
-// A read-only tail stays read-only whatever the role.
 watch(
   () => files.canWrite,
   (canWrite) => {
@@ -508,9 +409,6 @@ watch(
   },
 );
 
-// Opening or focusing any file from the browser while the window is collapsed
-// reopens it, so a click always lands somewhere visible. openFile() focuses the
-// tab it opens — new or already open — which is exactly an activeId change.
 watch(
   () => editor.activeId,
   () => {
@@ -520,17 +418,12 @@ watch(
   },
 );
 
-// With many tabs open, the strip scrolls horizontally. Keep the active tab
-// visible after every switch/open so a newly opened file never lands off-screen.
 watch(
   () => [editor.activeId, editor.tabs.length] as const,
   () => void nextTick(() => revealActiveTab()),
   { immediate: true },
 );
 
-// The floating window unmounts with its last tab (close-all, or closing the
-// last tab individually), so any dragged position is meaningless afterwards:
-// clear it here so the next open starts at the pinned default again.
 watch(
   () => editor.tabs.length,
   (count) => {
@@ -540,7 +433,6 @@ watch(
   },
 );
 
-/** setHost stores a tab's host element from its template ref. */
 function setHost(id: string, el: unknown): void {
   if (el instanceof HTMLElement) {
     hosts.set(id, el);
@@ -549,7 +441,6 @@ function setHost(id: string, el: unknown): void {
   }
 }
 
-/** setMergeHost stores a diff tab's host element from its template ref. */
 function setMergeHost(id: string, el: unknown): void {
   if (el instanceof HTMLElement) {
     mergeHosts.set(id, el);
@@ -558,7 +449,6 @@ function setMergeHost(id: string, el: unknown): void {
   }
 }
 
-/** ensureMerge creates the active diff tab's read-only merge view once. */
 async function ensureMerge(): Promise<void> {
   const tab = editor.activeTab;
   if (!tab || tab.kind !== "diff" || tab.status !== "ready" || !tab.diff) {
@@ -589,8 +479,6 @@ async function ensureMerge(): Promise<void> {
     if (editor.tabs.some((item) => item.id === tabId)) {
       mergeSessions.set(tabId, session);
       mergeSources.set(tabId, { base, current });
-      // A settings change during the lazy chunk load must still land on the
-      // fresh diff view (the global watcher ran before it existed).
       session.setSettings(editorSettings.settings);
     } else {
       session.destroy();
@@ -604,7 +492,6 @@ async function ensureMerge(): Promise<void> {
   }
 }
 
-/** refreshHistoryCount caches one file tab's revision count for the footer. */
 async function refreshHistoryCount(tab: EditorTab | null = activeTab.value): Promise<void> {
   if (!tab || tab.kind !== "file" || tab.status !== "ready") {
     return;
@@ -618,21 +505,16 @@ async function refreshHistoryCount(tab: EditorTab | null = activeTab.value): Pro
     );
     historyCounts.value = { ...historyCounts.value, [tab.id]: versions.length };
   } catch {
-    // History is optional: a 503 or a deleted path simply omits the count.
   }
 }
 
-/** openHistory shows the version-history dialog for the active file. */
 function openHistory(): void {
-  // A truncated tab is a read-only tail: a restore would overwrite the whole
-  // file from a view the user never saw.
   if (!historyTarget.value || historyTarget.value.truncated) {
     return;
   }
   historyOpen.value = true;
 }
 
-/** openDiff opens (or reuses) a read-only diff tab for one revision. */
 async function openDiff(version: FilesVersion): Promise<void> {
   const tab = historyTarget.value;
   if (!tab) {
@@ -654,10 +536,6 @@ async function openDiff(version: FilesVersion): Promise<void> {
   historyOpen.value = false;
 }
 
-/**
- * restoreVersion writes one revision back over the file, reloads the open tab
- * and refreshes the dialog. A dirty tab was already confirmed by the dialog.
- */
 async function restoreVersion(version: FilesVersion): Promise<void> {
   const tab = historyTarget.value;
   if (!tab || tab.truncated) {
@@ -671,8 +549,6 @@ async function restoreVersion(version: FilesVersion): Promise<void> {
       tab.path,
       version.id,
     );
-    // Drop any diff tab of this file: it compared a revision against the
-    // content the restore just replaced, so it is stale now.
     for (const item of editor.tabs) {
       if (item.kind === "diff" && item.root === tab.root && item.path === tab.path) {
         editor.close(item.id);
@@ -688,13 +564,11 @@ async function restoreVersion(version: FilesVersion): Promise<void> {
   }
 }
 
-/** isTabFocused reports whether DOM focus is on a tablist button. */
 function isTabFocused(): boolean {
   const active = document.activeElement;
   return active instanceof HTMLElement && active.getAttribute("role") === "tab";
 }
 
-/** ensureSession creates the active tab's editor instance on first view. */
 async function ensureSession(): Promise<void> {
   const tab = editor.activeTab;
   if (!tab || tab.kind !== "file" || tab.status !== "ready") {
@@ -706,13 +580,7 @@ async function ensureSession(): Promise<void> {
   }
   const existing = sessions.get(tab.id);
   if (existing) {
-    // The host stays mounted across a status switch now, but if it was ever
-    // replaced (unmount/remount) the session is bound to a detached node and
-    // must be rebuilt against the live one.
     if (sessionHosts.get(tab.id) === host) {
-      // Only pull focus into the editor on an explicit open (browser click).
-      // While the user is on a tab button, re-focusing here would steal
-      // ArrowLeft/ArrowRight from the roving tablist focus.
       if (!isTabFocused()) {
         existing.focus();
       }
@@ -738,7 +606,6 @@ async function ensureSession(): Promise<void> {
     settings: editorSettings.settings,
     onChange: (doc) => {
       editor.setDoc(tabId, doc);
-      // Coalesce the recount; a scan per transaction would block typing.
       queueFindStatus();
     },
     onCursor: (line, column) => {
@@ -764,14 +631,10 @@ async function ensureSession(): Promise<void> {
       previousMatch();
     },
   }).then((session) => {
-    // A rapid tab switch while the chunk loaded: keep the instance only if the
-    // tab is still open.
     if (editor.tabs.some((item) => item.id === tabId)) {
       sessions.set(tabId, session);
       sessionHosts.set(tabId, host);
       sessionLanguages.set(tabId, tab.language);
-      // A settings change during the lazy chunk load must still land on the
-      // fresh instance (the global watcher ran before it existed).
       session.setSettings(editorSettings.settings);
       session.requestMeasure();
       session.focus();
@@ -787,11 +650,8 @@ async function ensureSession(): Promise<void> {
   }
 }
 
-/** saveTab saves one tab and reports the outcome. */
 async function saveTab(id: string): Promise<void> {
   const tab = editor.tabs.find((item) => item.id === id);
-  // Ctrl/Cmd+S is a no-op on a read-only or clean tab: never rewrite a clean
-  // file (which would normalise it) and never fire a write the server refuses.
   if (
     !tab ||
     tab.saving ||
@@ -808,11 +668,8 @@ async function saveTab(id: string): Promise<void> {
   } else if (outcome === "error") {
     message.error(tab.error || String(t("files.editor.saveFailed", { name: tab.name })));
   }
-  // "conflict" and "unsupported" arm their own prompts; "blocked" is a no-op
-  // (loading/read-only tab).
 }
 
-/** saveFailureText names the tab and, when known, its server error. */
 function saveFailureText(tab: EditorTab): string {
   return tab.error
     ? String(
@@ -824,17 +681,10 @@ function saveFailureText(tab: EditorTab): string {
     : String(t("files.editor.saveAllFailed", { name: tab.name }));
 }
 
-/**
- * saveAllTabs saves every dirty tab (Ctrl/Cmd+Shift+S). A failed tab keeps its
- * dirty marker and reports its own error; a run where everything saved gets a
- * single success toast.
- */
 async function saveAllTabs(): Promise<void> {
   if (!files.canWrite || !editor.hasDirty) {
     return;
   }
-  // A second Ctrl+Shift+S while the first run is in flight would write the same
-  // buffers twice.
   if (editor.dirtyTabs.some((tab) => tab.saving)) {
     return;
   }
@@ -853,7 +703,6 @@ async function saveAllTabs(): Promise<void> {
       continue;
     }
     if (report.outcome === "unsupported") {
-      // The encoding prompt names the tab and offers a UTF-8 save.
       continue;
     }
     message.error(saveFailureText(report.tab));
@@ -863,7 +712,6 @@ async function saveAllTabs(): Promise<void> {
   }
 }
 
-/** downloadActive hands a large or binary tab's file to the browser. */
 async function downloadActive(): Promise<void> {
   const tab = activeTab.value;
   if (!tab) {
@@ -874,18 +722,15 @@ async function downloadActive(): Promise<void> {
   });
 }
 
-/** directoryOf returns the parent path of a root-relative path. */
 function directoryOf(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash === -1 ? "" : path.slice(0, slash);
 }
 
-/** toggleWrap flips the wrap preference. */
 function toggleWrap(): void {
   editorSettings.update({ wrap: !editorSettings.settings.wrap });
 }
 
-/** pickLanguage overrides the active tab's grammar without touching history. */
 function pickLanguage(language: EditorLanguageId): void {
   const tab = activeTab.value;
   if (tab) {
@@ -893,10 +738,6 @@ function pickLanguage(language: EditorLanguageId): void {
   }
 }
 
-/**
- * pickEol switches the active tab's line ending. The buffer text is untouched;
- * the tab turns dirty and the next save writes the new terminators.
- */
 function pickEol(eol: EditorEol): void {
   const tab = activeTab.value;
   if (tab) {
@@ -904,18 +745,15 @@ function pickEol(eol: EditorEol): void {
   }
 }
 
-/** pickTabSize applies the indentation width to every open editor. */
 function pickTabSize(size: number): void {
   editorSettings.update({ tabSize: size as EditorSettings["tabSize"] });
 }
 
-/** encodingWarningTab is the open tab the unsupported-characters prompt names. */
 const encodingWarningTab = computed<EditorTab | null>(
   () =>
     editor.tabs.find((tab) => tab.id === editor.encodingWarning?.tabId) ?? null,
 );
 
-/** dialogOpen is true while any editor dialog owns the keyboard. */
 const dialogOpen = computed<boolean>(
   () =>
     shortcutsOpen.value ||
@@ -927,8 +765,6 @@ const dialogOpen = computed<boolean>(
     editor.encodingWarning !== null,
 );
 
-// Capture the trigger before a dialog steals focus, and give it back after the
-// last one closes. NModal traps focus while open; this covers the return leg.
 watch(dialogOpen, (open, wasOpen) => {
   if (open && !wasOpen) {
     const active = document.activeElement;
@@ -947,12 +783,6 @@ watch(dialogOpen, (open, wasOpen) => {
   }
 });
 
-/**
- * pickEncoding changes the active tab's save charset. A clean tab is re-saved
- * immediately so the file itself moves to the new encoding (an unmodified
- * legacy file must not keep its old bytes under a new label); a dirty tab
- * applies it on the next save.
- */
 async function pickEncoding(encoding: EditorEncoding): Promise<void> {
   const tab = activeTab.value;
   if (!tab || tab.kind !== "file" || !files.canWrite) {
@@ -979,11 +809,8 @@ async function pickEncoding(encoding: EditorEncoding): Promise<void> {
   } else if (outcome === "error") {
     message.error(saveFailureText(tab));
   }
-  // "conflict"/"unsupported" arm their own prompts; the store has already
-  // reverted the label to the charset on disk when the re-save did not land.
 }
 
-/** useUtf8AndSave retries the blocked save as UTF-8, keeping the characters. */
 async function useUtf8AndSave(): Promise<void> {
   const warning = editor.encodingWarning;
   const tab = encodingWarningTab.value;
@@ -1000,17 +827,14 @@ async function useUtf8AndSave(): Promise<void> {
   }
 }
 
-/** resetWindowPosition returns the window to its pinned default position. */
 function resetWindowPosition(): void {
   editorWindow.resetPosition();
 }
 
-/** onWindowResize records the viewport for display-only fitting. */
 function onWindowResize(): void {
   viewport.value = { width: window.innerWidth, height: window.innerHeight };
 }
 
-/** onWindowDrag applies a title-bar drag, clamped by the store. */
 function onWindowDrag(x: number, y: number): void {
   editorWindow.setPosition(
     x,
@@ -1020,12 +844,10 @@ function onWindowDrag(x: number, y: number): void {
   );
 }
 
-/** onWindowResize applies a grip resize; the store keeps the opposite edge. */
 function onWindowResizeMove(box: WindowBox): void {
   editorWindow.resizeTo(box, viewport.value.width, viewport.value.height);
 }
 
-/** onWindowResizeBy applies one keyboard resize step from the slider. */
 function onWindowResizeBy(deltaWidth: number, deltaHeight: number): void {
   editorWindow.resizeBy(
     deltaWidth,
@@ -1035,7 +857,6 @@ function onWindowResizeBy(deltaWidth: number, deltaHeight: number): void {
   );
 }
 
-/** minimizeWindow collapses the window into the rail icon and moves focus there. */
 function minimizeWindow(): void {
   editorWindow.setMinimized(true);
   void nextTick(() => {
@@ -1043,11 +864,6 @@ function minimizeWindow(): void {
   });
 }
 
-/**
- * onWindowEsc closes only the topmost surface. A dialog, popover, menu or the
- * find bar owns Escape while it is open, so the window must never collapse
- * underneath it.
- */
 function onWindowEsc(event: KeyboardEvent): void {
   if (event.defaultPrevented) {
     return;
@@ -1059,14 +875,9 @@ function onWindowEsc(event: KeyboardEvent): void {
   if (dialogOpen.value) {
     return;
   }
-  // A teleported follower (settings popover, select menu) or the CodeMirror
-  // autocomplete tooltip is not tracked by dialogOpen; while one is mounted it
-  // consumes Escape itself.
   if (document.querySelector(".n-popover, .n-dropdown, .cm-tooltip") !== null) {
     return;
   }
-  // The find bar and go-to-line popover are surfaces too: Escape closes the one
-  // on screen before the window itself collapses.
   if (findOpen.value) {
     closeFind();
     return;
@@ -1078,15 +889,10 @@ function onWindowEsc(event: KeyboardEvent): void {
   minimizeWindow();
 }
 
-/** restoreWindow reopens the window and returns focus to the active tab. */
 function restoreWindow(): void {
   editorWindow.setMinimized(false);
-  // The persisted position is kept (clamped to the viewport on resize), so
-  // the window reappears where the user left it. Focusing happens in the
-  // minimized watcher below, so the rail icon's restore click shares it.
 }
 
-/** focusRestoredWindow lands focus back on the active tab after a restore. */
 function focusRestoredWindow(): void {
   const tab = document.getElementById(`ed-tab-${editor.activeId}`);
   if (tab) {
@@ -1094,15 +900,11 @@ function focusRestoredWindow(): void {
   } else {
     sessions.get(editor.activeId)?.focus();
   }
-  // The window was display:none while collapsed; re-measure the live host.
   sessions.get(editor.activeId)?.requestMeasure();
   mergeSessions.get(editor.activeId)?.requestMeasure();
   revealActiveTab();
 }
 
-// Any restore (the title-bar control, the rail icon, or opening a file while
-// collapsed) returns focus to the active tab and re-measures the live host,
-// which was display:none while the window was collapsed.
 watch(
   () => editorWindow.minimized,
   (next, prev) => {
@@ -1112,7 +914,6 @@ watch(
   },
 );
 
-/** focusTab activates one tab and moves DOM focus onto its tab button. */
 function focusTab(index: number): void {
   const tab = editor.tabs[index];
   if (!tab) {
@@ -1124,7 +925,6 @@ function focusTab(index: number): void {
   });
 }
 
-/** revealActiveTab scrolls the tab strip so the active tab stays in view. */
 function revealActiveTab(): void {
   const strip = tabsElement.value;
   const id = editor.activeId;
@@ -1143,7 +943,6 @@ function revealActiveTab(): void {
   );
 }
 
-/** cycleTab moves the active tab by one position (Ctrl+Tab / Ctrl+Shift+Tab). */
 function cycleTab(delta: number): void {
   const count = editor.tabs.length;
   if (count < 2) {
@@ -1153,7 +952,6 @@ function cycleTab(delta: number): void {
   editor.activate(editor.tabs[(index + delta + count) % count]!.id);
 }
 
-/** openTabMenu opens the tab context menu at the pointer. */
 function openTabMenu(event: MouseEvent, id: string): void {
   tabMenuId.value = id;
   tabMenuX.value = event.clientX;
@@ -1161,14 +959,12 @@ function openTabMenu(event: MouseEvent, id: string): void {
   tabMenuOpen.value = true;
 }
 
-/** onTabMouseDown cancels the browser's middle-click autoscroll. */
 function onTabMouseDown(event: MouseEvent): void {
   if (event.button === 1) {
     event.preventDefault();
   }
 }
 
-/** onTabAuxClick closes a tab on a middle click. */
 function onTabAuxClick(event: MouseEvent, id: string): void {
   if (event.button !== 1) {
     return;
@@ -1177,7 +973,6 @@ function onTabAuxClick(event: MouseEvent, id: string): void {
   requestCloseTabs([id]);
 }
 
-/** onTabMenuSelect runs one context-menu command on the targeted tab. */
 function onTabMenuSelect(key: string): void {
   tabMenuOpen.value = false;
   const id = tabMenuId.value;
@@ -1196,14 +991,7 @@ function onTabMenuSelect(key: string): void {
   );
 }
 
-/**
- * requestCloseTabs closes the given tabs after a prompt when any of them is
- * dirty. Nothing is skipped silently: a mixed selection prompts for the dirty
- * ones and closes the rest with them once a choice is made.
- */
 function requestCloseTabs(ids: string[], keepId = ""): void {
-  // One prompt at a time: a second close request (Alt+W, middle click, menu)
-  // must not retarget the dialog the user is already answering.
   if (pendingClose.value !== null || closeSaving.value) {
     return;
   }
@@ -1219,7 +1007,6 @@ function requestCloseTabs(ids: string[], keepId = ""): void {
   settleClose(closing.map((tab) => tab.id));
 }
 
-/** settleClose closes ids and keeps a scoped close's target active. */
 function settleClose(ids: string[]): void {
   const keep = pendingKeepId.value;
   editor.closeMany(ids);
@@ -1229,20 +1016,16 @@ function settleClose(ids: string[]): void {
   pendingKeepId.value = "";
 }
 
-/** cancelClose abandons the close prompt and keeps every tab. */
 function cancelClose(): void {
   pendingClose.value = null;
   pendingKeepId.value = "";
 }
 
-/** saveAndClose saves the pending dirty tabs, then closes what saved. */
 async function saveAndClose(): Promise<void> {
   const ids = pendingClose.value ?? [];
   if (ids.length === 0 || closeSaving.value) {
     return;
   }
-  // A tab already writing would be skipped by saveAll and then closed with its
-  // in-flight (or newly typed) text unsaved.
   if (editor.tabs.some((tab) => ids.includes(tab.id) && tab.saving)) {
     return;
   }
@@ -1252,9 +1035,6 @@ async function saveAndClose(): Promise<void> {
     const failed = new Set<string>();
     for (const report of reports) {
       if (report.outcome === "saved") {
-        // A save writes the text it was handed; edits typed while it was in
-        // flight keep the tab dirty, so it must stay open instead of being
-        // closed as if everything was persisted.
         if (!editor.isDirty(report.tab)) {
           continue;
         }
@@ -1269,12 +1049,10 @@ async function saveAndClose(): Promise<void> {
         continue;
       }
       if (report.outcome === "unsupported") {
-        // Keep the tab open; the encoding prompt offers a UTF-8 save.
         continue;
       }
       message.error(saveFailureText(report.tab));
     }
-    // A failed tab stays open and dirty; everything else still closes.
     settleClose(ids.filter((id) => !failed.has(id)));
     pendingClose.value = null;
   } finally {
@@ -1282,14 +1060,12 @@ async function saveAndClose(): Promise<void> {
   }
 }
 
-/** discardAndClose drops the pending buffers and closes their tabs. */
 function discardAndClose(): void {
   const ids = pendingClose.value ?? [];
   pendingClose.value = null;
   settleClose(ids);
 }
 
-/** onEditorKeydown handles the editor-wide tab shortcuts. */
 function onEditorKeydown(event: KeyboardEvent): void {
   if (
     event.defaultPrevented ||
@@ -1301,7 +1077,6 @@ function onEditorKeydown(event: KeyboardEvent): void {
   ) {
     return;
   }
-  // A modal (conflict, save-as, discard) owns the keyboard while it is open.
   if (event.target instanceof Element && event.target.closest(".n-modal")) {
     return;
   }
@@ -1319,12 +1094,10 @@ function onEditorKeydown(event: KeyboardEvent): void {
   }
 }
 
-/** focusCloseButton returns focus to the title-bar Close control. */
 function focusCloseButton(): void {
   document.querySelector<HTMLElement>(".ed-window-close")?.focus();
 }
 
-/** returnFocusToBrowser moves focus off a closing window back to the browser. */
 function returnFocusToBrowser(): void {
   const target =
     document.querySelector<HTMLElement>(".fm-search input") ??
@@ -1332,17 +1105,11 @@ function returnFocusToBrowser(): void {
   target?.focus();
 }
 
-/** closeAllAndReturnFocus closes every tab and lands focus back on the page. */
 function closeAllAndReturnFocus(): void {
   editor.closeAll();
   void nextTick(() => returnFocusToBrowser());
 }
 
-/**
- * closeAllTabs closes the whole editor. When any buffer is dirty it asks first
- * (the dialog lists the unsaved files); with nothing dirty it closes at once,
- * with no dialog.
- */
 function closeAllTabs(): void {
   if (editor.hasDirty) {
     closeAllOpen.value = true;
@@ -1351,19 +1118,16 @@ function closeAllTabs(): void {
   closeAllAndReturnFocus();
 }
 
-/** confirmCloseAll discards the dirty buffers and closes every tab. */
 function confirmCloseAll(): void {
   closeAllOpen.value = false;
   closeAllAndReturnFocus();
 }
 
-/** cancelCloseAll keeps the buffers and returns focus to the Close control. */
 function cancelCloseAll(): void {
   closeAllOpen.value = false;
   void nextTick(() => focusCloseButton());
 }
 
-/** onTabKeydown implements the tablist roving focus (Left/Right/Home/End). */
 function onTabKeydown(event: KeyboardEvent, index: number): void {
   const count = editor.tabs.length;
   if (count === 0) {
@@ -1382,20 +1146,16 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
     event.preventDefault();
     focusTab(count - 1);
   } else if (event.key === "Delete") {
-    // The inline × is presentational (a tablist may only own tabs); Delete on a
-    // focused tab is the keyboard path, next to the Alt+W binding.
     event.preventDefault();
     requestCloseTabs([editor.tabs[index]!.id]);
   }
 }
 
-/** onBeforeUnload guards a reload/close while a document is dirty. */
 function onBeforeUnload(event: BeforeUnloadEvent): void {
   if (!editor.hasDirty) {
     return;
   }
   event.preventDefault();
-  // Older browsers need returnValue set to show the confirmation.
   event.returnValue = "";
 }
 
@@ -1423,9 +1183,6 @@ onBeforeUnmount(() => {
   mergeSessions.clear();
   mergeHosts.clear();
   mergeSources.clear();
-  // An implicit unmount must never drop a dirty buffer (logout and session
-  // changes reset the stores explicitly): reset only when nothing is dirty.
-  // The store outlives the component, so a remount restores the tabs.
   if (!editor.hasDirty) {
     editor.reset();
   }
@@ -1540,10 +1297,6 @@ onBeforeUnmount(() => {
               <span v-if="editor.isDirty(tab)" class="ed-dot" aria-hidden="true" />
               {{ tab.name }}
             </button>
-            <!-- A tablist may only own tabs, so the inline close is
-                 presentational: keyboard users close the focused tab with
-                 Delete (or Alt+W anywhere in the editor), and the mouse keeps
-                 the inline affordance. -->
             <span
               class="ed-tab-close"
               role="presentation"
@@ -1557,10 +1310,6 @@ onBeforeUnmount(() => {
 
         <div v-if="activeTab" class="ed-body">
           <div v-if="activeTab.status === 'ready' && activeTab.kind === 'file'" class="ed-toolbar">
-            <!-- AppTooltip (JUS-156) keeps every action named when the narrow
-                 layout hides the visible labels (icon-only below 320px of
-                 editor column). Its copy is the aria-label, so a visible label
-                 and its tooltip never disagree. -->
             <AppTooltip :label="t('files.editor.wrap')">
               <NButton
                 size="tiny"
@@ -1685,8 +1434,6 @@ onBeforeUnmount(() => {
             </AppTooltip>
           </div>
 
-          <!-- A file over the editor ceiling opens as a read-only tail: say so
-               and keep the download one click away. -->
           <div v-if="activeTab.truncated" class="ed-truncated">
             <NAlert type="warning" :bordered="false">
               <div class="ed-truncated-body">
@@ -1700,8 +1447,6 @@ onBeforeUnmount(() => {
             </NAlert>
           </div>
 
-          <!-- Custom find/replace bar (JUS-231): in flow above the content, so
-               the status bar keeps its place and the editor shrinks instead. -->
           <EditorSearchBar
             :show="findOpen && activeTab.status === 'ready'"
             :expanded="replaceExpanded"
@@ -1738,8 +1483,6 @@ onBeforeUnmount(() => {
               @close="closeGotoLine"
             />
 
-            <!-- One host per ready tab, kept mounted across a status switch (a
-                 loading/large/binary/error tab must not detach a live session). -->
             <div
               v-for="tab in readyTabs"
               :key="tab.id"
@@ -1751,7 +1494,6 @@ onBeforeUnmount(() => {
               :aria-labelledby="'ed-tab-' + tab.id"
             />
 
-            <!-- History diffs are read-only MergeViews, one host per ready diff tab. -->
             <div
               v-for="tab in readyDiffTabs"
               :key="tab.id"
@@ -1973,9 +1715,6 @@ onBeforeUnmount(() => {
   width: min(1331px, calc(100vw - var(--space-6) * 2));
   height: min(936px, calc(100vh - var(--ed-window-chrome, 104px)));
   height: min(936px, calc(100dvh - var(--ed-window-chrome, 104px)));
-  /* The minimum yields to narrow viewports so the window always fits with
-     its side margins; the maximum caps the inline size to the same margins
-     (the inline style owns the real value, the caps only trim overflow). */
   min-width: min(480px, calc(100vw - var(--space-6) * 2));
   min-height: min(320px, calc(100vh - var(--space-6) * 2));
   max-width: calc(100vw - var(--space-6) * 2);
@@ -2005,17 +1744,12 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* The editor column keeps the tab strip, toolbar, pane and footer while the
-   explorer panel sits beside it; min-width:0 lets the pane shrink instead of
-   pushing the sidebar off the window. */
 .ed-right {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  /* The toolbar adapts to the editor column, not the viewport: a container
-     query hides its labels once the column can no longer fit them (JUS-286). */
   container-type: inline-size;
   container-name: editor;
 }
@@ -2037,8 +1771,6 @@ onBeforeUnmount(() => {
   padding: 0 var(--space-3) var(--space-3);
 }
 
-/* The panes share one positioned box so the go-to-line popover can sit above
-   the active editor without entering the flex flow. */
 .ed-panes {
   position: relative;
   display: flex;
@@ -2047,8 +1779,6 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* A loading/large/binary/error tab owns the content area; the ready hosts stay
-   mounted but must not split the space with its state panel. */
 .ed-panes.is-hidden {
   display: none;
 }
@@ -2117,8 +1847,6 @@ onBeforeUnmount(() => {
   padding: var(--space-2) 0;
 }
 
-/* The save pair stays together and rides the right edge of whichever row it
-   lands on; at narrow widths it is the first group to wrap. */
 .ed-toolbar-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2132,9 +1860,6 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
-/* Below this editor-column width even one labelled action no longer fits on a
-   row. Drop the visible labels (the aria-label keeps every name) and let the
-   icon buttons wrap: every action stays on screen and unclipped. */
 @container editor (max-width: 320px) {
   .ed-toolbar :deep(.n-button__content) {
     display: none;
@@ -2169,7 +1894,6 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
-/* The merge view stacks its two panes; both must fill the tab host. */
 .ed-diff-host :deep(.cm-mergeView),
 .ed-diff-host :deep(.cm-mergeViewEditors) {
   height: 100%;

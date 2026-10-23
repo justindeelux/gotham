@@ -14,12 +14,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// The real-container exec tests below are the required regression for JUS-244:
-// closing the hijacked attach connection alone does not end a Docker exec, so
-// every path must end the shell and its jobs through the explicit kill helper.
-// They use a unique throwaway container and never touch the shared dev
-// containers.
-
 var killTableCases = []struct {
 	name   string
 	input  string
@@ -31,14 +25,10 @@ var killTableCases = []struct {
 	{"plain-background", "sleep 7104 &\n", ""},
 	{"setsid-background", "(setsid sleep 7105 &); sleep 7106\n", ""},
 	{"nested-background", "( (sleep 7107 &) & ); sleep 7108\n", ""},
-	// A newline in the shell's comm used to truncate /proc/<pid>/stat on the
-	// first line; the child scrubs its environment so only the parent chain can
-	// find it.
 	{"comm-newline-env-scrubbed", "printf 'a\nb' > /proc/self/comm; env -i sleep 7701 &\n", "sleep 7701"},
 	{"shell-exit-before-close", "exit 0\n", ""},
 }
 
-// e2eContainerClient returns a Docker client, skipping unless GOTHAM_E2E=1.
 func e2eContainerClient(t *testing.T) *DockerClient {
 	t.Helper()
 	if os.Getenv("GOTHAM_E2E") != "1" {
@@ -56,13 +46,10 @@ func e2eContainerClient(t *testing.T) *DockerClient {
 	return client
 }
 
-// e2eContainer starts a unique throwaway alpine:3 container.
 func e2eContainer(t *testing.T, client *DockerClient) string {
 	return e2eContainerImage(t, client, "alpine:3")
 }
 
-// e2eContainerImage starts a unique throwaway container of image and removes it
-// at the end of the test.
 func e2eContainerImage(t *testing.T, client *DockerClient, image string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -89,15 +76,11 @@ func e2eContainerImage(t *testing.T, client *DockerClient, image string) string 
 	return id
 }
 
-// runContainerCommand runs one non-interactive command in the container and
-// returns its output.
 func runContainerCommand(t *testing.T, client *DockerClient, containerID, command string) string {
 	t.Helper()
 	return runContainerCommandArgs(t, client, containerID, command)
 }
 
-// runContainerCommandArgs is runContainerCommand with positional arguments for
-// the script (kept out of the script text so a scan never matches itself).
 func runContainerCommandArgs(t *testing.T, client *DockerClient, containerID, command string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -115,8 +98,6 @@ func runContainerCommandArgs(t *testing.T, client *DockerClient, containerID, co
 	return string(output)
 }
 
-// cmdlineScanScript lists pids whose command line contains $1. The scan shell
-// is skipped by its gotham-scan argv[0].
 const cmdlineScanScript = `exec 2>/dev/null
 for d in /proc/[0-9]*; do
   [ -r "$d/cmdline" ] || continue
@@ -127,13 +108,11 @@ for d in /proc/[0-9]*; do
   esac
 done`
 
-// cmdlineLeaks returns the /proc entries whose command line contains needle.
 func cmdlineLeaks(t *testing.T, client *DockerClient, containerID, needle string) string {
 	t.Helper()
 	return strings.TrimSpace(runContainerCommandArgs(t, client, containerID, cmdlineScanScript, needle))
 }
 
-// waitNoCmdline polls until no process's command line contains needle.
 func waitNoCmdline(t *testing.T, client *DockerClient, containerID, needle string) {
 	t.Helper()
 	const timeout = 10 * time.Second
@@ -149,9 +128,6 @@ func waitNoCmdline(t *testing.T, client *DockerClient, containerID, needle strin
 	t.Fatalf("process %q still running inside the container:\n%s", needle, last)
 }
 
-// markerScanScript lists pids carrying the terminal's unique environment
-// marker. It is a scan from outside the terminal exec (a fresh Exec), using
-// /proc and tr/grep rather than the kill helper.
 const markerScanScript = `exec 2>/dev/null
 for d in /proc/[0-9]*; do
   [ -r "$d/environ" ] || continue
@@ -160,13 +136,11 @@ for d in /proc/[0-9]*; do
   fi
 done`
 
-// terminalMarkerLeaks returns the /proc entries still carrying marker.
 func terminalMarkerLeaks(t *testing.T, client *DockerClient, containerID, marker string) string {
 	t.Helper()
 	return strings.TrimSpace(runContainerCommandArgs(t, client, containerID, markerScanScript, marker))
 }
 
-// waitNoMarker polls until no process carries the terminal marker.
 func waitNoMarker(t *testing.T, client *DockerClient, containerID, marker string) {
 	t.Helper()
 	const timeout = 10 * time.Second
@@ -182,7 +156,6 @@ func waitNoMarker(t *testing.T, client *DockerClient, containerID, marker string
 	t.Fatalf("terminal marker %s still present in:\n%s", marker, last)
 }
 
-// pidGone reports whether the pid no longer exists inside the container.
 func pidGone(t *testing.T, client *DockerClient, containerID string, pid int) bool {
 	t.Helper()
 	output := runContainerCommand(t, client, containerID,
@@ -190,7 +163,6 @@ func pidGone(t *testing.T, client *DockerClient, containerID string, pid int) bo
 	return strings.Contains(output, "gone")
 }
 
-// containerRunning reports the container's Docker state.
 func containerRunning(t *testing.T, client *DockerClient, containerID string) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -246,9 +218,6 @@ func TestDockerExecRealKillTable(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealCleanupFailureIsSurfaced removes the helper's /bin/sh after
-// the terminal is open. Close must return an error and must not pretend the exec
-// is gone; the container is removed by cleanup.
 func TestDockerExecRealCleanupFailureIsSurfaced(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
@@ -275,9 +244,6 @@ func TestDockerExecRealCleanupFailureIsSurfaced(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealCloseKillsShellAndJob is the finding-1 regression: close a
-// terminal while a foreground job runs and prove neither the shell nor the job
-// survives, while the application container keeps running.
 func TestDockerExecRealCloseKillsShellAndJob(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
@@ -310,8 +276,6 @@ func TestDockerExecRealCloseKillsShellAndJob(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealOpenCloseCyclesLeakNothing opens and closes several
-// terminals, each running a job, and proves no shell or job accumulates.
 func TestDockerExecRealOpenCloseCyclesLeakNothing(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
@@ -356,10 +320,6 @@ func TestDockerExecRealOpenCloseCyclesLeakNothing(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealMarkerScanUnavailableWithoutTools is the round-3 finding-1
-// repro: a minimal image without tr/grep cannot inspect markers. Close must
-// report the incomplete cleanup instead of returning success while an orphaned
-// loop survives.
 func TestDockerExecRealMarkerScanUnavailableWithoutTools(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
@@ -369,8 +329,6 @@ func TestDockerExecRealMarkerScanUnavailableWithoutTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
 	}
-	// Remove the marker tools, then leave an orphan that ignores HUP and exit
-	// the shell so Close takes the marker-only path.
 	if _, err := session.Write([]byte("rm -f /usr/bin/tr /bin/tr /bin/grep /usr/bin/grep; (trap '' HUP; while :; do :; done) & exit 0\n")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -381,10 +339,6 @@ func TestDockerExecRealMarkerScanUnavailableWithoutTools(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealPreExistingSameUIDNonDumpable is round-5 finding 2: a
-// same-uid non-dumpable process started BEFORE the terminal (a worker that
-// dropped privileges, like nginx/php-fpm) is not attributable and must not fail
-// the close. The terminal's own job is still killed.
 func TestDockerExecRealPreExistingSameUIDNonDumpable(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainerImage(t, client, "debian:bookworm-slim")
@@ -395,8 +349,6 @@ func TestDockerExecRealPreExistingSameUIDNonDumpable(t *testing.T) {
 		t.Fatalf("Exec(root): %v", err)
 	}
 	defer func() { _ = rootSession.Close() }()
-	// Drop to nobody without exec: the process becomes non-dumpable while its
-	// owner is the same uid as the later nobody terminal.
 	preExisting := "perl -e '$<=65534; $>=65534; $)=65534; q{GOTHAM-PRE-EXISTING}; sleep 60' &\n"
 	if _, err := rootSession.Write([]byte(preExisting)); err != nil {
 		t.Fatalf("write pre-existing worker: %v", err)
@@ -428,10 +380,6 @@ func TestDockerExecRealPreExistingSameUIDNonDumpable(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealInTreeNonDumpableDescendant covers the positive side: a
-// non-dumpable process STARTED FROM the terminal is in the tree/session, so it
-// is attributed through readable /proc/<pid>/stat and killed even though its
-// environ cannot be read.
 func TestDockerExecRealInTreeNonDumpableDescendant(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainerImage(t, client, "debian:bookworm-slim")
@@ -459,10 +407,6 @@ func TestDockerExecRealInTreeNonDumpableDescendant(t *testing.T) {
 	}
 }
 
-// TestDockerExecRealNonRootCloseWithRootProcess is the round-4/5 false-positive
-// regression: a non-root (name or numeric uid) terminal sharing the container
-// with a root-owned process must Close successfully; foreign-uid unreadable
-// environ is not our marker space and must not fail the cleanup.
 func TestDockerExecRealNonRootCloseWithRootProcess(t *testing.T) {
 	client := e2eContainerClient(t)
 	cases := []struct {
@@ -517,15 +461,11 @@ func TestDockerExecRealNonRootCloseWithRootProcess(t *testing.T) {
 	}
 }
 
-// writeInput is a small helper for a direct Docker exec session.
 func writeInput(session ExecSession, input string) error {
 	_, err := session.Write([]byte(input))
 	return err
 }
 
-// TestDockerExecRealNonRootManyForeignProcesses is round-5 finding 1: a nobody
-// helper must not spend the retry sleep on every foreign-uid process. 120 root
-// sleeps are present; Close must finish well inside execKillTimeout (8 s).
 func TestDockerExecRealNonRootManyForeignProcesses(t *testing.T) {
 	client := e2eContainerClient(t)
 	for _, image := range []string{"alpine:3", "debian:bookworm-slim"} {
@@ -577,9 +517,6 @@ func TestDockerExecRealNonRootManyForeignProcesses(t *testing.T) {
 	}
 }
 
-// TestDockerClientExecRealHelperOutputIsClean is the round-3 finding-4 regression:
-// processes exiting during the scan must not print redirection errors into the
-// helper output.
 func TestDockerClientExecRealHelperOutputIsClean(t *testing.T) {
 	client := e2eContainerClient(t)
 	for _, image := range []string{"alpine:3", "debian:bookworm-slim"} {

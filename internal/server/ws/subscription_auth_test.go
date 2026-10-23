@@ -14,8 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// subjectVerifier accepts one token and reports a fixed account subject, so the
-// handler can resolve the authenticated user.
 type subjectVerifier struct {
 	token  string
 	userID uuid.UUID
@@ -31,8 +29,6 @@ func (s subjectVerifier) VerifyAccessToken(token string) (*auth.Claims, error) {
 	}, nil
 }
 
-// newAuthorizedTestServer builds the WS endpoint for one user with a
-// subscription authorizer.
 func newAuthorizedTestServer(t *testing.T, hub *Hub, userID uuid.UUID, authorize SubscriptionAuthorizer) *httptest.Server {
 	t.Helper()
 	handler := NewHandler(hub, subjectVerifier{token: testToken, userID: userID}, nil, authorize)
@@ -41,9 +37,6 @@ func newAuthorizedTestServer(t *testing.T, hub *Hub, userID uuid.UUID, authorize
 	return server
 }
 
-// expectNoMessage asserts that no frame arrives within a short window. It is
-// used only on a connection that is discarded afterwards: an expired read
-// deadline leaves the websocket unusable.
 func expectNoMessage(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
 	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
@@ -55,11 +48,6 @@ func expectNoMessage(t *testing.T, conn *websocket.Conn) {
 	}
 }
 
-// TestLogSubscriptionRequiresTeamMembership is the fix-round-2 C regression: a
-// logs:{serverID}:{containerID} subscription only joins the room when the
-// authorizer accepts the node's team for the caller (read). Both the
-// preselected query subscription and the frame-based one are checked, and a
-// denied client never receives that node's logs.
 func TestLogSubscriptionRequiresTeamMembership(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -78,7 +66,6 @@ func TestLogSubscriptionRequiresTeamMembership(t *testing.T) {
 	}
 	channel := LogChannel(nodeID.String(), "abc")
 
-	// A member's preselected subscription succeeds and receives broadcasts.
 	memberServer := newAuthorizedTestServer(t, hub, member, authorize)
 	memberConn := dial(t, wsURL(memberServer, "?token="+testToken+"&server="+nodeID.String()+"&container=abc"))
 	if msg := receive(t, memberConn); msg.Type != TypeSubscribed || msg.Channel != channel {
@@ -88,14 +75,11 @@ func TestLogSubscriptionRequiresTeamMembership(t *testing.T) {
 	if msg := receive(t, memberConn); msg.Type != TypeLog || msg.Data != "hello" {
 		t.Fatalf("member broadcast = %+v, want the node's log frame", msg)
 	}
-	// A frame-based subscribe is accepted too.
 	_ = websocket.JSON.Send(memberConn, clientRequest{Subscribe: LogChannel(nodeID.String(), "other")})
 	if msg := receive(t, memberConn); msg.Type != TypeSubscribed {
 		t.Fatalf("member frame subscription = %+v, want a subscribed frame", msg)
 	}
 
-	// A non-member's preselected subscription is denied and never joins the
-	// room: a broadcast on that channel does not reach the connection.
 	outsiderServer := newAuthorizedTestServer(t, hub, outsider, authorize)
 	deniedConn := dial(t, wsURL(outsiderServer, "?token="+testToken+"&server="+nodeID.String()+"&container=abc"))
 	if msg := receive(t, deniedConn); msg.Type != TypeDenied || msg.Channel != channel {
@@ -104,7 +88,6 @@ func TestLogSubscriptionRequiresTeamMembership(t *testing.T) {
 	hub.Broadcast(channel, []byte(`{"type":"log","data":"secret"}`))
 	expectNoMessage(t, deniedConn)
 
-	// A frame-based subscribe from a non-member is denied as well.
 	frameConn := dial(t, wsURL(outsiderServer, "?token="+testToken))
 	_ = websocket.JSON.Send(frameConn, clientRequest{Subscribe: channel})
 	if msg := receive(t, frameConn); msg.Type != TypeDenied {

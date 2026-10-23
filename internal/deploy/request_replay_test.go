@@ -62,7 +62,6 @@ func TestReplayApplicationCanonicalSecretsAndMove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Restart with the same encryption key, canonical order and normalized defaults.
 	restarted := NewService(cfg)
 	defer restarted.Close()
 	input.Name = "image"
@@ -84,7 +83,6 @@ func TestReplayApplicationCanonicalSecretsAndMove(t *testing.T) {
 		t.Fatalf("config change: %v", err)
 	}
 	input.Env[0].Value = "secret:app-secret"
-	// Moving to another environment in the same team invalidates creation replay.
 	var projectID uuid.UUID
 	if err := st.DB.QueryRow(context.Background(), "SELECT project_id FROM environments WHERE id=$1", env).Scan(&projectID); err != nil {
 		t.Fatal(err)
@@ -99,7 +97,6 @@ func TestReplayApplicationCanonicalSecretsAndMove(t *testing.T) {
 	if _, err := restarted.CreateApplication(deployReplayContext(principal, team, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, requestreplay.ErrMissing) {
 		t.Fatalf("move: %v", err)
 	}
-	// Restore for fixture cleanup, then delete and prove no replacement.
 	if _, err := st.DB.Exec(context.Background(), "DELETE FROM applications WHERE id=$1", app.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -125,10 +122,8 @@ func TestReplayDeployCrashWindowsAndRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Persisted state models crashes before enqueue, after enqueue, during work and after terminal completion.
 			svc := NewService(Config{Store: st, Secret: testSecretKey, Logger: discardLogger()})
 			defer svc.Close()
-			// A changed current config must not change the manual-deploy fingerprint or run validation again.
 			if _, err := st.DB.Exec(context.Background(), "UPDATE applications SET image_ref='' WHERE id=$1", app.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -183,7 +178,6 @@ func TestReplayDeployPostcommitFailures(t *testing.T) {
 		}
 		svc := NewService(Config{Repository: repository, Secret: testSecretKey, Logger: discardLogger()})
 		defer svc.Close()
-		// A stopped, unbuffered queue deterministically rejects postcommit enqueue.
 		svc.startOnce.Do(func() {})
 		svc.queue = make(chan job)
 		svc.baseCancel()

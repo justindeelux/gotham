@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeRouteService is a scriptable ServiceService for the route tests.
 type fakeRouteService struct {
 	service   Service
 	deploy    Deploy
@@ -29,7 +28,6 @@ type fakeRouteService struct {
 	err error
 }
 
-// Create implements ServiceService.
 func (f *fakeRouteService) Create(context.Context, uuid.UUID, CreateRequest) (Service, error) {
 	if f.err != nil {
 		return Service{}, f.err
@@ -37,7 +35,6 @@ func (f *fakeRouteService) Create(context.Context, uuid.UUID, CreateRequest) (Se
 	return f.service, nil
 }
 
-// List implements ServiceService.
 func (f *fakeRouteService) List(context.Context, uuid.UUID, ServiceFilter) ([]Service, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -45,7 +42,6 @@ func (f *fakeRouteService) List(context.Context, uuid.UUID, ServiceFilter) ([]Se
 	return []Service{f.service}, nil
 }
 
-// Get implements ServiceService.
 func (f *fakeRouteService) Get(context.Context, uuid.UUID, uuid.UUID) (Service, error) {
 	if f.err != nil {
 		return Service{}, f.err
@@ -53,7 +49,6 @@ func (f *fakeRouteService) Get(context.Context, uuid.UUID, uuid.UUID) (Service, 
 	return f.service, nil
 }
 
-// Update implements ServiceService.
 func (f *fakeRouteService) Update(context.Context, uuid.UUID, uuid.UUID, UpdateRequest) (Service, error) {
 	if f.err != nil {
 		return Service{}, f.err
@@ -61,10 +56,8 @@ func (f *fakeRouteService) Update(context.Context, uuid.UUID, uuid.UUID, UpdateR
 	return f.service, nil
 }
 
-// Delete implements ServiceService.
 func (f *fakeRouteService) Delete(context.Context, uuid.UUID, uuid.UUID) error { return f.err }
 
-// Deploy implements ServiceService.
 func (f *fakeRouteService) Deploy(context.Context, uuid.UUID, uuid.UUID) (Service, Deploy, error) {
 	if f.err != nil {
 		return Service{}, Deploy{}, f.err
@@ -72,7 +65,6 @@ func (f *fakeRouteService) Deploy(context.Context, uuid.UUID, uuid.UUID) (Servic
 	return f.service, f.deploy, nil
 }
 
-// Stop implements ServiceService.
 func (f *fakeRouteService) Stop(context.Context, uuid.UUID, uuid.UUID) (Service, error) {
 	if f.err != nil {
 		return Service{}, f.err
@@ -80,7 +72,6 @@ func (f *fakeRouteService) Stop(context.Context, uuid.UUID, uuid.UUID) (Service,
 	return f.service, nil
 }
 
-// Restart implements ServiceService.
 func (f *fakeRouteService) Restart(context.Context, uuid.UUID, uuid.UUID) (Service, error) {
 	if f.err != nil {
 		return Service{}, f.err
@@ -88,7 +79,6 @@ func (f *fakeRouteService) Restart(context.Context, uuid.UUID, uuid.UUID) (Servi
 	return f.service, nil
 }
 
-// Containers implements ServiceService.
 func (f *fakeRouteService) Containers(context.Context, uuid.UUID, uuid.UUID) ([]ComposeContainer, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -96,7 +86,6 @@ func (f *fakeRouteService) Containers(context.Context, uuid.UUID, uuid.UUID) ([]
 	return f.items, nil
 }
 
-// Logs implements ServiceService.
 func (f *fakeRouteService) Logs(context.Context, uuid.UUID, uuid.UUID, string, int64, bool) (LogStream, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -109,7 +98,6 @@ func (f *fakeRouteService) Logs(context.Context, uuid.UUID, uuid.UUID, string, i
 	return &fakeLogStream{chunks: chunks, streamErr: f.streamErr}, nil
 }
 
-// Deploys implements ServiceService.
 func (f *fakeRouteService) Deploys(context.Context, uuid.UUID, uuid.UUID) ([]Deploy, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -117,11 +105,8 @@ func (f *fakeRouteService) Deploys(context.Context, uuid.UUID, uuid.UUID) ([]Dep
 	return f.deploys, nil
 }
 
-// Compile-time guarantee.
 var _ ServiceService = (*fakeRouteService)(nil)
 
-// routeTestServer mounts the routes for one fake service behind an optional
-// authenticated user.
 func routeTestServer(t *testing.T, svc ServiceService, userID uuid.UUID) http.Handler {
 	t.Helper()
 	router := chi.NewRouter()
@@ -136,7 +121,6 @@ func routeTestServer(t *testing.T, svc ServiceService, userID uuid.UUID) http.Ha
 	return router
 }
 
-// sampleService is one live service row for the fake.
 func sampleService() Service {
 	return Service{
 		ID:            uuid.New(),
@@ -152,8 +136,6 @@ func sampleService() Service {
 	}
 }
 
-// TestRoutesCreateAndRead proves the CRUD route surface answers with the
-// service envelope and its domain map.
 func TestRoutesCreateAndRead(t *testing.T) {
 	service := sampleService()
 	fake := &fakeRouteService{service: service}
@@ -204,9 +186,6 @@ func TestRoutesCreateAndRead(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateRejections pins F6: a missing server_id or environment_id
-// answers 400 with the required message (not the invalid-id text), and a
-// malformed UUID names its field.
 func TestRoutesCreateRejections(t *testing.T) {
 	service := sampleService()
 	newRouter := func() (http.Handler, *fakeRouteService) {
@@ -243,8 +222,6 @@ func TestRoutesCreateRejections(t *testing.T) {
 	}
 }
 
-// TestRoutesLifecycleAndLists proves deploy/stop/restart/delete plus the
-// deploy, container and log reads answer.
 func TestRoutesLifecycleAndLists(t *testing.T) {
 	service := sampleService()
 	fake := &fakeRouteService{
@@ -299,7 +276,6 @@ func TestRoutesLifecycleAndLists(t *testing.T) {
 	}
 }
 
-// TestRoutesErrorMapping proves service sentinels map to their HTTP statuses.
 func TestRoutesErrorMapping(t *testing.T) {
 	cases := map[string]int{
 		"not found":  http.StatusNotFound,
@@ -331,8 +307,6 @@ func TestRoutesErrorMapping(t *testing.T) {
 	}
 }
 
-// TestRoutesLogsFirstReadFailure proves a node that refuses the log stream is
-// answered with its error status instead of an empty 200.
 func TestRoutesLogsFirstReadFailure(t *testing.T) {
 	service := sampleService()
 	router := routeTestServer(t, &fakeRouteService{service: service, err: ErrAgentUnavailable}, service.UserID)
@@ -343,9 +317,6 @@ func TestRoutesLogsFirstReadFailure(t *testing.T) {
 	}
 }
 
-// TestRoutesLogsTerminalFailureKeepsBody proves a failure after the response
-// started still returns the output that was received (the status is already
-// sent and cannot be corrected).
 func TestRoutesLogsTerminalFailureKeepsBody(t *testing.T) {
 	service := sampleService()
 	fake := &fakeRouteService{
@@ -364,9 +335,6 @@ func TestRoutesLogsTerminalFailureKeepsBody(t *testing.T) {
 	}
 }
 
-// TestRoutesLogsTerminalErrorIsRedactedInLogs proves a terminal stream failure
-// is redacted in the handler's log line (the HTTP status is already sent, so
-// the log is where it surfaces) and that the received body is untouched.
 func TestRoutesLogsTerminalErrorIsRedactedInLogs(t *testing.T) {
 	secret := testEnv["PASSWORD"]
 	repo := newFakeRepository()
@@ -400,7 +368,6 @@ func TestRoutesLogsTerminalErrorIsRedactedInLogs(t *testing.T) {
 	}
 }
 
-// TestRoutesRequireAuth proves an unauthenticated caller gets 401.
 func TestRoutesRequireAuth(t *testing.T) {
 	service := sampleService()
 	router := routeTestServer(t, &fakeRouteService{service: service}, uuid.Nil)
@@ -411,8 +378,6 @@ func TestRoutesRequireAuth(t *testing.T) {
 	}
 }
 
-// TestMountDisabled proves a nil service and the feature flag both mount
-// nothing.
 func TestMountDisabled(t *testing.T) {
 	service := sampleService()
 	for name, build := range map[string]func() ServiceService{
@@ -433,8 +398,6 @@ func TestMountDisabled(t *testing.T) {
 	}
 }
 
-// TestDecodeBodyRejectsUnknownFields proves a typo in the create body is a 400
-// rather than a silently ignored field.
 func TestDecodeBodyRejectsUnknownFields(t *testing.T) {
 	service := sampleService()
 	router := routeTestServer(t, &fakeRouteService{service: service}, service.UserID)

@@ -8,22 +8,15 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// updateProfileRequest is the body of PATCH /me. display_name is raw so a
-// missing field (no change) stays distinguishable from an explicit null
-// (clear the name).
 type updateProfileRequest struct {
 	DisplayName json.RawMessage `json:"display_name"`
 }
 
-// changePasswordRequest is the body of POST /me/password. current_password is
-// required only when the account already has a password; the service decides.
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
 }
 
-// handleUpdateProfile replaces the account's display name (null or blank
-// clears it) and returns the updated account.
 func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -45,7 +38,6 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		displayName = name
 	} else {
-		// No display_name member: nothing to change, return the account.
 		user, err := s.auth.Me(r.Context(), userID)
 		if err != nil {
 			if errors.Is(err, auth.ErrUnauthorized) {
@@ -77,8 +69,6 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meResponse{User: user})
 }
 
-// handleChangePassword replaces the account's password, ends every other
-// session, and returns a fresh token pair for the caller.
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -95,8 +85,6 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrCurrentPasswordIncorrect):
-			// A wrong current password is a 400, never a 401: the web layer
-			// treats 401 as session expiry.
 			writeJSON(w, http.StatusBadRequest, apiError{Message: auth.ErrCurrentPasswordIncorrect.Error()})
 		case errors.Is(err, auth.ErrValidation):
 			writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})

@@ -16,21 +16,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxRequestBodyBytes bounds a provider request body.
-const maxRequestBodyBytes = 1 << 20 // 1 MiB
+const maxRequestBodyBytes = 1 << 20
 
-// UserIDFunc resolves the authenticated user from the request context. The
-// server passes its own RequireAuth accessor, so this package never imports the
-// HTTP server.
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// ControlPlaneURLSource resolves the effective instance control-plane base
-// URL ("" when unset). The server injects the instance service accessor, so
-// this package never imports the HTTP server either.
 type ControlPlaneURLSource func(ctx context.Context) string
 
-// providerResponse is the wire representation of a provider, without
-// credentials.
 type providerResponse struct {
 	ID        string    `json:"id"`
 	Provider  string    `json:"provider"`
@@ -41,12 +32,10 @@ type providerResponse struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// providerListEnvelope wraps the provider list.
 type providerListEnvelope struct {
 	Providers []providerResponse `json:"providers"`
 }
 
-// repoResponse is the wire representation of a repository.
 type repoResponse struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
@@ -58,17 +47,14 @@ type repoResponse struct {
 	HTMLURL       string `json:"html_url"`
 }
 
-// repoListEnvelope wraps the repository list.
 type repoListEnvelope struct {
 	Repos []repoResponse `json:"repos"`
 }
 
-// errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
 }
 
-// createProviderRequest is the body of POST /v1/providers.
 type createProviderRequest struct {
 	Provider     string `json:"provider"`
 	BaseURL      string `json:"base_url"`
@@ -78,22 +64,16 @@ type createProviderRequest struct {
 	Scopes       string `json:"scopes"`
 }
 
-// authorizeResponse is the body returned when an OAuth connection starts.
 type authorizeResponse struct {
 	URL   string `json:"url"`
 	State string `json:"state"`
 }
 
-// connectProviderRequest is the body of POST /v1/providers/{id}/connect.
 type connectProviderRequest struct {
 	Code  string `json:"code"`
 	State string `json:"state"`
 }
 
-// autoProvisionGitLabRequest is the body of
-// POST /v1/providers/gitlab/auto-provision: a one-time admin token creates
-// the GitLab OAuth application, and only the resulting client id/secret are
-// stored (sealed). The admin token is never stored, logged or returned.
 type autoProvisionGitLabRequest struct {
 	BaseURL     string `json:"base_url"`
 	AdminToken  string `json:"admin_token"`
@@ -102,27 +82,22 @@ type autoProvisionGitLabRequest struct {
 	Scopes      string `json:"scopes"`
 }
 
-// gitLabSetupInfoResponse answers GET /v1/providers/gitlab/setup-info: the
-// exact redirect URI and scopes for a manually created OAuth application.
 type gitLabSetupInfoResponse struct {
 	BaseURL     string `json:"base_url"`
 	RedirectURI string `json:"redirect_uri"`
 	Scopes      string `json:"scopes"`
 }
 
-// branchResponse is the wire representation of a repository branch.
 type branchResponse struct {
 	Name      string `json:"name"`
 	Commit    string `json:"commit"`
 	Protected bool   `json:"protected"`
 }
 
-// branchListEnvelope wraps the branch list.
 type branchListEnvelope struct {
 	Branches []branchResponse `json:"branches"`
 }
 
-// handler serves the provider routes for one ProviderService.
 type handler struct {
 	svc             ProviderService
 	userID          UserIDFunc
@@ -130,38 +105,16 @@ type handler struct {
 	controlPlaneURL ControlPlaneURLSource
 }
 
-// Mount registers the authenticated provider endpoints on r:
-//
-//	GET    /v1/providers
-//	POST   /v1/providers
-//	DELETE /v1/providers/{id}
-//	GET    /v1/providers/{id}/authorize
-//	POST   /v1/providers/{id}/connect
-//	GET    /v1/providers/{id}/repos
-//	GET    /v1/providers/{id}/branches?repo=<full-name>
-//	POST   /v1/providers/gitlab/auto-provision
-//	GET    /v1/providers/gitlab/setup-info
-//
-// auth wraps the group; the server passes its method-based resource scope
-// boundary (read for GET/HEAD, deploy for the create/connect mutations). A nil
-// svc is a no-op so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ProviderService) {
 	MountWithControlPlaneURL(r, auth, userID, svc, nil)
 }
 
-// MountWithControlPlaneURL registers the same endpoints as Mount, but the
-// redirect-host check compares against the instance control-plane URL host
-// when it is set (falling back to the request host). A nil source keeps
-// today's behavior.
 func MountWithControlPlaneURL(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ProviderService, src ControlPlaneURLSource) {
 	if svc == nil {
 		return
 	}
 	h := &handler{svc: svc, userID: userID, logger: slog.Default(), controlPlaneURL: src}
 
-	// The GitLab browser callback is public like a webhook delivery: the
-	// single-use OAuth state identifies the user and connection, so no
-	// session is needed (or usable) when the provider redirects back.
 	r.Get("/v1/providers/gitlab/callback", h.gitLabCallback)
 
 	r.Group(func(protected chi.Router) {
@@ -178,8 +131,6 @@ func MountWithControlPlaneURL(r chi.Router, auth func(http.Handler) http.Handler
 	})
 }
 
-// create serves POST /v1/providers: it stores a new, unconnected provider
-// connection from the caller's OAuth application.
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -206,8 +157,6 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, newProviderResponse(provider))
 }
 
-// authorize serves GET /v1/providers/{id}/authorize: it returns the provider
-// authorization URL and the state binding the browser to this connection.
 func (h *handler) authorize(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -226,8 +175,6 @@ func (h *handler) authorize(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, authorizeResponse{URL: url, State: state})
 }
 
-// connect serves POST /v1/providers/{id}/connect: it completes an OAuth
-// connection by redeeming the code and state for stored tokens.
 func (h *handler) connect(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -251,7 +198,6 @@ func (h *handler) connect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newProviderResponse(provider))
 }
 
-// list serves GET /v1/providers.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -271,7 +217,6 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, providerListEnvelope{Providers: response})
 }
 
-// listRepos serves GET /v1/providers/{id}/repos.
 func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -296,15 +241,10 @@ func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, repoListEnvelope{Repos: response})
 }
 
-// deleteEnvelope reports an idempotent delete.
 type deleteEnvelope struct {
 	Deleted bool `json:"deleted"`
 }
 
-// delete serves DELETE /v1/providers/{id}: it forgets the stored connection,
-// its credentials and its cached repositories. Deleting twice is a success.
-// A connection applications still deploy through is refused with 409 naming
-// them: delete those applications (or move them) first.
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -323,7 +263,6 @@ func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, deleteEnvelope{Deleted: true})
 }
 
-// listBranches serves GET /v1/providers/{id}/branches?repo=<full-name>.
 func (h *handler) listBranches(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -354,10 +293,6 @@ func (h *handler) listBranches(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, branchListEnvelope{Branches: response})
 }
 
-// gitLabAutoProvision serves POST /v1/providers/gitlab/auto-provision: it
-// creates the GitLab OAuth application from the one-time admin token and
-// stores the connection. The response never carries credentials. The redirect
-// URL must name this control plane's host.
 func (h *handler) gitLabAutoProvision(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -381,9 +316,6 @@ func (h *handler) gitLabAutoProvision(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, newProviderResponse(provider))
 }
 
-// gitLabSetupInfo serves GET /v1/providers/gitlab/setup-info: the exact
-// redirect URI and scopes for a manually created GitLab OAuth application.
-// The redirect URL must name this control plane's host.
 func (h *handler) gitLabSetupInfo(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.currentUser(w, r); !ok {
 		return
@@ -405,11 +337,6 @@ func (h *handler) gitLabSetupInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, gitLabSetupInfoResponse(info))
 }
 
-// gitLabCallback serves GET /v1/providers/gitlab/callback: the browser
-// landing of the GitLab OAuth flow. The single-use state identifies the user
-// and connection, so the endpoint needs no session. It completes the connect
-// and redirects to the SPA result page with a fixed result flag; failures
-// carry fixed reason codes, never provider detail.
 func (h *handler) gitLabCallback(w http.ResponseWriter, r *http.Request) {
 	name, err := h.svc.ConnectCallback(r.Context(),
 		strings.TrimSpace(r.URL.Query().Get("code")),
@@ -422,7 +349,6 @@ func (h *handler) gitLabCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/providers/callback?status=ok&provider="+url.QueryEscape(name), http.StatusFound)
 }
 
-// callbackReason maps a connect failure to a fixed result code for the SPA.
 func callbackReason(err error) string {
 	if errors.Is(err, ErrValidation) {
 		return "invalid"
@@ -430,9 +356,6 @@ func callbackReason(err error) string {
 	return "failed"
 }
 
-// redirectMatches reports whether redirectURL names this control plane: the
-// control-plane URL host when it is set, otherwise the host serving this
-// request (see redirectMatchesOrigin).
 func (h *handler) redirectMatches(r *http.Request, redirectURL string) bool {
 	if h.controlPlaneURL != nil {
 		if base := strings.TrimSpace(h.controlPlaneURL(r.Context())); base != "" {
@@ -448,11 +371,6 @@ func (h *handler) redirectMatches(r *http.Request, redirectURL string) bool {
 	return redirectMatchesOrigin(r, redirectURL)
 }
 
-// redirectMatchesOrigin reports whether redirectURL names the host serving
-// this request: the OAuth redirect must be the public control-plane callback,
-// so a value pointing anywhere else is rejected before anything is stored or
-// registered. Hosts compare without ports: the API and the public origin may
-// listen on different ones.
 func redirectMatchesOrigin(r *http.Request, redirectURL string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(redirectURL))
 	if err != nil || parsed.Hostname() == "" {
@@ -466,9 +384,6 @@ func redirectMatchesOrigin(r *http.Request, redirectURL string) bool {
 	return strings.EqualFold(parsed.Hostname(), host)
 }
 
-// inUseNames extracts the application names from an ErrInUse error for the
-// curated 409 body. It falls back to the full text when the shape is
-// unexpected, so the names are never silently dropped.
 func inUseNames(err error) string {
 	if names, ok := strings.CutPrefix(err.Error(), ErrInUse.Error()+": "); ok {
 		return names
@@ -476,8 +391,6 @@ func inUseNames(err error) string {
 	return err.Error()
 }
 
-// providerID parses the {id} path parameter, answering 400 when it is not a
-// UUID.
 func (h *handler) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	providerID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -487,8 +400,6 @@ func (h *handler) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID,
 	return providerID, true
 }
 
-// decodeJSON decodes a size-limited JSON body, rejecting unknown fields and
-// trailing input.
 func (h *handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	decoder := json.NewDecoder(r.Body)
@@ -504,7 +415,6 @@ func (h *handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bo
 	return true
 }
 
-// currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -518,7 +428,6 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID
 	return userID, true
 }
 
-// writeServiceError maps service sentinels to HTTP responses.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	var httpErr *httpError
 	switch {
@@ -543,7 +452,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// newProviderResponse maps a domain provider to its wire representation.
 func newProviderResponse(p Provider) providerResponse {
 	return providerResponse{
 		ID:        p.ID.String(),
@@ -556,7 +464,6 @@ func newProviderResponse(p Provider) providerResponse {
 	}
 }
 
-// newRepoResponse maps a domain repository to its wire representation.
 func newRepoResponse(repo Repo) repoResponse {
 	return repoResponse{
 		ID:            repo.ExternalID,
@@ -570,7 +477,6 @@ func newRepoResponse(repo Repo) repoResponse {
 	}
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

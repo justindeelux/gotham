@@ -18,11 +18,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// applicationsPath is the collection route.
 const applicationsPath = "/v1/applications"
 
-// applicationBody is the create payload exactly as FE-4.1's wizard sends it
-// (see CreateApplicationInput in web/src/features/applications/api/applications.ts).
 const applicationBody = `{
 	"name": "demo app",
 	"provider": "github",
@@ -41,10 +38,6 @@ const applicationBody = `{
 	]
 }`
 
-// applicationWireKeys are the fields of the FE's `Application` interface plus
-// the additive `base_domain_disabled` visibility flag, the `github_app_id`
-// link, the GS-9 image fields and the GS-8 compose fields; the envelope must
-// carry exactly these, or the SPA reads undefined values.
 var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id",
@@ -56,11 +49,6 @@ var applicationWireKeys = []string{
 	"server_name", "created_at", "updated_at",
 }
 
-// applicationListWireKeys are the list-item fields: the Dockerfile source
-// text, --build-arg values and the pasted compose document travel on the
-// detail routes only, so a list read never exposes them. Every other detail
-// key (including GS-5's github_app_id and the compose routing metadata)
-// must appear here, or list readers see undefined values.
 var applicationListWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type",
@@ -72,7 +60,6 @@ var applicationListWireKeys = []string{
 	"server_name", "created_at", "updated_at",
 }
 
-// assertJSONKeys fails unless body is an object with exactly the given keys.
 func assertJSONKeys(t *testing.T, body []byte, want ...string) {
 	t.Helper()
 	var payload map[string]json.RawMessage
@@ -89,7 +76,6 @@ func assertJSONKeys(t *testing.T, body []byte, want ...string) {
 	}
 }
 
-// keysOf renders a decoded object's keys for failure output.
 func keysOf(payload map[string]json.RawMessage) []string {
 	keys := make([]string, 0, len(payload))
 	for key := range payload {
@@ -98,7 +84,6 @@ func keysOf(payload map[string]json.RawMessage) []string {
 	return keys
 }
 
-// sampleApplication returns an application with every wire field filled.
 func sampleApplication() Application {
 	return Application{
 		ID:            uuid.New(),
@@ -185,11 +170,6 @@ func TestRoutesCreateApplicationRejectsBadInput(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateApplicationInstallsProviderHook pins the BE-4.4 create
-// lifecycle: an application created with a supported provider and a repository
-// installs its push hook through the service, which is what lets a push
-// trigger auto-deploys without the caller touching the webhook route. The
-// response reports the successful install.
 func TestRoutesCreateApplicationInstallsProviderHook(t *testing.T) {
 	userID, serverID := uuid.New(), uuid.New()
 	app := sampleApplication()
@@ -220,9 +200,6 @@ func TestRoutesCreateApplicationInstallsProviderHook(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateApplicationSkipsHookWithoutProvider pins the other half: a
-// pasted public URL (provider "public" or empty) has no provider hook, so the
-// route must not call the lifecycle at all.
 func TestRoutesCreateApplicationSkipsHookWithoutProvider(t *testing.T) {
 	for _, provider := range []string{"", "public", "manual"} {
 		t.Run("provider "+provider, func(t *testing.T) {
@@ -246,12 +223,6 @@ func TestRoutesCreateApplicationSkipsHookWithoutProvider(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateApplicationSurvivesHookFailure pins the failure semantics:
-// the application row is already committed, so a provider outage, missing
-// credentials or an unusable callback cannot turn the create into an error
-// (the caller would retry and create a duplicate). The failure is logged by
-// the service and the response carries a coarse webhook outcome so the caller
-// knows automatic deploys are off and which route retries the install.
 func TestRoutesCreateApplicationSurvivesHookFailure(t *testing.T) {
 	userID, serverID := uuid.New(), uuid.New()
 	app := sampleApplication()
@@ -291,12 +262,6 @@ func TestRoutesCreateApplicationSurvivesHookFailure(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateApplicationBoundsStalledHookProvider drives the real service
-// through the create route with a provider that accepts the connection and
-// then stalls: the request must return inside the hook timeout with 201 and
-// the outcome must be recorded with the configured logger. Without the bound
-// the SPA would time out after the row committed and invite a duplicate
-// create (MEDIUM-1).
 func TestRoutesCreateApplicationBoundsStalledHookProvider(t *testing.T) {
 	userID, serverID := uuid.New(), uuid.New()
 	stall := &stallingHookLifecycle{}
@@ -417,10 +382,6 @@ func TestRoutesListApplications(t *testing.T) {
 		}
 	})
 
-	// The list shape must keep every non-Dockerfile detail key: dropping
-	// one (as the GS-5 github_app_id was in the rebase) silently feeds
-	// undefined values to list readers. The link round-trips verbatim
-	// when set and encodes empty (not the zero UUID) when unlinked.
 	t.Run("list keeps the github app link", func(t *testing.T) {
 		linkID := uuid.New()
 		linked := sampleApplication()
@@ -569,8 +530,6 @@ func TestRoutesUpdateApplication(t *testing.T) {
 		}
 	})
 
-	// The link round-trips through the update body: a UUID sets it, an
-	// empty string clears it, absent leaves it alone.
 	t.Run("link set and clear", func(t *testing.T) {
 		linkID := uuid.NewString()
 		for _, tc := range []struct {
@@ -651,11 +610,6 @@ func TestRoutesDeleteApplication(t *testing.T) {
 	}
 }
 
-// TestRoutesDeleteApplicationFailsClosedOnHookFailure drives the real service:
-// when the provider hook cannot be removed, the delete answers 502 and the
-// application survives. The stored hook row is the only handle on the remote
-// hook, so the caller retries, cleans the host by hand, or force-forgets the
-// row (DELETE .../webhooks?force=true) and deletes again.
 func TestRoutesDeleteApplicationFailsClosedOnHookFailure(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -847,9 +801,6 @@ func TestRoutesVolumeListing(t *testing.T) {
 	}
 }
 
-// TestRoutesVolumeListingRejectsForeignCaller pins the authorization boundary
-// at the HTTP layer: the service's 404 (never the row) is what a foreign caller
-// sees.
 func TestRoutesVolumeListingRejectsForeignCaller(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 	svc := &fakeDeployService{volumesErr: ErrNotFound}
@@ -883,9 +834,6 @@ func TestRoutesStopStart(t *testing.T) {
 			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 		}
 		assertJSONKeys(t, rec.Body.Bytes(), "deployment")
-		// The deployment envelope carries omitempty fields (image_tag, error,
-		// timestamps) exactly like the routes FE-4.1 already consumes; these
-		// are the keys every answer has.
 		assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "deployment"),
 			"id", "application_id", "kind", "state", "attempt", "container_id",
 			"commit_sha", "commit_message", "commit_author", "committed_at",
@@ -1027,8 +975,6 @@ func TestRoutesNewApplicationRoutesGuardAccess(t *testing.T) {
 	})
 }
 
-// mustJSON walks a JSON document along the given path (object keys and array
-// indexes as strings) and returns the raw slice at that location.
 func mustJSON(t *testing.T, body []byte, path ...string) []byte {
 	t.Helper()
 	var node any
@@ -1064,10 +1010,6 @@ func mustJSON(t *testing.T, body []byte, path ...string) []byte {
 	return encoded
 }
 
-// TestRoutesCreateApplicationSourceTypes posts source-typed payloads through
-// the real service: an unknown type is a 400, a not-yet-implemented type is
-// a 422, a provider/type mismatch is a 400, a provider-less git_private
-// creates with the stored type, and a matching github_app creates too.
 func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 	body := func(sourceType, provider, repo, cloneURL string) string {
 		payload := map[string]any{
@@ -1180,11 +1122,6 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		}
 	})
 
-	// A github_app application keeps the legacy validation: provider=github
-	// applications predate GitHub App connections (OAuth flow, deploy keys),
-	// so any clone URL the cloner supports stays creatable. The token path
-	// applies at clone time only when an installation actually grants the
-	// repo.
 	t.Run("github app with ssh clone url is created", func(t *testing.T) {
 		userID := uuid.New()
 		svc := newTestService(t, &fakeRepository{})
@@ -1199,8 +1136,6 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		}
 	})
 
-	// A linked create stores the connection id on the row; a foreign one is
-	// not-found so connection ids cannot be probed.
 	t.Run("github app link is owned", func(t *testing.T) {
 		userID := uuid.New()
 		owned := uuid.New()

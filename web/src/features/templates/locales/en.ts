@@ -1,11 +1,3 @@
-/**
- * English catalog for the templates surface (I18N-7). Display copy only:
- * template slugs, field keys, rendered compose, secret values, domains and
- * API payloads stay raw values interpolated as parameters. Curated bundled
- * template descriptions and field help live under `overlay`, keyed by the
- * stable template slug; unknown or operator-provided metadata falls back
- * to the provider copy.
- */
 const en = {
   validation: {
     required: "This field is required.",

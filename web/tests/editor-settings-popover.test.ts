@@ -1,14 +1,9 @@
-// Editor settings popover (JUS-219 fix round): the controls must stay bound to
-// the live settings object after an update, keyboard users must land inside the
-// panel and get focus back on Escape, and a row's text must not double-toggle a
-// switch.
 /* global document:readonly, KeyboardEvent:readonly, HTMLElement:readonly, localStorage:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import EditorSettingsPopover from "@/features/files/components/EditorSettingsPopover.vue";
-// Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
@@ -24,7 +19,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** mountPopover mounts the component with its teleported panel on the body. */
 function mountPopover() {
   return mount(EditorSettingsPopover, {
     attachTo: document.body,
@@ -32,13 +26,11 @@ function mountPopover() {
   });
 }
 
-/** openPopover clicks the trigger and waits for the panel to render. */
 async function openPopover(wrapper: ReturnType<typeof mountPopover>): Promise<void> {
   await wrapper.find("button").trigger("click");
   await flushPromises();
 }
 
-/** rowFor finds the settings row whose text starts with the given label. */
 function rowFor(label: string): HTMLElement {
   const rows = [...document.querySelectorAll<HTMLElement>(".ed-settings-row")];
   const row = rows.find((item) => item.textContent?.trim().startsWith(label));

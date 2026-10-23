@@ -1,6 +1,3 @@
-// Server proxy tab tests (JUS-202): the Proxy & Traefik tab renders this
-// node's generated routers from the shared proxy store instead of the stale
-// Phase 6 placeholder.
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";

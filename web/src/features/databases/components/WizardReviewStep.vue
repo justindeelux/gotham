@@ -20,7 +20,6 @@ interface Emits {
 
 import { i18n } from "@/shared/i18n";
 
-/** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
@@ -28,8 +27,6 @@ function t(key: string, params?: Record<string, string | number>): string {
 const props = defineProps<Props>();
 defineEmits<Emits>();
 
-
-/** portMapping renders the raw ports; only the surrounding words localize. */
 const portMapping = computed<string>(() =>
   props.form.exposePublic
     ? `${props.form.publicPort} → ${props.enginePort}`

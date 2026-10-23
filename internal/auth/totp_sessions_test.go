@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// listSids returns the account's live session ids in an id->bool set.
 func liveSids(t *testing.T, svc *Service, userID uuid.UUID, at time.Time) map[uuid.UUID]bool {
 	t.Helper()
 	rows, err := svc.store.ListSessionsByUser(context.Background(), pgUUID(userID), at)
@@ -22,10 +21,6 @@ func liveSids(t *testing.T, svc *Service, userID uuid.UUID, at time.Time) map[uu
 	return out
 }
 
-// TestTOTPRevokesOtherSessions covers the three session-revocation rules for
-// JUS-196: enabling and disabling keep the caller's session and end the rest,
-// and redeeming a recovery code ends every pre-existing chain before minting
-// the caller's new one.
 func TestTOTPRevokesOtherSessions(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -34,9 +29,6 @@ func TestTOTPRevokesOtherSessions(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	// A real base time keeps the created sessions live as far as the guard's
-	// DB-side now() is concerned; the test only ever needs a frozen clock so
-	// the TOTP steps line up, not a specific date.
 	clock := time.Now()
 	svc.now = func() time.Time { return clock }
 
@@ -47,7 +39,6 @@ func TestTOTPRevokesOtherSessions(t *testing.T) {
 	userID := uuid.MustParse(registered.User.ID)
 	currentSession := sidOf(t, svc, registered.AccessToken)
 
-	// A second, unrelated chain exists before enrollment.
 	other, err := svc.Login(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
@@ -69,7 +60,6 @@ func TestTOTPRevokesOtherSessions(t *testing.T) {
 		t.Fatalf("sessions after enable = %v, want only the caller's", sids)
 	}
 
-	// Completing a TOTP login mints a third chain.
 	challenge, err := svc.Login(ctx, email, password, SessionMeta{})
 	if err != nil || !challenge.MFARequired {
 		t.Fatalf("Login with TOTP = %+v, err %v", challenge, err)
@@ -84,7 +74,6 @@ func TestTOTPRevokesOtherSessions(t *testing.T) {
 		t.Fatalf("expected two sessions after a TOTP login")
 	}
 
-	// Disabling keeps the caller's original session and ends the rest.
 	clock = clock.Add(totpPeriod)
 	if err := svc.DisableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock), currentSession); err != nil {
 		t.Fatalf("DisableTOTP: %v", err)
@@ -94,7 +83,6 @@ func TestTOTPRevokesOtherSessions(t *testing.T) {
 		t.Fatalf("sessions after disable = %v, want only the caller's", sids)
 	}
 
-	// Re-enable to exercise the recovery-code rule.
 	enrollment, err = svc.BeginTOTPEnrollment(ctx, userID)
 	if err != nil {
 		t.Fatalf("BeginTOTPEnrollment (second): %v", err)

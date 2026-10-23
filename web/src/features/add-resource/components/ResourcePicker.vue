@@ -18,7 +18,6 @@ import { activeLocale, i18n } from "@/shared/i18n";
 import BrandIcon from "./BrandIcon.vue";
 import { brandFor, templateBrand } from "../utils/brands";
 
-// Each resource type opens its existing wizard with the environment scope preselected.
 const props = defineProps<{
   projectId: string;
   environmentId: string;
@@ -34,10 +33,6 @@ const emit = defineEmits<{
 const router = useRouter();
 const templatesStore = useTemplatesStore();
 
-/**
- * t renders page copy in the active locale (tracks language switches).
- * Template and engine names stay raw values interpolated as parameters.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
@@ -53,10 +48,6 @@ type ResourceTab = (typeof RESOURCE_TABS)[number];
 const activeTab = ref<ResourceTab>("application");
 const tabsId = useId();
 
-/**
- * tabPropsFor carries the tab semantics NTabs omits (2.45.3 renders plain
- * divs): each tab is a roving-tabindex tab owned by the tablist.
- */
 function tabPropsFor(tab: ResourceTab): Record<string, string | number | boolean> {
   const selected = tab === activeTab.value;
   return {
@@ -68,11 +59,6 @@ function tabPropsFor(tab: ResourceTab): Record<string, string | number | boolean
   };
 }
 
-/**
- * handleTabKeydown moves and activates tabs with arrows/Home/End
- * (NTabs 2.45.3 has no key handling of its own). Keys pressed inside a
- * tab panel belong to the panel, so only a focused tab is handled.
- */
 function handleTabKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
   const tab = target?.closest<HTMLElement>(".n-tabs-tab");
@@ -110,15 +96,12 @@ function handleTabKeydown(event: KeyboardEvent): void {
     return;
   }
   activeTab.value = RESOURCE_TABS[next];
-  // Roving tabindex: focus follows the selection after re-render (the
-  // tab list is captured now: it reads null once dispatch ends).
   const tablist = event.currentTarget as HTMLElement | null;
   nextTick(() => {
     tablist?.querySelectorAll<HTMLElement>(".n-tabs-tab")[next]?.focus();
   });
 }
 
-/** serviceQuery filters the service cards by name or description. */
 const serviceQuery = ref("");
 
 watch(() => props.show, (show) => {
@@ -128,7 +111,6 @@ watch(() => props.show, (show) => {
   }
 });
 
-/** filteredTemplates matches the service query against name and description. */
 const filteredTemplates = computed<TemplateSummary[]>(() => {
   const needle = serviceQuery.value.trim().toLowerCase();
   if (needle === "") {
@@ -141,7 +123,6 @@ const filteredTemplates = computed<TemplateSummary[]>(() => {
   });
 });
 
-/** sourceLabelKey maps a wizard source value to its selector label. */
 const SOURCE_LABEL_KEYS: Record<string, string> = {
   git_public: "applications.wizard.sourceGitPublic",
   git_private: "applications.wizard.sourceGitPrivate",
@@ -152,15 +133,12 @@ const SOURCE_LABEL_KEYS: Record<string, string> = {
   compose: "applications.wizard.sourceCompose",
 };
 
-/** sourceValues lists every wizard source type as its own picker card. */
 const sourceValues = Object.keys(SOURCE_LABEL_KEYS);
 
-/** sourceLabel renders the wizard's own label for one source value. */
 function sourceLabel(value: string): string {
   return t(SOURCE_LABEL_KEYS[value] ?? value);
 }
 
-/** sourceDescription renders the one-line catalog copy for one source. */
 function sourceDescription(value: string): string {
   const key = `add-resource.sources.${value}`;
   if (i18n.global.te(key)) {
@@ -169,7 +147,6 @@ function sourceDescription(value: string): string {
   return value;
 }
 
-/** engineDescription renders the one-line catalog copy for one engine. */
 function engineDescription(value: string): string {
   const key = `add-resource.engines.${value}`;
   if (i18n.global.te(key)) {
@@ -178,7 +155,6 @@ function engineDescription(value: string): string {
   return engineByValue(value).label;
 }
 
-/** engineImage renders the repo:default-tag preview of one engine. */
 function engineImage(value: string): string {
   const engine = engineByValue(value);
   return `${engine.repo}:${engine.defaultVersion}`;
@@ -191,38 +167,27 @@ const templateOpen = ref(false);
 const databaseEngine = ref("postgres");
 const databaseOpen = ref(false);
 
-/**
- * wizardOpen is true while any create wizard covers the picker; the host
- * hides the picker modal behind it (the picker stays mounted).
- */
 const wizardOpen = computed<boolean>(
   () => appOpen.value || templateOpen.value || databaseOpen.value,
 );
 
 watch(wizardOpen, (open) => emit("wizardOpen", open));
 
-/** openApplication opens the application wizard with one source preselected. */
 function openApplication(sourceType: string): void {
   appSource.value = sourceType;
   appOpen.value = true;
 }
 
-/** openTemplate opens the template wizard with one template preselected. */
 function openTemplate(slug: string): void {
   templateSlug.value = slug;
   templateOpen.value = true;
 }
 
-/** openDatabase opens the database wizard with one engine preselected. */
 function openDatabase(engine: string): void {
   databaseEngine.value = engine;
   databaseOpen.value = true;
 }
 
-/**
- * handleGroupKey moves focus inside one card group with the arrow keys
- * (and Home/End): the card activates on Enter as a plain button.
- */
 function handleGroupKey(event: KeyboardEvent): void {
   const container = event.currentTarget as HTMLElement | null;
   const cards = container?.querySelectorAll<HTMLElement>("button.res-card");
@@ -246,7 +211,6 @@ function handleGroupKey(event: KeyboardEvent): void {
   cards[next].focus();
 }
 
-/** afterApplicationCreate closes the wizard and opens the new application. */
 function afterApplicationCreate(application: Application): void {
   appOpen.value = false;
   emit("created");
@@ -260,7 +224,6 @@ function afterApplicationCreate(application: Application): void {
   });
 }
 
-/** afterDatabaseCreate closes the wizard and opens the new database. */
 function afterDatabaseCreate(created: CreatedDatabase): void {
   databaseOpen.value = false;
   emit("created");
@@ -439,7 +402,6 @@ onMounted(() => {
   gap: var(--space-3);
 }
 
-/* Reserve the same content space for each tab, including on short viewports. */
 .res-pane {
   height: min(calc(var(--space-12) * 8), calc(100dvh - var(--space-12) * 5));
   overflow-y: auto;

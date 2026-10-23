@@ -23,74 +23,45 @@ import (
 	"github.com/justindeelux/gotham/toolcatalog"
 )
 
-// Timeouts and limits.
 const (
-	// defaultRPCTimeout bounds a catalog listing.
-	defaultRPCTimeout = 30 * time.Second
-	// installTimeout bounds a whole install/uninstall stream, which is not a
-	// single RPC: an apt install can legitimately run for minutes.
-	installTimeout = 30 * time.Minute
-	// defaultPollInterval is how often a worker re-checks the queue when no
-	// enqueue has woken it (multi-instance control planes, or a lost wakeup).
-	defaultPollInterval = time.Second
-	// defaultListLimit / maxListLimit bound the job list.
-	defaultListLimit = 100
-	maxListLimit     = 500
-	// defaultWorkers is the worker pool size: nodes run in parallel, and the
-	// per-node claim keeps one node's jobs sequential.
-	defaultWorkers = 4
-	// defaultLease is how long a claimed job stays owned before another instance
-	// may recover it. The worker renews it every lease/3 while running.
-	defaultLease = 90 * time.Second
-	// defaultSweepInterval is how often the worker reconciles stale jobs.
+	defaultRPCTimeout    = 30 * time.Second
+	installTimeout       = 30 * time.Minute
+	defaultPollInterval  = time.Second
+	defaultListLimit     = 100
+	maxListLimit         = 500
+	defaultWorkers       = 4
+	defaultLease         = 90 * time.Second
 	defaultSweepInterval = 30 * time.Second
-	// maxJobLogBytes caps a job's persisted log; beyond it the worker stops
-	// appending and records one truncation marker. maxLogPage bounds one log
-	// fetch so a client pages with ?after=seq instead of pulling everything.
-	maxJobLogBytes  = 256 << 10
-	maxLogPage      = 2000
-	logTruncatedMsg = "[log truncated at 256 KiB]"
+	maxJobLogBytes       = 256 << 10
+	maxLogPage           = 2000
+	logTruncatedMsg      = "[log truncated at 256 KiB]"
 )
 
-// ToolchainService is the slice of the domain the HTTP layer depends on. It
-// keeps the handler testable with a fake that needs no database.
 type ToolchainService interface {
-	// ListTools returns the node's catalog with each entry's detected state.
 	ListTools(ctx context.Context, serverID uuid.UUID) ([]Tool, error)
-	// Enqueue validates action/toolIDs against the node's catalog, then queues
-	// one job per tool, skipping a tool the node already has an active job for.
 	Enqueue(ctx context.Context, serverID uuid.UUID, action Action, toolIDs []string) (EnqueueResult, error)
-	// Cancel cancels one queued job (a running or terminal job is a conflict).
 	Cancel(ctx context.Context, serverID, jobID uuid.UUID) (Job, error)
-	// Get returns one job plus a page of its log (lines with seq > after, at
-	// most maxLogPage), so the job list and realtime frames never carry the log.
 	Get(ctx context.Context, serverID, jobID uuid.UUID, after int64) (JobDetail, error)
-	// List returns a node's jobs, newest first.
 	List(ctx context.Context, serverID uuid.UUID, limit int) ([]Job, error)
 }
 
-// AgentClient is the slice of agentv1.ToolServiceClient the worker uses.
 type AgentClient interface {
 	ListTools(ctx context.Context, in *agentv1.ListToolsRequest, opts ...grpc.CallOption) (*agentv1.ListToolsResponse, error)
 	InstallTool(ctx context.Context, in *agentv1.InstallToolRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ToolEvent], error)
 	UninstallTool(ctx context.Context, in *agentv1.InstallToolRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ToolEvent], error)
 }
 
-// AgentConn is an AgentClient that owns a connection to close when done.
 type AgentConn interface {
 	AgentClient
 	io.Closer
 }
 
-// DialFunc dials one node's agent ToolService.
 type DialFunc func(ctx context.Context, serverID uuid.UUID) (AgentConn, error)
 
-// Registry resolves a server row for its team and node identity.
 type Registry interface {
 	Get(ctx context.Context, id uuid.UUID) (*servers.Server, error)
 }
 
-// Store is the queue persistence the service needs. *store.Store satisfies it.
 type Store interface {
 	CreateToolchainJob(ctx context.Context, params sqlc.CreateToolchainJobParams) (sqlc.ToolchainJob, error)
 	GetToolchainJobForServer(ctx context.Context, params sqlc.GetToolchainJobForServerParams) (sqlc.ToolchainJob, error)
@@ -105,40 +76,26 @@ type Store interface {
 	CancelToolchainJob(ctx context.Context, id pgtype.UUID) (sqlc.ToolchainJob, error)
 }
 
-// Compile-time checks: the production store is a Store, and *Service is the
-// ToolchainService the HTTP layer mounts.
 var (
 	_ Store            = (*store.Store)(nil)
 	_ ToolchainService = (*Service)(nil)
 	_ io.Closer        = (*Service)(nil)
 )
 
-// Config wires a Service. Store and Registry are required (NewDefaultService
-// returns nil without a store). Dial may be nil until the mTLS dialer is
-// plugged in; Publisher/RedisAddr default to a Redis publisher, InstanceID to a
-// random per-process id, Workers to a small pool.
 type Config struct {
-	Store      Store
-	Registry   Registry
-	Dial       DialFunc
-	Publisher  Publisher
-	RedisAddr  string
-	Logger     *slog.Logger
-	RPCTimeout time.Duration
-	// PollInterval overrides the worker's queue poll (tests use a short one).
+	Store        Store
+	Registry     Registry
+	Dial         DialFunc
+	Publisher    Publisher
+	RedisAddr    string
+	Logger       *slog.Logger
+	RPCTimeout   time.Duration
 	PollInterval time.Duration
-	// InstanceID identifies this process in claimed_by. It is random per process
-	// by default and is only used to scope lease renewal and finish; recovery is
-	// keyed on the lease, never on the id.
-	InstanceID string
-	// Lease overrides how long a claimed job stays owned (tests shorten it).
-	Lease time.Duration
-	// Workers overrides the pool size (nodes run in parallel up to this many).
-	Workers int
+	InstanceID   string
+	Lease        time.Duration
+	Workers      int
 }
 
-// Service is the control-plane toolchain domain service: the queue API plus a
-// pool of workers that drive node agents.
 type Service struct {
 	store     Store
 	registry  Registry
@@ -147,19 +104,14 @@ type Service struct {
 	publisher Publisher
 	logger    *slog.Logger
 
-	rpcTimeout   time.Duration
-	pollInterval time.Duration
-	instanceID   string
-	lease        time.Duration
-	workers      int
-	// renewInterval is how often a running job's lease is renewed (lease/3,
-	// floored at a second); a field so tests can shorten it.
+	rpcTimeout    time.Duration
+	pollInterval  time.Duration
+	instanceID    string
+	lease         time.Duration
+	workers       int
 	renewInterval time.Duration
-	// maxLogBytes caps a job's persisted log (a field so tests can shrink it).
-	maxLogBytes int
+	maxLogBytes   int
 
-	// wake nudges idle workers as soon as a job is enqueued, so a job starts
-	// without waiting for the poll tick and tests do not have to sleep.
 	wake chan struct{}
 
 	mu      sync.Mutex
@@ -168,8 +120,6 @@ type Service struct {
 	wg      sync.WaitGroup
 }
 
-// NewDefaultService builds the production Service for the HTTP wiring. It
-// returns nil (so the routes are not mounted) when no store is configured.
 func NewDefaultService(cfg Config) *Service {
 	if cfg.Store == nil {
 		return nil
@@ -177,7 +127,6 @@ func NewDefaultService(cfg Config) *Service {
 	return NewService(cfg)
 }
 
-// NewService builds a Service from cfg.
 func NewService(cfg Config) *Service {
 	logger := cfg.Logger
 	if logger == nil {
@@ -229,8 +178,6 @@ func NewService(cfg Config) *Service {
 	}
 }
 
-// ListTools returns the node's catalog with each entry's detected state. It
-// authorizes the node for read and dials its agent.
 func (s *Service) ListTools(ctx context.Context, serverID uuid.UUID) ([]Tool, error) {
 	if err := s.resolve(ctx, serverID, false); err != nil {
 		return nil, err
@@ -238,11 +185,6 @@ func (s *Service) ListTools(ctx context.Context, serverID uuid.UUID) ([]Tool, er
 	return s.catalog(ctx, serverID)
 }
 
-// InstalledToolIDs returns the catalog ids installed on the node, dialing its
-// agent without re-checking the caller's team scope (the caller has already
-// resolved the node). The deploy gate uses it to refuse a build pack whose tool
-// is absent, so the create answers a clear 4xx instead of a build that fails at
-// "railpack is not on PATH".
 func (s *Service) InstalledToolIDs(ctx context.Context, serverID uuid.UUID) (map[string]bool, error) {
 	catalog, err := s.catalog(ctx, serverID)
 	if err != nil {
@@ -255,8 +197,6 @@ func (s *Service) InstalledToolIDs(ctx context.Context, serverID uuid.UUID) (map
 	return installed, nil
 }
 
-// catalog dials the node's agent and returns its tool list, without authorizing
-// (the caller has already resolved the node).
 func (s *Service) catalog(ctx context.Context, serverID uuid.UUID) ([]Tool, error) {
 	client, err := s.dialClient(ctx, serverID)
 	if err != nil {
@@ -279,10 +219,6 @@ func (s *Service) catalog(ctx context.Context, serverID uuid.UUID) ([]Tool, erro
 	return tools, nil
 }
 
-// Enqueue validates the request against the node's live catalog, then queues one
-// job per tool. The whole request is rejected (no jobs created) when any tool is
-// unknown or cannot perform the action on this node, so a partial selection
-// never silently enqueues a subset.
 func (s *Service) Enqueue(ctx context.Context, serverID uuid.UUID, action Action, toolIDs []string) (EnqueueResult, error) {
 	if !action.Valid() {
 		return EnqueueResult{}, fmt.Errorf("%w: unknown action %q", ErrValidation, action)
@@ -294,7 +230,6 @@ func (s *Service) Enqueue(ctx context.Context, serverID uuid.UUID, action Action
 	if err := s.resolve(ctx, serverID, true); err != nil {
 		return EnqueueResult{}, err
 	}
-	// Keep platform policy authoritative even when an older agent allows removal.
 	if action == ActionUninstall {
 		for _, id := range ids {
 			if tool, known := toolcatalog.Lookup(id); known && !tool.Uninstallable {
@@ -332,8 +267,6 @@ func (s *Service) Enqueue(ctx context.Context, serverID uuid.UUID, action Action
 			Action:   string(action),
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
-			// The node already has an active job for this tool and action (the
-			// partial unique index refused the insert).
 			result.Skipped = append(result.Skipped, id)
 			continue
 		}
@@ -348,8 +281,6 @@ func (s *Service) Enqueue(ctx context.Context, serverID uuid.UUID, action Action
 	return result, nil
 }
 
-// Cancel cancels one queued job. A job that is running, terminal, missing, or
-// owned by another node answers ErrConflict/ErrNotFound.
 func (s *Service) Cancel(ctx context.Context, serverID, jobID uuid.UUID) (Job, error) {
 	if err := s.resolve(ctx, serverID, true); err != nil {
 		return Job{}, err
@@ -369,7 +300,6 @@ func (s *Service) Cancel(ctx context.Context, serverID, jobID uuid.UUID) (Job, e
 	}
 	row, err := s.store.CancelToolchainJob(ctx, pgUUID(jobID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Raced with the worker: it claimed the job between our read and write.
 		return Job{}, fmt.Errorf("%w: job is no longer queued", ErrConflict)
 	}
 	if err != nil {
@@ -380,9 +310,6 @@ func (s *Service) Cancel(ctx context.Context, serverID, jobID uuid.UUID) (Job, e
 	return job, nil
 }
 
-// Get returns one job plus a page of its log (lines with seq > after). A job
-// owned by another node, or on a node the caller may not see, answers
-// ErrNotFound.
 func (s *Service) Get(ctx context.Context, serverID, jobID uuid.UUID, after int64) (JobDetail, error) {
 	if err := s.resolve(ctx, serverID, false); err != nil {
 		return JobDetail{}, err
@@ -420,7 +347,6 @@ func (s *Service) Get(ctx context.Context, serverID, jobID uuid.UUID, after int6
 	return detail, nil
 }
 
-// List returns a node's jobs, newest first. A limit of zero uses the default.
 func (s *Service) List(ctx context.Context, serverID uuid.UUID, limit int) ([]Job, error) {
 	if err := s.resolve(ctx, serverID, false); err != nil {
 		return nil, err
@@ -445,12 +371,6 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID, limit int) ([]Jo
 	return jobs, nil
 }
 
-// resolve loads the node and authorizes the caller's active team against it:
-// read access needs membership, write access needs the owner/admin role. A node
-// the caller may not touch answers ErrNotFound, so node ids cannot be probed,
-// exactly like the container and server surfaces. A request without a team
-// scope (background jobs, tests, or teams disabled) keeps the pre-teams
-// behavior, and a nil registry (worker-only construction) skips the check.
 func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) error {
 	if s.registry == nil {
 		return nil
@@ -471,7 +391,6 @@ func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) e
 	return nil
 }
 
-// dialClient dials the node's agent ToolService.
 func (s *Service) dialClient(ctx context.Context, serverID uuid.UUID) (AgentConn, error) {
 	if s.dial == nil {
 		return nil, fmt.Errorf("%w: dialer is not configured", ErrAgentUnavailable)
@@ -483,8 +402,6 @@ func (s *Service) dialClient(ctx context.Context, serverID uuid.UUID) (AgentConn
 	return conn, nil
 }
 
-// wakeWorkers nudges every idle worker (a full send buffer means they are
-// already awake) so an enqueue does not wait for the poll tick.
 func (s *Service) wakeWorkers() {
 	for i := 0; i < cap(s.wake); i++ {
 		select {
@@ -495,16 +412,10 @@ func (s *Service) wakeWorkers() {
 	}
 }
 
-// defaultInstanceID returns a per-process identity for claimed jobs. It is
-// deliberately random: an instance must never be able to fail a job another
-// (possibly restart-overlapping) process still owns, so recovery is keyed only
-// on the lease, not on the instance id.
 func defaultInstanceID() string {
 	return uuid.NewString()
 }
 
-// normalizeToolIDs trims, drops empties, and removes duplicates while keeping
-// the caller's order, so one request cannot enqueue the same tool twice.
 func normalizeToolIDs(toolIDs []string) []string {
 	seen := make(map[string]bool, len(toolIDs))
 	out := make([]string, 0, len(toolIDs))

@@ -5,22 +5,16 @@ import (
 	"time"
 )
 
-// Scheduler is the optional schedule surface of a Service; the HTTP layer
-// type-asserts for it so plain Service fakes keep working.
 type Scheduler interface {
-	// ScheduleState returns the live schedule and its runtime status.
 	ScheduleState() ScheduleState
-	// SetSchedule validates, persists and hot-applies a new schedule.
 	SetSchedule(ctx context.Context, sc Schedule) (ScheduleState, error)
 }
 
-// BackoffState reports a version held back after a failed update.
 type BackoffState struct {
 	Version string    `json:"version"`
 	Until   time.Time `json:"until"`
 }
 
-// ScheduleState is the schedule plus what the scheduler has done with it.
 type ScheduleState struct {
 	Schedule       Schedule      `json:"schedule"`
 	Timezone       string        `json:"timezone"`
@@ -30,8 +24,6 @@ type ScheduleState struct {
 	Backoff        *BackoffState `json:"backoff,omitempty"`
 }
 
-// defaultSchedule derives the no-row schedule from the environment-backed
-// config: AUTO_UPDATE enables both the check and the apply, as before.
 func defaultSchedule(cfg Config, interval time.Duration) Schedule {
 	channel := cfg.Channel
 	if channel != ChannelBeta {
@@ -47,7 +39,6 @@ func defaultSchedule(cfg Config, interval time.Duration) Schedule {
 	}
 }
 
-// loadSchedule overlays the persisted schedule on the defaults.
 func (s *service) loadSchedule() {
 	if s.schedules == nil {
 		return
@@ -80,8 +71,6 @@ func (s *service) recordCheck(err error) {
 	}
 }
 
-// location is the instance timezone, falling back to UTC when it is unset or
-// unknown.
 func (s *service) location() *time.Location {
 	if s.timezone != nil {
 		if loc, err := time.LoadLocation(s.timezone()); err == nil {
@@ -91,7 +80,6 @@ func (s *service) location() *time.Location {
 	return time.UTC
 }
 
-// ScheduleState implements Scheduler.
 func (s *service) ScheduleState() ScheduleState {
 	s.mu.Lock()
 	state := ScheduleState{Schedule: s.sched, Timezone: s.location().String(), LastCheckError: s.checkErr}
@@ -110,8 +98,6 @@ func (s *service) ScheduleState() ScheduleState {
 	return state
 }
 
-// SetSchedule implements Scheduler. The loop is woken so the change takes
-// effect without a restart.
 func (s *service) SetSchedule(ctx context.Context, sc Schedule) (ScheduleState, error) {
 	if err := sc.Validate(); err != nil {
 		return ScheduleState{}, err
@@ -132,9 +118,6 @@ func (s *service) SetSchedule(ctx context.Context, sc Schedule) (ScheduleState, 
 	return s.ScheduleState(), nil
 }
 
-// StartAuto runs the scheduler until ctx is cancelled. It always runs so a
-// schedule enabled later takes effect without a restart; while checks are
-// disabled it just waits for a reload.
 func (s *service) StartAuto(ctx context.Context) {
 	go func() {
 		for {
@@ -167,7 +150,6 @@ func (s *service) StartAuto(ctx context.Context) {
 	}()
 }
 
-// runScheduled performs one scheduled check, applying when auto-apply is on.
 func (s *service) runScheduled(ctx context.Context, sc Schedule) {
 	if !sc.AutoApply {
 		if _, err := s.Check(ctx); err != nil {

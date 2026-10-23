@@ -1,4 +1,3 @@
-// Shell navigation data: section routing and key uniqueness.
 import { describe, expect, it } from "vitest";
 
 import { activeNavKey, navSections, visibleNavSections } from "../src/app/layouts/navigation";
@@ -8,7 +7,6 @@ describe("activeNavKey", () => {
   it("follows the first path segment", () => {
     expect(activeNavKey("/servers/abc")).toBe("servers");
     expect(activeNavKey("/projects/abc")).toBe("projects");
-    // PE-5: nested resource pages highlight Projects through its segment.
     expect(activeNavKey("/projects/abc/environments/def")).toBe("projects");
     expect(activeNavKey("/projects/abc/environments/def/applications/1")).toBe("projects");
     expect(activeNavKey("/dashboard")).toBe("dashboard");
@@ -23,7 +21,6 @@ describe("activeNavKey", () => {
   it("highlights File manager on both file routes (JUS-110)", () => {
     expect(activeNavKey("/files")).toBe("files");
     expect(activeNavKey("/servers/abc/files")).toBe("files");
-    // The rest of a server's pages stay on the Servers entry.
     expect(activeNavKey("/servers/abc")).toBe("servers");
     expect(activeNavKey("/servers/abc/containers")).toBe("servers");
     const files = navSections
@@ -33,8 +30,6 @@ describe("activeNavKey", () => {
   });
 
   it("highlights nothing on profile: no sidebar entry exists", () => {
-    // Profile is reached from the MeCard menu; the key matches no nav item,
-    // so AppSidebar renders no is-active entry instead of the wrong one.
     expect(activeNavKey("/settings/profile")).toBe("profile");
     const keys = navSections.flatMap((section) =>
       section.items.map((item) => item.key),
@@ -45,8 +40,6 @@ describe("activeNavKey", () => {
 
 describe("navSections", () => {
   it("lists Projects instead of the flat resource entries", () => {
-    // PE-4 (JUS-33): Projects replaces Applications, Services and Databases.
-    // PE-5 removed the flat routes; the sidebar never linked them.
     const keys = navSections.flatMap((section) =>
       section.items.map((item) => item.key),
     );
@@ -54,8 +47,6 @@ describe("navSections", () => {
     expect(keys).not.toContain("applications");
     expect(keys).not.toContain("services");
     expect(keys).not.toContain("databases");
-    // GOTHAM-18: the standalone template library is gone; the add-resource
-    // picker is the only way to a template.
     expect(keys).not.toContain("templates");
     const projects = navSections
       .flatMap((section) => section.items)
@@ -79,8 +70,6 @@ describe("navSections", () => {
   });
 
   it("drops the API tokens entry until the feature ships (JUS-136)", () => {
-    // Every remaining entry links to a shipped route; an unshipped feature
-    // must not leave an inert stub behind.
     const items = navSections.flatMap((section) => section.items);
     expect(items.some((item) => item.key === "tokens")).toBe(false);
     for (const item of items) {
@@ -122,14 +111,11 @@ describe("navSections", () => {
       },
     ];
     const hidden = visibleNavSections(mixed, false);
-    // The all-admin group (and its orphan heading) is gone; the mixed group
-    // keeps only its public item.
     expect(hidden.map((section) => section.label)).toEqual(["Open"]);
     expect(hidden[0]!.items.map((item) => item.key)).toEqual(["a"]);
     const shown = visibleNavSections(mixed, true);
     expect(shown.map((section) => section.label)).toEqual(["Open", "Locked"]);
     expect(shown[1]!.items.map((item) => item.key)).toEqual(["c"]);
-    // The real catalog: System is all-admin, so non-admins lose the heading.
     const real = visibleNavSections(navSections, false);
     expect(real.some((section) => section.labelKey === "nav.sections.system")).toBe(false);
     expect(visibleNavSections(navSections, true)).toHaveLength(navSections.length);

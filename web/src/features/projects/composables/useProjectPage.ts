@@ -18,15 +18,8 @@ import type { NameConflictState } from "@/features/projects/composables/useNameC
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useTeamsStore } from "@/features/teams";
 
-/** Detail tabs: environments now, shared variables as a PE-6 placeholder. */
 export type ProjectTab = "environments" | "variables";
 
-/**
- * Detail page state for `/projects/:projectId` (PE-4, Linear JUS-33).
- * Created per mount and dropped on unmount: every dialog draft, open flag
- * and submit guard belongs to this mount only. Data lives in the projects
- * store; this composable owns the UI state above it.
- */
 export interface ProjectPageState {
   tab: Ref<ProjectTab>;
   renameOpen: Ref<boolean>;
@@ -50,7 +43,6 @@ export interface ProjectPageState {
   envDeleteTarget: Ref<Environment | null>;
   envDeleting: Ref<boolean>;
   envDeleteError: ComputedRef<string | null>;
-  /** True while the project holds any resource (delete explains itself). */
   hasResources: ComputedRef<boolean>;
   canWrite: ComputedRef<boolean>;
   openRename(): void;
@@ -73,11 +65,6 @@ export function useProjectPage(
   const projectsStore = useProjectsStore();
   const teamsStore = useTeamsStore();
 
-  /**
-   * currentId reads the route param live. The router reuses this page
-   * across detail-to-detail navigation, so a snapshotted id would keep
-   * fetching and mutating under the previous project.
-   */
   const currentId = (): string => toValue(projectIdSource);
 
   const tab = ref<ProjectTab>("environments");
@@ -133,18 +120,12 @@ export function useProjectPage(
 
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
-  /**
-   * hasResources reports whether any environment holds resources. The delete
-   * dialog uses it to explain the block up front; the backend's 409 stays
-   * the authority when a deploy lands between the check and the submit.
-   */
   const hasResources = computed<boolean>(() =>
     projectsStore.environments.some(
       (environment) => environmentResourceTotal(environment) > 0,
     ),
   );
 
-  /** openRename prefills the rename dialog with the project name. */
   function openRename(): void {
     renameName.value = projectsStore.detail?.name ?? "";
     renameFailure.value = null;
@@ -152,15 +133,11 @@ export function useProjectPage(
     renameOpen.value = true;
   }
 
-  /** handleRename patches the name; the busy flag is the submit guard. */
   async function handleRename(): Promise<void> {
     const detail = projectsStore.detail;
     if (renameBusy.value || !detail || !isProjectNameValid(renameName.value)) {
       return;
     }
-    // Identity of the project that started this mutation: a late success
-    // must not close a dialog the user opened after moving to another
-    // project (see resetDialogs, which drops the old dialogs on the move).
     const projectId = currentId();
     renameBusy.value = true;
     renameFailure.value = null;
@@ -179,7 +156,6 @@ export function useProjectPage(
     }
   }
 
-  /** handleDelete deletes the project and returns to the list. */
   async function handleDelete(): Promise<void> {
     const detail = projectsStore.detail;
     if (deleting.value || !detail) {
@@ -200,15 +176,12 @@ export function useProjectPage(
       deleteOpen.value = false;
       await router.push({ name: "projects" });
     } catch (error) {
-      // The backend message is the actionable part: a project that still
-      // holds resources is refused with 409 naming the block.
       deleteFailure.value = error;
     } finally {
       deleting.value = false;
     }
   }
 
-  /** openEnvCreate resets the environment draft. */
   function openEnvCreate(): void {
     envName.value = "";
     envFailure.value = null;
@@ -216,7 +189,6 @@ export function useProjectPage(
     envCreateOpen.value = true;
   }
 
-  /** handleEnvCreate adds the environment; the busy flag guards submit. */
   async function handleEnvCreate(): Promise<void> {
     if (envBusy.value || !isEnvironmentNameValid(envName.value)) {
       return;
@@ -248,7 +220,6 @@ export function useProjectPage(
     }
   }
 
-  /** openEnvRename prefills the rename dialog with the environment name. */
   function openEnvRename(environment: Environment): void {
     envRenameTarget.value = environment;
     envRenameName.value = environment.name;
@@ -256,7 +227,6 @@ export function useProjectPage(
     envRenameConflict.clear();
   }
 
-  /** handleEnvRename renames the targeted environment. */
   async function handleEnvRename(): Promise<void> {
     const target = envRenameTarget.value;
     if (
@@ -274,9 +244,6 @@ export function useProjectPage(
         envRenameName.value,
       );
       message.success(String(i18n.global.t("projects.toast.environmentRenamed")));
-      // Same late-response guard, on dialog identity: only the dialog this
-      // mutation opened may close (a move already dropped it via
-      // resetDialogs, so the check also covers the cross-project case).
       if (envRenameTarget.value?.id === target.id) {
         envRenameTarget.value = null;
       }
@@ -289,13 +256,11 @@ export function useProjectPage(
     }
   }
 
-  /** openEnvDelete targets one environment for the delete confirm. */
   function openEnvDelete(environment: Environment): void {
     envDeleteTarget.value = environment;
     envDeleteFailure.value = null;
   }
 
-  /** handleEnvDelete deletes the targeted environment. */
   async function handleEnvDelete(): Promise<void> {
     const target = envDeleteTarget.value;
     if (envDeleting.value || !target) {
@@ -322,21 +287,13 @@ export function useProjectPage(
     }
   }
 
-  /** reload refetches the detail (the alert renders the store error). */
   async function reload(): Promise<void> {
     try {
       await projectsStore.fetchDetail(currentId());
     } catch {
-      // The store exposes the error; the alert renders it.
     }
   }
 
-  /**
-   * resetDialogs drops every draft of the previous project on id change.
-   * Busy flags are never cleared here: a request still in flight owns its
-   * flag until its own finally runs, or a second submit could start on the
-   * newly shown project while the first is unresolved.
-   */
   function resetDialogs(): void {
     renameOpen.value = false;
     renameFailure.value = null;
@@ -372,7 +329,6 @@ export function useProjectPage(
     try {
       await teamsStore.ensureTeams();
     } catch {
-      // The teams surface reports its own failure; the detail still loads.
     }
     await reload();
   });

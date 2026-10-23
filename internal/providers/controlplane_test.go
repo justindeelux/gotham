@@ -11,13 +11,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// controlPlaneSource returns a ControlPlaneURLSource yielding base.
 func controlPlaneSource(base string) ControlPlaneURLSource {
 	return func(context.Context) string { return base }
 }
 
-// routeServerWithControlPlane mounts with the given source for route-level
-// redirect-host tests.
 func routeServerWithControlPlane(t *testing.T, svc ProviderService, userID UserIDFunc, src ControlPlaneURLSource) http.Handler {
 	t.Helper()
 
@@ -27,9 +24,6 @@ func routeServerWithControlPlane(t *testing.T, svc ProviderService, userID UserI
 	return r
 }
 
-// TestRedirectMatchesControlPlane pins the host check: the control-plane URL
-// host wins when set (even when the request host differs), empty keeps the
-// request-host behavior, and an unusable base falls back to the request host.
 func TestRedirectMatchesControlPlane(t *testing.T) {
 	withCP := &handler{controlPlaneURL: controlPlaneSource("https://cp.example:8443")}
 	without := &handler{}
@@ -64,9 +58,6 @@ func TestRedirectMatchesControlPlane(t *testing.T) {
 	}
 }
 
-// TestRoutesAutoProvisionUsesControlPlaneHost pins the route behavior behind
-// a proxy: with the control-plane URL set, a redirect naming its host passes
-// even though the request arrived on the internal host.
 func TestRoutesAutoProvisionUsesControlPlaneHost(t *testing.T) {
 	userID := uuid.New()
 	svc := &fakeService{provisioned: Provider{

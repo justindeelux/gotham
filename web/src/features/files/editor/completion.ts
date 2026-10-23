@@ -1,10 +1,3 @@
-/**
- * Editor autocomplete and snippets (JUS-227). Imported only by the lazy
- * CodeMirror bundle, so `@codemirror/autocomplete` never lands in the entry
- * chunk. Sources are per-language keyword/snippet lists plus a fallback built
- * from the words already in the document; both switches live in the editor
- * settings compartment so a toggle applies without recreating the view.
- */
 import {
   acceptCompletion,
   autocompletion,
@@ -22,23 +15,11 @@ import { keymap } from "@codemirror/view";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
-/** SnippetSpec is one labelled snippet template for the completion popup. */
 export interface SnippetSpec {
   label: string;
-  /**
-   * template uses the snippet field syntax that `snippetCompletion` expands:
-   * `${name}` is a placeholder whose literal name is selected for typing,
-   * `${1:8080}` is a numbered tab stop with a real default value, and the bare
-   * `${}` is the final cursor stop. A bare `${1}` would be an empty field, so
-   * every numeric field must carry a default.
-   */
   template: string;
 }
 
-/**
- * KEYWORDS is the per-language completion vocabulary. Languages without an
- * entry still get word-in-document completion, so every file has a source.
- */
 const KEYWORDS: Partial<Record<EditorLanguageId, readonly string[]>> = {
   json: ["true", "false", "null"],
   yaml: [
@@ -167,10 +148,6 @@ const KEYWORDS: Partial<Record<EditorLanguageId, readonly string[]>> = {
   ],
 };
 
-/**
- * SNIPPETS holds the core snippet sets. Only the four languages named by the
- * issue ship snippets; the rest fall back to keywords and document words.
- */
 const SNIPPETS: Partial<Record<EditorLanguageId, readonly SnippetSpec[]>> = {
   shell: [
     { label: "shebang", template: "#!/usr/bin/env bash\nset -euo pipefail\n${}" },
@@ -259,7 +236,6 @@ const SNIPPETS: Partial<Record<EditorLanguageId, readonly SnippetSpec[]>> = {
   ],
 };
 
-/** keywordLanguage folds the alias languages onto their keyword table. */
 function keywordLanguage(language: EditorLanguageId): EditorLanguageId {
   if (language === "vue") {
     return "html";
@@ -273,12 +249,10 @@ function keywordLanguage(language: EditorLanguageId): EditorLanguageId {
 const keywordCache = new Map<EditorLanguageId, Completion[]>();
 const snippetCache = new Map<EditorLanguageId, Completion[]>();
 
-/** snippetSpecs returns one language's snippet templates (also used by tests). */
 export function snippetSpecs(language: EditorLanguageId): readonly SnippetSpec[] {
   return SNIPPETS[language] ?? [];
 }
 
-/** keywordCompletions returns one language's keyword items (cached). */
 export function keywordCompletions(language: EditorLanguageId): Completion[] {
   let options = keywordCache.get(language);
   if (!options) {
@@ -291,7 +265,6 @@ export function keywordCompletions(language: EditorLanguageId): Completion[] {
   return options;
 }
 
-/** snippetCompletions returns one language's snippet items (cached). */
 export function snippetCompletions(language: EditorLanguageId): Completion[] {
   let options = snippetCache.get(language);
   if (!options) {
@@ -307,11 +280,6 @@ export function snippetCompletions(language: EditorLanguageId): Completion[] {
   return options;
 }
 
-/**
- * completionSources assembles the active sources. Turning autocomplete off
- * yields no sources at all, which is what makes the toggle a full removal;
- * snippets are a source of their own and follow their own switch.
- */
 export function completionSources(
   settings: EditorSettings,
   language: EditorLanguageId,
@@ -332,13 +300,6 @@ export function completionSources(
   return sources;
 }
 
-/**
- * completionExtensions builds the autocomplete layer for the settings
- * compartment. With autocomplete disabled it returns an empty extension, so
- * the popup, its sources and the Tab handler are all removed from the view.
- * Bracket closing is deliberately not part of this layer (see
- * {@link bracketExtensions}).
- */
 export function completionExtensions(
   settings: EditorSettings,
   language: EditorLanguageId,
@@ -350,8 +311,6 @@ export function completionExtensions(
     autocompletion({ override: completionSources(settings, language) }),
     keymap.of([
       {
-        // Tab accepts only while the popup is open; otherwise it keeps moving
-        // focus out of the editor (WCAG 2.1.2).
         key: "Tab",
         run: (view) =>
           completionStatus(view.state) === "active" && acceptCompletion(view),
@@ -360,12 +319,6 @@ export function completionExtensions(
   ];
 }
 
-/**
- * bracketExtensions closes brackets and deletes a matching pair. It is a
- * separate, always-on editing behaviour rather than part of the completion
- * toggle: turning autocomplete off must not silently change how typing `(`
- * behaves. It lives here because the package ships in the lazy editor chunk.
- */
 export function bracketExtensions(): Extension {
   return [closeBrackets(), keymap.of(closeBracketsKeymap)];
 }

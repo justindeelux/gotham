@@ -19,18 +19,11 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// validCreateInput returns a payload every creation test starts from: a known
-// server, a cloneable repository and one plain variable plus one sealed secret.
-// Domains are platform-wide unique (JUS-89), so each call mints its own host;
-// tests that need a fixed domain override BaseDomain after.
 var validCreateInputCounter int64
 
 func validCreateInput(serverID uuid.UUID) CreateApplicationInput {
 	validCreateInputCounter++
 	return CreateApplicationInput{
-		// server, a cloneable repository and one plain variable plus one sealed secret.
-		// The fake repository resolves any environment permissively; tests
-		// that need a seeded or shared environment override the ID after.
 		EnvironmentID: uuid.New(),
 		Name:          "demo app",
 		Provider:      "github",
@@ -47,7 +40,6 @@ func validCreateInput(serverID uuid.UUID) CreateApplicationInput {
 	}
 }
 
-// newNodeService builds a service whose agent dialer always hands out node.
 func newNodeService(t *testing.T, repo *fakeRepository, node Node) *Service {
 	t.Helper()
 	svc := NewService(Config{
@@ -68,8 +60,8 @@ func TestServiceCreateApplication(t *testing.T) {
 
 	in := validCreateInput(serverID)
 	in.Name = "  demo app  "
-	in.Branch = ""    // defaults to "main"
-	in.BuildPack = "" // auto-detection
+	in.Branch = ""
+	in.BuildPack = ""
 	in.Storage = []Storage{{Name: "data", HostPath: "", ContainerPath: " /var/lib/app "}}
 
 	created, err := svc.CreateApplication(context.Background(), userID, in)
@@ -501,8 +493,6 @@ func TestServiceDeleteApplicationWithoutNode(t *testing.T) {
 	}
 }
 
-// newHookService builds a service over repo whose hook lifecycle is hooks (or
-// a closure answering nil when hooks itself is nil).
 func newHookService(t *testing.T, repo *fakeRepository, hooks HookLifecycle) *Service {
 	t.Helper()
 	svc := NewService(Config{
@@ -515,12 +505,6 @@ func newHookService(t *testing.T, repo *fakeRepository, hooks HookLifecycle) *Se
 	return svc
 }
 
-// TestServiceDeleteApplicationRemovesProviderHook pins the BE-4.4 delete
-// lifecycle order: the provider hook goes first, then the deploy key, then the
-// application row. The key must survive a failed hook removal (see
-// TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure); on the success
-// path the order keeps a webhook deploy that still reaches the app able to
-// clone until the hook is gone.
 func TestServiceDeleteApplicationRemovesProviderHook(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -551,14 +535,6 @@ func TestServiceDeleteApplicationRemovesProviderHook(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteApplicationSkipsHookWithoutProvider pins the other half: a
-// pasted public URL has no provider hook, so the delete makes no hook call.
-// TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure pins the
-// best-effort half of the ordering: once the provider hook is gone, a failing
-// deploy-key detach must not abort the delete and leave a live application
-// with automatic deploys silently disabled. The local key row cascades with
-// the application; the remote key orphan is logged with provider and repo for
-// manual cleanup.
 func TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -595,9 +571,6 @@ func TestServiceDeleteApplicationSurvivesDeployKeyDetachFailure(t *testing.T) {
 	if repo.hasDeployKey(app.ID) {
 		t.Error("the local deploy key mapping must cascade with the application")
 	}
-	// private_keys has no application FK: the sealed row must go through the
-	// explicit local cleanup even when the host detach failed, or the
-	// credential is orphaned in the database.
 	if repo.hasPrivateKey(created.PrivateKeyID) {
 		t.Error("the sealed private key row was orphaned by the failed host detach")
 	}
@@ -629,14 +602,6 @@ func TestServiceDeleteApplicationSkipsHookWithoutProvider(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure pins the HIGH
-// finding: the stored hook row is the only handle on the remote hook, so a
-// failed removal aborts the delete and keeps both sides in step. Nothing that
-// would break the still-live application may have been mutated first: the
-// deploy key must still be attached (a webhook deploy that reaches the app can
-// keep cloning), the container keeps running and the row survives. The caller
-// retries, removes the hook on the host by hand, or force-forgets the row
-// (ForgetWebhook) and deletes again.
 func TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -664,8 +629,6 @@ func TestServiceDeleteApplicationFailsClosedOnHookRemovalFailure(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteApplicationWithoutHookLifecycle pins the unwired install
-// (no provider service, or a closure answering nil): deletes keep working.
 func TestServiceDeleteApplicationWithoutHookLifecycle(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -696,9 +659,6 @@ func TestServiceDeleteApplicationWithoutHookLifecycle(t *testing.T) {
 	}
 }
 
-// TestServiceInstallHookDelegatesToLifecycle pins the create-side entry point
-// the route calls: without a request there is no callback origin, so a
-// non-request caller must use the explicit webhook route.
 func TestServiceInstallHookDelegatesToLifecycle(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 	hooks := &fakeHookLifecycle{}
@@ -717,9 +677,6 @@ func TestServiceInstallHookDelegatesToLifecycle(t *testing.T) {
 	}
 }
 
-// TestServiceInstallHookWithoutLifecycleIsNoop pins the unwired install: no
-// lifecycle means nothing to do, not an error, and the route reports no
-// outcome (attempted=false).
 func TestServiceInstallHookWithoutLifecycleIsNoop(t *testing.T) {
 	svc := newTestService(t, &fakeRepository{})
 	req := httptest.NewRequest(http.MethodPost, applicationsPath, nil)
@@ -732,11 +689,6 @@ func TestServiceInstallHookWithoutLifecycleIsNoop(t *testing.T) {
 	}
 }
 
-// TestServiceInstallHookBoundsStalledProvider pins MEDIUM-1: a provider that
-// accepts the connection and then stalls must not hold the create path open.
-// The call is cut at Config.HookTimeout, the failure is logged (the outcome
-// stays visible) and the error is returned for the create route to surface as
-// installed=false, never to fail the create.
 func TestServiceInstallHookBoundsStalledProvider(t *testing.T) {
 	stall := &stallingHookLifecycle{}
 
@@ -772,9 +724,6 @@ func TestServiceInstallHookBoundsStalledProvider(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteApplicationBoundsStalledProvider pins the same bound on the
-// uninstall path: a stalled provider is cut off and the delete fails closed
-// (the application row survives), so the hook can still be removed later.
 func TestServiceDeleteApplicationBoundsStalledProvider(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -839,7 +788,7 @@ func TestServiceReplaceEnv(t *testing.T) {
 	ciphertext := stored[0].Ciphertext
 
 	after, err := svc.ReplaceEnv(context.Background(), userID, created.ID, []EnvEntry{
-		{Key: "API_TOKEN", Value: reference}, // round-trip: re-seal nothing
+		{Key: "API_TOKEN", Value: reference},
 		{Key: "LOG_LEVEL", Value: "debug"},
 	})
 	if err != nil {
@@ -934,9 +883,6 @@ func TestServiceReplaceStorages(t *testing.T) {
 	})
 }
 
-// TestServiceReplaceStoragesCompose pins the compose refusal: the storage map
-// does not apply to a compose application, so the write names the compose
-// source instead of failing on the absolute-container-path rule.
 func TestServiceReplaceStoragesCompose(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -971,9 +917,6 @@ func TestServiceStopStart(t *testing.T) {
 		app := testApplication(userID)
 		repo := &fakeRepository{app: app}
 		node := newMockNode()
-		// The service is built before the deployments are seeded: NewService
-		// sweeps non-terminal rows (a queued deployment left by a dead control
-		// plane), and the in-flight case below must survive that sweep.
 		svc := newNodeService(t, repo, node)
 		for _, state := range states {
 			seedDeployment(t, repo, app, Deployment{

@@ -20,8 +20,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestSignAppJWTVerifies proves the JWT is RS256 over header.claims and
-// verifies with the app public key.
 func TestSignAppJWTVerifies(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -55,7 +53,6 @@ func TestSignAppJWTVerifies(t *testing.T) {
 	}
 }
 
-// TestSignAppJWTRejectsGarbage proves malformed keys fail closed.
 func TestSignAppJWTRejectsGarbage(t *testing.T) {
 	for _, pemBytes := range []string{"", "not-pem", "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----"} {
 		if _, err := signAppJWT(123, []byte(pemBytes), time.Now()); err == nil {
@@ -64,7 +61,6 @@ func TestSignAppJWTRejectsGarbage(t *testing.T) {
 	}
 }
 
-// signBody signs a delivery body the way GitHub does.
 func signBody(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
@@ -95,21 +91,18 @@ func TestVerifyDelivery(t *testing.T) {
 		t.Fatalf("verified app = %v, want %v", appID, app.ID)
 	}
 
-	// Wrong secret must fail.
 	bad := http.Header{}
 	bad.Set("X-Hub-Signature-256", signBody("wrong-secret", body))
 	if _, ok := svc.VerifyDelivery(bad, body); ok {
 		t.Fatal("wrong secret was accepted")
 	}
 
-	// Missing prefix must fail.
 	bare := http.Header{}
 	bare.Set("X-Hub-Signature-256", strings.TrimPrefix(signBody("wh-secret", body), "sha256="))
 	if _, ok := svc.VerifyDelivery(bare, body); ok {
 		t.Fatal("unprefixed signature was accepted")
 	}
 
-	// Unknown installation must fail.
 	unknown := []byte(`{"action":"added","installation":{"id":4242,"account":{"login":"acme"}}}`)
 	unknownHeader := http.Header{}
 	unknownHeader.Set("X-Hub-Signature-256", signBody("wh-secret", unknown))
@@ -119,8 +112,6 @@ func TestVerifyDelivery(t *testing.T) {
 	_ = repo
 }
 
-// TestHandleAppEventRefreshesCache proves installation events refresh the
-// repo cache and a deleted installation drops its row.
 func TestHandleAppEventRefreshesCache(t *testing.T) {
 	svc, repo, api, userID := testFixture()
 	api.pem = testKeyPEM(t)
@@ -162,18 +153,14 @@ func TestHandleAppEventRefreshesCache(t *testing.T) {
 		t.Fatalf("installations after delete = %+v", insts)
 	}
 
-	// Non-installation events are ignored.
 	if err := svc.HandleAppEvent(context.Background(), app.ID, "push", body); err != nil {
 		t.Fatal(err)
 	}
-	// Events for an app that does not own the installation are refused.
 	if err := svc.HandleAppEvent(context.Background(), uuid.New(), "installation", deleted); err == nil {
 		t.Fatal("foreign app event was accepted")
 	}
 }
 
-// TestSecretsNeverLeak proves stored secrets never appear in API outputs or
-// error text.
 func TestSecretsNeverLeak(t *testing.T) {
 	svc, _, api, userID := testFixture()
 	api.pem = testKeyPEM(t)

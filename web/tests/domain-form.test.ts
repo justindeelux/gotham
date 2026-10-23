@@ -1,5 +1,3 @@
-// JUS-233 domain form: the port/service/protocol validation and the compose
-// service port pre-fill the Domains tab relies on.
 import { describe, expect, it } from "vitest";
 
 import {

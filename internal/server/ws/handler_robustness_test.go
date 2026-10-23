@@ -13,10 +13,6 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-// TestPumpRequestsStopsWhenBlocked is the B1-6 regression: the request reader
-// must exit when the connection tears down a stop channel, even while it is
-// blocked sending on a full incoming queue. Without the stop select it would
-// block forever and leak the goroutine.
 func TestPumpRequestsStopsWhenBlocked(t *testing.T) {
 	incoming := make(chan clientRequest, 1)
 	stop := make(chan struct{})
@@ -53,9 +49,6 @@ func TestPumpRequestsStopsWhenBlocked(t *testing.T) {
 	}
 }
 
-// TestSubscriptionCapPerConnection is the B1-10 regression: a connection may
-// hold at most maxSubscriptionsPerClient rooms; the overflow is denied and
-// never joins the hub.
 func TestSubscriptionCapPerConnection(t *testing.T) {
 	hub, server := newTestServer(t)
 	conn := dial(t, wsURL(server, "/?token="+testToken))
@@ -85,9 +78,6 @@ func TestSubscriptionCapPerConnection(t *testing.T) {
 	}
 }
 
-// TestAuthorizationCachedPerConnection is the second half of B1-10: repeated
-// log channels for the same node must not re-query the authorizer (and thus
-// the database) on every subscribe.
 func TestAuthorizationCachedPerConnection(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -125,9 +115,6 @@ func TestAuthorizationCachedPerConnection(t *testing.T) {
 	}
 }
 
-// TestAuthorizationRevocationAfterTTL is the U1 regression: an allow is cached
-// only for authCacheTTL, so a user removed from a team loses access on the next
-// re-check instead of keeping it for the whole connection.
 func TestAuthorizationRevocationAfterTTL(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -155,7 +142,6 @@ func TestAuthorizationRevocationAfterTTL(t *testing.T) {
 	}
 
 	allow.Store(false)
-	// Within the TTL the cached allow still admits a second channel on the node.
 	if err := websocket.JSON.Send(conn, clientRequest{Subscribe: LogChannel(nodeID.String(), "b")}); err != nil {
 		t.Fatalf("second subscribe: %v", err)
 	}
@@ -163,7 +149,6 @@ func TestAuthorizationRevocationAfterTTL(t *testing.T) {
 		t.Fatalf("subscription within TTL = %+v, want subscribed", msg)
 	}
 
-	// After the TTL the re-check sees the revocation.
 	time.Sleep(40 * time.Millisecond)
 	if err := websocket.JSON.Send(conn, clientRequest{Subscribe: LogChannel(nodeID.String(), "c")}); err != nil {
 		t.Fatalf("third subscribe: %v", err)
@@ -173,9 +158,6 @@ func TestAuthorizationRevocationAfterTTL(t *testing.T) {
 	}
 }
 
-// TestAuthorizationGrantAfterDenial is the U1 regression for the other
-// direction: denials are not cached, so a user added after being denied is
-// admitted on the next attempt.
 func TestAuthorizationGrantAfterDenial(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()

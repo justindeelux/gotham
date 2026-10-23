@@ -46,24 +46,13 @@ const emit = defineEmits<{
 const serversStore = useServersStore();
 const { locale, t } = useI18n();
 const formRef = ref<FormInst | null>(null);
-/**
- * saveFailure keeps the raw last save failure. The banner display derives
- * from it in the current locale, so a language switch re-renders a retained
- * failure without resubmitting or touching the draft.
- */
 const saveFailure = ref<unknown>(null);
-/** errorMessage renders the retained save failure, empty while healthy. */
 const errorMessage = computed<string>(() =>
   saveFailure.value === null || saveFailure.value === undefined
     ? ""
     : failureText(saveFailure.value, locale.value),
 );
 const saving = ref(false);
-/**
- * validationAttempted records that the edit form has been validated at
- * least once, so a language switch can refresh already-visible feedback
- * without ever surfacing errors on a pristine form.
- */
 const validationAttempted = ref(false);
 
 const form = reactive<EditForm>({
@@ -78,7 +67,6 @@ const form = reactive<EditForm>({
 
 const rules = computed<FormRules>(() => editRules(form.authMode));
 
-/** currentAuth describes the stored credential without revealing it. */
 const currentAuth = computed<string>(() => {
   if (!props.server) {
     return "";
@@ -92,7 +80,6 @@ const currentAuth = computed<string>(() => {
   return t("servers.edit.currentNone");
 });
 
-/** resetsPin warns when the edit invalidates the pinned host key. */
 const resetsPin = computed<boolean>(() => {
   const server = props.server;
   if (!server) {
@@ -107,7 +94,6 @@ const resetsPin = computed<boolean>(() => {
   );
 });
 
-/** prefill copies the server into the form; the password always stays blank. */
 function prefill(): void {
   const server = props.server;
   if (!server) {
@@ -135,12 +121,10 @@ watch(
   { immediate: true },
 );
 
-/** closeModal closes the dialog without saving. */
 function closeModal(): void {
   emit("update:show", false);
 }
 
-/** handleSave validates and PATCHes the server. */
 async function handleSave(): Promise<void> {
   if (!props.server) {
     return;
@@ -162,14 +146,12 @@ async function handleSave(): Promise<void> {
   if (form.authMode === "key") {
     input.ssh_key_id = form.keyId.trim();
   } else if (form.authMode === "password" && form.password !== "") {
-    // A blank password leaves the stored secret unchanged.
     input.password = form.password;
   }
 
   saving.value = true;
   try {
     const updated = await serversStore.updateServer(props.server.id, input);
-    // The secret never leaves this form: drop it the moment the save lands.
     form.password = "";
     emit("updated", updated);
     emit("update:show", false);
@@ -180,11 +162,6 @@ async function handleSave(): Promise<void> {
   }
 }
 
-/**
- * A language switch refreshes already-visible edit feedback without
- * touching the draft. A pristine form is never validated, so no errors
- * surface on untouched fields.
- */
 const stopLocaleWatch = onLocaleChange(() => {
   if (validationAttempted.value && props.show && formRef.value) {
     void formRef.value.validate().catch(() => {});

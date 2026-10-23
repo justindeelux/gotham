@@ -1,4 +1,3 @@
-// Pure view helpers for the server metrics tab (extracted from ServerDetailPage).
 
 import type { MetricPoint, MetricStep } from "@/features/servers/api/metrics";
 import { isMetricsDisabled } from "@/features/servers/api/metrics";
@@ -10,19 +9,14 @@ import { formatBytes, toPercent } from "@/shared/utils/format";
 import enCatalog from "../locales/en";
 import viCatalog from "../locales/vi";
 
-/** catalogFor selects the servers display dictionary for one locale. */
 function catalogFor(locale?: string | null): typeof enCatalog {
   return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
 }
 
-/** One metrics range: the API step and the window it is shown over. */
 export interface MetricRange {
   step: MetricStep;
-  /** Bucket width of the step, in milliseconds. */
   stepMs: number;
-  /** Window read at this step; capped by ParseMetricsQuery per step. */
   windowMs: number;
-  /** Shown above the charts. */
   hint: string;
 }
 
@@ -42,7 +36,6 @@ export const metricRanges: MetricRange[] = [
   },
 ];
 
-/** metricRangeHint renders the window hint for one step in the display locale. */
 export function metricRangeHint(step: MetricStep, locale?: string | null): string {
   const metrics = catalogFor(locale).metrics;
   switch (step) {
@@ -55,7 +48,6 @@ export function metricRangeHint(step: MetricStep, locale?: string | null): strin
       return metrics.range1m;
   }
 }
-/** Auto-refresh choices: off unless the operator picks a cadence. */
 export type MetricRefreshChoice = "off" | "15s" | "60s";
 
 export const metricRefreshOptions: Array<{ label: string; value: MetricRefreshChoice }> = [
@@ -64,7 +56,6 @@ export const metricRefreshOptions: Array<{ label: string; value: MetricRefreshCh
   { label: "60s", value: "60s" },
 ];
 
-/** refreshMsForChoice is the auto-refresh cadence in ms; 0 keeps it off. */
 export function refreshMsForChoice(choice: MetricRefreshChoice): number {
   switch (choice) {
     case "15s":
@@ -76,38 +67,25 @@ export function refreshMsForChoice(choice: MetricRefreshChoice): number {
   }
 }
 
-/**
- * usage reads a 0..1 usage fraction as a percentage. The heartbeat contract
- * stores usage as a fraction (see toPercent), which is what the rollup keeps.
- */
 export function usage(value: number): number {
   return toPercent(value);
 }
 
-/** formatPercentValue renders a percentage axis label. */
 export function formatPercentValue(value: number): string {
   return `${Math.round(value)}%`;
 }
 
-/** formatRateValue renders a byte-per-second axis label. */
 export function formatRateValue(value: number): string {
   return `${formatBytes(value)}/s`;
 }
 
-/** One rendered card: its series, axis and newest reading. */
 export interface MetricChart {
   title: string;
-  /** Percentage charts share a fixed 0..100 axis. */
   percent: boolean;
   series: ChartSeries[];
-  /** The newest sample, rendered next to the title. */
   latest: string;
 }
 
-/**
- * buildMetricCharts maps the window's points onto the four real charts.
- * Nothing is synthesized: every series is a projection of the given `points`.
- */
 export function buildMetricCharts(
   points: MetricPoint[],
   locale?: string | null,
@@ -161,17 +139,10 @@ export function buildMetricCharts(
   ];
 }
 
-/** isMetricStep narrows a server-returned step onto the accepted values. */
 export function isMetricStep(value: string): value is MetricStep {
   return value === "1m" || value === "1h" || value === "1d";
 }
 
-/**
- * metricsFailureText renders a retained metrics failure for display in the
- * current locale. Curated refusals (expired session, disabled feature flag)
- * keep their summary-only shape; anything else gets the localized summary
- * plus the raw diagnostic. Classification stays on the raw error object.
- */
 export function metricsFailureText(
   failure: unknown,
   locale?: string | null,

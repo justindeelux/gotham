@@ -8,9 +8,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestMapRPCError guards the agent-error taxonomy on the deploy client,
-// including the NotFound mapping that routes a missing Docker resource to a
-// 404 instead of a 500.
 func TestMapRPCError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -20,9 +17,6 @@ func TestMapRPCError(t *testing.T) {
 		{"unavailable", status.Error(codes.Unavailable, "down"), ErrAgentUnavailable},
 		{"deadline", status.Error(codes.DeadlineExceeded, "slow"), ErrAgentUnavailable},
 		{"canceled", status.Error(codes.Canceled, "gone"), ErrAgentUnavailable},
-		// An oversized node reply (the gRPC receive limit) is the node being
-		// unable to answer, not a client error: it must reach the caller as the
-		// bounded 502 family, never a generic 500.
 		{"resource exhausted", status.Error(codes.ResourceExhausted, "reply too large"), ErrAgentUnavailable},
 		{"invalid argument", status.Error(codes.InvalidArgument, "bad"), ErrValidation},
 		{"not found", status.Error(codes.NotFound, "missing"), ErrNotFound},

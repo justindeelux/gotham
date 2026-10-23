@@ -10,30 +10,23 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestContainerTeamIsolation is the F1 regression: a node's containers are only
-// reachable by its own team, before any agent or cache access, and a read_only
-// member can list but not mutate. A foreign node and a missing node answer the
-// same 404 so the API is not an existence oracle.
 func TestContainerTeamIsolation(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 
 	registry := newFakeRegistry()
 	node := registry.seed()
 	node.TeamID = teamB
-	legacy := registry.seed() // TeamID left unset: the pre-teams shared node
+	legacy := registry.seed()
 
 	mock := &mockDockerClient{listResp: listResponse(), runID: "new-1"}
 	cache := newFakeCache()
 	svc := fixture(registry, mock, cache)
 
-	// Warm the cache for the team node: the authorization check must run
-	// before the cache is consulted, so a stranger never gets a cached list.
 	owner := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: teamB, Role: teams.RoleOwner})
 	if _, err := svc.List(owner, node.ID); err != nil {
 		t.Fatalf("owner List: %v", err)
 	}
 
-	// A member of another team cannot see the node, cached or not.
 	stranger := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: teamA, Role: teams.RoleOwner})
 	if _, err := svc.List(stranger, node.ID); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("stranger List = %v, want ErrServerNotFound", err)
@@ -44,12 +37,10 @@ func TestContainerTeamIsolation(t *testing.T) {
 	if err := svc.Stop(stranger, node.ID, "abc"); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("stranger Stop = %v, want ErrServerNotFound", err)
 	}
-	// A missing node answers exactly like a foreign one.
 	if _, err := svc.List(stranger, uuid.New()); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("missing node List = %v, want ErrServerNotFound", err)
 	}
 
-	// A read_only member reads the node but cannot mutate it.
 	viewer := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: teamB, Role: teams.RoleReadOnly})
 	if _, err := svc.List(viewer, node.ID); err != nil {
 		t.Fatalf("read_only List: %v", err)
@@ -73,8 +64,6 @@ func TestContainerTeamIsolation(t *testing.T) {
 		t.Fatalf("read_only Run = %v, want ErrForbidden", err)
 	}
 
-	// Legacy nodes stay shared: no team owns them, so any authenticated team
-	// may read them (the documented pre-teams residual) and an admin may act.
 	legacyCtx := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: teamA, Role: teams.RoleAdmin})
 	if _, err := svc.List(legacyCtx, legacy.ID); err != nil {
 		t.Fatalf("legacy List: %v", err)
@@ -84,9 +73,6 @@ func TestContainerTeamIsolation(t *testing.T) {
 	}
 }
 
-// TestContainerRequestWithoutScopeKeepsLegacyBehavior guards the compatibility
-// path: background callers (backup jobs) hold no team scope, and their node
-// access must keep working.
 func TestContainerRequestWithoutScopeKeepsLegacyBehavior(t *testing.T) {
 	registry := newFakeRegistry()
 	node := registry.seed()
@@ -99,7 +85,6 @@ func TestContainerRequestWithoutScopeKeepsLegacyBehavior(t *testing.T) {
 	if err := svc.Stop(context.Background(), node.ID, "abc"); err != nil {
 		t.Fatalf("Stop without a scope: %v", err)
 	}
-	// The node is a team node, so only the missing scope kept the call alive.
 	if node.TeamID == uuid.Nil {
 		t.Fatal("the fixture node must carry a team")
 	}

@@ -1,6 +1,3 @@
-// Editor language resolution (JUS-226): the filename-first table, the
-// extension table and the picker catalogue. Table-driven so a new language
-// only needs one row per test group.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,7 +10,6 @@ import type { EditorLanguageId } from "@/features/files/utils/editor";
 
 describe("detectLanguage", () => {
   it.each<[string, EditorLanguageId]>([
-    // Special filenames resolve before the extension table.
     ["Dockerfile", "dockerfile"],
     ["Dockerfile.prod", "dockerfile"],
     ["app.Dockerfile", "dockerfile"],
@@ -34,10 +30,8 @@ describe("detectLanguage", () => {
     ["Rakefile", "ruby"],
     ["Guardfile", "ruby"],
     ["docker-compose.yml", "yaml"],
-    // A path prefix is ignored (only the basename is matched).
     ["etc/nginx.conf", "nginx"],
     ["config/.env", "ini"],
-    // Case-insensitive match.
     ["DOCKERFILE", "dockerfile"],
     ["APP.PHP", "php"],
   ])("resolves %s by name", (path, language) => {

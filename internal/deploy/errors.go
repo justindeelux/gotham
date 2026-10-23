@@ -2,49 +2,22 @@ package deploy
 
 import "errors"
 
-// Sentinel errors mapped to HTTP statuses by the routes layer.
 var (
-	// ErrNotFound — resource does not exist (404).
-	ErrNotFound = errors.New("deploy: not found")
-	// ErrValidation — invalid input (400).
-	ErrValidation = errors.New("deploy: validation")
-	// ErrConflict — an active deployment already exists for the application (409).
-	ErrConflict = errors.New("deploy: conflict")
-	// ErrDeployInFlight — a deployment is running, so a server change is
-	// refused (409 with the contract's exact body).
-	ErrDeployInFlight = errors.New("deploy: a deploy is in progress")
-	// ErrPreviewsOpen — the base application has live previews, so a move
-	// or server change is refused (409) until they are closed.
-	ErrPreviewsOpen = errors.New("deploy: close the open previews first")
-	// ErrNameConflict — the target environment already holds the name (409).
-	ErrNameConflict = errors.New("deploy: name already exists in the target environment")
-	// ErrDomainConflict — the domain is already bound to another
-	// application on the (new) node (409 with its own message, not the
-	// deploy-in-flight text).
-	ErrDomainConflict = errors.New("deploy: domain already in use on the target server")
-	// ErrServerNotFound — target server missing or not assigned to the user (404).
-	ErrServerNotFound = errors.New("deploy: server not found")
-	// ErrAgentUnavailable — node agent unreachable; the only retryable failure.
-	ErrAgentUnavailable = errors.New("deploy: agent unavailable")
-	// ErrHealthcheck — container did not become healthy in time (terminal).
-	ErrHealthcheck = errors.New("deploy: healthcheck failed")
-	// ErrDisabled — FEATURE_APPLICATIONS=false disables the whole feature (503).
-	ErrDisabled = errors.New("deploy: feature disabled")
-	// ErrNotConnected — the caller has no usable connection for the
-	// application's provider, so no deploy key can be registered (409).
-	ErrNotConnected = errors.New("deploy: provider is not connected")
-	// ErrProvider — a Git-host API call (registering or removing a deploy key)
-	// failed; handlers answer a gateway status instead of leaking the body.
-	ErrProvider = errors.New("deploy: provider call failed")
-	// ErrSourceNotImplemented — the application names a source type the
-	// orchestrator cannot fetch yet (GS-7..GS-9); the deploy fails closed.
+	ErrNotFound             = errors.New("deploy: not found")
+	ErrValidation           = errors.New("deploy: validation")
+	ErrConflict             = errors.New("deploy: conflict")
+	ErrDeployInFlight       = errors.New("deploy: a deploy is in progress")
+	ErrPreviewsOpen         = errors.New("deploy: close the open previews first")
+	ErrNameConflict         = errors.New("deploy: name already exists in the target environment")
+	ErrDomainConflict       = errors.New("deploy: domain already in use on the target server")
+	ErrServerNotFound       = errors.New("deploy: server not found")
+	ErrAgentUnavailable     = errors.New("deploy: agent unavailable")
+	ErrHealthcheck          = errors.New("deploy: healthcheck failed")
+	ErrDisabled             = errors.New("deploy: feature disabled")
+	ErrNotConnected         = errors.New("deploy: provider is not connected")
+	ErrProvider             = errors.New("deploy: provider call failed")
 	ErrSourceNotImplemented = errors.New("deploy: source type is not supported yet")
-	// ErrNoRunningDeployment — the application has no deployment that started a
-	// container, so there is nothing to exec into (409 for a terminal request).
-	ErrNoRunningDeployment = errors.New("deploy: application has no running deployment")
-	// ErrContainerNotFound — the resolved container is gone, replaced by a
-	// newer deployment, or was never part of this application's running set.
-	ErrContainerNotFound = errors.New("deploy: container is not part of the running deployment")
-	// ErrContainerNotRunning — the container exists but is stopped/restarting.
-	ErrContainerNotRunning = errors.New("deploy: container is not running")
+	ErrNoRunningDeployment  = errors.New("deploy: application has no running deployment")
+	ErrContainerNotFound    = errors.New("deploy: container is not part of the running deployment")
+	ErrContainerNotRunning  = errors.New("deploy: container is not running")
 )

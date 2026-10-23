@@ -103,8 +103,6 @@ func TestArchiveValidationBeforeDial(t *testing.T) {
 	}
 }
 
-// TestArchiveRBACReadOnly proves a read_only member cannot compress or extract,
-// while roots/list stay readable.
 func TestArchiveRBACReadOnly(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -124,8 +122,6 @@ func TestArchiveRBACReadOnly(t *testing.T) {
 	}
 }
 
-// TestArchiveForeignTeamNotFound proves a foreign team is indistinguishable
-// from a missing node (404) for both archive operations.
 func TestArchiveForeignTeamNotFound(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed(uuid.New())
@@ -139,8 +135,6 @@ func TestArchiveForeignTeamNotFound(t *testing.T) {
 	}
 }
 
-// TestArchiveRPCErrorMapping proves the agent's statuses map onto the API
-// sentinels, including the archive-limit ResourceExhausted becoming 413.
 func TestArchiveRPCErrorMapping(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -201,16 +195,12 @@ func TestCompressRoute(t *testing.T) {
 		t.Fatalf("seen compress = %+v", svc.seenCompress)
 	}
 
-	// A malformed body is a 400 and never reaches the service.
 	rec = doWrite(t, h, http.MethodPost, "/v1/servers/"+id.String()+"/files/compress", "{", nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("malformed compress status = %d, want 400", rec.Code)
 	}
 }
 
-// TestIsInvalidArchiveError pins the agent-message classification: a corrupt or
-// truncated archive body is invalid_archive, while an ordinary request-shape
-// error stays a plain invalid request (Claude N3).
 func TestIsInvalidArchiveError(t *testing.T) {
 	t.Parallel()
 	archive := []string{
@@ -254,7 +244,6 @@ func TestExtractRoute(t *testing.T) {
 	}
 }
 
-// TestArchiveRouteErrorStatuses proves the route maps the service sentinels.
 func TestArchiveRouteErrorStatuses(t *testing.T) {
 	id := uuid.New()
 	cases := []struct {
@@ -288,8 +277,6 @@ func TestArchiveRouteErrorStatuses(t *testing.T) {
 	}
 }
 
-// TestArchiveRouteErrorCodes proves the archive-specific failures carry a
-// stable body code the browser maps to a distinct message (M9/M11).
 func TestArchiveRouteErrorCodes(t *testing.T) {
 	id := uuid.New()
 	cases := []struct {
@@ -318,8 +305,6 @@ func TestArchiveRouteErrorCodes(t *testing.T) {
 	}
 }
 
-// TestArchiveRoutesDisabled proves a disabled feature answers 503 before any
-// agent work.
 func TestArchiveRoutesDisabled(t *testing.T) {
 	id := uuid.New()
 	t.Setenv(FeatureEnv, "false")
@@ -334,8 +319,6 @@ func TestArchiveRoutesDisabled(t *testing.T) {
 	}
 }
 
-// TestArchiveAudited proves both operations record an audit line with the
-// stable op token and never echo a body.
 func TestArchiveAudited(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -364,7 +347,6 @@ func TestArchiveAudited(t *testing.T) {
 			t.Errorf("audit log missing %s: %s", op, out)
 		}
 	}
-	// The archive-specific extra fields are recorded too (L6).
 	for _, extra := range []string{`"format":"zip"`, `"overwrite":false`, `"destination":"."`, `"sources":1`} {
 		if !strings.Contains(out, extra) {
 			t.Errorf("audit log missing %s: %s", extra, out)

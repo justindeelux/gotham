@@ -65,8 +65,6 @@ func TestValidateCloneURL(t *testing.T) {
 	}
 }
 
-// TestValidateCloneURLDevLocal covers the GOTHAM_DEV_CLONE_LOCAL escape
-// hatch: local paths and file:// URLs are cloneable only in dev mode.
 func TestValidateCloneURLDevLocal(t *testing.T) {
 	t.Setenv(devLocalCloneEnv, "true")
 	for _, url := range []string{"/srv/fixtures/demo", "file:///srv/fixtures/demo"} {
@@ -76,17 +74,14 @@ func TestValidateCloneURLDevLocal(t *testing.T) {
 	}
 }
 
-// staticKeyResolver hands out a fixed answer for the deploy-key lookup.
 type staticKeyResolver struct {
 	pem   string
 	err   error
 	calls int
 }
 
-// Compile-time guarantee that staticKeyResolver satisfies the seam.
 var _ deployKeyResolver = (*staticKeyResolver)(nil)
 
-// DeployKeyPrivatePEM implements deployKeyResolver.
 func (r *staticKeyResolver) DeployKeyPrivatePEM(_ context.Context, appID uuid.UUID) (string, error) {
 	r.calls++
 	if r.err != nil {
@@ -95,7 +90,6 @@ func (r *staticKeyResolver) DeployKeyPrivatePEM(_ context.Context, appID uuid.UU
 	return r.pem, nil
 }
 
-// sshCommandKeyPath extracts the `-i` key path from a captured GIT_SSH_COMMAND.
 func sshCommandKeyPath(env []string) string {
 	for _, entry := range env {
 		if !strings.HasPrefix(entry, "GIT_SSH_COMMAND=") {
@@ -115,8 +109,6 @@ func sshCommandKeyPath(env []string) string {
 	return ""
 }
 
-// sshCommandKnownHostsPath extracts the UserKnownHostsFile path from a captured
-// GIT_SSH_COMMAND.
 func sshCommandKnownHostsPath(env []string) string {
 	for _, entry := range env {
 		if !strings.HasPrefix(entry, "GIT_SSH_COMMAND=") {
@@ -136,7 +128,6 @@ func sshCommandKnownHostsPath(env []string) string {
 	return ""
 }
 
-// hasEntry reports whether env carries a variable with the given name.
 func hasEntry(env []string, name string) bool {
 	for _, entry := range env {
 		if strings.HasPrefix(entry, name+"=") {
@@ -146,9 +137,6 @@ func hasEntry(env []string, name string) bool {
 	return false
 }
 
-// countEntry counts env entries naming the variable. Git uses the last one it
-// sees, so two GIT_SSH_COMMAND entries are a real ambiguity, not a harmless
-// duplicate.
 func countEntry(env []string, name string) int {
 	count := 0
 	for _, entry := range env {
@@ -159,22 +147,13 @@ func countEntry(env []string, name string) int {
 	return count
 }
 
-// ambient env used by the clone tests to prove a CI-runner/developer
-// GIT_SSH_COMMAND and unrelated variables are handled deterministically.
 const (
 	ambientSSHCommand = "ssh -o ControlMaster=no -o BatchMode=yes"
 	ambientEnvName    = "GOTHAM_CLONER_TEST_AMBIENT"
 	ambientEnvValue   = "survives"
 )
 
-// TestGitSourceCloneWithDeployKey asserts everything the keyed clone must do:
-// rewrite the URL to SSH, point GIT_SSH_COMMAND at a 0600 ephemeral key file,
-// keep that file alive for the run only, and never log key material. The git
-// invocation itself is replaced, so no network and no sshd are involved.
 func TestGitSourceCloneWithDeployKey(t *testing.T) {
-	// A CI runner (actions/checkout) or a developer shell may export
-	// GIT_SSH_COMMAND. It must not survive into the keyed clone: the child
-	// gets exactly the cloner-constructed command.
 	t.Setenv("GIT_SSH_COMMAND", ambientSSHCommand)
 	t.Setenv(ambientEnvName, ambientEnvValue)
 
@@ -193,8 +172,6 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 		gotArgv = append([]string(nil), argv...)
 		gotEnv = append([]string(nil), env...)
 
-		// The ephemeral directory is removed as soon as Clone returns, so the
-		// known_hosts is captured here rather than after the call.
 		knownHostsPath = sshCommandKnownHostsPath(env)
 		if knownHostsPath != "" {
 			if data, readErr := os.ReadFile(knownHostsPath); readErr == nil {
@@ -222,8 +199,6 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 			t.Errorf("read deploy key: %v", err)
 			return nil, nil
 		}
-		// The cloner trims surrounding whitespace before materialising the
-		// key, so the comparison is on the trimmed PEM.
 		if strings.TrimSpace(string(stored)) != strings.TrimSpace(privatePEM) {
 			t.Error("the ephemeral file does not hold the application's private key")
 		}
@@ -269,8 +244,6 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 	if keyPath != "" && !strings.Contains(command, "-i '"+keyPath+"'") {
 		t.Errorf("GIT_SSH_COMMAND = %q, want it to carry -i %q", command, keyPath)
 	}
-	// The pinned provider keys must be present in the known_hosts the clone
-	// verifies against, so github.com/gitlab.com work without operator setup.
 	if knownHostsPath == "" {
 		t.Fatal("GIT_SSH_COMMAND carries no UserKnownHostsFile path")
 	}
@@ -302,17 +275,11 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 	}
 }
 
-// TestGitSourceCloneWithoutDeployKeyStaysAnonymous pins the default: with no
-// key in the database (or no resolver wired at all) the clone is the anonymous
-// https one it has always been, with no GIT_SSH_COMMAND in the environment.
 func TestGitSourceCloneWithoutDeployKeyStaysAnonymous(t *testing.T) {
-	// The anonymous clone must drop an inherited GIT_SSH_COMMAND rather than
-	// pass it through (the Dependabot-CI failure), while keeping the rest of
-	// the ambient environment.
 	t.Setenv("GIT_SSH_COMMAND", ambientSSHCommand)
 	t.Setenv(ambientEnvName, ambientEnvValue)
 
-	app := testApplication(uuid.New()) // https://github.com/acme/demo.git
+	app := testApplication(uuid.New())
 	dir := filepath.Join(t.TempDir(), "repo")
 
 	var gotArgv, gotEnv []string
@@ -352,8 +319,6 @@ func TestGitSourceCloneWithoutDeployKeyStaysAnonymous(t *testing.T) {
 	}
 }
 
-// TestGitSourceCloneKeyLookupFailureStopsClone makes a broken key lookup loud
-// instead of silently degrading to an anonymous clone the host would reject.
 func TestGitSourceCloneKeyLookupFailureStopsClone(t *testing.T) {
 	app := testApplication(uuid.New())
 	dir := filepath.Join(t.TempDir(), "repo")
@@ -381,11 +346,6 @@ func TestGitSourceCloneKeyLookupFailureStopsClone(t *testing.T) {
 	}
 }
 
-// TestSSHCloneURL covers the http(s) → ssh rewrite a deploy key needs, and the
-// URL shapes that must pass through untouched. The FE stores the provider's
-// own ssh_url for a private repository (BE-4.4b), so an ssh URL — including a
-// self-hosted instance on a non-default port — is what the cloner normally
-// sees and must never be rewritten.
 func TestSSHCloneURL(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -425,8 +385,6 @@ func TestGitSourceRejectsInvalidURLWithoutRunningGit(t *testing.T) {
 	}
 }
 
-// seedGitFixture creates a local git repository with one commit on main and
-// returns its directory. It skips the test when git is unavailable.
 func seedGitFixture(t *testing.T) string {
 	t.Helper()
 	git, err := exec.LookPath("git")
@@ -488,18 +446,11 @@ func TestGitSourceClonesBranch(t *testing.T) {
 		t.Errorf("log = %q, want the completion line", joined)
 	}
 
-	// A retried step re-enters Clone with a directory git already refused to
-	// overwrite: the second run must clear it and succeed again.
 	if err := (gitSource{}).Clone(context.Background(), app, dir, nil); err != nil {
 		t.Fatalf("retried clone: %v", err)
 	}
 }
 
-// stubSSHScript is a test stand-in for ssh: it records the arguments and the
-// deploy key the cloner handed it, then serves the repository with
-// git-upload-pack locally. The last argument is the remote command git asked
-// ssh to run, so the stub closes the ssh transport over local pipes — no
-// network, no sshd, no host keys.
 const stubSSHScript = `#!/bin/sh
 record="$GOTHAM_TEST_SSH_RECORD"
 key=""
@@ -522,16 +473,6 @@ for last in "$@"; do :; done
 exec /bin/sh -c "$last"
 `
 
-// TestGitSourceClonesPrivateRepoOverSSH exercises the private-repository clone
-// path end to end without a network: a real git binary clones a real fixture
-// repository through the GIT_SSH_COMMAND the cloner builds, with a stub `ssh`
-// on PATH that checks the ephemeral deploy key and serves the repository with
-// git-upload-pack. It covers the pieces BE-4.4b depends on — the stored SSH
-// clone URL, the 0600 key file, the ssh options and git's ssh transport — but
-// not SSH itself: the transport is git's, the crypto/auth hop is a local
-// stand-in (see the package's TestGitSourceCloneWithDeployKey for the fake
-// runner variant and the report for what a live host would still have to
-// prove).
 func TestGitSourceClonesPrivateRepoOverSSH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the ssh stand-in is a POSIX shell script")
@@ -553,8 +494,6 @@ func TestGitSourceClonesPrivateRepoOverSSH(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateDeployKeyPair: %v", err)
 	}
-	// The URL shape the FE stores for a private provider repository: a
-	// provider-reported ssh:// clone URL, here pointing at the fixture path.
 	app := testApplication(uuid.New())
 	app.CloneURL = "ssh://git@fixture.invalid" + origin
 	app.Branch = "main"
@@ -593,7 +532,6 @@ func TestGitSourceClonesPrivateRepoOverSSH(t *testing.T) {
 	}
 }
 
-// waitForPIDFile polls until the child wrote its pid.
 func waitForPIDFile(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -609,7 +547,6 @@ func waitForPIDFile(t *testing.T, path string) int {
 	return 0
 }
 
-// waitForProcessExit polls kill(pid, 0) until the process is gone.
 func waitForProcessExit(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -622,11 +559,6 @@ func waitForProcessExit(t *testing.T, pid int) {
 	t.Fatalf("process %d is still alive", pid)
 }
 
-// TestRunGitCancelKillsProcessGroup proves an aborted clone (step timeout,
-// deploy cancellation, graceful service shutdown) takes down git *and* the
-// children it spawned. The unit keeps KillMode=process, so systemd does not
-// kill them; without the group kill the background sleep (standing in for
-// ssh) would survive the cancellation.
 func TestRunGitCancelKillsProcessGroup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process groups are POSIX-only")
@@ -656,11 +588,6 @@ func TestRunGitCancelKillsProcessGroup(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
-// TestRunGitChildDiesWithItsParent proves the Linux parent-death signal: a
-// hard SIGKILL (or OOM) of the control plane leaves no chance to cancel
-// contexts, so the kernel must kill the git child. The helper re-execs this
-// test binary, starts a git command through runGit, reports the child's pid
-// and exits without cleanup.
 func TestRunGitChildDiesWithItsParent(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the parent-death signal is Linux-only")
@@ -682,7 +609,6 @@ func TestRunGitChildDiesWithItsParent(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
-// TestRunGitChildDiesHelper is the child of TestRunGitChildDiesWithItsParent.
 func TestRunGitChildDiesHelper(t *testing.T) {
 	if os.Getenv("GOTHAM_RUN_GIT_DEATH_HELPER") != "1" {
 		t.Skip("helper process for TestRunGitChildDiesWithItsParent")
@@ -707,9 +633,6 @@ func TestRunGitChildDiesHelper(t *testing.T) {
 	os.Exit(2)
 }
 
-// TestGitSourceKnownHostsPolicy pins the keyed clone's host-key policy: the
-// embedded provider keys are always present, strict checking is the default,
-// accept-new only appears under the dev flag, and GOTHAM_KNOWN_HOSTS is merged.
 func TestGitSourceKnownHostsPolicy(t *testing.T) {
 	privatePEM, _, _, err := generateDeployKeyPair("gotham:deploy:test")
 	if err != nil {
@@ -753,8 +676,6 @@ func TestGitSourceKnownHostsPolicy(t *testing.T) {
 		if strings.Contains(command, "accept-new") {
 			t.Errorf("GIT_SSH_COMMAND = %q, want no accept-new by default", command)
 		}
-		// The host-wide known_hosts and KnownHostsCommand must not be trusted:
-		// the ephemeral pinned set is the only anchor.
 		if !strings.Contains(command, "GlobalKnownHostsFile=/dev/null") {
 			t.Errorf("GIT_SSH_COMMAND = %q, want GlobalKnownHostsFile=/dev/null", command)
 		}
@@ -787,8 +708,6 @@ func TestGitSourceKnownHostsPolicy(t *testing.T) {
 		if err := os.WriteFile(operatorFile, []byte("git.internal ssh-ed25519 AAAA\n"), 0o600); err != nil {
 			t.Fatalf("write operator known_hosts: %v", err)
 		}
-		// WriteFile honours the umask; chmod makes the world-writable mode
-		// deterministic across environments.
 		if err := os.Chmod(operatorFile, 0o666); err != nil {
 			t.Fatalf("chmod operator known_hosts: %v", err)
 		}
@@ -835,14 +754,11 @@ func TestGitSourceKnownHostsPolicy(t *testing.T) {
 	})
 }
 
-// stubSSHHost is a minimal in-process SSH server used to exercise OpenSSH host
-// key verification with the exact options the cloner builds.
 type stubSSHHost struct {
 	listener net.Listener
 	hostKey  ssh.PublicKey
 }
 
-// startStubSSHHost starts the server on a random loopback port.
 func startStubSSHHost(t *testing.T) *stubSSHHost {
 	t.Helper()
 
@@ -856,7 +772,7 @@ func startStubSSHHost(t *testing.T) *stubSSHHost {
 	}
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
-			return nil, nil // accept any public key
+			return nil, nil
 		},
 	}
 	config.AddHostKey(signer)
@@ -879,7 +795,6 @@ func startStubSSHHost(t *testing.T) *stubSSHHost {
 	return host
 }
 
-// handle performs the handshake and answers exec requests with success.
 func (h *stubSSHHost) handle(conn net.Conn, config *ssh.ServerConfig) {
 	defer func() { _ = conn.Close() }()
 
@@ -914,12 +829,10 @@ func (h *stubSSHHost) handle(conn net.Conn, config *ssh.ServerConfig) {
 	}
 }
 
-// knownHostsEntry renders a non-default-port known_hosts line for key.
 func knownHostsEntry(host string, port int, key ssh.PublicKey) string {
 	return "[" + host + "]:" + strconv.Itoa(port) + " " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
 }
 
-// writeOpenSSHKey writes a fresh ed25519 OpenSSH private key to path.
 func writeOpenSSHKey(t *testing.T, path string) {
 	t.Helper()
 
@@ -936,9 +849,6 @@ func writeOpenSSHKey(t *testing.T, path string) {
 	}
 }
 
-// TestCloneRedactsURLCredentials is the item-3 regression: a clone URL that
-// embeds a token must never reach the realtime deploy log — neither in the
-// command line the cloner echoes nor in the quoted git error tail.
 func TestCloneRedactsURLCredentials(t *testing.T) {
 	const token = "ghp_supersecrettoken123"
 	app := testApplication(uuid.New())
@@ -963,7 +873,6 @@ func TestCloneRedactsURLCredentials(t *testing.T) {
 
 	t.Run("error tail", func(t *testing.T) {
 		run := func(context.Context, []string, []string) ([]byte, error) {
-			// A git version that echoes the URL it was handed, credential and all.
 			return []byte("fatal: unable to access '" + app.CloneURL + "': auth failed"), errors.New("exit status 128")
 		}
 		source := gitSource{run: run}
@@ -977,17 +886,9 @@ func TestCloneRedactsURLCredentials(t *testing.T) {
 	})
 }
 
-// TestCloneRedactsBeforeTruncation is the fix-round-1 regression: the git error
-// tail is redacted BEFORE the 400-byte truncation, so a cut landing inside the
-// userinfo cannot expose the credential suffix (tail would otherwise start at
-// "ser:secretpw@host/…"). The trailing assertion pins that truncation actually
-// happened, so the test cannot pass by never exercising a cut.
 func TestCloneRedactsBeforeTruncation(t *testing.T) {
 	const secret = "secretpw"
 	app := testApplication(uuid.New())
-	// The URL is 31 bytes and the suffix is 380, so had tail run first the last
-	// 400 bytes would begin at offset 11, inside the userinfo. Clone redacts
-	// before truncating, which is exactly the regression this test pins.
 	output := "https://user:" + secret + "@host/repo" + strings.Repeat("B", 380)
 	run := func(context.Context, []string, []string) ([]byte, error) {
 		return []byte(output), errors.New("exit status 128")
@@ -1005,10 +906,6 @@ func TestCloneRedactsBeforeTruncation(t *testing.T) {
 	}
 }
 
-// TestRedactCloneURLAndError pins the redaction shapes directly, so the
-// regex cannot silently widen (mangling harmless text) or narrow (leaving a
-// credential in place), and the parse-failure fallback never returns a
-// credential-bearing string raw.
 func TestRedactCloneURLAndError(t *testing.T) {
 	cases := []struct {
 		in       string
@@ -1017,14 +914,11 @@ func TestRedactCloneURLAndError(t *testing.T) {
 	}{
 		{"https://user:pass@host/repo.git", "https://host/repo.git", []string{"user:pass"}},
 		{"https://token@host/repo.git", "https://host/repo.git", []string{"token@"}},
-		{"git@host:acme/demo.git", "git@host:acme/demo.git", nil},                                 // scp-like, no userinfo
-		{"https://host/repo.git", "https://host/repo.git", nil},                                   // nothing to strip
-		{"ssh://git@host/repo.git", "ssh://host/repo.git", []string{"git@"}},                      // userinfo (git) hidden too
-		{"https://user:p@ss@host/repo.git", "https://host/repo.git", []string{"p@ss", "ss@host"}}, // literal '@' in password
-		// url.Parse rejects the invalid escape; the fallback must still redact.
+		{"git@host:acme/demo.git", "git@host:acme/demo.git", nil},
+		{"https://host/repo.git", "https://host/repo.git", nil},
+		{"ssh://git@host/repo.git", "ssh://host/repo.git", []string{"git@"}},
+		{"https://user:p@ss@host/repo.git", "https://host/repo.git", []string{"p@ss", "ss@host"}},
 		{"https://user:secret%zz@host/repo.git", "https://***@host/repo.git", []string{"secret"}},
-		// A raw '/' in the password also fails Parse and must be redacted by the
-		// fallback rather than returned raw.
 		{"https://user:pa/ss@host/repo.git", "https://***@host/repo.git", []string{"pa/ss"}},
 	}
 	for _, tc := range cases {
@@ -1038,15 +932,10 @@ func TestRedactCloneURLAndError(t *testing.T) {
 			}
 		}
 	}
-	// Harmless git diagnostics must survive untouched.
 	plain := "fatal: repository 'https://github.com/acme/demo.git/' not found"
 	if got := redactCloneError(plain); got != plain {
 		t.Errorf("redactCloneError mangled a credential-free message: %q", got)
 	}
-	// Accepted, safe over-redaction: a credential-free URL whose path carries
-	// an '@' is read as userinfo and hidden. There is no credential to leak and
-	// the alternative (leaving it) risks missing a real one, so this tradeoff
-	// is pinned rather than fixed.
 	overRedacted := "fatal: repository 'https://example.com/~user/repo@v2.git/' not found"
 	wantOverRedacted := "fatal: repository 'https://***@v2.git/' not found"
 	if got := redactCloneError(overRedacted); got != wantOverRedacted {
@@ -1054,10 +943,6 @@ func TestRedactCloneURLAndError(t *testing.T) {
 	}
 }
 
-// TestSSHHostKeyVerification runs the real OpenSSH client with the known_hosts
-// and StrictHostKeyChecking options the cloner builds against an in-process
-// host presenting an unknown key: strict refuses it, a pin accepts it, and
-// accept-new learns it.
 func TestSSHHostKeyVerification(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the ssh client stand-in is POSIX-only")
@@ -1081,8 +966,6 @@ func TestSSHHostKeyVerification(t *testing.T) {
 	writeOpenSSHKey(t, clientKey)
 
 	run := func(knownHostsPath string, acceptNew bool) (string, error) {
-		// Mirror the options the cloner's GIT_SSH_COMMAND sets, plus BatchMode
-		// so a prompt can never block the test.
 		args := []string{
 			"-i", clientKey,
 			"-o", "IdentitiesOnly=yes",
@@ -1133,9 +1016,6 @@ func TestSSHHostKeyVerification(t *testing.T) {
 		if out, err := run(path, true); err != nil {
 			t.Fatalf("accept-new refused an unknown host key: %v\n%s", err, out)
 		}
-		// Ubuntu's ssh_config enables HashKnownHosts, so the learned entry is
-		// hashed (|1|…) and a plain-text contains check fails there. ssh-keygen
-		// -F resolves hashed and plain entries alike.
 		keygen, err := exec.LookPath("ssh-keygen")
 		if err != nil {
 			t.Skip("ssh-keygen binary is not available")

@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// TestSpoolSweepsStaleFiles proves the startup sweep removes only the spooler's
-// own abandoned staging files and leaves fresh files and unrelated files alone.
 func TestSpoolSweepsStaleFiles(t *testing.T) {
 	dir := t.TempDir()
 	stale := filepath.Join(dir, spoolFilePrefix+"stale")
@@ -39,8 +37,6 @@ func TestSpoolSweepsStaleFiles(t *testing.T) {
 	}
 }
 
-// TestSpoolBoundsConcurrency proves the staging semaphore refuses a second body
-// while the first is staged and releases the slot on cleanup.
 func TestSpoolBoundsConcurrency(t *testing.T) {
 	s := newSpooler(t.TempDir(), 1, nil)
 
@@ -60,8 +56,6 @@ func TestSpoolBoundsConcurrency(t *testing.T) {
 	cleanup2()
 }
 
-// TestSpoolRefusesWhenVolumeFull proves a staging volume that cannot hold a
-// ceiling-sized body is refused with ErrInsufficientStorage before any write.
 func TestSpoolRefusesWhenVolumeFull(t *testing.T) {
 	original := spoolFreeBytes
 	spoolFreeBytes = func(string) uint64 { return 1 }
@@ -73,9 +67,6 @@ func TestSpoolRefusesWhenVolumeFull(t *testing.T) {
 	}
 }
 
-// TestSpoolUsesPrivateDirAndFileModes proves the staging directory is 0700 and
-// every staging file is 0600, so a multi-tenant host cannot read another
-// request's staged body.
 func TestSpoolUsesPrivateDirAndFileModes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "spool")
 	s := newSpooler(dir, 1, nil)

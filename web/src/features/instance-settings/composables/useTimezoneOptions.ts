@@ -11,7 +11,6 @@ function offsetLabel(zone: string, now: Date): string {
   }
 }
 
-/** IANA zones (plus UTC and the saved value) with their current UTC offset. */
 export function timezoneOptions(current: string): SelectOption[] {
   const now = new Date();
   const zones = new Set<string>(["UTC", ...Intl.supportedValuesOf("timeZone")]);

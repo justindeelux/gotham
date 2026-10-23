@@ -1,12 +1,3 @@
-// Differential contract for the auth zod migration (JUS-23 V1/V2).
-//
-// Expected outcomes were recorded from the pre-migration Naive UI rules run
-// through the real async-validator engine (throwaway script, 2026-10-04)
-// and encoded here, so any schema change that alters acceptance or messages
-// fails loudly. Preserved quirks (not accidents to fix silently): zod's
-// .email() is NOT used because it rejects bracket-IP, quoted-local-part and
-// unicode-domain addresses the old rule accepts; whitespace-only passwords
-// pass required, exactly as before.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -33,9 +24,6 @@ import type { RuleFromOptions } from "@/shared/validation/naiveAdapter";
 import type { FormInst, FormItemRule } from "naive-ui";
 import type { Ref } from "vue";
 
-// Schema messages are namespaced keys resolved at validation time; the
-// English catalog values stay byte-identical to the recorded outcomes, so
-// this contract proves the original behavior in the default locale.
 beforeEach(() => {
   registerDiscoveredCatalogs();
   resetLocaleState();
@@ -183,7 +171,6 @@ describe("login and register rule builders", () => {
 
 describe("describeAuthError display contract", () => {
   it("maps curated, raw and degenerate failures in both locales", () => {
-    // 429 and empty/whitespace/non-object resolve to curated summaries.
     expect(describeAuthError({ status: 429, message: "slow down" })).toBe(
       "Too many attempts, please wait",
     );
@@ -192,8 +179,6 @@ describe("describeAuthError display contract", () => {
         "Something went wrong. Please try again.",
       );
     }
-    // Messaged unknowns keep a localized summary plus the raw diagnostic:
-    // prefix stripped, never translated, never classified.
     expect(
       describeAuthError({ status: 401, message: "auth: invalid credentials" }),
     ).toBe("Request failed: invalid credentials");
@@ -217,7 +202,6 @@ describe("describeAuthError display contract", () => {
 });
 
 describe("createVisibleValidation contract", () => {
-  /** runValidator invokes one wrapped validator with a form value. */
   function runValidator(rule: FormItemRule, value: unknown): unknown {
     const validate = rule.validator as unknown as (
       ..._args: unknown[]
@@ -248,7 +232,6 @@ describe("createVisibleValidation contract", () => {
     expect(
       runValidator((asyncRule.slow as FormItemRule[])[0], "v"),
     ).toBeInstanceOf(Promise);
-    // The promise result leaves the record unchanged (only the array fail).
     expect(visible.failedCount()).toBe(1);
   });
 
@@ -260,17 +243,14 @@ describe("createVisibleValidation contract", () => {
       value: { validate: vi.fn().mockResolvedValue({}) },
     } as unknown as Ref<FormInst | null>;
 
-    // Empty record: no validation runs at all (pristine switch is a no-op).
     visible.refreshVisible(formRef);
     expect(formRef.value?.validate).not.toHaveBeenCalled();
 
-    // One failure: refresh validates exactly that path, nothing else.
     expect(runValidator(rule, "bad")).toBeInstanceOf(Error);
     visible.refreshVisible(formRef);
     expect(formRef.value?.validate).toHaveBeenCalledTimes(1);
     expect(formRef.value?.validate).toHaveBeenCalledWith(undefined, ["email"]);
 
-    // Reset alone (no reinput clearing paths) empties the record again.
     visible.reset();
     visible.refreshVisible(formRef);
     expect(formRef.value?.validate).toHaveBeenCalledTimes(1);

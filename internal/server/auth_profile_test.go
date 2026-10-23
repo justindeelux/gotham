@@ -23,8 +23,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// newTestProfileServer builds a Server whose RequireAuth also resolves API
-// tokens, so the profile routes can prove they reject them.
 func newTestProfileServer(t *testing.T) (*Server, *fakeTokenService) {
 	t.Helper()
 
@@ -83,13 +81,9 @@ func TestProfileMeCarriesNewFields(t *testing.T) {
 	}
 }
 
-// TestMePlatformAdminSources: GET /me reports is_platform_admin from the
-// stored flag OR a PLATFORM_ADMINS allowlist match, using the same helper as
-// the admin gate.
 func TestMePlatformAdminSources(t *testing.T) {
 	s, _ := newTestProfileServer(t)
 
-	// The fake account has no stored flag and the allowlist is empty.
 	t.Setenv(PlatformAdminsEnv, "")
 	plain := doRequest(t, s, http.MethodGet, "/api/v1/auth/me", "", "Bearer valid-token")
 	if plain.Code != http.StatusOK {
@@ -103,7 +97,6 @@ func TestMePlatformAdminSources(t *testing.T) {
 		t.Error("is_platform_admin = true, want false with no flag and no allowlist")
 	}
 
-	// The allowlist alone flips the bit (case-insensitive, like the gate).
 	t.Setenv(PlatformAdminsEnv, "USER@example.com")
 	listed := doRequest(t, s, http.MethodGet, "/api/v1/auth/me", "", "Bearer valid-token")
 	var listedBody meResponse
@@ -114,7 +107,6 @@ func TestMePlatformAdminSources(t *testing.T) {
 		t.Errorf("is_platform_admin = false for an allowlisted email, want true (body %s)", listed.Body.String())
 	}
 
-	// The stored flag alone flips the bit: the scratch bootstrap account.
 	t.Setenv(PlatformAdminsEnv, "")
 	stack, _, pair := scratchProfileStack(t)
 	stored := doRequest(t, stack, http.MethodGet, "/api/v1/auth/me", "", "Bearer "+pair.AccessToken)
@@ -159,8 +151,6 @@ func TestProfileChangePassword(t *testing.T) {
 	}
 }
 
-// TestProfileRejectsAPITokens: a scoped API token (even admin-worthy) must
-// never touch the self-service profile routes: 403 with the contract message.
 func TestProfileRejectsAPITokens(t *testing.T) {
 	s, tokens := newTestProfileServer(t)
 
@@ -188,14 +178,12 @@ func TestProfileRejectsAPITokens(t *testing.T) {
 		t.Errorf("API-token password body = %s, want the contract message", body)
 	}
 
-	// The API token itself is valid: the tokens surface still answers 200.
 	listed := doRequest(t, s, http.MethodGet, "/api/v1/tokens", "", bearer)
 	if listed.Code != http.StatusOK {
 		t.Fatalf("API-token list status = %d, want 200 (token must stay valid)", listed.Code)
 	}
 }
 
-// TestProfileRateLimit: the profile routes sit behind the credential limiter.
 func TestProfileRateLimit(t *testing.T) {
 	s, _ := newTestProfileServer(t)
 
@@ -227,10 +215,6 @@ func TestProfileRateLimit(t *testing.T) {
 	}
 }
 
-// TestRequireInteractiveSessionMiddleware: the guard is route-level
-// middleware, so a route mounted in the group is rejected for API tokens
-// without any per-handler code. The dummy handler proves the middleware (not
-// the handler) wrote the 403.
 func TestRequireInteractiveSessionMiddleware(t *testing.T) {
 	s, _ := newTestProfileServer(t)
 
@@ -259,11 +243,6 @@ func TestRequireInteractiveSessionMiddleware(t *testing.T) {
 	}
 }
 
-// scratchProfileStack builds a Server backed by the real auth service on a
-// private scratch database and returns it with the service and live token
-// pairs for the seeded account (registered and logged in). Fake-backed
-// handler tests cannot catch validation the fake does not mirror (F1 reached
-// Postgres and answered 500); this stack can.
 func scratchProfileStack(t *testing.T) (*Server, *auth.AuthResult, *auth.AuthResult) {
 	t.Helper()
 
@@ -347,9 +326,6 @@ func scratchProfileStack(t *testing.T) (*Server, *auth.AuthResult, *auth.AuthRes
 	return s, registered, loggedIn
 }
 
-// TestProfileUnstorableTextOverHTTP replays the F1 probe against the real
-// stack: NUL, bidi-override and zero-width names are 400 with the contract
-// message, and a storable name still round-trips.
 func TestProfileUnstorableTextOverHTTP(t *testing.T) {
 	s, _, pair := scratchProfileStack(t)
 	bearer := "Bearer " + pair.AccessToken

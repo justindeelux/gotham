@@ -8,7 +8,6 @@ const props = defineProps<{ tool: ToolchainTool }>();
 
 type BadgeKind = "success" | "warning" | "default";
 
-/** badgeKind maps detect state to one Naive tag: green, amber, or grey. */
 const badgeKind = computed<BadgeKind>(() => {
   if (!props.tool.installed) {
     return "default";

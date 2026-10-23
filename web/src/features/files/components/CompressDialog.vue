@@ -18,7 +18,6 @@ import { useNameConflict } from "@/features/projects/composables/useNameConflict
 
 interface Props {
   show: boolean;
-  /** entries are the files/folders the archive is built from. */
   entries: FilesEntry[];
 }
 
@@ -42,8 +41,6 @@ const formatOptions: Array<{ label: string; value: ArchiveFormat }> = [
   { label: "tar.gz", value: "tar.gz" },
 ];
 
-// Reset the form each time the dialog opens so a previous value never leaks
-// into a new archive.
 watch(
   () => props.show,
   (open) => {
@@ -56,8 +53,6 @@ watch(
   },
 );
 
-// Follow a format change by swapping a known archive suffix on the current name
-// (an untouched default or a user value that still looks like an archive).
 watch(format, (next, previous) => {
   const trimmed = name.value.trim();
   const previousExt = archiveExtension(previous);
@@ -68,7 +63,6 @@ watch(format, (next, previous) => {
   conflict.clear();
 });
 
-/** nameTaken reports an archive name already present in the listing (409). */
 const nameTaken = computed<boolean>(() =>
   files.entries.some((entry) => entry.name === normalizeEntryName(name.value)),
 );
@@ -93,7 +87,6 @@ const valid = computed<boolean>(
   () => validateEntryName(name.value) === null && !nameTaken.value,
 );
 
-/** submit builds the archive and surfaces any failure in a toast. */
 async function submit(): Promise<void> {
   if (files.acting) {
     return;

@@ -50,14 +50,10 @@ describe("relativeTime", () => {
     expect(relativeTime("2026-10-06T09:00:00Z", "en", { long: true })).toBe("3 hours ago");
     expect(relativeTime("2026-10-05T13:00:00Z", "en", { long: true })).toBe("23 hours ago");
 
-    // A small forward clock skew (agent ahead of the browser) reads as "just
-    // now" instead of a nonsensical "in 30 seconds".
     expect(relativeTime("2026-10-06T12:00:30Z", "en", { long: true })).toBe("just now");
     expect(relativeTime("2026-10-06T12:05:00Z", "en", { long: true })).toBe("in 5 minutes");
-    // Vietnamese long form comes from Intl too.
     expect(relativeTime("2026-10-03T12:00:00Z", "vi", { long: true })).toBe("3 ngày trước");
 
-    // A caller-supplied reference instant (the coarse ticker) is honoured.
     expect(
       relativeTime("2026-10-04T12:00:00Z", "en", {
         long: true,
@@ -65,7 +61,6 @@ describe("relativeTime", () => {
       }),
     ).toBe("4 days ago");
 
-    // Missing / invalid timestamps keep the catalog labels in long mode too.
     expect(relativeTime(null, "en", { long: true })).toBe("never");
     expect(relativeTime("not-a-date", "en", { long: true })).toBe("unknown");
   });

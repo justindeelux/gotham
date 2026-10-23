@@ -1,5 +1,3 @@
-// Delete application (JUS-80): the confirm button stays disabled until the
-// typed name matches, and the store remove calls deleteApplication once.
 /* global HTMLButtonElement: readonly, HTMLInputElement: readonly, Event: readonly */
 import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
@@ -32,7 +30,6 @@ beforeEach(() => {
   globalThis.document.body.innerHTML = "";
 });
 
-/** modalButtons returns the teleported modal buttons by visible text. */
 function modalButton(text: string): HTMLButtonElement | null {
   const buttons = [...globalThis.document.body.querySelectorAll("button")];
   return (buttons.find((button) => button.textContent?.trim() === text) ?? null) as HTMLButtonElement | null;
@@ -46,7 +43,6 @@ function mountDialog() {
   });
 }
 
-/** setModalInput types into the teleported confirmation input. */
 async function setModalInput(value: string): Promise<void> {
   const input = globalThis.document.body.querySelector("input") as HTMLInputElement | null;
   expect(input).not.toBeNull();

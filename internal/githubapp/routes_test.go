@@ -14,8 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// testRouter mounts the routes with a fixed user, exercising the full HTTP
-// flow end to end against the fake GitHub.
 func testRouter(svc *Service, userID uuid.UUID) http.Handler {
 	r := chi.NewRouter()
 	Mount(r, func(next http.Handler) http.Handler { return next },
@@ -41,9 +39,6 @@ func doRequest(t *testing.T, router http.Handler, method, path string, body any)
 	return rec
 }
 
-// TestRoutesBrowserCallback proves the browser callback needs no bearer
-// token: the state identifies the user, and both outcomes finish with a
-// redirect to the SPA result route carrying a bounded flag.
 func TestRoutesBrowserCallback(t *testing.T) {
 	svc, _, api, userID := testFixture()
 	api.pem = testKeyPEM(t)
@@ -69,8 +64,6 @@ func TestRoutesBrowserCallback(t *testing.T) {
 		t.Fatalf("location = %q", location)
 	}
 
-	// Replaying the consumed state redirects with the expired flag, and a
-	// missing state does too: no JSON error ever reaches the browser.
 	rec = doRequest(t, router, http.MethodGet,
 		"/v1/providers/github-app/callback?code=manifest-code&state="+manifest.State, nil)
 	if rec.Code != http.StatusFound {
@@ -88,9 +81,6 @@ func TestRoutesBrowserCallback(t *testing.T) {
 	}
 }
 
-// TestRoutesInstallStateResolvesApp proves the setup landing can bind an
-// installation to the right app when several wait: the pending install state
-// resolves to its app without being consumed.
 func TestRoutesInstallStateResolvesApp(t *testing.T) {
 	svc, _, api, userID := testFixture()
 	api.pem = testKeyPEM(t)
@@ -132,14 +122,10 @@ func TestRoutesInstallStateResolvesApp(t *testing.T) {
 	if code, _ := resolve("bogus"); code != http.StatusNotFound {
 		t.Fatalf("bogus state = %d, want 404", code)
 	}
-	// Resolution does not consume: both states still record.
 	if _, err := svc.RecordInstallation(ctx, userID, mustParseAppID(t, appAID), 999, stateA); err != nil {
 		t.Fatal(err)
 	}
 }
-
-// TestRoutesEndToEnd runs connect + install + list repos + branches + push
-// shape + disconnect through HTTP against the fake.
 
 func mustParseAppID(t *testing.T, id string) uuid.UUID {
 	t.Helper()
@@ -181,7 +167,6 @@ func TestRoutesEndToEnd(t *testing.T) {
 		t.Fatal("callback leaks the private key")
 	}
 
-	// State replay through HTTP must fail.
 	rec = doRequest(t, router, http.MethodPost, "/v1/providers/github-app/callback",
 		map[string]any{"code": "manifest-code", "state": manifest.State})
 	if rec.Code != http.StatusBadRequest {
@@ -231,7 +216,6 @@ func TestRoutesEndToEnd(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
 	}
-	// GS-10 lists the connection age: the wire shape carries created_at.
 	if !strings.Contains(rec.Body.String(), `"created_at"`) {
 		t.Fatalf("list misses created_at: %s", rec.Body.String())
 	}
@@ -248,7 +232,6 @@ func TestRoutesEndToEnd(t *testing.T) {
 		t.Fatalf("disconnect = %+v", disconnected)
 	}
 
-	// Unknown app answers 404.
 	rec = doRequest(t, router, http.MethodGet, "/v1/providers/github-app/"+uuid.NewString()+"/repos", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown app = %d, want 404", rec.Code)

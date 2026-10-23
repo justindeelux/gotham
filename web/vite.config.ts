@@ -3,8 +3,6 @@ import { fileURLToPath, URL } from "node:url";
 import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
 
-// The SPA is compiled straight into the Go package that embeds it, so the
-// committed build output ships inside the control-plane binary.
 export default defineConfig({
   plugins: [vue()],
   resolve: {

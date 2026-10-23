@@ -1,7 +1,3 @@
-// HostHelperGate + section states (JUS-185): one accurate message per cause, an
-// in-product Install only when the repair path exists (helper missing but the
-// payload and the pinned repair drop-in present), an honest "update the control
-// plane" message otherwise, and the failure/retry and double-click paths.
 import { NMessageProvider } from "naive-ui";
 import { defineComponent, h, nextTick, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -159,8 +155,6 @@ describe("HostHelperGate", () => {
   });
 
   it("guards against a double click", async () => {
-    // A pending install keeps `installing` true while the second click fires
-    // in the same tick, which is exactly the double-click the guard covers.
     mockInstall.mockImplementation(() => new Promise(() => {}));
     const { wrapper } = await mountGate(
       networkState(hostWith({ helper: "missing", network_stack: true })),
@@ -214,9 +208,7 @@ describe("HostHelperGate", () => {
     await flushPromises();
     await nextTick();
     expect(wrapper.text()).toContain("could not be installed");
-    // The modal is teleported to body, so its log is read off the document.
     expect(globalThis.document.body.textContent).toContain("install-tool: boom");
-    // retry stays available
     expect(installButton(wrapper)).toBeTruthy();
     wrapper.unmount();
   });
@@ -236,8 +228,6 @@ describe("NetworkForm host states", () => {
     const { wrapper } = await mountForm(NetworkForm, locked);
     await installButton(wrapper)?.trigger("click");
     await flushPromises();
-    // The form does not re-render from a new prop in this stub, so assert the
-    // live region exists and the install path ran.
     expect(wrapper.find('[role="status"]').exists()).toBe(true);
     wrapper.unmount();
   });

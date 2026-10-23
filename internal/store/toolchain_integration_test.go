@@ -16,11 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestToolchainQueueContract exercises the generated toolchain-job queries
-// against Postgres: the active-job de-dupe, oldest-first per-node claiming,
-// cancel scoped to queued jobs, lease-scoped recovery, and the append-only log.
-// These are the SQL semantics the worker relies on, pinned separately from the
-// worker's own unit tests.
 func TestToolchainQueueContract(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -96,9 +91,6 @@ func TestToolchainQueueContract(t *testing.T) {
 	serverA, serverB := newServer(), newServer()
 	serverC, serverD := newServer(), newServer()
 
-	// Active de-dupe: a second active job for the same node+tool+action is a
-	// no-op; another action is a distinct job; re-enqueue is allowed once the
-	// first is terminal.
 	superseded := enqueue(serverA.ID, "docker", "install", base)
 	if _, err := st.CreateToolchainJob(ctx, sqlc.CreateToolchainJobParams{
 		ServerID: serverA.ID, ToolID: "docker", Action: "install",
@@ -112,9 +104,6 @@ func TestToolchainQueueContract(t *testing.T) {
 	a2 := enqueue(serverA.ID, "git", "install", base.Add(2*time.Second))
 	b1 := enqueue(serverB.ID, "railpack", "install", base.Add(3*time.Second))
 
-	// Oldest-first, and per-node sequential: after claiming A's first job, A is
-	// skipped (it has a running job) so B's job is claimed next; A's second job
-	// waits until A's first finishes.
 	first := claim("inst-1")
 	if uuid.UUID(first.ID.Bytes) != uuid.UUID(a1.ID.Bytes) {
 		t.Fatalf("first claim = %s, want a1", uuid.UUID(first.ID.Bytes))
@@ -128,8 +117,6 @@ func TestToolchainQueueContract(t *testing.T) {
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("claim while A busy err = %v, want pgx.ErrNoRows (A's second job blocked)", err)
 	}
-	// A finish guarded on ownership: the wrong instance cannot close a running
-	// job, and only the owning instance on an unexpired lease can.
 	if _, err := st.FinishToolchainJob(ctx, sqlc.FinishToolchainJobParams{ID: first.ID, ClaimedBy: "someone-else", Status: "succeeded"}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("foreign finish err = %v, want pgx.ErrNoRows", err)
 	}
@@ -144,7 +131,6 @@ func TestToolchainQueueContract(t *testing.T) {
 		t.Fatalf("claim did not record instance/lease: %+v", third)
 	}
 
-	// Cancel only touches queued jobs.
 	if _, err := st.CancelToolchainJob(ctx, third.ID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("cancel running err = %v, want pgx.ErrNoRows", err)
 	}
@@ -157,9 +143,6 @@ func TestToolchainQueueContract(t *testing.T) {
 		t.Fatalf("canceled job = %+v, want canceled with finished_at", canceled)
 	}
 
-	// Recovery is lease-only: the lapsed lease is failed; a fresh lease (ours or
-	// a peer's) is never touched, so a restart-overlapping process cannot fail a
-	// live job.
 	lapsedJob := enqueue(serverC.ID, "lapsed", "install", base.Add(5*time.Second))
 	freshJob := enqueue(serverD.ID, "fresh", "install", base.Add(6*time.Second))
 	lapsed := claim("inst-2")
@@ -190,8 +173,6 @@ func TestToolchainQueueContract(t *testing.T) {
 		}
 	}
 
-	// Append-only log: line rows with a monotonic seq, ordered reads, an after
-	// cursor, and idempotent appends.
 	logJob := enqueue(serverB.ID, "logtool", "install", base.Add(5*time.Second))
 	appendLine := func(seq int64, line string) {
 		t.Helper()
@@ -203,7 +184,7 @@ func TestToolchainQueueContract(t *testing.T) {
 	}
 	appendLine(1, "one")
 	appendLine(2, "two")
-	appendLine(1, "ignored") // ON CONFLICT DO NOTHING
+	appendLine(1, "ignored")
 	if err := st.AppendToolchainJobLogTail(ctx, sqlc.AppendToolchainJobLogTailParams{
 		JobID: logJob.ID, Stream: "stderr", Line: "three\n",
 	}); err != nil {
@@ -223,7 +204,6 @@ func TestToolchainQueueContract(t *testing.T) {
 	if len(after) != 2 || after[0].Seq != 2 {
 		t.Fatalf("after=1 rows = %+v, want seq 2 and 3", after)
 	}
-	// Deleting the job cascades its log rows away.
 	if _, err := pool.Exec(ctx, "DELETE FROM toolchain_jobs WHERE id = $1", logJob.ID); err != nil {
 		t.Fatalf("delete job: %v", err)
 	}
@@ -236,11 +216,6 @@ func TestToolchainQueueContract(t *testing.T) {
 	}
 }
 
-// TestToolchainClaimIsPerNodeSerializedUnderConcurrency is the PR #325 H1
-// regression: many goroutines claiming concurrently must never leave two running
-// jobs on one node. The unique partial index is what guarantees this; the
-// claim's NOT EXISTS alone raced (two claimers each picked a different job of
-// one node ~39/40 trials).
 func TestToolchainClaimIsPerNodeSerializedUnderConcurrency(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -311,7 +286,6 @@ func TestToolchainClaimIsPerNodeSerializedUnderConcurrency(t *testing.T) {
 				case err == nil:
 					claimed++
 				case errors.Is(err, pgx.ErrNoRows), errors.Is(err, store.ErrClaimContended):
-					// expected: an empty queue, or a lost node race
 				default:
 					claimErr = err
 				}

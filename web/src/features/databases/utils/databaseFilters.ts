@@ -1,9 +1,7 @@
 import type { Database } from "@/features/databases/api/databases";
 
-/** Filter chip keys mirroring the databases.html toolbar. */
 export type DatabaseFilter = "all" | "running" | "stopped" | "public";
 
-/** matchesFilter applies the active status chip to one database. */
 export function matchesFilter(
   database: Database,
   filter: DatabaseFilter,
@@ -21,7 +19,6 @@ export function matchesFilter(
   }
 }
 
-/** matchesSearch applies the name/engine/node query to one database. */
 export function matchesSearch(
   database: Database,
   query: string,
@@ -39,14 +36,12 @@ export function matchesSearch(
   return haystacks.some((field) => field.toLowerCase().includes(needle));
 }
 
-/** engineLabel renders engine + version + image hint. */
 export function engineLabel(database: Database): string {
   return database.version
     ? `${database.engine}:${database.version}`
     : database.engine;
 }
 
-/** engineBreakdown summarizes engines for the KPI subtitle. */
 export function engineBreakdown(databases: Database[]): string {
   const counts = new Map<string, number>();
   for (const item of databases) {
@@ -60,7 +55,6 @@ export function engineBreakdown(databases: Database[]): string {
     .join(" · ");
 }
 
-/** filterCounts renders live counts for the filter chips; never invented. */
 export function filterCounts(
   databases: Database[],
 ): Record<DatabaseFilter, number> {

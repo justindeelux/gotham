@@ -21,7 +21,6 @@ const emit = defineEmits<{
 
 const { t, locale } = useI18n();
 
-/** label renders the "browser on OS" device name in the active locale. */
 const label = computed<string>(() =>
   deviceLabel(props.session.user_agent, locale.value as DeviceLocale),
 );
@@ -43,12 +42,6 @@ const activeAbsolute = computed<string>(() =>
   formatDateTime(props.session.last_used_at),
 );
 
-/**
- * formatDateTime renders date + time for the hover title in the active
- * display locale (not the browser default). No shared datetime helper
- * exists (shared/utils/format only has the date-only formatDate), so the
- * row formats locally like ProfileIdentityCard does.
- */
 function formatDateTime(iso: string): string {
   const time = new Date(iso);
   if (Number.isNaN(time.getTime())) {
@@ -63,10 +56,6 @@ function formatDateTime(iso: string): string {
   });
 }
 
-/**
- * confirmText warns harder for the current session: ending it signs the
- * user out here, while other sessions end silently in the background.
- */
 const confirmText = computed<string>(() =>
   props.session.current
     ? t("profile.sessions.confirmCurrent")
@@ -155,10 +144,6 @@ const confirmText = computed<string>(() =>
   font-size: var(--text-xs);
 }
 
-/* The rows stack by panel width, not viewport (JUS-19 convention): the
- * panel content is the container, so a narrow sidebar column stacks even
- * on a wide viewport. In the stacked layout the facts wrap onto their own
- * lines instead of clipping (touch has no hover title). */
 @container (max-width: 480px) {
   .session-row {
     flex-direction: column;

@@ -8,18 +8,10 @@ import { useI18n } from "vue-i18n";
 import { parseGotoLine } from "@/features/files/editor/goto";
 import type { GotoLineError } from "@/features/files/editor/goto";
 
-/**
- * Custom go-to-line popover (JUS-231). It accepts `line` or `line:column`,
- * shows the cursor line and the document's line count, and rejects zero,
- * out-of-range and non-numeric input inline instead of clamping it.
- */
 interface Props {
   show: boolean;
-  /** current is the cursor line when the popover opens. */
   current: number;
-  /** total is the document line count. */
   total: number;
-  /** jump performs the move; a rejected dimension is shown inline. */
   jump: (_line: number, _column: number) => GotoLineError | null;
 }
 
@@ -33,7 +25,6 @@ const value = ref("");
 const error = ref<GotoLineError | null>(null);
 const errorId = `ed-goto-error-${Math.random().toString(36).slice(2, 9)}`;
 
-/** errorText explains the rejected dimension in place. */
 const errorText = computed<string>(() => {
   if (error.value === "format") {
     return String(t("files.editor.goTo.invalidFormat"));
@@ -47,7 +38,6 @@ const errorText = computed<string>(() => {
   return "";
 });
 
-// Opening focuses the field with its text selected, so a retype replaces it.
 watch(
   () => props.show,
   (show) => {
@@ -64,7 +54,6 @@ watch(
   { immediate: true },
 );
 
-/** submit validates the syntax and lets the editor check the column bound. */
 function submit(): void {
   const parsed = parseGotoLine(value.value, props.total);
   if ("error" in parsed) {
@@ -79,7 +68,6 @@ function submit(): void {
   emit("close");
 }
 
-/** onSubmit ignores Enter while an IME composition is active. */
 function onSubmit(event: KeyboardEvent): void {
   if (event.isComposing) {
     return;

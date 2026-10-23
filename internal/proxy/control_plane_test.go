@@ -146,12 +146,10 @@ func TestControlPlaneSyncAndList(t *testing.T) {
 	if len(f.agent.calls) != 2 || !reflect.DeepEqual(f.agent.calls[0].Files, f.agent.calls[1].Files) {
 		t.Fatal("sync files differ on rerun")
 	}
-	// The localhost route must never be emitted on a remote node.
 	routes, diagnostics := f.service.controlPlaneRoute(ctx, uuid.New(), nil, nil)
 	if len(routes) != 0 || len(diagnostics) != 0 {
 		t.Fatalf("remote panel=%+v diagnostics=%+v", routes, diagnostics)
 	}
-	// Clearing the URL removes the router on the next sync.
 	f.service.controlPlaneURL = func(context.Context) (string, error) { return "", nil }
 	if err := f.service.SyncServer(ctx, f.serverID); err != nil {
 		t.Fatal(err)

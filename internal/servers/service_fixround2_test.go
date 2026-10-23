@@ -13,10 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestDeployKeyStampedWithAppTeam covers JUS-5 fix round 2, defect 2: an
-// application's deploy key is stamped with the owning app's team, so another
-// team that learns its UUID cannot attach it as a node SSH key, while the
-// application's own deploy flow keeps working.
 func TestDeployKeyStampedWithAppTeam(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -133,7 +129,6 @@ func TestDeployKeyStampedWithAppTeam(t *testing.T) {
 		}
 	})
 
-	// The sealed row carries the owning app's team, not NULL.
 	stored, err := st.GetPrivateKeyByID(ctx, mapping.PrivateKeyID)
 	if err != nil {
 		t.Fatalf("GetPrivateKeyByID: %v", err)
@@ -143,7 +138,6 @@ func TestDeployKeyStampedWithAppTeam(t *testing.T) {
 	}
 	deployKeyID := uuidFromPG(mapping.PrivateKeyID)
 
-	// Another team cannot attach it as a node key on either path.
 	if _, err := service.Add(bobPersonal, uuid.UUID(bob.ID.Bytes), "bob-node", "127.0.0.1", 22, "root", deployKeyID, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("cross-team Add with a deploy key = %v, want ErrValidation", err)
 	}
@@ -162,8 +156,6 @@ func TestDeployKeyStampedWithAppTeam(t *testing.T) {
 		t.Errorf("cross-team Update with a deploy key = %v, want ErrValidation", err)
 	}
 
-	// The owning team can still attach it, and the application's own flow —
-	// mapping to sealed row to decrypted PEM — keeps working.
 	if _, err := service.Add(aliceTeam, uuid.UUID(alice.ID.Bytes), "alice-node", "127.0.0.1", 22, "root", deployKeyID, ""); err != nil {
 		t.Errorf("own-team Add with the deploy key = %v, want success", err)
 	} else {
@@ -188,10 +180,6 @@ func TestDeployKeyStampedWithAppTeam(t *testing.T) {
 	}
 }
 
-// TestListPrivateKeysByTeam covers JUS-5 fix round 2, defect 4: the key
-// listing is scoped by team, so a future caller cannot enumerate another
-// team's keys. Legacy (team_id NULL) rows stay listed, mirroring
-// ListServersByTeam; attaching them is still gated by keyForTeam.
 func TestListPrivateKeysByTeam(t *testing.T) {
 	service, st := newTestService(t)
 

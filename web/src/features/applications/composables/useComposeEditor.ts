@@ -9,15 +9,6 @@ import {
 import { useApplicationsStore } from "@/features/applications/stores/applications";
 import { extractComposeServiceNames } from "@/features/applications/utils/compose";
 
-/**
- * Draft state behind the compose editor of one compose application (the
- * detail page). A pasted document saves its text and web service together;
- * a repo-backed one saves the file path and web service. A redeploy always
- * ups the latest stored file. An unrelated update to the row (domain save,
- * rename) bumps updated_at without touching the draft: re-seeding only
- * lands while the draft matches the last seeded snapshot, so in-progress
- * edits survive.
- */
 export function useComposeEditor(source: Ref<Application | null> | Application | null) {
   const appsStore = useApplicationsStore();
 
@@ -26,12 +17,10 @@ export function useComposeEditor(source: Ref<Application | null> | Application |
   const service = ref("");
   const saving = ref(false);
   const saveError = ref("");
-  /** saved* snapshot the last seeded row for dirty checks. */
   const savedContent = ref("");
   const savedFile = ref("");
   const savedService = ref("");
 
-  /** seed copies the stored row into the draft and snapshots it clean. */
   function seed(): void {
     const app = toValue(source);
     content.value = app?.compose_content ?? "";
@@ -43,7 +32,6 @@ export function useComposeEditor(source: Ref<Application | null> | Application |
     saveError.value = "";
   }
 
-  /** isDirty reports whether the draft differs from the last seeded row. */
   const isDirty = computed<boolean>(
     () =>
       content.value !== savedContent.value ||
@@ -61,10 +49,8 @@ export function useComposeEditor(source: Ref<Application | null> | Application |
     { immediate: true },
   );
 
-  /** isRepoMode is true when the stored row references a repository file. */
   const isRepoMode = computed<boolean>(() => savedContent.value.trim() === "");
 
-  /** serviceOptions suggests the web service from the draft text. */
   const serviceOptions = computed<Array<{ label: string; value: string }>>(() =>
     extractComposeServiceNames(content.value).map((name) => ({
       label: name,
@@ -72,22 +58,18 @@ export function useComposeEditor(source: Ref<Application | null> | Application |
     })),
   );
 
-  /** contentValid mirrors the backend creation gate (non-empty, 256 KiB). */
   const contentValid = computed<boolean>(
     () => composeContentSchema.safeParse(content.value).success,
   );
 
-  /** fileValid mirrors the backend gate for the in-repo path. */
   const fileValid = computed<boolean>(
     () => composeFileSchema.safeParse(file.value).success,
   );
 
-  /** serviceValid mirrors the backend gate for the routed service. */
   const serviceValid = computed<boolean>(
     () => composeServiceSchema.safeParse(service.value).success,
   );
 
-  /** saveDisabled gates the save on a valid, edited draft and a loaded row. */
   const saveDisabled = computed<boolean>(() => {
     if (
       saving.value ||
@@ -100,11 +82,6 @@ export function useComposeEditor(source: Ref<Application | null> | Application |
     return isRepoMode.value ? !fileValid.value : !contentValid.value;
   });
 
-  /**
-   * handleSave writes the draft; the store merges the row, so the page
-   * refreshes. Resolves true when the save landed, false when it was skipped
-   * or failed.
-   */
   async function handleSave(): Promise<boolean> {
     const app = toValue(source);
     if (!app || saveDisabled.value) {

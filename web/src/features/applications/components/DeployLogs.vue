@@ -10,21 +10,8 @@ import {
 import type { Deployment } from "@/features/applications/api/applications";
 import LogViewer from "@/features/servers/components/LogViewer.vue";
 
-/**
- * Build/deploy log for one deployment.
- *
- * An in-flight deployment streams its realtime channel (`LogViewer`); a
- * finished one reads the persisted build log (`GET .../logs`, JUS-84), so a
- * failed run stays inspectable after its Redis stream is gone. The control
- * plane publishes agent output on `logs:{serverID}:{deploymentID}` (see
- * `DeployChannel` in `internal/deploy/events.go`). The streamed output
- * itself is never translated; only the generated heading is.
- */
-
 interface Props {
-  /** Node the application is deployed to (server_id of the application). */
   serverId: string;
-  /** Deployment whose logs are shown. */
   deployment: Deployment | null;
 }
 
@@ -32,16 +19,12 @@ const props = defineProps<Props>();
 
 const { t } = useI18n();
 
-/** Stored log of a finished deployment (null while streaming or unloaded). */
 const storedLog = ref<string | null>(null);
 
-/** True when the stored-log read failed (distinct from a genuinely empty log). */
 const loadFailed = ref(false);
 
-/** Monotonic read id: a slow read must not overwrite a newer selection. */
 let readSeq = 0;
 
-/** Manual retry trigger for the error state's retry button. */
 const retryNonce = ref(0);
 
 const streaming = computed<boolean>(
@@ -67,16 +50,10 @@ const subtitle = computed<string>(() =>
     : "",
 );
 
-/** True while a finished deployment's stored log is being read. */
 const loadingStored = computed<boolean>(
   () => !streaming.value && !!props.deployment && !!props.serverId && storedLog.value === null && !loadFailed.value,
 );
 
-/**
- * A deployment counts as just finished when its clock is missing or recent:
- * only then is an empty stored log worth re-reading (the persist may still
- * be landing). Older rows with no log predate log persistence (JUS-84).
- */
 function justFinished(selected: Deployment): boolean {
   if (!selected.finished_at) {
     return true;
@@ -88,11 +65,7 @@ function justFinished(selected: Deployment): boolean {
   return Date.now() - finished < 60_000;
 }
 
-/** Loads the stored log whenever a finished deployment is selected. */
 watch(
-  // Array-of-sources form: each element is compared, so a re-polled but equal
-  // deployment does not reset storedLog (which collapsed the page and jumped
-  // the scroll position to the top).
   [() => (props.deployment ? `${props.deployment.id}:${props.deployment.state}` : ""), retryNonce],
   async () => {
     const selected = props.deployment;
@@ -103,8 +76,6 @@ watch(
       return;
     }
     const fresh = () => seq === readSeq && props.deployment?.id === selected.id;
-    // An empty read right after the terminal event can precede the persist;
-    // retry briefly before settling on storedEmpty.
     const attempts = justFinished(selected) ? 3 : 1;
     for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) {
@@ -134,7 +105,6 @@ watch(
   { immediate: true },
 );
 
-/** Re-reads the stored log after a failed read. */
 function retryLoad(): void {
   retryNonce.value += 1;
 }

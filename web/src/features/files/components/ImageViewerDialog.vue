@@ -20,9 +20,7 @@ interface Props {
   serverId: string;
   teamId: string;
   root: string;
-  /** directory is the viewer's root-relative folder ("" = root top level). */
   directory: string;
-  /** entry is the image to show; null renders an empty closed shell. */
   entry: FilesEntry | null;
 }
 
@@ -39,21 +37,16 @@ const objectUrl = ref<string | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
-/** loadSeq invalidates a superseded load (a second open or a close). */
 let loadSeq = 0;
-/** aborter cancels the in-flight blob fetch when the dialog closes. */
 let aborter: AbortController | null = null;
-/** drag anchor for an active pan gesture; null when not panning. */
 let dragAnchor: { x: number; y: number } | null = null;
 
-/** cancelLoad invalidates and aborts any in-flight load. */
 function cancelLoad(): void {
   loadSeq += 1;
   aborter?.abort();
   aborter = null;
 }
 
-/** releaseUrl revokes the current object URL, if any. */
 function releaseUrl(): void {
   if (objectUrl.value !== null) {
     URL.revokeObjectURL(objectUrl.value);
@@ -61,9 +54,6 @@ function releaseUrl(): void {
   }
 }
 
-/** closeAll drops the load and the transient states. The object URL is
- * released on the modal's leave transition ({@link onAfterLeave}), never
- * mid-close, so a reopen racing the fade cannot lose its URL. */
 function closeAll(): void {
   cancelLoad();
   dragAnchor = null;
@@ -71,21 +61,12 @@ function closeAll(): void {
   error.value = null;
 }
 
-/**
- * onAfterLeave revokes the object URL once the dialog is gone. It runs only
- * while closed: a reopen that cancelled the leave keeps its own URL.
- */
 function onAfterLeave(): void {
   if (!props.show) {
     releaseUrl();
   }
 }
 
-/**
- * load mints a single-use download ticket through the authenticated files
- * API, then fetches the body as a Blob and shows it through an object URL.
- * The ticket is the download route's only credential (no bearer on fetch).
- */
 async function load(): Promise<void> {
   const target = props.entry;
   cancelLoad();
@@ -128,8 +109,6 @@ async function load(): Promise<void> {
     if (isCanceledError(err)) {
       return;
     }
-    // An unclassified failure (a network TypeError, a ticket 500 with no
-    // catalog mapping) gets the viewer copy, never a raw message.
     error.value =
       filesErrorKey(err) === null
         ? String(t("files.viewer.loadError"))
@@ -164,26 +143,15 @@ onBeforeUnmount(() => {
   releaseUrl();
 });
 
-/** close emits the v-model close. */
 function close(): void {
   emit("update:show", false);
 }
 
-/**
- * onImgError reports an undecodable body (corrupt or unsupported bytes): the
- * spinner is already gone and the stage would otherwise sit blank. The broken
- * URL is released; retry reloads it.
- */
 function onImgError(): void {
   releaseUrl();
   error.value = String(t("files.viewer.loadError"));
 }
 
-/**
- * onWheel zooms around the cursor by one notch per wheel tick. The point is
- * measured from the stage center, matching the composable's coordinate
- * contract, so the pixel under the cursor stays under it.
- */
 function onWheel(event: WheelEvent): void {
   if (objectUrl.value === null) {
     return;
@@ -199,11 +167,6 @@ function onWheel(event: WheelEvent): void {
   );
 }
 
-/**
- * onPointerDown starts a pan drag. Panning needs a zoomed view: at scale 1
- * the image is already fitted, so the press is left alone (text selection
- * included).
- */
 function onPointerDown(event: PointerEvent): void {
   if (event.button !== 0 || view.value.scale <= 1 || objectUrl.value === null) {
     return;
@@ -212,7 +175,6 @@ function onPointerDown(event: PointerEvent): void {
   stageEl.value?.setPointerCapture(event.pointerId);
 }
 
-/** onPointerMove pans the view by the drag delta. */
 function onPointerMove(event: PointerEvent): void {
   if (dragAnchor === null) {
     return;
@@ -221,7 +183,6 @@ function onPointerMove(event: PointerEvent): void {
   dragAnchor = { x: event.clientX, y: event.clientY };
 }
 
-/** onPointerUp ends the pan drag. */
 function onPointerUp(): void {
   dragAnchor = null;
 }

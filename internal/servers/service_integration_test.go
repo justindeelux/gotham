@@ -13,9 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestServiceLifecycleWithValidation exercises the full stack against the dev
-// database and the in-process SSH server: key storage, server creation, SSH
-// validation with the stored key, and CRUD.
 func TestServiceLifecycleWithValidation(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -57,8 +54,6 @@ func TestServiceLifecycleWithValidation(t *testing.T) {
 		t.Errorf("SSHKeyID = %v, want %s", created.SSHKeyID, key.ID)
 	}
 
-	// Validation uses the stored (encrypted) key, which must round-trip
-	// through AES-GCM decryption.
 	result, err := service.Validate(ctx, created.ID, ValidateAuth{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -72,9 +67,6 @@ func TestServiceLifecycleWithValidation(t *testing.T) {
 		}
 	}
 
-	// SSH validation records inventory but does not make the node ready: ready
-	// means an authenticated agent heartbeat (A4-15/B4-9). An agentless node
-	// stays pending after a successful SSH probe.
 	fetched, err := service.Get(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -88,16 +80,12 @@ func TestServiceLifecycleWithValidation(t *testing.T) {
 	if fetched.TotalMem == nil || *fetched.TotalMem != int64(8192000)*1024 {
 		t.Errorf("TotalMem = %v, want 8192000 KiB", fetched.TotalMem)
 	}
-	// The first successful validation pins the node's host key; a later
-	// validation must present the same key.
 	if fetched.HostKeyFingerprint == nil || *fetched.HostKeyFingerprint != hostFingerprint {
 		t.Errorf("HostKeyFingerprint = %v, want the pinned %q", fetched.HostKeyFingerprint, hostFingerprint)
 	}
-	// A second validation against the pin succeeds.
 	if _, err := service.Validate(ctx, created.ID, ValidateAuth{}); err != nil {
 		t.Fatalf("Validate with pinned host key: %v", err)
 	}
-	// The operator reset forgets the pin so a rotated key can be re-pinned.
 	reset, err := service.ResetHostKey(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("ResetHostKey: %v", err)
@@ -132,8 +120,6 @@ func TestServiceLifecycleWithValidation(t *testing.T) {
 	}
 }
 
-// TestServiceAddValidation checks the create-input guards without a database
-// round trip beyond the key lookup.
 func TestServiceAddValidation(t *testing.T) {
 	service, _ := newTestService(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -156,9 +142,6 @@ func TestServiceAddValidation(t *testing.T) {
 	}
 }
 
-// TestServicePasswordAuthRequiresHostKeyTrust proves password auth to an
-// unpinned node is refused unless the operator explicitly trusts the host key,
-// and that the explicit trust pins the key.
 func TestServicePasswordAuthRequiresHostKeyTrust(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -181,15 +164,12 @@ func TestServicePasswordAuthRequiresHostKeyTrust(t *testing.T) {
 		}
 	})
 
-	// Without explicit trust, an unpinned host is refused before any password
-	// is sent.
 	if _, err := service.Validate(ctx, created.ID, ValidateAuth{Password: "hunter2"}); err == nil {
 		t.Fatal("password validation trusted an unpinned host key")
 	} else if !strings.Contains(err.Error(), "not pinned") {
 		t.Errorf("err = %v, want it to report the host is not pinned", err)
 	}
 
-	// The operator's explicit trust accepts and pins the key.
 	if _, err := service.Validate(ctx, created.ID, ValidateAuth{Password: "hunter2", TrustHostKey: true}); err != nil {
 		t.Fatalf("Validate with trust_host_key: %v", err)
 	}
@@ -202,10 +182,6 @@ func TestServicePasswordAuthRequiresHostKeyTrust(t *testing.T) {
 	}
 }
 
-// TestServiceStoredPasswordAndUpdate proves a password given at creation is
-// encrypted at rest, used for later SSH validation without being passed again,
-// never exposed via Get, and that Update resets the host-key pin and status
-// only when the address, user, or credential changes.
 func TestServiceStoredPasswordAndUpdate(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -231,7 +207,6 @@ func TestServiceStoredPasswordAndUpdate(t *testing.T) {
 		t.Errorf("HasPassword = false, want true")
 	}
 
-	// The stored secret authenticates a validation run with an empty auth.
 	result, err := service.Validate(ctx, created.ID, ValidateAuth{TrustHostKey: true})
 	if err != nil {
 		t.Fatalf("Validate with stored password: %v", err)
@@ -240,7 +215,6 @@ func TestServiceStoredPasswordAndUpdate(t *testing.T) {
 		t.Errorf("pin = %+v, want %q", result.Server, fingerprint)
 	}
 
-	// A name-only edit keeps the pin and the password flag.
 	name := "stored-pw-renamed"
 	updated, err := service.Update(ctx, created.ID, UpdateParams{Name: &name})
 	if err != nil {
@@ -256,7 +230,6 @@ func TestServiceStoredPasswordAndUpdate(t *testing.T) {
 		t.Errorf("HasPassword = false after name-only edit, want true")
 	}
 
-	// An address change resets the pin and returns the node to pending.
 	newIP := "10.99.0.9"
 	updated, err = service.Update(ctx, created.ID, UpdateParams{IP: &newIP})
 	if err != nil {
@@ -269,7 +242,6 @@ func TestServiceStoredPasswordAndUpdate(t *testing.T) {
 		t.Errorf("Status = %q, want pending after address change", updated.Status)
 	}
 
-	// Switching to a key forgets the password.
 	key, err := service.AddPrivateKey(ctx, "update-key", string(testPrivateKeyPEM(t)))
 	if err != nil {
 		t.Fatalf("AddPrivateKey: %v", err)
@@ -285,7 +257,6 @@ func TestServiceStoredPasswordAndUpdate(t *testing.T) {
 		t.Errorf("HasPassword = true after key switch, want false")
 	}
 
-	// Validation errors never echo the stored secret.
 	if _, err := service.Add(ctx, uuid.New(), "both-node", host, port, "root", key.ID, "hunter2"); err == nil {
 		t.Errorf("Add with key and password succeeded, want ErrValidation")
 	} else if strings.Contains(err.Error(), "hunter2") {
@@ -293,9 +264,6 @@ func TestServiceStoredPasswordAndUpdate(t *testing.T) {
 	}
 }
 
-// TestServicePinHostKeyIsCompareAndSet proves the first-use pin cannot
-// overwrite an existing pin: a racing validation that observed a different key
-// must fail closed, not clobber the stored pin.
 func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -314,7 +282,6 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 		}
 	})
 
-	// Simulate the winner of the race having pinned one key...
 	if _, err := st.PinServerHostKey(ctx, sqlc.PinServerHostKeyParams{
 		ID:                 pgUUID(created.ID),
 		HostKeyFingerprint: strPtr("SHA256:winner"),
@@ -322,7 +289,6 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 		t.Fatalf("seed pin: %v", err)
 	}
 
-	// ...then a stale validation that observed a different key must fail.
 	pinRow, err := st.GetServerByID(ctx, pgUUID(created.ID))
 	if err != nil {
 		t.Fatalf("GetServerByID: %v", err)
@@ -335,7 +301,6 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 		t.Errorf("err = %v, want a changed-while-pinning error", err)
 	}
 
-	// A concurrent validation that observed the same key is a benign no-op.
 	if err := service.pinHostKey(ctx, created.ID, pinRow, "SHA256:winner"); err != nil {
 		t.Fatalf("pinHostKey with the same key: %v", err)
 	}
@@ -348,9 +313,6 @@ func TestServicePinHostKeyIsCompareAndSet(t *testing.T) {
 	}
 }
 
-// TestServicePinHostKeyRetryBranch covers the lost-CAS retry: a row cleared by
-// a concurrent reset is re-pinned on the retry, and a row cleared on every
-// attempt is a bounded error rather than a silent skip.
 func TestServicePinHostKeyRetryBranch(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -373,18 +335,12 @@ func TestServicePinHostKeyRetryBranch(t *testing.T) {
 		return created.ID
 	}
 
-	// The seam simulates a lost CAS: returning pgx.ErrNoRows is exactly what a
-	// concurrent writer makes PinServerHostKey report, so the retry path runs
-	// without a real race. The row state (empty vs. pinned) drives the outcome.
-
 	t.Run("clear once then retry succeeds", func(t *testing.T) {
 		id := newNode(t, "retry-once-node")
 		calls := 0
 		st.BeforePinServerHostKey = func() error {
 			calls++
 			if calls == 1 {
-				// The first attempt loses the CAS against a cleared row; the
-				// retry sees the row still unpinned and pins it.
 				return pgx.ErrNoRows
 			}
 			return nil
@@ -409,8 +365,6 @@ func TestServicePinHostKeyRetryBranch(t *testing.T) {
 
 	t.Run("clear repeatedly is a bounded error", func(t *testing.T) {
 		id := newNode(t, "retry-loop-node")
-		// Every attempt loses the CAS to an empty row: the loop is bounded and
-		// reports an error instead of skipping the pin.
 		st.BeforePinServerHostKey = func() error { return pgx.ErrNoRows }
 		t.Cleanup(func() { st.BeforePinServerHostKey = nil })
 
@@ -435,10 +389,6 @@ func TestServicePinHostKeyRetryBranch(t *testing.T) {
 	})
 }
 
-// TestServiceValidateFailsClosedWhenPinWriteFails proves Validate's wiring: a
-// pin write that fails during a first-use validation returns ErrValidation and
-// leaves the node not-ready, rather than reporting success behind an
-// unpersisted pin.
 func TestServiceValidateFailsClosedWhenPinWriteFails(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -473,7 +423,6 @@ func TestServiceValidateFailsClosedWhenPinWriteFails(t *testing.T) {
 		}
 	})
 
-	// Force every pin write to fail for this validation.
 	st.BeforePinServerHostKey = func() error { return errors.New("pin write forced to fail") }
 	t.Cleanup(func() { st.BeforePinServerHostKey = nil })
 
@@ -500,8 +449,6 @@ func TestServiceValidateFailsClosedWhenPinWriteFails(t *testing.T) {
 	}
 }
 
-// TestServiceValidateMissingServer checks that validating an unknown server
-// returns ErrNotFound rather than an SSH error.
 func TestServiceValidateMissingServer(t *testing.T) {
 	service, _ := newTestService(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

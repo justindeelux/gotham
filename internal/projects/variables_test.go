@@ -19,23 +19,16 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// testVariableSecret seals the test suite's shared secrets.
 const testVariableSecret = "test-shared-variables-secret"
 
-// newVariableTestService wires the real service onto the in-memory repository
-// with the given team scope and a sealing key.
 func newVariableTestService(repo *fakeRepository, userID, teamID uuid.UUID, role teams.Role) (*Service, context.Context) {
 	svc := NewService(Config{Repository: repo, Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
 	ctx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: role})
 	return svc, ctx
 }
 
-// strPtr boxes a PUT value (nil stays omitted).
 func strPtr(value string) *string { return &value }
 
-// TestReplaceProjectVariablesRoundtrip walks the PUT then GET: plain values
-// come back, secrets stay masked, and the stored ciphertext differs from the
-// plaintext.
 func TestReplaceProjectVariablesRoundtrip(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -94,9 +87,6 @@ func TestReplaceProjectVariablesRoundtrip(t *testing.T) {
 	}
 }
 
-// TestReplaceKeepsSecretWhenValueOmitted pins the contract's keep semantics:
-// an omitted value for an existing secret key re-writes its ciphertext
-// unchanged, while a new secret without a value is a 400.
 func TestReplaceKeepsSecretWhenValueOmitted(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -139,7 +129,6 @@ func TestReplaceKeepsSecretWhenValueOmitted(t *testing.T) {
 	}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("new secret without value = %v, want ErrValidation", err)
 	}
-	// The failed PUT changed nothing.
 	rows, err := repo.ListVariables(context.Background(), project.ID, uuid.Nil)
 	if err != nil {
 		t.Fatalf("ListVariables: %v", err)
@@ -149,8 +138,6 @@ func TestReplaceKeepsSecretWhenValueOmitted(t *testing.T) {
 	}
 }
 
-// TestReplaceSemanticsDropMissingKeys pins the replace (not merge) rule: keys
-// absent from the PUT are gone afterwards.
 func TestReplaceSemanticsDropMissingKeys(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -184,7 +171,6 @@ func TestReplaceSemanticsDropMissingKeys(t *testing.T) {
 	}
 }
 
-// TestVariableKeyValidation pins the contract's key rule and the scope cap.
 func TestVariableKeyValidation(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -196,7 +182,7 @@ func TestVariableKeyValidation(t *testing.T) {
 	}
 	for _, key := range []string{"", "1ABC", "HAS SPACE", "HAS-DASH", "has.dot", "key=eq", "_"} {
 		if key == "_" {
-			continue // "_" is valid; the rest must fail.
+			continue
 		}
 		if _, err := svc.ReplaceProjectVariables(ctx, userID, project.ID, []VariableInput{{Key: key, Value: strPtr("x")}}); !errors.Is(err, ErrValidation) {
 			t.Errorf("key %q = %v, want ErrValidation", key, err)
@@ -223,8 +209,6 @@ func TestVariableKeyValidation(t *testing.T) {
 	}
 }
 
-// TestVariableViewerForbidden pins the role rule: viewers read but never
-// write.
 func TestVariableViewerForbidden(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -243,7 +227,6 @@ func TestVariableViewerForbidden(t *testing.T) {
 	}
 }
 
-// TestVariableCrossTeamIsNotFound pins team isolation on both scopes.
 func TestVariableCrossTeamIsNotFound(t *testing.T) {
 	userID, teamA, teamB := uuid.New(), uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -263,7 +246,6 @@ func TestVariableCrossTeamIsNotFound(t *testing.T) {
 			t.Errorf("cross-team %s = %v, want ErrNotFound", name, err)
 		}
 	}
-	// The environment scope resolves through the team-scoped environment read.
 	_, environments, err := svcA.GetProject(ctxA, userID, project.ID)
 	if err != nil || len(environments) != 1 {
 		t.Fatalf("GetProject: %+v, %v", environments, err)
@@ -278,11 +260,8 @@ func TestVariableCrossTeamIsNotFound(t *testing.T) {
 	}
 }
 
-// mustVarErr adapts a (T, error) call to the error for table assertions.
 func mustVarErr[T any](_ T, err error) error { return err }
 
-// TestVariableRoutesLifecycle walks the four variable routes and pins the
-// masked wire shape on both scopes.
 func TestVariableRoutesLifecycle(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
@@ -336,7 +315,6 @@ func TestVariableRoutesLifecycle(t *testing.T) {
 		}
 	}
 
-	// The environment scope answers the same shape.
 	rec = doRequest(handler, http.MethodPut, "/v1/environments/"+productionID+"/variables",
 		`{"variables":[{"key":"STAGING_ONLY","value":"1","secret":false}]}`)
 	if rec.Code != http.StatusOK {
@@ -353,7 +331,6 @@ func TestVariableRoutesLifecycle(t *testing.T) {
 	if len(envVars.Variables) != 1 || envVars.Variables[0].Key != "STAGING_ONLY" {
 		t.Fatalf("env GET = %+v, want the environment's own row", envVars.Variables)
 	}
-	// Scopes do not leak into each other.
 	rec = doRequest(handler, http.MethodGet, "/v1/projects/"+projectID+"/variables", "")
 	var projectVars variablesEnvelope
 	if err := json.Unmarshal(rec.Body.Bytes(), &projectVars); err != nil {
@@ -363,7 +340,6 @@ func TestVariableRoutesLifecycle(t *testing.T) {
 		t.Fatalf("project GET = %+v, want only the two project rows", projectVars.Variables)
 	}
 
-	// Bad keys are a 400 with the contract's message body.
 	rec = doRequest(handler, http.MethodPut, "/v1/projects/"+projectID+"/variables",
 		`{"variables":[{"key":"NOPE-BAD","value":"1"}]}`)
 	if rec.Code != http.StatusBadRequest {
@@ -372,7 +348,6 @@ func TestVariableRoutesLifecycle(t *testing.T) {
 	if errorMessage(t, rec) == "" {
 		t.Fatal("bad key PUT has an empty message")
 	}
-	// NUL bytes and over-long keys are 400s too.
 	for name, body := range map[string]string{
 		"nul value": `{"variables":[{"key":"A","value":"a\u0000b"}]}`,
 		"long key":  `{"variables":[{"key":"` + strings.Repeat("K", 129) + `","value":"1"}]}`,
@@ -382,15 +357,12 @@ func TestVariableRoutesLifecycle(t *testing.T) {
 			t.Errorf("%s PUT = %d (body %s), want 400", name, rec.Code, rec.Body.String())
 		}
 	}
-	// A foreign project is a 404, like every other project route.
 	rec = doRequest(handler, http.MethodGet, "/v1/projects/"+uuid.New().String()+"/variables", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("foreign GET = %d (body %s), want 404", rec.Code, rec.Body.String())
 	}
 }
 
-// TestVariableRoutesViewerReadOnly pins the HTTP role rule: a viewer reads
-// both scopes and is refused both PUTs.
 func TestVariableRoutesViewerReadOnly(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
@@ -418,9 +390,6 @@ func TestVariableRoutesViewerReadOnly(t *testing.T) {
 	}
 }
 
-// TestSharedVariablesScratchRoundtrip walks the repository against a scratch
-// database: replace and list on both scopes, masked reads, sealed storage,
-// and the project-delete cascade.
 func TestSharedVariablesScratchRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -464,7 +433,6 @@ func TestSharedVariablesScratchRoundtrip(t *testing.T) {
 		t.Fatalf("production vars = %+v, %v; want none", productionVars, err)
 	}
 
-	// The deploy seam reads both scopes in one snapshot.
 	rows, err := st.ListSharedVariablesForEnvironment(ctx, pgUUID(project.ID), pgUUID(staging.ID))
 	if err != nil {
 		t.Fatalf("ListSharedVariablesForEnvironment: %v", err)
@@ -478,15 +446,12 @@ func TestSharedVariablesScratchRoundtrip(t *testing.T) {
 		}
 	}
 
-	// The scope index refuses two rows of one scope with one key, even when
-	// the service (which dedupes first) is bypassed.
 	if _, err := st.DB.Exec(ctx,
 		`INSERT INTO shared_variables (project_id, key, value) VALUES ($1, 'DUP', '1'), ($1, 'DUP', '2')`,
 		pgUUID(project.ID)); err == nil {
 		t.Fatal("duplicate keys in one scope inserted, want a uniqueness refusal")
 	}
 
-	// Deleting the project cascades every scope's rows.
 	if _, err := repo.DeleteProject(ctx, project.TeamID, project.ID); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
@@ -499,10 +464,6 @@ func TestSharedVariablesScratchRoundtrip(t *testing.T) {
 	}
 }
 
-// TestSecretFlagFlips pins all three flag transitions: secret to plain with
-// an omitted value drops the old sealed value, plain to secret with an
-// omitted value is a 400, and plain to secret with a value seals it while
-// leaving the value column empty.
 func TestSecretFlagFlips(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -519,7 +480,6 @@ func TestSecretFlagFlips(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// Secret to plain with an omitted value: the old sealed value is gone.
 	flipped, err := svc.ReplaceProjectVariables(ctx, userID, project.ID, []VariableInput{
 		{Key: "FLIP"},
 		{Key: "STAY", Value: strPtr("plain")},
@@ -542,7 +502,6 @@ func TestSecretFlagFlips(t *testing.T) {
 		}
 	}
 
-	// Plain to secret with an omitted value is a 400: there is nothing to keep.
 	if _, err := svc.ReplaceProjectVariables(ctx, userID, project.ID, []VariableInput{
 		{Key: "FLIP", Secret: true},
 		{Key: "STAY", Value: strPtr("plain")},
@@ -550,7 +509,6 @@ func TestSecretFlagFlips(t *testing.T) {
 		t.Fatalf("plain to secret without value = %v, want ErrValidation", err)
 	}
 
-	// Plain to secret with a value seals it and leaves the value column empty.
 	if _, err := svc.ReplaceProjectVariables(ctx, userID, project.ID, []VariableInput{
 		{Key: "FLIP", Value: strPtr("new-secret"), Secret: true},
 		{Key: "STAY", Value: strPtr("plain")},
@@ -575,8 +533,6 @@ func TestSecretFlagFlips(t *testing.T) {
 	}
 }
 
-// TestVariableValueValidation pins F5: keys are capped at 128 characters and
-// NUL or invalid UTF-8 in values is a 400, for plain and secret rows alike.
 func TestVariableValueValidation(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -603,7 +559,6 @@ func TestVariableValueValidation(t *testing.T) {
 			t.Errorf("%s = %v, want ErrValidation", name, err)
 		}
 	}
-	// A failed PUT changes nothing.
 	rows, err := repo.ListVariables(context.Background(), project.ID, uuid.Nil)
 	if err != nil {
 		t.Fatalf("ListVariables: %v", err)
@@ -613,27 +568,19 @@ func TestVariableValueValidation(t *testing.T) {
 	}
 }
 
-// failingVariablesRepo wraps the fake and fails the variable writes and
-// reads with an error that carries the secret value, so the test proves the
-// route's error log does not repeat it.
 type failingVariablesRepo struct {
 	*fakeRepository
 	err error
 }
 
-// ListVariables implements Repository.
 func (f *failingVariablesRepo) ListVariables(_ context.Context, _, _ uuid.UUID) ([]SharedVariable, error) {
 	return nil, f.err
 }
 
-// ReplaceVariables implements Repository.
 func (f *failingVariablesRepo) ReplaceVariables(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ func(existing []SharedVariable) ([]SharedVariable, error)) error {
 	return f.err
 }
 
-// TestVariableLogsMaskSecrets drives the route error log with a
-// secret-carrying repository failure and asserts the captured output contains
-// neither the plaintext nor anything of the stored rows.
 func TestVariableLogsMaskSecrets(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	secretValue := "hunter2-supersecret-value"
@@ -681,10 +628,6 @@ func TestVariableLogsMaskSecrets(t *testing.T) {
 	}
 }
 
-// TestConcurrentReplaceSerializes is the F1 regression: 16 concurrent PUTs
-// on one scope must all succeed with exactly one consistent final set. It
-// fails on the old lock-free delete-then-insert, where most PUTs hit the
-// scope uniqueness index (23505, mapped to a 500).
 func TestConcurrentReplaceSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -739,11 +682,6 @@ func TestConcurrentReplaceSerializes(t *testing.T) {
 	}
 }
 
-// TestConcurrentKeepVsNewValueStaysConsistent is the F2 companion: a
-// keep-ciphertext PUT racing a new-value PUT cannot restore a stale
-// ciphertext, because the existing set is read inside the locked write
-// transaction. Every iteration ends with either the old or the new value and
-// zero errors.
 func TestConcurrentKeepVsNewValueStaysConsistent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -800,8 +738,6 @@ func TestConcurrentKeepVsNewValueStaysConsistent(t *testing.T) {
 	}
 }
 
-// TestKeepSeesLatestCommit pins the keep path sequentially: a keep PUT after
-// a new-value PUT preserves the new ciphertext, not a stale one.
 func TestKeepSeesLatestCommit(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -843,9 +779,6 @@ func TestKeepSeesLatestCommit(t *testing.T) {
 	}
 }
 
-// TestReplaceAgainstDeletedScopeIsNotFound is the F3 regression: a PUT
-// against a deleted environment or project answers 404, not 500 — over the
-// service and over HTTP.
 func TestReplaceAgainstDeletedScopeIsNotFound(t *testing.T) {
 	userID, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -879,10 +812,6 @@ func TestReplaceAgainstDeletedScopeIsNotFound(t *testing.T) {
 	}
 }
 
-// TestConcurrentEnvironmentReplaceSerializes mirrors the project-scope F1
-// test on the environment scope: 16 concurrent PUTs must all succeed with
-// one consistent final set. It kills the mutant that drops the environment
-// row lock.
 func TestConcurrentEnvironmentReplaceSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -941,15 +870,11 @@ func TestConcurrentEnvironmentReplaceSerializes(t *testing.T) {
 	}
 }
 
-// raceResult collects one racer's error.
 type raceResult struct {
 	name string
 	err  error
 }
 
-// assertRaceClean fails on any error other than a missing scope: a deadlock
-// (SQLSTATE 40P01) or a raw constraint violation surfaces as a wrapped
-// database error, never as ErrNotFound.
 func assertRaceClean(t *testing.T, round int, results []raceResult) {
 	t.Helper()
 	for _, result := range results {
@@ -959,10 +884,6 @@ func assertRaceClean(t *testing.T, round int, results []raceResult) {
 	}
 }
 
-// TestEnvironmentPutRacesDeleteSerializes is the R1 regression: an
-// environment PUT racing the environment delete must serialize (one side
-// wins, the loser answers 404), never deadlock. The old lock order
-// deadlocked about half the rounds.
 func TestEnvironmentPutRacesDeleteSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
@@ -1005,9 +926,6 @@ func TestEnvironmentPutRacesDeleteSerializes(t *testing.T) {
 	}
 }
 
-// TestEnvironmentPutRacesProjectDeleteSerializes races an environment PUT
-// against the project delete over 20 rounds: no deadlock, the loser answers
-// 404.
 func TestEnvironmentPutRacesProjectDeleteSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
@@ -1046,10 +964,6 @@ func TestEnvironmentPutRacesProjectDeleteSerializes(t *testing.T) {
 	}
 }
 
-// TestMixedScopeRaceSerializes runs project PUT, environment PUT, environment
-// delete and environment create at once over 20 rounds: every operation ends
-// cleanly (PUTs and the delete may answer 404 when they lose the race; the
-// uniquely-named create always succeeds).
 func TestMixedScopeRaceSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()

@@ -1,5 +1,3 @@
-// Two-factor API client and login flow (JUS-196): routes, payloads and the
-// half-authenticated state with a mocked axios layer.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 

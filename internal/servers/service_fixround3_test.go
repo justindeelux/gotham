@@ -14,12 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestLegacyAttachedKeyStillValidates covers the JUS-5 fix round 2 upgrade
-// guarantee: a legacy (team_id NULL) key already attached to a team server
-// still loads on the attached-key path, so the node validates under its own
-// team's scope. An unrelated team that names the key explicitly still gets
-// unknown-key. Removing the NULL-team skip (denying NULL keys outright, the
-// pre-guarantee behavior) must fail this test.
 func TestLegacyAttachedKeyStillValidates(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -65,7 +59,6 @@ func TestLegacyAttachedKeyStillValidates(t *testing.T) {
 	aliceTeam := teams.WithScope(ctx, teams.Scope{UserID: uuid.UUID(alice.ID.Bytes), TeamID: uuid.UUID(shared.ID.Bytes), Role: teams.RoleOwner})
 	bobPersonal := teams.WithScope(ctx, teams.Scope{UserID: uuid.UUID(bob.ID.Bytes), TeamID: teams.PersonalTeamID(uuid.UUID(bob.ID.Bytes)), Role: teams.RoleOwner})
 
-	// No team scope: the stored row keeps team_id NULL, the legacy state.
 	legacyKey, err := service.AddPrivateKey(ctx, fmt.Sprintf("r3-legacy-%d", suffix), string(testPrivateKeyPEM(t)))
 	if err != nil {
 		t.Fatalf("AddPrivateKey legacy: %v", err)
@@ -78,7 +71,6 @@ func TestLegacyAttachedKeyStillValidates(t *testing.T) {
 		}
 	})
 
-	// A team server still pointing at the legacy key (the pre-teams layout).
 	var serverRow pgtype.UUID
 	if err := st.DB.QueryRow(ctx,
 		`INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id)
@@ -95,12 +87,10 @@ func TestLegacyAttachedKeyStillValidates(t *testing.T) {
 		}
 	})
 
-	// The attached-key path loads the legacy key under the owning team's scope.
 	if _, err := service.loadKeyAuth(aliceTeam, pgUUID(legacyKey.ID), "", false); err != nil {
 		t.Fatalf("attached legacy key load = %v, want success", err)
 	}
 
-	// ... and the node validates over SSH with its stored key.
 	result, err := service.Validate(aliceTeam, serverID, ValidateAuth{})
 	if err != nil {
 		t.Fatalf("Validate with the attached legacy key = %v, want success", err)
@@ -111,7 +101,6 @@ func TestLegacyAttachedKeyStillValidates(t *testing.T) {
 		}
 	}
 
-	// An unrelated team naming the key explicitly still gets unknown-key.
 	if _, err := service.loadKeyAuth(bobPersonal, pgUUID(legacyKey.ID), "", true); !errors.Is(err, ErrValidation) {
 		t.Errorf("unrelated-team explicit load = %v, want ErrValidation", err)
 	}

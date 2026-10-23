@@ -19,7 +19,6 @@ interface Props {
   root: string;
   path: string;
   fileName: string;
-  /** dirty reports unsaved edits in the open tab, so restore must warn. */
   dirty: boolean;
 }
 
@@ -39,7 +38,6 @@ const loading = ref(false);
 const loadError = ref("");
 const deletingId = ref("");
 
-/** reload reads the current file's revisions, newest first. */
 async function reload(): Promise<void> {
   loading.value = true;
   loadError.value = "";
@@ -70,7 +68,6 @@ watch(
   { immediate: true },
 );
 
-/** remove deletes one stored revision after the popconfirm. */
 async function remove(version: FilesVersion): Promise<void> {
   if (deletingId.value) {
     return;
@@ -93,12 +90,10 @@ async function remove(version: FilesVersion): Promise<void> {
   }
 }
 
-/** close hides the dialog. */
 function close(): void {
   emit("update:show", false);
 }
 
-/** sizeLabel renders the stored body size. */
 function sizeLabel(version: FilesVersion): string {
   return formatBytes(version.size);
 }

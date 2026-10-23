@@ -20,12 +20,8 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN; a value that cannot be reached skips the test
-// so CI stays green without a database.
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
-// integrationDSN returns the DSN the repository integration test should use.
 func integrationDSN() string {
 	if dsn := os.Getenv("GOTHAM_TEST_DSN"); dsn != "" {
 		return dsn
@@ -33,24 +29,15 @@ func integrationDSN() string {
 	return defaultIntegrationDSN
 }
 
-// integrationDSNExplicit reports whether the operator opted in by setting
-// GOTHAM_TEST_DSN: an explicit opt-in turns a missing database or a failed
-// migration into a failure instead of a skip, so the lane cannot pass green by
-// skipping.
 func integrationDSNExplicit() bool {
 	return os.Getenv("GOTHAM_TEST_DSN") != ""
 }
 
-// TestStoreRepositoryRoundtrip exercises the PostgreSQL adapter — including
-// secret sealing and the partial unique indexes that make dedupe work —
-// against a real server. It skips when no database is reachable.
 func TestStoreRepositoryRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -62,8 +49,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -92,7 +77,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	}
 	appID := uuid.UUID(createdApp.ID.Bytes)
 
-	// The lookup is by ID; team authorization happens in the service.
 	if _, err := repo.GetApplication(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing application error = %v, want ErrNotFound", err)
 	}
@@ -104,7 +88,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Errorf("application = %+v, want the creator's personal team", app)
 	}
 
-	// Installing a hook seals its secret at rest and reads it back opened.
 	created, err := repo.CreateWebhook(ctx, Hook{
 		ApplicationID: appID,
 		Provider:      "github",
@@ -142,7 +125,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Errorf("hook = %+v", got)
 	}
 
-	// The delivery lookup matches the repository case-insensitively.
 	targets, err := repo.Targets(ctx, "github", "octo/gotham")
 	if err != nil {
 		t.Fatalf("Targets: %v", err)
@@ -154,7 +136,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Errorf("targets for another provider = %v / %v, want none", targets, err)
 	}
 
-	// Dedupe: the same commit may be claimed once, a new commit again.
 	event, err := repo.ClaimEvent(ctx, Event{
 		ApplicationID: appID, Provider: "github", Event: "push",
 		DeliveryID: "d1", Ref: "refs/heads/main", CommitSHA: "abc123",
@@ -183,8 +164,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	if err := repo.LinkEventDeployment(ctx, event.ID, deploymentID); err != nil {
 		t.Fatalf("LinkEventDeployment: %v", err)
 	}
-	// Once the winner's deployment is durable, the duplicate carries it — the
-	// caller can then acknowledge it as a no-op (C3-4).
 	linked, err := repo.ClaimEvent(ctx, Event{
 		ApplicationID: appID, Provider: "github", Event: "push",
 		DeliveryID: "d3", Ref: "refs/heads/main", CommitSHA: "abc123",
@@ -195,8 +174,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	if err := repo.ReleaseEvent(ctx, event.ID); err != nil {
 		t.Fatalf("ReleaseEvent: %v", err)
 	}
-	// Released: the same delivery may be claimed again, and a double release
-	// is not an error.
 	if _, err := repo.ClaimEvent(ctx, Event{
 		ApplicationID: appID, Provider: "github", Event: "push",
 		DeliveryID: "d1", Ref: "refs/heads/main", CommitSHA: "abc123",
@@ -207,7 +184,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Errorf("second release: %v", err)
 	}
 
-	// Detaching the application removes its hook exactly once.
 	if _, err := repo.DeleteWebhook(ctx, appID); err != nil {
 		t.Fatalf("DeleteWebhook: %v", err)
 	}
@@ -219,17 +195,11 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryPreviewRoundtrip exercises the preview_deploys adapter
-// against a real server: the unique (application, PR) pair, the deleted/
-// reopened transition, the stale list, the cascade from both the base and the
-// sibling application, and the enriched delivery targets.
 func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -241,8 +211,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -306,7 +274,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Errorf("missing preview error = %v, want ErrNotFound", err)
 	}
 
-	// One preview of the application; a bound preview is never an orphan.
 	list, err := repo.ListPreviews(ctx, baseID)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("ListPreviews = %d / %v, want one preview", len(list), err)
@@ -318,9 +285,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatalf("ListOrphanedPreviewApplications = %d / %v, want none", len(apps), err)
 	}
 
-	// The claim: the live binding's head dedupes a start, an in-flight lease
-	// dedupes a replay, a different head is a new transition, and a historical
-	// head is NOT a permanent handled set (N1) — the claim approves it again.
 	claimStart := func(head string) PreviewClaimResult {
 		t.Helper()
 		result, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
@@ -332,26 +296,21 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		}
 		return result
 	}
-	// The binding currently names abc123: delivering it again is a duplicate.
 	if dup := claimStart("abc123"); !dup.Duplicate {
 		t.Fatalf("current-head claim = %+v, want duplicate", dup)
 	}
-	// A new head is approved and holds an in-flight lease.
 	approved := claimStart("sha-b")
 	if !approved.Approved || approved.Reservation.ID == uuid.Nil || approved.Binding == nil {
 		t.Fatalf("new-head claim = %+v, want approved with a lease and the binding", approved)
 	}
-	// The same head while its lease is live is a duplicate.
 	if dup := claimStart("sha-b"); !dup.Duplicate {
 		t.Fatalf("in-flight claim = %+v, want duplicate", dup)
 	}
-	// A different PR at the same head is independent (F2).
 	if other, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
 		ApplicationID: baseID, PRNumber: 8, Kind: ReservationStart, HeadSHA: "sha-b", LiveLimit: 5,
 	}); err != nil || !other.Approved {
 		t.Fatalf("second PR at the same head = %+v / %v, want approved", other, err)
 	}
-	// The queue succeeded: the binding names the new head and the lease goes.
 	if _, err := repo.UpsertPreview(ctx, Preview{
 		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
 		PRNumber: 7, Branch: "feat/x", HeadSHA: "sha-b",
@@ -365,12 +324,10 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	if dup := claimStart("sha-b"); !dup.Duplicate {
 		t.Fatalf("current-head claim after the queue = %+v, want duplicate", dup)
 	}
-	// N1: a force-push back to the historical head must deploy again.
 	back := claimStart("abc123")
 	if !back.Approved {
 		t.Fatalf("historical-head claim = %+v, want approved (not a handled set)", back)
 	}
-	// A close marker reserves once.
 	closeResult, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
 		ApplicationID: baseID, PRNumber: 7, Kind: ReservationClose,
 	})
@@ -382,7 +339,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	}); err != nil || !dup.Duplicate {
 		t.Fatalf("second close claim = %+v / %v, want duplicate", dup, err)
 	}
-	// The atomic close completion deletes the binding and clears the ledger.
 	closed, err := repo.MarkPreviewClosed(ctx, baseID, 7)
 	if err != nil {
 		t.Fatalf("MarkPreviewClosed: %v", err)
@@ -390,16 +346,12 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	if closed.State != PreviewDeleted || closed.DeletedAt.IsZero() {
 		t.Errorf("closed preview = %+v", closed)
 	}
-	// A stale reservation can never poison a reopen: the completion cleared
-	// every row, and the same historical head is claimable again.
 	if reopened := claimStart("abc123"); !reopened.Approved {
 		t.Fatalf("reopen claim = %+v, want approved", reopened)
 	}
 	if err := repo.ReleasePreviewDelivery(ctx, uuid.MustParse("00000000-0000-0000-0000-000000000000")); err != nil {
 		t.Errorf("releasing a missing reservation: %v, want nil", err)
 	}
-	// Expired leases are purged by the claim (and by the sweep's global pass),
-	// so a crashed delivery cannot suppress its revision forever.
 	expired, err := repo.ClaimPreviewDelivery(ctx, PreviewClaim{
 		ApplicationID: baseID, PRNumber: 7, Kind: ReservationStart, HeadSHA: "sha-expired",
 	})
@@ -425,8 +377,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatalf("ClearPreviewDeliveries(PR 8): %v", err)
 	}
 
-	// A re-opened PR refreshes the same binding row (the unique pair) instead
-	// of inserting a second one.
 	reopened, err := repo.UpsertPreview(ctx, Preview{
 		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
 		PRNumber: 7, Branch: "feat/y", HeadSHA: "def456",
@@ -439,8 +389,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Errorf("reopened preview = %+v, want the same row refreshed", reopened)
 	}
 
-	// Deleting the sibling clears the link but keeps the binding row: the
-	// FK is ON DELETE SET NULL so the audit trail survives the teardown.
 	if err := st.DeleteApplication(ctx, pgUUID(siblingID)); err != nil {
 		t.Fatalf("DeleteApplication(sibling): %v", err)
 	}
@@ -451,8 +399,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	if survivor.PreviewApplicationID != uuid.Nil {
 		t.Errorf("preview still links the deleted sibling: %+v", survivor)
 	}
-	// The binding is now orphaned: the sweep's binding pass finds it, and its
-	// application pass ignores it (it is a binding, not an application).
 	orphans, err := repo.ListOrphanedPreviews(ctx)
 	if err != nil || len(orphans) != 1 || orphans[0].ID != survivor.ID {
 		t.Fatalf("ListOrphanedPreviews = %+v / %v, want the orphaned binding", orphans, err)
@@ -464,8 +410,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatalf("ListOrphanedPreviews after close = %d / %v, want none", len(orphans), err)
 	}
 
-	// A persisted close intent is the sweep's teardown-retry list. The sibling
-	// link is NULL here: the listing only cares about the state and age.
 	if _, err := repo.UpsertPreview(ctx, Preview{
 		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
 		PRNumber: 12, Host: "pr-12-wh-app.example.com",
@@ -474,8 +418,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertPreview(closing): %v", err)
 	}
-	// The fake/test flow uses the binding row's updated_at; force it into the
-	// past through the schema so the cutoff is deterministic.
 	if _, err := pool.Exec(ctx, "UPDATE preview_deploys SET updated_at = now() - interval '1 hour' WHERE application_id = $1 AND pr_number = 12", pgUUID(baseID)); err != nil {
 		t.Fatalf("age the closing binding: %v", err)
 	}
@@ -486,9 +428,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatalf("ListClosingPreviews(older cutoff) = %d / %v, want none", len(closing), err)
 	}
 
-	// An is_preview application without a live binding is the sweep's second
-	// work list; marking its binding deleted puts it back in scope even when
-	// the application row itself survived.
 	previewApp, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
 		Name: "wh-app-pr-11", Provider: "github",
@@ -537,7 +476,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Error("preview 11 lost its id")
 	}
 
-	// Deleting the base application cascades its previews too.
 	if _, err := repo.UpsertPreview(ctx, Preview{
 		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
 		PRNumber: 9, Branch: "feat/z", HeadSHA: "fff",
@@ -557,15 +495,11 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryTargetsCarryPreviewFields pins the enriched delivery
-// target row the preview logic derives the sibling from.
 func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -577,8 +511,6 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -630,7 +562,6 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 	}
 }
 
-// claimFixture creates a user and a base application for claim-level tests.
 func claimFixture(t *testing.T, ctx context.Context, st *store.Store) (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	email := fmt.Sprintf("be-8.1-claim-%d@example.com", time.Now().UnixNano())
@@ -654,12 +585,9 @@ func claimFixture(t *testing.T, ctx context.Context, st *store.Store) (uuid.UUID
 	return userID, uuid.UUID(base.ID.Bytes), uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes)
 }
 
-// openClaimFixture opens the integration database and returns the store.
 func openClaimFixture(t *testing.T, ctx context.Context) *store.Store {
 	t.Helper()
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -671,17 +599,12 @@ func openClaimFixture(t *testing.T, ctx context.Context) *store.Store {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
 	return store.New(pool)
 }
 
-// TestStoreClosingSameHeadClaimRetries is the N4 database-level proof: a claim
-// at a closing binding's own head answers retryable, and the fenced write
-// refuses to touch it.
 func TestStoreClosingSameHeadClaimRetries(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -706,10 +629,9 @@ func TestStoreClosingSameHeadClaimRetries(t *testing.T) {
 		t.Fatalf("closing same-head claim = %+v, want retryable (not duplicate)", result)
 	}
 
-	// The fenced write refuses a closing binding even with a valid lease.
 	lease, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
-		HeadSHA: "head-a", LiveLimit: 5, // still closing: retryable again
+		HeadSHA: "head-a", LiveLimit: 5,
 	})
 	if err != nil || !lease.Retryable {
 		t.Fatalf("second closing claim = %+v / %v, want retryable", lease, err)
@@ -739,9 +661,6 @@ func TestStoreClosingSameHeadClaimRetries(t *testing.T) {
 	}
 }
 
-// TestStoreExpiredWorkerCannotPromote is the N5 database-level proof: a worker
-// whose lease lapsed cannot promote a binding once five other previews are
-// live; the fenced write refuses it.
 func TestStoreExpiredWorkerCannotPromote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -762,7 +681,6 @@ func TestStoreExpiredWorkerCannotPromote(t *testing.T) {
 		t.Fatalf("expire the slow lease: %v", err)
 	}
 
-	// Five other previews take every slot.
 	for pr := 2; pr <= 6; pr++ {
 		claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 			ApplicationID: pgUUID(baseID), PrNumber: int32(pr), Kind: store.PreviewClaimStart,
@@ -781,8 +699,6 @@ func TestStoreExpiredWorkerCannotPromote(t *testing.T) {
 		}
 	}
 
-	// The slow worker resumes: its promotion is refused and no sixth binding
-	// appears.
 	write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 1, ReservationID: slow.Reservation.ID,
 		LeaseHeadSHA: "sha-1", HeadSHA: "sha-1", State: "active", ConsumeLease: true,
@@ -805,9 +721,6 @@ func TestStoreExpiredWorkerCannotPromote(t *testing.T) {
 	}
 }
 
-// TestStoreClosedBindingCannotBeResurrected is the R-1 database-level proof: a
-// completed close clears the ledger, so a racing worker's promotion is refused
-// and the binding stays deleted.
 func TestStoreClosedBindingCannotBeResurrected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -828,7 +741,6 @@ func TestStoreClosedBindingCannotBeResurrected(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertPreviewDeploy: %v", err)
 	}
-	// The close completes while the worker is in flight.
 	if _, err := st.MarkPreviewClosed(ctx, pgUUID(baseID), 7); err != nil {
 		t.Fatalf("MarkPreviewClosed: %v", err)
 	}
@@ -852,19 +764,12 @@ func TestStoreClosedBindingCannotBeResurrected(t *testing.T) {
 	}
 }
 
-// TestStoreCloseSerializesWithPromotion is the real-concurrent R-1 regression:
-// a close that starts while a promotion is inside its write waits for the
-// base-application lock, so the promotion cannot be overwritten after the
-// fence's reads; the close then wins and the binding stays deleted. A BEFORE
-// INSERT trigger on the test's application pauses the promotion inside the
-// write while holding that lock.
 func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
 	userID, baseID, _, _ := claimFixture(t, ctx, st)
 
-	// Seed the existing binding (head-a) so the close has a row to update.
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
 		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
 		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
@@ -880,7 +785,6 @@ func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 		t.Fatalf("claim = %+v / %v, want approved", claim, err)
 	}
 
-	// Pause the promotion inside its upsert, after the app lock is held.
 	appLiteral := baseID.String()
 	if _, err := st.DB.Exec(ctx, `
 		DROP TRIGGER IF EXISTS be81_fence_gate_trg ON preview_deploys;
@@ -918,8 +822,6 @@ func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 		promoteErr <- err
 	}()
 
-	// Wait until the promotion is inside the gate (sleeping in the trigger
-	// while holding the app lock).
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var entered int
@@ -937,8 +839,6 @@ func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// The close starts while the promotion holds the lock: it must wait, not
-	// complete underneath it.
 	closed := make(chan error, 1)
 	go func() {
 		_, err := st.MarkPreviewClosed(context.Background(), pgUUID(baseID), 7)
@@ -956,8 +856,6 @@ func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 	if result := <-promoted; result.Refused != "" || result.Binding.State != "active" {
 		t.Fatalf("promotion = %+v, want written active", result)
 	}
-	// The close now wins: its completion must land after (and over) the
-	// promotion, leaving the binding deleted.
 	if err := <-closed; err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -980,10 +878,6 @@ func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 	}
 }
 
-// TestStoreLeaseExpiryDuringLockWait is the N6 regression: a lease that
-// expires while the writer waits for the base-application lock must be
-// refused, because lease validity is evaluated with the actual current time
-// after the lock is granted, not the transaction-start time.
 func TestStoreLeaseExpiryDuringLockWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1004,7 +898,6 @@ func TestStoreLeaseExpiryDuringLockWait(t *testing.T) {
 		t.Fatalf("shorten the lease: %v", err)
 	}
 
-	// Hold the application lock on a separate connection so the writer waits.
 	holder, err := st.DB.Acquire(ctx)
 	if err != nil {
 		t.Fatalf("acquire lock holder: %v", err)
@@ -1031,7 +924,6 @@ func TestStoreLeaseExpiryDuringLockWait(t *testing.T) {
 		written <- result
 		writeErr <- err
 	}()
-	// Let the lease lapse while the writer waits for the lock, then release it.
 	time.Sleep(1200 * time.Millisecond)
 	if err := holdTx.Commit(ctx); err != nil {
 		t.Fatalf("release the application lock: %v", err)
@@ -1049,9 +941,6 @@ func TestStoreLeaseExpiryDuringLockWait(t *testing.T) {
 	}
 }
 
-// TestStoreSiblingDeleteClearsLedger is the LOW regression: deleting a
-// preview sibling closes its binding and clears the pull request's ledger, so
-// no lease survives to authorize a stale promotion.
 func TestStoreSiblingDeleteClearsLedger(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1075,7 +964,6 @@ func TestStoreSiblingDeleteClearsLedger(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertPreviewDeploy: %v", err)
 	}
-	// A live lease a stale worker could still use to promote.
 	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
 		HeadSHA: "head-b", LiveLimit: 5,
@@ -1106,18 +994,11 @@ func TestStoreSiblingDeleteClearsLedger(t *testing.T) {
 	}
 }
 
-// TestStoreClaimConcurrencyRespectsTheCap is the N3 database-level proof:
-// concurrent claims for distinct pull requests of one application never
-// approve more than the cap, because every claim locks the base application
-// row and counts the live bindings plus in-flight leases in the same
-// transaction.
 func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -1129,8 +1010,6 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -1194,7 +1073,6 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 		t.Fatalf("approved = %d, want exactly the cap %d (prs %v)", len(got), cap, got)
 	}
 
-	// The database agrees: distinct live-or-in-flight pull requests == cap.
 	var live int
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM (
@@ -1210,9 +1088,6 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 		t.Fatalf("live previews = %d, want %d", live, cap)
 	}
 
-	// Complete one of the approved previews (binding written, lease released):
-	// a refresh of it is allowed even at the cap, because the claim skips the
-	// quota for an existing live binding.
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
 		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
 		Repo: base.Repo, PrNumber: got[0], Branch: "main", HeadSha: "sha-orig",
@@ -1235,10 +1110,6 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 	}
 }
 
-// TestStoreNoBindingCloseRefusesTheRacingPromote is the F-1 database-level
-// interleave: claim (start) → claim (close, no binding yet) → bind. The close
-// marker must refuse the promotion, no live binding may appear behind it, and
-// once the close clears the ledger the same revision must reopen.
 func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1261,7 +1132,6 @@ func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 		t.Fatalf("close claim = %+v / %v, want approved", closeClaim, err)
 	}
 
-	// The in-flight open's promotion is refused: the close owns the PR.
 	write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
 		ApplicationID: pgUUID(baseID), PrNumber: pr, ReservationID: open.Reservation.ID,
 		LeaseHeadSHA: "head-a", HeadSHA: "head-a", State: "active",
@@ -1283,7 +1153,6 @@ func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 	if bindings != 0 {
 		t.Fatalf("bindings = %d, want none behind the close", bindings)
 	}
-	// A start arriving while the close is live answers retryable.
 	again, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimStart,
 		HeadSHA: "head-a", LiveLimit: 5,
@@ -1292,8 +1161,6 @@ func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 		t.Fatalf("start during the close = %+v / %v, want retryable", again, err)
 	}
 
-	// The no-binding close completes (its ledger clear); the same delivery
-	// reopens and promotes.
 	if err := st.ClearPreviewDeliveries(ctx, pgUUID(baseID), pr); err != nil {
 		t.Fatalf("ClearPreviewDeliveries: %v", err)
 	}
@@ -1317,10 +1184,6 @@ func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 	}
 }
 
-// TestStoreFailedNoBindingCloseRetryReclaims is the MEDIUM-1 store-level
-// regression: a no-binding close whose clear failed keeps its marker (the
-// fence refuses the racing open), and the redelivered close must be approved
-// again so it can re-run the clear instead of being acked as a duplicate.
 func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1342,8 +1205,6 @@ func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
 		t.Fatalf("close claim: %v", err)
 	}
 
-	// The close's clear "fails" (nothing is cleared). The marker is still the
-	// fence, so the racing open's promotion is refused.
 	write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
 		ApplicationID: pgUUID(baseID), PrNumber: pr, ReservationID: open.Reservation.ID,
 		LeaseHeadSHA: "head-a", HeadSHA: "head-a", State: "active",
@@ -1356,7 +1217,6 @@ func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
 		t.Fatalf("racing promotion after the failed clear = %+v, want refused closing", write)
 	}
 
-	// The redelivered close re-claims (not Duplicate) so it can run the clear.
 	retry, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimClose,
 		LiveLimit: 5,
@@ -1368,7 +1228,6 @@ func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
 		t.Fatalf("ClearPreviewDeliveries: %v", err)
 	}
 
-	// The same delivery reopens and promotes after the close completed.
 	reopen, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: pr, Kind: store.PreviewClaimStart,
 		HeadSHA: "head-a", LiveLimit: 5,
@@ -1386,13 +1245,6 @@ func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
 	}
 }
 
-// TestStoreUpsertPreviewDeployTakesTheApplicationLock is the F-2 regression:
-// the exported upsert serializes with the other preview transitions on the
-// per-application row lock. The probe seeds the conflict row first: the INSERT
-// path takes FOR KEY SHARE on the applications row for its FK check, which
-// would block even without the application lock, so only the ON CONFLICT
-// UPDATE path discriminates the locked implementation from the unlocked one
-// (MEDIUM-2).
 func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1408,9 +1260,6 @@ func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 		t.Fatalf("seed the binding row: %v", err)
 	}
 
-	// Hold the application lock in an outer transaction: the locked upsert
-	// must wait on it, while an unlocked conflict update (no FK re-check on
-	// the unchanged application_id) would slip past.
 	tx, err := st.DB.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin lock holder: %v", err)
@@ -1430,7 +1279,6 @@ func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 		t.Fatalf("release the application lock: %v", err)
 	}
 
-	// Without contention the upsert refreshes the one row.
 	params.HeadSha = "head-b"
 	stored, err := st.UpsertPreviewDeploy(ctx, params)
 	if err != nil {
@@ -1451,17 +1299,11 @@ func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryLogsUnopenableHookSecret pins C3-9: a hook whose secret
-// cannot be decrypted must not be skipped silently — the lookup returns no
-// target (it can never verify a delivery) and logs the hook identity, never the
-// secret material.
 func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := integrationDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if integrationDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -1473,8 +1315,6 @@ func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -1500,7 +1340,6 @@ func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 	}
 	appID := uuid.UUID(createdApp.ID.Bytes)
 
-	// Seal the hook with one key...
 	writer := newStoreRepository(st, "right-secret", discardLogger())
 	if _, err := writer.CreateWebhook(ctx, Hook{
 		ApplicationID: appID, Provider: "github", Repo: createdApp.Repo, HookID: "4242",
@@ -1508,7 +1347,6 @@ func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 		t.Fatalf("CreateWebhook: %v", err)
 	}
 
-	// ...then read it back with another, capturing the warning.
 	var logs bytes.Buffer
 	reader := newStoreRepository(st, "wrong-secret",
 		slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
@@ -1528,8 +1366,6 @@ func TestStoreRepositoryLogsUnopenableHookSecret(t *testing.T) {
 	}
 }
 
-// createApplicationParams builds the row the webhook tests watch. The ID comes
-// from the database default, so callers read it back from the returned row.
 func createApplicationParams(userID, envID, serverID uuid.UUID) sqlc.CreateApplicationParams {
 	return sqlc.CreateApplicationParams{
 		UserID:        pgUUID(userID),
@@ -1544,10 +1380,6 @@ func createApplicationParams(userID, envID, serverID uuid.UUID) sqlc.CreateAppli
 	}
 }
 
-// seedAppColumns creates a project, an environment and a node for tests that
-// insert application rows directly (environment_id and server_id are NOT
-// NULL since PE-2). The team is the user's personal team (ID = user ID),
-// which CreateUser already created.
 func seedAppColumns(t *testing.T, ctx context.Context, st *store.Store, userID uuid.UUID) (envID, serverID pgtype.UUID) {
 	pool := st.DB
 	t.Helper()

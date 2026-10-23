@@ -16,7 +16,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** confirmName holds the typed application name; reset on every open. */
 const confirmName = ref("");
 
 watch(
@@ -28,7 +27,6 @@ watch(
   },
 );
 
-/** matches enables the confirm button only on an exact name match. */
 const matches = computed<boolean>(
   () => props.appName !== "" && confirmName.value === props.appName,
 );

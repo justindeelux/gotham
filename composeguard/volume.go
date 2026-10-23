@@ -7,12 +7,6 @@ import (
 	"strings"
 )
 
-// serviceVolumes validates one service's mounts: anonymous volumes,
-// project-local named volumes, confined host-path binds and tmpfs. The
-// source classification follows compose: a source whose first character is
-// `.`, `/` or `~` is a host path, anything else a named volume. An
-// undeclared named volume is accepted: the deploy rewrite auto-declares it
-// under the application's managed directory.
 func (v *validator) serviceVolumes(path string, raw any) error {
 	if raw == nil {
 		return nil
@@ -29,7 +23,6 @@ func (v *validator) serviceVolumes(path string, raw any) error {
 	return nil
 }
 
-// mount validates one volume entry in short or long form.
 func (v *validator) mount(path string, entry any) error {
 	switch mount := entry.(type) {
 	case string:
@@ -41,12 +34,6 @@ func (v *validator) mount(path string, entry any) error {
 	}
 }
 
-// shortMount parses compose's "source:target[:mode]" volume form. A single
-// part is an anonymous volume; otherwise the source's first character
-// decides: `.`, `/` and `~` start a host path, anything else a named volume.
-// A single-letter source is a Windows drive (`C:/...`), which compose-go
-// parses as a drive letter while the Linux daemon rejects: it fails closed
-// here rather than depending on the daemon.
 func (v *validator) shortMount(path, entry string) error {
 	parts := strings.Split(entry, ":")
 	switch len(parts) {
@@ -58,7 +45,7 @@ func (v *validator) shortMount(path, entry string) error {
 		if !strings.HasPrefix(target, "/") {
 			return at(path, "volume target %q must be an absolute container path", parts[0])
 		}
-		return nil // Anonymous volume: no host source to confine.
+		return nil
 	case 2, 3:
 		source := parts[0]
 		if isWindowsDrive(source) {
@@ -85,8 +72,6 @@ func (v *validator) shortMount(path, entry string) error {
 	}
 }
 
-// isWindowsDrive reports a single-letter source: compose-go reads `C:` as a
-// Windows drive letter, so such a source never names a volume here.
 func isWindowsDrive(source string) bool {
 	if len(source) != 1 {
 		return false
@@ -95,10 +80,6 @@ func isWindowsDrive(source string) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// checkMountMode validates the short-form mode segment: read/write,
-// SELinux relabeling and copy flags only. Propagation modes (rshared,
-// rslave and friends) would leak mounts between containers and fail
-// closed here; compose reports anything else at the node.
 func checkMountMode(path, mode string) error {
 	for _, flag := range strings.Split(mode, ",") {
 		switch strings.TrimSpace(flag) {
@@ -112,19 +93,12 @@ func checkMountMode(path, mode string) error {
 	return nil
 }
 
-// isBindSource reports whether a short-form source is a host path, the way
-// compose classifies it: any source starting with `.`, `/` or `~`. This
-// closes the `..`, `.hidden` and `~` escapes the first-character check used
-// to miss.
 func isBindSource(source string) bool {
 	return strings.HasPrefix(source, "/") ||
 		strings.HasPrefix(source, ".") ||
 		strings.HasPrefix(source, "~")
 }
 
-// longMount validates the long volume syntax. Only bind, volume and tmpfs
-// mounts exist for a confined project; every key outside the per-type set
-// fails closed.
 func (v *validator) longMount(path string, mount map[string]any) error {
 	for key := range mount {
 		switch key {
@@ -145,7 +119,7 @@ func (v *validator) longMount(path string, mount map[string]any) error {
 			if !strings.HasPrefix(target, "/") {
 				return at(path, "volume mount has no target")
 			}
-			return nil // Anonymous volume.
+			return nil
 		}
 		if isBindSource(source) {
 			return at(path, "volume source %q must be a named volume for type volume", source)
@@ -208,7 +182,6 @@ func (v *validator) longMount(path string, mount map[string]any) error {
 	}
 }
 
-// optionalBool accepts an absent value or a boolean.
 func optionalBool(raw any) error {
 	switch raw.(type) {
 	case nil, bool:
@@ -218,9 +191,6 @@ func optionalBool(raw any) error {
 	}
 }
 
-// namedSource validates a named volume reference: a safe name outside the
-// managed-database namespace. The top-level declaration is optional: an
-// undeclared volume is auto-declared by the deploy rewrite.
 func (v *validator) namedSource(path, source string) error {
 	if isWindowsDrive(source) {
 		return at(path, "volume source %q is not supported", source)
@@ -234,11 +204,6 @@ func (v *validator) namedSource(path, source string) error {
 	return nil
 }
 
-// bindSource confines a host-path bind to the application's managed
-// directory: it must be an absolute path (relative sources resolve into the
-// agent's state directory, outside the managed volumes), a direct child of
-// the managed directory, never a known-dangerous host location, and free of
-// symlinks where the filesystem can be inspected.
 func (v *validator) bindSource(path, source string) error {
 	if !strings.HasPrefix(source, "/") {
 		return at(path, "host path %q must be absolute: relative paths land outside the managed volumes", source)
@@ -257,9 +222,6 @@ func (v *validator) bindSource(path, source string) error {
 	return nil
 }
 
-// isDangerousHostPath reports whether host names a host location that must
-// never be mounted into a confined container: the root filesystem, the
-// system trees, and the Docker socket (full node control).
 func isDangerousHostPath(host string) bool {
 	cleaned := filepath.Clean(host)
 	switch cleaned {
@@ -270,14 +232,6 @@ func isDangerousHostPath(host string) bool {
 	return filepath.Base(cleaned) == "docker.sock"
 }
 
-// checkNoSymlinks Lstat-walks base and every component of path below it,
-// rejecting any symlink. The walk starts at base (not "/") so a legitimate
-// system symlink such as macOS's /var -> /private/var never affects an
-// operator-configured root. A missing component is accepted (compose
-// creates it as a real directory); any other Lstat error fails closed.
-// Where the filesystem cannot be inspected at all (the control plane
-// checking node paths), every component is missing and the lexical checks
-// above are what confine the bind.
 func checkNoSymlinks(base, path string) error {
 	current := filepath.Clean(base)
 	if err := checkNotSymlink(current); err != nil {
@@ -305,8 +259,6 @@ func checkNoSymlinks(base, path string) error {
 	return nil
 }
 
-// checkNotSymlink reports a symlink error for a symlink and any other Lstat
-// failure unchanged (fail closed).
 func checkNotSymlink(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -318,9 +270,6 @@ func checkNotSymlink(path string) error {
 	return nil
 }
 
-// checkVolumeOpts validates the volume options of a named-volume mount:
-// nocopy only, plus a subpath confined inside the volume. A subpath
-// escape (`..` or absolute) would break out of the volume on the node.
 func checkVolumeOpts(path string, raw any) error {
 	opts, ok := raw.(map[string]any)
 	if !ok {

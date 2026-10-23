@@ -8,9 +8,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TestDevComposePortsAreLoopback pins that the dev databases are published on
-// the loopback interface only, so a dev machine on an untrusted network does
-// not expose Postgres or Redis.
 func TestDevComposePortsAreLoopback(t *testing.T) {
 	data, err := os.ReadFile("compose.dev.yml")
 	if err != nil {

@@ -19,7 +19,6 @@ import WizardTargetForm from "./WizardTargetForm.vue";
 interface Props {
   show: boolean;
   slug: string;
-  /** Preselected scope (empty on the flat library: the picker asks). */
   projectId?: string;
   environmentId?: string;
 }
@@ -39,11 +38,6 @@ function close(): void {
   emit("update:show", false);
 }
 
-/**
- * t renders wizard chrome copy in the active locale (tracks language
- * switches). Called during render, so steps refresh without losing values.
- * Template names and slugs stay raw parameters.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

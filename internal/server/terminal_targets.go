@@ -16,33 +16,14 @@ import (
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
-// terminal targets aggregation (JUS-265).
-//
-// The add-tab picker reads one authorised list. Host shells are a platform
-// operator capability; container targets come from the same deploy resolver
-// the per-application discovery route uses, so a target is never something the
-// caller could not already open from its application page. The active team
-// scope (set by RequireTeam) decides which applications are considered, and the
-// resolver re-proves application write access for each one.
-
-// Bounds: one picker read must stay cheap on an installation with many nodes
-// and applications. Overflow is simply not listed; the picker is a launcher,
-// not an inventory.
 const (
-	maxTerminalTargetServers      = 50
-	maxTerminalTargetApplications = 50
-	maxTerminalTargetContainers   = 50
-	// maxTerminalTargetScannedApplications bounds how many application rows one
-	// picker read resolves. The cap is a scan bound, never the visible cap: the
-	// visible 50 is applied after resolution so stopped/forbidden apps cannot
-	// hide a running one.
+	maxTerminalTargetServers             = 50
+	maxTerminalTargetApplications        = 50
+	maxTerminalTargetContainers          = 50
 	maxTerminalTargetScannedApplications = 100
-	// terminalTargetWorkers bounds concurrent node dials from one picker read.
-	terminalTargetWorkers = 4
+	terminalTargetWorkers                = 4
 )
 
-// terminalTargetsSource is the request-scoped adapter between the transport's
-// discovery contract and the servers/deploy domains.
 type terminalTargetsSource struct {
 	servers    ServerService
 	apps       deploy.DeployService
@@ -50,8 +31,6 @@ type terminalTargetsSource struct {
 	isOperator bool
 }
 
-// terminalTargetsSourceFor captures the request's operator decision once, so
-// the later list cannot accidentally re-read a changed request context.
 func (s *Server) terminalTargetsSourceFor(r *http.Request) terminal.TargetsSource {
 	source := terminalTargetsSource{isOperator: s.isPlatformOperator(r)}
 	if s.servers != nil {
@@ -66,17 +45,12 @@ func (s *Server) terminalTargetsSourceFor(r *http.Request) terminal.TargetsSourc
 	return source
 }
 
-// ListTargets returns everything the caller may open. Per-source failures are
-// reported in Targets.Errors; only a truly unusable request (the caller is
-// gone) returns an error.
 func (s terminalTargetsSource) ListTargets(ctx context.Context, userID uuid.UUID) (terminal.Targets, error) {
 	targets := terminal.Targets{
 		Servers:      make([]terminal.HostTarget, 0),
 		Applications: make([]terminal.ContainerTargetGroup, 0),
 		Errors:       make([]terminal.TargetError, 0),
 	}
-	// Host shells: only a platform operator may open one, so a non-operator's
-	// list simply has no servers (never an authorization error entry).
 	if s.isOperator && s.servers != nil {
 		hosts, err := s.servers.List(ctx)
 		if err != nil {
@@ -97,8 +71,6 @@ func (s terminalTargetsSource) ListTargets(ctx context.Context, userID uuid.UUID
 	return targets, nil
 }
 
-// readyHostTargets keeps nodes an operator can actually start a shell on and
-// reports whether the bound cut the ready set.
 func readyHostTargets(hosts []servers.Server) ([]terminal.HostTarget, bool) {
 	targets := make([]terminal.HostTarget, 0, len(hosts))
 	for _, host := range hosts {
@@ -117,12 +89,6 @@ func readyHostTargets(hosts []servers.Server) ([]terminal.HostTarget, bool) {
 	return targets, false
 }
 
-// collectContainers lists the active team's applications and resolves each
-// application's running containers with a bounded worker pool. The visible cap
-// is applied after filtering (in the transport response), so an application
-// with no running container never consumes a slot. One slow or broken node
-// never blocks the rest of the list: the fan-out stops launching work on
-// ctx.Done and collapses all deadline/cancel outcomes into one timeout entry.
 func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uuid.UUID, targets *terminal.Targets) {
 	applications, err := s.apps.ListApplications(ctx, userID, deploy.ApplicationFilter{})
 	if err != nil {
@@ -139,8 +105,6 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 	if len(applications) == 0 {
 		return
 	}
-	// Most recently updated first: a just-redeployed application is the one an
-	// operator is most likely to open, and the order is deterministic.
 	sort.SliceStable(applications, func(i, j int) bool {
 		if !applications[i].UpdatedAt.Equal(applications[j].UpdatedAt) {
 			return applications[i].UpdatedAt.After(applications[j].UpdatedAt)
@@ -155,9 +119,6 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 		targets.Truncated = true
 	}
 
-	// Each application is resolved independently because the deploy resolver
-	// authorizes and locks per application; sharing one node read would need a
-	// deploy-domain batch API. The worker bound keeps that at four dials.
 	type resolved struct {
 		group *terminal.ContainerTargetGroup
 		err   *terminal.TargetError
@@ -230,8 +191,6 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 	}
 	workers.Wait()
 
-	// Results stay in the application order, which is also the order of the
-	// visible cap: the first 50 resolvable applications win.
 	for _, result := range results {
 		if result.group != nil {
 			targets.Applications = append(targets.Applications, *result.group)
@@ -240,8 +199,6 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 			targets.Errors = append(targets.Errors, *result.err)
 		}
 	}
-	// Everything the deadline cut short (never started or cancelled mid-call)
-	// is one bounded entry with a count, not up to 100 "internal" rows.
 	unresolved := int64(len(applications)) - atomic.LoadInt64(&handled)
 	timeouts := atomic.LoadInt64(&timed)
 	if unresolved > 0 {
@@ -256,15 +213,6 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 	}
 }
 
-// targetErrorForApplication classifies one resolution failure. A capability or
-// lifecycle gap is not an error the picker should announce:
-//
-//   - ErrForbidden: the caller may read the team but not open a shell in this
-//     application (read_only, or another member's legacy application).
-//   - No running deployment / deploy in flight / stopped container: nothing to
-//     open right now, and the application's own page owns the explanation.
-//
-// Everything else is a source failure worth a retry.
 func targetErrorForApplication(application deploy.Application, err error) *terminal.TargetError {
 	switch {
 	case err == nil:
@@ -286,10 +234,6 @@ func targetErrorForApplication(application deploy.Application, err error) *termi
 	}
 }
 
-// terminalTargetsAuth is the add-tab discovery chain: authentication, an
-// interactive JWT session (a scoped API token must never enumerate shells) and
-// the active team scope the application list reads. It deliberately carries no
-// operator check: a non-operator still sees their container targets.
 func (s *Server) terminalTargetsAuth() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return s.RequireAuth(s.requireInteractiveSession(s.RequireTeam(next)))

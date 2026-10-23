@@ -31,24 +31,17 @@ const { t } = useI18n();
 const message = useMessage();
 const files = useFilesStore();
 
-// The octal field is the source of truth; the 3x3 grid is derived from it and
-// writes back a fresh octal string, so the two stay in sync in both
-// directions. While the octal string is invalid the grid is disabled and left
-// all-false, so a stray grid click can never overwrite what the user typed.
 const octal = ref("644");
 const touched = ref(false);
 
-/** The nine rwx flags in owner/group/other x read/write/execute order. */
 const flagIndexes = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
 
-/** roles labels the three grid rows. */
 const rows = computed(() => [
   { label: String(t("files.permissions.owner")), offset: 0 },
   { label: String(t("files.permissions.group")), offset: 3 },
   { label: String(t("files.permissions.other")), offset: 6 },
 ]);
 
-/** columns labels the three grid columns. */
 const columns = computed(() => [
   String(t("files.permissions.read")),
   String(t("files.permissions.write")),
@@ -59,7 +52,6 @@ const octalValid = computed<boolean>(
   () => filesOctalModeSchema.safeParse(octal.value).success,
 );
 
-/** The entry's real mode as symbolic + full octal, shown read-only above the grid. */
 const currentMode = computed(() =>
   props.entry == null
     ? ""
@@ -70,13 +62,10 @@ const flags = computed<boolean[]>(() =>
   octalValid.value ? permissionFlags(parseOctalMode(octal.value)) : [false, false, false, false, false, false, false, false, false],
 );
 
-/** The mode the field currently expresses, when it is valid. */
 const parsedMode = computed<number | null>(() =>
   octalValid.value ? parseOctalMode(octal.value) : null,
 );
 
-// A directory must keep owner execute (the agent refuses otherwise): without it
-// the entry cannot be traversed and the file manager would lock itself out.
 const directoryNeedsOwnerExec = computed<boolean>(
   () =>
     props.entry?.kind === "directory" &&
@@ -84,8 +73,6 @@ const directoryNeedsOwnerExec = computed<boolean>(
     (parsedMode.value & 0o100) === 0,
 );
 
-// Applying the mode the entry already has is a no-op the server would audit;
-// keep the button disabled until something actually changes.
 const unchanged = computed<boolean>(
   () =>
     props.entry != null &&
@@ -101,7 +88,6 @@ const canApply = computed<boolean>(
     files.canWrite,
 );
 
-/** errorKey is the catalog key shown under the field, or null when valid. */
 const errorKey = computed<string | null>(() => {
   if (!octalValid.value) {
     return touched.value ? "files.permissions.invalid" : null;
@@ -112,7 +98,6 @@ const errorKey = computed<string | null>(() => {
   return null;
 });
 
-/** flagAria builds a screen-reader label for one grid checkbox. */
 function flagAria(offset: number, column: number): string {
   return String(
     t("files.permissions.flagAria", {
@@ -122,8 +107,6 @@ function flagAria(offset: number, column: number): string {
   );
 }
 
-/** toggleFlag writes one grid toggle back into the octal field. It is inert
- * while the field is invalid, so the typed text is never rewritten. */
 function toggleFlag(index: number, checked: boolean): void {
   if (!octalValid.value) {
     return;
@@ -143,7 +126,6 @@ watch(
   },
 );
 
-/** submit applies the mode and surfaces any failure in a toast. */
 async function submit(): Promise<void> {
   if (files.acting || !props.entry) {
     return;

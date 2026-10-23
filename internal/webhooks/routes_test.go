@@ -22,12 +22,8 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// contextKey marks a request the test auth middleware accepted.
 type contextKey struct{}
 
-// newRouteServer mounts the webhook routes behind an auth middleware that
-// rejects requests with no Authorization header — the shape of the server's
-// RequireAuth for bearer and token callers.
 func newRouteServer(svc *Service, userID uuid.UUID) http.Handler {
 	r := chi.NewRouter()
 	auth := func(next http.Handler) http.Handler {
@@ -43,23 +39,19 @@ func newRouteServer(svc *Service, userID uuid.UUID) http.Handler {
 	return r
 }
 
-// alwaysUser returns a UserIDFunc that reports one fixed, authenticated user.
 func alwaysUser(id uuid.UUID) UserIDFunc {
 	return func(context.Context) (uuid.UUID, bool) { return id, true }
 }
 
-// pushBody is a GitHub/Gitea-shaped push notification for the fake repo.
 func pushBody(commit string) string {
 	return `{"ref":"refs/heads/main","after":"` + commit + `","repository":{"full_name":"octo/gotham"}}`
 }
 
-// gitLabPushBody is the same push as the GitLab body shape.
 func gitLabPushBody(commit string) string {
 	return `{"ref":"refs/heads/main","after":"` + commit +
 		`","project":{"path_with_namespace":"octo/gotham"}}`
 }
 
-// deliveryRequest builds a delivery for provider with the given headers.
 func deliveryRequest(provider, body string, headers map[string]string, sourceIP string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/webhooks/"+provider, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -70,7 +62,6 @@ func deliveryRequest(provider, body string, headers map[string]string, sourceIP 
 	return req
 }
 
-// githubPushHeaders signs body with secret for a GitHub push delivery.
 func githubPushHeaders(secret, body, deliveryID string) map[string]string {
 	return map[string]string{
 		headerGitHubSignature: githubSignaturePrefix + hmacHex(secret, []byte(body)),
@@ -79,15 +70,12 @@ func githubPushHeaders(secret, body, deliveryID string) map[string]string {
 	}
 }
 
-// managementRequest builds an authenticated management request.
 func managementRequest(method, path string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set("Authorization", "Bearer token")
 	return req
 }
 
-// TestRoutesCreateWebhookIgnoresUntrustedForwardedScheme pins L6: an untrusted
-// peer cannot redirect the hook callback to https by sending X-Forwarded-Proto.
 func TestRoutesCreateWebhookIgnoresUntrustedForwardedScheme(t *testing.T) {
 	repo := newFakeRepository()
 	installer := &fakeInstaller{}
@@ -112,8 +100,6 @@ func TestRoutesCreateWebhookIgnoresUntrustedForwardedScheme(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateWebhookTrustedProxyScheme pins that a trusted proxy's
-// X-Forwarded-Proto is honored for the callback origin.
 func TestRoutesCreateWebhookTrustedProxyScheme(t *testing.T) {
 	repo := newFakeRepository()
 	installer := &fakeInstaller{}
@@ -276,7 +262,6 @@ func TestRoutesDeliveryInvalidSignaturePerProvider(t *testing.T) {
 			body:     pushBody("tampered"),
 			headers: func() map[string]string {
 				return map[string]string{
-					// A valid signature replayed over edited bytes must fail.
 					headerGiteaSignature: hmacHex("hook-secret", []byte(pushBody("abc123"))),
 					headerGiteaEvent:     "push",
 				}
@@ -325,8 +310,6 @@ func TestRoutesDeliveryDedupeByCommitSHA(t *testing.T) {
 	if rec := send(t, "delivery-1"); rec.Code != http.StatusAccepted {
 		t.Fatalf("first delivery status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
 	}
-	// The same commit under a different delivery GUID — a provider retry, or a
-	// second hook firing for the same push — must not queue a second build.
 	rec := send(t, "delivery-2")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("repeat status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
@@ -346,9 +329,6 @@ func TestRoutesDeliveryDedupeByCommitSHA(t *testing.T) {
 	}
 }
 
-// TestRoutesDeliveryConflictRedelivers pins the redelivery half of C3-3: the
-// 503 leaves the claim released, so when the host retries the same push after
-// the active build finishes the retry queues the deployment normally.
 func TestRoutesDeliveryConflictRedelivers(t *testing.T) {
 	const secret = "hook-secret"
 	repo := newFakeRepository().withTarget()
@@ -367,7 +347,7 @@ func TestRoutesDeliveryConflictRedelivers(t *testing.T) {
 	if rec := send(t, "delivery-1"); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("first status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 	}
-	deployer.setErr(nil) // the active build finished
+	deployer.setErr(nil)
 	if rec := send(t, "delivery-2"); rec.Code != http.StatusAccepted {
 		t.Fatalf("redelivery status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -376,9 +356,6 @@ func TestRoutesDeliveryConflictRedelivers(t *testing.T) {
 	}
 }
 
-// gatedDeployer blocks DeploySystem until release, so a test can interleave a
-// duplicate delivery while the winning claim is still in flight (no deployment
-// linked yet).
 type gatedDeployer struct {
 	entered chan struct{}
 	release chan struct{}
@@ -395,11 +372,6 @@ func (d *gatedDeployer) DeploySystem(_ context.Context, appID uuid.UUID) (deploy
 	}, nil
 }
 
-// TestReceiveDuplicateWaitsForDurableClaim pins C3-4: a duplicate that arrives
-// while the winning delivery has claimed but not yet linked its deployment must
-// not be acknowledged — if it were 200 and the winner then released its claim,
-// the commit would be dropped. It answers retryable, and once the winner's
-// deployment is durable the same redelivery becomes a 200 duplicate no-op.
 func TestReceiveDuplicateWaitsForDurableClaim(t *testing.T) {
 	const secret = "hook-secret"
 	repo := newFakeRepository().withTarget()
@@ -417,7 +389,7 @@ func TestReceiveDuplicateWaitsForDurableClaim(t *testing.T) {
 		_, err := svc.Receive(context.Background(), providers.NameGitHub, request("delivery-1"))
 		winner <- err
 	}()
-	<-deployer.entered // the winner has claimed; DeploymentSystem is in flight
+	<-deployer.entered
 
 	if _, err := svc.Receive(context.Background(), providers.NameGitHub, request("delivery-2")); !errors.Is(err, ErrRetryable) {
 		t.Fatalf("duplicate while winner in flight error = %v, want ErrRetryable", err)
@@ -428,8 +400,6 @@ func TestReceiveDuplicateWaitsForDurableClaim(t *testing.T) {
 		t.Fatalf("winner: %v", err)
 	}
 
-	// The winner's deployment is now linked: the same delivery is a durable
-	// duplicate no-op instead of a retry.
 	delivery, err := svc.Receive(context.Background(), providers.NameGitHub, request("delivery-3"))
 	if err != nil {
 		t.Fatalf("durable duplicate: %v", err)
@@ -442,8 +412,6 @@ func TestReceiveDuplicateWaitsForDurableClaim(t *testing.T) {
 	}
 }
 
-// cancelOnDeploy cancels the delivery context as it crosses the deploy boundary
-// and then returns err, modelling a client disconnect at the deadline.
 type cancelOnDeploy struct {
 	cancel context.CancelFunc
 	err    error
@@ -462,9 +430,6 @@ func (d *cancelOnDeploy) DeploySystem(_ context.Context, appID uuid.UUID) (deplo
 	}, nil
 }
 
-// TestReceiveReleasesClaimOnCancelledRequest pins U1: when the request context
-// is cancelled at the deploy boundary, the claim must still be released (on a
-// detached context) or it is stranded and every redelivery answers 503.
 func TestReceiveReleasesClaimOnCancelledRequest(t *testing.T) {
 	const secret = "hook-secret"
 	repo := newFakeRepository().withTarget()
@@ -486,9 +451,6 @@ func TestReceiveReleasesClaimOnCancelledRequest(t *testing.T) {
 	}
 }
 
-// TestReceiveLinksClaimOnCancelledRequest pins the link half of U1: a
-// successful deploy whose request context was cancelled must still link the
-// deployment, so a redelivery is a durable duplicate rather than a retry.
 func TestReceiveLinksClaimOnCancelledRequest(t *testing.T) {
 	const secret = "hook-secret"
 	repo := newFakeRepository().withTarget()
@@ -535,8 +497,6 @@ func TestRoutesDeliveryRateLimited(t *testing.T) {
 
 	statuses := make([]int, 0, 3)
 	for i := 0; i < 3; i++ {
-		// A fresh commit per request so the anti-spam dedupe never masks the
-		// rate limiter this test is about.
 		push := pushBody("commit-" + strconv.Itoa(i))
 		headers := githubPushHeaders(secret, push, "delivery-"+strconv.Itoa(i))
 		rec := httptest.NewRecorder()
@@ -555,9 +515,6 @@ func TestRoutesDeliveryRateLimited(t *testing.T) {
 	}
 }
 
-// TestRoutesDeliveryClientIPBehindTrustedProxy pins that the delivery limiter
-// keys on X-Forwarded-For when the direct peer is a trusted proxy: distinct
-// forwarded clients behind one proxy do not share a bucket.
 func TestRoutesDeliveryClientIPBehindTrustedProxy(t *testing.T) {
 	const secret = "hook-secret"
 	repo := newFakeRepository().withTarget()
@@ -662,10 +619,6 @@ func TestRoutesDeliveryIgnoresNonBuildingEvents(t *testing.T) {
 	}
 }
 
-// TestRoutesDeliveryBranchMatchIsExact pins C3-7: branch names are
-// case-sensitive, so a push to "main" must not consume the watched branch's
-// claim when the application watches "Main" (the clone still checks out
-// "Main").
 func TestRoutesDeliveryBranchMatchIsExact(t *testing.T) {
 	const secret = "hook-secret"
 	repo := newFakeRepository().withTarget()
@@ -683,7 +636,6 @@ func TestRoutesDeliveryBranchMatchIsExact(t *testing.T) {
 		return rec
 	}
 
-	// A push to the differently-cased branch is ignored and claims nothing.
 	rec := push("main", "abc123", "delivery-1")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("lower-case branch status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
@@ -702,7 +654,6 @@ func TestRoutesDeliveryBranchMatchIsExact(t *testing.T) {
 		t.Errorf("deployments = %d, want 0", deployer.deployCount())
 	}
 
-	// The exact watched branch still deploys.
 	if rec := push("Main", "abc123", "delivery-2"); rec.Code != http.StatusAccepted {
 		t.Fatalf("watched branch status = %d, want 202 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -722,7 +673,6 @@ func TestRoutesDeliveryUnknownRepositoryIsUnauthorized(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, deliveryRequest(providers.NameGitHub, body, headers, "10.0.0.1:4242"))
 
-	// An unknown repository must answer exactly like a bad signature.
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -766,17 +716,11 @@ func TestRoutesDeliveryDeployDisabled(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 	}
-	// Nothing was queued, so the claim must be released: a later retry of this
-	// delivery is a legitimate attempt, not spam.
 	if repo.claimCount() != 0 {
 		t.Errorf("claims = %d, want 0", repo.claimCount())
 	}
 }
 
-// TestRoutesDeliveryConflictIsRetryable pins C3-3: a push that arrives while a
-// build is in flight must not be acknowledged as delivered (200) or the commit
-// is silently dropped. The route answers 503 so the Git host redelivers it, and
-// the claim is released so that redelivery is not mistaken for spam.
 func TestRoutesDeliveryConflictIsRetryable(t *testing.T) {
 	const secret = "hook-secret"
 	repo := newFakeRepository().withTarget()
@@ -922,11 +866,6 @@ func TestRoutesDeleteWebhookProviderFailureKeepsRow(t *testing.T) {
 	}
 }
 
-// TestRoutesForgetWebhookForceEscapeHatch pins ?force=true: the caller
-// acknowledges that the provider cannot be reached, the stored row is dropped
-// without any host call (so a stalled provider cannot block the hatch), and
-// the response reports the removal. The strict route keeps the row and answers
-// 502 — see TestRoutesDeleteWebhookProviderFailureKeepsRow.
 func TestRoutesForgetWebhookForceEscapeHatch(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	installer := &fakeInstaller{}

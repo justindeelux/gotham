@@ -34,13 +34,7 @@ const channelsStore = useNotificationsStore();
 const { canMutate, openEdit, resolveResourceName } = useChannelDialog();
 
 const testing = ref(false);
-/** Last server answer, rendered verbatim (wire text, never translated). */
 const testResult = ref<TestResult | null>(null);
-/**
- * Raw failure behind a failed test run. The display text derives from it
- * plus the current locale, so a language switch refreshes a retained
- * failure without resending the test (no outbound delivery on switch).
- */
 const testErrorRaw = ref<unknown>(null);
 const testFailure = computed<string | null>(() =>
   testErrorRaw.value === null
@@ -48,11 +42,6 @@ const testFailure = computed<string | null>(() =>
     : describeChannelError(testErrorRaw.value),
 );
 
-/**
- * Delivery-history panel state. The panel is lazy: it reads the history only
- * when the operator opens it (and again after a send-test), so the page never
- * fetches history for channels nobody inspects.
- */
 const historyOpen = ref(false);
 const historyLoading = ref(false);
 const deliveries = ref<NotificationDelivery[]>([]);
@@ -63,14 +52,8 @@ const historyError = computed<string | null>(() =>
     : describeChannelError(historyErrorRaw.value),
 );
 
-/**
- * Token of the newest history read. Opening the panel and a send-test refresh
- * can overlap; only the newest read may write state, so an older response can
- * never overwrite a newer list or clear a spinner the newest read still owns.
- */
 let historyReadToken = 0;
 
-/** toggleHistory opens/closes the panel, loading the history on open. */
 async function toggleHistory(channel: NotificationChannel): Promise<void> {
   historyOpen.value = !historyOpen.value;
   if (historyOpen.value) {
@@ -78,7 +61,6 @@ async function toggleHistory(channel: NotificationChannel): Promise<void> {
   }
 }
 
-/** loadHistory reloads one channel's newest attempts (latest read wins). */
 async function loadHistory(channel: NotificationChannel): Promise<void> {
   const token = ++historyReadToken;
   historyLoading.value = true;
@@ -102,7 +84,6 @@ async function loadHistory(channel: NotificationChannel): Promise<void> {
   }
 }
 
-/** handleToggle flips a channel's enabled flag in place. */
 async function handleToggle(channel: NotificationChannel, enabled: boolean): Promise<void> {
   try {
     await channelsStore.update(channel.id, { enabled });
@@ -111,7 +92,6 @@ async function handleToggle(channel: NotificationChannel, enabled: boolean): Pro
   }
 }
 
-/** handleDelete removes a channel after confirmation. */
 async function handleDelete(channel: NotificationChannel): Promise<void> {
   try {
     await channelsStore.remove(channel.id);
@@ -125,7 +105,6 @@ async function handleDelete(channel: NotificationChannel): Promise<void> {
   }
 }
 
-/** handleTest delivers a synthetic event and records the outcome. */
 async function handleTest(channel: NotificationChannel): Promise<void> {
   testing.value = true;
   testResult.value = null;
@@ -137,7 +116,6 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
   } finally {
     testing.value = false;
   }
-  // A test leaves a history row; refresh an open panel so it appears.
   if (historyOpen.value) {
     await loadHistory(channel);
   }

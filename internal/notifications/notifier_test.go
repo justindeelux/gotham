@@ -14,8 +14,6 @@ import (
 	"time"
 )
 
-// webhookCall captures one request a mock webhook received. The mutex keeps
-// the asynchronous-delivery tests race-free.
 type webhookCall struct {
 	mu          sync.Mutex
 	method      string
@@ -25,22 +23,18 @@ type webhookCall struct {
 	body        []byte
 }
 
-// snapshot reads the recorded request under the lock.
 func (c *webhookCall) snapshot() (method, path, contentType string, body []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.method, c.path, c.contentType, append([]byte(nil), c.body...)
 }
 
-// rawPath returns the request path exactly as sent, before URL decoding.
 func (c *webhookCall) rawPath() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.escapedPath
 }
 
-// newWebhookServer starts a mock endpoint answering status and recording the
-// request.
 func newWebhookServer(t *testing.T, status int) (*httptest.Server, *webhookCall) {
 	t.Helper()
 	call := &webhookCall{}
@@ -61,7 +55,6 @@ func newWebhookServer(t *testing.T, status int) (*httptest.Server, *webhookCall)
 	return server, call
 }
 
-// fixedEvent is the event every notifier test formats.
 func fixedEvent() Event {
 	return Event{
 		Kind:         EventDeploy,
@@ -104,9 +97,6 @@ func TestDiscordNotifierPostsContent(t *testing.T) {
 	}
 }
 
-// TestDiscordDisablesMentions proves an application name that looks like a
-// mention can never ping a channel: the payload disables every mention kind
-// while the name still travels verbatim as data.
 func TestDiscordDisablesMentions(t *testing.T) {
 	server, call := newWebhookServer(t, http.StatusOK)
 	notifier := newDiscordNotifier(server.URL+"/webhook", server.Client())
@@ -148,7 +138,6 @@ func TestSlackNotifierPostsText(t *testing.T) {
 	if want := slackEscape(fixedEvent().Message()); payload.Text != want {
 		t.Errorf("text = %q, want %q", payload.Text, want)
 	}
-	// No option may re-parse or resolve the user text.
 	if payload.LinkNames || payload.UnfurlLinks || payload.UnfurlMedia {
 		t.Errorf("payload = %+v, want link_names and both unfurl flags off", payload)
 	}
@@ -174,8 +163,6 @@ func TestTelegramNotifierPostsMessage(t *testing.T) {
 	}
 }
 
-// TestTelegramNotifierHidesTokenOnFailure proves a failed delivery never puts
-// the bot token (which lives in the URL path) into the error text.
 func TestTelegramNotifierHidesTokenOnFailure(t *testing.T) {
 	server, _ := newWebhookServer(t, http.StatusInternalServerError)
 	const token = "7184:AAH-super-secret-token"
@@ -232,8 +219,6 @@ func TestEmailNotifierBuildsMail(t *testing.T) {
 	}
 }
 
-// TestNotifierFailureIsReported proves a non-2xx answer is an error carrying
-// the status but not the URL.
 func TestNotifierFailureIsReported(t *testing.T) {
 	server, _ := newWebhookServer(t, http.StatusBadRequest)
 	notifier := newDiscordNotifier(server.URL+"/webhook/secret-token", server.Client())
@@ -250,12 +235,10 @@ func TestNotifierFailureIsReported(t *testing.T) {
 	}
 }
 
-// TestNotifierConnectionRefusedHidesSecret proves a refused connection never
-// puts the credential-bearing endpoint into the error.
 func TestNotifierConnectionRefusedHidesSecret(t *testing.T) {
 	server, _ := newWebhookServer(t, http.StatusOK)
 	endpoint := server.URL + "/webhook/refused-secret-token"
-	server.Close() // the port is free again: connections are refused
+	server.Close()
 
 	err := newDiscordNotifier(endpoint, &http.Client{Timeout: time.Second}).Notify(context.Background(), fixedEvent())
 	if err == nil {
@@ -267,13 +250,8 @@ func TestNotifierConnectionRefusedHidesSecret(t *testing.T) {
 	}
 }
 
-// TestNotifierTimeoutHidesSecret proves a timeout is classified without the
-// credential-bearing URL (Telegram keeps its token in the path).
 func TestNotifierTimeoutHidesSecret(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		// Hold the request until the client gives up. The bounded fallback
-		// keeps httptest.Server.Close from waiting on a request the client
-		// already abandoned.
 		select {
 		case <-r.Context().Done():
 		case <-time.After(500 * time.Millisecond):
@@ -293,9 +271,6 @@ func TestNotifierTimeoutHidesSecret(t *testing.T) {
 	}
 }
 
-// TestNotifierNon2xxHidesRemoteBody proves a non-2xx answer reports the status
-// but never the remote body (a server may reflect the request path) and never
-// the URL.
 func TestNotifierNon2xxHidesRemoteBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -314,10 +289,6 @@ func TestNotifierNon2xxHidesRemoteBody(t *testing.T) {
 	}
 }
 
-// newReflectingStatusServer starts a mock endpoint that hijacks the
-// connection and answers with a status line whose reason phrase reflects the
-// request path — exactly the hostile-webhook behavior the credential-leak
-// tests guard against.
 func newReflectingStatusServer(t *testing.T, status int) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -339,9 +310,6 @@ func newReflectingStatusServer(t *testing.T, status int) *httptest.Server {
 	return server
 }
 
-// TestNotifierHidesStatusReasonPhrase proves the remote-controlled HTTP reason
-// phrase never reaches the error: an endpoint can reflect the
-// credential-bearing request path in it.
 func TestNotifierHidesStatusReasonPhrase(t *testing.T) {
 	server := newReflectingStatusServer(t, http.StatusInternalServerError)
 	notifier := newDiscordNotifier(server.URL+"/webhook/reason-secret-token", server.Client())
@@ -356,8 +324,6 @@ func TestNotifierHidesStatusReasonPhrase(t *testing.T) {
 	}
 }
 
-// TestNotifierRefusesCrossOriginRedirect proves a redirect to another origin is
-// refused before the credential-bearing request is replayed there.
 func TestNotifierRefusesCrossOriginRedirect(t *testing.T) {
 	var targetCalls int
 	var mu sync.Mutex
@@ -389,8 +355,6 @@ func TestNotifierRefusesCrossOriginRedirect(t *testing.T) {
 	}
 }
 
-// TestNotifierRefusesLinkLocalRedirect proves a same-host is not enough: a
-// redirect whose target is a literal link-local address is refused.
 func TestNotifierRefusesLinkLocalRedirect(t *testing.T) {
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", "http://169.254.169.254/latest/meta-data/redirect-secret-token")
@@ -409,8 +373,6 @@ func TestNotifierRefusesLinkLocalRedirect(t *testing.T) {
 	}
 }
 
-// TestNotifierFollowsSameOriginRedirect keeps a legitimate path redirect
-// working.
 func TestNotifierFollowsSameOriginRedirect(t *testing.T) {
 	var finalPath string
 	var mu sync.Mutex
@@ -437,7 +399,6 @@ func TestNotifierFollowsSameOriginRedirect(t *testing.T) {
 	}
 }
 
-// assertNoSecret fails when err text mentions any credential fragment.
 func assertNoSecret(t *testing.T, err error, fragments ...string) {
 	t.Helper()
 	message := err.Error()
@@ -448,8 +409,6 @@ func assertNoSecret(t *testing.T, err error, fragments ...string) {
 	}
 }
 
-// TestTelegramTokenValidation rejects tokens that could smuggle path/query
-// syntax into the sendMessage URL.
 func TestTelegramTokenValidation(t *testing.T) {
 	invalid := map[string]string{
 		"path slash": "7184:AAH/secret",
@@ -471,8 +430,6 @@ func TestTelegramTokenValidation(t *testing.T) {
 	}
 }
 
-// TestTelegramNotifierEscapesTokenPath keeps the URL path well-formed even for
-// a token that predates validation.
 func TestTelegramNotifierEscapesTokenPath(t *testing.T) {
 	server, call := newWebhookServer(t, http.StatusOK)
 	notifier := newTelegramNotifier("12/3?x", "-100", server.URL, server.Client())
@@ -485,9 +442,6 @@ func TestTelegramNotifierEscapesTokenPath(t *testing.T) {
 	}
 }
 
-// TestOutboundHostValidation refuses literal link-local/metadata destinations
-// (including scoped IPv6 literals) while keeping private/self-hosted ranges
-// allowed.
 func TestOutboundHostValidation(t *testing.T) {
 	blocked := []string{
 		"http://169.254.169.254/latest/meta-data/",
@@ -531,8 +485,6 @@ func TestOutboundHostValidation(t *testing.T) {
 	}
 }
 
-// TestRedactedConfigMasksSecrets pins the read DTO rule: secret fields are
-// masked to their last four characters and can never round-trip.
 func TestRedactedConfigMasksSecrets(t *testing.T) {
 	config := ChannelConfig{
 		WebhookURL: "https://discord.com/api/webhooks/1184/8f2c-secret-value",
@@ -564,8 +516,6 @@ func TestRedactedConfigMasksSecrets(t *testing.T) {
 	}
 }
 
-// TestRenderMessageFramesHeaders proves the SMTP document is CRLF-framed and
-// header injection through the subject is neutralized.
 func TestRenderMessageFramesHeaders(t *testing.T) {
 	raw := string(renderMessage(Mail{
 		From:    "ops@gotham.dev",
@@ -584,7 +534,6 @@ func TestRenderMessageFramesHeaders(t *testing.T) {
 	}
 }
 
-// mustJSONString encodes s as a JSON string, including the quotes.
 func mustJSONString(t *testing.T, s string) string {
 	t.Helper()
 	encoded, err := json.Marshal(s)
@@ -594,10 +543,6 @@ func mustJSONString(t *testing.T, s string) string {
 	return string(encoded)
 }
 
-// TestSlackEscapesMentionAndLinkInjection proves every user-controlled part of
-// the message reaches Slack as inert text: mentions ("<!channel>", "<@U123>"),
-// channel links ("<#C1|x>") and phishing links ("<https://evil|click>") are
-// escaped, so nothing pings or renders a link from user input.
 func TestSlackEscapesMentionAndLinkInjection(t *testing.T) {
 	server, call := newWebhookServer(t, http.StatusOK)
 	notifier := newSlackNotifier(server.URL+"/services/T04/inject-secret", server.Client())
@@ -623,8 +568,6 @@ func TestSlackEscapesMentionAndLinkInjection(t *testing.T) {
 			t.Errorf("text = %q, want the escaped form %q", text, escaped)
 		}
 	}
-	// No raw markup survives: every '<'/'>' is escaped and '&' only starts an
-	// entity.
 	if strings.ContainsAny(text, "<>") {
 		t.Errorf("text = %q still contains raw angle brackets", text)
 	}
@@ -643,9 +586,6 @@ func TestSlackEscapesMentionAndLinkInjection(t *testing.T) {
 	}
 }
 
-// TestTelegramDoesNotParseUserMarkup proves the sender never asks the Bot API
-// to parse the text: a name carrying HTML/Markdown syntax is delivered
-// verbatim and no parse_mode is sent.
 func TestTelegramDoesNotParseUserMarkup(t *testing.T) {
 	server, call := newWebhookServer(t, http.StatusOK)
 	notifier := newTelegramNotifier("7184:AAH-token", "-100", server.URL, server.Client())
@@ -668,9 +608,6 @@ func TestTelegramDoesNotParseUserMarkup(t *testing.T) {
 	}
 }
 
-// TestEmailSubjectCannotInjectHeaders proves a resource name carrying CRLF
-// cannot add a header: the subject is neutralized and the document keeps a
-// single Subject line.
 func TestEmailSubjectCannotInjectHeaders(t *testing.T) {
 	mailer := &fakeMailer{}
 	notifier := newEmailNotifier(mailer, ChannelConfig{

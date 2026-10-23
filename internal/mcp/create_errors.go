@@ -6,7 +6,6 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// SDK schema errors can quote input values, including pasted credentials.
 func safeCreateErrors(next sdk.MethodHandler) sdk.MethodHandler {
 	return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
 		result, err := next(ctx, method, req)

@@ -18,10 +18,8 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** keyedSchema stores a namespaced message key, resolved at call time. */
 const keyedSchema = z.string().min(1, "common.actions.save");
 
-/** legacySchema stores plain English, which must pass through untouched. */
 const legacySchema = z.string().min(1, "Email is required");
 
 describe("validation message resolution", () => {

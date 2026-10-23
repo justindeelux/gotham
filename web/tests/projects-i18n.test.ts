@@ -1,7 +1,3 @@
-// I18N-3 (JUS-44) focused checks: projects catalog parity plus the live
-// language-switch behavior the package promises — inline 409s stay inline
-// and translate, other failures stay in alerts, counts/kinds/problems
-// switch, and dirty drafts plus the selected scope survive the switch.
 /* global HTMLInputElement: readonly */
 import { NButton, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -108,8 +104,6 @@ describe("error summaries keep raw diagnostics", () => {
       message: "projects: project still has resources (including previews)",
       cause: null,
     };
-    // The contract prefix is stripped (as before); the actionable refusal
-    // itself is identical in both locales.
     expect(describeProjectError(refusal)).toBe(
       "project still has resources (including previews)",
     );
@@ -240,7 +234,6 @@ describe("drafts survive a language switch", () => {
     await nextTick();
     await flushPromises();
 
-    // The draft survives; the dialog and page chrome translated.
     expect((wrapper.find(".n-modal .n-form-item input").element as HTMLInputElement).value).toBe(
       "storefront",
     );
@@ -298,7 +291,6 @@ describe("drafts survive a language switch", () => {
     const nameInput = globalThis.document.body.querySelector(
       ".n-modal .n-form-item input",
     ) as HTMLInputElement;
-    // Empty required name validated on blur through the real teleported modal.
     nameInput.focus();
     nameInput.dispatchEvent(new globalThis.Event("blur"));
     await flushPromises();

@@ -1,8 +1,3 @@
-// JUS-249: saved terminal quick commands and abbreviation suggestions.
-// The transport is exercised with a faithful fake socket (open/message/close)
-// that records every frame, so the tests assert the exact bytes inserted and
-// prove nothing presses Enter. The shell state comes only from OSC 133 marks;
-// no prompt text is parsed and no keystroke concatenation is trusted.
 /* global HTMLElement:readonly, TextEncoder:readonly, TextDecoder:readonly, window:readonly */
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -47,7 +42,6 @@ import {
 import { setSession } from "@/shared/api/token";
 import type { User } from "@/shared/api/token";
 
-/** command builds one valid saved command. */
 function command(
   id: string,
   label: string,
@@ -62,7 +56,6 @@ function command(
   };
 }
 
-/** memoryStorage is a Storage-shaped map for persistence tests. */
 function memoryStorage(): {
   getItem: (_key: string) => string | null;
   setItem: (_key: string, _value: string) => void;
@@ -78,7 +71,6 @@ function memoryStorage(): {
   };
 }
 
-/** account builds one minimal signed-in user. */
 function account(id: string): User {
   return {
     id,
@@ -87,12 +79,10 @@ function account(id: string): User {
   };
 }
 
-/** bytes turns text into UTF-8 bytes. */
 function bytes(text: string): Uint8Array {
   return new TextEncoder().encode(text);
 }
 
-/** concat joins byte chunks. */
 function concat(chunks: Uint8Array[]): Uint8Array {
   const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const out = new Uint8Array(total);
@@ -104,7 +94,6 @@ function concat(chunks: Uint8Array[]): Uint8Array {
   return out;
 }
 
-/** osc builds one OSC prompt mark (`\x1b]133;B\x07`). */
 function osc(mark: string, code = "133"): Uint8Array {
   return bytes(`\x1b]${code};${mark}\x07`);
 }
@@ -160,7 +149,6 @@ describe("quick command schemas", () => {
       abbreviation: "gs",
     });
     expect(duplicate.success).toBe(false);
-    // Re-saving the same command keeps its own abbreviation.
     const self = quickCommandDraftSchema(existing, "a").safeParse({
       label: "One",
       command: "echo one",
@@ -284,8 +272,6 @@ describe("quick command storage", () => {
 
   it("can store the full 40-command list with JSON-escaped text", () => {
     const storage = memoryStorage();
-    // Quotes double under JSON escaping; 40 x 2048 is the worst allowed
-    // payload shape and must fit the 512 KiB guard.
     const many = Array.from({ length: QUICK_COMMANDS_MAX }, (_, index) =>
       command(`id-${index}`, `Label ${index}`, '"'.repeat(QUICK_COMMAND_TEXT_MAX)),
     );
@@ -393,8 +379,6 @@ describe("prompt scanner", () => {
       phase: "unknown",
       alternateScreen: false,
     });
-    // Private-mode lists are common (`?1049;25h`); the alternate buffer still
-    // wins even when another mode is set in the same CSI.
     scanner.push(bytes("\x1b[?25;1049h"));
     expect(scanner.getState().alternateScreen).toBe(true);
   });
@@ -423,7 +407,6 @@ describe("quick command engine", () => {
     command("c2", "Compose up", "docker compose up -d", "dcu"),
   ];
 
-  /** makeEngine returns an engine already at an editable prompt. */
   function makeEngine(list: QuickCommand[] = commands) {
     const states: Array<{ suggestion: unknown; phase: string }> = [];
     const engine = new QuickCommandEngine({
@@ -445,7 +428,6 @@ describe("quick command engine", () => {
       abbreviation: "gs",
       command: "git status",
     });
-    // Continuing the word hides it again.
     expect(engine.handleInput("x")).toBe("x");
     expect(engine.getState().suggestion).toBeNull();
   });
@@ -460,9 +442,6 @@ describe("quick command engine", () => {
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
 
-    // Arrow-left is an escape sequence chunk; the mirror is dropped, the
-    // bytes are still forwarded, and typing cannot re-enable suggestions
-    // until a fresh B mark.
     expect(engine.handleInput("\x1b[D")).toBe("\x1b[D");
     expect(engine.getState().suggestion).toBeNull();
     engine.handleInput("g");
@@ -474,7 +453,6 @@ describe("quick command engine", () => {
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
-    // Bracketed paste arrives as one chunk.
     expect(engine.handleInput("\x1b[200~text\x1b[201~")).toContain("text");
     expect(engine.getState().suggestion).toBeNull();
     engine.handleInput("g");
@@ -483,7 +461,6 @@ describe("quick command engine", () => {
     engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
 
-    // Multi-character IME commit / paste.
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
@@ -498,15 +475,12 @@ describe("quick command engine", () => {
     const { engine } = makeEngine();
     engine.handleInput("g");
     engine.handleInput("s");
-    // Esc belongs to the shell (vi normal mode / readline meta), so it is
-    // always forwarded; it also dismisses the suggestion and stops tracking.
     expect(engine.handleInput("\x1b")).toBe("\x1b");
     expect(engine.getState().suggestion).toBeNull();
     expect(engine.getState().suspended).toBe(true);
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).toBeNull();
-    // Only a fresh B mark re-enables matching.
     engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
     engine.handleInput("g");
@@ -525,14 +499,11 @@ describe("quick command engine", () => {
     expect(engine.handleInput("\r")).toBe("\r");
     expect(engine.getState().suggestion).toBeNull();
 
-    // After Enter, a shell without a C mark must not suggest while the
-    // submitted command is still running; only a new B mark re-enables it.
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).toBeNull();
     engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
-    // The type-ahead above tainted the first prompt; the next one is clean.
     engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
     engine.handleInput("g");
@@ -549,7 +520,6 @@ describe("quick command engine", () => {
     engine.setComposing(false);
     engine.handleInput("g");
     engine.handleInput("s");
-    // The composition changed a line the mirror cannot see; wait for B.
     expect(engine.getState().suggestion).toBeNull();
     engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
@@ -568,7 +538,6 @@ describe("quick command engine", () => {
       text: "git status",
       abbreviation: "gs",
     });
-    // Still available until the caller commits.
     expect(engine.getState().suggestion).not.toBeNull();
     engine.clearTracking();
     expect(engine.getState().suggestion).toBeNull();
@@ -617,8 +586,6 @@ describe("quick command engine", () => {
 
   it("suspends inside Ctrl-R/Ctrl-S search and Tab completion", () => {
     const { engine } = makeEngine();
-    // Ctrl-R is a single control byte; it must reach readline and stop the
-    // mirror, not be swallowed.
     expect(engine.handleInput("\x12")).toBe("\x12");
     expect(engine.getState().suggestion).toBeNull();
     expect(engine.getState().suspended).toBe(true);
@@ -626,7 +593,6 @@ describe("quick command engine", () => {
     engine.handleInput("s");
     expect(engine.getState().suggestion).toBeNull();
 
-    // A fresh prompt resumes; then Tab completion suspends again.
     engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
     engine.handleInput("g");
@@ -641,9 +607,6 @@ describe("quick command engine", () => {
 
   it("does not false-match after a history/arrow reset", () => {
     const { engine } = makeEngine();
-    // A clean line ending in `foo`, then history recall (Up) resets the
-    // mirror. The old bug let `gs` match as if it started the line, so the
-    // replacement would leave `fooecho ...` behind.
     engine.handleInput("e");
     engine.handleInput("c");
     engine.handleInput("h");
@@ -661,7 +624,6 @@ describe("quick command engine", () => {
 
   it("never matches type-ahead queued while a command was running", () => {
     const { engine } = makeEngine();
-    // A command is running (no B mark); the user types ahead.
     engine.setPrompt({ phase: "running", detected: true, alternateScreen: false });
     engine.handleInput("f");
     engine.handleInput("o");
@@ -670,15 +632,12 @@ describe("quick command engine", () => {
     engine.handleInput("s");
     expect(engine.getState().suggestion).toBeNull();
 
-    // The next prompt is tainted by that queued input: even typing `gs`
-    // there cannot match, because the real line already contains `foogs`.
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
     expect(engine.getState().suspended).toBe(true);
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).toBeNull();
 
-    // Enter submits the type-ahead; the following prompt is clean.
     engine.handleInput("\r");
     engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
@@ -689,12 +648,11 @@ describe("quick command engine", () => {
 
   it("records Enter submitted while suspended, even without a C mark", () => {
     const { engine } = makeEngine();
-    engine.handleInput("\x1b[A"); // recall suspends the mirror
+    engine.handleInput("\x1b[A");
     expect(engine.getState().suspended).toBe(true);
-    engine.handleInput("\r"); // submit the recalled line while suspended
+    engine.handleInput("\r");
     expect(engine.getState().submitted).toBe(true);
 
-    // Type-ahead after the submitted recalled command must taint the prompt.
     engine.handleInput("f");
     engine.handleInput("o");
     engine.handleInput("o");
@@ -711,7 +669,6 @@ describe("quick command engine", () => {
       engine.handleInput(char);
     }
     expect(engine.getState().suggestion).toBeNull();
-    // A word boundary still matches after real text.
     engine.handleInput(" ");
     engine.handleInput("g");
     engine.handleInput("s");
@@ -729,11 +686,6 @@ describe("quick command engine", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Runtime: exact frames over a faithful fake socket.
-// ---------------------------------------------------------------------------
-
-/** FakeSocket records every client frame and lets the test control the peer. */
 class FakeSocket implements TerminalSocket {
   binaryType = "arraybuffer";
   readyState = 0;
@@ -775,7 +727,6 @@ class FakeSocket implements TerminalSocket {
   }
 }
 
-/** FakeTerminal records writes and lets the test drive user input. */
 class FakeTerminal {
   static last: FakeTerminal | null = null;
   cols: number;
@@ -799,7 +750,6 @@ class FakeTerminal {
   }
 
   loadAddon(): void {
-    // FitAddon is not relevant to these assertions.
   }
 
   onData(listener: (_data: string) => void): { dispose: () => void } {
@@ -843,17 +793,13 @@ class FakeTerminal {
   }
 }
 
-/** FakeFit keeps the runtime's fit path harmless. */
 class FakeFit {
   fit(): void {
-    // no layout in jsdom
   }
   dispose(): void {
-    // no-op
   }
 }
 
-/** serverFrame wraps an opcode + payload into one binary server frame. */
 function serverFrame(opcode: number, payload: Uint8Array = new Uint8Array()): ArrayBuffer {
   const frame = new Uint8Array(payload.length + 1);
   frame[0] = opcode;
@@ -861,7 +807,6 @@ function serverFrame(opcode: number, payload: Uint8Array = new Uint8Array()): Ar
   return frame.buffer;
 }
 
-/** setupRuntime builds one runtime with a captured socket and state log. */
 function setupRuntime(commands: QuickCommand[] = []) {
   FakeTerminal.last = null;
   let socket: FakeSocket | null = null;
@@ -911,7 +856,6 @@ function setupRuntime(commands: QuickCommand[] = []) {
   };
 }
 
-/** connectedRuntime opens the socket and confirms `opened`. */
 async function connectedRuntime(commands: QuickCommand[] = []) {
   const context = setupRuntime(commands);
   await context.runtime.connect();
@@ -927,7 +871,6 @@ async function connectedRuntime(commands: QuickCommand[] = []) {
   return context;
 }
 
-/** output sends one server output frame. */
 function output(context: ReturnType<typeof setupRuntime>, data: Uint8Array | string): void {
   const chunk = typeof data === "string" ? bytes(data) : data;
   context.socket.message(serverFrame(0x01, chunk));
@@ -1033,8 +976,6 @@ describe("terminal runtime quick commands", () => {
     context.terminal().type("s");
     expect(context.runtime.getSuggestionState().suggestion).not.toBeNull();
 
-    // Enter submits: C mark, then sudo's password prompt is output but never
-    // a shell B mark.
     context.terminal().type("\r");
     output(context, concat([osc("C"), bytes("[sudo] password for gotham: ")]));
     context.terminal().type("secret");
@@ -1078,13 +1019,11 @@ describe("terminal runtime quick commands", () => {
     context.terminal().type("s");
     context.socket.sent = [];
     context.terminal().type("\x1b");
-    // Esc always reaches the shell (it may be vi normal mode).
     expect(context.socket.inputs()).toEqual(["\x1b"]);
     expect(context.runtime.getSuggestionState().suggestion).toBeNull();
     context.terminal().type("g");
     context.terminal().type("s");
     expect(context.runtime.getSuggestionState().suggestion).toBeNull();
-    // A new prompt resumes suggestions.
     output(context, concat([osc("A"), osc("B")]));
     context.terminal().type("g");
     context.terminal().type("s");
@@ -1151,7 +1090,6 @@ describe("quick commands store", () => {
 
 describe("quick command transport golden bytes", () => {
   it("encodes an acceptance as DELs plus the command text", () => {
-    // This pins the wire shape independent of the runtime internals.
     const frame = encodeInput(prepareAcceptance(2, "git status", false).sequence);
     expect(frame[0]).toBe(CLIENT_INPUT);
     expect(new TextDecoder().decode(frame.subarray(1))).toBe("\x7f\x7fgit status");

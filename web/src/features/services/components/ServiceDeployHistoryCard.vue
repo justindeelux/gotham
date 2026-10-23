@@ -12,12 +12,6 @@ import { activeLocale, i18n } from "@/shared/i18n";
 import { relativeTime } from "@/shared/utils/format";
 import { computed } from "vue";
 
-/** ServiceDeployHistoryCard renders the deploy attempts table card. */
-
-/**
- * t renders card copy in the active locale (tracks language switches).
- * Called during render, so labels refresh without reloading history.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
@@ -32,7 +26,6 @@ const {
   retryHistory,
 } = useServiceDetailContext();
 
-/** stateCell renders one deploy state as a tag. */
 function stateCell(deploy: ServiceDeploy): VNode {
   return h(
     NTag,
@@ -41,7 +34,6 @@ function stateCell(deploy: ServiceDeploy): VNode {
   );
 }
 
-/** errorCell renders the redacted failure message, or an em dash. */
 function errorCell(deploy: ServiceDeploy): VNode {
   if (!deploy.error) {
     return h(NText, { depth: 3 }, { default: () => "—" });
@@ -49,7 +41,6 @@ function errorCell(deploy: ServiceDeploy): VNode {
   return h("span", { class: "mono error-text" }, deploy.error);
 }
 
-/** deployColumns resolves headers in the active locale. */
 const deployColumns = computed<DataTableColumns<ServiceDeploy>>(() => [
   {
     title: t("services.history.columns.deploy"),
@@ -90,7 +81,6 @@ const deployColumns = computed<DataTableColumns<ServiceDeploy>>(() => [
   },
 ]);
 
-/** deployRowKey identifies a history row by its deploy id. */
 function deployRowKey(row: ServiceDeploy): string {
   return row.id;
 }

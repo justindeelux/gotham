@@ -26,7 +26,10 @@ function fixture(t) {
   git(repo, "commit", "-m", "chore: seed fixture");
   git(repo, "remote", "add", "origin", join(root, "origin.git"));
   git(repo, "push", "-u", "origin", "main");
-  const taskEnv = { ...env };
+  mkdirSync(join(root, "bin"));
+  writeFileSync(join(root, "bin", "gh"),
+    `#!/bin/sh\nprintf '%s\\n' "$TEST_MERGED_PRS"\n`, { mode: 0o755 });
+  const taskEnv = { ...env, PATH: `${join(root, "bin")}:${env.PATH}`, TEST_MERGED_PRS: "[]" };
   const run = (...args) => spawnSync(process.execPath, [script, ...args], {
     cwd: repo, env: taskEnv, encoding: "utf8",
   });
@@ -98,10 +101,8 @@ test("squash-merged checkout is reusable only with proof of its exact pushed hea
   git(repo, "merge", "--squash", "fix/first");
   git(repo, "commit", "-m", "fix: squash delivery");
   git(repo, "push", "origin", "main");
-  mkdirSync(join(root, "bin"));
-  writeFileSync(join(root, "bin", "gh"),
-    `#!/bin/sh\nprintf '%s\\n' "$TEST_MERGED_PRS"\n`, { mode: 0o755 });
-  taskEnv.PATH = `${join(root, "bin")}:${taskEnv.PATH}`;
+  git(repo, "push", "origin", "--delete", "fix/first");
+  git(repo, "config", "fetch.prune", "true");
   taskEnv.TEST_MERGED_PRS = JSON.stringify([{ headRefOid: "other-head" }]);
   assert.notEqual(run("fix/next").status, 0);
   assert.equal(git(work, "branch", "--show-current"), "fix/first");
@@ -109,6 +110,19 @@ test("squash-merged checkout is reusable only with proof of its exact pushed hea
   const result = run("fix/next");
   assert.equal(result.status, 0, result.stderr);
   assert.equal(git(work, "rev-parse", "HEAD"), git(repo, "rev-parse", "HEAD"));
+});
+
+test("remote branch names are not reused and dangling local config is preserved", (t) => {
+  const { repo, root, work, run } = fixture(t);
+  git(repo, "push", "origin", "main:fix/existing");
+  assert.notEqual(run("fix/existing").status, 0);
+  assert.equal(existsSync(work), false);
+  assert.equal(run("fix/first").status, 0);
+  rmSync(join(work, "opencode.json"));
+  symlinkSync(join(root, "missing-config"), join(work, "opencode.json"));
+  const result = run("fix/next");
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(git(work, "branch", "--show-current"), "fix/next");
 });
 
 test("operator notes are linked to their original and symlinked checkouts are refused", (t) => {

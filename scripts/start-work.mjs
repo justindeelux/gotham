@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 const [branch, mode, ...extra] = process.argv.slice(2);
@@ -13,6 +13,7 @@ if (!/^(feat|fix|refactor|perf|docs|test|ci|build|chore)\/[a-z0-9]+(?:-[a-z0-9]+
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
 }).trim();
+const exists = (path) => lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 
 try {
   const common = git(process.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -20,11 +21,13 @@ try {
   const target = join(dirname(repo), `${basename(repo)}-${mode ? branch.replace("/", "-") : "work"}`);
   git(repo, "fetch", "origin");
   git(repo, "rev-parse", "--verify", "origin/main");
-  if (spawnSync("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0) {
-    throw new Error(`Branch ${branch} already exists; resume its checkout explicitly`);
+  for (const ref of [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]) {
+    if (spawnSync("git", ["-C", repo, "show-ref", "--verify", "--quiet", ref]).status === 0) {
+      throw new Error(`Branch ${branch} already exists; resume it explicitly`);
+    }
   }
 
-  if (existsSync(target)) {
+  if (exists(target)) {
     if (mode) throw new Error(`Parallel checkout already exists: ${target}`);
     if (realpathSync(target) !== resolve(target)) throw new Error("Refusing a symlinked checkout path");
     if (realpathSync(git(target, "rev-parse", "--path-format=absolute", "--git-common-dir")) !==
@@ -36,16 +39,13 @@ try {
     }
     if (spawnSync("git", ["-C", target, "merge-base", "--is-ancestor", "HEAD", "origin/main"]).status !== 0) {
       const head = git(target, "rev-parse", "HEAD");
-      if (git(target, "rev-parse", "@{upstream}") !== head) {
-        throw new Error("Previous branch has unpushed commits; preserve it before reusing this checkout");
-      }
       const previous = git(target, "symbolic-ref", "--short", "HEAD");
       const prs = JSON.parse(execFileSync("gh", [
         "pr", "list", "--head", previous, "--base", "main", "--state", "merged",
         "--json", "headRefOid", "--limit", "100",
       ], { cwd: target, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
       if (!prs.some((pr) => pr.headRefOid === head)) {
-        throw new Error("Previous branch has no merged PR at its current head");
+        throw new Error("Previous branch has unpushed or unmerged work: no merged PR at its current head");
       }
     }
     git(target, "switch", "-c", branch, "origin/main");
@@ -57,10 +57,10 @@ try {
   for (const name of ["ORCHESTRATION.md", "test-server.md"]) {
     const source = join(repo, "docs", name);
     const link = join(target, "docs", name);
-    if (existsSync(source) && !existsSync(link)) symlinkSync(source, link);
+    if (exists(source) && !exists(link)) symlinkSync(source, link);
   }
   const config = join(target, "opencode.json");
-  if (!existsSync(config)) {
+  if (!exists(config)) {
     writeFileSync(config, JSON.stringify({
       "$schema": "https://opencode.ai/config.json",
       model: "opencode-go/deepseek-v4.1-flash",

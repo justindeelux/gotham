@@ -52,9 +52,6 @@ documentation lives in [`../site/`](../site/).
 
 [`../AGENTS.md`](../AGENTS.md) — workflow and invariants.
 
-[`development-workflow.md`](development-workflow.md) — delivery boundaries,
-reusable checkouts, CI scope selection and the required merge gate.
-
 ## Test server
 
 [`test-server.md`](test-server.md) — the long-lived all-in-one test box

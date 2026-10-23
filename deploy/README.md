@@ -638,8 +638,8 @@ read.
 systemd host. See the script header and the BE-9.1 report for exactly what it
 proves.
 
-CI covers the installer chain on relevant ready PRs and every push to `main`:
-the `installer` job in `.github/workflows/ci.yml` runs `sh -n` over `deploy/*.sh`, `actionlint` over the
+CI covers the installer chain on every PR: the `installer` job in
+`.github/workflows/ci.yml` runs `sh -n` over `deploy/*.sh`, `actionlint` over the
 workflows, and `deploy/test-release-install.sh` (the checkout-level chain with a
 loopback fake releases server and no host changes). The two scripts that need a
 real systemd host and root — `deploy/verify-systemd.sh` and

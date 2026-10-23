@@ -1,15 +1,25 @@
 name: UI E2E
 
 # Browser-level smoke for the embedded SPA against a real control plane.
-# Reused by ci.yml alongside internal/e2e (API-level suite).
+# Separate from ci.yml (unit/build) and internal/e2e (API-level suite).
 # JUS-251: the terminal specs drive real PTYs and real containers through the
 # control plane + node agent, so backend terminal/agent/auth changes must run
 # this job too (a regression that re-requires `root`, breaks the relay or the
 # authorizer has to reach the browser proof).
-# CI selects this suite and includes its result in the required CI gate.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 on:
-  workflow_call:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "web/**"
+      - "internal/terminal/**"
+      - "internal/servers/**"
+      - "internal/auth/**"
+      - "agent/**"
+      - "proto/**"
+      - ".github/workflows/ui-e2e.yml"
 
 permissions:
   contents: read

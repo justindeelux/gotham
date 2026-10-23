@@ -1,6 +1,6 @@
 import { defineConfig } from "vitepress";
 
-// Content lives next to this folder: site/*.md (English) and site/vi/*.md (Vietnamese).
+// Content lives next to this folder: docs/*.md (English) and docs/vi/*.md (Vietnamese).
 // Every nav/sidebar link must resolve in both locales, or the build fails on dead links.
 export default defineConfig({
   lang: "en",

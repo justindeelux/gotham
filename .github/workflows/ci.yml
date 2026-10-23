@@ -45,7 +45,7 @@ jobs:
           has() { [ "$all" = true ] || grep -qE "$1" changed.txt && echo true || echo false; }
           {
             echo "go=$(has '\.go$|^go\.(mod|sum)$|^Makefile$|^internal/|^agent/|^templates/|^\.golangci')"
-            echo "web=$(has '^web/|^internal/server/webdist/')"
+            echo "web=$(has '^web/')"
             echo "sqlc=$(has '^internal/store/|sqlc\.ya?ml$|\.sql$')"
             echo "proto=$(has '^proto/|^buf|^Makefile$|\.pb\.go$')"
             echo "installer=$(has '^deploy/|^updatecore/|^\.github/workflows/')"
@@ -127,7 +127,7 @@ jobs:
   web:
     needs: changes
     if: needs.changes.outputs.web == 'true'
-    name: web build + type-check + dist drift
+    name: web build + type-check + test
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -152,6 +152,10 @@ jobs:
         working-directory: web
         run: npm run type-check
 
+      - name: Build
+        working-directory: web
+        run: npm run build
+
       - name: Frontend harness checks
         working-directory: web
         env:
@@ -161,18 +165,6 @@ jobs:
       - name: Lint
         working-directory: web
         run: npm run lint
-
-      - name: Build
-        working-directory: web
-        run: npm run build
-
-      - name: Check committed dist is up to date
-        run: |
-          if [ -n "$(git status --porcelain -- internal/server/webdist)" ]; then
-            echo "webdist: committed SPA is out of date (rebuild with npm run build):"
-            git status --porcelain -- internal/server/webdist
-            exit 1
-          fi
 
   sqlc:
     needs: changes

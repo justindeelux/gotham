@@ -25,7 +25,7 @@ web-build:
 		echo "==> building web SPA (npm run build)"; \
 		cd web && npm run build; \
 	else \
-		echo "==> skipping web build; using committed internal/server/webdist"; \
+		echo "==> skipping web build; embedding the placeholder UI (install web/ deps and rerun for the real SPA)"; \
 	fi
 
 ## test: run the unit test suite

@@ -536,7 +536,8 @@ the body).
   manifests and artifact digests verify with the pinned key, and the two-agent
   systemd update path is proven on the test box. Still unproven: applying a
   *newer* GitHub-hosted release through `gotham update` (control plane and agent
-  rollout) and exercising the unattended `AUTO_UPDATE` loop.
+  rollout) and exercising the unattended `AUTO_UPDATE` loop. See
+  `docs/plans/10-self-update-release.md` and `docs/TODO.md` (LOW-4).
 - **Release trigger custody (INFO).** The release job and PR CI now run on
   GitHub-hosted runners and the signing key stays in the approval-gated
   `release` environment, so untrusted `pull_request` code no longer shares a host

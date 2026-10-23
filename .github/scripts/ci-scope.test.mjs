@@ -12,7 +12,7 @@ const enabled = (paths, full = false) => Object.entries(selectJobs(paths, full))
 
 test("site and reference docs avoid application suites", () => {
   assert.deepEqual(enabled(["site/guide/install.md", "README.md"]), ["site"]);
-  assert.deepEqual(enabled(["AGENTS.md", "docs/mcp.md"]), []);
+  assert.deepEqual(enabled(["AGENTS.md", "docs/development-workflow.md"]), []);
 });
 
 test("SPA and generated assets run browser proof without backend E2E", () => {

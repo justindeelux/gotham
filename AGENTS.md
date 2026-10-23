@@ -4,12 +4,12 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
 
 ## Development Workflow
 
-- Docs index: `docs/README.md` (plan status, process, test server, design).
-- Public docs: `site/` (VitePress, EN + `/vi/`); `docs/` is internal reference, never `docs/plans/`.
-- One delivery = one short-lived branch/PR. Related small issues may share a PR when they have one review and rollback boundary; link every issue. Keep migrations, permission changes and independent features separate. See `docs/development-workflow.md`; `docs/plans/` and `docs/TODO.md` are reference only.
-- Reuse one clean working checkout for sequential deliveries; create separate worktrees only for concurrent work. Keep the primary `main` checkout for synchronization/indexing. Start with `node scripts/start-work.mjs <type>/<slug>` (`--parallel` for an isolated checkout); never share a checkout between concurrent editors.
-- Choose agent/model per task at dispatch; explicit user choices override documented defaults. Checkout bootstrap must not create or overwrite agent configuration. See `docs/development-workflow.md` → Agent selection.
-- Git operations (branching, commit messages, merge vs rebase, conflict resolution): use the `/git-workflow` skill. Commits and PR titles follow Conventional Commits, `<type>(<scope>): <subject>` (e.g. `fix(files): show owner / mode separately`). Branch and worktree names keep the `<type>/<slug>` rule in `docs/ORCHESTRATION.md`.
+- Technical docs index: `docs/README.md`. Private workflow and operator notes: `.local-workflow/README.md` (local, gitignored).
+- Public docs: `site/` (VitePress, EN + `/vi/`); technical references: `docs/`. Private process notes and plans live only in `.local-workflow/`.
+- One delivery = one short-lived branch/PR. Related small issues may share a PR when they have one review and rollback boundary; link every issue. Keep migrations, permission changes and independent features separate. See `.local-workflow/docs/development-workflow.md`; `.local-workflow/docs/plans/` and `.local-workflow/docs/TODO.md` are reference only.
+- Reuse one clean working checkout for sequential deliveries; create separate worktrees only for concurrent work. Keep the primary `main` checkout for synchronization/indexing. Start with `node .local-workflow/scripts/start-work.mjs <type>/<slug>` (`--parallel` for an isolated checkout); never share a checkout between concurrent editors.
+- Choose agent/model per task at dispatch; explicit user choices override documented defaults. Checkout bootstrap must not create or overwrite agent configuration. See `.local-workflow/docs/development-workflow.md` → Agent selection.
+- Git operations (branching, commit messages, merge vs rebase, conflict resolution): use the `/git-workflow` skill. Commits and PR titles follow Conventional Commits, `<type>(<scope>): <subject>` (e.g. `fix(files): show owner / mode separately`). Branch and worktree names keep the `<type>/<slug>` rule in `.local-workflow/docs/ORCHESTRATION.md`.
 - Validation runs per delivery, before merge: run the checks for every affected scope locally, then require `CI gate` green on the final ready PR. Unknown/shared changes run all checks; pushes to `main` retain the full suite. Review/fix locally before opening the ready PR; drafts defer expensive checks and cannot pass the gate. Invariants for the affected scopes:
   1. `go build ./...` clean
   2. `go test ./...` green
@@ -18,9 +18,9 @@ Self-hosted Platform-as-a-Service: control plane (Go, modular monolith) + node a
   5. `npm run build` + `npm run type-check` clean (web/)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
   7. `cd site && npm ci && npm run docs:build` clean (`site/` only; Node 20+; no Go/`web/` impact)
-- CI policy/bootstrap changes: `node --test .github/scripts/*.test.mjs` and `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7`. Keep job selection conservative, include generated assets and deleted/renamed paths, and never skip a selected job green.
-- Orchestration rules (worker dispatch, recipe, lessons): see `docs/ORCHESTRATION.md`.
-- UI e2e: run the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
+- CI policy/bootstrap changes: `node --test .github/scripts/ci-scope.test.mjs` + `node --test .local-workflow/tests/*.test.mjs` and `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7`. Keep job selection conservative, include generated assets and deleted/renamed paths, and never skip a selected job green.
+- Orchestration rules (worker dispatch, recipe, lessons): see `.local-workflow/docs/ORCHESTRATION.md`.
+- UI e2e: run the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `.local-workflow/docs/test-server.md`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
 ## Code Style

@@ -10,17 +10,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// Gitea constants. Gitea is self-hosted, so a stored base_url is required; the
-// API lives under /api/v1 and OAuth under /login/oauth on the same host.
 const (
-	// giteaDefaultScopes grants repository access for listing and webhooks.
 	giteaDefaultScopes = "repo"
 
-	// giteaPageSize is Gitea's maximum limit.
 	giteaPageSize = 50
 )
 
-// giteaRepo is the subset of the Gitea repository object this provider uses.
 type giteaRepo struct {
 	ID            int64  `json:"id"`
 	Name          string `json:"name"`
@@ -32,7 +27,6 @@ type giteaRepo struct {
 	HTMLURL       string `json:"html_url"`
 }
 
-// giteaBranch is the subset of the Gitea branch object this provider uses.
 type giteaBranch struct {
 	Name      string `json:"name"`
 	Protected bool   `json:"protected"`
@@ -41,16 +35,12 @@ type giteaBranch struct {
 	} `json:"commit"`
 }
 
-// giteaSource implements SourceProvider against the Gitea REST API.
 type giteaSource struct {
 	tokenTracking
 	listingState
 	apiBase string
 }
 
-// newGiteaSource builds the Gitea implementation for one stored connection. The
-// base URL must be set (validated by the service) because Gitea is self-hosted.
-// allowUnsafe disables the outbound guards for the loopback hosts tests use.
 func newGiteaSource(p Provider, allowUnsafe bool) *giteaSource {
 	base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	return &giteaSource{
@@ -71,25 +61,18 @@ func newGiteaSource(p Provider, allowUnsafe bool) *giteaSource {
 	}
 }
 
-// Name identifies the provider.
 func (p *giteaSource) Name() string { return NameGitea }
 
-// ExchangeToken completes the OAuth2 flow with Gitea.
 func (p *giteaSource) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
 	ctx, cancel := withProviderTimeout(p.exchangeContext(ctx))
 	defer cancel()
 	return p.config.Exchange(ctx, code)
 }
 
-// AuthCodeURL builds the authorization URL for state. It satisfies the
-// authorizer seam used by the connect flow.
 func (p *giteaSource) AuthCodeURL(state string) string {
 	return p.config.AuthCodeURL(state)
 }
 
-// ListRepos returns every repository visible to the token, including private
-// ones. Pagination is bounded by maxRepoPages; a listing that hits the bound is
-// marked truncated so the caller keeps the previous cache.
 func (p *giteaSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
 	ctx, cancel := withListingTimeout(ctx)
 	defer cancel()
@@ -123,8 +106,6 @@ func (p *giteaSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo,
 	return repos, nil
 }
 
-// ListBranches returns the branches of repo ("owner/name"). Pagination is
-// bounded by maxRepoPages.
 func (p *giteaSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo string) ([]Branch, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return nil, err
@@ -156,8 +137,6 @@ func (p *giteaSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo 
 	return branches, nil
 }
 
-// CreateWebhook installs a push hook on repo ("owner/name") and returns the
-// hook ID the Gitea instance assigned to it.
 func (p *giteaSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, repo string, hook Webhook) (string, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return "", err
@@ -187,8 +166,6 @@ func (p *giteaSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, repo
 	return strconv.FormatInt(created.ID, 10), nil
 }
 
-// DeleteWebhook removes the hook identified by hookID from repo. A hook that
-// is already gone (404) counts as deleted so the caller stays idempotent.
 func (p *giteaSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo, hookID string) error {
 	if err := validateRepo(repo, 2); err != nil {
 		return err
@@ -207,9 +184,6 @@ func (p *giteaSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo
 	return nil
 }
 
-// CreatePullRequestComment posts a comment on pull request number of repo
-// ("owner/name") through the issues API, which is where Gitea stores PR
-// conversation.
 func (p *giteaSource) CreatePullRequestComment(ctx context.Context, tok *oauth2.Token, repo string, number int, body string) error {
 	if err := validateRepo(repo, 2); err != nil {
 		return err
@@ -223,8 +197,6 @@ func (p *giteaSource) CreatePullRequestComment(ctx context.Context, tok *oauth2.
 	return doJSON(ctx, client, NameGitea, http.MethodPost, endpoint, "application/json", payload, nil)
 }
 
-// AddDeployKey registers the public key on repo ("owner/name") as a read-only
-// deploy key and returns the key ID the Gitea instance assigned to it.
 func (p *giteaSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo string, key DeployKey) (string, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return "", err
@@ -252,8 +224,6 @@ func (p *giteaSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo 
 	return strconv.FormatInt(created.ID, 10), nil
 }
 
-// RemoveDeployKey removes the key identified by keyID from repo. A key that is
-// already gone (404) counts as removed so the caller stays idempotent.
 func (p *giteaSource) RemoveDeployKey(ctx context.Context, tok *oauth2.Token, repo, keyID string) error {
 	if err := validateRepo(repo, 2); err != nil {
 		return err

@@ -17,8 +17,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// scratchDSN mirrors the store integration suites: the dev database unless
-// GOTHAM_TEST_DSN overrides it.
 func scratchBaseDSN() string {
 	if dsn := os.Getenv("GOTHAM_TEST_DSN"); dsn != "" {
 		return dsn
@@ -26,7 +24,6 @@ func scratchBaseDSN() string {
 	return "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 }
 
-// dsnForDatabase points a DSN at another database on the same server.
 func dsnForDatabase(dsn, database string) string {
 	parsed, err := url.Parse(dsn)
 	if err != nil {
@@ -36,8 +33,6 @@ func dsnForDatabase(dsn, database string) string {
 	return parsed.String()
 }
 
-// newScratchStore creates a disposable database, migrates it to latest and
-// returns a store backed by it. The database is dropped on cleanup.
 func newScratchStore(t *testing.T) *store.Store {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -83,13 +78,10 @@ func newScratchStore(t *testing.T) *store.Store {
 	return store.New(pool)
 }
 
-// uuidOf converts a sqlc UUID column to the domain type.
 func uuidOf(v pgtype.UUID) uuid.UUID {
 	return uuid.UUID(v.Bytes)
 }
 
-// seedUser creates an account (with its personal team) and returns the
-// team ID (the personal team's ID is the user's ID).
 func seedUser(t *testing.T, ctx context.Context, st *store.Store, email string) (teamID uuid.UUID) {
 	t.Helper()
 	user, err := st.CreateUser(ctx, email, nil)
@@ -99,9 +91,6 @@ func seedUser(t *testing.T, ctx context.Context, st *store.Store, email string) 
 	return uuidOf(user.ID)
 }
 
-// TestStoreRepositoryRoundtrip walks the repository against a scratch
-// database: create (project plus production in one transaction), rename,
-// second environment, deletes and the cascade.
 func TestStoreRepositoryRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -162,9 +151,6 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryPreviewBaseIDs maps preview application rows to their
-// base through preview_deploys, scoped to the team: a foreign team and an
-// unknown id resolve to no row, and a deleted binding stays invisible.
 func TestStoreRepositoryPreviewBaseIDs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -236,9 +222,6 @@ func TestStoreRepositoryPreviewBaseIDs(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryUniquenessIsCaseInsensitive asserts the lower(name)
-// indexes reject differently-cased duplicates in the same scope but allow
-// the same name in another scope.
 func TestStoreRepositoryUniquenessIsCaseInsensitive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -267,9 +250,6 @@ func TestStoreRepositoryUniquenessIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryFailedCreateLeavesNoRows asserts the
-// project-plus-production transaction is atomic: a duplicate name commits
-// neither row.
 func TestStoreRepositoryFailedCreateLeavesNoRows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -297,12 +277,6 @@ func TestStoreRepositoryFailedCreateLeavesNoRows(t *testing.T) {
 	}
 }
 
-// TestServiceConcurrentDeleteKeepsOneEnvironment is the F1 regression:
-// two admins deleting a project's last two environments at once must leave
-// exactly one behind. The survivor check and the delete run in one
-// transaction that locks the parent project row, so the second delete
-// observes the first. It fails on the old check-then-delete code, where both
-// deletes routinely succeed and the project ends with zero environments.
 func TestServiceConcurrentDeleteKeepsOneEnvironment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -360,11 +334,6 @@ func TestServiceConcurrentDeleteKeepsOneEnvironment(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryCreateRacesDeleteProject is the F3 regression: an
-// environment created while its project is deleted must answer ErrNotFound
-// (or succeed when the create wins), never a raw foreign-key error. It fails
-// on the old code, where the 23503 from the lost INSERT races through to
-// the caller.
 func TestStoreRepositoryCreateRacesDeleteProject(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -409,8 +378,6 @@ func TestStoreRepositoryCreateRacesDeleteProject(t *testing.T) {
 	}
 }
 
-// TestStoreRepositoryCrossTeamIsNotFound asserts the team filter on every
-// read and delete.
 func TestStoreRepositoryCrossTeamIsNotFound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -443,5 +410,4 @@ func TestStoreRepositoryCrossTeamIsNotFound(t *testing.T) {
 	}
 }
 
-// mustErr adapts a (T, error) call to the error for table assertions.
 func mustErr[T any](_ T, err error) error { return err }

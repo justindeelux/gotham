@@ -1,4 +1,3 @@
-// AppLayout shell: open-drawer DOM and remount parity (fast, deterministic).
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -93,8 +92,6 @@ async function mountShell(): Promise<ReturnType<typeof mount>> {
   });
   await router.push("/dashboard");
   await router.isReady();
-  // The app shell hosts the global editor window (JUS-232), which needs
-  // the message provider production supplies in App.vue.
   const shell = defineComponent({
     render: () =>
       h(NMessageProvider, null, {
@@ -148,8 +145,6 @@ describe("shell drawer DOM", () => {
   });
 });
 
-// JUS-135: the rail unmounts below the tablet breakpoint (it is a drawer), so
-// the shared server poll must be owned by the shell, not the rail.
 describe("shared server poll ownership", () => {
   it("arms the poll for the shell's lifetime and clears it on unmount", async () => {
     const layout = await mountShell();

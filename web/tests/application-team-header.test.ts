@@ -1,13 +1,3 @@
-// JUS-257 regression: every application-scoped request carries the active
-// team.
-//
-// The control plane resolves a request without X-Team-Id against the caller's
-// PERSONAL team, so a shared-team application read answered 404 before the
-// detail page and its tabs ever rendered. The shared request layer now
-// attaches the persisted active team to /applications and /deployments
-// routes; this suite drives every client call through the real axios instance
-// with a recording adapter, so a route that loses the header (or a caller that
-// overrides it) fails loudly.
 /* global window:readonly */
 import type { AxiosResponse, InternalAxiosRequestConfig } from "axios";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -58,11 +48,9 @@ import {
 const teamId = "team-shared";
 const appId = "app-1";
 
-/** captured is every request the shared instance handed to the adapter. */
 let captured: InternalAxiosRequestConfig[] = [];
 const originalAdapter = http.defaults.adapter;
 
-/** Wire payload with one of every envelope the clients read. */
 const payload = {
   application: {
     id: appId,
@@ -125,7 +113,6 @@ const domainInput: DomainInput = {
   protocol: "http",
 };
 
-/** CallCase is one client call plus the route it must address. */
 interface CallCase {
   name: string;
   method: "get" | "post" | "put" | "delete";
@@ -133,12 +120,6 @@ interface CallCase {
   run: () => Promise<unknown>;
 }
 
-/**
- * applicationCalls covers every single-resource application call (detail,
- * deployments, logs, environment, storage, domains, git/registry credentials
- * and lifecycle mutations) plus the dashboard feed and the terminal routes
- * that read an application. Each one previously went out without the team.
- */
 const applicationCalls: CallCase[] = [
   {
     name: "getApplication (detail page)",
@@ -334,7 +315,6 @@ const applicationCalls: CallCase[] = [
   },
 ];
 
-/** teamHeaderOf returns the X-Team-Id of one captured request. */
 function teamHeaderOf(
   config: InternalAxiosRequestConfig | undefined,
 ): string | null {

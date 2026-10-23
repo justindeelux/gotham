@@ -28,35 +28,18 @@ import { useSharedVariables } from "@/features/projects/composables/useSharedVar
 import type { InheritedVariable } from "@/features/projects/schemas/variables";
 import { activeLocale, i18n } from "@/shared/i18n";
 
-/**
- * Environment page (`/projects/:projectId/environments/:environmentId`,
- * PE-5 Linear JUS-34, shared variables PE-6 Linear JUS-35): a
- * `Projects / <project> / <environment>` breadcrumb, a unified resource
- * table with type tabs and a preview switch, and an Add resource dialog
- * that opens the existing create wizards with this route's scope.
- *
- * The Shared variables section below the table edits this environment's
- * variables with the project's ones shown read-only above for context
- * (precedence: application overrides environment overrides project).
- *
- * Thin route component: table state lives in `useEnvironmentPage`; the
- * create wizards own their forms and report back through `created`.
- */
 const router = useRouter();
 const page = useEnvironmentPage();
 
-/** projectVariables renders read-only above the environment editor. */
 const projectVariables = useSharedVariables(() => ({
   kind: "project",
   projectId: page.projectId.value,
 }));
-/** environmentVariables owns the environment editor (one scope per mount). */
 const environmentVariables = useSharedVariables(() => ({
   kind: "environment",
   environmentId: page.environmentId.value,
 }));
 
-/** projectInherited maps the project draft onto read-only context rows. */
 const projectInherited = computed<InheritedVariable[]>(() =>
   projectVariables.draft.value.map((row) => ({
     key: row.key,
@@ -66,17 +49,11 @@ const projectInherited = computed<InheritedVariable[]>(() =>
   })),
 );
 
-/**
- * t renders page copy in the active locale (tracks language switches).
- * Called during render, so tabs, tables and dialogs refresh without
- * losing the search query, the selected tab or the preview switch.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
 }
 
-/** tabs lists the resource type tabs with localized labels. */
 const tabs = computed<Array<{ key: EnvironmentResourceTab; label: string }>>(() => [
   { key: "all", label: t("projects.environment.tabs.all") },
   { key: "applications", label: t("projects.environment.tabs.applications") },
@@ -84,19 +61,16 @@ const tabs = computed<Array<{ key: EnvironmentResourceTab; label: string }>>(() 
   { key: "databases", label: t("projects.environment.tabs.databases") },
 ]);
 
-/** scrollToVariables jumps to the Shared variables section. */
 function scrollToVariables(): void {
   document
     .querySelector(".variables-section")
     ?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-/** tabCount renders the per-tab total next to its label. */
 function tabCount(tab: EnvironmentResourceTab): number {
   return page.counts.value[tab];
 }
 
-/** kindLabel renders the resource kind as display text. */
 function kindLabel(kind: string): string {
   if (kind === "application") {
     return t("projects.environment.kinds.application");
@@ -107,7 +81,6 @@ function kindLabel(kind: string): string {
   return t("projects.environment.kinds.database");
 }
 
-/** siblingOptions lists the project's environments for the switcher. */
 const siblingOptions = computed<Array<{ label: string; value: string }>>(() =>
   page.siblings.value.map((environment) => ({
     label: environment.name,
@@ -115,7 +88,6 @@ const siblingOptions = computed<Array<{ label: string; value: string }>>(() =>
   })),
 );
 
-/** switchEnvironment navigates to a sibling environment of the project. */
 function switchEnvironment(environmentId: string): void {
   if (environmentId === "" || environmentId === page.environmentId.value) {
     return;
@@ -126,10 +98,6 @@ function switchEnvironment(environmentId: string): void {
   });
 }
 
-/**
- * handleTabKey moves the active type tab with the arrow keys (and Home/End),
- * following the tablist pattern: the tab activates on focus.
- */
 function handleTabKey(event: KeyboardEvent, index: number): void {
   const entries = tabs.value;
   let next: number;
@@ -151,29 +119,19 @@ function handleTabKey(event: KeyboardEvent, index: number): void {
   list?.[next]?.focus();
 }
 
-/** emptyHint names what can be added when the table (or filter) is empty. */
 const emptyHint = computed<string>(() =>
   page.rows.value.length === 0
     ? t("projects.environment.emptyFresh")
     : t("projects.environment.emptyFiltered"),
 );
 
-/** openImport closes the picker and opens the compose import dialog. */
 function openImport(): void {
   page.addOpen.value = false;
   page.importOpen.value = true;
 }
 
-/**
- * wizardOpen hides the picker modal while one of its wizards is on top:
- * the wizards teleport to the body, so without this their cards bleed
- * through at the edges (modal-on-modal). The picker stays mounted
- * (display-directive below), so its filter and scroll position survive,
- * and closing the wizard restores it through this same flag.
- */
 const wizardOpen = ref(false);
 
-/** afterServiceCreate reloads and opens the nested service page. */
 function afterServiceCreate(service: Service): void {
   page.importOpen.value = false;
   void page.reload();
@@ -369,12 +327,6 @@ function afterServiceCreate(service: Service): void {
       </section>
     </template>
 
-    <!-- Add resource: the picker tabs the three resource types (one tab
-      per type) inside a fixed-height pane, so the modal keeps its size
-      while the user switches. Header stays pinned, only the content
-      scrolls (shared scroll contract in shared/styles/main.css). Hidden
-      (not unmounted) while a wizard is open, so no card bleeds through
-      behind it; the wizard's close restores the picker. -->
     <NModal
       :show="page.addOpen.value && !wizardOpen"
       preset="card"
@@ -549,11 +501,6 @@ function afterServiceCreate(service: Service): void {
   color: var(--muted);
 }
 
-/* The name cell links to the resource detail page; the link stretches
-   over the whole row, so there is no separate Open button. Native link
-   semantics keep table navigation, keyboard focus, middle-click and
-   open-in-new-tab. Future inner controls need .row-action to stay above
-   the stretched overlay instead of navigating. */
 .resource-row {
   position: relative;
 }
@@ -587,8 +534,6 @@ function afterServiceCreate(service: Service): void {
   z-index: 1;
 }
 
-/* Icon left, name and secondary info stacked right; min-width: 0 lets the
-   text block shrink so long names truncate instead of widening the cell. */
 .resource-cell {
   display: flex;
   align-items: center;
@@ -609,7 +554,6 @@ function afterServiceCreate(service: Service): void {
   text-overflow: ellipsis;
 }
 
-/* Preview rows nest under their base application. */
 .preview-row .resource-cell {
   padding-left: var(--space-4);
   position: relative;
@@ -662,8 +606,6 @@ function afterServiceCreate(service: Service): void {
     margin-left: 0;
   }
 
-  /* Narrow: each resource becomes a stacked card, still opened by
-     tapping the card itself, without horizontal scrolling. */
   .resource-table thead {
     position: absolute;
     width: 1px;

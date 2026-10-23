@@ -17,18 +17,12 @@ import (
 )
 
 const (
-	// defaultBuildContextLimit bounds a received build context tarball.
 	defaultBuildContextLimit = int64(512 << 20)
-	// defaultDockerfile is used when the request does not name one.
-	defaultDockerfile = "Dockerfile"
-	// imageRepoPrefix namespaces every image built by the platform.
-	imageRepoPrefix = "gotham/"
-	// maxBuildMetaRefLen bounds one app/deploy id segment of an image tag.
-	maxBuildMetaRefLen = 128
+	defaultDockerfile        = "Dockerfile"
+	imageRepoPrefix          = "gotham/"
+	maxBuildMetaRefLen       = 128
 )
 
-// BuildClient is the subset of DockerClient the build service needs. It is an
-// interface so tests can substitute a fake.
 type BuildClient interface {
 	EnsureRegistry(ctx context.Context) (string, error)
 	Build(ctx context.Context, opts BuildOptions, emit func([]byte) error) error
@@ -39,28 +33,20 @@ type BuildClient interface {
 	PruneAppImages(ctx context.Context, appID, keepDeploy string) error
 }
 
-// BuildServer implements agentv1.BuildServiceServer on top of a BuildClient.
 type BuildServer struct {
 	agentv1.UnimplementedBuildServiceServer
-	docker BuildClient
-	log    *slog.Logger
-	// maxContextBytes bounds the received build context; tests lower it.
+	docker          BuildClient
+	log             *slog.Logger
 	maxContextBytes int64
-	// toolUse marks a build in flight so an uninstall can refuse a tool that
-	// is building. Nil when the node runs no tool service.
-	toolUse *tools.ToolUseTracker
+	toolUse         *tools.ToolUseTracker
 }
 
-// BuildServerOption tunes a BuildServer.
 type BuildServerOption func(*BuildServer)
 
-// WithToolUseTracker wires the node's tool-use tracker so a build is reported
-// as using its toolchain for the duration of the build.
 func WithToolUseTracker(tracker *tools.ToolUseTracker) BuildServerOption {
 	return func(s *BuildServer) { s.toolUse = tracker }
 }
 
-// NewBuildServer returns a BuildService implementation backed by docker.
 func NewBuildServer(docker BuildClient, log *slog.Logger, options ...BuildServerOption) *BuildServer {
 	if log == nil {
 		log = slog.Default()
@@ -72,15 +58,9 @@ func NewBuildServer(docker BuildClient, log *slog.Logger, options ...BuildServer
 	return server
 }
 
-// BuildImage buffers the streamed build context, builds the image on the
-// node, pushes it to the node-local registry, and streams build output back.
-// The last response on success carries the image digest and registry address.
 func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) error {
 	ctx := stream.Context()
 
-	// Mark the build in flight before any toolchain work: an uninstall of
-	// docker/buildkit/railpack/pack must refuse while this is running, and a
-	// build must not start into an uninstall's removal window.
 	if s.toolUse != nil {
 		if err := s.toolUse.BeginBuild(); err != nil {
 			return status.Errorf(codes.Unavailable, "build refused: %v", err)
@@ -147,10 +127,6 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 	}
 
 	if engine := normalizeEngine(meta.GetEngine()); engine != "" {
-		// A language toolchain (Railpack, Buildpacks) runs on the node against
-		// the extracted context, so a control-plane host does not need the CLI
-		// and the image is pushed to the node registry by the shared steps
-		// below.
 		if err := emit([]byte("running " + engine + " build on the node\n")); err != nil {
 			return sendErr
 		}
@@ -166,7 +142,6 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 		return fail(err)
 	}
 
-	// Keep the standardized local tag runnable on the node without a pull.
 	if err := s.docker.TagImage(ctx, registryImage, imageRepoPrefix+meta.GetAppId(), meta.GetDeployId()); err != nil {
 		return fail(err)
 	}
@@ -183,8 +158,6 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 		return fail(err)
 	}
 
-	// Retention is best-effort: the deploy is already built and pushed, so a
-	// cleanup failure must not turn a successful build into a failed one.
 	if err := s.docker.PruneAppImages(ctx, meta.GetAppId(), meta.GetDeployId()); err != nil {
 		s.log.Warn("image retention failed",
 			slog.String("app", meta.GetAppId()),
@@ -212,8 +185,6 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 	return nil
 }
 
-// receiveContext writes the remaining requests to dst until the client closes
-// its send side and returns the number of bytes written.
 func (s *BuildServer) receiveContext(stream agentv1.BuildService_BuildImageServer, dst io.Writer) (int64, error) {
 	var written int64
 	for {
@@ -241,8 +212,6 @@ func (s *BuildServer) receiveContext(stream agentv1.BuildService_BuildImageServe
 	}
 }
 
-// validateBuildMeta checks that both ids are usable in an image tag and that
-// the requested engine is one the node can run.
 func validateBuildMeta(meta *agentv1.BuildMeta) error {
 	if err := validateTagSegment("app_id", meta.GetAppId()); err != nil {
 		return err
@@ -258,9 +227,6 @@ func validateBuildMeta(meta *agentv1.BuildMeta) error {
 	}
 }
 
-// normalizeEngine maps a BuildMeta engine to the toolchain the node must run,
-// or "" for a Dockerfile build. The Dockerfile and static engines both build
-// the uploaded context as a Dockerfile.
 func normalizeEngine(engine string) string {
 	switch strings.ToLower(strings.TrimSpace(engine)) {
 	case string(buildtool.Railpack):
@@ -272,7 +238,6 @@ func normalizeEngine(engine string) string {
 	}
 }
 
-// validateTagSegment rejects empty, oversized, or ref-unsafe tag segments.
 func validateTagSegment(field, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s is required", field)
@@ -291,7 +256,6 @@ func validateTagSegment(field, value string) error {
 	return nil
 }
 
-// dockerfilePath resolves the Dockerfile path for a build.
 func dockerfilePath(meta *agentv1.BuildMeta) string {
 	if path := meta.GetDockerfile(); path != "" {
 		return path
@@ -299,7 +263,6 @@ func dockerfilePath(meta *agentv1.BuildMeta) string {
 	return defaultDockerfile
 }
 
-// buildLogResponse wraps raw build output in a log response.
 func buildLogResponse(data []byte) *agentv1.BuildImageResponse {
 	return &agentv1.BuildImageResponse{
 		Event: &agentv1.BuildImageResponse_Log{
@@ -308,8 +271,6 @@ func buildLogResponse(data []byte) *agentv1.BuildImageResponse {
 	}
 }
 
-// receiveError maps a stream receive failure onto a status error, using
-// fallback when the stream ended before the first message arrived.
 func receiveError(err error, fallback string) error {
 	if errors.Is(err, io.EOF) {
 		return status.Error(codes.InvalidArgument, fallback)

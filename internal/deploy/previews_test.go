@@ -8,8 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// seedBaseForPreview stores a base application with environment, storage and
-// deploy key, returning the repository holding it.
 func seedBaseForPreview(t *testing.T, app Application) *fakeRepository {
 	t.Helper()
 	repo := &fakeRepository{app: app}
@@ -52,7 +50,7 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 	created, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
 		Name:       "demo app-pr-7",
 		Branch:     "feat/x",
-		BaseDomain: "PR-7-Demo.app.example.com", // normalized by the clone
+		BaseDomain: "PR-7-Demo.app.example.com",
 	})
 	if err != nil {
 		t.Fatalf("CreatePreviewApplication: %v", err)
@@ -78,9 +76,6 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 		t.Error("the base application was marked is_preview")
 	}
 
-	// Plain environment variables travel with the preview; sealed secrets and
-	// storages do not (M2: a PR branch must not read production secrets or
-	// write production volumes).
 	envVars, _ := repo.ListEnvVars(context.Background(), created.ID)
 	secrets, _ := repo.ListSecrets(context.Background(), created.ID)
 	storages, _ := repo.ListStorages(context.Background(), created.ID)
@@ -108,7 +103,6 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 		t.Error("the base deploy key was removed by the clone")
 	}
 
-	// A second preview for another PR gets its own name and does not collide.
 	second, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
 		Name: "demo app-pr-8", Branch: "feat/y", BaseDomain: "pr-8-demo.app.example.com",
 	})
@@ -120,11 +114,6 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 	}
 }
 
-// TestCreatePreviewApplicationClonesWildcardCertificate is the HTTPS intent
-// regression: a base application with an enabled wildcard DNS-01 intent gets an
-// equivalent intent on the sibling (recorded for the preview host, same
-// provider), and the system teardown removes it through the application
-// cascade.
 func TestCreatePreviewApplicationClonesWildcardCertificate(t *testing.T) {
 	base := testApplication(uuid.New())
 	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
@@ -158,7 +147,6 @@ func TestCreatePreviewApplicationClonesWildcardCertificate(t *testing.T) {
 		t.Fatalf("base intent = %+v, want it untouched", baseIntent)
 	}
 
-	// The teardown removes the sibling and its intent (the schema cascade).
 	if err := svc.DeleteSystemApplication(context.Background(), created.ID); err != nil {
 		t.Fatalf("DeleteSystemApplication: %v", err)
 	}
@@ -167,10 +155,6 @@ func TestCreatePreviewApplicationClonesWildcardCertificate(t *testing.T) {
 	}
 }
 
-// TestCreatePreviewApplicationSkipsUncoveredCertificates pins the negative
-// cases: no base intent, a plain/disabled/stale intent, a disabled or missing
-// provider, and a provider whose zones do not cover the preview host all leave
-// the sibling HTTP-only.
 func TestCreatePreviewApplicationSkipsUncoveredCertificates(t *testing.T) {
 	base := testApplication(uuid.New())
 	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
@@ -234,9 +218,6 @@ func TestCreatePreviewApplicationSkipsUncoveredCertificates(t *testing.T) {
 	}
 }
 
-// TestCreatePreviewApplicationCertificateFailureIsBestEffort pins the contract:
-// a failing certificate write never fails the sibling clone (the preview simply
-// stays HTTP-only).
 func TestCreatePreviewApplicationCertificateFailureIsBestEffort(t *testing.T) {
 	base := testApplication(uuid.New())
 	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
@@ -299,7 +280,6 @@ func TestCreatePreviewApplicationRejectsUnusableInput(t *testing.T) {
 		})
 	}
 
-	// The feature flag disables the system path too.
 	t.Setenv(FeatureEnv, "false")
 	repo := &fakeRepository{app: base}
 	svc := newTestService(t, repo)
@@ -310,9 +290,6 @@ func TestCreatePreviewApplicationRejectsUnusableInput(t *testing.T) {
 	}
 }
 
-// TestDeleteSystemApplicationRemovesLocalKeyOnly is the F7 regression: the
-// system teardown deletes the sibling's local deploy-key rows (the mapping and
-// the sealed private key) but never touches the shared remote key.
 func TestDeleteSystemApplicationRemovesLocalKeyOnly(t *testing.T) {
 	base := testApplication(uuid.New())
 	repo := seedBaseForPreview(t, base)
@@ -347,8 +324,6 @@ func TestDeleteSystemApplicationRemovesLocalKeyOnly(t *testing.T) {
 	if removed != 0 {
 		t.Errorf("remote removals = %d, want 0 (the key is shared with the base)", removed)
 	}
-	// Deleting again (a redelivered close, a sweep racing the close) is a
-	// success.
 	if err := svc.DeleteSystemApplication(context.Background(), preview.ID); err != nil {
 		t.Fatalf("second DeleteSystemApplication: %v", err)
 	}
@@ -359,9 +334,6 @@ func TestDeleteSystemApplicationRemovesLocalKeyOnly(t *testing.T) {
 	}
 }
 
-// TestDeleteSystemApplicationRefusesNonPreview pins the hardening check: the
-// system teardown only accepts preview siblings (it skips the remote key
-// detach), so an ordinary application can never be deleted through it.
 func TestDeleteSystemApplicationRefusesNonPreview(t *testing.T) {
 	base := testApplication(uuid.New())
 	repo := &fakeRepository{app: base}
@@ -376,9 +348,6 @@ func TestDeleteSystemApplicationRefusesNonPreview(t *testing.T) {
 	}
 }
 
-// TestDeleteApplicationOfAPreviewKeepsTheRemoteKey is the H1 regression: the
-// user-facing delete of a preview sibling removes the local rows but leaves
-// the base application's remote deploy key registered.
 func TestDeleteApplicationOfAPreviewKeepsTheRemoteKey(t *testing.T) {
 	base := testApplication(uuid.New())
 	repo := seedBaseForPreview(t, base)
@@ -411,9 +380,6 @@ func TestDeleteApplicationOfAPreviewKeepsTheRemoteKey(t *testing.T) {
 	}
 }
 
-// TestDeleteApplicationTearsDownPreviewsFirst is the F5 regression: the base
-// delete runs the preview cleanup first and aborts when it fails, so the
-// bindings are never cascaded away while a sibling survives.
 func TestDeleteApplicationTearsDownPreviewsFirst(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -433,7 +399,6 @@ func TestDeleteApplicationTearsDownPreviewsFirst(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = svc.Close() })
 
-	// A failing cleanup aborts the delete and keeps the base application.
 	cleanupErr = errors.New("preview teardown failed")
 	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err == nil {
 		t.Fatal("DeleteApplication with a failing preview cleanup: no error, want one")
@@ -445,7 +410,6 @@ func TestDeleteApplicationTearsDownPreviewsFirst(t *testing.T) {
 		t.Fatalf("cleanup calls = %d, want 1", cleaned)
 	}
 
-	// Retrying with a working cleanup deletes the base.
 	cleanupErr = nil
 	if err := svc.DeleteApplication(context.Background(), app.UserID, app.ID); err != nil {
 		t.Fatalf("DeleteApplication(retry): %v", err)

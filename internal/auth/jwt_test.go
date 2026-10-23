@@ -54,8 +54,6 @@ func TestVerifyRejectsExpiredToken(t *testing.T) {
 		t.Fatalf("NewSigner: %v", err)
 	}
 
-	// Issue the token as if it were created an hour ago, so it is already
-	// expired at verification time.
 	signer.now = func() time.Time { return time.Now().Add(-time.Hour) }
 	token, _, err := signer.IssueAccessToken(uuid.New(), "user", uuid.Nil)
 	if err != nil {
@@ -130,7 +128,6 @@ func TestNewSignerRejectsInvalidPEM(t *testing.T) {
 	}
 }
 
-// generateTestKeypair returns PEM-encoded PKCS#8 and PKIX Ed25519 keys.
 func generateTestKeypair(t *testing.T) (privatePEM, publicPEM []byte) {
 	t.Helper()
 

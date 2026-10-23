@@ -31,12 +31,6 @@ const { openCertificateCreate, openCertificateEdit, handleDeleteCertificate } =
   useCertificates();
 const { applicationName } = useDomainLabels();
 
-/**
- * cellStack lays out a two-line cell with a token gap. These VNodes are built
- * inside a computed, outside the component's scoped-style scope, so the
- * layout rides inline (scoped classes never match here); colors and type
- * still come from design tokens.
- */
 const cellStackStyle = {
   display: "flex",
   flexDirection: "column",
@@ -54,7 +48,6 @@ const cellSubStyle = {
   color: "var(--muted)",
 } as const;
 
-/** domainCell renders the recorded domain with its application. */
 function domainCell(certificate: Certificate): VNode {
   return h("div", { style: cellStackStyle }, [
     h("span", { class: "mono", style: cellNameStyle }, certificate.domain),
@@ -66,7 +59,6 @@ function domainCell(certificate: Certificate): VNode {
   ]);
 }
 
-/** statusCell renders the node-observed certificate status. */
 function statusCell(certificate: Certificate): VNode {
   return h(
     NTag,
@@ -78,7 +70,6 @@ function statusCell(certificate: Certificate): VNode {
   );
 }
 
-/** expiryCell renders the live expiry, only ever for a present certificate. */
 function expiryCell(certificate: Certificate): VNode {
   if (certificate.status !== "present") {
     return h(NText, { depth: 3 }, { default: () => "—" });
@@ -102,7 +93,6 @@ function expiryCell(certificate: Certificate): VNode {
   ]);
 }
 
-/** actionsCell renders Edit / Delete controls for one certificate. */
 function certificateActions(certificate: Certificate): VNode {
   return h(NSpace, { size: 8, align: "center", wrap: false }, {
     default: () => [
@@ -142,9 +132,6 @@ function certificateActions(certificate: Certificate): VNode {
   });
 }
 
-/** certificateColumns keeps the high-signal columns only: domain (name),
- * status, expiry and actions. Challenge, DNS provider, wildcard, enabled and
- * updated move to the edit dialog / detail view. */
 const certificateColumns = computed<DataTableColumns<Certificate>>(() => [
   {
     title: proxyText("domains.certificates.domain", "Domain"),
@@ -172,7 +159,6 @@ const certificateColumns = computed<DataTableColumns<Certificate>>(() => [
   },
 ]);
 
-/** rowKey identifies a certificate row by its id. */
 function certificateRowKey(row: Certificate): string {
   return row.id;
 }

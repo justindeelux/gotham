@@ -1,11 +1,3 @@
-// Wizard state machine for AddServerWizard (extracted from the component).
-//
-// Owns the connection form, its rules, the validation probes and the
-// create/reset flow. The shell keeps the modal chrome, the step rail, the
-// footer and the install step (the jus20 script check reads installCommand and
-// its copy wiring from AddServerWizard.vue source, so those stay there).
-// Step components read this context through WizardKey instead of prop
-// drilling the whole form.
 
 import type { FormInst, FormRules } from "naive-ui";
 import { useMessage } from "naive-ui";
@@ -43,7 +35,6 @@ export interface ConnectionForm {
   trustHostKey: boolean;
 }
 
-/** Display state of one fixed validation check. */
 export type CheckState = "idle" | "running" | "ok" | "fail";
 
 export interface FixedCheck {
@@ -51,7 +42,6 @@ export interface FixedCheck {
   label: string;
   state: CheckState;
   detail: string;
-  /** True when the control plane can fix this failed check automatically. */
   installable: boolean;
 }
 
@@ -82,21 +72,16 @@ export interface AddServerWizardContext {
   handleValidate: () => Promise<void>;
   closeWizard: () => void;
   handleShowChange: (_value: boolean) => void;
-  /** dockerInstall streams the pre-agent install over the wizard's SSH session. */
   dockerInstall: DockerInstallState;
-  /** dockerInstallOpen mirrors the install-log modal visibility. */
   dockerInstallOpen: Ref<boolean>;
-  /** dockerInstallOffer is true when the docker probe failed and can be fixed. */
   dockerInstallOffer: ComputedRef<boolean>;
   openDockerInstall: () => void;
   closeDockerInstall: () => void;
-  /** recheckAfterDockerInstall closes the log and re-runs the probe. */
   recheckAfterDockerInstall: () => Promise<void>;
 }
 
 export const WizardKey: InjectionKey<AddServerWizardContext> = Symbol("add-server-wizard");
 
-/** Fixed probe list — exactly the checks the validate API reports. */
 const FIXED_CHECK_NAMES: ServerCheckName[] = ["docker", "cpu", "ram", "disk"];
 
 type WizardEmit = {
@@ -118,46 +103,28 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
 
   const step = ref(0);
   const formRef = ref<FormInst | null>(null);
-  /**
-   * createFailure keeps the raw last create failure; probeFailure keeps the
-   * raw last probe failure or the server's own outcome message. The banner
-   * displays derive from them in the current locale, so a language switch
-   * re-renders retained failures without re-running probes or API calls.
-   */
   const createFailure = ref<unknown>(null);
   const probeFailure = ref<unknown>(null);
-  /** errorMessage renders the retained create failure, empty while healthy. */
   const errorMessage = computed<string>(() =>
     createFailure.value === null || createFailure.value === undefined
       ? ""
       : failureText(createFailure.value, locale.value),
   );
-  /** validateMessage renders the retained probe failure, empty while healthy. */
   const validateMessage = computed<string>(() => {
     const failure = probeFailure.value;
     if (failure === null || failure === undefined || failure === "") {
       return "";
     }
-    // A plain probe string is server-reported verbatim (pre-i18n behavior);
-    // only thrown errors go through the localized failureText.
     if (typeof failure === "string") {
       return failure;
     }
     return failureText(failure, locale.value);
   });
-  /**
-   * validationAttempted records that the connection form has been validated
-   * at least once, so a language switch can refresh already-visible feedback
-   * without ever surfacing errors on a pristine form.
-   */
   const validationAttempted = ref(false);
   const validationPassed = ref(false);
   const fixedChecks = ref<FixedCheck[]>(makeIdleChecks());
   const createdServer = ref<Server | null>(null);
 
-  // Invalidates in-flight create/validate responses when the wizard is reset or
-  // closed, and clears their loading flags, so a late answer cannot repopulate a
-  // wizard the user already left or leave it stuck loading.
   const inFlight = useInFlightGuard();
   const creating = inFlight.creating;
   const validating = inFlight.validating;
@@ -179,10 +146,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
 
   const rules = computed<FormRules>(() => connectionRules(form));
 
-  // The pre-agent Docker install (JUS-187): the node's agent is not installed
-  // yet at the validate step, so the install runs over the same SSH session the
-  // probes use and the wizard re-runs them afterwards. The control plane owns
-  // the allow-listed argv; the browser only names the node and credentials.
   const dockerInstall = useDockerInstall({
     serverId: computed<string>(() => createdServer.value?.id ?? ""),
     passphrase: computed<string>(() => form.passphrase),
@@ -194,34 +157,26 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       return false;
     }
     const docker = fixedChecks.value.find((check) => check.name === "docker");
-    // Only offer the automatic install where the control plane reports it can
-    // actually run: an unsupported distro, arch or privilege path stays hidden
-    // instead of failing after a click.
     return docker?.state === "fail" && docker.installable;
   });
 
-  /** openDockerInstall opens the log modal and starts the streamed install. */
   function openDockerInstall(): void {
     dockerInstallOpen.value = true;
     void dockerInstall.start();
   }
 
-  /** closeDockerInstall hides the modal and aborts any running stream. */
   function closeDockerInstall(): void {
     dockerInstallOpen.value = false;
     dockerInstall.stop();
   }
 
-  /** recheckAfterDockerInstall closes the log and re-runs the probe. */
   async function recheckAfterDockerInstall(): Promise<void> {
     closeDockerInstall();
     await handleValidate();
   }
 
-  /** hasCreatedServer reports whether the connection step already registered a node. */
   const hasCreatedServer = computed<boolean>(() => createdServer.value !== null);
 
-  /** currentServer prefers the polled store copy so status flips live. */
   const currentServer = computed<Server | null>(() => {
     const created = createdServer.value;
     if (!created) {
@@ -232,7 +187,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
 
   const isReady = computed<boolean>(() => currentServer.value?.status === "ready");
 
-  /** SSH status line for the validate step (connection facts only). */
   const sshStatusLine = computed<string>(() => {
     const server = currentServer.value;
     if (!server) {
@@ -245,7 +199,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     () => fixedChecks.value.filter((check) => check.state === "ok").length,
   );
 
-  /** checkLabel renders one fixed probe name in the current locale. */
   function checkLabel(name: ServerCheckName): string {
     switch (name) {
       case "docker":
@@ -259,7 +212,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     }
   }
 
-  /** checkSummary reports the real outcome — never a fabricated duration. */
   const checkSummary = computed<string>(() => {
     if (validating.value) {
       return t("servers.wizard.summaryRunning");
@@ -279,7 +231,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     () => fixedChecks.value.some((check) => check.state === "ok" || check.state === "fail"),
   );
 
-  /** nodeInitials renders the avatar on the Finish step. */
   const nodeInitials = computed<string>(() => {
     const name = (currentServer.value?.name ?? form.name).trim();
     if (name === "") {
@@ -307,16 +258,12 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     return parts.join(" · ");
   });
 
-  // Entering the validate step kicks off the first probe automatically; the
-  // Retry button repeats it on demand.
   watch(step, (value) => {
     if (value === 1 && createdServer.value && !hasRunChecks.value && !validating.value) {
       void handleValidate();
     }
   });
 
-  // Editing the connection details invalidates a previous validation: a pass for
-  // the old values must never unlock install for the new ones.
   const connectionSnapshot = computed<string>(() =>
     JSON.stringify([
       form.name,
@@ -340,7 +287,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     fixedChecks.value = makeIdleChecks();
   });
 
-  /** makeIdleChecks returns the fixed probe list in the idle state. */
   function makeIdleChecks(): FixedCheck[] {
     return FIXED_CHECK_NAMES.map((name) => ({
       name,
@@ -351,7 +297,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     }));
   }
 
-  /** applyCheckResults maps the API outcome onto the fixed check list. */
   function applyCheckResults(results: CheckResult[]): void {
     const byName = new Map(results.map((item) => [item.name, item]));
     fixedChecks.value = FIXED_CHECK_NAMES.map((name) => {
@@ -375,11 +320,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     });
   }
 
-  /**
-   * relabelChecks refreshes the fixed probe labels after a language switch.
-   * States and server-reported details are preserved; only the static probe
-   * names and the idle/running placeholders are re-rendered.
-   */
   function relabelChecks(): void {
     fixedChecks.value = fixedChecks.value.map((check) => {
       let detail = check.detail;
@@ -392,10 +332,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     });
   }
 
-  /** handleCreate optionally stores a key, then registers the server. */
   async function handleCreate(): Promise<void> {
-    // Back from the validate step must not register the node twice: an already
-    // created server just advances to validation again.
     if (createdServer.value) {
       step.value = 1;
       return;
@@ -436,7 +373,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       });
 
       if (!inFlight.isCurrent(token)) {
-        return; // the wizard was closed while the create was in flight
+        return;
       }
       createdServer.value = server;
       emit("created", server);
@@ -453,7 +390,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     }
   }
 
-  /** handleValidate runs the probe and stores the per-check results. */
   async function handleValidate(): Promise<void> {
     const server = createdServer.value;
     if (!server) {
@@ -463,8 +399,6 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     const token = inFlight.begin();
     validating.value = true;
     probeFailure.value = null;
-    // A retry starts from "not passed": a previous pass must never remain
-    // visible (or unlock Continue) while the new probe runs or after it fails.
     validationPassed.value = false;
     fixedChecks.value = FIXED_CHECK_NAMES.map((name) => ({
       name,
@@ -478,7 +412,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
         trustHostKey: form.trustHostKey,
       });
       if (!inFlight.isCurrent(token)) {
-        return; // the wizard was closed while the probe was in flight
+        return;
       }
       applyCheckResults(outcome.checks);
       probeFailure.value = outcome.message;
@@ -500,13 +434,11 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     }
   }
 
-  /** closeWizard closes the modal and resets the wizard state. */
   function closeWizard(): void {
     emit("update:show", false);
     resetWizard();
   }
 
-  /** handleShowChange mirrors the modal visibility and resets when closing. */
   function handleShowChange(value: boolean): void {
     emit("update:show", value);
     if (!value) {
@@ -514,10 +446,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     }
   }
 
-  /** resetWizard returns every field to its initial value. */
   function resetWizard(): void {
-    // Invalidate any in-flight create/validate and clear its loading flags, so a
-    // reopen never inherits a stuck button from the request it abandoned.
     inFlight.reset();
     step.value = 0;
     form.name = "";
@@ -543,17 +472,10 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     formRef.value?.restoreValidation();
   }
 
-  /** setFormRef binds the connection NForm instance owned by the step. */
   function setFormRef(instance: FormInst | null): void {
     formRef.value = instance;
   }
 
-  /**
-   * A language switch refreshes already-visible connection feedback without
-   * touching the draft: probe labels re-render, and a previously validated
-   * form re-validates (same visible set, translated). A pristine form is
-   * never validated, so no errors surface on untouched fields.
-   */
   const stopLocaleWatch = onLocaleChange(() => {
     relabelChecks();
     if (validationAttempted.value && formRef.value) {

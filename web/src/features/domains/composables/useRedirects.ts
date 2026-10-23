@@ -7,7 +7,6 @@ import { describeProxyError, proxyText } from "@/features/domains/api/proxy";
 import type { DomainRedirect, RedirectCode } from "@/features/domains/api/proxy";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
-/** Redirect create/edit form state. */
 export interface RedirectForm {
   application_id: string;
   source_domain: string;
@@ -17,7 +16,6 @@ export interface RedirectForm {
   enabled: boolean;
 }
 
-/** emptyRedirectForm returns a create-mode redirect draft. */
 export function emptyRedirectForm(): RedirectForm {
   return {
     application_id: "",
@@ -29,12 +27,6 @@ export function emptyRedirectForm(): RedirectForm {
   };
 }
 
-/**
- * redirectCodeOptions builds the redirect-code select options in the
- * current locale at invocation time. The numeric wire codes stay raw
- * values; only the kind words resolve. Call it inside a computed so the
- * options refresh on a language switch.
- */
 export function redirectCodeOptions(): Array<{
   label: string;
   value: RedirectCode;
@@ -65,21 +57,12 @@ export function redirectCodeOptions(): Array<{
   ];
 }
 
-/**
- * Redirect state is per page instance (created by provideRedirects in the
- * page, shared via inject): drafts and dialog flags never outlive the page.
- */
 function createRedirectsState() {
   const message = useMessage();
   const proxyStore = useProxyStore();
 
   const redirectForm = ref<RedirectForm>(emptyRedirectForm());
   const redirectSaving = ref(false);
-  /**
-   * Raw failures behind the create/edit alerts. Display strings derive from
-   * them plus the current locale, so a language switch refreshes a retained
-   * alert without losing the typed draft.
-   */
   const redirectErrorRaw = ref<unknown>(null);
   const redirectError = computed<string | null>(() => {
     void activeLocale.value;
@@ -116,7 +99,6 @@ function createRedirectsState() {
     })),
   );
 
-  /** openRedirectEdit seeds the dialog from a stored rule. */
   function openRedirectEdit(redirect: DomainRedirect): void {
     editingRedirect.value = redirect;
     redirectEditForm.value = {
@@ -131,7 +113,6 @@ function createRedirectsState() {
     redirectEditOpen.value = true;
   }
 
-  /** handleCreateRedirect stores one rule from the add-redirect form. */
   async function handleCreateRedirect(): Promise<void> {
     redirectErrorRaw.value = null;
     redirectSaving.value = true;
@@ -148,7 +129,6 @@ function createRedirectsState() {
       message.success(
         proxyText("domains.redirects.created", "Redirect rule created."),
       );
-      // Keep the application so a second rule can be added quickly.
       redirectForm.value = {
         ...emptyRedirectForm(),
         application_id: form.application_id,
@@ -160,7 +140,6 @@ function createRedirectsState() {
     }
   }
 
-  /** handleSaveRedirect patches one rule from the edit dialog. */
   async function handleSaveRedirect(): Promise<void> {
     const existing = editingRedirect.value;
     if (!existing) {
@@ -188,7 +167,6 @@ function createRedirectsState() {
     }
   }
 
-  /** handleToggleRedirect enables or pauses one rule. */
   async function handleToggleRedirect(
     redirect: DomainRedirect,
     enabled: boolean,
@@ -205,7 +183,6 @@ function createRedirectsState() {
     }
   }
 
-  /** handleDeleteRedirect removes one rule. */
   async function handleDeleteRedirect(redirect: DomainRedirect): Promise<void> {
     try {
       await proxyStore.removeRedirectRule(redirect.id);
@@ -240,17 +217,12 @@ export type RedirectsState = ReturnType<typeof createRedirectsState>;
 
 const redirectsKey: InjectionKey<RedirectsState> = Symbol("domains.redirects");
 
-/**
- * provideRedirects creates the redirect state for one page mount.
- * Call once in the page; descendants share it through useRedirects.
- */
 export function provideRedirects(): RedirectsState {
   const state = createRedirectsState();
   provide(redirectsKey, state);
   return state;
 }
 
-/** useRedirects shares the page instance; call in descendant components. */
 export function useRedirects(): RedirectsState {
   const state = inject(redirectsKey);
   if (!state) {

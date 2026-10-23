@@ -8,8 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestCreateRequiresEnvironment pins the contract: no environment is a 400,
-// a foreign one a 404.
 func TestCreateRequiresEnvironment(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(t, repo, &fakeAgent{})
@@ -31,8 +29,6 @@ func TestCreateRequiresEnvironment(t *testing.T) {
 	}
 }
 
-// TestUpdateMovesEnvironment pins the move: same-team relocation works and a
-// name the target already holds is a 409.
 func TestUpdateMovesEnvironment(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(t, repo, &fakeAgent{})
@@ -76,9 +72,6 @@ func TestUpdateMovesEnvironment(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesServerChangeWhileDeploying pins the 409 guard: a node
-// change while a deploy is in flight is refused, and succeeds after it
-// lands.
 func TestUpdateRefusesServerChangeWhileDeploying(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(t, repo, &fakeAgent{})
@@ -109,8 +102,6 @@ func TestUpdateRefusesServerChangeWhileDeploying(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesServerChangeOnceDeployed pins F2: a service with deploy
-// history cannot change node, even when idle; a never-deployed one may.
 func TestUpdateRefusesServerChangeOnceDeployed(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(t, repo, &fakeAgent{})
@@ -144,9 +135,6 @@ func TestUpdateRefusesServerChangeOnceDeployed(t *testing.T) {
 	}
 }
 
-// TestConcurrentUpdatesConverge pins F3 at the service level: a rename and
-// a move racing each other both land (the lifecycle lock serializes them
-// and the conditional write keeps the fields each request leaves alone).
 func TestConcurrentUpdatesConverge(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(t, repo, &fakeAgent{})

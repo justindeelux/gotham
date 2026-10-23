@@ -9,34 +9,20 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-// Two-factor authentication over HTTP (JUS-196).
-//
-// The profile routes are mounted in the interactive-session group, so an API
-// token can never manage the second factor. Every mutating route requires the
-// account password (when one is set) plus a current code, so a stolen access
-// token alone cannot turn the second factor off or repoint it.
-
-// totpCodeRequest is the body of the profile TOTP mutations. password is
-// required only when the account has one; the service decides.
 type totpCodeRequest struct {
 	Password string `json:"password"`
 	Code     string `json:"code"`
 }
 
-// mfaLoginRequest is the body of the second login step: the half-authenticated
-// token from /login (or the OAuth exchange) and the submitted code.
 type mfaLoginRequest struct {
 	MFAToken string `json:"mfa_token"`
 	Code     string `json:"code"`
 }
 
-// recoveryCodesResponse carries the freshly minted recovery codes, shown once.
 type recoveryCodesResponse struct {
 	RecoveryCodes []string `json:"recovery_codes"`
 }
 
-// handleTOTPStatus returns whether two-factor is enabled and how many recovery
-// codes are left.
 func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -52,9 +38,6 @@ func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
-// handleTOTPEnroll mints a pending secret and returns the setup material (the
-// base32 secret and the otpauth URI the QR encodes). Nothing is live until
-// enable confirms a code.
 func (s *Server) handleTOTPEnroll(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -70,8 +53,6 @@ func (s *Server) handleTOTPEnroll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, enrollment)
 }
 
-// handleTOTPEnable confirms the pending secret with a code and returns the
-// recovery codes once.
 func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	userID, code, ok := s.decodeTOTPRequest(w, r)
 	if !ok {
@@ -86,7 +67,6 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, recoveryCodesResponse{RecoveryCodes: codes})
 }
 
-// handleTOTPDisable turns two-factor off after proving the password and a code.
 func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	userID, code, ok := s.decodeTOTPRequest(w, r)
 	if !ok {
@@ -100,8 +80,6 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleTOTPRegenerate replaces the recovery codes, invalidating every previous
-// code.
 func (s *Server) handleTOTPRegenerate(w http.ResponseWriter, r *http.Request) {
 	userID, code, ok := s.decodeTOTPRequest(w, r)
 	if !ok {
@@ -116,8 +94,6 @@ func (s *Server) handleTOTPRegenerate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, recoveryCodesResponse{RecoveryCodes: codes})
 }
 
-// handleLoginTOTP completes a login whose account has TOTP enabled: it redeems
-// the half-authenticated token with a code and only then returns the token pair.
 func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	var req mfaLoginRequest
 	if !s.decodeJSON(w, r, &req) {
@@ -128,13 +104,9 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrTOTPLocked):
-			// The account is locked out after too many wrong codes; the SPA
-			// renders the same rate-limit message it does for a 429.
 			writeJSON(w, http.StatusTooManyRequests, apiError{Message: auth.ErrTOTPLocked.Error()})
 		case errors.Is(err, auth.ErrInvalidCode), errors.Is(err, auth.ErrInvalidCredentials),
 			errors.Is(err, auth.ErrTOTPNotConfigured):
-			// One message for every refusal: a caller cannot learn from the
-			// response whether the token or the code was the problem.
 			writeJSON(w, http.StatusUnauthorized, apiError{Message: "invalid code"})
 		default:
 			s.logger.Error("auth: complete mfa login", "error", err)
@@ -147,8 +119,6 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// decodeTOTPRequest reads the caller and the code body shared by the profile
-// TOTP mutations.
 func (s *Server) decodeTOTPRequest(w http.ResponseWriter, r *http.Request) (uuid.UUID, totpCodeRequest, bool) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -163,10 +133,6 @@ func (s *Server) decodeTOTPRequest(w http.ResponseWriter, r *http.Request) (uuid
 	return userID, req, true
 }
 
-// writeTOTPError maps a TOTP service error to its HTTP response. The messages
-// that are API contract bodies (an invalid code, a wrong current password, a
-// conflicting state) render verbatim with a 400/409; an unexpected failure is a
-// logged 500. A session-level ErrUnauthorized is always a 401.
 func (s *Server) writeTOTPError(w http.ResponseWriter, action string, err error, conflictStatus int) {
 	switch {
 	case errors.Is(err, auth.ErrUnauthorized):

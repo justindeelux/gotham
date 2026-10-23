@@ -13,7 +13,6 @@ import (
 )
 
 func TestToolServerListTools(t *testing.T) {
-	// An empty PATH makes detection deterministic: every tool is absent.
 	t.Setenv("PATH", t.TempDir())
 
 	response, err := NewToolServer().ListTools(context.Background(), &agentv1.ListToolsRequest{})
@@ -71,8 +70,6 @@ func TestToolServerListToolsReportsDetection(t *testing.T) {
 	t.Fatal("ListTools omitted railpack")
 }
 
-// TestToolServerListToolsReportsMinVersion checks the catalog's git minimum is
-// compared and surfaced through ListTools, not just carried as metadata.
 func TestToolServerListToolsReportsMinVersion(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\necho 'git version 2.30.0'\n"), 0o755); err != nil {
@@ -96,9 +93,6 @@ func TestToolServerListToolsReportsMinVersion(t *testing.T) {
 	t.Fatal("ListTools omitted git")
 }
 
-// TestToolServerInstallDetectOnly pins the contract that a detect-only host
-// unit is refused before any command runs: the systemd units are never
-// installed or removed, so the manager answers FailedPrecondition.
 func TestToolServerInstallDetectOnly(t *testing.T) {
 	server := NewToolServer(withToolRunner(&fakeToolRunner{}))
 	request := &agentv1.InstallToolRequest{Id: toolcatalog.IDSystemdNetworkd}

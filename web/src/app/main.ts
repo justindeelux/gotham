@@ -14,25 +14,13 @@ app.use(createPinia());
 installI18n(app);
 app.use(router);
 
-// A dead session (failed refresh, forced logout) redirects in-app through
-// the router instead of a hard location.assign, which would reload the
-// document and lose SPA state. Preventing the default tells the HTTP layer
-// (see redirectToLogin in api/http) the SPA took over; without a listener
-// the HTTP layer falls back to the hard navigation.
 window.addEventListener("gotham:session-expired", (event) => {
   event.preventDefault();
   void router.push({ name: "login" }).catch(() => undefined);
 });
 
-/** sessionStorage flag marking the one-shot reload after a failed navigation. */
 const chunkReloadKey = "gotham-chunk-reload";
 
-/**
- * shouldReloadAfterNavigationFailure decides whether to attempt the one-shot
- * reload. It returns false when the flag is already set (the previous reload
- * did not help) or sessionStorage is unavailable, so the caller shows a
- * fallback instead of reloading in a loop.
- */
 function shouldReloadAfterNavigationFailure(): boolean {
   try {
     if (sessionStorage.getItem(chunkReloadKey)) {
@@ -45,21 +33,13 @@ function shouldReloadAfterNavigationFailure(): boolean {
   }
 }
 
-/** clearNavigationReloadFlag re-arms the one-shot reload after a good load. */
 function clearNavigationReloadFlag(): void {
   try {
     sessionStorage.removeItem(chunkReloadKey);
   } catch {
-    // Ignore private-mode failures: the worst case is one extra reload.
   }
 }
 
-/**
- * renderReloadFallback overlays a minimal, dependency-free message and reload
- * button, so a user with stale hashed chunks is not stranded. It is appended to
- * the body, outside the mounted app, so the render cannot wipe it. Copy comes
- * from the stored locale (no feature chunk or i18n runtime required).
- */
 function renderReloadFallback(): void {
   if (document.getElementById("gotham-reload-fallback")) {
     return;
@@ -90,26 +70,15 @@ function renderReloadFallback(): void {
   document.body.append(overlay);
 }
 
-// Mount once the initial navigation resolves so route-dependent startup
-// (App.vue's session hydration) observes the real route rather than "/" (G3).
-// A top-level `await` here leaves the built entry module pending forever (the
-// app never mounts, blank page); a promise chain is equivalent and bundle-safe.
 let navigationFailed = false;
 
 router
   .isReady()
   .then(() => {
-    // A resolved navigation means the current assets are healthy: re-arm the
-    // one-shot reload for a future deploy.
     clearNavigationReloadFlag();
   })
   .catch((error) => {
     console.error("initial navigation failed", error);
-    // A lazy chunk that 404s after a deploy with stale hashed assets rejects
-    // the initial navigation. Reload once to pull fresh assets; if that did not
-    // help, mount and show a reload fallback rather than looping. Redirecting
-    // to /login does not work here: it is publicOnly, so an authenticated user
-    // bounces to dashboard, which needs the same missing chunks.
     if (shouldReloadAfterNavigationFailure()) {
       window.location.reload();
       return new Promise<void>(() => {});

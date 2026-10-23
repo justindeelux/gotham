@@ -12,8 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/updates"
 )
 
-// fakeAgentUpdateRegistry is a ServerService that also implements the optional
-// agent-update surface (BE-9.2).
 type fakeAgentUpdateRegistry struct {
 	*fakeServerService
 	versions  []servers.AgentVersion
@@ -29,9 +27,6 @@ func (f *fakeAgentUpdateRegistry) AgentUpdateTarget(context.Context) (string, er
 	return f.target, f.targetErr
 }
 
-// fakeUpdatesService is a minimal updates.Service for handler tests. The agent
-// update surface must not depend on it (it reports the control plane's own
-// version), so tests set it to prove independence.
 type fakeUpdatesService struct {
 	release *updates.Release
 	err     error
@@ -53,7 +48,6 @@ func (f *fakeUpdatesService) Resume(context.Context) error         { return nil 
 func (f *fakeUpdatesService) LastStatus() (*updates.Status, error) { return nil, nil }
 func (f *fakeUpdatesService) StartAuto(context.Context)            {}
 
-// TestAgentUpdateRoutes covers the fleet view and the update-all trigger.
 func TestAgentUpdateRoutes(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
 
@@ -66,8 +60,6 @@ func TestAgentUpdateRoutes(t *testing.T) {
 		target: "v1.2.0",
 	}
 	s := newServerRoutesTestServer(t, fake)
-	// The control plane is already current: its own self-update check finds
-	// nothing. H1: update-all must still roll out to the agents behind it.
 	s.updates = &fakeUpdatesService{release: nil}
 
 	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", authHeader)
@@ -98,8 +90,6 @@ func TestAgentUpdateRoutes(t *testing.T) {
 	}
 }
 
-// TestAgentUpdateRoutesUpToDate proves update-all is a no-op when every known
-// agent is already on the target.
 func TestAgentUpdateRoutesUpToDate(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	fake := &fakeAgentUpdateRegistry{
@@ -122,9 +112,6 @@ func TestAgentUpdateRoutesUpToDate(t *testing.T) {
 	}
 }
 
-// TestAgentUpdateRoutesNoAgentRelease proves update-all reports 503 when the
-// agent updater is disabled (no key / FEATURE_UPDATES=false), rather than
-// silently no-op'ing.
 func TestAgentUpdateRoutesNoAgentRelease(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), target: ""}
@@ -136,7 +123,6 @@ func TestAgentUpdateRoutesNoAgentRelease(t *testing.T) {
 	}
 }
 
-// TestAgentUpdateRoutesTargetError proves a release-server failure is a 502.
 func TestAgentUpdateRoutesTargetError(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), targetErr: errors.New("releases API down")}
@@ -148,9 +134,6 @@ func TestAgentUpdateRoutesTargetError(t *testing.T) {
 	}
 }
 
-// TestAgentUpdateRoutesNormalizesVersions is N4: a bare "1.2.0" and a canonical
-// "v1.2.0" are the same version, so a release stamped without the "v" does not
-// make every agent look pending.
 func TestAgentUpdateRoutesNormalizesVersions(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	fake := &fakeAgentUpdateRegistry{
@@ -173,7 +156,6 @@ func TestAgentUpdateRoutesNormalizesVersions(t *testing.T) {
 	}
 }
 
-// TestAgentUpdateRoutesRequireOperator proves a plain session is refused.
 func TestAgentUpdateRoutesRequireOperator(t *testing.T) {
 	t.Setenv(PlatformAdminsEnv, "")
 	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), target: "v1.2.0"}
@@ -187,9 +169,6 @@ func TestAgentUpdateRoutesRequireOperator(t *testing.T) {
 	}
 }
 
-// TestAgentUpdateRoutesUnavailable proves the routes are not mounted when the
-// registry does not implement the surface: the request falls through to the
-// /v1/servers/{id} route, which rejects "agents" as a bad id.
 func TestAgentUpdateRoutesUnavailable(t *testing.T) {
 	fake := newFakeServerService()
 	s := newServerRoutesTestServer(t, fake)

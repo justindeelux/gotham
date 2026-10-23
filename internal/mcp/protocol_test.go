@@ -35,10 +35,6 @@ var (
 	protocolDeployID  = uuid.MustParse("66666666-6666-4666-8666-666666666666")
 )
 
-// TestMCPStdioProtocolHelper is the child half of the protocol tests: it runs
-// the adapter over the process's real stdin/stdout. The test runner must not
-// print anything before Serve takes the streams, so the helper exits directly
-// instead of returning to the testing package.
 func TestMCPStdioProtocolHelper(_ *testing.T) {
 	if os.Getenv("GOTHAM_TEST_MCP_STDIO") != "1" {
 		return
@@ -61,11 +57,6 @@ func TestMCPStdioProtocolHelper(_ *testing.T) {
 	os.Exit(0)
 }
 
-// TestProtocolStdioAllTools drives the real gomcp serve process with the
-// official SDK client: initialize, list and call every one of the 18 tools over
-// newline-delimited JSON on stdout. It pins the public contract of each tool
-// (strict JSON Schema, read/write annotations, structured result) and proves
-// the fixed token is never projected through the protocol or stderr.
 func TestProtocolStdioAllTools(t *testing.T) {
 	backend := &protocolBackend{mode: protocolNormal}
 	api := httptest.NewServer(backend.handler(t))
@@ -134,10 +125,6 @@ func TestProtocolStdioAllTools(t *testing.T) {
 		}
 	}
 
-	// Every tool gets one minimal happy-path call. The backend serves one
-	// stable dataset, so the table proves registration, schema acceptance and
-	// structured result decoding for all 18 rather than re-testing each tool's
-	// projection rules (covered by the dedicated unit suites).
 	calls := []struct {
 		name string
 		args map[string]any
@@ -184,9 +171,6 @@ func TestProtocolStdioAllTools(t *testing.T) {
 	}
 }
 
-// TestProtocolStdioStdoutTranscript sends raw frames and parses the real
-// stdout transcript: every line must be a JSON-RPC frame and the fixed token
-// must never appear.
 func TestProtocolStdioStdoutTranscript(t *testing.T) {
 	backend := &protocolBackend{mode: protocolNormal}
 	api := httptest.NewServer(backend.handler(t))
@@ -217,10 +201,6 @@ func TestProtocolStdioStdoutTranscript(t *testing.T) {
 	}
 }
 
-// TestProtocolStdioTokenFailures covers the startup failures a client sees over
-// real stdio: an invalid gt1_ token, a revoked token (backend 401), a JWT that
-// is not an API token, and an old backend whose context works but whose strict
-// reads/mutations are 404 with no legacy write fallback.
 func TestProtocolStdioTokenFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -281,8 +261,6 @@ func TestProtocolStdioTokenFailures(t *testing.T) {
 		}
 	})
 
-	// Negative control: the same counter must move for a POST to a legacy
-	// alias, proving the old-backend zero above is meaningful.
 	t.Run("legacy write counter moves on a POST", func(t *testing.T) {
 		backend := &protocolBackend{mode: protocolOldBackend}
 		api := httptest.NewServer(backend.handler(t))
@@ -306,17 +284,12 @@ const (
 	protocolOldBackend
 )
 
-// protocolBackend is one stable fake control plane for every tool shape. It
-// records successful mutations so an old-backend fallback cannot hide.
 type protocolBackend struct {
 	mode         protocolMode
 	mu           sync.Mutex
 	legacyWrites int
 }
 
-// writeCount counts non-GET requests to a non-strict alias. A correct adapter
-// only mutates through /api/v1/mcp/*; a legacy fallback would move this
-// counter even when the old backend answers 404.
 func (b *protocolBackend) writeCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -440,8 +413,6 @@ func validateToolSchema(t *testing.T, tool *sdk.Tool) {
 	}
 }
 
-// connectStdio starts the real helper process and connects the SDK client. The
-// child is closed and reaped when the test ends.
 func connectStdio(t *testing.T, apiURL, token string) (*sdk.ClientSession, *bytes.Buffer, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -469,8 +440,6 @@ func stdioCommand(ctx context.Context, apiURL, token string) *exec.Cmd {
 	return command
 }
 
-// runStdioRaw writes frames one at a time and reads one response per request
-// frame, returning the raw stdout transcript.
 func runStdioRaw(t *testing.T, apiURL, token string, frames []string) (string, string, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

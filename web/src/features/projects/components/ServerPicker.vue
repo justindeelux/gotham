@@ -16,7 +16,6 @@ const props = withDefaults(
     modelValue: string;
     label?: string;
     feedback?: string;
-    /** Disabled with the pin reason when the resource cannot change node (M4). */
     disabled?: boolean;
   }>(),
   { label: undefined, feedback: "", disabled: false },
@@ -26,27 +25,17 @@ const emit = defineEmits<{
   "update:modelValue": [value: string];
 }>();
 
-/**
- * Required server picker shared by every create flow and the resource move
- * card (PE-5, Linear JUS-34). Offline nodes are disabled with the reason
- * listed under the field; every other state stays selectable, matching what
- * the backend accepts. A single selectable node is preselected. A failed
- * node list surfaces the store error with a retry instead of claiming no
- * node is registered.
- */
 const serversStore = useServersStore();
 
 const options = computed(() => buildServerOptions(serversStore.servers));
 
 const blockedHint = computed(() => unusableServerHint(serversStore.servers));
 
-/** t renders picker copy in the active locale (tracks language switches). */
 function t(key: string): string {
   void activeLocale.value;
   return String(i18n.global.t(key));
 }
 
-/** labelText is the caller override or the localized node wording. */
 const labelText = computed<string>(() => props.label ?? t("projects.server.label"));
 
 const noServers = computed<boolean>(
@@ -56,12 +45,10 @@ const noServers = computed<boolean>(
     serversStore.servers.length === 0,
 );
 
-/** reload refetches the node list (the error retry). */
 function reload(): void {
   void serversStore.fetchServers().catch(() => undefined);
 }
 
-// Preselect when a single selectable node exists and nothing is picked yet.
 watch(
   () => serversStore.servers,
   (servers) => {

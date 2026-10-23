@@ -1,7 +1,3 @@
-// Files editor tab management (JUS-220): Save All with per-tab failures, the
-// tab context menu, the dirty-close prompt, middle-click close, Alt+W and
-// Ctrl+Tab. The CodeMirror chunk and the file API are mocked so the component
-// runs without a real editor or network.
 /* global document:readonly, KeyboardEvent:readonly, MouseEvent:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider, NDropdown } from "naive-ui";
@@ -54,7 +50,6 @@ import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const wrappers: Array<ReturnType<typeof mount>> = [];
 
-/** makeTab builds one ready tab; `dirty` sets doc !== original. */
 function makeTab(id: string, dirty: boolean): EditorTab {
   return {
     id,
@@ -89,7 +84,6 @@ function team(id: string, role: Team["role"]): Team {
   };
 }
 
-/** mountEditor mounts FilesEditor under the message provider with one team. */
 function mountEditor() {
   setActivePinia(createPinia());
   const teams = useTeamsStore();
@@ -115,12 +109,10 @@ function mountEditor() {
   return { wrapper, editor, files, teams };
 }
 
-/** buttonByText finds a rendered button by its trimmed label. */
 function buttonByText(wrapper: ReturnType<typeof mount>, text: string) {
   return wrapper.findAll("button").find((button) => button.text().trim() === text);
 }
 
-/** closePromptButton finds a button inside the dirty-close prompt. */
 function closePromptButton(wrapper: ReturnType<typeof mount>, text: string) {
   const modal = wrapper.find(".files-editor-close-modal");
   return modal.findAll("button").find((button) => button.text().trim() === text);
@@ -171,15 +163,12 @@ describe("editor Save All", () => {
     );
     await flushPromises();
 
-    // Both dirty tabs were written; the clean tab was skipped.
     expect(api.putContent).toHaveBeenCalledTimes(2);
     const t1 = editor.tabs.find((tab) => tab.id === "t1")!;
     const t2 = editor.tabs.find((tab) => tab.id === "t2")!;
     expect(editor.isDirty(t1)).toBe(false);
     expect(editor.isDirty(t2)).toBe(true);
-    // The failure is reported for its own tab, by name.
     expect(document.body.textContent).toContain("Could not save t2.yaml");
-    // No blanket "all saved" toast on a partial run.
     expect(document.body.textContent).not.toContain("All changes saved");
     wrapper.unmount();
   });
@@ -242,7 +231,6 @@ describe("editor Save All", () => {
     );
     await flushPromises();
 
-    // Both conflicts are reported by name; the dialog walks them in turn.
     expect(document.body.textContent).toContain("t1.yaml changed on the server");
     expect(document.body.textContent).toContain("t2.yaml changed on the server");
     expect(wrapper.text()).toContain("t1.yaml changed since you opened it");
@@ -286,7 +274,6 @@ describe("editor tab context menu", () => {
       "divider",
       "copyPath",
     ]);
-    // The last tab has nothing to its right.
     expect(options.find((option) => option.key === "right")?.disabled).toBe(true);
     expect(dropdown.props("show")).toBe(true);
     wrapper.unmount();
@@ -340,7 +327,6 @@ describe("editor tab context menu", () => {
     expect(wrapper.findAll(".ed-unsaved li").map((item) => item.text())).toEqual([
       "t1.yaml",
     ]);
-    // Nothing closes until the user chooses.
     expect(editor.tabs).toHaveLength(2);
 
     await buttonByText(wrapper, "Don't save")!.trigger("click");
@@ -388,13 +374,11 @@ describe("editor dirty close prompt", () => {
     await closePromptButton(wrapper, "Save")!.trigger("click");
     await flushPromises();
 
-    // A failed save must not close (and discard) the buffer.
     expect(editor.tabs).toHaveLength(1);
     expect(editor.hasDirty).toBe(true);
     expect(wrapper.text()).not.toContain("Close unsaved files?");
     expect(document.body.textContent).toContain("Could not save t1.yaml");
 
-    // The retry succeeds and closes the tab.
     api.putContent.mockImplementation(async () => ({
       etag: '"v2"',
       size: 7,
@@ -420,8 +404,6 @@ describe("editor dirty close prompt", () => {
       "t2.yaml",
     ]);
 
-    // Alt+W and a middle click while the prompt is open are ignored: the
-    // dialog keeps acting on the tab it was opened for.
     window.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "w",
@@ -462,8 +444,6 @@ describe("editor dirty close prompt", () => {
     await closePromptButton(wrapper, "Save")!.trigger("click");
     await flushPromises();
 
-    // The save was handed the old buffer; the new text must not be dropped by
-    // the close that follows it.
     editor.setDoc("t1", "typed during save");
     resolveWrite({ etag: '"v2"', size: 7, mode: 0o100644 });
     await flushPromises();
@@ -511,7 +491,6 @@ describe("editor tab ergonomics", () => {
     });
     tab.dispatchEvent(left);
     expect(left.defaultPrevented).toBe(false);
-    // A middle mousedown never closes by itself; auxclick does.
     expect(editor.tabs).toHaveLength(2);
     wrapper.unmount();
   });
@@ -569,15 +548,11 @@ describe("tab helpers", () => {
 
   it("scrolls an off-screen tab into view and leaves a visible one alone", () => {
     const strip = { left: 100, right: 300, scrollLeft: 0 };
-    // Already inside the padded viewport.
     expect(scrollTabIntoView(strip, { left: 150, right: 220 })).toBe(0);
-    // Past the right edge: scroll just enough to clear the padding.
     expect(scrollTabIntoView(strip, { left: 280, right: 340 })).toBe(48);
-    // Before the left edge: scroll back towards zero.
     expect(
       scrollTabIntoView({ left: 100, right: 300, scrollLeft: 80 }, { left: 90, right: 140 }),
     ).toBe(62);
-    // Never negative.
     expect(
       scrollTabIntoView({ left: 100, right: 300, scrollLeft: 4 }, { left: 90, right: 140 }),
     ).toBe(0);

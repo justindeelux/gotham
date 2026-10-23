@@ -57,12 +57,12 @@ func TestScheduleValidate(t *testing.T) {
 }
 
 func TestScheduleNextRun(t *testing.T) {
-	from := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC) // a Saturday
+	from := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	daily := Schedule{Frequency: FrequencyDaily, AtTime: "03:30"}
 	if got, want := daily.nextRun(from, time.Hour, time.UTC), time.Date(2026, 10, 11, 3, 30, 0, 0, time.UTC); !got.Equal(want) {
 		t.Errorf("daily = %v, want %v", got, want)
 	}
-	weekly := Schedule{Frequency: FrequencyWeekly, AtTime: "05:00", Weekday: 1} // Monday
+	weekly := Schedule{Frequency: FrequencyWeekly, AtTime: "05:00", Weekday: 1}
 	if got, want := weekly.nextRun(from, time.Hour, time.UTC), time.Date(2026, 10, 12, 5, 0, 0, 0, time.UTC); !got.Equal(want) {
 		t.Errorf("weekly = %v, want %v", got, want)
 	}
@@ -71,8 +71,6 @@ func TestScheduleNextRun(t *testing.T) {
 	}
 }
 
-// TestSetSchedulePersistsAndReloads proves a saved schedule is stored, applied
-// to the live service and restored by a fresh service (restart).
 func TestSetSchedulePersistsAndReloads(t *testing.T) {
 	server := httptest.NewServer(releasesHandler(nil, 0, 0))
 	defer server.Close()
@@ -138,7 +136,7 @@ func TestScheduleNextRunInstanceTimezone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	from := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC) // 06:00 in Berlin (CEST)
+	from := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC)
 	daily := Schedule{Frequency: FrequencyDaily, AtTime: "03:30"}
 	if got, want := daily.nextRun(from, time.Hour, berlin), time.Date(2026, 10, 11, 1, 30, 0, 0, time.UTC); !got.Equal(want) {
 		t.Fatalf("berlin daily next = %v, want %v", got, want)

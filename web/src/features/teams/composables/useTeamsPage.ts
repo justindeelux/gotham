@@ -18,11 +18,6 @@ import {
 import { useTeamsStore } from "@/features/teams/stores/teams";
 import { registerLink } from "@/features/teams/utils/teamLinks";
 
-/**
- * Shared page context for the teams surface (FE-8.1 (2) — teams, members and
- * invites). Created once by TeamsPage and consumed by its panels and dialogs
- * through `useTeamsPageContext`, so no prop drilling is needed.
- */
 export interface TeamsPageContext {
   selectedTeam: ComputedRef<Team | null>;
   isPersonal: ComputedRef<boolean>;
@@ -75,7 +70,6 @@ export interface TeamsPageContext {
 
 export const teamsPageKey: InjectionKey<TeamsPageContext> = Symbol("teams-page");
 
-/** useTeamsPageContext reads the page context provided by TeamsPage. */
 export function useTeamsPageContext(): TeamsPageContext {
   const context = inject(teamsPageKey);
   if (!context) {
@@ -84,25 +78,13 @@ export function useTeamsPageContext(): TeamsPageContext {
   return context;
 }
 
-/**
- * useTeamsPage owns every piece of teams page state: team create / rename /
- * delete, the members and invites collections with their guarded loads and
- * mutations, and the invite dialogs. See the original TeamsPage for the
- * ownership protocol (selection generations, mutation tokens, read tokens).
- */
 export function useTeamsPage(): TeamsPageContext {
   const message = useMessage();
   const teamsStore = useTeamsStore();
 
-  // Create / rename / delete.
   const createOpen = ref(false);
   const createName = ref("");
   const createBusy = ref(false);
-  /**
-   * Raw failures behind the dialog and page alerts. Display strings derive
-   * from these plus the current locale, so a language switch refreshes a
-   * retained alert without losing typed input.
-   */
   const createErrorRaw = ref<unknown>(null);
   const createError = computed<string | null>(() =>
     createErrorRaw.value === null
@@ -128,7 +110,6 @@ export function useTeamsPage(): TeamsPageContext {
   );
   const deleting = ref(false);
 
-  // Members.
   const members = ref<TeamMember[]>([]);
   const membersLoading = ref(false);
   const membersErrorRaw = ref<unknown>(null);
@@ -143,12 +124,9 @@ export function useTeamsPage(): TeamsPageContext {
       ? null
       : describeTeamError(memberActionErrorRaw.value),
   );
-  /** Token of the newest members read; a stale response never writes state. */
   let membersReadToken = 0;
-  /** Members with an in-flight mutation, keyed by user id, for the row spinner. */
   const pendingMemberIds = ref<Record<string, boolean>>({});
 
-  // Invites.
   const invites = ref<TeamInvite[]>([]);
   const invitesLoading = ref(false);
   const invitesErrorRaw = ref<unknown>(null);
@@ -163,43 +141,20 @@ export function useTeamsPage(): TeamsPageContext {
       ? null
       : describeTeamError(inviteActionErrorRaw.value),
   );
-  /** Token of the newest invites read; a stale response never writes state. */
   let invitesReadToken = 0;
 
-  // Mutation ownership.
-  /**
-   * Selection generation: incremented whenever the selected team changes. A
-   * mutation captures it at start and may only write page state while it still
-   * matches, so a stale response from an earlier visit to the same team
-   * (A → B → A) can never overwrite the newer visit's applied result.
-   */
   let selectionGeneration = 0;
 
-  /**
-   * Latest mutation token per subject (a member id, an invite id, the invite
-   * form, the team delete). Only the newest mutation of one subject may write
-   * page state, so an overlapping older submission cannot regress to its
-   * response or clear the newer one's pending indicator. The counter itself
-   * never resets, so a token minted after a selection change can never collide
-   * with one that is still in flight.
-   */
   const mutationTokens = new Map<string, number>();
 
-  /** Monotonic mutation counter; every issuance is unique. */
   let mutationSequence = 0;
 
-  /** beginMutation registers a mutation of one subject and returns its token. */
   function beginMutation(subject: string): number {
     mutationSequence += 1;
     mutationTokens.set(subject, mutationSequence);
     return mutationSequence;
   }
 
-  /**
-   * ownsMutation reports whether a mutation may still write page state: the
-   * selection must not have changed since it started, it must still target the
-   * selected team, and no newer mutation of the same subject may have started.
-   */
   function ownsMutation(
     subject: string,
     token: number,
@@ -213,7 +168,6 @@ export function useTeamsPage(): TeamsPageContext {
     );
   }
 
-  /** setMemberPending tracks one member's in-flight mutation. */
   function setMemberPending(userId: string, pending: boolean): void {
     const next = { ...pendingMemberIds.value };
     if (pending) {
@@ -224,7 +178,6 @@ export function useTeamsPage(): TeamsPageContext {
     pendingMemberIds.value = next;
   }
 
-  /** memberPending reports whether a member row awaits its mutation. */
   function memberPending(userId: string): boolean {
     return pendingMemberIds.value[userId] === true;
   }
@@ -239,7 +192,6 @@ export function useTeamsPage(): TeamsPageContext {
       ? null
       : describeTeamError(inviteErrorRaw.value),
   );
-  /** The one-time create answer; it lives in memory only and is never stored. */
   const createdInvite = ref<CreatedTeamInvite | null>(null);
   const copied = ref(false);
 
@@ -247,16 +199,10 @@ export function useTeamsPage(): TeamsPageContext {
   const isPersonal = computed<boolean>(() => selectedTeam.value?.is_personal ?? false);
   const canManage = computed<boolean>(() => canManageMembers(selectedTeam.value?.role ?? null));
   const isOwner = computed<boolean>(() => selectedTeam.value?.role === "owner");
-  /** The personal team's owner membership is immutable (see ErrPersonalOwner). */
   const personalOwnerId = computed<string>(() =>
     isPersonal.value ? selectedTeam.value?.id ?? "" : "",
   );
 
-  /**
-   * Role select options in the current locale. roleLabel reads the shared
-   * role catalog at invocation time, so the computed refreshes on a
-   * language switch. Values are wire roles and never translated.
-   */
   const roleOptions = computed<Array<{ label: string; value: TeamRole }>>(
     () => [
       { label: roleLabel("owner"), value: "owner" },
@@ -272,7 +218,6 @@ export function useTeamsPage(): TeamsPageContext {
     ],
   );
 
-  /** memberRoleDisabled reports whether a member's role select is locked. */
   function memberRoleDisabled(member: TeamMember): boolean {
     if (!canManage.value) {
       return true;
@@ -280,11 +225,9 @@ export function useTeamsPage(): TeamsPageContext {
     if (member.user_id === personalOwnerId.value) {
       return true;
     }
-    // Only an owner may touch an owner (or grant ownership).
     return member.role === "owner" && !isOwner.value;
   }
 
-  /** memberRemovable reports whether the remove action is offered. */
   function memberRemovable(member: TeamMember): boolean {
     if (!canManage.value) {
       return false;
@@ -292,12 +235,6 @@ export function useTeamsPage(): TeamsPageContext {
     return member.user_id !== personalOwnerId.value;
   }
 
-  /**
-   * resetTeamContext drops the previous team's members and invites, invalidates
-   * every read and mutation still in flight for it, and clears its pending
-   * indicators. It runs before a selection change is acted on, so rows, errors,
-   * spinners and late responses of one team can never surface under another.
-   */
   function resetTeamContext(): void {
     selectionGeneration += 1;
     membersReadToken += 1;
@@ -314,10 +251,6 @@ export function useTeamsPage(): TeamsPageContext {
     pendingMemberIds.value = {};
     deleting.value = false;
     teamActionErrorRaw.value = null;
-    // The invite form belongs to the previous team: its pending submission is
-    // now owned by nobody (the guard refuses to clear it), so reset the busy
-    // state here or the next team's form would stay loading forever, and close
-    // a form the new selection did not open.
     inviteBusy.value = false;
     inviteOpen.value = false;
   }
@@ -345,8 +278,6 @@ export function useTeamsPage(): TeamsPageContext {
       }
       membersErrorRaw.value = error;
     } finally {
-      // Only the newest read owns the spinner; an obsolete one must not clear a
-      // loading state the current read still needs.
       if (isCurrent()) {
         membersLoading.value = false;
       }
@@ -382,7 +313,6 @@ export function useTeamsPage(): TeamsPageContext {
     }
   }
 
-  /** loadTeam refreshes the selected team's members and invites. */
   async function loadTeam(): Promise<void> {
     await Promise.all([loadMembers(), loadInvites()]);
   }
@@ -395,8 +325,6 @@ export function useTeamsPage(): TeamsPageContext {
       message.success(teamText("teams.toast.createdTeam", "Created team {name}", { name: team.name }));
       createOpen.value = false;
       createName.value = "";
-      // Selecting the new team fires the selection watcher, which reloads the
-      // collections; an explicit load here would duplicate that read.
     } catch (error) {
       createErrorRaw.value = error;
     } finally {
@@ -404,7 +332,6 @@ export function useTeamsPage(): TeamsPageContext {
     }
   }
 
-  /** openRename prefills the rename dialog with the selected team's name. */
   function openRename(): void {
     renameName.value = selectedTeam.value?.name ?? "";
     renameErrorRaw.value = null;
@@ -438,15 +365,6 @@ export function useTeamsPage(): TeamsPageContext {
     const teamId = team.id;
     const subject = `team:${teamId}`;
     const token = beginMutation(subject);
-    /**
-     * A team absent from the store is the genuine outcome of a successful delete
-     * (the store removes the row and moves the selection), so that is what the
-     * success message reports. Every other write — the failure alert and the
-     * pending spinner — must own the current context (mutation token and
-     * selection generation). The team-gone shortcut must never feed the error
-     * path: once a newer delete has succeeded, an older failure would otherwise
-     * paint its error on the fallback team.
-     */
     const teamGone = (): boolean =>
       !teamsStore.teams.some((item) => item.id === teamId);
     const ownsFeedback = (): boolean =>
@@ -459,11 +377,7 @@ export function useTeamsPage(): TeamsPageContext {
       if (teamGone()) {
         message.success(teamText("teams.toast.deletedTeam", "Deleted team {name}", { name: team.name }));
       }
-      // The store falls back to the personal team, whose selection change
-      // reloads the collections through the watcher.
     } catch (error) {
-      // The backend message is the actionable part: personal teams and teams
-      // that still own resources are refused with 409.
       if (!ownsFeedback()) {
         return;
       }
@@ -488,8 +402,6 @@ export function useTeamsPage(): TeamsPageContext {
     try {
       const updated = await updateMemberRole(teamId, member.user_id, role);
       if (!owns()) {
-        // A newer visit or a newer submission owns this row now: the response
-        // and its success message belong to an earlier state.
         return;
       }
       members.value = members.value.map((item) =>
@@ -537,7 +449,6 @@ export function useTeamsPage(): TeamsPageContext {
     }
   }
 
-  /** openInvite resets the invite dialog. */
   function openInvite(): void {
     inviteEmail.value = "";
     inviteRole.value = "read_only";
@@ -563,9 +474,6 @@ export function useTeamsPage(): TeamsPageContext {
         inviteRole.value,
       );
       if (!owns()) {
-        // The operator moved on, or a newer submission owns the form; the
-        // one-time token belongs to the team the invite was created for and
-        // must not surface under another one.
         return;
       }
       createdInvite.value = invite;
@@ -609,7 +517,6 @@ export function useTeamsPage(): TeamsPageContext {
     }
   }
 
-  /** copyAcceptLink copies the one-time link; a denied clipboard falls back. */
   async function copyAcceptLink(): Promise<void> {
     const invite = createdInvite.value;
     if (!invite) {
@@ -624,7 +531,6 @@ export function useTeamsPage(): TeamsPageContext {
     }
   }
 
-  /** closeInviteToken drops the one-time token from memory. */
   function closeInviteToken(): void {
     createdInvite.value = null;
     copied.value = false;
@@ -633,8 +539,6 @@ export function useTeamsPage(): TeamsPageContext {
   watch(
     () => teamsStore.activeTeamId,
     () => {
-      // Drop and invalidate the previous team's collections before the new
-      // reads start: no late response may render under the new selection.
       resetTeamContext();
       closeInviteToken();
       teamActionErrorRaw.value = null;
@@ -647,10 +551,7 @@ export function useTeamsPage(): TeamsPageContext {
     try {
       await teamsStore.fetchTeams();
     } catch {
-      // The store exposes the error; the alert renders it.
     }
-    // The selection watcher already started the reads when fetchTeams changed
-    // the active team; only an unchanged selection needs an explicit first load.
     if (teamsStore.activeTeamId === selectionBeforeLoad) {
       await loadTeam();
     }

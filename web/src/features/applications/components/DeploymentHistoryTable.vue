@@ -24,7 +24,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** errorText renders the deployment error, falling back to an em dash. */
 function errorText(deployment: Deployment): VNode {
   if (!deployment.error) {
     return h(NText, { depth: 3 }, { default: () => "—" });
@@ -32,7 +31,6 @@ function errorText(deployment: Deployment): VNode {
   return h("span", { class: "mono error-text" }, deployment.error);
 }
 
-/** commitText renders the short hash plus the message subject. */
 function commitText(deployment: Deployment): VNode {
   if (!deployment.commit_sha) {
     return h(NText, { depth: 3 }, { default: () => "—" });
@@ -43,7 +41,6 @@ function commitText(deployment: Deployment): VNode {
   return h("span", { class: "mono", title: full }, text);
 }
 
-/** actionsCell renders per-row Logs / Rollback controls. */
 function actionsCell(row: Deployment): VNode {
   const children: VNode[] = [
     h(
@@ -71,11 +68,6 @@ function actionsCell(row: Deployment): VNode {
   return h(NSpace, { size: 8, align: "center", wrap: false }, { default: () => children });
 }
 
-/**
- * columns renders the history grid. Computed (not module-static) so a
- * language switch relabels headers and row buttons without losing the
- * pagination or scroll position. Raw diagnostics and wire ids stay verbatim.
- */
 const columns = computed<DataTableColumns<Deployment>>(() => [
   {
     title: String(t("applications.table.deploy")),
@@ -139,7 +131,6 @@ const columns = computed<DataTableColumns<Deployment>>(() => [
   },
 ]);
 
-/** rowKey identifies a row by its deployment id. */
 function rowKey(row: Deployment): string {
   return row.id;
 }

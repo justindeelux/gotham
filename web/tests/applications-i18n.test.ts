@@ -1,6 +1,3 @@
-// Focused I18N-4 checks: applications catalog parity, invocation-time error
-// summaries in both locales with raw diagnostics untouched, live-switch
-// behavior that keeps drafts, and 0/1/many counts with unchanged payloads.
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -37,7 +34,6 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** apiError builds the normalized shape isApiError accepts. */
 function apiError(status: number, message = "") {
   return { status, message, cause: null };
 }
@@ -107,7 +103,6 @@ describe("describe*Error localization", () => {
   });
 
   it("pairs every nonempty failure with its summary and the exact raw detail", () => {
-    // Unknown 500s keep the exact stripped diagnostic under a summary.
     expect(describeApplicationError({ message: "deploy: container exploded", status: 500 })).toBe(
       "Request failed container exploded",
     );
@@ -117,16 +112,13 @@ describe("describe*Error localization", () => {
     expect(describeProviderError({ message: "deploy: container exploded", status: 500 })).toBe(
       "Request failed container exploded",
     );
-    // Blank failures render the summary alone.
     expect(describeApplicationError(apiError(500))).toBe("Request failed");
     expect(describeProviderError(new Error(""))).toBe(
       "Something went wrong. Please try again.",
     );
-    // Plain errors keep their exact message under the unexpected summary.
     expect(describeProviderError(new Error("boom"))).toBe(
       "Something went wrong. Please try again. boom",
     );
-    // Known 400/502 refusals keep their exact detail under distinct summaries.
     expect(describeApplicationError({ message: "deploy: bad port", status: 400 })).toBe(
       "Invalid request. Check the highlighted fields and retry. bad port",
     );
@@ -174,7 +166,6 @@ describe("describe*Error localization", () => {
     expect(collision).toBe(
       'An application with this name already exists in the target environment. an application named "shop" already exists in the target environment',
     );
-    // An unrelated 409 never reads as an in-flight deployment.
     const other = describeApplicationError(apiError(409, "a deploy key already exists"));
     expect(other).toContain("conflicts with the current state");
     expect(other).toContain("a deploy key already exists");
@@ -375,7 +366,6 @@ describe("deploy pipeline labels", () => {
     server_id: "server-1",
   } as never;
 
-  /** deployment builds one deploy row for the pipeline. */
   function deployment(overrides: Partial<Deployment>): Deployment {
     return {
       id: "deploy-12345678",
@@ -423,7 +413,6 @@ describe("deploy pipeline labels", () => {
     expect(wrapper.text()).toContain("đang build");
     expect(wrapper.text()).toContain("đang chạy");
     expect(wrapper.text()).not.toContain("building");
-    // Raw enum data stays intact behind the display labels.
     expect(pipelineStepsFor(latest).map((step) => step.name)).toEqual(
       steps.map((step) => step.name),
     );
@@ -441,7 +430,6 @@ describe("deploy pipeline labels", () => {
     setLocale("vi", null);
     await wrapper.vm.$nextTick();
     expect(wrapper.text()).toContain("thất bại");
-    // The raw server diagnostic is never translated.
     expect(wrapper.text()).toContain("build failed: exit status 1");
     wrapper.unmount();
   });

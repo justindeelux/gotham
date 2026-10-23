@@ -14,15 +14,6 @@ import {
 
 test.use({ storageState: storageStatePath });
 
-/**
- * JUS-273 / GOTHAM-19 real-stack proof: the volumes API must name the File
- * Manager root the enrolled agent ACTUALLY exposes (full access => "system"/"/",
- * confined => "volumes"), and Open in File Manager must navigate this browser
- * tab to that directory as a new internal File Manager tab, keeping the tabs
- * already open. The spec runs against the node agent started by the UI e2e
- * workflow; without an enrolled agent there is nothing to resolve.
- */
-
 interface ServerRow {
   id: string;
   name: string;
@@ -45,7 +36,6 @@ interface VolumeBody {
   }>;
 }
 
-/** enrolledNode returns the ready node agent the workflow registered. */
 async function enrolledNode(
   request: APIRequestContext,
   headers: Record<string, string>,
@@ -106,9 +96,6 @@ test("volume link uses the root the agent exposes and opens the directory", asyn
     return;
   }
 
-  // The target root must be one the node itself advertises, and the joined
-  // root path must be the volume's host path. A hard-coded root fails here in
-  // full-access mode ("system", not "volumes").
   const rootsResponse = await request.get(
     `/api/v1/servers/${node.id}/files/roots`,
     { headers },
@@ -122,8 +109,6 @@ test("volume link uses the root the agent exposes and opens the directory", asyn
   }
   expect(target.server_id).toBe(node.id);
 
-  // Seed the real directory and a marker through the File Manager (test setup;
-  // the feature itself only ever reads). A pre-existing directory/file is fine.
   const parent = target.path.split("/").slice(0, -1).join("/");
   for (const path of [parent, target.path]) {
     if (path === "") {
@@ -142,8 +127,6 @@ test("volume link uses the root the agent exposes and opens the directory", asyn
   });
   expect([201, 409], `create ${marker}: ${await file.text()}`).toContain(file.status());
 
-  // The agent may report a resolved root path (/tmp -> /private/tmp on macOS),
-  // so compare the real directories rather than the literal strings.
   expect(realpathSync(join(root.path, target.path))).toBe(
     realpathSync(volume.host_path ?? ""),
   );
@@ -157,8 +140,6 @@ test("volume link uses the root the agent exposes and opens the directory", asyn
   });
   await expect(open).toBeVisible();
 
-  // The action is a button that navigates in this browser tab: no new window
-  // and no target=_blank, the application page is replaced by the File Manager.
   const applicationURL = page.url();
   await open.click();
   await page.waitForURL(`**/servers/${node.id}/files?**`);
@@ -169,15 +150,11 @@ test("volume link uses the root the agent exposes and opens the directory", asyn
   expect(page.url()).not.toBe(applicationURL);
   await expect(page.getByText("marker.txt", { exact: true }).first()).toBeVisible();
 
-  // The volume directory is its own focused internal tab, beside the File
-  // Manager tab that was already open.
   const volumeTab = page.locator(".fm-tab").filter({ hasText: volume.name });
   await expect(volumeTab).toHaveCount(1);
   await expect(volumeTab).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".fm-tab")).toHaveCount(2);
 
-  // Going back to the application and re-opening the same target focuses that
-  // tab instead of stacking a duplicate.
   await page.goBack();
   await expect(page.getByText(volume.host_path ?? "", { exact: false })).toBeVisible();
   await open.click();
@@ -210,15 +187,12 @@ test("an invalid deep link explains the fallback instead of failing silently", a
   const { roots } = (await rootsResponse.json()) as { roots: FileRootRow[] };
   expect(roots.length).toBeGreaterThan(0);
 
-  // An unknown root is rejected with a localized notice naming the link and
-  // the root the browser stayed on; it never silently shows another directory.
   await page.goto(`/servers/${node.id}/files?root=nope&path=elsewhere`);
   await expect(
     page.getByText(/root “nope” is not available on this server/),
   ).toBeVisible();
   await expect(page.getByText(roots[0].name, { exact: true }).first()).toBeVisible();
 
-  // An escaping path is rejected the same way.
   await page.goto(
     `/servers/${node.id}/files?root=${encodeURIComponent(roots[0].name)}&path=..%2Fetc`,
   );

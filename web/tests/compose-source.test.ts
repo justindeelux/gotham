@@ -1,4 +1,3 @@
-// GS-8 compose source: schema gates, wizard Source step and detail editor.
 /* global HTMLButtonElement: readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
@@ -37,7 +36,6 @@ beforeEach(() => {
 describe("compose schemas", () => {
   it("enables compose in sourceTypeImplemented", () => {
     expect(sourceTypeImplemented("compose")).toBe(true);
-    // All other known types deploy too (compose is the last one, GS-8).
     expect(sourceTypeImplemented("git_private")).toBe(true);
     expect(sourceTypeImplemented("dockerfile")).toBe(true);
     expect(sourceTypeImplemented("image")).toBe(true);
@@ -50,14 +48,11 @@ describe("compose schemas", () => {
   });
 
   it("gates pasted content on non-empty, size and services", () => {
-    // Shared table with the server (ValidateComposeContent): both refuse
-    // empty, blank, oversize and documents without a services mapping.
     expect(composeContentSchema.safeParse("services:\n  web:\n    image: x\n").success).toBe(true);
     expect(composeContentSchema.safeParse("").success).toBe(false);
     expect(composeContentSchema.safeParse("   \n # only a comment\n").success).toBe(false);
     expect(composeContentSchema.safeParse(`services:\n  web:\n    image: x\n${"x".repeat(256 * 1024)}`).success).toBe(false);
     expect(composeContentSchema.safeParse(`services:\n  web:\n    image: x\n${"x".repeat(256 * 1024 - 40)}`).success).toBe(true);
-    // Multi-byte text: under 256K chars but over 256 KiB, matching the server.
     expect(
       composeContentSchema.safeParse(`services:\n${"é".repeat(128 * 1024)}`).success,
     ).toBe(false);
@@ -83,7 +78,6 @@ describe("compose schemas", () => {
     expect(composeFileSchema.safeParse("../escape.yml").success).toBe(false);
     expect(composeFileSchema.safeParse("a/../../x.yml").success).toBe(false);
     expect(composeFileSchema.safeParse("x".repeat(257)).success).toBe(false);
-    // Multi-byte path: under 256 chars but over 256 bytes, matching the server.
     expect(composeFileSchema.safeParse(`${"é".repeat(128)}.yml`).success).toBe(false);
     expect(composeFileSchema.safeParse(`${"é".repeat(100)}.yml`).success).toBe(true);
   });
@@ -123,7 +117,6 @@ function mountWizard() {
   return { w: wiz!, wrapper };
 }
 
-/** mountSourceStep renders the wizard Source step for one source type. */
 function mountSourceStep(sourceType: string) {
   setActivePinia(createPinia());
   let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
@@ -393,7 +386,6 @@ describe("detail compose editor", () => {
     expect(editor.isRepoMode.value).toBe(false);
     expect(editor.content.value).toBe(pasted);
     expect(editor.service.value).toBe("web");
-    // A clean draft has nothing to save.
     expect(editor.saveDisabled.value).toBe(true);
 
     editor.service.value = "";
@@ -407,11 +399,9 @@ describe("detail compose editor", () => {
     expect(seen).toEqual([
       { compose_content: `${pasted}# edited\n`, compose_service: "web" },
     ]);
-    // A successful save leaves the draft clean, so Save waits for the next edit.
     expect(editor.isDirty.value).toBe(false);
     expect(editor.saveDisabled.value).toBe(true);
 
-    // An unrelated row bump re-seeds a clean draft but keeps edits.
     app.value = { ...app.value, updated_at: "2026-10-08T00:00:01Z" };
     await nextTick();
     expect(editor.content.value).toBe(pasted);

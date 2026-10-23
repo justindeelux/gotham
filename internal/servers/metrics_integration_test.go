@@ -18,11 +18,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// TestMetricsRangeAndRetention is the Phase 8 exit criterion for the server
-// time series: samples round-trip, the range query aggregates into epoch
-// aligned buckets at the requested step, and the retention sweep deletes only
-// rows older than the 30-day horizon. It runs against the dev database and
-// skips when none is available.
 func TestMetricsRangeAndRetention(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -31,17 +26,12 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 
 	server := addMetricsNode(t, ctx, service, st, "metrics-range")
 
-	// Two buckets of the 1m series, with the first bucket carrying three
-	// samples so its average is observable. The base is hour-aligned so the
-	// four samples always share one hourly bucket and one UTC day, whatever
-	// minute the test starts in.
 	base := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
 	insertMetric(t, st, server.ID, base, 0.10)
 	insertMetric(t, st, server.ID, base.Add(10*time.Second), 0.20)
 	insertMetric(t, st, server.ID, base.Add(50*time.Second), 0.30)
 	insertMetric(t, st, server.ID, base.Add(time.Minute), 0.60)
 
-	// A sample well past the retention horizon, used by the sweep below.
 	old := base.Add(-31 * 24 * time.Hour)
 	insertMetric(t, st, server.ID, old, 0.99)
 
@@ -65,7 +55,6 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 		t.Errorf("first bucket io = %+v, want the inserted values", points[0])
 	}
 
-	// The 1h series has one bucket holding all four fresh samples.
 	points, err = service.Metrics(ctx, server.ID, base, base.Add(2*time.Hour), "1h")
 	if err != nil {
 		t.Fatalf("Metrics(1h): %v", err)
@@ -80,7 +69,6 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 		t.Errorf("hourly cpu average = %v, want 0.3", points[0].CPUUsage)
 	}
 
-	// The 1d series aligns to midnight UTC and holds the same samples.
 	points, err = service.Metrics(ctx, server.ID, base, base.Add(48*time.Hour), "1d")
 	if err != nil {
 		t.Fatalf("Metrics(1d): %v", err)
@@ -92,8 +80,6 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 		t.Errorf("daily bucket = %s, want %s", points[0].Bucket, base.Truncate(24*time.Hour))
 	}
 
-	// A window that holds no samples is an empty series, not an error, and an
-	// empty bucket is omitted rather than invented.
 	points, err = service.Metrics(ctx, server.ID, base.Add(10*time.Minute), base.Add(20*time.Minute), "1m")
 	if err != nil {
 		t.Fatalf("Metrics(empty window): %v", err)
@@ -102,7 +88,6 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 		t.Errorf("empty window points = %d, want 0", len(points))
 	}
 
-	// Invalid queries are validation errors, not storage errors.
 	for name, call := range map[string]func() ([]MetricPoint, error){
 		"inverted range": func() ([]MetricPoint, error) {
 			return service.Metrics(ctx, server.ID, base.Add(time.Minute), base, "1m")
@@ -119,7 +104,6 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 		}
 	}
 
-	// Retention removes the out-of-horizon row and nothing else.
 	sweeper := NewMetricsSweeper(st, discardLogger())
 	sweeper.now = func() time.Time { return base }
 	deleted, err := sweeper.Sweep(ctx)
@@ -143,9 +127,6 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 	}
 }
 
-// TestMetricsTeamIsolation verifies the read authorization of the series: a
-// node of another team answers ErrNotFound, while every member of the node's
-// team — including read_only — may read it.
 func TestMetricsTeamIsolation(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -221,7 +202,6 @@ func TestMetricsTeamIsolation(t *testing.T) {
 		t.Errorf("read_only points = %d, want 1", len(points))
 	}
 
-	// The owner (a team member) reads the same series.
 	if points, err := service.Metrics(aliceTeam, node.ID, from, to, "1m"); err != nil {
 		t.Errorf("owner Metrics = %v, want a series", err)
 	} else if len(points) != 1 {
@@ -242,9 +222,6 @@ func TestMetricsTeamIsolation(t *testing.T) {
 	}
 }
 
-// TestHeartbeatSkipsMetricsWhenDisabled verifies the kill switch: with
-// FEATURE_METRICS=false the heartbeat still updates the servers row but appends
-// no time-series sample.
 func TestHeartbeatSkipsMetricsWhenDisabled(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -293,10 +270,6 @@ func TestHeartbeatSkipsMetricsWhenDisabled(t *testing.T) {
 	}
 }
 
-// TestHeartbeatAggregatesSamples is the FX-3 item-4 bound on metrics growth:
-// samples arriving closer together than heartbeatSampleInterval are dropped
-// while the servers row still carries the latest snapshot. The throttle runs on
-// the server wall clock, so a heartbeat cannot advance sent_at to bypass it.
 func TestHeartbeatAggregatesSamples(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -330,14 +303,11 @@ func TestHeartbeatAggregatesSamples(t *testing.T) {
 		}
 	}
 
-	// The throttle keys on the server wall clock, never on sent_at: a sample
-	// whose sent_at is far ahead but which arrives immediately must still be
-	// dropped.
-	send(0.1, base)                   // accepted
-	send(0.2, base.Add(24*time.Hour)) // dropped: same wall-clock slot
+	send(0.1, base)
+	send(0.2, base.Add(24*time.Hour))
 	current = base.Add(heartbeatSampleInterval + time.Second)
-	send(0.3, current.Add(-24*time.Hour)) // accepted: new slot despite old sent_at
-	send(0.4, current.Add(time.Hour))     // dropped: same slot, future sent_at
+	send(0.3, current.Add(-24*time.Hour))
+	send(0.4, current.Add(time.Hour))
 
 	updated, err := st.GetServerByNodeID(ctx, &nodeID)
 	if err != nil {
@@ -356,9 +326,6 @@ func TestHeartbeatAggregatesSamples(t *testing.T) {
 	}
 }
 
-// TestHeartbeatClampsFutureSentAt proves a hostile sent_at cannot poison the
-// series: a far-future report is stored at the server clock, and the throttle
-// still accepts the next genuine sample.
 func TestHeartbeatClampsFutureSentAt(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -392,9 +359,9 @@ func TestHeartbeatClampsFutureSentAt(t *testing.T) {
 		}
 	}
 
-	send(0.1, base.Add(2*time.Hour)) // far future: stored clamped to now
+	send(0.1, base.Add(2*time.Hour))
 	current = base.Add(11 * time.Second)
-	send(0.2, current) // accepted despite the earlier hostile timestamp
+	send(0.2, current)
 
 	var count int
 	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&count); err != nil {
@@ -412,8 +379,6 @@ func TestHeartbeatClampsFutureSentAt(t *testing.T) {
 	}
 }
 
-// addMetricsNode creates a node for the metrics tests and deletes it on
-// cleanup (its samples cascade).
 func addMetricsNode(t *testing.T, ctx context.Context, service *ServerService, st *store.Store, name string) *Server {
 	t.Helper()
 	server, err := service.Add(ctx, uuid.New(), name, "127.0.0.1", 22, "root", uuid.Nil, "")
@@ -430,8 +395,6 @@ func addMetricsNode(t *testing.T, ctx context.Context, service *ServerService, s
 	return server
 }
 
-// insertMetric stores one sample directly, without going through the heartbeat
-// path, so the range test controls the timestamps exactly.
 func insertMetric(t *testing.T, st *store.Store, serverID uuid.UUID, at time.Time, cpu float64) {
 	t.Helper()
 	err := st.InsertServerMetric(context.Background(), sqlc.InsertServerMetricParams{

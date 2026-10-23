@@ -13,11 +13,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// This file is the JUS-252 proof for zsh: the same optional prompt-mark
-// integration as bash, added through a private ZDOTDIR so the operator's
-// .zshenv/.zshrc still run first and nothing is written to the PTY.
-
-// terminalTestZsh returns an installed zsh or skips the test.
 func terminalTestZsh(t *testing.T) string {
 	t.Helper()
 	for _, candidate := range []string{"/bin/zsh", "/usr/bin/zsh"} {
@@ -32,8 +27,6 @@ func terminalTestZsh(t *testing.T) string {
 	return ""
 }
 
-// TestTerminalShellSetupSelection pins which shells get an integration and
-// which keep the plain command line.
 func TestTerminalShellSetupSelection(t *testing.T) {
 	t.Setenv("ZDOTDIR", "")
 	for _, shell := range []string{"/bin/sh", "/usr/bin/dash", "/bin/ash", "/usr/bin/fish"} {
@@ -50,9 +43,6 @@ func TestTerminalShellSetupSelection(t *testing.T) {
 	}
 }
 
-// TestTerminalZshSetupIsPrivateAndConstant proves the generated startup files
-// live in a fresh 0700 directory, are 0600, carry only the agent constants, and
-// pass the operator's ZDOTDIR as a quoted environment value.
 func TestTerminalZshSetupIsPrivateAndConstant(t *testing.T) {
 	t.Setenv("ZDOTDIR", "/home/operator/.config/zsh")
 	setup, err := terminalZshSetup()
@@ -107,7 +97,6 @@ func TestTerminalZshSetupIsPrivateAndConstant(t *testing.T) {
 		t.Fatalf("integration ZDOTDIR = %q; want %q", got, dir)
 	}
 
-	// A second session gets its own directory with byte-identical files.
 	second, err := terminalZshSetup()
 	if err != nil {
 		t.Fatalf("terminalZshSetup (second): %v", err)
@@ -131,9 +120,6 @@ func TestTerminalZshSetupIsPrivateAndConstant(t *testing.T) {
 	}
 }
 
-// TestTerminalZshSetupIgnoresRelativeZdotdir proves a relative operator
-// ZDOTDIR cannot make the integration read startup files from the shell's
-// operator-chosen cwd; the generated .zshenv falls back to HOME instead.
 func TestTerminalZshSetupIgnoresRelativeZdotdir(t *testing.T) {
 	t.Setenv("ZDOTDIR", "relative/zsh")
 	setup, err := terminalZshSetup()
@@ -146,9 +132,6 @@ func TestTerminalZshSetupIgnoresRelativeZdotdir(t *testing.T) {
 	}
 }
 
-// TestTerminalZshIntegrationScript runs the generated files on a real zsh PTY:
-// the operator's files are sourced first, the prompt is preserved, marks are
-// ordered and carry the real exit status, and re-sourcing is a no-op.
 func TestTerminalZshIntegrationScript(t *testing.T) {
 	zsh := terminalTestZsh(t)
 	t.Setenv("ZDOTDIR", "")
@@ -187,10 +170,6 @@ func TestTerminalZshIntegrationScript(t *testing.T) {
 	shell.waitFor("GOTHAMCUSTOM> ")
 	shell.settle()
 
-	// Both operator startup files ran before the integration, their prompt and
-	// alias win, and they saw ZDOTDIR exactly as a plain zsh would (unset here).
-	// After startup the private registry is no longer exported: the session has
-	// the operator's value (unset) and no Gotham variables.
 	shell.write("echo \"userrc=$GOTHAM_TEST_ZSHRC shenv=$GOTHAM_TEST_ZSHENV unset=$GOTHAM_TEST_ZSHENV_UNSET rcunset=$GOTHAM_TEST_ZSHRC_ZDOTDIR_UNSET\"\r")
 	shell.waitFor("userrc=1 shenv=1 unset=1 rcunset=1")
 	shell.write("echo \"zdotdir=${ZDOTDIR-<unset>} userzdot=${GOTHAM_TERMINAL_USER_ZDOTDIR-<unset>}\"\r")
@@ -201,16 +180,11 @@ func TestTerminalZshIntegrationScript(t *testing.T) {
 		t.Fatal("the integration used zsh's read-only status parameter")
 	}
 
-	// A succeeding then a failing command: D carries the real status even though
-	// the operator's own precmd hook runs first.
 	shell.write("true\r")
 	shell.write("false\r")
 	shell.write("echo after-false\r")
 	shell.waitFor("after-false\r\n")
 
-	// Sourcing the generated .zshrc again is a no-op: no second operator rc, no
-	// duplicated hooks. The private path is known to the agent, not to the live
-	// session (which now has the operator's ZDOTDIR).
 	shell.write(". '" + filepath.Join(dir, ".zshrc") + "'\r")
 	shell.write(". '" + filepath.Join(dir, ".zshrc") + "'\r")
 	shell.write("echo idempotent-ok\r")
@@ -233,8 +207,6 @@ func TestTerminalZshIntegrationScript(t *testing.T) {
 	if !strings.Contains(kinds, "DAB") {
 		t.Fatalf("marks %q; want ordered D A B", kinds)
 	}
-	// zsh emits B twice on a fresh prompt: once at the end of PROMPT and once
-	// from the zle line-init widget that recovers after Ctrl-C.
 	if !strings.Contains(kinds, "BBC") {
 		t.Fatalf("marks %q; zsh must emit C after B", kinds)
 	}
@@ -257,9 +229,6 @@ func TestTerminalZshIntegrationScript(t *testing.T) {
 	}
 }
 
-// TestTerminalZshSetupDoesNotInterpolateOperatorPaths proves the operator's
-// ZDOTDIR is only an environment value: characters that would be shell syntax
-// never reach the generated scripts.
 func TestTerminalZshSetupDoesNotInterpolateOperatorPaths(t *testing.T) {
 	odd := "/tmp/gotham odd/$(touch pwn)/; echo pwned"
 	t.Setenv("ZDOTDIR", odd)
@@ -283,9 +252,6 @@ func TestTerminalZshSetupDoesNotInterpolateOperatorPaths(t *testing.T) {
 	}
 }
 
-// TestTerminalZshUnusualHomeStillIntegrates proves a HOME and temp directory
-// with spaces, a dollar sign and no operator rc files neither break the
-// integration nor get executed as shell code.
 func TestTerminalZshUnusualHomeStillIntegrates(t *testing.T) {
 	zsh := terminalTestZsh(t)
 	tmpRoot := filepath.Join(t.TempDir(), "tmp dir $x")
@@ -319,10 +285,6 @@ func TestTerminalZshUnusualHomeStillIntegrates(t *testing.T) {
 	}
 }
 
-// TestTerminalZshRestoresUserZdotdirForChildren proves the private ZDOTDIR is
-// only used for startup. In the live session `$ZDOTDIR` is again the operator's
-// value (or unset, which falls back to HOME), a nested `zsh -i` reads the
-// operator's own rc files, and no Gotham variable leaks into children.
 func TestTerminalZshRestoresUserZdotdirForChildren(t *testing.T) {
 	zsh := terminalTestZsh(t)
 
@@ -415,9 +377,6 @@ func TestTerminalZshRestoresUserZdotdirForChildren(t *testing.T) {
 	})
 }
 
-// TestTerminalZshHostSessionIntegration proves the gRPC host path starts zsh
-// with the private ZDOTDIR integration, reports the configured shell, and
-// removes the directory when the session ends.
 func TestTerminalZshHostSessionIntegration(t *testing.T) {
 	zsh := terminalTestZsh(t)
 	t.Setenv("ZDOTDIR", "")
@@ -480,9 +439,6 @@ func TestTerminalZshHostSessionIntegration(t *testing.T) {
 	}
 }
 
-// TestTerminalZshFailingUserRcKeepsSession proves a broken operator .zshrc does
-// not stop the integration or the shell: zsh reports the parse error, the marks
-// are still installed and commands run.
 func TestTerminalZshFailingUserRcKeepsSession(t *testing.T) {
 	zsh := terminalTestZsh(t)
 	t.Setenv("ZDOTDIR", "")
@@ -510,9 +466,6 @@ func TestTerminalZshFailingUserRcKeepsSession(t *testing.T) {
 	}
 }
 
-// TestTerminalZshDisabledIntegrationIsUnchanged proves the off switch restores
-// the pre-JUS-252 behaviour: the plain zsh command line, no ZDOTDIR override
-// and no prompt marks.
 func TestTerminalZshDisabledIntegrationIsUnchanged(t *testing.T) {
 	zsh := terminalTestZsh(t)
 	setup, err := terminalShellSetupFor(zsh, false)
@@ -541,8 +494,6 @@ func TestTerminalZshDisabledIntegrationIsUnchanged(t *testing.T) {
 	}
 }
 
-// TestTerminalZshStartFailureRemovesIntegrationDir proves the private directory
-// is removed when the PTY cannot be started (the shell binary is missing).
 func TestTerminalZshStartFailureRemovesIntegrationDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
@@ -550,7 +501,7 @@ func TestTerminalZshStartFailureRemovesIntegrationDir(t *testing.T) {
 	terminal := NewTerminalServer(TerminalConfig{Logger: discardLogger()})
 	spec := terminalStart{
 		Target: terminalTargetHost,
-		Shell:  filepath.Join(tmp, "missing", "zsh"), // basename zsh, parent absent
+		Shell:  filepath.Join(tmp, "missing", "zsh"),
 		Dir:    tmp,
 		Cols:   80,
 		Rows:   24,

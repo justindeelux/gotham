@@ -17,47 +17,28 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// FeatureEnv is the kill switch for the whole notifications surface:
-// FEATURE_NOTIFICATIONS=false unmounts the channel routes and turns the
-// deploy/backup hooks into no-ops, leaving the core flows untouched. Only an
-// explicit false disables it — unset (or any other value) keeps it enabled,
-// matching deploy.Enabled and databases.Enabled.
 const FeatureEnv = "FEATURE_NOTIFICATIONS"
 
-// Enabled reports whether the notifications feature is on.
 func Enabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "false")
 }
 
-// Resource types a channel can override. They mirror the event sources:
-// applications for deploys, databases for backups.
 const (
-	// ResourceApplication scopes a channel to one application's deploys.
 	ResourceApplication = "application"
-	// ResourceDatabase scopes a channel to one database's backups.
-	ResourceDatabase = "database"
+	ResourceDatabase    = "database"
 )
 
-// maxNameLength bounds a channel name.
 const maxNameLength = 100
 
-// Kind is the transport of one notification channel. The values are the
-// strings stored in notification_channels.kind.
 type Kind string
 
-// Channel kinds.
 const (
-	// KindDiscord posts a JSON message to a Discord webhook URL.
-	KindDiscord Kind = "discord"
-	// KindSlack posts a JSON message to a Slack incoming webhook URL.
-	KindSlack Kind = "slack"
-	// KindTelegram calls the Bot API sendMessage method.
+	KindDiscord  Kind = "discord"
+	KindSlack    Kind = "slack"
 	KindTelegram Kind = "telegram"
-	// KindEmail sends an email through SMTP.
-	KindEmail Kind = "email"
+	KindEmail    Kind = "email"
 )
 
-// Valid reports whether k is one of the four stored kinds.
 func (k Kind) Valid() bool {
 	switch k {
 	case KindDiscord, KindSlack, KindTelegram, KindEmail:
@@ -67,7 +48,6 @@ func (k Kind) Valid() bool {
 	}
 }
 
-// ParseKind parses a kind string, rejecting anything else.
 func ParseKind(raw string) (Kind, error) {
 	kind := Kind(strings.TrimSpace(raw))
 	if !kind.Valid() {
@@ -76,27 +56,17 @@ func ParseKind(raw string) (Kind, error) {
 	return kind, nil
 }
 
-// EventKey is one subscribable event. The values are the strings stored in
-// notification_channels.events and are what a channel selects.
 type EventKey string
 
-// Event keys.
 const (
-	// EventDeploySuccess — a deployment reached running.
 	EventDeploySuccess EventKey = "deploy_success"
-	// EventDeployFailure — a deployment reached failed.
 	EventDeployFailure EventKey = "deploy_failure"
-	// EventBackupSuccess — a backup run completed.
 	EventBackupSuccess EventKey = "backup_success"
-	// EventBackupFailure — a backup run failed.
 	EventBackupFailure EventKey = "backup_failure"
 )
 
-// AllEvents lists every event in subscription order. A new channel subscribes
-// to all of them unless the request names a subset.
 var AllEvents = []EventKey{EventDeploySuccess, EventDeployFailure, EventBackupSuccess, EventBackupFailure}
 
-// Valid reports whether k is a known event key.
 func (k EventKey) Valid() bool {
 	for _, known := range AllEvents {
 		if k == known {
@@ -106,55 +76,33 @@ func (k EventKey) Valid() bool {
 	return false
 }
 
-// EventKind discriminates the event source.
 type EventKind string
 
-// Event sources.
 const (
-	// EventDeploy — a deployment lifecycle event.
 	EventDeploy EventKind = "deploy"
-	// EventBackup — a backup lifecycle event.
 	EventBackup EventKind = "backup"
-	// EventTest — the synthetic send-test event; it carries no subscription
-	// key and is only ever delivered to the one channel a test targets.
-	EventTest EventKind = "test"
+	EventTest   EventKind = "test"
 )
 
-// Outcome is the terminal result of an event source.
 type Outcome string
 
-// Outcomes.
 const (
-	// OutcomeSuccess — the run finished successfully.
 	OutcomeSuccess Outcome = "success"
-	// OutcomeFailure — the run failed.
 	OutcomeFailure Outcome = "failure"
 )
 
-// Event is one terminal deploy or backup result to deliver. It is the whole
-// payload a notifier formats; no secret ever travels on it.
 type Event struct {
-	// Kind is the event source (deploy or backup).
-	Kind EventKind
-	// Outcome is success or failure.
-	Outcome Outcome
-	// TeamID selects the team whose channels receive the event.
-	TeamID uuid.UUID
-	// ResourceType and ResourceID identify the application or database the
-	// event belongs to; channels scoped to it are selected too.
+	Kind         EventKind
+	Outcome      Outcome
+	TeamID       uuid.UUID
 	ResourceType string
 	ResourceID   uuid.UUID
-	// Name is the application or database name.
-	Name string
-	// Host is the optional application host (domain) for deploy events.
-	Host string
-	// Error is the failure text; empty on success.
-	Error string
-	// At is when the run reached its terminal state.
-	At time.Time
+	Name         string
+	Host         string
+	Error        string
+	At           time.Time
 }
 
-// Key maps the event to its subscription key.
 func (e Event) Key() EventKey {
 	switch {
 	case e.Kind == EventDeploy && e.Outcome == OutcomeSuccess:
@@ -170,9 +118,6 @@ func (e Event) Key() EventKey {
 	}
 }
 
-// Summary is the one-line headline of the event, used as the email subject
-// and the first line of every message body. A send-test renders its own
-// headline so a recipient cannot mistake it for a real deploy or backup.
 func (e Event) Summary() string {
 	if e.Kind == EventTest {
 		return "Test notification: " + e.Name
@@ -188,13 +133,8 @@ func (e Event) Summary() string {
 	return fmt.Sprintf("%s %s: %s", noun, verb, e.Name)
 }
 
-// maxEventError bounds the failure text embedded in a message so a huge
-// engine dump can never push a payload past a channel's size limit.
 const maxEventError = 500
 
-// Message renders the event as plain text, the format Discord, Slack,
-// Telegram and email all carry. Only data the event actually holds is
-// rendered — no invented fields.
 func (e Event) Message() string {
 	lines := []string{e.Summary()}
 	if e.Host != "" {
@@ -211,15 +151,6 @@ func (e Event) Message() string {
 	return strings.Join(lines, "\n")
 }
 
-// truncateText trims text and caps it to at most limit UTF-16 code units,
-// keeping the head. When it truncates, the budget includes the trailing
-// ellipsis, so the result never exceeds the limit the caller passed.
-//
-// UTF-16 code units are the conservative unit for every transport: Discord and
-// Slack count characters the way JavaScript does, and the Telegram Bot API
-// counts UTF-16 code units after entity parsing. A message that fits here fits
-// all three. Truncation walks rune boundaries, so it can never split a UTF-8
-// sequence (Postgres rejects an invalid-UTF-8 delivery row).
 func truncateText(text string, limit int) string {
 	text = strings.TrimSpace(text)
 	if limit <= 0 {
@@ -228,7 +159,6 @@ func truncateText(text string, limit int) string {
 	if utf16Length(text) <= limit {
 		return text
 	}
-	// One unit is reserved for the ellipsis; it is itself one UTF-16 unit.
 	budget := limit - 1
 	var b strings.Builder
 	used := 0
@@ -246,8 +176,6 @@ func truncateText(text string, limit int) string {
 	return b.String() + "…"
 }
 
-// utf16Length counts the UTF-16 code units of text, the unit the providers
-// bound a message by.
 func utf16Length(text string) int {
 	total := 0
 	for _, r := range text {
@@ -260,28 +188,18 @@ func utf16Length(text string) int {
 	return total
 }
 
-// ChannelConfig is the transport configuration of one channel. A single struct keeps
-// the stored JSON and the redaction rules trivial; which fields are required
-// depends on the channel kind and is enforced by validate.
 type ChannelConfig struct {
-	// WebhookURL is the Discord/Slack incoming webhook (a secret).
-	WebhookURL string `json:"webhook_url,omitempty"`
-	// BotToken is the Telegram bot token (a secret).
-	BotToken string `json:"bot_token,omitempty"`
-	// ChatID is the Telegram chat the bot posts to.
-	ChatID string `json:"chat_id,omitempty"`
-	// Host, Port, Username and Password are the SMTP relay settings; Password
-	// is a secret and Username may be empty for an open relay.
-	Host     string `json:"host,omitempty"`
-	Port     int    `json:"port,omitempty"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	// From is the envelope and header sender; To are the recipients.
-	From string   `json:"from,omitempty"`
-	To   []string `json:"to,omitempty"`
+	WebhookURL string   `json:"webhook_url,omitempty"`
+	BotToken   string   `json:"bot_token,omitempty"`
+	ChatID     string   `json:"chat_id,omitempty"`
+	Host       string   `json:"host,omitempty"`
+	Port       int      `json:"port,omitempty"`
+	Username   string   `json:"username,omitempty"`
+	Password   string   `json:"password,omitempty"`
+	From       string   `json:"from,omitempty"`
+	To         []string `json:"to,omitempty"`
 }
 
-// validate checks the config against the channel kind.
 func (c ChannelConfig) validate(kind Kind) error {
 	switch kind {
 	case KindDiscord, KindSlack:
@@ -327,15 +245,8 @@ func (c ChannelConfig) validate(kind Kind) error {
 	return nil
 }
 
-// telegramTokenPattern is the BotFather token shape: "<numeric id>:<chars>".
-// Pinning it keeps a token from smuggling path syntax into the sendMessage
-// URL.
 var telegramTokenPattern = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]+$`)
 
-// validateWebhookURL accepts an absolute http(s) URL. Private/self-hosted
-// ranges stay allowed (channels are configured by team owners, exactly like
-// backup targets' S3 endpoints), but link-local/metadata destinations are
-// refused.
 func validateWebhookURL(raw string) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -348,20 +259,12 @@ func validateWebhookURL(raw string) error {
 	return validateOutboundHost(parsed.Hostname())
 }
 
-// validateOutboundHost refuses literal link-local addresses, which cover the
-// cloud metadata services (169.254.169.254) and IPv6 fe80::/10, including
-// scoped literals such as fe80::1%eth0. A hostname is left to DNS at send
-// time: resolving during validation would make config writes depend on the
-// resolver. Private ranges (10/8, 172.16/12, 192.168/16) stay allowed on
-// purpose.
 func validateOutboundHost(host string) error {
 	host = strings.TrimSpace(host)
 	if split, _, err := net.SplitHostPort(host); err == nil {
 		host = split
 	}
 	host = strings.Trim(host, "[]")
-	// A zone id is not part of the address; net.ParseIP rejects it, so drop
-	// it before the link-local test.
 	if zone := strings.IndexByte(host, '%'); zone >= 0 {
 		host = host[:zone]
 	}
@@ -375,16 +278,11 @@ func validateOutboundHost(host string) error {
 	return nil
 }
 
-// isZero reports whether an update carries no config change at all.
 func (c ChannelConfig) isZero() bool {
 	return c.WebhookURL == "" && c.BotToken == "" && c.ChatID == "" && c.Host == "" &&
 		c.Port == 0 && c.Username == "" && c.Password == "" && c.From == "" && c.To == nil
 }
 
-// normalized trims the transport fields a client copy-pastes from a dashboard:
-// a surrounding space must never reach a URL, the Telegram API or an SMTP
-// command. Password is never trimmed because leading/trailing spaces can be
-// part of a credential.
 func (c ChannelConfig) normalized() ChannelConfig {
 	normalized := c
 	normalized.WebhookURL = strings.TrimSpace(c.WebhookURL)
@@ -402,11 +300,6 @@ func (c ChannelConfig) normalized() ChannelConfig {
 	return normalized
 }
 
-// merged applies the non-empty fields of an update over the stored config. A
-// submitted value equal to the stored field's masked representation is a
-// client echoing back the read DTO, so the stored secret is retained instead
-// of being overwritten with the mask; any other non-empty value is a
-// deliberate replacement.
 func (c ChannelConfig) merged(update ChannelConfig) ChannelConfig {
 	merged := c
 	if update.WebhookURL != "" && update.WebhookURL != maskSecret(c.WebhookURL) {
@@ -439,16 +332,10 @@ func (c ChannelConfig) merged(update ChannelConfig) ChannelConfig {
 	return merged
 }
 
-// hasSecrets reports whether the config carries any secret material; the read
-// DTO exposes this as a boolean so a client can render "configured" without
-// receiving the value.
 func (c ChannelConfig) hasSecrets() bool {
 	return c.WebhookURL != "" || c.BotToken != "" || c.Password != ""
 }
 
-// redacted returns the config with every secret masked: at most the last four
-// characters survive, matching what the settings UI displays. Non-secret
-// fields (chat id, SMTP host/port/user/from/to) pass through.
 func (c ChannelConfig) redacted() ChannelConfig {
 	return ChannelConfig{
 		WebhookURL: maskSecret(c.WebhookURL),
@@ -463,7 +350,6 @@ func (c ChannelConfig) redacted() ChannelConfig {
 	}
 }
 
-// maskSecret keeps at most the last four characters of a secret.
 func maskSecret(secret string) string {
 	if secret == "" {
 		return ""
@@ -474,7 +360,6 @@ func maskSecret(secret string) string {
 	return "…" + secret[len(secret)-4:]
 }
 
-// sealConfig encrypts the whole transport config with the deployment key.
 func sealConfig(secret string, config ChannelConfig) (string, error) {
 	plain, err := json.Marshal(config)
 	if err != nil {
@@ -487,7 +372,6 @@ func sealConfig(secret string, config ChannelConfig) (string, error) {
 	return sealed, nil
 }
 
-// openConfig reverses sealConfig.
 func openConfig(secret, sealed string) (ChannelConfig, error) {
 	plain, err := providers.OpenSecret(secret, sealed)
 	if err != nil {
@@ -500,17 +384,13 @@ func openConfig(secret, sealed string) (ChannelConfig, error) {
 	return config, nil
 }
 
-// Channel is one stored notification channel. SealedConfig is the ciphertext
-// of the transport config; it is opened only to build a notifier or a redacted
-// read view.
 type Channel struct {
-	ID      uuid.UUID
-	TeamID  uuid.UUID
-	Name    string
-	Kind    Kind
-	Enabled bool
-	Events  []EventKey
-	// ResourceType is empty for a team-wide channel.
+	ID           uuid.UUID
+	TeamID       uuid.UUID
+	Name         string
+	Kind         Kind
+	Enabled      bool
+	Events       []EventKey
 	ResourceType string
 	ResourceID   uuid.UUID
 	SealedConfig string
@@ -518,7 +398,6 @@ type Channel struct {
 	UpdatedAt    time.Time
 }
 
-// Wants reports whether the channel subscribes to the event.
 func (c Channel) Wants(event Event) bool {
 	key := event.Key()
 	if key == "" {
@@ -532,9 +411,6 @@ func (c Channel) Wants(event Event) bool {
 	return false
 }
 
-// ChannelView is the read representation of a channel: the wire DTO the API
-// serves. Secrets are masked and SecretsConfigured tells a client whether a
-// secret is stored without ever returning it.
 type ChannelView struct {
 	ID                uuid.UUID     `json:"id"`
 	TeamID            uuid.UUID     `json:"team_id"`
@@ -550,12 +426,6 @@ type ChannelView struct {
 	UpdatedAt         time.Time     `json:"updated_at"`
 }
 
-// ChannelRequest is the body of the channel create and update endpoints. On
-// update, zero values leave the stored field unchanged; Enabled is a pointer
-// because false is meaningful, ResourceType/ResourceID are pointers so an
-// empty string can clear a resource override (both must be named together),
-// and a non-nil Events slice replaces the subscription (an empty one is
-// rejected).
 type ChannelRequest struct {
 	Name         string        `json:"name,omitempty"`
 	Kind         Kind          `json:"kind,omitempty"`
@@ -566,48 +436,25 @@ type ChannelRequest struct {
 	Config       ChannelConfig `json:"config,omitempty"`
 }
 
-// TestResult is the answer of the send-test action. It never carries the
-// channel's secrets.
 type TestResult struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message"`
 }
 
-// Delivery-history bounds and labels (JUS-195).
-
 const (
-	// maxDeliveryError bounds the failure summary stored in a delivery row and
-	// returned by the history endpoint. The notifier already classifies and
-	// strips credentials from its error text; the cap keeps a pathological
-	// message from bloating a row.
-	maxDeliveryError = 300
-	// deliveryRetention is the per-channel history cap. The repository trims a
-	// channel to its newest deliveryRetention rows on every write, so history
-	// is bounded by a row count and not by a background janitor.
-	deliveryRetention = 50
-	// deliveryHistoryLimit is how many recent attempts the history endpoint
-	// returns to the UI.
+	maxDeliveryError     = 300
+	deliveryRetention    = 50
 	deliveryHistoryLimit = 20
-	// testEventType labels a send-test attempt in the history; dispatched
-	// events store their EventKey instead.
-	testEventType = "test"
+	testEventType        = "test"
 )
 
-// DeliveryStatus is the terminal result of one delivery attempt.
 type DeliveryStatus string
 
-// Delivery statuses.
 const (
-	// DeliverySucceeded — the transport accepted the message.
 	DeliverySucceeded DeliveryStatus = "success"
-	// DeliveryFailed — the transport refused or the connection failed; the
-	// row carries a classified summary.
-	DeliveryFailed DeliveryStatus = "failure"
+	DeliveryFailed    DeliveryStatus = "failure"
 )
 
-// Delivery is one persisted delivery attempt: a dispatched deploy/backup event
-// or an operator's send-test. It holds no secret — only the event type, the
-// terminal status and a bounded failure summary.
 type Delivery struct {
 	ID           uuid.UUID
 	ChannelID    uuid.UUID
@@ -617,8 +464,6 @@ type Delivery struct {
 	CreatedAt    time.Time
 }
 
-// DeliveryView is the read representation of a delivery attempt, the wire DTO
-// the history endpoint serves. It never carries the channel's secrets.
 type DeliveryView struct {
 	ID           uuid.UUID      `json:"id"`
 	ChannelID    uuid.UUID      `json:"channel_id"`
@@ -628,8 +473,6 @@ type DeliveryView struct {
 	CreatedAt    time.Time      `json:"created_at"`
 }
 
-// parseResource validates a resource override pair: both empty means
-// team-wide, otherwise the type must be known and the id a UUID.
 func parseResource(resourceType, resourceID string) (string, uuid.UUID, error) {
 	resourceType = strings.TrimSpace(resourceType)
 	resourceID = strings.TrimSpace(resourceID)
@@ -649,8 +492,6 @@ func parseResource(resourceType, resourceID string) (string, uuid.UUID, error) {
 	return resourceType, id, nil
 }
 
-// normalizeEvents validates an explicit subscription, defaulting to every
-// event when the request names none. Duplicates are dropped.
 func normalizeEvents(events []EventKey) ([]EventKey, error) {
 	if events == nil {
 		return append([]EventKey(nil), AllEvents...), nil

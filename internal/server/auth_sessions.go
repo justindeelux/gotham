@@ -12,7 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/clientip"
 )
 
-// sessionResponse is one row of GET /me/sessions.
 type sessionResponse struct {
 	ID         uuid.UUID `json:"id"`
 	UserAgent  string    `json:"user_agent"`
@@ -22,15 +21,10 @@ type sessionResponse struct {
 	Current    bool      `json:"current"`
 }
 
-// sessionsResponse is the body of GET /me/sessions. Sessions is never null:
-// an account with no live session gets [].
 type sessionsResponse struct {
 	Sessions []sessionResponse `json:"sessions"`
 }
 
-// parseSessionClaim parses the access token's "sid" claim. A missing or
-// malformed value means "current unknown" (a token minted before PF-2), never
-// an authentication failure: callers get uuid.Nil.
 func parseSessionClaim(raw string) uuid.UUID {
 	if raw == "" {
 		return uuid.Nil
@@ -42,9 +36,6 @@ func parseSessionClaim(raw string) uuid.UUID {
 	return sessionID
 }
 
-// sessionMeta resolves the device metadata recorded with a new or rotated
-// refresh session: the request User-Agent and the client IP behind the
-// trusted proxies (the same handling the rate limiter uses).
 func (s *Server) sessionMeta(r *http.Request) auth.SessionMeta {
 	return auth.SessionMeta{
 		UserAgent: r.UserAgent(),
@@ -52,8 +43,6 @@ func (s *Server) sessionMeta(r *http.Request) auth.SessionMeta {
 	}
 }
 
-// handleListSessions returns the caller's live sessions, newest last use
-// first. A token without a "sid" claim marks no row as current.
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -86,16 +75,6 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessionsResponse{Sessions: out})
 }
 
-// handleRevokeSession deletes one of the caller's sessions, like logout does.
-// An unknown, foreign, expired, or already-dead id answers 404 (never 403,
-// so a probe cannot distinguish them); ending the caller's own session is
-// allowed and the web signs out afterwards.
-//
-// Deleting the row makes its refresh token unknown: a replay is a plain 401
-// that can never trigger the reuse-detection family revoke, so revoking a
-// stolen session cannot log the owner out everywhere. Access tokens already
-// issued live out their 15-minute life (the same documented window as
-// reset-password and the PF-1 password change).
 func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {
@@ -125,16 +104,6 @@ func (s *Server) handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleRevokeOtherSessions deletes every live session of the caller except
-// the current one. The current session id must itself be live: a token
-// without a "sid" claim (minted before PF-2), or a stale, revoked, deleted,
-// expired, or foreign sid, answers 409 and deletes nothing rather than
-// guessing.
-//
-// Deleted refresh tokens replay as plain 401s that can never trigger the
-// reuse-detection family revoke. Access tokens already issued live out their
-// 15-minute life (the same documented window as reset-password and the PF-1
-// password change).
 func (s *Server) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 	userID, ok := UserIDFromContext(r.Context())
 	if !ok {

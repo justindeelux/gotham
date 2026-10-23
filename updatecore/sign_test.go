@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// TestSignVerifyRoundtrip proves a signature over bytes verifies with the
-// matching public key, and that a wrong key or tampered bytes fail.
 func TestSignVerifyRoundtrip(t *testing.T) {
 	publicKey, privateKey, err := GenerateKey()
 	if err != nil {
@@ -55,8 +53,6 @@ func TestSignVerifyRoundtrip(t *testing.T) {
 	}
 }
 
-// TestPublicKeyFormats proves the public key round-trips through PEM and the
-// base64/hex forms accepted for embedding.
 func TestPublicKeyFormats(t *testing.T) {
 	publicKey, _, err := GenerateKey()
 	if err != nil {
@@ -96,9 +92,6 @@ func TestPublicKeyFormats(t *testing.T) {
 	}
 }
 
-// TestLoadPublicKeyPrecedence proves the embedded key is the trust anchor: the
-// environment override is ignored whenever a key is embedded, and is only used
-// for development builds without one.
 func TestLoadPublicKeyPrecedence(t *testing.T) {
 	embedded, _, err := GenerateKey()
 	if err != nil {
@@ -112,7 +105,6 @@ func TestLoadPublicKeyPrecedence(t *testing.T) {
 	t.Cleanup(func() { PublicKey = original })
 	t.Setenv(PublicKeyEnv, EncodePublicKeyBase64(envKey))
 
-	// Embedded key wins; the environment cannot replace it.
 	PublicKey = EncodePublicKeyBase64(embedded)
 	got, err := LoadPublicKey()
 	if err != nil {
@@ -122,7 +114,6 @@ func TestLoadPublicKeyPrecedence(t *testing.T) {
 		t.Fatal("environment override replaced the embedded trust anchor")
 	}
 
-	// Dev build with no embedded key: the environment applies.
 	PublicKey = ""
 	got, err = LoadPublicKey()
 	if err != nil {
@@ -132,16 +123,12 @@ func TestLoadPublicKeyPrecedence(t *testing.T) {
 		t.Fatal("dev environment key was not used")
 	}
 
-	// Neither set fails closed.
 	t.Setenv(PublicKeyEnv, "")
 	if _, err := LoadPublicKey(); !errors.Is(err, ErrNoPublicKey) {
 		t.Fatalf("LoadPublicKey(empty) = %v, want ErrNoPublicKey", err)
 	}
 }
 
-// TestVerifierSet proves a key-set verifier accepts a signature from either the
-// current or the pre-positioned next key, refuses an unknown key and tampered
-// bytes, and fails closed on an empty set.
 func TestVerifierSet(t *testing.T) {
 	current, currentPrivate, err := GenerateKey()
 	if err != nil {
@@ -198,10 +185,6 @@ func TestVerifierSet(t *testing.T) {
 	}
 }
 
-// TestLoadPublicKeysRing proves the embedded current + next ring is loaded in
-// order, that a next key without a current key and a malformed embedded key
-// both fail closed, and that the development override applies only when nothing
-// is embedded.
 func TestLoadPublicKeysRing(t *testing.T) {
 	originalCurrent, originalNext := PublicKey, NextPublicKey
 	t.Cleanup(func() { PublicKey, NextPublicKey = originalCurrent, originalNext })
@@ -220,8 +203,6 @@ func TestLoadPublicKeysRing(t *testing.T) {
 	}
 	t.Setenv(PublicKeyEnv, EncodePublicKeyBase64(envKey))
 
-	// A next key without a current key fails closed: the ring cannot trust the
-	// release that carried it.
 	PublicKey = ""
 	NextPublicKey = EncodePublicKeyBase64(next)
 	if _, err := LoadPublicKeys(); !errors.Is(err, ErrNoPublicKey) {
@@ -231,8 +212,6 @@ func TestLoadPublicKeysRing(t *testing.T) {
 		t.Fatalf("LoadPublicKey(next only) = %v, want ErrNoPublicKey", err)
 	}
 
-	// Both embedded: the ring is current then next, and the environment
-	// override is ignored.
 	PublicKey = EncodePublicKeyBase64(current)
 	keys, err := LoadPublicKeys()
 	if err != nil {
@@ -249,7 +228,6 @@ func TestLoadPublicKeysRing(t *testing.T) {
 		t.Fatal("LoadPublicKey did not return the embedded current key")
 	}
 
-	// A malformed embedded key fails closed instead of being ignored.
 	NextPublicKey = "not-a-key"
 	if _, err := LoadPublicKeys(); err == nil {
 		t.Fatal("LoadPublicKeys(malformed next) = nil error, want failure")
@@ -260,21 +238,17 @@ func TestLoadPublicKeysRing(t *testing.T) {
 		t.Fatal("LoadPublicKeys(malformed current) = nil error, want failure")
 	}
 
-	// Nothing embedded: the development override supplies a single-key ring.
 	PublicKey = ""
 	if keys, err = LoadPublicKeys(); err != nil || len(keys) != 1 || !keys[0].Equal(envKey) {
 		t.Fatalf("LoadPublicKeys(dev) = (%d keys, %v), want the env key", len(keys), err)
 	}
 
-	// Neither embedded nor override fails closed.
 	t.Setenv(PublicKeyEnv, "")
 	if _, err := LoadPublicKeys(); !errors.Is(err, ErrNoPublicKey) {
 		t.Fatalf("LoadPublicKeys(empty) = %v, want ErrNoPublicKey", err)
 	}
 }
 
-// TestPrivateKeyPEMRoundtrip proves a PKCS#8 private key survives a PEM
-// round-trip and still signs verifiably.
 func TestPrivateKeyPEMRoundtrip(t *testing.T) {
 	publicKey, privateKey, err := GenerateKey()
 	if err != nil {

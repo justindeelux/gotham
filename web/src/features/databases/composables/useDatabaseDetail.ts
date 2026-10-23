@@ -3,8 +3,6 @@ import { useMessage } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { InjectionKey } from "vue";
 
-
-/** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
@@ -31,11 +29,6 @@ import { useServersStore } from "@/features/servers";
 
 export type CredentialField = "username" | "password" | "database" | "root_password";
 
-/**
- * useDatabaseDetail owns the detail page's overview state: the row, its
- * credentials, the connection string, lifecycle actions and the rename
- * dialog. Backup-tab state lives in useDatabaseBackups.
- */
 export function useDatabaseDetail() {
   const route = useRoute();
   const router = useRouter();
@@ -51,10 +44,6 @@ export function useDatabaseDetail() {
   const renaming = ref(false);
   const revealed = ref(false);
 
-  // The detail page owns its own load state: the list store's flags describe the
-  // polling list, not this row's fetch, so a failed detail load would otherwise
-  // render an empty shell with no explanation. The raw failure is retained so
-  // a language switch refreshes the visible banner without a refetch.
   const pageLoading = ref(false);
   const noSelection = ref(false);
   const pageErrorRaw = ref<unknown>(null);
@@ -67,25 +56,20 @@ export function useDatabaseDetail() {
       : describeDatabaseError(pageErrorRaw.value);
   });
 
-  /** isNarrow stacks the two-column descriptions on small screens. */
   const isNarrow = useMediaQuery("(max-width: 640px)");
 
-  /** descColumns renders descriptions in one column below 640px. */
   const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 
   const database = computed<Database | null>(
     () => databasesStore.databases.find((item) => item.id === dbId.value) ?? null,
   );
 
-  /** shortId renders the head of the database UUID for the header. */
   const shortId = computed<string>(() => dbId.value.slice(0, 8));
 
-  /** initials derives a two-letter avatar from the database name. */
   const initials = computed<string>(() =>
     (database.value?.name.slice(0, 2) ?? "DB").toUpperCase(),
   );
 
-  /** engineLabel renders engine + version for the header. */
   const engineLabel = computed<string>(() => {
     if (!database.value) {
       return "";
@@ -95,7 +79,6 @@ export function useDatabaseDetail() {
       : database.value.engine;
   });
 
-  /** serverLabel resolves the node name for the overview. */
   const serverLabel = computed<string>(() => {
     if (!database.value) {
       return "—";
@@ -106,7 +89,6 @@ export function useDatabaseDetail() {
     return server ? `${server.name} · ${server.ip}` : database.value.server_id;
   });
 
-  /** canStart/canStop/canRestart gate the lifecycle buttons by status. */
   const canStart = computed<boolean>(
     () => database.value?.status === "stopped" || database.value?.status === "error",
   );
@@ -123,7 +105,6 @@ export function useDatabaseDetail() {
     databasesStore.credentialsOf(dbId.value),
   );
 
-  /** copyCredential copies one cached credential field without narrowing issues. */
   function copyCredential(field: CredentialField, labelKey: string): void {
     const value = credentials.value?.[field] ?? "";
     if (value === "") {
@@ -137,13 +118,6 @@ export function useDatabaseDetail() {
     void copyText(value, String(t(labelKey)));
   }
 
-  /**
-   * connectionString builds the full DSN (with the real password) for the Copy
-   * button. The public endpoint is preferred when the database exposes a public
-   * port, but only when the node address is actually resolved — substituting the
-   * raw server UUID would copy an unroutable host. The internal fallback uses
-   * the exact backend container-name rule.
-   */
   const connectionString = computed<string>(() => {
     const db = database.value;
     const creds = credentials.value;
@@ -162,7 +136,6 @@ export function useDatabaseDetail() {
     return `${scheme}://${creds.username}:${creds.password}@${dbContainerName(db.name, db.id)}:${internalPort}/${creds.database}`;
   });
 
-  /** nodeAddressUnknown renders instead of a DSN with an unroutable host. */
   const nodeAddressUnknown = computed<boolean>(() => {
     const db = database.value;
     if (!db || !credentials.value || db.public_port <= 0) {
@@ -171,12 +144,10 @@ export function useDatabaseDetail() {
     return !serversStore.servers.some((item) => item.id === db.server_id && item.ip);
   });
 
-  /** connectionDisplay masks the password for on-screen rendering. */
   const connectionDisplay = computed<string>(() =>
     maskConnectionPassword(connectionString.value),
   );
 
-  /** copyConnectionString copies the unmasked DSN. */
   function copyConnectionString(): void {
     if (nodeAddressUnknown.value) {
       message.error(t("databases.detail.credentials.nodeDsnError"));
@@ -192,7 +163,6 @@ export function useDatabaseDetail() {
     );
   }
 
-  /** fetchAll loads the row, its credentials and the node list. */
   async function fetchAll(): Promise<void> {
     if (!dbId.value) {
       noSelection.value = true;
@@ -204,9 +174,6 @@ export function useDatabaseDetail() {
     pageErrorRaw.value = null;
     try {
       const database = await databasesStore.fetchDatabase(dbId.value);
-      // The row ids are the authority: a wrong project/environment in the
-      // URL replaces it with the canonical nested URL instead of rendering
-      // silently. The route watcher reloads from there.
       const canonical = resolveEnvironmentScope(
         { projectId: database.project_id, environmentId: database.environment_id },
         {
@@ -231,12 +198,10 @@ export function useDatabaseDetail() {
     try {
       await databasesStore.fetchCredentials(dbId.value);
     } catch {
-      // The store already exposes the error; the alert renders it.
     }
     void serversStore.fetchServers().catch(() => undefined);
   }
 
-  /** resetView clears the per-database UI when the route id changes. */
   function resetView(): void {
     revealed.value = false;
     renameOpen.value = false;
@@ -245,7 +210,6 @@ export function useDatabaseDetail() {
     moveErrorRaw.value = null;
   }
 
-  /** handleLifecycle runs one start/stop/restart action. */
   async function handleLifecycle(
     action: "start" | "stop" | "restart",
   ): Promise<void> {
@@ -269,13 +233,11 @@ export function useDatabaseDetail() {
     }
   }
 
-  /** openRename prefills the current name and opens the dialog. */
   function openRename(): void {
     renameValue.value = database.value?.name ?? "";
     renameOpen.value = true;
   }
 
-  /** handleRename submits the PATCH rename. */
   async function handleRename(): Promise<void> {
     const name = renameValue.value.trim();
     if (!isDatabaseNameValid(name)) {
@@ -294,7 +256,6 @@ export function useDatabaseDetail() {
     }
   }
 
-  /** handleDelete soft-deletes the row and returns to the environment. */
   async function handleDelete(): Promise<void> {
     const current = database.value;
     const name = current?.name ?? dbId.value;
@@ -314,11 +275,9 @@ export function useDatabaseDetail() {
     }
   }
 
-  /** canWrite follows the contract's roles: viewers read, members write. */
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
   const moveSaving = ref(false);
-  /** moveErrorRaw retains the move refusal so the inline error refreshes on switch. */
   const moveErrorRaw = ref<unknown>(null);
   const moveError = computed<string | null>(() =>
     moveErrorRaw.value === null
@@ -326,14 +285,6 @@ export function useDatabaseDetail() {
       : describeDatabaseError(moveErrorRaw.value),
   );
 
-  /**
-   * handleMove applies the location settings (move environment, change
-   * node). Only changed fields ride the PATCH; a move retargets the nested
-   * route to the new environment. The contract's 409 refusals (in-flight
-   * deploy, pinned node, name collision) render inline through moveError.
-   * The navigation is identity-guarded: leaving the database mid-request
-   * never yanks the user back to it.
-   */
   async function handleMove(scope: {
     projectId: string;
     environmentId: string;
@@ -359,7 +310,7 @@ export function useDatabaseDetail() {
     try {
       const updated = await databasesStore.update(targetId, input);
       if (targetId !== dbId.value) {
-        return; // the route moved on while the write was in flight
+        return;
       }
       message.success(t("databases.detail.lifecycle.locationSaved"));
       await refreshProjectCounts([current.project_id, updated.project_id]);
@@ -387,28 +338,20 @@ export function useDatabaseDetail() {
     }
   }
 
-  /**
-   * refreshProjectCounts invalidates the projects store after a move, so
-   * project/environment counts converge without relying on a remount.
-   */
   async function refreshProjectCounts(projectIds: string[]): Promise<void> {
     try {
       await projectsStore.fetchProjects();
     } catch {
-      // The store already exposes the error; counts converge on next load.
     }
     const detail = projectsStore.detail;
     if (detail && projectIds.includes(detail.id)) {
       try {
         await projectsStore.fetchDetail(detail.id);
       } catch {
-        // Same as above; the detail alert renders it.
       }
     }
   }
 
-  // The detail route is reused when navigating between databases, and a
-  // move keeps the id while the environment changes: reload on either.
   watch([dbId, () => String(route.params.environmentId ?? "")], () => {
     resetView();
     void fetchAll();
@@ -464,6 +407,5 @@ export function useDatabaseDetail() {
 
 export type DatabaseDetail = ReturnType<typeof useDatabaseDetail>;
 
-/** Injection key for the page-owned detail state shared with tab cards. */
 export const databaseDetailKey: InjectionKey<DatabaseDetail> =
   Symbol("database-detail");

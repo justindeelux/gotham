@@ -1,8 +1,3 @@
-// JUS-273: the File Manager deep link is validated against the CURRENT
-// server's roots, explains a rejected link (unknown root, malformed path,
-// missing directory) and opens the validated root/path. These assertions are
-// unit-level so dropping the gating or hiding the notice cannot pass on a
-// skipped e2e alone.
 
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -51,7 +46,6 @@ interface MockFiles {
 
 let files: MockFiles;
 
-/** routerFor builds a memory router at one server-files location. */
 async function routerFor(url: string) {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -69,7 +63,6 @@ async function routerFor(url: string) {
   return router;
 }
 
-/** mountPage mounts the page with a stubbed browser and the mocked store. */
 async function mountPage(url: string) {
   const router = await routerFor(url);
   const wrapper = mount(ServerFilesPage, {
@@ -121,7 +114,6 @@ describe("ServerFilesPage deep link", () => {
     expect(files.openAt).not.toHaveBeenCalled();
     expect(wrapper.find(".server-files__deep-link").exists()).toBe(false);
 
-    // The current server's roots arrive: the same link now opens.
     files.rootsServerId = "server-2";
     await nextTick();
     await nextTick();

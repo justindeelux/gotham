@@ -1,5 +1,3 @@
-// Unit tests for the deployment duration formatter extracted from
-// ApplicationDetailPage during the JUS-24 split (F2-applications).
 
 import { describe, expect, it, vi } from "vitest";
 

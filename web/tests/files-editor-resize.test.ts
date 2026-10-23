@@ -1,7 +1,3 @@
-// JUS-241: the floating editor window resizes from all four edges and all
-// four corners. The anchoring rules live in a pure helper so they can be
-// checked without a browser: the edge opposite the grip stays put, and the
-// size never leaves the viewport band.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -14,10 +10,8 @@ import type {
   EditorResizeDirection,
 } from "@/features/files/utils/editorResize";
 
-/** origin is the window box a resize starts from. */
 const origin: EditorBox = { x: 100, y: 120, width: 800, height: 600 };
 
-/** limits is the size band of a 1280x800 viewport. */
 const limits = editorResizeLimits(1280, 800);
 
 describe("editorResizeLimits", () => {
@@ -67,35 +61,30 @@ describe("resizeEditorBox", () => {
       deltaY: number;
       expected: EditorBox;
     }> = [
-      // East: the right edge follows the pointer, the left one stays.
       {
         direction: "e",
         deltaX: 50,
         deltaY: 50,
         expected: { x: 100, y: 120, width: 850, height: 600 },
       },
-      // West: the left edge follows, the right one stays.
       {
         direction: "w",
         deltaX: 50,
         deltaY: 50,
         expected: { x: 150, y: 120, width: 750, height: 600 },
       },
-      // South: the bottom edge follows, the top one stays.
       {
         direction: "s",
         deltaX: 50,
         deltaY: 50,
         expected: { x: 100, y: 120, width: 800, height: 650 },
       },
-      // North: the top edge follows, the bottom one stays.
       {
         direction: "n",
         deltaX: 50,
         deltaY: 50,
         expected: { x: 100, y: 170, width: 800, height: 550 },
       },
-      // The corners move both of their own edges.
       {
         direction: "ne",
         deltaX: 50,
@@ -161,7 +150,6 @@ describe("resizeEditorBox", () => {
   it("never shrinks below the minimum size", () => {
     const next = resizeEditorBox("w", origin, 5000, 0, limits);
     expect(next.width).toBe(480);
-    // The right edge stays anchored even though the drag overshot.
     expect(next.x + next.width).toBe(origin.x + origin.width);
     const short = resizeEditorBox("n", origin, 0, 5000, limits);
     expect(short.height).toBe(320);
@@ -169,8 +157,6 @@ describe("resizeEditorBox", () => {
   });
 
   it("never grows past the viewport", () => {
-    // The window is 100px from the left edge, so it can only grow to the
-    // right edge of the screen: 1280 - 100.
     const next = resizeEditorBox("e", origin, 5000, 0, limits);
     expect(next.width).toBe(1180);
     expect(next.x + next.width).toBe(1280);

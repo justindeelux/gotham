@@ -15,63 +15,28 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// historyRetention is how long a replaced configuration stays available for
-// fast revert. It is measured from the replacement (superseded_at), never
-// from the original push (R2).
 const historyRetention = 24 * time.Hour
 
-// ConfigVersion is one stored configuration snapshot.
 type ConfigVersion struct {
-	// ID identifies the stored row (promotion/abort target).
-	ID uuid.UUID
-	// Files are the documents of the snapshot.
-	Files []File
-	// ContentHash fingerprints the files.
-	ContentHash string
-	// Pending marks a version recorded but not yet promoted (the node may or
-	// may not already serve it after an ambiguous push).
-	Pending bool
-	// SupersededAt is when the version was replaced; zero while active.
+	ID           uuid.UUID
+	Files        []File
+	ContentHash  string
+	Pending      bool
 	SupersededAt time.Time
 }
 
-// HistoryStore sequences configuration versions so that the active snapshot
-// survives unchanged syncs and its predecessor stays revertable for the
-// retention window after replacement. The production implementation is
-// *store.Store (through storeHistory); nil disables history and revert.
 type HistoryStore interface {
-	// PrepareConfigVersion durably records files as the configuration about
-	// to be pushed and returns the version to promote. changed=false means
-	// the stored active configuration already matches; changed=true means the
-	// caller must promote the returned version after a successful push. Any
-	// error leaves the node untouched and must fail the sync.
 	PrepareConfigVersion(ctx context.Context, serverID uuid.UUID, files []File, contentHash string) (ConfigVersion, bool, error)
-	// PromoteConfigVersion activates a prepared version after a confirmed
-	// push: pending records are cleared, the version becomes active, the
-	// previous active version is superseded and expired predecessors pruned.
 	PromoteConfigVersion(ctx context.Context, serverID, versionID uuid.UUID) error
-	// AbortConfigVersion drops a pending record. The sync never calls it: every
-	// failed push retains the pending record (R2), and only a successful
-	// promotion or the restoration path clears it. It remains available for
-	// explicit operator cleanup.
 	AbortConfigVersion(ctx context.Context, serverID, versionID uuid.UUID) error
-	// PreviousConfigVersion returns the configuration to revert to. While a
-	// pending push exists the node may already serve it, so the actual prior
-	// is the active version, never an older superseded one (R2).
 	PreviousConfigVersion(ctx context.Context, serverID uuid.UUID) (ConfigVersion, error)
-	// ActiveConfigVersion returns the version the node is believed to serve:
-	// the pending record while a push is unconfirmed, else the newest active
-	// version. It answers ErrVersionNotFound when the node was never synced.
-	// Read surfaces (the router list sync status) compare against it.
 	ActiveConfigVersion(ctx context.Context, serverID uuid.UUID) (ConfigVersion, error)
 }
 
-// storeHistory adapts the shared store to the history seam.
 type storeHistory struct {
 	store *store.Store
 }
 
-// PrepareConfigVersion maps the store's transactional preparation.
 func (h storeHistory) PrepareConfigVersion(ctx context.Context, serverID uuid.UUID, files []File, contentHash string) (ConfigVersion, bool, error) {
 	payload, err := json.Marshal(files)
 	if err != nil {
@@ -88,20 +53,15 @@ func (h storeHistory) PrepareConfigVersion(ctx context.Context, serverID uuid.UU
 	return version, changed, nil
 }
 
-// PromoteConfigVersion maps the store's transactional promotion.
 func (h storeHistory) PromoteConfigVersion(ctx context.Context, serverID, versionID uuid.UUID) error {
 	return h.store.PromoteProxyConfigVersion(ctx, pgUUID(serverID), pgUUID(versionID),
 		pgtype.Timestamptz{Time: time.Now().Add(-historyRetention), Valid: true})
 }
 
-// AbortConfigVersion drops a pending record.
 func (h storeHistory) AbortConfigVersion(ctx context.Context, serverID, versionID uuid.UUID) error {
 	return h.store.AbortProxyConfigVersion(ctx, pgUUID(serverID), pgUUID(versionID))
 }
 
-// ActiveConfigVersion resolves the version the node is believed to serve: a
-// pending push may already be live, so it wins over the newest active
-// version; otherwise the active version, then ErrVersionNotFound.
 func (h storeHistory) ActiveConfigVersion(ctx context.Context, serverID uuid.UUID) (ConfigVersion, error) {
 	pending, err := h.store.PendingProxyConfigVersion(ctx, pgUUID(serverID))
 	if err == nil && pending.Pending {
@@ -120,10 +80,6 @@ func (h storeHistory) ActiveConfigVersion(ctx context.Context, serverID uuid.UUI
 	return configVersionFromRow(active)
 }
 
-// PreviousConfigVersion resolves the revert target: a pending push means the
-// node may already serve it, so the active version is the actual prior;
-// otherwise the newest superseded predecessor, then the active version
-// (idempotent re-push) and only then ErrVersionNotFound.
 func (h storeHistory) PreviousConfigVersion(ctx context.Context, serverID uuid.UUID) (ConfigVersion, error) {
 	pending, err := h.store.PendingProxyConfigVersion(ctx, pgUUID(serverID))
 	switch {
@@ -156,7 +112,6 @@ func (h storeHistory) PreviousConfigVersion(ctx context.Context, serverID uuid.U
 	return ConfigVersion{}, err
 }
 
-// configVersionFromRow decodes a stored version.
 func configVersionFromRow(row sqlc.ProxyConfigVersion) (ConfigVersion, error) {
 	var files []File
 	if err := json.Unmarshal(row.Files, &files); err != nil {
@@ -174,5 +129,4 @@ func configVersionFromRow(row sqlc.ProxyConfigVersion) (ConfigVersion, error) {
 	return version, nil
 }
 
-// errHistoryNotConfigured guards the optional history seam.
 var errHistoryNotConfigured = errors.New("proxy: configuration history is not configured")

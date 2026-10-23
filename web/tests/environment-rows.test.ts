@@ -1,8 +1,3 @@
-// JUS-87 environment rows: the name cell links to the resource detail
-// page with the link stretched over the row (no Open button, no JS row
-// handler). Native table semantics stay intact: rows carry no role or
-// tabindex, each row holds exactly one link, and the link target matches
-// the row the composable built.
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
@@ -52,8 +47,6 @@ const { rows } = vi.hoisted(() => ({
   ],
 }));
 
-// The page template reads straight through both composables: serve canned
-// refs so the mount stays hermetic (no HTTP, no stores, no router).
 vi.mock("@/features/projects/composables/useEnvironmentPage", () => ({
   useEnvironmentPage: () => ({
     projectId: ref("11111111-1111-4111-8111-111111111111"),
@@ -101,14 +94,11 @@ beforeEach(() => {
   globalThis.document.body.innerHTML = "";
 });
 
-/** mountRows renders the table with every child component stubbed. */
 function mountRows() {
   return mount(EnvironmentPage, {
     global: {
       plugins: [i18n],
       stubs: {
-        // Render a real anchor so the row keeps exactly one focusable
-        // link; `to` stays assertable through the stubbed component.
         RouterLink: { name: "RouterLink", template: "<a><slot /></a>", props: ["to"] },
         ProjectBreadcrumb: true,
         SharedVariablesEditor: true,
@@ -152,8 +142,6 @@ describe("environment resource rows", () => {
     for (const row of tableRows) {
       expect(row.attributes("role")).toBeUndefined();
       expect(row.attributes("tabindex")).toBeUndefined();
-      // The name link is the only interactive element in the row, so
-      // nothing inside it can hijack navigation.
       expect(row.findAll("a")).toHaveLength(1);
       expect(row.findAll("button")).toHaveLength(0);
     }

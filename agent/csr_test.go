@@ -87,7 +87,6 @@ func TestEnsureKeyCreatesAndReuses(t *testing.T) {
 		t.Error("EnsureKey returned a different key on the second call")
 	}
 
-	// The persisted key is a PEM EC PRIVATE KEY, not a PKCS#8 blob.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read key: %v", err)
@@ -111,8 +110,6 @@ func TestEnsureKeyRejectsCorruptFile(t *testing.T) {
 	}
 }
 
-// TestEnsureKeyProofOfPossession proves the key returned by EnsureKey is the one
-// that signs the CSR: the CSR public key must match the persisted private key.
 func TestEnsureKeyProofOfPossession(t *testing.T) {
 	dir := t.TempDir()
 	key, _, err := EnsureKey(dir)
@@ -135,9 +132,6 @@ func TestEnsureKeyProofOfPossession(t *testing.T) {
 	}
 }
 
-// TestCertificateRequestUsesKeyFileOverride ensures that when GOTHAM_AGENT_KEY
-// points at an explicit path, the CSR is built from the key stored there so it
-// matches the key cmd/gotham-agent later loads for the DockerService.
 func TestCertificateRequestUsesKeyFileOverride(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "nested", "custom.key")

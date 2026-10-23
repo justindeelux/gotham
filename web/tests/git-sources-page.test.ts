@@ -1,5 +1,3 @@
-// Git sources management page (GS-10, JUS-66): row mapping, usage guards,
-// connect clients, the disconnect 409 flow and the write-only secrets.
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -269,7 +267,6 @@ describe("GitLabConnectDialog secrets", () => {
       "/providers/gitlab/auto-provision",
       expect.objectContaining({ admin_token: "super-secret-admin-token" }),
     );
-    // The write-only token never survives the submit.
     expect((token.element as { value: string }).value).toBe("");
   });
 

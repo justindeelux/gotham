@@ -12,26 +12,11 @@ import { computed } from "vue";
 import type { TemplateField, TemplateValues } from "@/features/templates/api/templates";
 import { templateOverlayFieldHelp } from "@/features/templates/api/templates";
 
-/**
- * Renders a form from a template's field schema: text/secret input, number,
- * select and bool, with required, pattern, min/max, max_length and help text
- * taken straight from the API (see Field in internal/templates/schema.go).
- *
- * Values are strings in each field's canonical form; validation messages are
- * supplied by the caller (`errors`, computed with checkTemplateValue) so the
- * submit flow decides when they become visible.
- */
-
 interface Props {
   fields: TemplateField[];
   modelValue: TemplateValues;
   errors?: Record<string, string>;
   disabled?: boolean;
-  /**
-   * Template slug for the curated field-help overlay. When set, help text
-   * resolves through the templates catalog with fallback to the provider
-   * help; unknown slugs always show the provider copy.
-   */
   slug?: string;
 }
 
@@ -58,12 +43,10 @@ const selectOptions = computed<Record<string, Array<{ label: string; value: stri
   },
 );
 
-/** fieldValue returns the current value in canonical string form. */
 function fieldValue(field: TemplateField): string {
   return props.modelValue[field.key] ?? "";
 }
 
-/** numberValue renders the string value for NInputNumber; empty is null. */
 function numberValue(field: TemplateField): number | null {
   const raw = fieldValue(field).trim();
   if (raw === "") {
@@ -73,11 +56,6 @@ function numberValue(field: TemplateField): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/**
- * helpText renders one field's help: the curated catalog overlay for a
- * bundled template, otherwise the provider help. Field keys, labels and
- * placeholders always stay provider data.
- */
 function helpText(field: TemplateField): string | undefined {
   if (props.slug !== "") {
     return templateOverlayFieldHelp(props.slug, field);
@@ -85,17 +63,14 @@ function helpText(field: TemplateField): string | undefined {
   return field.help;
 }
 
-/** feedbackText shows the validation message, falling back to the help. */
 function feedbackText(field: TemplateField): string {
   return props.errors[field.key] ?? helpText(field) ?? "";
 }
 
-/** validationStatus marks a field in error without re-validating here. */
 function validationStatus(field: TemplateField): "error" | undefined {
   return props.errors[field.key] ? "error" : undefined;
 }
 
-/** setValue emits a copy with one field replaced. */
 function setValue(key: string, value: string): void {
   emit("update:modelValue", { ...props.modelValue, [key]: value });
 }

@@ -12,10 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestValidatePublicGitURL pins the GS-3 allow-list: a keyless public source
-// takes http, https or git and nothing else. SSH transports are refused by
-// name (the refusal is what keeps a keyless clone off the control plane's
-// ambient SSH identity), and local sources stay behind the dev flag.
 func TestValidatePublicGitURL(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -69,8 +65,6 @@ func TestValidatePublicGitURL(t *testing.T) {
 	}
 }
 
-// TestValidatePublicGitURLDevLocal covers the fixture hatch: local paths and
-// file:// URLs validate only in dev mode.
 func TestValidatePublicGitURLDevLocal(t *testing.T) {
 	t.Setenv(devLocalCloneEnv, "true")
 	for _, url := range []string{"/srv/fixtures/demo", "file:///srv/fixtures/demo"} {
@@ -80,9 +74,6 @@ func TestValidatePublicGitURLDevLocal(t *testing.T) {
 	}
 }
 
-// TestIsSSHTransportURL pins the deploy-time SSH detector: ssh:// and both
-// scp spellings refuse a keyless clone, while public schemes and local
-// fixtures pass through.
 func TestIsSSHTransportURL(t *testing.T) {
 	for url, want := range map[string]bool{
 		"ssh://git@host/acme/demo.git": true,
@@ -102,8 +93,6 @@ func TestIsSSHTransportURL(t *testing.T) {
 	}
 }
 
-// TestParseSymrefBranch pins the ls-remote --symref parsing: the HEAD symref
-// resolves, detached/missing output answers "".
 func TestParseSymrefBranch(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -125,8 +114,6 @@ func TestParseSymrefBranch(t *testing.T) {
 	}
 }
 
-// TestDefaultBranchForLsRemote pins the ls-remote invocation (argv, HEAD)
-// and the symref parsing through a fake runner: no network involved.
 func TestDefaultBranchForLsRemote(t *testing.T) {
 	const url = "https://git.example/acme/demo.git"
 	var gotArgv []string
@@ -151,8 +138,6 @@ func TestDefaultBranchForLsRemote(t *testing.T) {
 	}
 }
 
-// TestDefaultBranchForFailure pins the actionable error: an unreachable host
-// fails the resolution with the quoted detail followed by the hint.
 func TestDefaultBranchForFailure(t *testing.T) {
 	run := func(context.Context, []string, []string) ([]byte, error) {
 		return []byte("fatal: Could not resolve host: git.example"), errors.New("exit status 128")
@@ -164,7 +149,6 @@ func TestDefaultBranchForFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "unreachable") {
 		t.Errorf("err = %v, want the unreachable hint", err)
 	}
-	// The hint trails the quoted git detail instead of leading it.
 	detailAt := strings.Index(err.Error(), "Could not resolve host")
 	hintAt := strings.Index(err.Error(), "unreachable")
 	if detailAt == -1 || hintAt == -1 || hintAt < detailAt {
@@ -172,9 +156,6 @@ func TestDefaultBranchForFailure(t *testing.T) {
 	}
 }
 
-// TestClassifyGitFailure pins the hint classes against realistic git stderr:
-// a missing branch names the branch (not the repository), a tty-less 401
-// asks for credentials, and a port number never triggers the auth hint.
 func TestClassifyGitFailure(t *testing.T) {
 	cases := []struct {
 		output string
@@ -206,8 +187,6 @@ func TestClassifyGitFailure(t *testing.T) {
 	}
 }
 
-// TestCloneRefusesKeylessSSH pins the ambient-identity guard: an SSH URL with
-// no deploy key is refused before git runs, for both URL spellings.
 func TestCloneRefusesKeylessSSH(t *testing.T) {
 	for _, url := range []string{
 		"ssh://git@git.internal/acme/demo.git",
@@ -244,8 +223,6 @@ func TestCloneRefusesKeylessSSH(t *testing.T) {
 	}
 }
 
-// TestCloneFailureHints pins the actionable deploy-log errors: a failing
-// clone quotes git and appends the classified hint.
 func TestCloneFailureHints(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -278,8 +255,6 @@ func TestCloneFailureHints(t *testing.T) {
 	}
 }
 
-// TestCloneResolvesEmptyBranch pins the GS-3 default: no branch means
-// ls-remote decides, against a real local fixture (no network).
 func TestCloneResolvesEmptyBranch(t *testing.T) {
 	t.Setenv(devLocalCloneEnv, "true")
 	origin := seedGitFixture(t)
@@ -306,8 +281,6 @@ func TestCloneResolvesEmptyBranch(t *testing.T) {
 	}
 }
 
-// TestCloneResolvesNonMainDefault proves the resolution is not a hardcoded
-// "main": the fixture default is renamed and the clone follows it.
 func TestCloneResolvesNonMainDefault(t *testing.T) {
 	t.Setenv(devLocalCloneEnv, "true")
 	origin := seedGitFixture(t)
@@ -341,10 +314,6 @@ func TestCloneResolvesNonMainDefault(t *testing.T) {
 	}
 }
 
-// TestCreateApplicationKeepsEmptyBranchForPublicGit pins the GS-3 fix-round-1
-// rule end to end at the service boundary: a git_public application created
-// with no branch stores "", so the deploy clone resolves the remote default
-// via ls-remote. Provider flows keep the "main" fallback.
 func TestCreateApplicationKeepsEmptyBranchForPublicGit(t *testing.T) {
 	t.Run("public git keeps the empty branch", func(t *testing.T) {
 		repo := &fakeRepository{}
@@ -381,8 +350,6 @@ func TestCreateApplicationKeepsEmptyBranchForPublicGit(t *testing.T) {
 	})
 }
 
-// TestUpdateApplicationKeepsEmptyBranchForPublicGit pins the update half:
-// clearing the branch restores ls-remote resolution for public-git sources.
 func TestUpdateApplicationKeepsEmptyBranchForPublicGit(t *testing.T) {
 	empty := ""
 	newPublicApp := func() Application {
@@ -409,7 +376,7 @@ func TestUpdateApplicationKeepsEmptyBranchForPublicGit(t *testing.T) {
 	})
 
 	t.Run("provider flow falls back to main", func(t *testing.T) {
-		app := testApplication(uuid.New()) // legacy empty type, github provider
+		app := testApplication(uuid.New())
 		repo := &fakeRepository{app: app}
 		svc := newTestService(t, repo)
 		updated, err := svc.UpdateApplication(context.Background(), app.UserID, app.ID,
@@ -423,9 +390,6 @@ func TestUpdateApplicationKeepsEmptyBranchForPublicGit(t *testing.T) {
 	})
 }
 
-// TestCloneSourceResolvesMasterDefault is the finding-1 regression at the
-// deploy fetch step: a stored git_public application with an empty branch
-// clones the fixture's non-main default (master), not a guessed "main".
 func TestCloneSourceResolvesMasterDefault(t *testing.T) {
 	t.Setenv(devLocalCloneEnv, "true")
 	origin := seedGitFixture(t)
@@ -460,8 +424,6 @@ func TestCloneSourceResolvesMasterDefault(t *testing.T) {
 	}
 }
 
-// TestApplicationResponseRedactsCredentials pins the API echo guard: a
-// legacy token-bearing clone URL is returned without its userinfo.
 func TestApplicationResponseRedactsCredentials(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.CloneURL = "https://user:ghp_SECRET@github.com/acme/demo.git"

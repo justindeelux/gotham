@@ -1,9 +1,3 @@
-// Package toolcatalog is the single catalog of host tools the Gotham platform
-// needs, with per-tool detection.
-//
-// It is deliberately scope-neutral: the node agent serves the catalog over gRPC
-// and the shared buildtool package uses it to decide whether a build toolchain
-// is present on a host, so it imports neither gotham/internal nor gotham/agent.
 package toolcatalog
 
 import (
@@ -15,21 +9,14 @@ import (
 	"time"
 )
 
-// Category groups catalog entries for the UI. The set is fixed so a client can
-// render a stable grouping.
 type Category string
 
 const (
-	// CategoryBuild covers source and image build toolchains.
-	CategoryBuild Category = "build"
-	// CategoryRuntime covers tools the agent or control plane runs directly.
+	CategoryBuild   Category = "build"
 	CategoryRuntime Category = "runtime"
-	// CategoryNetwork covers host network configuration tools.
 	CategoryNetwork Category = "network"
 )
 
-// Catalog entry ids. They are the stable handles a client passes back to the
-// install/uninstall RPCs.
 const (
 	IDRailpack        = "railpack"
 	IDBuildKit        = "buildkit"
@@ -47,51 +34,25 @@ const (
 	IDIP              = "ip"
 )
 
-// Detect describes how one tool is found on the host. Every rule resolves
-// through PATH (or runs the whole Probe argv through PATH), never a hard-coded
-// absolute path, so a test that points PATH at a stub directory sees exactly
-// the catalog entry it stubbed and nothing from the host it runs on.
 type Detect struct {
-	// Binaries are executable names resolved on PATH in order; the first hit
-	// wins.
 	Binaries []string
-	// Version is the argv run against the resolved executable to read its
-	// version; nil skips the probe.
-	Version []string
-	// Probe, when set, is a whole argv run instead of a binary lookup, for a
-	// tool that is not a command of its own (the BuildKit container image, the
-	// systemd units checked through systemctl). Its success means installed.
-	Probe []string
+	Version  []string
+	Probe    []string
 }
 
-// Tool is one catalog entry.
 type Tool struct {
-	// ID is the stable handle for this tool.
-	ID string
-	// Name is the human-readable name.
-	Name string
-	// Description explains what the platform uses the tool for.
-	Description string
-	Category    Category
-	Detect      Detect
-	// Deps are the catalog ids this tool needs to be usable.
-	Deps []string
-	// NeedsRoot is true when installing or removing the tool needs root.
-	NeedsRoot bool
-	// Installable and Uninstallable gate the manager. Both are false for a
-	// detect-only host unit (systemd-networkd/resolved, networkctl) the
-	// platform never installs or removes.
+	ID            string
+	Name          string
+	Description   string
+	Category      Category
+	Detect        Detect
+	Deps          []string
+	NeedsRoot     bool
 	Installable   bool
 	Uninstallable bool
-	// MinVersion is the minimum version the platform needs; detection compares
-	// the observed version against it and reports the result in
-	// Detection.VersionOK. Empty when no minimum is required.
-	MinVersion string
+	MinVersion    string
 }
 
-// Catalog is the platform's host tool catalog, in display order. It is the
-// single source of truth: detection, the agent's ListTools RPC and the
-// build-toolchain gate all read it.
 var Catalog = []Tool{
 	{
 		ID:          IDRailpack,
@@ -133,15 +94,13 @@ var Catalog = []Tool{
 		MinVersion: "2.37",
 	},
 	{
-		ID:          IDDocker,
-		Name:        "Docker",
-		Description: "Runs application, database and proxy containers; every node needs it.",
-		Category:    CategoryRuntime,
-		Detect:      Detect{Binaries: []string{"docker"}, Version: []string{"--version"}},
-		NeedsRoot:   true,
-		Installable: true,
-		// Docker is never removed: doing so would destroy every workload on the
-		// node. The UI must not offer it.
+		ID:            IDDocker,
+		Name:          "Docker",
+		Description:   "Runs application, database and proxy containers; every node needs it.",
+		Category:      CategoryRuntime,
+		Detect:        Detect{Binaries: []string{"docker"}, Version: []string{"--version"}},
+		NeedsRoot:     true,
+		Installable:   true,
 		Uninstallable: false,
 	},
 	{
@@ -231,36 +190,20 @@ var Catalog = []Tool{
 	},
 }
 
-// Detection is the observed state of one tool on the host.
 type Detection struct {
-	// ID is the catalog entry id.
-	ID string
-	// Installed reports whether the tool resolved on this host.
+	ID        string
 	Installed bool
-	// Version is the version read from the tool, empty when unknown.
-	Version string
-	// Path is the resolved executable path; empty for a tool that is not a
-	// command of its own (the BuildKit container, the systemd units probed
-	// through systemctl) or that is not installed.
-	Path string
-	// VersionOK reports whether the observed version meets the catalog entry's
-	// MinVersion. It is true when the entry declares no minimum, and false when
-	// a minimum is declared but the observed version is missing or lower.
+	Version   string
+	Path      string
 	VersionOK bool
 }
 
-// versionPattern extracts the first dotted numeric version from a probe's
-// output, for example "2.43.0" from "git version 2.43.0".
 var versionPattern = regexp.MustCompile(`\d+(?:\.\d+)+`)
 
-// probeTimeout bounds a single version or probe command so a wedged executable
-// cannot stall a ListTools call.
 const probeTimeout = 5 * time.Second
 
-// List returns the catalog.
 func List() []Tool { return Catalog }
 
-// Lookup returns the catalog entry with id.
 func Lookup(id string) (Tool, bool) {
 	for _, tool := range Catalog {
 		if tool.ID == id {
@@ -270,9 +213,6 @@ func Lookup(id string) (Tool, bool) {
 	return Tool{}, false
 }
 
-// Installed reports whether the tool with id resolves on this host. It is the
-// cheap presence check the build-toolchain gate uses: no version probe is run.
-// An unknown id is not installed.
 func Installed(id string) bool {
 	tool, ok := Lookup(id)
 	if !ok {
@@ -285,7 +225,6 @@ func Installed(id string) bool {
 	return ok
 }
 
-// DetectAll resolves every catalog entry against the host, in catalog order.
 func DetectAll() []Detection {
 	detections := make([]Detection, 0, len(Catalog))
 	for _, tool := range Catalog {
@@ -294,9 +233,6 @@ func DetectAll() []Detection {
 	return detections
 }
 
-// DetectTool resolves one catalog entry against the host. A tool that is
-// present but does not answer its version probe is still reported installed,
-// with an empty version.
 func DetectTool(tool Tool) Detection {
 	detection := Detection{ID: tool.ID}
 	if len(tool.Detect.Probe) > 0 {
@@ -312,8 +248,6 @@ func DetectTool(tool Tool) Detection {
 	return detection
 }
 
-// resolve returns the executable one tool's Detect rule points at: the first
-// binary on PATH.
 func resolve(tool Tool) (string, bool) {
 	for _, name := range tool.Detect.Binaries {
 		if path, err := exec.LookPath(name); err == nil {
@@ -323,15 +257,12 @@ func resolve(tool Tool) (string, bool) {
 	return "", false
 }
 
-// probeSucceeds runs a tool's Probe argv and reports whether it succeeded.
 func probeSucceeds(tool Tool) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, tool.Detect.Probe[0], tool.Detect.Probe[1:]...).Run() == nil
 }
 
-// runVersion runs a tool's version argv and returns the first dotted numeric
-// version in its combined output, or "" when it answers nothing parseable.
 func runVersion(path string, args []string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
@@ -339,10 +270,6 @@ func runVersion(path string, args []string) string {
 	return versionPattern.FindString(string(out))
 }
 
-// meetsMinVersion reports whether observed is at least minimum. An entry with
-// no minimum is always met; a minimum that is declared but has no parseable
-// observed version is not, because the platform does not assume a version it
-// could not read is new enough.
 func meetsMinVersion(observed, minimum string) bool {
 	if minimum == "" {
 		return true
@@ -353,8 +280,6 @@ func meetsMinVersion(observed, minimum string) bool {
 	return compareVersions(observed, minimum) >= 0
 }
 
-// compareVersions compares two dotted numeric versions, treating a missing
-// component as zero, so "2.43" equals "2.43.0". It returns -1, 0 or 1.
 func compareVersions(a, b string) int {
 	as, bs := strings.Split(a, "."), strings.Split(b, ".")
 	for i := 0; i < len(as) || i < len(bs); i++ {
@@ -368,8 +293,6 @@ func compareVersions(a, b string) int {
 	return 0
 }
 
-// versionComponent returns the i-th dotted component as an int, or 0 when it is
-// missing or not a number.
 func versionComponent(parts []string, i int) int {
 	if i >= len(parts) {
 		return 0

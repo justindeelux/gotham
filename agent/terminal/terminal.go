@@ -26,109 +26,48 @@ import (
 )
 
 const (
-	// terminalTargetHost runs a host shell. terminalTargetContainer runs an
-	// interactive exec inside a resolved application container. Anything else
-	// is refused rather than silently falling back to the host.
 	terminalTargetHost      = "host"
 	terminalTargetContainer = "container"
 
-	// terminalDefaultMaxSessions bounds concurrent host shells on one node.
-	// A host PTY is an operator capability, not a per-user fan-out primitive.
-	terminalDefaultMaxSessions = 8
-	// terminalDefaultMaxInputBytes bounds one input message from the control
-	// plane. Paste and key-repeat bursts are chunked by the caller.
+	terminalDefaultMaxSessions   = 8
 	terminalDefaultMaxInputBytes = 64 << 10
-	// terminalDefaultMaxDuration bounds one session's lifetime even while the
-	// control plane still holds the stream open.
-	terminalDefaultMaxDuration = 8 * time.Hour
-	// terminalOutputChunk bounds one output message sent to the control plane.
-	terminalOutputChunk = 32 << 10
-	// terminalWriteTimeout bounds one write to the PTY master so a wedged shell
-	// cannot pin the RPC handler forever.
-	terminalWriteTimeout = 5 * time.Second
-	// terminalKillGrace is how long a session gets to exit after SIGHUP before
-	// its process group is killed outright.
-	terminalKillGrace = 2 * time.Second
-	// terminalGraceProbe is how often the graceful cleanup re-checks whether the
-	// session is already empty, so a close does not sit idle for the whole grace
-	// after every job exited.
-	terminalGraceProbe = terminalKillGrace / 4
-	// terminalScanRounds bounds the hard-kill re-scans used for processes forked
-	// while the previous signal was being delivered.
-	terminalScanRounds = 4
-	// terminalScanInterval is the settle time between hard-kill re-scans. It is
-	// per round, never per process.
-	terminalScanInterval = 100 * time.Millisecond
-	// terminalSessionBudget bounds the whole session scan-and-signal walk,
-	// including the graceful probes and the hard-kill re-scans.
-	terminalSessionBudget = terminalKillGrace + 2*time.Second
-	// ShutdownWait bounds how long a graceful agent stop waits for
-	// in-flight session cleanup walks before the process exits anyway.
-	ShutdownWait = 3 * time.Second
-	// terminalStopWait bounds how long a handler waits for the output pump to
-	// deliver the final event before returning anyway.
-	terminalStopWait = terminalKillGrace + 2*time.Second
+	terminalDefaultMaxDuration   = 8 * time.Hour
+	terminalOutputChunk          = 32 << 10
+	terminalWriteTimeout         = 5 * time.Second
+	terminalKillGrace            = 2 * time.Second
+	terminalGraceProbe           = terminalKillGrace / 4
+	terminalScanRounds           = 4
+	terminalScanInterval         = 100 * time.Millisecond
+	terminalSessionBudget        = terminalKillGrace + 2*time.Second
+	ShutdownWait                 = 3 * time.Second
+	terminalStopWait             = terminalKillGrace + 2*time.Second
 
 	terminalMinDimension = 1
 	terminalMaxDimension = 1000
 
-	// Upper bounds on caller-supplied path strings, matching the file
-	// manager's own argument ceiling.
 	terminalMaxRootBytes = 128
 	terminalMaxCwdBytes  = 4096
 )
 
-// TerminalRoots resolves a FileService root-relative directory for an initial
-// terminal cwd. *FileServer implements it.
 type TerminalRoots interface {
 	ResolveShellDir(rootName, rel string) (string, error)
 }
 
-// ContainerExec runs an interactive exec inside one container. *DockerClient
-// implements it over the Docker Engine HTTP client; tests substitute a fake.
 type ContainerExec interface {
 	Exec(ctx context.Context, containerID string, opts docker.ExecOptions) (docker.ExecSession, error)
 }
 
-// TerminalConfig configures a TerminalServer.
 type TerminalConfig struct {
-	// Logger receives session lifecycle lines. It never receives terminal
-	// bytes or input.
-	Logger *slog.Logger
-	// Roots resolves the initial working directory for host targets that name a
-	// FileService root. A host session without a root does not use it and opens
-	// in the agent's default directory, so a node with the file service
-	// disabled can still run a shell. Container targets do not use it.
-	Roots TerminalRoots
-	// Shell is the absolute shell path to run for host targets. Empty prefers
-	// the operator's $SHELL when it is bash or zsh (both have the optional
-	// startup integration), then bash (/bin/bash, /usr/bin/bash, bash from
-	// PATH), then zsh (/bin/zsh, /usr/bin/zsh, zsh from PATH), falling back to
-	// $SHELL and /bin/sh; with IntegrationDisabled it selects the first usable
-	// candidate from $SHELL, /bin/bash and /bin/sh exactly as before JUS-252.
-	Shell string
-	// IntegrationDisabled turns off the optional bash/zsh startup integration:
-	// the integrated host shell selection, the bash rcfile and the zsh ZDOTDIR
-	// wrapper that source the operator's files and add colour defaults and OSC
-	// 133 prompt marks. False (the default) keeps it on; the agent config sets
-	// it from GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
+	Logger              *slog.Logger
+	Roots               TerminalRoots
+	Shell               string
 	IntegrationDisabled bool
-	// Containers runs container targets. nil makes them fail with
-	// FailedPrecondition instead of falling back to a host shell.
-	Containers ContainerExec
-	// MaxSessions bounds concurrent sessions; 0 uses the default.
-	MaxSessions int
-	// MaxInputBytes bounds one input message; 0 uses the default.
-	MaxInputBytes int
-	// MaxDuration bounds one session; 0 uses the default.
-	MaxDuration time.Duration
+	Containers          ContainerExec
+	MaxSessions         int
+	MaxInputBytes       int
+	MaxDuration         time.Duration
 }
 
-// TerminalServer implements agentv1.TerminalServiceServer with a Linux PTY
-// (github.com/creack/pty). Every stream owns exactly one shell: the PTY, its
-// process group and every process in its session are killed and reaped when the
-// stream ends, whether the shell exited, the control plane closed it, the
-// context was cancelled or the session hit its lifetime cap.
 type TerminalServer struct {
 	agentv1.UnimplementedTerminalServiceServer
 
@@ -141,15 +80,11 @@ type TerminalServer struct {
 	sessions      chan struct{}
 	containers    ContainerExec
 
-	// walks tracks in-flight session cleanup goroutines so a graceful agent
-	// stop can wait a bounded time for SIGTERM/SIGKILL delivery.
 	walks sync.WaitGroup
 
-	// start is a seam for tests that must not spawn a real shell.
 	start func(terminalStart) (terminalProcess, error)
 }
 
-// terminalStart is the validated input to a session.
 type terminalStart struct {
 	Target      string
 	Shell       string
@@ -159,8 +94,6 @@ type terminalStart struct {
 	Rows        uint16
 }
 
-// terminalProcess is the small surface OpenTerminal needs from either a host
-// PTY session or a container exec session.
 type terminalProcess interface {
 	read(p []byte) (int, error)
 	write(data []byte) error
@@ -169,9 +102,6 @@ type terminalProcess interface {
 	wait() (int32, string)
 }
 
-// NewTerminalServer returns a TerminalService implementation. It sweeps stale
-// per-session integration directories left behind by a hard kill of a previous
-// agent process; that maintenance is best-effort and never blocks startup.
 func NewTerminalServer(cfg TerminalConfig) *TerminalServer {
 	sweepStaleTerminalRcDirs(time.Now())
 	log := cfg.Logger
@@ -204,7 +134,6 @@ func NewTerminalServer(cfg TerminalConfig) *TerminalServer {
 	return server
 }
 
-// OpenTerminal runs one PTY-backed host shell for the lifetime of the stream.
 func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.TerminalRequest, agentv1.TerminalResponse]) error {
 	ctx := stream.Context()
 
@@ -264,10 +193,6 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 	lifetime := time.NewTimer(s.maxDuration)
 	defer lifetime.Stop()
 
-	// stop ends the shell and waits for the output pump to deliver its final
-	// event, so no goroutine writes to the stream after the handler returns.
-	// It is idempotent and runs on every exit path once the pump exists; a
-	// pump result already consumed by the loop is not read twice.
 	var (
 		stopOnce     sync.Once
 		stopErr      error
@@ -293,8 +218,6 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 		select {
 		case err := <-output:
 			pumpConsumed = true
-			// The shell exited (or the PTY failed); the pump already sent the
-			// exit event when it could.
 			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				return err
 			}
@@ -349,14 +272,11 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 	}
 }
 
-// terminalRecv is one value from the receive goroutine.
 type terminalRecv struct {
 	req *agentv1.TerminalRequest
 	err error
 }
 
-// receiveTerminal forwards stream messages until the stream ends. It exits
-// when the handler returns because gRPC unblocks Recv then.
 func receiveTerminal(stream grpc.BidiStreamingServer[agentv1.TerminalRequest, agentv1.TerminalResponse], out chan<- terminalRecv) {
 	defer close(out)
 	for {
@@ -373,7 +293,6 @@ func receiveTerminal(stream grpc.BidiStreamingServer[agentv1.TerminalRequest, ag
 	}
 }
 
-// prepare validates an open request and resolves its target.
 func (s *TerminalServer) prepare(open *agentv1.TerminalOpen) (terminalStart, error) {
 	switch target := strings.TrimSpace(open.GetTarget()); target {
 	case "", terminalTargetHost:
@@ -385,15 +304,6 @@ func (s *TerminalServer) prepare(open *agentv1.TerminalOpen) (terminalStart, err
 	}
 }
 
-// prepareHost validates a host shell open and resolves its initial directory.
-//
-// A root and cwd are optional. With both omitted the shell starts in a default
-// directory the agent resolves from the service user's passwd entry (looked up
-// by uid; Go's os/user may use $HOME only if that lookup fails), so a host
-// shell does not depend on file roots being configured. The request and the
-// browser never supply the start directory. A cwd without a root is refused. A
-// provided root keeps the file manager's exact allow-list, relative path,
-// escape and existence policy.
 func (s *TerminalServer) prepareHost(open *agentv1.TerminalOpen) (terminalStart, error) {
 	root := open.GetRoot()
 	cwd := open.GetCwd()
@@ -432,21 +342,10 @@ func (s *TerminalServer) prepareHost(open *agentv1.TerminalOpen) (terminalStart,
 	return terminalStart{Target: terminalTargetHost, Shell: shell, Dir: dir, Cols: cols, Rows: rows}, nil
 }
 
-// defaultTerminalDir resolves the initial working directory for a host shell
-// opened without a file root. It is decided on the agent from the service
-// user's passwd entry, looked up by uid; the request and browser never supply
-// it (Go's os/user may fall back to the agent's HOME only when the passwd
-// lookup fails). The home directory is resolved (symlinks evaluated), must be
-// an existing, searchable directory, and otherwise the fallback is the
-// filesystem root. The result is set directly on the child process, never
-// interpolated into a shell command.
 func defaultTerminalDir() string {
 	return resolveDefaultTerminalDir(serviceHomeDir())
 }
 
-// serviceHomeDir reads the service user's home directory, preferring the
-// passwd entry for the current uid. os/user may use $HOME when that lookup
-// fails; the value never comes from a request or a browser.
 func serviceHomeDir() string {
 	current, err := user.Current()
 	if err != nil {
@@ -455,12 +354,6 @@ func serviceHomeDir() string {
 	return current.HomeDir
 }
 
-// resolveDefaultTerminalDir validates one default-directory candidate. It is
-// separate from defaultTerminalDir so the fallback paths are testable: an
-// empty or relative home, a missing target, a symlink that does not resolve to
-// a directory, and a file all fall back to "/". A directory the service user
-// cannot search (chdir would fail) also falls back to "/" rather than returning
-// a start directory the shell cannot enter.
 func resolveDefaultTerminalDir(home string) string {
 	if home == "" || !filepath.IsAbs(home) {
 		return "/"
@@ -473,17 +366,12 @@ func resolveDefaultTerminalDir(home string) string {
 	if err != nil || !info.IsDir() {
 		return "/"
 	}
-	// Stat succeeds for a directory without search permission, but chdir does
-	// not. Check the service user's ability to enter it and fall back safely.
 	if err := unix.Access(resolved, unix.X_OK); err != nil {
 		return "/"
 	}
 	return resolved
 }
 
-// prepareContainer validates a container exec open. The container id is
-// resolved by the control plane from the application's running deployment; the
-// agent still verifies the container exists and is running before starting.
 func (s *TerminalServer) prepareContainer(open *agentv1.TerminalOpen) (terminalStart, error) {
 	containerID := strings.TrimSpace(open.GetContainerId())
 	if !validContainerID(containerID) {
@@ -508,9 +396,6 @@ func (s *TerminalServer) prepareContainer(open *agentv1.TerminalOpen) (terminalS
 	return terminalStart{Target: terminalTargetContainer, ContainerID: containerID, Shell: shell, Cols: cols, Rows: rows}, nil
 }
 
-// validContainerID requires the full lowercase hexadecimal Docker id the
-// control plane resolves. Names, short prefixes and upper-case spellings are
-// refused so the agent never resolves an ambiguous or caller-chosen name.
 func validContainerID(id string) bool {
 	if len(id) != 64 {
 		return false
@@ -524,7 +409,6 @@ func validContainerID(id string) bool {
 	return true
 }
 
-// terminalDimensions validates a PTY size.
 func terminalDimensions(cols, rows uint32) (uint16, uint16, error) {
 	if cols < terminalMinDimension || cols > terminalMaxDimension ||
 		rows < terminalMinDimension || rows > terminalMaxDimension {
@@ -534,7 +418,6 @@ func terminalDimensions(cols, rows uint32) (uint16, uint16, error) {
 	return uint16(cols), uint16(rows), nil
 }
 
-// terminalDirError maps an fsroot resolution failure onto a gRPC status.
 func terminalDirError(err error) error {
 	switch {
 	case errors.Is(err, fsroot.ErrNotFound):
@@ -551,7 +434,6 @@ func terminalDirError(err error) error {
 	}
 }
 
-// terminalStreamError maps a transport error without leaking stream details.
 func terminalStreamError(action string, err error) error {
 	switch {
 	case errors.Is(err, context.Canceled):
@@ -563,8 +445,6 @@ func terminalStreamError(action string, err error) error {
 	}
 }
 
-// pumpOutput reads the PTY until it closes and then reports the exit status.
-// It is the only goroutine that sends on the stream.
 func (s *TerminalServer) pumpOutput(
 	ctx context.Context,
 	stream grpc.BidiStreamingServer[agentv1.TerminalRequest, agentv1.TerminalResponse],
@@ -601,10 +481,6 @@ func (s *TerminalServer) pumpOutput(
 	})
 }
 
-// startSession starts the configured shell on a new PTY. A bash host session
-// gets the constant integration rcfile as --rcfile and a zsh host session gets a
-// private ZDOTDIR; neither is ever sent through stdin. If the private files
-// cannot be created the shell still starts without the integration.
 func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, error) {
 	setup, err := terminalShellSetupFor(spec.Shell, s.integration)
 	if err != nil {
@@ -613,7 +489,7 @@ func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, erro
 		}
 		setup = terminalShellSetup{}
 	}
-	cmd := exec.Command(spec.Shell, setup.args...) // #nosec G204 -- the shell is chosen by the node, not the caller.
+	cmd := exec.Command(spec.Shell, setup.args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = append(terminalEnv(), setup.env...)
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
@@ -623,9 +499,6 @@ func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, erro
 		}
 		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
 	}
-	// pty's ioctl helpers use os.File.Fd, which puts the master back into
-	// blocking mode. Restore non-blocking I/O so Close can interrupt a Read that
-	// a process outside the session is still holding open through the slave.
 	if err := terminalNonblock(master); err != nil {
 		_ = killTerminalProcessGroup(cmd.Process.Pid, terminalKill)
 		_ = master.Close()
@@ -638,7 +511,6 @@ func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, erro
 	return newTerminalSession(cmd, master, s.log, &s.walks, setup.cleanup), nil
 }
 
-// startContainer opens an interactive exec in the resolved container.
 func (s *TerminalServer) startContainer(ctx context.Context, spec terminalStart) (terminalProcess, error) {
 	if s.containers == nil {
 		return nil, errors.New("container exec is not configured")
@@ -660,7 +532,6 @@ func (s *TerminalServer) startContainer(ctx context.Context, spec terminalStart)
 	}, nil
 }
 
-// containerTerminalSession adapts one Docker exec to terminalProcess.
 type containerTerminalSession struct {
 	stream      docker.ExecSession
 	ctx         context.Context
@@ -674,13 +545,8 @@ type containerTerminalSession struct {
 	done     chan struct{}
 }
 
-// read reads the exec process's output.
 func (s *containerTerminalSession) read(p []byte) (int, error) { return s.stream.Read(p) }
 
-// write sends input to the exec process with a bounded wait. The hijacked
-// Docker stream exposes no write deadline, so a wedged container can otherwise
-// block the handler, which would also make it deaf to context cancellation.
-// The stream is closed on timeout to unblock the writer.
 func (s *containerTerminalSession) write(data []byte) error {
 	done := make(chan error, 1)
 	go func() {
@@ -699,18 +565,10 @@ func (s *containerTerminalSession) write(data []byte) error {
 	}
 }
 
-// resize applies a new window size to the container TTY.
 func (s *containerTerminalSession) resize(cols, rows uint16) error {
 	return s.stream.Resize(s.ctx, cols, rows)
 }
 
-// terminate ends the exec process tree and releases the attachment. Closing the
-// hijacked connection alone does not stop the container process, so Close runs
-// the explicit cleanup with a detached, bounded context (the terminal stream's
-// context is usually already cancelled on this path) and returns any failure.
-// A failure is logged at ERROR with the container id, never silently treated as
-// success. The application container keeps running: only the interactive
-// process and its jobs go away.
 func (s *containerTerminalSession) terminate() {
 	s.termOnce.Do(func() {
 		if err := s.stream.Close(); err != nil && s.log != nil {
@@ -720,8 +578,6 @@ func (s *containerTerminalSession) terminate() {
 	})
 }
 
-// wait reports the exec process's exit status. The exit lookup runs on a
-// context detached from the stream so a canceled relay still reaps the status.
 func (s *containerTerminalSession) wait() (int32, string) {
 	s.waitOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), terminalStopWait)
@@ -737,14 +593,10 @@ func (s *containerTerminalSession) wait() (int32, string) {
 	return s.code, s.signal
 }
 
-// Shell reports the shell executable the agent chose in the container.
 func (s *containerTerminalSession) Shell() string { return s.stream.Shell() }
 
-// User reports the container user the exec runs as.
 func (s *containerTerminalSession) User() string { return s.stream.User() }
 
-// terminalSessionIdentity reports the shell and the user shown in the opened
-// event for either target.
 func terminalSessionIdentity(session terminalProcess, spec terminalStart) (string, string) {
 	if identity, ok := session.(interface {
 		Shell() string
@@ -758,9 +610,6 @@ func terminalSessionIdentity(session terminalProcess, spec terminalStart) (strin
 	return spec.Shell, serviceUser()
 }
 
-// terminalStartError maps a container exec failure onto a bounded gRPC status.
-// The prefixes are stable so the control plane can report an actionable reason
-// without echoing Docker's raw message.
 func terminalStartError(err error) error {
 	switch {
 	case err == nil:
@@ -778,24 +627,10 @@ func terminalStartError(err error) error {
 	}
 }
 
-// resolveTerminalShell picks the shell the node runs. A configured value must
-// be an absolute, executable regular file and is used exactly as given.
-//
-// With the integration on, the operator's $SHELL is honored when it is bash or
-// zsh, because both now receive the full terminal experience (colours for bash
-// and the OSC 133 prompt marks that quick-command suggestions need). Otherwise
-// bash is preferred over an unsupported $SHELL on purpose: the product owner
-// asked for /bin/bash rather than whatever shell the service account was created
-// with. A node whose $SHELL is fish or sh therefore gets bash by design; set
-// GOTHAM_AGENT_TERMINAL_SHELL to opt a node back to another shell. The old order
-// ($SHELL, /bin/bash, /bin/sh) is kept only when the integration is disabled
-// with GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
 func resolveTerminalShell(configured string, integration bool) (string, error) {
 	return resolveTerminalShellWith(configured, integration, exec.LookPath, os.Stat)
 }
 
-// resolveTerminalShellWith is resolveTerminalShell with injectable lookup and
-// stat so the installed-shell branches are testable.
 func resolveTerminalShellWith(
 	configured string,
 	integration bool,
@@ -811,7 +646,6 @@ func resolveTerminalShellWith(
 	}
 	var candidates []string
 	if integration {
-		// Honor an operator's bash/zsh before forcing bash; both are integrated.
 		if shell := strings.TrimSpace(os.Getenv("SHELL")); bashShell(shell) || zshShell(shell) {
 			candidates = append(candidates, shell)
 		}
@@ -831,8 +665,6 @@ func resolveTerminalShellWith(
 	return "", errors.New("no absolute executable shell found")
 }
 
-// firstUsableShell returns the first candidate that is an absolute executable
-// regular file. Duplicates are harmless: the first match wins.
 func firstUsableShell(candidates []string, stat func(string) (os.FileInfo, error)) (string, bool) {
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
@@ -848,20 +680,12 @@ func firstUsableShell(candidates []string, stat func(string) (os.FileInfo, error
 	return "", false
 }
 
-// terminalSafeEnv is the environment a host shell inherits. It is an allowlist
-// on purpose: the agent process holds secrets (the enrollment token, credential
-// paths) and a root shell must never inherit them.
 var terminalSafeEnv = map[string]bool{
 	"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true,
 	"LANG": true, "LANGUAGE": true, "TZ": true, "TMPDIR": true, "PWD": true,
 	"XDG_RUNTIME_DIR": true, "TERM_PROGRAM": true,
 }
 
-// terminalEnv builds the child environment from the allowlist plus a terminal
-// description. LC_* locale variables are kept so UTF-8 and collation behave
-// like the operator's locale. The extra values are derived from the agent's
-// own environment and the service user's passwd entry, never from a request or
-// the browser.
 func terminalEnv() []string {
 	env := make([]string, 0, 20)
 	for _, entry := range os.Environ() {
@@ -873,9 +697,6 @@ func terminalEnv() []string {
 			env = append(env, entry)
 		}
 	}
-	// Keep HOME/USER/LOGNAME correct even when the service was started without
-	// them (systemd with a bare environment). Existing non-empty values from the
-	// operator's environment are kept.
 	if home := serviceHomeDir(); home != "" {
 		env = docker.TerminalEnvDefault(env, "HOME", home)
 	}
@@ -886,7 +707,6 @@ func terminalEnv() []string {
 	return docker.TerminalEnvDescription(env)
 }
 
-// serviceUser reports the OS identity the shell runs as.
 func serviceUser() string {
 	if name := strings.TrimSpace(os.Getenv("USER")); name != "" {
 		return name
@@ -894,7 +714,6 @@ func serviceUser() string {
 	return currentUsername()
 }
 
-// terminalSession owns one PTY and its child process.
 type terminalSession struct {
 	cmd   *exec.Cmd
 	pty   *os.File
@@ -904,13 +723,9 @@ type terminalSession struct {
 	walks *sync.WaitGroup
 	done  chan struct{}
 
-	// cleanup removes the per-session integration directory (0700 directory,
-	// 0600 files). nil for non-integrated shells and when the integration is off.
 	cleanup     func()
 	cleanupOnce sync.Once
 
-	// leaderStart is the shell's /proc start time, captured at fork time. It
-	// lets the session walk tell the recorded session apart from a reused pid.
 	leaderStart uint64
 
 	termOnce sync.Once
@@ -934,9 +749,6 @@ func newTerminalSession(cmd *exec.Cmd, master *os.File, log *slog.Logger, walks 
 	}
 }
 
-// removeCleanup deletes the session's private rcfile once. It never runs while
-// the shell still needs it: terminate ends the shell first, and a naturally
-// exited shell has already read the file.
 func (s *terminalSession) removeCleanup() {
 	if s.cleanup == nil {
 		return
@@ -944,10 +756,6 @@ func (s *terminalSession) removeCleanup() {
 	s.cleanupOnce.Do(s.cleanup)
 }
 
-// WaitTerminations waits up to timeout for in-flight session cleanup walks to
-// finish. A graceful agent stop calls it after the gRPC handlers are drained, so
-// SIGTERM/SIGKILL delivery is not lost to an immediate process exit. It reports
-// false when the bound expired; the walks themselves stay time-bounded.
 func (s *TerminalServer) WaitTerminations(timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
@@ -964,25 +772,6 @@ func (s *TerminalServer) WaitTerminations(timeout time.Duration) bool {
 	}
 }
 
-// terminate ends the whole host session, not just the shell's process group. It
-// is idempotent and returns immediately: the PTY master is closed inline and the
-// /proc session walk runs on a background goroutine bounded by
-// terminalSessionBudget, so a large process table never delays the close.
-//
-// The shell is a session leader (pty.StartWithSize sets Setsid). An interactive
-// shell with job control puts every job in its own process group, so signalling
-// only the shell's group leaves `sleep N &` running. After SIGHUP to the group,
-// every process whose session id equals the shell's pid gets SIGTERM, then
-// SIGKILL after terminalKillGrace (a bounded set of re-scans catches jobs forked
-// during the grace). The PTY master is closed immediately: because it is
-// non-blocking, Close interrupts the output pump's pending Read even when a
-// process that left the session (setsid) still holds the slave open.
-//
-// A child that already exited is not signalled through its group, and a session
-// id whose leader start time no longer matches is never signalled: that pid has
-// been reused. A walk that could not inspect all of /proc reports itself as
-// incomplete (WARN with the session id) and keeps the process-group fallback.
-// Reaping is scheduled on every path so no zombie remains.
 func (s *terminalSession) terminate() {
 	s.termOnce.Do(func() {
 		select {
@@ -997,8 +786,6 @@ func (s *terminalSession) terminate() {
 	})
 }
 
-// startEndSession runs endSession in a goroutine tracked by the server so a
-// graceful shutdown can wait for it, but terminate() itself never blocks.
 func (s *terminalSession) startEndSession() {
 	if s.walks == nil {
 		go s.endSession()
@@ -1011,12 +798,6 @@ func (s *terminalSession) startEndSession() {
 	}()
 }
 
-// endSession sends SIGTERM to every process in the shell's session and then runs
-// the bounded hard kill. The members a scan found are kept (with their pidfds)
-// until after the grace, so a later incomplete walk can never lose them: they
-// are SIGKILLed regardless. When the first walk is incomplete, the members it
-// did find are still TERMed, the incompleteness is logged at WARN, and the
-// process-group fallback runs after the grace as well.
 func (s *terminalSession) endSession() {
 	deadline := time.Now().Add(terminalSessionBudget)
 	members, complete := terminalSessionMembers(s.sid, s.leaderStart, deadline)
@@ -1032,8 +813,6 @@ func (s *terminalSession) endSession() {
 	s.killSessionAfterGrace(members, complete, deadline)
 }
 
-// warnIncompleteScan reports a walk that could not see all of /proc. It is never
-// silent: the session id and the number of members found are logged at WARN.
 func (s *terminalSession) warnIncompleteScan(found int) {
 	if s.log == nil {
 		return
@@ -1042,12 +821,6 @@ func (s *terminalSession) warnIncompleteScan(found int) {
 		"session_id", s.sid, "members_found", found)
 }
 
-// killSessionAfterGrace keeps the members the first scan verified (with their
-// pidfds) across the grace and SIGKILLs them even when a later re-scan is
-// incomplete; it then re-scans a bounded number of times for jobs forked during
-// the grace. Every loop is bounded and no sleep is per process. It never cuts the
-// grace short: an incomplete probe stops the probing but still waits out the
-// remaining grace before the hard kill and the process-group fallback.
 func (s *terminalSession) killSessionAfterGrace(kept []terminalSessionMember, complete bool, deadline time.Time) {
 	defer func() { closeTerminalSessionMembers(kept) }()
 	grace := time.Now().Add(terminalKillGrace)
@@ -1062,8 +835,6 @@ func (s *terminalSession) killSessionAfterGrace(kept []terminalSessionMember, co
 		time.Sleep(remaining)
 		found, ok := terminalSessionMembers(s.sid, s.leaderStart, deadline)
 		if !ok {
-			// Keep the members this truncated walk verified as well; they are
-			// hard-killed below even though the walk is incomplete.
 			kept = mergeTerminalSessionMembers(kept, found)
 			s.warnIncompleteScan(len(found))
 			complete = false
@@ -1077,8 +848,6 @@ func (s *terminalSession) killSessionAfterGrace(kept []terminalSessionMember, co
 	if remaining := time.Until(grace); remaining > 0 {
 		time.Sleep(remaining)
 	}
-	// Hard kill the members the first walk found before touching any later
-	// scan result: a truncated re-scan must never drop them.
 	signalTerminalSession(kept, terminalKill)
 	closeTerminalSessionMembers(kept)
 	kept = nil
@@ -1092,7 +861,6 @@ func (s *terminalSession) killSessionAfterGrace(kept []terminalSessionMember, co
 		}
 		found, ok := terminalSessionMembers(s.sid, s.leaderStart, deadline)
 		if !ok {
-			// Never drop the members a truncated scan did find.
 			signalTerminalSession(found, terminalKill)
 			closeTerminalSessionMembers(found)
 			s.warnIncompleteScan(len(found))
@@ -1111,8 +879,6 @@ func (s *terminalSession) killSessionAfterGrace(kept []terminalSessionMember, co
 	}
 }
 
-// hardKillGroupIfLive kills the shell's process group only while its leader has
-// not been reaped, so a reused pid is never addressed.
 func (s *terminalSession) hardKillGroupIfLive() {
 	select {
 	case <-s.done:
@@ -1121,25 +887,18 @@ func (s *terminalSession) hardKillGroupIfLive() {
 	}
 }
 
-// read reads the PTY's output.
 func (s *terminalSession) read(p []byte) (int, error) { return s.pty.Read(p) }
 
-// write sends input to the PTY master with a bounded deadline so a shell that
-// stops reading cannot pin the handler.
 func (s *terminalSession) write(data []byte) error {
 	_ = s.pty.SetWriteDeadline(time.Now().Add(terminalWriteTimeout))
 	_, err := s.pty.Write(data)
 	return err
 }
 
-// resize applies a new window size.
 func (s *terminalSession) resize(cols, rows uint16) error {
 	return pty.Setsize(s.pty, &pty.Winsize{Cols: cols, Rows: rows})
 }
 
-// wait reaps the child and reports its exit status. The private integration
-// rcfile is removed once the shell has exited, so a shell that starts slowly
-// can still read it.
 func (s *terminalSession) wait() (int32, string) {
 	s.waitOnce.Do(func() {
 		s.waitErr = s.cmd.Wait()

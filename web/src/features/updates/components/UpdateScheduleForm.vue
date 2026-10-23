@@ -58,7 +58,6 @@ function fromState(state: ScheduleState): ScheduleForm {
 const form = reactive<ScheduleForm>(fromState(props.state));
 const rules = scheduleRules();
 
-// A saved or reloaded schedule replaces the draft.
 watch(() => props.state.schedule, () => Object.assign(form, fromState(props.state)));
 
 const channelOptions = computed(() => [
@@ -202,12 +201,10 @@ async function onSubmit(): Promise<void> {
   max-width: 960px;
 }
 
-/* Grid rows own the vertical rhythm; drop the global stacked-item margin. */
 .n-form.schedule-form > * {
   margin-top: 0;
 }
 
-/* Switch rows, frequency, hints and actions span both columns. */
 .schedule-form > .n-form-item:has(.switch-row),
 .schedule-form > .n-form-item:has(.n-radio-group),
 .schedule-form > .field-hint,

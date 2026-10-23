@@ -3,12 +3,6 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-// Behavioural proof for the JUS-69 modal scroll contract: every card modal
-// stays inside the viewport while only its body scrolls — the header and any
-// footer actions stay pinned. The fixture stages the Naive card DOM
-// (.n-card-header + .n-card-content + footer) against the real
-// web/src/shared/styles/main.css. No backend is involved.
-
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const fixture = `file://${resolve(testsDir, "modal-scroll.fixture.html")}`;
 
@@ -27,7 +21,6 @@ for (const viewport of [
     const card = page.locator("#add-modal");
     const header = page.locator("#add-header");
     const body = page.locator("#add-body");
-    // The 2000px body overflows: the card is bounded, the body scrolls.
     expect(await body.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
       await body.evaluate((element) => element.clientHeight),
     );
@@ -39,7 +32,6 @@ for (const viewport of [
     await body.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
-    // Scrolling the body to the bottom leaves the header where it was.
     const after = await header.boundingBox();
     expect(after!.y).toBeCloseTo(before!.y, 0);
     expect(after!.y).toBeGreaterThanOrEqual(0);
@@ -56,7 +48,6 @@ for (const viewport of [
     const body = page.locator("#wizard-body");
     const foot = page.locator("#wizard-foot");
     const create = page.locator("#wizard-create");
-    // Only the step body scrolls; the card body itself never does.
     expect(await body.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
       await body.evaluate((element) => element.clientHeight),
     );
@@ -69,7 +60,6 @@ for (const viewport of [
     expect(headerBox!.y).toBeGreaterThanOrEqual(0);
     expect(footBox!.y + footBox!.height).toBeLessThanOrEqual(viewport.height);
     expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(viewport.height);
-    // The footer action is the acceptance proof: inside the viewport.
     await expect(create).toBeVisible();
     const createBox = await create.boundingBox();
     expect(createBox!.y + createBox!.height).toBeLessThanOrEqual(viewport.height);

@@ -1,13 +1,6 @@
 import type { DatabaseBackup } from "@/features/databases/api/backups";
 import type { Database } from "@/features/databases/api/databases";
 
-/**
- * mergeBackupsById folds a server list into the cached one by id and sorts the
- * result newest first. A server row wins for a known id; a local `running` row
- * the server has not reported yet is kept — dropping it would stop the page's
- * running-job poll — and sorting keeps the just-queued row at the top instead
- * of pushing it below the older server rows.
- */
 export function mergeBackupsById(
   existing: DatabaseBackup[],
   incoming: DatabaseBackup[],
@@ -23,12 +16,6 @@ export function mergeBackupsById(
   );
 }
 
-/**
- * mergeDatabasesById folds a server list into the local one. A server row wins
- * for a known id and a local-only row is preserved, but an id in deletedIds is
- * dropped from both sides: a list response that started before a delete
- * resolved after it, so without this it would resurrect the removed row.
- */
 export function mergeDatabasesById(
   server: Database[],
   local: Database[],

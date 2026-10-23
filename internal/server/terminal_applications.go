@@ -14,17 +14,12 @@ import (
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
-// terminalApplicationResolver adapts the deploy domain to the transport's
-// resolution contract and translates its sentinels into the terminal package's
-// HTTP-facing errors. Keeping the adapter here means neither domain package
-// imports the other.
 type terminalApplicationResolver struct {
 	deploy deploy.TerminalResolver
 }
 
 var _ terminal.ApplicationTargets = terminalApplicationResolver{}
 
-// ListContainers implements terminal.ApplicationTargets.
 func (r terminalApplicationResolver) ListContainers(ctx context.Context, userID, appID uuid.UUID) (terminal.ContainerTargetSet, error) {
 	set, err := r.deploy.ListTerminalContainers(ctx, userID, appID)
 	if err != nil {
@@ -33,7 +28,6 @@ func (r terminalApplicationResolver) ListContainers(ctx context.Context, userID,
 	return newTerminalTargetSet(set), nil
 }
 
-// ResolveContainer implements terminal.ApplicationTargets.
 func (r terminalApplicationResolver) ResolveContainer(ctx context.Context, userID, appID uuid.UUID, service, containerID string) (terminal.ContainerTargetSet, terminal.ContainerTarget, error) {
 	set, target, err := r.deploy.ResolveTerminalContainer(ctx, userID, appID, service, containerID)
 	if err != nil {
@@ -48,7 +42,6 @@ func (r terminalApplicationResolver) ResolveContainer(ctx context.Context, userI
 	return converted, terminal.ContainerTarget{}, terminal.ErrContainerNotFound
 }
 
-// newTerminalTargetSet maps the deploy view onto the transport view.
 func newTerminalTargetSet(set deploy.TerminalTargetSet) terminal.ContainerTargetSet {
 	converted := terminal.ContainerTargetSet{
 		ApplicationID:   set.ApplicationID,
@@ -73,9 +66,6 @@ func newTerminalTargetSet(set deploy.TerminalTargetSet) terminal.ContainerTarget
 	return converted
 }
 
-// mapTerminalTargetError maps deploy sentinels onto the terminal package's
-// actionable errors. An unknown error is returned unchanged so the handler logs
-// it (without terminal I/O) and answers a generic internal error.
 func mapTerminalTargetError(err error) error {
 	switch {
 	case err == nil:
@@ -103,21 +93,12 @@ func mapTerminalTargetError(err error) error {
 	}
 }
 
-// applicationTerminalAuth is the control-route chain for container terminal
-// discovery, creation and deletion: authentication, an interactive JWT session
-// (a scoped API token must never drive a shell), the team scope and the team
-// write gate. The WebSocket attach has its own in-band JWT check.
 func (s *Server) applicationTerminalAuth() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return s.withTeam()(s.requireInteractiveSession(next))
 	}
 }
 
-// applicationTerminalAuthorizer authorizes a container terminal with the
-// application write permission, never the platform-operator role. It also
-// pins the stream to the session's sign-in lineage exactly like the host
-// authorizer: refresh-token rotation keeps the created_at, while logout,
-// revoke-all, password reset and account deletion remove it.
 type applicationTerminalAuthorizer struct {
 	resolver deploy.TerminalResolver
 	auth     AuthService
@@ -126,9 +107,6 @@ type applicationTerminalAuthorizer struct {
 
 var _ terminal.Authorizer = applicationTerminalAuthorizer{}
 
-// Authorize runs at the application WebSocket handshake. A token minted before
-// a refresh rotation is accepted while its sign-in lineage still has a live
-// session, exactly like the host authorizer.
 func (a applicationTerminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims, target terminal.Target) (terminal.Marker, error) {
 	if target.Kind != terminal.TargetContainer || target.ApplicationID == uuid.Nil {
 		return terminal.Marker{}, errors.New("terminal: the application authorizer only serves container targets")
@@ -171,9 +149,6 @@ func (a applicationTerminalAuthorizer) Authorize(ctx context.Context, claims *au
 	return terminal.Marker{SignInAt: signInAt}, nil
 }
 
-// Revalidate re-checks the application's current write permission and the
-// sign-in lineage every tick. Only a definitive refusal returns (false, nil); a
-// lookup failure returns an error so the caller keeps the shell and retries.
 func (a applicationTerminalAuthorizer) Revalidate(ctx context.Context, claims *auth.Claims, marker terminal.Marker, target terminal.Target) (bool, error) {
 	if target.Kind != terminal.TargetContainer || target.ApplicationID == uuid.Nil ||
 		claims == nil || a.auth == nil || a.resolver == nil {
@@ -209,8 +184,6 @@ func (a applicationTerminalAuthorizer) Revalidate(ctx context.Context, claims *a
 	return liveSignIn(sessions, marker.SignInAt), nil
 }
 
-// authorizeWrite resolves the caller's current role in the application's team.
-// A legacy row without a team keeps the pre-teams creator rule.
 func (a applicationTerminalAuthorizer) authorizeWrite(ctx context.Context, userID uuid.UUID, access deploy.TerminalApplicationAccess) error {
 	if access.TeamID == uuid.Nil {
 		if userID != access.OwnerID {
@@ -219,7 +192,6 @@ func (a applicationTerminalAuthorizer) authorizeWrite(ctx context.Context, userI
 		return nil
 	}
 	if a.teams == nil {
-		// Tests and the pre-teams compatibility path: only the creator may act.
 		if userID != access.OwnerID {
 			return teams.ErrForbidden
 		}
@@ -235,8 +207,6 @@ func (a applicationTerminalAuthorizer) authorizeWrite(ctx context.Context, userI
 	return nil
 }
 
-// isDefinitiveRefusal distinguishes "the caller may not" from "the lookup
-// failed": only the first ends an open shell.
 func isDefinitiveRefusal(err error) bool {
 	return errors.Is(err, teams.ErrForbidden) || errors.Is(err, teams.ErrNotFound)
 }

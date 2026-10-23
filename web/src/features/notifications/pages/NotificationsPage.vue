@@ -16,21 +16,8 @@ import { provideChannelDialog } from "@/features/notifications/composables/useCh
 import { useNotificationsStore } from "@/features/notifications/stores/notifications";
 import { useTeamsStore } from "@/features/teams";
 
-/**
- * FE-8.1 (3) — notification channels.
- *
- * The layout follows the established settings/form pattern.
- * Secrets are write-only: reads show the masked value the API returns, and an
- * update only carries a value the operator actually typed.
- *
- * Thin route component: team scope, channel cards and the channel dialog
- * live in their own components; the draft and resource loading live in
- * useChannelDialog.
- */
 const channelsStore = useNotificationsStore();
 const teamsStore = useTeamsStore();
-// Per page instance: the cards and the dialog share this draft via inject,
-// and it is dropped on unmount — typed secrets never survive a route change.
 const { canMutate, loadResources, openCreate } = provideChannelDialog();
 
 watch(
@@ -44,8 +31,6 @@ watch(
 onMounted(async () => {
   const selectionBeforeLoad = teamsStore.activeTeamId;
   await teamsStore.ensureTeams();
-  // The selection watcher already reloaded the list when ensureTeams changed
-  // the active team; only an unchanged selection needs an explicit first read.
   if (teamsStore.activeTeamId === selectionBeforeLoad) {
     await Promise.all([
       channelsStore.fetchChannels().catch(() => undefined),

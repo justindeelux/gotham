@@ -8,12 +8,6 @@ import { fetchTotpStatus, type TotpStatus } from "@/features/profile/api/totp";
 import TotpConfirmDialog from "@/features/profile/components/TotpConfirmDialog.vue";
 import TotpSetupDialog from "@/features/profile/components/TotpSetupDialog.vue";
 
-/**
- * TotpCard is the two-factor panel on the profile page (JUS-196): it reports
- * whether the second factor is on, how many recovery codes remain, and opens
- * the enrollment / disable / regenerate dialogs. The status is re-read after
- * every committed change.
- */
 const { t } = useI18n();
 
 const status = ref<TotpStatus | null>(null);
@@ -26,7 +20,6 @@ const confirmMode = ref<"disable" | "regenerate" | null>(null);
 const enabled = computed<boolean>(() => status.value?.enabled ?? false);
 const remaining = computed<number>(() => status.value?.recovery_codes_remaining ?? 0);
 
-/** refresh re-reads the two-factor status. */
 async function refresh(): Promise<void> {
   loadError.value = "";
   try {

@@ -17,36 +17,24 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// variableKeyPattern is the contract's key rule: shell-style identifiers
-// only. It is stricter than the application env-var rule on purpose, so a
-// shared key is always a valid container variable without further quoting.
 var variableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// maxVariablesPerScope caps one PUT body per the API contract.
 const maxVariablesPerScope = 128
 
-// maxVariableKeyLength caps one key, matching application env keys.
 const maxVariableKeyLength = 128
 
-// Variable is one shared KEY=VALUE pair as the API sees it. Secret values are
-// write-only: Value is empty when Secret is true, so a secret's plaintext and
-// ciphertext never leave the server in a response.
 type Variable struct {
 	Key    string
 	Value  string
 	Secret bool
 }
 
-// VariableInput is one row of a PUT body. A nil Value is an omitted value,
-// which keeps an existing secret's sealed ciphertext instead of replacing it.
 type VariableInput struct {
 	Key    string
 	Value  *string
 	Secret bool
 }
 
-// SharedVariable is the stored row: plain pairs keep Value, secret pairs keep
-// the AES-256-GCM ciphertext sealed with providers.SealSecret.
 type SharedVariable struct {
 	Key        string
 	Value      string
@@ -54,8 +42,6 @@ type SharedVariable struct {
 	Secret     bool
 }
 
-// GetProjectVariables returns one project's project-level variables (viewers
-// may read). A foreign project answers ErrNotFound.
 func (s *Service) GetProjectVariables(ctx context.Context, userID, projectID uuid.UUID) ([]Variable, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -70,9 +56,6 @@ func (s *Service) GetProjectVariables(ctx context.Context, userID, projectID uui
 	return s.listVariables(ctx, projectID, uuid.Nil)
 }
 
-// ReplaceProjectVariables replaces one project's whole project-level set and
-// returns it masked (owner/admin). An omitted value for an existing secret
-// key keeps its sealed ciphertext.
 func (s *Service) ReplaceProjectVariables(ctx context.Context, userID, projectID uuid.UUID, inputs []VariableInput) ([]Variable, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -90,8 +73,6 @@ func (s *Service) ReplaceProjectVariables(ctx context.Context, userID, projectID
 	return s.replaceVariables(ctx, projectID, uuid.Nil, inputs)
 }
 
-// GetEnvironmentVariables returns one environment's variables (viewers may
-// read). A foreign environment answers ErrNotFound.
 func (s *Service) GetEnvironmentVariables(ctx context.Context, userID, environmentID uuid.UUID) ([]Variable, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -106,9 +87,6 @@ func (s *Service) GetEnvironmentVariables(ctx context.Context, userID, environme
 	return s.listVariables(ctx, environment.ProjectID, environment.ID)
 }
 
-// ReplaceEnvironmentVariables replaces one environment's whole set and
-// returns it masked (owner/admin). An omitted value for an existing secret
-// key keeps its sealed ciphertext.
 func (s *Service) ReplaceEnvironmentVariables(ctx context.Context, userID, environmentID uuid.UUID, inputs []VariableInput) ([]Variable, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -126,7 +104,6 @@ func (s *Service) ReplaceEnvironmentVariables(ctx context.Context, userID, envir
 	return s.replaceVariables(ctx, environment.ProjectID, environment.ID, inputs)
 }
 
-// listVariables reads one scope and masks every secret.
 func (s *Service) listVariables(ctx context.Context, projectID, environmentID uuid.UUID) ([]Variable, error) {
 	rows, err := s.repo.ListVariables(ctx, projectID, environmentID)
 	if err != nil {
@@ -143,11 +120,6 @@ func (s *Service) listVariables(ctx context.Context, projectID, environmentID uu
 	return variables, nil
 }
 
-// replaceVariables validates a PUT body, seals new secret values and swaps
-// the scope's whole set, returning the masked result. The new set is resolved
-// from the existing rows inside the repository's locked transaction, so a
-// concurrent PUT cannot slip between the keep-ciphertext read and the write
-// and validation failures change nothing.
 func (s *Service) replaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, inputs []VariableInput) ([]Variable, error) {
 	if len(inputs) > maxVariablesPerScope {
 		return nil, fmt.Errorf("%w: at most %d variables per scope", ErrValidation, maxVariablesPerScope)
@@ -161,10 +133,6 @@ func (s *Service) replaceVariables(ctx context.Context, projectID, environmentID
 	return s.listVariables(ctx, projectID, environmentID)
 }
 
-// buildVariableSet resolves a PUT body against the scope's existing rows:
-// keys and values are validated, omitted values on existing secrets keep
-// their ciphertext, and new secret values are sealed. It is pure apart from
-// sealing, so the repository runs it inside the write transaction.
 func (s *Service) buildVariableSet(existing []SharedVariable, inputs []VariableInput) ([]SharedVariable, error) {
 	byKey := make(map[string]SharedVariable, len(existing))
 	for _, row := range existing {
@@ -211,8 +179,6 @@ func (s *Service) buildVariableSet(existing []SharedVariable, inputs []VariableI
 	return vars, nil
 }
 
-// validateVariableKey enforces the contract's key rule: ^[A-Za-z_][A-Za-z0-9_]*$,
-// at most 128 characters like application env keys.
 func validateVariableKey(key string) error {
 	if !variableKeyPattern.MatchString(key) {
 		return fmt.Errorf("%w: variable key %q must match ^[A-Za-z_][A-Za-z0-9_]*$", ErrValidation, key)
@@ -223,9 +189,6 @@ func validateVariableKey(key string) error {
 	return nil
 }
 
-// validateVariableValue rejects what PostgreSQL text columns and container
-// runtimes cannot carry: NUL bytes (which fail the insert with a 500) and
-// invalid UTF-8.
 func validateVariableValue(key, value string) error {
 	if strings.ContainsRune(value, 0) {
 		return fmt.Errorf("%w: variable %q value must not contain NUL", ErrValidation, key)
@@ -236,8 +199,6 @@ func validateVariableValue(key, value string) error {
 	return nil
 }
 
-// ListVariables returns one scope's stored rows (environmentID Nil reads the
-// project level), ordered by key.
 func (r *storeRepository) ListVariables(ctx context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, error) {
 	rows, err := r.store.ListSharedVariables(ctx, pgUUID(projectID), pgUUID(environmentID))
 	if err != nil {
@@ -246,10 +207,6 @@ func (r *storeRepository) ListVariables(ctx context.Context, projectID, environm
 	return sharedVariablesFromRows(rows), nil
 }
 
-// ReplaceVariables swaps one scope's whole set in a locked transaction (see
-// Store.ReplaceSharedVariablesLocked). build resolves the new set from the
-// existing rows inside that transaction, so keep-ciphertext reads the latest
-// committed set; a missing scope answers ErrNotFound.
 func (r *storeRepository) ReplaceVariables(ctx context.Context, projectID, environmentID uuid.UUID, build func(existing []SharedVariable) ([]SharedVariable, error)) error {
 	err := r.store.ReplaceSharedVariablesLocked(ctx, pgUUID(projectID), pgUUID(environmentID),
 		func(existing []sqlc.SharedVariable) ([]sqlc.InsertSharedVariableParams, error) {
@@ -275,8 +232,6 @@ func (r *storeRepository) ReplaceVariables(ctx context.Context, projectID, envir
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
-		// A parent deleted by a racing transaction trips the foreign key;
-		// a foreign scope reads as 404, never 500.
 		if isForeignKeyViolation(err) {
 			return ErrNotFound
 		}
@@ -285,7 +240,6 @@ func (r *storeRepository) ReplaceVariables(ctx context.Context, projectID, envir
 	return nil
 }
 
-// sharedVariablesFromRows maps sqlc rows to stored variables.
 func sharedVariablesFromRows(rows []sqlc.SharedVariable) []SharedVariable {
 	vars := make([]SharedVariable, 0, len(rows))
 	for _, row := range rows {
@@ -299,35 +253,26 @@ func sharedVariablesFromRows(rows []sqlc.SharedVariable) []SharedVariable {
 	return vars
 }
 
-// variableResponse is the wire representation of one variable: value is
-// omitted for secrets, so neither plaintext nor ciphertext ever leaves the
-// server.
 type variableResponse struct {
 	Key    string  `json:"key"`
 	Value  *string `json:"value,omitempty"`
 	Secret bool    `json:"secret"`
 }
 
-// variablesEnvelope is the GET/PUT variables body.
 type variablesEnvelope struct {
 	Variables []variableResponse `json:"variables"`
 }
 
-// replaceVariablesRequest is the PUT variables body: it replaces the whole
-// set, so an empty (or missing) list clears the scope.
 type replaceVariablesRequest struct {
 	Variables []variableInput `json:"variables"`
 }
 
-// variableInput is one row of a PUT body: a missing value keeps an existing
-// secret's sealed ciphertext.
 type variableInput struct {
 	Key    string  `json:"key"`
 	Value  *string `json:"value"`
 	Secret bool    `json:"secret"`
 }
 
-// getProjectVariables serves GET /v1/projects/{id}/variables.
 func (h *handler) getProjectVariables(w http.ResponseWriter, r *http.Request) {
 	userID, projectID, ok := h.projectParams(w, r)
 	if !ok {
@@ -341,8 +286,6 @@ func (h *handler) getProjectVariables(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, variablesEnvelope{Variables: newVariableList(variables)})
 }
 
-// replaceProjectVariables serves PUT /v1/projects/{id}/variables: the body
-// replaces the whole set and the masked set is returned.
 func (h *handler) replaceProjectVariables(w http.ResponseWriter, r *http.Request) {
 	userID, projectID, ok := h.projectParams(w, r)
 	if !ok {
@@ -360,7 +303,6 @@ func (h *handler) replaceProjectVariables(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, variablesEnvelope{Variables: newVariableList(variables)})
 }
 
-// getEnvironmentVariables serves GET /v1/environments/{id}/variables.
 func (h *handler) getEnvironmentVariables(w http.ResponseWriter, r *http.Request) {
 	userID, environmentID, ok := h.environmentParams(w, r)
 	if !ok {
@@ -374,8 +316,6 @@ func (h *handler) getEnvironmentVariables(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, variablesEnvelope{Variables: newVariableList(variables)})
 }
 
-// replaceEnvironmentVariables serves PUT /v1/environments/{id}/variables:
-// the body replaces the whole set and the masked set is returned.
 func (h *handler) replaceEnvironmentVariables(w http.ResponseWriter, r *http.Request) {
 	userID, environmentID, ok := h.environmentParams(w, r)
 	if !ok {
@@ -393,8 +333,6 @@ func (h *handler) replaceEnvironmentVariables(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, variablesEnvelope{Variables: newVariableList(variables)})
 }
 
-// newVariableList maps domain variables to the wire, never rendering a null
-// list and never a secret value.
 func newVariableList(variables []Variable) []variableResponse {
 	response := make([]variableResponse, 0, len(variables))
 	for _, variable := range variables {
@@ -408,7 +346,6 @@ func newVariableList(variables []Variable) []variableResponse {
 	return response
 }
 
-// newVariableInputs maps wire rows to service inputs.
 func newVariableInputs(inputs []variableInput) []VariableInput {
 	converted := make([]VariableInput, 0, len(inputs))
 	for _, input := range inputs {
@@ -417,14 +354,10 @@ func newVariableInputs(inputs []variableInput) []VariableInput {
 	return converted
 }
 
-// toInput maps one wire row to its service input (the shapes match field
-// for field, so this is a plain conversion).
 func (in variableInput) toInput() VariableInput {
 	return VariableInput(in)
 }
 
-// sortedVariableKeys returns the sorted keys of a masked set (test helper for
-// order-independent assertions stays with the mapping it asserts).
 func sortedVariableKeys(variables []Variable) []string {
 	keys := make([]string, 0, len(variables))
 	for _, variable := range variables {

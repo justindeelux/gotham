@@ -15,26 +15,9 @@ import { activeLocale, i18n } from "@/shared/i18n";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
 
-/**
- * One compose service: the stored document (view/edit → PATCH), its
- * environment, the node's containers and logs, the lifecycle actions and the
- * deploy history.
- *
- * Containers and logs are loaded on demand: both dial the node agent, which
- * answers 502 when no agent is connected, so a page render never probes the
- * node on its own. The per-deploy step timeline has no API and is rendered as
- * an explicit backend-pending stub.
- *
- * Thin route component: state lives in `useServiceDetail` (provided to the
- * cards below), sections render through them.
- */
 const page = useServiceDetail();
 provide(serviceDetailKey, page);
 
-/**
- * t renders page copy in the active locale (tracks language switches).
- * Called during render, so labels refresh without losing drafts.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

@@ -1,7 +1,3 @@
-// Custom find/replace over CodeMirror's search state (JUS-231): the match
-// count, the query options, replacement undo and the go-to-line parser. The
-// controller is exercised on a real EditorView so the search state, the
-// highlight decoration and the history integration are the real ones.
 /* global document:readonly, performance:readonly */
 import { history, undo } from "@codemirror/commands";
 import { SearchQuery, getSearchQuery, setSearchQuery } from "@codemirror/search";
@@ -23,12 +19,10 @@ import {
   validateSearchPattern,
 } from "@/features/files/editor/searchPattern";
 
-/** status is the expected shape with the cap flag defaulted off. */
 function status(total: number, current: number, capped = false) {
   return { total, current, capped };
 }
 
-/** options builds one query spec with every toggle off. */
 function options(query: string, extra: Partial<EditorSearchOptions> = {}): EditorSearchOptions {
   return {
     query,
@@ -39,12 +33,10 @@ function options(query: string, extra: Partial<EditorSearchOptions> = {}): Edito
   };
 }
 
-/** text builds a CodeMirror Text from one document string. */
 function text(doc: string): Text {
   return EditorState.create({ doc }).doc;
 }
 
-/** makeView builds a real editable view with undo history and the search UI. */
 function makeView(doc: string): EditorView {
   const host = document.createElement("div");
   document.body.append(host);
@@ -131,8 +123,6 @@ describe("searchStatus", () => {
     const result = searchStatus(doc, options("(a+)+$", { regexp: true }), 0);
 
     expect(result).toEqual(status(0, 0));
-    // The pattern never reaches RegExp.exec, so this returns immediately even
-    // though (a+)+$ on 50k 'a's would backtrack effectively forever.
     expect(performance.now() - started).toBeLessThan(250);
   });
 });
@@ -181,8 +171,6 @@ describe("search controller", () => {
     const view = makeView("a A");
     const search = createSearchController([view]);
     search.setOptions(options("a"), "a");
-    // Select the first match, then replace it with itself: the next match must
-    // survive (the old doc-identity check replaced it too).
     view.dispatch({ selection: { anchor: 0, head: 1 } });
 
     search.replace("a");
@@ -210,15 +198,12 @@ describe("search controller", () => {
     expect(search.next()).toEqual(status(0, 0));
     expect(search.replaceAll("X")).toEqual(status(0, 0));
     expect(view.state.doc.toString()).toBe("one (two");
-    // A fallback to CodeMirror's default panel is the one regression this
-    // surface must never have.
     expect(view.dom.querySelector(".cm-panels")).toBeNull();
     view.destroy();
   });
 
   it("stays responsive when the state already holds a catastrophic pattern", () => {
     const view = makeView("a".repeat(50_000) + "!");
-    // Simulate a state injected from outside the bar (defense in depth).
     view.dispatch({
       effects: setSearchQuery.of(
         new SearchQuery({ search: "(a+)+$", regexp: true }),

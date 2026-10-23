@@ -1,6 +1,3 @@
-// Files browser store (P18 step 6): selection, sort, navigation, pagination
-// and the disabled/permission states. The API module is mocked so the store is
-// exercised without axios or the DOM.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,7 +33,6 @@ const readOnlyRoot: FilesRoot = {
   free_bytes: 0,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(
   overrides: Partial<FilesEntry> & { name: string },
 ): FilesEntry {
@@ -61,7 +57,6 @@ const listing = {
   cursor: "",
 };
 
-/** deferred returns a promise with its resolve exposed. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -76,7 +71,6 @@ beforeEach(() => {
   vi.mocked(listEntries).mockReset();
   const teams = useTeamsStore();
   teams.activeTeamId = "team-1";
-  // read_only is the safe default; tests that need content opt in explicitly.
   teams.teams = [];
 });
 
@@ -243,14 +237,10 @@ describe("files store navigation", () => {
     const store = useFilesStore();
     await store.init("server-1");
 
-    // The active tab browses the read-only root with a filter typed for it.
     await store.setRoot("compose");
     store.setQuery("app");
     expect(store.query).toBe("app");
 
-    // The root disappears from the refreshed list and the next loadAll
-    // re-validates every tab: the tab drops to volumes and its now-meaningless
-    // filter goes with it (JUS-141).
     vi.mocked(listRoots).mockResolvedValue([root]);
     await store.init("server-1");
 
@@ -271,7 +261,6 @@ describe("files store navigation", () => {
 
     store.setQuery("app");
 
-    // The breakdown follows the filtered rows, never the whole folder.
     expect(store.visibleCounts).toMatchObject({ file: 1, directory: 0, symlink: 0 });
   });
 
@@ -353,7 +342,6 @@ describe("files store navigation", () => {
       const opened = await store.openSymlinkTarget("usr/bin");
 
       expect(opened).toBe("error");
-      // The view stays put on a transient failure too.
       expect(store.path).toBe("");
       expect(store.error).toBeNull();
       expect(store.loading).toBe(false);

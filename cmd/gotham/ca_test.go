@@ -9,9 +9,6 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 )
 
-// TestRunCAInitCreatesLoadableCA proves `gotham ca init` provisions a CA the
-// serve path (servers.LoadAuthority) can load, writes it 0600, and is
-// idempotent (a second run never replaces the CA).
 func TestRunCAInitCreatesLoadableCA(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ca")
 	t.Setenv("GOTHAM_CA_DIR", dir)
@@ -38,7 +35,6 @@ func TestRunCAInitCreatesLoadableCA(t *testing.T) {
 		t.Fatal("LoadAuthority after init returned nil, want a CA")
 	}
 
-	// A second init must keep the same CA, not rotate it.
 	if code := runCA([]string{"init"}); code != exitOK {
 		t.Fatalf("runCA init (second) = %d, want %d", code, exitOK)
 	}
@@ -51,8 +47,6 @@ func TestRunCAInitCreatesLoadableCA(t *testing.T) {
 	}
 }
 
-// TestRunCAUsage covers the argument handling so an unknown verb is a usage
-// error rather than a silent no-op.
 func TestRunCAUsage(t *testing.T) {
 	if code := runCA(nil); code != exitUsage {
 		t.Errorf("runCA(nil) = %d, want %d", code, exitUsage)
@@ -65,9 +59,6 @@ func TestRunCAUsage(t *testing.T) {
 	}
 }
 
-// TestRunCAInitPersistsHosts is F1: `gotham ca init --host` records the
-// operator-configured listener SAN hosts so serve presents them, and a bad flag
-// is a usage error.
 func TestRunCAInitPersistsHosts(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ca")
 	t.Setenv("GOTHAM_CA_DIR", dir)

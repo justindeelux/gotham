@@ -1,7 +1,3 @@
-// List state for ContainersPage: loading, filtering, polling and row actions.
-//
-// The page keeps layout (breadcrumb, card, drawer); the table owns its
-// columns and the toolbar owns its chips.
 
 import { useMessage } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
@@ -25,7 +21,6 @@ import {
 } from "@/features/servers/utils/containerView";
 import type { ContainerFilter } from "@/features/servers/utils/containerView";
 
-/** Polling cadence for the container list, in milliseconds. */
 const pollIntervalMs = 5_000;
 
 export function useContainersPage(serverId: ComputedRef<string>) {
@@ -34,13 +29,7 @@ export function useContainersPage(serverId: ComputedRef<string>) {
 
   const containers = ref<Container[]>([]);
   const loading = ref(false);
-  /**
-   * fetchFailure keeps the raw last list failure. The `error` display
-   * derives from it in the current locale, so a language switch re-renders
-   * a retained banner without refetching or resetting the selection.
-   */
   const fetchFailure = ref<unknown>(null);
-  /** error renders the retained failure, or null while healthy. */
   const error = computed<string | null>(() =>
     fetchFailure.value === null || fetchFailure.value === undefined
       ? null
@@ -49,7 +38,6 @@ export function useContainersPage(serverId: ComputedRef<string>) {
   const serverName = ref<string>("");
   const loaded = ref(false);
 
-  /** Per-action in-flight markers keyed by `${containerId}:${action}`. */
   const pending = ref<Record<string, boolean>>({});
 
   const selected = ref<Container | null>(null);
@@ -58,7 +46,6 @@ export function useContainersPage(serverId: ComputedRef<string>) {
   const activeFilter = ref<ContainerFilter>("all");
   const searchQuery = ref("");
 
-  /** filteredContainers applies the chip filter and the name/image search. */
   const filteredContainers = computed<Container[]>(() => {
     const needle = searchQuery.value.trim().toLowerCase();
     return containers.value.filter((row) => {
@@ -72,42 +59,35 @@ export function useContainersPage(serverId: ComputedRef<string>) {
     });
   });
 
-  /** filterCounts renders live chip counts; never invented. */
   const filterCounts = computed<Record<ContainerFilter, number>>(() => ({
     all: countByFilter(containers.value, "all"),
     running: countByFilter(containers.value, "running"),
     exited: countByFilter(containers.value, "exited"),
   }));
 
-  /** isNarrow tracks viewports where the fixed log drawer would overflow. */
   const isNarrow = useMediaQuery("(max-width: 760px)");
 
-  /** drawerWidth keeps the log drawer inside narrow viewports. */
   const drawerWidth = computed<number | string>(() =>
     isNarrow.value ? "94vw" : 720,
   );
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  /** isPending reports whether one action is in flight for a container. */
   function isPending(containerId: string, action: ContainerAction): boolean {
     return pending.value[`${containerId}:${action}`] === true;
   }
 
-  /** isBusy reports whether any action is in flight for a container. */
   function isBusy(containerId: string): boolean {
     return Object.keys(pending.value).some((key) =>
       key.startsWith(`${containerId}:`),
     );
   }
 
-  /** openLogs selects a container and opens the log drawer. */
   function openLogs(row: Container): void {
     selected.value = row;
     drawerOpen.value = true;
   }
 
-  /** fetchContainers reloads the list; `showLoading` drives the table spinner. */
   async function fetchContainers(showLoading: boolean): Promise<void> {
     if (!serverId.value) {
       return;
@@ -126,7 +106,6 @@ export function useContainersPage(serverId: ComputedRef<string>) {
     }
   }
 
-  /** fetchServer loads the server name for the heading; failures are ignored. */
   async function fetchServer(): Promise<void> {
     if (!serverId.value) {
       return;
@@ -135,11 +114,9 @@ export function useContainersPage(serverId: ComputedRef<string>) {
       const server = await getServer(serverId.value);
       serverName.value = server.name;
     } catch {
-      // The breadcrumb falls back to the server id when the lookup fails.
     }
   }
 
-  /** runAction invokes one lifecycle action and refreshes the list on success. */
   async function runAction(
     row: Container,
     action: ContainerAction,
@@ -166,7 +143,6 @@ export function useContainersPage(serverId: ComputedRef<string>) {
     }
   }
 
-  /** startPolling refreshes the container list in place every few seconds. */
   function startPolling(): void {
     if (pollTimer !== null) {
       return;
@@ -176,7 +152,6 @@ export function useContainersPage(serverId: ComputedRef<string>) {
     }, pollIntervalMs);
   }
 
-  /** stopPolling clears the refresh interval. */
   function stopPolling(): void {
     if (pollTimer !== null) {
       clearInterval(pollTimer);
@@ -184,13 +159,11 @@ export function useContainersPage(serverId: ComputedRef<string>) {
     }
   }
 
-  /** initialize loads the server name and the container list. */
   async function initialize(): Promise<void> {
     loaded.value = false;
     await Promise.all([fetchServer(), fetchContainers(true)]);
   }
 
-  // The page derives serverId from the route; a change resets the drawer.
   watch(() => serverId.value, () => {
     selected.value = null;
     drawerOpen.value = false;

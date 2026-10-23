@@ -7,13 +7,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, "..");
 const probeDir = join(webRoot, "src", "features", "__i18n_probe__", "locales");
 
-/**
- * Vitest global setup: temporarily copy a nonempty feature-catalog fixture
- * into the real `features/<module>/locales/` discovery path so the catalog
- * test proves registration through the actual import.meta.glob flow. Removed
- * in teardown (and pre-cleaned here); the path is also gitignored so a
- * failed cleanup can never ship or commit.
- */
 export default function setup(): () => void {
   rmSync(join(webRoot, "src", "features", "__i18n_probe__"), {
     recursive: true,

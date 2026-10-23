@@ -9,18 +9,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// stateTTL bounds how long a manifest or install state stays redeemable.
 const stateTTL = 10 * time.Minute
 
-// stateCapacity bounds outstanding states across all users, and statePerUser
-// bounds one account's share, so a single owner cannot exhaust the store.
 const (
 	stateCapacity = 10000
 	statePerUser  = 20
 )
 
-// stateKind names what a state authorizes: finishing the manifest callback or
-// recording an installation.
 type stateKind string
 
 const (
@@ -28,11 +23,6 @@ const (
 	stateInstall  stateKind = "install"
 )
 
-// stateEntry is one pending manifest/install authorization, bound to the user
-// and (for installs) the app that issued it. Manifest states also carry the
-// GitHub base URLs chosen at StartManifest, so the callback exchanges the
-// code against the same host (github.com or Enterprise). States are
-// single-use and expire after stateTTL.
 type stateEntry struct {
 	userID     uuid.UUID
 	appID      uuid.UUID
@@ -42,9 +32,6 @@ type stateEntry struct {
 	expires    time.Time
 }
 
-// stateStore keeps issued states in memory with no background goroutine:
-// expired entries are swept on write and rejected on read. now overrides the
-// clock in tests; it defaults to time.Now.
 type stateStore struct {
 	mu      sync.Mutex
 	entries map[string]stateEntry
@@ -62,9 +49,6 @@ func (s *stateStore) time() time.Time {
 	return time.Now()
 }
 
-// new issues a state for userID (and appID for installs), remembering the
-// base URLs for manifest states. It fails when the caller already holds too
-// many pending states.
 func (s *stateStore) new(userID, appID uuid.UUID, kind stateKind, baseURL, apiBaseURL string) (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
@@ -98,10 +82,6 @@ func (s *stateStore) new(userID, appID uuid.UUID, kind stateKind, baseURL, apiBa
 	return state, nil
 }
 
-// redeem consumes a state: a second use, an expired state, or a state issued
-// for another user, kind or app fails. Expiry is checked on read, so a state
-// that lapsed between issue and callback is refused. On success it returns
-// the entry, carrying the manifest base URLs the callback must use.
 func (s *stateStore) redeem(state string, userID, appID uuid.UUID, kind stateKind) (stateEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,8 +102,6 @@ func (s *stateStore) redeem(state string, userID, appID uuid.UUID, kind stateKin
 	return entry, true
 }
 
-// peek reports the user a pending state was issued to, without consuming it.
-// Expired states and kind mismatches fail.
 func (s *stateStore) peek(state string, kind stateKind) (uuid.UUID, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -134,8 +112,6 @@ func (s *stateStore) peek(state string, kind stateKind) (uuid.UUID, bool) {
 	return entry.userID, true
 }
 
-// peekApp reports the user and app a pending install state was issued for,
-// without consuming it. Expired states and kind mismatches fail.
 func (s *stateStore) peekApp(state string) (userID, appID uuid.UUID, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -1,9 +1,3 @@
-// Differential tests for the V7 databases zod migration (JUS-23).
-// Each row pins the outcome + message the hand-written guard produced
-// (captured pre-migration in zz-scratch-old.test.ts): the new schemas must
-// produce the identical outcome + message for every row. Messages are
-// namespaced i18n keys resolved at invocation time, so the suite registers
-// the real feature catalogs and asserts the resolved English display text.
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
@@ -104,8 +98,6 @@ describe("validateTargetForm keeps guard order and messages", () => {
     secretKey: "s",
     isNew: true,
   };
-  // Keys keep guard order; the resolved English display text stays pinned
-  // to the recorded guard strings below.
   const rows: Array<[string, typeof base, string | null]> = [
     ["ok", base, null],
     ["empty name", { ...base, name: "  " }, databaseMessages.targetNameRequired],

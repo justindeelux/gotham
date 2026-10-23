@@ -1,13 +1,11 @@
 import type { Server } from "@/features/servers";
 
-/** One rendered metric bar of a server node card. */
 export interface ServerMetricView {
   label: string;
   percentage: number;
   color: string;
 }
 
-/** Presentational model for one server node card. */
 export interface ServerNodeCardModel {
   id: string;
   name: string;
@@ -22,7 +20,6 @@ export interface ServerNodeCardModel {
   sshUser: string;
 }
 
-/** nodeInitials derives a two-letter node avatar from the server name. */
 export function nodeInitials(name: string): string {
   const parts = name.replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/);
   if (parts.length === 1) {
@@ -31,7 +28,6 @@ export function nodeInitials(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-/** nodeSubtitle summarizes address, OS, and Docker version. */
 export function nodeSubtitle(server: Server): string {
   const bits = [`${server.ip}:${server.port}`];
   if (server.os) {
@@ -43,12 +39,6 @@ export function nodeSubtitle(server: Server): string {
   return bits.join(" · ");
 }
 
-/**
- * buildServerNodeCard maps a server plus its precomputed metric views into
- * the presentational card model. Metric views stay with the caller (the page
- * renders them through the shared usageView threshold), so this helper owns
- * only the pure text derivations.
- */
 export function buildServerNodeCard(
   server: Server,
   metrics: { cpu: ServerMetricView; ram: ServerMetricView; disk: ServerMetricView },

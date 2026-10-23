@@ -17,23 +17,10 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// DefaultMaxUploadBytes is the control-plane ceiling for a single write or
-// upload body (1 GiB), matching the agent's default GOTHAM_AGENT_FILE_MAX_UPLOAD.
-// A request body above it answers 413 before the agent is dialed. Override with
-// FILES_MAX_UPLOAD_BYTES.
-const DefaultMaxUploadBytes int64 = 1 << 30 // 1 GiB
+const DefaultMaxUploadBytes int64 = 1 << 30
 
-// writeChunkBytes is the body chunk size streamed to the agent. It stays well
-// under the agent's 2 MiB gRPC receive cap and the dialer's 4 MiB send cap.
-const writeChunkBytes = 256 << 10 // 256 KiB
+const writeChunkBytes = 256 << 10
 
-// WriteRequest describes a create-or-replace. Size is the exact number of body
-// bytes that will be read; a shorter or longer body is refused so a truncated
-// upload never reaches the agent's commit. ExpectEtag is the etag read from the
-// editor ("" means the target must not exist); Overwrite replaces an existing
-// target the caller has not read. A non-empty ExpectEtag that no longer matches
-// is a conflict even when Overwrite is set (the agent never clobbers a newer
-// file).
 type WriteRequest struct {
 	Root       string
 	Path       string
@@ -41,35 +28,20 @@ type WriteRequest struct {
 	Overwrite  bool
 	Mode       uint32
 	Size       int64
-	// Encoding is the charset the body should be written in (utf-8, ascii,
-	// gbk, gb2312, big5). Empty means UTF-8, the historical behaviour. The
-	// body is always UTF-8 from the editor; writeFile transcodes it before it
-	// reaches the agent and refuses a rune the target cannot represent.
-	Encoding string
-	// FromEditor marks a save from the code editor. The editor only ever sees a
-	// read-only tail of a file over the ceiling, so such a save is refused when
-	// the target is already too large; an upload or copy of the same file is
-	// not.
+	Encoding   string
 	FromEditor bool
 }
 
-// WriteResult reports the committed file.
 type WriteResult struct {
 	Entry     Entry  `json:"entry"`
 	Created   bool   `json:"created"`
 	WriteMode string `json:"write_mode"`
 }
 
-// Write creates or replaces one file. The body is streamed to the agent in
-// bounded chunks after a header declaring its exact size; a request-body error
-// cancels the stream so the agent discards its staging file and never commits.
 func (s *Service) Write(ctx context.Context, serverID uuid.UUID, req WriteRequest, body io.Reader) (WriteResult, error) {
 	return s.writeFile(ctx, serverID, "write", req, body)
 }
 
-// AuthorizeWrite authorizes a mutation of the server without dialing the agent,
-// so a streamed upload can refuse a forbidden caller once before reading its
-// body. It is the same team/role check every write method runs via resolve.
 func (s *Service) AuthorizeWrite(ctx context.Context, serverID uuid.UUID) error {
 	if !Enabled() {
 		return ErrDisabled
@@ -78,7 +50,6 @@ func (s *Service) AuthorizeWrite(ctx context.Context, serverID uuid.UUID) error 
 	return err
 }
 
-// Create creates an empty file exclusively: an existing name is a conflict.
 func (s *Service) Create(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (Entry, error) {
 	result, err := s.writeFile(ctx, serverID, "create", WriteRequest{Root: root, Path: path, Mode: mode}, nil)
 	if err != nil {
@@ -87,7 +58,6 @@ func (s *Service) Create(ctx context.Context, serverID uuid.UUID, root, path str
 	return result.Entry, nil
 }
 
-// writeFile is the shared create-or-replace path; op is the audit label.
 func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, req WriteRequest, body io.Reader) (result WriteResult, err error) {
 	defer func() { s.audit(ctx, serverID, op, req.Root, req.Path, err) }()
 	if !Enabled() {
@@ -99,8 +69,6 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 	if err := validatePathArg("path", req.Path); err != nil {
 		return WriteResult{}, err
 	}
-	// If-Match travels in the proto header, so invalid UTF-8 would fail
-	// proto.Marshal and surface as a 500; refuse it as a 400 before the dial.
 	if !utf8.ValidString(req.ExpectEtag) {
 		return WriteResult{}, fmt.Errorf("%w: If-Match is not valid UTF-8", ErrValidation)
 	}
@@ -123,10 +91,6 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 		return WriteResult{}, err
 	}
 	if encodingName != EncodingUTF8 {
-		// Transcoding needs the whole body to know the exact byte count the
-		// agent header must declare. The editor never saves more than it could
-		// read, so keep the legacy-charset path inside the editor ceiling
-		// instead of buffering a 1 GiB upload.
 		if req.Size > s.maxContentBytes {
 			return WriteResult{}, ErrTooLarge
 		}
@@ -145,15 +109,6 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 		req.Size = int64(len(encoded))
 	}
 
-	// Guarantee: a recorded revision is exactly the body the commit replaced.
-	// The pre-save read must carry the same etag as the If-Match the agent
-	// validates under its per-path lock; only then is the body we read provably
-	// the one being replaced. A mismatch means the file moved between the
-	// caller's read and ours (the agent's etag check will either refuse the
-	// commit or the file changed back), so nothing is recorded rather than the
-	// wrong prior body. A force-save or create has no known prior at all, and a
-	// too-large/binary body is not readable as text: both skip history without
-	// failing the save.
 	var prior *Content
 	if op == "write" && req.ExpectEtag != "" && s.historyStore() != nil {
 		current, readErr := s.readContent(ctx, serverID, req.Root, req.Path)
@@ -164,8 +119,6 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 			s.logger.Debug("files: skipping version snapshot; the pre-save etag does not match the save",
 				"server_id", serverID.String(), "root", req.Root, "relpath", req.Path)
 		case errors.Is(readErr, ErrTooLarge), errors.Is(readErr, ErrNotEditable), errors.Is(readErr, ErrNotFound):
-			// Nothing readable to keep (a large/binary body or a vanished
-			// file). The save itself still proceeds.
 		default:
 			s.logger.Warn("files: could not read the pre-save body for history",
 				"server_id", serverID.String(), "root", req.Root, "relpath", req.Path, "error", readErr)
@@ -182,13 +135,6 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 	return result, nil
 }
 
-// refuseEditorWrite rejects an editor save over an existing file larger than
-// the editor ceiling: the buffer the user saw is a read-only tail, so writing it
-// would replace bytes they never saw. A force-save is refused too, deliberately:
-// the editor never shows an over-limit file, so even `overwrite` would commit a
-// buffer whose relation to the file on disk is unknown. A missing target (a
-// create) or a small one proceeds. The size check is a UX guard on the stat; the
-// If-Match etag remains the integrity guard against a concurrent change.
 func (s *Service) refuseEditorWrite(ctx context.Context, serverID uuid.UUID, root, path string) error {
 	existing, err := s.Stat(ctx, serverID, root, path)
 	switch {
@@ -201,9 +147,6 @@ func (s *Service) refuseEditorWrite(ctx context.Context, serverID uuid.UUID, roo
 	}
 }
 
-// streamWrite streams one validated request body to the agent and commits it.
-// It owns no audit or history policy: writeFile and RestoreVersion decide what
-// a commit means.
 func (s *Service) streamWrite(ctx context.Context, serverID uuid.UUID, req WriteRequest, body io.Reader) (WriteResult, error) {
 	ctx, client, cancel, err := s.rpcTransfer(ctx, serverID)
 	if err != nil {
@@ -250,11 +193,6 @@ func (s *Service) streamWrite(ctx context.Context, serverID uuid.UUID, req Write
 			break
 		}
 		if readErr != nil {
-			// The request body failed mid-transfer (client disconnect, a
-			// truncated upload, a read deadline). Cancelling the stream makes
-			// the agent drop its staging file, so a partial upload is never
-			// renamed into place. readErr is wrapped so the route can still
-			// recognise an *http.MaxBytesError and answer 413.
 			cancel()
 			return WriteResult{}, fmt.Errorf("%w: reading request body: %w", ErrValidation, readErr)
 		}
@@ -281,7 +219,6 @@ func (s *Service) streamWrite(ctx context.Context, serverID uuid.UUID, req Write
 	return WriteResult{Entry: newEntry(info), Created: response.GetCreated(), WriteMode: response.GetWriteMode()}, nil
 }
 
-// Mkdir creates one directory.
 func (s *Service) Mkdir(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (entry Entry, err error) {
 	defer func() { s.audit(ctx, serverID, "mkdir", root, path, err) }()
 	if !Enabled() {
@@ -311,7 +248,6 @@ func (s *Service) Mkdir(ctx context.Context, serverID uuid.UUID, root, path stri
 	return newEntry(info), nil
 }
 
-// Rename renames or moves one entry within a single root.
 func (s *Service) Rename(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (entry Entry, err error) {
 	defer func() {
 		s.audit(ctx, serverID, "rename", root, source, err, "destination", destination)
@@ -346,15 +282,6 @@ func (s *Service) Rename(ctx context.Context, serverID uuid.UUID, root, source, 
 	return newEntry(info), nil
 }
 
-// Chmod changes one entry's permission bits (owner/admin only). The route
-// requires the mode field, so it is never absent here. Only the low 0o777 bits
-// are accepted: a request carrying setuid, setgid or sticky (or any other bit
-// above 0o777) is refused (400) before the agent is dialed. The agent refuses a
-// symbolic link and a special file, preserves any existing special bits, keeps
-// a directory's owner execute bit, and refuses a hard-linked file in a confined
-// root. The wired ChmodResponse is empty, so the entry is re-stat-ed and
-// returned, exactly as Copy does for its destination; the fresh entry carries
-// the new mode and etag for the browser.
 func (s *Service) Chmod(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (entry Entry, err error) {
 	defer func() { s.audit(ctx, serverID, "chmod", root, path, err, "mode", mode) }()
 	if !Enabled() {
@@ -390,8 +317,6 @@ func (s *Service) Chmod(ctx context.Context, serverID uuid.UUID, root, path stri
 	return newEntry(info), nil
 }
 
-// Copy copies one entry within a single root, draining the agent's progress
-// stream and returning the new destination entry.
 func (s *Service) Copy(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (entry Entry, err error) {
 	defer func() {
 		s.audit(ctx, serverID, "copy", root, source, err, "destination", destination)
@@ -433,9 +358,6 @@ func (s *Service) Copy(ctx context.Context, serverID uuid.UUID, root, source, de
 	return newEntry(info), nil
 }
 
-// Delete removes one entry. By default it is moved into the node's recycle bin
-// (Trash/Restore/Purge/EmptyTrash); permanent asks the agent to remove it
-// outright. recursive permits deleting a non-empty directory.
 func (s *Service) Delete(ctx context.Context, serverID uuid.UUID, root, path string, recursive, permanent bool) (err error) {
 	defer func() { s.audit(ctx, serverID, "delete", root, path, err, "permanent", permanent) }()
 	if !Enabled() {
@@ -461,15 +383,11 @@ func (s *Service) Delete(ctx context.Context, serverID uuid.UUID, root, path str
 	return drainProgress(stream)
 }
 
-// rpcTransfer resolves and dials a server with the long transfer timeout
-// instead of the unary read budget, so a large upload/copy/delete outlives the
-// 30 s request window. write is always true: every transfer mutates.
 func (s *Service) rpcTransfer(ctx context.Context, serverID uuid.UUID) (context.Context, FileClient, context.CancelFunc, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.transferTimeout)
 	server, err := s.resolve(ctx, serverID, true)
 	if err != nil {
 		cancel()
-		// Return the (canceled) ctx so a deferred audit keeps its actor scope.
 		return ctx, nil, nil, err
 	}
 	client, err := s.dialClient(ctx, server)
@@ -480,14 +398,6 @@ func (s *Service) rpcTransfer(ctx context.Context, serverID uuid.UUID) (context.
 	return ctx, client, cancel, nil
 }
 
-// sendWritePart sends one message on a Write client stream and maps the
-// failure. When the agent rejects the stream before reading it — a read-only
-// root or application directory (PermissionDenied), a body over the node's
-// limit (ResourceExhausted), a low disk, an InvalidArgument header — it returns
-// its status and closes the send side, so Send surfaces only io.EOF while the
-// real status is available only from CloseAndRecv. Mapping the bare io.EOF
-// would answer 500; draining the stream here recovers the actual status so the
-// caller answers 403/400/413/507 as intended.
 func sendWritePart(stream grpc.ClientStreamingClient[agentv1.WriteRequest, agentv1.WriteResponse], msg *agentv1.WriteRequest) error {
 	err := stream.Send(msg)
 	if err == nil {
@@ -497,16 +407,11 @@ func sendWritePart(stream grpc.ClientStreamingClient[agentv1.WriteRequest, agent
 		if _, recvErr := stream.CloseAndRecv(); recvErr != nil {
 			return mapRPCError(recvErr)
 		}
-		// A clean CloseAndRecv after an io.EOF Send means the stream ended
-		// without a status we can classify; treat it as an unavailable agent
-		// rather than surfacing a raw EOF (which would be a 500).
 		return fmt.Errorf("%w: the agent closed the write stream", ErrAgentUnavailable)
 	}
 	return mapRPCError(err)
 }
 
-// drainProgress reads a Copy/Delete progress stream to its end, mapping a
-// mid-stream agent error instead of mistaking a truncated stream for success.
 func drainProgress(stream grpc.ServerStreamingClient[agentv1.Progress]) error {
 	for {
 		_, err := stream.Recv()

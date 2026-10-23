@@ -1,8 +1,3 @@
-// Differential test (JUS-23): service schemas must keep the exact import
-// dialog messages recorded from the pre-migration code. Since I18N-7
-// (JUS-48, shared service-schema ownership transfer) the schemas store
-// services-catalog keys; the displayed text resolves at invocation time,
-// so this test merges the catalogs and pins the rendered English copy.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { fieldErrors } from "@/shared/validation/naiveAdapter";

@@ -14,24 +14,18 @@ import (
 
 const maxBodyBytes = 1 << 20
 
-// UserIDFunc resolves the authenticated user from the request context (the
-// server passes its own accessor, so this package never imports the server).
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
 type errorBody struct {
 	Message string      `json:"message"`
 	Errors  FieldErrors `json:"errors,omitempty"`
-	// Log carries the installer output when a host-helper install failed, so
-	// the operator can read what the tool installer reported.
-	Log string `json:"log,omitempty"`
+	Log     string      `json:"log,omitempty"`
 }
 
 type stateEnvelope struct {
 	Settings State `json:"settings"`
 }
 
-// hostHelperEnvelope is the POST .../host-helper body: the freshly probed state
-// plus the installer output.
 type hostHelperEnvelope struct {
 	Settings State  `json:"settings"`
 	Log      string `json:"log"`
@@ -43,19 +37,6 @@ type handler struct {
 	logger *slog.Logger
 }
 
-// Mount registers the platform-operator endpoints on r:
-//
-//	GET  /v1/instance/settings
-//	PUT  /v1/instance/settings/general
-//	PUT  /v1/instance/settings/system
-//	PUT  /v1/instance/settings/network
-//	POST /v1/instance/settings/network/confirm
-//	POST /v1/instance/settings/network/revert
-//	POST /v1/instance/settings/control-plane-url/confirm
-//	POST /v1/instance/settings/control-plane-url/revert
-//
-// admin wraps the group with authentication and the platform-operator gate
-// (non-operators get 403 before any handler runs). A nil svc mounts nothing.
 func Mount(r chi.Router, admin func(http.Handler) http.Handler, userID UserIDFunc, svc *Service) {
 	if svc == nil {
 		return
@@ -76,7 +57,7 @@ func Mount(r chi.Router, admin func(http.Handler) http.Handler, userID UserIDFun
 }
 
 func (h *handler) actor(r *http.Request) uuid.UUID {
-	id, _ := h.userID(r.Context()) // API tokens have no user: audit as system
+	id, _ := h.userID(r.Context())
 	return id
 }
 
@@ -122,9 +103,6 @@ func (h *handler) revert(w http.ResponseWriter, r *http.Request) {
 	h.reply(w, st, err)
 }
 
-// installHostHelper installs the host helper and its sudoers rule, then returns
-// the re-probed state and the installer output. A failed install answers 502
-// with the installer output, so the operator can read the cause.
 func (h *handler) installHostHelper(w http.ResponseWriter, r *http.Request) {
 	st, log, err := h.svc.InstallHostHelper(r.Context(), h.actor(r))
 	switch {

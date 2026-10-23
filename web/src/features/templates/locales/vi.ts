@@ -1,9 +1,3 @@
-/**
- * Vietnamese catalog for the templates surface (I18N-7). Same shape as the
- * English catalog; slugs, field keys, rendered compose and secret values
- * stay raw parameters, and unknown template metadata falls back to the
- * provider copy.
- */
 import type en from "./en";
 
 const vi: typeof en = {

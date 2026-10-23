@@ -1,6 +1,3 @@
-// Image viewer zoom/pan math (JUS-204): the DOM-free helpers behind the
-// viewer dialog. Wheel zoom stays centered on the cursor and clamped;
-// a drag shifts the view; reset restores the fitted view. No DOM, no store.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -17,12 +14,10 @@ import type { ZoomView } from "@/features/files/composables/useImageZoom";
 import { isImageFile } from "@/features/files/utils/files";
 import type { FilesEntry } from "@/features/files/schemas/files";
 
-/** view builds a ZoomView with sensible defaults. */
 function view(overrides: Partial<ZoomView> = {}): ZoomView {
   return { scale: 1, x: 0, y: 0, ...overrides };
 }
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -48,8 +43,6 @@ describe("clampZoom", () => {
 
 describe("zoomAtPoint", () => {
   it("keeps the image point under the cursor fixed", () => {
-    // A cursor 100px right of center over a view panned 20px: zooming 2x
-    // moves the offset so the same image pixel stays under the cursor.
     const next = zoomAtPoint(view({ x: 20 }), 100, 0, 2);
     expect(next.scale).toBe(2);
     expect(next.x).toBe(100 - (100 - 20) * 2);

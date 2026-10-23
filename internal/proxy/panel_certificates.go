@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// panelCertificateKey is set only by the platform-admin certificate routes.
 type panelCertificateKey struct{}
 
 func panelCertificateContext(ctx context.Context) bool {
@@ -24,7 +23,6 @@ func panelCertificateAuth(next http.Handler) http.Handler {
 	})
 }
 
-// certificateApplication keeps panel intents outside the team-scoped CRUD API.
 func (s *sslService) certificateApplication(ctx context.Context, cert DomainCertificate) (ApplicationInfo, error) {
 	if cert.ApplicationID == uuid.Nil {
 		if !panelCertificateContext(ctx) {
@@ -38,10 +36,6 @@ func (s *sslService) certificateApplication(ctx context.Context, cert DomainCert
 	return s.store.GetApplication(ctx, cert.ApplicationID)
 }
 
-// ReconcilePanelCertificates creates confirmed hosts' new
-// HTTPS intents before deleting retired ones, and never changes app intents.
-// It then backfills the default TLS intent of application domains that have
-// none (JUS-201), so a box that upgrades gets its existing hosts repaired.
 func (s *SyncService) ReconcilePanelCertificates(ctx context.Context, urls []string) error {
 	if s.panelCertificates == nil {
 		return nil
@@ -53,11 +47,6 @@ func (s *SyncService) ReconcilePanelCertificates(ctx context.Context, urls []str
 	return s.reconcileApplicationCertificates(ctx, urls)
 }
 
-// ControlPlaneHTTPSHosts returns the normalized hosts of the configured
-// control-plane URLs that are served over https. It is the single gate that
-// turns on TLS for the panel domain and for the default TLS of attached
-// application domains, so the two cannot drift. A URL that cannot be parsed is
-// an error; a non-https URL is skipped.
 func ControlPlaneHTTPSHosts(urls []string) ([]string, error) {
 	hosts := make([]string, 0, len(urls))
 	for _, raw := range urls {
@@ -77,13 +66,6 @@ func ControlPlaneHTTPSHosts(urls []string) ([]string, error) {
 	return hosts, nil
 }
 
-// reconcileApplicationCertificates backfills the default enabled http-01
-// intent for every enabled application domain that has none (JUS-201): a host
-// attached before this change, or one whose intent was never recorded, is
-// repaired on startup and on every control-plane URL change. It is gated on
-// the same https condition as the panel domain, so an http-only instance
-// stays plain-HTTP, and it triggers the proxy rebuild the panel flow relies on
-// when it actually inserts rows.
 func (s *SyncService) reconcileApplicationCertificates(ctx context.Context, urls []string) error {
 	hosts, err := ControlPlaneHTTPSHosts(urls)
 	if err != nil {
@@ -102,10 +84,6 @@ func (s *SyncService) reconcileApplicationCertificates(ctx context.Context, urls
 	return nil
 }
 
-// resyncAfterBackfill pushes the freshly recorded intents to every node. It is
-// best effort like sslService.notifyResync — the intents are durable and the
-// next sync converges — and it inherits the caller's deadline so a settings
-// save is never held open by a slow bootstrap.
 func (s *SyncService) resyncAfterBackfill(ctx context.Context) {
 	syncCtx, cancel := context.WithTimeout(ctx, defaultResyncTimeout)
 	defer cancel()
@@ -161,7 +139,6 @@ func (s *sslService) reconcilePanelCertificates(ctx context.Context, urls []stri
 	})
 }
 
-// PanelCertificateState adds issuance state without changing legacy statuses.
 type PanelCertificateState struct {
 	Status   string     `json:"status"`
 	NotAfter *time.Time `json:"not_after,omitempty"`
@@ -180,8 +157,6 @@ func panelCertificateState(observation CertificateStatusObservation, usable bool
 	return state
 }
 
-// RunPanelCertificates reconciles immediately at startup, then observes issuance/expiry and
-// pushes only changed configuration, so redirects follow certificate readiness.
 func (s *SyncService) RunPanelCertificates(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()

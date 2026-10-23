@@ -14,11 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestResourcesEnvironmentMigration applies 00035 on a 00034 schema and
-// asserts the environment attachment: environment_id and NOT NULL server_id
-// with RESTRICT deletes on all three resource tables, the per-environment
-// name indexes (partial for databases and services) and the dropped
-// per-creator indexes; then it rolls 00035 back and asserts the revert.
 func TestResourcesEnvironmentMigration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -90,9 +85,6 @@ func TestResourcesEnvironmentMigration(t *testing.T) {
 		t.Fatalf("insert environment: %v", err)
 	}
 
-	// A box that ran PE-1's create routes may hold resource rows; 00035
-	// wipes them deliberately (like 00034) instead of aborting boot on the
-	// new NOT NULL columns.
 	for _, seed := range []string{
 		`INSERT INTO applications (user_id, team_id, server_id, name, clone_url, branch, build_pack)
 		 VALUES ($1, $1, $2, 'legacy-app', 'https://github.com/acme/demo.git', 'main', 'dockerfile')`,
@@ -149,7 +141,6 @@ func TestResourcesEnvironmentMigration(t *testing.T) {
 		}
 	}
 
-	// One row per table in the seeded environment and server.
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack)
 		 VALUES ($1, $1, $2, $3, 'app', 'https://github.com/acme/demo.git', 'main', 'dockerfile')`,
@@ -169,14 +160,12 @@ func TestResourcesEnvironmentMigration(t *testing.T) {
 		t.Fatalf("insert database: %v", err)
 	}
 
-	// RESTRICT: neither the environment nor the server can go first.
 	if _, err := db.ExecContext(ctx, `DELETE FROM environments WHERE id = $1`, envID); err == nil {
 		t.Error("deleting a non-empty environment succeeded, want RESTRICT")
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM servers WHERE id = $1`, serverID); err == nil {
 		t.Error("deleting a server with resources succeeded, want RESTRICT")
 	}
-	// Per-environment uniqueness: the same name in another environment fits.
 	var stagingID pgtype.UUID
 	if err := db.QueryRowContext(ctx,
 		`INSERT INTO environments (project_id, name) VALUES ($1, $2) RETURNING id`, projectID, "staging").Scan(&stagingID); err != nil {
@@ -194,8 +183,6 @@ func TestResourcesEnvironmentMigration(t *testing.T) {
 		userID, serverID, envID); err == nil {
 		t.Error("duplicate name in one environment succeeded, want a unique violation")
 	}
-	// The staging twin would violate the restored per-creator index below,
-	// so it goes before the rollback.
 	if _, err := db.ExecContext(ctx, `DELETE FROM applications WHERE environment_id = $1`, stagingID); err != nil {
 		t.Fatalf("delete staging application: %v", err)
 	}

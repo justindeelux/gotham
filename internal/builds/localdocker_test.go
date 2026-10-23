@@ -83,8 +83,6 @@ func TestDecodeBuildStreamError(t *testing.T) {
 	}
 }
 
-// requireDocker returns a builder for the local daemon, skipping when the
-// daemon is unreachable so GOTHAM_E2E runs stay portable.
 func requireDocker(t *testing.T) *LocalDockerBuilder {
 	t.Helper()
 	builder, err := NewLocalDockerBuilder()
@@ -188,10 +186,6 @@ func TestStaticEngineE2E(t *testing.T) {
 	}
 }
 
-// TestInlineDockerfileBuildE2E builds a pasted-Dockerfile context (GS-7: the
-// file is the whole context, no repository checkout) through the local
-// Docker transport, skipping like the other live-Docker tests when the
-// daemon is unreachable.
 func TestInlineDockerfileBuildE2E(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
@@ -201,9 +195,6 @@ func TestInlineDockerfileBuildE2E(t *testing.T) {
 	defer cancel()
 
 	dir := t.TempDir()
-	// A bare FROM scratch produces no image layer on the builder, so the
-	// context carries an ARG (also consumed, silencing the unused-arg
-	// warning) and a LABEL to give the image content.
 	writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\nARG APP_ENV\nLABEL gotham.e2e=inline\n")
 	contextTar, err := buildContextTar(contextSpec{root: dir})
 	if err != nil {
@@ -222,9 +213,6 @@ func TestInlineDockerfileBuildE2E(t *testing.T) {
 	}
 }
 
-// TestLocalDockerBuilderDockerHost pins the endpoint handed to toolchain CLIs:
-// the toolchain runs with a stripped environment, so the builder must carry a
-// usable DOCKER_HOST itself.
 func TestLocalDockerBuilderDockerHost(t *testing.T) {
 	for _, tc := range []struct{ host, want string }{
 		{host: "", want: ""},
@@ -242,9 +230,6 @@ func TestLocalDockerBuilderDockerHost(t *testing.T) {
 	}
 }
 
-// TestLocalDockerBuilderToolchainPassesDockerHost runs a fake railpack through
-// buildToolchain and checks the builder hands the CLI its DOCKER_HOST, since
-// the toolchain environment is stripped of the parent's variables.
 func TestLocalDockerBuilderToolchainPassesDockerHost(t *testing.T) {
 	envFile := filepath.Join(t.TempDir(), "docker-host")
 	fakeCLI(t, railpackCLI, fmt.Sprintf(`printf '%%s' "$DOCKER_HOST" > '%s'`, envFile))
@@ -290,10 +275,6 @@ func TestLocalDockerBuilderToolchainPassesDockerHost(t *testing.T) {
 	}
 }
 
-// TestDockerfileBuildObeysDockerignoreE2E is the live C1-1 regression: a
-// credential excluded by the repository's .dockerignore must not appear in the
-// built image, while an ordinary file must. It exports the image rootfs and
-// inspects the archive, so it needs no shell in the built image.
 func TestDockerfileBuildObeysDockerignoreE2E(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
@@ -326,10 +307,6 @@ func TestDockerfileBuildObeysDockerignoreE2E(t *testing.T) {
 	}
 }
 
-// TestDockerfileBuildDockerignoreOracleE2E pins the tricky Docker ignore
-// semantics end to end (verified against the Docker CLI): a negated child
-// survives under an excluded directory, and `cache/` excludes a regular file
-// named cache.
 func TestDockerfileBuildDockerignoreOracleE2E(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
@@ -370,9 +347,6 @@ func TestDockerfileBuildDockerignoreOracleE2E(t *testing.T) {
 	}
 }
 
-// TestDockerfileBuildDockerignoreOrderE2E is the round-2 U2 oracle: a later
-// ancestor exclusion must beat an earlier full-path negation, matching the
-// Docker CLI.
 func TestDockerfileBuildDockerignoreOrderE2E(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
@@ -464,8 +438,6 @@ func TestDockerfileBuildDockerignoreOrderE2E(t *testing.T) {
 	}
 }
 
-// buildContextImageE2E builds dir through the local builder and returns the
-// paths in the image's /app.
 func buildContextImageE2E(t *testing.T, builder *LocalDockerBuilder, dir string) map[string]struct{} {
 	t.Helper()
 	contextTar, err := buildContextTar(contextSpec{root: dir})
@@ -482,8 +454,6 @@ func buildContextImageE2E(t *testing.T, builder *LocalDockerBuilder, dir string)
 	return exportedRootfsFiles(t, ref, "app")
 }
 
-// TestDockerfileBuildFailedStepLeavesNoContainerE2E is the live C1-5
-// regression: a failed RUN step must not leave an intermediate container.
 func TestDockerfileBuildFailedStepLeavesNoContainerE2E(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
@@ -510,7 +480,6 @@ func TestDockerfileBuildFailedStepLeavesNoContainerE2E(t *testing.T) {
 	}
 }
 
-// dockerCLI runs a docker subcommand and returns its trimmed stdout.
 func dockerCLI(t *testing.T, args ...string) string {
 	t.Helper()
 	out, err := exec.Command("docker", args...).Output()
@@ -520,7 +489,6 @@ func dockerCLI(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// dockerContainerIDs lists every container id on the daemon.
 func dockerContainerIDs(t *testing.T) map[string]struct{} {
 	t.Helper()
 	ids := make(map[string]struct{})
@@ -532,9 +500,6 @@ func dockerContainerIDs(t *testing.T) map[string]struct{} {
 	return ids
 }
 
-// TestLocalDockerBuilderRedactsBuildArgsInTransportError is the U5 regression:
-// an unreachable daemon must not echo the buildargs query (which can carry
-// secrets) through the *url.Error wrapper.
 func TestLocalDockerBuilderRedactsBuildArgsInTransportError(t *testing.T) {
 	builder, err := NewLocalDockerBuilderWithHost("http://127.0.0.1:1")
 	if err != nil {
@@ -552,8 +517,6 @@ func TestLocalDockerBuilderRedactsBuildArgsInTransportError(t *testing.T) {
 	}
 }
 
-// exportedRootfsFiles exports an image's flattened rootfs and returns the paths
-// under prefix. The temporary container is removed on cleanup.
 func exportedRootfsFiles(t *testing.T, image, prefix string) map[string]struct{} {
 	t.Helper()
 	id := dockerCLI(t, "create", image, "/true")

@@ -1,5 +1,3 @@
-// GitHub App API client and store (GS-5, JUS-61 fix round 1): branch URL
-// validation/encoding and the clearErrors action, with a mocked axios layer.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/shared/api/http", () => ({

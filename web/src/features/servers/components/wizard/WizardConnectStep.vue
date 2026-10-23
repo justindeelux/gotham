@@ -19,9 +19,6 @@ if (!wizard) {
   throw new Error("WizardConnectStep must be used inside AddServerWizard.");
 }
 
-// The NForm instance lives in the wizard context (create/validate/reset use
-// it); a template string ref can only bind to this component's setup, so the
-// local ref is mirrored into the context.
 const formRef = ref<FormInst | null>(null);
 watch(formRef, (instance) => {
   wizard.setFormRef(instance);

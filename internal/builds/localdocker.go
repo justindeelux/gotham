@@ -16,28 +16,18 @@ import (
 	"github.com/justindeelux/gotham/buildtool"
 )
 
-// LocalDockerBuilder builds images against a local Docker daemon through the
-// Engine API. It is the dev/test ImageBuilder; production builds run on the
-// node agent, whose gRPC implementation plugs into the same seam.
 type LocalDockerBuilder struct {
-	http    *http.Client
-	baseURL string
-	// dockerHost is the DOCKER_HOST value handed to a toolchain CLI. The
-	// toolchain runs with a stripped environment, so it cannot inherit it.
+	http       *http.Client
+	baseURL    string
 	dockerHost string
 }
 
-// Compile-time guarantee that the local builder satisfies the seam.
 var _ ImageBuilder = (*LocalDockerBuilder)(nil)
 
-// NewLocalDockerBuilder dials the daemon named by DOCKER_HOST, falling back to
-// the default unix socket.
 func NewLocalDockerBuilder() (*LocalDockerBuilder, error) {
 	return NewLocalDockerBuilderWithHost(os.Getenv("DOCKER_HOST"))
 }
 
-// NewLocalDockerBuilderWithHost is NewLocalDockerBuilder with an explicit
-// endpoint: "unix:///path", "/path", "tcp://host:port" or "http(s)://host".
 func NewLocalDockerBuilderWithHost(host string) (*LocalDockerBuilder, error) {
 	transport, baseURL, err := newDockerTransport(host)
 	if err != nil {
@@ -50,9 +40,6 @@ func NewLocalDockerBuilderWithHost(host string) (*LocalDockerBuilder, error) {
 	}, nil
 }
 
-// dockerHostEnv normalises a Docker endpoint into a DOCKER_HOST value for a
-// child process. An empty host is left empty so the CLI uses its own default; a
-// bare socket path is prefixed with unix://.
 func dockerHostEnv(host string) string {
 	host = strings.TrimSpace(host)
 	switch {
@@ -65,9 +52,6 @@ func dockerHostEnv(host string) string {
 	}
 }
 
-// Build implements ImageBuilder by POSTing the context tarball to the daemon's
-// build endpoint and following the returned JSON stream. Logs are captured even
-// when the build fails, so the deploy log stream can show the failure reason.
 func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts ImageBuildOptions) (ImageBuildResult, error) {
 	if len(contextTar) == 0 {
 		return ImageBuildResult{}, fmt.Errorf("%w: empty build context", ErrValidation)
@@ -87,8 +71,6 @@ func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts 
 	query.Set("t", opts.Tag)
 	query.Set("dockerfile", dockerfile)
 	query.Set("rm", "1")
-	// forcerm also removes the intermediate containers of failed steps, so a
-	// failed build does not leak a container per attempt.
 	query.Set("forcerm", "1")
 	if opts.Target != "" {
 		query.Set("target", opts.Target)
@@ -108,8 +90,6 @@ func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts 
 
 	response, err := b.http.Do(request)
 	if err != nil {
-		// *url.Error embeds the full URL, including the buildargs query, which
-		// can carry secrets; unwrap it so an error message never exposes them.
 		var urlErr *url.Error
 		if errors.As(err, &urlErr) {
 			err = urlErr.Err
@@ -138,11 +118,6 @@ func (b *LocalDockerBuilder) Build(ctx context.Context, contextTar []byte, opts 
 	return result, nil
 }
 
-// buildToolchain extracts the raw source context to a temporary directory and
-// runs the toolchain in this process, then reports the built image's digest.
-// It is the dev/test counterpart of the node agent's toolchain build. The
-// toolchain runs with a stripped environment, so the builder passes its Docker
-// endpoint explicitly as DOCKER_HOST.
 func (b *LocalDockerBuilder) buildToolchain(ctx context.Context, contextTar []byte, opts ImageBuildOptions) (ImageBuildResult, error) {
 	dir, err := os.MkdirTemp("", "gotham-buildtool-*")
 	if err != nil {
@@ -173,8 +148,6 @@ func (b *LocalDockerBuilder) buildToolchain(ctx context.Context, contextTar []by
 	return result, nil
 }
 
-// imageDigest resolves the built image's content digest, or its image ID when
-// the image has not been pushed to a registry.
 func (b *LocalDockerBuilder) imageDigest(ctx context.Context, tag string) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, b.baseURL+"/images/"+tag+"/json", nil)
 	if err != nil {
@@ -205,7 +178,6 @@ func (b *LocalDockerBuilder) imageDigest(ctx context.Context, tag string) (strin
 	return out.ID, nil
 }
 
-// setJSONQuery encodes a non-empty string map as a JSON query parameter.
 func setJSONQuery(query url.Values, key string, values map[string]string) error {
 	if len(values) == 0 {
 		return nil
@@ -218,15 +190,12 @@ func setJSONQuery(query url.Values, key string, values map[string]string) error 
 	return nil
 }
 
-// buildStream is the part of the Docker build JSON stream the builder needs.
 type buildStream struct {
 	logs   string
 	digest string
 	err    error
 }
 
-// decodeBuildStream consumes the newline-delimited build event stream, keeping
-// the concatenated log output, the first reported image ID and the first error.
 func decodeBuildStream(source io.Reader) buildStream {
 	var out buildStream
 	var logs strings.Builder

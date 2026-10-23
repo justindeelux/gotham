@@ -10,11 +10,6 @@ import type { Page, WebSocketRoute } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, URL:readonly, window:readonly */
 
-// JUS-247 real-pane proof: the committed webdist is served statically, the
-// application/control-plane API is mocked, and Playwright's WebSocket router
-// stands in for the container PTY with the exact binary framing. The tab order
-// is measured at 390/480/1280/1366 with real Chromium.
-
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
 
@@ -117,11 +112,9 @@ interface Ledger {
   targets: number;
   creates: Array<{ service: string; container_id: string }>;
   deletes: number;
-  /** inputs records raw PTY input frames (opcode 1) from the browser. */
   inputs: string[];
 }
 
-/** freshLedger resets per-test request counts. */
 function freshLedger(): Ledger {
   return { targets: 0, creates: [], deletes: 0, inputs: [] };
 }
@@ -166,7 +159,6 @@ test.afterAll(async () => {
   });
 });
 
-/** frame builds one binary server frame. */
 function frame(opcode: number, payload: Buffer = Buffer.alloc(0)): Buffer {
   return Buffer.concat([Buffer.from([opcode]), payload]);
 }
@@ -190,7 +182,6 @@ function outputFrame(text: string): Buffer {
   return frame(1, Buffer.from(text, "utf8"));
 }
 
-/** mockApi answers the shell, application, target and session routes. */
 async function mockApi(
   page: Page,
   ledger: Ledger,
@@ -298,7 +289,6 @@ async function mockApi(
           websocket_path: `/api/v1/applications/${APP_ID}/terminal/sessions/${id}/ws`,
           subprotocol: "gotham.terminal.v1",
           application_id: APP_ID,
-          // Real backend shape: single-container apps omit `service`.
           ...(input.service !== "" ? { service: input.service } : {}),
           container_id: input.container_id,
           container_name: row?.name ?? input.container_id,
@@ -329,7 +319,6 @@ async function mockApi(
   );
 }
 
-/** seedApp seeds the signed-in account and opens the detail route. */
 async function seedApp(page: Page, path: string): Promise<void> {
   await page.addInitScript(
     (value) => {
@@ -345,7 +334,6 @@ async function seedApp(page: Page, path: string): Promise<void> {
   await expect(page.locator(".topbar")).toBeVisible();
 }
 
-/** terminalTabs reads the live store's terminal tabs. */
 async function terminalTabs(page: Page) {
   return page.evaluate(() => {
     const app = (document.querySelector("#app") as unknown as {
@@ -378,7 +366,6 @@ async function terminalTabs(page: Page) {
   });
 }
 
-/** navigate pushes an in-SPA route so the terminal store survives. */
 async function navigate(page: Page, path: string): Promise<void> {
   await page.evaluate(async (next: string) => {
     const app = (document.querySelector("#app") as unknown as {
@@ -390,7 +377,6 @@ async function navigate(page: Page, path: string): Promise<void> {
   }, path);
 }
 
-/** selectTeam switches the active team in the live shell store. */
 async function selectTeam(page: Page, id: string): Promise<void> {
   await page.evaluate((teamId: string) => {
     const app = (document.querySelector("#app") as unknown as {
@@ -416,11 +402,9 @@ test("the Terminal tab sits after Environment and opens one exact container shel
   await mockApi(page, ledger);
   await seedApp(page, detailPath);
 
-  // Loading the detail page (or other tabs) never discovers or creates.
   await expect(page.locator(".n-tabs-tab", { hasText: "Environment" })).toBeVisible();
   expect(ledger.targets).toBe(0);
   expect(ledger.creates).toHaveLength(0);
-  // The mounted-but-inactive pane shows nothing: no empty selector flash.
   await expect(page.locator(".app-term-select")).toHaveCount(0);
   const labels = await page.locator(".n-tabs-tab").allInnerTexts();
   const env = labels.indexOf("Environment");
@@ -434,7 +418,6 @@ test("the Terminal tab sits after Environment and opens one exact container shel
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
   await expect(page.locator(".term-surface")).toContainText("gotham-shop-1");
 
-  // A single-target app still offers an explicit refresh control.
   await expect(page.locator(".app-term-toolbar .app-term-refresh")).toBeVisible();
   await page.locator(".app-term-toolbar .app-term-refresh").click();
   await expect.poll(() => ledger.targets).toBe(2);
@@ -452,14 +435,10 @@ test("the Terminal tab sits after Environment and opens one exact container shel
     mode: "page",
   });
 
-  // Real input reaches the container session (not a host shell).
   await page.locator(".term-surface .xterm-screen").click();
   await page.keyboard.type("echo app");
   await expect(page.locator(".term-surface .xterm-rows")).toContainText("welcome session-1");
 
-  // Leaving the tab's route pauses the container shell: the rail count is
-  // visible to a team member (not only a platform operator) and the dock card
-  // keeps the exact target label. Resume reuses the same session.
   const before = (await terminalTabs(page))[0]!;
   await page.locator('a[href="/dashboard"]').first().click();
   await expect(page).toHaveURL(/\/dashboard$/);
@@ -476,7 +455,6 @@ test("the Terminal tab sits after Environment and opens one exact container shel
   expect(resumed.sessionId).toBe(before.sessionId);
   expect(ledger.creates).toHaveLength(1);
 
-  // Flapping and a double-click never duplicate the discovery or the shell.
   const targetReads = ledger.targets;
   const overview = page.locator(".n-tabs-tab", { hasText: "Overview" });
   const terminalTab = page.locator(".n-tabs-tab", { hasText: "Terminal" });
@@ -488,8 +466,6 @@ test("the Terminal tab sits after Environment and opens one exact container shel
   expect(ledger.targets).toBe(targetReads);
   expect(ledger.creates).toHaveLength(1);
 
-  // The shared pane close asks first; re-entry keeps the restart card and no
-  // new POST is issued until the explicit button is pressed.
   await page.locator('.term-surface [aria-label="Close terminal"]').click();
   const dialog = page.locator(".term-close-modal");
   await expect(dialog).toBeVisible();
@@ -528,8 +504,6 @@ for (const width of [390, 480, 1280, 1366]) {
     await expect.poll(() => ledger.creates.length).toBe(1);
     await expect(page.locator(".term-surface")).toBeVisible();
 
-    // The meta row wraps instead of clipping, and the page never scrolls
-    // horizontally at any tested width.
     const metaFits = await page.locator(".term-meta").evaluate((element) => {
       const node = element as HTMLElement;
       return node.scrollWidth <= node.clientWidth + 1;
@@ -554,7 +528,6 @@ test("multiple services and replicas need an explicit pick and switch only after
   expect(ledger.targets).toBe(1);
   expect(ledger.creates).toHaveLength(0);
 
-  // Open the selector and choose the second replica with real input.
   await page.locator(".app-term-select").click();
   const options = page.locator(".n-base-select-option");
   await expect(options).toHaveCount(3);
@@ -571,7 +544,6 @@ test("multiple services and replicas need an explicit pick and switch only after
     "web · gotham-shop-web-1",
   );
 
-  // Cancel keeps the live shell and the visible selection.
   await page.locator(".app-term-select").click();
   await page
     .locator(".n-base-select-option")
@@ -585,7 +557,6 @@ test("multiple services and replicas need an explicit pick and switch only after
   expect(ledger.creates).toHaveLength(1);
   await expect(page.locator(".term-surface")).toBeVisible();
 
-  // Confirm releases exactly that session and opens the chosen container.
   await page.locator(".app-term-select").click();
   await page
     .locator(".n-base-select-option")
@@ -652,7 +623,6 @@ test("a target discovery failure is bounded, explicit and never auto-retries", a
   ).toBeVisible();
   expect(ledger.targets).toBe(1);
   expect(ledger.creates).toHaveLength(0);
-  // No auto-retry loop; the explicit retry is the only recovery.
   await page.waitForTimeout(1000);
   expect(ledger.targets).toBe(1);
   await page.locator(".app-term-retry").click();
@@ -708,7 +678,6 @@ test("a replaced container is rediscovered and recreated with the new id", async
         container_id: input.container_id,
       });
       if (ledger.creates.length === 1) {
-        // The first selection was replaced between discovery and create.
         await route.fulfill({
           status: 404,
           json: {
@@ -833,7 +802,6 @@ test("a live shell whose container vanished recovers through rediscovery", async
       });
     },
   );
-  // The attached PTY reports the container vanished after a redeploy.
   await page.routeWebSocket(
     /\/api\/v1\/applications\/[^/]+\/terminal\/sessions\/[^/]+\/ws$/,
     (ws) => {
@@ -948,7 +916,6 @@ test("switching application keeps both container sessions isolated", async ({
   expect(
     tabs.find((tab) => tab.applicationId === APP_B_ID)?.targetLabel,
   ).toBe("gotham-blog-1");
-  // Returning to the first application reuses its live shell.
   await navigate(page, `${detailPath}?tab=terminal`);
   await expect(page.locator(".term-surface .term-state")).toHaveText(
     "Connected",
@@ -1074,7 +1041,6 @@ test("the theme menu on a container session sends no PTY input and shows no host
     "Connected",
   );
 
-  // A container shell has no Gotham host banner; only the shell output is there.
   await expect
     .poll(() => page.locator(".term-surface .xterm-rows").innerText())
     .toContain("welcome session-1");
@@ -1087,7 +1053,6 @@ test("the theme menu on a container session sends no PTY input and shows no host
     "data-theme",
     "gotham-light",
   );
-  // Menu interaction never reaches the PTY.
   expect(ledger.inputs).toEqual([]);
   expect(ledger.creates).toHaveLength(1);
 });

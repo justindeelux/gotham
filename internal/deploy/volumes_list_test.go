@@ -17,8 +17,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// managedVolumeTestRoot points the managed volume root at a temp directory so
-// the assertions never depend on the machine's /var/lib/gotham.
 func managedVolumeTestRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -26,7 +24,6 @@ func managedVolumeTestRoot(t *testing.T) string {
 	return root
 }
 
-// volumeTestService wires a Service whose node is the seeded mockNode.
 func volumeTestService(t *testing.T, repo *fakeRepository, node *mockNode) *Service {
 	t.Helper()
 	svc := NewService(Config{
@@ -39,19 +36,14 @@ func volumeTestService(t *testing.T, repo *fakeRepository, node *mockNode) *Serv
 	return svc
 }
 
-// fileRoot is one File Manager root as the agent reports it.
 func fileRoot(name, path string, writable bool) *agentv1.FileRoot {
 	return &agentv1.FileRoot{Name: name, Path: path, Writable: writable}
 }
 
-// fullAccessRoots models the default agent (GOTHAM_AGENT_FILE_FULL_ACCESS on):
-// one writable root named "system" covering "/".
 func fullAccessRoots() []*agentv1.FileRoot {
 	return []*agentv1.FileRoot{fileRoot("system", "/", true)}
 }
 
-// confinedRoots models GOTHAM_AGENT_FILE_FULL_ACCESS=false: the managed volume
-// root is writable, the compose root is read-only.
 func confinedRoots(managedRoot string) []*agentv1.FileRoot {
 	return []*agentv1.FileRoot{
 		fileRoot("volumes", managedRoot, true),
@@ -59,8 +51,6 @@ func confinedRoots(managedRoot string) []*agentv1.FileRoot {
 	}
 }
 
-// listedContainer is one container summary as the agent reports it, carrying
-// the application label or the compose labels the listing filters on.
 func listedContainer(name, state string, labels map[string]string, mounts ...*agentv1.ContainerMount) *agentv1.ContainerInfo {
 	return &agentv1.ContainerInfo{
 		Id:     name + "-id",
@@ -73,7 +63,6 @@ func listedContainer(name, state string, labels map[string]string, mounts ...*ag
 	}
 }
 
-// appMount is one mount of an app container with the agent's additive fields.
 func appMount(kind, source, name, device, destination string, readOnly bool) *agentv1.ContainerMount {
 	return &agentv1.ContainerMount{
 		Type:         kind,
@@ -85,10 +74,6 @@ func appMount(kind, source, name, device, destination string, readOnly bool) *ag
 	}
 }
 
-// TestListVolumesSingleContainerGroupsConfiguredAndObserved pins the ordinary
-// application: a managed bind and a namespaced named volume are listed with
-// their mapped paths, consumer and runtime state, and each opens in File Manager
-// through the node's ACTUAL root (confined mode here).
 func TestListVolumesSingleContainer(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -107,8 +92,6 @@ func TestListVolumesSingleContainer(t *testing.T) {
 	node.listed = []*agentv1.ContainerInfo{
 		listedContainer("shop-web-1", "running", map[string]string{labelAppID: app.ID.String()},
 			appMount("bind", bindPath, "", "", "/data", false),
-			// The engine's Source is the mountpoint; the configured DEVICE is
-			// the real directory and must win.
 			appMount("volume", mountpoint, volumeName, cacheDevice, "/cache", true),
 		),
 	}
@@ -135,7 +118,6 @@ func TestListVolumesSingleContainer(t *testing.T) {
 	if cache.Kind != VolumeKindManaged || cache.State != VolumeStateRunning {
 		t.Errorf("cache = %+v, want managed/running", cache)
 	}
-	// The runtime mount resolved the configured device, not Docker's mountpoint.
 	if cache.HostPath != cacheDevice {
 		t.Errorf("cache host = %q, want the resolved device %q", cache.HostPath, cacheDevice)
 	}
@@ -148,9 +130,6 @@ func TestListVolumesSingleContainer(t *testing.T) {
 	}
 }
 
-// TestListVolumesFullAccessRoot pins the default agent mode: the only root is
-// the writable "system" root at "/", so the target is system + the managed path
-// WITHOUT a leading slash. A hard-coded "volumes" root fails here.
 func TestListVolumesFullAccessRoot(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -175,18 +154,12 @@ func TestListVolumesFullAccessRoot(t *testing.T) {
 	if entry.FileManager.Root != "system" {
 		t.Errorf("root = %q, want the node's actual system root", entry.FileManager.Root)
 	}
-	// The system root is "/", so the root-relative path is the managed path
-	// without its leading slash.
 	wantPath := strings.TrimPrefix(filepath.ToSlash(bindPath), "/")
 	if entry.FileManager.Path != wantPath {
 		t.Errorf("path = %q, want %q", entry.FileManager.Path, wantPath)
 	}
 }
 
-// TestListVolumesComposeSharedVolume pins the acceptance case: two services
-// sharing one managed volume appear as a single row with both consumers, and
-// Open in File Manager targets the managed backing directory resolved from the
-// volume's configured device.
 func TestListVolumesComposeSharedVolume(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -250,9 +223,6 @@ volumes:
 	}
 }
 
-// TestListVolumesDistinctComposeVolumes pins the exact project-name match: a
-// volume called "my_data" must never fold into the configured "data" row (or
-// the reverse) merely because one name ends with the other.
 func TestListVolumesDistinctComposeVolumes(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -311,9 +281,6 @@ volumes:
 	}
 }
 
-// TestListVolumesKeepsConfiguredStorageWithoutRuntime pins that a stopped or
-// absent container never reads as deleted: the configured row stays, marked
-// unverified, and an unavailable agent is reported instead of hidden.
 func TestListVolumesKeepsConfiguredStorageWithoutRuntime(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -416,9 +383,6 @@ func TestListVolumesKeepsConfiguredStorageWithoutRuntime(t *testing.T) {
 	})
 }
 
-// TestListVolumesOlderAgent pins the explicit older-agent paths: a mount with
-// no type is not guessed to be a bind or a volume, and an agent without the
-// FileService roots RPC yields no target with a reason.
 func TestListVolumesOlderAgent(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -452,9 +416,6 @@ func TestListVolumesOlderAgent(t *testing.T) {
 	}
 }
 
-// TestListVolumesNoRootsRPCPinsTheReason pins an agent without the FileService
-// (files disabled or older): the listing keeps the storage but returns no
-// target and the files_disabled reason, never a guessed root.
 func TestListVolumesNoRootsRPC(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -480,8 +441,6 @@ func TestListVolumesNoRootsRPC(t *testing.T) {
 	}
 }
 
-// TestListVolumesUnverifiedDevice pins M3: a failed device inspect leaves the
-// volume unverified with no target, never "stored in Docker's data directory".
 func TestListVolumesUnverifiedDevice(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -516,10 +475,6 @@ func TestListVolumesUnverifiedDevice(t *testing.T) {
 	}
 }
 
-// TestListVolumesClassifiesUnmappedMounts pins the honest classification of
-// mounts no configured row covers: tmpfs has no directory action, a bind
-// outside the managed root is not exposed, and a repeated mount does not
-// duplicate its consumer.
 func TestListVolumesClassifiesUnmappedMounts(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -557,9 +512,6 @@ func TestListVolumesClassifiesUnmappedMounts(t *testing.T) {
 	}
 }
 
-// TestListVolumesIgnoresOtherApplications proves the label filter is the
-// boundary: another application's container on the same node contributes no
-// entry or consumer.
 func TestListVolumesIgnoresOtherApplications(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -584,8 +536,6 @@ func TestListVolumesIgnoresOtherApplications(t *testing.T) {
 	}
 }
 
-// TestListVolumesRejectsForeignCaller pins authorization: a caller outside the
-// application's team sees 404, never a listing.
 func TestListVolumesRejectsForeignCaller(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -596,10 +546,6 @@ func TestListVolumesRejectsForeignCaller(t *testing.T) {
 	}
 }
 
-// TestFileManagerTargetRejectsEscapingPaths pins the navigation validation: a
-// path outside the managed root, the root itself and a traversal never produce
-// a File Manager target, even when a full-access "system" root could browse
-// them.
 func TestFileManagerTargetRejectsEscapingPaths(t *testing.T) {
 	app := testApplication(uuid.New())
 	root := managedVolumeTestRoot(t)
@@ -608,8 +554,6 @@ func TestFileManagerTargetRejectsEscapingPaths(t *testing.T) {
 		path string
 	}{
 		{"sibling application", filepath.Join(root, uuid.New().String(), "data")},
-		// A sibling whose name is a STRING PREFIX of this app id: a string
-		// prefix comparison would accept it, component-wise containment must not.
 		{"sibling prefix", filepath.Join(root, app.ID.String()+"x", "data")},
 		{"sibling suffix", filepath.Join(root, app.ID.String()+"-copy", "data")},
 		{"sibling prefix through the app dir", filepath.Join(root, app.ID.String(), "..", app.ID.String()+"x", "data")},
@@ -637,8 +581,6 @@ func TestFileManagerTargetRejectsEscapingPaths(t *testing.T) {
 		t.Errorf("target = %+v, want the app's server and volumes/<appID>/data", target)
 	}
 
-	// The full-access root resolves the same directory through "system", but
-	// never escapes the application directory.
 	full, reason := fileManagerTarget(app, VolumeEntry{HostPath: inside}, fullAccessRoots(), "")
 	if full == nil || reason != "" || full.Root != "system" ||
 		full.Path != strings.TrimPrefix(filepath.ToSlash(inside), "/") {
@@ -650,9 +592,6 @@ func TestFileManagerTargetRejectsEscapingPaths(t *testing.T) {
 	}
 }
 
-// TestFileManagerTargetResolvesSymlinkedRoot pins the real-stack case where an
-// agent reports a resolved root path (macOS /tmp -> /private/tmp) while the
-// control plane derives the managed path from its configured (symlinked) root.
 func TestFileManagerTargetResolvesSymlinkedRoot(t *testing.T) {
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "linked")
@@ -672,8 +611,6 @@ func TestFileManagerTargetResolvesSymlinkedRoot(t *testing.T) {
 	}
 }
 
-// TestFileManagerTargetSkipsReadOnlyRoot pins that the read-only compose root
-// is never chosen for volume data.
 func TestFileManagerTargetSkipsReadOnlyRoot(t *testing.T) {
 	app := testApplication(uuid.New())
 	root := managedVolumeTestRoot(t)
@@ -685,9 +622,6 @@ func TestFileManagerTargetSkipsReadOnlyRoot(t *testing.T) {
 	}
 }
 
-// TestListVolumesRuntimeUnverifiedDevice pins S2: a runtime-only mount whose
-// device inspect failed is unverified with no host path, never a fallback to
-// the Docker mountpoint (not_browsable).
 func TestListVolumesRuntimeUnverifiedDevice(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -722,9 +656,6 @@ func TestListVolumesRuntimeUnverifiedDevice(t *testing.T) {
 	}
 }
 
-// TestListVolumesNameFallbackWithoutDevice pins S3a: with no resolved device
-// the configured row is found ONLY by the exact project-prefixed name, so
-// "my_data" can never fold into "data" through a suffix match.
 func TestListVolumesNameFallbackWithoutDevice(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -742,7 +673,6 @@ volumes:
 	repo := &fakeRepository{app: app}
 	root := managedVolumeTestRoot(t)
 	project := services.ProjectName(app.ID)
-	// No devices: the name is the only link between runtime and configured.
 	node := newMockNode()
 	node.fileRoots = confinedRoots(root)
 	node.listed = []*agentv1.ContainerInfo{
@@ -774,8 +704,6 @@ volumes:
 	}
 }
 
-// TestListVolumesRuntimeDeviceBeatsSource pins S3b: a runtime-only volume takes
-// its configured device as the host path, not Docker's mountpoint in source.
 func TestListVolumesRuntimeDeviceBeatsSource(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -806,8 +734,6 @@ func TestListVolumesRuntimeDeviceBeatsSource(t *testing.T) {
 	}
 }
 
-// TestFileManagerTargetChoosesLongestRoot pins S3c: a writable "/" plus a
-// writable nested root containing the managed directory picks the nested one.
 func TestFileManagerTargetChoosesLongestRoot(t *testing.T) {
 	app := testApplication(uuid.New())
 	root := managedVolumeTestRoot(t)
@@ -825,8 +751,6 @@ func TestFileManagerTargetChoosesLongestRoot(t *testing.T) {
 	}
 }
 
-// TestListVolumesCancelledContext pins S5: an already-cancelled request returns
-// the context error instead of a misleading "unavailable" listing.
 func TestListVolumesCancelledContext(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)

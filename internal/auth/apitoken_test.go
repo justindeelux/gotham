@@ -18,8 +18,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// newTestAPITokenService migrates the dev database and returns a token service
-// wired to it, alongside the store for fixtures.
 func newTestAPITokenService(t *testing.T) (*APITokenService, *store.Store) {
 	t.Helper()
 
@@ -28,8 +26,6 @@ func newTestAPITokenService(t *testing.T) (*APITokenService, *store.Store) {
 	return NewAPITokenService(st, logger), st
 }
 
-// createTestUser inserts a passwordless account and returns its ID. The account
-// is removed afterwards, cascading to its tokens.
 func createTestUser(t *testing.T, st *store.Store) uuid.UUID {
 	t.Helper()
 
@@ -197,7 +193,6 @@ func TestAPITokenValidation(t *testing.T) {
 		})
 	}
 
-	// A nil scope list defaults to read-only.
 	created, err := svc.Create(ctx, userID, "default", nil)
 	if err != nil {
 		t.Fatalf("Create(no scopes): %v", err)
@@ -261,7 +256,6 @@ func TestAPITokenFormat(t *testing.T) {
 		t.Errorf("token payload = %d bytes, want %d", len(raw), apiTokenBytes)
 	}
 
-	// Only the hash is stored, and it is the SHA-256 hex of the plaintext.
 	wantHash := hex.EncodeToString(func() []byte {
 		sum := sha256.Sum256([]byte(created.Token))
 		return sum[:]
@@ -286,16 +280,13 @@ func TestAPITokenAuthenticateRejectsBadTokens(t *testing.T) {
 	svc, _ := newTestAPITokenService(t)
 	ctx := context.Background()
 
-	// Wrong prefix is not an API token.
 	if _, err := svc.Authenticate(ctx, "not-an-api-token"); !errors.Is(err, ErrUnauthorized) {
 		t.Errorf("Authenticate(wrong prefix) error = %v, want ErrUnauthorized", err)
 	}
-	// Correct prefix but unknown hash.
 	unknown := APITokenPrefix + strings.Repeat("x", 43)
 	if _, err := svc.Authenticate(ctx, unknown); !errors.Is(err, ErrUnauthorized) {
 		t.Errorf("Authenticate(unknown) error = %v, want ErrUnauthorized", err)
 	}
-	// Empty token.
 	if _, err := svc.Authenticate(ctx, ""); !errors.Is(err, ErrUnauthorized) {
 		t.Errorf("Authenticate(empty) error = %v, want ErrUnauthorized", err)
 	}
@@ -326,9 +317,6 @@ func TestScopesContain(t *testing.T) {
 	}
 }
 
-// TestCanGrantScopes pins the token-minting subset rule: a token may only grant
-// scopes it holds, with a more privileged scope covering the ones below it
-// (deploy grants read; only admin grants admin).
 func TestCanGrantScopes(t *testing.T) {
 	tests := map[string]struct {
 		held      []string

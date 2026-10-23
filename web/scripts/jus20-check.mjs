@@ -1,11 +1,3 @@
-// JUS-20 follow-up check: the wizard install step keeps the removed card's guidance.
-//
-// The repo has no web test runner (no vitest/jsdom), so this script stands in
-// for a unit test like scripts/jus11-check.mjs: it asserts the Add server
-// wizard's install command carries the full guidance the Servers page card
-// used to show, and that the rendered/copied text cannot silently drop it.
-//
-// Run from web/:  node scripts/jus20-check.mjs
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -33,7 +25,6 @@ function assert(condition, message) {
   }
 }
 
-/** installLines returns the installCommand array entries from the wizard source. */
 function installLines(source) {
   const start = source.indexOf("const installCommand = [");
   assert(start !== -1, "installCommand array not found");

@@ -7,37 +7,22 @@ import { activeLocale, i18n } from "@/shared/i18n";
 
 interface Props {
   serviceId: string;
-  /** Compose service names the project declares; empty means all services. */
   services?: string[];
   title?: string;
   maxLines?: number;
 }
 
-/**
- * Live log terminal for one compose service (see `useServiceLogs` for the
- * stream lifecycle).
- *
- * Known gap, rendered as an explicit stub below: the API has no stored log
- * artifact, so "Download" cannot export anything that is not already on
- * screen.
- */
 const props = withDefaults(defineProps<Props>(), {
   services: () => [],
   title: "",
   maxLines: 2000,
 });
 
-/**
- * t renders log-terminal copy in the active locale (tracks language
- * switches). Called during render, so controls refresh without dropping
- * the stream. Streamed log lines stay raw and are never translated.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
 }
 
-/** heading is the caller override or the localized logs wording. */
 const heading = computed<string>(() => props.title || t("services.logs.title"));
 
 const {

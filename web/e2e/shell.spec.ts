@@ -7,33 +7,22 @@ import {
   uniqueSuffix,
 } from "./support";
 
-/** stampSpaMarker tags the JS context so a full-page reload is detectable. */
 async function stampSpaMarker(page: Page): Promise<void> {
   await page.evaluate(() => {
     (window as Window & { __spa?: number }).__spa = 1;
   });
 }
 
-/** spaMarkerSurvived is false only after a real document reload. */
 async function spaMarkerSurvived(page: Page): Promise<boolean> {
   return page.evaluate(
     () => (window as Window & { __spa?: number }).__spa === 1,
   );
 }
 
-/**
- * FX-15a regression suite for the app shell, navigation and auth-screen states.
- *
- * The shell scenarios start already authenticated (session from global setup);
- * the auth scenario runs signed out so the public-only guard keeps it on
- * /login. Each check targets one finding and fails if the old behavior returns.
- */
 test.describe("auth shell", () => {
   test("the auth screens do not overflow the mockup viewport height", async ({
     page,
   }) => {
-    // B3-1: the stale `.auth-page` wrapper added a second 100vh minimum plus
-    // padding inside `.auth-main`, so the 900px mockup scrolled by 64px.
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/login");
 
@@ -46,9 +35,6 @@ test.describe("auth shell", () => {
   test("the password-reset guidance tells the user what to do", async ({
     page,
   }) => {
-    // B4-17 / JUS-197: the old disabled "Forgot password?" control is gone.
-    // The reason is visible text telling a locked-out user to contact their
-    // admin — not a hover-only tooltip and not an inert button.
     await page.goto("/login");
     await expect(
       page.getByText("Forgot your password? Contact your admin to reset it.", {
@@ -65,7 +51,6 @@ test.describe("app shell", () => {
   test.use({ storageState: storageStatePath });
 
   test("the content region is a main landmark", async ({ page }) => {
-    // B3-16.
     await page.goto("/dashboard");
     await expect(page.getByRole("main")).toBeVisible();
   });
@@ -73,7 +58,6 @@ test.describe("app shell", () => {
   test("the mobile drawer owns focus, closes on Escape and returns focus", async ({
     page,
   }) => {
-    // B3-4 (and B3-13's parent surface).
     await page.setViewportSize({ width: 390, height: 780 });
     await page.goto("/dashboard");
 
@@ -94,7 +78,6 @@ test.describe("app shell", () => {
   });
 
   test("the phone drawer entry is a 44px touch target", async ({ page }) => {
-    // B3-13.
     await page.setViewportSize({ width: 390, height: 780 });
     await page.goto("/dashboard");
     await page.getByRole("button", { name: "Toggle navigation" }).click();
@@ -109,7 +92,6 @@ test.describe("app shell", () => {
   test("growing past the breakpoint unmounts the drawer backdrop", async ({
     page,
   }) => {
-    // B3-17.
     await page.setViewportSize({ width: 390, height: 780 });
     await page.goto("/dashboard");
     await page.getByRole("button", { name: "Toggle navigation" }).click();
@@ -120,7 +102,6 @@ test.describe("app shell", () => {
   });
 
   test("the rail Add server button opens the wizard", async ({ page }) => {
-    // B3-6: the rail add button must deep-link into the wizard, not the list.
     await page.goto("/dashboard");
     await page.getByRole("link", { name: "Add server", exact: true }).click();
     await expect(page).toHaveURL(/\/servers$/);
@@ -130,9 +111,6 @@ test.describe("app shell", () => {
   test("a failed logout still redirects in-app from the topbar", async ({
     page,
   }) => {
-    // B3-3: a failed revoke must not block navigation or degrade into a hard
-    // document reload. `window.__spa` survives only a client-side redirect; a
-    // `location.assign("/login")` (the 401 expire fallback) would wipe it.
     await page.route("**/api/v1/auth/logout", (route) =>
       route.fulfill({ status: 400, contentType: "application/json", body: "{}" }),
     );
@@ -148,8 +126,6 @@ test.describe("app shell", () => {
   test("a failed logout still redirects in-app from the sidebar card", async ({
     page,
   }) => {
-    // B3-3 covers both sign-out handlers: the sidebar MeCard owns its own
-    // logout path, so it needs the same protection and its own check.
     await page.route("**/api/v1/auth/logout", (route) =>
       route.fulfill({ status: 400, contentType: "application/json", body: "{}" }),
     );
@@ -169,8 +145,6 @@ test.describe("app shell", () => {
     page,
     request,
   }) => {
-    // B3-6: the avatar used to point at the list. Seed a node row (no agent
-    // contact) and follow its rail link.
     const account = loadAccount();
     const name = `ui-e2e-node-${uniqueSuffix()}`;
     const created = await request.post("/api/v1/servers", {
@@ -194,8 +168,6 @@ test.describe("app shell", () => {
     page,
     request,
   }) => {
-    // B4-16: with servers present, a filter that matches none must not reuse
-    // the first-run "No servers yet" copy.
     const account = loadAccount();
     const created = await request.post("/api/v1/servers", {
       headers: { Authorization: `Bearer ${account.accessToken}` },
@@ -215,9 +187,6 @@ test.describe("app shell", () => {
   });
 
   test("servers first-run state says no servers yet", async ({ page }) => {
-    // B4-16: the zero-servers branch must not reuse the filtered-miss copy.
-    // Intercepting the list makes the branch deterministic regardless of rows
-    // seeded by other specs on a shared database.
     await page.route("**/api/v1/servers", (route) =>
       route.fulfill({
         status: 200,
@@ -233,9 +202,6 @@ test.describe("app shell", () => {
   });
 });
 
-// The detail route is exercised with an unknown id: the page stays on the
-// route and renders its error state, which is enough to prove the sidebar
-// section stays highlighted. The resulting 404 resource log is expected.
 test.describe("app shell detail routes", () => {
   test.use({
     storageState: storageStatePath,
@@ -245,7 +211,6 @@ test.describe("app shell detail routes", () => {
   test("a server detail URL keeps the Servers entry highlighted", async ({
     page,
   }) => {
-    // B2-12 / B3-5.
     await page.goto("/servers/does-not-exist");
     await expect(
       page.locator('#app-nav a[href="/servers"]'),

@@ -1,6 +1,3 @@
-// Component tests for the panels extracted during the JUS-24 split
-// (F2-applications). Each case pins the user-visible copy, roles and emitted
-// events the monoliths rendered before the split.
 
 import { NButton } from "naive-ui";
 import { mount } from "@vue/test-utils";
@@ -26,7 +23,6 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** mountWithI18n provides the composer every localized component requires. */
 function mountWithI18n(component: unknown, options: Record<string, unknown>) {
   return mount(component as never, {
     ...(options as object),
@@ -102,7 +98,6 @@ describe("ApplicationHeader", () => {
     expect(wrapper.emitted("deploy")).toHaveLength(1);
     expect(wrapper.emitted("rollback")).toHaveLength(1);
     expect(wrapper.emitted("stop")).toHaveLength(1);
-    // Start is disabled while the container runs; Stop is disabled once stopped.
     expect(byText("Start")?.attributes("disabled")).not.toBeUndefined();
   });
 
@@ -118,9 +113,6 @@ describe("ApplicationHeader", () => {
     const buttons = wrapper.findAllComponents(NButton);
     const byLabel = (label: string) =>
       buttons.find((button) => button.text() === label);
-    // Intent colors come from the Gotham-mapped Naive theme (JUS-87): one
-    // distinct type per control, so they read apart in light and dark.
-    // Outline style (ghost): transparent background, colored border/text.
     expect(byLabel("Redeploy")?.props("type")).toBe("primary");
     expect(byLabel("Rollback")?.props("type")).toBe("warning");
     expect(byLabel("Stop")?.props("type")).toBe("error");
@@ -133,8 +125,6 @@ describe("ApplicationHeader", () => {
   });
 });
 
-// The flat ApplicationsPage and its ApplicationListCard were removed in PE-5:
-// resources are listed on the environment page and open under nested routes.
 describe("ApplicationOverviewTab", () => {
   it("renders the first-deploy empty state without a latest deployment", () => {
     const wrapper = mountWithI18n(ApplicationOverviewTab, {

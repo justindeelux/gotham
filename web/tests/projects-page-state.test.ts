@@ -1,9 +1,3 @@
-// Page-instance state regression tests for the projects surface (PE-4,
-// JUS-33). The search query, dialog drafts, open flags and submit guards
-// must be created per page mount and dropped on unmount: a typed project
-// name must never survive a route change and dialogs must not re-open.
-// Viewers see the list but no create button. Teleport is stubbed so dialog
-// content renders inline.
 import { NButton, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -60,8 +54,6 @@ import { useTeamsStore } from "@/features/teams";
 const counts = { applications: 3, services: 1, databases: 2 };
 const emptyCounts = { applications: 0, services: 0, databases: 0 };
 
-// Mounted pages resolve copy through the projects catalog: merge it and run
-// English by default so the pinned copy below keeps proving behavior.
 beforeEach(() => {
   i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
   i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });
@@ -126,7 +118,6 @@ function testRouter(path: string) {
   return router;
 }
 
-/** seedTeams presets the teams store; role picks writer vs viewer. */
 function seedTeams(role: "owner" | "read_only" = "owner"): void {
   const team = {
     id: "team-1",
@@ -136,15 +127,12 @@ function seedTeams(role: "owner" | "read_only" = "owner"): void {
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
   };
-  // The pages call ensureTeams on mount, which refetches: the mock answers
-  // the same team so the seeded role (and selection) survives the load.
   vi.mocked(listTeams).mockResolvedValue([team] as never);
   const teams = useTeamsStore();
   teams.teams = [team] as never;
   teams.activeTeamId = "team-1";
 }
 
-/** mountList mounts the list page with a router and a seeded team. */
 async function mountList(path = "/projects") {
   const router = testRouter(path);
   await router.isReady();
@@ -157,7 +145,6 @@ async function mountList(path = "/projects") {
   return wrapper;
 }
 
-/** mountDetail mounts the detail page for one project id. */
 async function mountDetail(id: string) {
   const router = testRouter(`/projects/${id}`);
   await router.isReady();
@@ -170,7 +157,6 @@ async function mountDetail(id: string) {
   return { wrapper, router };
 }
 
-/** clickButton clicks the first naive button with the exact label. */
 async function clickButton(wrapper: VueWrapper, label: string): Promise<void> {
   const buttons = wrapper.findAllComponents(NButton);
   const target = buttons.find((button) => button.text() === label);
@@ -180,7 +166,6 @@ async function clickButton(wrapper: VueWrapper, label: string): Promise<void> {
   await nextTick();
 }
 
-/** buttonLabels lists every rendered naive button label. */
 function buttonLabels(wrapper: VueWrapper): string[] {
   return wrapper.findAllComponents(NButton).map((button) => button.text());
 }
@@ -279,7 +264,6 @@ describe("projects list page states", () => {
     const wrapper = await mountList();
     await clickButton(wrapper, "New project");
     expect(wrapper.text()).toContain("production");
-    // Empty name: the submit stays disabled, no request fires.
     const submits = wrapper
       .findAllComponents(NButton)
       .filter((button) => button.text() === "Create project");
@@ -296,8 +280,6 @@ describe("projects list page states", () => {
 
     const wrapper = await mountList();
     await clickButton(wrapper, "New project");
-    // Visible labels are not linked by Naive UI, so each input carries its
-    // own accessible name matching the visible label.
     expect(wrapper.find("#project-create-name").attributes("aria-label")).toBe(
       "Project name",
     );
@@ -322,14 +304,10 @@ describe("projects list page states", () => {
     await clickButton(wrapper, "New project");
     await wrapper.find(".n-modal .n-form-item input").setValue("storefront");
     await clickButton(wrapper, "Create project");
-    // The 409 renders on the name field and the dialog stays open. The raw
-    // refusal stays in the conflict state; the field shows the curated
-    // message in the active locale.
     const feedback = wrapper.find(".n-modal .n-form-item-feedback__line");
     expect(feedback.exists()).toBe(true);
     expect(feedback.text()).toContain("This name is already taken.");
     expect(wrapper.text()).toContain("New project");
-    // Editing the field clears the inline conflict.
     await wrapper.find(".n-modal .n-form-item input").setValue("storefront-2");
     await nextTick();
     expect(
@@ -355,7 +333,6 @@ describe("project detail page states", () => {
     expect(wrapper.text()).toContain("Projects");
     expect(wrapper.text()).toContain("production");
     expect(wrapper.text()).toContain("Shared variables");
-    // PE-5: Open links to the environment page.
     const open = wrapper
       .findAllComponents(NButton)
       .find((button) => button.text() === "Open");
@@ -376,7 +353,6 @@ describe("project detail page states", () => {
     });
 
     const { wrapper } = await mountDetail(id);
-    // The name cell renders a real anchor to the same target as Open.
     const nameLink = wrapper.find(
       ".env-table td.env-name a[href=\"/projects/11111111-1111-4111-8111-111111111111/environments/22222222-2222-4222-8222-222222222222\"]",
     );
@@ -394,7 +370,6 @@ describe("project detail page states", () => {
     });
 
     const { wrapper } = await mountDetail(id);
-    // The opener stays enabled so keyboard and touch reach the explanation.
     await clickButton(wrapper, "Delete project");
     expect(wrapper.text()).toContain("Move or delete every resource");
     const confirm = wrapper
@@ -415,7 +390,6 @@ describe("project detail page states", () => {
     });
 
     const { wrapper } = await mountDetail(id);
-    // Row Delete stays enabled; the dialog carries the visible block reason.
     await clickButton(wrapper, "Delete");
     expect(wrapper.text()).toContain("Move or delete them first");
     wrapper.unmount();
@@ -435,7 +409,6 @@ describe("project detail page states", () => {
         .findAllComponents(NButton)
         .filter((button) => button.text() === "Rename");
 
-    // Project rename (first Rename button, in the page head).
     await renames()[0]!.trigger("click");
     await flushPromises();
     await nextTick();
@@ -444,14 +417,12 @@ describe("project detail page states", () => {
     );
     await clickButton(wrapper, "Cancel");
 
-    // Environment create.
     await clickButton(wrapper, "Add environment");
     expect(
       wrapper.find("#environment-create-name").attributes("aria-label"),
     ).toBe("Environment name");
     await clickButton(wrapper, "Cancel");
 
-    // Environment rename (second Rename button, in the table row).
     await renames()[1]!.trigger("click");
     await flushPromises();
     await nextTick();
@@ -475,11 +446,9 @@ describe("project detail page states", () => {
     await clickButton(wrapper, "Rename");
     const input = wrapper.find(".n-modal input");
     expect(input.exists()).toBe(true);
-    // The keystroke that opened the dialog ends here: keyup must not submit.
     await input.trigger("keyup.enter");
     await flushPromises();
     expect(vi.mocked(renameProject)).not.toHaveBeenCalled();
-    // An explicit Enter inside the form submits once.
     await input.trigger("keydown.enter");
     await flushPromises();
     await nextTick();
@@ -555,7 +524,6 @@ describe("project detail page states", () => {
     vi.mocked(renameEnvironment).mockResolvedValue(environmentRow());
 
     const { wrapper } = await mountDetail(id);
-    // Environment create: keyup submits nothing, keydown submits once.
     await clickButton(wrapper, "Add environment");
     const createInput = wrapper.find(".n-modal input");
     await createInput.setValue("staging");
@@ -567,7 +535,6 @@ describe("project detail page states", () => {
     await nextTick();
     expect(vi.mocked(createEnvironment)).toHaveBeenCalledTimes(1);
 
-    // Environment rename: keyup submits nothing, keydown submits once.
     const rowRename = wrapper
       .findAllComponents(NButton)
       .filter((button) => button.text() === "Rename")[1]!;
@@ -605,12 +572,9 @@ describe("project detail page states", () => {
     await clickButton(wrapper, "Rename");
     const input = wrapper.find(".n-modal input");
     await input.setValue("renamed");
-    // First submit starts the request.
     await input.trigger("keydown.enter");
     await flushPromises();
     expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
-    // Moving to another project resets dialogs but must not release the
-    // in-flight guard: submitting the new project's dialog stays blocked.
     await router.push(`/projects/${otherId}`);
     await flushPromises();
     await nextTick();
@@ -667,7 +631,6 @@ describe("project detail page states", () => {
     await wrapper.find(".n-modal input").trigger("keydown.enter");
     await flushPromises();
     expect(vi.mocked(renameProject)).toHaveBeenCalledTimes(1);
-    // Move to B and open its rename dialog before A resolves.
     await router.push(`/projects/${otherId}`);
     await flushPromises();
     await nextTick();
@@ -675,7 +638,6 @@ describe("project detail page states", () => {
     resolveRename(projectRow({ id, name: "renamed" }));
     await flushPromises();
     await nextTick();
-    // B's dialog stays open with B's draft, not A's result.
     expect(wrapper.find(".n-modal").exists()).toBe(true);
     expect(
       (wrapper.find(".n-modal input").element as unknown as { value: string })
@@ -709,7 +671,6 @@ describe("project detail page states", () => {
     await confirm.trigger("click");
     await flushPromises();
     expect(vi.mocked(deleteProject)).toHaveBeenCalledTimes(1);
-    // Move to B before A resolves: the success must not leave B.
     await router.push(`/projects/${otherId}`);
     await flushPromises();
     await nextTick();

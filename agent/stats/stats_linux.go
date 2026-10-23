@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-// readCPUTimes parses the aggregate "cpu" line of /proc/stat, returning the
-// cumulative idle (including iowait) and total jiffies.
 func readCPUTimes() (idle, total uint64, err error) {
 	file, err := os.Open("/proc/stat")
 	if err != nil {
@@ -31,7 +29,7 @@ func readCPUTimes() (idle, total uint64, err error) {
 				return 0, 0, parseErr
 			}
 			total += value
-			if index == 3 || index == 4 { // idle + iowait
+			if index == 3 || index == 4 {
 				idle += value
 			}
 		}
@@ -43,8 +41,6 @@ func readCPUTimes() (idle, total uint64, err error) {
 	return 0, 0, errors.New("stats: no cpu line in /proc/stat")
 }
 
-// readMemory reports used and total bytes from /proc/meminfo. It prefers
-// MemAvailable over MemFree so cached memory is not counted as used.
 func readMemory() (used, total uint64, err error) {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -88,7 +84,6 @@ func readMemory() (used, total uint64, err error) {
 	return total - reclaimable, total, nil
 }
 
-// meminfoKilobytes parses a "<number> kB" meminfo value into bytes.
 func meminfoKilobytes(value string) (uint64, error) {
 	fields := strings.Fields(strings.TrimSpace(value))
 	if len(fields) == 0 {
@@ -101,7 +96,6 @@ func meminfoKilobytes(value string) (uint64, error) {
 	return amount * 1024, nil
 }
 
-// osVersion reads the kernel release, for example "6.1.0-13-amd64".
 func osVersion() string {
 	data, err := os.ReadFile("/proc/sys/kernel/osrelease")
 	if err != nil {
@@ -110,11 +104,6 @@ func osVersion() string {
 	return strings.TrimSpace(string(data))
 }
 
-// readNetwork reads the host's cumulative network byte counters. It sums every
-// non-loopback interface, so container and bridge interfaces (veth*, docker0,
-// br-*) are counted in addition to the physical NIC and container traffic can
-// appear roughly twice. That is an accepted ceiling: the value is a host-level
-// indicator, not a unique wire throughput.
 func readNetwork() (rx, tx uint64, err error) {
 	file, err := os.Open("/proc/net/dev")
 	if err != nil {
@@ -124,12 +113,6 @@ func readNetwork() (rx, tx uint64, err error) {
 	return parseNetDev(file)
 }
 
-// readDiskIO reads the host's cumulative disk I/O byte counters, counting the
-// whole block devices /sys/block lists. Partition entries in /proc/diskstats
-// are skipped so a disk and its partitions are not counted twice; loop, ram
-// and zram (RAM-backed swap) pseudo devices have no real I/O. A stacked setup
-// (dm/md over its member disks) is counted once per layer, which is an accepted
-// ceiling for a host-level indicator.
 func readDiskIO() (read, write uint64, err error) {
 	devices, err := wholeBlockDevices()
 	if err != nil {
@@ -143,8 +126,6 @@ func readDiskIO() (read, write uint64, err error) {
 	return parseDiskStats(file, devices)
 }
 
-// wholeBlockDevices returns the names of the real whole block devices the
-// kernel lists under /sys/block.
 func wholeBlockDevices() (map[string]struct{}, error) {
 	entries, err := os.ReadDir("/sys/block")
 	if err != nil {

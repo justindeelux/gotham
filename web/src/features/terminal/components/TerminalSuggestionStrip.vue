@@ -6,24 +6,9 @@ import { useI18n } from "vue-i18n";
 
 import type { QuickCommandSuggestion } from "@/features/terminal/utils/quickCommandEngine";
 
-/**
- * Suggestion bar (JUS-249, JUS-275).
- *
- * It only mounts for a real suggestion (or a command notice / the no-prompt
- * marks diagnostic), and it is an overlay on the terminal bottom: the renderer
- * box never changes, so a match cannot resize the PTY and an idle terminal
- * keeps every row for the shell instead of reserving an empty hint.
- *
- * The list is a valid listbox owning one option directly (no ul/li wrappers).
- * Keys reach the PTY unless the user explicitly focuses the list with
- * Ctrl+Shift+Space; then Enter accepts (without Enter reaching the shell),
- * Escape dismisses and Tab returns focus.
- */
 interface Props {
   suggestion: QuickCommandSuggestion | null;
-  /** notice replaces the hint (e.g. an insert refusal). */
   notice?: string;
-  /** noPromptMarksHint only turns true after the post-connect grace period. */
   noPromptMarksHint?: boolean;
 }
 
@@ -40,7 +25,6 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const option = ref<HTMLButtonElement | null>(null);
 
-/** announcement is empty unless a suggestion is visible. */
 const announcement = computed<string>(() => {
   if (!props.suggestion) {
     return "";
@@ -51,14 +35,12 @@ const announcement = computed<string>(() => {
   });
 });
 
-/** focusOption is called by the surface's Ctrl+Shift+Space shortcut. */
 function focusOption(): void {
   option.value?.focus();
 }
 
 defineExpose({ focusOption });
 
-/** onOptionKeydown only runs while the option itself is focused. */
 function onOptionKeydown(event: KeyboardEvent): void {
   switch (event.key) {
     case "Escape":
@@ -148,10 +130,6 @@ function onOptionKeydown(event: KeyboardEvent): void {
 </template>
 
 <style scoped>
-/* The strip is an overlay: it never takes a row from the xterm box, so
- * showing/hiding a suggestion cannot resize the PTY. The surface itself is
- * transparent to the pointer (rows under it stay clickable/selectable); only
- * its controls take input. */
 .term-suggest {
   position: absolute;
   left: 0;
@@ -179,9 +157,6 @@ function onOptionKeydown(event: KeyboardEvent): void {
   pointer-events: auto;
 }
 
-/* Visually hidden but exposed to assistive technology. This must live in
- * this component: a scoped rule in the parent does not reach teleported/
- * child markup. */
 .term-sr {
   position: absolute;
   width: 1px;

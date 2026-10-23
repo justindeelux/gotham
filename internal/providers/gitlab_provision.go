@@ -14,22 +14,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// gitLabDefaultProvisionScopes is the exact scope set a Gotham-provisioned
-// GitLab OAuth application needs: full API access for webhooks, deploy keys
-// and member project listing, plus the read scopes a least-privilege manual
-// application carries.
 const gitLabDefaultProvisionScopes = "api read_user read_repository"
 
-// gitLabAllowedScopes bounds the scope sets a provisioned application may
-// carry, so a typo fails at the API instead of a confusing GitLab rejection.
 var gitLabAllowedScopes = map[string]bool{
 	"api": true, "read_user": true, "read_repository": true,
 	"openid": true, "profile": true, "email": true,
 }
 
-// AutoProvisionGitLabInput carries the one-time details to create a GitLab
-// OAuth application automatically. AdminToken is used for the single
-// POST /api/v4/applications call and is never stored or logged.
 type AutoProvisionGitLabInput struct {
 	BaseURL     string
 	AdminToken  string
@@ -38,38 +29,18 @@ type AutoProvisionGitLabInput struct {
 	Scopes      string
 }
 
-// GitLabSetupInfo is the manual-application fallback: the exact redirect URI
-// and scopes to register on gitlab.com or a self-hosted instance when no
-// admin token is available for automatic creation.
 type GitLabSetupInfo struct {
 	BaseURL     string `json:"base_url"`
 	RedirectURI string `json:"redirect_uri"`
 	Scopes      string `json:"scopes"`
 }
 
-// gitLabApplication is the subset of the POST /api/v4/applications response
-// Gotham keeps: the client id and secret of the created OAuth application.
 type gitLabApplication struct {
 	ID            int64  `json:"id"`
 	ApplicationID string `json:"application_id"`
 	Secret        string `json:"secret"`
 }
 
-// AutoProvisionGitLab creates the GitLab OAuth application through the GitLab
-// API from a one-time admin token and stores the connection (client id/secret
-// sealed, tokens empty until the OAuth flow completes). The admin token never
-// reaches the database: it authenticates the provisioning calls only.
-//
-// The likely duplicate is refused before anything is created on the GitLab
-// instance; when the row insert still fails afterwards (a race), the
-// just-created application is deleted again, so no orphaned OAuth application
-// (whose secret is only returned once) is left behind.
-//
-// The admin token needs api scope (applications are administrator-only
-// resources). Self-hosted limits: the instance must be reachable over TLS the
-// control plane trusts (plain http is refused outside tests), base_url must
-// name the instance root (https://git.example.com, no /api/v4 suffix), and
-// the redirect URL must be the exact public control-plane callback.
 func (s *Service) AutoProvisionGitLab(ctx context.Context, userID uuid.UUID, input AutoProvisionGitLabInput) (Provider, error) {
 	if s.repo == nil {
 		return Provider{}, fmt.Errorf("providers: repository is not configured")
@@ -97,9 +68,6 @@ func (s *Service) AutoProvisionGitLab(ctx context.Context, userID uuid.UUID, inp
 		name = "gotham"
 	}
 
-	// Refuse the likely duplicate before creating anything on the instance:
-	// the row would trip the (user_id, name, base_url) unique index and the
-	// application just created (with its one-time secret) would be orphaned.
 	if duplicate, err := s.gitLabConnected(ctx, userID, base); err != nil {
 		return Provider{}, err
 	} else if duplicate {
@@ -121,18 +89,12 @@ func (s *Service) AutoProvisionGitLab(ctx context.Context, userID uuid.UUID, inp
 		Scopes:       scopes,
 	})
 	if err != nil {
-		// The row is the only handle on the remote application: remove it so
-		// a retry (or a race loser) does not orphan an application Gotham
-		// can never use again. Best effort on a detached context, like the
-		// deploy-key and webhook rollbacks.
 		s.bestEffortRemoveApplication(ctx, base, input.AdminToken, applicationID)
 		return Provider{}, err
 	}
 	return created, nil
 }
 
-// gitLabConnected reports whether userID already has a GitLab connection for
-// the normalized instance base.
 func (s *Service) gitLabConnected(ctx context.Context, userID uuid.UUID, base string) (bool, error) {
 	connections, err := s.repo.List(ctx, userID)
 	if err != nil {
@@ -146,11 +108,6 @@ func (s *Service) gitLabConnected(ctx context.Context, userID uuid.UUID, base st
 	return false, nil
 }
 
-// gitLabProvisionScopes resolves the scope set of a provisioned application:
-// the default when empty, otherwise every whitespace-separated token must be
-// one Gotham knows, so a typo (or a comma-joined "api,read_user", which
-// GitLab would only reject late) fails here instead. The result is deduped
-// and space-joined, the shape the GitLab applications API expects.
 func gitLabProvisionScopes(scopes string) (string, error) {
 	if strings.TrimSpace(scopes) == "" {
 		return gitLabDefaultProvisionScopes, nil
@@ -172,9 +129,6 @@ func gitLabProvisionScopes(scopes string) (string, error) {
 	return strings.Join(out, " "), nil
 }
 
-// GitLabSetupInfoFor returns the manual-application fallback for baseURL: the
-// exact redirect URI and scopes to register when automatic creation is not
-// possible. It validates the instance base URL but performs no network call.
 func (s *Service) GitLabSetupInfoFor(baseURL, redirectURL string) (GitLabSetupInfo, error) {
 	base := gitLabInstanceBase(strings.TrimSpace(baseURL))
 	if err := validateBaseURL(base, s.allowUnsafeBaseURL); err != nil {
@@ -193,10 +147,6 @@ func (s *Service) GitLabSetupInfoFor(baseURL, redirectURL string) (GitLabSetupIn
 	}, nil
 }
 
-// createGitLabApplication registers one confidential OAuth application on the
-// GitLab instance and returns its API id with the client id and secret. The
-// admin token travels in the Authorization header of this call only; error
-// values never include it.
 func (s *Service) createGitLabApplication(ctx context.Context, base, adminToken, name, redirectURL, scopes string) (int64, string, string, error) {
 	if base == "" {
 		base = gitLabDefaultBase
@@ -225,15 +175,8 @@ func (s *Service) createGitLabApplication(ctx context.Context, base, adminToken,
 	return created.ID, created.ApplicationID, created.Secret, nil
 }
 
-// gitLabRemoveApplicationTimeout bounds the best-effort removal of an
-// application whose row could not be stored. It runs on a detached context,
-// which is exactly what may have just expired, mirroring the deploy-key and
-// webhook rollbacks.
 const gitLabRemoveApplicationTimeout = 5 * time.Second
 
-// bestEffortRemoveApplication deletes a just-provisioned GitLab application
-// whose row could not be stored, so a retry starts from a clean state instead
-// of orphaning an application Gotham can never use again.
 func (s *Service) bestEffortRemoveApplication(ctx context.Context, base, adminToken string, applicationID int64) {
 	if applicationID <= 0 {
 		return
@@ -267,8 +210,6 @@ func (s *Service) bestEffortRemoveApplication(ctx context.Context, base, adminTo
 	}
 }
 
-// gitLabScheme returns the scheme of an instance base ("" for gitlab.com,
-// which is always https).
 func gitLabScheme(base string) string {
 	if base == "" {
 		return "https"
@@ -283,10 +224,6 @@ func gitLabScheme(base string) string {
 	return parsed.Scheme
 }
 
-// postGitLabApplication POSTs payload to /api/v4/applications with the admin
-// token as a bearer credential and decodes the created application. A 401/403
-// means the token was rejected (validation, so the caller gets a 400); any
-// other non-2xx is a provider failure. Errors never include the token.
 func postGitLabApplication(ctx context.Context, client *http.Client, base, adminToken string, payload map[string]any, dst *gitLabApplication) error {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -321,10 +258,6 @@ func postGitLabApplication(ctx context.Context, client *http.Client, base, admin
 	return nil
 }
 
-// gitLabInstanceBase normalizes a caller-supplied instance root: an empty
-// value selects gitlab.com (stored as "" so the default applies everywhere),
-// and a value that already carries the /api/v4 suffix is trimmed back to the
-// root the OAuth and API paths derive from.
 func gitLabInstanceBase(raw string) string {
 	base := strings.TrimRight(strings.TrimSpace(raw), "/")
 	if base == gitLabDefaultBase || base == gitLabDefaultBase+"/api/v4" {
@@ -334,16 +267,8 @@ func gitLabInstanceBase(raw string) string {
 	return strings.TrimRight(base, "/")
 }
 
-// gitLabCallbackPath is the exact control-plane callback a GitLab OAuth
-// application must register: the browser landing that completes the connect.
 const gitLabCallbackPath = "/api/v1/providers/gitlab/callback"
 
-// validateRedirectURL accepts only the exact control-plane callback over
-// absolute http(s) without userinfo: GitLab matches the redirect exactly, so
-// any other path (including the login /oauth/callback) could never complete
-// the provider flow. Query, fragment and encoded-path forms are refused for
-// the same reason: neither GitLab nor the router would match them back to
-// the callback.
 func validateRedirectURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {

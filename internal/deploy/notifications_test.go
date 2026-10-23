@@ -10,33 +10,25 @@ import (
 	"github.com/google/uuid"
 )
 
-// recordingNotifier captures the terminal results handed to the deploy hook.
 type recordingNotifier struct {
 	mu       sync.Mutex
 	recorded []DeployResult
 }
 
-// Compile-time guarantee.
 var _ Notifier = (*recordingNotifier)(nil)
 
-// DeployFinished implements Notifier. It records synchronously, which is what
-// lets a test assert right after the run returns; the production
-// implementation queues the delivery instead.
 func (n *recordingNotifier) DeployFinished(_ context.Context, result DeployResult) {
 	n.mu.Lock()
 	n.recorded = append(n.recorded, result)
 	n.mu.Unlock()
 }
 
-// results returns the recorded outcomes.
 func (n *recordingNotifier) results() []DeployResult {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return append([]DeployResult(nil), n.recorded...)
 }
 
-// TestOrchestratorNotifiesSuccess proves a deployment reaching running calls
-// the hook exactly once with the application, team and host.
 func TestOrchestratorNotifiesSuccess(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.TeamID = uuid.New()
@@ -82,8 +74,6 @@ func TestOrchestratorNotifiesSuccess(t *testing.T) {
 	}
 }
 
-// TestOrchestratorNotifiesFailure proves a failed deployment calls the hook
-// exactly once with the failure text.
 func TestOrchestratorNotifiesFailure(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.TeamID = uuid.New()
@@ -116,8 +106,6 @@ func TestOrchestratorNotifiesFailure(t *testing.T) {
 	}
 }
 
-// TestOrchestratorWithoutNotifierIsSafe pins the nil (flag-off) hook path: the
-// state machine still runs and no hook is required.
 func TestOrchestratorWithoutNotifierIsSafe(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}

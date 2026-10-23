@@ -14,7 +14,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// writeSearchFixture lays out a small tree under the volumes root.
 func writeSearchFixture(t *testing.T, volumeRoot string) {
 	t.Helper()
 	files := map[string]string{
@@ -35,7 +34,6 @@ func writeSearchFixture(t *testing.T, volumeRoot string) {
 	}
 }
 
-// searchPaths returns the sorted root-relative paths of a result set.
 func searchPaths(resp *agentv1.SearchResponse) []string {
 	out := make([]string, 0, len(resp.GetResults()))
 	for _, hit := range resp.GetResults() {
@@ -58,8 +56,6 @@ func TestFileServerSearchNameOnlyNonRecursive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	// Only the name matches; notes.txt holds "config" in its body but must not
-	// be returned, and the subdirectory is not descended without recursive.
 	if got := searchPaths(resp); len(got) != 1 || got[0] != "app/config.yaml" {
 		t.Fatalf("results = %v, want [app/config.yaml]", got)
 	}
@@ -75,7 +71,7 @@ func TestFileServerSearchRecursive(t *testing.T) {
 
 	resp, err := server.Search(context.Background(), &agentv1.SearchRequest{
 		Root:      RootVolumes,
-		Query:     "CONFIG", // case-insensitive
+		Query:     "CONFIG",
 		Recursive: true,
 	})
 	if err != nil {
@@ -93,8 +89,6 @@ func TestFileServerSearchRecursive(t *testing.T) {
 	}
 }
 
-// TestFileServerSearchResultCapIsTruncated proves the result cap is an explicit
-// truncated flag, never a short list presented as complete.
 func TestFileServerSearchResultCapIsTruncated(t *testing.T) {
 	old := searchMaxResults
 	searchMaxResults = 2
@@ -122,8 +116,6 @@ func TestFileServerSearchResultCapIsTruncated(t *testing.T) {
 	}
 }
 
-// TestFileServerSearchScanCapIsTruncated proves the scan cap bounds the work a
-// wide tree can force.
 func TestFileServerSearchScanCapIsTruncated(t *testing.T) {
 	old := searchScanCap
 	searchScanCap = 3
@@ -148,8 +140,6 @@ func TestFileServerSearchScanCapIsTruncated(t *testing.T) {
 	}
 }
 
-// TestFileServerSearchDepthCapIsTruncated proves the depth cap reports an
-// incomplete result set instead of silently stopping.
 func TestFileServerSearchDepthCapIsTruncated(t *testing.T) {
 	old := searchMaxDepth
 	searchMaxDepth = 2
@@ -176,9 +166,6 @@ func TestFileServerSearchDepthCapIsTruncated(t *testing.T) {
 	}
 }
 
-// TestFileServerSearchNeverFollowsSymlinkOutOfRoot proves a link planted in the
-// tree cannot direct the walk outside the root, and a link to an in-root
-// directory is not descended through the link path.
 func TestFileServerSearchNeverFollowsSymlinkOutOfRoot(t *testing.T) {
 	t.Parallel()
 	server, volumeRoot := newTestFileServer(t)
@@ -209,15 +196,11 @@ func TestFileServerSearchNeverFollowsSymlinkOutOfRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	// Exactly the real in-root file, reached by its real path only: the escape
-	// link is never followed and the in-root link is not descended through.
 	if got := searchPaths(resp); len(got) != 1 || got[0] != "app/real/secret.txt" {
 		t.Fatalf("results = %v, want [app/real/secret.txt]", got)
 	}
 }
 
-// TestFileServerSearchExcludesTrash proves the reserved recycle bin is neither
-// matched nor descended into.
 func TestFileServerSearchExcludesTrash(t *testing.T) {
 	t.Parallel()
 	server, volumeRoot := newTestFileServer(t)
@@ -274,7 +257,6 @@ func TestFileServerSearchSkipsUnreadableSubdir(t *testing.T) {
 	if got := searchPaths(resp); len(got) != 1 || got[0] != "app/visible.txt" {
 		t.Fatalf("results = %v, want [app/visible.txt]", got)
 	}
-	// A skipped, unreadable subdirectory means the result set is incomplete.
 	if !resp.GetTruncated() {
 		t.Fatal("truncated = false, want true when a subdirectory was skipped")
 	}

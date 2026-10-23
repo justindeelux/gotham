@@ -18,29 +18,19 @@ import { useI18n } from "vue-i18n";
 
 import type { SearchPatternError } from "@/features/files/editor/searchPattern";
 
-/**
- * Custom find/replace bar (JUS-231). It is presentation only: the parent owns
- * the query and the CodeMirror search calls, so the same bar serves the file
- * editor, the history diff and the embedded code editor.
- */
 interface Props {
   show: boolean;
-  /** expanded shows the replacement row. */
   expanded: boolean;
-  /** canReplace is false on read-only tabs. */
   canReplace: boolean;
   query: string;
   replacement: string;
   caseSensitive: boolean;
   wholeWord: boolean;
   regexp: boolean;
-  /** patternError is the inline syntax/complexity reason the query is unused. */
   patternError: SearchPatternError | null;
   total: number;
-  /** capped means the count stopped at the match/time cap. */
   capped: boolean;
   current: number;
-  /** focusReplace puts the caret in the replacement field on open. */
   focusReplace: boolean;
 }
 
@@ -63,11 +53,8 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const queryInput = ref<InputInst | null>(null);
 const replaceInput = ref<InputInst | null>(null);
-// A stable id links the regex error to the query field. One bar per editor
-// surface, but the files page and a config dialog can each render one.
 const errorId = `ed-find-regex-${Math.random().toString(36).slice(2, 9)}`;
 
-/** counterText is the aria-live match count, empty without a query. */
 const counterText = computed<string>(() => {
   if (!props.query || props.patternError) {
     return "";
@@ -86,7 +73,6 @@ const counterText = computed<string>(() => {
   );
 });
 
-/** errorText names the rejected pattern in place. */
 const errorText = computed<string>(() => {
   if (props.patternError === "complexity") {
     return String(t("files.editor.searchBar.complexPattern"));
@@ -97,14 +83,12 @@ const errorText = computed<string>(() => {
   return "";
 });
 
-/** queryProps names the field and links the inline pattern error. */
 const queryProps = computed<Record<string, string | undefined>>(() => ({
   "aria-label": String(t("files.editor.searchBar.find")),
   "aria-invalid": props.patternError ? "true" : undefined,
   "aria-describedby": props.patternError ? errorId : undefined,
 }));
 
-// Opening moves focus into the bar; Mod-H lands on the replacement field.
 watch(
   () => [props.show, props.focusReplace] as const,
   ([show]) => {
@@ -122,7 +106,6 @@ watch(
   { immediate: true },
 );
 
-/** onQueryEnter walks the matches, Shift reverses (IME-safe). */
 function onQueryEnter(event: KeyboardEvent): void {
   if (event.isComposing) {
     return;
@@ -135,7 +118,6 @@ function onQueryEnter(event: KeyboardEvent): void {
   emit("next");
 }
 
-/** onReplaceEnter replaces one match, Mod+Enter replaces every match. */
 function onReplaceEnter(event: KeyboardEvent): void {
   if (event.isComposing) {
     return;

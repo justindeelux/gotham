@@ -9,8 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestHistoryRoutes covers the list/read/restore/delete envelopes and the
-// version-id validation (JUS-224).
 func TestHistoryRoutes(t *testing.T) {
 	id := uuid.New()
 	versionID := uuid.New()

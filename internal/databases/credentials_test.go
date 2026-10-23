@@ -9,7 +9,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// TestGenerateCredentials pins the per-engine credential shape.
 func TestGenerateCredentials(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -105,7 +104,6 @@ func TestGenerateCredentials(t *testing.T) {
 	}
 }
 
-// TestGenerateCredentialsIsRandom guards against a fixed or seeded password.
 func TestGenerateCredentialsIsRandom(t *testing.T) {
 	first, err := generateCredentials(EnginePostgres, "orders")
 	if err != nil {
@@ -120,7 +118,6 @@ func TestGenerateCredentialsIsRandom(t *testing.T) {
 	}
 }
 
-// TestDeriveIdentifier covers the SQL-identifier normalisation.
 func TestDeriveIdentifier(t *testing.T) {
 	tests := []struct {
 		input string
@@ -152,12 +149,6 @@ func TestDeriveIdentifier(t *testing.T) {
 	}
 }
 
-// TestGenerateCredentialsNeverDerivesPgPrefix guards the live failure where
-// a database named pg-orders derived the login pg_orders and PostgreSQL's
-// initdb refused it ("role names cannot begin with pg_"), leaving the
-// create in error after the full healthcheck window. Every engine's derived
-// identifiers must stay clear of the pg_ prefix (and the [a-z0-9_] alphabet
-// keeps them valid for MySQL/MariaDB/MongoDB too; Redis uses fixed values).
 func TestGenerateCredentialsNeverDerivesPgPrefix(t *testing.T) {
 	names := []string{"pg-orders", "pg_orders", "PG-ORDERS", "Pg.Reports"}
 	for _, engine := range EngineNames() {
@@ -178,9 +169,6 @@ func TestGenerateCredentialsNeverDerivesPgPrefix(t *testing.T) {
 	}
 }
 
-// TestSealAndOpenCredentials proves the plaintext never reaches the stored
-// row: the ciphertext carries neither the password nor its prefix, opens back
-// to the original values, and refuses a wrong key.
 func TestSealAndOpenCredentials(t *testing.T) {
 	credentials := Credentials{
 		Username:     "orders",
@@ -223,8 +211,6 @@ func TestSealAndOpenCredentials(t *testing.T) {
 	}
 }
 
-// TestSealSkipsAbsentCredentials: engines without a root login store three
-// values, not four empty ones.
 func TestSealSkipsAbsentCredentials(t *testing.T) {
 	credentials, err := generateCredentials(EnginePostgres, "orders")
 	if err != nil {
@@ -244,8 +230,6 @@ func TestSealSkipsAbsentCredentials(t *testing.T) {
 	}
 }
 
-// TestOpenCredentialsIgnoresUnknownKeys keeps a future credential from
-// breaking older readers.
 func TestOpenCredentialsIgnoresUnknownKeys(t *testing.T) {
 	password, err := providers.SealSecret(testSecret, "pw")
 	if err != nil {
@@ -263,8 +247,6 @@ func TestOpenCredentialsIgnoresUnknownKeys(t *testing.T) {
 	}
 }
 
-// TestOpenCredentialsRejectsCorruptedValue fails loudly instead of booting a
-// database with an empty password.
 func TestOpenCredentialsRejectsCorruptedValue(t *testing.T) {
 	_, err := openCredentials(testSecret, []Secret{{Key: "password", Ciphertext: "not-base64!"}})
 	if err == nil {

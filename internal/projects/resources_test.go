@@ -14,7 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// fakeListers serves canned workloads for the resources surface.
 type fakeListers struct {
 	applications []deploy.Application
 	services     []services.Service
@@ -38,14 +37,11 @@ func (f *fakeListers) List(_ context.Context, _ uuid.UUID, _ databases.DatabaseF
 	return f.databases, nil
 }
 
-// Compile-time guarantees that the canned listers satisfy the seams.
 var (
 	_ ApplicationLister = (*fakeListers)(nil)
 	_ DatabaseLister    = (*fakeListers)(nil)
 )
 
-// fakeServiceLister adapts fakeListers to the services seam (its List takes a
-// ServiceFilter, so it cannot live on the same type as the databases List).
 type fakeServiceLister struct{ *fakeListers }
 
 func (f fakeServiceLister) List(_ context.Context, _ uuid.UUID, _ services.ServiceFilter) ([]services.Service, error) {
@@ -54,8 +50,6 @@ func (f fakeServiceLister) List(_ context.Context, _ uuid.UUID, _ services.Servi
 
 var _ ServiceLister = fakeServiceLister{}
 
-// resourcesService wires the real service onto the in-memory repository with
-// canned workloads.
 func resourcesService(repo *fakeRepository, listers *fakeListers) *Service {
 	return NewService(Config{
 		Repository:   repo,
@@ -67,8 +61,6 @@ func resourcesService(repo *fakeRepository, listers *fakeListers) *Service {
 	})
 }
 
-// TestGetEnvironmentResources returns one environment with its project and
-// workloads, hides previews by default and answers 404 for foreign IDs.
 func TestGetEnvironmentResources(t *testing.T) {
 	repo := newFakeRepository()
 	owner, teamID := uuid.New(), uuid.New()
@@ -127,8 +119,6 @@ func TestGetEnvironmentResources(t *testing.T) {
 	}
 }
 
-// TestPreviewBases maps preview rows to their base application and drops
-// unknown ids (PE-5 M1).
 func TestPreviewBases(t *testing.T) {
 	repo := newFakeRepository()
 	owner, teamID := uuid.New(), uuid.New()
@@ -150,8 +140,6 @@ func TestPreviewBases(t *testing.T) {
 	}
 }
 
-// TestEnvironmentResourcesRoute walks the endpoint: the envelope shape,
-// preview filtering and the 404.
 func TestEnvironmentResourcesRoute(t *testing.T) {
 	owner, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()
@@ -199,9 +187,6 @@ func TestEnvironmentResourcesRoute(t *testing.T) {
 	}
 }
 
-// TestEnvironmentResourcesPreviewsRoute pins the preview markers (PE-5 M1):
-// with ?previews=1 the preview rides the envelope flagged is_preview with
-// its base id, while the base carries neither.
 func TestEnvironmentResourcesPreviewsRoute(t *testing.T) {
 	owner, teamID := uuid.New(), uuid.New()
 	repo := newFakeRepository()

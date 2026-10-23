@@ -1,4 +1,3 @@
-// Command gotham-agent is the Gotham node agent entrypoint.
 package main
 
 import (
@@ -17,15 +16,8 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-// version is the reported build version. Released binaries override it with
-// -ldflags "-X main.version=<tag>".
 var version = "dev"
 
-// newTerminalConfig maps the agent configuration onto the terminal service.
-// It is a separate function so the config-to-server wiring (including the
-// GOTHAM_AGENT_TERMINAL_INTEGRATION off switch) is unit-tested directly.
-// Roots is left for the caller because a nil *agent.FileServer must not become
-// a non-nil agent.TerminalRoots interface.
 func newTerminalConfig(cfg agent.Config, log *slog.Logger, containers agent.ContainerExec) agent.TerminalConfig {
 	return agent.TerminalConfig{
 		Logger:              log,
@@ -36,22 +28,18 @@ func newTerminalConfig(cfg agent.Config, log *slog.Logger, containers agent.Cont
 	}
 }
 
-// Exit codes returned by run.
 const (
 	exitOK    = 0
 	exitError = 1
 	exitUsage = 2
 )
 
-// shutdownGrace bounds how long a shutdown waits for goroutines to unwind.
 const shutdownGrace = 5 * time.Second
 
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// run dispatches subcommands and returns the process exit code. With no
-// arguments it runs the agent, matching the systemd unit.
 func run(args []string) int {
 	if len(args) == 0 {
 		return runServe()
@@ -74,8 +62,6 @@ func run(args []string) int {
 	}
 }
 
-// runServe loads configuration, connects to the control plane, serves the
-// DockerService and streams heartbeats until SIGINT or SIGTERM arrives.
 func runServe() int {
 	cfg, err := agent.Load()
 	if err != nil {
@@ -114,9 +100,6 @@ func runServe() int {
 
 	runner := agent.NewAgent(cfg, log, docker)
 
-	// The file service is on unless GOTHAM_AGENT_FILES=false. Validating and opening its roots
-	// eagerly fails startup fast on a bad configuration instead of surfacing
-	// the error on the first control-plane call.
 	var fileServer *agent.FileServer
 	if cfg.Files {
 		opened, err := agent.NewFileServer(cfg, log)
@@ -136,10 +119,6 @@ func runServe() int {
 	runErr := make(chan error, 1)
 
 	startServer := func(response *agentv1.RegisterResponse) error {
-		// Persist a freshly issued certificate on every registration so a
-		// renewal is visible to the running listener, which reads the file on
-		// each handshake. A persistence failure falls back to the in-memory
-		// certificate (reload disabled).
 		certPEM := response.GetCert()
 		certPath := ""
 		if len(certPEM) > 0 {
@@ -161,8 +140,6 @@ func runServe() int {
 			var creds credentials.TransportCredentials
 			switch {
 			case len(certPEM) > 0 && certPath != "":
-				// File-backed credentials reload on every handshake, so a
-				// re-issued certificate takes effect without a restart.
 				creds, err = agent.ServerCredentialsFromFiles(certPath, agent.KeyPath(cfg.KeyFile, cfg.CertDir), cfg.CA)
 				reloadable = true
 			case len(certPEM) > 0:
@@ -178,11 +155,6 @@ func runServe() int {
 				startErr = err
 				return
 			}
-			// A TLS listener must authenticate the control plane: either it
-			// verifies client certificates against the CA (mandatory
-			// control-plane peer check), or the operator explicitly opted into
-			// the plaintext development mode. Anything else is a misconfiguration
-			// that would expose the Docker/File/Build services to any peer.
 			allowAnyPeer := false
 			if creds != nil && cfg.CA == "" {
 				if !cfg.Insecure {
@@ -207,17 +179,12 @@ func runServe() int {
 			if fileServer != nil {
 				serverOptions = append(serverOptions, agent.WithFileService(fileServer))
 			}
-			// The host terminal resolves its initial cwd through the FileService
-			// root policy, so Roots stays nil when files are disabled and a host
-			// open answers FailedPrecondition. Container exec does not need a
-			// file root, so the service is always registered.
 			terminalConfig := newTerminalConfig(cfg, log, docker)
 			if fileServer != nil {
 				terminalConfig.Roots = fileServer
 			}
 			serverOptions = append(serverOptions, agent.WithTerminalService(agent.NewTerminalServer(terminalConfig)))
 			if allowAnyPeer {
-				// The only opt-out is the explicit, loudly-logged dev-insecure mode.
 				serverOptions = append(serverOptions, agent.WithoutControlPlanePeer())
 			}
 			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log,
@@ -275,7 +242,6 @@ func runServe() int {
 	return exitOK
 }
 
-// usage prints the top-level command help.
 func usage(w io.Writer) {
 	fmt.Fprintf(w, `gotham-agent %s
 

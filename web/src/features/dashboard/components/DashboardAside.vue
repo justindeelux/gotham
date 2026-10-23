@@ -11,7 +11,6 @@ import { relativeTime } from "@/shared/utils/format";
 const serversStore = useServersStore();
 const { t } = useI18n();
 
-/** Bound the widgets so a large fleet is not re-diffed in full every 5s (B4-14). */
 const heartbeatWidgetLimit = 8;
 const visibleHeartbeats = computed<Server[]>(() =>
   serversStore.servers.slice(0, heartbeatWidgetLimit),
@@ -26,7 +25,6 @@ const offlineServers = computed<Server[]>(() =>
   ),
 );
 
-/** moreNodesText renders the overflow count in the display locale. */
 const moreNodesText = computed<string>(() =>
   hiddenHeartbeatCount.value === 1
     ? t("dashboard.aside.moreOne", { count: 1 })

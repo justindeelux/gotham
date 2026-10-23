@@ -59,8 +59,6 @@ func TestGitHubProviderIdentityVerifiedFallback(t *testing.T) {
 			_, _ = w.Write([]byte(`{}`))
 			return
 		}
-		// An unverified primary must be skipped in favour of the verified
-		// secondary address.
 		_, _ = w.Write([]byte(`[
 			{"email":"unverified-primary@example.com","primary":true,"verified":false},
 			{"email":"verified@example.com","primary":false,"verified":true}
@@ -85,8 +83,6 @@ func TestGitHubProviderIdentityRejectsUnverifiedPrimary(t *testing.T) {
 			_, _ = w.Write([]byte(`{}`))
 			return
 		}
-		// GitHub lets a user set an address primary before verifying it, so a
-		// primary-but-unverified address must never authenticate the account.
 		_, _ = w.Write([]byte(`[{"email":"victim@example.com","primary":true,"verified":false}]`))
 	}))
 	defer srv.Close()
@@ -127,8 +123,6 @@ func TestGitHubProviderNameAndAuthCodeURL(t *testing.T) {
 	}
 }
 
-// newTestGitHubProvider builds a GitHub provider with its API base pointed at
-// base, so tests exercise the parsing logic without touching github.com.
 func newTestGitHubProvider(t *testing.T, base string) *GitHubProvider {
 	t.Helper()
 

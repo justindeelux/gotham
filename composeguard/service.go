@@ -7,10 +7,6 @@ import (
 	"strings"
 )
 
-// service validates one compose service against the allowlist. Only
-// known-safe keys pass; anything else — namespaces, capabilities, devices,
-// host configuration, secrets, build inputs — fails closed naming the
-// offending path.
 func (v *validator) service(name string, service map[string]any, networks map[string]bool, all []string) error {
 	path := "services." + name
 	image, ok := service["image"].(string)
@@ -67,7 +63,6 @@ func (v *validator) service(name string, service map[string]any, networks map[st
 	return nil
 }
 
-// checkNonEmptyString accepts a non-empty string value.
 func checkNonEmptyString(path string, value any) error {
 	text, ok := value.(string)
 	if !ok || strings.TrimSpace(text) == "" {
@@ -76,8 +71,6 @@ func checkNonEmptyString(path string, value any) error {
 	return nil
 }
 
-// checkScalar accepts a plain scalar (string, number or boolean): the shapes
-// command arguments, resource quantities and similar fields take.
 func checkScalar(path string, value any) error {
 	switch value.(type) {
 	case string, bool, int, int64, float64:
@@ -87,7 +80,6 @@ func checkScalar(path string, value any) error {
 	}
 }
 
-// checkStringList accepts a string or a list of scalars.
 func checkStringList(path string, value any) error {
 	switch entries := value.(type) {
 	case string:
@@ -104,8 +96,6 @@ func checkStringList(path string, value any) error {
 	}
 }
 
-// checkBool accepts a boolean (or its quoted spelling, which documents
-// commonly use).
 func checkBool(path string, value any) error {
 	switch flag := value.(type) {
 	case bool:
@@ -120,11 +110,6 @@ func checkBool(path string, value any) error {
 	}
 }
 
-// checkEnvironment accepts a mapping of scalars or a list of KEY=VALUE
-// strings. A mapping null or a list entry without `=` would resolve from
-// the agent's process environment on the node, so both are rejected: every
-// value the container sees must be written in the document (or substituted
-// from the application environment before it is sent).
 func checkEnvironment(path string, value any) error {
 	switch entries := value.(type) {
 	case map[string]any:
@@ -150,18 +135,8 @@ func checkEnvironment(path string, value any) error {
 	}
 }
 
-// dockerAPIPorts are unprivileged but never legitimate for an application
-// to publish: they are the Docker API itself.
 var dockerAPIPorts = []int{2375, 2376}
 
-// checkPorts accepts the short string syntax and the long mapping syntax
-// with its standard keys, and rejects a published host port inside the
-// reserved set: the privileged band 1-1023 and the Docker API ports. The
-// band matches the application's own HostPort rule, so a document cannot
-// bypass it by writing the port directly. Ephemeral mappings (no published
-// part) and high ports pass, like ordinary applications; unparseable
-// numbers and live references pass here and fail closed later (the node
-// refuses them, and the rendered re-check judges resolved values).
 func checkPorts(path string, value any) error {
 	entries, ok := value.([]any)
 	if !ok {
@@ -199,9 +174,6 @@ func checkPorts(path string, value any) error {
 	return nil
 }
 
-// checkShortPublished rejects a short-syntax entry whose published host
-// port falls in the reserved set. The container-side ranges and the
-// protocol suffix never decide: only the host binding squats node ports.
 func checkShortPublished(path, entry string) error {
 	target := entry
 	if index := strings.LastIndex(target, "/"); index >= 0 {
@@ -221,26 +193,19 @@ func checkShortPublished(path, entry string) error {
 	parts := strings.Split(rest, ":")
 	switch len(parts) {
 	case 1:
-		return nil // Bare container port (or range): ephemeral host port.
+		return nil
 	case 2:
 		if net.ParseIP(strings.TrimSpace(parts[0])) != nil {
-			return nil // host_ip with an ephemeral host port.
+			return nil
 		}
 		return checkPublishedBand(path, parts[0])
 	case 3:
-		// [ip:]host:container. The address never matters for the band:
-		// even a loopback binding consumes the host port.
 		return checkPublishedBand(path, parts[1])
 	default:
 		return at(path, "port entry %q has too many segments", entry)
 	}
 }
 
-// checkPublishedBand rejects one published host-port value inside the
-// reserved set: 1-1023 (privileged, including 22/80/443) and the Docker
-// API ports 2375/2376. Ranges are rejected on any reserved member. Values
-// that are not plain numbers (live references, resolved after render) pass
-// here; the rendered re-check judges them resolved.
 func checkPublishedBand(path, published string) error {
 	value := strings.TrimSpace(published)
 	if value == "" {
@@ -274,7 +239,6 @@ func checkPublishedBand(path, published string) error {
 	return nil
 }
 
-// bandMembers names the reserved members of a published range, if any.
 func bandMembers(lo, hi int) []string {
 	var members []string
 	for port := lo; port <= hi; port++ {
@@ -289,8 +253,6 @@ func bandMembers(lo, hi int) []string {
 	return members
 }
 
-// reservedReason names why a published host port is reserved, or "" when
-// the application may publish it.
 func reservedReason(port int) string {
 	if port >= 1 && port <= 1023 {
 		return "privileged band"
@@ -303,10 +265,6 @@ func reservedReason(port int) string {
 	return ""
 }
 
-// checkLocalRefs accepts a list of names that must each be declared in the
-// referenced top-level section (service networks). The mapping form (with
-// aliases and conditions) is rejected: the default attachment is what a
-// confined project needs.
 func checkLocalRefs(path string, value any, declared map[string]bool, what string) error {
 	entries, ok := value.([]any)
 	if !ok {
@@ -324,9 +282,6 @@ func checkLocalRefs(path string, value any, declared map[string]bool, what strin
 	return nil
 }
 
-// checkDependsOn accepts a list of declared service names. The long form
-// (conditions, restarts) is rejected: startup order beyond plain
-// dependencies is not needed for a confined project.
 func checkDependsOn(path string, value any, all []string) error {
 	entries, ok := value.([]any)
 	if !ok {
@@ -351,7 +306,6 @@ func checkDependsOn(path string, value any, all []string) error {
 	return nil
 }
 
-// checkRestart accepts the documented restart policies.
 func checkRestart(path string, value any) error {
 	policy, ok := value.(string)
 	if !ok {
@@ -372,7 +326,6 @@ func checkRestart(path string, value any) error {
 	}
 }
 
-// checkHealthcheck accepts the standard probe fields.
 func checkHealthcheck(path string, value any) error {
 	probe, ok := value.(map[string]any)
 	if !ok {
@@ -399,9 +352,6 @@ func checkHealthcheck(path string, value any) error {
 	return nil
 }
 
-// checkLabels accepts a mapping of scalars or a list of KEY=VALUE strings.
-// Any gotham.-prefixed key is rejected: those labels steer Gotham's own
-// container sweeps and proxy, so a document must never set them.
 func checkLabels(path string, value any) error {
 	switch entries := value.(type) {
 	case map[string]any:
@@ -409,7 +359,6 @@ func checkLabels(path string, value any) error {
 			if strings.HasPrefix(key, "gotham.") {
 				return at(path, "label %q is reserved for Gotham", key)
 			}
-			// A null label value means empty, which compose accepts.
 			if entry == nil {
 				continue
 			}
@@ -434,10 +383,6 @@ func checkLabels(path string, value any) error {
 	}
 }
 
-// checkDeployLimits accepts resource limits and reservations only: the
-// replica count, placement and restart policy of swarm mode would break the
-// single-web-container release model, so the deploy section carries nothing
-// else.
 func checkDeployLimits(path string, value any) error {
 	deploy, ok := value.(map[string]any)
 	if !ok {
@@ -478,8 +423,6 @@ func checkDeployLimits(path string, value any) error {
 	return nil
 }
 
-// checkLogging accepts the default log drivers only: anything else would
-// ship container logs off the node.
 func checkLogging(path string, value any) error {
 	logging, ok := value.(map[string]any)
 	if !ok {

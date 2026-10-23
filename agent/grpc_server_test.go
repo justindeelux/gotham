@@ -15,9 +15,6 @@ import (
 
 func TestServerServeAndShutdown(t *testing.T) {
 	fake := &fakeDockerClient{containers: []*agentv1.ContainerInfo{{Id: "abc"}}}
-	// Development mode: no certificate and no CA with the explicit insecure
-	// opt-in → plaintext listener on loopback, which is what the control
-	// plane's insecure development dial expects.
 	creds, err := ServerCredentials(nil, nil, "", true)
 	if err != nil {
 		t.Fatalf("ServerCredentials: %v", err)
@@ -62,9 +59,6 @@ func TestServerServeAndShutdown(t *testing.T) {
 	}
 }
 
-// TestNewServerRefusesPlaintextOffLoopback is the FX-3 item-9 guard: a
-// plaintext listener must stay on loopback, while a TLS listener may bind
-// anywhere.
 func TestNewServerRefusesPlaintextOffLoopback(t *testing.T) {
 	fake := &fakeDockerClient{}
 
@@ -95,13 +89,7 @@ func TestNewServerRefusesPlaintextOffLoopback(t *testing.T) {
 	t.Cleanup(func() { _ = tlsServer.ln.Close() })
 }
 
-// TestAgentRecvCapExceedsComposeLimit is the FX-3 R2/C3 guard: a compose
-// document at the application limit must survive gRPC framing and be rejected by
-// its own validation (InvalidArgument), not by the transport's receive cap
-// (ResourceExhausted). It also proves the receive cap still rejects a message
-// well past it.
 func TestAgentRecvCapExceedsComposeLimit(t *testing.T) {
-	// maxComposeYAML is the compose service's application limit (1 MiB).
 	const maxComposeYAML = 1 << 20
 	const composeTestProject = "gotham-11111111-2222-4333-8444-555555555555"
 	if agentMaxRecvMsgSize <= maxComposeYAML {
@@ -133,7 +121,6 @@ func TestAgentRecvCapExceedsComposeLimit(t *testing.T) {
 	defer callCancel()
 	client := agentv1.NewComposeServiceClient(conn)
 
-	// A document one byte over the application limit is rejected by validation.
 	justOver := make([]byte, maxComposeYAML+1)
 	for i := range justOver {
 		justOver[i] = 'x'
@@ -145,7 +132,6 @@ func TestAgentRecvCapExceedsComposeLimit(t *testing.T) {
 		t.Fatalf("just-over-limit document = %v, want InvalidArgument (not a transport cap)", err)
 	}
 
-	// A payload one byte past the transport receive cap is rejected by gRPC.
 	overCap := make([]byte, agentMaxRecvMsgSize+1)
 	for i := range overCap {
 		overCap[i] = 'x'
@@ -157,9 +143,6 @@ func TestAgentRecvCapExceedsComposeLimit(t *testing.T) {
 		t.Fatalf("over-cap payload = %v, want ResourceExhausted", err)
 	}
 
-	// A document exactly at the application limit fits the receive cap and is
-	// validated as a document (it is not valid compose, so it fails on content,
-	// never on transport size).
 	exact := make([]byte, maxComposeYAML)
 	copy(exact, "services:\n  web:\n    image: nginx\n")
 	for i := len("services:\n  web:\n    image: nginx\n"); i < len(exact); i++ {

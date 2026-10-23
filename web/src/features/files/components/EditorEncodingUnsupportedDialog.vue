@@ -7,11 +7,8 @@ import type { EditorEncoding } from "@/features/files/utils/editor";
 
 interface Props {
   show: boolean;
-  /** name is the tab's display name. */
   name: string;
-  /** encoding is the charset the save was blocked by. */
   encoding: EditorEncoding;
-  /** characters lists the distinct characters that cannot be represented. */
   characters: string[];
 }
 

@@ -1,7 +1,3 @@
-// Create/Rename dialog submit guard (JUS-111 fix round 1): a fast double Enter
-// must not fire two mutations. The dialogs mount under the naive-ui message
-// provider with the files API mocked; teleport is stubbed so the modal stays
-// inside the wrapper.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h } from "vue";
@@ -49,7 +45,6 @@ const root: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -61,7 +56,6 @@ function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   };
 }
 
-/** deferred exposes the resolve of a promise. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -145,7 +139,6 @@ describe("files create/rename dialogs", () => {
 });
 
 describe("files delete dialog (recycle bin)", () => {
-  /** confirmButton finds a footer button by its label text. */
   function confirmButton(
     wrapper: ReturnType<typeof mount>,
     label: string,
@@ -168,7 +161,6 @@ describe("files delete dialog (recycle bin)", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Move to recycle bin");
-    // Permanent deletion lives only in the recycle bin, never here.
     expect(wrapper.text()).not.toContain("Delete permanently");
 
     await confirmButton(wrapper, "Move to recycle bin")!.trigger("click");

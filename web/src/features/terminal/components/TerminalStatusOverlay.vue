@@ -7,7 +7,6 @@ import { useI18n } from "vue-i18n";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
 import { errorKey, isRetryable, statusTone } from "@/features/terminal/utils/terminal";
 
-/** Lifecycle overlay for one terminal (JUS-249 extraction). */
 interface Props {
   tab: TerminalTab;
 }
@@ -19,13 +18,10 @@ const { t } = useI18n();
 const tone = computed<string>(() => statusTone(props.tab.status));
 const retryable = computed<boolean>(() => isRetryable(props.tab.status));
 
-/** failureText is bounded catalog copy only (JUS-248). Never render raw
- * control-plane or relay text: it can carry host paths. */
 const failureText = computed<string>(() =>
   t(errorKey(props.tab.errorCode)),
 );
 
-/** exitText describes how the shell ended. */
 const exitText = computed<string>(() => {
   if (props.tab.exitSignal) {
     return t("terminal.exited.withSignal", { signal: props.tab.exitSignal });
@@ -83,7 +79,6 @@ const exitText = computed<string>(() => {
 <style scoped>
 .term-overlay {
   position: absolute;
-  /* Above the suggestion overlay so a reconnect state is never covered. */
   z-index: 4;
   inset: auto var(--space-3) calc(var(--space-8) + var(--space-2));
   display: grid;

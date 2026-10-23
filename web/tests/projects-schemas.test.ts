@@ -1,6 +1,3 @@
-// Schemas and pure helpers for the projects surface (PE-4, JUS-33).
-// Pins the contract's validation (names 1-64 chars after trim), the list
-// search, the card summary text and the error mapping.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -29,8 +26,6 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-// Display helpers resolve through the projects catalog: merge it once and
-// run English by default so the pinned copy below keeps proving behavior.
 beforeEach(() => {
   i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
   i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });

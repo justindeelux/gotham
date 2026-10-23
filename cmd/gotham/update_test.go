@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// TestCheckBinaryOwner covers the CLI ownership guard (M3): a binary owned by
-// another uid is refused with a clear message naming the correct invocation,
-// while the owning uid and a missing binary are allowed.
 func TestCheckBinaryOwner(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gotham")
 	if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {

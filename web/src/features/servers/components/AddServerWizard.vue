@@ -51,12 +51,6 @@ const {
 const message = useMessage();
 const { t } = useI18n();
 
-// The agent installer is not a release asset and needs its sibling files
-// (deploy/release-verify.sh, gotham-agent-updater.conf, ...); it also fails
-// closed without the control-plane CA, and the agent dials 127.0.0.1 unless
-// GOTHAM_AGENT_CP_ADDR is set. This is the same complete checkout block
-// docs/guide/install.md uses — keep it a single copy-pasteable command (the copy
-// button copies this exact string).
 const installCommand = [
   "scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .",
   "git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham",
@@ -71,7 +65,6 @@ const installCommand = [
   "systemctl status gotham-agent",
 ].join("\n");
 
-/** copyInstallCommand copies the agent install block to the clipboard. */
 async function copyInstallCommand(): Promise<void> {
   try {
     await navigator.clipboard.writeText(installCommand);
@@ -121,15 +114,10 @@ async function copyInstallCommand(): Promise<void> {
             {{ wizard.errorMessage.value }}
           </NAlert>
 
-          <!-- Step 1: connection details. Field hints render as
-               class="field-hint" inside WizardConnectStep on the shared
-               global hint gap (no local hint styles here or there). -->
           <WizardConnectStep v-if="step === 0" />
 
-          <!-- Step 2: validation checklist -->
           <WizardValidateStep v-else-if="step === 1" />
 
-          <!-- Step 3: install the agent (real states only) -->
           <NSpace v-else-if="step === 2" vertical :size="12">
             <NText strong>{{ $t("servers.wizard.installTitle") }}</NText>
 
@@ -184,7 +172,6 @@ async function copyInstallCommand(): Promise<void> {
             </NText>
           </NSpace>
 
-          <!-- Step 4: finish -->
           <WizardFinishStep v-else />
         </div>
 
@@ -226,10 +213,6 @@ async function copyInstallCommand(): Promise<void> {
 .wizard {
   display: grid;
   grid-template-columns: 208px minmax(0, 1fr);
-  /* No min-height floor: the card is bounded to the viewport by the shared
-   * modal scroll contract (shared/styles/main.css, which also flexes .wizard)
-   * and the step body scrolls, so a floor would push the footer out on short
-   * viewports. */
   min-height: 0;
   margin-top: var(--space-3);
   border: 1px solid var(--border);

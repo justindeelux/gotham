@@ -68,10 +68,6 @@ a {
 }
 
 :focus-visible {
-  /* A visible, high-contrast indicator (>=3:1 against every app surface):
-   * the accent mixed toward white, drawn as a real outline so it also
-   * survives forced-colors mode. The previous 30%-alpha accent ring measured
-   * ~1.36:1 (B3-9). */
   outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
@@ -104,20 +100,10 @@ a {
   background: transparent;
 }
 
-/* Naive UI's `.n-avatar` is a flex item with the default `flex-shrink: 1`.
- * Inside a fixed-size flex parent — e.g. a button's 18px `.n-icon-slot` — a
- * 24px round avatar shrinks on width only, rendering as an 18x24 ellipse.
- * Avatars are fixed-size by nature, so never let them shrink. */
 .n-avatar {
   flex-shrink: 0;
 }
 
-/* Naive UI renders an NFormItem's default slot (input + `.field-hint`) inside
- * `.n-form-item-blank`, a flex row — so a hint placed after its field sat on
- * the same row as the input. Wrap the row and force every hint onto its own
- * line below the field, scoped to the modals that own the `.field-hint`
- * pattern so no other form in the app re-lays-out. (Every hint in the app
- * now uses this default-slot pattern; none remain in the `#feedback` slot.) */
 .wizard-modal .n-form-item-blank,
 .edit-server-modal .n-form-item-blank {
   flex-wrap: wrap;
@@ -131,25 +117,6 @@ a {
   color: var(--meta);
 }
 
-/* Form feedback rhythm (JUS-16/17/18), set once globally.
- * JUS-17: Naive reserves a min-height feedback row under every field even
- * when the field is valid. Collapse the empty row so no blank line renders,
- * then give stacked fields in a plain NForm one shared item-to-item gap
- * (--form-item-gap). Only .dynamic-form needs a :not() exclusion: the row
- * pairs (addr-row, import-grid) are not direct NForm children, so the child
- * selector already skips them and their own gap owns the rhythm — a sibling
- * margin there would tilt the columns if they ever move directly under NForm.
- * The :empty rule relies on Vue/Naive leaving only a comment node inside the
- * wrapper when there is no feedback (comments do not count for :empty, so it
- * matches). If a future Naive version renders an element or whitespace text
- * there instead, the reserved row silently returns — re-check this selector
- * on every Naive upgrade.
- * JUS-18: while a field reports an error its hint hides and returns when the
- * error clears. Naive marks the input row .n-form-item-blank--error for rule
- * failures and explicit validation-status alike, so one selector covers every
- * form. Fields that render help through the feedback prop (DynamicForm, the
- * import dialogs) already swap help for error in that single line.
- * JUS-16: the 12px error size lives in the Naive theme (App.vue), not here. */
 .n-form-item-feedback-wrapper:empty {
   display: none;
 }
@@ -162,24 +129,6 @@ a {
   display: none;
 }
 
-/* Two-column form rows (JUS-19): short fields share one row and collapse to
- * a single column once their container narrows below the shared collapse
- * threshold (JUS-19 fix 3). The query keys off the modal/form width via
- * .form-container, not the viewport. Measured real container widths
- * (review-B-r2): 512px NForms in the 560px modals, 590px Add-server
- * connect-form, 622px CreateAppWizard wizard-main, 640px database card —
- * all pair; the 420px Register card stays single-column via the page-width
- * container. Container queries are baseline in current
- * Chromium/Firefox/Safari, so there is no viewport fallback.
- * Rows are direct NForm children so the global item-to-item rhythm above owns
- * the vertical spacing; the items inside own none. A lone item spans both
- * columns (e.g. a conditional partner that is currently hidden). Column gap
- * matches the connect addr-row; row gap matches the shared --form-item-gap
- * rhythm for the stacked state. Grid minimums (minmax(0, 1fr) + min-width: 0)
- * mean plain inputs and selects can never overflow their column; controls
- * with intrinsic minimums (segmented radios, ~294px for the key-mode pair)
- * belong on full-width rows. The 480px value is shared with the EnvEditor
- * and redirect-form fallbacks — a vitest check keeps the three in sync. */
 .form-container {
   container-type: inline-size;
 }
@@ -207,13 +156,6 @@ a {
   }
 }
 
-/* Single-border focus for text fields (JUS-13): the field's own border takes
- * the accent color on focus and the extra Naive UI glow ring is removed. This
- * covers NInput (text, password, textarea) and NInputNumber, which renders an
- * inner NInput, on every form and page. The border color change itself is the
- * visible keyboard indicator (accent-ink on the input surface measures >3:1),
- * so the global :focus-visible outline is suppressed only on the inner input
- * elements, where it would draw a second box around the field. */
 .n-input.n-input--focus .n-input__state-border {
   box-shadow: none !important;
 }
@@ -223,11 +165,6 @@ a {
   outline: none;
 }
 
-/* Root wrap rules for tables and description lists (JUS-8): labels keep whole
- * words (word-break: normal) with a readable minimum width, and only long
- * unbreakable values (ids, hashes, image tags in .mono) may break anywhere.
- * Naive UI's data-table default (word-break: break-word on the whole table)
- * broke short headers mid-word ("deplo/y") once a column squeezed. */
 .n-data-table .n-data-table-table {
   word-break: normal;
 }
@@ -252,10 +189,6 @@ a {
   overflow-wrap: anywhere;
 }
 
-/* Connect-step grouping shared by the Add wizard and the Edit modal (JUS-13):
- * related fields read as one block with a single spacing rhythm. The address
- * row is a grid (not a wrapping flex), so IP + port stay on one row whether
- * or not the modal shows a scrollbar. */
 .wizard-modal .connect-form,
 .edit-server-modal .connect-form {
   display: flex;
@@ -304,16 +237,6 @@ a {
   width: 100%;
 }
 
-/* Modal scroll contract (JUS-69): every card modal is bounded to the viewport and
- * only its body scrolls — the header (title/close) and any footer actions
- * stay pinned. Naive renders preset="card" as .n-card-header +
- * .n-card-content + .n-card__footer/.n-card__action siblings with no height
- * bound (the .n-modal-scroll-content wrapper only centers), so without this
- * a tall modal overflows the viewport and the header scrolls away over the
- * content. New card modals reuse .app-modal; the wizard and edit modals
- * share the same shell. Plain card modals scroll .n-card-content directly;
- * wizard modals pin their own .wizard-foot, so the card content is a fixed
- * flex column and only .wizard-body scrolls. */
 .app-modal.n-modal.n-card,
 .wizard-modal.n-modal.n-card,
 .edit-server-modal.n-modal.n-card {
@@ -332,9 +255,6 @@ a {
   flex: 0 0 auto;
 }
 
-/* Plain card modals (Add resource, edit server) scroll the card body. The
- * edit modal keeps its component-local flex column on .n-card-content
- * (EditServerModal.vue); the scroll and bounds here compose with it. */
 .app-modal.n-modal.n-card > .n-card-content,
 .edit-server-modal.n-modal.n-card > .n-card-content {
   flex: 1 1 auto;
@@ -343,10 +263,6 @@ a {
   min-width: 0;
 }
 
-/* On a very short viewport (a docked devtools pane, a landscape phone) the
- * pinned header and footer alone can fill the bounded card and leave the body
- * a few pixels tall, hiding the form (JUS-267 follow-up). Below that height
- * the whole card scrolls instead, so the body keeps its natural height. */
 @media (max-height: 480px) {
   .app-modal.n-modal.n-card {
     overflow-y: auto;
@@ -358,12 +274,6 @@ a {
   }
 }
 
-/* Wizard modals (create application, add server) keep their own footer: the
- * card body is a fixed flex column and only the step body scrolls, so
- * Back/Continue/Create never leave the viewport on tall steps (Dockerfile
- * and Docker Compose editors). This supersedes the component-scoped
- * n-card-content scroll rules (lower specificity), which scrolled the footer
- * away with the step. */
 .wizard-modal.n-modal.n-card > .n-card-content {
   display: flex;
   flex-direction: column;
@@ -396,11 +306,6 @@ a {
   align-items: center;
   justify-content: center;
   width: 100%;
-  /* Container for the RegisterPage password row (JUS-19 fix 1): the 420px
-   * card is narrower than the collapse threshold, so the card itself cannot
-   * be the container — the page width decides between side-by-side (desktop)
-   * and stacked (narrow viewport) passwords. LoginPage has no .form-row, so
-   * this changes nothing there. */
   container-type: inline-size;
 }
 
@@ -409,9 +314,6 @@ a {
   max-width: 400px;
 }
 
-/* Settings page head (JUS-97): eyebrow → title → description with one shared
- * 8px rhythm. Pages
- * with their own scoped .page-head styles keep them. */
 .page-head {
   display: flex;
   align-items: flex-start;
@@ -433,25 +335,16 @@ a {
   max-width: 74ch;
 }
 
-/* An alert above a form (JUS-97): keep a token gap before the first field. */
 .form-alert {
   margin-bottom: var(--space-4);
 }
 
-/* Switch beside its label/description (JUS-98), mirroring .switch-row. */
 .switch-row {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
 }
 
-/* AppTooltip's own tooltips (JUS-156): the popover body never intercepts a
-   pointer, so a tooltip that lingers over the control beneath it can never
-   swallow a click meant for that control — while its copy stays hoverable, so
-   the pointer can cross onto the tooltip without dismissing it (WCAG 1.4.13).
-   Scoped with :has() to this wrapper's popovers: every other naive tooltip in
-   the app (servers rail, application header, service logs) keeps naive's
-   default, hoverable body. */
 .n-tooltip:has(.app-tooltip-content) {
   pointer-events: none;
 }
@@ -460,9 +353,6 @@ a {
   pointer-events: auto;
 }
 
-/* The always-present description node a reason tooltip points aria-describedby
-   at (JUS-156 round 2): clipped out of view but kept in the accessibility tree
-   even while no tooltip is open. */
 .app-tooltip-sr {
   position: absolute;
   width: 1px;

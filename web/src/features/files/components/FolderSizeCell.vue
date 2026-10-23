@@ -1,12 +1,6 @@
 <script lang="ts">
-/**
- * nextErrorId numbers each cell's aria-describedby target. It lives at module
- * scope, not in setup: a counter inside <script setup> restarts at 0 for every
- * instance, so every row would reuse `fm-size-error-1` and the ids would clash.
- */
 let nextErrorId = 0;
 
-/** nextFolderSizeErrorId hands out the next unique error-id suffix. */
 function nextFolderSizeErrorId(): number {
   nextErrorId += 1;
   return nextErrorId;
@@ -29,17 +23,6 @@ import { useFilesStore } from "@/features/files/stores/files";
 import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
 
-/**
- * FolderSizeCell (JUS-162) renders the Size cell of ONE folder row: a
- * quiet icon-only "Calculate" button, a spinner with a Cancel control while
- * the walk runs, the result (with a "partial" marker when the agent stopped at its entry cap), or
- * a retry affordance after a failure. The state lives in `useFolderSize`, keyed
- * by server/root/path, so it survives the list's row windowing.
- *
- * The cell's `.fm-size` wrapper is one of the browser's row controls
- * (`isRowControl`), so a press or key on Calculate/Cancel/Retry never reaches
- * the row's selection handler and the buttons keep their native Enter/Space.
- */
 const props = defineProps<{ entry: FilesEntry; path: string }>();
 
 const { t } = useI18n();
@@ -66,10 +49,6 @@ const resultLabel = computed(() =>
       }),
 );
 
-/**
- * announcement feeds the persistent polite live region, so a screen reader
- * hears the completion or failure without the user hunting for the cell.
- */
 const announcement = computed<string>(() => {
   switch (state.value.status) {
     case "loading":
@@ -144,8 +123,6 @@ function cancel(): void {
         <Calculator :size="14" :stroke-width="1.8" aria-hidden="true" />
       </template>
     </NButton>
-    <!-- Persistent live region: it exists in every state so a status change is
-         announced (a live region inserted already-full is not). -->
     <span class="fm-sr-only" role="status" aria-live="polite">{{
       announcement
     }}</span>
@@ -160,8 +137,6 @@ function cancel(): void {
 </template>
 
 <style scoped>
-/* The cell keeps the browser's mono/xs grid; only the link color and the
-   spinner gap are set here, from tokens (no hard-coded values). */
 .fm-size {
   display: inline-flex;
   align-items: center;
@@ -170,8 +145,6 @@ function cancel(): void {
 }
 
 .fm-size-action {
-  /* JUS-206/216: the Calculate control is a quiet icon button (no background);
-     the Cancel/Retry text controls keep the reference green body-text link. */
   color: var(--success-ink);
   font-family: var(--font-body);
   font-size: var(--text-xs);
@@ -182,7 +155,6 @@ function cancel(): void {
   text-decoration: underline;
 }
 
-/* The icon-only Calculate has no text to underline on hover. */
 .fm-size-action--icon:hover {
   text-decoration: none;
 }
@@ -200,8 +172,6 @@ function cancel(): void {
   font-style: italic;
 }
 
-/* Clipped out of view but still in the accessibility tree (mirrors the
-   browser's shared .fm-sr-only). */
 .fm-sr-only {
   position: absolute;
   width: 1px;

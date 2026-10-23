@@ -10,7 +10,6 @@ if (!wizard) {
   throw new Error("WizardFinishStep must be used inside AddServerWizard.");
 }
 
-/** statusName renders the current lifecycle state for the finish hint. */
 const statusName = computed<string>(() =>
   wizard.currentServer.value ? wizard.currentServer.value.status : "pending",
 );

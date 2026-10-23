@@ -1,7 +1,3 @@
-// Files search results (JUS-163 fix round 1): the polite live region announces
-// the searching/count/empty outcome, the truncated note is visible, and a row
-// click / Clear emit the right events. The shared i18n plugin supplies the
-// files catalog so the count plural and copy resolve.
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -17,7 +13,6 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-/** hit builds one search result with sensible defaults. */
 function hit(path: string, name: string, kind: FileKind = "file"): FilesSearchHit {
   return {
     path,
@@ -143,8 +138,6 @@ describe("files search results", () => {
       path: "",
     });
     const row = wrapper.find(".fm-search-row");
-    // A real double-click is two clicks and then a dblclick. Only the dblclick
-    // opens, so the second click can never land on a new listing (JUS-163 round 3).
     await row.trigger("click");
     await row.trigger("click");
     await row.trigger("dblclick");

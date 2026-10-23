@@ -13,7 +13,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// changelogFixture is a release row for the changelog test server.
 type changelogFixture struct {
 	tag        string
 	body       string
@@ -22,7 +21,6 @@ type changelogFixture struct {
 	draft      bool
 }
 
-// serveChangelogFixtures serves a GitHub-Releases-like array including html_url.
 func serveChangelogFixtures(t *testing.T, releases []changelogFixture) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -191,8 +189,6 @@ func TestCheckExposesHTMLURL(t *testing.T) {
 	})
 	defer server.Close()
 	_ = server
-	// The check path resolves platform assets; reuse the releasesHandler
-	// fixture style from checker_test.go instead.
 	arch := "amd64"
 	assets := []string{"gotham-linux-" + arch, "gotham-manifest-" + arch + ".txt", "gotham-manifest-" + arch + ".txt.sig"}
 	mux := http.NewServeMux()
@@ -269,7 +265,6 @@ func TestChangelogCachedForOfferTTL(t *testing.T) {
 	}
 }
 
-// newTestRouter mounts the update routes with the given admin predicate.
 func newTestRouter(svc Service, isAdmin func(*http.Request) bool) chi.Router {
 	router := chi.NewRouter()
 	Mount(router, identityAuth, identityAuth, isAdmin, svc)

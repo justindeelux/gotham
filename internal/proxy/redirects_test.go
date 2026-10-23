@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeRedirectStore is an in-memory RedirectStore for the service tests.
 type fakeRedirectStore struct {
 	apps      map[uuid.UUID]ApplicationInfo
 	redirects map[uuid.UUID]DomainRedirect
@@ -136,7 +135,6 @@ func (s *fakeRedirectStore) ListEnabledRedirects(_ context.Context) ([]RedirectE
 	return out, nil
 }
 
-// newRedirectService wires the service over a fake store and counts resyncs.
 func newRedirectService(t *testing.T, store *fakeRedirectStore) (*redirectService, *int) {
 	t.Helper()
 	resyncs := 0
@@ -151,7 +149,6 @@ func newRedirectService(t *testing.T, store *fakeRedirectStore) (*redirectServic
 	return svc, &resyncs
 }
 
-// redirectApp is a healthy application fixture.
 func redirectApp(serverID uuid.UUID) ApplicationInfo {
 	return ApplicationInfo{ID: uuid.New(), BaseDomain: "app.example.com", ServerID: serverID}
 }
@@ -334,7 +331,6 @@ func TestCreateRedirectConflicts(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("seed rule: %v", err)
 		}
-		// The reverse insertion order must be rejected too: a→b then b→c.
 		_, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
 			ApplicationID: owner.ID,
 			SourceDomain:  "second.example.com",
@@ -364,11 +360,11 @@ func TestCreateRedirectConflicts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("second rule: %v", err)
 		}
-		source := "second.example.com" // first.example.com → second.example.com already exists
+		source := "second.example.com"
 		if _, err := svc.UpdateRedirect(context.Background(), other.ID, UpdateRedirectInput{SourceDomain: &source}); !errors.Is(err, ErrConflict) {
 			t.Fatalf("update source onto an existing target err = %v, want ErrConflict", err)
 		}
-		target := "first.example.com" // third→first would complete a loop with first→second? no: third.target=first is first's source
+		target := "first.example.com"
 		if _, err := svc.UpdateRedirect(context.Background(), other.ID, UpdateRedirectInput{TargetDomain: &target}); !errors.Is(err, ErrConflict) {
 			t.Fatalf("update target onto an existing source err = %v, want ErrConflict", err)
 		}
@@ -385,8 +381,6 @@ func TestCreateRedirectConflicts(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("seed rule: %v", err)
 		}
-		// A disabled rule may claim a source that is an enabled rule's target:
-		// it is not emitted, so no chain exists yet.
 		disabled := false
 		pending, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
 			ApplicationID: owner.ID,
@@ -397,11 +391,9 @@ func TestCreateRedirectConflicts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("disabled rule must be accepted: %v", err)
 		}
-		// Enabling it would create first→second→third, so it is rejected.
 		if _, err := svc.UpdateRedirect(context.Background(), pending.ID, UpdateRedirectInput{Enabled: boolPtr(true)}); !errors.Is(err, ErrConflict) {
 			t.Fatalf("enable chain err = %v, want ErrConflict", err)
 		}
-		// The same rule enabling after moving its source off the chain is fine.
 		source := "fresh.example.com"
 		if _, err := svc.UpdateRedirect(context.Background(), pending.ID, UpdateRedirectInput{SourceDomain: &source, Enabled: boolPtr(true)}); err != nil {
 			t.Fatalf("enable after breaking the chain: %v", err)
@@ -480,8 +472,6 @@ func TestUpdateRedirectPartialAndGuards(t *testing.T) {
 		t.Fatalf("resyncs = %d, want 2", *resyncs)
 	}
 
-	// Re-enabling re-runs the chain guard: point the rule at itself is
-	// rejected, and pointing it at a disabled sibling's source is allowed.
 	blocked := false
 	if _, err := svc.CreateRedirect(context.Background(), CreateRedirectInput{
 		ApplicationID: app.ID,
@@ -495,7 +485,6 @@ func TestUpdateRedirectPartialAndGuards(t *testing.T) {
 	if _, err := svc.UpdateRedirect(context.Background(), created.ID, UpdateRedirectInput{TargetDomain: &target, Enabled: boolPtr(true)}); err != nil {
 		t.Fatalf("target at a disabled rule's source must be allowed: %v", err)
 	}
-	// A source equal to another rule's source is a duplicate.
 	back := "app.example.com"
 	if _, err := svc.UpdateRedirect(context.Background(), created.ID, UpdateRedirectInput{TargetDomain: &back}); err != nil {
 		t.Fatalf("restore target: %v", err)
@@ -568,11 +557,6 @@ func TestListRedirectsByApplication(t *testing.T) {
 	}
 }
 
-// TestRedirectsForServerBreaksChainsAtTheLaterRule proves the generation-side
-// no-chain net is global and deterministic: when a racing write left a chain
-// behind, the later-created rule of the pair is held back (mirroring the
-// write-time rejection of the second write) while the earlier rule keeps
-// serving, and the check spans nodes.
 func TestRedirectsForServerBreaksChainsAtTheLaterRule(t *testing.T) {
 	serverA := uuid.New()
 	serverB := uuid.New()
@@ -582,8 +566,6 @@ func TestRedirectsForServerBreaksChainsAtTheLaterRule(t *testing.T) {
 	first := RedirectRule{ID: uuid.New(), ApplicationID: app, SourceDomain: "a.example.com", TargetDomain: "b.example.com", Code: 301, Enabled: true, ServerID: serverA}
 	second := RedirectRule{ID: uuid.New(), ApplicationID: app, SourceDomain: "b.example.com", TargetDomain: "c.example.com", Code: 301, Enabled: true, ServerID: serverB}
 
-	// Creation order first, second: node A keeps the first rule, node B holds
-	// the second one back.
 	redirects, diagnostics := redirectsForServer(apps, []RedirectRule{first, second}, serverA)
 	if len(redirects) != 1 || redirects[0].Source != "a.example.com" {
 		t.Fatalf("node A redirects = %#v, want the earlier rule", redirects)
@@ -599,8 +581,6 @@ func TestRedirectsForServerBreaksChainsAtTheLaterRule(t *testing.T) {
 		t.Fatalf("node B diagnostics = %#v, want one for the chained rule", diagnostics)
 	}
 
-	// Reversing the creation order reverses the victim: the rule created
-	// later (a→b) is held back, and the older b→c keeps serving on node B.
 	redirects, diagnostics = redirectsForServer(apps, []RedirectRule{second, first}, serverB)
 	if len(redirects) != 1 || redirects[0].Source != "b.example.com" {
 		t.Fatalf("node B reversed redirects = %#v, want the earlier rule", redirects)
@@ -614,9 +594,6 @@ func TestRedirectsForServerBreaksChainsAtTheLaterRule(t *testing.T) {
 	}
 }
 
-// TestRedirectsForServerHoldsBackConflicts proves the generation-side safety
-// net: domain-disabled owners, duplicate sources, node-domain shadows and
-// chains are all held back as diagnostics instead of emitted.
 func TestRedirectsForServerHoldsBackConflicts(t *testing.T) {
 	server := uuid.New()
 	app := uuid.New()
@@ -625,22 +602,14 @@ func TestRedirectsForServerHoldsBackConflicts(t *testing.T) {
 	}
 	otherServer := uuid.New()
 	rules := []RedirectRule{
-		// Healthy.
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "www.example.com", TargetDomain: "app.example.com", Code: 301, PreservePath: true, Enabled: true, ServerID: server},
-		// Other node: not this node's rule.
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "other.example.com", TargetDomain: "app.example.com", Code: 301, Enabled: true, ServerID: otherServer},
-		// Disabled: not emitted.
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "paused.example.com", TargetDomain: "app.example.com", Code: 301, Enabled: false, ServerID: server},
-		// Domain-disabled owner: held back.
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "blocked.example.com", TargetDomain: "app.example.com", Code: 301, Enabled: true, ServerID: server, DomainDisabled: true},
-		// Source shadows an application base domain on the node: held back.
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "app.example.com", TargetDomain: "elsewhere.example.com", Code: 301, Enabled: true, ServerID: server},
-		// Duplicate source: both held back.
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "dupe.example.com", TargetDomain: "app.example.com", Code: 301, Enabled: true, ServerID: server},
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "dupe.example.com", TargetDomain: "app.example.com", Code: 301, Enabled: true, ServerID: server},
-		// Chain: the rule pointing at another live source is held back.
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "chain.example.com", TargetDomain: "www.example.com", Code: 301, Enabled: true, ServerID: server},
-		// Invalid code: held back.
 		{ID: uuid.New(), ApplicationID: app, SourceDomain: "bad-code.example.com", TargetDomain: "app.example.com", Code: 307, Enabled: true, ServerID: server},
 	}
 
@@ -648,9 +617,6 @@ func TestRedirectsForServerHoldsBackConflicts(t *testing.T) {
 	if len(redirects) != 1 || redirects[0].Source != "www.example.com" {
 		t.Fatalf("redirects = %#v, want only www.example.com", redirects)
 	}
-	// Held back: domain-disabled owner, node-domain shadow, two duplicates,
-	// a chain target and an invalid code. The other node's rule and the
-	// disabled rule are simply not this node's emitted set.
 	if len(diagnostics) != 6 {
 		t.Fatalf("diagnostics = %#v, want 6 held-back rules", diagnostics)
 	}

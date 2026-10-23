@@ -17,11 +17,6 @@ const authStore = useAuthStore();
 const route = useRoute();
 const { mobileNavOpen, toggleNav } = useMobileNav();
 
-/**
- * JUS-135: below the tablet breakpoint the server rail is a Naive UI drawer
- * (focus trap, Escape and aria come from NDrawer) instead of an always-on
- * column. The drawer closes on navigation and when the viewport grows back.
- */
 const isMobile = useMediaQuery("(max-width: 1024px)");
 const railOpen = ref(false);
 watch(isMobile, (value) => {
@@ -29,7 +24,6 @@ watch(isMobile, (value) => {
     railOpen.value = false;
   }
 });
-// Close on any navigation (the query included) ...
 watch(
   () => route.fullPath,
   () => {
@@ -37,15 +31,8 @@ watch(
   },
 );
 
-/**
- * Listener ports shown as topbar chips. They mirror the backend defaults in
- * `internal/config/config.go` (`defaultServerPort = 8000`); the SPA itself is
- * served from the same origin, so these are labels, not live config.
- */
 const cpPort = 8000;
 
-// The control plane exposes no environment endpoint, so the chip reflects
-// where the SPA itself is served from: loopback means a local setup.
 const envLabel = computed<string>(() => {
   const host = window.location.hostname;
   return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === ""
@@ -57,8 +44,6 @@ const envLabel = computed<string>(() => {
 
 <template>
   <header class="topbar">
-    <!-- JUS-135: the server rail becomes this drawer below the tablet
-         breakpoint; the trigger replaces the rail column on phones/tablets. -->
     <NButton
       quaternary
       circle
@@ -99,18 +84,12 @@ const envLabel = computed<string>(() => {
     </div>
   </header>
 
-  <!-- JUS-135: the phone/tablet server rail. Naive's NDrawer supplies the
-       focus trap, Escape-to-close and dialog semantics; the content only
-       mounts while open, so the rail's server poll is not duplicated. -->
   <NDrawer
     v-model:show="railOpen"
     placement="left"
     :width="72"
     :aria-label="t('servers.rail.navLabel')"
   >
-    <!-- A tap on any rail link/button selects its target and closes the
-         drawer — including a link whose route is the current one, where the
-         route watcher above never fires (JUS-135). -->
     <div class="rail-drawer" @click="railOpen = false">
       <ServerRail />
     </div>
@@ -174,8 +153,6 @@ const envLabel = computed<string>(() => {
   display: none;
 }
 
-/* JUS-135: the rail drawer. The drawer body owns no padding, so it just needs
-   to hand the full height to the rail (whose foot sticks to the bottom). */
 .rail-drawer {
   height: 100%;
   display: flex;
@@ -202,8 +179,6 @@ const envLabel = computed<string>(() => {
   }
 }
 
-/* Phone: the language selector and the account control are the only
-   controls left in the top bar; tighten the spacing around them. */
 @media (max-width: 640px) {
   .topbar {
     gap: var(--space-2);

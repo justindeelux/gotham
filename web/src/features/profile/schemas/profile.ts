@@ -4,14 +4,6 @@ import { z } from "zod";
 import { confirmPasswordSchema, registerPasswordSchema } from "@/features/auth";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
-/**
- * Profile schemas (JUS-27). Messages are namespaced i18n keys resolved at
- * validation/display time, so a language switch refreshes visible feedback;
- * the English catalog values stay byte-identical to the previous strings.
- * The new/confirm password rules are reused from the auth schemas (same
- * policy message as register, per the API contract) and are not duplicated
- * here. Session notice keys double as the useSessionsPanel banner state.
- */
 export const profileMessages = {
   displayNameLength: "profile.validation.displayNameLength",
   currentPasswordRequired: "profile.validation.currentPasswordRequired",
@@ -29,11 +21,6 @@ export const profileMessages = {
   signInAgain: "profile.sessions.signInAgain",
 } as const;
 
-/**
- * displayNameFieldSchema backs the display-name field. The value is trimmed;
- * blank input is valid and clears the name (sent as null), anything else
- * must be 1-64 characters after trimming.
- */
 export const displayNameFieldSchema = z
   .string({
     required_error: profileMessages.displayNameLength,
@@ -42,7 +29,6 @@ export const displayNameFieldSchema = z
   .trim()
   .max(64, profileMessages.displayNameLength);
 
-/** currentPasswordSchema is required-only (whitespace passes, as on login). */
 export const currentPasswordSchema = z
   .string({
     required_error: profileMessages.currentPasswordRequired,
@@ -50,10 +36,6 @@ export const currentPasswordSchema = z
   })
   .min(1, profileMessages.currentPasswordRequired);
 
-/**
- * displayNameRules builds the DisplayNameForm NForm rules: one schema-backed
- * entry with no required mark, because blank is valid and clears the name.
- */
 export function displayNameRules(): FormRules {
   return {
     displayName: [
@@ -62,12 +44,6 @@ export function displayNameRules(): FormRules {
   };
 }
 
-/**
- * changePasswordRules builds the ChangePasswordForm NForm rules. The current
- * password entry is present only when the account has one; the new password
- * reuses the register policy and the confirmation check reads the live new
- * password through a reader (not a snapshot).
- */
 export function changePasswordRules(
   hasPassword: boolean,
   password: () => string,
@@ -95,7 +71,6 @@ export function changePasswordRules(
   };
 }
 
-/** userEnvelopeShape mirrors the User transport for envelope validation. */
 const userEnvelopeShape = z.object({
   id: z.string(),
   email: z.string(),
@@ -107,10 +82,8 @@ const userEnvelopeShape = z.object({
   is_platform_admin: z.boolean().optional(),
 });
 
-/** meEnvelopeSchema validates the GET/PATCH /me {"user"} envelope. */
 export const meEnvelopeSchema = z.object({ user: userEnvelopeShape });
 
-/** passwordChangeEnvelopeSchema validates the POST /me/password AuthResult. */
 export const passwordChangeEnvelopeSchema = z.object({
   user: userEnvelopeShape,
   access_token: z.string(),

@@ -1,5 +1,3 @@
-// Profile schemas (JUS-27): catalog byte-exactness, field behaviour,
-// rule builders, required marks, and API envelope shapes.
 import { mount } from "@vue/test-utils";
 import type { FormRules } from "naive-ui";
 import { NForm, NFormItem, NInput } from "naive-ui";
@@ -24,8 +22,6 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-// Schema messages are keys resolved at display time; registration plus the
-// default locale keeps every display assertion on the original English text.
 beforeEach(() => {
   registerDiscoveredCatalogs();
   resetLocaleState();
@@ -40,8 +36,6 @@ describe("profileMessages are message keys with byte-exact English display", () 
     expect(profileMessages.currentPasswordRequired).toBe(
       "profile.validation.currentPasswordRequired",
     );
-    // Behavior preserved: the keys resolve to the exact previous strings in
-    // the default locale, so visible feedback is unchanged in English.
     expect(resolveValidationMessage(profileMessages.displayNameLength)).toBe(
       "Display name must be 1-64 characters",
     );
@@ -115,8 +109,6 @@ describe("currentPasswordSchema", () => {
 describe("password rules are reused from auth, not duplicated", () => {
   it("keeps the register policy message for the new password", () => {
     expect(authMessages.passwordPolicy).toBe("auth.validation.passwordPolicy");
-    // Behavior preserved: the key resolves to the exact previous string in
-    // the default locale.
     expect(resolveValidationMessage(authMessages.passwordPolicy)).toBe(
       "Use at least 10 characters with 2 character classes (lowercase, uppercase, digits, symbols)",
     );

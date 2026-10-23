@@ -19,13 +19,10 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// volumeRequest builds a create request carrying volumes and labels.
 func volumeRequest(labels map[string]string, volumes ...string) *agentv1.CreateContainerRequest {
 	return &agentv1.CreateContainerRequest{Volumes: volumes, Labels: labels}
 }
 
-// proxyRequest builds a request carrying the managed proxy identity, which the
-// proxy branch requires before it may mount the node's proxy directory.
 func proxyRequest(volumes ...string) *agentv1.CreateContainerRequest {
 	return &agentv1.CreateContainerRequest{
 		Name:    proxy.ContainerName,
@@ -34,10 +31,6 @@ func proxyRequest(volumes ...string) *agentv1.CreateContainerRequest {
 	}
 }
 
-// TestValidateContainerVolumes pins the node-side rule per component: an
-// application bind is a direct child of <root>/<appID> and its named volumes
-// are namespaced; a proxy may mount the node's proxy directory; other managed
-// containers (database, backup) may use named volumes but no host bind.
 func TestValidateContainerVolumes(t *testing.T) {
 	root := t.TempDir()
 	proxyRoot := t.TempDir()
@@ -85,9 +78,6 @@ func TestValidateContainerVolumes(t *testing.T) {
 	}
 }
 
-// TestValidateContainerVolumesRejectsSymlinks pins the fail-closed walk on the
-// node: a symlink at the bind path (live or dangling) or an app directory that
-// is itself a symlink is refused.
 func TestValidateContainerVolumesRejectsSymlinks(t *testing.T) {
 	root := t.TempDir()
 	proxyRoot := t.TempDir()
@@ -113,7 +103,6 @@ func TestValidateContainerVolumesRejectsSymlinks(t *testing.T) {
 		t.Fatalf("dangling symlink err = %v, want ErrInvalidVolumeBind", err)
 	}
 
-	// The app directory itself is a symlink.
 	otherRoot := t.TempDir()
 	otherApp := uuid.New()
 	if err := os.Symlink("/etc", filepath.Join(otherRoot, otherApp.String())); err != nil {
@@ -125,8 +114,6 @@ func TestValidateContainerVolumesRejectsSymlinks(t *testing.T) {
 	}
 }
 
-// TestValidateContainerVolumesFailsClosedOnLstatError pins that a non-ENOENT
-// Lstat error is refused (here ENOTDIR: the app path is a regular file).
 func TestValidateContainerVolumesFailsClosedOnLstatError(t *testing.T) {
 	root := t.TempDir()
 	proxyRoot := t.TempDir()
@@ -141,9 +128,6 @@ func TestValidateContainerVolumesFailsClosedOnLstatError(t *testing.T) {
 	}
 }
 
-// TestDockerServerRejectsOutOfRootBind drives the rule through the gRPC
-// surface and pins the InvalidArgument mapping, so the control plane sees bad
-// input rather than an internal failure.
 func TestDockerServerRejectsOutOfRootBind(t *testing.T) {
 	root := t.TempDir()
 	proxyRoot := t.TempDir()

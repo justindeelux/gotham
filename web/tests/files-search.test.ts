@@ -1,7 +1,3 @@
-// Files browser name search (JUS-163): the nav-row input's two modes. With
-// "Include subdirectories" off it is the client-side folder filter; with it on,
-// runSearch runs a bounded server-side search. The API module is mocked so the
-// store is exercised without axios or the DOM.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,7 +34,6 @@ const root: FilesRoot = {
   free_bytes: 0,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(
   overrides: Partial<FilesEntry> & { name: string },
 ): FilesEntry {
@@ -62,7 +57,6 @@ const listing = {
   cursor: "",
 };
 
-/** seedStore loads a store bound to one server with a fixture listing. */
 async function seedStore() {
   vi.mocked(listRoots).mockResolvedValue([root]);
   vi.mocked(listEntries).mockResolvedValue(listing);
@@ -71,7 +65,6 @@ async function seedStore() {
   return store;
 }
 
-/** deferred returns a promise with its resolve exposed. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -96,7 +89,6 @@ describe("files search", () => {
     store.setQuery("conf");
     expect(store.recursive).toBe(false);
     expect(store.visibleEntries.map((item) => item.name)).toEqual(["config"]);
-    // With the switch off, submitting is not a server round trip.
     await store.runSearch();
     expect(searchEntries).not.toHaveBeenCalled();
   });
@@ -105,7 +97,6 @@ describe("files search", () => {
     const store = await seedStore();
     store.setRecursive(true);
     store.setQuery("conf");
-    // With the switch on the plain listing shows until a search runs.
     expect(store.visibleEntries.map((item) => item.name)).toEqual([
       "config",
       "app.yaml",
@@ -151,8 +142,6 @@ describe("files search", () => {
     expect(store.searchResults).toEqual([]);
     expect(store.searchQuery).toBe("");
     expect(store.searchTruncated).toBe(false);
-    // The Clear action also empties the nav input, but the Include-subdirectories
-    // switch keeps its state (JUS-163 round 3).
     expect(store.query).toBe("");
     expect(store.recursive).toBe(true);
   });
@@ -257,7 +246,6 @@ describe("files search", () => {
     expect(store.searchActive).toBe(false);
     expect(store.searchLoading).toBe(false);
 
-    // A late search response that lost to the refresh must not resurrect it.
     pending.resolve({ results: [], truncated: false });
     await search;
     expect(store.searchActive).toBe(false);
@@ -280,8 +268,6 @@ describe("files search", () => {
 
     pendingListing.resolve(listing);
     await load;
-    // The search did not cancel the listing's own generation, and the listing
-    // did not cancel the search.
     expect(store.loading).toBe(false);
     expect(store.searchActive).toBe(true);
   });

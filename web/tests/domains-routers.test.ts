@@ -1,6 +1,3 @@
-// Router list UI tests (JUS-90): the routers tab renders the generated
-// routers from the API, filters them through the search box, and reports an
-// unreadable node instead of inventing rows.
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";

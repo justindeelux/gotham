@@ -14,16 +14,10 @@ import (
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
-// terminalDialer is the mTLS TerminalService dial implemented by
-// *servers.ServerService. The HTTP layer type-asserts its server registry to
-// this interface, so tests with a fake registry leave the dialer unwired
-// instead of forcing a wider interface change.
 type terminalDialer interface {
 	DialTerminalClient(ctx context.Context, id uuid.UUID, opts ...servers.DockerDialOption) (*servers.TerminalClient, error)
 }
 
-// terminalService builds the host terminal registry and plugs the agent dialer.
-// It returns nil without a server registry, so the routes mount nothing.
 func (s *Server) terminalService() *terminal.Service {
 	if s.servers == nil {
 		return nil
@@ -37,32 +31,15 @@ func (s *Server) terminalService() *terminal.Service {
 	return terminal.NewService(cfg)
 }
 
-// terminalAuthorizer implements terminal.Authorizer from the auth service.
-// The access token is verified once at the handshake; every later check reads
-// server-side state only. The liveness key is the sign-in lineage
-// (SessionInfo.CreatedAt), not the token's sid: refresh-token rotation revokes
-// the presented session row and inserts a replacement with a new id but the
-// same created_at, so matching the created_at survives ordinary rotation while
-// logout/revoke-all/password reset delete the lineage.
 type terminalAuthorizer struct {
 	auth                 AuthService
 	isPlatformAdminEmail func(string) bool
 }
 
-// terminalAuthorizer builds the authorizer used by the terminal routes.
 func (s *Server) terminalAuthorizer() terminal.Authorizer {
 	return terminalAuthorizer{auth: s.auth, isPlatformAdminEmail: s.isPlatformAdminEmail}
 }
 
-// Authorize runs at the WebSocket handshake. A token without a sid is refused:
-// no server-side lineage exists that a logout could revoke. The handshake
-// token may predate a refresh-token rotation, so its sid row can already be
-// revoked (rotation keeps the row for reuse detection): in that case the
-// token's sign-in lineage is resolved from that row and accepted only while a
-// live session of the same lineage still exists. Attach therefore accepts
-// exactly what Revalidate keeps alive. Only a host target is accepted:
-// application container streams use their own authorizer, so host operator
-// access never implies container access.
 func (a terminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims, target terminal.Target) (terminal.Marker, error) {
 	if target.Kind != terminal.TargetHost {
 		return terminal.Marker{}, errors.New("terminal: the host authorizer does not serve container targets")
@@ -102,9 +79,6 @@ func (a terminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims, 
 	return terminal.Marker{SignInAt: signInAt}, nil
 }
 
-// Revalidate re-checks the account, the current operator role and the sign-in
-// lineage. Only a definitive refusal returns (false, nil); a lookup failure
-// returns an error so the caller can keep the shell and retry.
 func (a terminalAuthorizer) Revalidate(ctx context.Context, claims *auth.Claims, marker terminal.Marker, target terminal.Target) (bool, error) {
 	if target.Kind != terminal.TargetHost || claims == nil || a.auth == nil {
 		return false, nil
@@ -133,13 +107,6 @@ func (a terminalAuthorizer) Revalidate(ctx context.Context, claims *auth.Claims,
 	return liveSignIn(sessions, marker.SignInAt), nil
 }
 
-// resolveSignIn returns the sign-in lineage of the access token's sid. A live
-// sid yields its own created_at directly. A sid that refresh rotation revoked
-// is resolved from the retained row, but accepted only while a live session of
-// that same lineage still exists. A row deleted by logout, revoke-session or a
-// password reset resolves to nothing, and a revoked family without a live row
-// is refused, so an unrelated second sign-in never keeps a stale token alive.
-// Authorize and Revalidate share this rule, so attach and the 30 s check agree.
 func resolveSignIn(ctx context.Context, authSvc AuthService, userID, sessionID uuid.UUID, sessions []auth.SessionInfo) (time.Time, bool, error) {
 	for _, info := range sessions {
 		if info.ID == sessionID {
@@ -156,9 +123,6 @@ func resolveSignIn(ctx context.Context, authSvc AuthService, userID, sessionID u
 	return signInAt, true, nil
 }
 
-// liveSignIn reports whether sessions contains a live session of the sign-in
-// lineage signInAt. Refresh rotation preserves created_at, so this keeps a
-// shell attached across rotation.
 func liveSignIn(sessions []auth.SessionInfo, signInAt time.Time) bool {
 	for _, info := range sessions {
 		if info.CreatedAt.Equal(signInAt) {
@@ -168,9 +132,6 @@ func liveSignIn(sessions []auth.SessionInfo, signInAt time.Time) bool {
 	return false
 }
 
-// operator resolves the operator role from the current account record, never
-// from the immutable role claim in the handshake token, so a demotion is
-// noticed on revalidation.
 func (a terminalAuthorizer) operator(user *auth.User) bool {
 	if user == nil {
 		return false

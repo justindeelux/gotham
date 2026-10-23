@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// GetDeployment reads an exact release independently of the bounded history window.
 func (s *Service) GetDeployment(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error) {
 	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return Deployment{}, err

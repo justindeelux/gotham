@@ -12,8 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// routeTestServer mounts the template routes for one service behind a
-// pass-through authentication wrapper.
 func routeTestServer(t *testing.T, svc Service) http.Handler {
 	t.Helper()
 	router := chi.NewRouter()
@@ -22,7 +20,6 @@ func routeTestServer(t *testing.T, svc Service) http.Handler {
 	return router
 }
 
-// doRequest serves one request against the handler and returns the recorder.
 func doRequest(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *strings.Reader
@@ -37,7 +34,6 @@ func doRequest(t *testing.T, handler http.Handler, method, path, body string) *h
 	return recorder
 }
 
-// TestRoutesList proves the catalog answer is metadata only.
 func TestRoutesList(t *testing.T) {
 	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
 	recorder := doRequest(t, router, http.MethodGet, "/v1/templates", "")
@@ -63,7 +59,6 @@ func TestRoutesList(t *testing.T) {
 	}
 }
 
-// TestRoutesGet proves the detail answer carries the form schema.
 func TestRoutesGet(t *testing.T) {
 	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
 	recorder := doRequest(t, router, http.MethodGet, "/v1/templates/demo", "")
@@ -91,7 +86,6 @@ func TestRoutesGet(t *testing.T) {
 	}
 }
 
-// TestRoutesNotFound proves an unknown slug is a 404 on both read and render.
 func TestRoutesNotFound(t *testing.T) {
 	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
 	for _, tc := range []struct {
@@ -109,8 +103,6 @@ func TestRoutesNotFound(t *testing.T) {
 	}
 }
 
-// TestRoutesRender proves the FE-7.1 contract: the response carries the
-// validated compose document and its parsed domain map.
 func TestRoutesRender(t *testing.T) {
 	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
 	recorder := doRequest(t, router, http.MethodPost, "/v1/templates/demo/render",
@@ -147,22 +139,17 @@ func TestRoutesRender(t *testing.T) {
 	if len(response.Spec.NamedVolumes) != 1 || response.Spec.NamedVolumes[0] != "data" {
 		t.Errorf("named volumes = %v", response.Spec.NamedVolumes)
 	}
-	// Secrets travel in env, never in the document.
 	if got := response.Env["password"]; got != "p$ss" {
 		t.Errorf("env[password] = %q", got)
 	}
 	if strings.Contains(response.ComposeYAML, "p$ss") {
 		t.Fatalf("the response document contains the secret:\n%s", response.ComposeYAML)
 	}
-	// The document survives the services pipeline with the returned
-	// environment, which is what the gallery forwards to POST /v1/services.
 	if _, err := services.Render(response.ComposeYAML, response.Env); err != nil {
 		t.Fatalf("services.Render: %v", err)
 	}
 }
 
-// TestRoutesRenderErrors proves validation failures are 400s with a clear
-// message and malformed bodies are rejected.
 func TestRoutesRenderErrors(t *testing.T) {
 	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
 	cases := map[string]struct {
@@ -190,8 +177,6 @@ func TestRoutesRenderErrors(t *testing.T) {
 	}
 }
 
-// TestRoutesRequireAuth proves the auth wrapper is the only gate: a rejecting
-// wrapper answers 401 on every endpoint.
 func TestRoutesRequireAuth(t *testing.T) {
 	router := chi.NewRouter()
 	auth := func(next http.Handler) http.Handler {
@@ -212,9 +197,6 @@ func TestRoutesRequireAuth(t *testing.T) {
 	}
 }
 
-// TestRoutesRenderBodyStrictness proves the endpoint consumes exactly one JSON
-// object and rejects over-limit bodies: trailing garbage, a second document
-// and an oversized body are all refused (only trailing whitespace is fine).
 func TestRoutesRenderBodyStrictness(t *testing.T) {
 	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
 	valid := `{"values":{"domain":"app.example.com","password":"x"}}`
@@ -238,9 +220,6 @@ func TestRoutesRenderBodyStrictness(t *testing.T) {
 	}
 }
 
-// TestRoutesDisabledAtRuntime proves FEATURE_SERVICES=false after mounting
-// answers 503 on every endpoint, exactly like the service operations; the
-// startup-time flag instead unmounts the routes (404, see TestMountDisabled).
 func TestRoutesDisabledAtRuntime(t *testing.T) {
 	t.Setenv(services.FeatureEnv, "")
 	router := routeTestServer(t, mustCatalog(t, sampleFiles()))
@@ -263,8 +242,6 @@ func TestRoutesDisabledAtRuntime(t *testing.T) {
 	}
 }
 
-// TestMountDisabled proves a nil service and FEATURE_SERVICES=false both mount
-// nothing.
 func TestMountDisabled(t *testing.T) {
 	for name, build := range map[string]func(t *testing.T) Service{
 		"nil service": func(t *testing.T) Service { return nil },

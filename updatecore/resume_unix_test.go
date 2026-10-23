@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-// TestResumeStagedSkipsWhileLockHeld is the C1 regression: the wrapper holds the
-// update lock (as fd 9) through the restart and the whole health window, so a
-// restarted binary calling ResumeStaged must return promptly without launching
-// anything and without waiting for the lock.
 func TestResumeStagedSkipsWhileLockHeld(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "gotham")
@@ -26,8 +22,6 @@ func TestResumeStagedSkipsWhileLockHeld(t *testing.T) {
 	}
 	lockPath := filepath.Join(dir, "update.lock")
 
-	// Hold the lock exactly as the privileged wrapper does: a separate open
-	// file description with LOCK_EX.
 	holder, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatalf("open lock: %v", err)

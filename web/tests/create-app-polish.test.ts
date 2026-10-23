@@ -1,6 +1,3 @@
-// JUS-75 create-application modal polish: the step counter matches the
-// stepper length for every source type, the stale helper sentence is gone,
-// and notices render as small inline alerts under their field.
 import { mount } from "@vue/test-utils";
 import { NAlert, NMessageProvider } from "naive-ui";
 import { readFileSync } from "node:fs";
@@ -28,7 +25,6 @@ import {
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** readSfc returns the raw source of one single-file component. */
 function readSfc(relativePath: string): string {
   return readFileSync(resolve(webRoot, relativePath), "utf8");
 }
@@ -39,7 +35,6 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** mountSourceStep renders the Source step for one source type. */
 function mountSourceStep(sourceType: string) {
   setActivePinia(createPinia());
   let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
@@ -58,7 +53,6 @@ function mountSourceStep(sourceType: string) {
   return { w: wiz!, wrapper };
 }
 
-/** mountWizard exposes the raw wizard state without rendering a step. */
 function mountWizard() {
   setActivePinia(createPinia());
   let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
@@ -85,7 +79,6 @@ describe("JUS-75 step counter matches the stepper", () => {
       expect(w.stepTotal.value).toBe(total);
       expect(w.visibleStepNames.value).toHaveLength(total);
       expect(w.visibleStepNames.value[0]).toBe(w.stepNames.value[0]);
-      // Walk every visited step: positions run 1..total with no gap.
       const seen: number[] = [w.stepPosition.value];
       while (w.visibleStepIndex.value < total - 1) {
         w.nextStep();
@@ -141,7 +134,6 @@ describe("JUS-75 notices are small inline alerts under their field", () => {
     expect(alerts[0].props("showIcon")).toBe(false);
     expect(wrapper.find(".n-alert.field-alert").exists()).toBe(true);
     expect(alerts[0].text()).toContain("latest");
-    // Order: the image input renders before the notice.
     const html = wrapper.html();
     expect(html.indexOf("registry.example.com/team/app:1.2")).toBeLessThan(html.indexOf("latest"));
     wrapper.unmount();
@@ -188,7 +180,6 @@ describe("JUS-75 notices are small inline alerts under their field", () => {
     expect(editor.find(".n-alert.arg-alert").exists()).toBe(true);
     const html = editor.html();
     expect(html.indexOf("arg-row")).toBeLessThan(html.indexOf("n-alert"));
-    // Existing aria labels used by e2e stay untouched.
     expect(editor.find("input[aria-label='KEY']").exists()).toBe(true);
     expect(editor.find("input[aria-label='value']").exists()).toBe(true);
     editor.unmount();

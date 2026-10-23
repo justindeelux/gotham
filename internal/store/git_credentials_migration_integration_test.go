@@ -13,9 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestGitCredentialMigration applies 00041 on a schema migrated through the
-// previous tip and asserts the new table: the credential row round-trips,
-// the application delete cascades it away, and rolling back drops the table.
 func TestGitCredentialMigration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -59,8 +56,6 @@ func TestGitCredentialMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init migrations: %v", err)
 	}
-	// Migrate through the previous tip (00037 on main; 00038-00040 belong
-	// to GS-5/GS-7/GS-9 and land before this file merges).
 	if _, err := provider.UpTo(ctx, 40); err != nil {
 		t.Fatalf("migrate to 00040: %v", err)
 	}
@@ -123,7 +118,6 @@ func TestGitCredentialMigration(t *testing.T) {
 	if username != "bob" || ciphertext != "sealed-token" {
 		t.Errorf("credential = (%q, %q), want (bob, sealed-token)", username, ciphertext)
 	}
-	// A duplicate insert replaces the row (rotation is an upsert).
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO application_git_credentials (application_id, username, ciphertext)
 		 VALUES ($1, 'bob', 'rotated') ON CONFLICT (application_id) DO UPDATE SET
@@ -131,7 +125,6 @@ func TestGitCredentialMigration(t *testing.T) {
 		t.Fatalf("upsert credential: %v", err)
 	}
 
-	// Deleting the application cascades the credential row away.
 	if _, err := db.ExecContext(ctx, `DELETE FROM applications WHERE id = $1`, appID); err != nil {
 		t.Fatalf("delete application: %v", err)
 	}

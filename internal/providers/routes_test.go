@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeService is a deterministic ProviderService for route tests.
 type fakeService struct {
 	providers []Provider
 	repos     []Repo
@@ -62,7 +61,6 @@ func (f *fakeService) List(context.Context, uuid.UUID) ([]Provider, error) {
 	return f.providers, f.listErr
 }
 
-// Create implements ProviderService.
 func (f *fakeService) Create(_ context.Context, _ uuid.UUID, input CreateProviderInput) (Provider, error) {
 	f.createInput = input
 	if f.createErr != nil {
@@ -71,12 +69,10 @@ func (f *fakeService) Create(_ context.Context, _ uuid.UUID, input CreateProvide
 	return f.created, nil
 }
 
-// Authorize implements ProviderService.
 func (f *fakeService) Authorize(context.Context, uuid.UUID, uuid.UUID) (string, string, error) {
 	return f.authURL, f.authState, f.authErr
 }
 
-// Connect implements ProviderService.
 func (f *fakeService) Connect(_ context.Context, _, _ uuid.UUID, code, state string) (Provider, error) {
 	f.connectCode, f.connectState = code, state
 	if f.connectErr != nil {
@@ -85,7 +81,6 @@ func (f *fakeService) Connect(_ context.Context, _, _ uuid.UUID, code, state str
 	return f.connected, nil
 }
 
-// ConnectCallback implements ProviderService.
 func (f *fakeService) ConnectCallback(_ context.Context, code, state string) (string, error) {
 	f.connectCode, f.connectState = code, state
 	if f.connectErr != nil {
@@ -98,19 +93,16 @@ func (f *fakeService) ListRepos(context.Context, uuid.UUID, uuid.UUID) ([]Repo, 
 	return f.repos, f.reposErr
 }
 
-// Delete implements ProviderService.
 func (f *fakeService) Delete(_ context.Context, _ uuid.UUID, providerID uuid.UUID) error {
 	f.deletedProviderID = providerID
 	return f.deleteErr
 }
 
-// ListBranches implements ProviderService.
 func (f *fakeService) ListBranches(_ context.Context, _ uuid.UUID, _ uuid.UUID, repo string) ([]Branch, error) {
 	f.branchRepo = repo
 	return f.branches, f.branchesErr
 }
 
-// AutoProvisionGitLab implements ProviderService.
 func (f *fakeService) AutoProvisionGitLab(_ context.Context, _ uuid.UUID, input AutoProvisionGitLabInput) (Provider, error) {
 	f.provisionSeen = input
 	if f.provisionErr != nil {
@@ -119,7 +111,6 @@ func (f *fakeService) AutoProvisionGitLab(_ context.Context, _ uuid.UUID, input 
 	return f.provisioned, nil
 }
 
-// GitLabSetupInfoFor implements ProviderService.
 func (f *fakeService) GitLabSetupInfoFor(baseURL, redirectURL string) (GitLabSetupInfo, error) {
 	f.setupBase, f.setupReturn = baseURL, redirectURL
 	if f.setupErr != nil {
@@ -128,8 +119,6 @@ func (f *fakeService) GitLabSetupInfoFor(baseURL, redirectURL string) (GitLabSet
 	return f.setupInfo, nil
 }
 
-// CreateWebhook implements ProviderService. The webhook tests drive the real
-// Service, so the route fake only reports the call.
 func (f *fakeService) CreateWebhook(_ context.Context, target HookTarget, hook Webhook) (string, error) {
 	f.webhookTarget, f.webhook = target, hook
 	if f.webhookErr != nil {
@@ -138,20 +127,16 @@ func (f *fakeService) CreateWebhook(_ context.Context, target HookTarget, hook W
 	return f.webhookID, nil
 }
 
-// DeleteWebhook implements ProviderService.
 func (f *fakeService) DeleteWebhook(_ context.Context, target HookTarget, hookID string) error {
 	f.webhookTarget, f.deletedHookID = target, hookID
 	return f.webhookErr
 }
 
-// CreatePullRequestComment implements ProviderService.
 func (f *fakeService) CreatePullRequestComment(_ context.Context, target HookTarget, number int, body string) error {
 	f.webhookTarget, f.commentNumber, f.commentBody = target, number, body
 	return f.webhookErr
 }
 
-// newRouteServer mounts the provider routes with a no-op auth middleware and
-// the given user accessor.
 func newRouteServer(svc ProviderService, userID UserIDFunc) http.Handler {
 	r := chi.NewRouter()
 	auth := func(next http.Handler) http.Handler { return next }
@@ -275,8 +260,6 @@ func TestMountNilService(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateProvider is the C1-11 regression: the create route reaches
-// the service and never echoes the client secret.
 func TestRoutesCreateProvider(t *testing.T) {
 	userID := uuid.New()
 	providerID := uuid.New()
@@ -298,8 +281,6 @@ func TestRoutesCreateProvider(t *testing.T) {
 	}
 }
 
-// TestRoutesCreateProviderInvalidBody rejects an unknown field and trailing
-// input.
 func TestRoutesCreateProviderInvalidBody(t *testing.T) {
 	svc := &fakeService{}
 	srv := newRouteServer(svc, alwaysUser(uuid.New()))
@@ -311,7 +292,6 @@ func TestRoutesCreateProviderInvalidBody(t *testing.T) {
 	}
 }
 
-// TestRoutesAuthorize returns the provider URL and the binding state.
 func TestRoutesAuthorize(t *testing.T) {
 	userID := uuid.New()
 	svc := &fakeService{authURL: "https://github.com/login/oauth/authorize?state=abc", authState: "abc"}
@@ -331,7 +311,6 @@ func TestRoutesAuthorize(t *testing.T) {
 	}
 }
 
-// TestRoutesConnect forwards the code and state and returns the connection.
 func TestRoutesConnect(t *testing.T) {
 	userID := uuid.New()
 	providerID := uuid.New()

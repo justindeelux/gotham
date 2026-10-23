@@ -1,5 +1,3 @@
-// F7 + poll cadence: library pluralization renders 1/many in a real step,
-// and a language switch fires zero API calls without touching poll cadence.
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

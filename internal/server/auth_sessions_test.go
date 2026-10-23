@@ -11,8 +11,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// TestSessionsList: the list returns the fake's rows with the contract shape;
-// the sid-bound token marks its row current, a sid-less token marks none.
 func TestSessionsList(t *testing.T) {
 	s, _ := newTestProfileServer(t)
 
@@ -101,7 +99,6 @@ func TestSessionsRevokeOthers(t *testing.T) {
 		t.Fatalf("revoke-others status = %d, want 204 (body %s)", ok.Code, ok.Body.String())
 	}
 
-	// A token without a sid claim cannot name the current session: 409.
 	sidLess := doRequest(t, s, http.MethodPost, "/api/v1/auth/me/sessions/revoke-others", "", "Bearer valid-token")
 	if sidLess.Code != http.StatusConflict {
 		t.Fatalf("sid-less revoke-others status = %d, want 409 (body %s)", sidLess.Code, sidLess.Body.String())
@@ -116,8 +113,6 @@ func TestSessionsRevokeOthers(t *testing.T) {
 	}
 }
 
-// TestSessionsRejectsAPITokens: a scoped API token must never list or revoke
-// sessions: 403 with the contract message on all three routes.
 func TestSessionsRejectsAPITokens(t *testing.T) {
 	s, tokens := newTestProfileServer(t)
 
@@ -149,8 +144,6 @@ func TestSessionsRejectsAPITokens(t *testing.T) {
 	}
 }
 
-// TestSessionsRateLimit: the session routes sit behind the credential limiter
-// with the profile group.
 func TestSessionsRateLimit(t *testing.T) {
 	s, _ := newTestProfileServer(t)
 
@@ -180,15 +173,10 @@ func TestSessionsRateLimit(t *testing.T) {
 	}
 }
 
-// TestSessionsEndToEndOverHTTP replays the contract against the real stack:
-// list with the current marker, revoke-other, revoke-own, foreign 404,
-// revoke-others, and the empty-list shape.
 func TestSessionsEndToEndOverHTTP(t *testing.T) {
 	s, _, pair := scratchProfileStack(t)
 	bearer := "Bearer " + pair.AccessToken
 
-	// The stack seeds its sessions through direct service calls (zero device
-	// metadata), so lift the credential limiter for the transcript below.
 	old := s.authLimiter
 	limiter := newIPRateLimiter(rate.Limit(1000), 1000)
 	s.authLimiter = limiter
@@ -229,7 +217,6 @@ func TestSessionsEndToEndOverHTTP(t *testing.T) {
 		}
 	}
 
-	// Revoke the other session: 204, and it leaves the list.
 	if rec := doRequest(t, s, http.MethodDelete, "/api/v1/auth/me/sessions/"+otherID, "", bearer); rec.Code != http.StatusNoContent {
 		t.Fatalf("revoke other status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -242,7 +229,6 @@ func TestSessionsEndToEndOverHTTP(t *testing.T) {
 		t.Fatalf("list after revoke = %+v, want only the current session", remaining.Sessions)
 	}
 
-	// A foreign id is 404, never 403.
 	foreign := doRequest(t, s, http.MethodDelete, "/api/v1/auth/me/sessions/44444444-2222-3333-4444-555555555555", "", bearer)
 	if foreign.Code != http.StatusNotFound {
 		t.Fatalf("foreign id status = %d, want 404", foreign.Code)
@@ -251,13 +237,10 @@ func TestSessionsEndToEndOverHTTP(t *testing.T) {
 		t.Errorf("foreign id body = %s, want the contract message", body)
 	}
 
-	// Revoke-others with a single live session is a 204 no-op.
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/auth/me/sessions/revoke-others", "", bearer); rec.Code != http.StatusNoContent {
 		t.Fatalf("revoke-others status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// Ending the caller's own session is allowed; the list is then empty
-	// (an array, never null).
 	if rec := doRequest(t, s, http.MethodDelete, "/api/v1/auth/me/sessions/"+ownID, "", bearer); rec.Code != http.StatusNoContent {
 		t.Fatalf("revoke own status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -270,8 +253,6 @@ func TestSessionsEndToEndOverHTTP(t *testing.T) {
 	}
 }
 
-// TestSessionsCaptureMetaOverHTTP: a refresh over HTTP records the request's
-// User-Agent and client IP on the rotated session, and the list shows them.
 func TestSessionsCaptureMetaOverHTTP(t *testing.T) {
 	s, _, pair := scratchProfileStack(t)
 
@@ -313,9 +294,6 @@ func TestSessionsCaptureMetaOverHTTP(t *testing.T) {
 	t.Error("no session marked current after the HTTP refresh")
 }
 
-// TestSessionsRevokeReplayStaysPlain401OverHTTP (F1): revoking a session
-// deletes its row, so replaying its refresh token is a plain 401 that leaves
-// every other session alone — including over HTTP.
 func TestSessionsRevokeReplayStaysPlain401OverHTTP(t *testing.T) {
 	s, reg, login := scratchProfileStack(t)
 
@@ -344,8 +322,6 @@ func TestSessionsRevokeReplayStaysPlain401OverHTTP(t *testing.T) {
 		}
 	}
 
-	// Revoke the other session, then replay its refresh token: 401, and the
-	// current session is untouched.
 	if rec := doRequest(t, s, http.MethodDelete, "/api/v1/auth/me/sessions/"+otherID, "", bearer); rec.Code != http.StatusNoContent {
 		t.Fatalf("revoke status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -369,8 +345,6 @@ func TestSessionsRevokeReplayStaysPlain401OverHTTP(t *testing.T) {
 	}
 }
 
-// TestSessionsStaleSidConflictOverHTTP (F2): revoke-others with the
-// pre-rotation access token answers 409 and deletes nothing.
 func TestSessionsStaleSidConflictOverHTTP(t *testing.T) {
 	s, _, login := scratchProfileStack(t)
 
@@ -400,7 +374,6 @@ func TestSessionsStaleSidConflictOverHTTP(t *testing.T) {
 		t.Errorf("stale-sid body = %s, want the contract message", body)
 	}
 
-	// Nothing was revoked: both sessions still list under the fresh token.
 	list := doRequest(t, s, http.MethodGet, "/api/v1/auth/me/sessions", "", "Bearer "+fresh.AccessToken)
 	var body sessionsResponse
 	if err := json.Unmarshal(list.Body.Bytes(), &body); err != nil {
@@ -411,20 +384,16 @@ func TestSessionsStaleSidConflictOverHTTP(t *testing.T) {
 	}
 }
 
-// TestProfileFormatCharsOverHTTP: the F5 fix at the HTTP layer — a ZWNJ name
-// and a ZWJ emoji round-trip with 200, a word-joiner name is a 400.
 func TestProfileFormatCharsOverHTTP(t *testing.T) {
 	s, _, pair := scratchProfileStack(t)
 	bearer := "Bearer " + pair.AccessToken
 
-	// A Persian name joined with ZWNJ plus a ZWJ emoji sequence: 200.
 	allowed, _ := json.Marshal(map[string]string{"display_name": "\u0639\u0644\u06cc\u200c\u0631\u0636\u0627 \U0001F468\u200d\U0001F469\u200d\U0001F467"})
 	ok := doRequest(t, s, http.MethodPatch, "/api/v1/auth/me", string(allowed), bearer)
 	if ok.Code != http.StatusOK {
 		t.Fatalf("ZWNJ/ZWJ name status = %d, want 200 (body %s)", ok.Code, ok.Body.String())
 	}
 
-	// A word-joiner name: 400 with the contract message.
 	denied, _ := json.Marshal(map[string]string{"display_name": "a\u2060b"})
 	deniedRec := doRequest(t, s, http.MethodPatch, "/api/v1/auth/me", string(denied), bearer)
 	if deniedRec.Code != http.StatusBadRequest {

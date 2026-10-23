@@ -1,7 +1,3 @@
-// JUS-88 UI polish: disconnect modal width, certificate table columns and
-// sidebar footer alignment. jsdom never applies stylesheets, so widths and
-// alignment are asserted from SFC source text plus structural mounts (same
-// pattern as the JUS-16/17/18 and JUS-74 suites).
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,12 +6,10 @@ import { describe, expect, it } from "vitest";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** readSfc returns the raw source of one single-file component. */
 function readSfc(relativePath: string): string {
   return readFileSync(resolve(webRoot, relativePath), "utf8");
 }
 
-/** modalWidthPx reads the NModal style width in pixels. */
 function modalWidthPx(source: string): number {
   const match = source.match(/width:\s*(\d+)px/);
   expect(match, "expected an NModal style width in px").not.toBeNull();
@@ -82,9 +76,6 @@ describe("JUS-88 follow-up certificate cells stack with a gap", () => {
   const source = readSfc("src/features/domains/components/CertificatesPanel.vue");
 
   it("lays out two-line cells inline: column flex with a token gap", () => {
-    // The cells render via h() inside a computed, outside the scoped-style
-    // scope, so the layout must ride inline (regression: scoped .cell-main
-    // never matched and the lines rendered glued together).
     expect(source).toContain("cellStackStyle");
     expect(source).toMatch(/flexDirection:\s*"column"/);
     expect(source).toMatch(/gap:\s*"var\(--space-1\)"/);
@@ -103,8 +94,6 @@ describe("JUS-88 follow-up footer chevron is right-aligned", () => {
   });
 
   it("renders NSpace children as direct flex items and pushes the chevron right", () => {
-    // NSpace wraps children in anonymous divs by default, which swallowed
-    // the inner flex rules (regression: the chevron sat after the name).
     expect(source).toContain(':wrap-item="false"');
     expect(source).toMatch(/\.me-chevron\s*\{[^}]*margin-left:\s*auto/);
   });

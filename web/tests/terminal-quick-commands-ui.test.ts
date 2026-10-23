@@ -1,6 +1,3 @@
-// JUS-249 UI: the quick-command editor and the abbreviation suggestion strip.
-// The runtime is a faithful fake that records every accept/insert call, so the
-// tests assert the action target and that no path presses Enter on its own.
 /* global document:readonly, HTMLElement:readonly, KeyboardEvent:readonly, Event:readonly, HTMLButtonElement:readonly, HTMLInputElement:readonly, HTMLTextAreaElement:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -13,7 +10,6 @@ import {
   syncComposerLocale,
 } from "../src/shared/i18n";
 
-/** runtimeFakes holds every fake runtime the store creates. */
 const runtimeFakes = vi.hoisted(() => {
   class FakeRuntime {
     options: Record<string, unknown>;
@@ -50,7 +46,6 @@ const runtimeFakes = vi.hoisted(() => {
     }
 
     fit(): void {
-      // no layout in jsdom
     }
 
     dispose(): void {
@@ -85,7 +80,6 @@ const runtimeFakes = vi.hoisted(() => {
   return { FakeRuntime, instances };
 });
 
-/** apiFakes is the HTTP seam the store uses. */
 const apiFakes = vi.hoisted(() => ({
   create: vi.fn(),
   close: vi.fn(),
@@ -114,7 +108,6 @@ const { default: QuickCommandsModal } = await import(
   "../src/features/terminal/components/QuickCommandsModal.vue"
 );
 
-/** suggestionState builds one runtime suggestion snapshot. */
 function suggestionState(overrides: Record<string, unknown> = {}) {
   return {
     phase: "input",
@@ -163,7 +156,6 @@ beforeEach(() => {
   });
 });
 
-/** mountSurface opens one page session and mounts the shared surface. */
 async function mountSurface() {
   const terminal = useTerminalStore();
   const tab = await terminal.openPageSession({ serverId: "server-1", serverName: "prod" });
@@ -251,7 +243,6 @@ describe("terminal suggestion UI", () => {
     });
     surface.element.dispatchEvent(ctrlSpace);
     expect(ctrlSpace.defaultPrevented).toBe(false);
-    // The fake runtime owns the engine; the UI did not dismiss on its own.
     expect(runtime.dismissed).toBe(0);
     wrapper.unmount();
   });
@@ -274,9 +265,6 @@ describe("terminal suggestion UI", () => {
     await wrapper.find(".term-commands-btn").trigger("click");
     await flushPromises();
 
-    // The modal is teleported to body and lists the empty state with the
-    // example that explains the feature. This assertion is the mutation
-    // target for "the button must open the modal".
     expect(document.body.textContent).toContain(
       i18n.global.t("terminal.quickCommands.title"),
     );
@@ -301,8 +289,6 @@ describe("terminal suggestion UI", () => {
     done!.click();
     await flushPromises();
 
-    // The hide went through the modal; jsdom has no CSS transition, so replay
-    // the `closed` event NModal emits on after-leave in a real browser.
     const modal = wrapper.findComponent(QuickCommandsModal);
     expect(modal.props("show")).toBe(false);
     modal.vm.$emit("closed");
@@ -324,13 +310,10 @@ describe("terminal suggestion UI", () => {
     );
     await flushPromises();
 
-    // Right after connect a healthy shell may still be printing its prompt.
     expect(document.body.textContent).not.toContain(
       i18n.global.t("terminal.suggestions.noPromptMarks"),
     );
 
-    // A shell that never reports marks shows the one-line hint after the
-    // grace period; there is no documentation snippet.
     await vi.waitFor(
       () => {
         expect(document.body.textContent).toContain(
@@ -345,25 +328,19 @@ describe("terminal suggestion UI", () => {
 });
 
 describe("quick command modal", () => {
-  /** mountModal creates one session and mounts the manager modal open. */
   async function mountModal() {
     const terminal = useTerminalStore();
     const commands = useQuickCommandsStore();
-    // The modal is normally opened by a live tab; create one so insert has a
-    // real target.
     const tab = await terminal.openPageSession({ serverId: "server-1", serverName: "prod" });
     const wrapper = mount(QuickCommandsModal, {
       props: { show: true, tabId: tab.id },
       attachTo: document.body,
-      // Naive's focus trap looks for the card as a plain <div> sibling; VTU's
-      // default <transition-stub> breaks that lookup, so render the transition.
       global: { plugins: [i18n], stubs: { transition: false } },
     });
     await flushPromises();
     return { wrapper, commands, runtime: runtimeFakes.instances[0]! };
   }
 
-  /** click finds one button by its visible text and clicks it. */
   function click(text: string): void {
     const button = [...document.querySelectorAll("button")].find((element) =>
       element.textContent?.includes(text),
@@ -372,7 +349,6 @@ describe("quick command modal", () => {
     button!.click();
   }
 
-  /** fill writes a value into a modal field. */
   async function fill(selector: string, value: string): Promise<void> {
     const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
       selector,
@@ -383,10 +359,6 @@ describe("quick command modal", () => {
     await flushPromises();
   }
 
-  /**
-   * genericClassTokens collects the class tokens a content blocker's generic
-   * cosmetic filter could match (JUS-287): exactly `qc` or `qc-<something>`.
-   */
   function genericClassTokens(): string[] {
     return [...document.querySelectorAll<HTMLElement>("[class]")].flatMap(
       (element) =>
@@ -419,7 +391,6 @@ describe("quick command modal", () => {
     wrapper.unmount();
   });
 
-  /** modalIsHidden reads the teleported card's v-show state. */
   function modalIsHidden(): boolean {
     const root = document.querySelector<HTMLElement>(".term-quick-commands");
     return root === null || root.style.display === "none";
@@ -432,7 +403,6 @@ describe("quick command modal", () => {
     await flushPromises();
     await fill(".term-quick-commands-form input", "Deploy");
     await fill(".term-quick-commands-form textarea", "docker compose up -d");
-    // The abbreviation input is the second text input in the form.
     const inputs = document.querySelectorAll(".term-quick-commands-form input");
     expect(inputs.length).toBeGreaterThanOrEqual(2);
     const abbreviation = inputs[1] as HTMLInputElement;
@@ -449,13 +419,11 @@ describe("quick command modal", () => {
     });
 
     click("Insert");
-    // Insertion is the exact reviewed text: acceptance never appends Enter.
     expect(runtime.inserted).toEqual(["docker compose up -d"]);
     expect(runtime.inserted[0]).not.toContain("\r");
     expect(wrapper.emitted("inserted")?.at(-1)).toEqual(["Deploy"]);
     expect(wrapper.emitted("update:show")?.at(-1)).toEqual([false]);
 
-    // Edit reopens the same command and updates it in place.
     const edit = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Edit Deploy"]',
     );
@@ -486,7 +454,6 @@ describe("quick command modal", () => {
     click("Save command");
     await flushPromises();
 
-    // Naive shows the zod message; the store is untouched.
     expect(commands.commands).toHaveLength(1);
     expect(document.body.textContent).toContain(
       i18n.global.t("terminal.quickCommands.validation.abbreviationDuplicate"),
@@ -523,10 +490,6 @@ describe("quick command modal", () => {
     click("Add command");
     await flushPromises();
 
-    // JUS-267: the editor replaces the list instead of being appended below
-    // it, so it is always the first thing in the scrollable body. Both mode
-    // actions live in the fixed footer: Save stays visible without scrolling
-    // and Cancel remains next to it.
     expect(document.querySelector(".term-quick-commands-form")).not.toBeNull();
     expect(document.querySelector(".term-quick-commands-list")).toBeNull();
     expect(document.querySelector(".term-quick-commands-add")).toBeNull();
@@ -546,14 +509,12 @@ describe("quick command modal", () => {
       i18n.global.t("terminal.quickCommands.cancel"),
     );
 
-    // Cancel returns to the list and keeps the keyboard on Add.
     cancel!.click();
     await flushPromises();
     expect(document.querySelector(".term-quick-commands-form")).toBeNull();
     expect(document.querySelectorAll(".term-quick-commands-item")).toHaveLength(12);
     expect(document.activeElement).toBe(document.querySelector(".term-quick-commands-add"));
 
-    // Saving a new command also returns focus to Add.
     click("Add command");
     await flushPromises();
     await fill(".term-quick-commands-form input", "Command 13");
@@ -568,7 +529,6 @@ describe("quick command modal", () => {
     expect(document.querySelector(".term-quick-commands-form")).toBeNull();
     expect(document.activeElement).toBe(document.querySelector(".term-quick-commands-add"));
 
-    // Escape from an edit returns focus to that row's Edit button.
     const edit = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Edit Command 1"]',
     );
@@ -636,12 +596,10 @@ describe("quick command modal", () => {
       }),
     );
     await flushPromises();
-    // The draft is discarded, not saved, and the modal stays open.
     expect(document.querySelector(".term-quick-commands-form")).toBeNull();
     expect(useQuickCommandsStore().commands).toHaveLength(0);
     expect(modalIsHidden()).toBe(false);
 
-    // The second Escape (now no form) closes the modal.
     document.querySelector<HTMLButtonElement>(".term-quick-commands-add")!.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",

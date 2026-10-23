@@ -12,7 +12,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// fakeService is a deterministic Service for route tests.
 type fakeService struct {
 	release      *Release
 	checkErr     error
@@ -53,8 +52,6 @@ func (f *fakeService) LastStatus() (*Status, error) { return f.lastStatus, nil }
 
 func (f *fakeService) StartAuto(context.Context) {}
 
-// identityAuth and deniedAuthMiddleware stand in for the server's RequireAuth
-// and RequireAuth+RequirePlatformAdmin chains.
 func identityAuth(next http.Handler) http.Handler { return next }
 
 func deniedAuthMiddleware(_ http.Handler) http.Handler {
@@ -66,8 +63,6 @@ func deniedAuthMiddleware(_ http.Handler) http.Handler {
 func allowAdmin(*http.Request) bool { return true }
 func denyAdmin(*http.Request) bool  { return false }
 
-// TestMountRoutes covers routing, the apply admin boundary and the disabled
-// feature.
 func TestMountRoutes(t *testing.T) {
 	t.Run("check and apply", func(t *testing.T) {
 		svc := &fakeService{release: &Release{
@@ -224,8 +219,6 @@ func TestMountRoutes(t *testing.T) {
 	})
 }
 
-// TestCheckErrorMapping proves upstream failures surface as bad gateway, a
-// missing key as unavailable and a pending update as a conflict.
 func TestCheckErrorMapping(t *testing.T) {
 	cases := []struct {
 		err  error

@@ -22,34 +22,18 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// The recycle bin lives at <root>/.gotham-trash, one directory per deleted
-// entry:
-//
-//	<root>/.gotham-trash/<id>/meta.json   original path, deleted-at, size, kind
-//	<root>/.gotham-trash/<id>/data        the deleted entry itself
-//
-// A delete is a rename of the entry into "data" (cross-device falls back to a
-// guarded copy), so it is atomic on the entry's own filesystem. The reserved
-// name is hidden from List and refused by every normal file operation: the bin
-// is only reachable through ListTrash/Restore/Purge/EmptyTrash.
 const (
-	fileTrashDir      = ".gotham-trash"
-	fileTrashMeta     = "meta.json"
-	fileTrashData     = "data"
-	fileTrashDirMode  = 0o700
-	fileTrashMetaMode = 0o600
-	// fileTrashMetaLimit bounds the metadata file the agent will parse.
+	fileTrashDir       = ".gotham-trash"
+	fileTrashMeta      = "meta.json"
+	fileTrashData      = "data"
+	fileTrashDirMode   = 0o700
+	fileTrashMetaMode  = 0o600
 	fileTrashMetaLimit = 1 << 20
-	// fileTrashIDBytes is the length of a trash id in bytes; the hex id is
-	// twice that.
-	fileTrashIDBytes = 16
+	fileTrashIDBytes   = 16
 )
 
-// fileTrashMaxList bounds one ListTrash page; a larger bin reports truncated.
-// It is a variable so a test can lower it.
 var fileTrashMaxList = 5000
 
-// trashRecord is the metadata stored for one deleted entry.
 type trashRecord struct {
 	OriginalPath string    `json:"original_path"`
 	DeletedAt    time.Time `json:"deleted_at"`
@@ -57,22 +41,14 @@ type trashRecord struct {
 	Kind         string    `json:"kind"`
 }
 
-// errDirStopWalk stops a directory scan after the first entry, so checking
-// whether a directory is empty does not enumerate the whole tree.
 var errDirStopWalk = errors.New("stop walk")
 
-// trashItemDir is the directory holding one bin entry.
 func trashItemDir(id string) string { return fileTrashDir + "/" + id }
 
-// trashItemData is the moved entry itself.
 func trashItemData(id string) string { return trashItemDir(id) + "/" + fileTrashData }
 
-// trashItemMeta is the entry's metadata file.
 func trashItemMeta(id string) string { return trashItemDir(id) + "/" + fileTrashMeta }
 
-// validTrashID reports whether id is one of the service's own hex ids. The id
-// is validated before it is turned into a path, so a caller cannot address
-// anything outside the bin (or the bin's own children) with it.
 func validTrashID(id string) bool {
 	if len(id) != fileTrashIDBytes*2 {
 		return false
@@ -86,19 +62,14 @@ func validTrashID(id string) bool {
 	return true
 }
 
-// newTrashID returns a 128-bit hex id.
 func newTrashID() string {
 	var raw [fileTrashIDBytes]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		// crypto/rand never fails on a supported platform; a panic is
-		// preferable to a collision that would overwrite another entry.
 		panic(fmt.Sprintf("files: generate trash id: %v", err))
 	}
 	return hex.EncodeToString(raw[:])
 }
 
-// firstComponent returns the first slash-separated component of a clean
-// root-relative path.
 func firstComponent(rel string) string {
 	if i := strings.IndexByte(rel, '/'); i >= 0 {
 		return rel[:i]
@@ -106,16 +77,6 @@ func firstComponent(rel string) string {
 	return rel
 }
 
-// guardTrash refuses a normal file operation that addresses the reserved trash
-// tree, lexically or through a symlink that resolves into it. The trash tree is
-// only reachable through the bin RPCs.
-//
-// The check resolves the deepest existing ancestor, not just the full path:
-// root.Resolve fails on a missing component, so for a create-shaped target
-// ("link/newfile") whose leaf does not exist yet it would silently pass, and a
-// pre-existing symlink "link -> .gotham-trash" would let an ordinary op plant
-// or overwrite entries inside the bin. Walking up to the deepest ancestor that
-// does resolve closes that bypass.
 func guardTrash(root *fsroot.Root, action, rel string) error {
 	if rel == "" || rel == "." {
 		return nil
@@ -139,9 +100,6 @@ func guardTrash(root *fsroot.Root, action, rel string) error {
 	}
 }
 
-// guardTrashRaw cleans a caller-supplied path and applies guardTrash. A path
-// the cleaner rejects is left for the operation itself to reject with its own
-// typed error.
 func guardTrashRaw(root *fsroot.Root, action, raw string) error {
 	rel, err := fsroot.Clean(raw)
 	if err != nil {
@@ -150,8 +108,6 @@ func guardTrashRaw(root *fsroot.Root, action, raw string) error {
 	return guardTrash(root, action, rel)
 }
 
-// hideTrashEntries drops the reserved bin from a listing of the root itself, so
-// the bin is never browsable through List.
 func hideTrashEntries(rel string, entries []fsroot.Entry) []fsroot.Entry {
 	if rel != "." {
 		return entries
@@ -166,7 +122,6 @@ func hideTrashEntries(rel string, entries []fsroot.Entry) []fsroot.Entry {
 	return out
 }
 
-// trashKindString maps an fsroot kind onto the metadata's stable token.
 func trashKindString(kind fsroot.Kind) string {
 	switch kind {
 	case fsroot.KindRegular:
@@ -180,7 +135,6 @@ func trashKindString(kind fsroot.Kind) string {
 	}
 }
 
-// trashKind maps the metadata token back onto the wire enum.
 func trashKind(kind string) agentv1.FileKind {
 	switch kind {
 	case "file":
@@ -194,8 +148,6 @@ func trashKind(kind string) agentv1.FileKind {
 	}
 }
 
-// ensureTrashDir creates the root's trash directory when missing, refusing a
-// non-directory that squats the reserved name.
 func ensureTrashDir(root *fsroot.Root) error {
 	entry, err := root.Stat(fileTrashDir)
 	switch {
@@ -214,9 +166,6 @@ func ensureTrashDir(root *fsroot.Root) error {
 	}
 }
 
-// writeTrashRecord writes one entry's metadata. It is written before the entry
-// is moved, so a crash can leave a metadata-only item (harmless and skipped by
-// ListTrash) but never an item whose original path was lost.
 func (s *FileServer) writeTrashRecord(root *fsroot.Root, id string, rec trashRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -233,7 +182,6 @@ func (s *FileServer) writeTrashRecord(root *fsroot.Root, id string, rec trashRec
 	return file.Close()
 }
 
-// readTrashRecord reads one entry's metadata.
 func (s *FileServer) readTrashRecord(root *fsroot.Root, id string) (trashRecord, error) {
 	file, _, err := root.OpenRegular(trashItemMeta(id))
 	if err != nil {
@@ -251,7 +199,6 @@ func (s *FileServer) readTrashRecord(root *fsroot.Root, id string) (trashRecord,
 	return rec, nil
 }
 
-// dirHasEntries reports whether the directory holds any entry.
 func dirHasEntries(root *fsroot.Root, rel string) (bool, error) {
 	found := false
 	err := root.Names(rel, func(string) error {
@@ -264,9 +211,6 @@ func dirHasEntries(root *fsroot.Root, rel string) (bool, error) {
 	return found, nil
 }
 
-// trashEntry moves one entry into the root's recycle bin, recording its
-// original path so it can be restored. A non-recursive delete of a non-empty
-// directory is still refused, exactly as a hard delete would be.
 func (s *FileServer) trashEntry(ctx context.Context, root *fsroot.Root, rel string, recursive bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -308,13 +252,6 @@ func (s *FileServer) trashEntry(ctx context.Context, root *fsroot.Root, rel stri
 	return nil
 }
 
-// ListTrash lists a root's recycle bin, newest first. The scan keeps only the
-// newest fileTrashMaxList+1 items by the metadata file's modification time (a
-// bounded heap), so parsing cost is O(page) rather than O(bin size); when more
-// entries exist the response reports truncated, so the cap is never silent. A
-// root with no bin lists as empty. An item whose metadata is unreadable or whose
-// payload is missing (a half-written delete a crash left behind) is skipped
-// rather than listed as a phantom that can never be restored.
 func (s *FileServer) ListTrash(_ context.Context, req *agentv1.ListTrashRequest) (*agentv1.ListTrashResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -331,7 +268,6 @@ func (s *FileServer) ListTrash(_ context.Context, req *agentv1.ListTrashRequest)
 			continue
 		}
 		if _, err := root.Stat(trashItemData(id)); err != nil {
-			// A metadata-only item is not restorable, so it is not listed.
 			continue
 		}
 		items = append(items, trashListed{id: id, rec: rec})
@@ -346,23 +282,16 @@ func (s *FileServer) ListTrash(_ context.Context, req *agentv1.ListTrashRequest)
 	return &agentv1.ListTrashResponse{Entries: entries, Truncated: selection.truncated}, nil
 }
 
-// trashListed pairs an id with its metadata so the bin can be sorted by
-// deletion time.
 type trashListed struct {
 	id  string
 	rec trashRecord
 }
 
-// trashSelection is the bounded newest-N result of a bin scan.
 type trashSelection struct {
 	ids       []string
 	truncated bool
 }
 
-// newestTrashIDs selects at most limit valid bin item ids, newest first by the
-// modification time of their metadata file (written at delete time), with a
-// bounded heap so the work is O(bin) stats but only O(limit) metadata reads. It
-// retains limit+1 candidates so a capped listing can report truncation.
 func (s *FileServer) newestTrashIDs(root *fsroot.Root, limit int) (trashSelection, error) {
 	if limit <= 0 {
 		limit = 1
@@ -404,14 +333,11 @@ func (s *FileServer) newestTrashIDs(root *fsroot.Root, limit int) (trashSelectio
 	return trashSelection{ids: ids, truncated: truncated}, nil
 }
 
-// trashIDHeapEntry is one candidate in the bounded newest-N selection.
 type trashIDHeapEntry struct {
 	id  string
 	mod time.Time
 }
 
-// trashIDHeap is a min-heap of candidates by modification time, so the oldest is
-// at the root and can be evicted when a newer one arrives.
 type trashIDHeap []trashIDHeapEntry
 
 func (h trashIDHeap) Len() int           { return len(h) }
@@ -427,7 +353,6 @@ func (h *trashIDHeap) Pop() any {
 	return item
 }
 
-// trashIDs lists the valid item ids in a root's bin; a missing bin is empty.
 func (s *FileServer) trashIDs(root *fsroot.Root) ([]string, error) {
 	var ids []string
 	err := root.Names(fileTrashDir, func(name string) error {
@@ -445,7 +370,6 @@ func (s *FileServer) trashIDs(root *fsroot.Root) ([]string, error) {
 	return ids, nil
 }
 
-// trashEntryProto maps one bin item onto the wire.
 func trashEntryProto(id string, rec trashRecord) *agentv1.TrashEntry {
 	out := &agentv1.TrashEntry{
 		Id:           id,
@@ -460,9 +384,6 @@ func trashEntryProto(id string, rec trashRecord) *agentv1.TrashEntry {
 	return out
 }
 
-// Restore moves one bin entry back to its recorded original path (or an
-// explicit destination). An existing destination is refused unless overwrite is
-// set: the agent answers AlreadyExists, so the caller can offer a rename.
 func (s *FileServer) Restore(ctx context.Context, req *agentv1.RestoreRequest) (*agentv1.RestoreResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -499,8 +420,6 @@ func (s *FileServer) Restore(ctx context.Context, req *agentv1.RestoreRequest) (
 		unlock()
 		return nil, fileError("restore", moveErr)
 	}
-	// The item directory now holds only metadata; drop it. Best effort: the
-	// restore itself already succeeded.
 	_ = root.RemoveTree(context.Background(), trashItemDir(id), nil)
 	unlock()
 	entry, err := root.Stat(dst)
@@ -510,7 +429,6 @@ func (s *FileServer) Restore(ctx context.Context, req *agentv1.RestoreRequest) (
 	return &agentv1.RestoreResponse{Entry: fileEntry(entry), Path: dst}, nil
 }
 
-// Purge permanently removes one bin entry.
 func (s *FileServer) Purge(ctx context.Context, req *agentv1.PurgeRequest) (*agentv1.PurgeResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -523,9 +441,6 @@ func (s *FileServer) Purge(ctx context.Context, req *agentv1.PurgeRequest) (*age
 	if !validTrashID(id) {
 		return nil, status.Error(codes.InvalidArgument, "purge: invalid trash id")
 	}
-	// Serialise with a restore (and another purge) of the same item: a purge
-	// must never remove the item directory while a cross-device restore is
-	// still copying its payload.
 	unlock := s.lockPaths(root.Name(), trashItemData(id))
 	defer unlock()
 	if _, err := root.Stat(trashItemDir(id)); err != nil {
@@ -537,8 +452,6 @@ func (s *FileServer) Purge(ctx context.Context, req *agentv1.PurgeRequest) (*age
 	return &agentv1.PurgeResponse{}, nil
 }
 
-// EmptyTrash permanently removes every entry in a root's recycle bin. It is
-// idempotent: an absent bin is a successful empty.
 func (s *FileServer) EmptyTrash(ctx context.Context, req *agentv1.EmptyTrashRequest) (*agentv1.EmptyTrashResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -553,8 +466,6 @@ func (s *FileServer) EmptyTrash(ctx context.Context, req *agentv1.EmptyTrashRequ
 	}
 	var removed uint64
 	for _, id := range ids {
-		// Take the same per-item lock a restore uses, so emptying the bin
-		// cannot remove an item's payload while it is being restored.
 		unlock := s.lockPaths(root.Name(), trashItemData(id))
 		err := root.RemoveTree(ctx, trashItemDir(id), nil)
 		unlock()

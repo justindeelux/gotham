@@ -21,7 +21,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// newRouterWithService mounts the real routes around svc under a team scope.
 func newRouterWithService(t *testing.T, svc FileService, teamID uuid.UUID) http.Handler {
 	t.Helper()
 	t.Setenv(FeatureEnv, "true")
@@ -30,8 +29,6 @@ func newRouterWithService(t *testing.T, svc FileService, teamID uuid.UUID) http.
 	return r
 }
 
-// scopeAuth injects an active team scope, standing in for the server's
-// RequireTeam middleware.
 func scopeAuth(role teams.Role, teamID uuid.UUID) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,8 +38,6 @@ func scopeAuth(role teams.Role, teamID uuid.UUID) func(http.Handler) http.Handle
 	}
 }
 
-// newRealRouter mounts the routes with a real Service wired to client, so the
-// service-level RBAC and write paths run end to end.
 func newRealRouter(t *testing.T, role teams.Role, teamID uuid.UUID, client FileClient) (http.Handler, *servers.Server) {
 	t.Helper()
 	t.Setenv(FeatureEnv, "true")
@@ -57,7 +52,6 @@ func newRealRouter(t *testing.T, role teams.Role, teamID uuid.UUID, client FileC
 	return r, server
 }
 
-// doWrite sends one request with an optional body and headers.
 func doWrite(t *testing.T, h http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader io.Reader
@@ -73,7 +67,6 @@ func doWrite(t *testing.T, h http.Handler, method, path, body string, headers ma
 	return rec
 }
 
-// buildMultipart renders a multipart body with the given ordered file parts.
 func buildMultipart(t *testing.T, files []struct{ name, content string }) (string, string) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -141,7 +134,6 @@ func TestPutContentRoute(t *testing.T) {
 	})
 }
 
-// countingReader records how many bytes a handler read from it.
 type countingReader struct {
 	n int
 	r io.Reader
@@ -153,10 +145,6 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// TestPutContentAuthorizesBeforeBody is the fix-round-1 regression: a chunked
-// PUT must be authorized (feature enabled, team, RBAC) before its body is
-// spooled, so a disabled feature answers 503, a foreign team 404 and a
-// read-only caller 403 without the request body being read.
 func TestPutContentAuthorizesBeforeBody(t *testing.T) {
 	id := uuid.New()
 	path := "/v1/servers/" + id.String() + "/files/content?root=volumes&path=a.txt"
@@ -176,7 +164,7 @@ func TestPutContentAuthorizesBeforeBody(t *testing.T) {
 			body := &countingReader{r: strings.NewReader(strings.Repeat("x", 4096))}
 			req := httptest.NewRequest(http.MethodPut, path, body)
 			req.Header.Set("If-Match", `"v1"`)
-			req.ContentLength = -1 // force the chunked (spool) path
+			req.ContentLength = -1
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 			if rec.Code != tc.want {
@@ -224,10 +212,6 @@ func TestUploadPartialFailure(t *testing.T) {
 	}
 }
 
-// TestUploadBoundsTotalRequestBody is the fix-round-1 regression: the upload
-// route must bound the TOTAL request body, not only each part, so a multipart
-// whose bytes exceed the upload ceiling is refused instead of streaming
-// unbounded data through the control plane.
 func TestUploadBoundsTotalRequestBody(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -269,11 +253,7 @@ func TestUploadBoundsTotalRequestBody(t *testing.T) {
 	}
 }
 
-// TestUploadSpoolErrorReportsEveryPart is the fix-round-1 regression: a staging
-// failure on one part must not silently drop the parts that follow it — each
-// part is reported in the result array.
 func TestUploadSpoolErrorReportsEveryPart(t *testing.T) {
-	// A spool directory that cannot be created makes every part fail to stage.
 	blocker := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatalf("seed blocker: %v", err)
@@ -316,14 +296,11 @@ func TestUploadSpoolErrorReportsEveryPart(t *testing.T) {
 	}
 }
 
-// TestUploadTruncatedNotCommitted proves a multipart request whose body is cut
-// off mid-part is never committed: the file's bytes never reach the agent.
 func TestUploadTruncatedNotCommitted(t *testing.T) {
 	id := uuid.New()
 	body, contentType := buildMultipart(t, []struct{ name, content string }{
 		{"a.txt", strings.Repeat("x", 64)},
 	})
-	// Drop the closing boundary and the tail of the part.
 	truncated := body[:len(body)-40]
 	svc := &fakeService{writeResult: WriteResult{Entry: Entry{Name: "a.txt"}}}
 	h := newTestRouter(svc)
@@ -337,10 +314,6 @@ func TestUploadTruncatedNotCommitted(t *testing.T) {
 	}
 }
 
-// TestUploadLongerThanReadTimeout proves a slow multipart upload outlives the
-// server's ReadTimeout because the handler extends the connection read
-// deadline. The server is configured with a 100 ms ReadTimeout and the body
-// trickles for ~320 ms.
 func TestUploadLongerThanReadTimeout(t *testing.T) {
 	id := uuid.New()
 	svc := &fakeService{writeResult: WriteResult{Entry: Entry{Name: "a.txt"}}}
@@ -431,8 +404,6 @@ func TestMkdirCreateRenameMoveCopyDeleteRoutes(t *testing.T) {
 	}
 }
 
-// TestWriteRoutesRBAC is the RBAC table over every write route: a read_only
-// member is refused with 403 before any agent write.
 func TestWriteRoutesRBAC(t *testing.T) {
 	teamID := uuid.New()
 	client := &fakeFileClient{}
@@ -470,7 +441,6 @@ func TestWriteRoutesRBAC(t *testing.T) {
 		})
 	}
 
-	// Listing the bin is a read: a read_only member is allowed.
 	rec := doWrite(t, h, http.MethodGet, base+"trash?root=volumes", "", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET trash as read_only = %d, want 200 (body %s)", rec.Code, rec.Body.String())
@@ -508,8 +478,6 @@ func TestWriteErrorStatusMapping(t *testing.T) {
 	}
 }
 
-// TestChmodRoute pins the route: the {root, path, mode} body reaches the
-// service and the response is the {entry} envelope with the new mode.
 func TestChmodRoute(t *testing.T) {
 	id := uuid.New()
 	svc := &fakeService{chmodEntry: Entry{Name: "a.txt", Kind: "file", Mode: 0o600, Etag: `"c"`}}
@@ -529,9 +497,6 @@ func TestChmodRoute(t *testing.T) {
 	}
 }
 
-// TestChmodRouteRequiresMode pins that a body without mode is a 400 and never
-// reaches the service, while an explicit mode of 0 is still accepted (000 is a
-// real mode, just never a default).
 func TestChmodRouteRequiresMode(t *testing.T) {
 	id := uuid.New()
 	base := "/v1/servers/" + id.String() + "/files/chmod"
@@ -557,7 +522,6 @@ func TestChmodRouteRequiresMode(t *testing.T) {
 	}
 }
 
-// TestChmodRouteErrorMapping pins the route status mapping for chmod.
 func TestChmodRouteErrorMapping(t *testing.T) {
 	id := uuid.New()
 	base := "/v1/servers/" + id.String() + "/files/chmod"

@@ -10,17 +10,6 @@ import type { Page, Request, WebSocketRoute } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, setTimeout:readonly, URL:readonly, window:readonly */
 
-// JUS-265 add-tab picker against faithful fakes.
-//
-// The committed webdist is served statically and the control-plane API is
-// mocked with responses shaped exactly like the backend's (optional fields
-// omitted, bounded codes). Every create request is validated with the same
-// rules the control plane applies (known fields only, `target: "host"` for a
-// host shell, the exact resolved `(service, container_id)` pair for a
-// container shell), so a regression that invents a container id or sends an
-// extra field fails here. The PTY WebSocket is stood in with the real binary
-// framing.
-
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
 
@@ -64,12 +53,10 @@ const team = {
   updated_at: "2026-10-01T00:00:00Z",
 };
 
-/** serverRow builds one managed server row with optional fields omitted. */
 function serverRow(id: string, name: string) {
   return { id, name, ip: "10.0.0.1", status: "ready" };
 }
 
-/** targetContainer builds one backend-shaped running container. */
 function targetContainer(
   service: string,
   containerId: string,
@@ -87,7 +74,6 @@ function targetContainer(
   };
 }
 
-/** targetPayload is the add-tab discovery response with optional fields omitted. */
 function targetPayload(options?: {
   servers?: unknown[];
   applications?: unknown[];
@@ -112,20 +98,17 @@ function targetPayload(options?: {
         ],
       },
     ],
-    // A per-source failure without display metadata: id/name are omitted.
     errors: options?.errors ?? [
       { source: "application", code: "unavailable" },
     ],
   };
 }
 
-/** FakeSession is one session the mocked HTTP + WS pair understands. */
 interface FakeSession {
   id: string;
   socket: WebSocketRoute | null;
 }
 
-/** ApiState is the per-test ledger; the fake validates every request. */
 interface ApiState {
   creates: Array<{
     kind: "host" | "container";
@@ -137,11 +120,8 @@ interface ApiState {
   targetsCalls: Array<{ teamId: string }>;
   sessions: FakeSession[];
   seq: number;
-  /** targetsFailures makes the next N target reads answer 503. */
   targetsFailures: number;
-  /** createDelayMs keeps one create in flight for the single-flight proof. */
   createDelayMs: number;
-  /** payload overrides the target response. */
   payload: () => unknown;
 }
 
@@ -185,12 +165,10 @@ test.afterAll(async () => {
   });
 });
 
-/** frame builds one binary server frame. */
 function frame(opcode: number, payload: Buffer = Buffer.alloc(0)): Buffer {
   return Buffer.concat([Buffer.from([opcode]), payload]);
 }
 
-/** openFrame confirms a PTY for one session. */
 function openFrame(): Buffer {
   return frame(
     4,
@@ -206,12 +184,10 @@ function openFrame(): Buffer {
   );
 }
 
-/** outputFrame writes one line of shell output. */
 function outputFrame(text: string): Buffer {
   return frame(1, Buffer.from(text, "utf8"));
 }
 
-/** newState seeds the mock ledger. */
 function newState(): ApiState {
   return {
     creates: [],
@@ -225,12 +201,10 @@ function newState(): ApiState {
   };
 }
 
-/** teamOf reads the request's team header. */
 function teamOf(request: Request): string {
   return request.headers()["x-team-id"] ?? "";
 }
 
-/** validateBody applies the control plane's request rules for each route. */
 function validateBody(
   request: Request,
   kind: "host" | "container",
@@ -285,7 +259,6 @@ function validateBody(
   return null;
 }
 
-/** mockApi installs the control-plane fakes on one page. */
 async function mockApi(page: Page, state: ApiState): Promise<void> {
   await page.route("**/api/v1/**", async (route) => {
     await route.fulfill({ json: {} });
@@ -409,7 +382,6 @@ async function mockApi(page: Page, state: ApiState): Promise<void> {
     });
   });
 
-  // The PTY stream: binary frames only, exactly as the contract specifies.
   await page.routeWebSocket(
     /\/api\/v1\/(?:servers|applications)\/[^/]+\/terminal\/sessions\/[^/]+\/ws$/,
     (ws) => {
@@ -427,7 +399,6 @@ async function mockApi(page: Page, state: ApiState): Promise<void> {
   );
 }
 
-/** seedApp installs the session and opens one route. */
 async function seedApp(page: Page, path: string): Promise<void> {
   await page.addInitScript(
     (value) => {
@@ -440,7 +411,6 @@ async function seedApp(page: Page, path: string): Promise<void> {
   await expect(page.locator(".topbar")).toBeVisible();
 }
 
-/** storeCall runs one action on the live Pinia terminal store. */
 async function storeCall(
   page: Page,
   action: string,
@@ -462,7 +432,6 @@ async function storeCall(
   );
 }
 
-/** openWindow seeds one window session through the store entry point. */
 async function openWindow(page: Page): Promise<void> {
   await storeCall(page, "openWindowSession", {
     serverId: SERVER_ID,
@@ -472,7 +441,6 @@ async function openWindow(page: Page): Promise<void> {
   await expect(page.locator(".term-window")).toBeVisible();
 }
 
-/** picker opens the add-tab popover inside one surface. */
 async function openPicker(page: Page, surface: "window" | "page"): Promise<void> {
   const scope = surface === "window" ? ".term-window" : ".term-page";
   await page.locator(`${scope} .term-add-tab`).click();
@@ -490,7 +458,6 @@ test.describe("add-tab target picker", () => {
     expect(state.creates).toHaveLength(1);
 
     await openPicker(page, "window");
-    // One read, scoped to the active team, only when the popover opens.
     expect(state.targetsCalls).toEqual([{ teamId: TEAM_ID }]);
     await expect(page.locator(".term-targets-group-title")).toHaveText([
       "Servers",
@@ -498,7 +465,6 @@ test.describe("add-tab target picker", () => {
     ]);
     await expect(page.locator(".term-target-option")).toHaveCount(4);
 
-    // Search narrows to the application group only.
     await page.getByRole("dialog").getByRole("textbox").fill("shop-web-2");
     await expect(page.locator(".term-targets-group-title")).toHaveText(["shop"]);
     await expect(page.locator(".term-target-option")).toHaveCount(1);
@@ -506,12 +472,10 @@ test.describe("add-tab target picker", () => {
       "web · shop-web-2",
     );
 
-    // A partial source failure is reported without clearing the list.
     await expect(page.locator(".term-targets-partial")).toContainText(
       "Some targets could not be loaded.",
     );
 
-    // Keyboard: ArrowDown from the search box lands on the only option.
     await page.getByRole("dialog").getByRole("textbox").press("ArrowDown");
     await expect(page.locator(".term-target-option")).toBeFocused();
     await page.keyboard.press("Enter");
@@ -527,11 +491,8 @@ test.describe("add-tab target picker", () => {
       service: "web",
       container_id: CONTAINER_B_ID,
     });
-    // The browser never sends a trusted id outside the exact pair, and never
-    // falls back to a host create.
     expect(created.body).not.toHaveProperty("target");
     expect(state.creates.filter((entry) => entry.kind === "host")).toHaveLength(1);
-    // The first (host) tab is untouched: no DELETE, both sockets live.
     expect(state.deletes).toBe(0);
     expect(state.sessions.filter((item) => item.socket !== null)).toHaveLength(2);
     await expect(page.locator(".term-tab").nth(1)).toContainText(
@@ -547,7 +508,6 @@ test.describe("add-tab target picker", () => {
     await seedApp(page, "/terminal");
     await expect(page.locator(".term-page")).toBeVisible();
 
-    // Empty state: no shell until an explicit action, and the + is present.
     expect(state.creates).toHaveLength(0);
     await expect(page.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
 
@@ -561,7 +521,6 @@ test.describe("add-tab target picker", () => {
     expect(state.creates[0]!.body).not.toHaveProperty("root");
     expect(state.creates[0]!.body).not.toHaveProperty("cwd");
 
-    // The picker is lazy per open and the second tab is independent.
     await openPicker(page, "page");
     expect(state.targetsCalls).toHaveLength(2);
     await page
@@ -576,7 +535,6 @@ test.describe("add-tab target picker", () => {
       container_id: CONTAINER_ID,
     });
 
-    // Tab isolation: the active tab owns the rendered pane and its title.
     const tabs = page.locator(".term-page-tab");
     await expect(tabs.nth(1)).toContainText("shop · web · shop-web-1");
     await expect(page.locator(".term-page .xterm-rows")).toContainText("welcome session-2");
@@ -588,7 +546,6 @@ test.describe("add-tab target picker", () => {
     await expect(
       page.locator(".term-page-tab-name").nth(1),
     ).toHaveAttribute("aria-selected", "false");
-    // Switching tabs never reconnects either socket.
     expect(state.creates).toHaveLength(2);
   });
 
@@ -623,7 +580,6 @@ test.describe("add-tab target picker", () => {
       "No terminal targets available",
     );
 
-    // Close, then make the read fail: the 503 body is never rendered.
     await page.keyboard.press("Escape");
     await expect(page.locator(".term-targets")).toHaveCount(0);
     state.payload = () => targetPayload();
@@ -634,7 +590,6 @@ test.describe("add-tab target picker", () => {
     );
     await expect(page.locator(".term-targets-error")).not.toContainText("node down");
 
-    // Retry re-reads and renders the list.
     await page.locator(".term-targets").getByRole("button", { name: "Retry" }).click();
     await expect(page.locator(".term-targets-group-title")).toHaveText([
       "Servers",
@@ -700,7 +655,6 @@ test.describe("add-tab target picker", () => {
     await openWindow(page);
 
     const trigger = page.locator(".term-window .term-add-tab");
-    // Space opens from the trigger and Escape returns focus without a pick.
     await trigger.focus();
     await page.keyboard.press("Space");
     await expect(page.locator(".term-targets")).toBeVisible();
@@ -709,7 +663,6 @@ test.describe("add-tab target picker", () => {
     await expect(page.locator(".term-targets")).toHaveCount(0);
     await expect(trigger).toBeFocused();
 
-    // Enter opens; the search box owns focus, then arrows/Enter pick.
     await page.keyboard.press("Enter");
     await expect(page.locator(".term-targets")).toBeVisible();
     await expect(page.locator(".term-targets input").first()).toBeFocused();
@@ -744,7 +697,6 @@ test.describe("add-tab target picker", () => {
 
     for (const width of [1366, 1280, 480, 390]) {
       await page.setViewportSize({ width, height: 900 });
-      // Resize is observed asynchronously; wait for the reveal before measuring.
       await expect
         .poll(() =>
           page.evaluate(() => {
@@ -791,7 +743,6 @@ test.describe("add-tab target picker", () => {
       }
     }
 
-    // Selecting an earlier tab scrolls it back into view.
     await page.locator(".term-page-tab-name").nth(0).click();
     await expect
       .poll(() =>
@@ -833,12 +784,10 @@ test.describe("add-tab target picker", () => {
     await openWindow(page);
     await openPicker(page, "window");
 
-    // No host targets and no "Servers" section; the writable container stays.
     await expect(page.locator(".term-targets-group-title")).toHaveText(["shop"]);
     await expect(page.locator(".term-target-option")).toHaveCount(1);
     await expect(page.locator(".term-target-option")).toContainText("shop-web-1");
     await expect(page.locator(".term-targets-partial")).toHaveCount(0);
-    // A truncated response says so instead of pretending the list is complete.
     await expect(page.locator(".term-targets-truncated")).toContainText(
       "Showing the first 1 of the available targets.",
     );

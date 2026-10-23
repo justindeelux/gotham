@@ -1,9 +1,3 @@
-// JUS-139 fix round 1, browser-level: mounting the real browser proves the row
-// key handler keeps exactly one roving tab stop when the roving row leaves the
-// listing (folder change), resets the type-to-focus prefix on a listing change,
-// clears its type-to-focus timer on unmount, and seeds the range anchor at the
-// focused row when Shift+Arrow starts with no anchor. The files API and
-// useMessage are mocked, so the component runs under a real pinia + i18n.
 /* global document:readonly, HTMLElement:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -48,7 +42,6 @@ const root: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -60,7 +53,6 @@ function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   };
 }
 
-/** rootEntries sort to alpha (dir), beta, gamma. */
 const rootEntries: FilesEntry[] = [
   entry({ name: "alpha", kind: "directory", size: 0, mode: 0o040755 }),
   entry({ name: "beta" }),
@@ -91,16 +83,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** tabStops is the rendered name controls that own the roving tab stop. */
 function tabStops(wrapper: VueWrapper) {
   return wrapper.findAll('.fm-label[tabindex="0"]');
 }
 
-/** mountBrowser mounts the browser against the mocked store and settles it. */
 async function mountBrowser(): Promise<VueWrapper> {
-  // Bind the store before mount so onMounted's init does not reset the tab
-  // (which would fire the active-tab refocus watcher; jsdom has no
-  // scrollIntoView).
   await useFilesStore().init("server-1");
   const wrapper = mount(FilesBrowser, {
     props: { serverId: "server-1" },
@@ -123,8 +110,6 @@ describe("row keyboard navigation lifecycle", () => {
     expect(tabStops(wrapper)).toHaveLength(1);
     expect(tabStops(wrapper)[0].text()).toContain("beta");
 
-    // Navigate into a folder that also holds a "beta": the previous stop must
-    // not survive onto the same-named entry.
     vi.mocked(listEntries).mockResolvedValue({
       entries: [entry({ name: "beta" }), entry({ name: "alpha" })],
       truncated: false,
@@ -147,14 +132,12 @@ describe("row keyboard navigation lifecycle", () => {
     await flushPromises();
     expect(tabStops(wrapper)[0].text()).toContain("gamma");
 
-    // A folder change must drop the "g" prefix: the next key is a fresh run.
     await store.openDirectory("alpha");
     await flushPromises();
     const nextFirst = wrapper.find('.fm-row[data-entry="alpha"] .fm-label');
     (nextFirst.element as HTMLElement).focus();
     await nextFirst.trigger("keydown", { key: "b" });
     await flushPromises();
-    // A stale "gb" would match nothing and leave the focus where it was.
     expect(tabStops(wrapper)[0].text()).toContain("beta");
   });
 
@@ -184,7 +167,6 @@ describe("row keyboard navigation lifecycle", () => {
     await label.trigger("keydown", { key: "ArrowDown", shiftKey: true });
     await flushPromises();
 
-    // The run includes the origin row (alpha), not just the target (beta).
     expect(store.selectedNames.sort()).toEqual(["alpha", "beta"]);
   });
 });

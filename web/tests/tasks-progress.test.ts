@@ -124,34 +124,26 @@ describe("useTasksStore", () => {
 
   it("ignores stale frames older than the applied sequence", () => {
     const store = useTasksStore();
-    // A live terminal event races ahead of its own snapshot replay: the late
-    // queued frame must not resurrect the finished card.
     store.applyEvent(parseTaskFrame(frameOf(runningEvent({ status: "succeeded", seq: 5 })))!);
     store.applyEvent(parseTaskFrame(frameOf(runningEvent({ status: "queued", step: "", seq: 1 })))!);
     expect(store.visible).toHaveLength(1);
     expect(store.visible[0].event.status).toBe("succeeded");
-    // Unnumbered legacy frames still apply.
     store.applyEvent(parseTaskFrame(frameOf(runningEvent({ status: "running", step: "building", seq: 0 })))!);
     expect(store.visible[0].event.status).toBe("running");
   });
 
   it("marks cards missing from the snapshot as unknown instead of stuck", () => {
     const store = useTasksStore();
-    // Both tasks run; a marker closes the pre-disconnect batch (nothing to
-    // reconcile yet) and clears it, like a reconnect does on open.
     store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: "dep-1", seq: 2 })))!);
     store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: "dep-2", seq: 3 })))!);
     store.reconcileSnapshot();
     expect(store.visible.every((card) => !card.unknown)).toBe(true);
-    // Reconnect replay mentions only dep-1: dep-2 finished while the socket
-    // was down, so the closing marker flags it instead of leaving it stuck.
     store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: "dep-1", seq: 4 })))!);
     store.reconcileSnapshot();
     const byId = Object.fromEntries(store.visible.map((card) => [card.event.taskId, card]));
     expect(byId["dep-1"].unknown).toBe(false);
     expect(byId["dep-2"].unknown).toBe(true);
     expect(byId["dep-2"].event.status).toBe("running");
-    // Terminal cards are never reconciled, and each marker resets the batch.
     store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: "dep-3", status: "failed", seq: 1 })))!);
     store.reconcileSnapshot();
     expect(store.visible.find((card) => card.event.taskId === "dep-3")?.unknown).toBe(false);
@@ -224,8 +216,6 @@ describe("TaskProgressCards", () => {
     store.reconcileSnapshot();
     store.reconcileSnapshot();
     return wrapper.vm.$nextTick().then(() => {
-      // First marker closes the pre-disconnect batch; the second finds the
-      // still-running card absent and marks it finished instead of stuck.
       expect(wrapper.find('[data-task-unknown="true"]').exists()).toBe(true);
       expect(wrapper.text()).toContain("Finished");
     });

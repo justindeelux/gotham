@@ -11,11 +11,6 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// Argon2id parameters. These follow the RFC 9106 second recommended option
-// (time=3, memory=64 MiB, threads=4). The hash is stored using the standard
-// PHC encoded string form:
-//
-//	$argon2id$v=19$m=65536,t=3,p=4$<b64salt>$<b64hash>
 const (
 	argonTime    uint32 = 3
 	argonMemory  uint32 = 64 * 1024
@@ -24,12 +19,8 @@ const (
 	argonSaltLen        = 16
 )
 
-// errInvalidHash marks an encoded hash that cannot be parsed.
 var errInvalidHash = errors.New("auth: invalid password hash")
 
-// HashPassword derives an argon2id hash of password and returns its encoded
-// string form. An empty password is rejected. Length bounds are enforced by the
-// service layer so callers can surface a validation error before hashing.
 func HashPassword(password string) (string, error) {
 	if password == "" {
 		return "", fmt.Errorf("%w: password must not be empty", ErrValidation)
@@ -52,9 +43,6 @@ func HashPassword(password string) (string, error) {
 	), nil
 }
 
-// VerifyPassword reports whether password matches the encoded argon2id hash.
-// The parameters are read from the encoded string, so hashes produced with
-// older settings keep verifying after the defaults change.
 func VerifyPassword(encoded, password string) (bool, error) {
 	params, salt, want, err := decodeHash(encoded)
 	if err != nil {
@@ -65,15 +53,12 @@ func VerifyPassword(encoded, password string) (bool, error) {
 	return subtle.ConstantTimeCompare(want, got) == 1, nil
 }
 
-// argonParams holds the cost parameters parsed from an encoded hash.
 type argonParams struct {
 	memory  uint32
 	time    uint32
 	threads uint8
 }
 
-// decodeHash parses the PHC encoded form into its cost parameters, salt, and
-// hash bytes.
 func decodeHash(encoded string) (argonParams, []byte, []byte, error) {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {

@@ -18,10 +18,6 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// Job execution: the temporary-container flow of dump and restore jobs.
-
-// startRun records a backup row, claims the database's single-flight slot and
-// spawns the job. It is shared by the HTTP surface and the scheduler.
 func (m *BackupManager) startRun(ctx context.Context, database Database, target *BackupTarget, typ BackupType, scheduleID uuid.UUID) (Backup, error) {
 	if err := m.backupsReady(); err != nil {
 		return Backup{}, err
@@ -40,11 +36,6 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 	if target != nil {
 		backup.TargetID = target.ID
 	}
-	// Ownership is validated against the target row the run insert locks, not
-	// the caller's earlier read: a target that flips from local to S3 between
-	// the two must not slip a team database's dump into a member's bucket. The
-	// check runs before the run row exists, so a rejected target leaves no
-	// orphaned running backup.
 	stored, liveTarget, err := m.backups.CreateBackupWithTarget(ctx, backup, func(live *BackupTarget) error {
 		if live.Kind == TargetS3 && live.UserID != database.UserID {
 			return ErrNotFound
@@ -55,15 +46,10 @@ func (m *BackupManager) startRun(ctx context.Context, database Database, target 
 		m.release(database.ID)
 		return Backup{}, err
 	}
-	// liveTarget is the target read under the same row lock as the run insert,
-	// so a concurrent destination edit cannot strand this run.
 	go m.runBackup(stored, database, liveTarget)
 	return stored, nil
 }
 
-// runBackup is the whole dump job: stop the database, dump it from a
-// temporary container, compress and store the bytes, then put the database
-// back the way it was. Any failure is recorded on the row.
 func (m *BackupManager) runBackup(backup Backup, database Database, target *BackupTarget) {
 	defer m.release(database.ID)
 
@@ -89,7 +75,6 @@ func (m *BackupManager) runBackup(backup Backup, database Database, target *Back
 			"type", string(backup.Type), "size", size, "location", location)
 	}
 
-	// The job context may already be expired; the row write gets its own.
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer finishCancel()
 	if _, ferr := m.backups.FinishBackup(finishCtx, finished); ferr != nil {
@@ -100,10 +85,6 @@ func (m *BackupManager) runBackup(backup Backup, database Database, target *Back
 	m.notifyBackup(finishCtx, finished, database)
 }
 
-// runRestore is the restore job: download the artifact, stage it onto the
-// database volume in chunks and apply it from a temporary container. It
-// persists the terminal state on the restore row so an interrupted run is
-// recoverable after a restart.
 func (m *BackupManager) runRestore(restore Restore, backup Backup, database Database) {
 	defer m.release(database.ID)
 
@@ -126,7 +107,6 @@ func (m *BackupManager) runRestore(restore Restore, backup Backup, database Data
 			"database_id", database.ID.String())
 	}
 
-	// The job context may already be expired; the row write gets its own.
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer finishCancel()
 	if _, ferr := m.backups.FinishRestore(finishCtx, finished); ferr != nil {
@@ -135,9 +115,6 @@ func (m *BackupManager) runRestore(restore Restore, backup Backup, database Data
 	}
 }
 
-// dump stops the database, runs the engine's dump job on the node, compresses
-// the payload into a temporary file and uploads it to the target. It returns
-// the artifact location, its compressed size and the temporary container id.
 func (m *BackupManager) dump(ctx context.Context, database Database, target *BackupTarget, runID uuid.UUID) (string, int64, string, error) {
 	engine, ok := LookupBackupEngine(database.Engine)
 	if !ok {
@@ -147,11 +124,6 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 	if err != nil {
 		return "", 0, "", err
 	}
-	// Observe the pre-job state, persist it, then stop. Persisting before the
-	// stop closes the crash window: a crash after the stop still leaves
-	// was_running=true, so the sweep restarts the database the job paused. A
-	// failed record write is a hard job failure; the deferred resume then runs
-	// against a still-running container, where Start is a harmless no-op.
 	wasRunning, err := m.databaseRunning(ctx, database)
 	if err != nil {
 		return "", 0, "", err
@@ -203,14 +175,11 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 	if jobErr != nil {
 		return "", 0, containerID, jobErr
 	}
-	// The stored artifact is the compressed stream, so the size that matters
-	// is the file's — the collector counted the raw payload it decoded.
 	info, statErr := temp.Stat()
 	if statErr != nil {
 		return "", 0, containerID, fmt.Errorf("databases: stat staging file: %w", statErr)
 	}
 	size := info.Size()
-	// Re-read the compressed bytes: the file was written sequentially.
 	if _, err := temp.Seek(0, io.SeekStart); err != nil {
 		return "", 0, containerID, fmt.Errorf("databases: rewind staging file: %w", err)
 	}
@@ -225,15 +194,6 @@ func (m *BackupManager) dump(ctx context.Context, database Database, target *Bac
 	return location, size, containerID, nil
 }
 
-// restore downloads the artifact, stages it onto the volume in bounded chunks
-// and runs the engine's restore job, with the database stopped throughout so
-// the temporary container is the only writer.
-//
-// The database is resumed only after a successful restore. MySQL, MongoDB and
-// the Redis tar path are not transactional, so a job that fails partway can
-// leave a partial data directory; restarting the container into that state
-// would serve half-restored data. On failure the database stays stopped, is
-// marked error with the cause, and the staged artifact is removed.
 func (m *BackupManager) restore(ctx context.Context, database Database, backup Backup) error {
 	store, err := m.storeForLocation(ctx, backup, &database)
 	if err != nil {
@@ -251,9 +211,6 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 	}
 
 	if err := m.applyRestore(ctx, database, backup, artifact); err != nil {
-		// Never restart into a half-restored volume, and always surface the
-		// failure: the database stays stopped and its row carries the error,
-		// even when it was already stopped or has no container to pause.
 		m.markError(context.Background(), database, err)
 		return err
 	}
@@ -267,9 +224,6 @@ func (m *BackupManager) restore(ctx context.Context, database Database, backup B
 	return nil
 }
 
-// applyRestore stages the artifact onto the database volume and runs the
-// engine's restore job. It removes the staged artifact on any failure so a
-// retry starts from a clean volume.
 func (m *BackupManager) applyRestore(ctx context.Context, database Database, backup Backup, artifact io.Reader) error {
 	staged, err := stagingPath(database, backup.ID)
 	if err != nil {
@@ -279,8 +233,6 @@ func (m *BackupManager) applyRestore(ctx context.Context, database Database, bac
 		m.removeStagedArtifact(database, staged)
 		return err
 	}
-	// Any later failure leaves a staged artifact behind in the volume; a
-	// best-effort cleanup keeps a retry from starting on a partial file.
 	restoreSucceeded := false
 	defer func() {
 		if !restoreSucceeded {
@@ -311,11 +263,6 @@ func (m *BackupManager) applyRestore(ctx context.Context, database Database, bac
 	return nil
 }
 
-// removeStagedArtifact best-effort removes a staged restore artifact and its
-// directory after a failed restore, so a retry starts from a clean volume. It
-// runs its own bounded job with a fresh context — the restore's may already be
-// gone — and every failure is logged, never returned: the caller must keep
-// the original restore error.
 func (m *BackupManager) removeStagedArtifact(database Database, stagedPath string) {
 	engine, _, err := parseEngine(database.Engine)
 	if err != nil || !safeJobPath(stagedPath) {
@@ -328,8 +275,6 @@ func (m *BackupManager) removeStagedArtifact(database Database, stagedPath strin
 	runID := database.ID.String()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	// The script reports through the standard frame, so the collector
-	// validates that the removal actually ran.
 	script := fmt.Sprintf(
 		"if rm -f '%s' && rm -rf '%s'; then\n"+
 			"  printf 'GOTHAM-BACKUP-START %%s\\nGOTHAM-BACKUP-PAYLOAD %%s 0\\nGOTHAM-BACKUP-END %%s ok\\n' \"$GOTHAM_RUN_ID\" \"$GOTHAM_RUN_ID\" \"$GOTHAM_RUN_ID\"\n"+
@@ -363,11 +308,6 @@ func (m *BackupManager) removeStagedArtifact(database Database, stagedPath strin
 	}
 }
 
-// stageArtifact writes the artifact onto the database volume one bounded
-// chunk at a time. Each chunk is a temporary container whose command carries
-// a base64 payload: the agent contract has no file-transfer RPC, and a
-// command argument is the largest channel that survives it. The binding
-// limit is Linux's per-argument MAX_ARG_STRLEN (128 KiB), not ARG_MAX.
 func (m *BackupManager) stageArtifact(ctx context.Context, database Database, runID uuid.UUID, data io.Reader, stagedPath string) error {
 	buffer := make([]byte, stageChunkBytes)
 	for index := 0; ; index++ {
@@ -387,11 +327,6 @@ func (m *BackupManager) stageArtifact(ctx context.Context, database Database, ru
 	}
 }
 
-// stageChunk appends (or, for index 0, replaces) one chunk of the artifact
-// inside the database volume and waits for the container to finish. The chunk
-// travels base64-encoded inside the command argument — the only channel the
-// agent contract offers — and is decoded back to the artifact bytes by the
-// container, so the restore job reads the raw gzip file it expects.
 func (m *BackupManager) stageChunk(ctx context.Context, database Database, runID uuid.UUID, chunk []byte, stagedPath string, index int) error {
 	encoded := base64.StdEncoding.EncodeToString(chunk)
 	operator := ">>"
@@ -402,9 +337,6 @@ func (m *BackupManager) stageChunk(ctx context.Context, database Database, runID
 	if !safeJobPath(directory) || !safeJobPath(stagedPath) {
 		return fmt.Errorf("%w: staging path contains characters a shell argument cannot carry", ErrValidation)
 	}
-	// The chunk never contains shell metacharacters: base64 is alphanumerics
-	// plus "+" "/" "=", and both paths are built from a validated mount path
-	// and a UUID.
 	script := fmt.Sprintf(
 		"id=\"$GOTHAM_RUN_ID\"\n"+
 			"if mkdir -p '%s' && printf '%%s' '%s' | base64 -d %s '%s'; then\n"+
@@ -439,9 +371,6 @@ func (m *BackupManager) stageChunk(ctx context.Context, database Database, runID
 	return collector.Result()
 }
 
-// runJob starts a temporary container, feeds its log stream into sink and
-// returns the container id. The container is removed afterwards, success or
-// not: a job container exists only while its job runs.
 func (m *BackupManager) runJob(ctx context.Context, serverID uuid.UUID, options containers.RunOptions, sink io.Writer) (string, error) {
 	containerID, err := m.containers.Run(ctx, serverID, options)
 	if err != nil {
@@ -453,27 +382,17 @@ func (m *BackupManager) runJob(ctx context.Context, serverID uuid.UUID, options 
 	if err != nil {
 		return containerID, mapContainerError(err)
 	}
-	// The channel closes when Docker ends the stream — with follow, that is
-	// when the container exits — or when the job context expires.
 	for chunk := range logs {
 		if sink != nil {
-			// jobCollector records write failures internally, so a failed
-			// write must not stop the drain: the channel has to be emptied
-			// for the agent goroutine to finish.
 			_, _ = sink.Write(chunk)
 		}
 	}
-	// A terminal stream error means the dump may be truncated: report it
-	// instead of treating the job as a clean success.
 	if err := <-streamErr; err != nil {
 		return containerID, mapContainerError(err)
 	}
 	return containerID, ctx.Err()
 }
 
-// removeJobContainer force-removes a temporary container with its own
-// context: the job's context may already be gone, and a leaked container
-// would hold the volume's data directory.
 func (m *BackupManager) removeJobContainer(serverID uuid.UUID, containerID string) {
 	if containerID == "" {
 		return
@@ -486,20 +405,10 @@ func (m *BackupManager) removeJobContainer(serverID uuid.UUID, containerID strin
 	}
 }
 
-// backupServerLister is the slice of the repository the startup container
-// sweep needs: every managed node id. It is separate from BackupRepository so
-// the backup persistence contract stays about backup tables.
 type backupServerLister interface {
 	ListServerIDs(ctx context.Context) ([]uuid.UUID, error)
 }
 
-// sweepJobContainers removes temporary job containers a crashed control plane
-// left behind. It runs in the background at construction (see
-// NewDefaultBackupService), concurrently with serving and the scheduler: the
-// live-run and lease guards are therefore re-read after every node's list,
-// so a job that started mid-sweep is never mistaken for a leftover. A
-// container is removed only when neither its database is leased by a live job
-// nor its run is still running.
 func (m *BackupManager) sweepJobContainers() {
 	if m == nil || m.containers == nil || m.backups == nil {
 		return
@@ -524,12 +433,6 @@ func (m *BackupManager) sweepJobContainers() {
 				"server_id", serverID.String(), "error", err)
 			continue
 		}
-		// Re-read the guards after the (possibly slow) list: a job that
-		// started while listing claims its lease and writes its run row
-		// before creating any container (see startRun), so anything created
-		// since is covered and never removed as a leftover. A guard lookup
-		// failure skips this node: empty guards would mistake every live
-		// container for a leftover.
 		liveRuns, leased := m.liveGuards(ctx)
 		if liveRuns == nil || leased == nil {
 			continue
@@ -547,10 +450,6 @@ func (m *BackupManager) sweepJobContainers() {
 	}
 }
 
-// liveGuards snapshots the run rows and leases a live job always holds: its
-// running backup row and its database lease. A lookup failure returns nil
-// maps; callers must skip removals on nil (empty guards would mistake every
-// live container for a leftover).
 func (m *BackupManager) liveGuards(ctx context.Context) (liveRuns, leased map[uuid.UUID]bool) {
 	liveRuns = map[uuid.UUID]bool{}
 	leased = map[uuid.UUID]bool{}
@@ -568,10 +467,6 @@ func (m *BackupManager) liveGuards(ctx context.Context) (liveRuns, leased map[uu
 	return liveRuns, leased
 }
 
-// listContainersFresh reads a node's containers straight from the agent when
-// the service supports it. The startup sweep must not read the List cache: a
-// hit serves an earlier snapshot (and an older binary cached containers whose
-// labels were dropped), so a crash's leftover job container could be missed.
 func (m *BackupManager) listContainersFresh(ctx context.Context, serverID uuid.UUID) ([]containers.Container, error) {
 	type freshLister interface {
 		ListFresh(ctx context.Context, serverID uuid.UUID) ([]containers.Container, error)
@@ -582,9 +477,6 @@ func (m *BackupManager) listContainersFresh(ctx context.Context, serverID uuid.U
 	return m.containers.List(ctx, serverID)
 }
 
-// isStaleJobContainer reports whether c is a temporary backup job container
-// the sweep may remove. Containers of another role (the database container
-// itself) and containers still leased by a live run are never selected.
 func isStaleJobContainer(c containers.Container, leased, liveRuns map[uuid.UUID]bool) bool {
 	if c.Labels[labelManaged] != "true" {
 		return false
@@ -603,8 +495,6 @@ func isStaleJobContainer(c containers.Container, leased, liveRuns map[uuid.UUID]
 	return true
 }
 
-// databaseRunning reports whether the database container is listed as running.
-// A database without a container (row created, container gone) is not running.
 func (m *BackupManager) databaseRunning(ctx context.Context, database Database) (bool, error) {
 	if database.ContainerID == "" {
 		return false, nil
@@ -621,8 +511,6 @@ func (m *BackupManager) databaseRunning(ctx context.Context, database Database) 
 	return false, nil
 }
 
-// stopDatabase stops the database container so a job can mount its volume. A
-// database without a container needs no stop.
 func (m *BackupManager) stopDatabase(ctx context.Context, database Database) error {
 	if database.ContainerID == "" {
 		return nil
@@ -633,9 +521,6 @@ func (m *BackupManager) stopDatabase(ctx context.Context, database Database) err
 	return nil
 }
 
-// pauseDatabase stops the database container before a restore mounts its
-// volume, reporting whether it was running. A database without a container
-// needs no pause.
 func (m *BackupManager) pauseDatabase(ctx context.Context, database Database) (bool, error) {
 	running, err := m.databaseRunning(ctx, database)
 	if err != nil || !running {
@@ -647,8 +532,6 @@ func (m *BackupManager) pauseDatabase(ctx context.Context, database Database) (b
 	return true, nil
 }
 
-// resumeDatabase starts the database container again. It runs with a fresh
-// context so a cancelled job still brings the database back up.
 func (m *BackupManager) resumeDatabase(ctx context.Context, database Database) error {
 	if database.ContainerID == "" {
 		return nil

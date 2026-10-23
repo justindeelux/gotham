@@ -1,9 +1,5 @@
 import type { NotFoundMessages } from "./en";
 
-/**
- * Not-found Vietnamese catalog. Keys mirror `en.ts` exactly; only values are
- * translated.
- */
 const vi: NotFoundMessages = {
   title: "Không tìm thấy trang",
   description:

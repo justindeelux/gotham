@@ -1,6 +1,3 @@
-// Files archive surface (P18 step 9b): the compress/extract store actions and
-// the archive name/format helpers. The API module is mocked so the store runs
-// without axios or the DOM.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,7 +36,6 @@ const root: FilesRoot = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -135,7 +131,6 @@ describe("files store compress", () => {
         format: "zip",
       },
     );
-    // The listing refreshes after the archive is written.
     expect(vi.mocked(listEntries)).toHaveBeenLastCalledWith(
       "server-1",
       "team-1",

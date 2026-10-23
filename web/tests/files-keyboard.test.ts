@@ -1,8 +1,3 @@
-// JUS-139 row keyboard navigation. Type-to-focus resolves a typed prefix
-// against the visible (sorted+filtered) listing order, so it can jump to a row
-// the windowed list never rendered; the store keeps the shift-range anchor in
-// step with the keyboard cursor without touching the selection. These tests pin
-// the pure match maths and the anchor action.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -29,7 +24,6 @@ const root: FilesRoot = {
   free_bytes: 1024 ** 3,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(
   overrides: Partial<FilesEntry> & { name: string },
 ): FilesEntry {
@@ -56,7 +50,6 @@ describe("typeaheadIndex", () => {
   });
 
   it("cycles through the entries that share a repeated letter", () => {
-    // A single letter is a cycle: each press starts after `from`.
     expect(typeaheadIndex(names, "f", 0)).toBe(1);
     expect(typeaheadIndex(names, "ff", 3)).toBe(4);
   });

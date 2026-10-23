@@ -31,10 +31,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// defaultGatewayTestDSN points at the dev database from deploy/compose.dev.yml.
 const defaultGatewayTestDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
-// gatewayTestDSN mirrors the store integration test env override.
 func gatewayTestDSN() string {
 	if dsn := os.Getenv("GOTHAM_TEST_DSN"); dsn != "" {
 		return dsn
@@ -42,29 +40,20 @@ func gatewayTestDSN() string {
 	return defaultGatewayTestDSN
 }
 
-// gatewayTestDSNExplicit reports whether the operator opted in by setting
-// GOTHAM_TEST_DSN: an explicit opt-in turns a missing database or a failed
-// migration into a failure instead of a skip, so the gateway tests cannot pass
-// green by skipping.
 func gatewayTestDSNExplicit() bool {
 	return os.Getenv("GOTHAM_TEST_DSN") != ""
 }
 
-// discardLogger silences service logging during tests.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// newTestService builds a ServerService backed by the dev database, skipping
-// the test when Postgres is unavailable.
 func newTestService(t *testing.T) (*ServerService, *store.Store) {
 	t.Helper()
 	service, st, _ := newTestServiceWithAuthority(t)
 	return service, st
 }
 
-// newTestServiceWithAuthority returns the service and store together with the
-// CA the service signs agent certificates with, so tests can verify them.
 func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *Authority) {
 	t.Helper()
 
@@ -72,8 +61,6 @@ func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *A
 	defer cancel()
 
 	dsn := gatewayTestDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if gatewayTestDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -85,8 +72,6 @@ func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *A
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -107,16 +92,12 @@ func newTestServiceWithAuthority(t *testing.T) (*ServerService, *store.Store, *A
 	return service, st, authority
 }
 
-// startTestGateway serves g (insecure) over an in-memory connection and returns
-// a client connection.
 func startTestGateway(t *testing.T, service *ServerService) *grpc.ClientConn {
 	t.Helper()
 	_, conn := startTestGatewayInstance(t, service)
 	return conn
 }
 
-// startTestGatewayInstance is startTestGateway but also returns the gateway, so
-// tests can tighten its per-peer rate limits.
 func startTestGatewayInstance(t *testing.T, service *ServerService) (*Gateway, *grpc.ClientConn) {
 	t.Helper()
 	return startTestGatewayWithConfig(t, GatewayConfig{
@@ -125,7 +106,6 @@ func startTestGatewayInstance(t *testing.T, service *ServerService) (*Gateway, *
 	})
 }
 
-// startTestGatewayWithConfig serves cfg over an in-memory connection.
 func startTestGatewayWithConfig(t *testing.T, cfg GatewayConfig) (*Gateway, *grpc.ClientConn) {
 	t.Helper()
 
@@ -160,7 +140,6 @@ func startTestGatewayWithConfig(t *testing.T, cfg GatewayConfig) (*Gateway, *grp
 	return gateway, conn
 }
 
-// uniqueNodeID returns a node id that will not collide with other tests.
 func uniqueNodeID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
@@ -184,8 +163,6 @@ func TestGatewayRegisterCreatesServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// A certificate is only ever issued from a CSR bound to the node identity;
-	// this gateway has no authority configured, so the response carries none.
 	if len(resp.GetCert()) != 0 {
 		t.Error("Register returned a certificate without a CSR or a CA")
 	}
@@ -211,13 +188,10 @@ func TestGatewayRegisterCreatesServer(t *testing.T) {
 	if row.DockerVersion == nil || *row.DockerVersion != "24.0.7" {
 		t.Errorf("docker_version = %v, want 24.0.7", row.DockerVersion)
 	}
-	// Registration records capabilities but leaves the node pending: ready is
-	// reserved for an authenticated agent heartbeat (A4-15/B4-9).
 	if row.Status != StatusPending {
 		t.Errorf("status = %q, want %q", row.Status, StatusPending)
 	}
 
-	// A second Register for the same node id must update, not duplicate.
 	second, err := agentv1.NewAgentServiceClient(conn).Register(ctx, &agentv1.RegisterRequest{
 		NodeId:        nodeID,
 		Os:            "linux",
@@ -275,7 +249,6 @@ func TestGatewayRegisterRejectsInvalidCSR(t *testing.T) {
 	callCtx, callCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer callCancel()
 
-	// The CSR is validated before the registry write, so no row is created.
 	_, err = agentv1.NewAgentServiceClient(conn).Register(callCtx, &agentv1.RegisterRequest{
 		NodeId: uniqueNodeID("node-bad-csr"),
 		Csr:    []byte("not a csr"),
@@ -370,10 +343,6 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 		t.Errorf("last_seen = %+v, want a set timestamp", updated.LastSeen)
 	}
 
-	// The heartbeat path aggregates time-series samples on the server wall
-	// clock: two messages sent back-to-back persist a single sample, while the
-	// servers row keeps the newest snapshot. The sample is stamped with the
-	// message's sent_at.
 	var count int
 	if err := st.DB.QueryRow(ctx,
 		"SELECT count(*) FROM server_metrics WHERE server_id = $1", row.ID).Scan(&count); err != nil {
@@ -396,9 +365,6 @@ func TestGatewayHeartbeatUpdatesMetrics(t *testing.T) {
 	}
 }
 
-// TestGatewayHeartbeatRecordsAgentVersion proves the version map is fed by the
-// heartbeat path (which resolves the node first) and refuses an unknown node,
-// and that RequestUpdate does not write it.
 func TestGatewayHeartbeatRecordsAgentVersion(t *testing.T) {
 	service, st := newTestService(t)
 	conn := startTestGateway(t, service)
@@ -421,7 +387,6 @@ func TestGatewayHeartbeatRecordsAgentVersion(t *testing.T) {
 		_ = st.DeleteServer(cleanupCtx, row.ID)
 	})
 
-	// A registered node's heartbeat records its version.
 	stream, err := client.Heartbeat(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, nodeID))
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
@@ -442,7 +407,6 @@ func TestGatewayHeartbeatRecordsAgentVersion(t *testing.T) {
 		t.Fatalf("version map = %+v, want %s=v1.2.0", service.KnownAgentVersions(), nodeID)
 	}
 
-	// An unknown node's heartbeat is refused (ErrNotFound) and never recorded.
 	unknown := uniqueNodeID("node-unknown")
 	stream, err = client.Heartbeat(metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, unknown))
 	if err != nil {
@@ -461,7 +425,6 @@ func TestGatewayHeartbeatRecordsAgentVersion(t *testing.T) {
 	}
 }
 
-// fakeAgentUpdater is a controllable AgentUpdateOfferer for gateway tests.
 type fakeAgentUpdater struct {
 	release *updatecore.Release
 	target  string
@@ -524,8 +487,6 @@ func TestGatewayRequestUpdate(t *testing.T) {
 		if resp.GetRollout() {
 			t.Error("rollout = true without an operator trigger")
 		}
-		// M2: RequestUpdate carries no authenticated node identity, so it must
-		// not write the version map; only the heartbeat path does.
 		if versions := service.KnownAgentVersions(); len(versions) != 0 {
 			t.Errorf("version map = %+v, want empty (RequestUpdate must not record)", versions)
 		}
@@ -597,20 +558,16 @@ func TestGatewayRequestUpdate(t *testing.T) {
 	})
 }
 
-// startAuthorityGateway serves service over TLS with authority and returns the
-// listener address.
 func startAuthorityGateway(t *testing.T, service *ServerService, authority *Authority) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	gateway, err := NewGateway(GatewayConfig{
-		Addr:      "127.0.0.1:0",
-		Authority: authority,
-		Service:   service,
-		Logger:    discardLogger(),
-		// Open enrollment so the certificate-less bootstrap these tests rely on
-		// is allowed; the fail-closed default has its own tests.
+		Addr:                "127.0.0.1:0",
+		Authority:           authority,
+		Service:             service,
+		Logger:              discardLogger(),
 		AllowOpenEnrollment: true,
 	})
 	if err != nil {
@@ -623,9 +580,6 @@ func startAuthorityGateway(t *testing.T, service *ServerService, authority *Auth
 	return gateway.listener.Addr().String()
 }
 
-// TestGatewayRegisterRejectsReservedNodeIDAliases is the FX-3 C1 guard: an
-// equivalent spelling of a reserved identity (mapped IPv6, alternate IPv6,
-// uppercase, trailing dot) must not slip past the lookup.
 func TestGatewayRegisterRejectsReservedNodeIDAliases(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 
@@ -641,8 +595,6 @@ func TestGatewayRegisterRejectsReservedNodeIDAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
-	// The alias matrix exceeds the production register burst; this test checks
-	// identity rejection, not rate limiting.
 	gateway.registerLimiter = newPeerRateLimiter(registerRateLimit, 64)
 	if err := gateway.Start(ctx); err != nil {
 		t.Fatalf("gateway.Start: %v", err)
@@ -658,14 +610,14 @@ func TestGatewayRegisterRejectsReservedNodeIDAliases(t *testing.T) {
 	client := agentv1.NewAgentServiceClient(conn)
 
 	aliases := []string{
-		"::ffff:127.0.0.1", // IPv4-mapped IPv6 of 127.0.0.1
-		"0:0:0:0:0:0:0:1",  // alternate spelling of ::1
-		"LOCALHOST",        // uppercase
-		"localhost.",       // trailing dot (FQDN)
-		"localhost..",      // multiple trailing dots
-		"CP.EXAMPLE.COM.",  // uppercase + trailing dot
-		"::0001",           // padded IPv6 loopback
-		"[::1]",            // bracketed IPv6
+		"::ffff:127.0.0.1",
+		"0:0:0:0:0:0:0:1",
+		"LOCALHOST",
+		"localhost.",
+		"localhost..",
+		"CP.EXAMPLE.COM.",
+		"::0001",
+		"[::1]",
 	}
 	for _, alias := range aliases {
 		_, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: alias, Os: "linux"})
@@ -679,9 +631,6 @@ func TestGatewayRegisterRejectsReservedNodeIDAliases(t *testing.T) {
 	}
 }
 
-// TestReservedNodeIDMessageIsActionable is the FX-3 C2 guard: a co-located agent
-// whose default node id is the machine hostname gets an error naming
-// GOTHAM_AGENT_NODE_ID rather than a bare "reserved".
 func TestReservedNodeIDMessageIsActionable(t *testing.T) {
 	if !strings.Contains(reservedNodeIDMessage, "GOTHAM_AGENT_NODE_ID") {
 		t.Errorf("reservedNodeIDMessage = %q, want it to name GOTHAM_AGENT_NODE_ID", reservedNodeIDMessage)
@@ -696,7 +645,6 @@ func TestReservedNodeIDMessageIsActionable(t *testing.T) {
 	}
 }
 
-// TestCanonicalNodeID pins the canonicalization used by the reserved lookup.
 func TestCanonicalNodeID(t *testing.T) {
 	cases := map[string]string{
 		"LOCALHOST":          "localhost",
@@ -719,9 +667,6 @@ func TestCanonicalNodeID(t *testing.T) {
 	}
 }
 
-// TestGatewayHeartbeatRejectsIdentityMismatch rejects a heartbeat whose
-// metadata node id contradicts the authenticated peer certificate (FX-3 item 3):
-// a real node leaf authenticates, but claiming another node id is refused.
 func TestGatewayHeartbeatRejectsIdentityMismatch(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -744,9 +689,6 @@ func TestGatewayHeartbeatRejectsIdentityMismatch(t *testing.T) {
 	}
 }
 
-// TestGatewayRegisterWithCSRIssuesBoundCert is the FX-3 item-1 end-to-end path:
-// a CSR bound to the registered node id yields a usable certificate, and the
-// registry row is created.
 func TestGatewayRegisterWithCSRIssuesBoundCert(t *testing.T) {
 	service, st, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -796,9 +738,6 @@ func TestGatewayRegisterWithCSRIssuesBoundCert(t *testing.T) {
 	})
 }
 
-// TestGatewayRegisterRejectsIdentityMismatch is the FX-3 item-3 guard (JUS-194):
-// a peer that authenticated as one node cannot register under another node id,
-// while its own identity is accepted.
 func TestGatewayRegisterRejectsIdentityMismatch(t *testing.T) {
 	service, st, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -806,8 +745,6 @@ func TestGatewayRegisterRejectsIdentityMismatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Enroll the node once (bootstrap: no client certificate, so a CSR) and use
-	// the issued certificate for the authenticated attempt below.
 	nodeID := uniqueNodeID("node-identity")
 	key := testKey(t)
 	csr := testCSR(t, key, &x509.CertificateRequest{Subject: pkix.Name{CommonName: nodeID}, DNSNames: []string{nodeID}})
@@ -823,7 +760,6 @@ func TestGatewayRegisterRejectsIdentityMismatch(t *testing.T) {
 		t.Fatalf("Register as victim = %v, want PermissionDenied", err)
 	}
 
-	// The authenticated identity itself is accepted (a normal renewal).
 	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csr}); err != nil {
 		t.Fatalf("Register as the authenticated identity: %v", err)
 	}
@@ -838,7 +774,6 @@ func TestGatewayRegisterRejectsIdentityMismatch(t *testing.T) {
 	})
 }
 
-// TestGatewayRegisterRejectsLongNodeID is the FX-3 item-4 cap on node_id.
 func TestGatewayRegisterRejectsLongNodeID(t *testing.T) {
 	service, _ := newTestService(t)
 	conn := startTestGateway(t, service)
@@ -853,7 +788,6 @@ func TestGatewayRegisterRejectsLongNodeID(t *testing.T) {
 	}
 }
 
-// TestGatewayRegisterRateLimited is the FX-3 item-4 per-peer registration cap.
 func TestGatewayRegisterRateLimited(t *testing.T) {
 	service, _ := newTestService(t)
 	gateway, conn := startTestGatewayInstance(t, service)
@@ -870,7 +804,6 @@ func TestGatewayRegisterRateLimited(t *testing.T) {
 	}
 }
 
-// TestGatewayHeartbeatRateLimited is the FX-3 item-4 per-peer heartbeat cap.
 func TestGatewayHeartbeatRateLimited(t *testing.T) {
 	service, _ := newTestService(t)
 	gateway, conn := startTestGatewayInstance(t, service)
@@ -891,17 +824,12 @@ func TestGatewayHeartbeatRateLimited(t *testing.T) {
 	if err := stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()}); err != nil {
 		t.Fatalf("first send: %v", err)
 	}
-	// The second message exhausts the burst; the server closes the stream with
-	// ResourceExhausted, surfaced on the next send or close.
 	_ = stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
 	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("Heartbeat after burst = %v, want ResourceExhausted", err)
 	}
 }
 
-// TestGatewayRegisterRejectsReservedNodeID is the FX-3 R1 short-term guard: a
-// peer cannot enroll the control plane's own listener identity, which would mint
-// a CP-impersonation certificate.
 func TestGatewayRegisterRejectsReservedNodeID(t *testing.T) {
 	service, st, authority := newTestServiceWithAuthority(t)
 
@@ -942,8 +870,6 @@ func TestGatewayRegisterRejectsReservedNodeID(t *testing.T) {
 		}
 	}
 
-	// A non-reserved id is unaffected. It bootstraps like any first
-	// enrollment: no client certificate yet, so it must carry a CSR.
 	nodeID := uniqueNodeID("node-not-reserved")
 	csr := testCSR(t, testKey(t), &x509.CertificateRequest{Subject: pkix.Name{CommonName: nodeID}, DNSNames: []string{nodeID}})
 	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csr}); err != nil {
@@ -960,8 +886,6 @@ func TestGatewayRegisterRejectsReservedNodeID(t *testing.T) {
 	})
 }
 
-// TestGatewayHeartbeatIdleDeadline proves an idle Heartbeat stream is closed
-// rather than held open indefinitely (FX-3 R2).
 func TestGatewayHeartbeatIdleDeadline(t *testing.T) {
 	service, _ := newTestService(t)
 	_, conn := startTestGatewayWithConfig(t, GatewayConfig{
@@ -977,17 +901,12 @@ func TestGatewayHeartbeatIdleDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	// Stay quiet past the idle deadline; the server must close the stream
-	// rather than hold it open.
 	time.Sleep(3 * time.Second)
 	if _, err := stream.CloseAndRecv(); status.Code(err) != codes.DeadlineExceeded {
 		t.Fatalf("idle Heartbeat = %v, want DeadlineExceeded", err)
 	}
 }
 
-// TestGatewayConcurrentStreamCapOpensBehaviorally is the FX-3 P1 behavioral
-// check: with a tightened cap, opening maxConcurrentStreams Heartbeat streams on
-// one connection succeeds and the next stream fails/blocks with DeadlineExceeded.
 func TestGatewayConcurrentStreamCapOpensBehaviorally(t *testing.T) {
 	const cap = 4
 	service, _ := newTestService(t)
@@ -1001,23 +920,18 @@ func TestGatewayConcurrentStreamCapOpensBehaviorally(t *testing.T) {
 	defer cancel()
 	client := agentv1.NewAgentServiceClient(conn)
 
-	// The cap is per connection, so the streams must share one conn.
 	open := make([]grpc.ClientStreamingClient[agentv1.HeartbeatRequest, agentv1.HeartbeatResponse], 0, cap)
 	for i := 0; i < cap; i++ {
 		stream, err := client.Heartbeat(ctx)
 		if err != nil {
 			t.Fatalf("Heartbeat(%d): %v", i, err)
 		}
-		// A first message forces the stream past lazy setup.
 		if err := stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()}); err != nil {
 			t.Fatalf("send on stream %d: %v", i, err)
 		}
 		open = append(open, stream)
 	}
 
-	// The next stream must be refused: either Heartbeat fails synchronously or
-	// the first Send/Recv surfaces the transport error, bounded by a short
-	// deadline.
 	nextCtx, nextCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer nextCancel()
 	extra, err := client.Heartbeat(nextCtx)
@@ -1042,10 +956,6 @@ func TestGatewayConcurrentStreamCapOpensBehaviorally(t *testing.T) {
 	}
 }
 
-// TestGatewayLimitsStreamsAndMessages pins the gRPC caps (FX-3 R2) at their
-// production values and exercises the oversized-message path live. The concurrent
-// stream cap has its own behavioral test above; here it is also asserted as a
-// constant so a production default change is caught.
 func TestGatewayLimitsStreamsAndMessages(t *testing.T) {
 	if maxConcurrentStreams != 64 || maxRecvMsgSize != 1<<20 {
 		t.Fatalf("gateway caps = %d/%d, want 64/1MiB", maxConcurrentStreams, maxRecvMsgSize)
@@ -1062,8 +972,6 @@ func TestGatewayLimitsStreamsAndMessages(t *testing.T) {
 	}
 }
 
-// TestLoadAuthorityRejectsLooseKeyPermissions is the FX-3 R3 guard: a CA key
-// readable beyond its owner is refused.
 func TestLoadAuthorityRejectsLooseKeyPermissions(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := LoadOrCreateAuthority(dir); err != nil {
@@ -1084,8 +992,6 @@ func TestLoadAuthorityRejectsLooseKeyPermissions(t *testing.T) {
 	}
 }
 
-// TestRegisterErrorLogsUnexpected is the FX-3 item-6 guard: an unexpected
-// registry failure is logged before it is collapsed to Internal.
 func TestRegisterErrorLogsUnexpected(t *testing.T) {
 	var buf bytes.Buffer
 	gateway := &Gateway{logger: slog.New(slog.NewTextHandler(&buf, nil))}

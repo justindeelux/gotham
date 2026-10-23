@@ -135,10 +135,6 @@ func TestDeleteWebhookForeignApplicationIsNotFound(t *testing.T) {
 	}
 }
 
-// TestInstallHookDerivesCallbackFromRequest pins the deploy.HookLifecycle
-// adapter: the callback origin comes from the create request exactly like the
-// explicit route, so an application created through the API installs a hook
-// the Git host can reach. Repeating the install is idempotent.
 func TestInstallHookDerivesCallbackFromRequest(t *testing.T) {
 	repo := newFakeRepository()
 	installer := &fakeInstaller{}
@@ -157,7 +153,6 @@ func TestInstallHookDerivesCallbackFromRequest(t *testing.T) {
 	if got, want := installer.created[0].URL, "https://cp.example.com/api/v1/webhooks/github"; got != want {
 		t.Errorf("hook url = %q, want %q", got, want)
 	}
-	// The application already has a hook: the second install returns it.
 	if err := svc.InstallHook(context.Background(), repo.app.UserID, repo.app.ID, req); err != nil {
 		t.Fatalf("second InstallHook: %v", err)
 	}
@@ -166,9 +161,6 @@ func TestInstallHookDerivesCallbackFromRequest(t *testing.T) {
 	}
 }
 
-// TestInstallHookIgnoresUntrustedForwardedScheme pins L6 on the deploy
-// HookLifecycle adapter: an untrusted peer's X-Forwarded-Proto does not force
-// an https callback origin.
 func TestInstallHookIgnoresUntrustedForwardedScheme(t *testing.T) {
 	repo := newFakeRepository()
 	installer := &fakeInstaller{}
@@ -190,8 +182,6 @@ func TestInstallHookIgnoresUntrustedForwardedScheme(t *testing.T) {
 	}
 }
 
-// TestInstallHookTrustedProxyScheme pins that a trusted peer's
-// X-Forwarded-Proto is honored.
 func TestInstallHookTrustedProxyScheme(t *testing.T) {
 	repo := newFakeRepository()
 	installer := &fakeInstaller{}
@@ -223,9 +213,6 @@ func TestInstallHookTrustedProxyScheme(t *testing.T) {
 	}
 }
 
-// TestInstallHookSurfacesProviderFailure pins that the adapter does not
-// swallow a Git-host failure: the deploy create path logs it (the application
-// row is already committed) and the explicit route retries.
 func TestInstallHookSurfacesProviderFailure(t *testing.T) {
 	repo := newFakeRepository()
 	installer := &fakeInstaller{createErr: errors.New("502 bad gateway")}
@@ -238,8 +225,6 @@ func TestInstallHookSurfacesProviderFailure(t *testing.T) {
 	}
 }
 
-// TestRemoveHookIsIdempotent pins the delete-side adapter: the provider hook
-// and the stored row go together, and a second removal is a success.
 func TestRemoveHookIsIdempotent(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	installer := &fakeInstaller{}
@@ -260,12 +245,6 @@ func TestRemoveHookIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestForgetWebhookDropsRowWithoutContactingProvider pins the escape hatch:
-// the caller acknowledges the orphan (DELETE .../webhooks?force=true) and the
-// stored row goes without any Git-host call — the stalled or unreachable
-// provider is exactly why the hatch exists. The remote hook then cannot be
-// removed by the control plane anymore, which is what the caller
-// acknowledged; the warning names it for manual cleanup.
 func TestForgetWebhookDropsRowWithoutContactingProvider(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	installer := &fakeInstaller{}
@@ -285,7 +264,6 @@ func TestForgetWebhookDropsRowWithoutContactingProvider(t *testing.T) {
 		t.Errorf("provider deletions = %v, want none (force must not contact the host)", installer.deleted)
 	}
 
-	// Idempotent: an application with no hook reports false, no error.
 	deleted, err = svc.ForgetWebhook(context.Background(), repo.app.UserID, repo.app.ID)
 	if err != nil {
 		t.Fatalf("second ForgetWebhook: %v", err)
@@ -295,8 +273,6 @@ func TestForgetWebhookDropsRowWithoutContactingProvider(t *testing.T) {
 	}
 }
 
-// blockingDeleteInstaller models a provider that accepts the connection and
-// then stalls: DeleteWebhook blocks until its context is done.
 type blockingDeleteInstaller struct {
 	calls atomic.Int32
 }
@@ -311,10 +287,6 @@ func (i *blockingDeleteInstaller) DeleteWebhook(ctx context.Context, _ providers
 	return ctx.Err()
 }
 
-// TestForgetWebhookDoesNotWaitOnAStalledProvider pins the second half of the
-// escape hatch: with force=true the provider is never called, so a stall
-// cannot hold the request (and the subsequent application delete) open. The
-// strict route still calls the provider and fails closed.
 func TestForgetWebhookDoesNotWaitOnAStalledProvider(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	installer := &blockingDeleteInstaller{}
@@ -345,9 +317,6 @@ func TestForgetWebhookDoesNotWaitOnAStalledProvider(t *testing.T) {
 	}
 }
 
-// cancelOnCreateInstaller cancels the install context right after the host
-// accepted the hook, modelling a provider that answers at the edge of the
-// deadline; its DeleteWebhook honours a canceled context like a real client.
 type cancelOnCreateInstaller struct {
 	cancel  context.CancelFunc
 	deleted []string
@@ -366,10 +335,6 @@ func (i *cancelOnCreateInstaller) DeleteWebhook(ctx context.Context, _ providers
 	return nil
 }
 
-// TestCreateWebhookRollbackSurvivesExpiredInstallContext pins the rollback
-// fix: when the store write fails on a context that just expired (the install
-// took the whole budget), the remote hook must still be removed — the rollback
-// runs detached and bounded, not on the dead install context.
 func TestCreateWebhookRollbackSurvivesExpiredInstallContext(t *testing.T) {
 	repo := newFakeRepository()
 	repo.createErr = errors.New("database down")
@@ -391,10 +356,6 @@ func TestCreateWebhookRollbackSurvivesExpiredInstallContext(t *testing.T) {
 	}
 }
 
-// TestRemoveHookTranslatesProviderFailures pins the deploy-seam contract: the
-// application delete maps these errors to 409/502 (fail closed), so the
-// webhook adapter must hand up the deploy sentinels rather than its own
-// package's.
 func TestRemoveHookTranslatesProviderFailures(t *testing.T) {
 	cases := []struct {
 		name string
@@ -420,12 +381,6 @@ func TestRemoveHookTranslatesProviderFailures(t *testing.T) {
 	}
 }
 
-// TestHookBudgetsStayUnderSPARequestTimeout pins the latency budget: the SPA
-// aborts a create at 15s (web/src/shared/api/http.ts), and the worst-case hook
-// latency is one bounded install (deploy.DefaultHookTimeout) plus the detached
-// rollback (hookRollbackTimeout). Raising either bound must fail here rather
-// than surface as a client timeout after the application row committed, with a
-// minimum of 3s headroom for the rest of the request.
 func TestHookBudgetsStayUnderSPARequestTimeout(t *testing.T) {
 	const spaRequestTimeout = 15 * time.Second
 	worst := deploy.DefaultHookTimeout + hookRollbackTimeout

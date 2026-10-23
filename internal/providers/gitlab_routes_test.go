@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestRoutesDeleteProvider forgets the connection and answers idempotently.
 func TestRoutesDeleteProvider(t *testing.T) {
 	userID := uuid.New()
 	providerID := uuid.New()
@@ -36,7 +35,6 @@ func TestRoutesDeleteProvider(t *testing.T) {
 	}
 }
 
-// TestRoutesListBranches returns the branches of the requested repo.
 func TestRoutesListBranches(t *testing.T) {
 	userID := uuid.New()
 	svc := &fakeService{branches: []Branch{{Name: "main", Commit: "abc", Protected: true}}}
@@ -60,7 +58,6 @@ func TestRoutesListBranches(t *testing.T) {
 	}
 }
 
-// TestRoutesListBranchesRequiresRepo answers 400 without the repo query.
 func TestRoutesListBranchesRequiresRepo(t *testing.T) {
 	srv := newRouteServer(&fakeService{}, alwaysUser(uuid.New()))
 
@@ -72,8 +69,6 @@ func TestRoutesListBranchesRequiresRepo(t *testing.T) {
 	}
 }
 
-// TestRoutesGitLabAutoProvision stores the provisioned connection and never
-// echoes credentials.
 func TestRoutesGitLabAutoProvision(t *testing.T) {
 	userID := uuid.New()
 	svc := &fakeService{provisioned: Provider{
@@ -102,7 +97,6 @@ func TestRoutesGitLabAutoProvision(t *testing.T) {
 	}
 }
 
-// TestRoutesGitLabSetupInfo returns the manual-application details.
 func TestRoutesGitLabSetupInfo(t *testing.T) {
 	svc := &fakeService{setupInfo: GitLabSetupInfo{
 		BaseURL: "https://git.example", RedirectURI: "https://cp.example/api/v1/providers/gitlab/callback",
@@ -130,8 +124,6 @@ func TestRoutesGitLabSetupInfo(t *testing.T) {
 	}
 }
 
-// TestRoutesGitLabCallbackRedirects completes the browser flow with a fixed
-// result flag instead of a session.
 func TestRoutesGitLabCallbackRedirects(t *testing.T) {
 	svc := &fakeService{connected: Provider{Name: NameGitLab}}
 	srv := newRouteServer(svc, alwaysUser(uuid.New()))
@@ -151,7 +143,6 @@ func TestRoutesGitLabCallbackRedirects(t *testing.T) {
 	}
 }
 
-// TestRoutesGitLabCallbackFailure carries fixed reason codes, never detail.
 func TestRoutesGitLabCallbackFailure(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -180,8 +171,6 @@ func TestRoutesGitLabCallbackFailure(t *testing.T) {
 	}
 }
 
-// TestRoutesDeleteConflict answers 409 when applications still use the
-// connection, with a curated body naming them and no internal prefix.
 func TestRoutesDeleteConflict(t *testing.T) {
 	svc := &fakeService{deleteErr: fmt.Errorf("%w: shop, blog", ErrInUse)}
 	srv := newRouteServer(svc, alwaysUser(uuid.New()))
@@ -200,8 +189,6 @@ func TestRoutesDeleteConflict(t *testing.T) {
 	}
 }
 
-// TestRoutesProvisionRejectsForeignRedirect refuses a redirect URL that does
-// not name this control plane.
 func TestRoutesProvisionRejectsForeignRedirect(t *testing.T) {
 	srv := newRouteServer(&fakeService{}, alwaysUser(uuid.New()))
 
@@ -216,8 +203,6 @@ func TestRoutesProvisionRejectsForeignRedirect(t *testing.T) {
 	}
 }
 
-// TestRoutesSetupInfoRejectsForeignRedirect refuses a redirect URL that does
-// not name this control plane.
 func TestRoutesSetupInfoRejectsForeignRedirect(t *testing.T) {
 	srv := newRouteServer(&fakeService{}, alwaysUser(uuid.New()))
 

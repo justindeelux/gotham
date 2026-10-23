@@ -12,9 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeSSLStore is an in-memory SSLStore with the two reference guards the
-// production schema enforces: one enabled provider per type and one
-// certificate config per application.
 type fakeSSLStore struct {
 	mu            sync.Mutex
 	providers     []DNSProvider
@@ -28,17 +25,11 @@ type fakeSSLStore struct {
 	certDeleteErr error
 	getAppErr     error
 
-	// uncertified seeds the JUS-201 backfill: enabled application domains with
-	// no intent. backfillCalls counts the invocations so a test can pin the
-	// gate, backfillErr forces a store failure.
 	uncertified      []DomainCertificate
 	backfillCalls    int
 	backfillInserted int64
 	backfillErr      error
 
-	// countHook runs after CountEnabledCertificatesByProvider computes its
-	// result, outside the store lock: tests use it to hold a mutation inside
-	// its critical section.
 	countHook func()
 
 	lastProviderWrite DNSProviderWrite
@@ -120,8 +111,6 @@ func (f *fakeSSLStore) UpdateProvider(_ context.Context, id uuid.UUID, in DNSPro
 	return DNSProvider{}, ErrNotFound
 }
 
-// UpdateProviderMeta mirrors the credential-preserving production write: every
-// mutable field except the sealed credential is replaced.
 func (f *fakeSSLStore) UpdateProviderMeta(_ context.Context, id uuid.UUID, in DNSProviderWrite) (DNSProvider, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -294,9 +283,6 @@ func (f *fakeSSLStore) DeleteCertificate(_ context.Context, id uuid.UUID) error 
 	return ErrNotFound
 }
 
-// BackfillApplicationCertificates implements SSLStore: it records the default
-// http-01 intent for every enabled application domain the test seeds, skipping
-// applications that already hold an enabled wildcard intent.
 func (f *fakeSSLStore) BackfillApplicationCertificates(_ context.Context) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -345,7 +331,6 @@ func (f *fakeSSLStore) GetApplication(_ context.Context, id uuid.UUID) (Applicat
 	return app, nil
 }
 
-// newSSLServiceFixture wires an sslService over the fake store.
 func newSSLServiceFixture(t *testing.T, resync func(context.Context) error) (*sslService, *fakeSSLStore) {
 	t.Helper()
 	store := newFakeSSLStore()
@@ -358,7 +343,6 @@ func newSSLServiceFixture(t *testing.T, resync func(context.Context) error) (*ss
 	return service, store
 }
 
-// enableProvider seeds an enabled, sealed provider.
 func enableProvider(t *testing.T, store *fakeSSLStore, zones ...string) DNSProvider {
 	t.Helper()
 	providerType := ProviderCloudflare
@@ -443,9 +427,6 @@ func TestProviderCreateValidation(t *testing.T) {
 	}
 }
 
-// TestProviderCreateRefusesEmptySecret proves a DNS credential write is
-// refused when no deployment secret is configured, and that nothing is
-// persisted under the public empty-string key.
 func TestProviderCreateRefusesEmptySecret(t *testing.T) {
 	store := newFakeSSLStore()
 	service := newSSLService(SSLConfig{Store: store, Logger: discardLogger()})
@@ -467,9 +448,6 @@ func TestProviderCreateRefusesEmptySecret(t *testing.T) {
 	}
 }
 
-// TestProviderRotationRefusesEmptySecret proves a rotation through a service
-// without a deployment secret is refused and leaves the previously sealed
-// value (sealed with the real key) untouched.
 func TestProviderRotationRefusesEmptySecret(t *testing.T) {
 	_, store := newSSLServiceFixture(t, nil)
 	provider := enableProvider(t, store, "example.com")
@@ -490,9 +468,6 @@ func TestProviderRotationRefusesEmptySecret(t *testing.T) {
 	}
 }
 
-// TestProviderUpdateWithoutCredentialPreservesSealedCredential proves a
-// name-only update uses the credential-preserving write, so it can never
-// restore an older sealed value over a rotation.
 func TestProviderUpdateWithoutCredentialPreservesSealedCredential(t *testing.T) {
 	service, store := newSSLServiceFixture(t, nil)
 	provider := enableProvider(t, store, "example.com")
@@ -520,13 +495,6 @@ func TestProviderUpdateWithoutCredentialPreservesSealedCredential(t *testing.T) 
 	}
 }
 
-// TestSSLProviderAndCertificateMutationsAreSerialized is the controlled
-// interleaving regression for the reference invariant: while a provider
-// disable holds the shared mutation boundary (paused inside its reference
-// guard), a concurrent certificate create must not slip between the guard read
-// and the provider write. Without the shared boundary the create would see an
-// enabled provider, commit an enabled certificate, and then the disable would
-// commit — leaving an enabled certificate referencing a disabled provider.
 func TestSSLProviderAndCertificateMutationsAreSerialized(t *testing.T) {
 	service, store := newSSLServiceFixture(t, nil)
 	provider := enableProvider(t, store, "example.com")
@@ -570,8 +538,6 @@ func TestSSLProviderAndCertificateMutationsAreSerialized(t *testing.T) {
 		<-disableDone
 		t.Fatalf("certificate create interleaved with the provider guard (err=%v); the shared mutation boundary is missing", err)
 	case <-time.After(200 * time.Millisecond):
-		// Serialized as required: the create is blocked behind the provider
-		// mutation's critical section.
 	}
 
 	close(releaseGuard)
@@ -590,9 +556,6 @@ func TestSSLProviderAndCertificateMutationsAreSerialized(t *testing.T) {
 	}
 }
 
-// TestCertificateUpdateEnablingIsSerializedWithProviderGuard proves the same
-// boundary covers PATCH: enabling a certificate config validates the provider
-// inside the critical section.
 func TestCertificateUpdateEnablingIsSerializedWithProviderGuard(t *testing.T) {
 	service, store := newSSLServiceFixture(t, nil)
 	provider := enableProvider(t, store, "example.com")
@@ -717,13 +680,11 @@ func TestProviderUpdateGuardsReferencedProvider(t *testing.T) {
 	if _, err := service.UpdateProvider(context.Background(), provider.ID, UpdateDNSProviderInput{Zones: &zones}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("zone narrowing err = %v, want ErrConflict", err)
 	}
-	// A zone widening keeps the referenced domain covered and is allowed.
 	zones = []string{"other.example", "example.com"}
 	if _, err := service.UpdateProvider(context.Background(), provider.ID, UpdateDNSProviderInput{Zones: &zones}); err != nil {
 		t.Fatalf("zone widening err = %v", err)
 	}
 
-	// Once the certificate config is disabled the provider can be disabled.
 	certificates, _ := store.ListCertificates(context.Background())
 	if _, err := service.UpdateCertificate(context.Background(), certificates[0].ID, UpdateCertificateInput{Enabled: ptr(false)}); err != nil {
 		t.Fatalf("disable certificate: %v", err)
@@ -814,7 +775,6 @@ func TestCertificateCreateRejectsDisabledProviderWhenEnabled(t *testing.T) {
 		t.Fatalf("err = %v, want ErrValidation for a disabled provider", err)
 	}
 
-	// A disabled certificate config may reference the disabled provider.
 	certificate, err := service.CreateCertificate(context.Background(), CreateCertificateInput{
 		ApplicationID: appID,
 		Enabled:       ptr(false),
@@ -873,9 +833,6 @@ func TestCertificateUpdateReRecordsDomainAndValidates(t *testing.T) {
 		t.Fatalf("CreateCertificate: %v", err)
 	}
 
-	// The deploy API changes the application domain: the stored config stays
-	// put until an explicit re-target, and any other edit is rejected while
-	// the recorded host is detached.
 	store.applications[appID] = ApplicationInfo{ID: appID, BaseDomain: "new.example.com"}
 	if _, err := service.UpdateCertificate(context.Background(), certificate.ID, UpdateCertificateInput{Enabled: ptr(true)}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("UpdateCertificate on a detached domain err = %v, want ErrValidation", err)
@@ -891,8 +848,6 @@ func TestCertificateUpdateReRecordsDomainAndValidates(t *testing.T) {
 		t.Fatalf("recorded domain = %q, want the re-targeted application domain", updated.Domain)
 	}
 
-	// Switching to dns-01 without a provider is rejected; switching back to
-	// http-01 drops a previously referenced provider.
 	provider := enableProvider(t, store, "new.example.com")
 	if _, err := service.UpdateCertificate(context.Background(), certificate.ID, UpdateCertificateInput{
 		Challenge:     ptrChallenge(ChallengeDNS01),
@@ -969,10 +924,8 @@ func TestNewDefaultSSLServicesRespectFeatureFlag(t *testing.T) {
 	}
 }
 
-// ptr is a small helper for optional update fields.
 func ptr[T any](value T) *T { return &value }
 
-// ptrChallenge and ptrUUID keep the call sites readable.
 func ptrChallenge(value ChallengeMode) *ChallengeMode { return &value }
 
 func ptrUUID(value uuid.UUID) *uuid.UUID { return &value }

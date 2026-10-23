@@ -62,7 +62,6 @@ function status(path: string): "error" | undefined {
   return serverErrors.value[path] ? "error" : undefined;
 }
 
-// Announcing + focusing when the helper install unlocks the section (JUS-185).
 const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.system);
 </script>
 
@@ -127,7 +126,6 @@ const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.s
   max-width: 640px;
 }
 
-/* Visually-hidden polite live region (JUS-185). */
 .sr-only {
   position: absolute;
   width: 1px;

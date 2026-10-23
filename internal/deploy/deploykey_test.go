@@ -15,9 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 )
 
-// fakeRegistrar is a scriptable KeyRegistrar: it records every registration
-// and removal and can fail either call, which is how the Git host is faked
-// without a network.
 type fakeRegistrar struct {
 	mu sync.Mutex
 
@@ -30,10 +27,8 @@ type fakeRegistrar struct {
 	nextID    int
 }
 
-// Compile-time guarantee that fakeRegistrar satisfies the seam.
 var _ KeyRegistrar = (*fakeRegistrar)(nil)
 
-// AddDeployKey implements KeyRegistrar, handing out a stable provider key ID.
 func (f *fakeRegistrar) AddDeployKey(_ context.Context, target providers.HookTarget, key providers.DeployKey) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -46,7 +41,6 @@ func (f *fakeRegistrar) AddDeployKey(_ context.Context, target providers.HookTar
 	return fmt.Sprintf("key-%d", f.nextID), nil
 }
 
-// RemoveDeployKey implements KeyRegistrar.
 func (f *fakeRegistrar) RemoveDeployKey(_ context.Context, _ providers.HookTarget, keyID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -57,7 +51,6 @@ func (f *fakeRegistrar) RemoveDeployKey(_ context.Context, _ providers.HookTarge
 	return nil
 }
 
-// addedKey returns the first registered key (test helper).
 func (f *fakeRegistrar) addedKey() providers.DeployKey {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -67,8 +60,6 @@ func (f *fakeRegistrar) addedKey() providers.DeployKey {
 	return f.added[0]
 }
 
-// newKeyService builds a Service whose deploy keys are registered through
-// registrar.
 func newKeyService(t *testing.T, repo *fakeRepository, registrar KeyRegistrar) *Service {
 	t.Helper()
 	svc := NewService(Config{
@@ -81,7 +72,6 @@ func newKeyService(t *testing.T, repo *fakeRepository, registrar KeyRegistrar) *
 	return svc
 }
 
-// keyFixture seeds a repository holding one GitHub application.
 func keyFixture(t *testing.T) (*fakeRepository, *fakeRegistrar, *Service, Application) {
 	t.Helper()
 	repo := &fakeRepository{}
@@ -91,9 +81,6 @@ func keyFixture(t *testing.T) (*fakeRepository, *fakeRegistrar, *Service, Applic
 	return repo, registrar, newKeyService(t, repo, registrar), app
 }
 
-// TestGenerateDeployKeyPair checks the generated material: an OpenSSH private
-// PEM `ssh -i` can read, an authorized_keys line carrying the comment, and a
-// SHA-256 fingerprint that matches that line.
 func TestGenerateDeployKeyPair(t *testing.T) {
 	const comment = "gotham:deploy:11111111-2222-3333-4444-555555555555"
 	privatePEM, publicKey, fingerprint, err := generateDeployKeyPair(comment)
@@ -129,10 +116,6 @@ func TestGenerateDeployKeyPair(t *testing.T) {
 	}
 }
 
-// TestDeployKeySealingFollowsPrivateKeyContract proves the private half is
-// sealed with the shared AES-256-GCM helper and stays readable by the Phase-2
-// reader of private_keys.encrypted_key (servers.DecryptKey): both use
-// base64(nonce||ciphertext) over the SHA-256 of the same secret.
 func TestDeployKeySealingFollowsPrivateKeyContract(t *testing.T) {
 	privatePEM, _, _, err := generateDeployKeyPair("gotham:deploy:test")
 	if err != nil {
@@ -192,7 +175,6 @@ func TestCreateDeployKeyRegistersAndStores(t *testing.T) {
 		t.Error("registered a different key than the stored one")
 	}
 
-	// The cloner must be able to open the stored private half.
 	privatePEM, err := repo.DeployKeyPrivatePEM(context.Background(), app.ID)
 	if err != nil {
 		t.Fatalf("DeployKeyPrivatePEM: %v", err)
@@ -201,7 +183,6 @@ func TestCreateDeployKeyRegistersAndStores(t *testing.T) {
 		t.Errorf("stored private key is not a usable OpenSSH key: %v", err)
 	}
 
-	// Repeating the call returns the same key instead of registering another.
 	again, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
 	if err != nil {
 		t.Fatalf("CreateDeployKey again: %v", err)
@@ -289,7 +270,6 @@ func TestDeleteDeployKeyRemovesHostKeyThenRow(t *testing.T) {
 		t.Errorf("DeployKeyPrivatePEM = %q, %v; want empty", pem, err)
 	}
 
-	// Deleting twice is a success with nothing left to do.
 	deleted, err = svc.DeleteDeployKey(context.Background(), app.UserID, app.ID)
 	if err != nil || deleted {
 		t.Errorf("second delete = %v, %v; want false, nil", deleted, err)
@@ -315,12 +295,6 @@ func TestDeleteDeployKeyProviderFailureKeepsKey(t *testing.T) {
 	}
 }
 
-// TestDeleteApplicationProviderFailureStillDeletes pins the delete-path
-// trade-off: a Git host that cannot drop the deploy key must not leave a live
-// application behind (the provider hook, if any, was already removed first, so
-// aborting would silently disable automatic deploys). The local key row
-// cascades with the application and the remote key orphan is logged for manual
-// cleanup.
 func TestDeleteApplicationProviderFailureStillDeletes(t *testing.T) {
 	repo, registrar, svc, app := keyFixture(t)
 	created, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
@@ -367,8 +341,6 @@ func TestDeleteApplicationRemovesDeployKey(t *testing.T) {
 	}
 }
 
-// TestDeleteApplicationWithoutKeySkipsProvider keeps the plain delete path
-// (an application that never registered a key) free of Git-host calls.
 func TestDeleteApplicationWithoutKeySkipsProvider(t *testing.T) {
 	repo, registrar, svc, app := keyFixture(t)
 
@@ -383,11 +355,6 @@ func TestDeleteApplicationWithoutKeySkipsProvider(t *testing.T) {
 	}
 }
 
-// TestDeleteDeployKeyStaleDeleteKeepsReplacement pins C3-6: a delete that lost
-// the race must not remove a replacement key installed after its read. The
-// interleaving is deterministic: the second delete reads the old mapping, the
-// first delete then completes and a POST installs a replacement, and only then
-// does the stale delete run its fenced delete.
 func TestDeleteDeployKeyStaleDeleteKeepsReplacement(t *testing.T) {
 	repo, _, svc, app := keyFixture(t)
 	first, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
@@ -402,11 +369,9 @@ func TestDeleteDeployKeyStaleDeleteKeepsReplacement(t *testing.T) {
 			return
 		}
 		interleaved = true
-		// The first (winning) delete completes...
 		if _, err := repo.DeleteDeployKey(context.Background(), first); err != nil {
 			t.Errorf("first delete: %v", err)
 		}
-		// ...and a POST installs a replacement behind it.
 		created, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
 		if err != nil {
 			t.Errorf("replacement CreateDeployKey: %v", err)
@@ -440,9 +405,6 @@ func TestDeleteDeployKeyStaleDeleteKeepsReplacement(t *testing.T) {
 	}
 }
 
-// cancelOnAddRegistrar cancels the create context right after the host accepted
-// the key, modelling a provider that answered at the edge of the deadline; its
-// RemoveDeployKey honours a canceled context like a real client.
 type cancelOnAddRegistrar struct {
 	cancel  context.CancelFunc
 	removed []string
@@ -461,10 +423,6 @@ func (r *cancelOnAddRegistrar) RemoveDeployKey(ctx context.Context, _ providers.
 	return nil
 }
 
-// TestCreateDeployKeyRollbackSurvivesExpiredContext pins C3-8: when the store
-// write fails on a context that just expired, the registered remote key must
-// still be removed — the rollback runs detached and bounded, not on the dead
-// request context.
 func TestCreateDeployKeyRollbackSurvivesExpiredContext(t *testing.T) {
 	repo := &fakeRepository{}
 	app := testApplication(uuid.New())
@@ -488,10 +446,6 @@ func TestCreateDeployKeyRollbackSurvivesExpiredContext(t *testing.T) {
 	}
 }
 
-// TestDeleteApplicationCleansSealedKeyWhenLocalDetachFails pins C3-10: when the
-// local deploy-key detach fails, the application delete still proceeds but must
-// not strand the sealed private_keys row (the mapping cascades away and no
-// application FK reaches private_keys).
 func TestDeleteApplicationCleansSealedKeyWhenLocalDetachFails(t *testing.T) {
 	repo, _, svc, app := keyFixture(t)
 	created, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)
@@ -511,11 +465,6 @@ func TestDeleteApplicationCleansSealedKeyWhenLocalDetachFails(t *testing.T) {
 	}
 }
 
-// TestDeleteLocalDeployKeyPurgeStaysFencedOnMapping pins the JUS-5 fix round
-// 2 guard on the raw-ID purge: when the fenced mapping delete fails, the
-// private key goes only while the application's mapping still points at it. A
-// rotated mapping (now pointing at a new key) keeps its key; the stale purge
-// surfaces the original error instead.
 func TestDeleteLocalDeployKeyPurgeStaysFencedOnMapping(t *testing.T) {
 	ctx := context.Background()
 
@@ -565,8 +514,6 @@ func TestDeleteLocalDeployKeyPurgeStaysFencedOnMapping(t *testing.T) {
 	})
 }
 
-// firstLine returns the head of a PEM for failure messages without printing a
-// whole key.
 func firstLine(value string) string {
 	line, _, _ := strings.Cut(value, "\n")
 	return line

@@ -13,12 +13,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxSSLBodyBytes bounds SSL request bodies (they are tiny; a DNS token is at
-// most a few KB).
-const maxSSLBodyBytes = 1 << 20 // 1 MiB
+const maxSSLBodyBytes = 1 << 20
 
-// dnsProviderResponse is the wire representation of a DNS provider. The
-// sealed credential never appears here: only whether one is set.
 type dnsProviderResponse struct {
 	ID             string    `json:"id"`
 	Provider       string    `json:"provider"`
@@ -30,18 +26,14 @@ type dnsProviderResponse struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
-// dnsProviderEnvelope wraps a single provider.
 type dnsProviderEnvelope struct {
 	Provider dnsProviderResponse `json:"provider"`
 }
 
-// dnsProviderListEnvelope wraps a provider list.
 type dnsProviderListEnvelope struct {
 	Providers []dnsProviderResponse `json:"providers"`
 }
 
-// createDNSProviderRequest is the body of POST /v1/proxy/dns-providers.
-// Credential is write-only.
 type createDNSProviderRequest struct {
 	Provider   string   `json:"provider"`
 	Name       string   `json:"name,omitempty"`
@@ -50,7 +42,6 @@ type createDNSProviderRequest struct {
 	Enabled    *bool    `json:"enabled,omitempty"`
 }
 
-// updateDNSProviderRequest is the body of PATCH /v1/proxy/dns-providers/{id}.
 type updateDNSProviderRequest struct {
 	Provider   *string   `json:"provider,omitempty"`
 	Name       *string   `json:"name,omitempty"`
@@ -59,11 +50,6 @@ type updateDNSProviderRequest struct {
 	Enabled    *bool     `json:"enabled,omitempty"`
 }
 
-// certificateResponse is the wire representation of a certificate config.
-// Status and NotAfter are additive (BE-6.3): they are computed on read from
-// the owning node's ACME storage and omitted when no status service is
-// configured, so existing consumers are unaffected. NotAfter is only present
-// when Status is "present".
 type certificateResponse struct {
 	OwnerKind     string                 `json:"owner_kind"`
 	PanelState    *PanelCertificateState `json:"panel_state,omitempty"`
@@ -80,19 +66,14 @@ type certificateResponse struct {
 	UpdatedAt     time.Time              `json:"updated_at"`
 }
 
-// certificateEnvelope wraps a single certificate config.
 type certificateEnvelope struct {
 	Certificate certificateResponse `json:"certificate"`
 }
 
-// certificateListEnvelope wraps a certificate list.
 type certificateListEnvelope struct {
 	Certificates []certificateResponse `json:"certificates"`
 }
 
-// createCertificateRequest is the body of POST /v1/proxy/certificates. The
-// recorded domain defaults to the application's primary domain; domain
-// selects one of its other attached domains (JUS-89).
 type createCertificateRequest struct {
 	ApplicationID string `json:"application_id"`
 	Domain        string `json:"domain,omitempty"`
@@ -102,8 +83,6 @@ type createCertificateRequest struct {
 	Wildcard      bool   `json:"wildcard,omitempty"`
 }
 
-// updateCertificateRequest is the body of PATCH /v1/proxy/certificates/{id}.
-// Domain re-targets the intent onto another attached host.
 type updateCertificateRequest struct {
 	Domain        *string `json:"domain,omitempty"`
 	Enabled       *bool   `json:"enabled,omitempty"`
@@ -112,7 +91,6 @@ type updateCertificateRequest struct {
 	Wildcard      *bool   `json:"wildcard,omitempty"`
 }
 
-// createDNSProvider serves POST /v1/proxy/dns-providers.
 func (h *handler) createDNSProvider(w http.ResponseWriter, r *http.Request) {
 	var req createDNSProviderRequest
 	if !decodeRequiredBody(w, r, &req) {
@@ -132,7 +110,6 @@ func (h *handler) createDNSProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dnsProviderEnvelope{Provider: newDNSProviderResponse(provider)})
 }
 
-// listDNSProviders serves GET /v1/proxy/dns-providers.
 func (h *handler) listDNSProviders(w http.ResponseWriter, r *http.Request) {
 	providers, err := h.dns.ListProviders(r.Context())
 	if err != nil {
@@ -146,7 +123,6 @@ func (h *handler) listDNSProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dnsProviderListEnvelope{Providers: response})
 }
 
-// getDNSProvider serves GET /v1/proxy/dns-providers/{id}.
 func (h *handler) getDNSProvider(w http.ResponseWriter, r *http.Request) {
 	id, ok := sslPathID(w, r, "provider")
 	if !ok {
@@ -160,7 +136,6 @@ func (h *handler) getDNSProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dnsProviderEnvelope{Provider: newDNSProviderResponse(provider)})
 }
 
-// updateDNSProvider serves PATCH /v1/proxy/dns-providers/{id}.
 func (h *handler) updateDNSProvider(w http.ResponseWriter, r *http.Request) {
 	id, ok := sslPathID(w, r, "provider")
 	if !ok {
@@ -183,7 +158,6 @@ func (h *handler) updateDNSProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dnsProviderEnvelope{Provider: newDNSProviderResponse(provider)})
 }
 
-// deleteDNSProvider serves DELETE /v1/proxy/dns-providers/{id}.
 func (h *handler) deleteDNSProvider(w http.ResponseWriter, r *http.Request) {
 	id, ok := sslPathID(w, r, "provider")
 	if !ok {
@@ -196,7 +170,6 @@ func (h *handler) deleteDNSProvider(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// createCertificate serves POST /v1/proxy/certificates.
 func (h *handler) createCertificate(w http.ResponseWriter, r *http.Request) {
 	var req createCertificateRequest
 	if !decodeRequiredBody(w, r, &req) {
@@ -226,9 +199,6 @@ func (h *handler) createCertificate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, certificateEnvelope{Certificate: newCertificateResponse(certificate, CertificateStatusObservation{})})
 }
 
-// listCertificates serves GET /v1/proxy/certificates. The node-observed
-// status of every intent is computed on read; an unreachable node yields
-// unknown and never turns the list into an error.
 func (h *handler) listCertificates(w http.ResponseWriter, r *http.Request) {
 	certificates, err := h.certs.ListCertificates(r.Context())
 	if err != nil {
@@ -243,8 +213,6 @@ func (h *handler) listCertificates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, certificateListEnvelope{Certificates: response})
 }
 
-// getCertificate serves GET /v1/proxy/certificates/{id}, including the
-// node-observed status.
 func (h *handler) getCertificate(w http.ResponseWriter, r *http.Request) {
 	id, ok := sslPathID(w, r, "certificate")
 	if !ok {
@@ -259,7 +227,6 @@ func (h *handler) getCertificate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, certificateEnvelope{Certificate: newCertificateResponse(certificate, statuses[certificate.ID])})
 }
 
-// updateCertificate serves PATCH /v1/proxy/certificates/{id}.
 func (h *handler) updateCertificate(w http.ResponseWriter, r *http.Request) {
 	id, ok := sslPathID(w, r, "certificate")
 	if !ok {
@@ -289,7 +256,6 @@ func (h *handler) updateCertificate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, certificateEnvelope{Certificate: newCertificateResponse(certificate, CertificateStatusObservation{})})
 }
 
-// deleteCertificate serves DELETE /v1/proxy/certificates/{id}.
 func (h *handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
 	id, ok := sslPathID(w, r, "certificate")
 	if !ok {
@@ -302,7 +268,6 @@ func (h *handler) deleteCertificate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// sslPathID parses the {id} path parameter, answering 400 on garbage.
 func sslPathID(w http.ResponseWriter, r *http.Request, resource string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -312,7 +277,6 @@ func sslPathID(w http.ResponseWriter, r *http.Request, resource string) (uuid.UU
 	return id, true
 }
 
-// parseOptionalUUID parses an optional UUID string, answering 400 on garbage.
 func parseOptionalUUID(w http.ResponseWriter, raw, message string) (uuid.UUID, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -326,9 +290,6 @@ func parseOptionalUUID(w http.ResponseWriter, raw, message string) (uuid.UUID, b
 	return id, true
 }
 
-// writeServiceError maps the SSL/redirect service sentinels to HTTP responses.
-// Only actionable service messages reach the client; unknown failures are
-// generic and logged server-side (a credential never enters either path).
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrValidation):
@@ -347,10 +308,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// decodeRequiredBody decodes a required JSON object body into dst. It enforces
-// the request size bound over the whole body, rejects an empty body and JSON
-// null, rejects any content after the first JSON value (a second value or
-// garbage), and keeps strict unknown-field rejection.
 func decodeRequiredBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if r.Body == nil {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "request body is required"})
@@ -381,8 +338,6 @@ func decodeRequiredBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid request body"})
 		return false
 	}
-	// Only trailing whitespace may follow the first value; anything else is a
-	// second value or garbage and fails the request.
 	if err := decoder.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		writeJSON(w, http.StatusBadRequest, apiError{Message: "request body must contain a single JSON value"})
 		return false
@@ -390,8 +345,6 @@ func decodeRequiredBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// newDNSProviderResponse maps a provider onto its wire shape, dropping the
-// sealed credential.
 func newDNSProviderResponse(provider DNSProvider) dnsProviderResponse {
 	return dnsProviderResponse{
 		ID:             provider.ID.String(),
@@ -405,8 +358,6 @@ func newDNSProviderResponse(provider DNSProvider) dnsProviderResponse {
 	}
 }
 
-// certificateStatuses observes the given certificates when a status service
-// is configured; without one the map is empty and the response omits status.
 func (h *handler) certificateStatuses(r *http.Request, certificates []DomainCertificate) map[uuid.UUID]CertificateStatusObservation {
 	if h.status == nil {
 		return nil
@@ -414,9 +365,6 @@ func (h *handler) certificateStatuses(r *http.Request, certificates []DomainCert
 	return h.status.CertificateStatuses(r.Context(), certificates)
 }
 
-// newCertificateResponse maps a certificate config onto its wire shape. The
-// observation is zero (or omitted) when no status service is configured;
-// NotAfter is only rendered for a present status.
 func newCertificateResponse(certificate DomainCertificate, observation CertificateStatusObservation) certificateResponse {
 	response := certificateResponse{
 		ID:            certificate.ID.String(),

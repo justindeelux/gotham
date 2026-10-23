@@ -5,13 +5,6 @@ import (
 	"strings"
 )
 
-// search serves GET .../files/search?root=&path=&query=&recursive=.
-//
-// It is a bounded, name-only search under one directory: recursive=false
-// matches the directory's immediate entries, recursive=true descends into
-// subdirectories (the agent bounds the walk). Any team member may read it, like
-// list and stat. A capped result set is reported with `truncated: true`, never
-// as a silently short list.
 func (h *handler) search(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {

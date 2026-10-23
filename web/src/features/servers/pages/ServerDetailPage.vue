@@ -44,13 +44,7 @@ const { activeTab, blockedTerminal, showOverview } = useServerDetailTab(serverId
 
 const server = ref<Server | null>(null);
 const loading = ref(false);
-/**
- * fetchFailure keeps the raw last detail failure. The `error` display
- * derives from it in the current locale, so a language switch re-renders
- * a retained banner without reloading the server.
- */
 const fetchFailure = ref<unknown>(null);
-/** error renders the retained failure, or null while healthy. */
 const error = computed<string | null>(() => {
   if (!serverId.value) {
     return t("servers.detail.unknownServer");
@@ -64,10 +58,6 @@ const validating = ref(false);
 const deleting = ref(false);
 const editOpen = ref(false);
 
-/**
- * liveServer merges the polled list status into the detail row, so a node
- * that goes offline (or comes back) is reflected without a manual reload.
- */
 const liveServer = computed<Server | null>(() => {
   const local = server.value;
   const cached = serversStore.servers.find((item) => item.id === serverId.value);
@@ -80,11 +70,9 @@ const liveServer = computed<Server | null>(() => {
   return { ...local, status: cached.status };
 });
 
-// One shared metrics window for the page and the metrics tab.
 const { context: metricsContext, resetForServer } = useServerMetrics(serverId, activeTab);
 provide(ServerMetricsKey, metricsContext);
 
-/** fetchServer loads one server by route id; 404 surfaces as an error state. */
 async function fetchServer(): Promise<void> {
   if (!serverId.value) {
     return;
@@ -101,7 +89,6 @@ async function fetchServer(): Promise<void> {
   }
 }
 
-/** handleValidate runs the SSH probes and refreshes the header. */
 async function handleValidate(): Promise<void> {
   if (!server.value) {
     return;
@@ -130,13 +117,11 @@ async function handleValidate(): Promise<void> {
   }
 }
 
-/** handleUpdated applies an edit-modal save to the header. */
 function handleUpdated(updated: Server): void {
   server.value = updated;
   message.success(t("servers.toasts.saved", { name: updated.name }));
 }
 
-/** handleDelete removes the server and returns to the list. */
 async function handleDelete(): Promise<void> {
   if (!server.value) {
     return;
@@ -159,9 +144,6 @@ watch(serverId, () => {
   void fetchServer();
 });
 
-// Demotion is enforced by the backend and must leave the operator tab even
-// though its pane is removed by `v-if` at the same moment. A sign-out is not
-// a demotion: the auth flow owns that redirect.
 watch(
   [() => authStore.isAuthenticated, () => authStore.isPlatformAdmin],
   ([authenticated, admin]) => {
@@ -327,8 +309,6 @@ onMounted(() => {
 }
 
 .server-terminal {
-  /* The extracted stage owns the state view; keep a usable terminal height
-   * on the detail page without letting the page grow unbounded. */
   display: flex;
   flex-direction: column;
   height: clamp(18rem, 60vh, 44rem);

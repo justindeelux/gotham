@@ -22,13 +22,6 @@ const { t } = useI18n();
 const message = useMessage();
 const appsStore = useApplicationsStore();
 
-/**
- * Image-source editor: the prebuilt reference and the optional
- * private-registry credential. Blank credential fields are omitted, so saving
- * a new reference never clears a stored credential by accident; the clear
- * button wipes it explicitly. The credential is write-only: the API only
- * reports whether one is stored.
- */
 const imageRef = ref<string>(props.application.image_ref);
 const username = ref<string>("");
 const password = ref<string>("");
@@ -42,7 +35,6 @@ watch(
   },
 );
 
-/** handleSave stores the edited reference and any typed credential half. */
 async function handleSave(): Promise<void> {
   const nextRef = imageRef.value.trim();
   if (!imageRefSchema.safeParse(nextRef).success) {
@@ -77,7 +69,6 @@ async function handleSave(): Promise<void> {
   }
 }
 
-/** handleClear wipes the stored credential explicitly. */
 async function handleClear(): Promise<void> {
   error.value = null;
   saving.value = true;

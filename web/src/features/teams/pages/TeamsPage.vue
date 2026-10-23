@@ -20,18 +20,6 @@ import { teamsPageKey, useTeamsPage } from "@/features/teams/composables/useTeam
 import { useAuthStore } from "@/features/auth";
 import { useTeamsStore } from "@/features/teams/stores/teams";
 
-/**
- * FE-8.1 (2) — teams, members and invites.
- *
- * Members + invites panels on
- * the established settings page pattern. Every mutation is gated on the
- * caller's role as `GET /v1/teams` reports it, and the backend's protections
- * (last owner, personal team, non-empty team) surface as inline errors
- * instead of being pre-empted: the service is the authority.
- *
- * Thin route component: state and mutations live in `useTeamsPage` (provided
- * to the panels and dialogs below), sections render through them.
- */
 const teamsStore = useTeamsStore();
 const authStore = useAuthStore();
 const page = useTeamsPage();
@@ -100,8 +88,6 @@ const {
             <NTag :type="roleTagType(selectedTeam.role)" size="small" round>
               {{ $t("teams.page.yourRole", { role: roleLabel(selectedTeam.role) }) }}
             </NTag>
-            <!-- The instance-level flag is not a team role and never appears
-                 in the members table: label it separately for the viewer. -->
             <NTag v-if="authStore.isPlatformAdmin" type="info" size="small" round>
               {{ $t("common.roles.platformAdmin") }}
             </NTag>
@@ -168,15 +154,6 @@ const {
   flex-wrap: wrap;
 }
 
-/**
- * Selected-team header: the title plus Refresh/role tags share one Naive
- * card header row. At narrow widths the title takes a full row and the
- * extra block drops below it, so the full team name stays readable in both
- * languages (adaptation: the shipped card evolved past the team-settings
- * mockup tabs, which have no card header). A 100% title basis forces the
- * break — a 100% extra basis would sum to exactly one line and starve the
- * title instead. No font-size change; wrapping only.
- */
 .team-card :deep(.n-card-header) {
   flex-wrap: wrap;
   row-gap: var(--space-2);

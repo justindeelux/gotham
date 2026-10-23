@@ -19,14 +19,12 @@ import (
 	"github.com/justindeelux/gotham/internal/config"
 )
 
-// fakeTokenService is an in-memory TokenService for handler tests.
 type fakeTokenService struct {
 	mu     sync.Mutex
 	tokens map[uuid.UUID]fakeTokenRecord
 	seq    int
 }
 
-// fakeTokenRecord is one stored token and its ownership.
 type fakeTokenRecord struct {
 	created  auth.CreatedToken
 	owner    uuid.UUID
@@ -148,7 +146,6 @@ func (f *fakeTokenService) Authenticate(_ context.Context, token string) (*auth.
 	return nil, auth.ErrUnauthorized
 }
 
-// normalizeFakeScopes mirrors the service validation for handler tests.
 func normalizeFakeScopes(scopes []string) ([]string, error) {
 	if len(scopes) == 0 {
 		return []string{auth.ScopeRead}, nil
@@ -171,7 +168,6 @@ func normalizeFakeScopes(scopes []string) ([]string, error) {
 	return normalized, nil
 }
 
-// fakeRevokedAt returns a non-nil pointer once a token is revoked.
 func fakeRevokedAt(record fakeTokenRecord) *time.Time {
 	if !record.revoked {
 		return nil
@@ -180,7 +176,6 @@ func fakeRevokedAt(record fakeTokenRecord) *time.Time {
 	return &revoked
 }
 
-// newTestTokenServer builds a Server backed by the fake auth and token services.
 func newTestTokenServer(t *testing.T) (*Server, *fakeTokenService) {
 	t.Helper()
 
@@ -201,7 +196,6 @@ func newTestTokenServer(t *testing.T) (*Server, *fakeTokenService) {
 	return s, tokens
 }
 
-// decodeCreatedToken decodes a created/rotated token body.
 func decodeCreatedToken(t *testing.T, rec *httptest.ResponseRecorder) tokenResponse {
 	t.Helper()
 
@@ -250,7 +244,6 @@ func TestTokensCRUDFlow(t *testing.T) {
 		t.Errorf("list last_used_at = %v, want nil", list.Tokens[0].LastUsedAt)
 	}
 
-	// The API token authenticates the same protected route as a JWT.
 	me := doRequest(t, s, http.MethodGet, "/api/v1/auth/me", "", "Bearer "+body.Token)
 	if me.Code != http.StatusOK {
 		t.Fatalf("me with api token status = %d, want 200 (body %s)", me.Code, me.Body.String())
@@ -392,22 +385,15 @@ func TestRequireScopes(t *testing.T) {
 	}
 }
 
-// TestAdminScopeIssuanceIsPlatformGated is the fix-round-2 A regression: an
-// admin-scoped API token unlocks the platform-global surface, so minting one
-// must itself require platform-operator access. A plain session can still mint
-// read/deploy tokens.
 func TestAdminScopeIssuanceIsPlatformGated(t *testing.T) {
 	s, _ := newTestTokenServer(t)
 	const bearer = "Bearer valid-token"
 
-	// A plain session cannot mint the admin scope...
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
 		`{"name":"sneaky","scopes":["admin"]}`, bearer)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("plain session admin token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
-	// ...but may still mint a read/deploy token, including a mixed request
-	// that asks for admin alongside them.
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
 		`{"name":"ci","scopes":["read","deploy"]}`, bearer); rec.Code != http.StatusCreated {
 		t.Fatalf("plain session read/deploy token = %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -417,7 +403,6 @@ func TestAdminScopeIssuanceIsPlatformGated(t *testing.T) {
 		t.Fatalf("plain session mixed token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// An operator-listed session may mint it.
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	operatorToken := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
 		`{"name":"operator","scopes":["admin"]}`, bearer)
@@ -426,10 +411,6 @@ func TestAdminScopeIssuanceIsPlatformGated(t *testing.T) {
 	}
 }
 
-// TestAdminScopeIssuanceCannotBePadded is the fix-round-3 regression: the
-// token service trims scopes before persisting them, so the operator gate must
-// compare the canonical (normalized) list. A padded or duplicated "admin" used
-// to slip past the raw-string check and still be stored as admin.
 func TestAdminScopeIssuanceCannotBePadded(t *testing.T) {
 	s, tokens := newTestTokenServer(t)
 	const bearer = "Bearer valid-token"
@@ -450,7 +431,6 @@ func TestAdminScopeIssuanceCannotBePadded(t *testing.T) {
 		}
 	}
 
-	// A read/deploy-scoped API token cannot mint an admin scope either.
 	scoped, err := tokens.Create(context.Background(), testUserID, "ci", []string{auth.ScopeRead, auth.ScopeDeploy})
 	if err != nil {
 		t.Fatalf("seed scoped token: %v", err)
@@ -462,9 +442,6 @@ func TestAdminScopeIssuanceCannotBePadded(t *testing.T) {
 		t.Fatalf("scoped token padded admin request = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// A read/deploy API token stays refused even when its owner's email is
-	// allowlisted: an API token is a platform operator only by holding the
-	// admin scope itself (the documented boundary).
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
 		`{"name":"sneaky","scopes":[" admin "]}`,
@@ -472,9 +449,6 @@ func TestAdminScopeIssuanceCannotBePadded(t *testing.T) {
 		t.Fatalf("allowlisted owner's read token padded admin request = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// An operator session passes, and the stored scopes are the canonical
-	// ones: the response echoes the normalized list the token service
-	// persisted.
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/tokens",
 		`{"name":"operator","scopes":[" admin "]}`,
 		bearer)

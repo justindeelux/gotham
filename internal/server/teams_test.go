@@ -16,8 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// fakeTeamService is the middleware's narrow seam: only Membership is
-// exercised, every other method reports an unimplemented call.
 type fakeTeamService struct {
 	roles map[[2]uuid.UUID]teams.Role
 }
@@ -86,8 +84,6 @@ func (f *fakeTeamService) Accept(context.Context, uuid.UUID, string) (teams.Team
 	return teams.Team{}, errors.New("not implemented")
 }
 
-// newTeamTestServer builds a Server whose active-team middleware runs against
-// the injected service, with no database behind it.
 func newTeamTestServer(t *testing.T, svc teams.TeamService) *Server {
 	t.Helper()
 	cfg := &config.Config{Values: config.Values{Server: config.Server{Addr: "127.0.0.1"}}}
@@ -101,7 +97,6 @@ func newTeamTestServer(t *testing.T, svc teams.TeamService) *Server {
 	return s
 }
 
-// scopeHandler reports the scope the middleware resolved as JSON.
 func scopeHandler(t *testing.T) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -119,8 +114,6 @@ func scopeHandler(t *testing.T) http.Handler {
 	})
 }
 
-// serveTeam runs one request through RequireTeam (and optionally the write
-// gate) with userID already authenticated, which is what RequireAuth stores.
 func serveTeam(t *testing.T, s *Server, userID uuid.UUID, header, method string, next http.Handler) (*httptest.ResponseRecorder, map[string]string) {
 	t.Helper()
 	handler := s.teamWriteGate(next)
@@ -249,10 +242,6 @@ func TestTeamWriteGate(t *testing.T) {
 	}
 }
 
-// TestContainerRoutesRunTheTeamChain proves the nested container routes are
-// mounted through the team chain and the service: a stranger's request never
-// reaches the agent (404, not a 502 existence oracle), and a read_only member
-// may list but not stop a container.
 func TestContainerRoutesRunTheTeamChain(t *testing.T) {
 	teamID := uuid.New()
 	fake := newFakeTeamService()
@@ -276,31 +265,23 @@ func TestContainerRoutesRunTheTeamChain(t *testing.T) {
 	}
 	containersPath := "/api/v1/servers/" + nodeID.String() + "/containers"
 
-	// A stranger's own personal team does not own the node: 404, not the
-	// agent-unavailable 502 that an existing node would produce.
 	if rec := withHeader(http.MethodGet, containersPath, ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("stranger container list = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 	}
 	if rec := withHeader(http.MethodGet, containersPath, uuid.New().String()); rec.Code != http.StatusForbidden {
 		t.Fatalf("non-member team header = %d, want 403", rec.Code)
 	}
-	// A read_only member may list (the agent is unavailable in tests: 502
-	// proves the request passed authorization) but not stop containers.
 	if rec := withHeader(http.MethodGet, containersPath, teamID.String()); rec.Code != http.StatusBadGateway {
 		t.Fatalf("read_only container list = %d, want 502 after authorization (body %s)", rec.Code, rec.Body.String())
 	}
 	if rec := withHeader(http.MethodPost, containersPath+"/abc/stop", teamID.String()); rec.Code != http.StatusForbidden {
 		t.Fatalf("read_only container stop = %d, want 403", rec.Code)
 	}
-	// A missing node answers exactly like the foreign one.
 	if rec := withHeader(http.MethodGet, "/api/v1/servers/"+uuid.New().String()+"/containers", teamID.String()); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing node = %d, want 404", rec.Code)
 	}
 }
 
-// TestResourceRoutesRunTheTeamChain proves the resource groups are mounted with
-// the team middleware: the same request is answered differently depending on
-// the X-Team-Id header, before any domain handler runs.
 func TestResourceRoutesRunTheTeamChain(t *testing.T) {
 	teamID := uuid.New()
 	fake := newFakeTeamService()
@@ -320,22 +301,18 @@ func TestResourceRoutesRunTheTeamChain(t *testing.T) {
 		return rec
 	}
 
-	// No header: the personal team, exactly the pre-teams behavior.
 	if rec := withHeader(http.MethodGet, "/api/v1/servers", ""); rec.Code != http.StatusOK {
 		t.Fatalf("list without header = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
-	// A team the caller is not a member of is refused.
 	if rec := withHeader(http.MethodGet, "/api/v1/servers", uuid.New().String()); rec.Code != http.StatusForbidden {
 		t.Fatalf("list with a foreign team = %d, want 403", rec.Code)
 	}
-	// A read_only member may read but not mutate.
 	if rec := withHeader(http.MethodGet, "/api/v1/servers", teamID.String()); rec.Code != http.StatusOK {
 		t.Fatalf("read_only list = %d, want 200", rec.Code)
 	}
 	if rec := withHeader(http.MethodPost, "/api/v1/servers", teamID.String()); rec.Code != http.StatusForbidden {
 		t.Fatalf("read_only create = %d, want 403", rec.Code)
 	}
-	// A malformed header is rejected before the handler.
 	if rec := withHeader(http.MethodGet, "/api/v1/servers", "not-a-uuid"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad header = %d, want 400", rec.Code)
 	}

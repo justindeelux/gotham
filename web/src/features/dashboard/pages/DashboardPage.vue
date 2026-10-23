@@ -32,23 +32,12 @@ import GothamIcon from "@/shared/ui/GothamIcon.vue";
 const serversStore = useServersStore();
 const { locale, t } = useI18n();
 
-/**
- * Applications backing the "Running applications" tile. Read once on mount
- * (no polling) from the caller's personal team — the same scope as the
- * applications page — with at most the latest deployment row per application
- * (GET ?limit=1, four requests at a time). The tile distinguishes four
- * states: loading, error (with a retry, never a false "none yet"),
- * genuinely empty, and ready. When only some per-application reads fail the
- * figure is marked incomplete ("at least N running") instead of falsely low.
- */
 const applicationsLoading = ref(true);
 const applicationsError = ref<string | null>(null);
-/** Per-application latest-state reads that failed; >0 marks the tile incomplete. */
 const applicationFailedReads = ref(0);
 const applicationTotal = ref(0);
 const applicationRunning = ref(0);
 
-/** fetchApplicationCounts loads the personal-team list plus latest states. */
 async function fetchApplicationCounts(): Promise<void> {
   applicationsLoading.value = true;
   applicationsError.value = null;
@@ -69,24 +58,12 @@ async function fetchApplicationCounts(): Promise<void> {
     applicationTotal.value = 0;
     applicationRunning.value = 0;
     applicationFailedReads.value = 0;
-    // Retained as a semantic key: the tile resolves display text in the
-    // current locale, so a language switch re-renders without refetching.
     applicationsError.value = "dashboard.kpi.loadFailed";
   } finally {
     applicationsLoading.value = false;
   }
 }
 
-/**
- * tile is the pure render decision for the "Running applications" tile
- * (loading / error / empty / ready, plus the "≥N/total" figure and its
- * caveat). The template binds tile.countText / tile.hint directly and
- * formats nothing itself, so every branch is pinned by the ui-truth
- * harness through applicationTileView + buildApplicationTileInput. The
- * incomplete hint follows the display locale; counts never do. The retained
- * load failure is stored as a semantic key and resolved here, so a language
- * switch re-renders it without refetching.
- */
 const tile = computed(() =>
   applicationTileView(
     buildApplicationTileInput({
@@ -112,11 +89,6 @@ const offlineServers = computed<Server[]>(() =>
   ),
 );
 
-/**
- * aggregateStatus summarizes the fleet for the KPI badge. It never claims
- * "ready" while readyCount is 0: a fleet that is entirely pending/validating
- * reads "pending", and an unreachable node reads "offline" (B4-12).
- */
 const aggregateStatus = computed<ServerStatus>(() => {
   if (offlineServers.value.length > 0) {
     return "offline";
@@ -127,7 +99,6 @@ const aggregateStatus = computed<ServerStatus>(() => {
   return "pending";
 });
 
-/** Bound the widgets so a large fleet is not re-diffed in full every 5s (B4-14). */
 const nodeWidgetLimit = 6;
 const visibleNodes = computed<Server[]>(() =>
   servers.value.slice(0, nodeWidgetLimit),
@@ -136,10 +107,6 @@ const hiddenNodeCount = computed<number>(() =>
   Math.max(0, servers.value.length - nodeWidgetLimit),
 );
 
-/**
- * nodeCards maps the visible nodes through the shared usage threshold
- * (usageView) into presentational card models for ServerHealthSection.
- */
 const nodeCards = computed<ServerNodeCardModel[]>(() =>
   visibleNodes.value.map((server) =>
     buildServerNodeCard(server, {
@@ -152,7 +119,6 @@ const nodeCards = computed<ServerNodeCardModel[]>(() =>
 
 onMounted(() => {
   void serversStore.fetchServers().catch(() => {
-    // The store already exposes the error; alert rendering is enough here.
   });
   serversStore.pollServers();
   void fetchApplicationCounts();

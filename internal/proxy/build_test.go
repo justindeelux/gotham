@@ -92,9 +92,6 @@ func TestBuildConfigRouteProducesHTTPForwardingRouter(t *testing.T) {
 	if len(cfg.Routers) != 1 {
 		t.Fatalf("routers = %#v, want only the HTTP router before BE-6.2", cfg.Routers)
 	}
-	// The HTTP router must forward to the application (BE-6.1 acceptance);
-	// the HTTPS router and redirect arrive with BE-6.2 certificates, and no
-	// TLS router may exist here or Traefik would attempt ACME issuance now.
 	forward, ok := cfg.Routers[name+"-web"]
 	if !ok {
 		t.Fatalf("missing HTTP router %q in %#v", name+"-web", cfg.Routers)
@@ -132,11 +129,6 @@ func TestBuildConfigRouteProducesHTTPForwardingRouter(t *testing.T) {
 	}
 }
 
-// TestBuildConfigAppDomainTLSFollowsCertificate pins JUS-201's generated
-// shape: an app domain with a resolved certificate gets a websecure router
-// with the shared resolver and an http→https redirect on the web router, while
-// a domain without one stays the plain-HTTP forwarding router (the local/dev
-// path with no resolver/ACME).
 func TestBuildConfigAppDomainTLSFollowsCertificate(t *testing.T) {
 	appID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
 	name := "app-" + appID.String()
@@ -204,8 +196,6 @@ func TestRoutesForServer(t *testing.T) {
 		{ID: appA, ServerID: serverA, Domains: []ProxiedDomain{{Domain: "  App.Example.COM ", Port: 3000}}, ContainerID: "c1"},
 		{ID: appB, ServerID: serverB, Domains: []ProxiedDomain{{Domain: "other.example.com", Port: 3001}}, ContainerID: "c2"},
 	}
-	// The live endpoint is the engine-reported publication, not the declared
-	// pinned value (R1).
 	nodeContainers := []containers.Container{{ID: "c1", Name: "app", State: "running",
 		Ports: []string{"32768:3000"}, PortsReported: true}}
 

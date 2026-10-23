@@ -13,9 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestUserTOTPGuardsAreAtomic exercises the two trust boundaries that keep a
-// second factor single use: a recovery code is consumed exactly once, and a
-// code step is advanced exactly once, even under concurrent requests.
 func TestUserTOTPGuardsAreAtomic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -62,18 +59,15 @@ func TestUserTOTPGuardsAreAtomic(t *testing.T) {
 	if !enabled {
 		t.Fatalf("EnableUserTOTP did not enable the row")
 	}
-	// A second enable on an already-enabled row is refused (zero rows).
 	if enabled, err := s.EnableUserTOTP(ctx, user.ID, startStep, []string{"hash-three"}); err != nil || enabled {
 		t.Fatalf("second EnableUserTOTP = (%v, %v), want (false, nil)", enabled, err)
 	}
 
-	// Concurrent consumption of the same recovery code: exactly one wins.
 	if got := concurrentBool(t, 8, func() (bool, error) {
 		return s.ConsumeRecoveryCode(ctx, user.ID, "hash-one")
 	}); got != 1 {
 		t.Fatalf("concurrent ConsumeRecoveryCode winners = %d, want 1", got)
 	}
-	// The consumed code is gone; the sibling is still usable.
 	if consumed, err := s.ConsumeRecoveryCode(ctx, user.ID, "hash-one"); err != nil || consumed {
 		t.Fatalf("re-consumed code = (%v, %v), want (false, nil)", consumed, err)
 	}
@@ -81,8 +75,6 @@ func TestUserTOTPGuardsAreAtomic(t *testing.T) {
 		t.Fatalf("sibling code = (%v, %v), want (true, nil)", consumed, err)
 	}
 
-	// Concurrent advance to the same step: exactly one wins, and an older step
-	// is always refused.
 	if got := concurrentBool(t, 8, func() (bool, error) {
 		return s.AdvanceUserTOTPStep(ctx, user.ID, startStep+5)
 	}); got != 1 {
@@ -96,8 +88,6 @@ func TestUserTOTPGuardsAreAtomic(t *testing.T) {
 	}
 }
 
-// concurrentBool runs fn from function concurrent goroutines and reports how
-// many returned true without an error.
 func concurrentBool(t *testing.T, workers int, fn func() (bool, error)) int {
 	t.Helper()
 
@@ -131,9 +121,6 @@ func concurrentBool(t *testing.T, workers int, fn func() (bool, error)) int {
 	return winners
 }
 
-// TestUserTOTPAttemptBurstIsBounded: attempts are counted atomically and
-// refused once the threshold is reached, so a parallel burst can never overshoot
-// the threshold or slip past an armed lock. Clearing resets both.
 func TestUserTOTPAttemptBurstIsBounded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -190,8 +177,6 @@ func TestUserTOTPAttemptBurstIsBounded(t *testing.T) {
 		t.Fatalf("below threshold = %+v, want %d attempts and no lock", row, threshold-1)
 	}
 
-	// Twenty concurrent attempts: only the last free slot is reserved, the rest
-	// are refused because the lock is armed, and the counter stops at threshold.
 	if reserved := concurrentBool(t, 20, func() (bool, error) {
 		return s.BeginUserTOTPAttempt(ctx, user.ID, threshold, now, deadline)
 	}); reserved != 1 {
@@ -205,7 +190,6 @@ func TestUserTOTPAttemptBurstIsBounded(t *testing.T) {
 		t.Fatalf("locked row = %+v, want %d attempts and a lock", row, threshold)
 	}
 
-	// While locked, an attempt is refused and counted no further.
 	if reserved, err := s.BeginUserTOTPAttempt(ctx, user.ID, threshold, now, deadline); err != nil || reserved {
 		t.Fatalf("attempt while locked = (%v, %v), want (false, nil)", reserved, err)
 	}
@@ -229,10 +213,6 @@ func TestUserTOTPAttemptBurstIsBounded(t *testing.T) {
 	}
 }
 
-// TestUserTOTPUpsertResetsLockAndGuardsLiveSecret covers the enroll fixes
-// (JUS-198): re-enrolling a pending secret clears any stale lock state, and the
-// upsert can never overwrite a live (enabled) secret, so a re-enroll that loses
-// the race is refused instead of silently swapping the active factor.
 func TestUserTOTPUpsertResetsLockAndGuardsLiveSecret(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -267,7 +247,6 @@ func TestUserTOTPUpsertResetsLockAndGuardsLiveSecret(t *testing.T) {
 		}
 	})
 
-	// A pending enrollment whose lockout has been armed by failed confirmations.
 	if stored, err := s.UpsertUserTOTPSecret(ctx, user.ID, "pending-secret"); err != nil || !stored {
 		t.Fatalf("UpsertUserTOTPSecret = (%v, %v), want (true, nil)", stored, err)
 	}
@@ -279,7 +258,6 @@ func TestUserTOTPUpsertResetsLockAndGuardsLiveSecret(t *testing.T) {
 		}
 	}
 
-	// Re-enrolling replaces the pending secret and drops the stale lock state.
 	if stored, err := s.UpsertUserTOTPSecret(ctx, user.ID, "fresh-secret"); err != nil || !stored {
 		t.Fatalf("re-enroll = (%v, %v), want (true, nil)", stored, err)
 	}
@@ -291,7 +269,6 @@ func TestUserTOTPUpsertResetsLockAndGuardsLiveSecret(t *testing.T) {
 		t.Fatalf("re-enrolled row = %+v, want the fresh secret and no lock state", row)
 	}
 
-	// Once enabled, the pending upsert is refused and leaves the live secret.
 	if enabled, err := s.EnableUserTOTP(ctx, user.ID, 100, []string{"hash-one"}); err != nil || !enabled {
 		t.Fatalf("EnableUserTOTP = (%v, %v), want (true, nil)", enabled, err)
 	}
@@ -307,11 +284,6 @@ func TestUserTOTPUpsertResetsLockAndGuardsLiveSecret(t *testing.T) {
 	}
 }
 
-// TestUserTOTPRevocationJoinsTransaction proves the session revoke shares the
-// caller's transaction (JUS-198): a disable's row delete and the other-session
-// revoke commit together, and a later failure in the same operation rolls back
-// both, so a revocation failure can never leave old sessions alive behind a
-// completed change.
 func TestUserTOTPRevocationJoinsTransaction(t *testing.T) {
 	st, ctx := openVersionTestStore(t)
 	user, _ := versionTestUser(t, ctx, st, "totp-tx")
@@ -325,8 +297,6 @@ func TestUserTOTPRevocationJoinsTransaction(t *testing.T) {
 		t.Fatalf("EnableUserTOTP = (%v, %v), want (true, nil)", enabled, err)
 	}
 
-	// Model a disable: drop the TOTP row and revoke the other sessions in one
-	// transaction, then fail before the commit.
 	boom := errors.New("later step failed")
 	err := st.InTx(ctx, func(tx *store.Store) error {
 		if err := tx.DeleteUserTOTP(ctx, user.ID); err != nil {
@@ -341,7 +311,6 @@ func TestUserTOTPRevocationJoinsTransaction(t *testing.T) {
 		t.Fatalf("InTx error = %v, want the injected failure", err)
 	}
 
-	// Rolled back: the TOTP row and the other session both survive.
 	if _, err := st.GetUserTOTP(ctx, user.ID); err != nil {
 		t.Fatalf("the TOTP row did not roll back with the revocation: %v", err)
 	}
@@ -349,7 +318,6 @@ func TestUserTOTPRevocationJoinsTransaction(t *testing.T) {
 		t.Fatalf("the other session did not roll back: %v", err)
 	}
 
-	// A committed transaction does both at once.
 	if err := st.InTx(ctx, func(tx *store.Store) error {
 		if err := tx.DeleteUserTOTP(ctx, user.ID); err != nil {
 			return err

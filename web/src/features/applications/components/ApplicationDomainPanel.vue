@@ -30,7 +30,6 @@ const protocolOptions = computed<Array<{ label: string; value: DomainProtocol }>
   { label: t("applications.domain.protocolHttps"), value: "https" },
 ]);
 
-/** certificateOf resolves the certificate intent recorded for one hostname. */
 function certificateOf(host: string): Certificate | null {
   return (
     proxyStore.certificates.find(
@@ -39,7 +38,6 @@ function certificateOf(host: string): Certificate | null {
   );
 }
 
-/** editingRow is the stored row behind the open edit modal, if any. */
 const editingRow = computed<ApplicationDomain | null>(() => {
   if (domains.editingId.value === null) {
     return null;
@@ -47,11 +45,6 @@ const editingRow = computed<ApplicationDomain | null>(() => {
   return domains.domains.value.find((row) => row.id === domains.editingId.value) ?? null;
 });
 
-/**
- * renameCertificateHost is the old host whose intent the pending rename will
- * delete. The modal warns before saving; the composable deletes after the
- * domain update succeeds.
- */
 const renameCertificateHost = computed<string>(() => {
   const row = editingRow.value;
   if (row === null) {
@@ -64,11 +57,9 @@ const renameCertificateHost = computed<string>(() => {
   return certificateOf(row.domain)?.domain ?? "";
 });
 
-/** certificateOpen and certificateDomain drive the per-row certificate modal. */
 const certificateOpen = ref(false);
 const certificateDomain = ref("");
 
-/** openCertificate targets exactly the clicked row's domain. */
 function openCertificate(row: ApplicationDomain): void {
   certificateDomain.value = row.domain;
   certificateOpen.value = true;

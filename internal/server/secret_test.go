@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// TestEnsureSecretKey pins the startup resolution: a configured secret is used
-// verbatim, an empty one yields a fresh non-empty ephemeral key (never the
-// public empty string), and two resolutions never repeat.
 func TestEnsureSecretKey(t *testing.T) {
 	if got, generated := ensureSecretKey("configured-secret"); got != "configured-secret" || generated {
 		t.Fatalf("ensureSecretKey(configured) = (%q, %v), want the value unchanged", got, generated)
@@ -31,8 +28,6 @@ func TestEnsureSecretKey(t *testing.T) {
 	}
 }
 
-// TestResolveSecretKeyPersists checks an unconfigured key survives a restart:
-// the second resolution reads back the file the first one wrote.
 func TestResolveSecretKeyPersists(t *testing.T) {
 	dir := t.TempDir()
 	first, generated, persisted := ResolveSecretKey("", dir)
@@ -50,8 +45,6 @@ func TestResolveSecretKeyPersists(t *testing.T) {
 	}
 }
 
-// TestResolveSecretKeyEphemeralIsShared pins that an unwritable directory still
-// yields one key per process, so the CLI wiring and server.New agree.
 func TestResolveSecretKeyEphemeralIsShared(t *testing.T) {
 	a, genA, _ := ResolveSecretKey("", "")
 	b, genB, _ := ResolveSecretKey("", "")
@@ -60,8 +53,6 @@ func TestResolveSecretKeyEphemeralIsShared(t *testing.T) {
 	}
 }
 
-// TestResolveSecretKeyIgnoresCWDFile pins that an empty directory never reads a
-// stray secret.key from the working directory.
 func TestResolveSecretKeyIgnoresCWDFile(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if err := os.WriteFile("secret.key", []byte("stray\n"), 0o600); err != nil {

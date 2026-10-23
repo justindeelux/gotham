@@ -11,9 +11,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// TestRequestLoggerRecordsRecoveredPanic pins the middleware order: the request
-// logger must wrap the recoverer so a recovered panic still produces one
-// structured request line with status 500.
 func TestRequestLoggerRecordsRecoveredPanic(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))

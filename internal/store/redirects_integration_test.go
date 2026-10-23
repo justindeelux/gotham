@@ -15,18 +15,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestDomainRedirectStorage proves the BE-6.3 persistence contract against a
-// real database: the redirect rule round-trips, the source uniqueness and the
-// code/self-redirect constraints hold, the application join carries the node
-// state for generation, and deleting the application cascades its rules away.
 func TestDomainRedirectStorage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	dsn := testDSN()
 	explicit := testDSNExplicit()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -38,8 +32,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -103,7 +95,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 		t.Fatalf("stored redirect = %#v", rule)
 	}
 
-	// The source host is claimed exactly once.
 	if _, err := st.CreateDomainRedirect(ctx, sqlc.CreateDomainRedirectParams{
 		ApplicationID: app.ID,
 		SourceDomain:  "old.example.com",
@@ -114,7 +105,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 	}); err == nil {
 		t.Fatal("second rule with the same source was accepted")
 	}
-	// Only 301/302 are expressible.
 	if _, err := st.CreateDomainRedirect(ctx, sqlc.CreateDomainRedirectParams{
 		ApplicationID: app.ID,
 		SourceDomain:  "temp.example.com",
@@ -124,7 +114,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 	}); err == nil {
 		t.Fatal("redirect code outside 301/302 was accepted")
 	}
-	// A self redirect cannot be stored.
 	if _, err := st.CreateDomainRedirect(ctx, sqlc.CreateDomainRedirectParams{
 		ApplicationID: app.ID,
 		SourceDomain:  "loop.example.com",
@@ -134,7 +123,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 	}); err == nil {
 		t.Fatal("self redirect was accepted")
 	}
-	// An unknown application cannot own a rule.
 	if _, err := st.CreateDomainRedirect(ctx, sqlc.CreateDomainRedirectParams{
 		ApplicationID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
 		SourceDomain:  "orphan.example.com",
@@ -145,7 +133,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 		t.Fatal("rule for a missing application was accepted")
 	}
 
-	// Update is a partial write; the source claim moves with it.
 	updated, err := st.UpdateDomainRedirect(ctx, sqlc.UpdateDomainRedirectParams{
 		ID:           rule.ID,
 		SourceDomain: "legacy.example.com",
@@ -176,7 +163,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 		t.Fatalf("get redirect: %v", err)
 	}
 
-	// The generation join carries the owning node and the disabled flag.
 	generationRules, err := st.ListRedirectRules(ctx)
 	if err != nil {
 		t.Fatalf("list redirect rules: %v", err)
@@ -195,7 +181,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 		t.Fatal("redirect rule missing from the generation join")
 	}
 
-	// Ownership guards read the application domains and enabled sources.
 	domains, err := st.ListApplicationBaseDomains(ctx)
 	if err != nil {
 		t.Fatalf("list application base domains: %v", err)
@@ -223,7 +208,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 		t.Fatal("a disabled rule appeared as an enabled source")
 	}
 
-	// The status target join pairs certificate intents with their node.
 	certificate, err := st.CreateDomainCertificate(ctx, sqlc.CreateDomainCertificateParams{
 		ApplicationID: app.ID,
 		Domain:        "app.example.com",
@@ -250,7 +234,6 @@ func TestDomainRedirectStorage(t *testing.T) {
 		t.Fatal("certificate status target missing")
 	}
 
-	// Deleting the application cascades the redirect away.
 	if err := st.DeleteApplication(ctx, app.ID); err != nil {
 		t.Fatalf("delete application: %v", err)
 	}

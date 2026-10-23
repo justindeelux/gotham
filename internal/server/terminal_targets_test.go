@@ -23,8 +23,6 @@ import (
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
-// fakeTargetDeployService implements only the application listing the picker
-// aggregation reads; the embedded interface supplies the rest.
 type fakeTargetDeployService struct {
 	deploy.DeployService
 	applications []deploy.Application
@@ -38,13 +36,9 @@ func (f fakeTargetDeployService) ListApplications(context.Context, uuid.UUID, de
 	return f.applications, nil
 }
 
-// fakeTargetResolver is a faithful fake of the per-application resolver: it
-// returns a server-shaped target set, or the same sentinels the deploy service
-// returns on the real path.
 type fakeTargetResolver struct {
 	sets map[uuid.UUID]deploy.TerminalTargetSet
 	errs map[uuid.UUID]error
-	// list overrides the map lookup for timeout/concurrency tests.
 	list func(ctx context.Context, appID uuid.UUID) (deploy.TerminalTargetSet, error)
 }
 
@@ -66,7 +60,6 @@ func (f fakeTargetResolver) TerminalApplicationAccess(context.Context, uuid.UUID
 	return deploy.TerminalApplicationAccess{}, nil
 }
 
-// targetSet builds one running application target set.
 func targetSet(app deploy.Application, containers ...deploy.TerminalContainer) deploy.TerminalTargetSet {
 	return deploy.TerminalTargetSet{
 		ApplicationID:   app.ID,
@@ -111,7 +104,6 @@ func TestTerminalTargetsSourceAuthorization(t *testing.T) {
 		if len(targets.Servers) != 0 {
 			t.Fatalf("servers = %+v, want none for a non-operator", targets.Servers)
 		}
-		// The same caller still gets the application container they may write.
 		if len(targets.Applications) != 1 {
 			t.Fatalf("applications = %+v, want the writable container", targets.Applications)
 		}
@@ -171,7 +163,6 @@ func TestTerminalTargetsSourcePerApplicationFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTargets: %v", err)
 	}
-	// One healthy group, the empty one omitted, the forbidden one silent.
 	if len(targets.Applications) != 1 || targets.Applications[0].ApplicationName != "shop" {
 		t.Fatalf("applications = %+v", targets.Applications)
 	}
@@ -212,8 +203,6 @@ func TestTerminalTargetsSourceListFailureIsReported(t *testing.T) {
 	}
 }
 
-// liveApps builds count running applications whose UpdatedAt decreases with
-// the index (so index 0 is the newest).
 func liveApps(count int, serverID uuid.UUID) ([]deploy.Application, map[uuid.UUID]deploy.TerminalTargetSet) {
 	applications := make([]deploy.Application, 0, count)
 	sets := make(map[uuid.UUID]deploy.TerminalTargetSet, count)
@@ -241,8 +230,6 @@ func TestTerminalTargetsSourceCapsAfterFiltering(t *testing.T) {
 
 	t.Run("stopped applications do not consume the visible cap", func(t *testing.T) {
 		applications, sets := liveApps(50, serverID)
-		// Twenty newer applications have no running deployment: they must not
-		// hide the older running ones behind the cap.
 		errs := make(map[uuid.UUID]error, 20)
 		for index := 0; index < 20; index++ {
 			stopped := deploy.Application{
@@ -357,8 +344,6 @@ func TestTerminalTargetsSourceWorkerBound(t *testing.T) {
 	if _, err := source.ListTargets(context.Background(), userID); err != nil {
 		t.Fatalf("ListTargets: %v", err)
 	}
-	// The bound is a contract (four node dials at most), so assert the literal
-	// value: using the constant would make the test follow the mutation.
 	if peak > 4 {
 		t.Fatalf("peak concurrency = %d, want <= 4", peak)
 	}
@@ -401,9 +386,6 @@ func TestTerminalTargetsSourceTimeoutCollapses(t *testing.T) {
 	}
 }
 
-// TestTerminalTargetsRouteRequiresInteractiveSession is the transport gate:
-// an API token (even read/admin) cannot enumerate shells, while a real JWT
-// session can read the (empty) list.
 func TestTerminalTargetsRouteRequiresInteractiveSession(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
@@ -441,8 +423,6 @@ func TestTerminalTargetsRouteRequiresInteractiveSession(t *testing.T) {
 	}
 }
 
-// TestTerminalTargetsSourceForCapturesOperator keeps the request decision with
-// the request: an operator's source lists hosts, a member's does not.
 func TestTerminalTargetsSourceForCapturesOperator(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := &Server{
@@ -468,9 +448,6 @@ func TestTerminalTargetsSourceForCapturesOperator(t *testing.T) {
 	}
 }
 
-// TestTerminalTargetsRouteTeamScope is the M2 killer: the add-tab read rides
-// the real RequireTeam chain, so a non-member team header is refused instead
-// of silently falling back to another scope.
 func TestTerminalTargetsRouteTeamScope(t *testing.T) {
 	s, _ := newScopeTestServer(t)
 	teamA, teamB := uuid.New(), uuid.New()

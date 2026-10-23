@@ -1,6 +1,3 @@
-// Differential test (JUS-23): application schemas and env warnings must
-// reproduce the recorded outcomes of the hand-written checks they replace.
-// Recorded 2026-10-04 from the pre-migration code.
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -177,8 +174,6 @@ describe("wizard create payload carries the source type", () => {
       { id: "p2", provider: "gitlab", base_url: "", connected: true, scopes: "", created_at: "", updated_at: "" },
     ];
 
-    // Provider options follow the source type: github_app lists GitHub App
-    // connections (GS-5), gitlab_app keeps the OAuth provider list.
     w.githubAppStore.apps = [
       { id: "g1", app_id: 1, slug: "gotham", name: "gotham", base_url: "", connected: true, installations: [] },
     ];
@@ -187,7 +182,6 @@ describe("wizard create payload carries the source type", () => {
     Object.assign(w.form, { sourceType: "gitlab_app" });
     expect(w.providerOptions.value.map((item) => item.value)).toEqual(["p2"]);
 
-    // git_public carries no provider.
     Object.assign(w.form, {
       sourceType: "git_public", providerId: "", publicCloneUrl: "https://github.com/o/r.git",
       repoFullName: "", cloneUrl: "", branch: "main", name: "storefront",
@@ -199,7 +193,6 @@ describe("wizard create payload carries the source type", () => {
       source_type: "git_public",
     });
 
-    // github_app carries the matching provider slug.
     Object.assign(w.form, {
       sourceType: "github_app", providerId: "p1", repoFullName: "o/r",
       cloneUrl: "git@github.com:o/r.git", branch: "main", name: "abc",
@@ -211,7 +204,6 @@ describe("wizard create payload carries the source type", () => {
       source_type: "github_app",
     });
 
-    // git_private is provider-less: the clone URL doubles as the repo label.
     Object.assign(w.form, {
       sourceType: "git_private", providerId: "", publicCloneUrl: "", privateCloneUrl: "git@h:o/r.git",
       privateAuth: "ssh", httpsUsername: "", httpsToken: "", repoFullName: "", cloneUrl: "",
@@ -223,8 +215,6 @@ describe("wizard create payload carries the source type", () => {
       clone_url: "git@h:o/r.git",
       source_type: "git_private",
     });
-    // Routing is attached after creation on the Domains tab: the create
-    // payload carries no app-level port or domain.
     const payload = w.buildPayload();
     expect(payload).not.toHaveProperty("port");
     expect(payload).not.toHaveProperty("host_port");
@@ -254,8 +244,6 @@ describe("wizard create payload carries the source type", () => {
       cloneUrl: "",
     });
 
-    // Private-git fields clear the same way, so a token can never leak
-    // into another type's payload.
     Object.assign(w.form, {
       sourceType: "git_private", privateCloneUrl: "git@h:o/r.git", privateAuth: "https",
       httpsUsername: "bob", httpsToken: "s3cr3t",
@@ -285,8 +273,6 @@ describe("wizard create payload carries the source type", () => {
     const options = Object.fromEntries(
       w.sourceTypeOptions.value.map((item) => [item.value, item.disabled === true]),
     );
-    // Every known source type deploys (compose last, GS-8); unknown
-    // future types stay disabled until their package lands.
     expect(options).toEqual({
       git_public: false,
       git_private: false,

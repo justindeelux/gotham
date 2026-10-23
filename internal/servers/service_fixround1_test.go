@@ -15,9 +15,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// validatedReadyNode creates a key-authenticated node, validates it against
-// the in-process SSH probe (pinning the host key), attaches nodeID, and
-// heartbeats it to ready. It returns the server and the probe fingerprint.
 func validatedReadyNode(t *testing.T, service *ServerService, ctx context.Context, name string) (*Server, string) {
 	t.Helper()
 
@@ -63,9 +60,6 @@ func validatedReadyNode(t *testing.T, service *ServerService, ctx context.Contex
 	return ready, hostFingerprint
 }
 
-// TestUpdateRejectsKeyAndPassword covers defect 3a: PATCH with both
-// ssh_key_id and a password is a 400 like create, and must not echo the
-// secret.
 func TestUpdateRejectsKeyAndPassword(t *testing.T) {
 	service, _ := newTestService(t)
 
@@ -89,8 +83,6 @@ func TestUpdateRejectsKeyAndPassword(t *testing.T) {
 	}
 }
 
-// TestUpdateNameOnlyKeepsStatusAndPin covers defects 2 and 3b: a name-only
-// PATCH must not touch status or the pin.
 func TestUpdateNameOnlyKeepsStatusAndPin(t *testing.T) {
 	service, _ := newTestService(t)
 
@@ -113,9 +105,6 @@ func TestUpdateNameOnlyKeepsStatusAndPin(t *testing.T) {
 	}
 }
 
-// TestUpdateUnchangedValuesNoReset covers defect 3b: re-sending the stored
-// address or the attached key (or the stored password) must not reset the pin
-// or status, while a real change must.
 func TestUpdateUnchangedValuesNoReset(t *testing.T) {
 	service, _ := newTestService(t)
 
@@ -141,7 +130,6 @@ func TestUpdateUnchangedValuesNoReset(t *testing.T) {
 		t.Errorf("HostKeyFingerprint = %v, want the pin %q kept", unchanged.HostKeyFingerprint, fingerprint)
 	}
 
-	// Detaching the key IS a real credential change: it resets.
 	detached, err := service.Update(ctx, ready.ID, UpdateParams{SSHKeyID: &uuid.Nil})
 	if err != nil {
 		t.Fatalf("Update detach key: %v", err)
@@ -154,8 +142,6 @@ func TestUpdateUnchangedValuesNoReset(t *testing.T) {
 	}
 }
 
-// TestUpdateIdenticalPasswordNoReset covers defect 3b for secrets: re-sending
-// the stored password is not a change, while a new one resets.
 func TestUpdateIdenticalPasswordNoReset(t *testing.T) {
 	service, _ := newTestService(t)
 
@@ -208,9 +194,6 @@ func TestUpdateIdenticalPasswordNoReset(t *testing.T) {
 	}
 }
 
-// TestUpdateVsHeartbeatNoRevert covers defect 2: a PATCH racing a heartbeat
-// must not revert the heartbeat's status write, and a name-only PATCH must
-// never move a ready node out of ready.
 func TestUpdateVsHeartbeatNoRevert(t *testing.T) {
 	service, _ := newTestService(t)
 
@@ -227,7 +210,6 @@ func TestUpdateVsHeartbeatNoRevert(t *testing.T) {
 		return service.RecordHeartbeat(ctx, nodeID, &agentv1.HeartbeatRequest{CpuUsage: 0.3})
 	}
 
-	// Sequential first: heartbeat, then a name-only PATCH, must stay ready.
 	if err := heartbeat(); err != nil {
 		t.Fatalf("RecordHeartbeat: %v", err)
 	}
@@ -239,8 +221,6 @@ func TestUpdateVsHeartbeatNoRevert(t *testing.T) {
 		t.Fatalf("Status after name PATCH = %q, want %q", renamed.Status, StatusReady)
 	}
 
-	// Concurrent: neither writer moves the node out of ready, so every
-	// interleaving must end ready with a fresh heartbeat.
 	var wg sync.WaitGroup
 	errs := make(chan error, 32)
 	for i := 0; i < 8; i++ {
@@ -277,10 +257,6 @@ func TestUpdateVsHeartbeatNoRevert(t *testing.T) {
 	}
 }
 
-// TestValidateAfterPatchRace covers defect 1: when a PATCH moves the node to
-// a new address while a validation against the OLD address is in flight, the
-// stale validation must neither pin the old host's key onto the new address
-// nor overwrite the new pending status.
 func TestValidateAfterPatchRace(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -311,8 +287,6 @@ func TestValidateAfterPatchRace(t *testing.T) {
 		}
 	})
 
-	// Land a PATCH to a new address after the SSH dial succeeds but before
-	// the pin write: the seam runs inside the guarded pin write.
 	newIP := "203.0.113.99"
 	st.BeforePinServerHostKey = func() error {
 		_, err := service.Update(ctx, created.ID, UpdateParams{IP: &newIP})
@@ -340,8 +314,6 @@ func TestValidateAfterPatchRace(t *testing.T) {
 	}
 }
 
-// TestCrossTeamKeyAttach covers defect 4a: a key from another team answers
-// unknown-key on Add and Update, like a missing key.
 func TestCrossTeamKeyAttach(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -395,7 +367,6 @@ func TestCrossTeamKeyAttach(t *testing.T) {
 		}
 	})
 
-	// Another team's key is not attachable on Add: same error as a missing key.
 	if _, err := service.Add(bobPersonal, uuid.UUID(bob.ID.Bytes), "bob-node", "127.0.0.1", 22, "root", teamKey.ID, ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("cross-team Add = %v, want ErrValidation", err)
 	}
@@ -403,7 +374,6 @@ func TestCrossTeamKeyAttach(t *testing.T) {
 		t.Errorf("missing-key Add = %v, want ErrValidation", err)
 	}
 
-	// ... nor on Update.
 	bobNode, err := service.Add(bobPersonal, uuid.UUID(bob.ID.Bytes), "bob-node", "127.0.0.1", 22, "root", uuid.Nil, "")
 	if err != nil {
 		t.Fatalf("Add bob node: %v", err)
@@ -419,7 +389,6 @@ func TestCrossTeamKeyAttach(t *testing.T) {
 		t.Errorf("cross-team Update = %v, want ErrValidation", err)
 	}
 
-	// The owning team can attach it on both paths.
 	aliceNode, err := service.Add(aliceTeam, uuid.UUID(alice.ID.Bytes), "alice-node", "127.0.0.1", 22, "root", teamKey.ID, "")
 	if err != nil {
 		t.Fatalf("own-team Add with the key: %v", err)
@@ -435,8 +404,6 @@ func TestCrossTeamKeyAttach(t *testing.T) {
 		t.Errorf("own-team Update re-sending the key: %v", err)
 	}
 
-	// A legacy key (team_id NULL, never referenced) is not attachable by a
-	// team-scoped caller, but keeps pre-teams behavior without a team scope.
 	legacyKey, err := service.AddPrivateKey(ctx, "legacy-key", string(testPrivateKeyPEM(t)))
 	if err != nil {
 		t.Fatalf("AddPrivateKey legacy: %v", err)
@@ -466,8 +433,6 @@ func TestCrossTeamKeyAttach(t *testing.T) {
 		})
 	}
 
-	// A team that already references the legacy key can still attach it; a
-	// team that does not reference it cannot.
 	if _, err := st.DB.Exec(ctx,
 		`INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id)
 		 VALUES ('bob-ref', '127.0.0.1', 22, 'root', $1, $2)`,

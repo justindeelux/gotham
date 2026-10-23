@@ -1,8 +1,3 @@
-// Files double-click dispatch (JUS-130): the pure rule behind a double-click
-// (or Enter) on a browser row. It maps a row's kind + extension + the caller's
-// gates onto the default action, and it decides whether the editor can show the
-// file as text at all (known binary families; an oversize text file opens as a
-// read-only tail since JUS-225). No DOM, no store.
 import { describe, expect, it } from "vitest";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
@@ -13,7 +8,6 @@ import {
 } from "@/features/files/utils/files";
 import type { EntryActionGates } from "@/features/files/utils/files";
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -25,7 +19,6 @@ function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   };
 }
 
-/** gates builds the owner/admin + writable-root gate set. */
 function gates(overrides: Partial<EntryActionGates> = {}): EntryActionGates {
   return { canOpenEditor: true, canExtract: true, ...overrides };
 }
@@ -46,8 +39,6 @@ describe("entryAction", () => {
   });
 
   it("does nothing for an archive when the root is not writable", () => {
-    // The archive branch wins over the editor: a read-only root never falls
-    // back to opening the archive in the editor.
     expect(
       entryAction(entry({ name: "backup.zip" }), gates({ canExtract: false })),
     ).toBe("none");
@@ -87,7 +78,6 @@ describe("canOpenInEditor", () => {
   it("accepts a text file at any size", () => {
     expect(canOpenInEditor(entry({ name: "app.yaml" }))).toBe(true);
     expect(canOpenInEditor(entry({ name: "big.txt", size: MAX_EDITABLE_BYTES }))).toBe(true);
-    // Over the ceiling opens as a read-only tail, not a dead double-click.
     expect(
       canOpenInEditor(entry({ name: "big.txt", size: MAX_EDITABLE_BYTES + 1 })),
     ).toBe(true);

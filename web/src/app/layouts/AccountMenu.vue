@@ -19,10 +19,8 @@ const { t } = useI18n();
 const authStore = useAuthStore();
 const teamsStore = useTeamsStore();
 const router = useRouter();
-/** accountTrigger is the dropdown trigger, refocused when a cancel aborts. */
 const accountTrigger = ref<InstanceType<typeof NButton> | null>(null);
 
-/** restoreAccountTrigger puts keyboard focus back on the menu button. */
 function restoreAccountTrigger(): void {
   void nextTick(() => {
     const element = accountTrigger.value?.$el;
@@ -32,7 +30,6 @@ function restoreAccountTrigger(): void {
   });
 }
 
-/** displayName is the footer name: display name, falling back to the email. */
 const displayName = computed<string>(() => {
   const name = authStore.user?.display_name?.trim();
   if (name) {
@@ -45,24 +42,11 @@ const userInitial = computed<string>(() =>
   (displayName.value[0] ?? "?").toUpperCase(),
 );
 
-/**
- * hasDisplayName tells the header whether a real display name exists. Without
- * one displayName falls back to the email, so the email line is dropped —
- * otherwise the menu shows the address twice (JUS-197).
- */
 const hasDisplayName = computed<boolean>(() => {
   const name = authStore.user?.display_name?.trim();
   return name !== undefined && name !== "";
 });
 
-/**
- * roleText derives the footer label from the caller's raw team role through
- * the shared common role catalog (reactive in the active locale). The
- * teams-owned meRoleLabel helper stays untouched (I18N-8 owns it); an
- * unknown future role falls back to the raw value, never a guessed label.
- * A platform admin additionally carries the instance-level flag, which reads
- * "Platform admin" so it cannot be confused with the team admin role.
- */
 const roleText = computed<string>(() => {
   const role: TeamRole | null = teamsStore.activeTeam?.role ?? null;
   let base: string;
@@ -83,17 +67,6 @@ const roleText = computed<string>(() => {
   return base;
 });
 
-/**
- * loadRole reads the caller's teams for the footer label. A failed read
- * keeps the neutral fallback and retries on the next mount or account
- * change, plus a bounded retry (see shouldRetryRoleRead) so a transient
- * failure does not pin the neutral label until the sidebar remounts; a
- * fetch already in flight needs no retry because the label follows the store
- * reactively. A disabled teams feature (loaded with an empty list) keeps the
- * neutral fallback permanently. The sign-out path resets the teams store
- * (see the auth store), so a failed or stale read can never pin the
- * previous account's role here.
- */
 let roleRetries = 0;
 let roleRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -121,7 +94,6 @@ async function readRole(): Promise<void> {
   roleRetryTimer = setTimeout(() => void readRole(), roleReadRetryMs);
 }
 
-/** cancelRoleRetry drops a pending retry so it cannot fire after unmount. */
 function cancelRoleRetry(): void {
   if (roleRetryTimer !== null) {
     clearTimeout(roleRetryTimer);
@@ -132,8 +104,6 @@ function cancelRoleRetry(): void {
 onMounted(loadRole);
 onUnmounted(cancelRoleRetry);
 
-// A different signed-in account (or a team change elsewhere) re-reads the
-// role even when the sidebar never remounts.
 watch(
   () => authStore.user?.email,
   () => {
@@ -173,20 +143,11 @@ async function handleSelect(key: string | number): Promise<void> {
   if (key !== "sign-out") {
     return;
   }
-  // A user-initiated logout drops the editor buffers, so dirty tabs confirm
-  // first through the shared editor dialog. Anything but an explicit "leave"
-  // (staying, or the prompt being settled by a concurrent sign-out) aborts
-  // the logout. Forced sign-outs bypass this path and reset directly.
   const editor = useEditorStore();
   if ((await editor.confirmDiscard()) !== "leave") {
-    // Cancelling a confirmation closes the dialog and otherwise strands focus
-    // on <body>; the keyboard user stays on the account trigger (JUS-246).
     restoreAccountTrigger();
     return;
   }
-  // Live shells are a session-terminating resource too: sign-out runs the
-  // same close dialog, and a cancel aborts the logout with the PTYs intact.
-  // Forced sign-outs (401/revocation/cross-tab) bypass this path and reset.
   const terminal = useTerminalStore();
   if (!(await terminal.confirmCloseAll())) {
     restoreAccountTrigger();
@@ -195,8 +156,6 @@ async function handleSelect(key: string | number): Promise<void> {
   try {
     await authStore.logout();
   } catch {
-    // logout clears the local session in `finally`; a failed revoke must not
-    // block the redirect or surface as an unhandled rejection (B3-3).
   }
   await router.push({ name: "login" });
 }

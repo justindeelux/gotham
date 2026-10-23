@@ -12,13 +12,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Service reads and writes the instance settings.
 type Service struct {
-	// SyncPanelCertificates reconciles intent independently of proxy/trial success.
 	SyncPanelCertificates func(context.Context, []string) error
-	// ResyncProxy runs after a changed control-plane URL is saved. Configure before serving.
-	ResyncProxy func(context.Context) error
-	// CheckControlPlaneHost checks application, service and redirect ownership.
+	ResyncProxy           func(context.Context) error
 	CheckControlPlaneHost func(context.Context, string) error
 	domainLock            sync.Mutex
 	domainTimer           *time.Timer
@@ -28,10 +24,9 @@ type Service struct {
 	logger                *slog.Logger
 	now                   func() time.Time
 	lookup                func(string) string
-	netLock               sync.Mutex // serializes network apply / confirm / revert / reconcile
+	netLock               sync.Mutex
 }
 
-// NewService builds a Service. host may be nil (no host sections).
 func NewService(repo Repository, host HostApplier, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
@@ -39,7 +34,6 @@ func NewService(repo Repository, host HostApplier, logger *slog.Logger) *Service
 	return &Service{repo: repo, host: host, logger: logger, now: time.Now, lookup: os.Getenv}
 }
 
-// resolve picks env > stored > default for one general field.
 func (s *Service) resolve(env string, stored *string, def string) Field {
 	if v := strings.TrimSpace(s.lookup(env)); v != "" {
 		return Field{Value: v, Source: SourceEnv, Locked: true, EnvVar: env}
@@ -58,8 +52,6 @@ func (s *Service) general(rec Stored) General {
 	}
 }
 
-// ControlPlaneURL returns the effective public base URL ("" when unset); it is
-// the accessor other packages use instead of reading gotham.yaml directly.
 func (s *Service) ControlPlaneURL(ctx context.Context) (string, error) {
 	rec, err := s.repo.Load(ctx)
 	if err != nil {
@@ -75,10 +67,6 @@ func (s *Service) hostState(ctx context.Context) Host {
 	return s.host.Probe(ctx)
 }
 
-// Get returns the full state, first reconciling an expired network change.
-// The network section reports the host's live configuration (the source of
-// truth) whenever no change is pending and the helper can probe it, so the
-// form never offers stale stored defaults such as DHCP on a static host.
 func (s *Service) Get(ctx context.Context) (State, error) {
 	if err := s.reconcileControlPlaneURL(ctx); err != nil {
 		return State{}, err
@@ -90,8 +78,6 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 	if rec.Pending == nil {
 		if live, ok := s.hostLive(ctx); ok {
 			rec.Network.IPv4, rec.Network.IPv6 = live.IPv4, live.IPv6
-			// An empty live resolver list means unconfigured, not "no
-			// DNS": keep the stored servers so the form stays submittable.
 			if len(live.DNSServers) > 0 {
 				rec.Network.DNSServers = live.DNSServers
 			}
@@ -105,9 +91,6 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 	}, nil
 }
 
-// hostLive returns the helper's live network configuration. It reports
-// nothing when there is no host applier or the probe fails, in which case
-// callers fall back to the stored values.
 func (s *Service) hostLive(ctx context.Context) (Network, bool) {
 	if s.host == nil {
 		return Network{}, false
@@ -123,16 +106,10 @@ func (s *Service) hostLive(ctx context.Context) (Network, bool) {
 	return net, true
 }
 
-// sameInterface reports whether req leaves the interface configuration of
-// live untouched (DNS excluded: a resolver-only change needs no interface
-// rewrite and no risky-change confirmation).
 func sameInterface(live HostNetwork, req Network) bool {
 	return live.IPv4 == req.IPv4 && live.IPv6 == req.IPv6
 }
 
-// riskyInterfaceChange reports whether req would disturb the live addresses
-// of the active interface: switching it from static to DHCP, disabling the
-// family, or changing its address/gateway.
 func riskyInterfaceChange(live HostNetwork, req Network) bool {
 	if live.IPv4.Mode == ModeStatic && live.IPv4.Address != "" {
 		if req.IPv4.Mode != ModeStatic || req.IPv4.Address != live.IPv4.Address ||
@@ -149,7 +126,6 @@ func riskyInterfaceChange(live HostNetwork, req Network) bool {
 	return false
 }
 
-// Reconcile settles an expired pending network change; call it at startup.
 func (s *Service) Reconcile(ctx context.Context) error {
 	if err := s.reconcileControlPlaneURL(ctx); err != nil {
 		return err
@@ -158,8 +134,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return err
 }
 
-// reconcile: a pending change past its deadline was reverted by the host timer,
-// so the desired state returns to the previous values.
 func (s *Service) reconcile(ctx context.Context) (Stored, error) {
 	s.netLock.Lock()
 	defer s.netLock.Unlock()
@@ -175,7 +149,6 @@ func (s *Service) reconcile(ctx context.Context) (Stored, error) {
 	return rec, nil
 }
 
-// UpdateGeneral validates and stores the general section.
 func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in GeneralInput) (State, error) {
 	if err := s.reconcileControlPlaneURL(ctx); err != nil {
 		return State{}, err
@@ -250,7 +223,6 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 	return s.stateLocked(ctx, next), nil
 }
 
-// ptrOrNil keeps the stored value for a locked field and stores the rest.
 func ptrOrNil(v string, locked bool, stored *string) *string {
 	if locked {
 		return stored
@@ -261,7 +233,6 @@ func ptrOrNil(v string, locked bool, stored *string) *string {
 	return &v
 }
 
-// UpdateSystem validates, applies and stores the system section.
 func (s *Service) UpdateSystem(ctx context.Context, actor uuid.UUID, in System) (State, error) {
 	in, errs := normalizeSystem(in)
 	if errs != nil {
@@ -286,12 +257,6 @@ func (s *Service) UpdateSystem(ctx context.Context, actor uuid.UUID, in System) 
 	return s.Get(ctx)
 }
 
-// UpdateNetwork validates and tentatively applies a network change; it stays
-// pending until ConfirmNetwork, and the host reverts it after the deadline.
-// A resolver-only change on a static host is applied DNS-only (the interface
-// file is never rewritten); a change that would disturb the active
-// interface's addresses needs ConfirmInterfaceChange and is refused without
-// it, server-side.
 func (s *Service) UpdateNetwork(ctx context.Context, actor uuid.UUID, in NetworkInput) (State, error) {
 	net, errs := normalizeNetwork(in.Network)
 	if errs != nil {
@@ -330,7 +295,6 @@ func (s *Service) UpdateNetwork(ctx context.Context, actor uuid.UUID, in Network
 	rec.Pending = &Pending{Previous: rec.Network, Proposed: net, Deadline: s.now().Add(NetworkConfirmWindow)}
 	rec.Network = net
 	if err := s.repo.Save(ctx, actor, SectionNetwork, rec, changes); err != nil {
-		// Without a stored deadline nobody could confirm: undo on the host.
 		if rerr := s.host.RevertNetwork(ctx); rerr != nil {
 			s.logger.Error("instance network revert after failed save", "error", rerr)
 		}
@@ -340,12 +304,10 @@ func (s *Service) UpdateNetwork(ctx context.Context, actor uuid.UUID, in Network
 	return s.stateLocked(ctx, rec), nil
 }
 
-// ConfirmNetwork keeps the pending network change.
 func (s *Service) ConfirmNetwork(ctx context.Context, actor uuid.UUID) (State, error) {
 	return s.settle(ctx, actor, true)
 }
 
-// RevertNetwork cancels the pending network change now.
 func (s *Service) RevertNetwork(ctx context.Context, actor uuid.UUID) (State, error) {
 	return s.settle(ctx, actor, false)
 }
@@ -392,15 +354,6 @@ func (s *Service) stateLocked(ctx context.Context, rec Stored) State {
 	}
 }
 
-// InstallHostHelper installs the fixed host helper and its verb-pinned sudoers
-// rule through the root-owned tool installer, then re-probes so the caller gets
-// the fresh state. It answers the command output for the operator to read.
-//
-// It refuses when the repair path cannot run (no payload, or a Denied host
-// whose drop-in with the pinned repair verb is gone): no privileged path exists
-// by design in that state, so an install could only fail — the UI shows the
-// honest "update the control plane" state instead, and a direct call answers a
-// conflict rather than a sudo failure.
 func (s *Service) InstallHostHelper(ctx context.Context, actor uuid.UUID) (State, string, error) {
 	if s.host == nil {
 		return State{}, "", ErrUnsupported
@@ -425,8 +378,6 @@ func (s *Service) InstallHostHelper(ctx context.Context, actor uuid.UUID) (State
 	return st, log, err
 }
 
-// diff returns {field: {from, to}} for the audit trail; for struct values it
-// compares the JSON-visible fields as a whole.
 func diff(from, to any) map[string]any {
 	if fm, ok := from.(map[string]any); ok {
 		tm := to.(map[string]any)

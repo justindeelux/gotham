@@ -26,9 +26,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// acmeStorageFixture builds a Traefik-shaped acme.json body containing real
-// key material: an ACME account key and a per-certificate private key. The
-// markers let a test prove the key material never leaves the agent.
 func acmeStorageFixture(t *testing.T, notAfter time.Time, main string, sans ...string) []byte {
 	t.Helper()
 	leafPEM := selfSignedLeaf(t, notAfter, main, sans...)
@@ -73,8 +70,6 @@ func acmeStorageFixture(t *testing.T, notAfter time.Time, main string, sans ...s
 	return encoded
 }
 
-// testPrivateKeyPEM renders a fresh EC private key as PEM (the shape Traefik
-// stores, which the agent must never expose).
 func testPrivateKeyPEM(t *testing.T) string {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -88,7 +83,6 @@ func testPrivateKeyPEM(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
 }
 
-// selfSignedLeaf renders a self-signed PEM leaf valid until notAfter.
 func selfSignedLeaf(t *testing.T, notAfter time.Time, main string, sans ...string) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -109,7 +103,6 @@ func selfSignedLeaf(t *testing.T, notAfter time.Time, main string, sans ...strin
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-// writeACMEStorage writes content to root/acme/acme.json, creating the dir.
 func writeACMEStorage(t *testing.T, root string, content []byte) string {
 	t.Helper()
 	dir := filepath.Join(root, "acme")
@@ -123,17 +116,11 @@ func writeACMEStorage(t *testing.T, root string, content []byte) string {
 	return path
 }
 
-// TestReadACMEStorageReportsMetadataOnly proves the security boundary: a
-// fixture acme.json containing private and account keys yields certificate
-// metadata, and no key material appears in the response, in the logs, or in
-// any error string.
 func TestReadACMEStorageReportsMetadataOnly(t *testing.T) {
 	root := canonicalTempDir(t)
 	notAfter := time.Now().Add(90 * 24 * time.Hour).UTC().Truncate(time.Second)
 	fixture := acmeStorageFixture(t, notAfter, "app.example.test", "www.app.example.test")
 
-	// Capture everything the agent logs, so the proof covers the log channel
-	// too: the read path logs counts only.
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	server := New(Config{Root: root, Logger: logger})
@@ -163,10 +150,6 @@ func TestReadACMEStorageReportsMetadataOnly(t *testing.T) {
 		t.Fatalf("not_after = %s, want %s", got, notAfter)
 	}
 
-	// The response and the logs must not contain any key material. The
-	// fixture's PEM payloads are extracted below and every base64 body line is
-	// used as a marker, so a leak of any part of the account key or the
-	// certificate key fails this test.
 	rendered, err := protojson.Marshal(response)
 	if err != nil {
 		t.Fatalf("marshal response: %v", err)
@@ -184,9 +167,6 @@ func TestReadACMEStorageReportsMetadataOnly(t *testing.T) {
 	}
 }
 
-// keyPayloadMarkers extracts one base64 body segment of every private key in
-// the fixture, so the test can prove none of them appears in an output
-// channel.
 func keyPayloadMarkers(t *testing.T, fixture []byte) []string {
 	t.Helper()
 	var decoded map[string]struct {
@@ -226,11 +206,6 @@ func keyPayloadMarkers(t *testing.T, fixture []byte) []string {
 	return markers
 }
 
-// TestWriteProxyConfigPreparesACMEStorage proves the write path creates a
-// readable ACME storage file before Traefik can ever start (Traefik keeps an
-// existing file's mode and ownership on write, so this is what makes the
-// agent's later status read possible), and that it never truncates or replaces
-// a file that already holds certificates.
 func TestWriteProxyConfigPreparesACMEStorage(t *testing.T) {
 	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
 	if _, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
@@ -250,7 +225,6 @@ func TestWriteProxyConfigPreparesACMEStorage(t *testing.T) {
 		t.Fatalf("prepared storage mode = %o, want 600 (it will hold private keys)", mode)
 	}
 
-	// An existing storage file is never touched or truncated.
 	writeACMEStorage(t, root, []byte(`{"letsencrypt": {"Certificates": []}}`))
 	if _, err := server.WriteProxyConfig(context.Background(), request(map[string]string{
 		"traefik.yml": "entryPoints: {}\n",
@@ -266,9 +240,6 @@ func TestWriteProxyConfigPreparesACMEStorage(t *testing.T) {
 	}
 }
 
-// TestReadACMEStoragePermissionDeniedIsAnError proves a storage file the agent
-// cannot read is a genuine read failure (the control plane reports unknown),
-// never a fabricated absent: only a missing or empty file means no storage.
 func TestReadACMEStoragePermissionDeniedIsAnError(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("permission checks do not apply to root")
@@ -285,8 +256,6 @@ func TestReadACMEStoragePermissionDeniedIsAnError(t *testing.T) {
 	}
 }
 
-// TestReadACMEStorageMissingFile proves a node without ACME storage answers
-// present=false instead of an error.
 func TestReadACMEStorageMissingFile(t *testing.T) {
 	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
 	if err := os.RemoveAll(filepath.Join(root, "acme")); err != nil {
@@ -299,15 +268,11 @@ func TestReadACMEStorageMissingFile(t *testing.T) {
 	if response.GetPresent() || len(response.GetCertificates()) != 0 {
 		t.Fatalf("response = %v, want absent", response)
 	}
-	// The read-only traversal must not create the directory either.
 	if _, err := os.Stat(filepath.Join(root, "acme")); !os.IsNotExist(err) {
 		t.Fatalf("acme dir was created by the read path (stat err = %v)", err)
 	}
 }
 
-// TestReadACMEStorageEmptyFile proves the production boot state (Traefik
-// creates an empty acme.json before the first issuance) is reported as
-// present=false, not as a malformed read.
 func TestReadACMEStorageEmptyFile(t *testing.T) {
 	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
 	for _, content := range [][]byte{nil, []byte(""), []byte("\n  \n")} {
@@ -322,8 +287,6 @@ func TestReadACMEStorageEmptyFile(t *testing.T) {
 	}
 }
 
-// TestReadACMEStorageMalformed proves a corrupt file is an error whose text
-// carries no certificate content.
 func TestReadACMEStorageMalformed(t *testing.T) {
 	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
 	writeACMEStorage(t, root, []byte(`{"letsencrypt": {"Certificates": [{"domain": {"main": "x"}, "certificate": "not-base64-but-secret"}]}}`))
@@ -340,9 +303,6 @@ func TestReadACMEStorageMalformed(t *testing.T) {
 	}
 }
 
-// TestReadACMEStorageRejectsUnparseableCertificate proves a stored entry whose
-// certificate cannot be parsed fails the read: the control plane must report
-// unknown instead of a fabricated "present without expiry".
 func TestReadACMEStorageRejectsUnparseableCertificate(t *testing.T) {
 	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
 	body := `{"letsencrypt": {"Certificates": [{"domain": {"main": "x.example.test"}, "certificate": "` +
@@ -354,8 +314,6 @@ func TestReadACMEStorageRejectsUnparseableCertificate(t *testing.T) {
 	}
 }
 
-// TestReadACMEStorageRejectsSymlinks proves the read traversal never follows a
-// symlinked directory or file out of the ACME root.
 func TestReadACMEStorageRejectsSymlinks(t *testing.T) {
 	t.Run("symlinked acme dir", func(t *testing.T) {
 		root := canonicalTempDir(t)
@@ -393,8 +351,6 @@ func TestReadACMEStorageRejectsSymlinks(t *testing.T) {
 	})
 }
 
-// TestReadACMEStorageResolvesSANsAndResolvers proves every resolver section is
-// reported with its own entries.
 func TestReadACMEStorageResolvesSANsAndResolvers(t *testing.T) {
 	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
 	expiry := time.Now().Add(30 * 24 * time.Hour).UTC().Truncate(time.Second)
@@ -412,8 +368,6 @@ func TestReadACMEStorageResolvesSANsAndResolvers(t *testing.T) {
 	}
 }
 
-// TestReadACMEStorageBoundsFileSize proves an oversized storage file is an
-// error instead of an unbounded read.
 func TestReadACMEStorageBoundsFileSize(t *testing.T) {
 	server, root := newTestProxyServer(t, "http://127.0.0.1:1/ping")
 	path := writeACMEStorage(t, root, []byte(`{"letsencrypt": {}}`))

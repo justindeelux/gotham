@@ -18,7 +18,6 @@ const maxBody = 2 << 20
 const contractHeader = "X-Gotham-MCP-Contract"
 const teamHeader = "X-Gotham-MCP-Team-Id"
 
-// Error contains only stable local categories and HTTP status, never upstream text.
 type Error struct {
 	Code   string `json:"code"`
 	Status int    `json:"status,omitempty"`
@@ -26,7 +25,6 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Code }
 
-// Client never accepts per-call origins, credentials, or teams.
 type Client struct {
 	config Config
 	http   *http.Client
@@ -59,13 +57,10 @@ func (c *Client) Context(ctx context.Context) (Context, error) {
 	return result, nil
 }
 
-// readJSON is the package-local registration seam for typed read tools.
-// Callers must url.PathEscape each dynamic path segment before composing the path.
 func (c *Client) readJSON(ctx context.Context, path string, out any) error {
 	return c.get(ctx, path, out, true, false)
 }
 
-// Health is dependency state, including a useful degraded 503 response.
 type Health struct {
 	Status string `json:"status"`
 	DB     string `json:"db"`
@@ -84,7 +79,6 @@ func (c *Client) Health(ctx context.Context) (Health, error) {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any, strict, health bool) error {
-	// Paths originate in tool implementations; reject accidental origin or traversal overrides.
 	if len(path) > 8192 || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "#\\") {
 		return &Error{Code: "invalid_request"}
 	}

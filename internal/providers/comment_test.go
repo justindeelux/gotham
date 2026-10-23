@@ -10,8 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestGitHubSourceCreatePullRequestComment asserts the GitHub issue-comment
-// endpoint and payload.
 func TestGitHubSourceCreatePullRequestComment(t *testing.T) {
 	var gotMethod, gotPath, gotAccept string
 	var gotBody struct {
@@ -51,8 +49,6 @@ func TestGitHubSourceCreatePullRequestComment(t *testing.T) {
 	}
 }
 
-// TestGitLabSourceCreatePullRequestComment asserts the GitLab merge-request
-// note endpoint and payload.
 func TestGitLabSourceCreatePullRequestComment(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody struct {
@@ -84,8 +80,6 @@ func TestGitLabSourceCreatePullRequestComment(t *testing.T) {
 	}
 }
 
-// TestGiteaSourceCreatePullRequestComment asserts the Gitea issue-comment
-// endpoint and payload.
 func TestGiteaSourceCreatePullRequestComment(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody struct {
@@ -112,9 +106,6 @@ func TestGiteaSourceCreatePullRequestComment(t *testing.T) {
 	}
 }
 
-// TestServiceCreatePullRequestCommentUsesStoredConnection drives the service
-// seam: the stored connection authenticates the call and the provider's
-// endpoint receives it.
 func TestServiceCreatePullRequestCommentUsesStoredConnection(t *testing.T) {
 	var gotPath string
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -138,8 +129,6 @@ func TestServiceCreatePullRequestCommentUsesStoredConnection(t *testing.T) {
 		t.Errorf("path = %q", gotPath)
 	}
 
-	// A user without a connection cannot comment; the delivery then stays
-	// comment-free (the caller treats this as best effort).
 	if err := svc.CreatePullRequestComment(context.Background(), HookTarget{
 		UserID: uuid.New(), Provider: NameGitHub, Repo: "o/r",
 	}, 7, "hello"); !errors.Is(err, ErrNotFound) {

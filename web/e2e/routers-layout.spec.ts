@@ -4,20 +4,12 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "./fixtures";
 import { storageStatePath } from "./support";
 
-// Reuse the authenticated session so the page starts signed in.
 test.use({ storageState: storageStatePath });
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const shot = (name: string) =>
   resolve(testsDir, "../../.playwright-mcp", name);
 
-/**
- * JUS-90 fix 4: every multi-line cell of the router list stacks its lines
- * with the shared 4px step (var(--space-1)), left-aligned, with no overlap.
- * Real Chromium measures the real table against intercepted router rows
- * covering all three kinds (application with TLS, plain-HTTP service,
- * redirect) and two node sync states. Screenshots land in .playwright-mcp/.
- */
 test.describe("routers layout", () => {
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/v1/proxy/routers*", async (route) => {
@@ -103,7 +95,6 @@ test.describe("routers layout", () => {
         ),
       );
     const multiLine = cells.filter((kids) => kids.length >= 2);
-    // Three rows of host/source/node cells all render two lines.
     expect(multiLine.length).toBe(9);
     for (const kids of multiLine) {
       for (let i = 1; i < kids.length; i++) {

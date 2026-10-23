@@ -14,7 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 )
 
-// fakeRouterService is a canned proxy.RouterService.
 type fakeRouterService struct {
 	response proxy.RouterListResponse
 	err      error
@@ -32,8 +31,6 @@ func newRouterRoutes(svc proxy.RouterService) http.Handler {
 	return r
 }
 
-// TestProxyRoutersRouteListsGeneratedRouters proves the read endpoint serves
-// the service rows verbatim, with empty (never null) lists.
 func TestProxyRoutersRouteListsGeneratedRouters(t *testing.T) {
 	serverID, appID := uuid.New(), uuid.New()
 	svc := &fakeRouterService{response: proxy.RouterListResponse{
@@ -67,8 +64,6 @@ func TestProxyRoutersRouteListsGeneratedRouters(t *testing.T) {
 	}
 }
 
-// TestProxyRoutersRouteErrorMapping proves an unreachable node answers 502
-// (never fabricated rows) and a bad server_id answers 400.
 func TestProxyRoutersRouteErrorMapping(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -99,7 +94,6 @@ func TestProxyRoutersRouteErrorMapping(t *testing.T) {
 	}
 }
 
-// TestProxyRoutersRouteNilService proves a nil service mounts nothing.
 func TestProxyRoutersRouteNilService(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/v1/proxy/routers", nil)
 	recorder := httptest.NewRecorder()

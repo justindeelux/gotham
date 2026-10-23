@@ -9,14 +9,6 @@ import { expect, test } from "@playwright/test";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
 /* global Element:readonly, Event:readonly, document:readonly, getComputedStyle:readonly, HTMLElement:readonly, localStorage:readonly, URL:readonly, window:readonly */
-// URL/window run inside the page (browser globals); the repo lint envs do not
-// cover tests/, so they are declared.
-
-// Real-browser proof for JUS-245: the committed webdist is served statically,
-// the control-plane terminal API is mocked, and Playwright's WebSocket router
-// stands in for the PTY stream with the exact binary framing. Real Chromium
-// types into xterm, drags and resizes the window, minimizes to the rail and
-// measures the viewport at desktop and phone sizes.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -81,21 +73,17 @@ const entry = {
   etag: '"v1"',
 };
 
-/** fakeSession is one session the mocked HTTP + WS pair understands. */
 interface FakeSession {
   id: string;
   cwd: string;
   input: string;
   socket: WebSocketRoute | null;
   closeFrames: number;
-  /** opcodes records every client frame in order. */
   opcodes: number[];
-  /** resizes records each 0x02 payload decoded from the bytes. */
   resizes: Array<{ cols: number; rows: number }>;
   heartbeats: number;
 }
 
-/** terminalState is the per-test mock ledger. */
 interface TerminalState {
   sessions: FakeSession[];
   creates: number;
@@ -143,17 +131,14 @@ test.afterAll(async () => {
   });
 });
 
-/** frame builds one binary server frame. */
 function frame(opcode: number, payload: Buffer = Buffer.alloc(0)): Buffer {
   return Buffer.concat([Buffer.from([opcode]), payload]);
 }
 
-/** jsonFrame builds one JSON control frame. */
 function jsonFrame(opcode: number, value: unknown): Buffer {
   return frame(opcode, Buffer.from(JSON.stringify(value), "utf8"));
 }
 
-/** openFrame confirms a PTY for one session. */
 function openFrame(): Buffer {
   return jsonFrame(4, {
     shell: "/bin/bash",
@@ -163,12 +148,10 @@ function openFrame(): Buffer {
   });
 }
 
-/** outputFrame writes one line of shell output. */
 function outputFrame(text: string): Buffer {
   return frame(1, Buffer.from(text, "utf8"));
 }
 
-/** mockTerminalApi answers session create/delete and routes the PTY socket. */
 async function mockTerminalApi(
   page: Page,
   state: TerminalState,
@@ -235,7 +218,6 @@ async function mockTerminalApi(
     });
   });
 
-  // The PTY stream: binary frames only, exactly as the contract specifies.
   await page.routeWebSocket(
     /\/api\/v1\/servers\/[^/]+\/terminal\/sessions\/[^/]+\/ws$/,
     (ws) => {
@@ -274,7 +256,6 @@ async function mockTerminalApi(
     },
   );
 
-  // File manager routes, used by the editor-coexistence test.
   await page.route(`**/api/v1/servers/${serverId}/files/roots`, async (route) => {
     await route.fulfill({ json: { roots: [root] } });
   });
@@ -296,18 +277,14 @@ async function mockTerminalApi(
   });
 }
 
-/** seedApp seeds the session and opens one route. */
 async function seedApp(page: Page, path: string): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
   await page.goto(`${baseURL}${path}`);
-  // main.ts mounts after the initial navigation resolves; wait for the shell
-  // before reaching into the Pinia store.
   await expect(page.locator(".topbar")).toBeVisible();
 }
 
-/** storeCall runs one action on the live Pinia terminal store. */
 async function storeCall(
   page: Page,
   action: string,
@@ -329,12 +306,10 @@ async function storeCall(
   );
 }
 
-/** countOf counts non-overlapping occurrences of one marker in the buffer. */
 function countOf(text: string, marker: string): number {
   return text.split(marker).length - 1;
 }
 
-/** openWindow opens one floating-window session through the public store API. */
 async function openWindow(
   page: Page,
   cwd: string,
@@ -360,7 +335,6 @@ async function openWindow(
   }, { serverId, dir: cwd })) as { id: string; sessionId: string };
 }
 
-/** tabState reads one live tab's reactive size/status from Pinia. */
 async function tabState(
   page: Page,
   tabId: string,
@@ -382,14 +356,12 @@ async function tabState(
   }, tabId);
 }
 
-/** terminalText reads the visible xterm rows. */
 async function terminalText(page: Page): Promise<string> {
   return page
     .locator(".term-window .term-surface:visible .xterm-rows")
     .innerText();
 }
 
-/** boxOf returns the visible terminal window box. */
 async function windowBox(page: Page): Promise<{
   x: number;
   y: number;
@@ -403,13 +375,10 @@ async function windowBox(page: Page): Promise<{
   return box;
 }
 
-/** expectInsideViewport asserts the window keeps its margins and stays on screen. */
 async function expectInsideViewport(
   page: Page,
   viewport: { width: number; height: number },
 ): Promise<void> {
-  // A viewport change refits on the resize event; poll until the rendered box
-  // reflects the new screen before measuring.
   await expect
     .poll(async () => {
       const box = await windowBox(page);
@@ -425,12 +394,6 @@ async function expectInsideViewport(
   expect(box.width).toBeLessThanOrEqual(viewport.width);
 }
 
-/**
- * floatingShadow resolves the shared elevation tokens in the browser and
- * reports the window's computed shadow. The token is resolved through a probe
- * element so the assertion compares computed values rather than the raw
- * custom-property text.
- */
 async function floatingShadow(
   page: Page,
   selector: string,
@@ -462,10 +425,7 @@ async function floatingShadow(
   }, selector);
 }
 
-/** expectDialogActionGap asserts the footer actions keep a token-sized gap. */
 async function expectDialogActionGap(page: Page): Promise<void> {
-  // Naive zooms the card in; a raw bounding box taken mid-transition would
-  // report a fraction of the token-sized gap, so wait for the settled scale.
   await expect
     .poll(async () =>
       page.evaluate(() => {
@@ -499,7 +459,6 @@ async function expectDialogActionGap(page: Page): Promise<void> {
   expect(gap.actual).toBeGreaterThanOrEqual(gap.token - 0.5);
 }
 
-/** freshState resets the mock ledger for one test. */
 function freshState(): TerminalState {
   return { sessions: [], creates: 0, deletes: 0, seq: 0 };
 }
@@ -523,8 +482,6 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
     page.locator(".term-window .term-surface:visible .term-state"),
   ).toHaveText("Connected");
 
-  // The fitted renderer size must reach the PTY as one 0x02 frame right after
-  // `opened`, and the footer must show that size (not the server's 120x32).
   await expect
     .poll(() => state.sessions[0]?.resizes.length ?? 0)
     .toBeGreaterThan(0);
@@ -544,14 +501,12 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
     .locator(".term-tab-name", { hasText: "prod-01 · two" })
     .click();
 
-  // Type into the active (second) tab.
   await page.locator(".term-window .term-surface:visible .xterm-screen").click();
   await page.keyboard.type("echo two");
   await expect
     .poll(() => state.sessions.find((item) => item.id === second.sessionId)?.input)
     .toBe("echo two");
 
-  // Switch to the first tab: the same keystrokes must land in its own PTY.
   await page
     .locator(".term-tab-name", { hasText: "prod-01 · one" })
     .click();
@@ -567,8 +522,6 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
     state.sessions.find((item) => item.id === second.sessionId)?.input,
   ).toBe("echo two");
 
-  // A window resize re-fits the visible renderer, sends a fresh 0x02 with the
-  // new size, and typing still reaches the same session.
   const resizeCount = state.sessions.find(
     (item) => item.id === first.sessionId,
   )?.resizes.length ?? 0;
@@ -594,7 +547,6 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
     .poll(() => state.sessions.find((item) => item.id === first.sessionId)?.input)
     .toBe("echo one pwd");
 
-  // Switching panes repeatedly does not swap or recreate sessions.
   for (let index = 0; index < 3; index += 1) {
     await page
       .locator(".term-tab-name", { hasText: "prod-01 · two" })
@@ -605,7 +557,6 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
   }
   expect(state.creates).toBe(2);
 
-  // An in-app route change keeps both PTYs mounted in the app shell.
   await page.locator('a[href="/servers"]').first().click();
   await expect(page).toHaveURL(/\/servers$/);
   await expect(window).toBeVisible();
@@ -614,7 +565,6 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.locator(".term-tab")).toHaveCount(2);
 
-  // Minimize → rail badge → restore keeps both live and both buffers.
   await page.locator(".term-window-min").click();
   await expect(window).toBeHidden();
   const rail = page.locator(".rail-btn--terminal");
@@ -626,7 +576,6 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
   await expect(page.locator(".term-tab")).toHaveCount(2);
   expect(state.creates).toBe(2);
 
-  // A real keyboard shortcut opens the confirmation, and cancel keeps both.
   await page
     .locator(".term-tab-name", { hasText: "prod-01 · one" })
     .focus();
@@ -653,11 +602,8 @@ test("page → window transfer keeps the session, buffer and no new shell", asyn
     cwd: "app",
   })) as { id: string; sessionId: string };
   expect(state.creates).toBe(1);
-  // The page surface is not mounted in this package (JUS-246 owns the route);
-  // the session still streams into its renderer, so the buffer is real.
   await expect.poll(() => state.sessions[0]?.socket !== null).toBe(true);
 
-  // Transfer is one-way and reuses the tab: no POST, same live socket.
   await storeCall(page, "detachToWindow", tab.id);
   await expect(page.locator(".term-window")).toBeVisible();
   await expect(
@@ -667,8 +613,6 @@ test("page → window transfer keeps the session, buffer and no new shell", asyn
   await expect
     .poll(() => terminalText(page))
     .toContain(`welcome ${tab.sessionId}`);
-  // The transfer kept the same renderer, and `opened` flushed its real size to
-  // the PTY exactly as a direct window session does.
   await expect.poll(() => state.sessions[0]?.resizes.length ?? 0).toBeGreaterThan(0);
   const transferred = await tabState(page, tab.id);
   expect(state.sessions[0]?.resizes.at(-1)).toEqual({
@@ -676,8 +620,6 @@ test("page → window transfer keeps the session, buffer and no new shell", asyn
     rows: transferred.rows,
   });
 
-  // Returning to the page source returns the same detached tab; it must not
-  // create a duplicate shell. No window → page action is offered.
   const reopened = (await storeCall(page, "openPageSession", {
     serverId,
     serverName: "prod-01",
@@ -703,7 +645,6 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   await openWindow(page, "two");
   await expect(page.locator(".term-tab")).toHaveCount(2);
 
-  // Window close → cancel keeps both PTYs running.
   await page.locator(".term-window-close").click();
   const dialog = page.locator(".term-close-modal");
   await expect(dialog).toBeVisible();
@@ -716,9 +657,6 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(state.deletes).toBe(0);
   expect(state.sessions.every((item) => item.closeFrames === 0)).toBe(true);
 
-  // The tab strip's close control is a pointer target inside the tab (the
-  // tablist owns only role=tab elements) with a WCAG-sized hit box; keyboard
-  // users close the focused tab with Delete, which the tab announces.
   const closeButton = page
     .locator(".term-tab", { hasText: "prod-01 · one" })
     .locator(".term-tab-close");
@@ -728,7 +666,6 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(closeBox?.height ?? 0).toBeGreaterThanOrEqual(24);
   await closeButton.click();
   await expect(dialog).toContainText("Close this terminal?");
-  // The sign-out gate uses this same dialog, so the single-tab arm is covered.
   await expectDialogActionGap(page);
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
   await expect(page.locator(".term-tab")).toHaveCount(1);
@@ -737,7 +674,6 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(state.sessions[0]?.closeFrames).toBe(1);
   expect(state.sessions[1]?.closeFrames).toBe(0);
 
-  // Focus returns to the surviving tab, not to document.body.
   const remaining = await page.evaluate(() => {
     const app = (document.querySelector("#app") as unknown as {
       __vue_app__: {
@@ -753,14 +689,12 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
     .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
     .toBe(`term-tab-${remaining}`);
 
-  // Keyboard path: Delete on the focused tab opens the same confirmation.
   await page.locator(".term-tab-name").first().focus();
   await page.keyboard.press("Delete");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Keep terminals" }).click();
   await expect(page.locator(".term-tab")).toHaveCount(1);
 
-  // Closing the window confirms the remaining session and removes the badge.
   await page.locator(".term-window-close").click();
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
   await expect(page.locator(".term-window")).toBeHidden();
@@ -777,8 +711,6 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
   await page.setViewportSize({ width: 1366, height: 900 });
   await seedApp(page, "/dashboard");
 
-  // Ten tabs: at 390px the strip is narrower than the tabs' minimum width, so
-  // this test covers the scrolling state as well as the many-tab desktop rows.
   const titles = [
     "one", "two", "three", "four", "five",
     "six", "seven", "eight", "nine", "ten",
@@ -788,8 +720,6 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
   }
   await expect(page.locator(".term-tab")).toHaveCount(titles.length);
 
-  // JUS-275: the context trigger is named by its visible text, so the target
-  // is announced instead of a generic "session details" label (WCAG 2.5.3).
   const context = page.locator(
     ".term-window .term-surface:visible .term-context",
   );
@@ -821,7 +751,6 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
         strip: box(strip),
         window: windowBox,
         paddingRight: Number.parseFloat(getComputedStyle(bar).paddingRight),
-        // JUS-275: sessions never crowd the title bar.
         tabsInBar: bar.contains(tabs),
         tabs: box(tabs),
         scroll: {
@@ -832,8 +761,6 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
         add: addBox,
         min: minBox,
         close: closeBox,
-        // The (+)-after-tabs contract: the add control follows the last tab in
-        // the strip, and the pinned controls stay at the bar's far right.
         addHit: document
           .elementsFromPoint((addBox.left + addBox.right) / 2, (addBox.top + addBox.bottom) / 2)
           .some((element) => element === add || add.contains(element)),
@@ -846,12 +773,9 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
       };
     });
 
-    // The strip sits below the title bar and stays inside the window.
     expect(geometry.tabsInBar).toBe(false);
     expect(geometry.strip.top).toBeGreaterThanOrEqual(geometry.bar.bottom - 0.5);
     expect(geometry.strip.right).toBeLessThanOrEqual(geometry.window.right + 0.5);
-    // The close control's right edge is the bar's content right edge, and the
-    // minimize/close pair is at the far right of that bar.
     expect(
       Math.abs(geometry.close.right - (geometry.bar.right - geometry.paddingRight)),
     ).toBeLessThanOrEqual(1);
@@ -865,15 +789,12 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
     if (width <= 480) {
       expect(geometry.scroll.width).toBeGreaterThan(geometry.scroll.client);
     } else {
-      // A non-scrolling strip shows every tab strictly left of the add control.
       for (const tab of geometry.tabRects) {
         expect(tab.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
       }
     }
   }
 
-  // At 390px the scrollable strip can be scrolled to its end without moving
-  // the add control: the tabs are what scrolls.
   await page.setViewportSize({ width: 390, height: 900 });
   await page.evaluate(() => {
     const tabs = document.querySelector(".term-tabs") as HTMLElement;
@@ -892,14 +813,11 @@ test("window actions stay pinned and tabs keep their own scrollable strip", asyn
   expect(scrolled.lastRight).toBeLessThanOrEqual(scrolled.tabsRight + 0.5);
   expect(scrolled.tabsRight).toBeLessThanOrEqual(scrolled.addLeft + 0.5);
 
-  // Keyboard reachable in DOM order: the active tab hands Tab to the add
-  // control, and the bar's minimize then close follow.
   await page.locator('.term-tab-name[aria-selected="true"]').focus();
   await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
     .toContain("term-add-tab");
-  // The strip is reachable in both directions from the active tab.
   await page.keyboard.press("Shift+Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.getAttribute("role") ?? ""))
@@ -922,7 +840,6 @@ test("the window moves, resizes and stays bounded at desktop and phone sizes", a
   await expect(page.locator(".term-window")).toBeVisible();
   await expectInsideViewport(page, { width: 1280, height: 800 });
 
-  // Drag the title bar: the window follows the pointer, clamped on screen.
   const before = await windowBox(page);
   const bar = await page.locator(".term-window-bar").boundingBox();
   await page.mouse.move(bar!.x + 24, bar!.y + 20);
@@ -934,7 +851,6 @@ test("the window moves, resizes and stays bounded at desktop and phone sizes", a
   expect(after.y).toBeGreaterThan(before.y);
   await expectInsideViewport(page, { width: 1280, height: 800 });
 
-  // Drag far past the bottom-right edge: it never leaves the viewport.
   const movedBar = await page.locator(".term-window-bar").boundingBox();
   await page.mouse.move(movedBar!.x + 24, movedBar!.y + 20);
   await page.mouse.down();
@@ -942,7 +858,6 @@ test("the window moves, resizes and stays bounded at desktop and phone sizes", a
   await page.mouse.up();
   await expectInsideViewport(page, { width: 1280, height: 800 });
 
-  // Keyboard resize through the SE slider grows the window, still bounded.
   const grip = page.locator(".term-resize--se");
   await grip.focus();
   const beforeResize = await windowBox(page);
@@ -953,13 +868,9 @@ test("the window moves, resizes and stays bounded at desktop and phone sizes", a
   expect(afterResize.height).toBeLessThan(beforeResize.height);
   await expectInsideViewport(page, { width: 1280, height: 800 });
 
-  // 1366 keeps the same bound.
   await page.setViewportSize({ width: 1366, height: 800 });
   await expectInsideViewport(page, { width: 1366, height: 800 });
 
-  // 390px phone: the window fills the width within its margins, the meta row
-  // keeps the working directory readable instead of clipping it, and the
-  // minimized session is restorable from the mobile rail drawer.
   await page.setViewportSize({ width: 390, height: 844 });
   await expectInsideViewport(page, { width: 390, height: 844 });
   const cwdValue = page.locator(
@@ -980,7 +891,6 @@ test("the window moves, resizes and stays bounded at desktop and phone sizes", a
   await expect(page.locator(".term-window")).toBeVisible();
   await expectInsideViewport(page, { width: 390, height: 844 });
 
-  // 480px keeps the same contract.
   await page.setViewportSize({ width: 480, height: 900 });
   await expectInsideViewport(page, { width: 480, height: 900 });
   expect(state.creates).toBe(1);
@@ -1003,7 +913,6 @@ test("the terminal window coexists with the code editor without replacing it", a
   await openWindow(page, "app");
   const terminal = page.locator(".term-window");
   await expect(terminal).toBeVisible();
-  // Both floating windows and both rail controls exist at once.
   await expect(page.locator(".ed-window")).toBeVisible();
   await page.locator(".term-window-min").click();
   await expect(page.locator(".rail-btn--terminal")).toBeVisible();
@@ -1011,14 +920,10 @@ test("the terminal window coexists with the code editor without replacing it", a
   await page.locator(".rail-btn--terminal").click();
   await expect(terminal).toBeVisible();
 
-  // Clicking the editor lowers the terminal beneath it; clicking the terminal
-  // raises it again, so neither surface permanently covers the other.
   await page.locator(".ed-window-bar").click({ position: { x: 200, y: 12 } });
   const lowered = await terminal.evaluate((element) =>
     Number.parseInt(getComputedStyle(element as HTMLElement).zIndex, 10),
   );
-  // The rail icon is always reachable: with the window visible but behind the
-  // editor it raises it instead of merely minimizing it.
   await page.locator(".rail-btn--terminal").click();
   const raised = await terminal.evaluate((element) =>
     Number.parseInt(getComputedStyle(element as HTMLElement).zIndex, 10),
@@ -1026,14 +931,12 @@ test("the terminal window coexists with the code editor without replacing it", a
   expect(raised).toBeGreaterThan(lowered);
   await expect(terminal).toBeVisible();
 
-  // The editor still owns its buffer after all the terminal activity.
   await expect(page.locator(".cm-content")).toBeVisible();
   await page.locator(".ed-window-min").click();
   await expect(page.locator(".ed-window")).toBeHidden();
   await expect(terminal).toBeVisible();
   expect(state.creates).toBe(1);
 });
-
 
 test("both floating tools render through one window frame and elevation", async ({
   page,
@@ -1091,7 +994,6 @@ test("both floating tools render through one window frame and elevation", async 
     };
   });
 
-  // One shared frame: same elevation token, radius, border and header height.
   expect(chrome.floating).not.toBe("none");
   expect(chrome.editor.shadow).toBe(chrome.floating);
   expect(chrome.terminal.shadow).toBe(chrome.floating);
@@ -1100,7 +1002,6 @@ test("both floating tools render through one window frame and elevation", async 
   expect(Math.abs(chrome.editor.barHeight - chrome.terminal.barHeight)).toBeLessThanOrEqual(0.5);
   expect(chrome.editor.sharedBar).toBe(true);
   expect(chrome.terminal.sharedBar).toBe(true);
-  // Same control sizing for minimize/close.
   expect(Math.abs(chrome.editor.min.width - chrome.terminal.min.width)).toBeLessThanOrEqual(0.5);
   expect(Math.abs(chrome.editor.min.height - chrome.terminal.min.height)).toBeLessThanOrEqual(0.5);
   expect(Math.abs(chrome.editor.close.width - chrome.terminal.close.width)).toBeLessThanOrEqual(0.5);
@@ -1121,22 +1022,18 @@ test("heartbeat, disconnect, exit and error states use real frames", async ({
   await expect(status).toHaveText("Connected");
   const first = state.sessions[0]!;
 
-  // The 25s client heartbeat is on the wire (0x04), not just a README claim.
   await page.clock.fastForward(25_500);
   await expect.poll(() => first.heartbeats).toBeGreaterThanOrEqual(1);
 
-  // A transport close is reported as disconnected; nothing reconnects itself.
   await first.socket!.close({ code: 1006 });
   await expect(status).toHaveText("Disconnected");
   await page.clock.fastForward(5_000);
   expect(state.creates).toBe(1);
 
-  // Retry is explicit and creates exactly one new session.
   await page.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(status).toHaveText("Connected");
 
-  // The shell exit carries its code and offers a new session.
   const second = state.sessions[1]!;
   second.socket!.send(jsonFrame(2, { exit_code: 7, signal: "" }));
   await expect(status).toHaveText("Exited");
@@ -1149,8 +1046,6 @@ test("heartbeat, disconnect, exit and error states use real frames", async ({
     frame(3, Buffer.from("the node agent is unavailable", "utf8")),
   );
   await expect(status).toHaveText("Error");
-  // JUS-248 r1: the overlay renders bounded catalog copy only. The relay phrase
-  // can carry host detail, so the raw text must never reach the DOM.
   await expect(
     page.getByText("The node agent is unavailable. Try again once it reconnects."),
   ).toBeVisible();
@@ -1176,15 +1071,11 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
   await expect(shortcuts).toBeVisible();
   await expect(shortcuts).toContainText("Ctrl+Shift+E");
   await expect(shortcuts).toContainText("Alt+Shift+W");
-  // WCAG 2.5.8: the shortcuts trigger is at least 24x24.
   const shortcutsBox = await page.locator(".term-shortcuts-btn").boundingBox();
   expect(shortcutsBox?.width ?? 0).toBeGreaterThanOrEqual(24);
   expect(shortcutsBox?.height ?? 0).toBeGreaterThanOrEqual(24);
-  // Toggle the popover closed deterministically (Escape focus handling differs
-  // across platforms), then drive the real xterm input textarea.
   await page.locator(".term-shortcuts-btn").click();
   await expect(shortcuts).toBeHidden();
-  // JUS-156: the icon-only toolbar controls also explain themselves on hover.
   await page.locator(".term-commands-btn").hover();
   await expect(
     page.locator(".n-tooltip", { hasText: "Quick commands" }),
@@ -1194,14 +1085,11 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
   );
   await input.focus();
 
-  // The chord pulls focus out of the shell onto the window tab.
   await page.keyboard.press("Control+Shift+E");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
     .toBe(`term-tab-${tab.id}`);
 
-  // Inside the shell, Alt/Option chords belong to the PTY (macOptionIsMeta):
-  // they must not open the close dialog or minimize the window.
   await input.focus();
   await expect
     .poll(() =>
@@ -1219,8 +1107,6 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
     .toBeGreaterThan(inputBefore);
   expect(state.sessions[0]!.input).toContain("\u001b");
 
-  // The window chords are documented for the window chrome. Focus the tab and
-  // use Alt+Shift+W: the shared dialog opens; cancel keeps the session.
   await page.locator(`#term-tab-${tab.id}`).focus();
   await page.keyboard.press("Alt+Shift+W");
   const dialog = page.locator(".term-close-modal");
@@ -1228,8 +1114,6 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
   await dialog.getByRole("button", { name: "Keep terminals" }).click();
   await expect(page.locator(".term-tab")).toHaveCount(1);
 
-  // Alt+M from page chrome does nothing; from the shell it types Option+M;
-  // from the window chrome it minimizes to the rail.
   await page.locator(".topbar").click();
   await page.keyboard.press("Alt+M");
   await expect(page.locator(".term-window")).toBeVisible();
@@ -1278,7 +1162,6 @@ test("signing out confirms live shells and cancel aborts the logout", async ({
   expect(state.sessions[0]?.closeFrames).toBe(0);
   expect(state.deletes).toBe(0);
 
-  // A confirmed sign-out releases the shell and lands on the login page.
   await signOut();
   await expect(dialog).toContainText("Close this terminal?");
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
@@ -1326,8 +1209,6 @@ test("the theme applies immediately and survives page → window without a new s
   await mockTerminalApi(page, state);
   await seedApp(page, "/dashboard");
 
-  // A page-mode session has no mounted route in JUS-250 (JUS-246 owns it), but
-  // its renderer and PTY are live; the preference is the public store API.
   const tab = (await storeCall(page, "openPageSession", {
     serverId,
     serverName: "prod-01",
@@ -1337,7 +1218,6 @@ test("the theme applies immediately and survives page → window without a new s
   await expect.poll(() => state.sessions[0]?.socket !== null).toBe(true);
   await storeCall(page, "setTheme", "gotham-light");
 
-  // Account-scoped persistence, not a global key.
   expect(
     await page.evaluate(() =>
       localStorage.getItem("gotham.terminal.appearance.v1.u-1"),
@@ -1349,13 +1229,10 @@ test("the theme applies immediately and survives page → window without a new s
     ),
   ).toBeNull();
 
-  // The transfer keeps the session, buffer and chosen palette.
   await storeCall(page, "detachToWindow", tab.id);
   const surface = page.locator(".term-window .term-surface:visible");
   await expect(page.locator(".term-window")).toBeVisible();
   await expect(surface).toHaveAttribute("data-theme", "gotham-light");
-  // The frame around the xterm canvas follows the light theme instead of
-  // leaving an 8px dark gutter.
   await expect
     .poll(() =>
       surface.evaluate((element) =>
@@ -1366,8 +1243,6 @@ test("the theme applies immediately and survives page → window without a new s
   await expect.poll(() => terminalText(page)).toContain("welcome session-1");
   expect(state.creates).toBe(1);
 
-  // Choosing through the real control repaints in place: the PTY and buffer
-  // are untouched and the banner was not replayed by the transfer.
   await surface.locator(".term-theme-btn").click();
   const group = page.getByRole("radiogroup", { name: "Terminal theme" });
   await expect(group).toBeVisible();
@@ -1382,7 +1257,6 @@ test("the theme applies immediately and survives page → window without a new s
     .poll(async () => countOf(await terminalText(page), "Gotham v0.2.1-dev"))
     .toBe(1);
 
-  // Minimize/restore is not a new session and keeps the chosen theme.
   await page.locator(".term-window-min").click();
   await expect(page.locator(".term-window")).toBeHidden();
   await page.locator(".rail-btn--terminal").click();
@@ -1404,7 +1278,6 @@ test("the theme menu is keyboard operable and never types into the shell", async
   ).toHaveText("Connected");
 
   const session = state.sessions[0]!;
-  // Ignore the initial fitted-size frame; any 0x01 after this is leaked input.
   session.opcodes.length = 0;
   session.input = "";
   const surface = page.locator(".term-window .term-surface:visible");
@@ -1414,17 +1287,14 @@ test("the theme menu is keyboard operable and never types into the shell", async
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(group).toBeVisible();
-  // Focus lands on the checked radio, not xterm's textarea.
   await expect(group.getByRole("radio", { name: "Gotham Dark" })).toBeFocused();
 
-  // Arrows move the native radio group and apply the theme as they go.
   await page.keyboard.press("ArrowDown");
   await expect(surface).toHaveAttribute("data-theme", "gotham-light");
   await page.keyboard.press("ArrowUp");
   await expect(surface).toHaveAttribute("data-theme", "gotham-dark");
   await page.keyboard.press("Space");
   await page.keyboard.press("Enter");
-  // A printable key while the menu owns focus must not become PTY input.
   await page.keyboard.press("a");
   await page.keyboard.press("Tab");
   const tabLandedInShell = await page.evaluate(
@@ -1438,7 +1308,6 @@ test("the theme menu is keyboard operable and never types into the shell", async
   await expect(group).toBeHidden();
   await expect(trigger).toBeFocused();
 
-  // Reopen with Space on the trigger, pick the light theme, Escape back.
   await page.keyboard.press("Space");
   await expect(group).toBeVisible();
   await page.keyboard.press("ArrowDown");
@@ -1447,7 +1316,6 @@ test("the theme menu is keyboard operable and never types into the shell", async
   await expect(group).toBeHidden();
   await expect(trigger).toBeFocused();
 
-  // The shell never saw a keystroke from the menu, and the PTY is unchanged.
   expect(session.opcodes.filter((opcode) => opcode === 1)).toEqual([]);
   expect(session.input).toBe("");
   expect(state.creates).toBe(1);
@@ -1462,8 +1330,6 @@ test("the host banner shows the exact logo, real version and server once", async
   await mockTerminalApi(page, state);
   await seedApp(page, "/dashboard");
 
-  // The default window is ~100 columns: enough for the 63-cell logo, so a
-  // fresh session must show the artwork without any resizing.
   const first = await openWindow(page, "one");
   await expect(page.locator(".term-window")).toBeVisible();
   await expect.poll(() => state.sessions[0]?.resizes.length ?? 0).toBeGreaterThan(0);
@@ -1473,8 +1339,6 @@ test("the host banner shows the exact logo, real version and server once", async
   expect(banner).toContain("server: prod-01");
   expect(countOf(banner, "Gotham v0.2.1-dev")).toBe(1);
 
-  // A second tab, tab switches, a viewport resize, minimize/restore and a
-  // theme change must not replay the banner into the first tab.
   await openWindow(page, "two");
   await page.locator(".term-tab-name", { hasText: "prod-01 · one" }).click();
   await expect.poll(() => surfaceToText(page)).toContain("Gotham v0.2.1-dev");
@@ -1495,7 +1359,6 @@ test("the host banner shows the exact logo, real version and server once", async
   expect((await tabState(page, first.id)).status).toBe("connected");
   expect(state.creates).toBe(2);
 
-  // A container target is not a host shell: no Gotham banner at all.
   const container = (await storeCall(page, "openWindowSession", {
     serverId,
     serverName: "prod-01",
@@ -1509,8 +1372,6 @@ test("the host banner shows the exact logo, real version and server once", async
   expect(containerText).not.toContain("Gotham");
   expect(containerText).not.toContain("▓");
 
-  // A phone-width window gets the compact banner: no artwork, no wrapped
-  // title, and the prompt still follows it.
   await page.setViewportSize({ width: 390, height: 844 });
   const narrow = await openWindow(page, "narrow");
   await expect.poll(() => terminalText(page)).toContain(
@@ -1523,7 +1384,6 @@ test("the host banner shows the exact logo, real version and server once", async
   expect(state.creates).toBe(4);
 });
 
-/** surfaceToText reads the active window pane's xterm rows. */
 async function surfaceToText(page: Page): Promise<string> {
   return page
     .locator(".term-window .term-surface:visible .xterm-rows")
@@ -1538,7 +1398,6 @@ test("an idle terminal reserves no suggestion row and a match never resizes the 
   await mockTerminalApi(page, state);
   await seedApp(page, "/dashboard");
 
-  // One saved abbreviation makes the suggestion path reachable.
   await page.evaluate(() => {
     window.localStorage.setItem(
       "gotham.terminal.commands.v1.u-1",
@@ -1560,13 +1419,10 @@ test("an idle terminal reserves no suggestion row and a match never resizes the 
   const surface = page.locator(".term-window .term-surface:visible");
   await expect(surface.locator(".term-state")).toHaveText("Connected");
 
-  // JUS-275: no suggestion row is reserved while the shell is idle.
   await expect(surface.locator(".term-suggest")).toHaveCount(0);
   const idle = await surface.locator(".term-screen").boundingBox();
   const idleResizes = state.sessions[0]?.resizes.length ?? 0;
 
-  // A real prompt mark plus a typed abbreviation mounts the strip as an
-  // overlay: the renderer box and the PTY size stay exactly as they were.
   state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
   await surface.locator(".xterm-helper-textarea").focus();
   await page.keyboard.type("gs");
@@ -1574,9 +1430,6 @@ test("an idle terminal reserves no suggestion row and a match never resizes the 
   await expect
     .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
     .toBe(Math.round(idle?.height ?? 0));
-  // Restored guarantee (round 2): the strip is inside the terminal box but
-  // never intersects the cursor row / the line being typed. The placement
-  // follows the renderer cursor, so poll for the settled box.
   await expect
     .poll(async () => {
       const strip = await surface.locator(".term-suggest").boundingBox();
@@ -1597,8 +1450,6 @@ test("an idle terminal reserves no suggestion row and a match never resizes the 
       return clear ? "ok" : "covers cursor";
     })
     .toBe("ok");
-  // The overlay surface is pointer-transparent: the rows under it still take
-  // clicks/selection, only its controls capture the pointer.
   const under = await page.evaluate(() => {
     const element = document.querySelector(
       ".term-window .term-suggest",
@@ -1615,7 +1466,6 @@ test("an idle terminal reserves no suggestion row and a match never resizes the 
   });
   expect(under).toBe(false);
 
-  // Dismissing the match must not resize the PTY either.
   await surface.getByRole("button", { name: "Dismiss suggestion" }).click();
   await expect(surface.locator(".term-suggest")).toHaveCount(0);
   await expect
@@ -1652,7 +1502,6 @@ test("a suggestion never covers a prompt that sits on the last row", async ({
   const surface = page.locator(".term-window .term-surface:visible");
   await expect(surface.locator(".term-state")).toHaveText("Connected");
 
-  // Fill the viewport so the next prompt lands on the very last row.
   const rows = (await tabState(page, tab.id)).rows;
   const filler = Array.from({ length: rows + 8 }, (_, index) => `line ${index}`)
     .join("\r\n");
@@ -1699,21 +1548,17 @@ test("a suggestion never covers a prompt that sits on the last row", async ({
   expect(geometry.cursor).not.toBeNull();
   expect(geometry.strip).not.toBeNull();
 
-  // The prompt really is on the last row: the cursor cell reaches the bottom
-  // of the terminal (inside its 8px padding).
   expect(
     geometry.cursor!.y + geometry.cursor!.height,
   ).toBeGreaterThanOrEqual(
     geometry.screen!.y + geometry.screen!.height - 16,
   );
 
-  // A suggestion appearing sends no resize frame and keeps the xterm box.
   await expect
     .poll(async () => Math.round((await surface.locator(".term-screen").boundingBox())?.height ?? 0))
     .toBe(Math.round(screenBefore?.height ?? 0));
   expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
 
-  // The strip stays above the cursor row: the line being typed is visible.
   await expect
     .poll(async () => {
       const strip = await surface.locator(".term-suggest").boundingBox();
@@ -1729,8 +1574,6 @@ test("a suggestion never covers a prompt that sits on the last row", async ({
     })
     .toBe("clear");
 
-  // Chrome stays on top (reconnect/status), and the terminal rows under the
-  // strip stay interactive.
   expect(geometry.status).not.toBeNull();
   expect(geometry.statusHit).toBe(true);
   const passThrough = await page.evaluate(() => {
@@ -1747,8 +1590,6 @@ test("a suggestion never covers a prompt that sits on the last row", async ({
   });
   expect(passThrough).toBe(false);
 
-  // Round 2 (d): a reconnect state paints above the overlay, so its retry
-  // stays visible and clickable.
   state.sessions[0]?.socket?.close({ code: 1006 });
   const overlay = surface.locator(".term-overlay");
   await expect(overlay).toBeVisible();
@@ -1775,7 +1616,6 @@ test("quick command suggestions survive a theme change and page → window move"
   await mockTerminalApi(page, state);
   await seedApp(page, "/dashboard");
 
-  // Seed one command for the signed-in account before the runtime starts.
   await page.evaluate(() => {
     window.localStorage.setItem(
       "gotham.terminal.commands.v1.u-1",
@@ -1793,8 +1633,6 @@ test("quick command suggestions survive a theme change and page → window move"
     );
   });
 
-  // Start a page session, choose a theme, then transfer the live session to
-  // the floating window. The suggestion must still work on the same PTY.
   const tab = (await storeCall(page, "openPageSession", {
     serverId,
     serverName: "prod-01",
@@ -1814,7 +1652,6 @@ test("quick command suggestions survive a theme change and page → window move"
   const suggestion = surface.locator(".term-suggest-option");
   await expect(suggestion).toBeVisible();
 
-  // A theme change repaints in place and does not disturb the suggestion.
   await storeCall(page, "setTheme", "gotham-dark");
   await expect(surface).toHaveAttribute("data-theme", "gotham-dark");
   await expect(suggestion).toBeVisible();
@@ -1844,14 +1681,9 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
     page.locator(".term-window .term-surface:visible .term-state"),
   ).toHaveText("Connected");
 
-  // Add one command through the panel.
   await page.locator(".term-commands-btn").click();
   await expect(page.getByText("Quick commands", { exact: true })).toBeVisible();
 
-  // The editor stays inside a phone viewport. Popper repositions after the
-  // resize, so poll for the settled box instead of measuring mid-move.
-  // Wait for the card's open transition to finish before measuring: a
-  // mid-transition box carries the old transform origin and proves nothing.
   await expect
     .poll(() =>
       page.evaluate(
@@ -1879,7 +1711,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await page.setViewportSize({ width: 1280, height: 800 });
 
   await page.getByRole("button", { name: "Add command" }).click();
-  // JUS-275 item 7: abbreviation discoverability lives in the quick-command UI.
   await expect(page.getByText("Abbreviation (optional)")).toBeVisible();
   await expect(
     page.getByText(/Type this at a supported prompt/),
@@ -1891,7 +1722,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await expect(page.locator(".term-quick-commands-item")).toHaveCount(1);
   await expect(page.locator(".term-quick-commands-item")).toContainText("git status");
 
-  // Selecting it inserts text only.
   await page.locator(".term-quick-commands-insert").click();
   await expect.poll(() => state.sessions[0]?.input ?? "").toContain("git status");
   expect(state.sessions[0]?.input ?? "").not.toContain("\r");
@@ -1899,8 +1729,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await page.waitForTimeout(50);
   expect(state.sessions[0]?.input.length).toBe(afterInsert);
 
-  // A real prompt mark enables the abbreviation suggestion. Typing `gs` is
-  // forwarded; Ctrl+Shift+Space focuses the option; Enter accepts it.
   state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
   const input = page.locator(
     ".term-window .term-surface:visible .xterm-helper-textarea",
@@ -1910,7 +1738,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   const suggestion = page.locator(".term-window .term-suggest-option");
   await expect(suggestion).toBeVisible();
   await expect(suggestion).toContainText("Git status");
-  // The live announcement is exposed to AT but visually hidden.
   const live = page.locator(".term-window .term-suggest .term-sr");
   await expect(live).toHaveAttribute("role", "status");
   await expect(live).toHaveAttribute("aria-live", "polite");
@@ -1918,8 +1745,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   expect(liveBox?.width ?? 0).toBeLessThanOrEqual(1);
   expect(liveBox?.height ?? 0).toBeLessThanOrEqual(1);
 
-  // The strip stays inside the viewport at phone and desktop widths and is an
-  // overlay on the terminal bottom: it never takes a row from xterm.
   for (const width of [390, 480, 1280, 1366]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(suggestion).toBeVisible();
@@ -1965,8 +1790,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   expect(state.sessions[0]?.input ?? "").not.toContain("\r");
   await expect(suggestion).toBeHidden();
 
-  // A fresh prompt (mark) is required after accept; then Escape is forwarded
-  // to the shell (vi normal mode) and also dismisses the suggestion.
   await page.waitForTimeout(100);
   const resizesBefore = state.sessions[0]?.resizes.length ?? 0;
   const screenBefore = await page
@@ -1981,8 +1804,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
     .boundingBox();
   expect(screenBefore).not.toBeNull();
   expect(screenShown).not.toBeNull();
-  // JUS-275: the row is an overlay, so the renderer box is untouched and the
-  // suggestion sends no resize frame.
   expect(screenShown?.height).toBe(screenBefore?.height);
   expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
 
@@ -1992,7 +1813,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await expect
     .poll(() => state.sessions[0]?.input ?? "")
     .toBe(`${beforeEscape}\x1b`);
-  // The strip is gone again: still no resize frame.
   expect(state.sessions[0]?.resizes.length ?? 0).toBe(resizesBefore);
   await expect
     .poll(async () =>
@@ -2004,8 +1824,6 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
     )
     .toBe(Math.round(screenBefore?.height ?? 0));
 
-  // The list survives a reload for the same account. Close the live shell
-  // first so the beforeunload guard does not prompt during the reload.
   await page.locator(".term-window-close").click();
   await page
     .locator(".term-close-modal")
@@ -2034,15 +1852,11 @@ test("the terminal window floats on the soft elevation shadow in both themes", a
   const terminalWindow = page.locator(".term-window");
   await expect(terminalWindow).toBeVisible();
 
-  // Gotham Dark: the window paints the dedicated floating elevation, not the
-  // compact raised shadow the smaller overlays use.
   const dark = await floatingShadow(page, ".term-window");
   expect(dark.expected).not.toBe("none");
   expect(dark.actual).toBe(dark.expected);
   expect(dark.actual).not.toBe(dark.raised);
 
-  // Gotham Light repaints the xterm frame in place; the lift and the window
-  // geometry stay identical, so the shadow never shifts the layout.
   const surface = page.locator(".term-window .term-surface:visible");
   const darkBox = await windowBox(page);
   await storeCall(page, "setTheme", "gotham-light");
@@ -2062,8 +1876,6 @@ test("the terminal window floats on the soft elevation shadow in both themes", a
   expect(Math.round(lightBox.width)).toBe(Math.round(darkBox.width));
   expect(Math.round(lightBox.height)).toBe(Math.round(darkBox.height));
 
-  // A 390px phone keeps the same lift, the window inside the viewport and no
-  // horizontal document overflow.
   await page.setViewportSize({ width: 390, height: 844 });
   const phone = await floatingShadow(page, ".term-window");
   expect(phone.actual).toBe(phone.expected);

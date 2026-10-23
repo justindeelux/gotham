@@ -10,11 +10,6 @@ import type { Page, WebSocketRoute } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, URL:readonly, window:readonly */
 
-// JUS-246 real-pane proof: the committed webdist is served statically, the
-// control-plane API is mocked, and Playwright's WebSocket router stands in for
-// the PTY with the exact binary framing. The standalone page, the server
-// detail tab and the paused-session dock are driven with real input.
-
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
 
@@ -60,7 +55,6 @@ const SERVER_A = "11111111-1111-4111-8111-111111111111";
 const SERVER_B = "22222222-2222-4222-8222-222222222222";
 const SERVER_OFFLINE = "33333333-3333-4333-8333-333333333333";
 
-/** serverRow builds one managed server row. */
 function serverRow(id: string, name: string, status: string) {
   return {
     id,
@@ -93,7 +87,6 @@ const servers = [
   serverRow(SERVER_OFFLINE, "prod-03", "offline"),
 ];
 
-/** CreateBody is the exact terminal create-session request. */
 interface CreateBody {
   target?: string;
   root?: string;
@@ -103,18 +96,15 @@ interface CreateBody {
   [key: string]: unknown;
 }
 
-/** FakeSession is one session the mocked HTTP + WS pair understands. */
 interface FakeSession {
   id: string;
   serverId: string;
   input: string;
   socket: WebSocketRoute | null;
   closeFrames: number;
-  /** closeOnOpen makes the PTY socket drop as soon as it attaches. */
   closeOnOpen: boolean;
 }
 
-/** CreateBehavior scripts one POST /terminal/sessions response. */
 type CreateBehavior =
   | { kind: "ok" }
   | { kind: "status"; status: number }
@@ -129,12 +119,9 @@ interface TerminalState {
   creates: number;
   deletes: number;
   createServers: string[];
-  /** createBodies records the exact payload of every create call. */
   createBodies: CreateBody[];
   seq: number;
-  /** behaviors is consumed per create; empty means "ok". */
   behaviors: CreateBehavior[];
-  /** releases settle a delayed create during the flapping test. */
   releases: Array<() => void>;
 }
 
@@ -178,12 +165,10 @@ test.afterAll(async () => {
   });
 });
 
-/** frame builds one binary server frame. */
 function frame(opcode: number, payload: Buffer = Buffer.alloc(0)): Buffer {
   return Buffer.concat([Buffer.from([opcode]), payload]);
 }
 
-/** openFrame confirms a PTY for one session. */
 function openFrame(): Buffer {
   return frame(
     4,
@@ -199,12 +184,10 @@ function openFrame(): Buffer {
   );
 }
 
-/** outputFrame writes one line of shell output. */
 function outputFrame(text: string): Buffer {
   return frame(1, Buffer.from(text, "utf8"));
 }
 
-/** freshState resets the mock ledger. */
 function freshState(): TerminalState {
   return {
     sessions: [],
@@ -218,17 +201,8 @@ function freshState(): TerminalState {
   };
 }
 
-/** ROOT_PATTERN mirrors internal/terminal's allow-listed root name shape. */
 const ROOT_PATTERN = /^[a-z0-9][a-z0-9_-]{0,127}$/;
 
-/**
- * createBodyError mirrors the control plane's create-session validation. The
- * Terminal page and the Server detail Terminal tab must send a payload this
- * accepts: root is optional (the agent then picks the default directory), but
- * a root that is present must be a bounded name, and a cwd requires a root.
- * Keeping the real rules in the fake makes a UI/backend payload mismatch fail
- * these tests instead of being silently accepted by a permissive mock.
- */
 function createBodyError(body: CreateBody): string | null {
   const target = body.target ?? "host";
   if (target !== "host") {
@@ -272,7 +246,6 @@ function createBodyError(body: CreateBody): string | null {
   return null;
 }
 
-/** mockApi answers the shell, server and terminal routes. */
 async function mockApi(
   page: Page,
   state: TerminalState,
@@ -293,8 +266,6 @@ async function mockApi(
   await page.route("**/api/v1/servers", async (route) => {
     await route.fulfill({ json: { servers } });
   });
-  // The add-tab discovery read (JUS-265): this fixture only lists host nodes;
-  // the container journeys live in terminal-targets.spec.ts and terminal-application.spec.ts.
   await page.route("**/api/v1/terminal/targets", async (route) => {
     await route.fulfill({
       json: {
@@ -330,8 +301,6 @@ async function mockApi(
     state.creates += 1;
     state.createServers.push(serverId);
 
-    // Validate exactly like the control plane. A create body the backend would
-    // refuse must fail here, never be accepted because the mock is permissive.
     const body = (request.postDataJSON() ?? {}) as CreateBody;
     state.createBodies.push(body);
     const bodyError = createBodyError(body);
@@ -343,8 +312,6 @@ async function mockApi(
       return;
     }
 
-    // A fault scripted by a test: count the request first so a "no retry"
-    // assertion sees the exact number of attempts.
     if (behavior.kind === "network") {
       await route.abort("failed");
       return;
@@ -357,8 +324,6 @@ async function mockApi(
       return;
     }
     if (behavior.kind === "body") {
-      // A backend body message reaches the ApiError verbatim; the UI must map
-      // the failure to a bounded catalog code and never echo this text.
       await route.fulfill({
         status: behavior.status,
         json: { message: behavior.message },
@@ -366,8 +331,6 @@ async function mockApi(
       return;
     }
     if (behavior.kind === "malformed") {
-      // A 2xx body that violates the create contract: the UI must report an
-      // unexpected response, never a network error, and never open a socket.
       await route.fulfill({ status: 201, json: { id: "only-an-id" } });
       return;
     }
@@ -418,8 +381,6 @@ async function mockApi(
       }
       current.socket = ws;
       if (current.closeOnOpen) {
-        // The PTY confirmed the attach, then the stream dropped: the browser
-        // sees a live session close (disconnected), not a refused handshake.
         ws.send(openFrame());
         ws.close({ code: 1006 });
         return;
@@ -444,7 +405,6 @@ async function mockApi(
   );
 }
 
-/** seedApp seeds the signed-in user and opens one route. */
 async function seedApp(
   page: Page,
   path: string,
@@ -464,7 +424,6 @@ async function seedApp(
   await expect(page.locator(".topbar")).toBeVisible();
 }
 
-/** tabInfo reads the first terminal tab from the live Pinia store. */
 async function tabInfo(page: Page): Promise<{
   id: string;
   sessionId: string;
@@ -498,7 +457,6 @@ async function tabInfo(page: Page): Promise<{
   });
 }
 
-/** tabCounts returns how many page/window tabs the live store holds. */
 async function tabCounts(
   page: Page,
 ): Promise<{ page: number; window: number }> {
@@ -518,12 +476,6 @@ async function tabCounts(
   });
 }
 
-/**
- * pointHit reports what a real pointer would hit at one viewport point
- * (JUS-255). Playwright's locator clicks assert actionability, but only an
- * elementsFromPoint probe proves the topmost painted element is the floating
- * window (or its subtree) and that no page card sits above the shell.
- */
 async function pointHit(
   page: Page,
   point: { x: number; y: number },
@@ -551,28 +503,23 @@ test("the standalone page creates one shell for the chosen server and survives r
   await mockApi(page, state);
   await seedApp(page, "/terminal");
 
-  // Choosing a server is the activation: nothing is created before it.
   expect(state.creates).toBe(0);
   await expect(page.locator(".term-surface")).toHaveCount(0);
   await page.locator(".server-pick", { hasText: "prod-01" }).click();
   await expect.poll(() => state.creates).toBe(1);
   expect(state.createServers).toEqual([SERVER_A]);
-  // The page has no File manager context: the create payload must not invent a
-  // root or cwd (the control plane now accepts an omitted root).
   expect(state.createBodies[0]).toEqual({ target: "host", cols: 120, rows: 32 });
   await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_A}`));
   await expect(
     page.locator(".term-surface .term-state"),
   ).toHaveText("Connected");
 
-  // Real input reaches the session for the correct server.
   await page.locator(".term-surface .xterm-screen").click();
   await page.keyboard.type("echo one");
   await expect
     .poll(() => state.sessions[0]?.input)
     .toBe("echo one");
 
-  // 390px: the meta row wraps instead of clipping and the pane fits.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".term-meta")).toBeVisible();
   const metaFits = await page.locator(".term-meta").evaluate((element) => {
@@ -586,7 +533,6 @@ test("the standalone page creates one shell for the chosen server and survives r
   expect(noHorizontalScroll).toBe(true);
   await page.setViewportSize({ width: 1280, height: 800 });
 
-  // Leaving the route keeps the PTY alive and surfaces a paused card.
   const before = await tabInfo(page);
   await page.locator('a[href="/dashboard"]').first().click();
   await expect(page).toHaveURL(/\/dashboard$/);
@@ -598,8 +544,6 @@ test("the standalone page creates one shell for the chosen server and survives r
   expect(state.creates).toBe(1);
   expect(state.deletes).toBe(0);
 
-  // On a phone the dock is a compact bar until the operator expands it, so
-  // it cannot blanket the page content.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".term-dock-head")).toBeVisible();
   await expect(page.locator(".term-dock-list")).toBeHidden();
@@ -607,7 +551,6 @@ test("the standalone page creates one shell for the chosen server and survives r
   await expect(page.locator(".term-dock-list")).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 800 });
 
-  // Resume returns to the owning route and reuses the same session/buffer.
   await dock.locator(".term-dock-resume").click();
   await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_A}`));
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
@@ -617,7 +560,6 @@ test("the standalone page creates one shell for the chosen server and survives r
     .poll(() => page.locator(".term-surface .xterm-rows").innerText())
     .toContain(`welcome ${before?.sessionId}`);
 
-  // The page pane close affordance runs the shared Naive confirmation.
   const paneClose = page.locator('.term-surface [aria-label="Close terminal"]');
   await paneClose.click();
   const dialog = page.locator(".term-close-modal");
@@ -632,12 +574,10 @@ test("the standalone page creates one shell for the chosen server and survives r
   await expect(page.locator(".term-surface")).toHaveCount(0);
   await expect.poll(() => state.deletes).toBe(1);
   await expect(page.getByText("Session closed")).toBeVisible();
-  // Closing never starts a replacement on its own.
   expect(state.creates).toBe(1);
   await expect(page.locator(".term-dock")).toHaveCount(0);
   await expect(page.locator(".rail-btn--terminal")).toHaveCount(0);
 
-  // The explicit restart is the only path back, and it creates exactly once.
   await page
     .locator(".term-stage-closed")
     .getByRole("button", { name: "Start new session" })
@@ -674,13 +614,11 @@ test("page → window transfer keeps the session id and buffer, one way only", a
     .poll(() => window.locator(".xterm-rows").innerText())
     .toContain(`welcome ${before?.sessionId}`);
 
-  // A page pane never offers a return trip, and the source shows the notice.
   await expect(page.locator(".term-window").getByRole("button", { name: /page/i }))
     .toHaveCount(0);
   await expect(page.locator(".term-open-in-page")).toHaveCount(0);
   await expect(page.locator(".term-detached")).toBeVisible();
 
-  // Returning to the source route reuses the same (still window) session.
   await page.locator('a[href="/dashboard"]').first().click();
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.locator(".rail-btn--terminal .rail-badge")).toHaveText("1");
@@ -693,9 +631,6 @@ test("page → window transfer keeps the session id and buffer, one way only", a
   expect((await tabInfo(page))?.sessionId).toBe(before?.sessionId);
 });
 
-// JUS-255: the floating window must own the stacking order at every supported
-// width. The page pane sits behind it (a passive line, no buttons), so the
-// probe checks every window point against the real painted stack, not a fake.
 for (const size of [
   { width: 390, height: 844 },
   { width: 480, height: 900 },
@@ -715,14 +650,11 @@ for (const size of [
     const window = page.locator(".term-window");
     await expect(window).toBeVisible();
     await expect(page.locator(".term-detached")).toBeVisible();
-    // While the window is open the pane offers no actions at all: nothing can
-    // hide under the terminal and nothing can steal its pointer events.
     await expect(page.locator(".term-detached-actions")).toHaveCount(0);
 
     const box = await window.boundingBox();
     expect(box).not.toBeNull();
     const { x, y, width, height } = box!;
-    // Centre, three corners, the tab strip and the terminal's bottom edge.
     const points = [
       { x: x + width / 2, y: y + height / 2 },
       { x: x + 12, y: y + 12 },
@@ -740,11 +672,8 @@ for (const size of [
         false,
       );
     }
-    // The centre is the live shell, not window chrome and not the page behind.
     expect((await pointHit(page, points[0]!)).surfaceTop).toBe(true);
 
-    // The window is still draggable with the notice underneath, and it stays
-    // on top after the move.
     if (size.width === 1366) {
       const bar = await page.locator(".term-window-bar").boundingBox();
       await page.mouse.move(bar!.x + 40, bar!.y + 20);
@@ -790,7 +719,6 @@ test("the server detail Terminal tab keeps the window above its moved notice", a
   expect(hit.noticeTop).toBe(false);
   expect(hit.surfaceTop).toBe(true);
 
-  // Minimizing the window reveals the notice with its actions on the tab.
   await page.locator(".term-window-min").click();
   await expect(window).toBeHidden();
   await expect(page.locator(".term-detached-actions")).toBeVisible();
@@ -805,7 +733,6 @@ test("the server detail Terminal tab is lazy, single-flight and server-correct",
   await mockApi(page, state);
   await seedApp(page, `/servers/${SERVER_A}`);
 
-  // Opening the detail page never starts a shell.
   expect(state.creates).toBe(0);
   await expect(
     page.locator(".n-tabs-tab", { hasText: "Overview" }),
@@ -818,14 +745,11 @@ test("the server detail Terminal tab is lazy, single-flight and server-correct",
   await page.locator(".n-tabs-tab", { hasText: "Terminal" }).click();
   await expect.poll(() => state.creates).toBe(1);
   expect(state.createServers).toEqual([SERVER_A]);
-  // The detail tab has no File manager context either; the same exact payload
-  // the Terminal page sends must pass the control plane's validation.
   expect(state.createBodies[0]).toEqual({ target: "host", cols: 120, rows: 32 });
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
   const before = await tabInfo(page);
   expect(before?.sourcePath).toContain("tab=terminal");
 
-  // Rapid activation and re-entry reuse the live session, never a duplicate.
   for (let index = 0; index < 3; index += 1) {
     await page.locator(".n-tabs-tab", { hasText: "Overview" }).click();
     await page.locator(".n-tabs-tab", { hasText: "Terminal" }).click();
@@ -833,7 +757,6 @@ test("the server detail Terminal tab is lazy, single-flight and server-correct",
   expect(state.creates).toBe(1);
   expect((await tabInfo(page))?.sessionId).toBe(before?.sessionId);
 
-  // Leaving the detail page pauses the shell; the dock resumes the exact tab.
   await page.locator('a[href="/dashboard"]').first().click();
   await expect(page.locator(".term-dock")).toBeVisible();
   await page.locator(".term-dock-resume").click();
@@ -844,7 +767,6 @@ test("the server detail Terminal tab is lazy, single-flight and server-correct",
   expect((await tabInfo(page))?.sessionId).toBe(before?.sessionId);
   expect(state.creates).toBe(1);
 
-  // An offline node shows the unavailable state and never dials a shell.
   await page.goto(`${baseURL}/servers/${SERVER_OFFLINE}`);
   await expect(page.locator(".topbar")).toBeVisible();
   await page.locator(".n-tabs-tab", { hasText: "Terminal" }).click();
@@ -907,13 +829,9 @@ test("the moved-to-window notice starts a new page session only on demand", asyn
   await page.locator(".term-open-in-window").click();
   await expect(page.locator(".term-detached")).toBeVisible();
   await expect(page.getByText("This terminal is open in the window")).toBeVisible();
-  // Nothing starts from the notice itself. While the window is open the pane
-  // is passive (JUS-255), so no page action can sit under the shell.
   expect(state.creates).toBe(1);
   await expect(page.locator(".term-detached-actions")).toHaveCount(0);
 
-  // Collapsing the window makes the notice the visible pointer path; the
-  // actions still start nothing by themselves.
   await page.locator(".term-window-min").click();
   const startNew = page
     .locator(".term-detached")
@@ -922,8 +840,6 @@ test("the moved-to-window notice starts a new page session only on demand", asyn
   expect(state.creates).toBe(1);
   await startNew.click();
   await expect.poll(() => state.creates).toBe(2);
-  // Scope to the page pane: the floating window keeps its own (already
-  // Connected) surface, so a bare .term-surface locator is ambiguous here.
   await expect(page.locator(".term-page .term-surface .term-state")).toHaveText(
     "Connected",
   );
@@ -943,20 +859,16 @@ test("the moved notice actions are real pointer and keyboard targets", async ({
   const window = page.locator(".term-window");
   await expect(window).toBeVisible();
   await expect(page.locator(".term-detached-actions")).toHaveCount(0);
-  // The transfer removes the trigger, so focus lands on the window tab rather
-  // than document.body (keyboard users stay in the moved session).
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
     .toContain("term-tab-");
 
-  // Minimize with the real header button: the notice is now the way back.
   await page.locator(".term-window-min").click();
   await expect(window).toBeHidden();
   const notice = page.locator(".term-detached");
   await expect(notice).toBeVisible();
   await expect(page.locator(".term-detached-actions")).toBeVisible();
 
-  // "Show window" is hit-testable and clickable by a real pointer.
   const show = notice.getByRole("button", { name: "Show window" });
   const showBox = await show.boundingBox();
   const showHit = await pointHit(page, {
@@ -968,14 +880,11 @@ test("the moved notice actions are real pointer and keyboard targets", async ({
   await show.click();
   await expect(window).toBeVisible();
   await expect(page.locator(".term-detached-actions")).toHaveCount(0);
-  // Restoring hands focus to the window tab, never to document.body.
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
     .toContain("term-tab-");
   expect(state.creates).toBe(1);
 
-  // The same action works from the keyboard, and Tab walks the notice buttons
-  // in order: Show window -> Start new session.
   await page.locator(".term-window-min").click();
   await expect(window).toBeHidden();
   await show.focus();
@@ -990,7 +899,6 @@ test("the moved notice actions are real pointer and keyboard targets", async ({
   await page.keyboard.press("Enter");
   await expect(window).toBeVisible();
 
-  // "Close terminal" still asks through the one shared confirmation.
   await page.locator(".term-window-min").click();
   await expect(window).toBeHidden();
   await notice.getByRole("button", { name: "Close terminal" }).click();
@@ -1001,8 +909,6 @@ test("the moved notice actions are real pointer and keyboard targets", async ({
   await expect(notice).toBeVisible();
   expect(state.deletes).toBe(0);
 
-  // "Start new session" opens one fresh page shell; the moved tab keeps its
-  // session and buffer in the window.
   await notice.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(page.locator(".term-page .term-surface .term-state")).toHaveText(
@@ -1035,12 +941,10 @@ test("the server detail tab recovers from a closed session with an explicit rest
   await expect(page.getByText("Session closed")).toBeVisible();
   expect(state.creates).toBe(1);
 
-  // Focus lands on the explicit restart, not on a rail link.
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.textContent ?? ""))
     .toContain("Start new session");
 
-  // Switching Overview -> Terminal keeps the closed card and creates nothing.
   await page.locator(".n-tabs-tab", { hasText: "Overview" }).click();
   await page.locator(".n-tabs-tab", { hasText: "Terminal" }).click();
   await expect(page.locator(".term-stage-closed")).toBeVisible();
@@ -1110,11 +1014,9 @@ for (const failure of createFailures) {
       page.getByRole("button", { name: "Start new session" }),
     ).toBeVisible();
 
-    // No reconnect loop: the count is unchanged after a full retry window.
     await page.waitForTimeout(2000);
     expect(state.creates).toBe(1);
 
-    // Starting a new session is explicit and creates exactly once.
     await page.getByRole("button", { name: "Start new session" }).click();
     await expect.poll(() => state.creates).toBe(2);
     await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
@@ -1181,12 +1083,10 @@ test("an unexpected create response is bounded and never reported as network", a
   await expect(
     page.getByText("The control plane could not be reached."),
   ).toHaveCount(0);
-  // No session was registered, so no WebSocket could be opened.
   expect(state.sessions).toHaveLength(0);
   await page.waitForTimeout(1500);
   expect(state.creates).toBe(1);
 
-  // Explicit retry only; the next create is a well-formed response.
   await page.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
@@ -1209,7 +1109,6 @@ test("rapid tab flapping while a create is in flight issues one POST", async ({
   await terminalTab.click();
   await expect.poll(() => state.creates).toBe(1);
 
-  // Ten switches, a double-click and arrow-key moves while the POST is held.
   const overview = page.locator(".n-tabs-tab", { hasText: "Overview" });
   for (let index = 0; index < 10; index += 1) {
     await overview.click();
@@ -1222,7 +1121,6 @@ test("rapid tab flapping while a create is in flight issues one POST", async ({
   expect(state.creates).toBe(1);
   expect(state.createServers).toEqual([SERVER_A]);
 
-  // Release the single in-flight create; the session lands in the tab.
   state.releases.shift()?.();
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
   expect(state.creates).toBe(1);
@@ -1237,7 +1135,6 @@ test("closing one page tab confirms and keeps the other session", async ({
   await seedApp(page, `/terminal?server=${SERVER_A}`);
   await expect.poll(() => state.creates).toBe(1);
 
-  // A second page tab comes from the add-tab picker, not a destructive switch.
   await page.locator(".term-add-tab").click();
   await page
     .locator(".term-target-option")
@@ -1249,8 +1146,6 @@ test("closing one page tab confirms and keeps the other session", async ({
   await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_B}`));
   await expect(page.locator(".term-page-tab")).toHaveCount(2);
 
-  // Cancel keeps both shells and the active tab. The close control is its own
-  // labelled button, not a mouse-only span inside the tab.
   const close = page.locator(".term-page-tab.is-active .term-page-tab-close");
   await expect(close).toHaveAttribute("aria-label", /Close /);
   expect(await close.evaluate((element) => element.tagName)).toBe("BUTTON");
@@ -1263,7 +1158,6 @@ test("closing one page tab confirms and keeps the other session", async ({
   expect(state.deletes).toBe(0);
   await expect(page.locator(".term-page-tab")).toHaveCount(2);
 
-  // Confirm releases exactly the active tab; the first shell keeps running.
   await close.click();
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
@@ -1286,8 +1180,6 @@ test("signing out from /terminal lands on login with no forbidden redirect", asy
   await seedApp(page, `/terminal?server=${SERVER_A}`);
   await expect.poll(() => state.creates).toBe(1);
 
-  // The real account-menu path: sign-out confirms the live shell, then the
-  // auth flow redirects to login. It must not be mistaken for a demotion.
   await page.locator(".topbar").getByRole("button", { name: "Account" }).click();
   await page.locator(".n-dropdown-option", { hasText: "Sign out" }).click();
   const dialog = page.locator(".term-close-modal");
@@ -1300,14 +1192,12 @@ test("signing out from /terminal lands on login with no forbidden redirect", asy
   expect(await tabCounts(page)).toEqual({ page: 0, window: 0 });
 });
 
-/** RAW_PATTERNS are backend/axios strings that must never reach the DOM. */
 const RAW_PATTERNS = [
   "/srv/gotham/secret",
   "Request failed with status code",
   "Network Error",
 ];
 
-/** expectNoRawText asserts no raw failure text in text or attributes. */
 async function expectNoRawText(page: Page): Promise<void> {
   const html = await page.content();
   for (const pattern of RAW_PATTERNS) {
@@ -1378,8 +1268,6 @@ test("raw backend text never reaches the detail tab or the paused dock", async (
   await expect(page.getByText("The terminal could not be started.")).toBeVisible();
   await expectNoRawText(page);
 
-  // Leaving the route keeps the failed tab in the dock; the card must not
-  // echo the backend message.
   await page.locator('a[href="/dashboard"]').first().click();
   await expect(page.locator(".term-dock")).toBeVisible();
   await expect(page.locator(".term-dock")).toContainText("Error");
@@ -1417,11 +1305,6 @@ test("raw backend text never reaches the floating window", async ({ page }) => {
   await expectNoRawText(page);
 });
 
-// JUS-262: the page head was a flex row, so its three children (eyebrow,
-// title, description) rendered side by side — "OPERATIONS  Terminal  Open a
-// host shell…" on one line. The text group is one flex item now (same markup
-// as every other page); real boxes prove the stack at desktop and phone
-// widths, with a long description wrapping inside its own column.
 test("the page head stacks eyebrow, title and description at every width", async ({
   page,
 }) => {
@@ -1460,7 +1343,6 @@ test("the page head stacks eyebrow, title and description at every width", async
     expect(title, `${label}: title`).not.toBeNull();
     expect(description, `${label}: description`).not.toBeNull();
 
-    // Eyebrow above title above description: separate lines, never one row.
     expect(
       eyebrow!.bottom,
       `${label}: eyebrow sits above the title`,
@@ -1469,7 +1351,6 @@ test("the page head stacks eyebrow, title and description at every width", async
       title!.bottom,
       `${label}: title sits above the description`,
     ).toBeLessThanOrEqual(description!.top + 0.5);
-    // One stacked text column: the same left edge for all three.
     expect(
       Math.abs(title!.x - eyebrow!.x),
       `${label}: shared left edge`,
@@ -1478,7 +1359,6 @@ test("the page head stacks eyebrow, title and description at every width", async
       Math.abs(description!.x - eyebrow!.x),
       `${label}: description left edge`,
     ).toBeLessThan(1);
-    // The description wraps inside its column; nothing overflows sideways.
     expect(
       geometry.overflowX,
       `${label}: head does not overflow`,

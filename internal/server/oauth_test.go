@@ -24,7 +24,6 @@ import (
 	"github.com/justindeelux/gotham/internal/instance"
 )
 
-// fakeOAuthService is a deterministic OAuthService for handler tests.
 type fakeOAuthService struct {
 	callback    *auth.AuthResult
 	callbackErr error
@@ -47,8 +46,6 @@ func (f *fakeOAuthService) Callback(_ context.Context, _ string, _, _ string, _ 
 
 func (f *fakeOAuthService) Close() { f.closed = true }
 
-// newOAuthTestServer builds a Server backed by the fake OAuth service and the
-// given config.
 func newOAuthTestServer(t *testing.T, cfg *config.Config, oauth OAuthService) *Server {
 	t.Helper()
 
@@ -64,9 +61,6 @@ func newOAuthTestServer(t *testing.T, cfg *config.Config, oauth OAuthService) *S
 	return s
 }
 
-// newOAuthTestServerWithAuth builds a Server with both the fake auth service
-// and the OAuth service, so tests can exercise cookie clearing on the password
-// flows and the exchange endpoint together.
 func newOAuthTestServerWithAuth(t *testing.T, cfg *config.Config, oauth OAuthService) *Server {
 	t.Helper()
 
@@ -82,9 +76,6 @@ func newOAuthTestServerWithAuth(t *testing.T, cfg *config.Config, oauth OAuthSer
 	return s
 }
 
-// defaultOAuthConfig is the config used by OAuth handler tests: it opts into
-// plain-HTTP development with an explicit http:// redirect base, so the
-// insecure-request guard does not reject the HTTP tests (L1).
 func defaultOAuthConfig() *config.Config {
 	return &config.Config{
 		Values: config.Values{
@@ -98,7 +89,6 @@ func defaultOAuthConfig() *config.Config {
 	}
 }
 
-// defaultOAuthResult is the token pair the fake callback returns.
 func defaultOAuthResult() *auth.AuthResult {
 	return &auth.AuthResult{
 		User:         &auth.User{ID: testUserID.String(), Email: "user@example.com"},
@@ -108,10 +98,8 @@ func defaultOAuthResult() *auth.AuthResult {
 	}
 }
 
-// testOAuthFlow is the flow-binding cookie value shared by the exchange tests.
 const testOAuthFlow = "flow-123"
 
-// oauthRequest performs a GET against an OAuth route.
 func oauthRequest(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -121,8 +109,6 @@ func oauthRequest(t *testing.T, s *Server, path string) *httptest.ResponseRecord
 	return rec
 }
 
-// oauthCallbackRequest performs a callback GET with the given state and flow
-// cookie values (empty values omit the cookie).
 func oauthCallbackRequest(t *testing.T, s *Server, path, stateCookie, flowCookie string) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -138,7 +124,6 @@ func oauthCallbackRequest(t *testing.T, s *Server, path, stateCookie, flowCookie
 	return rec
 }
 
-// oauthExchangePost posts a one-time code, optionally with the flow cookie.
 func oauthExchangePost(t *testing.T, s *Server, code, flowCookie string) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -153,7 +138,6 @@ func oauthExchangePost(t *testing.T, s *Server, code, flowCookie string) *httpte
 	return rec
 }
 
-// exchangeCodeFromLocation extracts the one-time code from a callback redirect.
 func exchangeCodeFromLocation(t *testing.T, location string) string {
 	t.Helper()
 
@@ -168,8 +152,6 @@ func exchangeCodeFromLocation(t *testing.T, location string) string {
 	return code
 }
 
-// issueExchangeCode runs a successful callback for the fake and returns the
-// one-time code it redirects with.
 func issueExchangeCode(t *testing.T, s *Server) string {
 	t.Helper()
 
@@ -182,7 +164,6 @@ func issueExchangeCode(t *testing.T, s *Server) string {
 	return exchangeCodeFromLocation(t, rec.Header().Get("Location"))
 }
 
-// setCookieValue finds a Set-Cookie by name in a response.
 func setCookieValue(rec *httptest.ResponseRecorder, name string) *http.Cookie {
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == name {
@@ -257,8 +238,6 @@ func TestOAuthLoginSecureCookieOverTLS(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 
-	// Over HTTPS the cookies use the __Host- prefix, which requires Secure,
-	// Path=/ and no Domain; a sibling subdomain therefore cannot shadow them.
 	for _, name := range []string{auth.StateCookieNameSecure, auth.FlowCookieNameSecure} {
 		cookie := setCookieValue(rec, name)
 		if cookie == nil {
@@ -275,7 +254,6 @@ func TestOAuthLoginSecureCookieOverTLS(t *testing.T) {
 		}
 	}
 
-	// The insecure plain names must not be set on a secure request.
 	for _, name := range []string{auth.StateCookieName, auth.FlowCookieName} {
 		if cookie := setCookieValue(rec, name); cookie != nil {
 			t.Errorf("secure request set insecure cookie %s", name)
@@ -321,7 +299,6 @@ func TestOAuthCallbackRedirectsWithCode(t *testing.T) {
 	if strings.Contains(loc, "oauth_failed") {
 		t.Fatalf("callback failed: %s", loc)
 	}
-	// The redirect must never carry the token pair: only a one-time code.
 	for _, secret := range []string{"access-token", "refresh-token"} {
 		if strings.Contains(loc, secret) {
 			t.Errorf("Location %q leaks %q", loc, secret)
@@ -340,8 +317,6 @@ func TestOAuthCallbackRedirectsWithCode(t *testing.T) {
 	}
 	exchangeCodeFromLocation(t, loc)
 
-	// The state cookie is cleared; the flow cookie is deliberately retained so
-	// the SPA can redeem the code.
 	state := setCookieValue(rec, auth.StateCookieName)
 	if state == nil || state.MaxAge >= 0 {
 		t.Errorf("state cookie not cleared: %+v", state)
@@ -463,13 +438,11 @@ func TestOAuthExchangeHappyPath(t *testing.T) {
 		t.Errorf("token_type = %q, want %q", body.TokenType, tokenTypeBearer)
 	}
 
-	// The flow cookie is cleared once the code is redeemed.
 	flow := setCookieValue(rec, auth.FlowCookieName)
 	if flow == nil || flow.MaxAge >= 0 {
 		t.Errorf("flow cookie not cleared: %+v", flow)
 	}
 
-	// A code is single-use.
 	replay := oauthExchangePost(t, s, code, "flow-123")
 	if replay.Code != http.StatusUnauthorized {
 		t.Fatalf("replayed exchange status = %d, want 401", replay.Code)
@@ -564,8 +537,6 @@ func TestOAuthLoginNotFoundBodyIsJSON(t *testing.T) {
 	}
 }
 
-// TestOAuthCallbackRejectsDuplicateFlowCookie pins the HTTP-dev defense: a
-// planted duplicate flow cookie must fail the read closed rather than win.
 func TestOAuthCallbackRejectsDuplicateFlowCookie(t *testing.T) {
 	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 
@@ -585,8 +556,6 @@ func TestOAuthCallbackRejectsDuplicateFlowCookie(t *testing.T) {
 	}
 }
 
-// TestOAuthExchangeRejectsDuplicateFlowCookie pins the same defense on the
-// exchange endpoint.
 func TestOAuthExchangeRejectsDuplicateFlowCookie(t *testing.T) {
 	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 	code := issueExchangeCode(t, s)
@@ -604,8 +573,6 @@ func TestOAuthExchangeRejectsDuplicateFlowCookie(t *testing.T) {
 	}
 }
 
-// TestOAuthExchangeRejectedAfterLogout proves logout clears the flow cookie so
-// a pending exchange is no longer redeemable.
 func TestOAuthExchangeRejectedAfterLogout(t *testing.T) {
 	s := newOAuthTestServerWithAuth(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 	code := issueExchangeCode(t, s)
@@ -628,8 +595,6 @@ func TestOAuthExchangeRejectedAfterLogout(t *testing.T) {
 	}
 }
 
-// TestOAuthExchangeRejectedAfterPasswordLogin proves a password login clears
-// the flow cookie so a pending exchange cannot replace the new session.
 func TestOAuthExchangeRejectedAfterPasswordLogin(t *testing.T) {
 	s := newOAuthTestServerWithAuth(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 	code := issueExchangeCode(t, s)
@@ -649,8 +614,6 @@ func TestOAuthExchangeRejectedAfterPasswordLogin(t *testing.T) {
 	}
 }
 
-// TestOAuthExchangeRateLimit pins that the exchange endpoint shares the auth
-// limiter.
 func TestOAuthExchangeRateLimit(t *testing.T) {
 	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 
@@ -675,7 +638,6 @@ func TestOAuthExchangeRateLimit(t *testing.T) {
 	}
 }
 
-// TestOAuthCodeStoreCleanup pins that the sweep drops expired codes.
 func TestOAuthCodeStoreCleanup(t *testing.T) {
 	store := newOAuthCodeStore()
 	t.Cleanup(store.Close)
@@ -698,7 +660,6 @@ func TestOAuthCodeStoreCleanup(t *testing.T) {
 	}
 }
 
-// TestOAuthCodeStoreCapacity pins the exchange-code capacity cap.
 func TestOAuthCodeStoreCapacity(t *testing.T) {
 	store := newOAuthCodeStore()
 	t.Cleanup(store.Close)
@@ -714,8 +675,6 @@ func TestOAuthCodeStoreCapacity(t *testing.T) {
 	}
 }
 
-// oauthRawRequest performs an OAuth request with an explicit scheme and cookies,
-// for tests that exercise the HTTPS/HTTP cookie-name and scheme binding.
 func oauthRawRequest(t *testing.T, s *Server, method, path, body string, secure bool, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -739,8 +698,6 @@ func oauthRawRequest(t *testing.T, s *Server, method, path, body string, secure 
 	return rec
 }
 
-// TestOAuthLoginRejectsInsecureFlowForHTTPSOrigin pins G1: an insecure request
-// must not start a flow that returns to an HTTPS origin.
 func TestOAuthLoginRejectsInsecureFlowForHTTPSOrigin(t *testing.T) {
 	cfg := defaultOAuthConfig()
 	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
@@ -756,8 +713,6 @@ func TestOAuthLoginRejectsInsecureFlowForHTTPSOrigin(t *testing.T) {
 	}
 }
 
-// TestOAuthExchangeRejectsSchemeDowngrade pins G1: a code issued over HTTPS
-// cannot be redeemed over plain HTTP, even with the matching binding value.
 func TestOAuthExchangeRejectsSchemeDowngrade(t *testing.T) {
 	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 
@@ -776,8 +731,6 @@ func TestOAuthExchangeRejectsSchemeDowngrade(t *testing.T) {
 	}
 }
 
-// TestOAuthExchangeSecureFlow proves the HTTPS path works end to end with the
-// __Host- cookie names.
 func TestOAuthExchangeSecureFlow(t *testing.T) {
 	s := newOAuthTestServer(t, defaultOAuthConfig(), &fakeOAuthService{callback: defaultOAuthResult()})
 
@@ -804,8 +757,6 @@ func TestOAuthExchangeSecureFlow(t *testing.T) {
 	}
 }
 
-// TestOAuthHTTPDevFlowEndToEnd proves the explicit http redirect-base path still
-// works end to end over plain HTTP.
 func TestOAuthHTTPDevFlowEndToEnd(t *testing.T) {
 	cfg := defaultOAuthConfig()
 	cfg.OAuth.GitHub.RedirectURL = "http://localhost:8000/api/v1/auth/oauth/github/callback"
@@ -834,18 +785,14 @@ func TestOAuthHTTPDevFlowEndToEnd(t *testing.T) {
 	}
 }
 
-// TestOAuthLogoutClearsBothCookieNameSets pins G2: an HTTPS logout clears the
-// plain HTTP pair too (and vice versa).
 func TestOAuthLogoutClearsBothCookieNameSets(t *testing.T) {
 	s := newOAuthTestServerWithAuth(t, defaultOAuthConfig(), &fakeOAuthService{})
 
-	// An HTTP login leaves the plain pair in the browser.
 	login := oauthRawRequest(t, s, http.MethodGet, "/api/v1/auth/oauth/github/login", "", false)
 	if setCookieValue(login, auth.FlowCookieName) == nil {
 		t.Fatal("plain flow cookie not set")
 	}
 
-	// An HTTPS logout must clear both name sets.
 	logout := oauthRawRequest(t, s, http.MethodPost, "/api/v1/auth/logout",
 		`{"refresh_token":"refresh-token"}`, true)
 	if logout.Code != http.StatusNoContent {
@@ -867,9 +814,6 @@ func TestOAuthLogoutClearsBothCookieNameSets(t *testing.T) {
 	}
 }
 
-// TestOAuthCallbackRejectsInsecureRequestForHTTPSOrigin pins H1: an HTTP
-// callback on an HTTPS deployment is refused before any cookie or code is
-// trusted.
 func TestOAuthCallbackRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
 	cfg := defaultOAuthConfig()
 	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
@@ -892,9 +836,6 @@ func TestOAuthCallbackRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
 	}
 }
 
-// TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin pins H1: an HTTP
-// redemption on an HTTPS deployment is refused even for a code minted over
-// HTTPS.
 func TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
 	cfg := defaultOAuthConfig()
 	cfg.OAuth.GitHub.RedirectURL = "https://gotham.example/api/v1/auth/oauth/github/callback"
@@ -911,8 +852,6 @@ func TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
 		t.Fatalf("status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// The rejected attempt must not have consumed the code: the same code still
-	// redeems over HTTPS.
 	allowed := oauthRawRequest(t, s, http.MethodPost, "/api/v1/auth/oauth/exchange",
 		`{"code":`+strconv.Quote(code)+`}`, true,
 		&http.Cookie{Name: auth.FlowCookieNameSecure, Value: testOAuthFlow})
@@ -921,9 +860,6 @@ func TestOAuthExchangeRejectsInsecureRequestForHTTPSOrigin(t *testing.T) {
 	}
 }
 
-// TestOAuthEmptyRedirectBaseRequiresHTTPS pins L1: with no usable redirect base
-// the guard fails closed for insecure requests, while a secure request is
-// allowed.
 func TestOAuthEmptyRedirectBaseRequiresHTTPS(t *testing.T) {
 	cfg := &config.Config{
 		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
@@ -947,8 +883,6 @@ func TestOAuthEmptyRedirectBaseRequiresHTTPS(t *testing.T) {
 	}
 }
 
-// stubInstanceRepo is an empty instance store for control-plane URL tests;
-// the effective URL comes from the environment (see instance.Service).
 type stubInstanceRepo struct{}
 
 func (stubInstanceRepo) Load(context.Context) (instance.Stored, error) {
@@ -959,9 +893,6 @@ func (stubInstanceRepo) Save(context.Context, uuid.UUID, string, instance.Stored
 	return nil
 }
 
-// TestOAuthRedirectBaseControlPlaneURL pins the post-login origin precedence:
-// the explicit GitHub redirect env wins when set, otherwise the instance
-// control-plane URL names the origin, and empty keeps today's behavior.
 func TestOAuthRedirectBaseControlPlaneURL(t *testing.T) {
 	newServerWithInstance := func(t *testing.T, redirectURL string) *Server {
 		t.Helper()

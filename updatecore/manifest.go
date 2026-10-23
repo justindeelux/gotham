@@ -8,43 +8,26 @@ import (
 	"strings"
 )
 
-// Release manifest naming. A release publishes
-// gotham-manifest-<arch>.txt and its detached Ed25519 signature
-// gotham-manifest-<arch>.txt.sig. The signature authenticates the manifest,
-// and the manifest binds the release identity (version, channel, arch, file)
-// to the artifact digest, closing the metadata/downgrade gap of a raw-bytes
-// signature.
 const (
 	ManifestPrefix    = "gotham-manifest-"
 	ManifestSuffix    = ".txt"
 	ManifestSigSuffix = ".sig"
 )
 
-// Manifest is the signed release descriptor.
 type Manifest struct {
-	Version string
-	Channel string
-	Arch    string
-	File    string
-	SHA256  string
-	// HelperFile and HelperSHA256 optionally bind a co-shipped host-helper
-	// payload archive (the deploy/ helper scripts, tarred) to the same
-	// signature. The control plane's root update wrapper verifies the payload
-	// against HelperSHA256 before applying it (JUS-188); an empty pair means the
-	// release ships no helper payload. Optional for every existing consumer:
-	// the Go applier verifies only the binary SHA256 and ignores these fields.
+	Version      string
+	Channel      string
+	Arch         string
+	File         string
+	SHA256       string
 	HelperFile   string
 	HelperSHA256 string
 }
 
-// ManifestName returns the manifest asset name for arch.
 func ManifestName(arch string) string {
 	return ManifestPrefix + arch + ManifestSuffix
 }
 
-// ManifestNameWithPrefix returns the manifest asset name for a release family,
-// e.g. "gotham-agent-manifest-amd64.txt" for the node agent. An empty prefix
-// uses the default control-plane prefix.
 func ManifestNameWithPrefix(prefix, arch string) string {
 	if prefix == "" {
 		prefix = ManifestPrefix
@@ -52,7 +35,6 @@ func ManifestNameWithPrefix(prefix, arch string) string {
 	return prefix + arch + ManifestSuffix
 }
 
-// BuildManifest computes the manifest for artifact.
 func BuildManifest(version, channel, arch, file string, artifact []byte) Manifest {
 	sum := sha256.Sum256(artifact)
 	return Manifest{
@@ -64,9 +46,6 @@ func BuildManifest(version, channel, arch, file string, artifact []byte) Manifes
 	}
 }
 
-// WithHelper binds a co-shipped helper payload archive (its file name and
-// bytes) to the manifest, returning the updated manifest. The digest is what
-// the root update wrapper checks before applying the payload.
 func (m Manifest) WithHelper(name string, data []byte) Manifest {
 	sum := sha256.Sum256(data)
 	m.HelperFile = name
@@ -74,7 +53,6 @@ func (m Manifest) WithHelper(name string, data []byte) Manifest {
 	return m
 }
 
-// Marshal renders the manifest deterministically (one key=value per line).
 func (m Manifest) Marshal() []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "version=%s\n", m.Version)
@@ -82,8 +60,6 @@ func (m Manifest) Marshal() []byte {
 	fmt.Fprintf(&b, "arch=%s\n", m.Arch)
 	fmt.Fprintf(&b, "file=%s\n", m.File)
 	fmt.Fprintf(&b, "sha256=%s\n", m.SHA256)
-	// Omitted entirely for a release with no helper payload, so older manifests
-	// render byte-for-byte as before.
 	if m.HelperFile != "" && m.HelperSHA256 != "" {
 		fmt.Fprintf(&b, "helper_file=%s\n", m.HelperFile)
 		fmt.Fprintf(&b, "helper_sha256=%s\n", m.HelperSHA256)
@@ -91,11 +67,8 @@ func (m Manifest) Marshal() []byte {
 	return []byte(b.String())
 }
 
-// ErrManifest is returned when a manifest is missing or unusable.
 var ErrManifest = errors.New("updates: release manifest invalid")
 
-// ParseManifest parses the key=value manifest, rejecting missing or malformed
-// required fields.
 func ParseManifest(data []byte) (Manifest, error) {
 	var m Manifest
 	for _, line := range strings.Split(string(data), "\n") {
@@ -139,9 +112,6 @@ func ParseManifest(data []byte) (Manifest, error) {
 	if _, err := hex.DecodeString(m.SHA256); err != nil {
 		return Manifest{}, fmt.Errorf("%w: malformed sha256", ErrManifest)
 	}
-	// The helper binding is optional, but a manifest that names one without a
-	// digest (or with a malformed digest) is rejected rather than silently
-	// accepted: the root wrapper refuses a payload it cannot check.
 	if m.HelperFile != "" || m.HelperSHA256 != "" {
 		if m.HelperFile == "" {
 			return Manifest{}, fmt.Errorf("%w: helper_sha256 without helper_file", ErrManifest)
@@ -156,7 +126,6 @@ func ParseManifest(data []byte) (Manifest, error) {
 	return m, nil
 }
 
-// Verify checks that data matches the manifest digest.
 func (m Manifest) Verify(data []byte) error {
 	sum := sha256.Sum256(data)
 	if !strings.EqualFold(hex.EncodeToString(sum[:]), m.SHA256) {

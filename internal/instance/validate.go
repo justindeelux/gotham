@@ -11,7 +11,6 @@ import (
 
 var hostLabel = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 
-// normalizeGeneral validates and normalizes the general input.
 func normalizeGeneral(in GeneralInput) (GeneralInput, FieldErrors) {
 	errs := FieldErrors{}
 	in.ControlPlaneURL = strings.TrimRight(strings.TrimSpace(in.ControlPlaneURL), "/")
@@ -58,7 +57,6 @@ func checkTimezone(tz string) string {
 	return ""
 }
 
-// normalizeNetwork validates the network section.
 func normalizeNetwork(n Network) (Network, FieldErrors) {
 	errs := FieldErrors{}
 	n.DNSServers = trimAll(n.DNSServers)
@@ -84,7 +82,6 @@ func normalizeNetwork(n Network) (Network, FieldErrors) {
 	return n, nonEmpty(errs)
 }
 
-// checkFamily validates one address family; v4 selects the family.
 func checkFamily(errs FieldErrors, key, mode, address, gateway string, v4, enabled bool) {
 	if mode != ModeDHCP && mode != ModeStatic {
 		errs[key+".mode"] = "must be dhcp or static"
@@ -129,7 +126,6 @@ func example(v4 bool) string {
 	return "2001:db8::10/64"
 }
 
-// normalizeSystem validates the system section.
 func normalizeSystem(s System) (System, FieldErrors) {
 	errs := FieldErrors{}
 	s.Hostname = strings.TrimSpace(s.Hostname)

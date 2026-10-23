@@ -11,41 +11,26 @@ import (
 	"time"
 )
 
-// p4BaseImage is the base image every fixture builds from: a few megabytes,
-// one pull, and busybox httpd serves the application on the container port.
 const p4BaseImage = "busybox:1.36"
 
-// p4ContainerPort is the port the fixture application listens on.
 const p4ContainerPort = 8080
 
-// p4Dockerfile is the application the happy-path scenarios deploy: a static
-// page served by busybox httpd, with no healthcheck (Docker then reports a
-// running container as healthy, which is the orchestrator's own semantics).
 const p4Dockerfile = `FROM ` + p4BaseImage + `
 COPY index.html /www/index.html
 EXPOSE 8080
 CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]
 `
 
-// p4BrokenDockerfile fails on the second instruction. The marker is echoed
-// before the failure so the test can prove the build output reached the
-// deployment's log.
 const p4BrokenDockerfile = `FROM ` + p4BaseImage + `
 RUN echo P4-BUILD-BOOM && exit 1
 `
 
-// p4Fixture is a local git repository standing in for the public repository an
-// application deploys from. The control plane clones it from disk (allowed only
-// because GOTHAM_DEV_CLONE_LOCAL=true is set on the harness), so no provider
-// API and no network are involved.
 type p4Fixture struct {
 	dir    string
 	repo   string
 	marker string
 }
 
-// newP4Fixture creates a repository with the working application committed on
-// main. name is the owner/name the seeded webhook watches.
 func newP4Fixture(t *testing.T, name, marker string) *p4Fixture {
 	t.Helper()
 	fixture := initFixture(t, name)
@@ -53,7 +38,6 @@ func newP4Fixture(t *testing.T, name, marker string) *p4Fixture {
 	return fixture
 }
 
-// newBrokenP4Fixture creates a repository whose Dockerfile fails to build.
 func newBrokenP4Fixture(t *testing.T, name, marker string) *p4Fixture {
 	t.Helper()
 	fixture := initFixture(t, name)
@@ -61,7 +45,6 @@ func newBrokenP4Fixture(t *testing.T, name, marker string) *p4Fixture {
 	return fixture
 }
 
-// initFixture creates the empty repository on main with its git identity set.
 func initFixture(t *testing.T, name string) *p4Fixture {
 	t.Helper()
 	requireGit(t)
@@ -74,8 +57,6 @@ func initFixture(t *testing.T, name string) *p4Fixture {
 	return fixture
 }
 
-// commit writes the marker page (and the Dockerfile) and commits it on main,
-// so the next deployment clones exactly this revision.
 func (f *p4Fixture) commit(t *testing.T, marker, dockerfile string) {
 	t.Helper()
 	f.marker = marker
@@ -92,10 +73,6 @@ func (f *p4Fixture) commit(t *testing.T, marker, dockerfile string) {
 	git(t, f.dir, "commit", "--no-gpg-sign", "-m", marker)
 }
 
-// requireGit fails the opted-in test when no git binary is available: the
-// control plane clones with the git binary, so the suite cannot run without
-// it. It is only reached behind the requireE2E gate, where a missing tool is
-// an infrastructure failure, never a green skip (CI runners ship git).
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -103,7 +80,6 @@ func requireGit(t *testing.T) {
 	}
 }
 
-// git runs one git command inside dir and fails the test when it errors.
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	command := exec.Command("git", args...)
@@ -113,9 +89,6 @@ func git(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// waitForHTTPBody polls url until it answers 200 with a body containing want.
-// The container reports healthy before its server necessarily accepts
-// connections, so the first attempt is allowed to fail.
 func waitForHTTPBody(t *testing.T, url, want string) {
 	t.Helper()
 	client := &http.Client{Timeout: 5 * time.Second}

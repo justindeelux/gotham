@@ -17,8 +17,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// dsnForDatabase rewrites a DSN to point at another database on the same
-// server (used for the maintenance connection and the disposable database).
 func dsnForDatabase(dsn, database string) string {
 	parsed, err := url.Parse(dsn)
 	if err != nil {
@@ -28,12 +26,6 @@ func dsnForDatabase(dsn, database string) string {
 	return parsed.String()
 }
 
-// TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates builds a
-// disposable database, migrates it to the pre-uniqueness schema, seeds legacy
-// duplicate bindings (mixed casing, two owners), then applies the uniqueness
-// migration and asserts every conflicting binding fails closed with its value
-// preserved: no winner is chosen, the unrelated healthy binding stays enabled
-// and the index rejects new conflicts.
 func TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -77,8 +69,6 @@ func TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init migrations: %v", err)
 	}
-	// The uniqueness migration is 00012; migrate to the newest pre-change
-	// version first so the legacy rows can be seeded.
 	if _, err := provider.UpTo(ctx, 11); err != nil {
 		t.Fatalf("migrate to 00011: %v", err)
 	}
@@ -90,9 +80,6 @@ func TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates(t *testing.T) {
 	defer pool.Close()
 
 	suffix := time.Now().UnixNano()
-	// The schema is at 00011 here: the store's CreateUser (which also creates
-	// the personal team of 00019) does not exist yet, so the two legacy users
-	// are seeded directly.
 	insertUser := func(email string) pgtype.UUID {
 		t.Helper()
 		var id pgtype.UUID
@@ -110,8 +97,6 @@ func TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates(t *testing.T) {
 		t.Fatalf("insert server: %v", err)
 	}
 
-	// Two legacy rows with the same normalized domain (different casing and
-	// different owners) plus one healthy unrelated binding.
 	insertApp := func(userID pgtype.UUID, name, domain string) {
 		t.Helper()
 		if _, err := pool.Exec(ctx,
@@ -125,9 +110,6 @@ func TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates(t *testing.T) {
 	insertApp(userB, "legacy-b", "legacy.example.com")
 	insertApp(userA, "healthy", "healthy.example.com")
 
-	// Apply the uniqueness and history migrations, stopping at 00033: 00034
-	// truncates the resource tables by design, which is outside this
-	// test's scope.
 	if _, err := provider.UpTo(ctx, 33); err != nil {
 		t.Fatalf("migrate to 00033: %v", err)
 	}
@@ -177,9 +159,6 @@ func TestDomainUniquenessMigrationFailsClosedOnLegacyDuplicates(t *testing.T) {
 		t.Fatal("applications_server_domain_idx was not created")
 	}
 
-	// A new enabled conflict against a live binding is rejected; the
-	// conflicting legacy domain itself is free again because every old
-	// binding holding it failed closed.
 	var pgErr *pgconn.PgError
 	_, err = pool.Exec(ctx,
 		`INSERT INTO applications (user_id, team_id, server_id, name, clone_url, branch, build_pack, base_domain, port, host_port)

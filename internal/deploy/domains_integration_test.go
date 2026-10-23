@@ -14,9 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// openDomainIntegrationStore opens the integration database with migrations
-// applied, or skips when Postgres is unreachable (fails when explicitly
-// configured but down).
 func openDomainIntegrationStore(t *testing.T, ctx context.Context) *store.Store {
 	t.Helper()
 	dsn := integrationDSN()
@@ -37,8 +34,6 @@ func openDomainIntegrationStore(t *testing.T, ctx context.Context) *store.Store 
 	return store.New(pool)
 }
 
-// domainIntegrationService builds a Service over the real repository with a
-// team-owner scope for a freshly created user.
 func domainIntegrationService(t *testing.T, ctx context.Context, st *store.Store, teamID uuid.UUID) (*Service, context.Context, uuid.UUID) {
 	t.Helper()
 	userRow, err := st.CreateUser(ctx, fmt.Sprintf("jus233-domains-%d@example.com", time.Now().UnixNano()), nil)
@@ -93,9 +88,6 @@ func primaryOf(t *testing.T, domains []ApplicationDomain) ApplicationDomain {
 	return *found
 }
 
-// TestDomainPromotionFlipFlopRealDB promotes, flips back and promotes again
-// on a real database: the demote-then-promote transaction must keep exactly
-// one primary on every flip.
 func TestDomainPromotionFlipFlopRealDB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -137,8 +129,6 @@ func TestDomainPromotionFlipFlopRealDB(t *testing.T) {
 	flip(domains[0].ID, "a.example.com")
 }
 
-// TestRemoveDomainPromotesEnabledRealDB proves removal promotes the oldest
-// ENABLED row, and only falls back to a disabled row when none remain.
 func TestRemoveDomainPromotesEnabledRealDB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -162,7 +152,6 @@ func TestRemoveDomainPromotesEnabledRealDB(t *testing.T) {
 	for _, row := range rows {
 		byName[row.Domain] = row
 	}
-	// Simulate a migration loser: disable the middle row directly.
 	loser := byName["disabled.example.com"]
 	if _, err := st.UpdateApplicationDomain(ctx, sqlc.UpdateApplicationDomainParams{
 		ID:        pgUUID(loser.ID),
@@ -198,11 +187,6 @@ func TestRemoveDomainPromotesEnabledRealDB(t *testing.T) {
 	}
 }
 
-// TestAddDomainReattachRealDB is the JUS-201 regression: attach, remove and
-// re-attach the same host against real Postgres. The earlier code left the
-// auto-created intent behind, so the re-attach hit the (application_id,
-// domain) unique index inside the attach transaction and the whole domain row
-// rolled back.
 func TestAddDomainReattachRealDB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -248,8 +232,6 @@ func TestAddDomainReattachRealDB(t *testing.T) {
 	}
 }
 
-// TestAddDomainPreExistingIntentRealDB proves the attach transaction survives a
-// host that already has an operator intent.
 func TestAddDomainPreExistingIntentRealDB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

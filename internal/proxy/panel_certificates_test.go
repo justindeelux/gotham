@@ -27,9 +27,6 @@ func (f fixedPanelStatus) CertificateStatuses(_ context.Context, certs []DomainC
 	return out
 }
 
-// TestReconcileApplicationCertificatesGate pins the JUS-201 backfill gate: the
-// default TLS of attached application domains is reconciled only when a
-// control-plane URL is served over https, exactly like the panel domain.
 func TestReconcileApplicationCertificatesGate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -55,9 +52,6 @@ func TestReconcileApplicationCertificatesGate(t *testing.T) {
 	}
 }
 
-// TestReconcileApplicationBackfillResyncs pins JUS-201's rebuild trigger: when
-// the backfill records an intent the proxy configuration is pushed, and an
-// unchanged (or gated-off) backfill pushes nothing.
 func TestReconcileApplicationBackfillResyncs(t *testing.T) {
 	newBackfillFixture := func(t *testing.T) *syncFixture {
 		t.Helper()
@@ -79,7 +73,6 @@ func TestReconcileApplicationBackfillResyncs(t *testing.T) {
 		if len(f.agent.calls) != before+1 {
 			t.Fatalf("config pushes = %d, want %d after the backfill", len(f.agent.calls), before+1)
 		}
-		// A second run inserts nothing and must not push again.
 		if err := f.service.ReconcilePanelCertificates(context.Background(), []string{"https://panel.example.com"}); err != nil {
 			t.Fatalf("second reconcile: %v", err)
 		}
@@ -409,7 +402,6 @@ func TestPanelCertificateStartupDuringTrial(t *testing.T) {
 			f := panelFixture(t)
 			st := newFakeSSLStore()
 			f.service.panelCertificates = st
-			// Remove a proposed-host intent left by the previous implementation.
 			st.certificates = []DomainCertificate{{ID: uuid.New(), Domain: "new.example.com", Enabled: true, Challenge: ChallengeHTTP01}}
 			proposed := "https://new.example.com"
 			repo := &panelSettingsRepo{rec: instance.Stored{

@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 )
 
-// writeTar builds an uncompressed tar from name -> contents.
 func writeTar(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -94,9 +93,6 @@ echo building`, argsFile))
 	}
 }
 
-// TestRunStripsInheritedSecrets checks the toolchain runs with a minimal
-// environment: a parent secret must not leak, while the toolchain's own inputs
-// (Docker/BuildKit addresses) are passed through.
 func TestRunStripsInheritedSecrets(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "env")
@@ -124,15 +120,11 @@ func TestRunStripsInheritedSecrets(t *testing.T) {
 	}
 }
 
-// TestRunStartsBuildKitWhenUnset checks Railpack needs no manual BuildKit setup:
-// with BUILDKIT_HOST unset, Run creates the container through docker and
-// points Railpack at it.
 func TestRunStartsBuildKitWhenUnset(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "env")
 	dockerLog := filepath.Join(dir, "docker")
 	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
-	// inspect reports no container yet, so Run must `docker run` it and wait for exec.
 	fakeCLI(t, "docker", fmt.Sprintf(`echo "$@" >> '%s'; if [ "$1" = inspect ]; then echo "Error: No such object: buildkit"; exit 1; fi`, dockerLog))
 	t.Setenv("BUILDKIT_HOST", "")
 
@@ -147,11 +139,6 @@ func TestRunStartsBuildKitWhenUnset(t *testing.T) {
 	}
 }
 
-// TestToolchainHomeMissingUsesStateDir is the JUS-86 regression: the
-// gotham-agent system user has no writable home (/home/gotham-agent does not
-// exist), and Railpack/BuildKit must write cache under $HOME, so a missing
-// HOME falls back to <StateDir>/toolchain-home instead of failing with
-// `mkdir /home/gotham-agent: permission denied`.
 func TestToolchainHomeMissingUsesStateDir(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "env")
@@ -176,8 +163,6 @@ func TestToolchainHomeMissingUsesStateDir(t *testing.T) {
 	if env := readFile(t, envFile); strings.Contains(env, "GOTHAM_SECRET_SENTINEL") {
 		t.Error("toolchain inherited a parent secret")
 	}
-	// The fallback home sits next to the agent's cert/credential files, never
-	// inside them: nothing secret-adjacent may appear under it on creation.
 	if entries, err := os.ReadDir(home); err != nil {
 		t.Fatalf("read fallback home: %v", err)
 	} else if len(entries) != 0 {
@@ -185,9 +170,6 @@ func TestToolchainHomeMissingUsesStateDir(t *testing.T) {
 	}
 }
 
-// TestToolchainHomeUnwritableFallsBack is the JUS-86 sibling: a HOME that
-// exists but cannot serve as a directory (here a regular file, so the check
-// holds even for root) is replaced the same way.
 func TestToolchainHomeUnwritableFallsBack(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "env")
@@ -208,8 +190,6 @@ func TestToolchainHomeUnwritableFallsBack(t *testing.T) {
 	}
 }
 
-// TestToolchainHomeValidIsKept checks a usable HOME is passed through
-// untouched and no fallback directory is created.
 func TestToolchainHomeValidIsKept(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "env")
@@ -230,9 +210,6 @@ func TestToolchainHomeValidIsKept(t *testing.T) {
 	}
 }
 
-// TestToolchainHomeTempFallback checks the control-plane dev path (no state
-// dir): a missing HOME falls back to a per-process directory under TMPDIR
-// instead of failing.
 func TestToolchainHomeTempFallback(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
@@ -409,7 +386,6 @@ func TestToolchainEnvDoesNotTouchDisk(t *testing.T) {
 	}
 }
 
-// childHome returns the HOME value in a child's `env` dump.
 func childHome(t *testing.T, envFile string) string {
 	const key = "HOME"
 	t.Helper()
@@ -422,8 +398,6 @@ func childHome(t *testing.T, envFile string) string {
 	return ""
 }
 
-// fakeCLI writes an executable shell stub named name and prepends its directory
-// to PATH for the test.
 func fakeCLI(t *testing.T, name, body string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -443,8 +417,6 @@ func readFile(t *testing.T, path string) string {
 	return string(content)
 }
 
-// TestRunRedactsBuildArgValues is the C1-13 regression: the logged command line
-// must not expose build-arg values (they may be secrets).
 func TestRunRedactsBuildArgValues(t *testing.T) {
 	dir := t.TempDir()
 	fakeCLI(t, RailpackCLI, "echo building")
@@ -467,9 +439,6 @@ func TestRunRedactsBuildArgValues(t *testing.T) {
 	}
 }
 
-// TestRunFailureIncludesOutputTail is the JUS-81 regression: a failing
-// toolchain must report the last lines of its output in the error, so the
-// deploy row keeps the cause after the live log is gone.
 func TestRunFailureIncludesOutputTail(t *testing.T) {
 	dir := t.TempDir()
 	var body strings.Builder
@@ -523,8 +492,6 @@ func TestRunFailureIncludesOutputTail(t *testing.T) {
 	}
 }
 
-// TestRunFailureWithoutOutput keeps the plain error when the tool fails
-// silently: no tail section is appended to an empty tail.
 func TestRunFailureWithoutOutput(t *testing.T) {
 	dir := t.TempDir()
 	fakeCLI(t, RailpackCLI, "exit 1")
@@ -539,8 +506,6 @@ func TestRunFailureWithoutOutput(t *testing.T) {
 	}
 }
 
-// TestOutputTailOverlappingSecrets is the round-2 finding 1 regression: a
-// shorter value prefixing a longer one must not leak the longer one's suffix.
 func TestOutputTailOverlappingSecrets(t *testing.T) {
 	tail := newOutputTail([]string{"abc", "abcdef"})
 	_, _ = tail.Write([]byte("key=abcdef\n"))
@@ -549,9 +514,6 @@ func TestOutputTailOverlappingSecrets(t *testing.T) {
 	}
 }
 
-// TestOutputTailMultilineSecret is the round-2 finding 2 regression: each
-// non-empty line of a PEM-like value is masked even though the full value
-// never appears on one output line.
 func TestOutputTailMultilineSecret(t *testing.T) {
 	tail := newOutputTail([]string{"-----BEGIN KEY-----\nsecret-body\n-----END KEY-----"})
 	_, _ = tail.Write([]byte("-----BEGIN KEY-----\nleaked secret-body here\n-----END KEY-----\n"))
@@ -563,8 +525,6 @@ func TestOutputTailMultilineSecret(t *testing.T) {
 	}
 }
 
-// TestOutputTailOversizedSingleLine is the round-2 finding 4 regression: one
-// line over the cap keeps its end instead of emptying the tail.
 func TestOutputTailOversizedSingleLine(t *testing.T) {
 	tail := newOutputTail(nil)
 	_, _ = tail.Write([]byte(strings.Repeat("a", tailMaxBytes+100) + "CAUSE\n"))
@@ -580,7 +540,6 @@ func TestOutputTailOversizedSingleLine(t *testing.T) {
 	}
 }
 
-// TestOutputTailTrailingPartial keeps output without a trailing newline.
 func TestOutputTailTrailingPartial(t *testing.T) {
 	tail := newOutputTail(nil)
 	_, _ = tail.Write([]byte("cause without newline"))
@@ -589,8 +548,6 @@ func TestOutputTailTrailingPartial(t *testing.T) {
 	}
 }
 
-// TestOutputTailCarriageReturn is the round-2 finding 5 regression: \r ends a
-// line so progress bars that overwrite in place still advance the tail.
 func TestOutputTailCarriageReturn(t *testing.T) {
 	tail := newOutputTail(nil)
 	_, _ = tail.Write([]byte("10%\r20%\r30%\n"))
@@ -599,9 +556,6 @@ func TestOutputTailCarriageReturn(t *testing.T) {
 	}
 }
 
-// TestOutputTailPendingBounded is the round-2 finding 5 regression: a
-// newline-less flood cannot grow the pending buffer without limit, and the
-// newest bytes still survive.
 func TestOutputTailPendingBounded(t *testing.T) {
 	tail := newOutputTail(nil)
 	_, _ = tail.Write([]byte(strings.Repeat("x", pendingMaxBytes+1000)))
@@ -614,9 +568,6 @@ func TestOutputTailPendingBounded(t *testing.T) {
 	}
 }
 
-// TestFailureTailFitsTruncateLimit is the round-2 finding 3 regression: a full
-// tail plus the run error prefix stays within truncateError's 4 KiB limit and
-// stays valid UTF-8, so the cause lines survive persistence.
 func TestFailureTailFitsTruncateLimit(t *testing.T) {
 	tail := newOutputTail(nil)
 	for i := 0; i < 100; i++ {
@@ -665,8 +616,6 @@ func TestRedactedCommandLine(t *testing.T) {
 	}
 }
 
-// TestOutputTailInvalidUTF8 is the round-3 regression: toolchain bytes that are
-// not UTF-8 never reach the stored error (Postgres rejects them in text).
 func TestOutputTailInvalidUTF8(t *testing.T) {
 	tail := newOutputTail(nil)
 	_, _ = tail.Write([]byte("\xff\xfe binary\n"))

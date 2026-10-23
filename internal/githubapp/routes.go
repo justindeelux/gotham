@@ -15,16 +15,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// maxRequestBodyBytes bounds a GitHub App request body.
-const maxRequestBodyBytes = 1 << 20 // 1 MiB
+const maxRequestBodyBytes = 1 << 20
 
-// UserIDFunc resolves the authenticated user from the request context. The
-// server passes its own RequireAuth accessor, so this package never imports
-// the HTTP server.
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// appResponse is the wire representation of a GitHub App. Secrets never
-// appear here: the private key and webhook secret stay sealed server-side.
 type appResponse struct {
 	ID            string                 `json:"id"`
 	AppID         int64                  `json:"app_id"`
@@ -36,51 +30,42 @@ type appResponse struct {
 	Installations []installationResponse `json:"installations"`
 }
 
-// installationResponse is the wire representation of one installation.
 type installationResponse struct {
 	ID             string `json:"id"`
 	InstallationID int64  `json:"installation_id"`
 	Account        string `json:"account"`
 }
 
-// appListEnvelope wraps the app list.
 type appListEnvelope struct {
 	Apps []appResponse `json:"apps"`
 }
 
-// manifestRequest starts the manifest flow.
 type manifestRequest struct {
 	BaseURL string `json:"base_url"`
 	Name    string `json:"name"`
 }
 
-// manifestResponse carries the manifest form the browser posts to the Git
-// host, together with the state binding the callback to this browser.
 type manifestResponse struct {
 	ActionURL string         `json:"action_url"`
 	Manifest  map[string]any `json:"manifest"`
 	State     string         `json:"state"`
 }
 
-// callbackRequest finishes the manifest flow.
 type callbackRequest struct {
 	Code  string `json:"code"`
 	State string `json:"state"`
 }
 
-// installResponse starts the installation step.
 type installResponse struct {
 	InstallURL string `json:"install_url"`
 	State      string `json:"state"`
 }
 
-// recordInstallationRequest records the setup callback.
 type recordInstallationRequest struct {
 	InstallationID int64  `json:"installation_id"`
 	State          string `json:"state"`
 }
 
-// repoResponse is the wire representation of a repository.
 type repoResponse struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
@@ -92,78 +77,47 @@ type repoResponse struct {
 	HTMLURL       string `json:"html_url"`
 }
 
-// repoListEnvelope wraps the repository list, flagging truncation so the UI
-// can say the list is partial instead of silently showing it.
 type repoListEnvelope struct {
 	Repos     []repoResponse `json:"repos"`
 	Truncated bool           `json:"truncated"`
 }
 
-// branchResponse is the wire representation of a branch.
 type branchResponse struct {
 	Name      string `json:"name"`
 	Commit    string `json:"commit"`
 	Protected bool   `json:"protected"`
 }
 
-// branchListEnvelope wraps the branch list.
 type branchListEnvelope struct {
 	Branches []branchResponse `json:"branches"`
 }
 
-// disconnectResponse reports a disconnect with the linked applications that
-// lose their connection.
 type disconnectResponse struct {
 	Deleted           bool     `json:"deleted"`
 	ApplicationsUsing int64    `json:"applications_using"`
 	Applications      []string `json:"applications"`
 }
 
-// errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
 }
 
-// handler serves the GitHub App routes for one Service.
 type handler struct {
-	svc    *Service
-	userID UserIDFunc
-	logger *slog.Logger
-	// controlPlaneURL resolves the effective instance control-plane base URL
-	// ("" when unset). The server injects the instance service accessor, so
-	// this package never imports the HTTP server.
+	svc             *Service
+	userID          UserIDFunc
+	logger          *slog.Logger
 	controlPlaneURL func(ctx context.Context) string
 }
 
-// Mount registers the GitHub App endpoints on r:
-//
-//	GET    /v1/providers/github-app/callback   (public browser landing: the
-//	                                            state identifies the user, and
-//	                                            it finishes with a redirect
-//	                                            to the SPA result route)
-//	POST   /v1/providers/github-app/manifest    (authenticated)
-//	POST   /v1/providers/github-app/callback   (authenticated, SPA-driven)
-//	... the rest authenticated ...
-//
-// auth wraps the authenticated group with the server's scope boundary. A nil
-// svc mounts nothing, so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc *Service) {
 	MountWithControlPlaneURL(r, auth, userID, svc, nil)
 }
 
-// MountWithControlPlaneURL registers the same endpoints as Mount, but the
-// manifest hook and redirect URLs use the instance control-plane URL when it
-// is set (falling back to the request origin). A nil source keeps today's
-// behavior.
 func MountWithControlPlaneURL(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc *Service, controlPlaneURL func(ctx context.Context) string) {
 	if svc == nil {
 		return
 	}
 	h := &handler{svc: svc, userID: userID, logger: slog.Default(), controlPlaneURL: controlPlaneURL}
-	// The manifest browser redirect lands here as a plain navigation (no
-	// bearer header): the single-use, expiring, user-bound state parameter
-	// is the identity, and the handler finishes with a redirect to the SPA
-	// result route, never JSON.
 	r.Get("/v1/providers/github-app/callback", h.callbackGet)
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
@@ -179,8 +133,6 @@ func MountWithControlPlaneURL(r chi.Router, auth func(http.Handler) http.Handler
 	})
 }
 
-// manifest serves POST .../manifest: it returns the manifest form the browser
-// posts to the Git host's app-creation page.
 func (h *handler) manifest(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -198,8 +150,6 @@ func (h *handler) manifest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, manifestResponse(manifest))
 }
 
-// callbackPost serves POST .../callback: it exchanges the manifest code for
-// stored, sealed app credentials.
 func (h *handler) callbackPost(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -217,8 +167,6 @@ func (h *handler) callbackPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, newAppResponse(app))
 }
 
-// callbackResult is the bounded set of outcome flags the browser callback
-// redirects with. Raw error text never reaches the query string.
 type callbackResult string
 
 const (
@@ -227,15 +175,7 @@ const (
 	callbackExpired   callbackResult = "expired"
 )
 
-// callbackGet serves GET .../callback without authentication: the browser
-// landing of the manifest redirect (GitHub appends ?code=...&state=...).
-// Identity comes from the state alone: it is single-use, expires, and is
-// bound to the user that started the manifest flow. Success and failure both
-// finish with a redirect to the SPA result route carrying a bounded flag.
 func (h *handler) callbackGet(w http.ResponseWriter, r *http.Request) {
-	// The state identifies the user, so no bearer token is needed — but the
-	// userID accessor still resolves the owner from it. A missing state can
-	// name nobody and fails closed to the expired flag.
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 	userID, ok := h.stateUser(r.Context(), state)
 	if !ok {
@@ -245,9 +185,6 @@ func (h *handler) callbackGet(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	app, err := h.svc.Callback(r.Context(), userID, code, state)
 	if err != nil {
-		// Every failure redirects with a bounded flag, but the reason is
-		// logged server-side: the error text carries no code, state, token
-		// or key (see redactCode), so it is safe to log.
 		h.logger.Warn("githubapp: browser callback failed", "reason", err.Error())
 		h.redirectResult(w, r, "", callbackResultFor(err))
 		return
@@ -255,8 +192,6 @@ func (h *handler) callbackGet(w http.ResponseWriter, r *http.Request) {
 	h.redirectResult(w, r, app.ID.String(), callbackConnected)
 }
 
-// redirectResult finishes the browser callback with a redirect to the SPA
-// result route. Only the bounded flag and the new app id cross into the URL.
 func (h *handler) redirectResult(w http.ResponseWriter, r *http.Request, appID string, result callbackResult) {
 	target := "/applications/github-app/callback?github_app=" + string(result)
 	if appID != "" {
@@ -265,9 +200,6 @@ func (h *handler) redirectResult(w http.ResponseWriter, r *http.Request, appID s
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
-// callbackResultFor maps a callback failure to its bounded redirect flag: an
-// expired or spent state tells the UI to start over, everything else is a
-// plain failure.
 func callbackResultFor(err error) callbackResult {
 	if errors.Is(err, ErrExpiredState) {
 		return callbackExpired
@@ -275,9 +207,6 @@ func callbackResultFor(err error) callbackResult {
 	return callbackFailed
 }
 
-// installState serves GET .../install-state?state=: it resolves a pending
-// install state to its app without consuming it. The caller must own the
-// state; recording still redeems the state exactly once.
 func (h *handler) installState(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -292,7 +221,6 @@ func (h *handler) installState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, installStateResponse{AppID: appID.String()})
 }
 
-// list serves GET .../github-app.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -310,14 +238,10 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, appListEnvelope{Apps: response})
 }
 
-// installStateResponse resolves a pending install state to its app without
-// consuming it, so the setup landing binds the installation to the right app.
 type installStateResponse struct {
 	AppID string `json:"app_id"`
 }
 
-// install serves GET .../{id}/install: the URL that sends the user to the app
-// installation page, plus the state binding the setup callback.
 func (h *handler) install(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -335,8 +259,6 @@ func (h *handler) install(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, installResponse{InstallURL: url, State: state})
 }
 
-// recordInstallation serves POST .../{id}/installations: it stores the
-// installation_id callback.
 func (h *handler) recordInstallation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -362,7 +284,6 @@ func (h *handler) recordInstallation(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// listRepos serves GET .../{id}/repos.
 func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -393,7 +314,6 @@ func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, repoListEnvelope{Repos: response, Truncated: truncated})
 }
 
-// listBranches serves GET .../{id}/repos/{owner}/{repo}/branches.
 func (h *handler) listBranches(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -416,8 +336,6 @@ func (h *handler) listBranches(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, branchListEnvelope{Branches: response})
 }
 
-// disconnect serves DELETE .../{id}: it deletes the stored credentials and
-// reports the linked applications that lose their connection.
 func (h *handler) disconnect(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -435,8 +353,6 @@ func (h *handler) disconnect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, disconnectResponse{Deleted: true, ApplicationsUsing: using.ApplicationsUsing, Applications: using.Applications})
 }
 
-// stateUser resolves the owner of a pending manifest state without consuming
-// it, answering false when the state is missing, expired or of another kind.
 func (h *handler) stateUser(ctx context.Context, state string) (uuid.UUID, bool) {
 	if h.svc == nil || strings.TrimSpace(state) == "" {
 		return uuid.Nil, false
@@ -445,7 +361,6 @@ func (h *handler) stateUser(ctx context.Context, state string) (uuid.UUID, bool)
 	return h.svc.StateOwner(state)
 }
 
-// appID parses the {id} path parameter, answering 400 when it is not a UUID.
 func (h *handler) appID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	appID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -455,8 +370,6 @@ func (h *handler) appID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool
 	return appID, true
 }
 
-// decodeJSON decodes a size-limited JSON body, rejecting unknown fields and
-// trailing input.
 func (h *handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	decoder := json.NewDecoder(r.Body)
@@ -472,7 +385,6 @@ func (h *handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bo
 	return true
 }
 
-// currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -486,8 +398,6 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID
 	return userID, true
 }
 
-// writeServiceError maps service sentinels to HTTP responses. Secrets never
-// appear here: only the sentinel text and validation messages are returned.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -502,7 +412,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// newAppResponse maps a domain app to its wire representation.
 func newAppResponse(app GitHubApp) appResponse {
 	response := appResponse{
 		ID:            app.ID.String(),
@@ -524,10 +433,6 @@ func newAppResponse(app GitHubApp) appResponse {
 	return response
 }
 
-// origin derives the control-plane public origin: the instance
-// control-plane URL when it is set, otherwise the request origin (see
-// originOf), so the manifest hook and redirect URLs point back at this
-// server.
 func (h *handler) origin(r *http.Request) string {
 	if h.controlPlaneURL != nil {
 		if base := strings.TrimSpace(h.controlPlaneURL(r.Context())); base != "" {
@@ -539,8 +444,6 @@ func (h *handler) origin(r *http.Request) string {
 	return originOf(r)
 }
 
-// originOf derives the control-plane public origin from the request, so the
-// manifest hook and redirect URLs point back at this server.
 func originOf(r *http.Request) string {
 	scheme := "https"
 	if r.TLS == nil {
@@ -556,7 +459,6 @@ func originOf(r *http.Request) string {
 	return scheme + "://" + host
 }
 
-// writeJSON encodes v as JSON with the given status.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

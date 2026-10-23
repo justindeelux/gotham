@@ -25,25 +25,10 @@ import type { TerminalOpenOptions } from "@/features/terminal/stores/terminal";
 import { useTeamsStore } from "@/features/teams/stores/teams";
 import { containerTabTitle } from "@/features/terminal/utils/containerRecovery";
 
-/**
- * Add-tab target picker (JUS-265).
- *
- * The (+) control lives directly after the tab strip of the floating window
- * and of the Terminal page. Opening it lazily reads the authorised target list
- * (GET /terminal/targets): ready servers for a platform operator and running
- * containers of applications the caller may write, grouped by application.
- * Picking one creates exactly one session in a NEW tab of the same surface;
- * rapid repeats for the same target join the in-flight create instead.
- *
- * The list is searchable and keyboard-navigable (Down/Up/Home/End move focus,
- * Enter or Space opens, Escape closes). Every load and create state renders
- * localized copy with an explicit retry; backend text never reaches the DOM.
- */
 interface Props {
   surface: "window" | "page";
 }
 
-/** TargetRow is one selectable option in the flattened list. */
 interface TargetRow {
   key: string;
   kind: "server" | "container";
@@ -52,7 +37,6 @@ interface TargetRow {
   options: TerminalOpenOptions;
 }
 
-/** TargetGroup is one visual section (servers or one application). */
 interface TargetGroupView {
   key: string;
   label: string;
@@ -77,13 +61,10 @@ const searchInput = ref<InstanceType<typeof NInput> | null>(null);
 const trigger = ref<InstanceType<typeof NButton> | null>(null);
 const pendingKey = ref("");
 const pickError = ref(false);
-/** picked suppresses the trigger refocus when a selection moved focus already. */
 let picked = false;
-/** loadToken discards a superseded load (close, retry, team switch). */
 let loadToken = 0;
 let controller: AbortController | null = null;
 
-/** sourcePath lets the app dock resume a page session opened from here. */
 function sourcePath(serverId: string): string {
   if (props.surface !== "page") {
     return "";
@@ -94,7 +75,6 @@ function sourcePath(serverId: string): string {
   }).fullPath;
 }
 
-/** serverRow maps one host target onto a pickable option. */
 function serverRow(server: TerminalHostTarget): TargetRow {
   return {
     key: `server:${server.id}`,
@@ -109,7 +89,6 @@ function serverRow(server: TerminalHostTarget): TargetRow {
   };
 }
 
-/** containerRows maps one application group onto its pickable options. */
 function containerRows(group: TerminalTargetGroup): TargetRow[] {
   return group.containers.map((container) => {
     const label = container.label || container.name;
@@ -141,7 +120,6 @@ function containerRows(group: TerminalTargetGroup): TargetRow[] {
   });
 }
 
-/** matches reports whether one row survives the search box. */
 function matches(row: TargetRow, needle: string): boolean {
   if (needle === "") {
     return true;
@@ -149,7 +127,6 @@ function matches(row: TargetRow, needle: string): boolean {
   return `${row.label} ${row.meta}`.toLowerCase().includes(needle);
 }
 
-/** visibleTargetCount is the number of rows the server returned (post-bound). */
 const visibleTargetCount = computed<number>(() => {
   const value = targets.value;
   if (value === null) {
@@ -161,11 +138,6 @@ const visibleTargetCount = computed<number>(() => {
   );
 });
 
-/**
- * groups is the filtered view. Server and application headings only render
- * when at least one of their rows matches, so a search for a container never
- * leaves an empty "Servers" header behind.
- */
 const groups = computed<TargetGroupView[]>(() => {
   const needle = query.value.trim().toLowerCase();
   const value = targets.value;
@@ -195,7 +167,6 @@ const groups = computed<TargetGroupView[]>(() => {
   return result;
 });
 
-/** optionsInPanel returns the rendered options in visual order. */
 function optionsInPanel(): HTMLButtonElement[] {
   const root = panel.value;
   if (root === null) {
@@ -204,7 +175,6 @@ function optionsInPanel(): HTMLButtonElement[] {
   return [...root.querySelectorAll<HTMLButtonElement>(".term-target-option")];
 }
 
-/** focusOption lands focus on one option without wrapping past the ends. */
 function focusOption(index: number): void {
   const options = optionsInPanel();
   if (options.length === 0) {
@@ -214,7 +184,6 @@ function focusOption(index: number): void {
   options[bounded]?.focus();
 }
 
-/** onSearchKeydown hands ArrowDown from the search box to the first option. */
 function onSearchKeydown(event: KeyboardEvent): void {
   if (event.key === "ArrowDown") {
     event.preventDefault();
@@ -227,14 +196,12 @@ function onSearchKeydown(event: KeyboardEvent): void {
   }
 }
 
-/** closePopover closes on Escape and returns focus to the trigger. */
 function closePopover(): void {
   show.value = false;
   cancelLoad();
   focusTrigger();
 }
 
-/** onOptionKeydown implements the listbox arrow/home/end pattern. */
 function onOptionKeydown(event: KeyboardEvent): void {
   const options = optionsInPanel();
   const current = options.indexOf(event.currentTarget as HTMLButtonElement);
@@ -267,7 +234,6 @@ function onOptionKeydown(event: KeyboardEvent): void {
   }
 }
 
-/** errorText localizes a bounded load failure; never backend text. */
 function errorText(code: TerminalErrorCode): string {
   switch (code) {
     case "auth":
@@ -283,7 +249,6 @@ function errorText(code: TerminalErrorCode): string {
   }
 }
 
-/** sourceErrorText localizes one per-source entry. */
 function sourceErrorText(code: TerminalTargetErrorCode): string {
   switch (code) {
     case "disabled":
@@ -297,7 +262,6 @@ function sourceErrorText(code: TerminalTargetErrorCode): string {
   }
 }
 
-/** cancelLoad aborts the current read and invalidates its result. */
 function cancelLoad(): void {
   loadToken += 1;
   controller?.abort();
@@ -305,7 +269,6 @@ function cancelLoad(): void {
   loading.value = false;
 }
 
-/** load reads the target list for the active team, with explicit retry. */
 async function load(): Promise<void> {
   cancelLoad();
   const token = loadToken;
@@ -334,10 +297,6 @@ async function load(): Promise<void> {
   }
 }
 
-/**
- * onGlobalKeydown closes the popover from anywhere, including the trigger
- * button: Naive does not own Escape for a popover whose content is open.
- */
 function onGlobalKeydown(event: KeyboardEvent): void {
   if (!show.value || event.key !== "Escape") {
     return;
@@ -346,7 +305,6 @@ function onGlobalKeydown(event: KeyboardEvent): void {
   closePopover();
 }
 
-/** focusTrigger returns focus after the popover's own hide update settled. */
 function focusTrigger(): void {
   void nextTick(() => {
     window.setTimeout(() => {
@@ -358,15 +316,12 @@ function focusTrigger(): void {
   });
 }
 
-/** onShow loads lazily on every open: a just-deployed container must appear. */
 function onShow(value: boolean): void {
   if (value) {
     query.value = "";
     pickError.value = false;
     picked = false;
     void load();
-    // A popover is teleported outside the trigger's DOM order, so a keyboard
-    // user's next key would otherwise never reach the search box.
     void nextTick(() => searchInput.value?.focus());
     return;
   }
@@ -377,8 +332,6 @@ function onShow(value: boolean): void {
   picked = false;
 }
 
-// A team switch while the popover is open must not keep listing the previous
-// team's applications; hosts are global, containers are team-scoped.
 watch(
   () => teams.activeTeamId,
   () => {
@@ -388,7 +341,6 @@ watch(
   },
 );
 
-/** select creates exactly one session for one target in a new tab. */
 async function select(row: TargetRow): Promise<void> {
   if (pendingKey.value === row.key) {
     return;
@@ -418,8 +370,6 @@ async function select(row: TargetRow): Promise<void> {
       document.getElementById(id)?.focus();
     });
   } catch {
-    // The store reports creation failures on the tab itself; the picker keeps
-    // its list so another target can be chosen without a reload.
     pickError.value = true;
   } finally {
     pendingKey.value = "";
@@ -499,8 +449,6 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else-if="groups.length === 0" class="term-targets-state">
-        <!-- Every source failed: surface the bounded per-source reason and a
-             retry instead of an empty list that implies "nothing exists". -->
         <template v-if="targets !== null && targets.errors.length > 0">
           <p class="term-targets-error" role="alert">
             {{ t("terminal.targets.partial") }}

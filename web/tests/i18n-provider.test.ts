@@ -1,4 +1,3 @@
-// Mounted provider: Naive locale and HTML language follow the UI locale.
 /* global document: readonly, localStorage: readonly, HTMLElement: readonly */
 import { mount } from "@vue/test-utils";
 import { dateEnGB, dateViVN, enGB, NConfigProvider, NDropdown, viVN } from "naive-ui";

@@ -12,24 +12,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// syncRequest is the optional body of POST /v1/proxy/sync: with a server_id
-// only that node is synced, otherwise every registered node and every node
-// hosting a proxied application is. revert re-pushes the node's previous
-// stored configuration version instead of generating from current state.
 type syncRequest struct {
 	ServerID string `json:"server_id"`
 	Revert   bool   `json:"revert"`
 }
 
-// syncResponse reports the per-node outcome of a sync run.
 type syncResponse struct {
 	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 	Results     []syncResult `json:"results"`
 }
 
-// syncResult is one node's outcome on the wire. Diagnostics carry the
-// per-application reasons a row was not routed, so a skipped application is
-// visible instead of silently absent.
 type syncResult struct {
 	ServerID    string       `json:"server_id"`
 	Synced      bool         `json:"synced"`
@@ -37,23 +29,6 @@ type syncResult struct {
 	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
 
-// Mount registers the authenticated proxy endpoints under /api. A nil service
-// or FEATURE_PROXY=false mounts nothing.
-//
-// The surface is split by blast radius:
-//
-//   - Per-application resources (certificates, redirects) are mounted under
-//     teamAuth: the server passes its team chain, and every operation
-//     authorizes the owning application's team and the caller's role (foreign
-//     team ⇒ 404, read_only write ⇒ 403). Lists are filtered to the caller's
-//     teams.
-//   - Platform-global operations (POST /v1/proxy/sync and the DNS-provider
-//     CRUD) are mounted under platformAuth: the server passes its
-//     RequirePlatformAdmin, because they act on every node and hold DNS
-//     credentials.
-//
-// The SSL services are optional: nil mounts only the sync endpoint (tests, or
-// a build without the SSL surface).
 func Mount(r chi.Router, teamAuth func(http.Handler) http.Handler, platformAuth func(http.Handler) http.Handler, svc ProxyService, dns DNSProviderService, certs CertificateService, redirects RedirectService, status CertificateStatusService) {
 	if svc == nil || !Enabled() {
 		return
@@ -97,8 +72,6 @@ func Mount(r chi.Router, teamAuth func(http.Handler) http.Handler, platformAuth 
 	})
 }
 
-// handler serves the proxy routes: sync/revert plus the SSL and redirect CRUD
-// surface.
 type handler struct {
 	svc       ProxyService
 	dns       DNSProviderService
@@ -108,10 +81,6 @@ type handler struct {
 	logger    *slog.Logger
 }
 
-// sync regenerates the routing configuration and pushes it to the node
-// agents, or reverts one node to its previous stored configuration. A partial
-// result answers 200 with the per-application diagnostics (the healthy routes
-// were pushed); a whole-node failure answers the mapped error status.
 func (h *handler) sync(w http.ResponseWriter, r *http.Request) {
 	var req syncRequest
 	if !decodeOptionalBody(w, r, &req) {
@@ -180,7 +149,6 @@ func (h *handler) sync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, response)
 }
 
-// revert re-pushes a node's previous stored configuration version.
 func (h *handler) revert(w http.ResponseWriter, r *http.Request, serverID uuid.UUID) {
 	if err := h.svc.RevertServer(r.Context(), serverID); err != nil {
 		h.writeError(w, "revert", serverID, err)
@@ -189,13 +157,10 @@ func (h *handler) revert(w http.ResponseWriter, r *http.Request, serverID uuid.U
 	writeJSON(w, http.StatusOK, syncResponse{Results: []syncResult{{ServerID: serverID.String(), Synced: true}}})
 }
 
-// hasDiagnostics reports whether a per-node result is a partial success (its
-// error text is the diagnostics message, not a whole-node failure).
 func hasDiagnostics(diagnostics []Diagnostic) bool {
 	return len(diagnostics) > 0
 }
 
-// writeError maps one node's sync failure to its HTTP response.
 func (h *handler) writeError(w http.ResponseWriter, op string, serverID uuid.UUID, err error) {
 	response := syncResponse{Results: []syncResult{{ServerID: serverID.String(), Error: err.Error()}}}
 	switch {
@@ -215,7 +180,6 @@ func (h *handler) writeError(w http.ResponseWriter, op string, serverID uuid.UUI
 	}
 }
 
-// writeServerError maps a whole-run failure to its HTTP response.
 func (h *handler) writeServerError(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, ErrValidation):
@@ -228,13 +192,10 @@ func (h *handler) writeServerError(w http.ResponseWriter, op string, err error) 
 	}
 }
 
-// apiError is the JSON body returned for whole-run failures.
 type apiError struct {
 	Message string `json:"message"`
 }
 
-// decodeOptionalBody decodes an optional JSON body, treating an empty body as
-// an empty struct, and answers 400 on malformed JSON.
 func decodeOptionalBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if r.Body == nil {
 		return true
@@ -247,8 +208,6 @@ func decodeOptionalBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return false
 }
 
-// parseOptionalServerID parses the optional server_id, answering 400 when it
-// is neither empty nor a valid UUID.
 func parseOptionalServerID(w http.ResponseWriter, raw string) (uuid.UUID, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -262,7 +221,6 @@ func parseOptionalServerID(w http.ResponseWriter, raw string) (uuid.UUID, bool) 
 	return id, true
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

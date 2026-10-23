@@ -7,27 +7,12 @@ import type { Server } from "@/features/servers";
 import { serverStatusKey } from "@/features/servers";
 import TerminalPane from "@/features/terminal/components/TerminalPane.vue";
 
-/**
- * Host and state view for one page session (JUS-246).
- *
- * The stage never starts a session by itself: `start` is emitted only from an
- * explicit button (closed session, or the moved-to-window notice), so a route
- * change, a close or a demotion can never silently spawn a shell. The closed
- * card is a polite live region and takes focus after a confirmed close, so the
- * keyboard flow continues on "Start new session" rather than on a rail tile.
- */
 interface Props {
   server: Server | null;
   ready: boolean;
   tabId: string;
   starting: boolean;
   closed: boolean;
-  /**
-   * mode keeps the host readiness copy off the application tab (JUS-247): a
-   * container session has no server lifecycle branch, it is only ready once
-   * the control plane created it. Discovery/empty/error states belong to the
-   * calling host; this stage renders the shared pane, loading and restart.
-   */
   mode?: "host" | "application";
 }
 
@@ -37,7 +22,6 @@ const { t } = useI18n();
 
 const startButton = ref<InstanceType<typeof NButton> | null>(null);
 
-/** focusStart moves focus onto the explicit restart control. */
 function focusStart(): void {
   const element = startButton.value?.$el;
   if (element instanceof HTMLElement) {
@@ -45,8 +29,6 @@ function focusStart(): void {
   }
 }
 
-// A confirmed close removes the tab; the dialog restores focus to its own
-// fallback on the next tick, so wait two ticks and land on the restart button.
 watch(
   () => props.closed,
   async (closed) => {
@@ -59,7 +41,6 @@ watch(
   },
 );
 
-/** statusLabel localizes the server lifecycle word. */
 function statusLabel(server: Server): string {
   return t(serverStatusKey(server.status));
 }

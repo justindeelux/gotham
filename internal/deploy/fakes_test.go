@@ -25,21 +25,12 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestMain clears the feature flag so the suite runs with the applications
-// surface enabled; individual tests override it with t.Setenv.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv(FeatureEnv)
-	// The SSRF host policy resolves every remote hostname at clone/probe
-	// time. The stub answers test hostnames with a public TEST-NET-3
-	// address, so unit tests never touch real DNS (and stay hermetic
-	// offline); tests covering resolution itself pass an explicit lookup.
 	defaultGitHostLookup = stubGitHostLookup
 	os.Exit(m.Run())
 }
 
-// stubGitHostLookup answers any hostname with a public documentation-range
-// address the host policy allows. "fail.invalid" fails like an unresolvable
-// name for the tests that pin the refusal.
 func stubGitHostLookup(_ context.Context, host string) ([]net.IP, error) {
 	if host == "fail.invalid" {
 		return nil, errors.New("stub: no such host")
@@ -47,147 +38,77 @@ func stubGitHostLookup(_ context.Context, host string) ([]net.IP, error) {
 	return []net.IP{net.ParseIP("203.0.113.10")}, nil
 }
 
-// discardLogger keeps the orchestrator's operational logging out of the test
-// output; assertions read the persisted rows instead.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeRepository is a scriptable in-memory Repository. Rows are kept in
-// insertion order and ListDeployments returns them newest first.
-//
-// The zero-value `app` field is the seeded application the pre-existing tests
-// build their fixtures around; every application created through
-// CreateApplication is kept in `apps`. Configuration rows (env vars, secrets,
-// storages) are matched by application_id, and a row left without one by a test
-// fixture belongs to whichever application is asked for.
 type fakeRepository struct {
-	mu          sync.Mutex
-	app         Application
-	apps        []Application
-	deployments []Deployment
-	envVars     []EnvVar
-	secrets     []Secret
-	storages    []Storage
-	// environments holds the seeded environments ResolveEnvironment
-	// answers with; resolveErr fails every environment and project
-	// resolution (the foreign-environment tests).
+	mu           sync.Mutex
+	app          Application
+	apps         []Application
+	deployments  []Deployment
+	envVars      []EnvVar
+	secrets      []Secret
+	storages     []Storage
 	environments map[uuid.UUID]EnvironmentRef
 	resolveErr   error
-	// livePreviews marks base applications with open preview bindings for
-	// HasLivePreviews (the move/server-change guard tests).
 	livePreviews map[uuid.UUID]bool
 
-	// deployKeys holds the single deploy key per application (the unique
-	// index on application_id); privateKeys mirrors private_keys, keyed by
-	// the private key id, because the real schema has no application FK
-	// there: deleting an application cascades only the mapping.
 	deployKeys  map[uuid.UUID]fakeDeployKey
 	privateKeys map[uuid.UUID]string
 
-	// certificates mirrors domain_certificates (one intent per domain);
-	// dnsProviders mirrors the provider rows the preview clone validates
-	// against. certErr fails every certificate write (the best-effort test).
 	certificates []CertificateIntent
 	dnsProviders map[uuid.UUID]DNSProviderInfo
 	certErr      error
-	// domains mirrors application_domains for the JUS-89 domain tests.
-	domains []ApplicationDomain
+	domains      []ApplicationDomain
 
-	// unknownServers names servers ServerExists must report as missing.
-	unknownServers map[uuid.UUID]bool
-	// serverTeams maps a registered server to its team; an entry without a
-	// team (missing or zero) is a legacy shared node.
-	serverTeams map[uuid.UUID]uuid.UUID
-	// ownedGitHubApps names the GitHub App connections GitHubAppOwnedBy
-	// reports as owned.
+	unknownServers  map[uuid.UUID]bool
+	serverTeams     map[uuid.UUID]uuid.UUID
 	ownedGitHubApps map[uuid.UUID]bool
 
 	getErr       error
 	createErr    error
 	failStaleErr error
-	// updateErr, when set, fails every UpdateApplication (the server-change
-	// domain-collision test).
-	updateErr error
+	updateErr    error
 
-	// failUpdateState, when non-empty, makes UpdateDeployment fail for that
-	// state (the failed-persist regression: the in-memory state must not
-	// advance past a state the database never saw).
 	failUpdateState State
 
-	// updateErrAfterPersist, when non-empty, persists the row for that state
-	// and then returns an error: an ambiguous write that committed but reported
-	// failure. forceFail must not downgrade the committed terminal row.
 	updateErrAfterPersist State
 
-	// onGetApplication, when set, runs after GetApplication resolves the row
-	// (without holding the repository lock) but before returning it, so a test
-	// can land a concurrent write between two reads.
 	onGetApplication func()
 
-	// onGetDeployKey, when set, runs after GetDeployKey resolves the row
-	// (without holding the repository lock) but before returning it, so a test
-	// can land a concurrent delete/replace between the read and the fenced
-	// delete.
 	onGetDeployKey func()
 
-	// createDeploymentNotify, when set, receives a token on every
-	// CreateDeployment call so a test can detect when a submit crossed the
-	// queue boundary (the serialization regression).
 	createDeploymentNotify chan struct{}
 
-	// deployKeyErr fails every deploy-key write (tests the rollback with).
 	deployKeyErr error
 
-	// gitCreds holds one sealed HTTPS credential per application (GS-4),
-	// mirroring application_git_credentials; gitCredErr fails every write.
-	gitCreds   map[uuid.UUID]fakeGitCredential
-	gitCredErr error
-	// deleteDeployKeyErr fails the local deploy-key detach (tests the
-	// sealed-key orphan cleanup with).
+	gitCreds           map[uuid.UUID]fakeGitCredential
+	gitCredErr         error
 	deleteDeployKeyErr error
 
-	// listDeploymentsErr, when set, fails every ListDeployments call (the
-	// unresolved-previous-container regression).
 	listDeploymentsErr error
 
-	// envConfigCalls counts ListEnvConfig invocations: the runtime payload must
-	// be assembled from that single-snapshot seam, never from the two separate
-	// collection reads (item-1 regression).
 	envConfigCalls int
 
-	// sharedProject holds project-level shared variables by project ID and
-	// sharedEnv holds environment-level ones by environment ID for
-	// ListSharedVariables (the deploy-merge seam).
 	sharedProject map[uuid.UUID][]SharedVariable
 	sharedEnv     map[uuid.UUID][]SharedVariable
 
-	// states records every persisted deployment state in order, so tests can
-	// assert the exact state-machine walk.
 	states []State
 
-	// events, when set, records repository operations so tests can pin their
-	// ordering against the hook lifecycle calls.
 	events *[]string
 }
 
-// record appends one repository operation to the shared test event log.
 func (r *fakeRepository) record(event string) {
 	if r.events != nil {
 		*r.events = append(*r.events, event)
 	}
 }
 
-// staleDeploymentError mirrors the message the boot-time sweep SQL writes.
 const staleDeploymentError = "control plane restarted before the deployment finished"
 
-// Compile-time guarantee that fakeRepository satisfies the seam.
 var _ Repository = (*fakeRepository)(nil)
 
-// GetApplication implements Repository. The row is resolved under the lock and
-// onGetApplication, when set, runs after it is released but before the snapshot
-// is returned — letting a test land a concurrent write between a caller's read
-// and the caller's next read.
 func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (Application, error) {
 	r.mu.Lock()
 	if r.getErr != nil {
@@ -220,8 +141,6 @@ func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (App
 	return app, nil
 }
 
-// primaryDomainLocked returns the enabled primary domain of an application.
-// The caller holds r.mu.
 func (r *fakeRepository) primaryDomainLocked(appID uuid.UUID) *ApplicationDomain {
 	var fallback *ApplicationDomain
 	for i := range r.domains {
@@ -239,9 +158,6 @@ func (r *fakeRepository) primaryDomainLocked(appID uuid.UUID) *ApplicationDomain
 	return fallback
 }
 
-// ListRecentDeployments implements Repository: the newest deployments across
-// the scope's applications, newest first, at most limit rows. Previews stay
-// out, matching the applications listing.
 func (r *fakeRepository) ListRecentDeployments(_ context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -292,9 +208,6 @@ func (r *fakeRepository) ListRecentDeployments(_ context.Context, scope teams.Sc
 	return out, nil
 }
 
-// ListApplications implements Repository: the active team's applications, or
-// the creator's when the scope has no team context (pre-teams behavior),
-// newest first (created_at DESC, id DESC).
 func (r *fakeRepository) ListApplications(_ context.Context, scope teams.Scope) ([]Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -325,8 +238,6 @@ func (r *fakeRepository) ListApplications(_ context.Context, scope teams.Scope) 
 	return out, nil
 }
 
-// CreateApplication implements Repository: it assigns an ID and timestamps like
-// the database and stores the configuration rows with the application.
 func (r *fakeRepository) CreateApplication(_ context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -339,9 +250,6 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 		}
 	}
 	now := time.Now().UTC()
-	// Keep insertion order observable: two rows created inside the same clock
-	// tick would otherwise sort back into an arbitrary order (the production
-	// query breaks created_at ties on id DESC).
 	for _, existing := range r.ownedApplications() {
 		if !now.After(existing.CreatedAt) {
 			now = existing.CreatedAt.Add(time.Nanosecond)
@@ -372,7 +280,6 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 	return app, nil
 }
 
-// UpdateApplication implements Repository and bumps updated_at.
 func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -398,8 +305,6 @@ func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (
 	return Application{}, ErrNotFound
 }
 
-// DeleteApplication implements Repository with the schema's cascade: the row
-// goes, and its configuration and deployments with it.
 func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -441,11 +346,6 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 		}
 	}
 	r.storages = storages
-	// Cascade the deploy-key mapping only: private_keys has no application FK
-	// (application_deploy_keys.private_key_id points at it), so the sealed
-	// row survives a bare application delete — the paths that must remove it
-	// call DeleteDeployKey explicitly. The git credential row cascades with
-	// the application (its FK carries ON DELETE CASCADE).
 	delete(r.deployKeys, appID)
 	delete(r.gitCreds, appID)
 	certificates := make([]CertificateIntent, 0, len(r.certificates))
@@ -455,7 +355,6 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 		}
 	}
 	r.certificates = certificates
-	// Domain rows cascade with the application (ON DELETE CASCADE).
 	kept := make([]ApplicationDomain, 0, len(r.domains))
 	for _, domain := range r.domains {
 		if domain.ApplicationID != appID {
@@ -466,7 +365,6 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 	return nil
 }
 
-// ReplaceEnvVars implements Repository, replacing both collections as one set.
 func (r *fakeRepository) ReplaceEnvVars(_ context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -501,7 +399,6 @@ func (r *fakeRepository) ReplaceEnvVars(_ context.Context, appID uuid.UUID, envV
 	return nil
 }
 
-// ReplaceStorages implements Repository, replacing the collection as one set.
 func (r *fakeRepository) ReplaceStorages(_ context.Context, appID uuid.UUID, storages []Storage) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -523,8 +420,6 @@ func (r *fakeRepository) ReplaceStorages(_ context.Context, appID uuid.UUID, sto
 	return nil
 }
 
-// ServerExists implements Repository: the node must be known and actionable by
-// the caller's active team.
 func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -540,8 +435,6 @@ func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, sco
 	return true, nil
 }
 
-// ServerTeam implements Repository: the registered node's team (zero for a
-// legacy shared node).
 func (r *fakeRepository) ServerTeam(_ context.Context, serverID uuid.UUID) (uuid.UUID, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -551,15 +444,12 @@ func (r *fakeRepository) ServerTeam(_ context.Context, serverID uuid.UUID) (uuid
 	return r.serverTeams[serverID], true, nil
 }
 
-// GitHubAppOwnedBy implements Repository: ids registered in ownedGitHubApps
-// belong to any caller, everything else is foreign.
 func (r *fakeRepository) GitHubAppOwnedBy(_ context.Context, id, _ uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.ownedGitHubApps[id], nil
 }
 
-// ListApplicationsByEnvironment implements Repository.
 func (r *fakeRepository) ListApplicationsByEnvironment(_ context.Context, environmentID uuid.UUID, includePreviews bool) ([]Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -581,7 +471,6 @@ func (r *fakeRepository) ListApplicationsByEnvironment(_ context.Context, enviro
 	return out, nil
 }
 
-// ListApplicationsByProject implements Repository.
 func (r *fakeRepository) ListApplicationsByProject(_ context.Context, projectID uuid.UUID, includePreviews bool) ([]Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -603,7 +492,6 @@ func (r *fakeRepository) ListApplicationsByProject(_ context.Context, projectID 
 	return out, nil
 }
 
-// NameInEnvironment implements Repository.
 func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -621,9 +509,6 @@ func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid
 	return false, nil
 }
 
-// ResolveEnvironment implements Repository: seeded environments resolve with
-// their project; any other ID resolves permissively (the team check is
-// covered by integration tests), unless resolveErr is set.
 func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (EnvironmentRef, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -636,14 +521,12 @@ func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ 
 	return EnvironmentRef{ID: environmentID}, nil
 }
 
-// HasLivePreviews implements Repository.
 func (r *fakeRepository) HasLivePreviews(_ context.Context, appID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.livePreviews[appID], nil
 }
 
-// ResolveProject implements Repository.
 func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -653,8 +536,6 @@ func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUI
 	return projectID, nil
 }
 
-// environmentProject returns the project of a seeded environment (zero for
-// unknown IDs). Callers hold r.mu.
 func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
 	if ref, ok := r.environments[environmentID]; ok {
 		return ref.ProjectID
@@ -662,8 +543,6 @@ func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
 	return uuid.Nil
 }
 
-// seedServerForTeam registers a node owned by teamID (the zero UUID seeds a
-// legacy shared node).
 func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -675,7 +554,6 @@ func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
 	return id
 }
 
-// ownedApplications returns every application the fake holds (seed first).
 func (r *fakeRepository) ownedApplications() []Application {
 	applications := make([]Application, 0, len(r.apps)+1)
 	if r.app.ID != uuid.Nil {
@@ -684,7 +562,6 @@ func (r *fakeRepository) ownedApplications() []Application {
 	return append(applications, r.apps...)
 }
 
-// CreateDeployment implements Repository, assigning an ID like the database.
 func (r *fakeRepository) CreateDeployment(_ context.Context, dep Deployment) (Deployment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -705,7 +582,6 @@ func (r *fakeRepository) CreateDeployment(_ context.Context, dep Deployment) (De
 	return dep, nil
 }
 
-// GetDeployment implements Repository.
 func (r *fakeRepository) GetDeployment(_ context.Context, appID, deploymentID uuid.UUID) (Deployment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -717,7 +593,6 @@ func (r *fakeRepository) GetDeployment(_ context.Context, appID, deploymentID uu
 	return Deployment{}, ErrNotFound
 }
 
-// ListDeployments implements Repository, newest first.
 func (r *fakeRepository) ListDeployments(_ context.Context, appID uuid.UUID) ([]Deployment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -733,8 +608,6 @@ func (r *fakeRepository) ListDeployments(_ context.Context, appID uuid.UUID) ([]
 	return out, nil
 }
 
-// ListDeploymentsLimit implements Repository: the newest slice of
-// ListDeployments, bounded to limit rows (one row when non-positive).
 func (r *fakeRepository) ListDeploymentsLimit(_ context.Context, appID uuid.UUID, limit int) ([]Deployment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -753,8 +626,6 @@ func (r *fakeRepository) ListDeploymentsLimit(_ context.Context, appID uuid.UUID
 	return out, nil
 }
 
-// FailStaleDeployments implements Repository: it marks every non-terminal
-// deployment failed, mirroring the boot-time sweep, and reports the count.
 func (r *fakeRepository) FailStaleDeployments(_ context.Context) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -774,7 +645,6 @@ func (r *fakeRepository) FailStaleDeployments(_ context.Context) (int64, error) 
 	return n, nil
 }
 
-// UpdateDeployment implements Repository and records the persisted state.
 func (r *fakeRepository) UpdateDeployment(_ context.Context, dep Deployment) (Deployment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -796,8 +666,6 @@ func (r *fakeRepository) UpdateDeployment(_ context.Context, dep Deployment) (De
 	return Deployment{}, ErrNotFound
 }
 
-// UpdateDeploymentBuildLog implements Repository: it stores the log on the
-// matching row, exactly like the production query.
 func (r *fakeRepository) UpdateDeploymentBuildLog(_ context.Context, id uuid.UUID, log string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -811,8 +679,6 @@ func (r *fakeRepository) UpdateDeploymentBuildLog(_ context.Context, id uuid.UUI
 	return ErrNotFound
 }
 
-// ListEnvVars implements Repository, scoped to the application (a fixture row
-// without an application id belongs to whichever application is asked for).
 func (r *fakeRepository) ListEnvVars(_ context.Context, appID uuid.UUID) ([]EnvVar, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -825,7 +691,6 @@ func (r *fakeRepository) ListEnvVars(_ context.Context, appID uuid.UUID) ([]EnvV
 	return out, nil
 }
 
-// ListSecrets implements Repository (see ListEnvVars for fixture rows).
 func (r *fakeRepository) ListSecrets(_ context.Context, appID uuid.UUID) ([]Secret, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -838,9 +703,6 @@ func (r *fakeRepository) ListSecrets(_ context.Context, appID uuid.UUID) ([]Secr
 	return out, nil
 }
 
-// ListEnvConfig implements Repository. envConfigCalls counts invocations so a
-// test can pin that the runtime payload is assembled from the single-snapshot
-// seam rather than the two separate collections.
 func (r *fakeRepository) ListEnvConfig(_ context.Context, appID uuid.UUID) ([]EnvVar, []Secret, error) {
 	r.mu.Lock()
 	r.envConfigCalls++
@@ -860,8 +722,6 @@ func (r *fakeRepository) ListEnvConfig(_ context.Context, appID uuid.UUID) ([]En
 	return envVars, secrets, nil
 }
 
-// ListSharedVariables implements Repository: the seeded project and
-// environment scopes for the deploy merge.
 func (r *fakeRepository) ListSharedVariables(_ context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, []SharedVariable, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -869,7 +729,6 @@ func (r *fakeRepository) ListSharedVariables(_ context.Context, projectID, envir
 		append([]SharedVariable{}, r.sharedEnv[environmentID]...), nil
 }
 
-// ListStorages implements Repository (see ListEnvVars for fixture rows).
 func (r *fakeRepository) ListStorages(_ context.Context, appID uuid.UUID) ([]Storage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -882,15 +741,10 @@ func (r *fakeRepository) ListStorages(_ context.Context, appID uuid.UUID) ([]Sto
 	return out, nil
 }
 
-// fakeDeployKey is one row of the application_deploy_keys mapping (the private
-// half lives separately in privateKeys, mirroring private_keys).
 type fakeDeployKey struct {
 	key DeployKey
 }
 
-// GetDeployKey implements Repository, keeping one key per application. The
-// optional onGetDeployKey hook runs without the lock so a test can interleave a
-// concurrent delete/replace before the returned row is used.
 func (r *fakeRepository) GetDeployKey(_ context.Context, appID uuid.UUID) (DeployKey, error) {
 	r.mu.Lock()
 	stored, ok := r.deployKeys[appID]
@@ -905,9 +759,6 @@ func (r *fakeRepository) GetDeployKey(_ context.Context, appID uuid.UUID) (Deplo
 	return stored.key, nil
 }
 
-// CreateDeployKey implements Repository, assigning IDs and timestamps like the
-// database and failing on the scriptable deployKeyErr. It writes the mapping
-// and the sealed private key as two rows, like the store transaction.
 func (r *fakeRepository) CreateDeployKey(_ context.Context, key DeployKey, privateKeyPEM string) (DeployKey, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -931,9 +782,6 @@ func (r *fakeRepository) CreateDeployKey(_ context.Context, key DeployKey, priva
 	return key, nil
 }
 
-// DeleteDeployKey implements Repository with the store's fenced cascade: the
-// delete matches only the mapping ID the caller read, and the mapping and its
-// private key go together.
 func (r *fakeRepository) DeleteDeployKey(_ context.Context, key DeployKey) (DeployKey, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -950,8 +798,6 @@ func (r *fakeRepository) DeleteDeployKey(_ context.Context, key DeployKey) (Depl
 	return stored.key, nil
 }
 
-// DeletePrivateKey implements Repository: removing the sealed row cascades the
-// mapping that points at it.
 func (r *fakeRepository) DeletePrivateKey(_ context.Context, privateKeyID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -964,8 +810,6 @@ func (r *fakeRepository) DeletePrivateKey(_ context.Context, privateKeyID uuid.U
 	return nil
 }
 
-// DeployKeyPrivatePEM implements Repository: "" for an application without a
-// key, the stored private half otherwise.
 func (r *fakeRepository) DeployKeyPrivatePEM(_ context.Context, appID uuid.UUID) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -979,15 +823,11 @@ func (r *fakeRepository) DeployKeyPrivatePEM(_ context.Context, appID uuid.UUID)
 	return r.privateKeys[stored.key.PrivateKeyID], nil
 }
 
-// fakeGitCredential is one row of application_git_credentials: the username
-// in plaintext and the token sealed with providers.SealSecret.
 type fakeGitCredential struct {
 	username string
 	sealed   string
 }
 
-// UpsertGitCredential implements Repository, storing the sealed token as
-// received (sealing is the service's job, covered by the service tests).
 func (r *fakeRepository) UpsertGitCredential(_ context.Context, appID uuid.UUID, username, sealedToken string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1001,7 +841,6 @@ func (r *fakeRepository) UpsertGitCredential(_ context.Context, appID uuid.UUID,
 	return nil
 }
 
-// GetGitCredential implements Repository: metadata only, never the token.
 func (r *fakeRepository) GetGitCredential(_ context.Context, appID uuid.UUID) (GitCredential, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1012,8 +851,6 @@ func (r *fakeRepository) GetGitCredential(_ context.Context, appID uuid.UUID) (G
 	return GitCredential{Username: stored.username}, nil
 }
 
-// GitCredential implements Repository (and gitCredentialResolver), opening
-// the sealed token with the test secret the test services seal with.
 func (r *fakeRepository) GitCredential(_ context.Context, appID uuid.UUID) (string, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1028,8 +865,6 @@ func (r *fakeRepository) GitCredential(_ context.Context, appID uuid.UUID) (stri
 	return stored.username, token, nil
 }
 
-// DeleteGitCredential implements Repository, answering ErrNotFound when none
-// is set so the service can report the idempotent outcome honestly.
 func (r *fakeRepository) DeleteGitCredential(_ context.Context, appID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1040,8 +875,6 @@ func (r *fakeRepository) DeleteGitCredential(_ context.Context, appID uuid.UUID)
 	return nil
 }
 
-// CopyGitCredential implements Repository: the preview sibling inherits the
-// sealed row as is.
 func (r *fakeRepository) CopyGitCredential(_ context.Context, baseID, previewID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1056,8 +889,6 @@ func (r *fakeRepository) CopyGitCredential(_ context.Context, baseID, previewID 
 	return nil
 }
 
-// GetCertificateIntent implements Repository: the intent recorded for the
-// application's primary domain, like the production query.
 func (r *fakeRepository) GetCertificateIntent(_ context.Context, appID uuid.UUID) (CertificateIntent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1076,7 +907,6 @@ func (r *fakeRepository) GetCertificateIntent(_ context.Context, appID uuid.UUID
 	return CertificateIntent{}, ErrNotFound
 }
 
-// GetDNSProviderInfo implements Repository.
 func (r *fakeRepository) GetDNSProviderInfo(_ context.Context, providerID uuid.UUID) (DNSProviderInfo, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1090,8 +920,6 @@ func (r *fakeRepository) GetDNSProviderInfo(_ context.Context, providerID uuid.U
 	return DNSProviderInfo{Zones: append([]string{}, info.Zones...), Enabled: info.Enabled}, nil
 }
 
-// CreateCertificateIntent implements Repository with the per-domain unique
-// index.
 func (r *fakeRepository) CreateCertificateIntent(_ context.Context, in CertificateIntent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1107,9 +935,6 @@ func (r *fakeRepository) CreateCertificateIntent(_ context.Context, in Certifica
 	return nil
 }
 
-// CreateCertificateIntentIfAbsent implements Repository with the ON CONFLICT
-// DO NOTHING write: an existing (application, domain) intent is a no-op
-// (JUS-201).
 func (r *fakeRepository) CreateCertificateIntentIfAbsent(_ context.Context, in CertificateIntent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1125,7 +950,6 @@ func (r *fakeRepository) CreateCertificateIntentIfAbsent(_ context.Context, in C
 	return nil
 }
 
-// ListCertificateIntents implements Repository.
 func (r *fakeRepository) ListCertificateIntents(_ context.Context, appID uuid.UUID) ([]CertificateIntent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1141,8 +965,6 @@ func (r *fakeRepository) ListCertificateIntents(_ context.Context, appID uuid.UU
 	return intents, nil
 }
 
-// DeleteAutoCertificateIntent implements Repository: only the default http-01
-// non-wildcard intent is removed.
 func (r *fakeRepository) DeleteAutoCertificateIntent(_ context.Context, appID uuid.UUID, domain string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1158,8 +980,6 @@ func (r *fakeRepository) DeleteAutoCertificateIntent(_ context.Context, appID uu
 	return nil
 }
 
-// ListApplicationDomains implements Repository: primary first, then oldest
-// first.
 func (r *fakeRepository) ListApplicationDomains(_ context.Context, appID uuid.UUID) ([]ApplicationDomain, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1181,15 +1001,12 @@ func (r *fakeRepository) ListApplicationDomains(_ context.Context, appID uuid.UU
 	return out, nil
 }
 
-// CreateApplicationDomain implements Repository with both unique indexes.
 func (r *fakeRepository) CreateApplicationDomain(_ context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.insertDomain(domain)
 }
 
-// insertDomain stores one domain row with the production uniqueness rules.
-// The caller holds r.mu.
 func (r *fakeRepository) insertDomain(domain ApplicationDomain) (ApplicationDomain, error) {
 	for _, existing := range r.domains {
 		if strings.EqualFold(existing.Domain, domain.Domain) && !existing.Disabled && !domain.Disabled {
@@ -1215,7 +1032,6 @@ func (r *fakeRepository) insertDomain(domain ApplicationDomain) (ApplicationDoma
 	return domain, nil
 }
 
-// UpdateApplicationDomain implements Repository.
 func (r *fakeRepository) UpdateApplicationDomain(_ context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1231,7 +1047,6 @@ func (r *fakeRepository) UpdateApplicationDomain(_ context.Context, domain Appli
 	return ApplicationDomain{}, ErrNotFound
 }
 
-// ClearPrimaryApplicationDomains implements Repository.
 func (r *fakeRepository) ClearPrimaryApplicationDomains(_ context.Context, appID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1243,14 +1058,10 @@ func (r *fakeRepository) ClearPrimaryApplicationDomains(_ context.Context, appID
 	return nil
 }
 
-// InTx implements Repository: the fake serializes on r.mu per method, so a
-// multi-step test sequence runs fn directly without holding the lock across
-// calls (holding it would deadlock the nested method locks).
 func (r *fakeRepository) InTx(_ context.Context, fn func(tx Repository) error) error {
 	return fn(r)
 }
 
-// DeleteApplicationDomain implements Repository.
 func (r *fakeRepository) DeleteApplicationDomain(_ context.Context, appID, domainID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1263,7 +1074,6 @@ func (r *fakeRepository) DeleteApplicationDomain(_ context.Context, appID, domai
 	return nil
 }
 
-// DeleteApplicationDomains implements Repository.
 func (r *fakeRepository) DeleteApplicationDomains(_ context.Context, appID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1277,7 +1087,6 @@ func (r *fakeRepository) DeleteApplicationDomains(_ context.Context, appID uuid.
 	return nil
 }
 
-// DomainClaim implements Repository.
 func (r *fakeRepository) DomainClaim(_ context.Context, domain string) (ApplicationDomain, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1289,13 +1098,10 @@ func (r *fakeRepository) DomainClaim(_ context.Context, domain string) (Applicat
 	return ApplicationDomain{}, ErrNotFound
 }
 
-// ListRedirectSources implements Repository: the fake holds no redirect
-// rules, so no source is ever shadowed.
 func (r *fakeRepository) ListRedirectSources(_ context.Context) ([]string, error) {
 	return []string{}, nil
 }
 
-// certificateIntent returns the stored intent of an application (test helper).
 func (r *fakeRepository) certificateIntent(appID uuid.UUID) (CertificateIntent, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1307,7 +1113,6 @@ func (r *fakeRepository) certificateIntent(appID uuid.UUID) (CertificateIntent, 
 	return CertificateIntent{}, false
 }
 
-// hasDeployKey reports whether an application holds a deploy key (test helper).
 func (r *fakeRepository) hasDeployKey(appID uuid.UUID) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1315,9 +1120,6 @@ func (r *fakeRepository) hasDeployKey(appID uuid.UUID) bool {
 	return ok
 }
 
-// hasPrivateKey reports whether a sealed private key row still exists (test
-// helper); it mirrors private_keys, which the application cascade does not
-// reach.
 func (r *fakeRepository) hasPrivateKey(privateKeyID uuid.UUID) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1325,7 +1127,6 @@ func (r *fakeRepository) hasPrivateKey(privateKeyID uuid.UUID) bool {
 	return ok
 }
 
-// deployment returns the stored row by ID (test helper).
 func (r *fakeRepository) deployment(id uuid.UUID) (Deployment, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1337,8 +1138,6 @@ func (r *fakeRepository) deployment(id uuid.UUID) (Deployment, bool) {
 	return Deployment{}, false
 }
 
-// persistedStates returns the recorded walk with consecutive duplicates
-// collapsed: an attempt counter update and a transition share a state.
 func (r *fakeRepository) persistedStates() []State {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1351,7 +1150,6 @@ func (r *fakeRepository) persistedStates() []State {
 	return out
 }
 
-// fakeSource writes a minimal buildable tree instead of running git.
 type fakeSource struct {
 	calls  int
 	err    error
@@ -1359,10 +1157,8 @@ type fakeSource struct {
 	branch string
 }
 
-// Compile-time guarantee that fakeSource satisfies the seam.
 var _ Source = (*fakeSource)(nil)
 
-// Clone implements Source by writing a Dockerfile the engine can build.
 func (s *fakeSource) Clone(_ context.Context, app Application, dir string, log func(string)) error {
 	s.calls++
 	s.branch = app.Branch
@@ -1380,8 +1176,6 @@ func (s *fakeSource) Clone(_ context.Context, app Application, dir string, log f
 	return os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n"), 0o644)
 }
 
-// mockNode is a scriptable Node: the mock agent the state-machine tests run
-// against. Every RPC counts its calls and records its arguments.
 type mockNode struct {
 	mu sync.Mutex
 
@@ -1394,15 +1188,9 @@ type mockNode struct {
 	removeErr error
 	listErr   error
 
-	// registryAddr and digest seed the BuildImage-style outcome.
 	registryAddr string
 	digest       string
 
-	// composeUpErr/composeDownErr/composePsErr script the compose RPCs;
-	// composeContainers seeds the ComposePs answer, and the compose* slices
-	// record every call for assertions. composeOldAgent makes
-	// ComposeValidate accept everything, emulating a pre-confinement agent
-	// for the capability probe test.
 	composeUpErr         error
 	composeDownErr       error
 	composePsErr         error
@@ -1418,20 +1206,13 @@ type mockNode struct {
 	composeDownProjects  []string
 	composeDownDocuments []string
 
-	// fileRoots/fileRootsErr seed the FileRoots answer (nil models an agent
-	// without the FileService, e.g. files disabled or older).
 	fileRoots    []*agentv1.FileRoot
 	fileRootsErr error
 
-	// healthState/healthStatus describe the container Run created.
 	containerID  string
 	healthState  string
 	healthStatus string
 
-	// runFailures is the number of leading Run calls that fail with the
-	// retryable ErrAgentUnavailable (or runErr when set); runErrLeavesContainer
-	// makes each of those failed calls leave an untracked container behind (a
-	// lost response), and listed seeds containers the node reports.
 	runFailures           int
 	runErrLeavesContainer bool
 	orphans               []*agentv1.ContainerInfo
@@ -1445,27 +1226,20 @@ type mockNode struct {
 	removeCalls int
 	closed      int
 
-	created  bool
-	requests []*agentv1.CreateContainerRequest
-	stopped  []string
-	started  []string
-	removed  []string
-	metas    []BuildMeta
-	// contexts records the raw build context tarball of every Build call, so
-	// tests can assert what the node actually received.
-	contexts [][]byte
-	// pullImages/pullUsers/pullPasswords record PullWithAuth calls (the
-	// prebuilt-image pull); the counter above covers both pull spellings.
+	created       bool
+	requests      []*agentv1.CreateContainerRequest
+	stopped       []string
+	started       []string
+	removed       []string
+	metas         []BuildMeta
+	contexts      [][]byte
 	pullImages    []string
 	pullUsers     []string
 	pullPasswords []string
 }
 
-// Compile-time guarantee that mockNode satisfies the seam.
 var _ Node = (*mockNode)(nil)
 
-// newMockNode returns a healthy mock agent: builds push to a node-local
-// registry and the started container reports as running.
 func newMockNode() *mockNode {
 	return &mockNode{
 		registryAddr: "127.0.0.1:5000",
@@ -1476,7 +1250,6 @@ func newMockNode() *mockNode {
 	}
 }
 
-// Build implements Node.
 func (m *mockNode) Build(_ context.Context, meta BuildMeta, contextTar []byte, log func([]byte)) (BuildOutcome, error) {
 	m.mu.Lock()
 	m.buildCalls++
@@ -1504,7 +1277,6 @@ func (m *mockNode) Build(_ context.Context, meta BuildMeta, contextTar []byte, l
 	}, nil
 }
 
-// Pull implements Node.
 func (m *mockNode) Pull(_ context.Context, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1512,8 +1284,6 @@ func (m *mockNode) Pull(_ context.Context, _ string) error {
 	return m.pullErr
 }
 
-// PullWithAuth implements Node, recording the pull for assertions and
-// answering the configured digest.
 func (m *mockNode) PullWithAuth(_ context.Context, image, username, password string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1527,8 +1297,6 @@ func (m *mockNode) PullWithAuth(_ context.Context, image, username, password str
 	return m.digest, nil
 }
 
-// Run implements Node, recording the payload and "creating" a container that
-// then answers healthchecks with the configured state.
 func (m *mockNode) Run(_ context.Context, req *agentv1.CreateContainerRequest) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1561,7 +1329,6 @@ func (m *mockNode) Run(_ context.Context, req *agentv1.CreateContainerRequest) (
 	return m.containerID, nil
 }
 
-// Stop implements Node.
 func (m *mockNode) Stop(_ context.Context, containerID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1570,7 +1337,6 @@ func (m *mockNode) Stop(_ context.Context, containerID string) error {
 	return m.stopErr
 }
 
-// Start implements Node.
 func (m *mockNode) Start(_ context.Context, containerID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1579,8 +1345,6 @@ func (m *mockNode) Start(_ context.Context, containerID string) error {
 	return m.startErr
 }
 
-// Remove implements Node. A configured removeErr leaves the container in place,
-// like an agent that cannot be reached.
 func (m *mockNode) Remove(_ context.Context, containerID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1606,8 +1370,6 @@ func (m *mockNode) Remove(_ context.Context, containerID string) error {
 	return nil
 }
 
-// Containers implements Node, exposing the seeded containers, the orphans a
-// failed Run left behind, and the container a successful Run created.
 func (m *mockNode) Containers(_ context.Context) ([]*agentv1.ContainerInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1629,8 +1391,6 @@ func (m *mockNode) Containers(_ context.Context) ([]*agentv1.ContainerInfo, erro
 	return out, nil
 }
 
-// ContainersByLabel implements Node: it answers the seeded containers carrying
-// every requested label, mirroring a node's server-side Docker label filter.
 func (m *mockNode) ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1659,8 +1419,6 @@ func (m *mockNode) ContainersByLabel(ctx context.Context, labels map[string]stri
 	return out, nil
 }
 
-// FileRoots implements Node, answering the seeded File Manager roots (nil when
-// the fake models an agent without the FileService).
 func (m *mockNode) FileRoots(_ context.Context) ([]*agentv1.FileRoot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1670,7 +1428,6 @@ func (m *mockNode) FileRoots(_ context.Context) ([]*agentv1.FileRoot, error) {
 	return m.fileRoots, nil
 }
 
-// Close implements Node.
 func (m *mockNode) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1678,8 +1435,6 @@ func (m *mockNode) Close() error {
 	return nil
 }
 
-// ComposeUp implements Node, recording the project and document of a compose
-// deploy for assertions.
 func (m *mockNode) ComposeUp(_ context.Context, projectName string, composeYAML []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1689,7 +1444,6 @@ func (m *mockNode) ComposeUp(_ context.Context, projectName string, composeYAML 
 	return m.composeUpErr
 }
 
-// ComposeDown implements Node, recording the teardown for assertions.
 func (m *mockNode) ComposeDown(_ context.Context, projectName string, composeYAML []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1699,7 +1453,6 @@ func (m *mockNode) ComposeDown(_ context.Context, projectName string, composeYAM
 	return m.composeDownErr
 }
 
-// ComposePs implements Node, answering the seeded project containers.
 func (m *mockNode) ComposePs(_ context.Context, _ string) ([]ComposeContainer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1710,10 +1463,6 @@ func (m *mockNode) ComposePs(_ context.Context, _ string) ([]ComposeContainer, e
 	return append([]ComposeContainer(nil), m.composeContainers...), nil
 }
 
-// ComposeValidate implements Node. By default it answers like a capable
-// node (the probe document accepted with enforcement reported);
-// composeOldAgent accepts everything without the enforcement flag,
-// emulating a pre-confinement agent.
 func (m *mockNode) ComposeValidate(_ context.Context, _ string, _ []byte) ([]string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1727,7 +1476,6 @@ func (m *mockNode) ComposeValidate(_ context.Context, _ string, _ []byte) ([]str
 	return []string{"probe"}, true, nil
 }
 
-// lastRequest returns the most recent Run payload.
 func (m *mockNode) lastRequest() *agentv1.CreateContainerRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1737,17 +1485,14 @@ func (m *mockNode) lastRequest() *agentv1.CreateContainerRequest {
 	return m.requests[len(m.requests)-1]
 }
 
-// recordPublisher captures published payloads for assertions.
 type recordPublisher struct {
 	mu       sync.Mutex
 	events   []Event
 	channels []string
 }
 
-// Compile-time guarantee that recordPublisher satisfies the seam.
 var _ Publisher = (*recordPublisher)(nil)
 
-// Publish implements Publisher.
 func (p *recordPublisher) Publish(_ context.Context, channel, payload string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1760,15 +1505,12 @@ func (p *recordPublisher) Publish(_ context.Context, channel, payload string) er
 	return nil
 }
 
-// payloads returns every captured event.
 func (p *recordPublisher) payloads() []Event {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]Event(nil), p.events...)
 }
 
-// dialScript returns a DialFunc that fails the first n calls with err (or
-// ErrAgentUnavailable) and then hands out node.
 func dialScript(node Node, failures int, err error) (DialFunc, *int) {
 	calls := new(int)
 	if err == nil {
@@ -1783,7 +1525,6 @@ func dialScript(node Node, failures int, err error) (DialFunc, *int) {
 	}, calls
 }
 
-// testApplication returns an application wired to a fake server and repo.
 func testApplication(userID uuid.UUID) Application {
 	return Application{
 		ID:            uuid.New(),
@@ -1799,9 +1540,6 @@ func testApplication(userID uuid.UUID) Application {
 	}
 }
 
-// testEnv returns the standard environment fixture: one plain variable and a
-// secret sealed with providers.SealSecret, the single crypto helper. It always
-// seals with testSecretKey, the key newTestService wires the services with.
 func testEnv(t *testing.T) ([]EnvVar, []Secret) {
 	t.Helper()
 	sealed, err := providers.SealSecret(testSecretKey, "hunter2")
@@ -1812,9 +1550,6 @@ func testEnv(t *testing.T) ([]EnvVar, []Secret) {
 		[]Secret{{Key: "API_TOKEN", Ciphertext: sealed}}
 }
 
-// fakeHookLifecycle is a scriptable HookLifecycle. It records installs and
-// removals, can fail a removal (the provider-outage case) and appends to a
-// shared event log so a test can pin ordering against repository operations.
 type fakeHookLifecycle struct {
 	mu           sync.Mutex
 	installCalls int
@@ -1825,10 +1560,8 @@ type fakeHookLifecycle struct {
 	events       *[]string
 }
 
-// Compile-time guarantee that fakeHookLifecycle satisfies the seam.
 var _ HookLifecycle = (*fakeHookLifecycle)(nil)
 
-// InstallHook implements HookLifecycle.
 func (f *fakeHookLifecycle) InstallHook(_ context.Context, _ uuid.UUID, appID uuid.UUID, _ *http.Request) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1837,7 +1570,6 @@ func (f *fakeHookLifecycle) InstallHook(_ context.Context, _ uuid.UUID, appID uu
 	return nil
 }
 
-// RemoveHook implements HookLifecycle.
 func (f *fakeHookLifecycle) RemoveHook(_ context.Context, _ uuid.UUID, appID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1849,19 +1581,14 @@ func (f *fakeHookLifecycle) RemoveHook(_ context.Context, _ uuid.UUID, appID uui
 	return f.removeErr
 }
 
-// stallingHookLifecycle blocks every hook call until its context is done,
-// simulating a provider that accepts the connection and then stalls. The
-// recorded call counts let a test prove the call happened exactly once.
 type stallingHookLifecycle struct {
 	mu           sync.Mutex
 	installCalls int
 	removeCalls  int
 }
 
-// Compile-time guarantee that stallingHookLifecycle satisfies the seam.
 var _ HookLifecycle = (*stallingHookLifecycle)(nil)
 
-// InstallHook implements HookLifecycle.
 func (f *stallingHookLifecycle) InstallHook(ctx context.Context, _, _ uuid.UUID, _ *http.Request) error {
 	f.mu.Lock()
 	f.installCalls++
@@ -1870,7 +1597,6 @@ func (f *stallingHookLifecycle) InstallHook(ctx context.Context, _, _ uuid.UUID,
 	return ctx.Err()
 }
 
-// RemoveHook implements HookLifecycle.
 func (f *stallingHookLifecycle) RemoveHook(ctx context.Context, _, _ uuid.UUID) error {
 	f.mu.Lock()
 	f.removeCalls++

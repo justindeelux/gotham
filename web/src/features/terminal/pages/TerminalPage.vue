@@ -20,15 +20,6 @@ import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
 import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
-/**
- * Standalone page terminal (`/terminal`, JUS-246).
- *
- * The page owns a tab strip now (JUS-265): the add-tab picker (+) after the
- * strip opens host or container sessions in new page tabs, each keeping its
- * own target label, state and close confirmation. The empty state keeps the
- * server cards for the first session; everything else is the shared session
- * stage. The page never creates a shell on mount or on a route change.
- */
 const { t } = useI18n();
 const terminal = useTerminalStore();
 const {
@@ -54,7 +45,6 @@ const {
 
 const tabsElement = ref<HTMLElement | null>(null);
 
-/** revealActiveTab keeps the selected (or newly opened) tab in view. */
 function revealActiveTab(): void {
   const strip = tabsElement.value;
   const active = activeTab.value;
@@ -83,7 +73,6 @@ watch(
 );
 
 function onWindowResize(): void {
-  // rAF runs after the new layout, so the strip measures the resized width.
   window.requestAnimationFrame(revealActiveTab);
 }
 
@@ -100,12 +89,10 @@ const isContainer = computed<boolean>(() =>
   activeTab.value ? isContainerTerminalTarget(activeTab.value.target) : false,
 );
 
-/** stageServer is null for a container tab (no node lifecycle branch). */
 const stageServer = computed(() =>
   isContainer.value ? null : selectedServer.value,
 );
 
-/** pageView is the single state the page renders below the tab strip. */
 const pageView = computed<"session" | "detached" | "closed" | "picker">(() => {
   if (activeTab.value !== null) {
     return "session";
@@ -119,7 +106,6 @@ const pageView = computed<"session" | "detached" | "closed" | "picker">(() => {
   return "picker";
 });
 
-/** showNotReady explains an empty-state pick on an unavailable node. */
 const showNotReady = computed<boolean>(
   () =>
     pageView.value === "picker" &&
@@ -128,8 +114,6 @@ const showNotReady = computed<boolean>(
     !serverReady.value,
 );
 
-// A one-way transfer unmounts the pane that owned the trigger, so focus would
-// fall to document.body. Hand it to the new window tab instead.
 watch(detachedTab, (next, previous) => {
   if (next === null || previous !== null) {
     return;
@@ -139,12 +123,10 @@ watch(detachedTab, (next, previous) => {
   });
 });
 
-/** requestCloseTab uses the shared confirmation path. */
 function requestCloseTab(id: string): void {
   void terminal.requestClose([id]);
 }
 
-/** focusTab moves focus to one page tab (roving tablist). */
 function focusTab(index: number): void {
   const tab = pageTabs.value[index];
   if (tab === undefined) {
@@ -156,7 +138,6 @@ function focusTab(index: number): void {
   });
 }
 
-/** onTabKeydown implements roving focus and the Delete close path. */
 function onTabKeydown(event: KeyboardEvent, index: number): void {
   const count = pageTabs.value.length;
   if (count === 0) {
@@ -362,8 +343,6 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
 .term-page-tab {
   display: inline-flex;
   align-items: center;
-  /* A readable minimum makes the strip scroll instead of squeezing every
-   * label to an ellipsis; the active-tab reveal keeps the selection visible. */
   min-width: min(8rem, 40vw);
   max-width: min(16rem, 45vw);
   border: 1px solid var(--border);

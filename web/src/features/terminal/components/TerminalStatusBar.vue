@@ -9,7 +9,6 @@ import {
   statusTone,
 } from "@/features/terminal/utils/terminal";
 
-/** Status footer for one terminal (JUS-249 extraction). */
 interface Props {
   tab: TerminalTab;
   variant: "page" | "window";
@@ -57,7 +56,6 @@ const isContainer = computed<boolean>(() =>
 
 <style scoped>
 .term-statusbar {
-  /* Above the suggestion overlay: chrome stays readable and clickable. */
   position: relative;
   z-index: 5;
   flex: 0 0 auto;

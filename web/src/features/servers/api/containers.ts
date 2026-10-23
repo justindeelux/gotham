@@ -5,34 +5,10 @@ import { isApiError, stripErrorPrefix } from "./servers";
 import enCatalog from "../locales/en";
 import viCatalog from "../locales/vi";
 
-/** catalogFor selects the servers display dictionary for one locale. */
 function catalogFor(locale?: string | null): typeof enCatalog {
   return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
 }
 
-/**
- * Typed client for the container routes served by `internal/containers`:
- *
- *   GET  /servers/{id}/containers
- *   POST /servers/{id}/containers/{containerID}/start
- *   POST /servers/{id}/containers/{containerID}/stop
- *   POST /servers/{id}/containers/{containerID}/restart
- *   POST /servers/{id}/containers/{containerID}/logs/stream
- *   POST /servers/{id}/images/pull
- *   POST /servers/{id}/containers/run
- *
- * Paths are relative to the shared axios instance (`baseURL: /api/v1`), so the
- * auth header and refresh-on-401 behaviour come from `./http` unchanged.
- */
-
-/**
- * A container running on a managed node, as mapped by the control plane.
- *
- * `state` is the raw Docker lifecycle state; `status` is its human string
- * (e.g. "Up 2 hours", "Exited (1) 3 hours ago"); `ports` carries operator
- * declared mappings from the `gotham.ports` label until the agent contract
- * transports Docker port bindings (see `internal/containers/container.go`).
- */
 export interface Container {
   id: string;
   name: string;
@@ -43,15 +19,10 @@ export interface Container {
   created?: string;
 }
 
-/** Body accepted by POST /servers/{id}/images/pull. */
 export interface PullImageInput {
   image: string;
 }
 
-/**
- * Body accepted by POST /servers/{id}/containers/run. Mirrors the control-plane
- * `RunOptions` DTO; `image` is the only required field.
- */
 export interface RunContainerInput {
   image: string;
   name?: string;
@@ -64,25 +35,20 @@ export interface RunContainerInput {
   networks?: string[];
 }
 
-/** Wire envelope for a container list. */
 interface ContainerListEnvelope {
   containers: Container[];
 }
 
-/** Wire envelope for a container action, reporting the targeted container. */
 interface ContainerActionEnvelope {
   container_id: string;
 }
 
-/** Wire envelope echoing the pulled image. */
 interface PullImageEnvelope {
   image: string;
 }
 
-/** The supported per-row container actions. */
 export type ContainerAction = "start" | "stop" | "restart";
 
-/** listContainers returns every container on one server. */
 export async function listContainers(serverId: string): Promise<Container[]> {
   const response = await http.get<ContainerListEnvelope>(
     `/servers/${serverId}/containers`,
@@ -90,10 +56,6 @@ export async function listContainers(serverId: string): Promise<Container[]> {
   return response.data.containers ?? [];
 }
 
-/**
- * containerAction runs start/stop/restart for one container. All three share
- * the same route shape and response, so they funnel through this helper.
- */
 async function containerAction(
   serverId: string,
   containerId: string,
@@ -106,7 +68,6 @@ async function containerAction(
   return response.data.container_id;
 }
 
-/** startContainer starts one container. */
 export function startContainer(
   serverId: string,
   containerId: string,
@@ -114,7 +75,6 @@ export function startContainer(
   return containerAction(serverId, containerId, "start");
 }
 
-/** stopContainer stops one container. */
 export function stopContainer(
   serverId: string,
   containerId: string,
@@ -122,7 +82,6 @@ export function stopContainer(
   return containerAction(serverId, containerId, "stop");
 }
 
-/** restartContainer restarts one container. */
 export function restartContainer(
   serverId: string,
   containerId: string,
@@ -130,7 +89,6 @@ export function restartContainer(
   return containerAction(serverId, containerId, "restart");
 }
 
-/** pullImage pulls an image onto one server; the request is accepted async. */
 export async function pullImage(
   serverId: string,
   image: string,
@@ -142,7 +100,6 @@ export async function pullImage(
   return response.data.image;
 }
 
-/** runContainer creates and starts a raw container, returning its id. */
 export async function runContainer(
   serverId: string,
   input: RunContainerInput,
@@ -154,16 +111,6 @@ export async function runContainer(
   return response.data.container_id;
 }
 
-/**
- * startContainerLogStream asks the control plane to bridge one container's
- * agent log stream into the realtime channel. Call it after the viewer's
- * subscription is acknowledged, so the hub room has a member before the agent
- * tail is published. It is idempotent per container, so repeated mounts share
- * one agent stream, and the stream is reaped once no WebSocket subscriber
- * remains. The returned number is how many replay frames the server published
- * for this start (0 for a fresh stream or an empty ring), which sizes the
- * viewer's replay window.
- */
 export async function startContainerLogStream(
   serverId: string,
   containerId: string,
@@ -175,11 +122,6 @@ export async function startContainerLogStream(
   return response.data.replay ?? 0;
 }
 
-/**
- * describeContainerError maps a thrown error to a user-facing message.
- * The useful technical detail always passes through untouched; only the
- * empty fallbacks follow the display locale.
- */
 export function describeContainerError(error: unknown, locale?: string | null): string {
   const errors = catalogFor(locale).errors;
   if (isApiError(error)) {

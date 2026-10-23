@@ -1,9 +1,3 @@
-// I18N-8 focused checks: domains, teams and notification channels.
-//
-// Proves catalog parity for the three feature namespaces, current-locale
-// labels from the shared feature helpers, raw classifier/error semantics,
-// and that a locale switch preserves drafts while refreshing retained
-// feedback. Wire values (event keys, kinds, URLs, roles, tokens) stay raw.
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -200,7 +194,6 @@ describe("I18N-8 team roles and invite classification", () => {
     expect(describeTeamError(expired)).toBe("invite expired");
     const forbidden = { message: "teams: need owner", status: 403 };
     expect(describeTeamError(forbidden)).toBe("need owner");
-    // Unknown failures pair the localized summary with the raw diagnostic.
     expect(describeTeamError({ message: "teams: boom", status: 500 })).toBe(
       "Request failed: boom",
     );
@@ -291,7 +284,6 @@ describe("I18N-8 live switch preserves drafts", () => {
     setLocale("vi", null);
     await nextTick();
     await flushPromises();
-    // Labels refresh, the recorded domain and selections stay verbatim.
     expect(wrapper.text()).toContain("Thử thách");
     expect(wrapper.text()).toContain("shop.example.com");
     const emitted = wrapper.emitted("update:modelValue");
@@ -322,7 +314,6 @@ describe("I18N-8 live switch preserves drafts", () => {
     state.openProviderCreate();
     state.providerForm.value.name = "Typed name";
     vi.mocked(updateDNSProvider).mockRejectedValueOnce({ message: "", status: 403 });
-    // Edit path (existing provider) exercises the raw-error write.
     state.openProviderEdit({
       id: "prov-1",
       provider: "cloudflare",
@@ -341,7 +332,6 @@ describe("I18N-8 live switch preserves drafts", () => {
 
     setLocale("vi", null);
     await nextTick();
-    // No refetch, no draft loss: the retained alert rederives in Vietnamese.
     expect(state.providerError.value).toBe(
       "Bạn cần phạm vi admin để quản lý tên miền và SSL. Hãy đăng nhập " +
         "bằng tài khoản admin hoặc dùng token API admin.",
@@ -375,7 +365,6 @@ describe("I18N-8 retained channel test failure", () => {
     updated_at: "",
   };
 
-  /** cardHarness mounts a real ChannelCard with dialog state provided. */
   async function cardHarness() {
     setActivePinia(createPinia());
     const teams = useTeamsStore();
@@ -420,7 +409,6 @@ describe("I18N-8 retained channel test failure", () => {
       "Test failed: Your team role does not allow this action.",
     );
 
-    // The switch sends nothing: the retained failure rederives in place.
     setLocale("vi", null);
     await nextTick();
     expect(resultText(wrapper)).toBe(
@@ -480,7 +468,6 @@ describe("I18N-8 channel draft preservation", () => {
 
     setLocale("vi", null);
     await nextTick();
-    // Draft, scope pick, secrets and gating survive; labels refresh.
     expect(state.form.value.name).toBe("Typed channel");
     expect(state.form.value.kind).toBe("discord");
     expect(state.form.value.webhook_url).toBe("https://typed/hook");
@@ -532,7 +519,6 @@ describe("I18N-8 retained team 409", () => {
     });
     await state.handleRename();
     expect(vi.mocked(renameTeam)).toHaveBeenCalledTimes(1);
-    // A known refusal keeps its raw actionable text in both locales.
     expect(state.renameError.value).toBe("name taken");
     setLocale("vi", null);
     await nextTick();

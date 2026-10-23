@@ -13,13 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestToolchainRunningServerUniqueMigrationToleratesDuplicates is the PR #325
-// review regression: a database that ran the pre-fix racy claim can already hold
-// several running jobs for one node, which would make 00055's CREATE UNIQUE
-// INDEX fail and abort the migration. It builds a disposable database, migrates
-// it to just before 00055, seeds duplicate running rows, then applies 00055 and
-// asserts it succeeds, keeps only the oldest running job per node, and enforces
-// the index afterwards.
 func TestToolchainRunningServerUniqueMigrationToleratesDuplicates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -62,7 +55,6 @@ func TestToolchainRunningServerUniqueMigrationToleratesDuplicates(t *testing.T) 
 	if err != nil {
 		t.Fatalf("init migrations: %v", err)
 	}
-	// Stop at the last migration before the unique running-server index.
 	if _, err := provider.UpTo(ctx, 54); err != nil {
 		t.Fatalf("migrate to 54: %v", err)
 	}
@@ -92,15 +84,12 @@ func TestToolchainRunningServerUniqueMigrationToleratesDuplicates(t *testing.T) 
 
 	base0 := time.Now().UTC().Truncate(time.Second)
 	serverA, serverB := insertServer("jus176-dup-a"), insertServer("jus176-dup-b")
-	// Two nodes, each with duplicate running rows; only the oldest per node must
-	// survive.
 	aOldest := seedRunning(serverA, "a1", base0)
 	aNewer := seedRunning(serverA, "a2", base0.Add(time.Minute))
 	aNewest := seedRunning(serverA, "a3", base0.Add(2*time.Minute))
 	bOldest := seedRunning(serverB, "b1", base0)
 	bNewer := seedRunning(serverB, "b2", base0.Add(time.Minute))
 
-	// Apply 00055: this must not fail on the duplicates.
 	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("apply migration 00055 on duplicate running rows: %v", err)
 	}
@@ -146,7 +135,6 @@ func TestToolchainRunningServerUniqueMigrationToleratesDuplicates(t *testing.T) 
 		t.Fatalf("unique running-server index count = %d, want 1", indexCount)
 	}
 
-	// The index now rejects a second running job on a node.
 	if _, err := db.ExecContext(ctx, `UPDATE toolchain_jobs SET status = 'running' WHERE id = $1`, aNewer); err == nil {
 		t.Fatal("expected a unique violation promoting a second running job on one node")
 	}

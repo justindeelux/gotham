@@ -29,12 +29,6 @@ const {
   signOutHere,
 } = useSessionsPanel();
 
-/**
- * othersConfirmText names the destructive count through the vue-i18n
- * library plural choice on one message with a named count parameter
- * (0/1/many), so the compiler (not a manual branch) selects the form.
- * The popconfirm stays guarded by the same disabled/empty rules.
- */
 const othersConfirmText = computed<string>(() =>
   t("profile.sessions.confirmOthers", { count: others.value.length }, { plural: others.value.length }),
 );
@@ -46,7 +40,6 @@ onMounted(() => {
 
 <template>
   <NCard :title="t('profile.sessions.title')">
-    <!-- Panel-width container for the row stack rule (JUS-19 convention). -->
     <div class="sessions-panel">
       <p class="small muted panel-desc">
         {{ t("profile.sessions.intro") }}

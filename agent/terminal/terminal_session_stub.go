@@ -7,14 +7,8 @@ import (
 	"time"
 )
 
-// Non-Linux hosts have no /proc session walk. The host session keeps the
-// process-group cleanup: background jobs in their own process groups can
-// survive a close there. The supported agent targets are Linux.
-
 func terminalProcessStartTime(pid int) uint64 { return 0 }
 
-// terminalSessionMember mirrors the Linux type; no member is ever produced and
-// the fields carry no meaning without a /proc walk.
 type terminalSessionMember struct{}
 
 func closeTerminalSessionMembers(members []terminalSessionMember) {}

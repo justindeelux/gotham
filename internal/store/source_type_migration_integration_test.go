@@ -14,11 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestApplicationSourceTypeMigration seeds provider-backed and public rows on
-// a 00036 schema, applies 00037 and asserts the backfill: github/gitlab rows
-// keep the provider-backed flow, everything else is public git, and the
-// CHECK rejects unknown types. Then it rolls 00037 back and asserts the
-// column is gone.
 func TestApplicationSourceTypeMigration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

@@ -19,13 +19,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// privateRepoSSHStub is a test stand-in for ssh: it records the deploy key git
-// presented and then serves the repository with git-upload-pack locally. The
-// last argument is the remote command git asked ssh to run, so the stub closes
-// git's ssh transport over local pipes — no network, no sshd, no host keys.
-// The real SSH crypto/auth hop is therefore not exercised; the orchestrator,
-// the deploy-key lookup, the git command line and the build are (see the
-// report for what a live host would still have to prove).
 const privateRepoSSHStub = `#!/bin/sh
 record="$GOTHAM_E2E_SSH_RECORD"
 key=""
@@ -42,10 +35,6 @@ for last in "$@"; do :; done
 exec /bin/sh -c "$last"
 `
 
-// seedPrivateRepoDeployKey stores an application deploy key directly — the
-// provider API is unreachable in CI, so the rows are written the way the
-// deploy-key route would have written them (a sealed private key in
-// private_keys plus the application_deploy_keys mapping).
 func (h *p4Harness) seedPrivateRepoDeployKey(t *testing.T, appID, repo string) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -80,13 +69,6 @@ func (h *p4Harness) seedPrivateRepoDeployKey(t *testing.T, appID, repo string) {
 	}
 }
 
-// TestP4DeployPrivateRepoOverSSH covers BE-4.4b end to end: an application
-// stored with the provider's ssh:// clone URL deploys a private repository
-// through its deploy key. The clone URL survives validation and the cloner
-// verbatim (no https→ssh rewrite needed), the orchestrator opens the sealed
-// key row, and git clones over ssh:// with the ephemeral 0600 key file the
-// cloner builds. The ssh transport itself is a local stand-in (see
-// privateRepoSSHStub), not a real sshd.
 func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the ssh stand-in is a POSIX shell script")
@@ -100,18 +82,12 @@ func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 		Name:          "p4-private-" + suffix,
 		Provider:      "github",
 		Repo:          fixture.repo,
-		// Loopback through the ssh stand-in below (no network, no sshd, no
-		// host keys): the harness allows private git hosts for this.
-		CloneURL:  "ssh://git@127.0.0.1" + filepath.ToSlash(fixture.dir),
-		Branch:    "main",
-		BuildPack: "dockerfile",
-		ServerID:  h.serverID.String(),
+		CloneURL:      "ssh://git@127.0.0.1" + filepath.ToSlash(fixture.dir),
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		ServerID:      h.serverID.String(),
 	})
 	h.addDomain(t, app.ID, "p4-private-"+suffix+".example.test", p4ContainerPort)
-	// The create route installed the push hook through the production seam:
-	// the harness wires cfg.Hooks to the real webhook service (with a stub
-	// installer, since no Git host is reachable), so the row exists without
-	// any explicit webhook-route call.
 	hookCtx, hookCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	hookRow, err := h.st.GetApplicationWebhookByApp(hookCtx, pgUUID(uuid.MustParse(app.ID)))
 	hookCancel()
@@ -138,8 +114,6 @@ func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 	if queued.State != "queued" {
 		t.Errorf("queued deployment state = %q, want queued", queued.State)
 	}
-	// The deploy log names the credential, and the clone reached a running
-	// container that answers on its published host port.
 	h.waitForDeployLog(t, queued.ID, "using the application deploy key")
 	running := h.waitForTerminal(t, app.ID, queued.ID)
 	if running.State != "running" {

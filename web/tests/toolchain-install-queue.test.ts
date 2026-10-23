@@ -1,9 +1,3 @@
-// Install progress modal queue log (JUS-178, fix round 1): seq de-dupe,
-// contiguous-cursor gap backfill, paged cursor loads, poll lifecycle
-// (queued→running start, terminal final tail), load-time frame preservation,
-// ANSI cleanup, and the retry/cancel list actions.
-// The realtime client and the HTTP layer are mocked; socket frames are
-// driven manually through the captured client options.
 /* global setTimeout: readonly, HTMLElement: readonly */
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -84,7 +78,6 @@ function job(overrides: Partial<ToolchainJob> = {}): ToolchainJob {
   };
 }
 
-/** logFrame wraps one output line as a realtime hub frame. */
 function logFrame(jobId: string, seq: number, line: string): string {
   return JSON.stringify({
     channel: "logs:srv-1:toolchain",
@@ -93,7 +86,6 @@ function logFrame(jobId: string, seq: number, line: string): string {
   });
 }
 
-/** socketMessage builds the client message the store's handler reads. */
 function socketMessage(raw: string): WebSocketMessage {
   return {
     raw,
@@ -104,12 +96,10 @@ function socketMessage(raw: string): WebSocketMessage {
   };
 }
 
-/** emitLogLine drives one realtime line through the store fan-out. */
 function emitLogLine(jobId: string, seq: number, line: string): void {
   capturedOptions?.onMessage?.(socketMessage(logFrame(jobId, seq, line)));
 }
 
-/** deferred returns a promise with its settle functions exposed. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   let reject!: (_reason: unknown) => void;
@@ -250,12 +240,9 @@ describe("useInstallQueueLog", () => {
     expect(wrapper.vm.cursor).toBe(2);
     expect(wrapper.vm.high).toBe(2);
 
-    // A redelivered frame (same seq) never renders twice; a late frame
-    // sorts into place and advances both watermarks.
     emitLogLine("job-1", 2, "installing");
     emitLogLine("job-1", 4, "fourth");
     emitLogLine("job-1", 3, "third");
-    // Another job's lines never leak into this buffer.
     emitLogLine("job-2", 5, "elsewhere");
     await flushPromises();
 
@@ -286,9 +273,6 @@ describe("useInstallQueueLog", () => {
     await flushPromises();
     expect(wrapper.vm.cursor).toBe(2);
 
-    // Seq 5 arrives with 3-4 missing: the cursor must stay at 2 and the
-    // backfill must ask after the cursor (2), not the realtime high (5),
-    // or lines 3-4 would be lost for good.
     emitLogLine("job-1", 5, "five");
     await flushPromises();
 
@@ -323,7 +307,6 @@ describe("useInstallQueueLog", () => {
     expect(wrapper.vm.lines.map((line) => line.seq)).toEqual([1, 2]);
     expect(wrapper.vm.cursor).toBe(2);
 
-    // The cursor poll is idempotent: replaying the same page adds nothing.
     getJobMock.mockResolvedValue({ job: job(), log: "done\n", next_seq: 2 });
     await wrapper.vm.reload();
     expect(wrapper.vm.lines.map((line) => line.seq)).toEqual([1, 2]);
@@ -347,7 +330,6 @@ describe("useInstallQueueLog", () => {
 
     expect(getJobMock).toHaveBeenCalledTimes(2);
     expect(getJobMock.mock.calls[1][2]).toBe(JOB_LOG_PAGE_SIZE);
-    // The client cap keeps the newest lines; the cursor covers everything.
     expect(wrapper.vm.lines.length).toBeLessThanOrEqual(500);
     expect(wrapper.vm.lines[wrapper.vm.lines.length - 1]?.seq).toBe(JOB_LOG_PAGE_SIZE + 1);
     expect(wrapper.vm.cursor).toBe(JOB_LOG_PAGE_SIZE + 1);
@@ -365,9 +347,7 @@ describe("useInstallQueueLog", () => {
     await flushPromises();
     expect(wrapper.vm.loading).toBe(true);
 
-    // A realtime line newer than the page in flight lands first…
     emitLogLine("job-1", 3, "live");
-    // …and the page load merges instead of overwriting it.
     pending.resolve({ job: job(), log: "a\nb\n", next_seq: 2 });
     await flushPromises();
 
@@ -381,8 +361,6 @@ describe("useInstallQueueLog", () => {
     await store.subscribe("srv-1");
     store.applyJob(job({ status: "queued" }));
     getJobMock.mockImplementation(async (_serverId: string, _jobId: string, after?: number) => {
-      // Any defined cursor is a tail request (?after=0 included); only the
-      // cursor-less call is the initial queued load.
       if (after !== undefined) {
         return { job: job({ status: "running" }), log: "tick\n", next_seq: after + 1 };
       }
@@ -393,14 +371,12 @@ describe("useInstallQueueLog", () => {
     await flushPromises();
     const callsWhileQueued = getJobMock.mock.calls.length;
     await new Promise((resolve) => setTimeout(resolve, 40));
-    // Queued jobs get no catch-up poll: realtime only.
     expect(getJobMock.mock.calls.length).toBe(callsWhileQueued);
 
     wrapper.vm.active = true;
     await new Promise((resolve) => setTimeout(resolve, 60));
     const tailCalls = getJobMock.mock.calls.slice(callsWhileQueued);
     expect(tailCalls.length).toBeGreaterThan(0);
-    // The first tail starts at the empty cursor; later tails advance it.
     expect(tailCalls[0][2]).toBe(0);
     for (const call of tailCalls) {
       expect(call[2]).not.toBeUndefined();
@@ -519,7 +495,6 @@ describe("InstallQueueList", () => {
     await retries[0].trigger("click");
     await flushPromises();
 
-    // The click must not be silent: the already-active job is focused.
     expect(wrapper.vm.selected).toBe("job-9");
     wrapper.unmount();
   });
@@ -590,7 +565,6 @@ describe("InstallQueueModal selection (JUS-184)", () => {
     });
   }
 
-  /** selectedToolName reads the highlighted queue row's tool name. */
   function selectedToolName(wrapper: ReturnType<typeof mount>): string {
     return wrapper.find(".queue-row.selected .queue-tool").text();
   }
@@ -666,7 +640,6 @@ describe("InstallQueueModal selection (JUS-184)", () => {
     store.openQueueModal();
     const wrapper = mountModal();
     await flushPromises();
-    // Newest running job is followed by default.
     expect(selectedToolName(wrapper)).toBe("Railpack");
 
     await selectRow(wrapper, "Git");
@@ -697,12 +670,10 @@ describe("InstallQueueModal selection (JUS-184)", () => {
     await flushPromises();
     expect(selectedToolName(wrapper)).toBe("Railpack");
 
-    // The user pins the failed job to read its log…
     await selectRow(wrapper, "Git");
     await flushPromises();
     expect(selectedToolName(wrapper)).toBe("Git");
 
-    // …and a progress frame for the running job must not steal it back.
     store.applyJob(
       job({
         id: "job-rail",
@@ -749,7 +720,6 @@ describe("InstallQueueModal selection (JUS-184)", () => {
 });
 
 describe("InstallJobLogPane", () => {
-  /** paneLines builds N rendered lines ending at a base seq. */
   function paneLines(count: number, endSeq: number) {
     return Array.from({ length: count }, (_, i) => ({
       seq: endSeq - count + 1 + i,
@@ -757,7 +727,6 @@ describe("InstallJobLogPane", () => {
     }));
   }
 
-  /** mockScroll gives a jsdom element measurable scroll geometry. */
   function mockScroll(el: HTMLElement, scrollHeight: number, clientHeight: number, top: number) {
     Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
     Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
@@ -774,7 +743,6 @@ describe("InstallJobLogPane", () => {
     await wrapper.setProps({ lines: paneLines(500, 501) });
     await nextTick();
 
-    // Length is frozen at the cap; only the last seq proves new content.
     expect(el.scrollTop).toBe(8000);
     wrapper.unmount();
   });

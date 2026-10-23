@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// fakeBinary writes an executable shell stub named name and prepends its
-// directory to PATH for the test, so detection resolves the stub instead of a
-// real tool. The stub is what makes these tests independent of the host.
 func fakeBinary(t *testing.T, name, body string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -19,8 +16,6 @@ func fakeBinary(t *testing.T, name, body string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// emptyPath points PATH at a directory with nothing in it so no catalog tool
-// resolves.
 func emptyPath(t *testing.T) {
 	t.Helper()
 	t.Setenv("PATH", t.TempDir())
@@ -52,8 +47,6 @@ func TestDetectMissingBinary(t *testing.T) {
 	}
 }
 
-// TestDetectToolPresentWithoutVersionProbe checks a tool that is on PATH but
-// does not answer its version probe is still installed, with no version.
 func TestDetectToolPresentWithoutVersionProbe(t *testing.T) {
 	emptyPath(t)
 	fakeBinary(t, "git", "exit 1")
@@ -67,8 +60,6 @@ func TestDetectToolPresentWithoutVersionProbe(t *testing.T) {
 	}
 }
 
-// TestDetectContainerProbe covers the BuildKit entry, which is a container
-// image probed through Docker rather than a host binary.
 func TestDetectContainerProbe(t *testing.T) {
 	t.Run("present", func(t *testing.T) {
 		emptyPath(t)
@@ -90,9 +81,6 @@ func TestDetectContainerProbe(t *testing.T) {
 	})
 }
 
-// TestDetectSystemdUnitsProbeViaPath stubs systemctl on PATH: the systemd
-// units must be detected through the probe command, never a host absolute
-// path, so a test (or a node without the unit) never sees host state.
 func TestDetectSystemdUnitsProbeViaPath(t *testing.T) {
 	t.Run("active", func(t *testing.T) {
 		emptyPath(t)
@@ -114,9 +102,6 @@ func TestDetectSystemdUnitsProbeViaPath(t *testing.T) {
 	})
 }
 
-// TestCatalogLeaksNoHostState is the CI regression: every catalog entry must
-// resolve through PATH, so an empty PATH reports the whole catalog as absent
-// even on a host that runs systemd and Docker.
 func TestCatalogLeaksNoHostState(t *testing.T) {
 	emptyPath(t)
 	for _, detection := range DetectAll() {
@@ -140,8 +125,6 @@ func TestInstalledHelper(t *testing.T) {
 	}
 }
 
-// TestCatalogIntegrity keeps the catalog internally consistent: unique ids,
-// required fields, declared category, and every dependency an existing entry.
 func TestCatalogIntegrity(t *testing.T) {
 	seen := make(map[string]bool, len(Catalog))
 	for _, tool := range Catalog {
@@ -170,9 +153,6 @@ func TestCatalogIntegrity(t *testing.T) {
 	}
 }
 
-// TestDetectOnlyToolsAreNeverManaged pins the JUS-174 requirement: the systemd
-// network units are detect-only and must never be offered for install or
-// removal.
 func TestDetectOnlyToolsAreNeverManaged(t *testing.T) {
 	for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved, IDNetworkctl, IDSystemctl} {
 		tool := mustLookup(t, id)
@@ -182,8 +162,6 @@ func TestDetectOnlyToolsAreNeverManaged(t *testing.T) {
 	}
 }
 
-// TestDetectAllReturnsCatalogOrder checks DetectAll covers the whole catalog in
-// order, so the agent's ListTools never silently drops an entry.
 func TestDetectAllReturnsCatalogOrder(t *testing.T) {
 	emptyPath(t)
 	detections := DetectAll()
@@ -197,9 +175,6 @@ func TestDetectAllReturnsCatalogOrder(t *testing.T) {
 	}
 }
 
-// TestGitMinVersion is the reviewer's JUS-174 finding: the catalog records
-// git's 2.37 minimum and detection must compare the observed version against
-// it, not just report the raw version.
 func TestGitMinVersion(t *testing.T) {
 	if got := mustLookup(t, IDGit).MinVersion; got != "2.37" {
 		t.Fatalf("git MinVersion = %q; want 2.37", got)

@@ -1,8 +1,3 @@
-// Connect GitHub / GitLab modal layout (JUS-74): both dialogs are ~520px
-// wide with stacked labels, the hint directly under its input and the
-// actions in a right-aligned footer (primary last). jsdom never applies
-// stylesheets, so the width is asserted from the NModal style prop text
-// (same pattern as the JUS-16/17/18 suite) plus structural mounts.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +27,6 @@ const mockedPage = vi.mocked(useGitSourcesPage);
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** readSfc returns the raw source of one single-file component. */
 function readSfc(relativePath: string): string {
   return readFileSync(resolve(webRoot, relativePath), "utf8");
 }
@@ -40,7 +34,6 @@ function readSfc(relativePath: string): string {
 const gitHubSource = readSfc("src/features/applications/pages/GitSourcesPage.vue");
 const gitLabSource = readSfc("src/features/applications/components/GitLabConnectDialog.vue");
 
-/** modalWidthPx reads the NModal style width in pixels. */
 function modalWidthPx(source: string): number {
   const match = source.match(/width:\s*(\d+)px/);
   expect(match, "expected an NModal style width in px").not.toBeNull();
@@ -109,8 +102,6 @@ describe("JUS-74 connect modal width", () => {
   it("renders hints in the form item feedback slot, below the input", () => {
     for (const source of [gitHubSource, gitLabSource]) {
       expect(source).toContain("#feedback");
-      // No hint may sit directly after an input: the default slot feeds
-      // .n-form-item-blank, a flex row that would squeeze the input.
       expect(source).not.toMatch(/\/>\s*<span class="field-hint"/);
     }
   });

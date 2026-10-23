@@ -13,7 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/taskevents"
 )
 
-// taskFramesOf decodes the task lifecycle frames a publisher captured.
 func taskFramesOf(t *testing.T, pub *recordPublisher) []taskevents.Event {
 	t.Helper()
 	var out []taskevents.Event
@@ -38,7 +37,6 @@ func statusesOf(events []taskevents.Event) []taskevents.Status {
 	return out
 }
 
-// framesOfTask returns the task frames of one task in publish order.
 func framesOfTask(t *testing.T, pub *recordPublisher, taskID string) []taskevents.Event {
 	t.Helper()
 	var out []taskevents.Event
@@ -50,8 +48,6 @@ func framesOfTask(t *testing.T, pub *recordPublisher, taskID string) []taskevent
 	return out
 }
 
-// waitForTrackerDrained polls until no running task remains or the deadline
-// hits; worker runs are asynchronous, so assertions after submit must wait.
 func waitForTrackerDrained(t *testing.T, tracker *taskevents.Tracker, teamID string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -64,9 +60,6 @@ func waitForTrackerDrained(t *testing.T, tracker *taskevents.Tracker, teamID str
 	t.Fatal("tracker did not drain within 10s")
 }
 
-// TestTaskEventsPublishedOnRun is the JUS-91 backend contract: a deploy run
-// publishes running events with step/progress plus a terminal event on the
-// team's task channel, and the tracker is empty once the run is terminal.
 func TestTaskEventsPublishedOnRun(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -115,9 +108,6 @@ func TestTaskEventsPublishedOnRun(t *testing.T) {
 	}
 }
 
-// TestFailPublishesDespitePersistError pins the stuck-card fix: when the
-// failed-state write itself fails, fail() still publishes the terminal failed
-// frame and drains the tracker.
 func TestFailPublishesDespitePersistError(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app, failUpdateState: StateFailed}
@@ -143,9 +133,6 @@ func TestFailPublishesDespitePersistError(t *testing.T) {
 	}
 }
 
-// TestFailSkipsPublishForAdoptedTerminal pins the no-flip rule: when the row
-// is already terminal (an ambiguous write committed it), fail() adopts the
-// outcome and publishes no failed card over the live one.
 func TestFailSkipsPublishForAdoptedTerminal(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -179,8 +166,6 @@ func TestFailSkipsPublishForAdoptedTerminal(t *testing.T) {
 	}
 }
 
-// TestRunPanicStillFailsClosed pins the defer-based guarantee: a panicking
-// step leaves a terminal row and card behind, then the panic propagates.
 func TestRunPanicStillFailsClosed(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -220,9 +205,6 @@ func TestRunPanicStillFailsClosed(t *testing.T) {
 	}
 }
 
-// ctxCountingPublisher records whether each publish ran on a live context.
-// A terminal publish on an already-cancelled caller context would be dropped
-// by the Redis transport, so fail() must publish detached.
 type ctxCountingPublisher struct {
 	recordPublisher
 	mu        sync.Mutex
@@ -247,8 +229,6 @@ func (p *ctxCountingPublisher) counts() (live, cancelled int) {
 	return p.live, p.cancelled
 }
 
-// TestCancelledRunStillPublishesTerminal pins the detached-context publish: a
-// run cancelled mid-flight still emits its failed card on a live context.
 func TestCancelledRunStillPublishesTerminal(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -280,9 +260,6 @@ func TestCancelledRunStillPublishesTerminal(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderingStaysMonotonic pins the queued-before-enqueue fix: even
-// with fast terminal workers, every task's first frame is queued and its last
-// is terminal, with strictly increasing sequence numbers.
 func TestSubmitOrderingStaysMonotonic(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -331,9 +308,6 @@ func TestSubmitOrderingStaysMonotonic(t *testing.T) {
 	}
 }
 
-// TestSubmitPublishesQueued is the webhook-triggered contract: DeploySystem
-// (the push-webhook path, no authenticated caller) shares submit with the
-// UI-started Deploy, so both surface a queued card from the same boundary.
 func TestSubmitPublishesQueued(t *testing.T) {
 	for _, viaSystem := range []bool{false, true} {
 		userID := uuid.New()
@@ -347,8 +321,6 @@ func TestSubmitPublishesQueued(t *testing.T) {
 			Logger:     discardLogger(),
 			Publisher:  pub,
 			Tasks:      tracker,
-			// The worker parks here, so the queued assertion below cannot
-			// race the run draining the tracker. Close releases it.
 			Dial: func(ctx context.Context, _ uuid.UUID) (Node, error) {
 				<-ctx.Done()
 				return nil, ctx.Err()
@@ -384,8 +356,6 @@ func TestSubmitPublishesQueued(t *testing.T) {
 	}
 }
 
-// TestTaskEventsPublishedOnFailure covers the failed card path: a run that
-// cannot reach its node publishes a failed event carrying the error.
 func TestTaskEventsPublishedOnFailure(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}

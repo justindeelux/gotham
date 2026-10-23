@@ -2,7 +2,6 @@ package mcp
 
 import "time"
 
-// Kept local to avoid importing control-plane services; parity is tested against servers.
 func parseMetricsQuery(from, to time.Time, step string) (time.Duration, error) {
 	bucket, window := time.Minute, 24*time.Hour
 	switch step {

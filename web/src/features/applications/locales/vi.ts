@@ -1,10 +1,5 @@
 import type { ApplicationsMessages } from "./en";
 
-/**
- * Applications Vietnamese catalog. Keys mirror `en.ts` exactly; only values
- * are translated. Wire enums, env keys, domains, commands, image tags,
- * secrets, channel patterns and API payloads stay untranslated by design.
- */
 const vi: ApplicationsMessages = {
   tabs: {
     overview: "Tổng quan",

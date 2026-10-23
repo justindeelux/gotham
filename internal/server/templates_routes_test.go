@@ -11,10 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// TestTemplatesRoutesWiring proves the BE-7.2 surface is mounted on the real
-// router behind the resource scope boundary: a missing token gets 401, a
-// read-scoped token may list the catalog, a deploy-scoped token may render, and
-// a read-scoped token may not render. A session token serves both.
 func TestTemplatesRoutesWiring(t *testing.T) {
 	s, tokens := newTestTokenServer(t)
 	const session = "Bearer valid-token"
@@ -78,8 +74,6 @@ func TestTemplatesRoutesWiring(t *testing.T) {
 	if len(rendered.Spec.Domains) != 1 || rendered.Spec.Domains[0].Domain != "blog.example.test" {
 		t.Fatalf("rendered domains = %+v", rendered.Spec.Domains)
 	}
-	// The secret boundary the gallery depends on: the value travels in env,
-	// the document only references it.
 	if got := rendered.Env["db_password"]; got != "wp-secret" {
 		t.Errorf("env[db_password] = %q", got)
 	}
@@ -88,8 +82,6 @@ func TestTemplatesRoutesWiring(t *testing.T) {
 	}
 }
 
-// TestTemplatesRoutesKillSwitch proves FEATURE_SERVICES=false unmounts the
-// template surface together with the service routes.
 func TestTemplatesRoutesKillSwitch(t *testing.T) {
 	t.Setenv(services.FeatureEnv, "false")
 	s, _ := newTestTokenServer(t)

@@ -10,8 +10,6 @@ import (
 	"github.com/justindeelux/gotham/agent/docker"
 )
 
-// TestShouldSendEnrollmentToken pins the two conditions (JUS-194 M1): the token
-// rides only on a CA-pinned TLS channel and only while no certificate exists.
 func TestShouldSendEnrollmentToken(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -41,8 +39,6 @@ func TestShouldSendEnrollmentToken(t *testing.T) {
 	}
 }
 
-// TestEnrollmentTokenNotSentWithoutCA is the wire-level guard: with no CA the
-// agent dials plaintext, and the token must not appear in the Register metadata.
 func TestEnrollmentTokenNotSentWithoutCA(t *testing.T) {
 	fake := &fakeAgentService{cpVersion: "test"}
 	dialOptions := startFakeCP(t, fake)

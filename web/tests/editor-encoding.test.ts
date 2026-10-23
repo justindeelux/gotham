@@ -1,6 +1,3 @@
-// Editor encodings (JUS-222): a legacy file reports its charset, saves back in
-// the same one, and a character the target cannot hold blocks the save instead
-// of being dropped. The API module is mocked so the store runs without axios.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,7 +33,6 @@ const entry: FilesEntry = {
   etag: '"v2"',
 };
 
-/** content builds a FilesContent response. */
 function content(
   body: string,
   encoding = "utf-8",
@@ -185,7 +181,6 @@ describe("editor store encoding", () => {
     expect(tab.encoding).toBe("utf-8");
     expect(putContentMock).not.toHaveBeenCalled();
     expect(store.encodingWarning?.encoding).toBe("ascii");
-    // Cancelling the prompt leaves the label matching the bytes on disk.
     store.dismissEncodingWarning();
     expect(store.encodingWarning).toBeNull();
     expect(tab.encoding).toBe("utf-8");

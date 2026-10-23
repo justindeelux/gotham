@@ -19,7 +19,6 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-// testCA returns a self-signed CA certificate and key.
 func testCA(t *testing.T) (caPEM []byte, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -47,7 +46,6 @@ func testCA(t *testing.T) (caPEM []byte, caCert *x509.Certificate, caKey *ecdsa.
 	return caPEM, cert, key
 }
 
-// testLeaf returns a certificate and key signed by the given CA.
 func testLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) (certPEM, keyPEM []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -159,8 +157,6 @@ func TestServerCredentials(t *testing.T) {
 		t.Errorf("ServerCredentials(cert, key, ca) = (%v, %v); want TLS creds", creds, err)
 	}
 
-	// No CA and no certificate is plaintext: it must be refused without the
-	// explicit insecure opt-in, and allowed only with it.
 	if _, err := ServerCredentials(nil, nil, "", false); err == nil {
 		t.Error("ServerCredentials(nil, nil, empty, false) = nil error; want refusal")
 	}
@@ -169,8 +165,6 @@ func TestServerCredentials(t *testing.T) {
 		t.Errorf("ServerCredentials(nil, nil, empty, true) = (%v, %v); want nil plaintext creds", creds, err)
 	}
 
-	// A CA configured with no issued certificate still keeps the listener on
-	// TLS with a self-signed certificate.
 	creds, err = ServerCredentials(nil, nil, caPath, false)
 	if err != nil || creds == nil {
 		t.Errorf("ServerCredentials(nil, nil, ca) = (%v, %v); want self-signed TLS creds", creds, err)
@@ -184,9 +178,6 @@ func TestServerCredentials(t *testing.T) {
 	}
 }
 
-// TestServerCredentialsFromFilesReloads proves the file-backed credentials read
-// the certificate on each handshake, so a renewal written to disk takes effect
-// without restarting the server.
 func TestServerCredentialsFromFilesReloads(t *testing.T) {
 	_, caCert, caKey := testCA(t)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -220,8 +211,6 @@ func TestServerCredentialsFromFilesReloads(t *testing.T) {
 		t.Fatalf("first handshake serial = %d, want 101", got)
 	}
 
-	// Rewrite the certificate through the atomic saver; the same credentials
-	// must present the new leaf.
 	if err := savePEM(certPath, certB); err != nil {
 		t.Fatalf("rewrite cert B: %v", err)
 	}
@@ -230,7 +219,6 @@ func TestServerCredentialsFromFilesReloads(t *testing.T) {
 	}
 }
 
-// leafWithKey signs a leaf certificate for key with the given serial.
 func leafWithKey(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, key *ecdsa.PrivateKey, serial *big.Int) []byte {
 	t.Helper()
 	template := &x509.Certificate{
@@ -249,8 +237,6 @@ func leafWithKey(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-// startTLSHandshakeServer accepts connections and completes a TLS handshake
-// with creds, returning its address.
 func startTLSHandshakeServer(t *testing.T, creds credentials.TransportCredentials) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -273,7 +259,6 @@ func startTLSHandshakeServer(t *testing.T, creds credentials.TransportCredential
 	return ln.Addr().String()
 }
 
-// peerSerial dials addr and returns the serial of the presented leaf.
 func peerSerial(t *testing.T, addr string) int64 {
 	t.Helper()
 	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12})

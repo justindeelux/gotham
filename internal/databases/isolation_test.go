@@ -10,10 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestDatabaseTeamIsolation is the Phase 8 exit criterion at the service layer:
-// a member of one team can neither see nor mutate another team's databases, a
-// read_only member reads but cannot mutate, and creation stamps the active
-// team.
 func TestDatabaseTeamIsolation(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	alice, bob := uuid.New(), uuid.New()
@@ -23,7 +19,6 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 	svc := newTestService(repo, cs)
 	bg := context.Background()
 
-	// Creation stamps the caller's active team.
 	mineCtx := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamB, Role: teams.RoleAdmin})
 	envID, _ := repo.seedEnvironment()
 	created, _, err := svc.Create(mineCtx, bob, CreateRequest{
@@ -49,7 +44,6 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 		Status:        StatusRunning,
 	})
 
-	// Team B sees only its own database.
 	databases, err := svc.List(mineCtx, bob, DatabaseFilter{})
 	if err != nil {
 		t.Fatalf("list team B: %v", err)
@@ -57,7 +51,6 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 	if len(databases) != 1 || databases[0].ID != created.ID {
 		t.Fatalf("team B list = %+v, want only its own database", databases)
 	}
-	// The other team's database cannot be read or mutated, not even by name.
 	aliceCtx := teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
 	if _, err := svc.Get(aliceCtx, alice, created.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-team Get = %v, want ErrNotFound", err)
@@ -72,7 +65,6 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 		t.Fatalf("cross-team Delete = %v, want ErrNotFound", err)
 	}
 
-	// A read_only member of team A reads its database but cannot mutate it.
 	viewerCtx := teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleReadOnly})
 	if _, err := svc.Get(viewerCtx, alice, other.ID); err != nil {
 		t.Fatalf("read_only Get: %v", err)
@@ -91,8 +83,6 @@ func TestDatabaseTeamIsolation(t *testing.T) {
 	}
 }
 
-// TestDatabaseCreateWithoutTeamContextStaysCreatorScoped keeps the pre-teams
-// path honest: without a team scope the list is the creator's own rows.
 func TestDatabaseCreateWithoutTeamContextStaysCreatorScoped(t *testing.T) {
 	repo := newFakeRepository()
 	cs := &fakeContainers{runID: "container-1"}
@@ -124,10 +114,6 @@ func TestDatabaseCreateWithoutTeamContextStaysCreatorScoped(t *testing.T) {
 	}
 }
 
-// TestDatabaseCreateRejectsForeignServer is the F6 regression for databases: a
-// database can only be provisioned on a node of the caller's active team (or a
-// legacy node without a team), so a stranger cannot bind a workload to another
-// team's server.
 func TestDatabaseCreateRejectsForeignServer(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	alice := uuid.New()

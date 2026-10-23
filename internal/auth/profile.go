@@ -14,15 +14,11 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Display name bounds (PF-1): optional free text, counted in characters.
 const (
 	minDisplayNameLength = 1
 	maxDisplayNameLength = 64
 )
 
-// UpdateProfile replaces the account's display name. A nil name, or one that
-// is empty after trimming, clears it. Anything else must be 1-64 characters
-// after trimming or ErrDisplayNameInvalid answers.
 func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, displayName *string) (*User, error) {
 	name, err := normalizeDisplayName(displayName)
 	if err != nil {
@@ -44,13 +40,6 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, displayNa
 	return toUser(user), nil
 }
 
-// normalizeDisplayName trims the name; nil or blank clears (nil), otherwise
-// the trimmed value must be 1-64 characters of storable text. Anything that
-// is not valid UTF-8, any control character (this covers NUL, newlines and
-// tabs), and any invisible formatting character in the narrow deny-list below
-// is rejected: Postgres would refuse NUL with a 500, and the rest have no
-// place in a rendered name. ZWNJ (U+200C) and ZWJ (U+200D) are allowed:
-// Persian/Hindi names and ZWJ emoji sequences need them (F5).
 func normalizeDisplayName(displayName *string) (*string, error) {
 	if displayName == nil {
 		return nil, nil
@@ -73,36 +62,23 @@ func normalizeDisplayName(displayName *string) (*string, error) {
 	return &trimmed, nil
 }
 
-// isDeniedFormatChar reports invisible formatting characters with no place in
-// a rendered name: the zero-width space, bidi marks, bidi embeddings and
-// overrides, the word joiner, isolates, the BOM, and the line/paragraph
-// separators. ZWNJ (U+200C) and ZWJ (U+200D) are deliberately absent: they join
-// Persian/Hindi words and build ZWJ emoji sequences.
 func isDeniedFormatChar(r rune) bool {
 	switch r {
-	case 0x200B, // zero-width space
-		0x200E, 0x200F, // bidi marks
-		0x2028, 0x2029, // line/paragraph separators
-		0x2060, // word joiner
-		0xFEFF: // byte-order mark
+	case 0x200B,
+		0x200E, 0x200F,
+		0x2028, 0x2029,
+		0x2060,
+		0xFEFF:
 		return true
 	}
 	switch {
-	case r >= 0x202A && r <= 0x202E, // bidi embeddings and overrides
-		r >= 0x2066 && r <= 0x2069: // isolates
+	case r >= 0x202A && r <= 0x202E,
+		r >= 0x2066 && r <= 0x2069:
 		return true
 	}
 	return false
 }
 
-// ChangePassword replaces the account's password and ends every other session.
-// When the account has a password the current one must match (a mismatch or a
-// missing value answers ErrCurrentPasswordIncorrect with a 400, never a
-// 401/403); passwordless (OAuth-created) accounts set one without it. The new
-// password follows the same rules as registration. The hash update, the
-// credential-version bump and the session purge commit in one transaction, and
-// the returned pair is minted from the post-bump row, so the caller keeps
-// working while every other chain is refused by Refresh (P-A5).
 func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current, newPassword string, meta SessionMeta) (*AuthResult, error) {
 	if err := ValidatePassword(newPassword); err != nil {
 		return nil, err
@@ -126,8 +102,6 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current,
 			return nil, ErrCurrentPasswordIncorrect
 		}
 		if !ok {
-			// Burn one more real verification so the failure costs the same
-			// whatever the stored credential looked like.
 			s.spendPasswordCheck(current)
 			return nil, ErrCurrentPasswordIncorrect
 		}
@@ -141,16 +115,11 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, current,
 	updated, err := s.store.ChangeUserPassword(ctx, pgUUID(userID), user.PasswordHash, &hash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// A concurrent change moved the credential after the check: the
-			// verified current password is stale.
 			return nil, ErrCurrentPasswordIncorrect
 		}
 		return nil, fmt.Errorf("auth: change password: %w", err)
 	}
 
 	s.logger.Info("auth: password changed", "user_id", userID)
-	// The new credential is already committed and every other session is
-	// gone; if issuing the caller's pair fails now, it logs in again with
-	// the new password rather than retrying the change.
 	return s.issue(ctx, updated, meta)
 }

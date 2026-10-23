@@ -21,21 +21,14 @@ import (
 	"github.com/justindeelux/gotham/internal/config"
 )
 
-// testUserID is the account the fake auth service authenticates.
 var testUserID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
 
-// fakeAuthService is a deterministic AuthService for handler tests.
 type fakeAuthService struct {
-	user *auth.User
-	// logoutErr, when set, is returned by Logout to exercise persistence
-	// failures.
-	logoutErr error
-	// totpEnabled/recoveryCodesLeft shape the TOTP status the fake reports.
+	user              *auth.User
+	logoutErr         error
 	totpEnabled       bool
 	recoveryCodesLeft int
-	// mfaLogin makes Login return the half-authenticated challenge (the
-	// account has TOTP enabled) instead of a token pair.
-	mfaLogin bool
+	mfaLogin          bool
 }
 
 func newFakeAuthService() *fakeAuthService {
@@ -71,7 +64,6 @@ func (f *fakeAuthService) Login(_ context.Context, _ string, password string, _ 
 		return nil, auth.ErrInvalidCredentials
 	}
 	if f.mfaLogin {
-		// The account has TOTP enabled: the half-authenticated challenge.
 		return &auth.AuthResult{User: f.user, MFARequired: true, MFAToken: "mfa-token"}, nil
 	}
 	return f.result(), nil
@@ -117,7 +109,6 @@ func (f *fakeAuthService) ChangePassword(_ context.Context, userID uuid.UUID, cu
 	return f.result(), nil
 }
 
-// fakeSessions is the deterministic session list behind the fake.
 var fakeSessions = []auth.SessionInfo{
 	{ID: uuid.MustParse("22222222-2222-3333-4444-555555555555"), UserAgent: "test-agent", IP: "10.0.0.1", Current: true},
 	{ID: uuid.MustParse("33333333-2222-3333-4444-555555555555"), UserAgent: "other-agent", IP: "10.0.0.2"},
@@ -135,8 +126,6 @@ func (f *fakeAuthService) ListSessions(_ context.Context, userID, currentSession
 	return out, nil
 }
 
-// SessionSignInAt resolves a fake session row's sign-in lineage. The fakes
-// carry no created_at, so any known row maps to the zero time.
 func (f *fakeAuthService) SessionSignInAt(_ context.Context, userID, sessionID uuid.UUID) (time.Time, bool, error) {
 	if userID != testUserID {
 		return time.Time{}, false, auth.ErrUnauthorized
@@ -179,16 +168,12 @@ func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) 
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 		}, nil
 	case "sid-token":
-		// A PF-2 session-bound token: the sessions handlers see the first
-		// fake session as the caller's current one.
 		return &auth.Claims{
 			Role:             "user",
 			SessionID:        fakeSessions[0].ID.String(),
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 		}, nil
 	case "admin-token":
-		// A first-account session: the control plane issues the "admin"
-		// role claim for the platform admin (JUS-21).
 		return &auth.Claims{
 			Role:             "admin",
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
@@ -198,9 +183,6 @@ func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) 
 	}
 }
 
-// The TOTP methods keep the fake's default behavior simple: enrollment returns
-// fixed setup material and the code "123456" is the only accepted second
-// factor. Handler tests override the fields they need.
 func (f *fakeAuthService) TOTPStatus(_ context.Context, _ uuid.UUID) (*auth.TOTPStatus, error) {
 	return &auth.TOTPStatus{Enabled: f.totpEnabled, RecoveryCodesRemaining: f.recoveryCodesLeft}, nil
 }
@@ -255,7 +237,6 @@ func (f *fakeAuthService) CompleteMFALogin(_ context.Context, mfaToken, code str
 	return f.result(), nil
 }
 
-// fakeInvites is a deterministic auth.InviteAcceptor for handler tests.
 type fakeInvites struct {
 	team  string
 	email string
@@ -270,7 +251,6 @@ func (fakeInvites) AcceptInvite(_ context.Context, _ uuid.UUID, _ string) error 
 	return nil
 }
 
-// newTestAuthServer builds a Server backed by the fake auth service.
 func newTestAuthServer(t *testing.T) *Server {
 	t.Helper()
 
@@ -290,7 +270,6 @@ func newTestAuthServer(t *testing.T) *Server {
 	return s
 }
 
-// doRequest performs a request against the server handler.
 func doRequest(t *testing.T, s *Server, method, path, body, authorization string) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -371,8 +350,6 @@ func TestAuthRegisterErrors(t *testing.T) {
 	}
 }
 
-// TestAuthConfig: the public config probe reports the SPA's register surface
-// without leaking anything else.
 func TestAuthConfig(t *testing.T) {
 	s := newTestAuthServer(t)
 
@@ -384,14 +361,11 @@ func TestAuthConfig(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &config); err != nil {
 		t.Fatalf("config body: %v", err)
 	}
-	// The test server has no store: registration is closed by default.
 	if config.RegistrationOpen {
 		t.Error("registrationOpen = true without a store, want false")
 	}
 }
 
-// TestAuthInviteValidate: a pending token returns the team and invited email;
-// any problem — unknown token, unset teams service — answers the same 404.
 func TestAuthInviteValidate(t *testing.T) {
 	s := newTestAuthServer(t)
 
@@ -452,8 +426,6 @@ func TestAuthRefreshAndLogout(t *testing.T) {
 		t.Fatalf("logout status = %d, want 204", logout.Code)
 	}
 
-	// A malformed or partial body is rejected rather than treated as an
-	// unknown token: no token-existence oracle.
 	malformed := doRequest(t, s, http.MethodPost, "/api/v1/auth/logout", ``, "")
 	if malformed.Code != http.StatusBadRequest {
 		t.Fatalf("malformed logout status = %d, want 400", malformed.Code)
@@ -495,7 +467,6 @@ func TestAuthMe(t *testing.T) {
 func TestAuthRateLimit(t *testing.T) {
 	s := newTestAuthServer(t)
 
-	// Exhaust the bucket: the first burst requests pass, the next is limited.
 	old := s.authLimiter
 	limiter := newIPRateLimiter(rate.Limit(0), 2)
 	s.authLimiter = limiter
@@ -518,8 +489,6 @@ func TestAuthRateLimit(t *testing.T) {
 	}
 }
 
-// TestAuthRefreshRateLimit: a tight refresh loop is throttled (the first burst
-// passes, the next answers 429), and logout shares the same bucket.
 func TestAuthRefreshRateLimit(t *testing.T) {
 	s := newTestAuthServer(t)
 
@@ -549,9 +518,6 @@ func TestAuthRefreshRateLimit(t *testing.T) {
 	}
 }
 
-// TestAuthLogoutPersistenceFailure: a failed revocation must not report
-// success, or the client would believe it is signed out while the refresh token
-// still works.
 func TestAuthLogoutPersistenceFailure(t *testing.T) {
 	s := newTestAuthServer(t)
 	s.auth = &fakeAuthService{user: newFakeAuthService().user, logoutErr: errors.New("database down")}
@@ -561,14 +527,11 @@ func TestAuthLogoutPersistenceFailure(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("logout status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
 	}
-	// The OAuth protocol cookies are cleared on the failure path too.
 	if flow := setCookieValue(rec, auth.FlowCookieName); flow == nil || flow.MaxAge >= 0 {
 		t.Fatalf("logout 500 did not clear the flow cookie: %+v", flow)
 	}
 }
 
-// TestAuthLogoutRejectsMalformedBody: a malformed body is a 400, not a silent
-// 204; a well-formed unknown token stays an idempotent 204 (no oracle).
 func TestAuthLogoutRejectsMalformedBody(t *testing.T) {
 	s := newTestAuthServer(t)
 
@@ -576,7 +539,6 @@ func TestAuthLogoutRejectsMalformedBody(t *testing.T) {
 	if malformed.Code != http.StatusBadRequest {
 		t.Fatalf("malformed logout status = %d, want 400", malformed.Code)
 	}
-	// The OAuth protocol cookies are cleared on the malformed-body path too.
 	if flow := setCookieValue(malformed, auth.FlowCookieName); flow == nil || flow.MaxAge >= 0 {
 		t.Fatalf("logout 400 did not clear the flow cookie: %+v", flow)
 	}
@@ -588,9 +550,6 @@ func TestAuthLogoutRejectsMalformedBody(t *testing.T) {
 	}
 }
 
-// TestAuthLogoutRejectsTrailingJSON: a well-formed first value followed by
-// trailing input must not revoke the token. The store fake is armed to fail if
-// Logout is reached, so a 400 proves it was never called.
 func TestAuthLogoutRejectsTrailingJSON(t *testing.T) {
 	s := newTestAuthServer(t)
 	s.auth = &fakeAuthService{user: newFakeAuthService().user, logoutErr: errors.New("logout must not be called")}
@@ -619,8 +578,6 @@ func TestSecurityHeaders(t *testing.T) {
 		}
 	}
 
-	// The hardened directives are pinned literally, so dropping one from the
-	// shared constant does not silently weaken the policy.
 	csp := rec.Header().Get("Content-Security-Policy")
 	for _, directive := range []string{"base-uri 'self'", "object-src 'none'", "form-action 'self'", "frame-ancestors 'none'"} {
 		if !strings.Contains(csp, directive) {
@@ -629,10 +586,6 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
-// TestContentSecurityPolicyAvatarAllowlist pins the whole policy literally:
-// the OAuth avatar hosts and the viewer blob: scheme are the only img-src
-// additions, and no other directive is loosened (no wildcard, no extra
-// scheme, no new host).
 func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 	s := newTestAuthServer(t)
 
@@ -643,9 +596,6 @@ func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 		t.Fatalf("Content-Security-Policy = %q, want %q", got, want)
 	}
 
-	// The img-src addition is exactly the supported OAuth providers' avatar
-	// hosts plus the viewer blob: scheme: no wildcard, no other host or
-	// scheme may sneak in.
 	imgSrc := got[strings.Index(got, "img-src ")+len("img-src "):]
 	imgSrc = imgSrc[:strings.Index(imgSrc, ";")]
 	var hosts []string
@@ -662,9 +612,6 @@ func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 		t.Errorf("Content-Security-Policy %q missing the viewer blob: source", got)
 	}
 
-	// Nothing else loosened: the full policy carries no wildcard source and
-	// no scheme outside the pinned img-src data:/blob:, the https: avatar host and
-	// the style 'unsafe-inline' the SPA already needs.
 	if strings.Contains(got, "*") {
 		t.Errorf("Content-Security-Policy %q contains a wildcard source", got)
 	}
@@ -680,18 +627,14 @@ func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 	}
 }
 
-// TestSecurityHeadersHSTSAndCache pins HSTS on secure responses and no-store on
-// the credential paths.
 func TestSecurityHeadersHSTSAndCache(t *testing.T) {
 	s := newTestAuthServer(t)
 
-	// A plain-HTTP request must not advertise HSTS.
 	plain := doRequest(t, s, http.MethodGet, "/healthz", "", "")
 	if got := plain.Header().Get("Strict-Transport-Security"); got != "" {
 		t.Errorf("HSTS over plain HTTP = %q, want empty", got)
 	}
 
-	// A direct-TLS request does.
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	req.TLS = &tls.ConnectionState{}
 	rec := httptest.NewRecorder()
@@ -711,9 +654,6 @@ func TestSecurityHeadersHSTSAndCache(t *testing.T) {
 	}
 }
 
-// TestTrustedProxyRateLimitKeying pins the server wiring: with a trusted proxy
-// configured, the auth limiter keys on X-Forwarded-For, so distinct clients
-// behind one proxy do not share a bucket.
 func TestTrustedProxyRateLimitKeying(t *testing.T) {
 	cfg := &config.Config{
 		Values: config.Values{Server: config.Server{

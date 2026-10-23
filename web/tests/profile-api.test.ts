@@ -1,5 +1,3 @@
-// Profile API client (JUS-27): routes, payloads, and envelope handling
-// with a mocked axios layer (the PF-1 backend ships in parallel).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/shared/api/http", () => ({

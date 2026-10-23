@@ -1,7 +1,3 @@
-// GitPrivateSourcePanel (GS-4): the detail-page panel for provider-less
-// private sources shows the deploy public key with copy + instructions (or
-// generation when none exists), the HTTPS credential state with save, and
-// the Test connection verdict. The api module is mocked at the boundary.
 import { NMessageProvider } from "naive-ui";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";

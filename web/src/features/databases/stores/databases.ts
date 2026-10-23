@@ -22,7 +22,6 @@ import type {
 } from "@/features/databases/api/databases";
 import { mergeDatabasesById } from "@/features/databases/utils/storeMerge";
 
-/** Polling cadence for the database list, in milliseconds. */
 const pollIntervalMs = 5_000;
 
 export const useDatabasesStore = defineStore("databases", () => {
@@ -32,11 +31,6 @@ export const useDatabasesStore = defineStore("databases", () => {
   const credentialsById = ref<Record<string, DatabaseCredentials>>({});
   const credentialsLoading = ref(false);
 
-  /**
-   * Retained page errors keep the raw failure and derive display text in the
-   * current locale, so a language switch refreshes a visible banner without
-   * a refetch.
-   */
   const errorRaw = ref<unknown>(null);
   const credentialsErrorRaw = ref<unknown>(null);
   const error = computed<string | null>(() =>
@@ -50,27 +44,12 @@ export const useDatabasesStore = defineStore("databases", () => {
       : describeDatabaseError(credentialsErrorRaw.value),
   );
 
-  // Interval handle kept outside reactive state; the store instance is a
-  // singleton so a single handle is enough for the whole app.
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Bumped by every local list mutation (create/delete). A list response that
-  // started before the mutation must merge instead of replacing the array, or
-  // it would clobber the row this tab just created.
   let mutationGeneration = 0;
 
-  // Ids this tab deleted. A list response that started before the delete must
-  // not resurrect them; the set is intentionally never cleared while the store
-  // lives, because a stale pre-delete response can resolve after a fresh
-  // post-delete one. Growth is bounded by the session's deletions.
-  // ponytail: per-session set, cap/expire only if a long session deletes
-  // thousands of databases.
   const deletedIds = new Set<string>();
 
-  /**
-   * applyServerList writes a server list, merging when a local mutation
-   * happened while it was in flight.
-   */
   function applyServerList(server: Database[], generation: number): void {
     if (generation === mutationGeneration) {
       databases.value = server;
@@ -79,7 +58,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     databases.value = mergeDatabasesById(server, databases.value, deletedIds);
   }
 
-  /** applyDatabase merges one database into the in-memory list in place. */
   function applyDatabase(updated: Database): void {
     const index = databases.value.findIndex((item) => item.id === updated.id);
     if (index === -1) {
@@ -89,7 +67,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     databases.value[index] = updated;
   }
 
-  /** fetchDatabases loads the list, toggling the loading flag. */
   async function fetchDatabases(): Promise<void> {
     loading.value = true;
     errorRaw.value = null;
@@ -104,7 +81,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /** refreshDatabases reloads the list without toggling the loading flag. */
   async function refreshDatabases(): Promise<void> {
     const generation = mutationGeneration;
     try {
@@ -115,10 +91,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /**
-   * pollDatabases starts a 5s interval that refreshes the list in place.
-   * Calling it more than once is a no-op until {@link stopPolling} runs.
-   */
   function pollDatabases(): void {
     if (pollTimer !== null) {
       return;
@@ -128,7 +100,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }, pollIntervalMs);
   }
 
-  /** stopPolling clears the interval; safe to call when not polling. */
   function stopPolling(): void {
     if (pollTimer !== null) {
       clearInterval(pollTimer);
@@ -136,11 +107,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /**
-   * reset drops the cached list and credentials and stops polling, so the
-   * next sign-in never sees the previous account's databases. Called on
-   * sign-out (see the auth store).
-   */
   function reset(): void {
     stopPolling();
     databases.value = [];
@@ -152,21 +118,12 @@ export const useDatabasesStore = defineStore("databases", () => {
     credentialsErrorRaw.value = null;
   }
 
-  /**
-   * fetchDatabase loads one database and merges it into the list, so the
-   * detail page stays consistent with the list after lifecycle actions.
-   */
   async function fetchDatabase(id: string): Promise<Database> {
     const database = await getDatabase(id);
     applyDatabase(database);
     return database;
   }
 
-  /**
-   * provision creates a database and merges the row into the list, keeping
-   * the generated credentials for the success panel. The caller owns the
-   * created row, never the whole list reload.
-   */
   async function provision(
     input: CreateDatabaseInput,
   ): Promise<{ database: Database; credentials: DatabaseCredentials }> {
@@ -182,7 +139,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /** rename changes the display name of one database. */
   async function rename(id: string, name: string): Promise<Database> {
     acting.value = true;
     try {
@@ -194,10 +150,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /**
-   * update applies a partial update (rename, move environment, change node)
-   * and merges the returned row into the list.
-   */
   async function update(
     id: string,
     input: UpdateDatabaseInput,
@@ -212,7 +164,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /** remove deletes a database and drops it from the list. */
   async function remove(id: string): Promise<void> {
     acting.value = true;
     try {
@@ -226,7 +177,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /** fetchCredentials loads the owner-only credentials of one database. */
   async function fetchCredentials(id: string): Promise<DatabaseCredentials> {
     credentialsLoading.value = true;
     credentialsErrorRaw.value = null;
@@ -242,12 +192,10 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /** credentialsOf returns the cached credentials of one database, if any. */
   function credentialsOf(id: string): DatabaseCredentials | null {
     return credentialsById.value[id] ?? null;
   }
 
-  /** start powers the container back on and merges the updated row. */
   async function start(id: string): Promise<Database> {
     acting.value = true;
     try {
@@ -259,7 +207,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /** stop shuts the container down and merges the updated row. */
   async function stop(id: string): Promise<Database> {
     acting.value = true;
     try {
@@ -271,7 +218,6 @@ export const useDatabasesStore = defineStore("databases", () => {
     }
   }
 
-  /** restart re-runs the container in place and merges the updated row. */
   async function restart(id: string): Promise<Database> {
     acting.value = true;
     try {

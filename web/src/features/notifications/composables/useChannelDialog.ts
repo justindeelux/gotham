@@ -29,11 +29,6 @@ import type {
   ResourceOption,
 } from "@/features/notifications/utils/channelHelpers";
 
-/**
- * Channel dialog state is per page instance (created by provideChannelDialog
- * in the page, shared via inject): typed secrets, the draft, the resource
- * lists and the read token never outlive the page.
- */
 function createChannelDialogState() {
   const message = useMessage();
   const channelsStore = useNotificationsStore();
@@ -42,48 +37,29 @@ function createChannelDialogState() {
   const formOpen = ref(false);
   const editingId = ref("");
   const saving = ref(false);
-  /**
-   * Raw failure behind the dialog alert. The display string derives from it
-   * plus the current locale, so a language switch refreshes a retained
-   * alert without losing the typed draft.
-   */
   const formErrorRaw = ref<unknown>(null);
   const formError = computed<string | null>(() =>
     formErrorRaw.value === null
       ? null
       : describeChannelError(formErrorRaw.value),
   );
-  /** Masked secrets as read, so an untouched field is never sent back. */
   const secretOriginals = ref({ webhook_url: "", bot_token: "", password: "" });
 
   const form = ref<ChannelForm>(emptyChannelForm());
 
-  /** Applications of the active team, offered when the scope is one app. */
   const resourceApplications = ref<ResourceOption[]>([]);
-  /** Databases of the active team, offered when the scope is one database. */
   const resourceDatabases = ref<ResourceOption[]>([]);
-  /** Team the resource lists belong to; a switch drops them. */
   const loadedResourcesTeamId = ref("");
-  /** Token of the newest resource read; a stale response never writes state. */
   let resourcesReadToken = 0;
 
-  /** applicationsUnavailable is true when the picker's app list cannot load. */
   const applicationsUnavailable = ref(false);
-  /** databasesUnavailable is true when the picker's database list cannot load. */
   const databasesUnavailable = ref(false);
 
-  /** outOfScopeEvents lists stored events the current scope cannot deliver. */
   const outOfScopeEvents = computed<NotificationEventKey[]>(() => {
     const deliverable = allowedEvents(form.value.resourceType);
     return form.value.events.filter((event) => !deliverable.includes(event));
   });
 
-  /**
-   * Event options the current scope can deliver, plus any stored event outside
-   * those rules. The extra keys keep their label and stay removable, but once
-   * removed they disappear from the list and cannot be re-selected — a dead
-   * combination cannot be built here, only preserved from older data.
-   */
   const eventOptions = computed<
     Array<{ label: string; value: NotificationEventKey }>
   >(() => {
@@ -98,7 +74,6 @@ function createChannelDialogState() {
     return options;
   });
 
-  /** outOfScopeWarning explains a stored subscription its scope cannot deliver. */
   const outOfScopeWarning = computed<string>(() => {
     const events = outOfScopeEvents.value;
     if (events.length === 0) {
@@ -114,10 +89,6 @@ function createChannelDialogState() {
     );
   });
 
-  /**
-   * Scope choices: a feature whose list is unavailable is disabled and labelled,
-   * so the other scope (or team-wide) stays selectable.
-   */
   const scopeOptions = computed<
     Array<{ label: string; value: ChannelScope; disabled?: boolean }>
   >(() => [
@@ -150,7 +121,6 @@ function createChannelDialogState() {
     },
   ]);
 
-  /** unavailableScopeHint names the resource features that cannot be offered. */
   const unavailableScopeHint = computed<string>(() => {
     if (applicationsUnavailable.value && databasesUnavailable.value) {
       return channelText(
@@ -178,7 +148,6 @@ function createChannelDialogState() {
     return "";
   });
 
-  /** eventsHint explains the event restriction of the selected scope. */
   const eventsHint = computed<string>(() => {
     switch (form.value.resourceType) {
       case "application":
@@ -202,8 +171,6 @@ function createChannelDialogState() {
   });
 
   const teamOptions = computed<Array<{ label: string; value: string }>>(() => {
-    // The personal marker reuses the teams catalog so it refreshes on a
-    // language switch; the team name itself is user data and stays raw.
     const personal = channelText("teams.page.personal", "personal");
     return teamsStore.teams.map((team) => ({
       label: team.is_personal ? `${team.name} (${personal})` : team.name,
@@ -212,15 +179,12 @@ function createChannelDialogState() {
   });
 
   const activeRole = computed<TeamRole | null>(() => teamsStore.activeTeam?.role ?? null);
-  /** Without a teams surface the backend still enforces the role. */
   const canMutate = computed<boolean>(
     () => teamsStore.featureDisabled || canManageMembers(activeRole.value),
   );
 
   const editing = computed<boolean>(() => editingId.value !== "");
 
-  /** selectScope switches the scope kind, drops the stale pick and re-constrains
-   * the subscription so a channel that can never fire cannot be saved. */
   function selectScope(scope: string): void {
     const next: ChannelScope =
       scope === "application" || scope === "database" ? scope : "";
@@ -229,11 +193,6 @@ function createChannelDialogState() {
     form.value.events = keepDeliverableEvents(next, form.value.events);
   }
 
-  /**
-   * resourcePickerOptions offers the resources of the selected scope. While
-   * editing, a stored resource the list no longer carries is kept as a
-   * "(missing)" option so an untouched scope survives the save.
-   */
   const resourcePickerOptions = computed<Array<{ label: string; value: string }>>(
     () => {
       const options = (
@@ -256,13 +215,6 @@ function createChannelDialogState() {
     },
   );
 
-  /**
-   * loadResources reads the active team's applications and databases. A team
-   * switch drops the previous team's lists first, and only the newest read may
-   * write, so a late response cannot offer another team's resources. The two
-   * lists load independently: a disabled feature on one endpoint (404) must not
-   * hide the other scope's picker.
-   */
   async function loadResources(teamId: string): Promise<void> {
     const token = ++resourcesReadToken;
     const isCurrent = (): boolean => token === resourcesReadToken;
@@ -290,10 +242,8 @@ function createChannelDialogState() {
         : [];
   }
 
-  /** canSubmit mirrors the backend rules: name and at least one event. */
   const canSubmit = computed<boolean>(() => canSubmitChannel(form.value));
 
-  /** openCreate resets the modal for a new channel. */
   function openCreate(): void {
     editingId.value = "";
     form.value = emptyChannelForm();
@@ -302,7 +252,6 @@ function createChannelDialogState() {
     formOpen.value = true;
   }
 
-  /** openEdit prefills the modal from a stored channel (secrets stay masked). */
   function openEdit(channel: NotificationChannel): void {
     editingId.value = channel.id;
     secretOriginals.value = {
@@ -319,10 +268,6 @@ function createChannelDialogState() {
       name: channel.name,
       kind: channel.kind,
       enabled: channel.enabled,
-      // The stored subscription is preserved exactly: an unrelated save must
-      // never expand or normalize events the operator did not touch. The form
-      // warns when the scope cannot deliver a stored key; changing the scope or
-      // the events is the deliberate path that re-constrains them.
       events: [...channel.events],
       resourceType,
       resourceId: channel.resource_id ?? "",
@@ -340,7 +285,6 @@ function createChannelDialogState() {
     formOpen.value = true;
   }
 
-  /** handleSave creates or updates the channel. */
   async function handleSave(): Promise<void> {
     saving.value = true;
     formErrorRaw.value = null;
@@ -373,7 +317,6 @@ function createChannelDialogState() {
     }
   }
 
-  /** resolveResourceName maps a stored scope pair onto a display name. */
   function resolveResourceName(resourceType: string, resourceId: string): string | undefined {
     const resources =
       resourceType === "application" ? resourceApplications.value : resourceDatabases.value;
@@ -412,17 +355,12 @@ export type ChannelDialogState = ReturnType<typeof createChannelDialogState>;
 const channelDialogKey: InjectionKey<ChannelDialogState> =
   Symbol("notifications.channel-dialog");
 
-/**
- * provideChannelDialog creates the dialog state for one page mount.
- * Call once in the page; descendants share it through useChannelDialog.
- */
 export function provideChannelDialog(): ChannelDialogState {
   const state = createChannelDialogState();
   provide(channelDialogKey, state);
   return state;
 }
 
-/** useChannelDialog shares the page instance; call in descendant components. */
 export function useChannelDialog(): ChannelDialogState {
   const state = inject(channelDialogKey);
   if (!state) {

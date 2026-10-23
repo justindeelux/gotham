@@ -1,9 +1,3 @@
-/**
- * Servers English catalog: list, detail, rail, wizard, containers,
- * log viewer and metrics copy. Pure helpers read this dictionary through
- * an explicit locale parameter (English when omitted), so unit harnesses
- * keep byte-identical output without a provider.
- */
 const en = {
   status: {
     ready: "Ready",
@@ -375,5 +369,4 @@ const en = {
 
 export default en;
 
-/** ServersMessages is the shape every servers locale must satisfy. */
 export type ServersMessages = typeof en;

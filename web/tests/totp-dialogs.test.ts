@@ -1,6 +1,3 @@
-// Two-factor profile dialogs (JUS-196 fix round 1): the one-time recovery codes
-// are not dismissable until acknowledged, both dialogs offer a .txt download,
-// and enabling the second factor refreshes the card (emits done) and toasts.
 /* global HTMLAnchorElement, Blob, setTimeout: readonly */
 import { NMessageProvider, NModal } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -42,7 +39,6 @@ beforeEach(() => {
   resetLocaleState();
   syncComposerLocale("en");
   vi.clearAllMocks();
-  // jsdom has no Blob object URLs; supply them for the download path.
   Object.defineProperty(globalThis.URL, "createObjectURL", {
     value: createObjectURL,
     configurable: true,
@@ -69,7 +65,6 @@ beforeEach(() => {
   vi.mocked(disableTotp).mockResolvedValue(undefined);
 });
 
-/** openDialog mounts a dialog behind the message provider, then opens it. */
 async function openDialog(
   child: object,
   props: Record<string, unknown> = {},
@@ -101,7 +96,6 @@ function buttonByText(wrapper: VueWrapper, text: string) {
 describe("TotpSetupDialog", () => {
   it("shows the codes with the modal locked, then closes on acknowledge", async () => {
     const dialog = await openDialog(TotpSetupDialog);
-    // The scan step is dismissable.
     expect(dialog.findComponent(NModal).props("closable")).toBe(true);
     expect(dialog.findComponent(NModal).props("maskClosable")).toBe(true);
 
@@ -110,12 +104,9 @@ describe("TotpSetupDialog", () => {
     await buttonByText(dialog, "Turn on").trigger("click");
     await flushPromises();
 
-    // Enabling refreshed the card and the codes are on screen.
     expect(dialog.emitted("done")).toBeTruthy();
     expect(dialog.text()).toContain("ABCDE-FGHJK");
     const modal = dialog.findComponent(NModal);
-    // Every dismiss path is off while the one-time codes are unacknowledged,
-    // including the header close "X".
     expect(modal.props("closable")).toBe(false);
     expect(modal.props("maskClosable")).toBe(false);
     expect(modal.props("closeOnEsc")).toBe(false);

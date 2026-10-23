@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeService is a scriptable FileService for route tests.
 type fakeService struct {
 	mu sync.Mutex
 
@@ -86,8 +85,6 @@ func (f *fakeService) record(call string) {
 	f.mu.Unlock()
 }
 
-// wrote reports whether the service's Write was called, safe to read after a
-// handler ran on another goroutine.
 func (f *fakeService) wrote() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -99,7 +96,6 @@ func (f *fakeService) wrote() bool {
 	return false
 }
 
-// called reports whether the named service method was reached.
 func (f *fakeService) called(name string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -131,8 +127,6 @@ func (f *fakeService) DirectorySize(_ context.Context, _ uuid.UUID, _, _ string)
 	return f.size, f.sizeErr
 }
 
-// searchCall records one Search invocation so a route test can assert the
-// query/recursive wiring.
 type searchCall struct {
 	root      string
 	path      string
@@ -274,10 +268,8 @@ func (f *fakeService) EmptyTrash(_ context.Context, _ uuid.UUID, _ string) (uint
 	return f.emptyRemoved, f.emptyErr
 }
 
-// passthroughAuth stands in for RequireAuth in route tests.
 func passthroughAuth(next http.Handler) http.Handler { return next }
 
-// newTestRouter mounts the file routes with the fake service.
 func newTestRouter(svc FileService) http.Handler {
 	r := chi.NewRouter()
 	Mount(r, passthroughAuth, svc, nil)
@@ -324,7 +316,6 @@ func TestRootsListStatRoutes(t *testing.T) {
 	if !listing.Truncated || listing.Cursor != "c" || len(listing.Entries) != 1 {
 		t.Fatalf("listing = %+v", listing)
 	}
-	// JUS-214: the owner/group ride the same entry JSON.
 	if body := rec.Body.String(); !strings.Contains(body, `"owner":"root"`) || !strings.Contains(body, `"group":"wheel"`) {
 		t.Fatalf("list JSON missing owner/group: %s", body)
 	}
@@ -428,9 +419,6 @@ func TestDownloadRequiresTicket(t *testing.T) {
 	}
 }
 
-// TestDownloadStreamsFirstChunkBeforeEnd asserts a download chunk reaches the
-// client before the agent stream ends: the native download must start writing
-// while the source is still producing.
 func TestDownloadStreamsFirstChunkBeforeEnd(t *testing.T) {
 	chunks := make(chan []byte)
 	release := make(chan struct{})
@@ -474,7 +462,6 @@ func TestDownloadStreamsFirstChunkBeforeEnd(t *testing.T) {
 	if string(first) != "first" {
 		t.Fatalf("first = %q", first)
 	}
-	// The source is still producing; the client already holds the first chunk.
 	close(release)
 	rest, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -485,12 +472,6 @@ func TestDownloadStreamsFirstChunkBeforeEnd(t *testing.T) {
 	}
 }
 
-// TestDownloadAbortsOnMidStreamError asserts a terminal agent error after the
-// headers were sent aborts the connection, so the browser marks the download as
-// failed instead of accepting a short body.
-// TestDownloadAbortsOnShortBody asserts a clean-end stream that produced fewer
-// bytes than the Content-Length already sent aborts the connection, so the
-// client sees a failed download instead of a truncated "success".
 func TestDownloadAbortsOnShortBody(t *testing.T) {
 	chunks := make(chan []byte)
 	streamErr := make(chan error)
@@ -518,8 +499,6 @@ func TestDownloadAbortsOnShortBody(t *testing.T) {
 	}
 }
 
-// TestValidationErrorMessageIsGeneric asserts the 400 body never echoes the raw
-// gRPC/agent error text a validation failure can carry.
 func TestValidationErrorMessageIsGeneric(t *testing.T) {
 	id := uuid.New()
 	h := newTestRouter(&fakeService{

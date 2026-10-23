@@ -31,7 +31,6 @@ var testEnv = map[string]string{
 	"PASSWORD": "hunter2-secret",
 }
 
-// newTestService wires the real domain service over the fakes.
 func newTestService(t *testing.T, repo *fakeRepository, agent *fakeAgent) ServiceService {
 	t.Helper()
 	if repo == nil {
@@ -47,7 +46,6 @@ func newTestService(t *testing.T, repo *fakeRepository, agent *fakeAgent) Servic
 	})
 }
 
-// createService stores one service for the given owner and returns it.
 func createService(t *testing.T, svc ServiceService, repo *fakeRepository, userID uuid.UUID) Service {
 	t.Helper()
 	serverID := repo.seedServer()
@@ -65,7 +63,6 @@ func createService(t *testing.T, svc ServiceService, repo *fakeRepository, userI
 	return created
 }
 
-// TestCreateValidation locks the create-time checks.
 func TestCreateValidation(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(t, repo, &fakeAgent{})
@@ -127,9 +124,6 @@ func TestCreateValidation(t *testing.T) {
 	}
 }
 
-// TestDeployRendersAndRecords proves a deploy renders the stored document
-// (leaving no ${VAR} reference), snapshots it in the deploy row and reports
-// the project running.
 func TestDeployRendersAndRecords(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{}
@@ -165,7 +159,6 @@ func TestDeployRendersAndRecords(t *testing.T) {
 		t.Errorf("the node ran a different document than the recorded snapshot")
 	}
 
-	// The printed service maps the domain label into a route.
 	domains, err := svc.Get(context.Background(), userID, created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -175,9 +168,6 @@ func TestDeployRendersAndRecords(t *testing.T) {
 	}
 }
 
-// TestDeployFailureRedactsEnvironment proves a failed agent call is recorded
-// and returned with the environment value redacted, and that the deploy
-// failure only flips the service status when the node actually changed.
 func TestDeployFailureRedactsEnvironment(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{validateErr: fmt.Errorf("%w: validate: cannot resolve ${PASSWORD}", ErrValidation)}
@@ -204,8 +194,6 @@ func TestDeployFailureRedactsEnvironment(t *testing.T) {
 		t.Fatalf("deploys = %+v", deploys)
 	}
 
-	// An up failure is a node change: the service goes to error and the
-	// message is redacted everywhere it is stored.
 	agent.validateErr = nil
 	agent.upErr = fmt.Errorf("%w: up: invalid value hunter2-secret", ErrDeployFailed)
 	_, _, err = svc.Deploy(context.Background(), userID, created.ID)
@@ -228,8 +216,6 @@ func TestDeployFailureRedactsEnvironment(t *testing.T) {
 	}
 }
 
-// TestStopAndRestart proves stop runs a down and restart uses the restart verb
-// only for a running project.
 func TestStopAndRestart(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{}
@@ -237,7 +223,6 @@ func TestStopAndRestart(t *testing.T) {
 	userID := uuid.New()
 	created := createService(t, svc, repo, userID)
 
-	// Restart of a never-deployed service starts it instead.
 	restarted, err := svc.Restart(context.Background(), userID, created.ID)
 	if err != nil {
 		t.Fatalf("Restart: %v", err)
@@ -260,7 +245,6 @@ func TestStopAndRestart(t *testing.T) {
 		t.Errorf("downs = %v", agent.downs)
 	}
 
-	// A running service restarts in place.
 	repo.mu.Lock()
 	running := repo.services[created.ID]
 	running.Status = StatusRunning
@@ -274,11 +258,6 @@ func TestStopAndRestart(t *testing.T) {
 	}
 }
 
-// TestDeleteStopsThenSoftDeletes proves delete brings the project down and
-// keeps the row when the node cannot be reached; when the stored document no
-// longer renders, the newest successful deploy snapshot is used to stop the
-// project, and no snapshot at all retains the row instead of hiding a
-// possibly running project.
 func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{}
@@ -302,8 +281,6 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 		t.Fatalf("Get after delete = %v, want ErrNotFound", err)
 	}
 
-	// A document that no longer renders with no successful snapshot retains
-	// the row: soft-deleting would hide a project that may still be running.
 	broken := createService(t, svc, repo, userID)
 	broken.Env = map[string]string{}
 	repo.mu.Lock()
@@ -316,8 +293,6 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 		t.Fatalf("the row must survive an unconfirmed shutdown: %v", err)
 	}
 
-	// With a running deploy snapshot the delete stops the project from that
-	// snapshot instead of failing.
 	snapshot := "services:\n  web:\n    image: nginx:1.23\n    environment:\n      DOMAIN: app.example.com\n"
 	if _, err := repo.CreateServiceDeploy(context.Background(), Deploy{
 		ID: uuid.New(), ServiceID: broken.ID, State: DeployRunning, ComposeYAML: snapshot,
@@ -331,7 +306,6 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 		t.Errorf("Get after delete = %v, want ErrNotFound", err)
 	}
 
-	// The node was driven with the snapshot document, not skipped.
 	agent.mu.Lock()
 	lastDown := agent.downs[len(agent.downs)-1]
 	agent.mu.Unlock()
@@ -340,9 +314,6 @@ func TestDeleteStopsThenSoftDeletes(t *testing.T) {
 	}
 }
 
-// TestDeployDoesNotClobberConcurrentEdit proves a lifecycle completion writes
-// only the status: a successful rename that lands while a deploy is in flight
-// must survive the deploy's completion.
 func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
 	repo := newFakeRepository()
 	gate := make(chan struct{})
@@ -358,8 +329,6 @@ func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
 	}()
 	waitForUp(t, agent)
 
-	// The update serializes behind the deploy's lifecycle lock: it must not
-	// complete (and must not be clobbered) while the deploy runs.
 	updateDone := make(chan error, 1)
 	go func() {
 		name := "updated-during-deploy"
@@ -391,9 +360,6 @@ func TestDeployDoesNotClobberConcurrentEdit(t *testing.T) {
 	}
 }
 
-// TestConcurrentLifecycleOpsSerialize proves a deploy and a stop on the same
-// service cannot interleave: the stop waits for the deploy to finish and the
-// final status is the last action's, never a contradictory mix.
 func TestConcurrentLifecycleOpsSerialize(t *testing.T) {
 	repo := newFakeRepository()
 	gate := make(chan struct{})
@@ -415,7 +381,6 @@ func TestConcurrentLifecycleOpsSerialize(t *testing.T) {
 		stopDone <- err
 	}()
 
-	// The stop must wait for the deploy to release the lifecycle lock.
 	time.Sleep(300 * time.Millisecond)
 	select {
 	case err := <-stopDone:
@@ -439,7 +404,6 @@ func TestConcurrentLifecycleOpsSerialize(t *testing.T) {
 	}
 }
 
-// waitForDown waits until the fake agent recorded a Down call.
 func waitForDown(t *testing.T, agent *fakeAgent) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -455,10 +419,6 @@ func waitForDown(t *testing.T, agent *fakeAgent) {
 	t.Fatal("the operation never reached the agent's Down")
 }
 
-// TestQueuedRestartAfterDeleteDoesNotResurrect proves a restart queued behind a
-// delete re-reads the row under the lifecycle lock: the deleted service is
-// refused instead of starting containers for a project the control plane can no
-// longer see.
 func TestQueuedRestartAfterDeleteDoesNotResurrect(t *testing.T) {
 	repo := newFakeRepository()
 	gate := make(chan struct{})
@@ -493,8 +453,6 @@ func TestQueuedRestartAfterDeleteDoesNotResurrect(t *testing.T) {
 	}
 }
 
-// TestQueuedDeployAfterDeleteDoesNotResurrect proves the same for a deploy: it
-// must not record a deploy attempt or start the deleted project.
 func TestQueuedDeployAfterDeleteDoesNotResurrect(t *testing.T) {
 	repo := newFakeRepository()
 	gate := make(chan struct{})
@@ -536,17 +494,13 @@ func TestQueuedDeployAfterDeleteDoesNotResurrect(t *testing.T) {
 	}
 }
 
-// TestQueuedRestartUsesThePostDeployState proves a queued lifecycle action
-// re-reads the row under the lock and picks the verb for the state it finds:
-// a restart queued behind a deploy restarts the now-running project instead of
-// starting it again.
 func TestQueuedRestartUsesThePostDeployState(t *testing.T) {
 	repo := newFakeRepository()
 	gate := make(chan struct{})
 	agent := &fakeAgent{upGate: gate}
 	svc := newTestService(t, repo, agent)
 	userID := uuid.New()
-	created := createService(t, svc, repo, userID) // status creating
+	created := createService(t, svc, repo, userID)
 
 	deployDone := make(chan error, 1)
 	go func() {
@@ -574,9 +528,6 @@ func TestQueuedRestartUsesThePostDeployState(t *testing.T) {
 	}
 }
 
-// TestTerminalLogErrorIsRedacted proves the stream's terminal error goes
-// through the same environment-aware boundary as every other node error, while
-// the log content itself passes through untouched.
 func TestTerminalLogErrorIsRedacted(t *testing.T) {
 	secret := testEnv["PASSWORD"]
 	repo := newFakeRepository()
@@ -611,10 +562,6 @@ func TestTerminalLogErrorIsRedacted(t *testing.T) {
 	}
 }
 
-// TestLogsRejectsUnknownComposeServiceBeforeDialing proves the selector is
-// validated against the stored document on the control plane, so an unknown
-// service is a validation error instead of a node round trip whose CLI refusal
-// would arrive as the first output.
 func TestLogsRejectsUnknownComposeServiceBeforeDialing(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{}
@@ -628,7 +575,7 @@ func TestLogsRejectsUnknownComposeServiceBeforeDialing(t *testing.T) {
 		},
 	})
 	userID := uuid.New()
-	created := createService(t, svc, repo, userID) // document declares web + worker
+	created := createService(t, svc, repo, userID)
 
 	if _, err := svc.Logs(context.Background(), userID, created.ID, "missing", 10, false); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Logs(unknown) = %v, want ErrValidation", err)
@@ -647,7 +594,6 @@ func TestLogsRejectsUnknownComposeServiceBeforeDialing(t *testing.T) {
 	}
 }
 
-// waitForUp waits until the fake agent recorded an Up call.
 func waitForUp(t *testing.T, agent *fakeAgent) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -663,9 +609,6 @@ func waitForUp(t *testing.T, agent *fakeAgent) {
 	t.Fatal("the deploy never reached the agent")
 }
 
-// TestNodeOperationErrorsRedactEnvironment proves every node operation, not
-// only a failed deploy, redacts the service environment values from the error
-// it returns (and keeps the sentinel chain matchable).
 func TestNodeOperationErrorsRedactEnvironment(t *testing.T) {
 	secret := testEnv["PASSWORD"]
 	cases := map[string]struct {
@@ -736,8 +679,6 @@ func TestNodeOperationErrorsRedactEnvironment(t *testing.T) {
 	}
 }
 
-// TestAgentConnectionsAreClosed proves each unary operation closes its dialed
-// client and a log stream closes its connection when it ends.
 func TestAgentConnectionsAreClosed(t *testing.T) {
 	steps := []struct {
 		name string
@@ -785,8 +726,6 @@ func TestAgentConnectionsAreClosed(t *testing.T) {
 		})
 	}
 
-	// Logs hands ownership to the stream; reading it to the end closes the
-	// connection.
 	repo := newFakeRepository()
 	agent := &fakeAgent{chunks: [][]byte{[]byte("line\n")}}
 	svc := newTestService(t, repo, agent)
@@ -807,9 +746,6 @@ func TestAgentConnectionsAreClosed(t *testing.T) {
 	}
 }
 
-// TestLifecycleChangesResyncTheProxy proves every routing-relevant lifecycle
-// change asks the Phase 6 proxy to reconcile the node, that a sync failure is
-// best effort (logged, never returned) and that a nil hook is harmless.
 func TestLifecycleChangesResyncTheProxy(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{}
@@ -856,7 +792,6 @@ func TestLifecycleChangesResyncTheProxy(t *testing.T) {
 		}
 	}
 
-	// A failing resync never fails the mutation.
 	proxySync.err = fmt.Errorf("proxy down")
 	repo2 := newFakeRepository()
 	svc2 := NewService(Config{
@@ -871,8 +806,6 @@ func TestLifecycleChangesResyncTheProxy(t *testing.T) {
 	}
 }
 
-// TestOwnershipAndLogs proves IDs cannot be probed across users and that a log
-// read validates the compose service name and delegates to the agent.
 func TestOwnershipAndLogs(t *testing.T) {
 	repo := newFakeRepository()
 	agent := &fakeAgent{chunks: [][]byte{[]byte("alive\n")}}
@@ -921,8 +854,6 @@ func TestOwnershipAndLogs(t *testing.T) {
 	}
 }
 
-// TestUpdateRevalidates proves a patch that breaks rendering is rejected and a
-// valid one is persisted.
 func TestUpdateRevalidates(t *testing.T) {
 	repo := newFakeRepository()
 	svc := newTestService(t, repo, &fakeAgent{})
@@ -943,7 +874,6 @@ func TestUpdateRevalidates(t *testing.T) {
 	}
 }
 
-// TestFeatureFlag proves the kill switch disables construction and mutation.
 func TestFeatureFlag(t *testing.T) {
 	t.Setenv(FeatureEnv, "false")
 	if Enabled() {

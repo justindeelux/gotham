@@ -3,11 +3,6 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-// Layout proof for I18N-8: the same flex/grid rules the shipped settings
-// pages use must hold the longest English and Vietnamese strings without
-// horizontal overflow at 390/900/1280px. Static fixture, no backend — the
-// strings are copied verbatim from the feature catalogs.
-
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const fixture = `file://${resolve(testsDir, "i18n-settings-layout.fixture.html")}`;
 

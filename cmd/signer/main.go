@@ -1,19 +1,3 @@
-// Command signer manages the Ed25519 release-signing keypair and signs release
-// artifacts. It is the only place the private key is used; the control plane
-// only ever embeds the matching public key.
-//
-// Usage:
-//
-//	signer keygen   [-out signing.key]
-//	signer sign     -key signing.key -in gotham-linux-amd64 [-out gotham-linux-amd64.sig]
-//	signer verify   -key signing.key.pub -in gotham-linux-amd64 [-sig gotham-linux-amd64.sig]
-//	signer manifest -key signing.key -in gotham-linux-amd64 -version v1.2.0 -arch amd64 [-helper gotham-hosthelpers.tar.gz]
-//
-// The signature is written as standard base64 (with a trailing newline), which
-// is the format the Applier verifies. Releases must publish a signed manifest
-// (gotham-manifest-<arch>.txt and its .sig) as well as the artifact: the
-// manifest binds the version, channel, arch and file name to the artifact
-// SHA-256, and, when -helper is given, the host-helper payload digest (JUS-188).
 package main
 
 import (
@@ -27,7 +11,6 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// version is the reported tool version, overridable with -ldflags.
 var version = "dev"
 
 const (
@@ -40,7 +23,6 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// run dispatches the subcommand and returns the process exit code.
 func run(args []string) int {
 	if len(args) == 0 {
 		usage(os.Stderr)
@@ -68,8 +50,6 @@ func run(args []string) int {
 	}
 }
 
-// runKeygen writes a new Ed25519 keypair and prints the ldflags value that
-// embeds the public key in the control plane.
 func runKeygen(args []string) int {
 	out := "signing.key"
 	flags := newFlagSet("keygen")
@@ -109,7 +89,6 @@ func runKeygen(args []string) int {
 	return exitOK
 }
 
-// runSign signs a file with the private key and writes the base64 signature.
 func runSign(args []string) int {
 	var keyPath, inPath, outPath string
 	flags := newFlagSet("sign")
@@ -161,9 +140,6 @@ func runSign(args []string) int {
 	return exitOK
 }
 
-// runManifest generates and signs the release manifest for an artifact. The
-// manifest binds the version, channel, arch and file name to the artifact
-// sha256; the detached signature authenticates the manifest.
 func runManifest(args []string) int {
 	var keyPath, inPath, version, channel, arch, outPath, helperPath string
 	flags := newFlagSet("manifest")
@@ -207,9 +183,6 @@ func runManifest(args []string) int {
 	}
 
 	manifest := updatecore.BuildManifest(version, channel, arch, filepath.Base(inPath), artifact)
-	// -helper binds the co-shipped host-helper payload archive (JUS-188) to the
-	// same signature, so the root update wrapper can verify the payload digest
-	// against the signed manifest before applying it.
 	if helperPath != "" {
 		helper, err := os.ReadFile(helperPath)
 		if err != nil {
@@ -232,7 +205,6 @@ func runManifest(args []string) int {
 	return exitOK
 }
 
-// runVerify verifies a detached signature; it exits 1 when verification fails.
 func runVerify(args []string) int {
 	var keyPath, inPath, sigPath string
 	flags := newFlagSet("verify")
@@ -278,7 +250,6 @@ func runVerify(args []string) int {
 	return exitOK
 }
 
-// loadPublicKeyFile reads a PEM or base64/hex public key file.
 func loadPublicKeyFile(path string) (ed25519.PublicKey, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -287,14 +258,12 @@ func loadPublicKeyFile(path string) (ed25519.PublicKey, error) {
 	return updatecore.ParsePublicKey(string(raw))
 }
 
-// newFlagSet builds a subcommand flag set that reports errors to stderr.
 func newFlagSet(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	return flags
 }
 
-// usage prints the top-level help.
 func usage(w io.Writer) {
 	fmt.Fprintf(w, `signer %s
 

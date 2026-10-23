@@ -341,7 +341,6 @@ func TestBuildImageResponseProtoRoundtrip(t *testing.T) {
 	}
 }
 
-// TestListToolsProtoRoundtrip covers the JUS-174 tool catalog messages.
 func TestListToolsProtoRoundtrip(t *testing.T) {
 	t.Parallel()
 
@@ -376,7 +375,6 @@ func TestListToolsProtoRoundtrip(t *testing.T) {
 	}
 }
 
-// TestToolEventProtoRoundtrip covers the install/uninstall stream message.
 func TestToolEventProtoRoundtrip(t *testing.T) {
 	t.Parallel()
 
@@ -472,10 +470,6 @@ func TestBuildServiceBuildImage(t *testing.T) {
 	}
 }
 
-// startTestServer serves the stub AgentService, DockerService and
-// BuildService over an in-memory bufconn listener and returns a dialed client
-// connection. Teardown is registered with t.Cleanup and reports any serve
-// error.
 func startTestServer(t *testing.T) *grpc.ClientConn {
 	t.Helper()
 

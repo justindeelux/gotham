@@ -22,14 +22,8 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// defaultTerminalTestDSN points at the dev database from deploy/compose.dev.yml.
 const defaultTerminalTestDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
-// newTerminalRealAuthService creates a scratch database, migrates it and
-// returns a real auth.Service with open registration enabled. The whole
-// endpoint stack below it (JWT signing, refresh rotation, session rows) is
-// production code; only the database is disposable. When GOTHAM_TEST_DSN is
-// set a connection failure is fatal so CI cannot pass green by skipping.
 func newTerminalRealAuthService(t *testing.T) *auth.Service {
 	t.Helper()
 
@@ -97,11 +91,6 @@ func newTerminalRealAuthService(t *testing.T) *auth.Service {
 	return svc
 }
 
-// TestTerminalAttachRealStackSessionLineage reproduces JUS-258 against a real
-// database and the real auth service: an owner signs in, another tab rotates
-// the refresh token, and the pre-rotation access token must still create and
-// attach a terminal. Logout, a revoked family and an unrelated second sign-in
-// must never attach.
 func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 	t.Setenv("PLATFORM_ADMINS", "")
 	svc := newTerminalRealAuthService(t)
@@ -118,8 +107,6 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 	}
 	authorizer := terminalAuthorizer{auth: svc, isPlatformAdminEmail: func(string) bool { return false }}
 
-	// Another tab refreshes: the presented row is revoked, the replacement
-	// inherits the sign-in created_at and carries a new sid.
 	rotated, err := svc.Refresh(ctx, register.RefreshToken, auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
@@ -133,9 +120,6 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 		t.Fatalf("revalidate after rotation = (%v, %v), want (true, nil)", ok, err)
 	}
 
-	// Create and the attach preflight must accept the same old token through
-	// the real HTTP chain. A non-upgrade GET reaches 400 only after the
-	// authorizer and ownership checks passed; a refused attach answers 403.
 	serverID := uuid.New()
 	s := newTestServer(t, stubPinger{}, stubPinger{})
 	s.auth = svc
@@ -179,8 +163,6 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 		t.Fatalf("attach preflight with the pre-rotation token = %d, want 400 (authorized, not upgraded)", code)
 	}
 
-	// An unrelated second sign-in stays live, but it must not rescue the old
-	// lineage once that lineage is logged out.
 	if _, err := svc.Login(ctx, email, "s3cret-password", auth.SessionMeta{}); err != nil {
 		t.Fatalf("Login decoy: %v", err)
 	}
@@ -194,9 +176,6 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 		t.Fatalf("attach preflight after logout = %d, want 403", code)
 	}
 
-	// Reuse detection revokes the whole family: a pre-rotation token whose
-	// revoked row is still on record must not attach because no live session
-	// shares its lineage.
 	replay, err := svc.Login(ctx, email, "s3cret-password", auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login replay: %v", err)
@@ -215,8 +194,6 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 		t.Fatal("a pre-rotation token of a revoked family attached")
 	}
 
-	// Revoking a single session deletes its row, so even its own current token
-	// cannot attach afterwards.
 	revoked, err := svc.Login(ctx, email, "s3cret-password", auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login revoked: %v", err)

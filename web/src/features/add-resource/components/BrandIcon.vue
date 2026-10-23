@@ -5,13 +5,9 @@ import type { CSSProperties } from "vue";
 import type { BrandIconSize } from "../utils/brands";
 
 interface Props {
-  /** Letter fallback shown when no vendored glyph matches (or is missing). */
   letters: string;
-  /** Avatar background hue; the glyph is always the accent foreground. */
   color: string;
-  /** Vendored Simple Icons slug (see `assets/brands`). */
   logo?: string | null;
-  /** sm = environment list, md = picker, lg = application detail. */
   size?: BrandIconSize;
 }
 
@@ -20,7 +16,6 @@ const props = withDefaults(defineProps<Props>(), {
   size: "md",
 });
 
-/** logoUrls bundles every vendored glyph; a slug without a file falls back. */
 const logoUrls = import.meta.glob<string>("../assets/brands/*.svg", {
   eager: true,
   query: "?url",
@@ -31,12 +26,10 @@ const logoUrl = computed<string | null>(() =>
   props.logo === null ? null : (logoUrls[`../assets/brands/${props.logo}.svg`] ?? null),
 );
 
-/** lettersClass picks the text size for the one- or two-letter fallback. */
 const lettersClass = computed<string>(
   () => `brand-icon__letters--${props.letters.length <= 1 ? "single" : "double"}`,
 );
 
-/** glyphStyle hands the vendored SVG URL to the scoped mask rules. */
 const glyphStyle = computed<CSSProperties>(
   () =>
     ({
@@ -58,9 +51,6 @@ const glyphStyle = computed<CSSProperties>(
 </template>
 
 <style scoped>
-/* The approved treatment: a white silhouette at ~62% of the colored frame.
-   A 1px token ring keeps the darkest brand hue (GitHub) distinct from the
-   app's dark surfaces without changing any brand color. */
 .brand-icon {
   display: grid;
   place-items: center;

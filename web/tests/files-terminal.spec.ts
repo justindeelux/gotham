@@ -9,16 +9,6 @@ import { expect, test } from "@playwright/test";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, setTimeout:readonly, URL:readonly, window:readonly */
-// URL/window run inside the page (browser globals); the repo lint envs do not
-// cover tests/, so they are declared.
-
-// Real-browser proof for JUS-248: "Open terminal here" in the File manager
-// opens a WINDOW-mode host session in the intended directory through the
-// toolbar, the empty-space menu and a directory row menu. The committed
-// webdist is served statically, the control-plane file + terminal APIs are
-// mocked faithfully (create/delete recorded, the PTY socket answers with the
-// real binary framing), and every assertion checks the exact create-session
-// payload, target and session identity — not just a visible label.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -70,10 +60,8 @@ const root = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/** oddName is a legal directory name with every quoting hazard. */
 const oddName = `odd dir; touch pwned $(id) \`whoami\` ' " ünïcode & |`;
 
-/** listing is the mixed folder the browser renders for every path. */
 function listing() {
   return [
     {
@@ -145,7 +133,6 @@ function listing() {
   ];
 }
 
-/** CreateBody is the exact terminal create-session request. */
 interface CreateBody {
   target?: string;
   root?: string;
@@ -155,26 +142,20 @@ interface CreateBody {
   [key: string]: unknown;
 }
 
-/** FakeSession is one session the mocked HTTP + WS pair understands. */
 interface FakeSession {
   id: string;
   body: CreateBody;
   socket: WebSocketRoute | null;
 }
 
-/** State is the per-test mock ledger. */
 interface State {
   creates: CreateBody[];
   sessions: FakeSession[];
   deletes: number;
   seq: number;
-  /** createError answers the create call with an HTTP failure instead. */
   createError: { status: number; message: string } | null;
-  /** createDelayMs holds a create response so an in-flight gesture is testable. */
   createDelayMs: number;
-  /** failListPath answers GET /files/list for exactly this path with 404. */
   failListPath: string | null;
-  /** streamError ends the PTY stream with this bounded error-frame phrase. */
   streamError: string | null;
 }
 
@@ -218,12 +199,10 @@ test.afterAll(async () => {
   });
 });
 
-/** frame builds one binary server frame. */
 function frame(opcode: number, payload: Buffer = Buffer.alloc(0)): Buffer {
   return Buffer.concat([Buffer.from([opcode]), payload]);
 }
 
-/** openFrame confirms a PTY for one session. */
 function openFrame(): Buffer {
   return frame(
     4,
@@ -239,12 +218,10 @@ function openFrame(): Buffer {
   );
 }
 
-/** errorFrame sends the bounded phrase the relay uses for a failed cwd. */
 function errorFrame(message: string): Buffer {
   return frame(3, Buffer.from(message, "utf8"));
 }
 
-/** state builds an empty ledger. */
 function newState(): State {
   return {
     creates: [],
@@ -258,7 +235,6 @@ function newState(): State {
   };
 }
 
-/** mockApi wires the file manager and terminal API for one page. */
 async function mockApi(page: Page, state: State): Promise<void> {
   const session = {
     user,
@@ -350,7 +326,6 @@ async function mockApi(page: Page, state: State): Promise<void> {
     },
   );
 
-  // The PTY stream: binary frames only, exactly as the contract specifies.
   await page.routeWebSocket(
     /\/api\/v1\/servers\/[^/]+\/terminal\/sessions\/[^/]+\/ws$/,
     (ws) => {
@@ -368,13 +343,11 @@ async function mockApi(page: Page, state: State): Promise<void> {
       }
       ws.send(openFrame());
       ws.onMessage(() => {
-        // Input is irrelevant to this proof; keep the socket live.
       });
     },
   );
 }
 
-/** openFiles seeds the session and lands on the file browser. */
 async function openFiles(
   page: Page,
   state: State,
@@ -386,32 +359,25 @@ async function openFiles(
   await expect(page.locator(".fm-label b").first()).toBeVisible();
 }
 
-/** rowFor returns the browser row whose entry name is exactly `name`. */
 function rowFor(page: Page, name: string) {
   return page
     .locator(".fm-table .fm-row")
     .filter({ has: page.getByText(name, { exact: true }) });
 }
 
-/** openDirectory double-clicks a folder row and waits for the new path. */
 async function openDirectory(page: Page, name: string): Promise<void> {
   await rowFor(page, name).dblclick();
   await expect(page.locator(".fm-foot-path")).toContainText(`volumes/${name}`);
 }
 
-/** terminalWindow is the floating window region. */
 function terminalWindow(page: Page) {
   return page.getByRole("region", { name: "Terminal window" });
 }
 
-/** terminalButton is the toolbar action. */
 function terminalButton(page: Page) {
   return page.getByRole("button", { name: "Open terminal here" });
 }
 
-// Every test that opens a shell leaves a live PTY behind. Close them through
-// the app's own confirmation path so the page never holds a beforeunload guard
-// (and an open WebSocket) when Playwright tears the context down.
 test.afterEach(async ({ page }) => {
   await page
     .evaluate(() => {
@@ -430,7 +396,6 @@ test.afterEach(async ({ page }) => {
       terminal?.closeAll();
     })
     .catch(() => {
-      // The page may already be gone after a failure; nothing to clean up.
     });
 });
 
@@ -442,7 +407,6 @@ test("toolbar opens a window session in the folder on screen", async ({ page }) 
   await page.getByRole("button", { name: "Open terminal here" }).click();
 
   await expect.poll(() => state.creates.length).toBe(1);
-  // Exactly the create contract: the relative path is data, never a command.
   expect(state.creates[0]).toEqual({
     target: "host",
     root: "volumes",
@@ -461,8 +425,6 @@ test("toolbar opens a window session in the folder on screen", async ({ page }) 
   await expect(page.getByRole("tab", { name: "prod-01 · data" })).toBeVisible();
   await expect(terminalWindow(page).getByText("Connected")).toBeVisible();
 
-  // JUS-255: the window paints above the file browser at the point a user
-  // would click. Nothing from the page (toolbars, bands, menus) sits on top.
   const box = await terminalWindow(page).boundingBox();
   const windowTop = await page.evaluate(
     ({ x, y }) => {
@@ -508,7 +470,6 @@ test("a directory row opens its own folder; files and special rows never offer i
   const state = newState();
   await openFiles(page, state);
 
-  // A file has no shell action.
   await rowFor(page, "app.yaml").click({ button: "right" });
   const fileMenu = page.getByRole("menu", { name: "More actions for app.yaml" });
   await expect(fileMenu).toBeVisible();
@@ -517,11 +478,9 @@ test("a directory row opens its own folder; files and special rows never offer i
   ).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  // A special entry (socket) has no actions at all.
   await rowFor(page, "run.sock").click({ button: "right" });
   await expect(page.getByRole("menu")).toHaveCount(0);
 
-  // A real directory targets itself, not the folder on screen.
   await rowFor(page, "config").click({ button: "right" });
   const folderMenu = page.getByRole("menu", {
     name: "More actions for config",
@@ -576,7 +535,6 @@ test("a pathological folder name travels verbatim, never as a command", async ({
   const body = JSON.stringify(state.creates[0]);
   expect(body).not.toContain("cd ");
   expect(body).not.toContain("touch pwned;");
-  // The whole body is the session contract: no `command` or shell text field.
   expect(Object.keys(state.creates[0]!).sort()).toEqual([
     "cols",
     "cwd",
@@ -600,7 +558,6 @@ test("an old session keeps its cwd when another directory opens", async ({
     .click();
   await expect.poll(() => state.creates.length).toBe(1);
 
-  // The floating window covers the list; minimize it like a user would.
   await page.getByRole("button", { name: "Minimize terminal window" }).click();
   await expect(terminalWindow(page)).toBeHidden();
 
@@ -611,7 +568,6 @@ test("an old session keeps its cwd when another directory opens", async ({
     .click();
   await expect.poll(() => state.creates.length).toBe(2);
 
-  // Two independent tabs, each labelled with its own directory and node.
   expect(state.creates.map((body) => body.cwd)).toEqual(["config", "data"]);
   await expect(page.getByRole("tab", { name: "prod-01 · config" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "prod-01 · data" })).toBeVisible();
@@ -622,14 +578,12 @@ test("restores a minimized terminal window for the new tab", async ({ page }) =>
   const state = newState();
   await openFiles(page, state);
 
-  // Open one session, then really minimize the window through its control.
   await page.getByRole("button", { name: "Open terminal here" }).click();
   await expect.poll(() => state.creates.length).toBe(1);
   await expect(terminalWindow(page)).toBeVisible();
   await page.getByRole("button", { name: "Minimize terminal window" }).click();
   await expect(terminalWindow(page)).toBeHidden();
 
-  // The next directory's action must restore it, not open a hidden tab.
   await openDirectory(page, "data");
   await page.getByRole("button", { name: "Open terminal here" }).click();
   await expect.poll(() => state.creates.length).toBe(2);
@@ -642,7 +596,6 @@ test("restores a minimized terminal window for the new tab", async ({ page }) =>
   });
   await expect(terminalWindow(page)).toBeVisible();
   await expect(page.getByRole("tab", { name: "prod-01 · data" })).toBeVisible();
-  // The first session was not retargeted: it keeps the root cwd.
   expect(state.creates[0]).toEqual({
     target: "host",
     root: "volumes",
@@ -657,9 +610,6 @@ test("non-operators never see the action (file read access is not a shell)", asy
   const state = newState();
   await openFiles(page, state);
 
-  // The file manager route itself is operator-gated. Simulate a live demotion
-  // (the account is read-only for files now) and prove the shell action reacts
-  // to the operator capability, not to the file role.
   await page.evaluate(() => {
     const app = (
       document.querySelector("#app") as unknown as {
@@ -752,7 +702,6 @@ test("surfaces an invalid working directory without a host path", async ({
       "The working directory is not allowed. Open a folder inside the server's allowed root.",
     ),
   ).toBeVisible();
-  // The bounded phrase is the only detail; no host path is leaked.
   await expect(terminalWindow(page)).not.toContainText("/var/lib/gotham");
 });
 
@@ -768,8 +717,6 @@ test("surfaces an unknown node and an unsupported agent", async ({ page }) => {
     ),
   ).toBeVisible();
 
-  // A second attempt answers 501 from an old agent. Wait out the first
-  // gesture's settle window so this is a deliberate new attempt.
   state.createError = { status: 501, message: "unsupported" };
   await expect(terminalButton(page)).toHaveAttribute("aria-busy", "false", {
     timeout: 5_000,
@@ -787,8 +734,6 @@ test("a human-speed double-click on a fast create starts one shell", async ({
   page,
 }) => {
   const state = newState();
-  // A fast PTY create is the r2 repro: the settle window must still absorb the
-  // second click of one gesture.
   state.createDelayMs = 30;
   await openFiles(page, state);
 
@@ -801,15 +746,13 @@ test("a human-speed double-click on a fast create starts one shell", async ({
   await page.waitForTimeout(120);
   await page.mouse.click(x, y);
   await expect.poll(() => state.creates.length).toBe(1);
-  // The key and the button stay busy through the settle window.
   await expect(button).toHaveAttribute("aria-busy", "true");
 
-  await page.waitForTimeout(180); // ~300 ms after the first click
+  await page.waitForTimeout(180);
   await page.mouse.click(x, y);
   await expect.poll(() => state.creates.length).toBe(1);
   await expect(terminalWindow(page).getByRole("tab")).toHaveCount(1);
 
-  // After the window a deliberate click is a new shell.
   await expect(button).toHaveAttribute("aria-busy", "false", {
     timeout: 5_000,
   });
@@ -847,7 +790,6 @@ test("double-activating a menu item creates one shell", async ({ page }) => {
     .getByRole("menuitem", { name: "Open terminal in config" });
   await expect(menuItem).toBeVisible();
 
-  // Two activations in the same task, before the dropdown unmounts.
   await menuItem.evaluate((element) => {
     (element as HTMLElement).click();
     (element as HTMLElement).click();
@@ -883,8 +825,6 @@ test("never renders raw backend text or host paths in the error overlay", async 
   ];
   for (const item of cases) {
     state.createError = { status: item.status, message: item.body };
-    // Each case is a separate deliberate attempt: the previous target's settle
-    // window keeps a same-gesture double-click from adding a shell.
     await expect(terminalButton(page)).toHaveAttribute("aria-busy", "false", {
       timeout: 5_000,
     });
@@ -892,7 +832,6 @@ test("never renders raw backend text or host paths in the error overlay", async 
     await expect(terminalWindow(page).getByText(item.text)).toBeVisible();
   }
 
-  // The response bodies are never part of the DOM, hidden tabs included.
   await expect(terminalWindow(page)).not.toContainText("/var/lib/gotham");
   await expect(terminalWindow(page)).not.toContainText("/root/.ssh");
   await expect(terminalWindow(page).locator(".term-detail")).toHaveCount(0);
@@ -911,7 +850,6 @@ test("a failed navigation removes the dead-cwd action until a listing loads", as
     page.getByRole("heading", { name: "Could not load entries" }),
   ).toBeVisible();
 
-  // No toolbar action and no menu action for a folder that never listed.
   await expect(terminalButton(page)).toHaveCount(0);
   await page.locator(".fm-state").click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Folder actions" });
@@ -921,7 +859,6 @@ test("a failed navigation removes the dead-cwd action until a listing loads", as
   ).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  // Retrying the folder loads it; the action returns and targets it.
   state.failListPath = null;
   await page.locator(".fm-state").getByRole("button", { name: "Retry" }).click();
   await expect(terminalButton(page)).toBeVisible();
@@ -941,7 +878,6 @@ test("a failed refresh keeps the last successfully loaded target", async ({
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.locator(".fm-inline-error")).toBeVisible();
 
-  // The rows are still the loaded listing, so the action keeps working there.
   await expect(terminalButton(page)).toBeVisible();
   await terminalButton(page).click();
   await expect.poll(() => state.creates.length).toBe(1);
@@ -963,7 +899,6 @@ test("a symlink with a proven directory target opens the link path", async ({
   await item.click();
 
   await expect.poll(() => state.creates.length).toBe(1);
-  // The LINK path is the cwd: the agent follows it and enforces the root policy.
   expect(state.creates[0]).toMatchObject({ root: "volumes", cwd: "current" });
   await expect(page.getByRole("tab", { name: "prod-01 · current" })).toBeVisible();
 });
@@ -1019,9 +954,6 @@ test("the toolbar action shows its label, names itself and has no tooltip", asyn
   await openFiles(page, state);
 
   const button = terminalButton(page);
-  // JUS-261: icon + visible label, while the aria-label stays the accessible
-  // name. JUS-268: the visible label made the hover/focus tooltip redundant,
-  // so the button no longer carries a description node at all.
   await expect(button.locator(".fm-btn-label")).toHaveText("Terminal");
   await expect(button.locator(".fm-btn-label")).toBeVisible();
   await expect(button).toHaveAttribute("aria-label", "Open terminal here");
@@ -1056,12 +988,7 @@ test("the terminal action follows File operations at every toolbar width", async
       throw new Error(`toolbar boxes missing at ${width}px`);
     }
 
-    // Directly after File operations and on the same row (a horizontal
-    // scrollport when the phone layout kicks in).
     expect(terminalBox.x).toBeGreaterThanOrEqual(opsBox.x + opsBox.width - 0.5);
-    // Adjacent, not merely somewhere to the right (the old icon-only button
-    // lived in the far-right cluster): the space between the two controls is
-    // one toolbar gap, never free-floating group space.
     expect(terminalBox.x - (opsBox.x + opsBox.width)).toBeLessThanOrEqual(16);
     expect(
       Math.abs(
@@ -1070,7 +997,6 @@ test("the terminal action follows File operations at every toolbar width", async
       ),
     ).toBeLessThanOrEqual(1);
 
-    // DOM order too: no other toolbar control sits between the two.
     const order = await page.evaluate(() =>
       [...document.querySelectorAll(".fm-toolbar-group button")].map(
         (button) => button.getAttribute("aria-label") ?? button.textContent?.trim(),
@@ -1080,8 +1006,6 @@ test("the terminal action follows File operations at every toolbar width", async
       "Open terminal here",
     );
 
-    // The label is visible exactly where the shared toolbar breakpoint shows
-    // labels; the aria-label remains the accessible name at every width.
     if (width <= 640) {
       await expect(terminal.locator(".fm-btn-label")).toBeHidden();
     } else {
@@ -1089,15 +1013,11 @@ test("the terminal action follows File operations at every toolbar width", async
       await expect(terminal.locator(".fm-btn-label")).toHaveText("Terminal");
     }
 
-    // Group integrity: no group splits its controls onto separate rows, and
-    // the whole toolbar never grows past two rows (one on wide screens).
     const layout = await page.evaluate(() => {
       const rows = [...document.querySelectorAll(".fm-toolbar-group")].map(
         (group) => [
           ...new Set(
             [...group.children]
-              // The phone layout hides the "Root" caption (display:none); it
-              // has no box and therefore no row.
               .filter((element) => element.getBoundingClientRect().height > 0)
               .map((element) => {
                 const rect = element.getBoundingClientRect();
@@ -1110,7 +1030,6 @@ test("the terminal action follows File operations at every toolbar width", async
       return { rows, height: toolbar.height };
     });
     expect(layout.rows.every((centres) => centres.length === 1)).toBe(true);
-    // The labelled action keeps the whole toolbar on its 32px row.
     expect(layout.height).toBeLessThanOrEqual(44);
   }
 });

@@ -17,8 +17,6 @@ import (
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
-// stubServerRegistry satisfies the server registry for wiring tests. The
-// embedded interface supplies the methods this test never calls.
 type stubServerRegistry struct {
 	ServerService
 	registry *servers.Server
@@ -51,20 +49,12 @@ func (s stubAuthService) ListSessions(context.Context, uuid.UUID, uuid.UUID) ([]
 	return s.sessions, nil
 }
 
-// rotatingAuth is a faithful session store for authorizer tests: rotation
-// replaces the session id but preserves its sign-in created_at exactly like
-// RotateSession (internal/store/queries/sessions.sql), and logout removes the
-// live row. The embedded interface supplies the AuthService methods this test
-// never calls.
 type rotatingAuth struct {
 	AuthService
 
-	mu       sync.Mutex
-	user     *auth.User
-	sessions []auth.SessionInfo
-	// lineages keeps the created_at of every row that still exists, including
-	// revoked rows left behind by rotation or revoke-all. Logout removes the
-	// entry because it deletes the row, like the real store.
+	mu         sync.Mutex
+	user       *auth.User
+	sessions   []auth.SessionInfo
 	lineages   map[uuid.UUID]time.Time
 	meErr      error
 	listErr    error
@@ -133,8 +123,6 @@ func (r *rotatingAuth) logout(id uuid.UUID) {
 	delete(r.lineages, id)
 }
 
-// revokeAll models reuse detection or revoke-all: every live row is revoked
-// and therefore leaves the live list, but the rows stay on record.
 func (r *rotatingAuth) revokeAll() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -209,33 +197,23 @@ func TestTerminalAuthorizerSurvivesSessionRotation(t *testing.T) {
 		t.Fatalf("marker = %s, want %s", marker.SignInAt, signIn)
 	}
 
-	// Refresh rotation revokes the handshake session and issues a new sid; the
-	// replacement keeps the sign-in created_at, so the shell stays authorized.
 	store.rotate(sessionID, replacementID)
 	ok, err := authorizer.Revalidate(context.Background(), claims, marker, hostTarget())
 	if err != nil || !ok {
 		t.Fatalf("after rotation = (%v, %v), want (true, nil)", ok, err)
 	}
 
-	// A different live sign-in on another device must not keep this shell alive
-	// once its own lineage is gone.
 	store.addSession(uuid.New(), signIn.Add(time.Hour))
 	store.logout(replacementID)
 	ok, err = authorizer.Revalidate(context.Background(), claims, marker, hostTarget())
 	if err != nil || ok {
 		t.Fatalf("after logout = (%v, %v), want (false, nil)", ok, err)
 	}
-	// The same deleted lineage must not authorize a fresh attach either, even
-	// though the decoy sign-in is still live.
 	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err == nil {
 		t.Fatal("a logged-out lineage authorized attach while another sign-in was live")
 	}
 }
 
-// TestTerminalAuthorizerAcceptsPreRotationToken is the JUS-258 regression: the
-// tab that did not refresh still holds the access token minted before another
-// tab rotated the refresh token, so its sid row is revoked while the sign-in
-// lineage is alive. Attach must accept it, exactly like Revalidate does.
 func TestTerminalAuthorizerAcceptsPreRotationToken(t *testing.T) {
 	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()
@@ -244,8 +222,6 @@ func TestTerminalAuthorizerAcceptsPreRotationToken(t *testing.T) {
 		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
 	claims := authorizerClaims(userID, oldSessionID)
 
-	// Another tab refreshes: the presented row is revoked, a replacement with
-	// the same sign-in created_at becomes live.
 	replacementID := uuid.New()
 	store.rotate(oldSessionID, replacementID)
 
@@ -261,10 +237,6 @@ func TestTerminalAuthorizerAcceptsPreRotationToken(t *testing.T) {
 	}
 }
 
-// TestTerminalAuthorizerRefusesPreRotationTokenOfRevokedFamily proves the
-// lineage, not the sid, is the authority: when reuse detection revokes every
-// live session the retained revoked row resolves but no live row matches it,
-// so a pre-rotation token is refused.
 func TestTerminalAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.T) {
 	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()
@@ -280,8 +252,6 @@ func TestTerminalAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.T) 
 	}
 }
 
-// TestTerminalAuthorizerRefusesPreRotationTokenOfDeletedRow proves a sid row
-// deleted by logout or a password reset cannot resolve a lineage at all.
 func TestTerminalAuthorizerRefusesPreRotationTokenOfDeletedRow(t *testing.T) {
 	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()
@@ -296,8 +266,6 @@ func TestTerminalAuthorizerRefusesPreRotationTokenOfDeletedRow(t *testing.T) {
 	}
 }
 
-// TestTerminalAuthorizerLineageLookupFailure keeps a database failure a
-// transient error rather than a definitive refusal of attach.
 func TestTerminalAuthorizerLineageLookupFailure(t *testing.T) {
 	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()

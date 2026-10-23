@@ -30,7 +30,6 @@ import { isApiError } from "@/features/servers";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
 
-/** Draft shape of the add/edit domain form. */
 export interface DomainDraft {
   domain: string;
   port: number | null;
@@ -38,23 +37,15 @@ export interface DomainDraft {
   protocol: DomainProtocol;
 }
 
-/**
- * Domain routing behind the Domains tab (JUS-236, formerly JUS-233): every
- * hostname carries its own target port, optional compose service and
- * protocol. The same modal adds and edits; selecting a compose service
- * pre-fills its declared port.
- */
 export function useApplicationDomains(application: Ref<Application>) {
   const message = useMessage();
   const appsStore = useApplicationsStore();
   const proxyStore = useProxyStore();
-  /** Captured during setup: inject() has no active instance after an await. */
   const refreshTick = useDomainsRefresh();
 
   const domains = ref<ApplicationDomain[]>([]);
   const loadingDomains = ref(false);
   const domainsError = ref<string | null>(null);
-  /** formOpen drives the shared add/edit modal. */
   const formOpen = ref(false);
   const draft = reactive<DomainDraft>({
     domain: "",
@@ -71,23 +62,14 @@ export function useApplicationDomains(application: Ref<Application>) {
   const rowErrorIsProxy = ref(false);
   const formServerError = ref<unknown>(null);
   const rowServerError = ref<unknown>(null);
-  /** refreshSeq drops an out-of-order response after an application switch. */
   let refreshSeq = 0;
 
-  /** isCompose reports whether the application has compose-specific fields. */
   const isCompose = computed<boolean>(() => application.value.source_type === "compose");
 
-  /**
-   * composePorts maps each compose service to its declared container port.
-   * Selecting a service pre-fills the port (still editable); repo-backed
-   * documents cannot be parsed here, so the selector falls back to the
-   * release service and free text.
-   */
   const composePorts = computed<Record<string, number>>(() =>
     extractComposeServicePorts(application.value.compose_content ?? ""),
   );
 
-  /** serviceOptions lists the parsed services plus the release web service. */
   const serviceOptions = computed<Array<{ label: string; value: string }>>(() => {
     const names = new Set(Object.keys(composePorts.value));
     if (application.value.compose_service) {
@@ -110,7 +92,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     rowServerError.value = null;
   }
 
-  /** certificateIntent finds the intent recorded for exactly this host. */
   function certificateIntent(host: string) {
     return (
       proxyStore.certificates.find(
@@ -119,24 +100,10 @@ export function useApplicationDomains(application: Ref<Application>) {
     );
   }
 
-  /**
-   * refreshCertificateIntents reloads the proxy list before a cleanup lookup.
-   * The backend already removes a renamed/detached host's default http-01
-   * intent, so a stale cache would make the client delete an id that is
-   * already gone. A refresh failure is not fatal: the cached list is a safe
-   * fallback, and a delete that still races the server is handled below.
-   */
   async function refreshCertificateIntents(): Promise<void> {
     await proxyStore.fetchCertificates().catch(() => undefined);
   }
 
-  /**
-   * removeCertificateIntent deletes an intent that is still recorded for a
-   * host that is no longer attached. The server removing it first (or a
-   * concurrent delete) answers 404, which means the desired state already
-   * holds and is treated as success. Any other failure is returned (not
-   * swallowed) so the row banner can surface it.
-   */
   async function removeCertificateIntent(host: string): Promise<unknown | null> {
     await refreshCertificateIntents();
     const intent = certificateIntent(host);
@@ -148,7 +115,6 @@ export function useApplicationDomains(application: Ref<Application>) {
       return null;
     } catch (error) {
       if (isApiError(error) && error.status === 404) {
-        // Already gone server-side: resync so the stale row disappears too.
         await refreshCertificateIntents();
         return null;
       }
@@ -156,7 +122,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     }
   }
 
-  /** surfaceRowError keeps one failure in the row banner across locale switches. */
   function surfaceRowError(id: string | null, error: unknown, isProxy: boolean): void {
     rowServerError.value = error;
     rowErrorId.value = id;
@@ -174,8 +139,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     }
     try {
       const rows = await listDomains(appID);
-      // A slow response for the previous application must never overwrite the
-      // new application's list.
       if (seq !== refreshSeq || application.value.id !== appID) {
         return;
       }
@@ -193,7 +156,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     }
   }
 
-  /** resetDraft clears the form back to the add-mode defaults. */
   function resetDraft(): void {
     editingId.value = null;
     draft.domain = "";
@@ -204,20 +166,17 @@ export function useApplicationDomains(application: Ref<Application>) {
     formServerError.value = null;
   }
 
-  /** openCreate opens the shared modal in add mode with a clean draft. */
   function openCreate(): void {
     clearErrors();
     resetDraft();
     formOpen.value = true;
   }
 
-  /** closeForm dismisses the shared modal and drops the draft. */
   function closeForm(): void {
     formOpen.value = false;
     resetDraft();
   }
 
-  /** startEdit loads one row into the shared add/edit modal. */
   function startEdit(row: ApplicationDomain): void {
     clearErrors();
     editingId.value = row.id;
@@ -228,10 +187,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     formOpen.value = true;
   }
 
-  /** handleServiceChange pre-fills the port of the selected service. A
-   * cleared select emits null; treat it as the release-default empty service.
-   * A service without a declared port clears the field so a stale port from
-   * the previous selection never looks pre-filled. */
   function handleServiceChange(service: string | null): void {
     draft.service = service ?? "";
     if (!isCompose.value) {
@@ -241,7 +196,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     draft.port = port && port > 0 ? port : null;
   }
 
-  /** validatedDraft returns the normalized payload, or the first error. */
   function validatedDraft(): DomainInput | string {
     const domain = draft.domain.trim().toLowerCase();
     const domainIssues = fieldErrors(hostDomainSchema, domain);
@@ -269,7 +223,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     };
   }
 
-  /** handleSave creates or edits one domain. */
   async function handleSave(): Promise<void> {
     clearErrors();
     const payload = validatedDraft();
@@ -293,9 +246,6 @@ export function useApplicationDomains(application: Ref<Application>) {
         await addDomain(application.value.id, payload);
         message.success(tr("applications.detail.domainAdded"));
       }
-      // A renamed host keeps no route for its old certificate, so drop that
-      // intent instead of leaving ACME orders for a host the app no longer
-      // serves. The edit modal warned before this happened.
       const cleanupError = renamed ? await removeCertificateIntent(oldHost) : null;
       resetDraft();
       formOpen.value = false;
@@ -321,8 +271,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     busyDomainId.value = domain.id;
     try {
       await removeDomain(application.value.id, domain.id);
-      // Removing a host detaches its routes; delete the now-unreachable
-      // certificate intent too. The popconfirm warned when one existed.
       const cleanupError = await removeCertificateIntent(domain.domain);
       if (editingId.value === domain.id) {
         resetDraft();
@@ -368,8 +316,6 @@ export function useApplicationDomains(application: Ref<Application>) {
       if (formServerError.value !== null) {
         formError.value = describeApplicationError(formServerError.value);
       } else {
-        // A local validation message is a catalog key: re-derive it from the
-        // unchanged draft in the new locale.
         const payload = validatedDraft();
         formError.value = typeof payload === "string" ? payload : null;
       }

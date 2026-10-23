@@ -18,17 +18,11 @@ const userInitial = computed<string>(() =>
   (displayName.value[0] ?? "?").toUpperCase(),
 );
 
-/**
- * platformRoleLabel names the platform role: "admin" marks the first
- * account (the platform admin), every other account is a member. Team
- * roles are per-team and shown on the Teams page, not here.
- */
 const platformRoleLabel = computed<string>(() => {
   const isAdmin = authStore.user?.is_platform_admin ?? authStore.user?.role === "admin";
   return isAdmin ? t("profile.identity.admin") : t("profile.identity.member");
 });
 
-/** memberSince renders created_at as a calendar date in the active locale. */
 const memberSince = computed<string>(() => {
   const raw = authStore.user?.created_at;
   if (!raw) {
@@ -102,11 +96,6 @@ const memberSince = computed<string>(() => {
   max-width: 560px;
 }
 
-/* Narrow containers stack each fact label-over-value: the table, its body,
- * every row and both cells all go block, so no anonymous table boxes remain
- * to squeeze the value column. Naive's own display:table-cell rule chains
- * five classes (0,5,0); repeating its ancestor chain after this wrapper wins
- * (0,7,0) without !important. */
 @container (max-width: 480px) {
   .identity-facts-wrap :deep(.n-descriptions-table),
   .identity-facts-wrap :deep(tbody),

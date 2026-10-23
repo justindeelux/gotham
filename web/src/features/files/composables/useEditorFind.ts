@@ -1,9 +1,3 @@
-/**
- * Find/replace + go-to-line state for one editor surface (JUS-231). The query
- * and its toggles are kept per tab here, while the actual matches live in
- * CodeMirror's search state, so a tab switch restores what the user typed and
- * the highlights always come from the live document.
- */
 import { computed, onScopeDispose, ref, watch } from "vue";
 
 import type { GotoLineError } from "@/features/files/editor/goto";
@@ -16,11 +10,8 @@ import type {
 } from "@/features/files/editor/search";
 
 export interface UseEditorFindOptions {
-  /** session returns the active tab's searchable editor, or null while loading. */
   session: () => SearchableEditor | null;
-  /** tabId keys the stored query; a change saves the old tab and loads the new. */
   tabId: () => string;
-  /** canReplace is false on read-only tabs and for a read-only role. */
   canReplace: () => boolean;
 }
 
@@ -29,15 +20,12 @@ interface SavedFindState extends EditorSearchOptions {
   replaceExpanded: boolean;
 }
 
-/** QUERY_DEBOUNCE_MS waits out a typing burst before scanning the document. */
 const QUERY_DEBOUNCE_MS = 180;
 
-/** STATUS_DEBOUNCE_MS coalesces the recount after one or more edits. */
 const STATUS_DEBOUNCE_MS = 220;
 
 const EMPTY_STATUS: EditorSearchStatus = { total: 0, current: 0, capped: false };
 
-/** useEditorFind owns the find bar and go-to-line popover state. */
 export function useEditorFind(options: UseEditorFindOptions) {
   const findOpen = ref(false);
   const replaceExpanded = ref(false);
@@ -57,10 +45,8 @@ export function useEditorFind(options: UseEditorFindOptions) {
   let queryTimer: ReturnType<typeof setTimeout> | null = null;
   let statusTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** canReplace follows the active tab's read-only state. */
   const canReplace = computed<boolean>(() => options.canReplace());
 
-  /** patternError is the inline reason the query is not applied. */
   const patternError = computed<SearchPatternError | null>(() => {
     if (!regexp.value || query.value.length === 0) {
       return null;
@@ -68,7 +54,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     return validateSearchPattern(query.value);
   });
 
-  /** clearQueryTimer cancels a pending debounced apply. */
   function clearQueryTimer(): void {
     if (queryTimer !== null) {
       clearTimeout(queryTimer);
@@ -76,7 +61,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** clearStatusTimer cancels a pending debounced recount. */
   function clearStatusTimer(): void {
     if (statusTimer !== null) {
       clearTimeout(statusTimer);
@@ -84,7 +68,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** currentOptions snapshots the form for the search controller. */
   function currentOptions(): EditorSearchOptions {
     return {
       query: query.value,
@@ -94,15 +77,12 @@ export function useEditorFind(options: UseEditorFindOptions) {
     };
   }
 
-  /** publish stores one controller result in the reactive bar state. */
   function publish(status: EditorSearchStatus): void {
     total.value = status.total;
     current.value = status.current;
     capped.value = status.capped;
   }
 
-  /** applySearch installs the query on the active session. A rejected pattern
-   *  clears the editor's search state instead of running it. */
   function applySearch(): void {
     const editor = options.session();
     if (!editor) {
@@ -116,14 +96,12 @@ export function useEditorFind(options: UseEditorFindOptions) {
     publish(editor.search.setOptions(currentOptions(), replacement.value));
   }
 
-  /** applyNow flushes a pending keystroke and scans once. */
   function applyNow(): void {
     clearQueryTimer();
     clearStatusTimer();
     applySearch();
   }
 
-  /** loadState restores one tab's query and toggles. */
   function loadState(tabId: string): void {
     const stored = saved.get(tabId);
     query.value = stored?.query ?? "";
@@ -153,8 +131,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   });
 
-  /** openFind opens the bar. `expand` forces the replace row (Mod-H); the
-   *  toolbar leaves the tab's remembered state alone. */
   function openFind(expand: boolean): void {
     if (gotoOpen.value) {
       closeGotoLine(false);
@@ -167,7 +143,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     applyNow();
   }
 
-  /** closeFind closes the bar, clears the highlights and refocuses the editor. */
   function closeFind(focus = true): void {
     if (!findOpen.value) {
       return;
@@ -182,18 +157,14 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** toggleReplace shows or hides the replacement row (kept per tab). */
   function toggleReplace(): void {
     replaceExpanded.value = !replaceExpanded.value;
   }
 
-  /** setQuery debounces the scan so a typing burst costs one pass. */
   function setQuery(value: string): void {
     query.value = value;
     clearQueryTimer();
     if (patternError.value) {
-      // Surface the error immediately and clear stale highlights; never run a
-      // rejected (possibly catastrophic) pattern.
       applyNow();
       return;
     }
@@ -203,12 +174,10 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }, QUERY_DEBOUNCE_MS);
   }
 
-  /** setReplacement only stores the text; matching does not depend on it. */
   function setReplacement(value: string): void {
     replacement.value = value;
   }
 
-  /** toggleOption flips one search toggle and reruns the query. */
   function toggleOption(option: "caseSensitive" | "wholeWord" | "regexp"): void {
     if (option === "caseSensitive") {
       caseSensitive.value = !caseSensitive.value;
@@ -220,14 +189,12 @@ export function useEditorFind(options: UseEditorFindOptions) {
     applyNow();
   }
 
-  /** syncPending flushes a debounced query/recount before a command. */
   function syncPending(): void {
     if (queryTimer !== null || statusTimer !== null) {
       applyNow();
     }
   }
 
-  /** next selects the next match and refreshes the counter. */
   function next(): void {
     syncPending();
     const editor = options.session();
@@ -236,7 +203,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** previous selects the previous match and refreshes the counter. */
   function previous(): void {
     syncPending();
     const editor = options.session();
@@ -245,7 +211,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** replaceMatch replaces the current match (one undo step). */
   function replaceMatch(): void {
     syncPending();
     const editor = options.session();
@@ -254,7 +219,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** replaceEveryMatch replaces every match in one undoable transaction. */
   function replaceEveryMatch(): void {
     syncPending();
     const editor = options.session();
@@ -263,14 +227,12 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** refreshGotoInfo reads the current line and the document line count. */
   function refreshGotoInfo(): void {
     const info = options.session()?.lineInfo();
     gotoCurrent.value = info?.line ?? 1;
     gotoTotal.value = info?.total ?? 1;
   }
 
-  /** openGotoLine shows the popover with the live line numbers. */
   function openGotoLine(): void {
     if (findOpen.value) {
       closeFind(false);
@@ -279,7 +241,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     gotoOpen.value = true;
   }
 
-  /** closeGotoLine hides the popover and returns focus to the editor. */
   function closeGotoLine(focus = true): void {
     if (!gotoOpen.value) {
       return;
@@ -290,7 +251,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** jumpToLine rejects an out-of-range line/column inline, else jumps. */
   function jumpToLine(line: number, column: number): GotoLineError | null {
     const editor = options.session();
     if (!editor) {
@@ -305,7 +265,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     return null;
   }
 
-  /** refresh re-applies the query after the active session is (re)built. */
   function refresh(): void {
     if (findOpen.value) {
       applySearch();
@@ -315,8 +274,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** queueStatus coalesces a recount after edits; cursor moves never trigger
-   *  a rescan (a full-document pass per arrow key is the regression here). */
   function queueStatus(): void {
     if (!findOpen.value) {
       return;

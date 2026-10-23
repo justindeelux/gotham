@@ -1,7 +1,3 @@
-/**
- * Vietnamese catalog for the toolchain surface. Same shape as the English
- * catalog; tool ids, versions, paths and API payloads stay raw parameters.
- */
 import type en from "./en";
 
 const vi: typeof en = {

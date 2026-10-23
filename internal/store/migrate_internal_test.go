@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// testDSN mirrors the external integration tests: the dev database from
-// deploy/compose.dev.yml unless GOTHAM_TEST_DSN overrides it.
 func testDSN() string {
 	if dsn := os.Getenv("GOTHAM_TEST_DSN"); dsn != "" {
 		return dsn
@@ -18,10 +16,6 @@ func testDSN() string {
 	return "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 }
 
-// holdMigrationLock opens a session that holds the migration advisory lock
-// until the returned connection is closed. It blocks until the lock is free
-// (other packages' Migrate calls also use it) and disables idle connections so
-// closing it really ends the session and frees the lock.
 func holdMigrationLock(t *testing.T, ctx context.Context, dsn string) *sql.Conn {
 	t.Helper()
 
@@ -51,8 +45,6 @@ func holdMigrationLock(t *testing.T, ctx context.Context, dsn string) *sql.Conn 
 	return conn
 }
 
-// TestMigrateFailFastFailsWhenLockHeld is the concurrent CLI case: while
-// another session holds the migration lock, up and down must both fail fast.
 func TestMigrateFailFastFailsWhenLockHeld(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -69,8 +61,6 @@ func TestMigrateFailFastFailsWhenLockHeld(t *testing.T) {
 	}
 }
 
-// TestMigrateWaitsForLock is the parallel-test case: Migrate must block on a
-// held lock (instead of failing) and proceed once the holder releases it.
 func TestMigrateWaitsForLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -81,14 +71,12 @@ func TestMigrateWaitsForLock(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Migrate(ctx, dsn, MigrateUp) }()
 
-	// The run must still be waiting while the lock is held.
 	select {
 	case err := <-done:
 		t.Fatalf("Migrate returned while the lock was held: %v", err)
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	// Ending the holder's session releases the lock; the waiter must proceed.
 	if err := conn.Close(); err != nil {
 		t.Fatalf("close lock connection: %v", err)
 	}

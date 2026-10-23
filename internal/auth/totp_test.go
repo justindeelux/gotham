@@ -9,12 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestTOTPRFC6238Vectors checks the generator against the RFC 6238 appendix B
-// SHA-1 reference values (the eight-digit values truncated to the six digits
-// this service issues), verifying the secret encoding, the counter derivation
-// and the dynamic truncation at once.
 func TestTOTPRFC6238Vectors(t *testing.T) {
-	// base32("12345678901234567890"), the appendix B seed.
 	const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 
 	vectors := []struct {
@@ -42,8 +37,6 @@ func TestTOTPRFC6238Vectors(t *testing.T) {
 	}
 }
 
-// TestTOTPSkewWindow: a code one step either side of "now" is accepted (a
-// skewed client clock), while one two steps away is not.
 func TestTOTPSkewWindow(t *testing.T) {
 	secret, err := generateTOTPSecret()
 	if err != nil {
@@ -66,9 +59,6 @@ func TestTOTPSkewWindow(t *testing.T) {
 	}
 }
 
-// TestTOTPCodeFormatting: separators are tolerated, and a code with the wrong
-// digit count or a non-digit never verifies (so a recovery code cannot be
-// mistaken for a TOTP code).
 func TestTOTPCodeFormatting(t *testing.T) {
 	secret, err := generateTOTPSecret()
 	if err != nil {
@@ -89,9 +79,6 @@ func TestTOTPCodeFormatting(t *testing.T) {
 	}
 }
 
-// TestRecoveryCodesAreRandomAndHasheable: generated codes use the unambiguous
-// alphabet, are the advertised length, and normalize to a separator-free form
-// that verifies against the stored argon2id hash.
 func TestRecoveryCodes(t *testing.T) {
 	codes, hashes, err := newRecoveryCodes()
 	if err != nil {
@@ -116,7 +103,6 @@ func TestRecoveryCodes(t *testing.T) {
 		}
 		seen[code] = true
 
-		// A lowercase, spaced submission still matches the stored hash.
 		submitted := strings.ToLower(code[:5]) + " " + strings.ToLower(code[6:])
 		ok, err := VerifyPassword(hashes[i], normalizeRecoveryCode(submitted))
 		if err != nil || !ok {
@@ -125,8 +111,6 @@ func TestRecoveryCodes(t *testing.T) {
 	}
 }
 
-// TestTOTPSecretDecodingToleratesManualEntry: a user typing the secret in
-// lowercase or with spaces still decodes, and padding is optional.
 func TestTOTPSecretDecodingToleratesManualEntry(t *testing.T) {
 	if _, err := decodeTOTPSecret("gezd gnbv gy3t qojq gezd gnbv gy3t qojq"); err != nil {
 		t.Fatalf("decodeTOTPSecret rejected a manual entry: %v", err)
@@ -136,8 +120,6 @@ func TestTOTPSecretDecodingToleratesManualEntry(t *testing.T) {
 	}
 }
 
-// codeForSecret returns the TOTP code for secret at at. It shares the
-// production decoder and generator so the tests exercise the same path.
 func codeForSecret(t *testing.T, secret string, at time.Time) string {
 	t.Helper()
 	key, err := decodeTOTPSecret(secret)
@@ -147,9 +129,6 @@ func codeForSecret(t *testing.T, secret string, at time.Time) string {
 	return totpCode(key, uint64(at.Unix()/int64(totpPeriod/time.Second)))
 }
 
-// TestMFATokenIsNotAnAccessToken: the half-authenticated token carries the MFA
-// purpose, so it is refused as an access token (and therefore as a WS token),
-// while an access token is refused as an MFA token.
 func TestMFATokenIsNotAnAccessToken(t *testing.T) {
 	signer, err := NewSigner(nil, nil)
 	if err != nil {

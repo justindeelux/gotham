@@ -36,14 +36,8 @@ import { useToolchainStore } from "@/features/toolchain";
 
 export type { AuthResult, User } from "@/shared/api/token";
 
-/**
- * MFA_CHALLENGE_TTL_MS mirrors the half-authenticated token's lifetime on the
- * server (JUS-196), so the SPA stops offering a code step once the token can no
- * longer be redeemed.
- */
 const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
-/** Input accepted by {@link useAuthStore.setSession}. */
 export interface SessionInput {
   user?: User | null;
   access_token: string;
@@ -57,34 +51,13 @@ export const useAuthStore = defineStore("auth", () => {
   const accessToken = ref<string | null>(initial.accessToken);
   const refreshToken = ref<string | null>(initial.refreshToken);
 
-  /**
-   * mfaToken holds the half-authenticated token between the password (or OAuth)
-   * step and the code step (JUS-196). It is in memory only, never persisted, and
-   * grants no access on its own: a reload abandons it and the user signs in
-   * again. mfaPending is true while a challenge is waiting to be completed;
-   * mfaExpiresAt mirrors the server's five-minute token lifetime so the code
-   * step is not reopened once the token can no longer be redeemed.
-   */
   const mfaToken = ref<string | null>(null);
   const mfaExpiresAt = ref<number | null>(null);
   const mfaPending = computed<boolean>(() => mfaToken.value !== null);
 
-  /**
-   * userSeq orders local account writes (setSession, setUser, clearSession).
-   * fetchMe captures it at start and discards a response that resolves after
-   * a newer local write, so a slow read cannot overwrite it. Reads that land
-   * through applySession (a token rotation or another tab) do not bump it:
-   * they carry server facts, never a newer local write.
-   */
   let userSeq = 0;
 
-  /**
-   * registrationOpen mirrors `GET /auth/config`: true only on a fresh instance
-   * with zero accounts. Afterwards the create-account tab is hidden and
-   * members join through an admin-created invite link (P-A2).
-   */
   const registrationOpen = ref(false);
-  /** configLoaded caches /auth/config for the session (fetchAuthConfig once). */
   let configLoaded = false;
 
   const isAuthenticated = computed<boolean>(() => accessToken.value !== null);
@@ -92,19 +65,12 @@ export const useAuthStore = defineStore("auth", () => {
     () => user.value?.is_platform_admin ?? user.value?.role === "admin",
   );
 
-  /** applySession replaces the in-memory state from a stored snapshot. */
   function applySession(session: Session): void {
     user.value = session.user;
     accessToken.value = session.accessToken;
     refreshToken.value = session.refreshToken;
   }
 
-  // The HTTP layer rotates tokens directly through the token module; mirror
-  // those changes here so the store never writes a stale token back. When the
-  // shared session is emptied elsewhere (forced logout on 401, cross-tab
-  // sign-out) the user-scoped caches are dropped too: the redirect stays
-  // in-app now, so no reload clears them anymore. An account change rebinds
-  // the editor window to the new account's persisted geometry.
   let lastAccountId = initial.user?.id ?? "";
   subscribeSession((session) => {
     applySession(session);
@@ -113,14 +79,10 @@ export const useAuthStore = defineStore("auth", () => {
       lastAccountId = nextAccountId;
       if (nextAccountId !== "") {
         try {
-          // An in-SPA account switch is a sign-out plus sign-in even when no
-          // empty-session step lands in between: drop the previous account's
-          // live terminals before rebinding the window geometry.
           useTerminalStore().reset();
           useEditorWindowStore().reloadForUser(nextAccountId);
           useTerminalWindowStore().reloadForUser(nextAccountId);
         } catch {
-          // Sign-in must always complete; a geometry reload never blocks it.
         }
       }
     }
@@ -129,7 +91,6 @@ export const useAuthStore = defineStore("auth", () => {
     }
   });
 
-  /** persist writes the current state back to the shared token module. */
   function persist(): void {
     persistSession({
       user: user.value,
@@ -138,7 +99,6 @@ export const useAuthStore = defineStore("auth", () => {
     });
   }
 
-  /** setSession stores the token pair (and user, when provided). */
   function setSession(input: SessionInput): void {
     user.value = input.user ?? null;
     accessToken.value = input.access_token;
@@ -147,29 +107,13 @@ export const useAuthStore = defineStore("auth", () => {
     persist();
   }
 
-  /**
-   * setUser replaces the stored account (a display-name save) and persists
-   * it, so the sidebar follows without a reload. It bumps the write order so
-   * an in-flight fetchMe cannot overwrite it with an older server read.
-   */
   function setUser(next: User | null): void {
     user.value = next;
     userSeq += 1;
     persist();
   }
 
-  /**
-   * clearSession forgets the session in memory and in localStorage, and
-   * drops every user-scoped Pinia cache (teams, servers, applications,
-   * databases, files, editor tabs and window geometry, notifications,
-   * services, backups, providers, templates,
-   * toolchain, proxy, recent deploys) so the next sign-in cannot render the
-   * previous account's data — notably the sidebar role, which the teams store
-   * would otherwise keep serving from its loaded cache.
-   */
   function clearSession(): void {
-    // The instance's registration policy does not change on sign-out; keep the
-    // cached config unless a caller forces a refresh.
     user.value = null;
     accessToken.value = null;
     refreshToken.value = null;
@@ -179,12 +123,6 @@ export const useAuthStore = defineStore("auth", () => {
     resetUserStores();
   }
 
-  /**
-   * resetUserStores clears every user-scoped store. Each call is guarded so
-   * a store that was never instantiated (or whose reset throws) cannot break
-   * sign-out; Pinia creates the store on first use, at which point there is
-   * nothing stale to clear.
-   */
   function resetUserStores(): void {
     const resetters: Array<() => void> = [
       () => useTeamsStore().reset(),
@@ -212,21 +150,10 @@ export const useAuthStore = defineStore("auth", () => {
       try {
         resetStore();
       } catch {
-        // Sign-out must always complete; a store reset never blocks it.
       }
     }
   }
 
-  /**
-   * fetchMe refreshes the account from GET /auth/me, clearing on 401. A
-   * response that resolves after the account changed is discarded so it
-   * cannot overwrite it: a different account id (an OAuth exchange or another
-   * sign-in installed a new session, or sign-out cleared it), or a newer
-   * local write (a display-name save, a password change). A token rotation
-   * that lands mid-flight changes the token but not the account, so the
-   * retried read after a 401 still applies — that is the first open with an
-   * expired access token.
-   */
   async function fetchMe(): Promise<void> {
     const tokenAtStart = accessToken.value;
     const idAtStart = user.value?.id;
@@ -249,7 +176,6 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  /** login exchanges credentials for a session, or opens the code step. */
   async function login(
     email: string,
     password: string,
@@ -259,8 +185,6 @@ export const useAuthStore = defineStore("auth", () => {
       password,
     });
     if (response.data.mfa_required) {
-      // The account has two-factor on: no session is issued. The caller must
-      // show the code step and call completeMfaLogin.
       setMfaChallenge(response.data.mfa_token ?? null);
       return { mfaRequired: true };
     }
@@ -269,27 +193,16 @@ export const useAuthStore = defineStore("auth", () => {
     return { mfaRequired: false };
   }
 
-  /**
-   * setMfaChallenge remembers a half-authenticated token minted elsewhere (an
-   * OAuth callback) or by the password step, and stamps the client-side expiry.
-   * A null token clears the challenge.
-   */
   function setMfaChallenge(token: string | null): void {
     mfaToken.value = token;
     mfaExpiresAt.value = token === null ? null : Date.now() + MFA_CHALLENGE_TTL_MS;
   }
 
-  /** clearMfaChallenge abandons a pending challenge (cancel, expiry, sign-out). */
   function clearMfaChallenge(): void {
     mfaToken.value = null;
     mfaExpiresAt.value = null;
   }
 
-  /**
-   * isMfaChallengeLive reports whether a pending token is still within its
-   * server-side lifetime, so the code step is not offered for a token that can
-   * only answer 401.
-   */
   function isMfaChallengeLive(): boolean {
     return (
       mfaToken.value !== null &&
@@ -298,11 +211,6 @@ export const useAuthStore = defineStore("auth", () => {
     );
   }
 
-  /**
-   * completeMfaLogin redeems the pending challenge with an authenticator or
-   * recovery code and starts the session. It throws when no challenge is
-   * pending, so it can never mint a session out of order.
-   */
   async function completeMfaLogin(code: string): Promise<void> {
     const token = mfaToken.value;
     if (token === null) {
@@ -316,10 +224,6 @@ export const useAuthStore = defineStore("auth", () => {
     setSession(response.data);
   }
 
-  /**
-   * fetchAuthConfig refreshes `registrationOpen`. A failure leaves it false
-   * (closed) — the safe default for an unknown instance state.
-   */
   async function fetchAuthConfig(force = false): Promise<void> {
     if (configLoaded && !force) {
       return;
@@ -329,16 +233,10 @@ export const useAuthStore = defineStore("auth", () => {
       registrationOpen.value = response.data.registrationOpen === true;
       configLoaded = true;
     } catch {
-      // Leave the safe default (closed) and allow a later retry.
       registrationOpen.value = false;
     }
   }
 
-  /**
-   * validateInvite resolves an invite token to the team the invitee is
-   * joining. A missing or unusable token throws, so the caller can fall back
-   * to the sign-in form.
-   */
   async function validateInvite(token: string): Promise<{ team: string; email: string }> {
     const response = await http.get<{ team: string; email: string }>(
       "/auth/invites/validate",
@@ -347,7 +245,6 @@ export const useAuthStore = defineStore("auth", () => {
     return response.data;
   }
 
-  /** register creates an account and starts the session. */
   async function register(
     email: string,
     password: string,
@@ -359,13 +256,9 @@ export const useAuthStore = defineStore("auth", () => {
       ...(inviteToken ? { inviteToken } : {}),
     });
     setSession(response.data);
-    // The instance now has an account (unless the test/dev override is on), so
-    // the cached policy is stale: the next auth render re-probes /auth/config
-    // instead of offering a create-account tab that would answer 403.
     configLoaded = false;
   }
 
-  /** logout revokes the refresh token, then clears the session. */
   async function logout(): Promise<void> {
     const token = refreshToken.value ?? getSession().refreshToken;
     try {
@@ -402,25 +295,14 @@ export const useAuthStore = defineStore("auth", () => {
   };
 });
 
-/** isUnauthorized reports whether an error is a 401 ApiError. */
 export function isUnauthorized(error: unknown): boolean {
   return getStatus(error) === 401;
 }
 
-/** isRateLimited reports whether an error is a 429 ApiError. */
 export function isRateLimited(error: unknown): boolean {
   return getStatus(error) === 429;
 }
 
-/**
- * describeAuthError maps a thrown API error to a user-facing message in the
- * active locale at call time (so a computed banner refreshes on language
- * switch). Known rate-limit refusals and the empty fallback resolve to
- * curated summaries; any other failure gets a localized summary with the
- * useful raw diagnostic retained as plain text (never translated, never
- * used for classification), so status checks and `stripErrorPrefix`
- * semantics stay language-independent.
- */
 export function describeAuthError(error: unknown): string {
   const status = getStatus(error);
   if (status === 429) {
@@ -437,12 +319,10 @@ export function describeAuthError(error: unknown): string {
   return commonErrors().unexpected;
 }
 
-/** commonErrors reads the shared error summaries for the active locale. */
 function commonErrors(): { rateLimited: string; unexpected: string; requestFailed: string } {
   return (activeLocale.value === "vi" ? viCatalog : enCatalog).common.errors;
 }
 
-/** getStatus extracts the HTTP status from a thrown ApiError, if present. */
 function getStatus(error: unknown): number | null {
   if (typeof error !== "object" || error === null) {
     return null;

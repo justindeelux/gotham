@@ -16,7 +16,6 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-/** memoryStorage builds an isolated Storage for locale tests. */
 function memoryStorage(initial?: Record<string, string>): Storage {
   const data = new Map(Object.entries(initial ?? {}));
   return {

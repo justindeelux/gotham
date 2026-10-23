@@ -17,23 +17,7 @@ interface RegisterResponse {
   refresh_token: string;
 }
 
-/**
- * global setup registers one unique account through the real API and persists
- * two artifacts:
- *
- *   · .auth/state.json   — Playwright storage state holding the token pair,
- *                          so navigation/application specs start signed in.
- *   · .auth/account.json — the credentials, so the auth spec can exercise the
- *                          real login form with the same account.
- *
- * Creating the account once keeps the run inside the register/login per-IP
- * rate limit (5/minute burst).
- */
 export default async function globalSetup(): Promise<void> {
-  // A fixed email lets the control plane list this account as a platform
-  // operator (PLATFORM_ADMINS) so the DNS-provider surface — platform-global
-  // since BE-8.2 — is reachable by the smoke. Otherwise a unique per-run email
-  // keeps parallel runs isolated.
   const email =
     process.env.GOTHAM_E2E_EMAIL ?? `ui-e2e-${uniqueSuffix()}@example.com`;
   const password = "Gotham-E2E-Password1";
@@ -44,9 +28,6 @@ export default async function globalSetup(): Promise<void> {
       data: { email, password },
     });
     if (!response.ok()) {
-      // The account survives across runs on a persistent database, and once an
-      // instance has an account registration is closed (P-A2) — either way,
-      // fall back to signing the existing account in.
       response = await api.post("/api/v1/auth/login", {
         data: { email, password },
       });

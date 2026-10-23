@@ -9,12 +9,6 @@ import { useStableRowKeys } from "@/shared/composables/useStableRowKeys";
 import { isSecretValue } from "@/features/applications/utils/envSecret";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
-/**
- * Key/value editor for the plain environment variables sent to the container.
- * Values carrying the `secret:` prefix name a sealed secret (stored AES-256-GCM
- * in the `secrets` table) and are never returned by the API.
- */
-
 interface Props {
   modelValue: EnvVar[];
 }
@@ -29,12 +23,10 @@ const { t } = useI18n();
 const rows = computed<EnvVar[]>(() => props.modelValue);
 const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
 
-/** isValidKey marks the convention shape; display-only, never blocking. */
 function isValidKey(key: string): boolean {
   return isRecommendedEnvKey(key);
 }
 
-/** updateRow replaces one row, keeping the array immutable for v-model. */
 function updateRow(index: number, patch: Partial<EnvVar>): void {
   const next = rows.value.map((row, rowIndex) =>
     rowIndex === index ? { ...row, ...patch } : row,
@@ -42,13 +34,11 @@ function updateRow(index: number, patch: Partial<EnvVar>): void {
   emit("update:modelValue", next);
 }
 
-/** addRow appends an empty row for the next variable. */
 function addRow(): void {
   insertAt(rows.value.length);
   emit("update:modelValue", [...rows.value, { key: "", value: "" }]);
 }
 
-/** removeRow drops one row by index. */
 function removeRow(index: number): void {
   removeAt(index);
   emit("update:modelValue", rows.value.filter((_, rowIndex) => rowIndex !== index));
@@ -105,8 +95,6 @@ function removeRow(index: number): void {
   flex-direction: column;
   gap: var(--space-2);
   align-items: flex-start;
-  /* Container for the single-column fallback below (JUS-19 fix 1): the row
-   * grid follows the editor width, not the viewport. */
   container-type: inline-size;
 }
 
@@ -114,9 +102,6 @@ function removeRow(index: number): void {
   margin-bottom: var(--space-1);
 }
 
-/* One variable is one row: name | value | delete. The grid (not a wrapping
- * flex) keeps the three controls on a single row at modal width; the sealed
- * badge drops onto its own line only when present. */
 .env-editor__row {
   display: grid;
   grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;

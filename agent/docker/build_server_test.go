@@ -19,7 +19,6 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// fakeBuildClient is a configurable buildClient for BuildServer tests.
 type fakeBuildClient struct {
 	registryAddr string
 	registryErr  error
@@ -124,9 +123,6 @@ func (f *fakeBuildClient) PruneAppImages(_ context.Context, appID, keepDeploy st
 	return f.pruneErr
 }
 
-// newBuildServiceClient starts an in-process BuildService server backed by
-// fake and returns a client connected over bufconn alongside the server so
-// tests can adjust it before the first RPC.
 func newBuildServiceClient(t *testing.T, fake *fakeBuildClient) (agentv1.BuildServiceClient, *BuildServer) {
 	t.Helper()
 	server := NewBuildServer(fake, discardLogger())
@@ -150,9 +146,6 @@ func newBuildServiceClient(t *testing.T, fake *fakeBuildClient) (agentv1.BuildSe
 	return agentv1.NewBuildServiceClient(conn), server
 }
 
-// runBuild streams meta and chunks to BuildImage, closes the send side, and
-// returns the collected log chunks plus the final result (nil when the RPC
-// failed first).
 func runBuild(t *testing.T, client agentv1.BuildServiceClient, meta *agentv1.BuildMeta, chunks [][]byte) ([]string, *agentv1.BuildImageResult, error) {
 	t.Helper()
 
@@ -286,9 +279,6 @@ func TestBuildServerBuildImageUsesDockerfileAndBuildArgs(t *testing.T) {
 	}
 }
 
-// TestBuildServerRunsToolchainOnNode pins the remote-build fix: a railpack or
-// buildpacks engine is dispatched to the node's toolchain runner against the
-// uploaded context, then tagged and pushed like a Dockerfile build.
 func TestBuildServerRunsToolchainOnNode(t *testing.T) {
 	fake := &fakeBuildClient{digest: "sha256:tool"}
 	client, _ := newBuildServiceClient(t, fake)
@@ -324,7 +314,6 @@ func TestBuildServerRunsToolchainOnNode(t *testing.T) {
 	if fake.toolchainArgs["GO_VERSION"] != "1.22" {
 		t.Errorf("build args = %v", fake.toolchainArgs)
 	}
-	// The shared tag/push steps still run for a toolchain build.
 	if fake.pushRepo != "127.0.0.1:5000/gotham/web" || fake.pushTag != "dep-1" {
 		t.Errorf("push call = (%q, %q)", fake.pushRepo, fake.pushTag)
 	}
@@ -480,9 +469,6 @@ func TestBuildServerPushError(t *testing.T) {
 	}
 }
 
-// TestBuildServerPruneFailureDoesNotFailBuild pins the best-effort contract:
-// image retention runs after a successful push, and a cleanup failure is
-// logged, never surfaced as a build failure.
 func TestBuildServerPruneFailureDoesNotFailBuild(t *testing.T) {
 	fake := &fakeBuildClient{pruneErr: errors.New("daemon busy")}
 	client, _ := newBuildServiceClient(t, fake)
@@ -499,8 +485,6 @@ func TestBuildServerPruneFailureDoesNotFailBuild(t *testing.T) {
 	}
 }
 
-// fakeBuildStream is enough of a BuildImage stream for the refusal test: the
-// call is refused before the first Recv.
 type fakeBuildStream struct {
 	grpc.ServerStream
 	ctx context.Context
@@ -512,9 +496,6 @@ func (s *fakeBuildStream) Recv() (*agentv1.BuildImageRequest, error) { return ni
 
 func (s *fakeBuildStream) Send(*agentv1.BuildImageResponse) error { return nil }
 
-// TestBuildServerRefusesDuringUninstall proves a build started while a tool
-// uninstall is in flight is refused with a retryable status instead of running
-// against a toolchain being removed.
 func TestBuildServerRefusesDuringUninstall(t *testing.T) {
 	tracker := tools.NewToolUseTracker()
 	release := tracker.BeginUninstall(toolcatalog.IDDocker)

@@ -1,4 +1,3 @@
-// JUS-24: extracted pure helpers keep their contracts after the split.
 import { describe, expect, it } from "vitest";
 
 import { durationText } from "../src/features/services/utils/deployDuration";

@@ -10,7 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// fakeRedirectSource is a canned RedirectSource.
 type fakeRedirectSource struct {
 	rules []RedirectRule
 	err   error
@@ -23,7 +22,6 @@ func (f *fakeRedirectSource) ListRedirectRules(context.Context) ([]RedirectRule,
 	return append([]RedirectRule{}, f.rules...), nil
 }
 
-// routerFixture builds a fixture with one routable HTTPS application.
 func routerFixture(t *testing.T, serverID uuid.UUID) (*syncFixture, ProxiedApplication) {
 	t.Helper()
 	app := runningApp(serverID, "app.example.com", "app-container", appContainerPort, 8080)
@@ -35,9 +33,6 @@ func routerFixture(t *testing.T, serverID uuid.UUID) (*syncFixture, ProxiedAppli
 	return fixture, app
 }
 
-// TestListRoutersReflectsGeneratedState proves the read side reports exactly
-// what a sync would push: the application host row (merged web+websecure,
-// TLS resolver, owning resource) and the redirect row, with no invented rows.
 func TestListRoutersReflectsGeneratedState(t *testing.T) {
 	serverID := uuid.New()
 	fixture, app := routerFixture(t, serverID)
@@ -90,9 +85,6 @@ func TestListRoutersReflectsGeneratedState(t *testing.T) {
 	}
 }
 
-// TestListRoutersSyncStatusPendingThenSynced proves the sync status compares
-// the regenerated documents against history: pending before the first sync,
-// synced once the sync pushed the same bytes.
 func TestListRoutersSyncStatusPendingThenSynced(t *testing.T) {
 	serverID := uuid.New()
 	fixture, _ := routerFixture(t, serverID)
@@ -114,7 +106,6 @@ func TestListRoutersSyncStatusPendingThenSynced(t *testing.T) {
 	if response.Nodes[0].SyncStatus != RouterSyncSynced {
 		t.Fatalf("sync status = %q, want synced after the sync", response.Nodes[0].SyncStatus)
 	}
-	// A held-back row is reported as a diagnostic, not a router.
 	fixture.source.setApps(append(fixture.source.apps, ProxiedApplication{
 		ID: uuid.New(), ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}},
 		ContainerID: "other",
@@ -134,9 +125,6 @@ func TestListRoutersSyncStatusPendingThenSynced(t *testing.T) {
 	}
 }
 
-// TestListRoutersUnreachableNode proves an unreadable node is reported with
-// an error and contributes no rows: a single-node read fails, while an
-// all-nodes read keeps the healthy node's rows and marks the failing node.
 func TestListRoutersUnreachableNode(t *testing.T) {
 	serverID := uuid.New()
 	fixture, _ := routerFixture(t, serverID)
@@ -156,8 +144,6 @@ func TestListRoutersUnreachableNode(t *testing.T) {
 		appContainer("other-container", 8081),
 	}
 
-	// The fixture's container list is shared per node: fail only the first
-	// node by answering per-node lists.
 	lists := map[uuid.UUID][]containers.Container{otherID: fixture.containers.list}
 	fixture.service.containers = &perNodeContainers{lists: lists, err: containers.ErrAgentUnavailable}
 
@@ -185,8 +171,6 @@ func TestListRoutersUnreachableNode(t *testing.T) {
 	}
 }
 
-// perNodeContainers answers canned container lists per node, failing nodes
-// without a list entry with err.
 type perNodeContainers struct {
 	containers.ContainerService
 	lists map[uuid.UUID][]containers.Container
@@ -200,9 +184,6 @@ func (f *perNodeContainers) List(_ context.Context, serverID uuid.UUID) ([]conta
 	return nil, f.err
 }
 
-// TestListRoutersAllNodesIncludesRegisteredNodes proves an all-nodes read
-// covers registered nodes with no applications, so an empty node reports
-// synced (or pending) rather than vanishing.
 func TestListRoutersAllNodesIncludesRegisteredNodes(t *testing.T) {
 	serverID := uuid.New()
 	fixture, _ := routerFixture(t, serverID)
@@ -218,7 +199,6 @@ func TestListRoutersAllNodesIncludesRegisteredNodes(t *testing.T) {
 	}
 }
 
-// TestAsRouterServiceNil proves the wiring helper stays nil-safe.
 func TestAsRouterServiceNil(t *testing.T) {
 	if AsRouterService(nil) != nil {
 		t.Fatal("AsRouterService(nil) != nil")

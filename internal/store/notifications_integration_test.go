@@ -19,16 +19,11 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestNotificationChannelPersistence runs migration 00021 and exercises the
-// channel queries: team-scoped reads, the dispatcher read's resource matching,
-// updates and deletes. It skips when no database is reachable.
 func TestNotificationChannelPersistence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	dsn := testDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -40,8 +35,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -89,7 +82,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Error("created_at is not set")
 	}
 
-	// A foreign team cannot read the row.
 	if _, err := st.GetNotificationChannel(ctx, sqlc.GetNotificationChannelParams{
 		ID:     created.ID,
 		TeamID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
@@ -100,7 +92,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("foreign list err = %v, want an empty page", err)
 	}
 
-	// A resource override: only the matching application may select it.
 	appID := uuid.New()
 	resourceType := "application"
 	override, err := st.CreateNotificationChannel(ctx, sqlc.CreateNotificationChannelParams{
@@ -121,7 +112,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("resource_type = %v, want application", override.ResourceType)
 	}
 
-	// The dispatcher read for the override's resource returns both rows.
 	forEvent, err := st.ListNotificationChannelsForEvent(ctx, sqlc.ListNotificationChannelsForEventParams{
 		TeamID:       teamID,
 		ResourceType: &resourceType,
@@ -134,7 +124,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("channels for the app event = %d, want the team-wide and the override", len(forEvent))
 	}
 
-	// Another resource only sees the team-wide channel.
 	otherApp := uuid.New()
 	forEvent, err = st.ListNotificationChannelsForEvent(ctx, sqlc.ListNotificationChannelsForEventParams{
 		TeamID:       teamID,
@@ -148,7 +137,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("channels for another app = %d, want only the team-wide row", len(forEvent))
 	}
 
-	// A disabled channel drops out of the dispatcher read.
 	disabled := false
 	if _, err := st.UpdateNotificationChannel(ctx, sqlc.UpdateNotificationChannelParams{
 		ID:           created.ID,
@@ -175,7 +163,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("channels = %d, want none: the only team-wide row is disabled", len(forEvent))
 	}
 
-	// The list still returns both configured channels.
 	all, err := st.ListNotificationChannels(ctx, teamID)
 	if err != nil {
 		t.Fatalf("ListNotificationChannels: %v", err)
@@ -184,7 +171,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("channels = %d, want 2", len(all))
 	}
 
-	// Delivery history is bounded per channel and team-scoped on read.
 	for i := 0; i < 55; i++ {
 		if _, err := st.CreateNotificationDelivery(ctx, sqlc.CreateNotificationDeliveryParams{
 			ID:           pgtype.UUID{Bytes: uuid.New(), Valid: true},
@@ -229,7 +215,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("foreign history = %d rows, want 0", len(foreignHistory))
 	}
 
-	// Delete is team-scoped and reports the affected rows.
 	affected, err := st.DeleteNotificationChannel(ctx, sqlc.DeleteNotificationChannelParams{
 		ID:     override.ID,
 		TeamID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
@@ -251,7 +236,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("delete affected = %d, want 1", affected)
 	}
 
-	// Deleting the team cascades the remaining channels.
 	if err := st.DeleteTeam(ctx, teamID); err != nil {
 		t.Fatalf("DeleteTeam: %v", err)
 	}
@@ -275,10 +259,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 	}
 }
 
-// TestNotificationChannelResourceConstraint applies the migrations on a
-// disposable database and proves the resource-pair CHECK rejects both half
-// pairs, including the NULL-type/non-NULL-id case a plain IN test would let
-// through as SQL NULL.
 func TestNotificationChannelResourceConstraint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -341,13 +321,10 @@ func TestNotificationChannelResourceConstraint(t *testing.T) {
 		}
 	}
 
-	// Half pairs are rejected: the NULL-type case is the regression this test
-	// guards (the arm must be FALSE, not SQL NULL).
 	assertCheckViolation("type NULL with id set", insert("null type", nil, pgtype.UUID{Bytes: uuid.New(), Valid: true}))
 	assertCheckViolation("type set with id NULL", insert("null id", "application", nil))
 	assertCheckViolation("unknown type with id", insert("unknown type", "service", pgtype.UUID{Bytes: uuid.New(), Valid: true}))
 
-	// Complete pairs stay valid.
 	if err := insert("team wide", nil, nil); err != nil {
 		t.Fatalf("team-wide insert: %v", err)
 	}
@@ -356,9 +333,6 @@ func TestNotificationChannelResourceConstraint(t *testing.T) {
 	}
 }
 
-// newDeliveryTestChannel opens the test database, applies the migrations, and
-// returns a Store plus a team and a channel to hang delivery rows on. It skips
-// when no database is reachable.
 func newDeliveryTestChannel(t *testing.T) (*store.Store, pgtype.UUID, uuid.UUID) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -414,11 +388,6 @@ func newDeliveryTestChannel(t *testing.T) (*store.Store, pgtype.UUID, uuid.UUID)
 	return st, user.ID, channelID
 }
 
-// TestNotificationDeliveryRetentionUnderConcurrency proves the per-channel
-// advisory lock bounds history even when writers race. Each goroutine runs the
-// exact transaction the storeRepository uses (lock, insert, prune): under READ
-// COMMITTED without the lock, two writers would each keep their own newest row
-// and the channel would settle above the cap.
 func TestNotificationDeliveryRetentionUnderConcurrency(t *testing.T) {
 	st, teamID, channelID := newDeliveryTestChannel(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

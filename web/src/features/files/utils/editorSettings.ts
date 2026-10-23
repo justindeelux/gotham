@@ -5,23 +5,14 @@ import {
 } from "@/features/files/schemas/editorSettings";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 
-/**
- * Per-user localStorage persistence for the editor preferences. Every access
- * is wrapped in try/catch: private mode, quota and blocked storage must never
- * break the editor. A corrupt payload is read as defaults and simply
- * overwritten by the next change.
- */
 export type EditorSettingsStorage = Pick<Storage, "getItem" | "setItem">;
 
-/** EDITOR_SETTINGS_MAX_BYTES caps the raw payload; a runaway entry is ignored. */
 export const EDITOR_SETTINGS_MAX_BYTES = 4 * 1024;
 
-/** editorSettingsStorageKey scopes preferences to one user on this browser. */
 export function editorSettingsStorageKey(userId: string): string {
   return userId === "" ? "" : `gotham.files.editor.v1.${encodeURIComponent(userId)}`;
 }
 
-/** readEditorSettings loads one user's preferences, falling back to defaults. */
 export function readEditorSettings(
   storage: EditorSettingsStorage,
   userId: string,
@@ -46,7 +37,6 @@ export function readEditorSettings(
   }
 }
 
-/** writeEditorSettings stores one user's preferences; false means not stored. */
 export function writeEditorSettings(
   storage: EditorSettingsStorage,
   userId: string,

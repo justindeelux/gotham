@@ -9,13 +9,6 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
 /* global URL, document:readonly, window:readonly */
-// JUS-236 layout proof: the application Domains tab renders every hostname as
-// a table row (host, port, service, protocol, primary, certificate, actions),
-// the add/edit form lives in a bounded modal, row actions stay inside their
-// row, and the table scrolls horizontally inside its card instead of pushing
-// the page wider at 390/480/1280/1366px. Every claim is a measured box on the
-// committed webdist served statically with the API mocked; element
-// screenshots land in .playwright-mcp/ (gitignored) for human review.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -176,7 +169,6 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session and answers every call the detail page makes. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -241,12 +233,10 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
-/** openDomainsTab renders the domain editor of the seeded application. */
 async function openDomainsTab(page: Page): Promise<Locator> {
   await page.goto(`${baseURL}/projects/proj-1/environments/env-1/applications/app-1`);
   const tab = page.locator(".n-tabs-tab").filter({ hasText: "Domains" });
   await tab.click();
-  // Match the card by its header title: body copy may mention the same words.
   const card = page
     .locator(".n-card")
     .filter({
@@ -257,7 +247,6 @@ async function openDomainsTab(page: Page): Promise<Locator> {
   return card;
 }
 
-/** boxOf returns the bounding box, failing loudly when the element has none. */
 async function boxOf(locator: Locator, label: string) {
   const box = await locator.boundingBox();
   expect(box, `${label} has a box`).not.toBeNull();
@@ -274,7 +263,6 @@ for (const width of [390, 480, 1280, 1366]) {
     await expect(rows).toHaveCount(3);
     const first = await boxOf(rows.nth(0), "first domain row");
     const second = await boxOf(rows.nth(1), "second domain row");
-    // Table rows stack directly below each other, never overlapping.
     expect(second.y, "second row below first").toBeGreaterThanOrEqual(first.y + first.height - 0.5);
     expect(first.x, "rows share the left edge").toBeLessThanOrEqual(second.x + 0.5);
   });

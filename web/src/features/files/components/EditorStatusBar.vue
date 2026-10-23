@@ -14,14 +14,11 @@ import type { EditorEol, EditorLanguageId } from "@/features/files/utils/editor"
 import { formatBytes } from "@/shared/utils/format";
 
 interface Props {
-  /** tab is the active document the footer describes. */
   tab: EditorTab;
   cursor: { line: number; column: number };
   historyCount: number;
-  /** canWrite is the caller's write gate for this root. */
   canWrite: boolean;
   tabSize: number;
-  /** dirty is the tab's unsaved-changes state (text or line ending). */
   dirty: boolean;
 }
 
@@ -37,12 +34,10 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** isEditable is true for a loaded file tab (not a diff or a refused read). */
 const isEditable = computed(
   () => props.tab.kind === "file" && props.tab.status === "ready",
 );
 
-/** isReadOnly marks the states that never accept edits or a save. */
 const isReadOnly = computed(
   () =>
     props.tab.kind === "diff" ||
@@ -53,12 +48,10 @@ const isReadOnly = computed(
     (isEditable.value && !props.canWrite),
 );
 
-/** canEdit marks a loaded file that this caller may write and saves whole. */
 const canEdit = computed(
   () => isEditable.value && props.canWrite && !props.tab.truncated,
 );
 
-/** fullPath is the root-qualified path shown in the footer. */
 const fullPath = computed(() =>
   props.tab.root ? `${props.tab.root}/${props.tab.path}` : props.tab.path,
 );
@@ -75,12 +68,10 @@ const tabSizeOptions = EDITOR_TAB_SIZES.map((size) => ({
   value: size,
 }));
 
-/** pickEol forwards the chosen terminator; the store marks the tab dirty. */
 function pickEol(value: string | number): void {
   emit("setEol", value as EditorEol);
 }
 
-/** pickTabSize updates the global indentation width. */
 function pickTabSize(value: string | number): void {
   emit("setTabSize", Number(value));
 }
@@ -169,8 +160,6 @@ function pickTabSize(value: string | number): void {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  /* One line at the default window width: the path truncates, right-side
-     counters never wrap. */
   flex-wrap: nowrap;
   min-width: 0;
   overflow: hidden;

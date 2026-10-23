@@ -8,8 +8,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// sealedSample returns a database row plus the sealed credentials of a fresh
-// provision, which is the input buildRunOptions sees in production.
 func sealedSample(t *testing.T, name, engineName string, publicPort int32) (Database, []Secret) {
 	t.Helper()
 	credentials, err := generateCredentials(engineName, name)
@@ -33,9 +31,6 @@ func sealedSample(t *testing.T, name, engineName string, publicPort int32) (Data
 	return database, secrets
 }
 
-// TestBuildRunOptionsPublicPostgres asserts the full payload of a public
-// PostgreSQL: image, decrypted standard environment, single published port,
-// named volume bind and the gotham.* labels.
 func TestBuildRunOptionsPublicPostgres(t *testing.T) {
 	database, secrets := sealedSample(t, "orders", EnginePostgres, 55432)
 	engine, _ := LookupEngine(EnginePostgres)
@@ -100,8 +95,6 @@ func TestBuildRunOptionsPublicPostgres(t *testing.T) {
 	}
 }
 
-// TestBuildRunOptionsInternalOnly: without a public port nothing is published,
-// so the database stays reachable only from containers on the node.
 func TestBuildRunOptionsInternalOnly(t *testing.T) {
 	database, secrets := sealedSample(t, "cache", EngineRedis, 0)
 	engine, _ := LookupEngine(EngineRedis)
@@ -124,8 +117,6 @@ func TestBuildRunOptionsInternalOnly(t *testing.T) {
 	}
 }
 
-// TestBuildRunOptionsRejectsForeignVolume: a corrupted row must not mount an
-// arbitrary path on a node.
 func TestBuildRunOptionsRejectsForeignVolume(t *testing.T) {
 	database, secrets := sealedSample(t, "orders", EnginePostgres, 0)
 	database.StoragePath = "/etc"
@@ -136,8 +127,6 @@ func TestBuildRunOptionsRejectsForeignVolume(t *testing.T) {
 	}
 }
 
-// TestBuildRunOptionsBadSecret: credentials that cannot be opened never reach
-// the agent.
 func TestBuildRunOptionsBadSecret(t *testing.T) {
 	database, secrets := sealedSample(t, "orders", EnginePostgres, 0)
 	engine, _ := LookupEngine(EnginePostgres)
@@ -147,7 +136,6 @@ func TestBuildRunOptionsBadSecret(t *testing.T) {
 	}
 }
 
-// TestVolumeName pins the volume convention shared with backups and restore.
 func TestVolumeName(t *testing.T) {
 	id := uuid.New()
 	want := "gotham-db-" + id.String()
@@ -156,8 +144,6 @@ func TestVolumeName(t *testing.T) {
 	}
 }
 
-// TestContainerName covers sanitisation, uniqueness and the empty-name
-// fallback.
 func TestContainerName(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -176,7 +162,6 @@ func TestContainerName(t *testing.T) {
 			if !strings.HasPrefix(got, tt.want) {
 				t.Errorf("containerName = %q, want prefix %q", got, tt.want)
 			}
-			// Two databases with the same name must not share a container name.
 			other := Database{ID: uuid.New(), Name: tt.dbName}
 			if containerName(other) == got {
 				t.Errorf("containerName %q collides across databases", got)

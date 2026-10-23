@@ -21,8 +21,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// installQuietComposeCLI puts a fake `docker` on PATH whose logs command stays
-// quiet until it is killed (a background child keeps it alive).
 func installQuietComposeCLI(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -39,12 +37,6 @@ exit 0
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// TestLogsHTTPQuietFollowOpensBeforeOutput is the transport-level regression
-// for the quiet follow stream: a real HTTP client must receive the accepted
-// response promptly, before the node's command produces any output, and the
-// stream must still end cleanly when the client cancels. It drives the real
-// exec seam (agent.ComposeServer with a fake CLI), a real gRPC transport, the
-// production adapter/service and the real HTTP routes.
 func TestLogsHTTPQuietFollowOpensBeforeOutput(t *testing.T) {
 	installQuietComposeCLI(t)
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -59,14 +51,11 @@ func TestLogsHTTPQuietFollowOpensBeforeOutput(t *testing.T) {
 	if _, err := composeServer.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
 		ProjectName: project,
 		ComposeYaml: []byte(testDocument),
-		// The seed models the Services surface, which opts out of the
-		// node's application-scope confinement (routing labels and all).
-		Unconfined: true,
+		Unconfined:  true,
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
 
-	// A real gRPC transport over bufconn, dialed through the production client.
 	listener := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer()
 	agentv1.RegisterComposeServiceServer(grpcServer, composeServer)
@@ -122,13 +111,10 @@ func TestLogsHTTPQuietFollowOpensBeforeOutput(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.StatusCode)
 	}
-	// The command stays quiet for ~5 seconds; acceptance must reach the client
-	// long before that.
 	if elapsed > 2*time.Second {
 		t.Fatalf("a quiet follow took %s to open; the response is buffered until the first output", elapsed)
 	}
 
-	// No output may arrive before cancellation.
 	body := make(chan []byte, 1)
 	go func() {
 		data, _ := io.ReadAll(response.Body)

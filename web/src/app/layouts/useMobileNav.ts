@@ -2,12 +2,6 @@ import { inject, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } fro
 import type { InjectionKey, Ref } from "vue";
 import { useRoute } from "vue-router";
 
-/**
- * Mobile drawer state for the app shell. Per mount: AppLayout creates it with
- * provideMobileNav and shares it with AppSidebar/AppTopbar through injection,
- * so a remount (login/logout layout switch) starts from clean state and
- * lifecycle is wired exactly once per instance.
- */
 export interface MobileNav {
   mobileNavOpen: Ref<boolean>;
   sidebarRef: Ref<HTMLElement | null>;
@@ -17,7 +11,6 @@ export interface MobileNav {
 
 const mobileNavKey: InjectionKey<MobileNav> = Symbol("mobileNav");
 
-/** focusables lists the visible tab stops inside the drawer. */
 function focusables(root: HTMLElement): HTMLElement[] {
   const selector =
     'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -26,20 +19,16 @@ function focusables(root: HTMLElement): HTMLElement[] {
   );
 }
 
-/** provideMobileNav creates the drawer state; call once in AppLayout setup. */
 export function provideMobileNav(): MobileNav {
   const route = useRoute();
 
   const mobileNavOpen = ref(false);
   const sidebarRef = ref<HTMLElement | null>(null);
 
-  // mobileQuery tracks the same ≤1024px breakpoint the stylesheet uses.
   const mobileQuery = window.matchMedia("(max-width: 1024px)");
 
-  /** restoreFocus is the element focus returns to when the drawer closes. */
   let restoreFocus: HTMLElement | null = null;
 
-  /** onDrawerKeydown closes on Escape and traps Tab inside the open drawer. */
   function onDrawerKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -69,7 +58,6 @@ export function provideMobileNav(): MobileNav {
     }
   }
 
-  /** toggleNav opens or closes the mobile drawer (the toggle is mobile-only). */
   function toggleNav(): void {
     if (mobileNavOpen.value) {
       closeMobileNav();
@@ -80,12 +68,10 @@ export function provideMobileNav(): MobileNav {
     mobileNavOpen.value = true;
   }
 
-  /** closeMobileNav closes the drawer; the watcher below restores focus. */
   function closeMobileNav(): void {
     mobileNavOpen.value = false;
   }
 
-  // B3-17: growing past the breakpoint must unmount the drawer and its backdrop.
   function onViewportChange(event: MediaQueryListEvent): void {
     if (!event.matches) {
       closeMobileNav();
@@ -128,10 +114,6 @@ export function provideMobileNav(): MobileNav {
   return nav;
 }
 
-/**
- * useMobileNav injects the drawer state. Children only: AppLayout provides
- * it, so a missing provider is a programming error with a clear message.
- */
 export function useMobileNav(): MobileNav {
   const nav = inject(mobileNavKey);
   if (!nav) {

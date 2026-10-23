@@ -12,7 +12,6 @@ import (
 	"testing"
 )
 
-// TestApplierPathHelpers covers the default/custom path and bound resolution.
 func TestApplierPathHelpers(t *testing.T) {
 	applier := &Applier{}
 	if _, err := applier.binaryPath(); err == nil {
@@ -49,7 +48,6 @@ func TestApplierPathHelpers(t *testing.T) {
 	}
 }
 
-// linkTo creates a symlink in a temp dir and returns its path.
 func linkTo(t *testing.T, target string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "link")
@@ -59,7 +57,6 @@ func linkTo(t *testing.T, target string) string {
 	return path
 }
 
-// TestApplierFetchErrors covers a non-2xx response and an over-size body.
 func TestApplierFetchErrors(t *testing.T) {
 	applier := &Applier{}
 
@@ -80,7 +77,6 @@ func TestApplierFetchErrors(t *testing.T) {
 	}
 }
 
-// TestValidateRedirect proves an https downgrade to loopback http is refused.
 func TestValidateRedirect(t *testing.T) {
 	httpsURL, _ := url.Parse("https://releases.example.com/asset")
 	loopbackHTTP, _ := url.Parse("http://127.0.0.1/asset")
@@ -97,7 +93,6 @@ func TestValidateRedirect(t *testing.T) {
 	}
 }
 
-// TestIsBlockedIP covers the dial-time destination filter.
 func TestIsBlockedIP(t *testing.T) {
 	for _, raw := range []string{"169.254.169.254", "fe80::1", "fd00:ec2::254", "100.100.100.200"} {
 		ip := net.ParseIP(raw)
@@ -112,7 +107,6 @@ func TestIsBlockedIP(t *testing.T) {
 	}
 }
 
-// TestInstallLockedFailsWithoutDirectory covers the staging error path.
 func TestInstallLockedFailsWithoutDirectory(t *testing.T) {
 	applier := &Applier{}
 	if err := applier.installLocked(filepath.Join(t.TempDir(), "missing", "gotham"), []byte("x")); !errors.Is(err, ErrApply) {
@@ -120,8 +114,6 @@ func TestInstallLockedFailsWithoutDirectory(t *testing.T) {
 	}
 }
 
-// TestSafeDialContext proves blocked literals are refused and normal targets
-// dial.
 func TestSafeDialContext(t *testing.T) {
 	if _, err := safeDialContext(context.Background(), "tcp", "169.254.169.254:80"); !errors.Is(err, ErrBadURL) {
 		t.Fatalf("safeDialContext(metadata) = %v, want ErrBadURL", err)

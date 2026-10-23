@@ -15,26 +15,10 @@ export type { ChartPoint, ChartSeries };
 
 const { t } = useI18n();
 
-/**
- * Dependency-free SVG time-series chart.
- *
- * Deliberately hand-rolled instead of pulling in ECharts/Chart.js: the surface
- * is four line charts of one API payload, and a library would add hundreds of
- * kilobytes to the embedded SPA (self-hosted, lean-footprint principle) for
- * features this component does not use.
- *
- * Missing buckets are real gaps in the backend payload (`ListServerMetrics`
- * omits empty buckets), so a line is broken whenever the time between two
- * points exceeds 1.5 buckets — nothing is interpolated through a gap.
- */
-
 interface Props {
   series: ChartSeries[];
-  /** Bucket width in milliseconds; used to detect gaps. */
   stepMs: number;
-  /** Formats axis labels and the legend readings. */
   formatValue?: (_value: number) => string;
-  /** Fixed y ceiling (percent charts use 100); auto when omitted. */
   yMax?: number;
   height?: number;
 }
@@ -45,7 +29,6 @@ const props = withDefaults(defineProps<Props>(), {
   height: 150,
 });
 
-/** viewBox width; the SVG scales to its container. */
 const width = 600;
 const padLeft = 46;
 const padRight = 12;
@@ -71,7 +54,6 @@ const xMax = computed<number>(() => {
   return max;
 });
 
-/** yCeiling is the fixed ceiling when given, else a rounded data maximum. */
 const yCeiling = computed<number>(() => {
   if (props.yMax !== undefined) {
     return props.yMax;
@@ -83,7 +65,6 @@ const yCeiling = computed<number>(() => {
 const plotWidth = width - padLeft - padRight;
 const plotHeight = computed<number>(() => props.height - padTop - padBottom);
 
-/** x maps a timestamp onto the plot. */
 function x(at: number): number {
   const span = xMax.value - xMin.value;
   if (span <= 0) {
@@ -92,22 +73,18 @@ function x(at: number): number {
   return padLeft + ((at - xMin.value) / span) * plotWidth;
 }
 
-/** y maps a value onto the plot. */
 function y(value: number): number {
   const ceiling = yCeiling.value || 1;
   const clamped = Math.min(Math.max(value, 0), ceiling);
   return padTop + plotHeight.value - (clamped / ceiling) * plotHeight.value;
 }
 
-/** project maps a point onto the plot for the path builders. */
 function project(at: number, value: number): { x: number; y: number } {
   return { x: x(at), y: y(value) };
 }
 
-/** baseline is the fill bottom for the single-series area. */
 const baseline = computed<number>(() => padTop + plotHeight.value);
 
-/** yTicks are the three gridline labels (0, half, ceiling). */
 const yTicks = computed<number[]>(() => [
   0,
   yCeiling.value / 2,
@@ -124,14 +101,11 @@ const xLabels = computed<Array<{ at: number; label: string }>>(() => {
   ];
 });
 
-/** latest renders the newest reading per series for the legend. */
 function latest(series: ChartSeries): string {
   const point = series.points[series.points.length - 1];
   return point ? props.formatValue(point.value) : "—";
 }
 
-/** ariaLabel summarises the chart for screen readers. Series names stay
- * raw technical values; only the sentence renders in the active locale. */
 const ariaLabel = computed<string>(() => {
   const names = props.series.map((item) => item.name).join(", ");
   return t("common.chart.seriesOf", { names });
@@ -265,8 +239,6 @@ const ariaLabel = computed<string>(() => {
 .chart__xlabels text {
   fill: var(--muted);
   font-family: var(--font-mono);
-  /* The SVG scales with its container, so the axis labels use the smallest
-     step of the shared type scale rather than a literal pixel size. */
   font-size: var(--text-xs);
 }
 

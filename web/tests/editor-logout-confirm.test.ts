@@ -1,6 +1,3 @@
-// JUS-232 fix round 2: a user-initiated logout with dirty editor buffers
-// prompts first through the shared leave dialog; staying aborts the logout,
-// confirming logs out and resets the editor. A clean logout never prompts.
 /* global document:readonly, window:readonly */
 import { NDropdown, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -81,7 +78,6 @@ import {
   syncComposerLocale,
 } from "@/shared/i18n";
 
-/** makeTab builds one ready tab; `dirty` sets doc !== original. */
 function makeTab(id: string, dirty: boolean): EditorTab {
   return {
     id,
@@ -117,7 +113,6 @@ function team(id: string, role: Team["role"]): Team {
   };
 }
 
-/** mountShell mounts the account menu next to the global editor window. */
 async function mountShell() {
   setActivePinia(createPinia());
   const teams = useTeamsStore();
@@ -168,7 +163,6 @@ async function mountShell() {
   return { wrapper, auth, editor, router };
 }
 
-/** signOut selects the menu's sign-out entry. */
 async function signOut(wrapper: ReturnType<typeof mountShell>["wrapper"]): Promise<void> {
   const menu = wrapper.find("#account-menu").findComponent(NDropdown);
   expect(menu.exists()).toBe(true);
@@ -176,14 +170,12 @@ async function signOut(wrapper: ReturnType<typeof mountShell>["wrapper"]): Promi
   await flushPromises();
 }
 
-/** leaveDialog finds the open discard-confirmation dialog, if any. */
 function leaveDialog(wrapper: ReturnType<typeof mountShell>["wrapper"]) {
   return wrapper
     .findAll(".app-modal")
     .find((node) => node.text().includes("Discard unsaved changes?"));
 }
 
-/** clickButton clicks a dialog button by its exact text. */
 async function clickButton(
   wrapper: ReturnType<typeof mountShell>["wrapper"],
   text: string,
@@ -221,7 +213,6 @@ describe("dirty logout confirmation (JUS-232 fix round 2)", () => {
 
     await signOut(wrapper);
     expect(leaveDialog(wrapper)).toBeTruthy();
-    // Nothing logged out while the prompt is open.
     expect(auth.isAuthenticated).toBe(true);
     expect(editor.tabs).toHaveLength(1);
 

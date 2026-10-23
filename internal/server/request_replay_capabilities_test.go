@@ -48,7 +48,6 @@ func TestMCPMutationCapabilitiesRequireMountedAliasesAndStableKey(t *testing.T) 
 			if s.ephemeralSecret != tc.ephemeral {
 				t.Fatalf("constructor ephemeral=%v want=%v", s.ephemeralSecret, tc.ephemeral)
 			}
-			// Only capability reads use these markers; no fake database operation is executed.
 			if tc.persistence {
 				s.persistence = &store.Store{}
 			}

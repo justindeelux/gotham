@@ -17,93 +17,52 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// DefaultUpdateScript is the installed, root-owned restart/healthcheck wrapper
-// the Applier invokes after a successful swap. It lives outside every path the
-// service user can write and takes no arguments: its binary, service and health
-// targets come from a root-owned configuration file.
 const DefaultUpdateScript = "/usr/libexec/gotham/gotham-update"
 
-// ApplyResult reports the outcome of an apply attempt.
 type ApplyResult struct {
-	// Applied is false when the running version is already current.
 	Applied bool   `json:"applied"`
 	Version string `json:"version,omitempty"`
 	Message string `json:"message,omitempty"`
-	// Staged reports that the swap succeeded and a restart/healthcheck is
-	// pending; the durable outcome is recorded by the wrapper and surfaced by
-	// LastStatus.
-	Staged bool `json:"staged"`
-	// Restart is an alias of Staged kept for the response shape.
-	Restart bool `json:"restart"`
+	Staged  bool   `json:"staged"`
+	Restart bool   `json:"restart"`
 }
 
-// Service is the self-update surface the HTTP layer depends on.
 type Service interface {
-	// Current returns the running version.
 	Current() string
-	// Check resolves the newest available release, or nil when up to date.
 	Check(ctx context.Context) (*Release, error)
-	// Changelog lists the changelogs of every release newer than the running
-	// version (newest first, bounded), falling back to the running version's
-	// own entry when up to date and to an empty list when the running release
-	// cannot be found (e.g. dev builds). It never fails for an unknown
-	// current version — only an unreachable release API is an error.
 	Changelog(ctx context.Context) ([]ChangelogEntry, error)
-	// Apply checks the channel and applies the resolved release.
 	Apply(ctx context.Context, channel Channel) (*ApplyResult, error)
-	// Rollback restores the retained previous binary.
 	Rollback() error
-	// Reset clears a stale pending marker (operator reset path).
 	Reset() error
-	// Resume relaunches a staged update's wrapper at startup so a crash during
-	// the health window is health-checked or rolled back.
 	Resume(ctx context.Context) error
-	// LastStatus returns the durable outcome of the most recent update attempt.
 	LastStatus() (*Status, error)
-	// StartAuto launches the scheduled check/apply loop when enabled.
 	StartAuto(ctx context.Context)
 }
 
-// Config wires a self-update Service.
 type Config struct {
-	Current string
-	Repo    string
-	BaseURL string
-	Channel Channel
-	// PublicKeys is the release key ring (current first, then the
-	// pre-positioned next key). A release manifest verifies when any key
-	// signed it. Empty leaves Apply fail-closed.
-	PublicKeys   []ed25519.PublicKey
-	BinaryPath   string
-	OldPath      string
-	LockPath     string
-	UpdateScript string
-	StatusPath   string
-	PendingPath  string
-	Timeout      time.Duration
-	MaxBytes     int64
-	// DownloadTimeout bounds the release-artifact body (kept separate from
-	// Timeout, which bounds the short metadata/API requests).
+	Current         string
+	Repo            string
+	BaseURL         string
+	Channel         Channel
+	PublicKeys      []ed25519.PublicKey
+	BinaryPath      string
+	OldPath         string
+	LockPath        string
+	UpdateScript    string
+	StatusPath      string
+	PendingPath     string
+	Timeout         time.Duration
+	MaxBytes        int64
 	DownloadTimeout time.Duration
-	// BackoffPath is the control-plane failed-attempt file for the AUTO_UPDATE
-	// loop; empty disables the persisted backoff.
-	BackoffPath  string
-	Logger       *slog.Logger
-	Auto         bool
-	AutoInterval time.Duration
-	// Schedules persists the operator's check / auto-apply schedule. Nil keeps
-	// the schedule in memory only (env defaults, lost on restart).
-	Schedules ScheduleStore
-	// Timezone returns the instance IANA timezone that daily/weekly schedule
-	// times are evaluated in. Nil or an unknown name means UTC.
-	Timezone func() string
-	// GOARCH pins the asset architecture (tests); empty means the running one.
-	GOARCH string
+	BackoffPath     string
+	Logger          *slog.Logger
+	Auto            bool
+	AutoInterval    time.Duration
+	Schedules       ScheduleStore
+	Timezone        func() string
+	GOARCH          string
 
-	// Client overrides the HTTP client for the checker and applier (tests).
-	Client *http.Client
-	// Restart overrides the restart wrapper (tests). When nil a default that
-	// runs the fixed root-owned wrapper through sudo is used.
+	Client  *http.Client
 	Restart RestartFunc
 }
 
@@ -117,25 +76,19 @@ type service struct {
 	logger   *slog.Logger
 	interval time.Duration
 
-	schedules ScheduleStore
-	timezone  func() string
-	reload    chan struct{}
-	mu        sync.Mutex // guards the fields below
-	sched     Schedule
-	nextAt    time.Time
-	checkedAt time.Time
-	checkErr  string
-	// changelog caches the viewer changelog for the offer-cache TTL so the
-	// GitHub API load stays bounded; it is keyed by channel+current.
+	schedules        ScheduleStore
+	timezone         func() string
+	reload           chan struct{}
+	mu               sync.Mutex
+	sched            Schedule
+	nextAt           time.Time
+	checkedAt        time.Time
+	checkErr         string
 	changelogKey     string
 	changelogEntries []ChangelogEntry
 	changelogUntil   time.Time
 }
 
-// NewService builds a self-update Service. It does not fail when no public key
-// is configured: Check still works, Apply stays disabled (fail closed). It
-// resolves the fixed binary path once, recovers an interrupted swap at startup
-// and logs the last recorded outcome.
 func NewService(cfg Config) (Service, error) {
 	logger := cfg.Logger
 	if logger == nil {
@@ -221,23 +174,16 @@ func NewService(cfg Config) (Service, error) {
 		sched:     defaultSchedule(cfg, interval),
 	}
 	svc.loadSchedule()
-	// Seed the persisted backoff from the durable status so a restart after a
-	// rollback does not immediately re-apply the same release (LOW-2).
 	svc.backoff.seedFromStatus(last, svc.current)
 	return svc, nil
 }
 
-// Current returns the running version.
 func (s *service) Current() string { return s.current }
 
-// Check resolves the newest available release on the scheduled channel, or nil
-// when up to date.
 func (s *service) Check(ctx context.Context) (*Release, error) {
 	return s.checkOn(ctx, "")
 }
 
-// checkOn checks channel (defaulting to the scheduled one) and records the
-// outcome for the status view.
 func (s *service) checkOn(ctx context.Context, channel Channel) (*Release, error) {
 	checker := *s.checker
 	checker.Channel = channel
@@ -249,12 +195,6 @@ func (s *service) checkOn(ctx context.Context, channel Channel) (*Release, error
 	return release, err
 }
 
-// Changelog lists newer-than-current changelogs newest-first, the running
-// version's own entry when up to date, or an empty list for an unknown current
-// version. Results are cached for the agent-offer TTL
-// (OfferCacheTTLFromEnv, default 10m) so the GitHub API load stays bounded and
-// a configured mirror (GOTHAM_UPDATE_BASE_URL) keeps working through the same
-// checker.
 func (s *service) Changelog(ctx context.Context) ([]ChangelogEntry, error) {
 	channel := s.schedule().Channel
 	key := string(channel) + "\x00" + s.current
@@ -288,8 +228,6 @@ func (s *service) Changelog(ctx context.Context) ([]ChangelogEntry, error) {
 	return entries, nil
 }
 
-// Apply checks the requested channel (defaulting to the scheduled one) and
-// applies the resolved release.
 func (s *service) Apply(ctx context.Context, channel Channel) (*ApplyResult, error) {
 	release, err := s.checkOn(ctx, channel)
 	if err != nil {
@@ -301,8 +239,6 @@ func (s *service) Apply(ctx context.Context, channel Channel) (*ApplyResult, err
 	return s.applyRelease(ctx, release)
 }
 
-// applyRelease installs an already-resolved release and shapes the result. It is
-// shared by the operator Apply and the AUTO_UPDATE loop.
 func (s *service) applyRelease(ctx context.Context, release *Release) (*ApplyResult, error) {
 	outcome, err := s.applier.Apply(ctx, release)
 	if err != nil {
@@ -317,11 +253,6 @@ func (s *service) applyRelease(ctx context.Context, release *Release) (*ApplyRes
 	return result, nil
 }
 
-// applyAutoUpdate runs one scheduled check/apply: it resolves the newest
-// release, skips a version still inside its failed-attempt backoff, and applies
-// otherwise. A failure is persisted so the next tick backs off (LOW-2). It
-// returns the offered version (for logging — the staged version, not the
-// running one) and whether an update was actually applied.
 func (s *service) applyAutoUpdate(ctx context.Context) (string, bool, error) {
 	release, err := s.Check(ctx)
 	if err != nil {
@@ -342,33 +273,20 @@ func (s *service) applyAutoUpdate(ctx context.Context) (string, bool, error) {
 	return result.Version, result.Applied, nil
 }
 
-// Rollback restores the retained previous binary and clears the pending marker.
 func (s *service) Rollback() error { return s.applier.Rollback() }
 
-// Reset clears a stale pending marker so a new apply can proceed and drops the
-// failed-attempt backoff, so the operator can retry the same version. It does
-// not touch the binary; an operator uses it only after confirming no wrapper is
-// running.
 func (s *service) Reset() error {
 	err := s.pending.Remove()
 	s.backoff.clear()
 	return err
 }
 
-// Resume relaunches the wrapper for a staged update left over from a crash,
-// reboot or OOM during the health window (M2). It never loops: the marker is
-// rewritten to resuming before the launch.
 func (s *service) Resume(ctx context.Context) error { return s.applier.ResumeStaged(ctx) }
 
-// LastStatus returns the current durable outcome: the pending marker while an
-// update is staged or its launcher failed, otherwise the authoritative
-// root-owned status.
 func (s *service) LastStatus() (*Status, error) {
 	return lastStatusOf(s.pending, s.status)
 }
 
-// lastStatusOf prefers the pending marker (staged/in-progress or a
-// control-plane launch failure) over the authoritative status.
 func lastStatusOf(pending, status *StatusStore) (*Status, error) {
 	if pending != nil {
 		if p, err := pending.Read(); err != nil {
@@ -380,16 +298,6 @@ func lastStatusOf(pending, status *StatusStore) (*Status, error) {
 	return status.Read()
 }
 
-// defaultRestart runs the fixed, root-owned wrapper through sudo and returns a
-// waiter for its exit. The wrapper takes no arguments: it restarts the fixed
-// service, health-checks it, rolls back on failure and records the outcome.
-// sudoers grants exactly this command with no arguments.
-//
-// The unit must keep KillMode=process so the wrapper is not killed when
-// `systemctl restart gotham` tears down the service cgroup.
-//
-// NoNewPrivileges must remain disabled in the unit because this call needs
-// setuid sudo; the only privileged action granted is the fixed wrapper.
 func defaultRestart(script string) RestartFunc {
 	return func(_ context.Context) (func() error, error) {
 		path := defaultString(script, DefaultUpdateScript)

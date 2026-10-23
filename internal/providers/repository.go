@@ -15,39 +15,25 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Repository persists provider connections and their cached repository lists.
-// Credential fields on Provider are plaintext across this boundary; the store
-// adapter seals them before they reach the database and opens them on read.
 type Repository interface {
-	// Create stores a new provider connection.
 	Create(ctx context.Context, p Provider) (Provider, error)
-	// Get returns the provider with id when it is owned by userID.
 	Get(ctx context.Context, id, userID uuid.UUID) (Provider, error)
-	// List returns every provider connection owned by userID.
 	List(ctx context.Context, userID uuid.UUID) ([]Provider, error)
-	// UpdateToken replaces the stored access/refresh tokens.
 	UpdateToken(ctx context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt *time.Time) (Provider, error)
-	// Delete removes the provider with id when it is owned by userID. A
-	// missing row is a success, so disconnecting twice is idempotent.
 	Delete(ctx context.Context, id, userID uuid.UUID) error
-	// ReplaceRepos overwrites the cached repository list of a provider.
 	ReplaceRepos(ctx context.Context, providerID uuid.UUID, repos []Repo) error
-	// ListCachedRepos returns the cached repository list of a provider.
 	ListCachedRepos(ctx context.Context, providerID uuid.UUID) ([]Repo, error)
 }
 
-// storeRepository adapts *store.Store to Repository, sealing credentials.
 type storeRepository struct {
 	store  *store.Store
 	cipher *secretCipher
 }
 
-// newStoreRepository builds the PostgreSQL-backed repository.
 func newStoreRepository(st *store.Store, c *secretCipher) *storeRepository {
 	return &storeRepository{store: st, cipher: c}
 }
 
-// Create seals the credential fields and stores the row.
 func (r *storeRepository) Create(ctx context.Context, p Provider) (Provider, error) {
 	clientSecret, err := r.cipher.seal(p.ClientSecret)
 	if err != nil {
@@ -83,7 +69,6 @@ func (r *storeRepository) Create(ctx context.Context, p Provider) (Provider, err
 	return r.providerFromRow(row)
 }
 
-// Get loads one provider owned by userID, mapping a missing row to ErrNotFound.
 func (r *storeRepository) Get(ctx context.Context, id, userID uuid.UUID) (Provider, error) {
 	row, err := r.store.GetProviderByIDAndUser(ctx, sqlc.GetProviderByIDAndUserParams{
 		ID:     pgUUID(id),
@@ -98,7 +83,6 @@ func (r *storeRepository) Get(ctx context.Context, id, userID uuid.UUID) (Provid
 	return r.providerFromRow(row)
 }
 
-// List loads every provider owned by userID.
 func (r *storeRepository) List(ctx context.Context, userID uuid.UUID) ([]Provider, error) {
 	rows, err := r.store.ListProvidersByUser(ctx, pgUUID(userID))
 	if err != nil {
@@ -116,7 +100,6 @@ func (r *storeRepository) List(ctx context.Context, userID uuid.UUID) ([]Provide
 	return providers, nil
 }
 
-// UpdateToken seals and stores a refreshed token pair.
 func (r *storeRepository) UpdateToken(ctx context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt *time.Time) (Provider, error) {
 	sealedAccess, err := r.cipher.seal(accessToken)
 	if err != nil {
@@ -142,7 +125,6 @@ func (r *storeRepository) UpdateToken(ctx context.Context, id uuid.UUID, accessT
 	return r.providerFromRow(row)
 }
 
-// Delete removes one provider owned by userID; a missing row is a success.
 func (r *storeRepository) Delete(ctx context.Context, id, userID uuid.UUID) error {
 	if err := r.store.DeleteProviderByIDAndUser(ctx, sqlc.DeleteProviderByIDAndUserParams{
 		ID:     pgUUID(id),
@@ -153,9 +135,6 @@ func (r *storeRepository) Delete(ctx context.Context, id, userID uuid.UUID) erro
 	return nil
 }
 
-// ReplaceRepos swaps the cached repository list of a provider. The new list is
-// built fully before the store replaces the old one in a single transaction, so
-// a failed or partial refresh leaves the previous complete list intact.
 func (r *storeRepository) ReplaceRepos(ctx context.Context, providerID uuid.UUID, repos []Repo) error {
 	params := make([]sqlc.UpsertRepoCacheParams, 0, len(repos))
 	for _, repo := range repos {
@@ -177,7 +156,6 @@ func (r *storeRepository) ReplaceRepos(ctx context.Context, providerID uuid.UUID
 	return nil
 }
 
-// ListCachedRepos reads a provider's cached repository list.
 func (r *storeRepository) ListCachedRepos(ctx context.Context, providerID uuid.UUID) ([]Repo, error) {
 	rows, err := r.store.ListRepoCacheByProvider(ctx, pgUUID(providerID))
 	if err != nil {
@@ -191,7 +169,6 @@ func (r *storeRepository) ListCachedRepos(ctx context.Context, providerID uuid.U
 	return repos, nil
 }
 
-// providerFromRow maps a stored row to the domain type, opening the credentials.
 func (r *storeRepository) providerFromRow(row sqlc.Provider) (Provider, error) {
 	clientSecret, err := r.cipher.open(row.ClientSecret)
 	if err != nil {
@@ -223,7 +200,6 @@ func (r *storeRepository) providerFromRow(row sqlc.Provider) (Provider, error) {
 	}, nil
 }
 
-// repoFromRow maps a cached repository row to the domain type.
 func repoFromRow(row sqlc.ReposCache) Repo {
 	return Repo{
 		ExternalID:    row.ExternalID,
@@ -237,14 +213,11 @@ func repoFromRow(row sqlc.ReposCache) Repo {
 	}
 }
 
-// isUniqueViolation reports whether err is a PostgreSQL unique violation
-// (a repeated create racing the pre-check, or a double submit).
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// pgUUID converts a uuid.UUID to the pgx type (invalid for the nil UUID).
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	if id == uuid.Nil {
 		return pgtype.UUID{}
@@ -252,7 +225,6 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-// uuidFromPG converts a pgx UUID to uuid.UUID.
 func uuidFromPG(id pgtype.UUID) uuid.UUID {
 	if !id.Valid {
 		return uuid.Nil
@@ -260,7 +232,6 @@ func uuidFromPG(id pgtype.UUID) uuid.UUID {
 	return id.Bytes
 }
 
-// pgTime converts an optional time to the pgx type.
 func pgTime(t *time.Time) pgtype.Timestamptz {
 	if t == nil || t.IsZero() {
 		return pgtype.Timestamptz{}
@@ -268,7 +239,6 @@ func pgTime(t *time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: *t, Valid: true}
 }
 
-// timeFromPG converts a pgx timestamptz to an optional time.
 func timeFromPG(t pgtype.Timestamptz) *time.Time {
 	if !t.Valid {
 		return nil

@@ -15,9 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// TestConnectionApplicationsOfMapsIdentity pins the disconnect in-use wiring:
-// the provider slug and clone URL must land in the connection identity the
-// check matches on, so a rename cannot silently disable the 409.
 func TestConnectionApplicationsOfMapsIdentity(t *testing.T) {
 	applications := []deploy.Application{
 		{Name: "shop", Provider: "gitlab", CloneURL: "https://git.example/acme/shop.git"},
@@ -40,9 +37,6 @@ func TestConnectionApplicationsOfMapsIdentity(t *testing.T) {
 	}
 }
 
-// TestProviderConnectionApplicationsWithoutDeploy pins the disabled path: no
-// deploy service lists nothing, so disconnect stays allowed where
-// applications are off.
 func TestProviderConnectionApplicationsWithoutDeploy(t *testing.T) {
 	s := newTestServer(t, stubPinger{}, stubPinger{})
 	if s.deploy != nil {
@@ -58,10 +52,6 @@ func TestProviderConnectionApplicationsWithoutDeploy(t *testing.T) {
 	}
 }
 
-// TestProviderDisconnectInUseEndToEnd proves the disconnect guard through the
-// real server wiring: a gitlab provider with an application on the same host
-// answers 409 naming the app, and deletes cleanly once the app is gone. It
-// needs Postgres and skips without one, like the projects wiring tests.
 func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 	s, st, owner := scratchProjectsStack(t)
 	bearer := "Bearer " + owner.AccessToken
@@ -104,8 +94,6 @@ func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 	rec = withTeam(http.MethodPost, "/api/v1/servers",
 		`{"name":"node-1","ip":"10.0.0.5","ssh_user":"root"}`)
 	_ = rec
-	// Node routes are not mounted on this stack (no node registry), so the
-	// server row is seeded directly; a NULL team stays shared across teams.
 	serverID := uuid.New()
 	if _, err := st.DB.Exec(ctx,
 		`INSERT INTO servers (id, name, ip, ssh_user) VALUES ($1, 'node-1', '10.0.0.5', 'root')`,
@@ -131,8 +119,6 @@ func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 		t.Fatalf("environments = %+v, want one", project.Environments)
 	}
 
-	// The hook install against the unreachable instance fails best effort;
-	// the application row is still created.
 	rec = withTeam(http.MethodPost, "/api/v1/applications",
 		`{"name":"shop","environment_id":"`+project.Environments[0].ID+`",`+
 			`"server_id":"`+server.Server.ID+`","provider":"gitlab",`+

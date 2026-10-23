@@ -10,7 +10,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// GitHub OAuth2 endpoints and REST API root, mirroring the Phase-1 login flow.
 const (
 	gitHubAuthURL  = "https://github.com/login/oauth/authorize"
 	gitHubTokenURL = "https://github.com/login/oauth/access_token"
@@ -18,15 +17,11 @@ const (
 	gitHubDefaultAPIBase = "https://api.github.com"
 	gitHubAccept         = "application/vnd.github+json"
 
-	// gitHubDefaultScopes grants access to public and private repositories,
-	// which is what listing repos, branches and installing webhooks requires.
 	gitHubDefaultScopes = "repo"
 
-	// gitHubPageSize is GitHub's maximum per_page.
 	gitHubPageSize = 100
 )
 
-// gitHubRepo is the subset of the GitHub repository object this provider uses.
 type gitHubRepo struct {
 	ID            int64  `json:"id"`
 	Name          string `json:"name"`
@@ -38,7 +33,6 @@ type gitHubRepo struct {
 	HTMLURL       string `json:"html_url"`
 }
 
-// gitHubBranch is the subset of the GitHub branch object this provider uses.
 type gitHubBranch struct {
 	Name      string `json:"name"`
 	Protected bool   `json:"protected"`
@@ -47,15 +41,12 @@ type gitHubBranch struct {
 	} `json:"commit"`
 }
 
-// gitHubSource implements SourceProvider against the GitHub REST API.
 type gitHubSource struct {
 	tokenTracking
 	listingState
 	apiBase string
 }
 
-// newGitHubSource builds the GitHub implementation for one stored connection.
-// allowUnsafe disables the outbound guards for the loopback hosts tests use.
 func newGitHubSource(p Provider, allowUnsafe bool) *gitHubSource {
 	apiBase := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	if apiBase == "" {
@@ -76,25 +67,18 @@ func newGitHubSource(p Provider, allowUnsafe bool) *gitHubSource {
 	}
 }
 
-// Name identifies the provider.
 func (p *gitHubSource) Name() string { return NameGitHub }
 
-// ExchangeToken completes the OAuth2 flow with GitHub.
 func (p *gitHubSource) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
 	ctx, cancel := withProviderTimeout(p.exchangeContext(ctx))
 	defer cancel()
 	return p.config.Exchange(ctx, code)
 }
 
-// AuthCodeURL builds the authorization URL for state. It satisfies the
-// authorizer seam used by the connect flow.
 func (p *gitHubSource) AuthCodeURL(state string) string {
 	return p.config.AuthCodeURL(state)
 }
 
-// ListRepos returns every repository the token can reach, including private
-// ones. Pagination is bounded by maxRepoPages; a listing that hits the bound is
-// marked truncated so the caller keeps the previous cache.
 func (p *gitHubSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo, error) {
 	ctx, cancel := withListingTimeout(ctx)
 	defer cancel()
@@ -131,8 +115,6 @@ func (p *gitHubSource) ListRepos(ctx context.Context, tok *oauth2.Token) ([]Repo
 	return repos, nil
 }
 
-// ListBranches returns the branches of repo ("owner/name"). Pagination is
-// bounded by maxRepoPages.
 func (p *gitHubSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo string) ([]Branch, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return nil, err
@@ -167,8 +149,6 @@ func (p *gitHubSource) ListBranches(ctx context.Context, tok *oauth2.Token, repo
 	return branches, nil
 }
 
-// CreateWebhook installs a push hook on repo ("owner/name") and returns the
-// hook ID GitHub assigned to it.
 func (p *gitHubSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, repo string, hook Webhook) (string, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return "", err
@@ -198,8 +178,6 @@ func (p *gitHubSource) CreateWebhook(ctx context.Context, tok *oauth2.Token, rep
 	return strconv.FormatInt(created.ID, 10), nil
 }
 
-// DeleteWebhook removes the hook identified by hookID from repo. A hook that
-// is already gone (404) counts as deleted so the caller stays idempotent.
 func (p *gitHubSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, repo, hookID string) error {
 	if err := validateRepo(repo, 2); err != nil {
 		return err
@@ -218,9 +196,6 @@ func (p *gitHubSource) DeleteWebhook(ctx context.Context, tok *oauth2.Token, rep
 	return nil
 }
 
-// CreatePullRequestComment posts a comment on pull request number of repo
-// ("owner/name") through the issues API, which is where GitHub stores PR
-// conversation.
 func (p *gitHubSource) CreatePullRequestComment(ctx context.Context, tok *oauth2.Token, repo string, number int, body string) error {
 	if err := validateRepo(repo, 2); err != nil {
 		return err
@@ -234,8 +209,6 @@ func (p *gitHubSource) CreatePullRequestComment(ctx context.Context, tok *oauth2
 	return doJSON(ctx, client, NameGitHub, http.MethodPost, endpoint, gitHubAccept, payload, nil)
 }
 
-// AddDeployKey registers the public key on repo ("owner/name") as a read-only
-// deploy key and returns the key ID GitHub assigned to it.
 func (p *gitHubSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo string, key DeployKey) (string, error) {
 	if err := validateRepo(repo, 2); err != nil {
 		return "", err
@@ -263,8 +236,6 @@ func (p *gitHubSource) AddDeployKey(ctx context.Context, tok *oauth2.Token, repo
 	return strconv.FormatInt(created.ID, 10), nil
 }
 
-// RemoveDeployKey removes the key identified by keyID from repo. A key that is
-// already gone (404) counts as removed so the caller stays idempotent.
 func (p *gitHubSource) RemoveDeployKey(ctx context.Context, tok *oauth2.Token, repo, keyID string) error {
 	if err := validateRepo(repo, 2); err != nil {
 		return err

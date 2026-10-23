@@ -1,8 +1,3 @@
-// Files browser tab-close focus (JUS-207): closing an INACTIVE tab must not
-// arm the close refocus, so a later + switch from outside the tablist leaves
-// keyboard focus where it was; closing the ACTIVE tab still moves focus to
-// the tab that takes over. Mounts the real browser so the activeTabId watcher
-// runs; the files API and useMessage are mocked.
 /* global document:readonly, HTMLElement:readonly, window:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -48,7 +43,6 @@ const root: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -70,8 +64,6 @@ beforeEach(() => {
   resetLocaleState();
   syncComposerLocale("en");
   vi.clearAllMocks();
-  // jsdom has no scrollIntoView; focusActiveTab is the only caller, so the
-  // spy also proves which test ran the refocus path.
   window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
   const teams = useTeamsStore();
   teams.activeTeamId = "team-1";
@@ -91,7 +83,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** settle flushes the store promises and the watcher's chained nextTicks. */
 async function settle(): Promise<void> {
   for (let index = 0; index < 5; index += 1) {
     await flushPromises();
@@ -99,10 +90,6 @@ async function settle(): Promise<void> {
   }
 }
 
-/**
- * mountTwoTabs inits the store, opens a second tab and mounts the browser:
- * tabs [A, B] with B active and DOM focus on <body> (outside the tablist).
- */
 async function mountTwoTabs(): Promise<VueWrapper> {
   const store = useFilesStore();
   await store.init("server-1");
@@ -124,13 +111,11 @@ describe("tab-close focus (JUS-207)", () => {
     const store = useFilesStore();
     const activeBefore = store.activeTabId;
 
-    // Close the inactive tab A via its ×.
     await wrapper.find(".fm-tab:not(.is-active) .fm-tab-close").trigger("click");
     await settle();
     expect(store.tabs).toHaveLength(1);
     expect(store.activeTabId).toBe(activeBefore);
 
-    // Press + : the new tab activates, but focus must not follow it in.
     await wrapper.find(".fm-tab-add").trigger("click");
     await settle();
     expect(store.tabs).toHaveLength(2);
@@ -143,14 +128,12 @@ describe("tab-close focus (JUS-207)", () => {
   it("closing the active tab moves focus to the tab that takes over", async () => {
     const wrapper = await mountTwoTabs();
 
-    // Keyboard focus sits on the active tab, as if the user tabbed there.
     (wrapper.find(".fm-tab.is-active").element as HTMLElement).focus();
     expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
 
     await wrapper.find(".fm-tab.is-active .fm-tab-close").trigger("click");
     await settle();
 
-    // The neighbour takes over and receives DOM focus (existing behaviour).
     const focused = document.activeElement as HTMLElement | null;
     expect(scrollIntoView).toHaveBeenCalled();
     expect(focused?.getAttribute("role")).toBe("tab");

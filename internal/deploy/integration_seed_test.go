@@ -13,9 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// seedProjectEnvironment creates a team, a project, an environment and a node
-// on the integration database and returns their IDs, cleaning them up at test
-// end. Resource rows require an environment and a server since PE-2.
 func seedProjectEnvironment(t *testing.T, ctx context.Context, st *store.Store) (teamID, envID, serverID uuid.UUID) {
 	t.Helper()
 

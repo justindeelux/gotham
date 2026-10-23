@@ -267,9 +267,6 @@ func TestResolveRouteCertificate(t *testing.T) {
 	}
 }
 
-// wildcardCoversHost reports whether requesting main=host plus `*.base` covers
-// host, mirroring certificate name matching: a wildcard SAN covers exactly one
-// label.
 func wildcardCoversHost(host, base string) bool {
 	if host == base {
 		return true
@@ -312,10 +309,6 @@ func TestWildcardBase(t *testing.T) {
 	}
 }
 
-// TestResolveRouteCertificateWildcardCoversRoutedHost proves the generated
-// wildcard request actually covers the routed host: for a multi-level host the
-// old zone-level wildcard (example.com + *.example.com) covered neither
-// app.sub.example.com nor its siblings.
 func TestResolveRouteCertificateWildcardCoversRoutedHost(t *testing.T) {
 	providerID := uuid.New()
 	providers := map[uuid.UUID]providerAccess{
@@ -374,10 +367,6 @@ func TestOpenCredentialRejectsForeignKey(t *testing.T) {
 	}
 }
 
-// TestCredentialCryptographyRefusesEmptySecret proves the public empty-string
-// key is never used: neither to seal a new token nor to open one (even a value
-// sealed with that public key), so stored DNS credentials are only readable
-// under a configured deployment secret.
 func TestCredentialCryptographyRefusesEmptySecret(t *testing.T) {
 	if _, err := sealCredential("", "cf-token"); !errors.Is(err, ErrSecret) {
 		t.Fatalf("sealCredential with an empty secret = %v, want ErrSecret", err)
@@ -385,10 +374,6 @@ func TestCredentialCryptographyRefusesEmptySecret(t *testing.T) {
 	if _, err := sealCredential("   ", "cf-token"); !errors.Is(err, ErrSecret) {
 		t.Fatalf("sealCredential with a whitespace secret = %v, want ErrSecret", err)
 	}
-	// A legacy row could have been sealed with the public empty key before
-	// the guards existed; it must not be opened under it either. providers
-	// now refuses the empty key outright, so the legacy blob cannot be
-	// recreated through the public API, and openCredential refuses first.
 	if _, err := providers.OpenSecret("", "legacy-ciphertext"); err == nil {
 		t.Fatal("providers.OpenSecret accepted the public empty key")
 	}
@@ -404,10 +389,6 @@ func TestCredentialCryptographyRefusesEmptySecret(t *testing.T) {
 	}
 }
 
-// TestEnvFingerprintEmptySecretIsNotDerivable proves an empty deployment
-// secret never keys the HMAC: the fingerprint is a fixed marker that cannot be
-// brute-forced against a candidate value, and a configured secret produces a
-// keyed digest that differs from it.
 func TestEnvFingerprintEmptySecretIsNotDerivable(t *testing.T) {
 	env := []string{"CF_DNS_API_TOKEN=secret-token"}
 	if got := envFingerprint("", env); got != "unconfigured" {

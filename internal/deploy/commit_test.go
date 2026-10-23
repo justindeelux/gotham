@@ -86,14 +86,11 @@ func TestParseCommitEmpty(t *testing.T) {
 	}
 }
 
-// initGitRepo builds a one-commit repository for the readCommit tests.
 func initGitRepo(t *testing.T, message string) string {
 	t.Helper()
 	return initGitRepoWithDates(t, message, "2026-10-01T12:34:56Z", "2026-10-01T12:34:56Z")
 }
 
-// initGitRepoWithDates builds a one-commit repository with distinct author
-// and committer dates, so the committed-at test can tell them apart.
 func initGitRepoWithDates(t *testing.T, message, authorDate, committerDate string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -151,8 +148,6 @@ func TestReadCommitShallowClone(t *testing.T) {
 
 func TestReadCommitIgnoresParentRepo(t *testing.T) {
 	parent := initGitRepo(t, "parent commit")
-	// A non-repo directory nested in a checkout (the Dockerfile case) must
-	// record nothing, never the parent's commit.
 	child := filepath.Join(parent, "child")
 	if err := os.Mkdir(child, 0o755); err != nil {
 		t.Fatal(err)
@@ -160,7 +155,6 @@ func TestReadCommitIgnoresParentRepo(t *testing.T) {
 	if got := readCommit(child); got != (CommitInfo{}) {
 		t.Errorf("readCommit(nested non-repo) = %+v, want zero", got)
 	}
-	// ... even when the environment points git at a repo.
 	t.Setenv("GIT_DIR", filepath.Join(parent, ".git"))
 	t.Setenv("GIT_WORK_TREE", parent)
 	if got := readCommit(child); got != (CommitInfo{}) {

@@ -1,14 +1,3 @@
-// Form row layout contract (JUS-19 + fix round 1), component half.
-//
-// Short fields share one row via the shared `.form-row` grid utility and
-// collapse to a single column once their container narrows below ~600px
-// (container query, not viewport). jsdom never applies stylesheets, so the
-// collapse rule itself is asserted as CSS text (same pattern as the
-// JUS-16/17/18 suite); row membership is structural — each pair must sit
-// inside the SAME .form-row block, found with a tag-matching scan, so the
-// tests fail when fields are merely stacked in order. Real-DOM mounts cover
-// the store-free components. The computed-style half lives in
-// form-layout.spec.ts (Playwright, no backend).
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -38,7 +27,6 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** mountWithI18n provides the composer every localized component requires. */
 function mountWithI18n(component: unknown, options: Record<string, unknown>) {
   return mount(component as never, {
     ...(options as object),
@@ -49,7 +37,6 @@ function mountWithI18n(component: unknown, options: Record<string, unknown>) {
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const mainCss = readFileSync(resolve(webRoot, "src/shared/styles/main.css"), "utf8");
 
-/** Feature catalogs render through the real composer in mounted checks. */
 beforeEach(() => {
   resetLocaleState();
   i18n.global.mergeLocaleMessage("en", { domains: domainsEn });
@@ -57,17 +44,10 @@ beforeEach(() => {
   syncComposerLocale("en");
 });
 
-/** readSfc returns the raw source of one single-file component. */
 function readSfc(relativePath: string): string {
   return readFileSync(resolve(webRoot, relativePath), "utf8");
 }
 
-/**
- * rowBlocks returns the inner HTML of each `<div class="...">` block with the
- * given class, in document order. A depth-counting scan pairs each opener
- * with its matching closer, so nested divs (field-stack, strength-row) stay
- * inside their row. Throws on unbalanced markup.
- */
 export function rowBlocks(source: string, rowClass = "form-row"): string[] {
   const blocks: string[] = [];
   const openTag = `<div class="${rowClass}`;
@@ -104,11 +84,6 @@ export function rowBlocks(source: string, rowClass = "form-row"): string[] {
   }
 }
 
-/**
- * expectPair asserts markers a and b sit inside the SAME row block, with a
- * first — i.e. the fields share one visual row in tab order, not merely
- * adjacent stacked rows.
- */
 function expectPair(source: string, a: string, b: string, rowClass = "form-row"): void {
   const hit = rowBlocks(source, rowClass).some((block) => {
     const first = block.indexOf(a);
@@ -117,10 +92,6 @@ function expectPair(source: string, a: string, b: string, rowClass = "form-row")
   expect(hit, `expected "${a}" and "${b}" in the same .${rowClass} block`).toBe(true);
 }
 
-/**
- * mediaBlocksMentioning returns the @media bodies that name a selector, so
- * viewport fallbacks can be scoped to one rule instead of the whole file.
- */
 export function mediaBlocksMentioning(source: string, selector: string): string[] {
   const hits: string[] = [];
   let cursor = 0;
@@ -164,7 +135,6 @@ describe("JUS-19 shared .form-row utility", () => {
   });
 
   it("shares one collapse threshold with EnvEditor and the redirect form", () => {
-    /** thresholdOf reads the max-width of the first @container rule. */
     function thresholdOf(source: string): string {
       const match = source.match(/@container\s*\(max-width:\s*(\d+px)\)/);
       expect(match, "expected one @container collapse rule").not.toBeNull();
@@ -177,8 +147,6 @@ describe("JUS-19 shared .form-row utility", () => {
   });
 
   it("has no viewport fallback for the row collapse", () => {
-    // Scoped to @media bodies mentioning .form-row: unrelated future media
-    // queries elsewhere in main.css must not fail this test.
     expect(mediaBlocksMentioning(mainCss, ".form-row")).toEqual([]);
   });
 
@@ -204,7 +172,6 @@ describe("JUS-88 CertificateForm single column", () => {
     enabled: true,
   };
 
-  /** mountForm mounts the certificate editor with no options to pick. */
   function mountForm() {
     return mount(CertificateForm, {
       props: { modelValue: draft, applications: [], providers: [] },
@@ -303,8 +270,6 @@ describe("JUS-19 DynamicForm stays two columns", () => {
 });
 
 describe("JUS-19 AddServerWizard rows", () => {
-  // The connect step lives in WizardConnectStep (JUS-24 split); the shell
-  // keeps the modal chrome, rail, install step and footer.
   const source = readSfc("src/features/servers/components/wizard/WizardConnectStep.vue");
 
   it("pairs Node name|SSH user in one row", () => {
@@ -312,9 +277,6 @@ describe("JUS-19 AddServerWizard rows", () => {
   });
 
   it("keeps Authentication and the key-mode selector on full-width rows", () => {
-    // Measured with the real Naive controls: the nowrap key-mode group needs
-    // 294px but a half column at the real 590px container is 289px, so the
-    // pair would clip by 5px. Neither control may share a row.
     const inRow = rowBlocks(source).some(
       (block) =>
         block.includes("servers.wizard.authMethod") || block.includes("servers.wizard.keyModeName"),
@@ -379,8 +341,6 @@ describe("JUS-19 CreateAppWizard rows", () => {
 
 describe("JUS-19 CreateDatabaseWizard rows", () => {
   it("pairs Version|Node in one row", () => {
-    // Labels are localized keys; the row pairing and the resolved English
-    // display text ("Version", "Node") are what this pins.
     const source = readSfc("src/features/databases/components/CreateDatabaseWizard.vue");
     expectPair(source, "databases.wizard.engineStep.version", "databases.wizard.engineStep.node");
     expect(en.wizard.engineStep.version).toBe("Version");
@@ -431,8 +391,6 @@ describe("JUS-19 RegisterPage rows", () => {
   });
 
   it("keys the collapse off the page width, not the 420px card", () => {
-    // The card itself is narrower than the collapse threshold, so it cannot
-    // be the container — otherwise the required pairing would never render.
     expect(mainCss).toMatch(/\.auth-page\s*\{[^}]*container-type:\s*inline-size/);
   });
 });

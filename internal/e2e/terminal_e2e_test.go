@@ -31,33 +31,8 @@ import (
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
-// JUS-251: the terminal journeys against the real stack — a real mTLS agent,
-// a real PTY, the production control-plane service and WebSocket routes, the
-// real FileService roots, and every Redis channel observed while a unique
-// canary is typed.
-//
-// What is REAL here: the node agent (in-process gRPC server over mTLS, the
-// same one the binary runs), the PTY and its kernel cleanup, the
-// control-plane terminal.Service and HTTP/WebSocket routes, the relay frames,
-// the FileService root resolution, and the Redis server the subscriber talks
-// to.
-//
-// What is NOT: PostgreSQL is not used (no store is opened); the token
-// verifier, the authorizer and the server registry are stubs, so this test
-// proves the terminal path, not the account/team permission logic (that lives
-// in internal/server and internal/deploy tests); the control plane's realtime
-// Redis hub is not mounted (there is no deploy/log traffic here). The
-// subscriber uses PSUBSCRIBE * rather than the hub, so it observes every
-// channel on this Redis; a publisher configured with a different Redis address
-// would be outside this check (terminal code has no such publisher).
-//
-// It is gated by GOTHAM_E2E=1 because it needs Redis, Docker (for the agent
-// construction path) and, for the fd/escaped-job assertions, Linux /proc.
-
-// terminalTokenProtocol mirrors the route contract's token subprotocol.
 const terminalToken = "e2e-terminal-token"
 
-// terminalTestVerifier accepts exactly one token for exactly one account.
 type terminalTestVerifier struct{ claims auth.Claims }
 
 func (v terminalTestVerifier) VerifyAccessToken(token string) (*auth.Claims, error) {
@@ -68,7 +43,6 @@ func (v terminalTestVerifier) VerifyAccessToken(token string) (*auth.Claims, err
 	return &copied, nil
 }
 
-// terminalTestAuthorizer never revokes and accepts only host targets.
 type terminalTestAuthorizer struct{}
 
 func (terminalTestAuthorizer) Authorize(_ context.Context, claims *auth.Claims, target terminal.Target) (terminal.Marker, error) {
@@ -82,7 +56,6 @@ func (terminalTestAuthorizer) Revalidate(context.Context, *auth.Claims, terminal
 	return true, nil
 }
 
-// terminalLogBuffer keeps every log line the terminal stack wrote.
 type terminalLogBuffer struct {
 	mu   sync.Mutex
 	data strings.Builder
@@ -100,9 +73,6 @@ func (b *terminalLogBuffer) String() string {
 	return b.data.String()
 }
 
-// terminalCaptureStderr redirects the process stderr for the test duration, so
-// a production log line written through os.Stderr (not an injected logger) is
-// visible to the canary assertion. The test is not parallel.
 func terminalCaptureStderr(t *testing.T) *terminalLogBuffer {
 	t.Helper()
 	reader, writer, err := os.Pipe()
@@ -126,7 +96,6 @@ func terminalCaptureStderr(t *testing.T) *terminalLogBuffer {
 	return buffer
 }
 
-// terminalFrame reads one server frame with a bounded deadline.
 func terminalFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) (byte, []byte) {
 	t.Helper()
 	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
@@ -142,7 +111,6 @@ func terminalFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) (b
 	return payload[0], payload[1:]
 }
 
-// terminalSend writes one client frame.
 func terminalSend(t *testing.T, conn *websocket.Conn, opcode byte, payload []byte) {
 	t.Helper()
 	if err := websocket.Message.Send(conn, append([]byte{opcode}, payload...)); err != nil {
@@ -150,7 +118,6 @@ func terminalSend(t *testing.T, conn *websocket.Conn, opcode byte, payload []byt
 	}
 }
 
-// terminalReadUntil accumulates output frames until marker appears.
 func terminalReadUntil(t *testing.T, conn *websocket.Conn, marker string) {
 	t.Helper()
 	var output strings.Builder
@@ -172,8 +139,6 @@ func terminalReadUntil(t *testing.T, conn *websocket.Conn, marker string) {
 	t.Fatalf("timed out waiting for %q; output %q", marker, output.String())
 }
 
-// terminalOpenPTMX counts this process's /dev/ptmx master descriptors (the
-// agent runs in-process). A failed inspection fails the test.
 func terminalOpenPTMX(t *testing.T) int {
 	t.Helper()
 	if runtime.GOOS == "linux" {
@@ -203,17 +168,12 @@ func terminalOpenPTMX(t *testing.T) int {
 	return count
 }
 
-// terminalProcessAlive reports whether the recorded pid is a LIVE process. pid
-// comes from the shell's $!, so it is exact and unique per run. A zombie is
-// NOT alive: in a container the test binary is pid 1 and never reaps an orphan
-// that the agent SIGKILLed, and signal 0 alone would keep reporting it.
 func terminalProcessAlive(pid int) bool {
 	if runtime.GOOS == "linux" {
 		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 		if err != nil {
 			return false
 		}
-		// The state is the first field after the parenthesized command name.
 		if index := strings.LastIndexByte(string(raw), ')'); index >= 0 && index+2 < len(raw) {
 			state := raw[index+2]
 			return state != 'Z' && state != 'X'
@@ -227,7 +187,6 @@ func terminalProcessAlive(pid int) bool {
 	return process.Signal(syscall.Signal(0)) == nil
 }
 
-// terminalWaitPIDFile reads a pid written by the shell.
 func terminalWaitPIDFile(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -244,8 +203,6 @@ func terminalWaitPIDFile(t *testing.T, path string) int {
 	return 0
 }
 
-// terminalCreate opens one pending host session and returns its id and
-// websocket path.
 func terminalCreate(t *testing.T, client *http.Client, baseURL, serverID, body string) (string, string) {
 	t.Helper()
 	response, err := client.Post(baseURL+"/api/v1/servers/"+serverID+"/terminal/sessions",
@@ -268,7 +225,6 @@ func terminalCreate(t *testing.T, client *http.Client, baseURL, serverID, body s
 	return created.ID, created.WebSocketPath
 }
 
-// terminalOpened is the agent's opened frame payload.
 type terminalOpened struct {
 	Shell       string `json:"shell"`
 	Cols        uint16 `json:"cols"`
@@ -276,7 +232,6 @@ type terminalOpened struct {
 	ServiceUser string `json:"service_user"`
 }
 
-// terminalAttach dials one pending session and validates the opened frame.
 func terminalAttach(t *testing.T, baseURL, path string) (*websocket.Conn, terminalOpened) {
 	t.Helper()
 	config, err := websocket.NewConfig("ws"+strings.TrimPrefix(baseURL, "http")+path, baseURL)
@@ -302,7 +257,6 @@ func terminalAttach(t *testing.T, baseURL, path string) (*websocket.Conn, termin
 	return conn, opened
 }
 
-// terminalWaitPTMX polls the descriptor count back to baseline.
 func terminalWaitPTMX(t *testing.T, baseline int, timeout time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -315,15 +269,12 @@ func terminalWaitPTMX(t *testing.T, baseline int, timeout time.Duration) bool {
 	return false
 }
 
-// TestTerminalRealStackNoLeak is the canary + cleanup proof.
 func TestTerminalRealStackNoLeak(t *testing.T) {
 	requireE2E(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Capture every logging channel the relay could use: injected loggers,
-	// slog.Default() resolved at call time, and direct os.Stderr writes.
 	stderr := terminalCaptureStderr(t)
 	previousDefault := slog.Default()
 	defaultLogs := &terminalLogBuffer{}
@@ -339,8 +290,6 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	// A symlink inside the writable root that leaves it. The agent must refuse
-	// it before any shell starts.
 	if err := os.Symlink("/etc", filepath.Join(volumes, "escape")); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
@@ -405,10 +354,6 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 	t.Cleanup(httpServer.Close)
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	// Redis: subscribe to EVERY channel for the whole test. Terminal bytes
-	// must never be published, so this pattern sees nothing from the shell.
-	// (The test CP has no realtime hub; PSUBSCRIBE * is strictly wider and
-	// observes any publish to this Redis, whoever makes it.)
 	rdb := redis.NewClient(&redis.Options{Addr: e2eRedisAddr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 	pubsub := rdb.PSubscribe(ctx, "*")
@@ -430,16 +375,11 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 	t.Logf("ptmx baseline: %d", baselinePTMX)
 	canary := "GOTHAM-CANARY-" + uuid.New().String()[:8]
 
-	// 1. A host session with NO root and NO cwd (JUS-253). The opened frame
-	//    reports the shell and the service_user the shell runs as.
 	sessionID, sessionPath := terminalCreate(t, client, httpServer.URL, serverID.String(),
 		`{"target":"host","cols":100,"rows":30}`)
 	conn, opened := terminalAttach(t, httpServer.URL, sessionPath)
 	t.Logf("opened: shell=%s service_user=%s %dx%d", opened.Shell, opened.ServiceUser, opened.Cols, opened.Rows)
 
-	// 2. Type a unique canary; the real PTY echoes it and `stty size` agrees
-	//    with the resize frame the route relays. The shell identity is the
-	//    agent's service user, reported by the opened frame's service_user.
 	terminalSend(t, conn, 0x01, []byte("echo "+canary+"\r"))
 	terminalReadUntil(t, conn, canary)
 	resize := make([]byte, 4)
@@ -449,7 +389,6 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 	terminalSend(t, conn, 0x01, []byte("stty size; pwd; id -un\r"))
 	terminalReadUntil(t, conn, "28 90")
 
-	// 3. The canary is absent from every logging channel and from Redis.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		pubMu.Lock()
@@ -473,8 +412,6 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 		}
 	}
 
-	// 4. A cwd through a symlink that leaves the root is refused and starts no
-	//    shell.
 	escapeBody := `{"target":"host","root":"volumes","cwd":"escape","cols":80,"rows":24}`
 	escape, err := client.Post(httpServer.URL+"/api/v1/servers/"+serverID.String()+"/terminal/sessions",
 		"application/json", strings.NewReader(escapeBody))
@@ -487,15 +424,10 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 	_ = json.NewDecoder(escape.Body).Decode(&escapeSession)
 	_ = escape.Body.Close()
 	if escape.StatusCode != http.StatusCreated {
-		// Either refusal point is acceptable; a preflight refusal needs no
-		// stream assertion.
 		if escape.StatusCode < 400 {
 			t.Fatalf("create escaping cwd = %d", escape.StatusCode)
 		}
 	} else {
-		// Create is pending-only: the agent resolves the directory when the
-		// stream opens, so the refusal arrives as the terminal error frame and
-		// no shell runs.
 		escCfg, cfgErr := websocket.NewConfig("ws"+strings.TrimPrefix(httpServer.URL, "http")+escapeSession.WebSocketPath, httpServer.URL)
 		if cfgErr != nil {
 			t.Fatalf("escape ws config: %v", cfgErr)
@@ -515,9 +447,6 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 		}
 	}
 
-	// 5. Close with a background job: no process survives and the PTY master
-	//    descriptor is released. The pid comes from the shell's $!, so it is
-	//    exact and unique for this run.
 	pidPath := filepath.Join(root, "job.pid")
 	terminalSend(t, conn, 0x01, []byte("sleep 7641 & echo $! > "+pidPath+"\r"))
 	jobPID := terminalWaitPIDFile(t, pidPath)
@@ -530,7 +459,7 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 		t.Fatal("background job never started")
 	}
 
-	terminalSend(t, conn, 0x03, nil) // explicit close frame
+	terminalSend(t, conn, 0x03, nil)
 	_ = conn.Close()
 	goneBy := time.Now().Add(15 * time.Second)
 	for time.Now().Before(goneBy) && terminalProcessAlive(jobPID) {
@@ -544,11 +473,6 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 			terminalOpenPTMX(t), baselinePTMX)
 	}
 
-	// 6. The mutation that re-blocks the PTY master read is only visible while
-	//    a process outside the shell's session still holds the slave open:
-	//    a setsid-escaped job. It may survive close (documented residual), but
-	//    the non-blocking master must still release the fd. Linux-only because
-	//    setsid comes from util-linux.
 	if _, lookErr := exec.LookPath("setsid"); lookErr != nil {
 		t.Log("setsid is not available; the escaped-job fd regression did not run (Linux CI runs it)")
 	} else {
@@ -556,8 +480,6 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 		_, escapedPath := terminalCreate(t, client, httpServer.URL, serverID.String(),
 			`{"target":"host","cols":80,"rows":24}`)
 		escaped, _ := terminalAttach(t, httpServer.URL, escapedPath)
-		// `exec sleep` keeps the recorded pid after sh writes it, so cleanup can
-		// kill exactly this process; the job is in its own session (setsid).
 		terminalSend(t, escaped, 0x01,
 			[]byte("(setsid sh -c 'echo $$ > "+escapedPIDPath+"; exec sleep 7642' &)\r"))
 		escapedPID := terminalWaitPIDFile(t, escapedPIDPath)
@@ -577,7 +499,6 @@ func TestTerminalRealStackNoLeak(t *testing.T) {
 		}
 	}
 
-	// The session registry no longer holds the closed session.
 	if _, err := svc.Attach(ctx, userID, serverID, uuid.MustParse(sessionID)); err == nil {
 		t.Fatal("closed session is still attachable")
 	}

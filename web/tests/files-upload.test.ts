@@ -1,6 +1,3 @@
-// Upload queue (P18 step 7): per-file progress, cancel, retry, and the
-// conflict path. naive-ui's useMessage is stubbed (everything else stays real
-// so the shared i18n module still resolves), and the API module is mocked.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messages = {
@@ -32,12 +29,10 @@ const target = {
   path: "",
 };
 
-/** file builds a small File for the queue. */
 function file(name: string, size = 8) {
   return new globalThis.File([new Uint8Array(size)], name);
 }
 
-/** result builds one success entry in the upload result array. */
 function ok(name: string): FilesUploadResult {
   return {
     name,
@@ -60,7 +55,6 @@ beforeEach(() => {
   messages.warning.mockReset();
 });
 
-/** deferred returns a promise with its resolve exposed (batch-gate tests). */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -86,7 +80,6 @@ describe("useFileUpload", () => {
     expect(upload.items.value[0]?.status).toBe("done");
     expect(upload.items.value[0]?.loaded).toBe(8);
     expect(upload.summary.value.done).toBe(1);
-    // The upload override is passed through, so the 15 s default is lifted.
     expect(vi.mocked(uploadFiles)).toHaveBeenCalledWith(
       "server-1",
       "team-1",
@@ -161,7 +154,6 @@ describe("useFileUpload", () => {
 
     await upload.retryFailed(target);
     expect(upload.items.value[0]?.status).toBe("done");
-    // The retry of a skipped file replaces it (overwrite=true).
     expect(vi.mocked(uploadFiles)).toHaveBeenLastCalledWith(
       "server-1",
       "team-1",
@@ -189,7 +181,6 @@ describe("useFileUpload", () => {
     const upload = useFileUpload();
     upload.addFiles([file("a.bin"), file("b.txt")]);
     const started = upload.start(target);
-    // a.bin is in flight; cancel the queued b.txt.
     upload.removeItem(upload.items.value[1]!.id);
     gate.resolve([ok("a.bin")]);
     await started;
@@ -270,8 +261,6 @@ describe("useFileUpload", () => {
       }
     });
 
-    // Two rapid clicks on the failed row: the second must not queue a
-    // duplicate, and a completed row must never be sent again.
     const id = upload.items.value[0]!.id;
     const first = upload.retry(id, target, false);
     expect(upload.items.value[0]!.status).toBe("queued");
@@ -279,7 +268,6 @@ describe("useFileUpload", () => {
     gate.resolve([ok("b")]);
     await Promise.all([started, first, second]);
 
-    // a failed once, b uploaded once, a retried once.
     expect(vi.mocked(uploadFiles)).toHaveBeenCalledTimes(3);
     expect(upload.items.value[0]!.status).toBe("done");
   });

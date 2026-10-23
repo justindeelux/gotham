@@ -1,7 +1,3 @@
-// F2: the certificate dialog retains the raw failure and derives its display
-// text in the current locale. The shared domains formatter is mocked with a
-// genuinely locale-aware substitute to prove the consumer caches no string;
-// the real baseline helper stays untouched for I18N-8.
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { beforeEach, describe, expect, it, vi } from "vitest";

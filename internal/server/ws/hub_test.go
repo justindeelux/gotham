@@ -10,7 +10,6 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-// waitForCondition polls cond until it is true or the deadline expires.
 func waitForCondition(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -23,9 +22,6 @@ func waitForCondition(t *testing.T, timeout time.Duration, what string, cond fun
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// TestHubShutdownDoesNotDeadlockRemoval is the B1-9 regression: once the hub
-// has stopped, remove/subscribe/unsubscribe from a connection finishing shutdown
-// must not block on an unbuffered channel whose receiver is gone.
 func TestHubShutdownDoesNotDeadlockRemoval(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -43,7 +39,6 @@ func TestHubShutdownDoesNotDeadlockRemoval(t *testing.T) {
 		for _, c := range clients {
 			hub.remove(c)
 		}
-		// A connection can also still try to change subscriptions as it exits.
 		hub.subscribe(clients[0], "logs:srv:ctr")
 		hub.unsubscribe(clients[0], "logs:srv:ctr")
 	}()
@@ -55,9 +50,6 @@ func TestHubShutdownDoesNotDeadlockRemoval(t *testing.T) {
 	}
 }
 
-// TestSlowClientDisconnected is the B1-7 regression: a connection that stops
-// reading is disconnected under the write deadline and its room membership is
-// released, and the discarded frames are observable via Drops.
 func TestSlowClientDisconnected(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -70,8 +62,6 @@ func TestSlowClientDisconnected(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	channel := LogChannel("srv-slow", "ctr")
-	// The connection is opened and subscribed but never read from, so the
-	// server's writes eventually block and time out.
 	_ = dial(t, wsURL(server, "/?token="+testToken+"&channel="+channel))
 
 	waitForCondition(t, 3*time.Second, "subscription", func() bool {
@@ -100,11 +90,8 @@ func TestSlowClientDisconnected(t *testing.T) {
 	}
 }
 
-// TestBroadcastSaturationCounted is the U4 regression: when the hub's own
-// broadcast queue is full (nothing draining it), the discarded frame is counted
-// rather than silently lost.
 func TestBroadcastSaturationCounted(t *testing.T) {
-	hub := NewHub() // no Run: the broadcast queue fills up
+	hub := NewHub()
 	for i := 0; i < 300; i++ {
 		hub.Broadcast("logs:srv:ctr", []byte("x"))
 	}
@@ -113,9 +100,6 @@ func TestBroadcastSaturationCounted(t *testing.T) {
 	}
 }
 
-// TestConnectionUpgradedAfterHubCloseIsDropped is the U9 regression: a
-// connection whose upgrade races Hub.Close must be closed promptly instead of
-// lingering with an unregistered client that nothing will ever kick.
 func TestConnectionUpgradedAfterHubCloseIsDropped(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -127,8 +111,6 @@ func TestConnectionUpgradedAfterHubCloseIsDropped(t *testing.T) {
 
 	conn, err := websocket.Dial(wsURL(server, "/?token="+testToken), "", "http://localhost/")
 	if err != nil {
-		// The handshake itself may already be refused; either way the
-		// connection was not retained.
 		return
 	}
 	t.Cleanup(func() { _ = conn.Close() })

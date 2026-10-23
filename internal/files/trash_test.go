@@ -60,7 +60,6 @@ func TestTrashServiceMapsEntries(t *testing.T) {
 		t.Fatalf("Trash with an empty root = %v, want ErrValidation", err)
 	}
 
-	// The agent's truncation flag is surfaced, never dropped.
 	client.trashResp = &agentv1.ListTrashResponse{Truncated: true}
 	listing, err = svc.Trash(context.Background(), server.ID, "volumes")
 	if err != nil {
@@ -88,7 +87,6 @@ func TestTrashRestoreService(t *testing.T) {
 		t.Fatalf("restore request = %+v", client.seenRestore)
 	}
 
-	// An existing target is a conflict (409).
 	client.restoreErr = status.Error(codes.AlreadyExists, "restore: exists")
 	if _, err := svc.Restore(context.Background(), server.ID, "volumes", "0123456789abcdef0123456789abcdef", "", false); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Restore conflict = %v, want ErrConflict", err)
@@ -107,7 +105,6 @@ func TestTrashPurgeAndEmptyService(t *testing.T) {
 	if client.seenPurge.GetId() != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("purge request = %+v", client.seenPurge)
 	}
-	// A traversal-shaped id is refused before the dial.
 	if err := svc.Purge(context.Background(), server.ID, "volumes", "../x"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Purge with a bad id = %v, want ErrValidation", err)
 	}
@@ -124,8 +121,6 @@ func TestTrashPurgeAndEmptyService(t *testing.T) {
 	}
 }
 
-// TestDeletePermanentFlagService pins that the permanent flag reaches the agent
-// and defaults off (so a plain delete recycles).
 func TestDeletePermanentFlagService(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed(uuid.New())
@@ -179,7 +174,6 @@ func TestTrashRoutes(t *testing.T) {
 	}
 }
 
-// TestRestoreConflictRoute pins the clear 409 a restore conflict produces.
 func TestRestoreConflictRoute(t *testing.T) {
 	client := &fakeFileClient{restoreErr: status.Error(codes.AlreadyExists, "restore: exists")}
 	h, server := newRealRouter(t, teams.RoleOwner, uuid.New(), client)
@@ -193,8 +187,6 @@ func TestRestoreConflictRoute(t *testing.T) {
 	}
 }
 
-// TestDeleteRoutePermanentFlag pins the permanent query parameter on the
-// existing entry route.
 func TestDeleteRoutePermanentFlag(t *testing.T) {
 	client := &fakeFileClient{}
 	h, server := newRealRouter(t, teams.RoleOwner, uuid.New(), client)

@@ -26,19 +26,12 @@ import QrCode from "@/shared/components/QrCode.vue";
 import { useCopyText } from "@/shared/composables/useCopyText";
 import { downloadText } from "@/shared/utils/download";
 
-/**
- * TotpSetupDialog runs the two-factor enrollment (JUS-196): it shows the
- * authenticator QR plus the manual key, confirms the first code (with the
- * account password when one is set), and finally reveals the recovery codes
- * once. Nothing is enabled until the confirmation succeeds.
- */
 const props = defineProps<{
   show: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:show": [value: boolean];
-  /** done reports that two-factor is now enabled, so the card refreshes. */
   done: [];
 }>();
 
@@ -59,20 +52,12 @@ const errorMessage = computed<string>(() =>
   rawError.value === null ? "" : describeAuthError(rawError.value),
 );
 
-/**
- * gateCodes is true while the one-time recovery codes are on screen. The modal
- * must not be dismissable then (no mask click, no Esc), so the codes cannot be
- * lost before the user acknowledges them.
- */
 const gateCodes = computed<boolean>(() => step.value === "codes");
 
 const formRef = ref<FormInst | null>(null);
 const form = reactive({ password: "", code: "" });
-// A computed so the password rule follows a late /auth/me load (an OAuth-only
-// account has no password field).
 const rules = computed(() => totpCodeRules(hasPassword.value));
 
-/** startEnrollment mints a fresh pending secret every time the dialog opens. */
 async function startEnrollment(): Promise<void> {
   step.value = "scan";
   enrolling.value = null;
@@ -97,14 +82,12 @@ watch(
       void startEnrollment();
       return;
     }
-    // Closed: drop the pending secret and any codes still in memory.
     enrolling.value = null;
     recoveryCodes.value = [];
     step.value = "scan";
   },
 );
 
-/** confirmEnable verifies the first code and turns two-factor on. */
 async function confirmEnable(): Promise<void> {
   if (submitting.value) {
     return;
@@ -124,7 +107,6 @@ async function confirmEnable(): Promise<void> {
     });
     form.password = "";
     form.code = "";
-    // Two-factor is on: refresh the card now, then show the one-time codes.
     message.success(t("profile.totp.enabledToast"));
     emit("done");
     step.value = "codes";
@@ -135,17 +117,14 @@ async function confirmEnable(): Promise<void> {
   }
 }
 
-/** finish closes the dialog after the recovery codes were acknowledged. */
 function finish(): void {
   emit("update:show", false);
 }
 
-/** cancelSetup abandons the enrollment before it is enabled. */
 function cancelSetup(): void {
   emit("update:show", false);
 }
 
-/** downloadCodes saves the one-time codes as a text file. */
 function downloadCodes(): void {
   downloadText("gotham-recovery-codes.txt", `${recoveryCodes.value.join("\n")}\n`);
 }
@@ -170,7 +149,6 @@ function downloadCodes(): void {
 
       <NSpin v-if="loading" size="large" class="totp-spin" />
 
-      <!-- Step 1: scan the QR (or type the key) and confirm a code. -->
       <template v-else-if="step === 'scan' && enrolling">
         <NText depth="3">{{ t("profile.totp.scanHint") }}</NText>
 
@@ -234,7 +212,6 @@ function downloadCodes(): void {
         </NForm>
       </template>
 
-      <!-- Step 2: the recovery codes, shown once. -->
       <template v-else-if="step === 'codes'">
         <NText depth="3">{{ t("profile.totp.codesHint") }}</NText>
         <ul class="totp-codes">

@@ -1,7 +1,3 @@
-// Profile account refresh (PF-6, JUS-27 follow-up): ProfilePage refreshes the
-// account from GET /auth/me on every mount so a session restored from
-// localStorage cannot serve stale facts, and a slow refresh never overwrites
-// a newer display name saved while it was in flight.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -154,10 +150,7 @@ describe("ProfilePage account refresh", () => {
     mockGet.mockReturnValue(gate.promise as never);
     const wrapper = await mountPage();
     await flushPromises();
-    // A display-name save lands while the refresh is in flight (the same
-    // setUser path as useDisplayNameForm).
     useAuthStore().setUser({ ...staleUser(), display_name: "Ada L" });
-    // The stale server read resolves afterwards and must be discarded.
     gate.resolve({ data: { user: staleUser() } });
     await flushPromises();
     await nextTick();
@@ -171,14 +164,11 @@ describe("ProfilePage account refresh", () => {
     mockGet.mockReturnValue(gate.promise as never);
     const wrapper = await mountPage();
     await flushPromises();
-    // The first /me 401s; the interceptor rotates the token pair, which
-    // installs the same account through the token module (no local write).
     persistTokenSession({
       user: { ...staleUser() },
       accessToken: "rotated-access",
       refreshToken: "rotated-refresh",
     });
-    // The retried /me resolves with the corrected facts and still applies.
     gate.resolve({ data: { user: freshUser() } });
     await flushPromises();
     await nextTick();
@@ -244,7 +234,6 @@ describe("ProfilePage account refresh", () => {
     auth.user = null;
     auth.accessToken = "access";
     auth.refreshToken = "refresh";
-    // The App.vue boot condition: tokens restored, account not yet loaded.
     expect(auth.isAuthenticated && auth.user === null).toBe(true);
     mockGet.mockResolvedValue({ data: { user: freshUser() } } as never);
     const wrapper = await mountPage();
@@ -285,8 +274,6 @@ describe("ProfilePage account refresh", () => {
     mockGet.mockReturnValue(gate.promise as never);
     const wrapper = await mountPage();
     await flushPromises();
-    // Another tab signs in as someone else: the token module notifies, the
-    // store applies, and no sequence is bumped — only the id differs.
     const other: User = {
       ...staleUser(),
       id: "u-2",
@@ -311,8 +298,6 @@ describe("ProfilePage account refresh", () => {
     mockGet.mockReturnValue(gate.promise as never);
     const wrapper = await mountPage();
     await flushPromises();
-    // Another tab (or a forced 401 logout) clears the token module: the
-    // store applies the empty session without a sequence bump.
     clearTokenSession();
     gate.resolve({ data: { user: freshUser() } });
     await flushPromises();

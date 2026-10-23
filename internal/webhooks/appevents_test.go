@@ -10,7 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// fakeAppEvents implements AppEventHandler without network access.
 type fakeAppEvents struct {
 	verified bool
 	appID    uuid.UUID
@@ -26,7 +25,6 @@ func (f *fakeAppEvents) HandleAppEvent(_ context.Context, _ uuid.UUID, event str
 	return nil
 }
 
-// fakeAppPush implements AppPushHandler without network access.
 type fakeAppPush struct {
 	verified bool
 	appID    uuid.UUID
@@ -48,8 +46,6 @@ func appEventRequest(event, body string) *http.Request {
 	}, "203.0.113.7:1234")
 }
 
-// TestReceiveAppEventRefreshesCache proves installation deliveries verify
-// through the app secret and refresh the cache without touching hooks.
 func TestReceiveAppEventRefreshesCache(t *testing.T) {
 	events := &fakeAppEvents{verified: true}
 	svc := newTestServiceWith(Config{
@@ -73,7 +69,6 @@ func TestReceiveAppEventRefreshesCache(t *testing.T) {
 	}
 }
 
-// TestReceiveAppEventRejectsUnverified proves a bad app signature is refused.
 func TestReceiveAppEventRejectsUnverified(t *testing.T) {
 	events := &fakeAppEvents{verified: false}
 	svc := newTestServiceWith(Config{
@@ -93,8 +88,6 @@ func TestReceiveAppEventRejectsUnverified(t *testing.T) {
 	}
 }
 
-// TestReceiveAppEventWithoutHandler proves installation events stay
-// unauthorized when no app service is wired.
 func TestReceiveAppEventWithoutHandler(t *testing.T) {
 	svc := newTestService(newFakeRepository(), &fakeInstaller{}, &fakeDeployer{})
 
@@ -104,16 +97,12 @@ func TestReceiveAppEventWithoutHandler(t *testing.T) {
 	}
 }
 
-// appPushBody is a push delivery signed with the app webhook secret.
 func appPushBody() string {
 	return `{"ref":"refs/heads/main","after":"abc123def456",` +
 		`"repository":{"full_name":"acme/web"},` +
 		`"installation":{"id":999,"account":{"login":"acme"}}}`
 }
 
-// TestAppPushTriggersDeploy proves a push signed with the app webhook secret
-// deploys the matching github_app application even though no per-hook secret
-// exists: connect -> install -> create app -> signed push -> queued.
 func TestAppPushTriggersDeploy(t *testing.T) {
 	repo := newFakeRepository()
 	repo.app.Repo = "acme/web"
@@ -148,8 +137,6 @@ func TestAppPushTriggersDeploy(t *testing.T) {
 	}
 }
 
-// TestAppPushWithoutHandler proves an app-signed push stays unauthorized
-// when no app push handler is wired (the hook path cannot verify it).
 func TestAppPushWithoutHandler(t *testing.T) {
 	svc := newTestService(newFakeRepository(), &fakeInstaller{}, &fakeDeployer{})
 
@@ -162,7 +149,6 @@ func TestAppPushWithoutHandler(t *testing.T) {
 	}
 }
 
-// TestAppPushWrongBranch proves an app push to another branch builds nothing.
 func TestAppPushWrongBranch(t *testing.T) {
 	repo := newFakeRepository()
 	repo.app.Repo = "acme/web"

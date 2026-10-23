@@ -14,64 +14,36 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Bounds of one template definition. They exist so a malformed or hostile
-// template file cannot make the catalog load or a render unbounded.
 const (
-	// MaxTemplateYAML bounds one template.yaml document.
-	MaxTemplateYAML = 64 << 10 // 64 KiB
-	// MaxNameLength bounds the display name.
-	MaxNameLength = 80
-	// MaxDescriptionLength bounds the card description.
+	MaxTemplateYAML      = 64 << 10
+	MaxNameLength        = 80
 	MaxDescriptionLength = 280
-	// MaxFields bounds one template's form.
-	MaxFields = 32
-	// MaxFieldValue bounds one supplied or default field value, in bytes.
-	MaxFieldValue = 1024
-	// maxLabelLength bounds a field label.
-	maxLabelLength = 80
-	// maxPlaceholderLength bounds a field placeholder.
+	MaxFields            = 32
+	MaxFieldValue        = 1024
+	maxLabelLength       = 80
 	maxPlaceholderLength = 200
-	// maxHelpLength bounds a field help text.
-	maxHelpLength = 500
-	// maxPatternLength bounds a field validation pattern.
-	maxPatternLength = 256
-	// maxOptions bounds a select field's option count.
-	maxOptions = 64
-	// maxOptionLength bounds one select option.
-	maxOptionLength = 128
+	maxHelpLength        = 500
+	maxPatternLength     = 256
+	maxOptions           = 64
+	maxOptionLength      = 128
 )
 
-// slugPattern is the template directory alphabet.
 var slugPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 
-// fieldKeyPattern is the field key alphabet: it is also the environment-variable
-// shape, so a template author never fights quoting.
 var fieldKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
-// iconPattern is the icon key alphabet the gallery resolves against its icon set.
 var iconPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
-// FieldType is the input type of one form field.
 type FieldType string
 
 const (
-	// FieldText — a free-form string.
-	FieldText FieldType = "text"
-	// FieldSecret — a free-form string the UI masks; never has a default.
+	FieldText   FieldType = "text"
 	FieldSecret FieldType = "secret"
-	// FieldNumber — a whole number, optionally bounded by Min/Max.
 	FieldNumber FieldType = "number"
-	// FieldSelect — one of a fixed Options set.
 	FieldSelect FieldType = "select"
-	// FieldBool — true or false.
-	FieldBool FieldType = "bool"
+	FieldBool   FieldType = "bool"
 )
 
-// Field is one form field of a template. Default is the value used when the
-// caller supplies none; the validator requires it on every non-required
-// field, so a render with no input is always possible for optional values.
-// Type-specific keys are only valid for their type: Pattern and MaxLength for
-// text/secret, Min and Max for number, Options for select.
 type Field struct {
 	Key         string    `json:"key"`
 	Label       string    `json:"label"`
@@ -86,13 +58,9 @@ type Field struct {
 	Max         *int64    `json:"max,omitempty"`
 	Options     []string  `json:"options,omitempty"`
 
-	// compiled is Pattern anchored to a full-value match. Unexported: the
-	// HTTP representation never exposes it.
 	compiled *regexp.Regexp
 }
 
-// Template is one validated template: catalog metadata, the form schema and
-// the compose document with {{ .field }} placeholders.
 type Template struct {
 	Slug        string  `json:"slug"`
 	Name        string  `json:"name"`
@@ -100,12 +68,9 @@ type Template struct {
 	Description string  `json:"description"`
 	Fields      []Field `json:"fields"`
 
-	// compose is the raw compose.yaml with unresolved placeholders.
 	compose string
 }
 
-// templateDocument is the template.yaml wire shape. Unknown keys are rejected
-// so a typo cannot silently drop configuration.
 type templateDocument struct {
 	Name        string          `yaml:"name"`
 	Icon        string          `yaml:"icon"`
@@ -113,7 +78,6 @@ type templateDocument struct {
 	Fields      []fieldDocument `yaml:"fields"`
 }
 
-// fieldDocument is one field entry of template.yaml.
 type fieldDocument struct {
 	Key         string   `yaml:"key"`
 	Label       string   `yaml:"label"`
@@ -129,8 +93,6 @@ type fieldDocument struct {
 	Options     []string `yaml:"options"`
 }
 
-// parseTemplate validates one template.yaml document and returns the template
-// definition (without the compose document, which loadTemplate adds).
 func parseTemplate(slug string, document []byte) (Template, error) {
 	if !slugPattern.MatchString(slug) {
 		return Template{}, fmt.Errorf("%w: %q is not a valid template slug", ErrValidation, slug)
@@ -144,9 +106,6 @@ func parseTemplate(slug string, document []byte) (Template, error) {
 	if err := decoder.Decode(&raw); err != nil {
 		return Template{}, fmt.Errorf("%w: template %s: template.yaml: %v", ErrValidation, slug, err)
 	}
-	// The metadata is exactly one document: a null document, malformed
-	// trailing YAML or an extra document is rejected, and only a clean EOF
-	// after the first document passes.
 	var extra any
 	switch err := decoder.Decode(&extra); {
 	case err == nil:
@@ -187,9 +146,6 @@ func parseTemplate(slug string, document []byte) (Template, error) {
 	return Template{Slug: slug, Name: name, Icon: icon, Description: description, Fields: fields}, nil
 }
 
-// parseField validates one field entry: known type, type-appropriate
-// validation keys, a default that itself passes the field's own rules, and the
-// secret constraints (a secret is required and is never pre-filled).
 func parseField(raw fieldDocument) (Field, error) {
 	key := strings.TrimSpace(raw.Key)
 	if !fieldKeyPattern.MatchString(key) {
@@ -304,8 +260,6 @@ func parseField(raw fieldDocument) (Field, error) {
 	return field, nil
 }
 
-// rejectSurrounding rejects a value the YAML decoder kept but that carries
-// surrounding whitespace, which would silently change a key or an option.
 func rejectSurrounding(raw, trimmed, what string) error {
 	if raw != trimmed {
 		return fmt.Errorf("%w: %s must not carry surrounding whitespace", ErrValidation, what)
@@ -313,8 +267,6 @@ func rejectSurrounding(raw, trimmed, what string) error {
 	return nil
 }
 
-// scalarDefault converts a YAML scalar default to its canonical string form.
-// Mappings, sequences and null are rejected: a form field has a scalar value.
 func scalarDefault(raw any) (string, error) {
 	switch value := raw.(type) {
 	case string:

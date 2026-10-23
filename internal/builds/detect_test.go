@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// buildFixtures writes the repository shapes the detection matrix exercises and
-// returns fixture name -> directory.
 func buildFixtures(t *testing.T) map[string]string {
 	t.Helper()
 	root := t.TempDir()
@@ -79,7 +77,6 @@ func TestEngineDetectExplicitHint(t *testing.T) {
 		NewBuildpacksEngine(nil),
 		NewStaticEngine(nil),
 	}
-	// An explicit hint selects the named engine without inspecting the tree.
 	for _, engine := range engines {
 		for name, dir := range dirs {
 			if got := engine.Detect(dir, engine.Kind()); !got {
@@ -87,7 +84,6 @@ func TestEngineDetectExplicitHint(t *testing.T) {
 			}
 		}
 	}
-	// A different hint is never a match.
 	if NewDockerfileEngine(nil).Detect(dirs["static"], EngineStatic) {
 		t.Error("dockerfile engine matched a static hint")
 	}
@@ -100,7 +96,6 @@ func TestRegistryDetectPriority(t *testing.T) {
 	dirs := buildFixtures(t)
 	registry := NewRegistry(nil)
 
-	// A repository with both a Dockerfile and index.html prefers the Dockerfile.
 	mixed := t.TempDir()
 	writeTestFile(t, filepath.Join(mixed, "Dockerfile"), "FROM scratch\n")
 	writeTestFile(t, filepath.Join(mixed, "index.html"), "<h1>hi</h1>\n")
@@ -145,8 +140,6 @@ func TestRegistryDetectExplicitHint(t *testing.T) {
 	if !ok || engine.Kind() != EngineStatic {
 		t.Fatalf("explicit static hint = (%v, %v); want static", engine, ok)
 	}
-	// An explicit hint selects the named engine even when the tree does not
-	// obviously match it; Build then validates the repository.
 	engine, ok = registry.Detect(dirs["static"], EngineDockerfile)
 	if !ok || engine.Kind() != EngineDockerfile {
 		t.Fatalf("explicit dockerfile hint = (%v, %v); want dockerfile", engine, ok)

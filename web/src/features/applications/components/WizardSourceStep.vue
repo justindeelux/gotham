@@ -14,7 +14,6 @@ const { form } = wizard;
 
 const { t } = useI18n();
 
-/** latestTagWarn flags a moving tag: redeploys follow it, pin a digest to freeze. */
 const latestTagWarn = computed<boolean>(
   () => wizard.isImage.value && isLatestImageTag(form.imageRef),
 );
@@ -35,7 +34,6 @@ const latestTagWarn = computed<boolean>(
         />
         <span class="field-hint">{{ t("applications.wizard.sourceTypeHint") }}</span>
       </NFormItem>
-      <!-- Preselected by the picker: read-only summary, Change goes back to the picker. -->
       <div v-else class="preselected">
         <span>{{ t("applications.wizard.sourcePreselected", { source: wizard.lockedSourceLabel.value }) }}</span>
         <NButton size="small" quaternary @click="wizard.closeWizard()">
@@ -359,10 +357,6 @@ const latestTagWarn = computed<boolean>(
   color: var(--meta);
 }
 
-/* Inline field notices sit on their own line below the input + hint inside
- * Naive's wrapping .n-form-item-blank row. NAlert has no size prop: the
- * light inline look overrides its theme vars (subtle tint, tight padding,
- * 13px text) and swaps the filled border box for a left accent bar. */
 .field-alert {
   --n-color: var(--warn-soft) !important;
   --n-padding: 8px 12px !important;

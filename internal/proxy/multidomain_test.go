@@ -9,16 +9,11 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// multiNode is one running container publishing the application port, so the
-// multi-domain routes resolve an endpoint.
 func multiNode() []containers.Container {
 	return []containers.Container{{ID: "c1", Name: "app", State: "running",
 		Ports: []string{"32768:3000"}, PortsReported: true}}
 }
 
-// TestRoutesForServerEmitsOneRoutePerDomain proves the JUS-89 routing model:
-// an application with two domains emits two routes, each with its own
-// router and service named after the host.
 func TestRoutesForServerEmitsOneRoutePerDomain(t *testing.T) {
 	serverID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	appID := uuid.MustParse("aaaaaaaa-1111-1111-1111-111111111111")
@@ -65,9 +60,6 @@ func TestRoutesForServerEmitsOneRoutePerDomain(t *testing.T) {
 	}
 }
 
-// TestRemovingADomainRemovesOnlyItsRouter proves router removal is scoped:
-// dropping the alias route from the input removes only the alias routers,
-// and the surviving primary renders exactly the single-domain document.
 func TestRemovingADomainRemovesOnlyItsRouter(t *testing.T) {
 	appID := uuid.MustParse("aaaaaaaa-1111-1111-1111-111111111111")
 	target := "http://172.17.0.1:32768"
@@ -100,9 +92,6 @@ func TestRemovingADomainRemovesOnlyItsRouter(t *testing.T) {
 	}
 }
 
-// TestRoutesForServerHoldsBackDuplicateDomainsAcrossApplications proves the
-// per-node duplicate rule covers aliases: every binding of a host two
-// applications claim is held back, like the single-domain rule.
 func TestRoutesForServerHoldsBackDuplicateDomainsAcrossApplications(t *testing.T) {
 	serverID := uuid.New()
 	first, second := uuid.New(), uuid.New()
@@ -125,10 +114,6 @@ func TestRoutesForServerHoldsBackDuplicateDomainsAcrossApplications(t *testing.T
 	}
 }
 
-// TestRouteCertificateReusesWildcardForSibling proves per-domain TLS (JUS-89):
-// a wildcard intent recorded for one domain activates the sibling's HTTPS
-// router through the same resolver, while an intent recorded for only one
-// domain leaves the other HTTP-only with a stale-host diagnostic.
 func TestRouteCertificateReusesWildcardForSibling(t *testing.T) {
 	serverID := uuid.New()
 	appID := uuid.New()
@@ -173,9 +158,6 @@ func TestRouteCertificateReusesWildcardForSibling(t *testing.T) {
 	}
 }
 
-// TestRouteCertificatePerDomainIsolation proves an intent recorded for one
-// domain never activates another: the uncertified route stays HTTP-only and
-// explains itself through the stale-host diagnostic.
 func TestRouteCertificatePerDomainIsolation(t *testing.T) {
 	serverID := uuid.New()
 	appID := uuid.New()

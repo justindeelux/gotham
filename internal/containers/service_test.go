@@ -18,7 +18,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// fakeRegistry is an in-memory Registry.
 type fakeRegistry struct {
 	mu     sync.Mutex
 	items  map[uuid.UUID]*servers.Server
@@ -52,19 +51,17 @@ func (f *fakeRegistry) Get(_ context.Context, id uuid.UUID) (*servers.Server, er
 	return server, nil
 }
 
-// mockDockerClient is a scriptable DockerClient with call counters.
 type mockDockerClient struct {
 	mu sync.Mutex
 
-	lists    int
-	starts   int
-	stops    int
-	restarts int
-	removes  int
-	pulls    int
-	runs     int
-	closes   int
-	// removeVolumes counts RemoveVolume calls and records the last name.
+	lists            int
+	starts           int
+	stops            int
+	restarts         int
+	removes          int
+	pulls            int
+	runs             int
+	closes           int
 	removeVolumes    int
 	removeVolumeSeen string
 	listResp         *agentv1.ListContainersResponse
@@ -74,11 +71,9 @@ type mockDockerClient struct {
 	runID            string
 	runErr           error
 	runSeen          *agentv1.CreateContainerRequest
-	// logsChunks are delivered by StreamLogs before logsTerminal; logsOpenErr
-	// fails the StreamLogs call itself.
-	logsChunks   [][]byte
-	logsTerminal error
-	logsOpenErr  error
+	logsChunks       [][]byte
+	logsTerminal     error
+	logsOpenErr      error
 }
 
 func (m *mockDockerClient) ListContainers(context.Context, *agentv1.ListContainersRequest, ...grpc.CallOption) (*agentv1.ListContainersResponse, error) {
@@ -161,8 +156,6 @@ func (m *mockDockerClient) StreamLogs(context.Context, *agentv1.StreamLogsReques
 	return &fakeLogStream{chunks: m.logsChunks, err: m.logsTerminal}, nil
 }
 
-// Close lets the service's per-operation close path release the mock, and lets
-// a test count how many connections were closed.
 func (m *mockDockerClient) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -170,16 +163,12 @@ func (m *mockDockerClient) Close() error {
 	return nil
 }
 
-// closeCount returns how many times Close was called.
 func (m *mockDockerClient) closeCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.closes
 }
 
-// fakeLogStream is a minimal server-streaming client for Logs tests. Only Recv
-// is exercised; the embedded nil grpc.ClientStream satisfies the rest of the
-// interface.
 type fakeLogStream struct {
 	grpc.ClientStream
 	chunks [][]byte
@@ -201,7 +190,6 @@ func (m *mockDockerClient) counts() (lists, starts, pulls, runs int) {
 	return m.lists, m.starts, m.pulls, m.runs
 }
 
-// fakeCache is a scriptable Cache with call counters and error injection.
 type fakeCache struct {
 	mu          sync.Mutex
 	items       map[uuid.UUID][]Container
@@ -250,7 +238,6 @@ func (f *fakeCache) Invalidate(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// fixture wires a service with fakes and a dialer returning mock.
 func fixture(registry *fakeRegistry, mock *mockDockerClient, cache Cache) *Service {
 	dial := func(context.Context, *servers.Server) (DockerClient, error) {
 		return mock, nil
@@ -390,7 +377,6 @@ func TestMutationsInvalidateCache(t *testing.T) {
 		}
 	}
 
-	// After invalidation the next List goes back to the agent.
 	mock.mu.Lock()
 	mock.lists = 0
 	mock.mu.Unlock()
@@ -493,7 +479,6 @@ func TestNoDialerReportsUnavailable(t *testing.T) {
 		t.Errorf("Stop without dialer: %v, want ErrAgentUnavailable", err)
 	}
 
-	// SetDial plugs the client in at merge time.
 	svc.SetDial(func(context.Context, *servers.Server) (DockerClient, error) {
 		return &mockDockerClient{listResp: listResponse()}, nil
 	})
@@ -531,9 +516,6 @@ func TestRPCErrorMapping(t *testing.T) {
 	}
 }
 
-// TestConnectionsClosedPerOperation is the B1-1 guard: every operation that
-// dials an agent must close the connection it owns, so repeated ops do not
-// accumulate gRPC connections.
 func TestConnectionsClosedPerOperation(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed()
@@ -567,9 +549,6 @@ func TestConnectionsClosedPerOperation(t *testing.T) {
 	}
 }
 
-// deadlineDockerClient records the deadline of the context it is called with
-// and blocks until it is done, so a test can prove the configured RPC timeout
-// reaches the agent call.
 type deadlineDockerClient struct {
 	*mockDockerClient
 	seen time.Duration
@@ -587,9 +566,6 @@ func (m *deadlineDockerClient) ListContainers(ctx context.Context, _ *agentv1.Li
 	}
 }
 
-// TestRPCTimeoutReachesAgentCall is the B1-3 guard: the derived RPC deadline
-// must be the context handed to the agent call, not the caller's unbounded
-// context.
 func TestRPCTimeoutReachesAgentCall(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed()
@@ -613,9 +589,6 @@ func TestRPCTimeoutReachesAgentCall(t *testing.T) {
 	}
 }
 
-// deadlineRecordingClient records the deadline of the context each agent call
-// receives, so a test can prove the configured timeout reaches every op, not
-// just the listing.
 type deadlineRecordingClient struct {
 	*mockDockerClient
 	mu        sync.Mutex
@@ -678,9 +651,6 @@ func (m *deadlineRecordingClient) StreamLogs(ctx context.Context, _ *agentv1.Str
 	return &fakeLogStream{err: io.EOF}, nil
 }
 
-// TestRPCDeadlineReachesAllOps is the U3 guard for B1-3: every operation —
-// lifecycle, list, pull, run and the logs open call — must pass a bounded
-// context to the agent, not the caller's unbounded one.
 func TestRPCDeadlineReachesAllOps(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed()
@@ -736,8 +706,6 @@ func TestRPCDeadlineReachesAllOps(t *testing.T) {
 	}
 }
 
-// TestLogsSurfacesStreamError is the A3-5 guard: a terminal agent stream error
-// is reported to the caller after the chunks that did arrive.
 func TestLogsSurfacesStreamError(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed()
@@ -766,8 +734,6 @@ func TestLogsSurfacesStreamError(t *testing.T) {
 	}
 }
 
-// TestLogsOpenErrorClosesClient is the U3 guard for the Logs open-error path:
-// a failed StreamLogs call must still close the dialed connection.
 func TestLogsOpenErrorClosesClient(t *testing.T) {
 	registry := newFakeRegistry()
 	server := registry.seed()
@@ -792,9 +758,6 @@ func TestPortsFromLabels(t *testing.T) {
 	}
 }
 
-// TestMapRPCErrorPortConflict pins the Docker host-port collision taxonomy: the
-// daemon reports it as a generic 500, so the message text is the only signal
-// across gRPC. It must map to ErrPortConflict, not leak as an internal error.
 func TestMapRPCErrorPortConflict(t *testing.T) {
 	cases := []struct {
 		name string
@@ -877,7 +840,6 @@ func TestNewDefaultServiceNilRegistry(t *testing.T) {
 	}
 }
 
-// Compile-time assertion that the service implements its interface.
 var _ ContainerService = (*Service)(nil)
 
 func TestListFreshBypassesCache(t *testing.T) {
@@ -885,7 +847,6 @@ func TestListFreshBypassesCache(t *testing.T) {
 	server := registry.seed()
 	mock := &mockDockerClient{listResp: listResponse()}
 	cache := newFakeCache()
-	// A stale cached list must not satisfy ListFresh.
 	cache.items[server.ID] = []Container{{ID: "stale"}}
 	svc := fixture(registry, mock, cache)
 

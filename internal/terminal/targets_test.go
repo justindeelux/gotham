@@ -14,8 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// Test-only user plumbing: the production mount receives UserIDFromContext,
-// so the handler itself never depends on the server package.
 type targetsUserKey struct{}
 
 func targetsUserFrom(ctx context.Context) (uuid.UUID, bool) {
@@ -196,9 +194,6 @@ func TestTerminalTargetsBoundsAndIgnoresUnknownCodes(t *testing.T) {
 	}
 }
 
-// TestTerminalTargetsHandlerTimeoutCancelsSource kills the "remove the handler
-// timeout" mutant: the source waits for ctx.Done, so only the handler's
-// WithTimeout makes the request return promptly.
 func TestTerminalTargetsHandlerTimeoutCancelsSource(t *testing.T) {
 	router := targetsRouterWithTimeout(t, func(*http.Request) TargetsSource {
 		return &blockingTimeoutSource{}

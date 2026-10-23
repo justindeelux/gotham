@@ -1,5 +1,3 @@
-// JUS-245: the floating terminal window minimizes onto the rail beside the
-// code editor, with its own count badge and a click-to-restore control.
 /* global document:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -24,7 +22,6 @@ const { default: ServerRail } = await import(
   "../src/features/servers/components/ServerRail.vue"
 );
 
-/** makeTerminal builds one minimal terminal tab for the badge count. */
 function makeTerminal(
   id: string,
   mode: "page" | "window" = "window",
@@ -53,7 +50,6 @@ function makeTerminal(
   };
 }
 
-/** makeEditor builds one minimal editor tab for the coexist badge. */
 function makeEditor(id: string): EditorTab {
   return {
     id,
@@ -78,7 +74,6 @@ function makeEditor(id: string): EditorTab {
   };
 }
 
-/** railRouter is the minimal route table the rail reads. */
 function railRouter(): ReturnType<typeof createRouter> {
   const stub = { template: "<div />" };
   return createRouter({
@@ -97,7 +92,6 @@ beforeEach(() => {
   syncComposerLocale("en");
   document.body.innerHTML = "";
   setActivePinia(createPinia());
-  // The terminal rail entry is operator-only (JUS-246).
   useAuthStore().user = {
     id: "u-1",
     email: "ada@gotham.dev",
@@ -107,7 +101,6 @@ beforeEach(() => {
   };
 });
 
-/** mountRail mounts the rail with the given terminal/editor tab counts. */
 async function mountRail(
   terminalCount: number,
   editorCount = 0,
@@ -159,7 +152,6 @@ describe("ServerRail terminal icon (JUS-245)", () => {
     expect(windowStore.minimized).toBe(true);
     expect(wrapper.find(".rail-btn--editor").exists()).toBe(true);
     expect(wrapper.find(".rail-btn--terminal").exists()).toBe(true);
-    // One divider against the server list, one against Overview/Alert.
     expect(wrapper.findAll(".rail-foot > .rail-sep")).toHaveLength(2);
     await wrapper.find(".rail-btn--terminal").trigger("click");
     expect(windowStore.minimized).toBe(false);
@@ -175,8 +167,6 @@ describe("ServerRail terminal icon (JUS-245)", () => {
     expect(button.attributes("aria-label")).toBe("Page terminals, 1 open");
     expect(button.find(".rail-badge").text()).toBe("1");
 
-    // There is no window to toggle: the click returns to the page that owns
-    // the paused session instead of hiding a live shell.
     await button.trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.path).toBe("/servers/server-1");

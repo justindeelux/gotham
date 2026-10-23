@@ -11,10 +11,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestWorkerRunsJobsSequentiallyPerNode pins the per-node ordering: a node's
-// jobs run one at a time even with several workers, so a slow first job keeps
-// the second one queued (a global pool that ignored the node guard would finish
-// the fast second job first).
 func TestWorkerRunsJobsSequentiallyPerNode(t *testing.T) {
 	agent := &fakeAgent{
 		catalog: []*agentv1.ToolInfo{catalogTool("slow", true, true), catalogTool("fast", true, true)},
@@ -47,8 +43,6 @@ func TestWorkerRunsJobsSequentiallyPerNode(t *testing.T) {
 	}
 }
 
-// TestWorkerRunsNodesInParallel pins the cross-node parallelism: a slow install
-// on one node does not block another node's job.
 func TestWorkerRunsNodesInParallel(t *testing.T) {
 	agent := &fakeAgent{
 		catalog: []*agentv1.ToolInfo{catalogTool("slow", true, true), catalogTool("fast", true, true)},
@@ -81,8 +75,6 @@ func TestWorkerRunsNodesInParallel(t *testing.T) {
 	}
 }
 
-// TestWorkerCapsJobLog pins the log cap: a chatty install stops persisting past
-// the cap and records one truncation marker instead of growing without bound.
 func TestWorkerCapsJobLog(t *testing.T) {
 	lines := make([]string, 0, 100)
 	for i := 0; i < 100; i++ {
@@ -136,8 +128,6 @@ func TestWorkerFailsResultAndUnreachableAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	// "unreachable" cannot run while "bad" still owns the node's slot; assert
-	// both end failed.
 	if got := waitTerminal(t, st, result.Jobs[0].ID); got != StatusFailed {
 		t.Fatalf("bad job status = %s, want failed", got)
 	}
@@ -149,10 +139,6 @@ func TestWorkerFailsResultAndUnreachableAgent(t *testing.T) {
 	}
 }
 
-// TestWorkerRecoversOnlyStaleJobs pins that recovery is lease-only: the sweeper
-// fails jobs whose lease lapsed, and never a job (even this instance's) that a
-// live process is still renewing — so a restart-overlapping process can never
-// fail a job another process owns.
 func TestWorkerRecoversOnlyStaleJobs(t *testing.T) {
 	agent := &fakeAgent{}
 	st := newFakeStore()
@@ -180,9 +166,6 @@ func TestWorkerRecoversOnlyStaleJobs(t *testing.T) {
 	}
 }
 
-// TestFinishNoOpForForeignOrStaleLease pins the finish guard: a finish by an
-// instance that no longer owns the job (foreign claimed_by, or a lapsed lease)
-// must not overwrite its state.
 func TestFinishNoOpForForeignOrStaleLease(t *testing.T) {
 	st := newFakeStore()
 	svc := testService(st, &fakeAgent{}, &fakeRegistry{}, nil)
@@ -204,8 +187,6 @@ func TestFinishNoOpForForeignOrStaleLease(t *testing.T) {
 	}
 }
 
-// TestWorkerRetriesFinishOnFailure pins the finish retry: a transient DB error
-// must not strand the job as running.
 func TestWorkerRetriesFinishOnFailure(t *testing.T) {
 	agent := &fakeAgent{
 		catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)},
@@ -226,8 +207,6 @@ func TestWorkerRetriesFinishOnFailure(t *testing.T) {
 	}
 }
 
-// TestRealtimeFramesCarryOnlyNewLines pins that a job state frame carries no
-// log and a log frame carries exactly one line (never the accumulated log).
 func TestRealtimeFramesCarryOnlyNewLines(t *testing.T) {
 	agent := &fakeAgent{
 		catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)},
@@ -264,9 +243,6 @@ func TestRealtimeFramesCarryOnlyNewLines(t *testing.T) {
 	}
 }
 
-// TestWorkerAbortsOnLostLease pins the lease-lost abort: when a renewal reports
-// that the lease is gone (the job was recovered), the worker cancels the stream
-// and returns without finishing, so it never overwrites a recovered job.
 func TestWorkerAbortsOnLostLease(t *testing.T) {
 	agent := &fakeAgent{
 		catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)},
@@ -277,8 +253,6 @@ func TestWorkerAbortsOnLostLease(t *testing.T) {
 	svc := testService(st, agent, &fakeRegistry{}, nil)
 	svc.renewInterval = 20 * time.Millisecond
 
-	// A running job this instance owns, so only the "0 rows renewed" signal can
-	// stop it.
 	id := st.seedRunning(uuid.New(), "docker", "test-instance", time.Now().Add(time.Hour))
 
 	done := make(chan struct{})
@@ -299,9 +273,6 @@ func TestWorkerAbortsOnLostLease(t *testing.T) {
 	}
 }
 
-// TestWorkerRetriesContendedClaimImmediately pins the lost-claim retry: when a
-// claim loses the per-node race the worker tries the next claimable job at once
-// instead of sleeping a poll interval.
 func TestWorkerRetriesContendedClaimImmediately(t *testing.T) {
 	agent := &fakeAgent{
 		catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)},
@@ -310,7 +281,7 @@ func TestWorkerRetriesContendedClaimImmediately(t *testing.T) {
 	st := newFakeStore()
 	st.contendedOnce = true
 	svc := testService(st, agent, &fakeRegistry{}, nil)
-	svc.pollInterval = 30 * time.Second // a stall would blow waitTerminal's deadline
+	svc.pollInterval = 30 * time.Second
 	svc.Start()
 	defer func() { _ = svc.Close() }()
 

@@ -25,8 +25,6 @@ import { expiryLabel, formatDate, relativeTime } from "@/shared/utils/format";
 interface Props {
   show: boolean;
   application: Application;
-  /** The domain row whose certificate intent is edited; never the primary by
-   * default. */
   domain: string;
 }
 
@@ -43,7 +41,6 @@ const certs = useCertificateConfig(
 
 const { t } = useI18n();
 
-/** deleteConfirm names the actual domain being removed, never raw HTML. */
 const deleteConfirm = computed<string>(() =>
   String(
     t("applications.cert.deleteConfirm", {
@@ -52,7 +49,6 @@ const deleteConfirm = computed<string>(() =>
   ),
 );
 
-/** open seeds the draft from the clicked domain whenever the modal opens. */
 watch(
   () => props.show,
   (show) => {
@@ -62,12 +58,10 @@ watch(
   },
 );
 
-/** close forwards the modal's own dismiss paths to the parent. */
 function close(): void {
   emit("update:show", false);
 }
 
-/** save closes the modal only when the write succeeded. */
 async function save(): Promise<void> {
   await certs.handleSaveCertificate();
   if (certs.certificateError.value === null) {
@@ -75,7 +69,6 @@ async function save(): Promise<void> {
   }
 }
 
-/** remove closes the modal after the stored intent is gone. */
 async function remove(): Promise<void> {
   await certs.handleDeleteCertificate();
   if (certs.certificate.value === null) {

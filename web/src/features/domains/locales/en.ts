@@ -1,10 +1,3 @@
-/**
- * English catalog for the domains feature: page shell, KPI tiles, DNS
- * provider controls, certificate controls, router stub and redirect rules.
- * Wire values (provider types, challenge modes, redirect codes, domains,
- * URLs, Traefik middleware names) are interpolated as parameters or kept in
- * code; only the framing copy lives here.
- */
 const en = {
   page: {
     eyebrow: "Operations · Reverse proxy",
@@ -235,10 +228,6 @@ const en = {
     emptyHint:
       "A rule sends one exact source host to one exact target host. The " +
       "target must serve its own certificate.",
-    /**
-     * Rule count with library pluralization (one | other): the numeric total
-     * selects the segment; `{total}`/`{enabled}` interpolate raw counts.
-     */
     rulesSummary:
       "{total} rule · {enabled} enabled. GET answers the stored code; " +
       "other methods answer 308/307 so they keep their method. | " +

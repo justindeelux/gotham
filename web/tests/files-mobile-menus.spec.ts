@@ -8,12 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
 /* global URL, document:readonly, window:readonly, HTMLElement:readonly, getComputedStyle:readonly */
-// JUS-145 proof, round 1: at EVERY width where the list overflows horizontally
-// the row/tile menu trigger is on screen and hit-testable (the actions cell is
-// pinned sticky-right), the compact layout keeps Modified visible and the
-// Modified/Owner-Mode columns sortable, and the windowed list keeps its exact
-// scroll maths. The committed webdist is served statically with the
-// control-plane file API mocked in real Chromium.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -69,14 +63,8 @@ const root = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/**
- * reachWidths covers the phone, tablet, the previously-broken 861..1400 band
- * (where the table overflows but the compact columns have not kicked in) and
- * desktop. `run.sock` (a special row) is the only row without a menu.
- */
 const reachWidths = [390, 540, 768, 861, 1024, 1280, 1440];
 
-/** listing is a small folder with one of every entry kind (12 rows). */
 function listing() {
   return [
     { name: "app.yaml", kind: "file" as const, size: 2458, mode: 0o100644, modified_at: "2026-10-12T09:02:00Z", etag: '"a"' },
@@ -95,10 +83,8 @@ function listing() {
   ];
 }
 
-/** COUNT is the large-directory size the issue names (5,000 entries). */
 const COUNT = 5000;
 
-/** bigListing is one folder plus 5,000 files so the list/grid window. */
 function bigListing() {
   return [
     { name: "aaa-dir", kind: "directory" as const, size: 4096, mode: 0o040755, modified_at: "2026-10-12T09:02:00Z", etag: '"d"' },
@@ -158,7 +144,6 @@ interface OpenOptions {
   viewport?: { width: number; height: number };
 }
 
-/** openFiles seeds a session, mocks the file API and lands on the browser. */
 async function openFiles(page: Page, options: OpenOptions = {}): Promise<void> {
   const entries = options.entries ?? listing();
   const viewport = options.viewport ?? { width: 1440, height: 900 };
@@ -195,12 +180,10 @@ async function openFiles(page: Page, options: OpenOptions = {}): Promise<void> {
   await expect(page.locator(".fm-label b").first()).toBeVisible();
 }
 
-/** moreFor is the row/tile ⋮ trigger (list and grid share the label). */
 function moreFor(page: Page, name: string): Locator {
   return page.getByRole("button", { name: `More actions for ${name}` });
 }
 
-/** expectNoPageOverflow proves the page itself never scrolls sideways. */
 async function expectNoPageOverflow(page: Page): Promise<void> {
   const doc = await page.evaluate(() => {
     const el = document.documentElement;
@@ -209,8 +192,6 @@ async function expectNoPageOverflow(page: Page): Promise<void> {
   expect(doc, "page horizontal overflow").toBeLessThanOrEqual(1);
 }
 
-/** bringIntoView scrolls a row/tile into the VERTICAL view of its scroller only
- * (never sideways), so the hit test runs on a genuinely visible trigger. */
 async function bringIntoView(trigger: Locator): Promise<void> {
   await trigger.evaluate((el) => {
     const wrap = el.closest(".table-wrap, .fm-grid") as HTMLElement | null;
@@ -227,8 +208,6 @@ async function bringIntoView(trigger: Locator): Promise<void> {
   });
 }
 
-/** expectReachable asserts the trigger is on screen (no sideways scroll) AND the
- * top-most element at its centre is the trigger itself. */
 async function expectReachable(trigger: Locator, width: number): Promise<void> {
   await expect(trigger).toBeVisible();
   const box = await trigger.boundingBox();
@@ -254,8 +233,6 @@ test.describe("row and tile menus are reachable without scrolling (JUS-145)", ()
       await openFiles(page, { viewport: { width, height: 900 } });
       await expectNoPageOverflow(page);
 
-      // Below the compact breakpoint the table must also fit internally, so no
-      // sideways scroll is needed at all.
       if (width <= 860) {
         const overflow = await page
           .locator(".table-wrap")
@@ -267,7 +244,6 @@ test.describe("row and tile menus are reachable without scrolling (JUS-145)", ()
       expect(await rows.count()).toBe(12);
       for (let index = 0; index < 12; index += 1) {
         const name = (await rows.nth(index).getAttribute("data-entry")) ?? "";
-        // A special row genuinely has no actions, so no trigger.
         if (name === "run.sock") {
           expect(await moreFor(page, name).count()).toBe(0);
           continue;
@@ -300,10 +276,6 @@ test.describe("row and tile menus are reachable without scrolling (JUS-145)", ()
     });
   }
 
-  // JUS-163 fix round 1: the search input, the "Include subdirectories" switch
-  // and the Search button share the nav row with Refresh. At every narrow width
-  // they must stay inside the viewport (no sideways scroll) — the group is
-  // allowed to wrap its switch under the input rather than overflow.
   for (const width of [390, 480, 640]) {
     test(`search controls fit the nav row at ${width}px`, async ({ page }) => {
       await openFiles(page, { viewport: { width, height: 900 } });
@@ -340,7 +312,6 @@ test.describe("row and tile menus are reachable without scrolling (JUS-145)", ()
   }) => {
     await openFiles(page, { viewport: { width: 1024, height: 768 } });
 
-    // Select a row so the selected tint must follow the pinned cell.
     await page.locator('.fm-table .fm-row:not(.fm-head)[data-entry="config"]').click();
     const cells = await page.evaluate(() => {
       const selected = document.querySelector(
@@ -358,8 +329,6 @@ test.describe("row and tile menus are reachable without scrolling (JUS-145)", ()
       };
     });
     expect(cells.selectedPos).toBe("sticky");
-    // Opaque surface (never transparent, or the columns scrolling under it show
-    // through) with the selected tint layered on top.
     expect(cells.selectedBg).not.toBe("rgba(0, 0, 0, 0)");
     expect(cells.selectedBg).toBe(cells.plainBg);
     expect(cells.selectedImage).not.toBe("none");
@@ -368,7 +337,6 @@ test.describe("row and tile menus are reachable without scrolling (JUS-145)", ()
 });
 
 test.describe("windowed list keeps its maths and reachability (JUS-145)", () => {
-  /** scrollMath reads the table's exact scroll height against the row token. */
   async function scrollMath(page: Page) {
     return page.evaluate(() => {
       const wrap = document.querySelector(".table-wrap") as HTMLElement;
@@ -411,7 +379,6 @@ test.describe("windowed list keeps its maths and reachability (JUS-145)", () => 
     };
 
     await checked(42);
-    // Cross the compact breakpoint: the token grows to 52px, then back.
     await page.setViewportSize({ width: 860, height: 900 });
     await checked(52);
     await page.setViewportSize({ width: 861, height: 900 });
@@ -425,8 +392,6 @@ test.describe("windowed list keeps its maths and reachability (JUS-145)", () => 
       entries: bigListing(),
       viewport: { width: 390, height: 844 },
     });
-    // Scroll to the bottom (vertical only); the pinned actions cell must be on
-    // screen and hit-testable there too.
     await page.locator(".table-wrap").evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });
@@ -455,7 +420,6 @@ test.describe("folded row actions and compact sort (JUS-145)", () => {
       return labels.map((text) => text.trim());
     };
 
-    // A file: edit/download/permissions/rename/cut/copy/delete.
     for (const label of [
       "Edit in editor",
       "Download",
@@ -467,16 +431,12 @@ test.describe("folded row actions and compact sort (JUS-145)", () => {
     ]) {
       expect(await menuLabels("app.yaml"), label).toContain(label);
     }
-    // An archive keeps Extract here….
     expect(await menuLabels("backup.tar.gz")).toContain("Extract here…");
-    // A folder: open/open-in-new-tab/.../paste/delete.
     const folder = await menuLabels("config");
     for (const label of ["Open", "Open in new tab", "Paste", "Delete"]) {
       expect(folder, label).toContain(label);
     }
-    // A symlink keeps Go to target.
     expect(await menuLabels("link-to-data")).toContain("Go to target");
-    // A special row has no menu at all.
     expect(await moreFor(page, "run.sock").count()).toBe(0);
   });
 
@@ -485,7 +445,6 @@ test.describe("folded row actions and compact sort (JUS-145)", () => {
   }) => {
     await openFiles(page, { viewport: { width: 390, height: 844 } });
 
-    // Modified is a visible, muted secondary line on the compact row.
     const sub = page.locator(
       '.fm-table .fm-row[data-entry="app.yaml"] .fm-row-sub',
     );
@@ -499,8 +458,6 @@ test.describe("folded row actions and compact sort (JUS-145)", () => {
           els.map((el) => (el as HTMLElement).dataset.entry ?? ""),
         );
 
-    // Headers for Modified / Owner-Mode are hidden, so the toolbar control is
-    // the only way to sort by them.
     await expect(page.locator(".fm-head .fm-cell--modified")).toBeHidden();
     await expect(page.locator(".fm-head .fm-cell--mode")).toBeHidden();
 
@@ -508,14 +465,11 @@ test.describe("folded row actions and compact sort (JUS-145)", () => {
     await expect(sortButton).toBeVisible();
     await expect(sortButton).toHaveAttribute("aria-label", /Name/);
 
-    // Baseline: Name ascending → app.yaml before backup.tar.gz.
     let names = await order();
     expect(names.indexOf("app.yaml")).toBeLessThan(
       names.indexOf("backup.tar.gz"),
     );
 
-    // Sort by Size ascending: the smallest file before the largest, and the
-    // folder still groups first (kind rank is direction-independent).
     await sortButton.click();
     await page.getByRole("menu", { name: "Sort" }).getByRole("menuitem", { name: "Size" }).click();
     await expect(sortButton).toHaveAttribute("aria-label", /Size/);
@@ -525,7 +479,6 @@ test.describe("folded row actions and compact sort (JUS-145)", () => {
       names.indexOf("backup.tar.gz"),
     );
 
-    // Flip the direction: the largest file now comes before the smallest.
     await sortButton.click();
     await page
       .getByRole("menu", { name: "Sort" })
@@ -537,7 +490,6 @@ test.describe("folded row actions and compact sort (JUS-145)", () => {
       names.indexOf("report-0000.txt"),
     );
 
-    // A keyboard user reaches the control too (native Enter opens the menu).
     await sortButton.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("menu", { name: "Sort" })).toBeVisible();
@@ -565,7 +517,6 @@ test.describe("the grid ⋮ follows the same popup/ARIA contract as the list", (
     await expect(menu).toBeHidden();
     await expect(more).toHaveAttribute("aria-expanded", "false");
 
-    // One menu at a time: opening a second tile closes the first.
     await more.click();
     await expect(menu).toBeVisible();
     await moreFor(page, "config").click();
@@ -578,7 +529,6 @@ test.describe("the grid ⋮ follows the same popup/ARIA contract as the list", (
 });
 
 test.describe("touch targets (JUS-145)", () => {
-  // hasTouch makes Chromium report `(hover: none)` / `(pointer: coarse)`.
   test.use({ hasTouch: true });
 
   test("list and grid ⋮ are >= 44px and open with one tap at 390px", async ({

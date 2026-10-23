@@ -21,42 +21,11 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 )
 
-// fileRootVolumes and fileRootCompose mirror the agent's fixed root names; the
-// browser addresses every entry as (root, relpath).
 const (
 	fileRootVolumes = "volumes"
 	fileRootCompose = "compose"
 )
 
-// TestFilesEndToEnd proves the Phase 18 exit criteria against a real node
-// agent: the control-plane routes are driven over HTTP (through the real
-// internal/files service and the real mTLS FileService dial) to a live agent
-// whose confined roots are temporary directories. It follows the repo's
-// existing gated-e2e pattern: it skips cleanly unless GOTHAM_E2E=1 and, once
-// set, fails on a missing prerequisite instead of skipping green.
-//
-// Run manually with:
-//
-//	GOTHAM_E2E=1 go test ./internal/e2e -run Files -v
-//
-// The walk is upload -> edit (If-Match) -> conflict (409) -> download (ticket)
-// -> delete, and it also pins the 428 (missing If-Match) and read-only-root
-// paths:
-//
-//  1. GET /roots lists the writable volumes root and the read-only compose root.
-//  2. PUT /content with no If-Match answers 428 (precondition required).
-//  3. POST /upload stages a multipart file and reports a per-file result.
-//  4. GET /content returns the body and a strong etag.
-//  5. PUT /content with the matching If-Match commits and returns the new etag.
-//  6. PUT /content with the stale etag answers 409 and leaves the file intact.
-//  7. PUT /content into the read-only compose root answers 403.
-//  8. POST /download-ticket mints a single-use ticket; GET /download streams the
-//     exact bytes and a second use answers 404.
-//  9. DELETE /entry removes the file; a stat then answers 404 and the path is
-//     gone from disk.
-//  10. POST /mkdir + /upload stage a tree, POST /compress builds a zip, DELETE
-//     /entry removes the tree, POST /extract restores it and the restored file
-//     reads back byte for byte — the archive path over the real CP↔agent dial.
 func TestFilesEndToEnd(t *testing.T) {
 	requireE2E(t)
 	t.Setenv(files.FeatureEnv, "true")
@@ -69,8 +38,6 @@ func TestFilesEndToEnd(t *testing.T) {
 
 	serverPath := "/v1/servers/" + base.serverID.String() + "/files"
 
-	// 1. The roots endpoint reports the writable volumes root and the read-only
-	// compose root.
 	roots := base.getJSON(t, client, serverPath+"/roots?root=")
 	rootList := roots["roots"].([]any)
 	if len(rootList) != 2 {
@@ -85,14 +52,10 @@ func TestFilesEndToEnd(t *testing.T) {
 		t.Fatalf("root writability = %v, want volumes writable and compose read-only", writable)
 	}
 
-	// 2. A save without If-Match (and without ?overwrite) is refused before any
-	// body is read.
 	if status, _ := base.do(t, client, http.MethodPut, serverPath+"/content?root="+fileRootVolumes+"&path=hello.txt", "hi\n", nil); status != http.StatusPreconditionRequired {
 		t.Fatalf("PUT without If-Match = %d, want 428", status)
 	}
 
-	// 3. Upload a file through the multipart route: the per-file result carries
-	// the committed entry.
 	upload := base.upload(t, client, serverPath+"/upload?root="+fileRootVolumes+"&path=", "hello.txt", "hello\n")
 	results := upload["results"].([]any)
 	if len(results) != 1 {
@@ -102,7 +65,6 @@ func TestFilesEndToEnd(t *testing.T) {
 		t.Fatalf("upload result has no entry: %v", result)
 	}
 
-	// 4. Read the body and its etag.
 	content := base.getJSON(t, client, serverPath+"/content?root="+fileRootVolumes+"&path=hello.txt")
 	if got := content["content"].(string); got != "hello\n" {
 		t.Fatalf("content = %q, want %q", got, "hello\n")
@@ -112,8 +74,6 @@ func TestFilesEndToEnd(t *testing.T) {
 		t.Fatal("read returned an empty etag")
 	}
 
-	// 5. Save with the matching If-Match: the write commits and reports a new
-	// etag.
 	status, body := base.do(t, client, http.MethodPut, serverPath+"/content?root="+fileRootVolumes+"&path=hello.txt", "hello world\n",
 		map[string]string{"If-Match": etag})
 	if status != http.StatusOK {
@@ -128,7 +88,6 @@ func TestFilesEndToEnd(t *testing.T) {
 		t.Fatalf("new etag = %q, want a fresh etag over %q", newEtag, etag)
 	}
 
-	// 6. The stale etag is a conflict, and the file is untouched.
 	if status, _ := base.do(t, client, http.MethodPut, serverPath+"/content?root="+fileRootVolumes+"&path=hello.txt", "boom\n",
 		map[string]string{"If-Match": etag}); status != http.StatusConflict {
 		t.Fatalf("PUT with stale If-Match = %d, want 409", status)
@@ -137,12 +96,10 @@ func TestFilesEndToEnd(t *testing.T) {
 		t.Fatalf("content after the rejected save = %q, want %q", got, "hello world\n")
 	}
 
-	// 7. The read-only compose root refuses a write.
 	if status, _ := base.do(t, client, http.MethodPut, serverPath+"/content?root="+fileRootCompose+"&path=nope.txt&overwrite=true", "x", nil); status != http.StatusForbidden {
 		t.Fatalf("PUT into the read-only root = %d, want 403", status)
 	}
 
-	// 8. A single-use download ticket streams the exact bytes.
 	status, ticketBody := base.do(t, client, http.MethodPost, serverPath+"/download-ticket?root="+fileRootVolumes+"&path=hello.txt", "", nil)
 	if status != http.StatusCreated {
 		t.Fatalf("download-ticket = %d (%s), want 201", status, ticketBody)
@@ -163,7 +120,6 @@ func TestFilesEndToEnd(t *testing.T) {
 		t.Fatalf("second download with the same ticket = %d, want 404", status)
 	}
 
-	// 9. Delete is permanent; the entry is gone from the API and from disk.
 	if status, body := base.do(t, client, http.MethodDelete, serverPath+"/entry?root="+fileRootVolumes+"&path=hello.txt", "", nil); status != http.StatusNoContent {
 		t.Fatalf("DELETE = %d (%s), want 204", status, body)
 	}
@@ -174,10 +130,6 @@ func TestFilesEndToEnd(t *testing.T) {
 		t.Fatalf("file still on disk after delete: err=%v", err)
 	}
 
-	// 10. Archives round-trip through the real control-plane service and agent:
-	// stage a small tree, build a zip, delete the tree, extract the zip back and
-	// read a restored file. This drives the CP /compress and /extract routes
-	// over the real mTLS FileService dial (OC N2).
 	if status, body := base.do(t, client, http.MethodPost, serverPath+"/mkdir",
 		`{"root":"`+fileRootVolumes+`","path":"data"}`, nil); status != http.StatusCreated {
 		t.Fatalf("mkdir data = %d (%s), want 201", status, body)
@@ -215,8 +167,6 @@ func TestFilesEndToEnd(t *testing.T) {
 	t.Logf("files e2e ok: node=%s root=%s", base.nodeID, base.writableRoot)
 }
 
-// TestFilesEndToEndDisabled pins the kill switch: with FEATURE_FILES off the
-// routes are mounted but every one answers 503, and the agent is never dialed.
 func TestFilesEndToEndDisabled(t *testing.T) {
 	requireE2E(t)
 	t.Setenv(files.FeatureEnv, "false")
@@ -239,8 +189,6 @@ func TestFilesEndToEndDisabled(t *testing.T) {
 	}
 }
 
-// filesHarness holds a live agent FileService, the control-plane service wired
-// to it and the HTTP surface under test.
 type filesHarness struct {
 	nodeID       string
 	serverID     uuid.UUID
@@ -250,10 +198,6 @@ type filesHarness struct {
 	baseURL      string
 }
 
-// newFilesHarness boots the agent FileService over mTLS on two temporary
-// confined roots (the first writable, the second read-only) and mounts the real
-// file routes in front of a real internal/files Service that dials the agent
-// exactly the way the control plane does.
 func newFilesHarness(t *testing.T, ctx context.Context) *filesHarness {
 	t.Helper()
 	logger := testLogger(t)
@@ -304,13 +248,8 @@ func newFilesHarness(t *testing.T, ctx context.Context) *filesHarness {
 	}
 }
 
-// passthroughAuth stands in for the server's RequireAuth chain: a non-HTTP
-// caller (no team scope) keeps the pre-teams authorization path.
 func passthroughAuth(next http.Handler) http.Handler { return next }
 
-// canonicalTempDir returns a symlink-resolved temporary directory: the agent's
-// traversal rejects a root whose ancestors carry symlinks, which macOS temp
-// paths (/var -> /private/var) always do.
 func canonicalTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -320,7 +259,6 @@ func canonicalTempDir(t *testing.T) string {
 	return dir
 }
 
-// do sends one request and returns its status and body.
 func (h *filesHarness) do(t *testing.T, client *http.Client, method, path, body string, headers map[string]string) (int, string) {
 	t.Helper()
 	var reader io.Reader
@@ -346,7 +284,6 @@ func (h *filesHarness) do(t *testing.T, client *http.Client, method, path, body 
 	return response.StatusCode, string(payload)
 }
 
-// getJSON issues a GET and decodes a JSON object, failing on a non-200.
 func (h *filesHarness) getJSON(t *testing.T, client *http.Client, path string) map[string]any {
 	t.Helper()
 	status, body := h.do(t, client, http.MethodGet, path, "", nil)
@@ -360,7 +297,6 @@ func (h *filesHarness) getJSON(t *testing.T, client *http.Client, path string) m
 	return decoded
 }
 
-// upload posts one multipart file and decodes the per-file result envelope.
 func (h *filesHarness) upload(t *testing.T, client *http.Client, path, name, content string) map[string]any {
 	t.Helper()
 	var buffer bytes.Buffer

@@ -22,20 +22,7 @@ import {
 } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
 
-/**
- * Explorer tree store for the in-editor file explorer (JUS-223).
- *
- * One listing is cached per expanded directory and loaded on first expand, so
- * opening a deep tree never walks the whole filesystem up front. The store is
- * deliberately separate from the files browser: it owns its own root/path and
- * never moves the browser's active tab, while every write reuses the same
- * files API and the editor store's `applyRename`/`applyDelete`/`blockingNames`
- * rules so tabs and tree stay consistent.
- */
-
-/** ExplorerDirtyError carries the names an unsaved buffer blocks. */
 export class ExplorerDirtyError extends Error {
-  /** names are the entries whose dirty tabs refuse the mutation. */
   readonly names: string[];
 
   constructor(names: string[]) {
@@ -45,18 +32,15 @@ export class ExplorerDirtyError extends Error {
   }
 }
 
-/** basename returns the last path segment of a root-relative path. */
 function basename(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash === -1 ? path : path.slice(slash + 1);
 }
 
-/** isUnder reports whether `path` is `prefix` or a descendant of it. */
 function isUnder(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(`${prefix}/`);
 }
 
-/** loadingDir builds a directory cache entry in its loading state. */
 function loadingDir(path: string, entries: ExplorerDirState["entries"] = []): ExplorerDirState {
   return {
     path,
@@ -76,9 +60,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
   const serverId = ref("");
   const rootName = ref("");
   const rootPath = ref("");
-  /** dirs caches one listing per directory (keyed by root-relative path). */
   const dirs = ref<Record<string, ExplorerDirState>>({});
-  /** expanded holds the nested folders the user opened; the root is implicit. */
   const expanded = ref<string[]>([]);
   const selectedPath = ref("");
 
@@ -89,12 +71,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
   const searchLoading = ref(false);
   const searchRaw = ref<unknown>(null);
 
-  // A load or search that finishes after a re-root must not write into the new
-  // tree. `session` is bumped by every reset; in-flight work captures it.
   let session = 0;
-  // A forced reload supersedes an in-flight listing instead of being dropped,
-  // and `dropUnder` bumps a path's token so a listing that started before a
-  // rename/delete can never resurrect the old directory afterwards.
   let loadSeq = 0;
   const loadTokens = new Map<string, number>();
   const inFlight = new Map<string, Promise<void>>();
@@ -109,34 +86,25 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
   const rootLoading = computed<boolean>(() => rootDir.value?.loading ?? false);
   const rootTruncated = computed<boolean>(() => rootDir.value?.truncated ?? false);
 
-  /**
-   * writable reads the server root's flag, not the browser's current tab: the
-   * explorer keeps its own root and may still be looking at a different one.
-   */
   const writable = computed<boolean>(
     () => files.roots.find((root) => root.name === rootName.value)?.writable ?? false,
   );
-  /** canWrite mirrors the browser gate: write role plus a writable root. */
   const canWrite = computed<boolean>(() => files.canReadContent && writable.value);
 
-  /** teamId reads the active team every call is scoped to. */
   function teamId(): string {
     return useTeamsStore().activeTeamId;
   }
 
-  /** isExpanded reports whether a directory's children are on screen. */
   function isExpanded(path: string): boolean {
     return path === rootPath.value || expanded.value.includes(path);
   }
 
-  /** abortSearch cancels the in-flight search and drops its result. */
   function abortSearch(): void {
     searchController?.abort();
     searchController = null;
     searchGeneration += 1;
   }
 
-  /** clearSearchState empties the search results without touching the query. */
   function clearSearchState(): void {
     abortSearch();
     searchHits.value = [];
@@ -145,11 +113,8 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     searchRaw.value = null;
   }
 
-  /** clearCache drops every cached listing and expansion. */
   function clearCache(): void {
     session += 1;
-    // A new non-forced load must never adopt a pre-reset in-flight promise; the
-    // session check already discards the old response.
     inFlight.clear();
     loadTokens.clear();
     dirs.value = {};
@@ -159,11 +124,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     clearSearchState();
   }
 
-  /**
-   * bind points the explorer at one server/root/path. A mount on the same
-   * address keeps the cached tree (the editor window closing and reopening must
-   * not refetch); any other address starts from a clean slate.
-   */
   function bind(nextServerId: string, nextRootName: string, nextRootPath: string): void {
     if (
       serverId.value === nextServerId &&
@@ -179,12 +139,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     clearCache();
   }
 
-  /**
-   * load reads one directory, keeping any previous entries during a refresh.
-   * A forced reload always issues a new request and supersedes any in-flight
-   * listing for that path, so a write followed by `load(dir, true)` can never
-   * be dropped behind a pre-write response.
-   */
   async function load(path: string, force = false): Promise<void> {
     if (serverId.value === "") {
       return;
@@ -243,18 +197,15 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     }
   }
 
-  /** init loads the current root on first mount. */
   async function init(): Promise<void> {
     await load(rootPath.value);
   }
 
-  /** refresh reloads the root and every expanded folder, keeping the view. */
   async function refresh(): Promise<void> {
     const paths = [rootPath.value, ...expanded.value.filter((path) => path !== rootPath.value)];
     await Promise.all(paths.map((path) => load(path, true)));
   }
 
-  /** setRoot re-roots the tree (up, or "set as root" on a folder). */
   async function setRoot(name: string, path: string): Promise<void> {
     rootName.value = name;
     rootPath.value = path;
@@ -262,7 +213,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     await load(path);
   }
 
-  /** up moves the tree root to its parent directory. */
   async function up(): Promise<void> {
     if (rootPath.value === "") {
       return;
@@ -270,7 +220,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     await setRoot(rootName.value, parentPath(rootPath.value));
   }
 
-  /** expand opens one directory and lazy-loads it on first use. */
   async function expand(path: string): Promise<void> {
     if (!isExpanded(path)) {
       expanded.value = [...expanded.value, path];
@@ -278,7 +227,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     await load(path);
   }
 
-  /** collapse folds one directory away; its cache survives for re-expansion. */
   function collapse(path: string): void {
     if (path === rootPath.value) {
       return;
@@ -286,7 +234,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     expanded.value = expanded.value.filter((item) => item !== path);
   }
 
-  /** toggle flips one directory's expansion. */
   async function toggle(path: string): Promise<void> {
     if (isExpanded(path)) {
       collapse(path);
@@ -295,12 +242,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     await expand(path);
   }
 
-  /**
-   * dropUnder invalidates every cached listing at or below `prefix`, including
-   * loads already in flight: their token is bumped so a late response cannot
-   * resurrect a deleted or renamed path. A renamed or deleted folder's children
-   * can never be reused under the old paths.
-   */
   function dropUnder(prefix: string, includeSelf: boolean): void {
     const inside = (key: string): boolean =>
       includeSelf ? isUnder(key, prefix) : key.startsWith(`${prefix}/`);
@@ -321,17 +262,14 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     }
   }
 
-  /** select records the user's focused row. */
   function select(path: string): void {
     selectedPath.value = path;
   }
 
-  /** entryAt resolves one cached listing row by path. */
   function entryAt(path: string) {
     return dirs.value[parentPath(path)]?.entries.find((entry) => entry.name === basename(path)) ?? null;
   }
 
-  /** assertNotDirty refuses a write that would drop unsaved tab edits. */
   function assertNotDirty(path: string): void {
     const blocked = editor.blockingNames(rootName.value, parentPath(path), [basename(path)]);
     if (blocked.length > 0) {
@@ -339,17 +277,12 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     }
   }
 
-  /** blockingNames reports the unsaved entries among `paths`. */
   function blockingNames(paths: string[]): string[] {
     return paths.flatMap((path) =>
       editor.blockingNames(rootName.value, parentPath(path), [basename(path)]),
     );
   }
 
-  /**
-   * create makes an empty file or folder in `dir`, refreshes that listing and
-   * selects the new row so it is visible and ready to rename.
-   */
   async function create(kind: "file" | "directory", name: string, dir: string): Promise<string> {
     const clean = normalizeEntryName(name);
     const target = joinPath(dir, clean);
@@ -367,11 +300,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     return target;
   }
 
-  /**
-   * rename renames one entry and rebases every open tab under it through the
-   * editor store. A dirty buffer anywhere inside the entry blocks the call
-   * before the server changes anything.
-   */
   async function rename(path: string, nextName: string): Promise<string> {
     const clean = normalizeEntryName(nextName);
     const dir = parentPath(path);
@@ -393,12 +321,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     return target;
   }
 
-  /**
-   * remove moves one entry to the recycle bin (recursively for a folder) and
-   * closes every tab it owned. A dirty buffer blocks the call first. `kind`
-   * lets a search hit in a folder that has never been expanded still delete
-   * recursively.
-   */
   async function remove(path: string, kind?: string): Promise<void> {
     const dir = parentPath(path);
     const name = basename(path);
@@ -415,7 +337,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     await load(dir, true);
   }
 
-  /** setSearchQuery updates the search input. */
   function setSearchQuery(value: string): void {
     searchQuery.value = value;
     if (value.trim() === "") {
@@ -423,12 +344,10 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     }
   }
 
-  /** setSearchRecursive flips the "Include subdirectories" option. */
   function setSearchRecursive(value: boolean): void {
     searchRecursive.value = value;
   }
 
-  /** runSearch searches names under the current root path. */
   async function runSearch(): Promise<void> {
     const query = searchQuery.value.trim();
     if (query === "" || serverId.value === "") {
@@ -467,13 +386,11 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     }
   }
 
-  /** clearSearch empties the query and restores the tree. */
   function clearSearch(): void {
     searchQuery.value = "";
     clearSearchState();
   }
 
-  /** reset unbinds the store (server switch / editor teardown). */
   function reset(): void {
     clearCache();
     serverId.value = "";
@@ -485,7 +402,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
   }
 
   return {
-    // state
     serverId,
     rootName,
     rootPath,
@@ -498,7 +414,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     searchTruncated,
     searchLoading,
     searchRaw,
-    // derived
     searchActive,
     searchError,
     rootDir,
@@ -506,7 +421,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     rootTruncated,
     canWrite,
     writable,
-    // actions
     bind,
     init,
     load,

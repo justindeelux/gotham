@@ -10,8 +10,6 @@ import {
   uniqueSuffix,
 } from "./support";
 
-// Reuse the authenticated session so the page starts signed in; the seed
-// calls authenticate separately with the access token from global setup.
 test.use({ storageState: storageStatePath });
 
 interface SeededApplication {
@@ -19,33 +17,11 @@ interface SeededApplication {
   name: string;
 }
 
-/** tab locates a Naive UI tab header by its label (tabs carry no ARIA role). */
 function tab(page: Page, name: string) {
   return page.locator(".n-tabs-tab").filter({ hasText: name });
 }
 
-/**
- * FE-6.x: drives the real Domains & SSL surface against the control plane.
- *
- * Covers the DNS-provider lifecycle (create, list, edit with credential
- * rotation, delete), certificate configuration create/edit/delete, the live
- * certificate status/expiry rendering (observed node states), the redirect
- * rule lifecycle (create, toggle, edit, conflict error, delete), the
- * application domain edit with its per-domain certificate modal, the generated
- * router list read (reported per node, with the unreachable seeded node
- * shown as an error rather than invented rows), and the API validation
- * error path. No ACME issuance is triggered: certificate rows are intent
- * records and no node consumes them in this run.
- */
 test.describe("domains", () => {
-  // The single scenario drives the whole Domains & SSL surface against a real
-  // control plane. Every reroute mutation — a certificate, a DNS provider, a
-  // redirect, the application domain — makes the control plane resync *every*
-  // registered node, so the run scales with the node rows the smoke seeds and
-  // was recorded at 26-34 s on the shared self-hosted runner, straddling the
-  // 30 s default. Raise the per-test budget rather than loosen one assertion:
-  // nodes are seeded on an unreachable loopback address (seedNodeAddress) so each
-  // resync fails fast, but the flow is legitimately long.
   test.describe.configure({ timeout: 60_000 });
 
   test("manages DNS providers, certificates and the application domain", async ({
@@ -64,8 +40,6 @@ test.describe("domains", () => {
     const rotatedCredential = `e2e-rotated-${suffix}-0123456789abcdef`;
     const throwawayCredential = `discard-me-${suffix}-0123456789abcdef`;
 
-    // No API response may ever echo a credential back (the API returns only
-    // `credentials_set`); response bodies are collected and asserted below.
     const credentialEchoes: string[] = [];
     const responseChecks: Promise<void>[] = [];
     page.on("response", (response) => {
@@ -90,8 +64,6 @@ test.describe("domains", () => {
       );
     });
 
-    // A server row is required before an application can be stored. No agent
-    // is connected, so nothing deploys and no certificate is issued.
     const serverResponse = await request.post("/api/v1/servers", {
       headers,
       data: {
@@ -129,8 +101,6 @@ test.describe("domains", () => {
     });
     expect(domainResponse.status(), await domainResponse.text()).toBe(201);
 
-    // A second application without a base domain backs the API error path:
-    // certificate writes for it must answer 400 and the UI must show it.
     const blankResponse = await request.post("/api/v1/applications", {
       headers,
       data: {
@@ -155,10 +125,6 @@ test.describe("domains", () => {
       page.getByRole("heading", { name: "Domains & SSL", level: 1 }),
     ).toBeVisible();
 
-    // The router list is generated state on read (JUS-90): the seeded node
-    // is unreachable and the application has no running deployment, so the
-    // tab reports the node error instead of invented rows and the table
-    // stays empty; certificates and redirects render live data.
     await tab(page, "Routers").click();
     await expect(page.getByText(/agent unavailable/i).first()).toBeVisible();
     await expect(page.getByText("No routers generated yet.")).toBeVisible();
@@ -167,7 +133,6 @@ test.describe("domains", () => {
       page.getByText("No certificate configurations yet."),
     ).toBeVisible();
 
-    // ── error path: the API rejects a certificate for a domainless app ────
     await page.getByRole("button", { name: "Add certificate" }).first().click();
     const createCertModal = page
       .locator(".n-modal")
@@ -185,7 +150,6 @@ test.describe("domains", () => {
     await createCertModal.getByRole("button", { name: "Cancel" }).click();
     await expect(createCertModal).toBeHidden();
 
-    // ── DNS provider: create ─────────────────────────────────────────────
     await tab(page, "DNS providers").click();
     await page.getByRole("button", { name: "Add provider" }).first().click();
     const providerModal = page
@@ -202,13 +166,8 @@ test.describe("domains", () => {
     let providerCard = page.locator(".channel-card").filter({ hasText: providerName });
     await expect(providerCard).toHaveCount(1);
     await expect(providerCard).toContainText("set");
-    // The write-only credential must never be rendered back.
     await expect(page.getByText(credential)).toHaveCount(0);
 
-    // ── credential lifecycle: every dismissal clears the secret ───────────
-    // The credential input renders the page's form state, so a retained
-    // secret would reappear in a reopened dialog. Each path types a throwaway
-    // token, dismisses, reopens and requires a blank field.
     const credentialInput = (modal: Locator) => modal.locator(".field-credential input");
     const openEditDialog = async (): Promise<Locator> => {
       await providerCard
@@ -239,10 +198,8 @@ test.describe("domains", () => {
       modal.locator(".n-card-header__close").click(),
     );
     await checkDismissalClears(() => page.keyboard.press("Escape"));
-    // Mask click: the overlay's outside-click handler closes the dialog.
     await checkDismissalClears(() => page.mouse.click(5, 5));
 
-    // A failed write followed by Cancel: the rejected secret is dropped too.
     await page.getByRole("button", { name: "Add provider" }).first().click();
     let createProviderModal = page
       .locator(".n-modal")
@@ -254,7 +211,6 @@ test.describe("domains", () => {
     await page.keyboard.press("Enter");
     await credentialInput(createProviderModal).fill(throwawayCredential);
     await createProviderModal.getByRole("button", { name: "Save" }).click();
-    // A second enabled Cloudflare provider conflicts with the first.
     await expect(createProviderModal.getByText(/already exists/i)).toBeVisible();
     await createProviderModal.getByRole("button", { name: "Cancel" }).click();
     await expect(page.locator(".n-modal")).toHaveCount(0);
@@ -268,7 +224,6 @@ test.describe("domains", () => {
     await expect(page.locator(".n-modal")).toHaveCount(0);
     await expect(page.getByText(throwawayCredential)).toHaveCount(0);
 
-    // ── DNS provider: edit with credential rotation ──────────────────────
     await providerCard
       .getByRole("button", { name: "Edit & rotate credential" })
       .click();
@@ -276,7 +231,6 @@ test.describe("domains", () => {
       .locator(".n-modal")
       .filter({ hasText: "Edit DNS provider" })
       .first();
-    // A reopened dialog must never prepopulate the previous secret.
     await expect(credentialInput(editProviderModal)).toHaveValue("");
     await editProviderModal.locator(".field-name input").fill(rotatedName);
     await editProviderModal
@@ -290,14 +244,12 @@ test.describe("domains", () => {
     await expect(page.getByText(credential)).toHaveCount(0);
     await expect(page.getByText(rotatedCredential)).toHaveCount(0);
 
-    // A successful write also clears the field (checked on reopen).
     await expect(page.locator(".n-modal")).toHaveCount(0);
     const afterWriteModal = await openEditDialog();
     await expect(credentialInput(afterWriteModal)).toHaveValue("");
     await afterWriteModal.getByRole("button", { name: "Cancel" }).click();
     await expect(page.locator(".n-modal")).toHaveCount(0);
 
-    // ── certificate: create with http-01 ─────────────────────────────────
     await tab(page, "Certificates").click();
     await page.getByRole("button", { name: "Add certificate" }).first().click();
     const createModal = page
@@ -313,7 +265,6 @@ test.describe("domains", () => {
     await expect(certRow).toHaveCount(1);
     await expect(certRow).toContainText(domain);
 
-    // ── certificate: edit to dns-01 + provider + wildcard ────────────────
     await certRow.getByRole("button", { name: "Edit" }).click();
     const editCertModal = page
       .locator(".n-modal")
@@ -333,9 +284,6 @@ test.describe("domains", () => {
     certRow = page.getByRole("row").filter({ hasText: domain });
     await expect(certRow).toContainText(domain);
 
-    // ── certificate status/expiry: live unknown from this control plane ───
-    // No node agent is reachable in this run, so the control plane observes
-    // the certificate as unknown and the view shows no expiry for it.
     await expect(
       page.getByRole("columnheader", { name: "Status" }),
     ).toBeVisible();
@@ -345,9 +293,6 @@ test.describe("domains", () => {
     certRow = page.getByRole("row").filter({ hasText: domain });
     await expect(certRow).toContainText("unknown");
 
-    // present/absent cannot be produced by a local CP without a connected
-    // node, so the list response is rewritten in the browser: the SPA must
-    // render exactly what the API reports and never invent a status.
     const notAfter = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000);
     const expectedExpiryDate = notAfter.toLocaleDateString("en-GB", {
       day: "numeric",
@@ -403,7 +348,6 @@ test.describe("domains", () => {
     ).toContainText("unknown");
     await page.unroute("**/api/v1/proxy/certificates");
 
-    // ── redirects: create, toggle, edit, conflict error, delete ───────────
     await tab(page, "Redirects").click();
     await expect(page.getByText("No redirect rules yet.")).toBeVisible();
     const createRedirectCard = page
@@ -454,7 +398,6 @@ test.describe("domains", () => {
       editRedirectModal.locator(".n-form-item").filter({ hasText: label });
     await editItem("Target domain").locator("input").fill(redirectTargetChanged);
     await editItem("Redirect code").locator(".n-select").click();
-    // Keyboard selection avoids ambiguity with the add form's mounted menu.
     await page.keyboard.press("ArrowUp");
     await page.keyboard.press("Enter");
     await editItem("Preserve path").getByRole("switch").click();
@@ -466,7 +409,6 @@ test.describe("domains", () => {
     await expect(redirectRow).toContainText("301");
     await expect(redirectRow).not.toContainText("keeps the path");
 
-    // A duplicate source is rejected with the API's actionable 409 message.
     await createRedirectCard.locator(".field-source input").fill(redirectSource);
     await createRedirectCard.locator(".field-target input").fill(`other-${zone}`);
     await createRedirectCard
@@ -480,7 +422,6 @@ test.describe("domains", () => {
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
     await expect(redirectRow).toHaveCount(0);
 
-    // ── application detail: edit a domain and configure ITS certificate ──
     await page.goto(nestedURL(projectId, environmentId, "applications", app.id));
     await tab(page, "Domains").click();
     const domainCard = page.locator(".n-card").filter({ hasText: "Domains" }).first();
@@ -491,8 +432,6 @@ test.describe("domains", () => {
     const domainModal = page.locator(".domain-form-modal");
     await expect(domainModal).toBeVisible();
     await domainModal.locator('input[aria-label="Domain hostname"]').fill(changedDomain);
-    // The old host has a certificate intent: the modal must warn that saving
-    // removes it before the user commits the rename.
     await expect(
       domainModal.getByText(/removes the certificate configuration recorded for/i),
     ).toBeVisible();
@@ -500,8 +439,6 @@ test.describe("domains", () => {
     await expect(domainModal).toBeHidden();
     const changedRow = domainCard.locator(".domain-row").filter({ hasText: changedDomain });
     await expect(changedRow).toHaveCount(1);
-    // The backend already removed the old host's auto intent on rename; the
-    // follow-up client cleanup must not surface a spurious 404.
     await expect(domainCard.getByText(/not found/i)).toHaveCount(0);
     await expect(
       page.locator(".n-message").filter({ hasText: "Domain updated." }),
@@ -510,8 +447,6 @@ test.describe("domains", () => {
       page.locator(".n-message").filter({ hasText: "Not found" }),
     ).toHaveCount(0);
 
-    // The certificate action opens the intent of the clicked row, which has
-    // no certificate yet (the earlier intent was recorded for the old host).
     await changedRow
       .getByRole("button", { name: `Certificate for ${changedDomain}` })
       .click();
@@ -522,11 +457,6 @@ test.describe("domains", () => {
     await expect(rowCertModal).toBeHidden();
     await expect(changedRow).not.toContainText("no certificate");
 
-    // ── application detail: an alias attaches through the modal ──────────
-    // Regression for the fix-round-2 live bug (inject() after an await
-    // reported success as "Something went wrong ... Cannot read
-    // properties"): the row appears, no error banner shows, and removal
-    // cleans up.
     const aliasCard = page.locator(".n-card").filter({ hasText: "Domains" }).first();
     const aliasDomain = `www.${zone}`;
     await aliasCard.locator(".domain-add").click();
@@ -544,10 +474,8 @@ test.describe("domains", () => {
     await expect(aliasRow).toHaveCount(0);
     await expect(aliasCard.getByText(/something went wrong/i)).toHaveCount(0);
 
-    // ── delete certificate, then the now-unreferenced provider ───────────
     await page.goto("/domains");
     await tab(page, "Certificates").click();
-    // Target the row by its recorded-domain cell.
     certRow = page
       .getByRole("row")
       .filter({ has: page.locator(".mono", { hasText: changedDomain }) });
@@ -562,7 +490,6 @@ test.describe("domains", () => {
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
     await expect(providerCard).toHaveCount(0);
 
-    // ── credential hygiene: no echo, no browser storage ──────────────────
     await Promise.all(responseChecks);
     expect(
       credentialEchoes,

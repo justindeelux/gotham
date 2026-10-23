@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeService is a scriptable ContainerService for route tests.
 type fakeService struct {
 	mu         sync.Mutex
 	containers []Container
@@ -94,8 +93,6 @@ func (f *fakeService) Run(_ context.Context, _ uuid.UUID, opts RunOptions) (stri
 	return f.runID, nil
 }
 
-// Logs streams the configured payload (default: nothing) and closes the
-// channel, which is what the agent does when a container's stream ends.
 func (f *fakeService) Logs(_ context.Context, _ uuid.UUID, _ string, _ bool) (<-chan []byte, <-chan error, error) {
 	f.record("logs")
 	f.mu.Lock()
@@ -117,12 +114,10 @@ func (f *fakeService) Logs(_ context.Context, _ uuid.UUID, _ string, _ bool) (<-
 	return out, streamErr, nil
 }
 
-// passthroughAuth stands in for RequireAuth in route tests.
 func passthroughAuth(next http.Handler) http.Handler {
 	return next
 }
 
-// newTestRouter mounts the container routes with the fake service.
 func newTestRouter(svc ContainerService) http.Handler {
 	r := chi.NewRouter()
 	Mount(r, passthroughAuth, svc)
@@ -257,8 +252,6 @@ func TestRunRoute(t *testing.T) {
 		t.Errorf("missing image status = %d, want 400", rec.Code)
 	}
 
-	// FX-5a: a raw run must not spoof a managed label or mount a reserved
-	// named volume.
 	rec = doRouteRequest(t, h, http.MethodPost, "/v1/servers/"+id.String()+"/containers/run",
 		`{"image":"nginx","labels":{"gotham.component":"proxy"}}`)
 	if rec.Code != http.StatusBadRequest {
@@ -312,5 +305,4 @@ func TestInternalErrorMapping(t *testing.T) {
 	}
 }
 
-// Compile-time assertion that the fake satisfies the interface.
 var _ ContainerService = (*fakeService)(nil)

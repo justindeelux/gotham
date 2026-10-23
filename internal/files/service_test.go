@@ -22,7 +22,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// fakeRegistry is an in-memory Registry.
 type fakeRegistry struct {
 	mu     sync.Mutex
 	items  map[uuid.UUID]*servers.Server
@@ -54,8 +53,6 @@ func (f *fakeRegistry) Get(_ context.Context, id uuid.UUID) (*servers.Server, er
 	return server, nil
 }
 
-// fakeReadStream satisfies grpc.ServerStreamingClient[ReadChunk] with a scripted
-// sequence of chunks and a terminal error.
 type fakeReadStream struct {
 	grpc.ClientStream
 	chunks [][]byte
@@ -75,7 +72,6 @@ func (s *fakeReadStream) Recv() (*agentv1.ReadChunk, error) {
 	return &agentv1.ReadChunk{Data: data}, nil
 }
 
-// fakeFileClient is a scriptable FileClient.
 type fakeFileClient struct {
 	mu sync.Mutex
 
@@ -207,8 +203,6 @@ func (f *fakeFileClient) Read(_ context.Context, in *agentv1.ReadRequest, _ ...g
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
-	// Honor a byte range the way the agent does, so a tail test exercises the
-	// real window rather than a hand-built slice.
 	body := f.readBody
 	if start := in.GetOffset(); start > 0 || in.GetLimit() > 0 {
 		if start > int64(len(body)) {
@@ -359,7 +353,6 @@ func (f *fakeFileClient) EmptyTrash(_ context.Context, in *agentv1.EmptyTrashReq
 	return &agentv1.EmptyTrashResponse{}, nil
 }
 
-// lastWriteHeader returns the header the fake Write stream received.
 func (f *fakeFileClient) lastWriteHeader() *agentv1.WriteHeader {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -369,7 +362,6 @@ func (f *fakeFileClient) lastWriteHeader() *agentv1.WriteHeader {
 	return f.lastWrite.header
 }
 
-// lastWriteBody returns the body bytes the fake Write stream received.
 func (f *fakeFileClient) lastWriteBody() []byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -379,15 +371,12 @@ func (f *fakeFileClient) lastWriteBody() []byte {
 	return f.lastWrite.body
 }
 
-// lastWriteClosed reports whether CloseAndRecv was called (i.e. the stream was
-// committed rather than cancelled).
 func (f *fakeFileClient) lastWriteClosed() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lastWrite != nil && f.lastWrite.closed
 }
 
-// fakeWriteStream is a scriptable Write client stream.
 type fakeWriteStream struct {
 	grpc.ClientStream
 	mu      sync.Mutex
@@ -424,7 +413,6 @@ func (s *fakeWriteStream) CloseAndRecv() (*agentv1.WriteResponse, error) {
 	return &agentv1.WriteResponse{}, nil
 }
 
-// fakeProgressStream is a scriptable Copy/Delete progress stream.
 type fakeProgressStream struct {
 	grpc.ClientStream
 	msgs  []*agentv1.Progress
@@ -444,7 +432,6 @@ func (s *fakeProgressStream) Recv() (*agentv1.Progress, error) {
 	return msg, nil
 }
 
-// Close satisfies io.Closer so the service releases the fake like a real client.
 func (f *fakeFileClient) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -452,7 +439,6 @@ func (f *fakeFileClient) Close() error {
 	return nil
 }
 
-// newTestService builds a service wired to client with a small editor ceiling.
 func newTestService(t *testing.T, registry Registry, client FileClient) *Service {
 	t.Helper()
 	t.Setenv(FeatureEnv, "true")
@@ -463,7 +449,6 @@ func newTestService(t *testing.T, registry Registry, client FileClient) *Service
 	})
 }
 
-// scopeCtx stores an active team scope on the request context.
 func scopeCtx(role teams.Role, teamID uuid.UUID) context.Context {
 	return teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: teamID, Role: role})
 }
@@ -498,9 +483,6 @@ func TestResolveRBAC(t *testing.T) {
 	})
 
 	t.Run("read_only viewer may write on a team-less legacy server", func(t *testing.T) {
-		// A team-less node ignores the caller's team role, like the rest of the
-		// legacy node surface: platform operators are superusers, so a viewer
-		// scope still authorizes a write there (documents the operator semantics).
 		registry := newFakeRegistry()
 		server := registry.seed(uuid.Nil)
 		svc := newTestService(t, registry, &fakeFileClient{})
@@ -589,9 +571,6 @@ func TestRootsAndListMapping(t *testing.T) {
 	}
 }
 
-// TestListEntryOwnerMapping pins the owner/group mapping: the names land on
-// Entry, and an agent that predates the fields leaves them empty rather than
-// failing the listing.
 func TestListEntryOwnerMapping(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -656,7 +635,6 @@ func TestContentLimits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		// sha256("hi")
 		if content.SHA256 != "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4" {
 			t.Fatalf("sha256 = %q", content.SHA256)
 		}
@@ -666,9 +644,6 @@ func TestContentLimits(t *testing.T) {
 	})
 }
 
-// TestQueryValidation is the fix-round-1 regression: invalid UTF-8 or an
-// over-long root/path/cursor must fail as ErrValidation (400) before any dial,
-// instead of reaching proto.Marshal and surfacing as a 500.
 func TestQueryValidation(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -698,9 +673,6 @@ func TestQueryValidation(t *testing.T) {
 	}
 }
 
-// TestDownloadWrongServerNotBurned proves the redeem-time server check does not
-// consume a ticket issued for another server: the wrong-server request is
-// refused, then the legitimate server still redeems the same ticket.
 func TestDownloadWrongServerNotBurned(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -751,10 +723,6 @@ func TestMapRPCError(t *testing.T) {
 	}
 }
 
-// TestResourceExhaustedClassification is the fix-round-1 regression: an agent
-// ResourceExhausted is not always "the node is busy". The message prefixes the
-// agent already defines distinguish a body over the node's limit (413), low
-// free space or an exhausted quota (507) and the transfer semaphore (429).
 func TestResourceExhaustedClassification(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -790,9 +758,6 @@ func TestDisabledFeature(t *testing.T) {
 	}
 }
 
-// TestDefaultServiceUsesProvidedLogger is the fix-round-1 regression: the
-// production default service must write its audit trail through the control
-// plane's configured logger, not slog.Default.
 func TestDefaultServiceUsesProvidedLogger(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	var buf bytes.Buffer
@@ -801,8 +766,6 @@ func TestDefaultServiceUsesProvidedLogger(t *testing.T) {
 	server := registry.seed(uuid.New())
 
 	svc := NewDefaultService(registry, logger)
-	// No dialer is wired, so the operation fails with ErrAgentUnavailable but
-	// still audits through the provided logger.
 	if _, err := svc.Mkdir(scopeCtx(teams.RoleOwner, server.TeamID), server.ID, "volumes", "d", 0); err == nil {
 		t.Fatal("mkdir without a dialer should fail")
 	}

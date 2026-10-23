@@ -16,28 +16,12 @@ import {
 import enCatalog from "../locales/en";
 import viCatalog from "../locales/vi";
 
-/** catalogFor selects the toolchain display dictionary for one locale. */
 function catalogFor(locale?: string | null): typeof enCatalog {
   return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
 }
 
-/**
- * Typed client for the toolchain routes served by
- * `internal/server/toolchain_routes.go`:
- *
- *   GET  /servers/{id}/tools
- *   GET  /servers/{id}/toolchain/jobs
- *   POST /servers/{id}/toolchain/jobs
- *   GET  /servers/{id}/toolchain/jobs/{jobID}?after=N
- *   POST /servers/{id}/toolchain/jobs/{jobID}/cancel
- *
- * Paths are relative to the shared axios instance (`baseURL: /api/v1`).
- */
-
-/** What an enqueue request does to each selected tool. */
 export type ToolchainAction = "install" | "uninstall";
 
-/** Lifecycle state of one toolchain job. */
 export type ToolchainJobStatus =
   | "queued"
   | "running"
@@ -45,7 +29,6 @@ export type ToolchainJobStatus =
   | "failed"
   | "canceled";
 
-/** One catalog entry with its detected state on a node. */
 export interface ToolchainTool {
   id: string;
   name: string;
@@ -62,7 +45,6 @@ export interface ToolchainTool {
   version_ok: boolean;
 }
 
-/** One queued install/uninstall job (never carries the log). */
 export interface ToolchainJob {
   id: string;
   server_id: string;
@@ -74,20 +56,17 @@ export interface ToolchainJob {
   finished_at?: string | null;
 }
 
-/** One job plus a page of its log. */
 export interface ToolchainJobDetail {
   job: ToolchainJob;
   log: string;
   next_seq: number;
 }
 
-/** Outcome of one enqueue request, in request order. */
 export interface ToolchainEnqueueResult {
   jobs: ToolchainJob[];
   skipped: string[];
 }
 
-/** One output line of a running job, from a `toolchain_log` frame. */
 export interface ToolchainLogLine {
   job_id: string;
   seq: number;
@@ -95,22 +74,14 @@ export interface ToolchainLogLine {
   line: string;
 }
 
-/** toolchainChannel returns the realtime room of one node's toolchain jobs. */
 export function toolchainChannel(serverId: string): string {
   return `logs:${serverId}:toolchain`;
 }
 
-/** isTerminalJobStatus reports whether a job reached its final state. */
 export function isTerminalJobStatus(status: ToolchainJobStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "canceled";
 }
 
-/**
- * isToolSelectable reports whether a row can be checked for bulk install:
- * only tools that are missing and installable. Detect-only rows and
- * already-installed rows render a disabled checkbox with a visible reason
- * instead (see ToolchainPage).
- */
 export function isToolSelectable(tool: ToolchainTool): boolean {
   return !tool.installed && tool.installable;
 }
@@ -119,7 +90,6 @@ function pathOf(serverId: string): string {
   return `/servers/${encodeURIComponent(serverId)}`;
 }
 
-/** listTools returns a node's tool catalog with each entry's detected state. */
 export async function listTools(serverId: string): Promise<ToolchainTool[]> {
   const { data } = await http.get(`${pathOf(serverId)}/tools`);
   const envelope = parseWith(toolchainToolsEnvelopeSchema, data, {
@@ -128,7 +98,6 @@ export async function listTools(serverId: string): Promise<ToolchainTool[]> {
   return envelope.tools;
 }
 
-/** listJobs returns a node's jobs, newest first (never the log). */
 export async function listJobs(serverId: string, limit = 100): Promise<ToolchainJob[]> {
   const { data } = await http.get(`${pathOf(serverId)}/toolchain/jobs`, {
     params: { limit },
@@ -139,7 +108,6 @@ export async function listJobs(serverId: string, limit = 100): Promise<Toolchain
   return envelope.jobs;
 }
 
-/** getJob returns one job plus a page of its log (`?after=` tails it). */
 export async function getJob(
   serverId: string,
   jobId: string,
@@ -154,7 +122,6 @@ export async function getJob(
   });
 }
 
-/** enqueueJobs enqueues one job per selected tool id. */
 export async function enqueueJobs(
   serverId: string,
   toolIds: string[],
@@ -169,7 +136,6 @@ export async function enqueueJobs(
   });
 }
 
-/** cancelJob cancels a queued job (running/terminal jobs answer 409). */
 export async function cancelJob(serverId: string, jobId: string): Promise<ToolchainJob> {
   const { data } = await http.post(
     `${pathOf(serverId)}/toolchain/jobs/${encodeURIComponent(jobId)}/cancel`,
@@ -195,10 +161,6 @@ function asJob(value: unknown): ToolchainJob | null {
   return parsed.success ? (parsed.data as ToolchainJob) : null;
 }
 
-/**
- * parseToolchainJobFrame decodes one `toolchain_job` realtime frame into a
- * job, or null when the frame is anything else (log lines, acks, notices).
- */
 export function parseToolchainJobFrame(raw: string): ToolchainJob | null {
   let frame: ToolchainFrame;
   try {
@@ -220,10 +182,6 @@ export function parseToolchainJobFrame(raw: string): ToolchainJob | null {
   }
 }
 
-/**
- * parseToolchainLogFrame decodes one `toolchain_log` realtime frame into a
- * log line, or null when the frame is anything else.
- */
 export function parseToolchainLogFrame(raw: string): ToolchainLogLine | null {
   let frame: ToolchainFrame;
   try {
@@ -264,7 +222,6 @@ export function parseToolchainLogFrame(raw: string): ToolchainLogLine | null {
   };
 }
 
-/** describeToolchainError renders a toolchain failure in the active locale. */
 export function describeToolchainError(error: unknown, locale?: string | null): string {
   const errors = catalogFor(locale).errors;
   if (!isApiError(error)) {

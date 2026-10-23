@@ -18,8 +18,6 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// fakeReleasesServer serves a single newer release with the assets the Checker
-// resolves for the running architecture.
 func fakeReleasesServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	asset := "gotham-linux-" + runtime.GOARCH
@@ -44,15 +42,11 @@ func fakeReleasesServer(t *testing.T) *httptest.Server {
 	return server
 }
 
-// newUpdateTestServer builds a Server with the self-update service pointed at a
-// local release API and a fixed running version.
 func newUpdateTestServer(t *testing.T, releasesURL string) (*Server, *fakeTokenService) {
 	t.Helper()
 	return newUpdateTestServerWith(t, releasesURL, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
-// newUpdateTestServerWith is newUpdateTestServer with a caller-supplied node
-// registry (whose Version() the update service reports) and logger.
 func newUpdateTestServerWith(t *testing.T, releasesURL string, registry ServerService, logger *slog.Logger) (*Server, *fakeTokenService) {
 	t.Helper()
 	dir := t.TempDir()
@@ -81,8 +75,6 @@ func newUpdateTestServerWith(t *testing.T, releasesURL string, registry ServerSe
 	return s, tokens
 }
 
-// versionedRegistry is the in-memory node registry with the build Version() the
-// update service reports when the version override does not apply.
 type versionedRegistry struct {
 	*fakeServerService
 	version string
@@ -90,10 +82,6 @@ type versionedRegistry struct {
 
 func (v versionedRegistry) Version() string { return v.version }
 
-// TestUpdateVersionOverrideIgnoredWithEmbeddedKey is the GOTHAM_UPDATE_CURRENT
-// residual: the override only exists for keyless development builds. A binary
-// with the release key embedded ignores it, warns and reports the node-registry
-// version instead; a keyless build still honours it.
 func TestUpdateVersionOverrideIgnoredWithEmbeddedKey(t *testing.T) {
 	releases := fakeReleasesServer(t)
 
@@ -119,7 +107,6 @@ func TestUpdateVersionOverrideIgnoredWithEmbeddedKey(t *testing.T) {
 		t.Errorf("no warning about the ignored version override; logs = %q", logs.String())
 	}
 
-	// A development build (no embedded key) still honours the override.
 	updatecore.PublicKey = ""
 	dev := s.updatesService()
 	if dev == nil {
@@ -130,18 +117,14 @@ func TestUpdateVersionOverrideIgnoredWithEmbeddedKey(t *testing.T) {
 	}
 }
 
-// TestUpdateRoutesGating proves check requires a session and apply requires a
-// platform operator: a plain session is refused before the service is reached.
 func TestUpdateRoutesGating(t *testing.T) {
 	releases := fakeReleasesServer(t)
 	s, tokens := newUpdateTestServer(t, releases.URL)
 
-	// Check requires authentication.
 	if rec := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated check status = %d, want 401", rec.Code)
 	}
 
-	// A plain session can read availability.
 	rec := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", "Bearer valid-token")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("check status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
@@ -162,7 +145,6 @@ func TestUpdateRoutesGating(t *testing.T) {
 		t.Errorf("plain session saw release notes %q", checkBody.Notes)
 	}
 
-	// Apply requires a platform operator.
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated apply status = %d, want 401", rec.Code)
 	}
@@ -179,8 +161,6 @@ func TestUpdateRoutesGating(t *testing.T) {
 		}
 	}
 
-	// An admin token passes the boundary and reaches the service, which refuses
-	// to apply without a configured public key (no binary is ever swapped).
 	adminToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{auth.ScopeAdmin})
 	if err != nil {
 		t.Fatalf("create admin token: %v", err)
@@ -189,7 +169,6 @@ func TestUpdateRoutesGating(t *testing.T) {
 		t.Fatalf("admin apply status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// A platform operator sees the release notes on the check response.
 	adminCheck := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", "Bearer "+adminToken.Token)
 	if adminCheck.Code != http.StatusOK {
 		t.Fatalf("admin check status = %d, want 200", adminCheck.Code)
@@ -205,8 +184,6 @@ func TestUpdateRoutesGating(t *testing.T) {
 	}
 }
 
-// TestUpdateRoutesDisabledUnmounts proves FEATURE_UPDATES=false removes both
-// routes.
 func TestUpdateRoutesDisabledUnmounts(t *testing.T) {
 	releases := fakeReleasesServer(t)
 	t.Setenv("FEATURE_UPDATES", "false")

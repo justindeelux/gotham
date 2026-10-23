@@ -9,34 +9,25 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// recordingBackupNotifier captures the terminal results handed to the backup
-// hook.
 type recordingBackupNotifier struct {
 	mu       sync.Mutex
 	recorded []BackupResult
 }
 
-// Compile-time guarantee.
 var _ BackupNotifier = (*recordingBackupNotifier)(nil)
 
-// BackupFinished implements BackupNotifier synchronously so tests can assert
-// right after the row turns terminal; the production implementation queues the
-// delivery.
 func (n *recordingBackupNotifier) BackupFinished(_ context.Context, result BackupResult) {
 	n.mu.Lock()
 	n.recorded = append(n.recorded, result)
 	n.mu.Unlock()
 }
 
-// results returns the recorded outcomes.
 func (n *recordingBackupNotifier) results() []BackupResult {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return append([]BackupResult(nil), n.recorded...)
 }
 
-// TestBackupCompletionNotifies proves a completed backup calls the hook once
-// with the database, team and status.
 func TestBackupCompletionNotifies(t *testing.T) {
 	fixture := newBackupFixture(t)
 	notifier := &recordingBackupNotifier{}
@@ -69,8 +60,6 @@ func TestBackupCompletionNotifies(t *testing.T) {
 	}
 }
 
-// TestBackupFailureNotifies proves a failed backup calls the hook once with
-// the failure text.
 func TestBackupFailureNotifies(t *testing.T) {
 	fixture := newBackupFixture(t)
 	fixture.containers.logFn = func(opts containers.RunOptions) [][]byte {
@@ -101,7 +90,6 @@ func TestBackupFailureNotifies(t *testing.T) {
 	}
 }
 
-// TestBackupWithoutNotifierIsSafe pins the nil (flag-off) hook path.
 func TestBackupWithoutNotifierIsSafe(t *testing.T) {
 	fixture := newBackupFixture(t)
 

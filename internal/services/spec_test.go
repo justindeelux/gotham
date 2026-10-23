@@ -10,9 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestInterpolateForms locks the compose reference forms this package
-// supports and the escaping contract: every literal dollar survives the node's
-// compose run as a literal dollar.
 func TestInterpolateForms(t *testing.T) {
 	document := `services:
   web:
@@ -47,8 +44,6 @@ func TestInterpolateForms(t *testing.T) {
 	if len(spec.Services) != 1 {
 		t.Fatalf("services = %v", spec.Services)
 	}
-	// Environment values are validated but not recorded; the observable
-	// contract is the rendered text.
 	for _, want := range []string{
 		"A: alpha",
 		"B: bravo",
@@ -69,8 +64,6 @@ func TestInterpolateForms(t *testing.T) {
 	}
 }
 
-// TestInterpolateErrors proves an unresolvable reference is a validation
-// error that names the variable (never a value).
 func TestInterpolateErrors(t *testing.T) {
 	longValue := strings.Repeat("s", 40)
 	cases := map[string]struct {
@@ -123,8 +116,6 @@ func TestInterpolateErrors(t *testing.T) {
 	}
 }
 
-// TestInterpolateDoesNotEchoValues proves a failing render of a secret-bearing
-// document does not return the secret.
 func TestInterpolateDoesNotEchoValues(t *testing.T) {
 	document := "services:\n  web:\n    image: nginx\n    environment:\n      PASSWORD: ${PASSWORD}\n      MISSING: ${NOPE:?}\n"
 	_, err := Interpolate(document, map[string]string{"PASSWORD": "hunter2-secret"})
@@ -136,8 +127,6 @@ func TestInterpolateDoesNotEchoValues(t *testing.T) {
 	}
 }
 
-// TestParseDomainMap proves the Gotham label convention maps compose services
-// to validated hosts with the Phase 6 rules.
 func TestParseDomainMap(t *testing.T) {
 	document := `services:
   worker:
@@ -175,9 +164,6 @@ volumes:
 	}
 }
 
-// TestParseRejections locks the schema checks: constructs the control plane
-// cannot ship to a node, unsafe domains and reserved volumes are rejected with
-// a validation error.
 func TestParseRejections(t *testing.T) {
 	cases := map[string]struct {
 		document string
@@ -254,8 +240,6 @@ func TestParseRejections(t *testing.T) {
 	}
 }
 
-// TestParseStorageMounts proves bind mounts and named volumes resolve, and
-// that named volumes are reported (they are what survives a down).
 func TestParseStorageMounts(t *testing.T) {
 	document := `services:
   web:
@@ -306,9 +290,6 @@ volumes:
 	}
 }
 
-// TestParseUndeclaredVolume proves a named volume used without a top-level
-// declaration is accepted and reported as one of the project's volumes: the
-// deploy rewrite auto-declares it.
 func TestParseUndeclaredVolume(t *testing.T) {
 	document := `services:
   web:
@@ -328,8 +309,6 @@ func TestParseUndeclaredVolume(t *testing.T) {
 	}
 }
 
-// TestRenderTemplatedDomain proves a domain label can itself be a ${VAR}
-// reference and ends up validated after interpolation.
 func TestRenderTemplatedDomain(t *testing.T) {
 	document := `services:
   web:
@@ -357,25 +336,18 @@ func TestRenderTemplatedDomain(t *testing.T) {
 	}
 }
 
-// TestRenderRejectsRenderedSecretsInErrors proves a parse failure of the
-// rendered document can be redacted at the service boundary.
 func TestRenderRedaction(t *testing.T) {
 	env := map[string]string{"DB_PASSWORD": "hunter2-secret"}
 	message := "parse error at line 3: hunter2-secret is not a string"
 	if redacted := Redact(message, env); strings.Contains(redacted, "hunter2-secret") {
 		t.Fatalf("Redact = %q, want the value removed", redacted)
 	}
-	// Even a short value is redacted: the environment map carries no
-	// secret/non-secret distinction.
 	if redacted := Redact("port 80 is in use", map[string]string{"PORT": "80"}); redacted != "port <redacted> is in use" {
 		t.Fatalf("Redact short value = %q", redacted)
 	}
-	// The dollar-escaped rendering of a value is redacted too: an error may
-	// quote the rendered document, where `x$y` was written as `x$$y`.
 	if redacted := Redact("value x$$y failed and x$y too", map[string]string{"PASSWORD": "x$y"}); strings.Contains(redacted, "x$y") || strings.Contains(redacted, "x$$y") {
 		t.Fatalf("Redact escaped value = %q", redacted)
 	}
-	// The error chain survives redaction so sentinel mapping keeps working.
 	err := RedactError(errors.Join(ErrValidation, errors.New(message)), env)
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("errors.Is(err, ErrValidation) = false for %v", err)
@@ -385,29 +357,20 @@ func TestRenderRedaction(t *testing.T) {
 	}
 }
 
-// TestInterpolateEscapedBudgetIsExact proves the remaining-budget check counts
-// the escaped form of a value, not only its raw length: a dollar-rich value
-// whose rendered form exceeds the budget is refused before it is appended.
 func TestInterpolateEscapedBudgetIsExact(t *testing.T) {
-	env := map[string]string{"V": "$$$$"} // renders as 8 bytes
+	env := map[string]string{"V": "$$$$"}
 	if _, err := interpolateString("${V}", env, 4); !errors.Is(err, ErrValidation) {
 		t.Fatalf("interpolateString = %v, want the budget rejection", err)
 	}
-	// Exactly at the budget passes: "$$" renders as four bytes.
 	if rendered, err := interpolateString("${V}", map[string]string{"V": "$$"}, 4); err != nil || rendered != "$$$$" {
 		t.Fatalf("interpolateString = %q, %v; want %q", rendered, err, "$$$$")
 	}
-	// A long dollar-rich value inside a real document is rejected without
-	// exceeding the rendered limit.
 	document := "services:\n  web:\n    image: ${BIG}\n"
 	if _, err := Interpolate(document, map[string]string{"BIG": strings.Repeat("$", 2<<20)}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Interpolate = %v, want the rendered-size rejection", err)
 	}
 }
 
-// TestInterpolateModifierArguments proves the operator is selected at the end
-// of the variable name, so operator characters inside an argument stay part of
-// the argument.
 func TestInterpolateModifierArguments(t *testing.T) {
 	document := `services:
   web:
@@ -431,17 +394,12 @@ func TestInterpolateModifierArguments(t *testing.T) {
 		}
 	}
 
-	// An unset-only error message may contain hyphens and operator-looking
-	// characters without changing the operator.
 	document = "services:\n  web:\n    image: nginx\n    environment:\n      A: ${MISSING?set -- the port first}\n"
 	if _, err := Interpolate(document, nil); !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "set -- the port first") {
 		t.Fatalf("Interpolate = %v, want the -? error message", err)
 	}
 }
 
-// TestRenderGrowthIsBounded proves the rendered-document limit is enforced
-// while the document is built: a small document whose repeated references
-// would expand past the cap must fail without allocating the expanded string.
 func TestRenderGrowthIsBounded(t *testing.T) {
 	value := strings.Repeat("x", 8<<10)
 	var builder strings.Builder
@@ -460,15 +418,11 @@ func TestRenderGrowthIsBounded(t *testing.T) {
 	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("Interpolate = %v, want the rendered-size rejection", err)
 	}
-	// The expanded document would be ~16 MiB; the bound must stop the builder
-	// near the 1 MiB cap.
 	if grown := after.TotalAlloc - before.TotalAlloc; grown > 4<<20 {
 		t.Fatalf("Interpolate allocated %d bytes for a bounded render", grown)
 	}
 }
 
-// TestParseEffectiveVolumeNames proves an alias cannot point at a managed
-// database volume through a definition name or an external-name form.
 func TestParseEffectiveVolumeNames(t *testing.T) {
 	reserved := "gotham-db-11111111-1111-1111-1111-111111111111"
 	cases := map[string]string{
@@ -505,7 +459,6 @@ volumes:
 		})
 	}
 
-	// A non-reserved name override is accepted and the alias is reported.
 	spec, err := Parse(`services:
   web:
     image: nginx:1.23
@@ -522,7 +475,6 @@ volumes:
 	}
 }
 
-// TestProjectName locks the derived project name the agent re-validates.
 func TestProjectName(t *testing.T) {
 	id := uuid.MustParse("3f2a4b6c-8d0e-4f1a-9b2c-3d4e5f607182")
 	if got := ProjectName(id); got != "gotham-3f2a4b6c-8d0e-4f1a-9b2c-3d4e5f607182" {

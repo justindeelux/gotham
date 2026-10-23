@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// TestAgentVersionMapBounds covers the M2 hardening: control characters are
-// stripped, the version is length-bounded, an empty version is refused, the map
-// is capped and stale entries are evicted.
 func TestAgentVersionMapBounds(t *testing.T) {
 	service := NewService(Config{Secret: "test-secret", Logger: discardLogger()})
 
@@ -25,13 +22,11 @@ func TestAgentVersionMapBounds(t *testing.T) {
 		t.Fatalf("version = %q, want no control characters", versions[0].Version)
 	}
 
-	// A blank version is refused.
 	service.RecordAgentVersion("node-b", "   ")
 	if got := len(service.KnownAgentVersions()); got != 1 {
 		t.Fatalf("versions = %d after a blank version, want 1", got)
 	}
 
-	// The map is capped.
 	for i := 0; i < maxAgentVersionEntries+50; i++ {
 		service.RecordAgentVersion(fmt.Sprintf("cap-%d", i), "v1.0.0")
 	}
@@ -39,7 +34,6 @@ func TestAgentVersionMapBounds(t *testing.T) {
 		t.Fatalf("versions = %d, want <= %d", got, maxAgentVersionEntries)
 	}
 
-	// Stale entries are evicted on read.
 	stale := NewService(Config{Secret: "test-secret", Logger: discardLogger()})
 	stale.RecordAgentVersion("old", "v1.0.0")
 	stale.agentUpdate.mu.Lock()
@@ -52,9 +46,6 @@ func TestAgentVersionMapBounds(t *testing.T) {
 	}
 }
 
-// TestRolloutForces covers L5: a rollout forces any offered version at or above
-// the target, so a partially-updated fleet converges even if a newer release was
-// published within the TTL.
 func TestRolloutForces(t *testing.T) {
 	cases := []struct {
 		target  string

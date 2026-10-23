@@ -10,16 +10,6 @@ import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
 import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
-/**
- * Terminal toolbar (JUS-249, JUS-275).
- *
- * The compact row keeps usable context on the left — target/application and
- * the (ellipsized) working directory — and groups the shortcuts popover, the
- * quick-command manager and the theme menu on the right. The diagnostic
- * session id and the full working directory live in the context popover
- * instead of a permanent chip, so a long path or a narrow window never pushes
- * the actions off-screen.
- */
 interface Props {
   tab: TerminalTab;
   variant: "page" | "window";
@@ -38,34 +28,24 @@ const isContainer = computed<boolean>(() =>
   isContainerTerminalTarget(props.tab.target),
 );
 
-/**
- * targetText is the visible target identity. A container session shows the
- * server-resolved "service · container name" label; a host session keeps the
- * contract target. The label is server data shown on purpose, never a raw
- * backend error body.
- */
 const targetText = computed<string>(() =>
   isContainer.value
     ? props.tab.targetLabel || props.tab.containerName || props.tab.target
     : props.tab.target,
 );
 
-/** detachToWindow is the one-way page → window transfer. */
 function detachToWindow(): void {
   terminal.detachToWindow(props.tab.id);
 }
 
-/** closeTerminal uses the shared confirmation path. */
 function closeTerminal(): void {
   terminal.requestClose([props.tab.id]);
 }
 
-/** onInserted lets the surface announce the insertion. */
 function onInserted(label: string): void {
   emit("inserted", label);
 }
 
-/** onCommandsClosed restores keyboard focus to the shell after the modal. */
 function onCommandsClosed(): void {
   emit("focus-terminal");
 }
@@ -244,8 +224,6 @@ function onCommandsClosed(): void {
   color: var(--fg-2);
 }
 
-/* The context chip is the popover trigger: it keeps the chip look and gains a
-   real hit box and focus ring. */
 .term-context {
   flex: 0 1 auto;
   padding: var(--space-1) var(--space-2);
@@ -328,8 +306,6 @@ function onCommandsClosed(): void {
 }
 
 .term-shortcuts-btn {
-  /* WCAG 2.5.8: the trigger keeps a 24x24 target (Naive's tiny 26x22 is
-   * below the minimum). The visual icon stays small; the hit box grows. */
   min-width: var(--space-6);
   min-height: var(--space-6);
 }
@@ -376,9 +352,6 @@ function onCommandsClosed(): void {
   font-size: var(--text-xs);
 }
 
-/* Phone width (390px): the key labels yield and the working directory takes a
- * full row below the context/actions row, so the path is never clipped to a
- * single character. */
 @media (max-width: 520px) {
   .term-meta {
     flex-wrap: wrap;

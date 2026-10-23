@@ -12,7 +12,6 @@ import {
 import { useCopyText } from "@/shared/composables/useCopyText";
 import { formatDate, relativeTime } from "@/shared/utils/format";
 
-/** Commit details of the built revision; hidden while commit_sha is empty. */
 interface Props {
   deployment: Deployment | null;
   repo?: string;
@@ -24,7 +23,6 @@ const props = withDefaults(defineProps<Props>(), { repo: "", cloneUrl: "" });
 const { t } = useI18n();
 const { copyText } = useCopyText();
 
-/** show renders only when the deployment carries a commit hash. */
 const show = computed<boolean>(() => hasCommitSha(props.deployment?.commit_sha));
 
 const shortSha = computed<string>(() => shortCommitSha(props.deployment?.commit_sha));
@@ -37,7 +35,6 @@ const relative = computed<string>(() => relativeTime(props.deployment?.committed
 
 const absolute = computed<string>(() => formatDate(props.deployment?.committed_at ?? ""));
 
-/** copySha copies the full hash; the label comes from the commit catalog. */
 function copySha(): void {
   if (props.deployment?.commit_sha) {
     void copyText(props.deployment.commit_sha, String(t("applications.commit.sha")));
@@ -81,7 +78,6 @@ function copySha(): void {
   font-family: var(--font-mono);
 }
 
-/** commit-message caps long bodies so the card never stretches. */
 .commit-message {
   display: block;
   white-space: pre-wrap;

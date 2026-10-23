@@ -7,7 +7,6 @@ import { isDatabaseNameValid } from "@/features/databases/schemas/databases";
 
 import { i18n } from "@/shared/i18n";
 
-/** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }

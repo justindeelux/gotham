@@ -1,11 +1,3 @@
-// JUS-9/JUS-10 UI-truth checks for the pure helpers behind the copy and
-// data-state fixes.
-//
-// The repo has no web unit-test runner (no vitest/jsdom), so this script
-// bundles the pure helpers with the project's own esbuild and asserts their
-// behaviour directly, in the same style as mock-ws-check.mjs.
-//
-// Run from web/:  node scripts/ui-truth-check.mjs
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,12 +6,8 @@ import { pathToFileURL } from "node:url";
 
 import { build } from "esbuild";
 
-// Web source root for the "@" import alias (mirrors vite.config.ts).
 const srcDir = new URL("../src", import.meta.url).pathname;
 
-// Vue SFCs are re-exported through feature indexes, so a bundled helper can
-// pull one into the module graph. The Node harnesses never execute them;
-// stub the default export instead of teaching esbuild to compile SFCs.
 const vueStubPlugin = {
   name: "stub-vue-sfc",
   setup(vueBuild) {
@@ -34,7 +22,6 @@ const vueStubPlugin = {
   },
 };
 
-// ── tiny assertion harness ───────────────────────────────────────────────
 const results = [];
 
 async function check(name, fn) {
@@ -54,9 +41,6 @@ function assert(condition, message) {
   }
 }
 
-// ── load a TypeScript module through esbuild ─────────────────────────────
-// The API modules import the axios-backed ./http layer, which the pure
-// helpers under test never touch; stub it so the bundle stays DOM-free.
 async function loadModule(relativePath) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-ui-truth-"));
   const outfile = join(directory, "module.mjs");
@@ -97,11 +81,6 @@ async function loadModule(relativePath) {
   };
 }
 
-// ── load an API module with catalogs registered ──────────────────────────
-// Node bundles never run initI18n (no import.meta.glob under esbuild), so a
-// describer with localized summaries would otherwise resolve against empty
-// catalogs. The entry registers the same synchronous catalogs the app merges
-// at startup, keeping assertions on real display text.
 async function loadApiWithCatalogs(apiImport, namespace, catalogImport) {
   const { writeFile } = await import("node:fs/promises");
   const directory = await mkdtemp(join(tmpdir(), "gotham-ui-truth-"));
@@ -155,12 +134,10 @@ async function loadApiWithCatalogs(apiImport, namespace, catalogImport) {
   };
 }
 
-/** sleep pauses the harness without pulling in a test runner. */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ── load applications.ts with a controllable http layer ───────────────────
 async function loadApplicationsWithHttp() {
   const directory = await mkdtemp(join(tmpdir(), "gotham-ui-truth-"));
   const outfile = join(directory, "module.mjs");
@@ -206,10 +183,6 @@ async function loadApplicationsWithHttp() {
   };
 }
 
-// ── load a real Pinia store with stubbed API imports ───────────────────────
-// apiStubs maps an import specifier (as written in the store source, e.g.
-// "@/features/teams/api/teams") to the stub module contents. Pinia and Vue
-// are bundled for real, so setActivePinia reaches the instance under test.
 async function loadStoreHarness(storeDir, storeFile, storeExport, apiStubs) {
   const directory = await mkdtemp(join(tmpdir(), "gotham-store-check-"));
   const outfile = join(directory, "store.mjs");
@@ -256,7 +229,6 @@ async function loadStoreHarness(storeDir, storeFile, storeExport, apiStubs) {
   };
 }
 
-// ── load the real auth store with stubbed HTTP, token and user stores ─────
 async function loadAuthHarness() {
   const directory = await mkdtemp(join(tmpdir(), "gotham-auth-check-"));
   const outfile = join(directory, "store.mjs");
@@ -365,9 +337,6 @@ async function loadAuthHarness() {
   };
 }
 
-// ── load the real http layer (axios + token bundled for real) ─────────────
-// loadModule's http stub would also rewrite axios's own adapters/http.js, so
-// the forced-logout test bundles without plugins instead.
 async function loadHttpReal() {
   const webDir = new URL("..", import.meta.url).pathname;
   const directory = await mkdtemp(join(webDir, ".tmp-http-check-"));
@@ -649,8 +618,6 @@ async function main() {
     const end = source.indexOf("dashboard.kpi.deploys", start);
     assert(end !== -1, "tile card block ends");
     const block = source.slice(start, end);
-    // Every tile branch directive is exactly a tile.state comparison: an
-    // `&& false` (or any extra condition) fails here.
     const directives = [...block.matchAll(/\bv-(?:if|else-if)="([^"]*)"/g)].map(
       (match) => match[1],
     );
@@ -668,8 +635,6 @@ async function main() {
     assert(block.includes("{{ tile.countText }}"), "figure binds countText");
     assert(block.includes("{{ tile.hint }}"), "caveat binds hint");
     assert(block.includes("{{ tile.error }}"), "error branch binds tile.error");
-    // The figure and marker come only from the tested function: no
-    // duplicated formatting, no page-level refs, no marker literal.
     for (const stale of [
       "tile.running",
       "tile.total",
@@ -768,8 +733,6 @@ async function main() {
   await check("allowlist regenerated from the Go sources live", async () => {
     const { execFileSync } = await import("node:child_process");
     const { readFile } = await import("node:fs/promises");
-    // The documented regeneration grep over non-test Go sources: a new Go
-    // prefix changes this set and fails the comparison below.
     const repoRoot = new URL("../../", import.meta.url).pathname;
     const grepped = execFileSync(
       "/bin/sh",
@@ -807,7 +770,6 @@ async function main() {
         `${prefix} strips`,
       );
     }
-    // Test-only strings and agent-internal prefixes never cross the API.
     for (const prefix of [
       "cleanup", "cloudflare", "rpc", "dial", "hijack", "fake",
       "disconnected", "agent", "stats", "sudo",
@@ -822,7 +784,6 @@ async function main() {
   console.log("every describe path strips backend prefixes (fix round 1)");
   await check("database, team, proxy, service and generic paths strip", async () => {
     const backups = await loadModule("../src/features/databases/api/backups.ts");
-    // Localized database summaries need the same catalogs the app merges.
     const databasesI18n = await loadApiWithCatalogs(
       "@/features/databases/api/databases",
       "databases",
@@ -1256,9 +1217,6 @@ async function main() {
   });
 
   await check("forced logout prefers the in-app router over a hard reload", async () => {
-    // B3-3: expireSession must let the SPA router take over (cancelable
-    // gotham:session-expired event) so a failed logout never degrades into a
-    // document reload; without a listener it keeps the hard assign fallback.
     const store = new Map();
     const redirects = [];
     const seenEvents = [];
@@ -1279,7 +1237,6 @@ async function main() {
       addEventListener: () => {},
       dispatchEvent: (event) => {
         seenEvents.push(event.type);
-        // Canceled (false) means the SPA router took over in-app.
         return false;
       },
     };

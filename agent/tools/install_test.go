@@ -17,8 +17,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// fakeToolStream is the send side of InstallTool/UninstallTool for tests; the
-// unused grpc.ServerStream methods come from the embedded interface.
 type fakeToolStream struct {
 	grpc.ServerStream
 	ctx     context.Context
@@ -40,7 +38,6 @@ func (s *fakeToolStream) Send(event *agentv1.ToolEvent) error {
 	return nil
 }
 
-// lines returns every output line, tagged by source, in order.
 func (s *fakeToolStream) lines() []string {
 	var lines []string
 	for _, event := range s.events {
@@ -51,7 +48,6 @@ func (s *fakeToolStream) lines() []string {
 	return lines
 }
 
-// result returns the final ToolResult, or nil when the stream carried none.
 func (s *fakeToolStream) result() *agentv1.ToolResult {
 	if len(s.events) == 0 {
 		return nil
@@ -59,14 +55,11 @@ func (s *fakeToolStream) result() *agentv1.ToolResult {
 	return s.events[len(s.events)-1].GetResult()
 }
 
-// recordedCommand is one command the executor ran.
 type recordedCommand struct {
 	argv []string
 	root bool
 }
 
-// fakeToolRunner is a commandRunner for tests: it records every argv and, when
-// step is set, delegates to it instead of the default success.
 type fakeToolRunner struct {
 	mu    sync.Mutex
 	calls []recordedCommand
@@ -87,7 +80,6 @@ func (r *fakeToolRunner) Run(ctx context.Context, argv []string, root bool, emit
 	return 0, nil
 }
 
-// commands returns the argv of every command the executor ran, in order.
 func (r *fakeToolRunner) commands() [][]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -98,7 +90,6 @@ func (r *fakeToolRunner) commands() [][]string {
 	return out
 }
 
-// allRoot reports whether every recorded command was marked root.
 func (r *fakeToolRunner) allRoot() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -110,8 +101,6 @@ func (r *fakeToolRunner) allRoot() bool {
 	return len(r.calls) > 0
 }
 
-// invoked returns the tool ids the executor asked the helper to act on, with
-// the verb stripped, in order.
 func (r *fakeToolRunner) invoked(verb string) []string {
 	var ids []string
 	for _, argv := range r.commands() {
@@ -122,8 +111,6 @@ func (r *fakeToolRunner) invoked(verb string) []string {
 	return ids
 }
 
-// installedNone reports every tool absent; installedOnly reports exactly the
-// named tools present.
 func installedNone(string) bool { return false }
 
 func TestToolServerRefusesPlatformToolUninstall(t *testing.T) {
@@ -207,10 +194,6 @@ func installedOnly(ids ...string) func(string) bool {
 	return func(id string) bool { return present[id] }
 }
 
-// TestToolServerInstallRunsDependenciesFirst proves the dependency chain
-// railpack => buildkit => docker is installed in order, each as the fixed
-// helper verb with a catalog id and elevated to root, and the stream closes
-// with a success result.
 func TestToolServerInstallRunsDependenciesFirst(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
@@ -241,8 +224,6 @@ func TestToolServerInstallRunsDependenciesFirst(t *testing.T) {
 	}
 }
 
-// TestToolServerInstallIdempotent proves a tool that is already installed is
-// skipped: no command runs and the stream still succeeds.
 func TestToolServerInstallIdempotent(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
@@ -262,9 +243,6 @@ func TestToolServerInstallIdempotent(t *testing.T) {
 	}
 }
 
-// TestToolServerInstallFailureReportsExitCode proves a failed command is
-// reported in-band with its own exit code and the command's stderr, not as a
-// gRPC error, so the control plane can show what went wrong.
 func TestToolServerInstallFailureReportsExitCode(t *testing.T) {
 	runner := &fakeToolRunner{step: func(_ context.Context, _ []string, _ bool, emit func(string, string) error) (int, error) {
 		if err := emit(streamStderr, "E: unable to locate package git"); err != nil {
@@ -296,9 +274,6 @@ func TestToolServerInstallFailureReportsExitCode(t *testing.T) {
 	}
 }
 
-// TestToolServerInstallCanceled proves a cancelled stream is reported as a
-// cancelled RPC, not as a failed install, and the command sees the
-// cancellation.
 func TestToolServerInstallCanceled(t *testing.T) {
 	runner := &fakeToolRunner{step: func(ctx context.Context, _ []string, _ bool, _ func(string, string) error) (int, error) {
 		<-ctx.Done()
@@ -317,9 +292,6 @@ func TestToolServerInstallCanceled(t *testing.T) {
 	}
 }
 
-// TestToolServerInstallSecondCallBusy proves only one install runs per node: a
-// second call while the first is in flight is refused with ResourceExhausted
-// rather than queued or run concurrently.
 func TestToolServerInstallSecondCallBusy(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
@@ -355,8 +327,6 @@ func TestToolServerInstallSecondCallBusy(t *testing.T) {
 	}
 }
 
-// TestToolServerInstallTimeout proves a command that outlives the install
-// timeout is killed and reported as a failed install, not left running.
 func TestToolServerInstallTimeout(t *testing.T) {
 	runner := &fakeToolRunner{step: func(ctx context.Context, _ []string, _ bool, _ func(string, string) error) (int, error) {
 		<-ctx.Done()
@@ -378,8 +348,6 @@ func TestToolServerInstallTimeout(t *testing.T) {
 	}
 }
 
-// TestToolServerUninstallRefusesInUse proves an uninstall is refused while the
-// tool is busy, before any command runs.
 func TestToolServerUninstallRefusesInUse(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
@@ -402,8 +370,6 @@ func TestToolServerUninstallRefusesInUse(t *testing.T) {
 	}
 }
 
-// TestToolServerUninstallRefusesDependency proves a tool another installed tool
-// depends on is refused, while a leaf tool is removable.
 func TestToolServerUninstallRefusesDependency(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
@@ -428,8 +394,6 @@ func TestToolServerUninstallRefusesDependency(t *testing.T) {
 	}
 }
 
-// TestToolServerUninstallNotInstalledIsNoOp proves removing an absent tool runs
-// no command and still succeeds, so an uninstall is idempotent.
 func TestToolServerUninstallNotInstalledIsNoOp(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
@@ -449,8 +413,6 @@ func TestToolServerUninstallNotInstalledIsNoOp(t *testing.T) {
 	}
 }
 
-// TestToolServerUninstallHoldsBuildGuard proves the tracker's uninstall mark is
-// held for the whole uninstall, so a build cannot start into the removal window.
 func TestToolServerUninstallHoldsBuildGuard(t *testing.T) {
 	tracker := NewToolUseTracker()
 	runner := &fakeToolRunner{step: func(_ context.Context, _ []string, _ bool, _ func(string, string) error) (int, error) {
@@ -471,8 +433,6 @@ func TestToolServerUninstallHoldsBuildGuard(t *testing.T) {
 	}
 }
 
-// TestToolServerInstallUnknownTool proves an unknown id is bad input, not an
-// install failure.
 func TestToolServerInstallUnknownTool(t *testing.T) {
 	server := NewToolServer(withToolRunner(&fakeToolRunner{}))
 	err := server.InstallTool(&agentv1.InstallToolRequest{Id: "nope"}, newFakeToolStream(context.Background()))
@@ -484,14 +444,9 @@ func TestToolServerInstallUnknownTool(t *testing.T) {
 	}
 }
 
-// TestExecRunnerDrainsOutputBeforeWait is the regression for the pipe/Wait
-// race: reading the pipes concurrently with command.Wait drops trailing lines
-// (often the error message). Every emitted line must be captured.
 func TestExecRunnerDrainsOutputBeforeWait(t *testing.T) {
 	runner := execRunner{}
 	var stdout, stderr []string
-	// printf is a real argument vector here (no shell), and the format string
-	// holds no tool input; 500 lines is enough that a Wait/read race truncates.
 	format := strings.Repeat("line\n", 500)
 	code, err := runner.Run(context.Background(), []string{"printf", format}, false,
 		func(stream, line string) error {
@@ -517,8 +472,6 @@ func TestExecRunnerDrainsOutputBeforeWait(t *testing.T) {
 	}
 }
 
-// TestExecRunnerReportsExitCode proves a non-zero exit is returned with its
-// code so the executor can report it.
 func TestExecRunnerReportsExitCode(t *testing.T) {
 	runner := execRunner{}
 	code, err := runner.Run(context.Background(), []string{"false"}, false, func(string, string) error { return nil })
@@ -530,13 +483,9 @@ func TestExecRunnerReportsExitCode(t *testing.T) {
 	}
 }
 
-// TestExecRunnerElevatesRootSteps proves a root command is run through the
-// fixed `sudo -n` prefix with the same argv, and that a bogus sudo refusal is
-// surfaced rather than silently running unelevated.
 func TestExecRunnerElevatesRootSteps(t *testing.T) {
 	dir := t.TempDir()
 	sudo := filepath.Join(dir, "sudo")
-	// A stand-in sudo: drop the -n flag and exec the rest.
 	script := "#!/bin/sh\n[ \"$1\" = \"-n\" ] || exit 9\nshift\nexec \"$@\"\n"
 	if err := os.WriteFile(sudo, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake sudo: %v", err)
@@ -569,9 +518,6 @@ func TestExecRunnerElevatesRootSteps(t *testing.T) {
 	}
 }
 
-// TestExecRunnerStopsChildGracefullyOnCancel proves a cancelled request sends
-// SIGTERM (not SIGKILL), so the helper can stop its transient unit; the child's
-// TERM trap must run and the runner must still report the cancellation.
 func TestExecRunnerStopsChildGracefullyOnCancel(t *testing.T) {
 	dir := t.TempDir()
 	ready := filepath.Join(dir, "ready")
@@ -618,8 +564,6 @@ func TestExecRunnerStopsChildGracefullyOnCancel(t *testing.T) {
 	}
 }
 
-// equalStrings compares two string slices without importing slices in every
-// test file.
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

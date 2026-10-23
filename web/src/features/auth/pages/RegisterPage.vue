@@ -25,10 +25,6 @@ import { strengthOf } from "@/features/auth/utils/passwordStrength";
 import { createVisibleValidation } from "@/features/auth/utils/visibleValidation";
 import { onLocaleChange } from "@/shared/i18n";
 
-// Error convention (shared with LoginPage): client-side validation errors
-// render inline on the field via NFormItem; server-side submit failures keep
-// the raw error and render once in the NAlert above the form through a
-// computed, so a language switch refreshes the banner reactively.
 interface RegisterForm {
   email: string;
   password: string;
@@ -59,18 +55,12 @@ onMounted(async () => {
   const raw = route.query.invite;
   const token = typeof raw === "string" ? raw : "";
 
-  // Take the token from the URL and block submission BEFORE the config
-  // request: on a slow connection the form is already visible, and a submit
-  // during that window would otherwise omit the invite and answer 403.
   if (token) {
     invite.holdToken(token);
   }
 
   await authStore.fetchAuthConfig();
 
-  // A fresh instance needs no invite: the first account bootstraps it. An
-  // invite present in the URL is always processed, even when ordinary
-  // registration happens to be open, so the invitee still joins the team.
   if (!token) {
     if (authStore.registrationOpen) {
       return;
@@ -91,15 +81,8 @@ onMounted(async () => {
 
 const strength = computed<number>(() => strengthOf(form.password));
 
-// The confirm rule reads the live password through a reader (not a
-// snapshot), so retyping the password revalidates the confirmation.
 const rules: FormRules = registerRules(() => form.password);
 
-/**
- * visible tracks paths with currently-shown feedback (input/blur/submit).
- * A language switch revalidates exactly those paths: already-visible errors
- * refresh, pristine fields stay clean, and nothing submits or calls an API.
- */
 const visible = createVisibleValidation();
 const trackedRules: FormRules = visible.trackRules(rules);
 const stopLocaleWatch = onLocaleChange(() => {
@@ -110,7 +93,6 @@ onUnmounted(() => {
   stopLocaleWatch();
 });
 
-/** redirectAfterAuth honours ?redirect when it is a safe local path. */
 async function redirectAfterAuth(): Promise<void> {
   await router.replace(safeRedirect(route.query.redirect) ?? "/dashboard");
 }
@@ -251,14 +233,10 @@ async function handleSubmit(): Promise<void> {
 </template>
 
 <style scoped>
-/* The design's card is a bare
-   width limiter — no border, no background. The only filled element is the
-   tab switch below. */
 .auth-card {
   width: min(420px, 100%);
 }
 
-/* Tab switch, divider, and footnote; tokens come from styles/tokens.css. */
 .auth-title {
   margin: 0 0 4px;
   font-size: 20px;

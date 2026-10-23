@@ -1,10 +1,5 @@
 import type { ProfileMessages } from "./en";
 
-/**
- * Vietnamese profile catalog. Keys mirror `en.ts` exactly; only values are
- * translated. Technical tokens (JWT, email addresses, device/browser/OS
- * names) stay untranslated by design.
- */
 const vi: ProfileMessages = {
   page: {
     eyebrow: "Cài đặt · Tài khoản",

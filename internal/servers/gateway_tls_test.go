@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// dialTLS dials addr with a client that trusts pool and verifies serverName,
-// completing the handshake.
 func dialTLS(ctx context.Context, pool *x509.CertPool, addr, serverName string) error {
 	dialer := &tls.Dialer{Config: &tls.Config{
 		RootCAs:    pool,
@@ -24,9 +22,6 @@ func dialTLS(ctx context.Context, pool *x509.CertPool, addr, serverName string) 
 	return conn.Close()
 }
 
-// TestGatewayServesTLSWhenAuthorityConfigured proves the serve path runs the
-// gRPC gateway over TLS once a CA exists: the listener presents a server
-// certificate that verifies against the CA pool.
 func TestGatewayServesTLSWhenAuthorityConfigured(t *testing.T) {
 	authority, err := LoadOrCreateAuthority(t.TempDir())
 	if err != nil {
@@ -61,10 +56,6 @@ func TestGatewayServesTLSWhenAuthorityConfigured(t *testing.T) {
 	}
 }
 
-// TestGatewayServesTLSForConfiguredHosts is F1: the listener certificate must
-// carry the operator-configured SANs so a remote agent dialing the control
-// plane by its name or IP verifies, while a name that is not in the SANs is
-// rejected.
 func TestGatewayServesTLSForConfiguredHosts(t *testing.T) {
 	authority, err := LoadOrCreateAuthority(t.TempDir())
 	if err != nil {
@@ -107,9 +98,6 @@ func TestGatewayServesTLSForConfiguredHosts(t *testing.T) {
 	}
 }
 
-// TestServerHostsAlwaysIncludesLoopbackAndHostname proves the SAN defaults: the
-// extra hosts are additive and the loopback names and machine hostname are
-// always present.
 func TestServerHostsAlwaysIncludesLoopbackAndHostname(t *testing.T) {
 	hosts := serverHosts(":9442", []string{"cp.example.com"})
 	want := []string{"cp.example.com", "localhost", "127.0.0.1", "::1"}

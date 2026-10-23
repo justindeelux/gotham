@@ -8,58 +8,38 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// CreateProvider stores a source-provider connection and returns the row. The
-// credential fields carry ciphertext produced by the providers service.
 func (s *Store) CreateProvider(ctx context.Context, params sqlc.CreateProviderParams) (sqlc.Provider, error) {
 	return s.queries.CreateProvider(ctx, params)
 }
 
-// GetProviderByIDAndUser returns the provider with the given ID when it is
-// owned by userID.
 func (s *Store) GetProviderByIDAndUser(ctx context.Context, params sqlc.GetProviderByIDAndUserParams) (sqlc.Provider, error) {
 	return s.queries.GetProviderByIDAndUser(ctx, params)
 }
 
-// ListProvidersByUser returns every provider connection owned by userID,
-// newest first.
 func (s *Store) ListProvidersByUser(ctx context.Context, userID pgtype.UUID) ([]sqlc.Provider, error) {
 	return s.queries.ListProvidersByUser(ctx, userID)
 }
 
-// UpdateProviderToken replaces the stored access/refresh tokens of a provider
-// and returns the updated row.
 func (s *Store) UpdateProviderToken(ctx context.Context, params sqlc.UpdateProviderTokenParams) (sqlc.Provider, error) {
 	return s.queries.UpdateProviderToken(ctx, params)
 }
 
-// DeleteProviderByIDAndUser removes the provider with the given ID when it is
-// owned by userID. Cached repositories cascade; a missing row is a success.
 func (s *Store) DeleteProviderByIDAndUser(ctx context.Context, params sqlc.DeleteProviderByIDAndUserParams) error {
 	return s.queries.DeleteProviderByIDAndUser(ctx, params)
 }
 
-// UpsertRepoCache inserts or refreshes one cached repository.
 func (s *Store) UpsertRepoCache(ctx context.Context, params sqlc.UpsertRepoCacheParams) (sqlc.ReposCache, error) {
 	return s.queries.UpsertRepoCache(ctx, params)
 }
 
-// ListRepoCacheByProvider returns a provider's cached repositories ordered by
-// full name.
 func (s *Store) ListRepoCacheByProvider(ctx context.Context, providerID pgtype.UUID) ([]sqlc.ReposCache, error) {
 	return s.queries.ListRepoCacheByProvider(ctx, providerID)
 }
 
-// DeleteRepoCacheByProvider removes every cached repository of a provider.
 func (s *Store) DeleteRepoCacheByProvider(ctx context.Context, providerID pgtype.UUID) error {
 	return s.queries.DeleteRepoCacheByProvider(ctx, providerID)
 }
 
-// ReplaceRepoCache atomically replaces a provider's cached repositories. It
-// locks the provider row, clears the old list and inserts the new one in one
-// transaction, so a partial failure leaves the previous complete list intact
-// and two concurrent refreshes for the same provider serialize instead of
-// interleaving. BeforeRepoCacheInsert, when set, can force a failure after the
-// clear to exercise the rollback.
 func (s *Store) ReplaceRepoCache(ctx context.Context, providerID pgtype.UUID, repos []sqlc.UpsertRepoCacheParams) error {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -67,8 +47,6 @@ func (s *Store) ReplaceRepoCache(ctx context.Context, providerID pgtype.UUID, re
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Lock the parent row: a second replacement for the same provider waits
-	// here rather than deleting between this clear and its inserts.
 	var locked pgtype.UUID
 	if err := tx.QueryRow(ctx, "SELECT id FROM providers WHERE id = $1 FOR UPDATE", providerID).Scan(&locked); err != nil {
 		return err

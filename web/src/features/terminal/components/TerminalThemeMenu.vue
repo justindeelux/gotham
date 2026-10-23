@@ -18,17 +18,6 @@ import {
 } from "@/features/terminal/schemas/terminalAppearance";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 
-/**
- * Terminal theme picker (JUS-250). One shared control for page and window
- * modes: choosing a named theme repaints every live renderer immediately
- * through the terminal store (no session is recreated).
- *
- * Keyboard contract: Enter/Space on the trigger opens the popover and moves
- * focus onto the checked radio; ArrowUp/ArrowDown move the radio group and
- * apply the theme as they go; Enter applies the focused option explicitly;
- * Escape closes and returns focus to the trigger. Key events are stopped at
- * the popover, so nothing typed in this menu can reach xterm's input.
- */
 const { t } = useI18n();
 const terminal = useTerminalStore();
 const groupName = useId();
@@ -36,13 +25,11 @@ const show = ref(false);
 const triggerRef = ref<ComponentPublicInstance | null>(null);
 const contentRef = ref<HTMLElement | null>(null);
 
-/** THEME_LABEL_KEYS maps a stored theme onto its catalog label. */
 const THEME_LABEL_KEYS: Record<TerminalThemeName, string> = {
   "gotham-dark": "terminal.appearance.themes.gothamDark",
   "gotham-light": "terminal.appearance.themes.gothamLight",
 };
 
-/** themes are the offered named palettes, in product order. */
 const themes = computed(() =>
   TERMINAL_THEMES.map((name) => ({
     name,
@@ -51,12 +38,10 @@ const themes = computed(() =>
   })),
 );
 
-/** choose applies one theme to every live terminal and persists it. */
 function choose(name: TerminalThemeName): void {
   terminal.setTheme(name);
 }
 
-/** closeMenu hides the popover and returns focus to its trigger. */
 function closeMenu(): void {
   show.value = false;
   void nextTick(() => {
@@ -67,7 +52,6 @@ function closeMenu(): void {
   });
 }
 
-/** onMenuKeydown keeps Escape/Enter inside the menu and off the PTY. */
 function onMenuKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
   if (event.key === "Escape") {
@@ -87,8 +71,6 @@ function onMenuKeydown(event: KeyboardEvent): void {
   }
 }
 
-// The panel is teleported, so its ref exists only after the body mounts. The
-// checked radio is the single tab stop of a native radio group.
 watch(show, async (open) => {
   if (!open) {
     return;

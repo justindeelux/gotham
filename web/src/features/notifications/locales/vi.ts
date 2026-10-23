@@ -1,8 +1,3 @@
-/**
- * Vietnamese catalog for the notifications feature. Keys mirror `en.ts`
- * exactly; only values are translated. Wire values (channel kinds, event
- * keys, URLs, ports, email addresses) stay raw parameters.
- */
 const vi = {
   page: {
     eyebrow: "Nhóm · Thông báo",

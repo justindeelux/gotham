@@ -1,6 +1,3 @@
-// Dashboard recent-deployments store (JUS-193). The aggregate feed loads once,
-// is bounded by the feed limit, refresh is single-flight and timer-driven, and
-// reset() drops the previous user's rows (sign-out must not leak them).
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

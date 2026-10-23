@@ -22,8 +22,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// privateTestApp returns a provider-less git_private application: the shape
-// the GS-4 wizard submits (empty provider, the clone URL as the repo label).
 func privateTestApp(userID uuid.UUID, cloneURL string) Application {
 	app := testApplication(userID)
 	app.SourceType = SourceGitPrivate
@@ -33,7 +31,6 @@ func privateTestApp(userID uuid.UUID, cloneURL string) Application {
 	return app
 }
 
-// staticCredResolver hands out a fixed HTTPS credential for the cloner.
 type staticCredResolver struct {
 	username string
 	token    string
@@ -41,10 +38,8 @@ type staticCredResolver struct {
 	calls    int
 }
 
-// Compile-time guarantee that staticCredResolver satisfies the seam.
 var _ gitCredentialResolver = (*staticCredResolver)(nil)
 
-// GitCredential implements gitCredentialResolver.
 func (r *staticCredResolver) GitCredential(_ context.Context, _ uuid.UUID) (string, string, error) {
 	r.calls++
 	if r.err != nil {
@@ -153,11 +148,6 @@ func TestBranchDefaultsToRemote(t *testing.T) {
 	}
 }
 
-// TestCreateDeployKeyLocalPath covers the GS-4 provider-less key: with no
-// registrar wired (there is no Git-host API for an arbitrary remote) the key
-// is generated and stored locally, a second call returns the same row, and
-// the private half opens for the cloner while the service read carries the
-// public half only.
 func TestCreateDeployKeyLocalPath(t *testing.T) {
 	userID := uuid.New()
 	app := privateTestApp(userID, "git@git.internal:acme/demo.git")
@@ -212,10 +202,6 @@ func TestCreateDeployKeyLocalRequiresRepository(t *testing.T) {
 	}
 }
 
-// TestCreateDeployKeyProviderPathStillNeedsRegistrar pins the untouched
-// provider flow: a connected-provider application still registers through
-// the Git-host API, so a missing registrar is a clear error, not a silent
-// local key.
 func TestCreateDeployKeyProviderPathStillNeedsRegistrar(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -229,9 +215,6 @@ func TestCreateDeployKeyProviderPathStillNeedsRegistrar(t *testing.T) {
 	}
 }
 
-// TestSetGitCredential seals the token and never returns it: the stored row
-// differs from the plaintext and opens back to it, rotation replaces the row,
-// and bad inputs fail before anything is stored.
 func TestSetGitCredential(t *testing.T) {
 	userID := uuid.New()
 	app := privateTestApp(userID, "https://git.internal/acme/demo.git")
@@ -346,10 +329,6 @@ func TestGetGitCredential(t *testing.T) {
 	}
 }
 
-// TestCloneCredentialAskpass pins the HTTPS injection: the token reaches git
-// only inside the ephemeral helper file (never argv, env values or logs),
-// the helper is 0700, the environment is deterministic, the URL passes after
-// "--", and the helper is gone when the clone returns.
 func TestCloneCredentialAskpass(t *testing.T) {
 	const token = "s3cr3t-token-value"
 	app := privateTestApp(uuid.New(), "https://git.internal/acme/demo.git")
@@ -382,7 +361,6 @@ func TestCloneCredentialAskpass(t *testing.T) {
 		t.Fatalf("Clone: %v", err)
 	}
 
-	// The URL passes after "--" so a hostile value is never parsed as a flag.
 	dash := -1
 	for i, arg := range gotArgv {
 		if arg == "--" {
@@ -407,7 +385,6 @@ func TestCloneCredentialAskpass(t *testing.T) {
 			t.Errorf("env = %v, want %s", gotEnv, want)
 		}
 	}
-	// Redirects are refused so the token can never move to another host.
 	if got := envValue(gotEnv, "GIT_CONFIG_VALUE_1"); got != "false" {
 		t.Errorf("GIT_CONFIG_VALUE_1 = %q, want false (http.followRedirects)", got)
 	}
@@ -429,9 +406,6 @@ func TestCloneCredentialAskpass(t *testing.T) {
 	}
 }
 
-// TestCloneCredentialDeployKeyFallback pins the compatibility path: an https
-// URL with a deploy key but no token is rewritten to SSH and cloned keyed,
-// exactly like before GS-4.
 func TestCloneCredentialDeployKeyFallback(t *testing.T) {
 	privatePEM, _, _, err := generateDeployKeyPair("gotham:deploy:test")
 	if err != nil {
@@ -457,9 +431,6 @@ func TestCloneCredentialDeployKeyFallback(t *testing.T) {
 	}
 }
 
-// TestCloneCredentialSSHRefusals pins the SSH guards: without a deploy key
-// the clone is refused (never ambient-identity), and a stored HTTPS token
-// does not satisfy an SSH URL.
 func TestCloneCredentialSSHRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -490,11 +461,6 @@ func TestCloneCredentialSSHRefusals(t *testing.T) {
 	}
 }
 
-// TestAskpassHelperExecution runs the generated helper with a real shell:
-// prompts naming the expected host answer the username/password, any other
-// prompt (a redirect to another host, an unexpected question) exits nonzero
-// so git fails instead of spending the credential there. It also pins the
-// 0700 mode and the cleanup.
 func TestAskpassHelperExecution(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the helper is a POSIX shell script")
@@ -559,10 +525,6 @@ func TestAskpassHelperExecution(t *testing.T) {
 	}
 }
 
-// TestGitSourceClonesPrivateGitScpURL exercises the scp-like private URL end
-// to end without a network: a real git binary clones a real fixture through
-// the GIT_SSH_COMMAND the cloner builds, with the stub ssh on PATH (the same
-// stand-in TestGitSourceClonesPrivateRepoOverSSH uses).
 func TestGitSourceClonesPrivateGitScpURL(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the ssh stand-in is a POSIX shell script")
@@ -602,9 +564,6 @@ func TestGitSourceClonesPrivateGitScpURL(t *testing.T) {
 	}
 }
 
-// smartHTTPStub serves the minimal smart-HTTP surface git ls-remote needs:
-// the ref advertisement with an empty ref list. It records the Authorization
-// header it saw so the test can prove the token arrived over the wire.
 type smartHTTPStub struct {
 	t             *testing.T
 	username      string
@@ -634,9 +593,6 @@ func (s *smartHTTPStub) handler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("001e# service=git-upload-pack\n0000" + "0000"))
 }
 
-// trustTestTLS makes the git child trust a test TLS server: its
-// certificate is written as a CA file and pointed at with GIT_SSL_CAINFO
-// (inherited through the probe's environment).
 func trustTestTLS(t *testing.T, server *httptest.Server) {
 	t.Helper()
 	var pemData []byte
@@ -656,11 +612,6 @@ func trustTestTLS(t *testing.T, server *httptest.Server) {
 	t.Setenv("GIT_SSL_CAINFO", caPath)
 }
 
-// TestConnectionProbeHTTPSAgainstSmartHTTPStub runs the production probe
-// (TestGitConnection with the real git binary) against a local smart-HTTP
-// stub over TLS: the success case proves the stored token reaches the remote
-// as a Basic credential, and the 401 case proves the classified auth hint.
-// No external network is involved.
 func TestConnectionProbeHTTPSAgainstSmartHTTPStub(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -668,7 +619,6 @@ func TestConnectionProbeHTTPSAgainstSmartHTTPStub(t *testing.T) {
 	}
 	_ = git
 
-	// The stub serves on loopback, which the host policy denies by default.
 	t.Setenv(GitAllowPrivateHostsEnv, "true")
 	stub := &smartHTTPStub{t: t, username: "bob", token: "s3cr3t-token"}
 	server := httptest.NewTLSServer(http.HandlerFunc(stub.handler))
@@ -721,11 +671,6 @@ func TestConnectionProbeHTTPSAgainstSmartHTTPStub(t *testing.T) {
 	})
 }
 
-// TestConnectionProbeRefusesCrossHostRedirect is the regression test for the
-// redirect token leak: the first server challenges (so the helper spends the
-// token there, proving injection works) and then redirects to a second
-// server recording everything it receives. The probe must fail closed with
-// the second server untouched — no Authorization header, no token bytes.
 func TestConnectionProbeRefusesCrossHostRedirect(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -733,7 +678,6 @@ func TestConnectionProbeRefusesCrossHostRedirect(t *testing.T) {
 	}
 	_ = git
 
-	// Both stubs serve on loopback, which the host policy denies by default.
 	t.Setenv(GitAllowPrivateHostsEnv, "true")
 	var secondSawAuth, secondBody string
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -789,7 +733,6 @@ func TestConnectionProbeRefusesCrossHostRedirect(t *testing.T) {
 	}
 }
 
-// envValue returns the value of the env entry naming the variable.
 func envValue(env []string, name string) string {
 	for _, entry := range env {
 		if value, ok := strings.CutPrefix(entry, name+"="); ok {
@@ -799,8 +742,6 @@ func envValue(env []string, name string) string {
 	return ""
 }
 
-// serviceWithRunner builds a Service whose connection probe runs through the
-// fake runner instead of the git binary.
 func serviceWithRunner(t *testing.T, repo *fakeRepository, run cloneRunner) *Service {
 	t.Helper()
 	svc := NewService(Config{
@@ -813,10 +754,6 @@ func serviceWithRunner(t *testing.T, repo *fakeRepository, run cloneRunner) *Ser
 	return svc
 }
 
-// TestTestGitConnectionOutcomes pins the probe contract without a network:
-// a keyless SSH remote is an outcome (not an error) naming the deploy key,
-// a git failure is classified, and a git echo of a token-bearing URL is
-// scrubbed before it reaches the message.
 func TestTestGitConnectionOutcomes(t *testing.T) {
 	t.Run("keyless SSH names the deploy key", func(t *testing.T) {
 		userID := uuid.New()
@@ -915,9 +852,6 @@ func TestTestGitConnectionOutcomes(t *testing.T) {
 	})
 }
 
-// TestRoutesGetDeployKey pins the read path the detail page uses: the
-// public half with a 200, a 404 without a key, and a body that never names
-// a private half or a token.
 func TestRoutesGetDeployKey(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 
@@ -970,9 +904,6 @@ func testConnectionPath(appID uuid.UUID) string {
 	return "/v1/applications/" + appID.String() + "/test-connection"
 }
 
-// TestRoutesGitCredential pins the HTTPS credential endpoints: storing
-// answers what is set (never the token), reading reports the state, and a
-// missing token is a 400.
 func TestRoutesGitCredential(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 
@@ -1041,9 +972,6 @@ func TestRoutesGitCredential(t *testing.T) {
 	})
 }
 
-// TestRoutesTestConnection pins the probe endpoint: the classified outcome
-// passes through with a 200 (even when the probe failed), while a service
-// failure answers 500 without its detail.
 func TestRoutesTestConnection(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 
@@ -1085,11 +1013,6 @@ func TestRoutesTestConnection(t *testing.T) {
 	})
 }
 
-// TestPrivateAndDeployURLGatesAgree pins finding 1: the creation gate
-// (ValidatePrivateGitURL) and the deploy gate (validateCloneURL) accept the
-// same private SSH shapes, so a created application always stays deployable.
-// The git:// scheme is the one documented divergence: the deploy gate keeps
-// accepting it for legacy rows, creation refuses it for new private rows.
 func TestPrivateAndDeployURLGatesAgree(t *testing.T) {
 	t.Setenv(devLocalCloneEnv, "false")
 	cases := []struct {
@@ -1121,10 +1044,6 @@ func TestPrivateAndDeployURLGatesAgree(t *testing.T) {
 	}
 }
 
-// TestCloneCredentialPlainHTTPIgnoresToken pins fix 4 at the clone layer: a
-// cleartext http URL never takes the askpass path, even when a token row
-// exists (SetGitCredential refuses such applications, so this is unreachable
-// through the API — the clone simply must not depend on that).
 func TestCloneCredentialPlainHTTPIgnoresToken(t *testing.T) {
 	app := privateTestApp(uuid.New(), "http://git.internal/acme/demo.git")
 	src := gitSource{creds: &staticCredResolver{username: "bob", token: "s3cr3t"}}
@@ -1141,9 +1060,6 @@ func TestCloneCredentialPlainHTTPIgnoresToken(t *testing.T) {
 	}
 }
 
-// TestTestGitConnectionThrottlesBursts pins the probe throttle: the first
-// probe runs, an immediate second answers the cooldown outcome without
-// running git, and a probe past the cooldown runs again.
 func TestTestGitConnectionThrottlesBursts(t *testing.T) {
 	userID := uuid.New()
 	app := privateTestApp(userID, "https://git.internal/acme/demo.git")
@@ -1178,8 +1094,6 @@ func TestTestGitConnectionThrottlesBursts(t *testing.T) {
 	}
 }
 
-// TestDeleteGitCredential covers the removal path: set, delete (true),
-// read back unset, delete again (false), and a foreign application 404s.
 func TestDeleteGitCredential(t *testing.T) {
 	userID := uuid.New()
 	app := privateTestApp(userID, "https://git.internal/acme/demo.git")
@@ -1203,7 +1117,6 @@ func TestDeleteGitCredential(t *testing.T) {
 	}
 }
 
-// TestGetGitCredentialDisabled pins the feature gate on the read path.
 func TestGetGitCredentialDisabled(t *testing.T) {
 	t.Setenv(FeatureEnv, "false")
 	userID := uuid.New()
@@ -1213,10 +1126,6 @@ func TestGetGitCredentialDisabled(t *testing.T) {
 	}
 }
 
-// TestPreviewOfHTTPSAppCopiesCredential pins fix 2: the preview sibling of
-// a token-authenticated private application inherits the sealed credential,
-// so its clone authenticates exactly like the base. A base without a token
-// previews without one (no error, nothing copied).
 func TestPreviewOfHTTPSAppCopiesCredential(t *testing.T) {
 	userID := uuid.New()
 	base := privateTestApp(userID, "https://git.internal/acme/demo.git")
@@ -1256,9 +1165,6 @@ func TestPreviewOfHTTPSAppCopiesCredential(t *testing.T) {
 	})
 }
 
-// TestPreviewOfPrivateAppCopiesLocalKey pins the preview flow for a
-// provider-less private application: the preview inherits the type and the
-// sibling gets its own mapping row over the same key material.
 func TestPreviewOfPrivateAppCopiesLocalKey(t *testing.T) {
 	userID := uuid.New()
 	base := privateTestApp(userID, "git@git.internal:acme/demo.git")

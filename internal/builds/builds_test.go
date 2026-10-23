@@ -14,13 +14,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// Test identifiers shared across the package tests.
 var (
 	testAppID    = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	testDeployID = uuid.MustParse("22222222-2222-2222-2222-222222222222")
 )
 
-// mockBuilder is a scriptable ImageBuilder that records its last call.
 type mockBuilder struct {
 	calls    int
 	lastOpts ImageBuildOptions
@@ -50,8 +48,6 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 }
 
-// readContextTar decodes a build context tar into path -> contents, skipping
-// directory entries.
 func readContextTar(t *testing.T, data []byte) map[string]string {
 	t.Helper()
 	files := make(map[string]string)
@@ -181,9 +177,6 @@ func TestRegistryBuildDockerfile(t *testing.T) {
 	}
 }
 
-// TestRegistryBuildDockerfileHonorsDockerIgnore is the engine-level C1-1
-// regression: the Dockerfile engine filters credentials listed in the
-// repository's .dockerignore while keeping the Dockerfile the builder needs.
 func TestRegistryBuildDockerfileHonorsDockerIgnore(t *testing.T) {
 	repoDir := t.TempDir()
 	writeTestFile(t, filepath.Join(repoDir, "Dockerfile"), "FROM scratch\nCOPY . /app\n")
@@ -262,9 +255,6 @@ func TestRegistryBuildStaticPublicDir(t *testing.T) {
 	}
 }
 
-// The Railpack and Buildpacks engines shell out to CLIs that may not be
-// installed on the node: with an empty PATH the build must fail with
-// ErrCLIMissing and an install hint, never with a fabricated image.
 func TestRegistryBuildCLIMissing(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -280,8 +270,6 @@ func TestRegistryBuildCLIMissing(t *testing.T) {
 			t.Setenv("PATH", t.TempDir())
 			repoDir := t.TempDir()
 			writeTestFile(t, filepath.Join(repoDir, tt.marker), tt.content)
-			// No builder: the toolchain runs in-process, so a missing CLI must
-			// fail with ErrCLIMissing instead of a fabricated image.
 			registry := NewRegistry(nil)
 
 			_, err := registry.Build(context.Background(), testOptions(repoDir))
@@ -298,10 +286,6 @@ func TestRegistryBuildCLIMissing(t *testing.T) {
 	}
 }
 
-// TestRegistryBuildToolchainRoutesToBuilder pins the remote-build fix: with a
-// builder configured, the Railpack and Buildpacks engines package the raw
-// source context and dispatch it with the engine named, so the node agent (not
-// the control plane) runs the CLI and pushes to the node registry.
 func TestRegistryBuildToolchainRoutesToBuilder(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -314,7 +298,6 @@ func TestRegistryBuildToolchainRoutesToBuilder(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// An empty PATH proves the control plane does not need the CLI.
 			t.Setenv("PATH", t.TempDir())
 			repoDir := t.TempDir()
 			writeTestFile(t, filepath.Join(repoDir, tt.marker), tt.content)
@@ -364,8 +347,6 @@ func TestRegistryBuildExplicitHintMismatch(t *testing.T) {
 	builder := &mockBuilder{}
 	registry := NewRegistry(builder)
 
-	// An explicit hint is honoured, so the engine runs and reports its own
-	// validation error instead of a generic "no engine".
 	opts := testOptions(repoDir)
 	opts.BuildPack = EngineStatic
 	if _, err := registry.Build(context.Background(), opts); !errors.Is(err, ErrValidation) {

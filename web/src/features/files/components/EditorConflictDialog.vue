@@ -11,7 +11,6 @@ const message = useMessage();
 const editor = useEditorStore();
 const teams = useTeamsStore();
 
-/** show follows the store's pending conflict prompt. */
 const show = computed<boolean>(() => editor.conflictTab !== null);
 const tab = computed(() => editor.conflictTab);
 const name = computed<string>(() => editor.conflictTab?.name ?? "");
@@ -21,8 +20,6 @@ const dirty = computed<boolean>(() => {
   return current !== null && editor.isDirty(current);
 });
 
-// NModal preset="card" hardcodes role="dialog"; a 409 that can overwrite the
-// server's copy is an alertdialog, so the role is corrected on the real card.
 watch(show, async (open) => {
   if (!open) {
     return;
@@ -33,7 +30,6 @@ watch(show, async (open) => {
     ?.setAttribute("role", "alertdialog");
 });
 
-/** reload discards local edits and re-reads the server's version. */
 async function reload(): Promise<void> {
   const current = editor.conflictTab;
   if (!current) {
@@ -42,7 +38,6 @@ async function reload(): Promise<void> {
   await editor.reload(current.id, teams.activeTeamId);
 }
 
-/** overwrite force-saves the buffer over the concurrent change. */
 async function overwrite(): Promise<void> {
   const current = editor.conflictTab;
   if (!current) {
@@ -56,7 +51,6 @@ async function overwrite(): Promise<void> {
   }
 }
 
-/** saveAs opens the save-as-copy dialog for the conflicting tab. */
 function saveAs(): void {
   const current = editor.conflictTab;
   if (current) {

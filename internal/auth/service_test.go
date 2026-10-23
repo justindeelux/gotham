@@ -17,8 +17,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// defaultTestDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN.
 const defaultTestDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
 func testDSN() string {
@@ -28,10 +26,6 @@ func testDSN() string {
 	return defaultTestDSN
 }
 
-// requirePostgres skips the test when no database is reachable. Only a
-// connection failure skips, and only when GOTHAM_TEST_DSN is unset: an
-// explicit DSN makes the connection failure fatal so CI cannot pass green by
-// skipping. Any migration error afterwards is always a hard failure.
 func requirePostgres(t *testing.T, dsn string) {
 	t.Helper()
 
@@ -48,8 +42,6 @@ func requirePostgres(t *testing.T, dsn string) {
 	_ = conn.Close(ctx)
 }
 
-// newTestService migrates the dev database, opens a store, and returns a Service
-// wired to an ephemeral signer. Every test gets unique emails and cleans up.
 func newTestService(t *testing.T) (*Service, *store.Store) {
 	t.Helper()
 
@@ -59,7 +51,6 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// A reachable database whose migrations fail is a real error, not a skip.
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -78,22 +69,10 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st := store.New(pool)
 	svc := New(st, signer, logger)
-	// A fixed credential-encryption key so TOTP enrollment seals and opens
-	// consistently across the test's calls.
 	svc.SetSecretKey("test-credential-encryption-key")
 	return svc, st
 }
 
-// requireClosedInstance seeds the "instance already has accounts" precondition
-// through the real bootstrap path. When the database already has an account —
-// or this seed loses the bootstrap race — Register reports
-// ErrRegistrationClosed and there is nothing to seed. Either way the instance
-// is closed on return.
-//
-// Callers that assert closed registration must run on a scratch database (see
-// scratchService): the seed row is the guarantee, and on the shared database
-// another package's cleanup could empty the users table mid-test and reopen
-// registration. The seed is deliberately NOT cleaned up.
 func requireClosedInstance(t *testing.T, svc *Service) {
 	t.Helper()
 
@@ -104,12 +83,10 @@ func requireClosedInstance(t *testing.T, svc *Service) {
 	}
 }
 
-// uniqueEmail returns an email that will not collide across test runs.
 func uniqueEmail(prefix string) string {
 	return fmt.Sprintf("be-1.1-%s-%d@example.com", prefix, time.Now().UnixNano())
 }
 
-// cleanupUser deletes the account (and, by cascade, its sessions) afterwards.
 func cleanupUser(t *testing.T, st *store.Store, email string) {
 	t.Helper()
 
@@ -177,8 +154,6 @@ func TestServiceRegisterDuplicateEmail(t *testing.T) {
 		t.Fatalf("first Register: %v", err)
 	}
 
-	// Same email in different case must also collide; a fresh invite keeps
-	// the duplicate past the registration gate so the unique index answers.
 	_, err := svc.Register(ctx, strings.ToUpper(email), password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
 	if !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("second Register error = %v, want ErrEmailTaken", err)
@@ -206,10 +181,6 @@ func TestServiceLoginFailures(t *testing.T) {
 	}
 }
 
-// TestServiceLoginMissStillVerifies pins the timing-oracle mitigation (A2-5):
-// the unknown-email and passwordless-account paths run a real password
-// verification before returning ErrInvalidCredentials, so their cost matches a
-// genuine check.
 func TestServiceLoginMissStillVerifies(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -294,7 +265,6 @@ func TestServiceRefreshRotation(t *testing.T) {
 		t.Fatal("Refresh reused the old refresh token, want rotation")
 	}
 
-	// The new token must still work.
 	third, err := svc.Refresh(ctx, second.RefreshToken, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh(new token): %v", err)
@@ -303,8 +273,6 @@ func TestServiceRefreshRotation(t *testing.T) {
 		t.Fatal("Refresh(new token) returned an empty refresh token")
 	}
 
-	// Replaying the rotated-away first token is reuse detection: it is
-	// refused, and the whole family (including the live third token) dies.
 	if _, err := svc.Refresh(ctx, first.RefreshToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Refresh(replayed token) error = %v, want ErrUnauthorized", err)
 	}
@@ -313,10 +281,6 @@ func TestServiceRefreshRotation(t *testing.T) {
 	}
 }
 
-// TestServiceRefreshExpiredDoesNotRevokeFamily: a merely expired, never-revoked
-// token is not evidence of theft, so it gets a plain 401 and leaves the user's
-// live sessions alone. A rotated-away (revoked) replay is covered by
-// TestServiceRefreshRotation.
 func TestServiceRefreshExpiredDoesNotRevokeFamily(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -349,8 +313,6 @@ func TestServiceRefreshExpiredDoesNotRevokeFamily(t *testing.T) {
 		t.Fatalf("Refresh(expired) error = %v, want ErrUnauthorized", err)
 	}
 
-	// The live session must survive: a revoked replay is theft, an expired one
-	// is not.
 	if _, err := svc.Refresh(ctx, live.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("live session was revoked by an expired-token replay: %v", err)
 	}
@@ -375,7 +337,6 @@ func TestServiceLogoutDeletesSession(t *testing.T) {
 		t.Fatalf("Refresh after logout error = %v, want ErrUnauthorized", err)
 	}
 
-	// The row is deleted, not merely revoked.
 	var count int
 	if err := st.DB.QueryRow(ctx,
 		`SELECT count(*) FROM sessions WHERE refresh_hash = $1`,
@@ -386,7 +347,6 @@ func TestServiceLogoutDeletesSession(t *testing.T) {
 		t.Fatalf("logged-out session still exists (%d rows), want deleted", count)
 	}
 
-	// Logout is idempotent, including for unknown tokens.
 	if err := svc.Logout(ctx, result.RefreshToken); err != nil {
 		t.Fatalf("second Logout: %v", err)
 	}
@@ -395,11 +355,6 @@ func TestServiceLogoutDeletesSession(t *testing.T) {
 	}
 }
 
-// TestServiceLogoutReplayDoesNotRevokeOtherSessions is the FX-2f regression: a
-// replayed token from a logged-out browser (a stale tab, an old copy) must be a
-// plain 401 and must not revoke the account's other live sessions. Logout
-// deletes the row, so the reuse classifier sees a deleted row and attributes
-// nothing; a revoked row would have been classified as rotation theft.
 func TestServiceLogoutReplayDoesNotRevokeOtherSessions(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -411,7 +366,6 @@ func TestServiceLogoutReplayDoesNotRevokeOtherSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// A second live session on another device that must survive the replay.
 	other, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
@@ -429,10 +383,6 @@ func TestServiceLogoutReplayDoesNotRevokeOtherSessions(t *testing.T) {
 	}
 }
 
-// TestServiceLogoutPreservesRevokedRow is the fix-round-1 regression: logout
-// must delete only a live row. Presenting a token that was already rotated away
-// must leave the revoked row in place, because that row is the
-// reuse-detection evidence for the rotation.
 func TestServiceLogoutPreservesRevokedRow(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -444,7 +394,6 @@ func TestServiceLogoutPreservesRevokedRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// Rotating first revokes its row and mints a replacement.
 	if _, err := svc.Refresh(ctx, first.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -482,15 +431,7 @@ func TestServiceMeUnknownUser(t *testing.T) {
 	}
 }
 
-// TestServiceRegisterOpenOverride covers the test/dev escape hatch: with
-// AllowOpenRegistration set on an instance that already has accounts, a
-// registration must take the plain-insert path. It must NOT reach
-// CreateFirstUser, whose emptiness guard would answer ErrRegistrationClosed
-// (that combination broke the UI smoke, which seeds extra accounts).
 func TestServiceRegisterOpenOverride(t *testing.T) {
-	// A private scratch database with one seeded account, so the override
-	// exercises the plain-insert path deterministically instead of depending
-	// on whatever the shared database happens to hold.
 	svc, st := scratchService(t)
 	ctx := context.Background()
 	if _, err := svc.Register(ctx, uniqueEmail("open-seed"), "s3cret-password", "", nil, SessionMeta{}); err != nil {

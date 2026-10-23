@@ -17,27 +17,12 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// RenderResult is one rendered template: the compose document plus the parsed
-// view the control plane reports (service names, domain routes, named volumes,
-// mounts).
 type RenderResult struct {
-	// ComposeYAML is the document with every placeholder resolved, ready to
-	// be created and deployed through the services surface unchanged.
 	ComposeYAML string
-	// Env carries the values of the template's secret fields, keyed by field
-	// key. Secret values are never written into the document: it references
-	// them as ${field}, so the services pipeline's interpolation and
-	// redaction boundary (BE-7.1) covers them from create through deploy,
-	// including every error and the deploy history. The caller must pass Env
-	// to services.Create alongside ComposeYAML.
-	Env map[string]string
-	// Spec is the services view of ComposeYAML.
-	Spec services.ComposeSpec
+	Env         map[string]string
+	Spec        services.ComposeSpec
 }
 
-// Render validates values against the template's form and renders the compose
-// document. Actually rendering a document is the same computation as
-// validating one, so there is no separate validate-only entry point.
 func (c *Catalog) Render(slug string, values map[string]any) (RenderResult, error) {
 	template, ok := c.bySlug[slug]
 	if !ok {
@@ -46,18 +31,6 @@ func (c *Catalog) Render(slug string, values map[string]any) (RenderResult, erro
 	return template.Render(values)
 }
 
-// Render validates values against the template's fields and substitutes them
-// into the compose document. Validation is strict: an unknown field, a missing
-// required value, a wrong type or a value failing its own rules is an error,
-// and the result is parsed with services.Parse before it is returned.
-//
-// Secret fields are rendered as ${field} references and returned in Env, so a
-// secret never enters the document, an error message or the deploy history;
-// the services pipeline substitutes and redacts it exactly like a service
-// environment value. Every error this method returns is additionally passed
-// through services.RedactError with the supplied secret values (raw and
-// dollar-escaped forms), so no error can echo a secret even if a future
-// change places one in a parse-visible position.
 func (t Template) Render(values map[string]any) (RenderResult, error) {
 	known := make(map[string]bool, len(t.Fields))
 	for _, field := range t.Fields {
@@ -96,10 +69,6 @@ func (t Template) Render(values map[string]any) (RenderResult, error) {
 		return RenderResult{}, services.RedactError(
 			fmt.Errorf("%w: template %s: compose.yaml: %v", ErrValidation, t.Slug, err), secrets)
 	}
-	// The rendered size is enforced while the document is built, not after:
-	// a small document with repeated references would otherwise allocate an
-	// oversized string before any limit applies (the services pipeline
-	// enforces its own limit the same way).
 	remaining := services.MaxComposeYAML
 	err = walkScalars(node, func(value string) (string, error) {
 		if !strings.Contains(value, "{{") {
@@ -115,13 +84,8 @@ func (t Template) Render(values map[string]any) (RenderResult, error) {
 				return "", fmt.Errorf("%w: unknown field %q", ErrValidation, key)
 			}
 			if secretFields[key] {
-				// A secret never enters the document: the reference is
-				// resolved (and redacted) by the services pipeline.
 				return "${" + key + "}", nil
 			}
-			// Escape for the services pipeline's own ${VAR} interpolation:
-			// the literal value reaches the container unchanged, and a value
-			// can never be read as a reference.
 			return escapeDollar(fieldValue), nil
 		})
 	})
@@ -149,8 +113,6 @@ func (t Template) Render(values map[string]any) (RenderResult, error) {
 	return RenderResult{ComposeYAML: document, Env: env, Spec: spec}, nil
 }
 
-// resolve returns the effective value of one field: the supplied value, or the
-// field's default when absent.
 func (f Field) resolve(values map[string]any) (string, error) {
 	raw, present := values[f.Key]
 	if !present {
@@ -166,9 +128,6 @@ func (f Field) resolve(values map[string]any) (string, error) {
 	return f.check(text)
 }
 
-// check applies the field's type and its type-specific rules, returning the
-// canonical value. The validator runs it on every default at load, so a
-// template default can never fail here for a loaded template.
 func (f Field) check(text string) (string, error) {
 	if len(text) > MaxFieldValue {
 		return "", fmt.Errorf("%w: field %q exceeds %d bytes", ErrValidation, f.Key, MaxFieldValue)
@@ -220,8 +179,6 @@ func (f Field) check(text string) (string, error) {
 	}
 }
 
-// scalarValue renders a JSON-supplied value as the string a form field carries.
-// Only scalars are accepted; numbers must be whole so no precision is lost.
 func scalarValue(raw any) (string, error) {
 	switch value := raw.(type) {
 	case string:
@@ -244,9 +201,6 @@ func scalarValue(raw any) (string, error) {
 	}
 }
 
-// decodeDocument parses a compose document into its YAML node tree. The input
-// must contain exactly one YAML document: a second document (or a null
-// trailing one) would otherwise be dropped silently by the re-encode.
 func decodeDocument(document string) (*yaml.Node, error) {
 	decoder := yaml.NewDecoder(strings.NewReader(document))
 	var node yaml.Node
@@ -260,10 +214,6 @@ func decodeDocument(document string) (*yaml.Node, error) {
 	return &node, nil
 }
 
-// walkScalars visits every string scalar of a YAML tree and replaces it with
-// the visitor's result. A non-string scalar (a number, a boolean, null) cannot
-// carry a placeholder and is left untouched; aliases are skipped because their
-// anchor is already visited.
 func walkScalars(node *yaml.Node, visit func(string) (string, error)) error {
 	switch node.Kind {
 	case yaml.DocumentNode, yaml.SequenceNode, yaml.MappingNode:
@@ -290,13 +240,6 @@ func walkScalars(node *yaml.Node, visit func(string) (string, error)) error {
 	return nil
 }
 
-// substitute replaces every {{ .field }} placeholder of one scalar with the
-// value resolve returns for its key. budget is the remaining rendered-size
-// budget shared by the whole document: a scalar that would exceed it fails
-// before the oversized string is built, exactly like services.Interpolate. The
-// syntax is deliberately the only supported one: there are no functions, no
-// conditionals, no nested templates and no escaping construct, so a template
-// can never execute anything.
 func substitute(source string, budget *int, resolve func(key string) (string, error)) (string, error) {
 	if !strings.Contains(source, "{{") {
 		if strings.Contains(source, "}}") {
@@ -351,13 +294,10 @@ func substitute(source string, budget *int, resolve func(key string) (string, er
 	return out.String(), nil
 }
 
-// documentTooLarge reports a document that exceeded the rendered-size bound.
 func documentTooLarge() error {
 	return fmt.Errorf("%w: rendered compose document exceeds %d bytes", ErrValidation, services.MaxComposeYAML)
 }
 
-// placeholderKey parses a placeholder body: optional whitespace around a
-// single ".key" field reference.
 func placeholderKey(body string) (string, bool) {
 	body = strings.TrimSpace(body)
 	if !strings.HasPrefix(body, ".") {
@@ -370,8 +310,6 @@ func placeholderKey(body string) (string, bool) {
 	return key, true
 }
 
-// escapeDollar doubles every literal dollar, so a substituted value passes the
-// services pipeline's ${VAR} interpolation unchanged.
 func escapeDollar(value string) string {
 	return strings.ReplaceAll(value, "$", "$$")
 }

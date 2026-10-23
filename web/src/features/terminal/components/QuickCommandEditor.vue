@@ -16,11 +16,6 @@ import {
 import type { QuickCommand, QuickCommandDraft } from "@/features/terminal/schemas/quickCommands";
 import { firstIssueMessage, ruleFrom } from "@/shared/validation/naiveAdapter";
 
-/**
- * Add/edit form for one quick command (JUS-249). It validates through Naive
- * rules and the same zod draft schema the store enforces; a duplicate
- * abbreviation and a control/bidi character are rejected before saving.
- */
 interface Props {
   commands: QuickCommand[];
   editing: QuickCommand | null;
@@ -54,7 +49,6 @@ const rules = computed<FormRules>(() => ({
 
 const shownError = computed<string>(() => props.error || formError.value);
 
-/** save validates through Naive then through the shared zod draft schema. */
 async function save(): Promise<void> {
   try {
     await formRef.value?.validate();
@@ -80,9 +74,6 @@ async function save(): Promise<void> {
   emit("save", parsed.data);
 }
 
-// The modal footer owns the primary Save and Cancel actions, so they stay
-// visible when the form is taller than a short viewport; the form still
-// submits on Enter (JUS-267 fix round 1).
 defineExpose({ submit: save });
 
 onMounted(() => {

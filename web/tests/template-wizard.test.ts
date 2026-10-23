@@ -1,4 +1,3 @@
-// useTemplateWizard core flow: open, validation gating, create/deploy payloads.
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";

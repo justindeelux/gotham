@@ -15,9 +15,6 @@ interface ValueProp {
   body: string;
 }
 
-// Value props for the auth shell. Copy renders through the auth catalog so a
-// language switch updates the shell without navigating; form copy stays with
-// UI-2 pages, only the shell lives here.
 const valueProps = computed<ValueProp[]>(() => [
   {
     icon: "server",
@@ -80,9 +77,6 @@ const valueProps = computed<ValueProp[]>(() => [
       <div class="auth-lang">
         <LanguageSelect />
       </div>
-      <!-- JUS-197: the aside (with the brand) hides below 940px, so phones
-           would sign in on a logo-less card. This compact lockup renders only
-           there. -->
       <div class="auth-mobile-brand" aria-hidden="true">
         <img class="brand-wordmark" src="/logo/gotham-wordmark.svg" alt="" />
       </div>
@@ -92,8 +86,6 @@ const valueProps = computed<ValueProp[]>(() => [
 </template>
 
 <style scoped>
-/* Two-column auth shell. Tokens come from styles/tokens.css; only utilities
-   missing from main.css are re-declared here, scoped. */
 .auth {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -146,9 +138,6 @@ const valueProps = computed<ValueProp[]>(() => [
   color: var(--accent-ink);
 }
 
-/* The title keeps `.fg-2`; the body keeps `.muted`. Do not force every
-   paragraph to `--fg`, which out-specified `.muted` and brightened the copy
-   (B3-10). */
 .auth-value p.fg-2 {
   color: var(--fg-2);
 }
@@ -157,9 +146,6 @@ const valueProps = computed<ValueProp[]>(() => [
   margin-top: 2px;
 }
 
-/* JUS-239: the brand ships as static artwork under /logo. Only the height is
- * a token — the width follows each asset's own ratio, so the lockups never
- * hard-code a pixel width. */
 .brand-lockup {
   display: flex;
   align-items: center;
@@ -233,9 +219,6 @@ const valueProps = computed<ValueProp[]>(() => [
   }
 }
 
-/* JUS-197: phones lose the aside entirely, so the compact brand lockup in
-   the main column carries the logo there. Tablets keep the full-width card
-   without it. */
 @media (max-width: 640px) {
   .auth-mobile-brand {
     display: flex;

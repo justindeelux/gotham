@@ -10,20 +10,8 @@ import {
   uniqueSuffix,
 } from "./support";
 
-// Reuse the authenticated session so the page starts signed in; the seed
-// calls authenticate separately with the access token from global setup.
 test.use({ storageState: storageStatePath });
 
-/**
- * PE-5 (JUS-34): the environment page against the real control plane.
- *
- * Seeds one server, one application and one service through the API
- * (configuration only — no deployment, so nothing is cloned or started) and
- * proves the environment page lists them with tabs and counts, opens a
- * resource through its nested URL with the Project/Environment/Resource
- * breadcrumb, and creates an application through the scoped wizard (the
- * route's project/environment in the summary, the seeded node selected).
- */
 test.describe("environment page", () => {
   test("lists seeded resources, opens nested details, creates scoped", async ({
     page,
@@ -85,13 +73,11 @@ test.describe("environment page", () => {
       service: { id: string };
     };
 
-    // ── the environment page lists both resources with tabs and counts ──
     await page.goto(environmentURL(projectId, environmentId));
     await expect(page.locator(".environment-page .title")).toHaveText("production");
     await expect(page.locator('nav[aria-label="Breadcrumb"]')).toContainText(projectName);
     const appRow = page.locator(".resource-table tbody tr").filter({ hasText: appName });
     await expect(appRow).toHaveCount(1);
-    // JUS-274: the list avatar comes from the seeded source (github).
     const rowAvatar = appRow.locator(".brand-icon");
     await expect(rowAvatar).toBeVisible();
     expect((await rowAvatar.boundingBox())?.width).toBe(28);
@@ -107,7 +93,6 @@ test.describe("environment page", () => {
     await expect(page.locator(".resource-table")).not.toContainText(appName);
     await page.locator(".tabs").getByRole("tab", { name: /All/ }).click();
 
-    // ── Open leads to the nested detail with the full breadcrumb ─────────
     await appRow.locator("a.resource-link").click();
     await expect(page).toHaveURL(
       nestedURL(projectId, environmentId, "applications", application.id),
@@ -118,8 +103,6 @@ test.describe("environment page", () => {
     await page.goBack();
     await expect(page.locator(".resource-table")).toBeVisible();
 
-    // ── the service opens nested too ─────────────────────────────────────
-    // Keyboard path: focusing the row link and pressing Enter navigates.
     await serviceRow.locator("a.resource-link").focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(
@@ -127,9 +110,7 @@ test.describe("environment page", () => {
     );
     await page.goBack();
 
-    // ── Add resource: the app wizard takes the route scope ───────────────
     await page.getByRole("button", { name: "Add resource" }).click();
-    // JUS-274: every source tile carries a monochrome brand glyph.
     await expect(
       page.locator('.n-modal button.res-card[data-source="git_public"] .brand-icon__glyph'),
     ).toHaveCount(1);
@@ -137,29 +118,20 @@ test.describe("environment page", () => {
     const wizard = page.locator(".wizard-modal");
     await expect(wizard).toBeVisible();
     await expect(wizard).toContainText(`${projectName} / production`);
-    // The picked source stays preselected: a read-only summary, no type select.
     await expect(wizard).toContainText("Source: Public git repository");
 
-    // Public git source: no provider round-trip, nothing is cloned here.
     const wizardAppName = `ui-e2e-wiz-${suffix}`.slice(0, 31);
     await wizard.locator("input[placeholder='https://github.com/owner/repo.git']").fill(cloneURL);
     await wizard.locator("input[placeholder='storefront']").fill(wizardAppName);
     await wizard.getByRole("button", { name: "Continue" }).click();
-    // Runtime step: the seeded node is pending (no agent validated it);
-    // pending nodes stay selectable, only offline ones are disabled.
     await wizard.locator(".form-row .n-select").first().click();
     await page
       .locator(".n-base-select-option")
       .filter({ hasText: node.name })
       .click();
     await wizard.getByRole("button", { name: "Continue" }).click();
-    // Build pack step: keep the default auto-detect. The pending node's tool
-    // catalog cannot be fetched, so every pack stays selectable (the gate is
-    // fail-open while the tools are unknown) and the default is unchanged.
     await wizard.getByRole("button", { name: "Continue" }).click();
-    // Env step: keep the NODE_ENV default.
     await wizard.getByRole("button", { name: "Continue" }).click();
-    // Review step: the create carries the route scope.
     const createRequest = page.waitForRequest(
       (request) =>
         request.url().endsWith("/api/v1/applications") &&
@@ -170,7 +142,6 @@ test.describe("environment page", () => {
     expect(createBody["environment_id"]).toBe(environmentId);
     expect(createBody["server_id"]).toBe(node.id);
     expect(createBody["source_type"]).toBe("git_public");
-    // The wizard queues the first deploy and lands on the nested detail.
     await expect(page).toHaveURL(
       new RegExp(`/projects/${projectId}/environments/${environmentId}/applications/[0-9a-f-]+$`),
     );

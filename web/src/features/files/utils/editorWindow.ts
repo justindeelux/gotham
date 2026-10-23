@@ -6,23 +6,14 @@ import {
 import type { EditorWindowState } from "@/features/files/schemas/editorWindow";
 import { clampWindowSize } from "@/shared/window/geometry";
 
-/**
- * Per-user localStorage persistence for the floating editor window geometry
- * (JUS-232). Every access is wrapped in try/catch: private mode, quota and
- * blocked storage must never break the editor. A corrupt payload reads as
- * defaults and is overwritten by the next change.
- */
 export type EditorWindowStorage = Pick<Storage, "getItem" | "setItem">;
 
-/** EDITOR_WINDOW_MAX_BYTES caps the raw payload; a runaway entry is ignored. */
 export const EDITOR_WINDOW_MAX_BYTES = 4 * 1024;
 
-/** editorWindowStorageKey scopes geometry to one user on this browser. */
 export function editorWindowStorageKey(userId: string): string {
   return userId === "" ? "" : `gotham.files.editorWindow.v1.${encodeURIComponent(userId)}`;
 }
 
-/** readEditorWindow loads one user's geometry, falling back to defaults. */
 export function readEditorWindow(
   storage: EditorWindowStorage,
   userId: string,
@@ -47,7 +38,6 @@ export function readEditorWindow(
   }
 }
 
-/** writeEditorWindow stores one user's geometry; false means not stored. */
 export function writeEditorWindow(
   storage: EditorWindowStorage,
   userId: string,
@@ -68,12 +58,6 @@ export function writeEditorWindow(
   }
 }
 
-/**
- * clampEditorSize keeps a resize drag inside the usable band: never below the
- * minimum, never larger than the viewport. On a viewport narrower than the
- * minimum (a phone), the floor yields to the viewport so the window always
- * fits with its margins.
- */
 export function clampEditorSize(
   width: number,
   height: number,

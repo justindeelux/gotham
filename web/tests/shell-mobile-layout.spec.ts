@@ -8,10 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, URL, window:readonly */
-// JUS-135 shell proof: below the tablet breakpoint the server rail leaves the
-// grid (it becomes a drawer), so the content column starts at x=0 on every
-// page — no blank 60/72px gutter and no overlap — and the rail drawer closes
-// on a tap even when the tapped link's route does not change.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -59,10 +55,6 @@ const serverRow = {
   updated_at: "2026-10-01T00:00:00Z",
 };
 
-// Every shell surface that has its own page: the drawer/gutter regression must
-// not depend on which page is open. Teams (members table) and Domains (tab
-// strip) are included so their wide content never pushes the page sideways
-// at phone widths (JUS-197).
 const shellRoutes = ["/dashboard", "/servers", "/projects", "/teams", "/domains", "/settings/profile"];
 
 let server: Server;
@@ -74,7 +66,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -105,12 +96,10 @@ test.afterAll(async () => {
   });
 });
 
-/** mockApi seeds the session and answers enough for the shell to render. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
-  // Catch-all first so the specific routes registered after it win.
   await page.route("**/api/v1/**", async (route) => {
     await route.fulfill({ json: {} });
   });
@@ -139,7 +128,6 @@ interface ShellMetrics {
   toggleHit: boolean;
 }
 
-/** shellMetrics reads the content column's geometry and the topbar hit-test. */
 async function shellMetrics(page: Page): Promise<ShellMetrics> {
   return page.evaluate(() => {
     const view = document.querySelector("main.view") as HTMLElement | null;
@@ -215,8 +203,6 @@ test("the rail drawer closes on a tap even when the route does not change", asyn
   const drawer = page.locator(".n-drawer[role='dialog']");
   await expect(drawer).toBeVisible();
 
-  // The rail's home link targets /dashboard — the current route — so only the
-  // drawer's own click handler can close it (the route watcher never fires).
   await drawer.getByRole("link", { name: "Gotham — home", exact: true }).click();
   await expect(drawer).toBeHidden();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");

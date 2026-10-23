@@ -8,14 +8,8 @@ import (
 	"testing"
 )
 
-// agentTestSandbox is the directory every default update path resolves into
-// during the test run, so a bug can never point the agent updater at a real
-// install (mirrors internal/server's TestMain sandbox).
 var agentTestSandbox string
 
-// TestMain points the agent's default update paths at a throwaway sandbox and
-// disables unattended auto-update before any test runs. Tests that need the
-// surface on still override with t.Setenv, which restores the sandbox after.
 func TestMain(m *testing.M) {
 	sandbox, err := os.MkdirTemp("", "gotham-agent-test-")
 	if err != nil {
@@ -48,9 +42,6 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// TestAgentUpdatePathsSandboxed fails loudly if the default update paths escape
-// the sandbox, so removing the TestMain wiring is caught instead of silently
-// reaching a real install.
 func TestAgentUpdatePathsSandboxed(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {

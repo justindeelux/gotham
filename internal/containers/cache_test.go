@@ -12,11 +12,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestCacheCodecPreservesInternalEvidence is the U1 regression: the Redis cache
-// must round-trip the fields Container's API tags hide (labels, mounts,
-// restart policy, ports_reported) as well as Health, or a cache hit serves
-// containers without them and every consumer reading them silently sees
-// nothing.
 func TestCacheCodecPreservesInternalEvidence(t *testing.T) {
 	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	original := []Container{{
@@ -71,10 +66,6 @@ func TestCacheCodecPreservesInternalEvidence(t *testing.T) {
 	}
 }
 
-// TestContainerJSONRoundTripKeepsHealth is the cheap guard for the readiness
-// cache bug: the Docker health status must survive the encoding/json round
-// trip RedisCache performs, otherwise a cached "starting" is seen as "no
-// healthcheck" and readiness is reported early.
 func TestContainerJSONRoundTripKeepsHealth(t *testing.T) {
 	raw, err := json.Marshal([]Container{{ID: "c1", State: "running", Health: HealthStarting}})
 	if err != nil {
@@ -89,10 +80,6 @@ func TestContainerJSONRoundTripKeepsHealth(t *testing.T) {
 	}
 }
 
-// newTestRedisCache builds a RedisCache for the dev Redis. It skips only when
-// GOTHAM_TEST_REDIS is unset; an explicit address makes an unreachable Redis
-// fatal, mirroring the GOTHAM_TEST_DSN fail-not-skip rule, so the db-test
-// job's provisioned Redis is actually gated.
 func newTestRedisCache(t *testing.T) *RedisCache {
 	t.Helper()
 	addr := os.Getenv("GOTHAM_TEST_REDIS")
@@ -113,8 +100,6 @@ func newTestRedisCache(t *testing.T) *RedisCache {
 	return cache
 }
 
-// TestRedisCachePreservesHealth exercises the real cache round-trip the
-// readiness gate depends on.
 func TestRedisCachePreservesHealth(t *testing.T) {
 	cache := newTestRedisCache(t)
 	ctx := context.Background()
@@ -133,9 +118,6 @@ func TestRedisCachePreservesHealth(t *testing.T) {
 	}
 }
 
-// TestListPreservesHealthThroughRedisCache is the reviewer's scenario: a fake
-// agent reports "starting", the service caches it, and the second (cache-hit)
-// read must still report "starting" rather than dropping Health to "".
 func TestListPreservesHealthThroughRedisCache(t *testing.T) {
 	cache := newTestRedisCache(t)
 	registry := newFakeRegistry()

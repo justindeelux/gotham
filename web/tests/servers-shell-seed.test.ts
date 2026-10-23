@@ -1,9 +1,3 @@
-// JUS-143: the shell seeds the server list when arming the poll so the
-// sidebar count and the rail are correct on first paint, on any page — even a
-// mobile cold load where neither the rail mounts nor the page fetches servers.
-// The seed skips when a load is already in flight, so it never double fetches
-// with the rail or a page seed; the store's listSync ordering keeps any
-// overlapping loads correct.
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -105,8 +99,6 @@ async function readyRouter(): Promise<ReturnType<typeof createRouter>> {
 
 async function mountShell(): Promise<ReturnType<typeof mount>> {
   const router = await readyRouter();
-  // The app shell hosts the global editor window (JUS-232), which needs
-  // the message provider production supplies in App.vue.
   const shell = defineComponent({
     render: () =>
       h(NMessageProvider, null, {
@@ -144,8 +136,6 @@ describe("shell server seed (JUS-143)", () => {
   });
 
   it("skips the seed when a page's load is already in flight (no double fetch)", async () => {
-    // A page mounts before the shell; it has already started a load, so the
-    // shell's seed must not fire a second request.
     useServersStore().loading = true;
 
     const layout = await mountShell();

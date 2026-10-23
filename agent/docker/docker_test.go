@@ -20,7 +20,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// fakeDockerState records what the fake Docker API received.
 type fakeDockerState struct {
 	mu          sync.Mutex
 	started     []string
@@ -34,15 +33,10 @@ type fakeDockerState struct {
 	logsQuery   string
 	listQuery   string
 	versionHits int
-	// createdID is the id the create endpoint returns (default created123).
-	createdID string
-	// startFail makes the start endpoint answer 500.
-	startFail bool
-	// removeFail makes the delete endpoint answer 500.
-	removeFail bool
-	// logsBody, when non-nil, replaces the multiplexed log frames with the
-	// exact bytes written (for short/raw/truncated stream tests).
-	logsBody []byte
+	createdID   string
+	startFail   bool
+	removeFail  bool
+	logsBody    []byte
 }
 
 func (s *fakeDockerState) snapshot() fakeDockerState {
@@ -66,8 +60,6 @@ func (s *fakeDockerState) snapshot() fakeDockerState {
 	}
 }
 
-// newFakeDockerServer starts an httptest server that mimics the Docker Engine
-// endpoints the agent uses.
 func newFakeDockerServer(t *testing.T) (*httptest.Server, *fakeDockerState) {
 	t.Helper()
 	state := &fakeDockerState{}
@@ -129,9 +121,6 @@ func newFakeDockerServer(t *testing.T) (*httptest.Server, *fakeDockerState) {
 		_, _ = w.Write([]byte(`{"status":"Download complete"}` + "\n"))
 	})
 
-	// Image inspect backing digest resolution after a pull. The decoy entry
-	// proves the client records the digest of the pulled repository, not
-	// just the first RepoDigests entry.
 	mux.HandleFunc("/images/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, map[string]any{
 			"Id": "sha256:deadbeef",
@@ -214,8 +203,6 @@ func newFakeDockerServer(t *testing.T) (*httptest.Server, *fakeDockerState) {
 	return server, state
 }
 
-// newFakeDockerClient points a DockerClient at the fake server using the
-// DOCKER_HOST override path.
 func newFakeDockerClient(t *testing.T, apiURL string) *DockerClient {
 	t.Helper()
 	client, err := NewDockerClient(strings.Replace(apiURL, "http://", "tcp://", 1))
@@ -233,7 +220,6 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	}
 }
 
-// writeLogFrames writes one Docker multiplexed log frame.
 func writeLogFrames(w http.ResponseWriter, streamType byte, payload string) {
 	header := make([]byte, 8)
 	header[0] = streamType
@@ -278,12 +264,6 @@ func TestDockerClientListContainers(t *testing.T) {
 	}
 }
 
-// TestDockerClientListContainersMountMetadata proves the mount type, volume
-// name and a local bind volume's configured device reach the control plane, so
-// a compose managed volume is never mistaken for its Docker mountpoint and a
-// bind is never resolved by guessing from the source path. It also pins the
-// device rules (local driver + bind/none options + absolute path) and that a
-// failed inspect is reported as unverified rather than as Docker's mountpoint.
 func TestDockerClientListContainersMountMetadata(t *testing.T) {
 	managed := filepath.Join(t.TempDir(), "app", "data")
 	var inspectCalls int
@@ -374,8 +354,6 @@ func TestDockerClientListContainersMountMetadata(t *testing.T) {
 	}
 }
 
-// TestDockerClientListContainersSkipsDevicesUnlessAsked pins M3: a node-wide
-// listing (heartbeat) never pays for a volume inspect.
 func TestDockerClientListContainersSkipsDevicesUnlessAsked(t *testing.T) {
 	var inspectCalls int
 	mux := http.NewServeMux()
@@ -511,16 +489,11 @@ func TestDockerClientPullImageError(t *testing.T) {
 	}
 }
 
-// inspectRepoDigest/inspectDigest are the RepoDigest the fake engine reports.
 const (
 	inspectRepoDigest = "docker.io/library/alpine"
 	inspectDigest     = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 )
 
-// TestDockerClientPullImageAuth is the credential-scoping guard: a per-pull
-// credential is sent as the Docker auth config for the image's own registry
-// and the resolved digest is answered; an anonymous pull sends the anonymous
-// config instead of the node credential.
 func TestDockerClientPullImageAuth(t *testing.T) {
 	server, state := newFakeDockerServer(t)
 	client := newFakeDockerClient(t, server.URL)
@@ -540,8 +513,6 @@ func TestDockerClientPullImageAuth(t *testing.T) {
 		t.Errorf("serveraddress = %q; want the image registry host", auth["serveraddress"])
 	}
 
-	// The digest answered is the pulled repository's, not the first entry's:
-	// the fake lists an unrelated digest first.
 	digest, err = client.PullImage(context.Background(), "alpine:latest", "robot", "s3cret-token")
 	if err != nil {
 		t.Fatalf("PullImage: %v", err)
@@ -558,9 +529,6 @@ func TestDockerClientPullImageAuth(t *testing.T) {
 	}
 }
 
-// TestDockerClientPullImageHubSpellings records digests across the Docker
-// Hub spellings: an explicit docker.io reference listed under its familiar
-// name, and a legacy index.docker.io reference listed under docker.io.
 func TestDockerClientPullImageHubSpellings(t *testing.T) {
 	const digestA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const digestB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -571,15 +539,12 @@ func TestDockerClientPullImageHubSpellings(t *testing.T) {
 	})
 	mux.HandleFunc("/images/", func(w http.ResponseWriter, r *http.Request) {
 		var digests []string
-		// The path carries the escaped reference; match the distinctive tail.
 		switch {
 		case strings.Contains(r.URL.Path, "alpine"):
 			digests = []string{"alpine@" + digestA}
 		case strings.Contains(r.URL.Path, "app"):
 			digests = []string{"docker.io/team/app@" + digestB}
 		case strings.Contains(r.URL.Path, "private"):
-			// A familiar-looking entry of another repository must not
-			// resolve a private pull; only the exact name counts.
 			digests = []string{"team/app@" + digestC, "registry.example.com/team/private@" + digestB}
 		}
 		writeJSON(t, w, map[string]any{"Id": "sha256:deadbeef", "RepoDigests": digests})
@@ -611,8 +576,6 @@ func TestDockerClientPullImageHubSpellings(t *testing.T) {
 	}
 }
 
-// TestDockerClientPullImageErrorRedactsCredential is the redaction guard: a}
-// failed pull with a credential never echoes it in the error.
 func TestDockerClientPullImageErrorRedactsCredential(t *testing.T) {
 	server, _ := newFakeDockerServer(t)
 	client := newFakeDockerClient(t, server.URL)
@@ -639,7 +602,6 @@ func decodeRegistryAuth(t *testing.T, header string) map[string]string {
 	return auth
 }
 
-// createContainerRequestForTest builds a request exercising every mapped field.
 func createContainerRequestForTest() *agentv1.CreateContainerRequest {
 	return &agentv1.CreateContainerRequest{
 		Image:         "nginx:latest",
@@ -766,9 +728,6 @@ func TestDockerClientLogs(t *testing.T) {
 	}
 }
 
-// TestDockerClientRunImageCleansUpFailedStart is the A3-3/D1-3 guard: a start
-// failure must remove the container it just created, so no orphan is left and
-// an immediate retry on the same name succeeds.
 func TestDockerClientRunImageCleansUpFailedStart(t *testing.T) {
 	server, state := newFakeDockerServer(t)
 	state.mu.Lock()
@@ -795,9 +754,6 @@ func TestDockerClientRunImageCleansUpFailedStart(t *testing.T) {
 	}
 }
 
-// TestDockerClientRunImageCleanupFailureNamesContainer is the U4 guard: when the
-// cleanup removal also fails, the error must name the orphan container so it can
-// be found and deleted.
 func TestDockerClientRunImageCleanupFailureNamesContainer(t *testing.T) {
 	server, state := newFakeDockerServer(t)
 	state.mu.Lock()
@@ -813,8 +769,6 @@ func TestDockerClientRunImageCleanupFailureNamesContainer(t *testing.T) {
 	}
 }
 
-// TestDockerClientLogsShortRawStream is the A3-4 guard: a raw stream shorter
-// than a multiplexed header must still be delivered, not dropped.
 func TestDockerClientLogsShortRawStream(t *testing.T) {
 	server, state := newFakeDockerServer(t)
 	state.mu.Lock()
@@ -838,8 +792,6 @@ func TestDockerClientLogsShortRawStream(t *testing.T) {
 	}
 }
 
-// TestDockerClientLogsTruncatedFrameReportsError is the A3-5 guard: a stream
-// that ends inside a frame is a failure, not a clean success.
 func TestDockerClientLogsTruncatedFrameReportsError(t *testing.T) {
 	server, state := newFakeDockerServer(t)
 	header := make([]byte, 8)
@@ -870,9 +822,6 @@ func TestDockerClientLogsTruncatedFrameReportsError(t *testing.T) {
 	}
 }
 
-// TestDockerClientHonorsContext proves the Docker client cancels an in-flight
-// request when its context expires, so a hung daemon cannot block past the
-// caller's deadline.
 func TestDockerClientHonorsContext(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
@@ -887,9 +836,6 @@ func TestDockerClientHonorsContext(t *testing.T) {
 	}
 }
 
-// TestDecodeLogStreamFollowsShortRawLine is the U1 guard: on a following raw
-// (TTY) stream that writes fewer than eight bytes and stays open, the bytes must
-// be delivered without waiting for a full header.
 func TestDecodeLogStreamFollowsShortRawLine(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close() }()
@@ -916,9 +862,6 @@ func TestDecodeLogStreamFollowsShortRawLine(t *testing.T) {
 	}
 }
 
-// TestDockerClientNotFoundTaxonomy is the U2/U3 guard: a Docker 404 is
-// classified by scope — a missing container is ErrDockerNotFound, a missing
-// image or repository is ErrDockerImageNotFound.
 func TestDockerClientNotFoundTaxonomy(t *testing.T) {
 	mux := http.NewServeMux()
 	notFound := func(body string) http.HandlerFunc {
@@ -946,8 +889,6 @@ func TestDockerClientNotFoundTaxonomy(t *testing.T) {
 	}
 }
 
-// TestDockerClientDaemonDown is the U3 guard for the daemon-down mapping: a
-// closed listener is ErrDockerUnavailable, not Internal.
 func TestDockerClientDaemonDown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := server.URL
@@ -959,9 +900,6 @@ func TestDockerClientDaemonDown(t *testing.T) {
 	}
 }
 
-// TestNotFoundErrorClassification is the U2/U3 guard: the image sentinel is
-// scoped to the pull and create paths, the create match is image-specific, and
-// the build helpers keep the container classification.
 func TestNotFoundErrorClassification(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -987,12 +925,7 @@ func TestNotFoundErrorClassification(t *testing.T) {
 	}
 }
 
-// TestDecodeLogStreamTruncatedAfterValidFrame is the U4 guard: a partial header
-// after at least one valid multiplexed frame is a truncated stream, not raw
-// data with a clean end.
 func TestDecodeLogStreamTruncatedAfterValidFrame(t *testing.T) {
-	// A valid frame (stream 1, size 1, payload "a") followed by a partial
-	// header [1,0,0] and EOF.
 	source := bytes.NewReader([]byte{1, 0, 0, 0, 0, 0, 0, 1, 'a', 1, 0, 0})
 	out := make(chan LogMessage)
 	ctx, cancel := context.WithCancel(context.Background())

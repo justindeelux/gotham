@@ -22,8 +22,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// terminalTestFixture builds a FileServer rooted at a temp directory and a
-// TerminalServer over it.
 func terminalTestFixture(t *testing.T) (*files.FileServer, *TerminalServer, string, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -73,8 +71,6 @@ func testShell(t *testing.T) string {
 	return ""
 }
 
-// startTerminalServer serves the terminal service over loopback and returns a
-// client.
 func startTerminalServer(t *testing.T, sessions *TerminalServer) agentv1.TerminalServiceClient {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -98,8 +94,6 @@ type terminalResult struct {
 	err      error
 }
 
-// recvUntil reads responses until pred matches, the stream fails or the timeout
-// expires.
 func recvUntil(t *testing.T, stream agentv1.TerminalService_OpenTerminalClient, pred func(*agentv1.TerminalResponse) bool) *agentv1.TerminalResponse {
 	t.Helper()
 	const timeout = 10 * time.Second
@@ -138,8 +132,6 @@ func waitForOutput(t *testing.T, stream agentv1.TerminalService_OpenTerminalClie
 	deadline := time.Now().Add(10 * time.Second)
 	var accumulated strings.Builder
 	for time.Now().Before(deadline) {
-		// A terminal can be quiet for a long time (a foreground job); bound
-		// each Recv so a missing marker fails instead of hanging the test.
 		type received struct {
 			response *agentv1.TerminalResponse
 			err      error
@@ -172,8 +164,6 @@ func waitForOutput(t *testing.T, stream agentv1.TerminalService_OpenTerminalClie
 	t.Fatalf("timed out waiting for %q; output %q", marker, accumulated.String())
 }
 
-// TestTerminalServerWaitsForCleanup pins the shutdown contract: a graceful agent
-// stop waits for in-flight session cleanup walks, bounded by a timeout.
 func TestTerminalServerWaitsForCleanup(t *testing.T) {
 	terminal := NewTerminalServer(TerminalConfig{Logger: discardLogger()})
 	started := make(chan struct{})
@@ -268,8 +258,6 @@ func TestTerminalDefaultWorkingDirectory(t *testing.T) {
 		t.Fatalf("OpenTerminal: %v", err)
 	}
 	defer func() { _ = stream.CloseSend() }()
-	// Exactly what the Terminal page and the Server detail tab send: no root
-	// and no cwd.
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
 		Target: "host", Cols: 80, Rows: 24,
 	}}}); err != nil {
@@ -278,8 +266,6 @@ func TestTerminalDefaultWorkingDirectory(t *testing.T) {
 	if _, err := stream.Recv(); err != nil {
 		t.Fatalf("recv opened without a root: %v", err)
 	}
-	// The shell must start where the agent decided: the service user's home
-	// when it is a real directory, otherwise "/".
 	expected := resolveDefaultTerminalDir(serviceHomeDir())
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{
 		Input: []byte("printf 'GOTHAM_PWD=%s\\n' \"$PWD\"\r"),
@@ -298,10 +284,6 @@ func TestTerminalDefaultWorkingDirectory(t *testing.T) {
 	}
 }
 
-// TestTerminalHostWithoutFileRoots proves a node with the file service disabled
-// (no TerminalRoots, GOTHAM_AGENT_FILES=false) still opens a host shell in the
-// agent's default directory. A named root is still refused: there is no
-// allow-list to resolve it against.
 func TestTerminalHostWithoutFileRoots(t *testing.T) {
 	terminal := NewTerminalServer(TerminalConfig{
 		Logger: discardLogger(),
@@ -344,8 +326,6 @@ func TestTerminalHostWithoutFileRoots(t *testing.T) {
 	waitForOutput(t, stream, "GOTHAM_PWD="+expected)
 }
 
-// TestTerminalCwdWithoutRootDoesNotStart proves the cwd-without-root refusal
-// happens in validation, before a shell process is started.
 func TestTerminalCwdWithoutRootDoesNotStart(t *testing.T) {
 	_, terminal, _, _ := terminalTestFixture(t)
 	started := 0
@@ -371,8 +351,6 @@ func TestTerminalCwdWithoutRootDoesNotStart(t *testing.T) {
 	}
 }
 
-// TestResolveDefaultTerminalDir pins the fallback rules without spawning a
-// shell: only an absolute home that resolves to an existing directory wins.
 func TestResolveDefaultTerminalDir(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "home")
@@ -417,9 +395,6 @@ func TestResolveDefaultTerminalDir(t *testing.T) {
 		})
 	}
 
-	// A directory the service user cannot search would fail at chdir, so the
-	// default must fall back to "/" instead of returning it. Root may traverse
-	// a 0000 directory, so this assertion only applies to a non-root runner.
 	t.Run("unsearchable directory", func(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root may chdir into a directory without search permission")
@@ -469,9 +444,6 @@ func TestTerminalEchoResizeAndExit(t *testing.T) {
 	}
 	waitForOutput(t, stream, "gotham-pty-ok")
 
-	// JUS-251: a real PTY round-trip for multi-byte UTF-8 (the browser suite
-	// covers the same bytes through xterm; this pins the Linux kernel/PTY path
-	// used in the amd64/arm64 container evidence).
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("echo gotham-pty-é✓ñ\r")}}); err != nil {
 		t.Fatalf("send utf8 input: %v", err)
 	}
@@ -607,8 +579,6 @@ func TestTerminalInputLimit(t *testing.T) {
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("12345")}}); err != nil {
 		t.Fatalf("send input: %v", err)
 	}
-	// The shell may already have emitted a prompt; drain events until the
-	// handler refuses the oversized frame.
 	for {
 		_, err = stream.Recv()
 		if err != nil {
@@ -764,7 +734,6 @@ func TestTerminalSessionIsolation(t *testing.T) {
 func TestTerminalReleasesResources(t *testing.T) {
 	_, terminal, rootName, _ := terminalTestFixture(t)
 	client := startTerminalServer(t, terminal)
-	// Warm up lazy runtime and gRPC state before taking the baseline.
 	runAgentSession(t, client, rootName)
 	baselineFD := openFDCount(t)
 	baselineGoroutines := runtime.NumGoroutine()
@@ -823,11 +792,6 @@ func TestTerminalDisconnectKillsProcessGroup(t *testing.T) {
 	t.Fatalf("shell process %d still exists after disconnect", pid)
 }
 
-// TestResolveShellDirFilesystemRoot pins the default full-access layout, where
-// the only FileService root is "system" at "/". A cwd under it must resolve:
-// the previous string-prefix containment check compared against "//" and
-// rejected every child of "/". Escape/symlink refusal is covered by
-// TestResolveShellDir with a temp-dir root.
 func TestResolveShellDirFilesystemRoot(t *testing.T) {
 	state := t.TempDir()
 	fileServer, err := files.NewFileServer(files.Config{
@@ -873,10 +837,6 @@ func TestResolveShellDirFilesystemRoot(t *testing.T) {
 	}
 }
 
-// TestTerminalOpenUnderFilesystemRoot reproduces the test-box failure: with the
-// default full-access root "system" at "/", a non-empty cwd used to be refused
-// because containment compared against "//". It must open a shell, run a
-// command and exit normally.
 func TestTerminalOpenUnderFilesystemRoot(t *testing.T) {
 	state := t.TempDir()
 	fileServer, err := files.NewFileServer(files.Config{

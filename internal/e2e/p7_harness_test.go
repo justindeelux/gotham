@@ -22,15 +22,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// p7Harness is the Phase 7 acceptance fixture shared by the BE-7.1 compose
-// acceptance and the BE-7.2 template acceptance: the real control plane
-// service stack (store -> services.Service -> mTLS agent ComposeServer ->
-// `docker compose` CLI -> Docker) plus the Phase 6 proxy service on the same
-// node, against the local Docker daemon and the dev Postgres database.
-//
-// Every prerequisite is fatal, never skipped: the caller is already behind the
-// GOTHAM_E2E gate, so a missing Docker, compose plugin or Postgres must fail
-// instead of skipping green.
 type p7Harness struct {
 	engine   *agent.DockerClient
 	compose  services.ServiceService
@@ -40,16 +31,11 @@ type p7Harness struct {
 	envID    uuid.UUID
 	logger   *slog.Logger
 
-	// suffix is the per-run identifier every fixture name carries.
 	suffix string
 
-	// createdIDs are the containers this test owns and must remove.
 	createdIDs []string
 }
 
-// newP7Harness boots the harness. It also refuses to run when a fixed-name
-// proxy container already exists (the Phase 6 R4 convention): that container
-// may be live state this run cannot prove it owns.
 func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	t.Helper()
 	logger := testLogger(t)
@@ -68,7 +54,6 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	t.Logf("docker %s at %s", version, e2eDockerSock())
 	h.engine = engine
 
-	// The compose plugin is the feature's only node prerequisite.
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Fatalf("docker CLI not found: %v", err)
 	}
@@ -111,9 +96,6 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 		t.Fatalf("create server: %v", err)
 	}
 	h.serverID = uuid.UUID(serverRow.ID.Bytes)
-	// Services require an environment since PE-2; the harness calls the
-	// service directly without a team scope, so the personal team
-	// (ID = user ID, created with the account) scopes it.
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
 		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: userRow.ID, Name: "p7-e2e-" + suffix,
 	})
@@ -135,9 +117,6 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 		}
 	})
 
-	// The node agent with the real ComposeServer rooted in a temp directory
-	// (macOS temp paths carry /var -> /private/var symlinks the agent's
-	// no-follow traversal rejects, so the fixture is canonicalized).
 	nodeID := "p7-e2e-" + suffix
 	composeRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -148,8 +127,6 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 		DockerHost: e2eDockerSock(),
 		Logger:     logger,
 	})
-	// The node also serves the Phase 6 proxy service: the service domains are
-	// routed through the real Traefik on this node.
 	proxyConfigDir := p6CanonicalTempDir(t)
 	proxyAcmeDir := proxyConfigDir + "/acme"
 	if err := os.MkdirAll(proxyAcmeDir, 0o755); err != nil {
@@ -160,8 +137,6 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 		agent.WithProxyService(proxyAgent),
 		agent.WithComposeService(composeAgent))
 
-	// R4 convention from the Phase 6 test: a pre-existing fixed-name proxy
-	// container may be live state this run cannot prove it owns.
 	if existing := p6FindContainer(t, ctx, engine); existing != "" {
 		t.Fatalf("a gotham-traefik container already exists (%s); refusing to remove a possibly live proxy", existing)
 	}
@@ -174,8 +149,6 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 			}
 		}
 	})
-	// On failure, keep the diagnosis close: the mounted configuration and the
-	// proxy logs are dumped before cleanup (the Phase 6 convention).
 	t.Cleanup(func() {
 		if !t.Failed() {
 			return
@@ -208,8 +181,6 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	})
 	t.Cleanup(func() { _ = containerService.Close() })
 
-	// Linux nodes reach published ports through the bridge gateway; Docker
-	// Desktop for macOS needs host.docker.internal (the Phase 6 convention).
 	backendHost := proxy.DefaultBackendHost
 	if runtime.GOOS == "darwin" {
 		backendHost = "host.docker.internal"
@@ -254,7 +225,6 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	return h
 }
 
-// trackContainer registers a container this test owns for cleanup.
 func (h *p7Harness) trackContainer(id string) {
 	if id != "" {
 		h.createdIDs = append(h.createdIDs, id)

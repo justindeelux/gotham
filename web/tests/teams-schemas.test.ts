@@ -1,8 +1,3 @@
-// Differential tests for the teams zod migration (V9 sweep, JUS-23).
-// The two disabled states pin the old trim-and-empty gating, including the
-// kept non-check (any non-empty invite string passes, no email-format rule).
-// The domains sweep found no client-side field checks (the server owns
-// redirect/certificate/provider validation), so no domains schema is kept.
 import { describe, expect, it } from "vitest";
 
 import {

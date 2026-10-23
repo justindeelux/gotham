@@ -20,22 +20,16 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// maxBodyBytes bounds project request bodies (they are tiny).
-const maxBodyBytes = 1 << 20 // 1 MiB
+const maxBodyBytes = 1 << 20
 
-// UserIDFunc resolves the authenticated user from the request context. The
-// server passes its own accessor, so this package never imports the HTTP
-// server (it mirrors services.UserIDFunc for the same reason).
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// resourceCountsResponse is the wire representation of resource counts.
 type resourceCountsResponse struct {
 	Applications int `json:"applications"`
 	Services     int `json:"services"`
 	Databases    int `json:"databases"`
 }
 
-// projectResponse is the wire representation of a project.
 type projectResponse struct {
 	ID               string                 `json:"id"`
 	Name             string                 `json:"name"`
@@ -46,7 +40,6 @@ type projectResponse struct {
 	ResourceCounts   resourceCountsResponse `json:"resource_counts"`
 }
 
-// environmentResponse is the wire representation of an environment.
 type environmentResponse struct {
 	ID             string                 `json:"id"`
 	ProjectID      string                 `json:"project_id"`
@@ -56,7 +49,6 @@ type environmentResponse struct {
 	ResourceCounts resourceCountsResponse `json:"resource_counts"`
 }
 
-// envelope types.
 type (
 	projectListEnvelope struct {
 		Projects []projectResponse `json:"projects"`
@@ -82,7 +74,6 @@ type (
 	}
 )
 
-// request bodies.
 type (
 	createProjectRequest struct {
 		Name        string `json:"name"`
@@ -100,10 +91,6 @@ type (
 	}
 )
 
-// environmentResourceApplication is one application of the resources
-// surface. It mirrors deploy's list item field for field, plus the preview
-// marker: is_preview flags a PR-preview sibling, preview_of names its base
-// application (empty when none).
 type environmentResourceApplication struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
@@ -126,8 +113,6 @@ type environmentResourceApplication struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
-// primaryDomain returns an application's derived primary host for the
-// resources surface, or "" when it has no enabled domain.
 func primaryDomain(application deploy.Application) string {
 	if application.PrimaryDomain == nil {
 		return ""
@@ -135,12 +120,8 @@ func primaryDomain(application deploy.Application) string {
 	return application.PrimaryDomain.Domain
 }
 
-// environmentResourceService is one service of the resources surface: the
-// services package's own response type, so the shapes cannot drift.
 type environmentResourceService = servicespkg.ServiceResponse
 
-// environmentResourceDatabase is one database of the resources surface. It
-// mirrors databases' list item field for field.
 type environmentResourceDatabase struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
@@ -159,7 +140,6 @@ type environmentResourceDatabase struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
-// environmentResourcesEnvelope is the GET /environments/{id}/resources body.
 type environmentResourcesEnvelope struct {
 	Environment  environmentResponse              `json:"environment"`
 	Project      projectResponse                  `json:"project"`
@@ -168,39 +148,16 @@ type environmentResourcesEnvelope struct {
 	Databases    []environmentResourceDatabase    `json:"databases"`
 }
 
-// errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
 }
 
-// handler serves the project routes for one ProjectService.
 type handler struct {
 	svc    ProjectService
 	userID UserIDFunc
 	logger *slog.Logger
 }
 
-// Mount registers the authenticated project endpoints under /api:
-//
-//	GET    /v1/projects
-//	POST   /v1/projects
-//	GET    /v1/projects/{id}
-//	PATCH  /v1/projects/{id}
-//	DELETE /v1/projects/{id}
-//	GET    /v1/projects/{id}/environments
-//	POST   /v1/projects/{id}/environments
-//	PATCH  /v1/environments/{id}
-//	DELETE /v1/environments/{id}
-//	GET    /v1/environments/{id}/resources
-//	GET    /v1/projects/{id}/variables
-//	PUT    /v1/projects/{id}/variables
-//	GET    /v1/environments/{id}/variables
-//	PUT    /v1/environments/{id}/variables
-//
-// auth wraps the group: the server passes its team chain (RequireAuth,
-// RequireTeam and the owner/admin gate for mutating methods, so a read_only
-// member reads and every mutation is refused before the handler). A nil svc
-// mounts nothing, so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ProjectService) {
 	if svc == nil {
 		return
@@ -227,7 +184,6 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 	})
 }
 
-// listProjects serves GET /v1/projects.
 func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -241,8 +197,6 @@ func (h *handler) listProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, projectListEnvelope{Projects: newProjectList(projects)})
 }
 
-// createProject serves POST /v1/projects: 201 with the stored project and
-// its production environment, created in one transaction.
 func (h *handler) createProject(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -275,7 +229,6 @@ func (h *handler) createProject(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getProject serves GET /v1/projects/{id}.
 func (h *handler) getProject(w http.ResponseWriter, r *http.Request) {
 	userID, projectID, ok := h.projectParams(w, r)
 	if !ok {
@@ -292,7 +245,6 @@ func (h *handler) getProject(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// updateProject serves PATCH /v1/projects/{id}.
 func (h *handler) updateProject(w http.ResponseWriter, r *http.Request) {
 	userID, projectID, ok := h.projectParams(w, r)
 	if !ok {
@@ -310,7 +262,6 @@ func (h *handler) updateProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, projectEnvelope{Project: newProjectResponse(project)})
 }
 
-// deleteProject serves DELETE /v1/projects/{id}: 204 on success.
 func (h *handler) deleteProject(w http.ResponseWriter, r *http.Request) {
 	userID, projectID, ok := h.projectParams(w, r)
 	if !ok {
@@ -323,7 +274,6 @@ func (h *handler) deleteProject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// listEnvironments serves GET /v1/projects/{id}/environments.
 func (h *handler) listEnvironments(w http.ResponseWriter, r *http.Request) {
 	userID, projectID, ok := h.projectParams(w, r)
 	if !ok {
@@ -337,8 +287,6 @@ func (h *handler) listEnvironments(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, environmentListEnvelope{Environments: newEnvironmentList(environments)})
 }
 
-// createEnvironment serves POST /v1/projects/{id}/environments: 201 with
-// the stored environment.
 func (h *handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	userID, projectID, ok := h.projectParams(w, r)
 	if !ok {
@@ -367,7 +315,6 @@ func (h *handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, environmentEnvelope{Receipt: requestreplay.ResultFrom(r.Context()), Environment: newEnvironmentResponse(environment)})
 }
 
-// updateEnvironment serves PATCH /v1/environments/{id}.
 func (h *handler) updateEnvironment(w http.ResponseWriter, r *http.Request) {
 	userID, environmentID, ok := h.environmentParams(w, r)
 	if !ok {
@@ -385,7 +332,6 @@ func (h *handler) updateEnvironment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, environmentEnvelope{Environment: newEnvironmentResponse(environment)})
 }
 
-// deleteEnvironment serves DELETE /v1/environments/{id}: 204 on success.
 func (h *handler) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
 	userID, environmentID, ok := h.environmentParams(w, r)
 	if !ok {
@@ -398,9 +344,6 @@ func (h *handler) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// getEnvironmentResources serves GET /environments/{id}/resources: the
-// environment, its project and the workloads attached to it. Previews are
-// excluded unless ?previews=1.
 func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request) {
 	userID, environmentID, ok := h.environmentParams(w, r)
 	if !ok {
@@ -419,9 +362,6 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 			previewIDs = append(previewIDs, application.ID)
 		}
 	}
-	// The base-application mapping is a second read only when previews are
-	// on the page; a failure here must not fail the whole envelope, so an
-	// unmapped preview renders with its tag and no parent.
 	bases := map[uuid.UUID]uuid.UUID{}
 	if len(previewIDs) > 0 {
 		if mapped, err := h.svc.PreviewBases(r.Context(), userID, previewIDs); err == nil {
@@ -448,19 +388,17 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 			ProjectName:     application.ProjectName,
 			Provider:        application.Provider,
 			Repo:            application.Repo,
-			// Display data: never echo embedded credentials (see
-			// deploy.RedactCloneURL).
-			CloneURL:      deploy.RedactCloneURL(application.CloneURL),
-			SourceType:    application.SourceType,
-			Branch:        application.Branch,
-			BuildPack:     application.BuildPack,
-			PrimaryDomain: primaryDomain(application),
-			ServerID:      serverID,
-			ServerName:    application.ServerName,
-			IsPreview:     application.IsPreview,
-			PreviewOf:     previewOf,
-			CreatedAt:     application.CreatedAt,
-			UpdatedAt:     application.UpdatedAt,
+			CloneURL:        deploy.RedactCloneURL(application.CloneURL),
+			SourceType:      application.SourceType,
+			Branch:          application.Branch,
+			BuildPack:       application.BuildPack,
+			PrimaryDomain:   primaryDomain(application),
+			ServerID:        serverID,
+			ServerName:      application.ServerName,
+			IsPreview:       application.IsPreview,
+			PreviewOf:       previewOf,
+			CreatedAt:       application.CreatedAt,
+			UpdatedAt:       application.UpdatedAt,
 		})
 	}
 	services := make([]environmentResourceService, 0, len(resources.Services))
@@ -496,7 +434,6 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -510,8 +447,6 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID
 	return userID, true
 }
 
-// projectParams resolves the authenticated user and the {id} path parameter,
-// answering 401/400 as needed.
 func (h *handler) projectParams(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -525,8 +460,6 @@ func (h *handler) projectParams(w http.ResponseWriter, r *http.Request) (uuid.UU
 	return userID, projectID, true
 }
 
-// environmentParams resolves the authenticated user and the environment {id}
-// path parameter, answering 401/400 as needed.
 func (h *handler) environmentParams(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -540,8 +473,6 @@ func (h *handler) environmentParams(w http.ResponseWriter, r *http.Request) (uui
 	return userID, environmentID, true
 }
 
-// writeServiceError maps service sentinels to HTTP responses. The conflict
-// and refusal bodies are the exact strings of the API contract.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -566,7 +497,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// newProjectResponse maps a domain project to its wire representation.
 func newProjectResponse(project Project) projectResponse {
 	return projectResponse{
 		ID:               project.ID.String(),
@@ -579,7 +509,6 @@ func newProjectResponse(project Project) projectResponse {
 	}
 }
 
-// newProjectList maps domain projects, never rendering a null list.
 func newProjectList(projects []Project) []projectResponse {
 	response := make([]projectResponse, 0, len(projects))
 	for _, project := range projects {
@@ -588,8 +517,6 @@ func newProjectList(projects []Project) []projectResponse {
 	return response
 }
 
-// newEnvironmentResponse maps a domain environment to its wire
-// representation.
 func newEnvironmentResponse(environment Environment) environmentResponse {
 	return environmentResponse{
 		ID:             environment.ID.String(),
@@ -601,7 +528,6 @@ func newEnvironmentResponse(environment Environment) environmentResponse {
 	}
 }
 
-// newEnvironmentList maps domain environments, never rendering a null list.
 func newEnvironmentList(environments []Environment) []environmentResponse {
 	response := make([]environmentResponse, 0, len(environments))
 	for _, environment := range environments {
@@ -610,8 +536,6 @@ func newEnvironmentList(environments []Environment) []environmentResponse {
 	return response
 }
 
-// decodeBody decodes a required JSON body into dst. An empty or malformed
-// body answers 400.
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
@@ -631,7 +555,6 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

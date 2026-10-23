@@ -10,7 +10,6 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// resetConfig builds a Config whose reset paths all live under dir.
 func resetConfig(dir string) Config {
 	return Config{
 		PendingPath: filepath.Join(dir, "update.pending"),
@@ -20,8 +19,6 @@ func resetConfig(dir string) Config {
 	}
 }
 
-// TestResetUpdateStateWritesMarker is the normal path: it clears the pending and
-// status files and writes a regular retry marker.
 func TestResetUpdateStateWritesMarker(t *testing.T) {
 	dir := t.TempDir()
 	cfg := resetConfig(dir)
@@ -53,8 +50,6 @@ func TestResetUpdateStateWritesMarker(t *testing.T) {
 	}
 }
 
-// TestResetUpdateStateLeavesSymlinkVictimUntouched is M1: a symlink planted by
-// the service user must not make root truncate and overwrite its target.
 func TestResetUpdateStateLeavesSymlinkVictimUntouched(t *testing.T) {
 	dir := t.TempDir()
 	cfg := resetConfig(dir)
@@ -81,8 +76,6 @@ func TestResetUpdateStateLeavesSymlinkVictimUntouched(t *testing.T) {
 	}
 }
 
-// TestResetUpdateStateDoesNotHangOnFIFO is M1: a FIFO planted by the service
-// user must not block a root run.
 func TestResetUpdateStateDoesNotHangOnFIFO(t *testing.T) {
 	dir := t.TempDir()
 	cfg := resetConfig(dir)
@@ -106,7 +99,6 @@ func TestResetUpdateStateDoesNotHangOnFIFO(t *testing.T) {
 	}
 }
 
-// TestSeedDelayEscalates is L1: the seeded failed-attempt delay doubles and caps.
 func TestSeedDelayEscalates(t *testing.T) {
 	cases := []struct {
 		count int
@@ -126,9 +118,6 @@ func TestSeedDelayEscalates(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterPersistsBackoffCount is L1: the attempt count survives a
-// wrapper restart (seeded from the durable status) and escalates, then resets on
-// success.
 func TestAgentUpdaterPersistsBackoffCount(t *testing.T) {
 	public, _, err := updatecore.GenerateKey()
 	if err != nil {
@@ -154,21 +143,16 @@ func TestAgentUpdaterPersistsBackoffCount(t *testing.T) {
 	if !runner.inBackoff(testAgentVersion) {
 		t.Fatal("backoff was not seeded")
 	}
-	// A further failed attempt escalates the persisted count.
 	runner.recordFailure(testAgentVersion)
 	if got := runner.readBackoff(testAgentVersion).count; got != 2 {
 		t.Fatalf("count after a second failure = %d, want 2", got)
 	}
-	// Success resets it.
 	runner.clearBackoff(testAgentVersion)
 	if got := runner.readBackoff(testAgentVersion).count; got != 0 {
 		t.Fatalf("count after success = %d, want 0", got)
 	}
 }
 
-// TestAgentUpdaterSeededBackoffDoesNotCountRestarts is the LOW: an unrelated
-// restart while the same rolled_back status is on disk must not escalate the
-// count; only a new failure (a changed status `at`) does.
 func TestAgentUpdaterSeededBackoffDoesNotCountRestarts(t *testing.T) {
 	public, _, err := updatecore.GenerateKey()
 	if err != nil {
@@ -199,14 +183,12 @@ func TestAgentUpdaterSeededBackoffDoesNotCountRestarts(t *testing.T) {
 		t.Fatalf("first seed count = %d, want 1", got)
 	}
 
-	// Two more restarts with the same status must not bump the count.
 	_ = newTestUpdater(t, cfg)
 	third := newTestUpdater(t, cfg)
 	if got := third.readBackoff(testAgentVersion).count; got != 1 {
 		t.Fatalf("count after restarts = %d, want 1 (restarts must not escalate)", got)
 	}
 
-	// A new failure time escalates it.
 	writeStatus(failureAt.Add(time.Minute))
 	fourth := newTestUpdater(t, cfg)
 	if got := fourth.readBackoff(testAgentVersion).count; got != 2 {

@@ -1,8 +1,3 @@
-/**
- * English instance-settings catalog (namespace `instance-settings`): page
- * copy, form labels and the validation message keys the schemas store. Only
- * values are translated in `vi.ts`.
- */
 const en = {
   page: {
     eyebrow: "Settings · Platform operators",

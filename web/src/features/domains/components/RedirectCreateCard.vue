@@ -26,7 +26,6 @@ const {
   handleCreateRedirect,
 } = useRedirects();
 
-/** codeOptions refreshes the redirect-code labels on a language switch. */
 const codeOptions = computed(() => redirectCodeOptions());
 </script>
 
@@ -119,8 +118,6 @@ const codeOptions = computed(() => redirectCodeOptions());
   min-width: 0;
 }
 
-/* Preserve path + Enabled share one row with the submit button, so the
- * inline form ends in a single action row instead of two lone switches. */
 .redirect-form__bottom {
   display: flex;
   align-items: flex-end;

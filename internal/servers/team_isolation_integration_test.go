@@ -15,10 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestServerTeamIsolation is the Phase 8 exit criterion for the node registry,
-// which has no owner column: a node stamped with a team is only visible to that
-// team, while a legacy node (team_id NULL) stays visible to every authenticated
-// caller. It runs against the dev database and skips when none is available.
 func TestServerTeamIsolation(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -89,8 +85,6 @@ func TestServerTeamIsolation(t *testing.T) {
 		t.Fatalf("legacy node team = %s, want unset", legacyNode.TeamID)
 	}
 
-	// The active team decides what the list returns: team nodes of the active
-	// team plus every legacy node.
 	listFor := func(scope teams.Scope) map[uuid.UUID]bool {
 		t.Helper()
 		rows, err := service.List(teams.WithScope(context.Background(), scope))
@@ -115,7 +109,6 @@ func TestServerTeamIsolation(t *testing.T) {
 		t.Errorf("bob's list = %v, want his node and the legacy node only", bobSees)
 	}
 
-	// Detail and delete follow the same rule; the legacy node stays reachable.
 	if _, err := service.Get(aliceTeam, bobNode.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("cross-team Get = %v, want ErrNotFound", err)
 	}
@@ -126,7 +119,6 @@ func TestServerTeamIsolation(t *testing.T) {
 		t.Errorf("legacy Get = %v, want the shared pre-teams behavior", err)
 	}
 
-	// A read_only member reads the team's node but cannot delete it.
 	if _, err := st.CreateTeamMember(ctx, sqlc.CreateTeamMemberParams{
 		TeamID: shared.ID,
 		UserID: bob.ID,
@@ -142,8 +134,6 @@ func TestServerTeamIsolation(t *testing.T) {
 		t.Errorf("read_only Delete = %v, want ErrForbidden", err)
 	}
 
-	// F7: a team that still owns a node cannot be deleted, and the node must
-	// stay private instead of falling back to the shared legacy state.
 	teamSvc := teams.NewService(teams.Config{Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err := teamSvc.Delete(ctx, uuid.UUID(alice.ID.Bytes), uuid.UUID(shared.ID.Bytes)); !errors.Is(err, teams.ErrTeamNotEmpty) {
 		t.Fatalf("delete a team owning a node = %v, want ErrTeamNotEmpty", err)

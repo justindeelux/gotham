@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// serve is a small helper that issues a GET request through the server handler.
 func serve(t *testing.T, s *Server, target string) *httptest.ResponseRecorder {
 	t.Helper()
 

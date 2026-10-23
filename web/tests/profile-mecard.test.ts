@@ -1,5 +1,3 @@
-// MeCard profile entry (JUS-27): dropdown items, display-name fallback,
-// and navigation to the profile page.
 import { NDropdown } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -56,7 +54,6 @@ async function mountCard(user: Record<string, unknown>) {
   return { wrapper, router, auth };
 }
 
-/** openMenu clicks the account button and reads the dropdown labels. */
 async function openMenu(
   wrapper: ReturnType<typeof mount>,
 ): Promise<string[]> {

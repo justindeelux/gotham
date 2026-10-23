@@ -14,21 +14,9 @@ import {
 import type { CreateRequest, TerminalTraffic } from "./terminal-support";
 import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
 
-/**
- * JUS-247 / JUS-251 application terminal journeys against the REAL stack.
- *
- * A prebuilt `nginx` image application is created and deployed through the
- * public API on the same control plane and node agent the browser talks to, so
- * the Terminal tab resolves a real running container. Lazy discovery, the
- * single-target auto-open, the one-way window transfer, the retained window
- * session, redeployment recovery and the read-only gate are asserted by
- * request counts, exact payloads and the container id the API returned.
- */
-
 test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 900 } });
 
 const account = loadAccount();
-/** fresh is this file's own sign-in (see loginFresh). */
 let fresh: Awaited<ReturnType<typeof loginFresh>>;
 
 test.beforeAll(async ({ request }) => {
@@ -38,10 +26,8 @@ test.beforeAll(async ({ request }) => {
 test.beforeEach(async ({ page }) => {
   await installSession(page, fresh);
 });
-/** Images deployed by this spec. The workflow pre-pulls the nginx image. */
 const APP_IMAGE = process.env.GOTHAM_E2E_TERMINAL_IMAGE ?? "nginx:1.28.0-alpine";
 
-/** SeededApplication is one real deployment created for a test. */
 interface SeededApplication {
   projectId: string;
   environmentId: string;
@@ -49,23 +35,18 @@ interface SeededApplication {
   containerId: string;
   service: string;
   teamId: string;
-  /** viewerToken is set only by the read-only scenario. */
   viewerToken?: string;
   viewerEmail?: string;
   viewerUserId?: string;
 }
 
-/** seeds accumulates test resources so cleanup runs even after a failure. */
 const seeds: SeededApplication[] = [];
-/** readOnlySeed is shared by the serial read-only scenarios. */
 let readOnlySeed: SeededApplication | null = null;
 
-/** cleanupSeed deletes the application, project and (when created) team. */
 async function cleanupSeed(
   request: APIRequestContext,
   seed: SeededApplication,
 ): Promise<void> {
-  // Deleting the application stops its container; then the project can go.
   await request
     .delete(`/api/v1/applications/${seed.applicationId}`, {
       headers: teamHeaders(seed.teamId, account),
@@ -96,7 +77,6 @@ test.afterAll(async ({ request }) => {
   }
 });
 
-/** teamHeaders scopes one API call to the team under test. */
 function teamHeaders(teamId: string, who: E2EAccount): Record<string, string> {
   const headers = authHeaders(who);
   if (teamId !== "") {
@@ -105,7 +85,6 @@ function teamHeaders(teamId: string, who: E2EAccount): Record<string, string> {
   return headers;
 }
 
-/** expectOK fails with the response body so a seed failure is debuggable. */
 async function expectOK(
   response: { ok(): boolean; status(): number; text(): Promise<string> },
   what: string,
@@ -115,7 +94,6 @@ async function expectOK(
   }
 }
 
-/** createProject creates a private project for owner-scoped application seeds. */
 async function createProject(
   request: APIRequestContext,
   headers: Record<string, string>,
@@ -132,7 +110,6 @@ async function createProject(
   return { projectId: body.project.id, environmentId: body.environments[0]!.id };
 }
 
-/** createApplication posts one image-source application. */
 async function createImageApplication(
   request: APIRequestContext,
   headers: Record<string, string>,
@@ -154,7 +131,6 @@ async function createImageApplication(
   return body.application.id;
 }
 
-/** deployApplication queues a real deploy and waits for a running container. */
 async function deployApplication(
   request: APIRequestContext,
   headers: Record<string, string>,
@@ -189,7 +165,6 @@ async function deployApplication(
   throw new Error("deployment never reached running");
 }
 
-/** terminalTargets reads the API's resolved containers for one application. */
 async function terminalTargets(
   request: APIRequestContext,
   headers: Record<string, string>,
@@ -207,7 +182,6 @@ async function terminalTargets(
   };
 }
 
-/** seedSingleApplication creates, deploys and returns one image application. */
 async function seedSingleApplication(
   request: APIRequestContext,
 ): Promise<SeededApplication> {
@@ -239,7 +213,6 @@ async function seedSingleApplication(
   return seed;
 }
 
-/** isOperator reads the platform-admin flag. */
 async function isOperator(request: APIRequestContext): Promise<boolean> {
   const response = await request.get("/api/v1/auth/me", {
     headers: authHeaders(account),
@@ -253,19 +226,16 @@ async function isOperator(request: APIRequestContext): Promise<boolean> {
   return body.user?.is_platform_admin === true;
 }
 
-/** applicationURL is the nested application detail route. */
 function applicationURL(seed: SeededApplication, tab?: string): string {
   const base = `/projects/${seed.projectId}/environments/${seed.environmentId}/applications/${seed.applicationId}`;
   return tab === undefined ? base : `${base}?tab=${tab}`;
 }
 
-/** terminalCalls records the terminal control requests of one page. */
 interface TerminalCalls {
   traffic: TerminalTraffic;
   paths: string[];
 }
 
-/** watchApplicationTerminal adds application-route request logging. */
 function watchApplicationTerminal(page: Page): TerminalCalls {
   const traffic = watchTerminal(page);
   const paths: string[] = [];
@@ -281,7 +251,6 @@ function watchApplicationTerminal(page: Page): TerminalCalls {
   return { traffic, paths };
 }
 
-/** openTerminalTab activates the application Terminal tab. */
 async function openTerminalTab(page: Page): Promise<void> {
   await page.locator(".n-tabs-tab", { hasText: /^Terminal$/ }).first().click();
 }
@@ -298,7 +267,6 @@ test.describe("application terminal on the real stack", () => {
     await page.goto(applicationURL(seed));
     await expect(page.locator('nav[aria-label="Breadcrumb"]')).toBeVisible();
     await page.waitForTimeout(1_000);
-    // Loading the detail page, and visiting another tab, issues nothing.
     expect(paths).toEqual([]);
     await page.locator(".n-tabs-tab", { hasText: /^Logs/ }).first().click();
     await page.waitForTimeout(500);
@@ -313,8 +281,6 @@ test.describe("application terminal on the real stack", () => {
     const create = await waitForCreate(traffic);
     expect(create.status).toBe(201);
 
-    // Exact target identity: the service and the FULL 64-hex container id the
-    // API resolved. A short id, a name or a host fallback would be a defect.
     expect(create.body).toMatchObject({
       service: seed.service,
       container_id: seed.containerId,
@@ -326,14 +292,12 @@ test.describe("application terminal on the real stack", () => {
         `POST /api/v1/applications/${seed.applicationId}/terminal/sessions`,
       ]),
     );
-    // Never a host shell from the application surface.
     expect(
       traffic.creates.some((entry: CreateRequest) =>
         entry.url.includes("/servers/"),
       ),
     ).toBe(false);
 
-    // A real container shell: no host banner, a real prompt.
     await expect
       .poll(async () =>
         page.locator(".xterm-rows").first().innerText().then((text) => /[#$]/.test(text)),
@@ -351,9 +315,6 @@ test.describe("application terminal on the real stack", () => {
     const seed = await seedSingleApplication(request);
     const { traffic, paths } = watchApplicationTerminal(page);
 
-    // Mutation 5a: `accessKnown = true` (or a gate that reads the default
-    // writable projects store) would start discovery while the role is still
-    // unknown. Hold the teams response so the window is deterministic.
     let release!: () => void;
     const held = new Promise<void>((resolve) => {
       release = resolve;
@@ -365,8 +326,6 @@ test.describe("application terminal on the real stack", () => {
 
     await page.goto(applicationURL(seed, "terminal"));
     await expect(page.locator('nav[aria-label="Breadcrumb"]')).toBeVisible();
-    // The page and its deep-linked Terminal tab are mounted, but no terminal
-    // control request may leave the browser while the role is unknown.
     await page.waitForTimeout(2_000);
     expect(paths).toEqual([]);
     expect(traffic.createCount()).toBe(0);
@@ -416,7 +375,6 @@ test.describe("application terminal on the real stack", () => {
     expect(added.filter((path) => path.startsWith("GET"))).toHaveLength(1);
     expect(added.filter((path) => path.startsWith("POST"))).toHaveLength(1);
 
-    // The window's session was kept: no DELETE and two live sockets.
     expect(traffic.deletes).toHaveLength(0);
     await expect
       .poll(() => traffic.sockets.filter((socket) => !socket.closed).length)
@@ -441,9 +399,6 @@ test.describe("application terminal on the real stack", () => {
       )
       .toBe(true);
 
-    // Replace the container through the real deploy pipeline. The old exec
-    // session dies with it; the UI must rediscover targets on the explicit
-    // restart instead of re-POSTing the stale id.
     const redeploy = await request.post(
       `/api/v1/applications/${seed.applicationId}/deploy`,
       { headers: authHeaders(account) },
@@ -453,7 +408,6 @@ test.describe("application terminal on the real stack", () => {
     await expect
       .poll(
         async () => {
-          // A deploy in flight answers 409; poll through it.
           const response = await request.get(
             `/api/v1/applications/${seed.applicationId}/terminal/targets`,
             { headers: authHeaders(account) },
@@ -486,7 +440,6 @@ test.describe("application terminal on the real stack", () => {
       service: seed.service,
       container_id: fresh,
     });
-    // Never a host fallback and the retained target is the FRESH id.
     expect(retried.url).not.toContain("/servers/");
     expect(retried.body?.container_id).not.toBe(seed.containerId);
   });
@@ -522,8 +475,6 @@ test.describe("application terminal on the real stack", () => {
         },
       );
       expect(create.status()).toBe(403);
-      // The same session without the team scope cannot see the application at
-      // all (404, never a cross-team 403 oracle).
       const foreign = await request.get(
         `/api/v1/applications/${readOnly.applicationId}/terminal/targets`,
         { headers: { Authorization: `Bearer ${readOnly.viewerToken}` } },
@@ -534,17 +485,11 @@ test.describe("application terminal on the real stack", () => {
     test("opens the shared-team application and issues zero terminal requests", async ({
       browser,
     }) => {
-      // JUS-257: the shared request layer attaches the active team, so this
-      // page now loads for a read-only member instead of answering 404 before
-      // the role gate can render. The gate then keeps every terminal request
-      // in the browser.
       const visitor = await viewerContext(browser, readOnly);
 
       try {
         const viewerPage = await visitor.newPage();
         const appPrefix = `/api/v1/applications/${readOnly.applicationId}`;
-        // The page and every tab read must carry the shared team; a missing
-        // header is the original bug (personal-team fallback -> 404).
         const teamHeadersOnRequests: Array<string | undefined> = [];
         viewerPage.on("request", (request) => {
           if (request.url().includes(appPrefix)) {
@@ -553,8 +498,6 @@ test.describe("application terminal on the real stack", () => {
         });
         const { paths } = watchApplicationTerminal(viewerPage);
         await viewerPage.goto(applicationURL(readOnly));
-        // A project link only exists once the application row loaded, so this
-        // fails on the 404 the bug produced (the fallback breadcrumb has none).
         await expect(
           viewerPage.locator('nav[aria-label="Breadcrumb"] a').first(),
         ).toBeVisible();
@@ -567,7 +510,6 @@ test.describe("application terminal on the real stack", () => {
         await expect(
           viewerPage.locator(".n-tabs-tab", { hasText: /^Terminal$/ }),
         ).toHaveCount(0);
-        // A crafted deep link falls back to Overview and shows the blocked state.
         await viewerPage.goto(applicationURL(readOnly, "terminal"));
         await expect(
           viewerPage.getByText(/needs write access/i).first(),
@@ -581,11 +523,6 @@ test.describe("application terminal on the real stack", () => {
   });
 });
 
-/**
- * seedReadOnlyApplication creates a shared team, invites a fresh viewer with
- * the read_only role, and deploys an image application in that team. The
- * caller is the team owner; the returned viewer can only read.
- */
 async function seedReadOnlyApplication(
   request: APIRequestContext,
 ): Promise<SeededApplication> {
@@ -653,13 +590,10 @@ async function seedReadOnlyApplication(
     viewerEmail,
     viewerUserId: session.user.id,
   };
-  // The read-only seed is shared by the serial describe and cleaned in
-  // afterAll, not after the first test.
   void viewerPassword;
   return seed;
 }
 
-/** viewerContext builds a browser context signed in as the read-only viewer. */
 async function viewerContext(
   browser: BrowserContext["browser"],
   seed: SeededApplication,

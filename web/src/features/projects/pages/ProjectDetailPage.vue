@@ -38,33 +38,9 @@ import { useProjectsStore } from "@/features/projects/stores/projects";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
-/**
- * Project detail (`/projects/:projectId`, PE-4 Linear JUS-33, shared
- * variables PE-6 Linear JUS-35).
- *
- * A `Projects / <project>`
- * breadcrumb, rename and delete actions, an Environments tab (table with
- * resource counts, open, add, rename, delete) and a Shared variables tab
- * with the precedence hint. Secrets are write-only: stored values are never
- * shown, and saving an untouched secret keeps its sealed value.
- *
- * Delete buttons stay enabled so the block is reachable by keyboard and
- * touch: the dialog explains why ("Move or delete the N resources first")
- * with a disabled confirm while blocked, and the backend's 409 stays the
- * authority. The resource Open buttons route to the environment page.
- *
- * Forms render through NForm with schema rules (inline client errors),
- * visible labels and a 409 taken name inline on the name field. Submits run
- * from an Enter keydown (never keyup, which would fire from the keystroke
- * that opened the dialog).
- *
- * Thin route component: UI state lives in `useProjectPage`, data in the
- * projects store.
- */
 const route = useRoute();
 const projectsStore = useProjectsStore();
 const page = useProjectPage(() => String(route.params.projectId ?? ""));
-/** projectVariables owns the Shared variables tab (one scope per mount). */
 const projectVariables = useSharedVariables(() => ({
   kind: "project",
   projectId: String(route.params.projectId ?? ""),
@@ -105,11 +81,6 @@ const {
   handleEnvDelete,
   reload,
 } = page;
-/**
- * Visible-feedback trackers (one per form): a language switch revalidates
- * exactly the paths with shown feedback, so visible errors refresh while
- * pristine fields stay clean (shared visibleValidation via features/auth).
- */
 const renameVisible = createVisibleValidation();
 const envCreateVisible = createVisibleValidation();
 const envRenameVisible = createVisibleValidation();
@@ -130,11 +101,6 @@ onUnmounted(() => {
   stopDetailLocaleWatch();
 });
 
-/**
- * t renders page copy in the active locale (tracks language switches).
- * Called during render, so tabs, tables and open dialogs refresh without
- * losing drafts.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
@@ -270,7 +236,6 @@ function t(key: string, params?: Record<string, string | number>): string {
       </NTabs>
     </template>
 
-    <!-- Rename project -->
     <NModal
       v-model:show="renameOpen"
       preset="card"
@@ -316,7 +281,6 @@ function t(key: string, params?: Record<string, string | number>): string {
       </template>
     </NModal>
 
-    <!-- Delete project -->
     <NModal
       v-model:show="deleteOpen"
       preset="card"
@@ -355,7 +319,6 @@ function t(key: string, params?: Record<string, string | number>): string {
       </template>
     </NModal>
 
-    <!-- Add environment -->
     <NModal
       v-model:show="envCreateOpen"
       preset="card"
@@ -402,7 +365,6 @@ function t(key: string, params?: Record<string, string | number>): string {
       </template>
     </NModal>
 
-    <!-- Rename environment -->
     <NModal
       :show="envRenameTarget !== null"
       preset="card"
@@ -448,7 +410,6 @@ function t(key: string, params?: Record<string, string | number>): string {
       </template>
     </NModal>
 
-    <!-- Delete environment -->
     <NModal
       :show="envDeleteTarget !== null"
       preset="card"
@@ -570,9 +531,6 @@ function t(key: string, params?: Record<string, string | number>): string {
   font-family: var(--font-mono);
 }
 
-/* Environment names link to the environment page (same target as Open):
-   the global `a` rule supplies the link color and the :focus-visible
-   outline; the underline on hover matches the global link style. */
 .env-link:hover {
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -596,8 +554,6 @@ function t(key: string, params?: Record<string, string | number>): string {
     margin-left: 0;
   }
 
-  /* Narrow: each environment becomes a stacked card so the actions stay
-     reachable without horizontal scrolling. */
   .env-table thead {
     position: absolute;
     width: 1px;

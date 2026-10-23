@@ -11,14 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// The P-A5 regression tests: a password reset must end every refresh chain,
-// including sessions minted by a login or refresh that was in flight while the
-// reset committed.
-
-// TestServiceRefreshRejectsStaleCredentialVersion covers the window PR #88
-// left open: a refresh that had already passed the rotation guard can mint its
-// replacement after the reset's session delete. That replacement carries the
-// pre-reset credential version, and Refresh must refuse it.
 func TestServiceRefreshRejectsStaleCredentialVersion(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -39,8 +31,6 @@ func TestServiceRefreshRejectsStaleCredentialVersion(t *testing.T) {
 		t.Fatalf("GetUserByID: %v", err)
 	}
 
-	// Reset the password, then replay the session the losing refresh minted
-	// after the reset's delete: it stores the account's pre-reset version.
 	newHash, err := HashPassword("rotated-password")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
@@ -69,7 +59,6 @@ func TestServiceRefreshRejectsStaleCredentialVersion(t *testing.T) {
 		t.Fatalf("Refresh(stale session) error = %v, want ErrUnauthorized", err)
 	}
 
-	// The refused session is left revoked, so it cannot be presented again.
 	var revokedAt pgtype.Timestamptz
 	if err := st.DB.QueryRow(ctx,
 		`SELECT revoked_at FROM sessions WHERE refresh_hash = $1`,
@@ -81,11 +70,6 @@ func TestServiceRefreshRejectsStaleCredentialVersion(t *testing.T) {
 	}
 }
 
-// TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession covers the R1
-// race: the presented session was read live, then a password reset deletes it
-// and the user logs in again. The pending rotation loses with pgx.ErrNoRows on
-// a deleted row, which must be a plain 401 — not a family revocation that kills
-// the freshly authenticated session.
 func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -107,8 +91,6 @@ func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T)
 		t.Fatalf("HashPassword: %v", err)
 	}
 
-	// In the window between the session read and the rotation: reset the
-	// password (deleting the presented session) and log in again.
 	var fresh *AuthResult
 	svc.beforeRotate = func() {
 		if err := st.ResetUserPassword(ctx, pgUUID(userID), email, newHash); err != nil {
@@ -128,18 +110,11 @@ func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T)
 	if fresh == nil || fresh.RefreshToken == "" {
 		t.Fatal("fresh login did not mint a session")
 	}
-	// The fresh session must survive: the stale refresh lost to a deleted
-	// row, not to a replay.
 	if _, err := svc.Refresh(ctx, fresh.RefreshToken, SessionMeta{}); err != nil {
 		t.Fatalf("fresh session was revoked by the stale refresh conflict: %v", err)
 	}
 }
 
-// TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession covers H1: a
-// stale pre-reset session (an in-flight login that minted after the reset's
-// delete) is refused on its first refresh by the credential-version check,
-// which marks the row revoked. Its second presentation must still classify by
-// version and be a plain 401 — it must not revoke the post-reset session.
 func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -172,7 +147,6 @@ func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
 		t.Fatalf("Login: %v", err)
 	}
 
-	// The stale session carries the pre-reset credential version.
 	staleToken := "stale-" + uuid.NewString()
 	if _, err := st.DB.Exec(ctx, `
 		INSERT INTO sessions (user_id, refresh_hash, expires_at, credential_version)
@@ -181,12 +155,9 @@ func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
 		t.Fatalf("insert stale session: %v", err)
 	}
 
-	// First presentation: version mismatch marks the row revoked, plain 401.
 	if _, err := svc.Refresh(ctx, staleToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("first stale Refresh error = %v, want ErrUnauthorized", err)
 	}
-	// Second presentation: the row is now revoked, but it is still an obsolete
-	// post-reset chain, not theft.
 	if _, err := svc.Refresh(ctx, staleToken, SessionMeta{}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("second stale Refresh error = %v, want ErrUnauthorized", err)
 	}
@@ -196,9 +167,6 @@ func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
 	}
 }
 
-// TestServiceLoginRefusesVersionBumpDuringVerify covers the login window: the
-// reset commits while the password is being verified, so the old password
-// checked out but the session must not be minted under the new credential.
 func TestServiceLoginRefusesVersionBumpDuringVerify(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -230,9 +198,6 @@ func TestServiceLoginRefusesVersionBumpDuringVerify(t *testing.T) {
 	}
 	svc.afterPasswordVerified = nil
 
-	// The reset really committed: the new password works, and the session it
-	// mints is bound to the account's post-reset version — not a constant and
-	// not an off-by-one, either of which would silently reopen the reset race.
 	loggedIn, err := svc.Login(ctx, email, "rotated-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login(new password): %v", err)
@@ -244,12 +209,6 @@ func TestServiceLoginRefusesVersionBumpDuringVerify(t *testing.T) {
 	assertSessionVersion(t, ctx, st, loggedIn.RefreshToken, account.CredentialVersion)
 }
 
-// TestServiceIssuedSessionsCarryAccountVersion pins the mint-time version
-// binding for both issuance paths at a non-trivial version: the session a
-// successful Login stores, and the replacement a successful Refresh stores,
-// must carry the account's current credential version. Storing a constant
-// (1) or an off-by-one (version+1) makes a pre-reset chain survive the reset
-// while the guard tests stay green, so this assertion is load-bearing.
 func TestServiceIssuedSessionsCarryAccountVersion(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -266,8 +225,6 @@ func TestServiceIssuedSessionsCarryAccountVersion(t *testing.T) {
 		t.Fatalf("parse user ID: %v", err)
 	}
 
-	// Move the account to version 2 so a constant or an off-by-one differs
-	// from the account's version.
 	newHash, err := HashPassword("rotated-password")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
@@ -296,8 +253,6 @@ func TestServiceIssuedSessionsCarryAccountVersion(t *testing.T) {
 	assertSessionVersion(t, ctx, st, rotated.RefreshToken, account.CredentialVersion)
 }
 
-// assertSessionVersion reads the session behind refreshToken back from the
-// store and asserts it stores want.
 func assertSessionVersion(t *testing.T, ctx context.Context, st *store.Store, refreshToken string, want int32) {
 	t.Helper()
 
@@ -310,10 +265,6 @@ func assertSessionVersion(t *testing.T, ctx context.Context, st *store.Store, re
 	}
 }
 
-// TestServiceRefreshAcceptsPreMigrationSession proves the upgrade logs nobody
-// out: a session written before the credential_version column existed takes the
-// migration default (1), which matches the account's version, so it still
-// refreshes.
 func TestServiceRefreshAcceptsPreMigrationSession(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -337,8 +288,6 @@ func TestServiceRefreshAcceptsPreMigrationSession(t *testing.T) {
 		t.Fatalf("fresh account version = %d, want 1", user.CredentialVersion)
 	}
 
-	// Omit credential_version, exactly as the pre-migration code did: the
-	// column default backfills it to the account's current version.
 	token := "pre-migration-" + uuid.NewString()
 	if _, err := st.DB.Exec(ctx, `
 		INSERT INTO sessions (user_id, refresh_hash, expires_at)

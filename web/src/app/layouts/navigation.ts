@@ -1,28 +1,20 @@
 import type { IconName } from "@/shared/ui/GothamIcon.vue";
 
-/** Sidebar entry: every entry links to a shipped route via `to`. */
 export interface NavItem {
   key: string;
   label: string;
-  /** labelKey renders the item label in the active locale (stable key). */
   labelKey: string;
   icon: IconName;
   to: string;
-  /** adminOnly hides the entry from callers who are not platform operators. */
   adminOnly?: boolean;
 }
 
 export interface NavSection {
   label: string;
-  /** labelKey renders the section label in the active locale. */
   labelKey: string;
   items: NavItem[];
 }
 
-// Group order and English labels follow the app shell sections. Every entry
-// links to a shipped route; features without a screen (API tokens) are absent until they ship.
-// `label` keeps the English text for source checks; `labelKey` is what the
-// sidebar renders, so a language switch updates labels without remounting.
 export const navSections: NavSection[] = [
   {
     label: "Operations",
@@ -68,23 +60,12 @@ export const navSections: NavSection[] = [
   },
 ];
 
-// Section aliases for paths whose first segment is not the sidebar key.
 export const sectionAliases: Record<string, string> = { settings: "notifications" };
 
-/**
- * visibleNavItems is the per-section filter: platform-admin-only entries
- * stay hidden from callers without the instance flag.
- */
 export function visibleNavItems(items: NavItem[], isPlatformAdmin: boolean): NavItem[] {
   return items.filter((item) => !item.adminOnly || isPlatformAdmin);
 }
 
-/**
- * visibleNavSections drops whole groups whose items are all hidden, so a
- * non-admin never sees an orphan section heading (e.g. System) with nothing
- * under it. Generic over the section list: groups with no adminOnly items
- * pass through untouched.
- */
 export function visibleNavSections(
   sections: NavSection[],
   isPlatformAdmin: boolean,
@@ -97,27 +78,12 @@ export function visibleNavSections(
     .filter((section) => section.items.length > 0);
 }
 
-/**
- * activeNavKey is the sidebar entry for a route path. It follows the first
- * path segment, so detail routes (/servers/:id, /projects/:projectId and
- * the nested /projects/:projectId/environments/:environmentId/... pages)
- * keep their section highlighted (B2-12, B3-5). Projects replaced the
- * Applications, Services and Databases entries; the flat routes were removed
- * in PE-5 and redirect to Projects.
- * Settings pages resolve via the second segment: /settings/notifications
- * highlights Notification channels, while /settings/profile matches no
- * sidebar entry (profile is reached from the MeCard menu) so nothing
- * highlights instead of the wrong item. Bare /settings redirects to
- * notifications, so it keeps that highlight.
- */
 export function activeNavKey(path: string): string {
   const parts = path.split("/").filter(Boolean);
   const [segment = "dashboard", section] = parts;
   if (segment === "settings") {
     return section ?? sectionAliases[segment] ?? segment;
   }
-  // The file browser also lives at /servers/:id/files; highlight the File
-  // manager entry there instead of the Servers entry (JUS-110).
   if (segment === "servers" && parts[2] === "files") {
     return "files";
   }

@@ -15,10 +15,6 @@ interface Props {
 
 defineProps<Props>();
 
-/**
- * t renders footer copy in the active locale (tracks language switches).
- * Step state and draft ownership never change on a switch.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

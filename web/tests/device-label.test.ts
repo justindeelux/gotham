@@ -1,5 +1,3 @@
-// deviceLabel (JUS-28): user-agent sniffing stays readable and falls back
-// to "Unknown device" for anything it does not recognize.
 import { describe, expect, it } from "vitest";
 
 import { deviceLabel } from "@/features/profile/utils/deviceLabel";

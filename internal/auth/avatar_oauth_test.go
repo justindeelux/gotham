@@ -36,9 +36,6 @@ func TestSanitizeAvatarURL(t *testing.T) {
 	}
 }
 
-// TestOAuthCallbackPersistsAvatarOnCreate proves the fix for the inert CSP
-// change: the first OAuth login stores the provider avatar, so /me (and the
-// header behind it) renders the image instead of the initial.
 func TestOAuthCallbackPersistsAvatarOnCreate(t *testing.T) {
 	const avatar = "https://avatars.githubusercontent.com/u/123456?v=4"
 	provider := &fakeOAuthProvider{name: "github"}
@@ -71,8 +68,6 @@ func TestOAuthCallbackPersistsAvatarOnCreate(t *testing.T) {
 	}
 }
 
-// TestOAuthCallbackRefreshesAvatarOnLogin proves later logins refresh the
-// stored avatar instead of leaving the first one stale.
 func TestOAuthCallbackRefreshesAvatarOnLogin(t *testing.T) {
 	const oldAvatar = "https://avatars.githubusercontent.com/u/111?v=4"
 	const newAvatar = "https://avatars.githubusercontent.com/u/222?v=4"
@@ -112,8 +107,6 @@ func TestOAuthCallbackRefreshesAvatarOnLogin(t *testing.T) {
 	}
 }
 
-// TestOAuthCallbackInvalidAvatarStoresNothing proves an invalid provider
-// avatar never blocks the login and never lands in the users row.
 func TestOAuthCallbackInvalidAvatarStoresNothing(t *testing.T) {
 	invalid := map[string]string{
 		"http scheme":  "http://avatars.githubusercontent.com/u/1",
@@ -157,8 +150,6 @@ func TestOAuthCallbackInvalidAvatarStoresNothing(t *testing.T) {
 	}
 }
 
-// TestOAuthCallbackInvalidAvatarKeepsExisting proves an invalid provider value
-// on a later login leaves a previously stored avatar untouched.
 func TestOAuthCallbackInvalidAvatarKeepsExisting(t *testing.T) {
 	const stored = "https://avatars.githubusercontent.com/u/111?v=4"
 	provider := &fakeOAuthProvider{name: "github"}
@@ -189,8 +180,6 @@ func TestOAuthCallbackInvalidAvatarKeepsExisting(t *testing.T) {
 	}
 }
 
-// TestMeReturnsStoredAvatar proves /me exposes the stored avatar to the
-// header behind it.
 func TestMeReturnsStoredAvatar(t *testing.T) {
 	const avatar = "https://avatars.githubusercontent.com/u/999?v=4"
 	svc, st := newTestService(t)

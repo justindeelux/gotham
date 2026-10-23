@@ -1,7 +1,3 @@
-// Probe-failure verbatim regression (JUS-46 review HIGH): a plain string
-// outcome.message from the server probe renders verbatim instead of
-// collapsing to the generic unexpected summary. Only thrown errors go
-// through the localized failureText.
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";

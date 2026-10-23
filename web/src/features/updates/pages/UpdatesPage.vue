@@ -10,14 +10,6 @@ import { renderMarkdown } from "@/features/updates/markdown";
 import type { ChangelogEntry } from "@/features/updates/schemas/updates";
 import { formatDate, relativeTime } from "@/shared/utils/format";
 
-/**
- * Settings → Updates (JUS-93, changelog JUS-102): version / channel / latest
- * release, check and update actions with progress and failure state, the
- * persisted check / auto-apply schedule, and the admin-gated changelog viewer
- * (sanitized markdown, GitHub link, intermediate versions newest first, the
- * running version's entry when up to date, empty state for dev builds).
- * Non-admins see status only.
- */
 const { t } = useI18n();
 const dialog = useDialog();
 const u = useUpdates();
@@ -45,19 +37,16 @@ const backoffNote = computed(() => {
   });
 });
 
-/** Changelog entries newest first (the API already orders them). */
 const changelogEntries = computed(() => u.changelog.value?.entries ?? []);
 const expandedChangelog = computed(() =>
   changelogEntries.value.length > 0 ? [changelogEntries.value[0].version] : [],
 );
-/** Single entry matching the running version means "up to date": title it so. */
 function entryTitle(entry: ChangelogEntry): string {
   if (changelogEntries.value.length === 1 && entry.version === u.check.value?.current) {
     return t("updates.changelog.currentTitle", { version: entry.version });
   }
   return entry.version;
 }
-/** Sanitized HTML for one release body (renderMarkdown escapes raw HTML). */
 function renderedNotes(entry: ChangelogEntry): string {
   return renderMarkdown(entry.notes ?? "", entry.html_url ?? "");
 }

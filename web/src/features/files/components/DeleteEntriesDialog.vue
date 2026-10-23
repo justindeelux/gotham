@@ -37,21 +37,14 @@ const hasFolders = computed<boolean>(() =>
   props.entries.some((entry) => entry.kind === "directory"),
 );
 
-/** hasSymlink reassures that deleting a link never removes its target. */
 const hasSymlink = computed<boolean>(() =>
   props.entries.some((entry) => entry.kind === "symlink"),
 );
 
-/** title names the target kind (folder vs file). */
 const title = computed<string>(() =>
   String(t(hasFolders.value ? "files.dialogs.deleteFolderTitle" : "files.dialogs.deleteTitle")),
 );
 
-/**
- * messageText explains the outcome: a delete always moves the entries to the
- * recycle bin, where they stay recoverable until the bin is emptied. Permanent
- * deletion is offered only from the bin itself.
- */
 const messageText = computed<string>(() =>
   String(
     t(
@@ -62,15 +55,11 @@ const messageText = computed<string>(() =>
   ),
 );
 
-/** submit moves every entry to the recycle bin and reports a per-name outcome. */
 async function submit(): Promise<void> {
   if (files.acting) {
     return;
   }
   try {
-    // Every entry the dialog is open for is deletable: a folder recursively, a
-    // file or symlink with a plain unlink (a symlink removes the link, never
-    // its target). Special rows never reach this dialog.
     const result = await files.remove(props.entries);
     if (result.failed.length === 0) {
       message.success(
@@ -91,8 +80,6 @@ async function submit(): Promise<void> {
       ),
     );
   } catch {
-    // runMutation only throws if the refresh itself failed; the listing keeps
-    // the entries and the browser shows the read error inline.
     message.error(String(t("common.errors.unexpected")));
   }
 }

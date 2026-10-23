@@ -14,7 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// routeMessage decodes the {"message": ...} error body.
 func routeMessage(t *testing.T, body []byte) string {
 	t.Helper()
 	var decoded struct {
@@ -26,8 +25,6 @@ func routeMessage(t *testing.T, body []byte) string {
 	return decoded.Message
 }
 
-// TestCreateApplicationRequiresEnvironment pins the contract: no environment
-// is a 400, a foreign one a 404.
 func TestCreateApplicationRequiresEnvironment(t *testing.T) {
 	repo := &fakeRepository{}
 	svc := newTestService(t, repo)
@@ -47,8 +44,6 @@ func TestCreateApplicationRequiresEnvironment(t *testing.T) {
 	}
 }
 
-// TestUpdateApplicationMovesEnvironment pins the move: same-team relocation
-// works, a name the target already holds is a 409, a foreign target a 404.
 func TestUpdateApplicationMovesEnvironment(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -70,7 +65,6 @@ func TestUpdateApplicationMovesEnvironment(t *testing.T) {
 		t.Fatalf("environment = %s, want %s", moved.EnvironmentID, envB)
 	}
 
-	// A sibling with the same name in the target blocks the move.
 	repo.apps = append(repo.apps, Application{ID: uuid.New(), UserID: userID, EnvironmentID: envA, Name: "taken"})
 	taken := "taken"
 	back, err := svc.UpdateApplication(context.Background(), userID, moved.ID,
@@ -80,7 +74,6 @@ func TestUpdateApplicationMovesEnvironment(t *testing.T) {
 		t.Fatalf("colliding move err = %v, want ErrNameConflict", err)
 	}
 
-	// A foreign environment answers 404.
 	repo.resolveErr = ErrNotFound
 	if _, err := svc.UpdateApplication(context.Background(), userID, moved.ID,
 		UpdateApplicationInput{EnvironmentID: &envA}); !errors.Is(err, ErrNotFound) {
@@ -88,8 +81,6 @@ func TestUpdateApplicationMovesEnvironment(t *testing.T) {
 	}
 }
 
-// TestCreatePreviewApplicationInheritsEnvironment pins decision 4: a preview
-// copies the environment and the server of its base application.
 func TestCreatePreviewApplicationInheritsEnvironment(t *testing.T) {
 	repo := &fakeRepository{}
 	svc := newTestService(t, repo)
@@ -122,9 +113,6 @@ func TestCreatePreviewApplicationInheritsEnvironment(t *testing.T) {
 	}
 }
 
-// TestListApplicationsFilters pins the ?environment_id= and ?project_id=
-// filters: each scopes the list, both together are a 400, a foreign ID a
-// 404.
 func TestListApplicationsFilters(t *testing.T) {
 	userID := uuid.New()
 	envA, projectA := uuid.New(), uuid.New()
@@ -165,9 +153,6 @@ func TestListApplicationsFilters(t *testing.T) {
 	}
 }
 
-// TestMoveRefusedWhilePreviewsOpen pins F5: moving the base application to
-// another environment, or changing its node, answers 409 while live
-// previews exist.
 func TestMoveRefusedWhilePreviewsOpen(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -201,8 +186,6 @@ func TestMoveRefusedWhilePreviewsOpen(t *testing.T) {
 	}
 }
 
-// TestServerChangeDeployCheckPassesThrough pins F6: a ListDeployments failure
-// inside the in-flight check surfaces as-is, never as the 409.
 func TestServerChangeDeployCheckPassesThrough(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -220,9 +203,6 @@ func TestServerChangeDeployCheckPassesThrough(t *testing.T) {
 	}
 }
 
-// TestUpdateApplicationTeamScope keeps the move inside the team even when the
-// caller names an environment of another team: the repository resolves it,
-// and a refusal surfaces as ErrNotFound.
 func TestUpdateApplicationTeamScope(t *testing.T) {
 	userID := uuid.New()
 	teamID := uuid.New()
@@ -240,8 +220,6 @@ func TestUpdateApplicationTeamScope(t *testing.T) {
 	}
 }
 
-// TestUpdateApplicationRouteMovesEnvironment pins the wire: environment_id
-// reaches the service, and the 409 bodies match the contract exactly.
 func TestUpdateApplicationRouteMovesEnvironment(t *testing.T) {
 	userID := uuid.New()
 	appID := uuid.New()

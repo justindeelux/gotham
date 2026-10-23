@@ -12,21 +12,13 @@ import type { ScheduleState, UpdateChangelog, UpdateCheck, UpdateSchedule } from
 
 const pollIntervalMs = 3000;
 const pollTimeoutMs = 5 * 60 * 1000;
-/** Results that end an update attempt (the others mean it is still running). */
 const settledResults = new Set(["ok", "rolled_back", "rollback_failed", "no_backup", "wrapper_failed"]);
 
-/** errorText reads the API message from a normalised ApiError. */
 function errorText(error: unknown): string {
   const message = (error as { message?: unknown } | null)?.message;
   return typeof message === "string" ? message : "";
 }
 
-/**
- * useUpdates holds the Updates page state: the release check, the schedule,
- * the apply flow and post-apply polling. While the service restarts the
- * status requests fail; polling keeps going until the version changes or the
- * wrapper records a settled result.
- */
 export function useUpdates() {
   const authStore = useAuthStore();
   const isAdmin = computed(
@@ -66,7 +58,6 @@ export function useUpdates() {
     }
   }
 
-  /** runCheck forces a release lookup; the error stays visible next to the button. */
   async function runCheck(): Promise<void> {
     checking.value = true;
     checkError.value = "";
@@ -87,17 +78,12 @@ export function useUpdates() {
   }
 
   async function load(): Promise<void> {
-    // The persisted account can predate a PLATFORM_ADMINS change, so refresh the
-    // operator bit the admin controls depend on (App.vue only fetches when empty).
     await Promise.all([authStore.fetchMe().catch(() => {}), runCheck(), loadSchedule()]);
-    // The changelog is admin-gated (notes come only from the read endpoint for
-    // operators); non-admins never need it.
     if (isAdmin.value) {
       await loadChangelog();
     }
   }
 
-  /** loadChangelog fetches the viewer changelog; empty (not an error) for dev builds. */
   async function loadChangelog(): Promise<void> {
     changelogLoading.value = true;
     try {
@@ -141,7 +127,6 @@ export function useUpdates() {
           return;
         }
       } catch {
-        // The control plane is restarting; keep polling.
       }
       if (Date.now() - startedAt > pollTimeoutMs) {
         awaitingRestart.value = false;

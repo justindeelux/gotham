@@ -25,11 +25,8 @@ const message = useMessage();
 const trash = useTrashStore();
 const files = useFilesStore();
 
-/** conflictName is the entry whose restore met an occupied destination (409). */
 const conflictName = ref<string | null>(null);
 
-// Load the bin for the browser's current root on every open, so the dialog
-// never shows a stale listing from a previous root or team.
 watch(
   () => props.show,
   (open) => {
@@ -41,19 +38,12 @@ watch(
   { immediate: true },
 );
 
-/**
- * canAct gates restore/purge/empty: the caller must be able to write (owner or
- * admin on a writable root) AND the loaded listing must belong to the current
- * node+root, so a leftover id can never act on a different scope.
- */
 const canAct = computed<boolean>(() => files.canWrite && trash.scopeMatches);
 
-/** typeLabel resolves the Type column through the shared files catalog. */
 function typeLabel(entry: TrashEntry): string {
   return entryTypeLabel(entry, locale.value);
 }
 
-/** emptyConfirmText avoids a specific count when the listing is capped. */
 const emptyConfirmText = computed<string>(() =>
   String(
     t(
@@ -63,9 +53,6 @@ const emptyConfirmText = computed<string>(() =>
   ),
 );
 
-/** restore returns one entry to its original path. A 409 (occupied path) is
- *  surfaced inline with its own clear message instead of the generic conflict
- *  copy, so the user knows to move the occupant and retry. */
 async function restore(entry: TrashEntry): Promise<void> {
   if (trash.acting || !canAct.value) {
     return;
@@ -83,7 +70,6 @@ async function restore(entry: TrashEntry): Promise<void> {
   }
 }
 
-/** purge permanently deletes one entry from the bin. */
 async function purge(entry: TrashEntry): Promise<void> {
   if (trash.acting || !canAct.value) {
     return;
@@ -96,7 +82,6 @@ async function purge(entry: TrashEntry): Promise<void> {
   }
 }
 
-/** empty permanently deletes every entry in the root's bin. */
 async function empty(): Promise<void> {
   if (trash.acting || !canAct.value) {
     return;
@@ -241,8 +226,6 @@ async function empty(): Promise<void> {
 </template>
 
 <style scoped>
-/* The modal contract (see main.css): header and footer are fixed,
- * only the entry list scrolls, and the card never exceeds the viewport. */
 .trash-hint {
   margin: 0 0 var(--space-2);
 }

@@ -12,34 +12,22 @@ import {
 import type { CreateServerInput, Server, UpdateServerInput, ValidateOptions, ValidateOutcome } from "@/features/servers/api/servers";
 import { createServerListSync } from "./serverListSync";
 
-/** Polling cadence for the server list, in milliseconds. */
 const pollIntervalMs = 5_000;
 
 export const useServersStore = defineStore("servers", () => {
   const servers = ref<Server[]>([]);
   const loading = ref(false);
-  /**
-   * failure keeps the raw last list failure. The `error` display derives
-   * from it in the current locale, so a language switch re-renders a
-   * retained banner without refetching or touching the poll cadence.
-   */
   const failure = ref<unknown>(null);
-  /** error renders the retained failure, or null while healthy. */
   const error = computed<string | null>(() =>
     failure.value === null || failure.value === undefined
       ? null
       : failureText(failure.value),
   );
 
-  // Interval handle kept outside reactive state; the store instance is a
-  // singleton so a single handle is enough for the whole app.
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Ordering guard: a poll response older than a newer one, or predating a
-  // local mutation, must not replace the list (A4-16/B4-5).
   const listSync = createServerListSync();
 
-  /** applyServer merges one server into the in-memory list in place. */
   function applyServer(updated: Server): void {
     const index = servers.value.findIndex((item) => item.id === updated.id);
     if (index === -1) {
@@ -49,10 +37,6 @@ export const useServersStore = defineStore("servers", () => {
     servers.value[index] = updated;
   }
 
-  /**
-   * loadServerList fetches the list and applies it only when the ordering guard
-   * admits the response. It returns the fetched list either way.
-   */
   async function loadServerList(): Promise<Server[]> {
     const token = listSync.begin();
     const list = await listServers();
@@ -63,7 +47,6 @@ export const useServersStore = defineStore("servers", () => {
     return list;
   }
 
-  /** fetchServers loads the list, toggling the loading flag. */
   async function fetchServers(): Promise<void> {
     loading.value = true;
     failure.value = null;
@@ -77,7 +60,6 @@ export const useServersStore = defineStore("servers", () => {
     }
   }
 
-  /** refreshServers reloads the list without toggling the loading flag. */
   async function refreshServers(): Promise<void> {
     try {
       await loadServerList();
@@ -86,10 +68,6 @@ export const useServersStore = defineStore("servers", () => {
     }
   }
 
-  /**
-   * pollServers starts a 5s interval that refreshes the list in place. Calling
-   * it more than once is a no-op until {@link stopPolling} runs.
-   */
   function pollServers(): void {
     if (pollTimer !== null) {
       return;
@@ -99,7 +77,6 @@ export const useServersStore = defineStore("servers", () => {
     }, pollIntervalMs);
   }
 
-  /** stopPolling clears the interval; safe to call when not polling. */
   function stopPolling(): void {
     if (pollTimer !== null) {
       clearInterval(pollTimer);
@@ -107,38 +84,28 @@ export const useServersStore = defineStore("servers", () => {
     }
   }
 
-  /** addServer creates a server and refreshes the list. */
   async function addServer(input: CreateServerInput): Promise<Server> {
     const created = await createServer(input);
-    // Invalidate any poll that started before the create: its response would
-    // not include the new row.
     listSync.markMutation();
     await refreshServers();
     return created;
   }
 
-  /** removeServer deletes a server and drops it from the list. */
   async function removeServer(id: string): Promise<void> {
     await deleteServer(id);
-    // Invalidate in-flight polls so a pre-delete response cannot resurrect the
-    // deleted row.
     listSync.markMutation();
     servers.value = servers.value.filter((item) => item.id !== id);
   }
 
-  /** validate runs the probes, merging the updated server into the list. */
   async function validate(id: string, passphrase?: string, options: ValidateOptions = {}): Promise<ValidateOutcome> {
     const outcome = await validateServer(id, passphrase, options);
     if (outcome.server) {
-      // Invalidate in-flight polls so they cannot clobber the merge with older
-      // state.
       listSync.markMutation();
       applyServer(outcome.server);
     }
     return outcome;
   }
 
-  /** updateServer edits a server, merging the updated row into the list. */
   async function updateServerById(id: string, input: UpdateServerInput): Promise<Server> {
     const updated = await updateServer(id, input);
     listSync.markMutation();
@@ -146,16 +113,8 @@ export const useServersStore = defineStore("servers", () => {
     return updated;
   }
 
-  /**
-   * reset drops the cached list and stops polling, so the next sign-in never
-   * sees the previous account's nodes. Called on sign-out (see the auth
-   * store).
-   */
   function reset(): void {
     stopPolling();
-    // JUS-143: invalidate any load that began before this reset, so a list
-    // request still in flight at sign-out cannot resolve into the next
-    // account's session.
     listSync.markMutation();
     servers.value = [];
     loading.value = false;

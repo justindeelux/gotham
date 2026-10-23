@@ -1,4 +1,3 @@
-// I18N-6: retained store banners re-derive in the new locale without refetch.
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,9 +14,7 @@ import {
 } from "@/shared/i18n";
 
 declare global {
-  // Counts mocked target test POSTs for the single-request assertion below.
   var __targetTestPosts: number | undefined;
-  // Overrides the mocked backup-list failure and counts list calls.
   var __backupsFailure: unknown;
   var __backupsCalls: number | undefined;
 }
@@ -122,7 +119,6 @@ describe("retained target-test failure refreshes on switch", () => {
       );
       setLocale("vi", null);
       await nextTick();
-      // Same retained failure, new locale, still exactly one POST.
       expect(backups!.targetTestMessage("target-1")).toBe(
         "Không kết nối được node agent hoặc tác vụ thất bại trên node. Kiểm tra trạng thái node rồi thử lại. (agent: unreachable)",
       );

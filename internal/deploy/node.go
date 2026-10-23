@@ -17,25 +17,16 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// buildChunkSize is the build context payload size sent per BuildImage
-// message. Small enough for the default gRPC window, large enough to keep the
-// stream efficient.
 const buildChunkSize = 64 << 10
 
-// BuildMeta mirrors agentv1.BuildMeta for the Node seam so the interface
-// stays independent of the generated oneof plumbing.
 type BuildMeta struct {
 	AppID      string
 	DeployID   string
 	Dockerfile string
-	// Engine names the build engine the node must run. Empty and "dockerfile"
-	// mean a Dockerfile build; "railpack"/"buildpacks" run that toolchain on
-	// the node.
-	Engine    string
-	BuildArgs map[string]string
+	Engine     string
+	BuildArgs  map[string]string
 }
 
-// BuildOutcome is the result of a build performed on a node.
 type BuildOutcome struct {
 	ImageTag      string
 	RegistryImage string
@@ -43,9 +34,6 @@ type BuildOutcome struct {
 	RegistryAddr  string
 }
 
-// ComposeContainer is one container of a compose project on the node: the
-// compose service it belongs to and the state the health gate reads. Name and
-// Image are display metadata for the terminal target picker.
 type ComposeContainer struct {
 	ID      string
 	Service string
@@ -55,76 +43,30 @@ type ComposeContainer struct {
 	Status  string
 }
 
-// Node is the subset of the node agent the orchestrator uses: build the
-// image, confirm it in the node registry, run the container and read its
-// state back for the healthcheck. Production is agentNode over the mTLS
-// DockerService/BuildService clients; tests substitute a mock.
 type Node interface {
-	// Build streams a build context to the agent's BuildImage RPC, forwarding
-	// raw log chunks to log as they arrive.
 	Build(ctx context.Context, meta BuildMeta, contextTar []byte, log func([]byte)) (BuildOutcome, error)
-	// Pull confirms an image is reachable from the node's registry.
 	Pull(ctx context.Context, image string) error
-	// PullWithAuth pulls a prebuilt image with one private-registry
-	// credential for this pull only (never persisted on the node) and
-	// answers the resolved image digest, "" when the engine reported none.
 	PullWithAuth(ctx context.Context, image, username, password string) (string, error)
-	// ComposeUp writes the rendered compose document and runs
-	// `docker compose up -d --remove-orphans` on the node. Nothing executes
-	// on the control plane host.
 	ComposeUp(ctx context.Context, projectName string, composeYAML []byte) error
-	// ComposeValidate checks a document on the node without starting
-	// anything, answering the declared service names and whether the node
-	// applied the confinement allowlist. The orchestrator gates compose
-	// runs on the enforcement flag, never on the mere absence of an error.
 	ComposeValidate(ctx context.Context, projectName string, composeYAML []byte) (services []string, enforced bool, err error)
-	// ComposeDown stops and removes the project's containers on the node;
-	// named volumes stay, so a stop is always recoverable.
 	ComposeDown(ctx context.Context, projectName string, composeYAML []byte) error
-	// ComposePs lists the project's containers on the node.
 	ComposePs(ctx context.Context, projectName string) ([]ComposeContainer, error)
-	// Run creates and starts a container, returning its ID.
 	Run(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
-	// Stop stops a running container (used to retire the previous release and
-	// for the manual stop endpoint).
 	Stop(ctx context.Context, containerID string) error
-	// Start starts a stopped container (manual start endpoint).
 	Start(ctx context.Context, containerID string) error
-	// Remove deletes a container, forcing a stop when it still runs. Anonymous
-	// volumes go with it; named volumes and host bind directories are preserved
-	// (the agent's Remove contract), so deleting a resource keeps its data.
 	Remove(ctx context.Context, containerID string) error
-	// Containers lists every container on the node, including stopped ones.
 	Containers(ctx context.Context) ([]*agentv1.ContainerInfo, error)
-	// ContainersByLabel lists the node's containers that carry every label in
-	// labels (key=value), including stopped ones when all is true. The agent
-	// applies Docker's native label filter, so the response carries only the
-	// matching containers instead of the whole node. resolveVolumes asks the
-	// node to resolve each named volume's configured device (an extra volume
-	// inspect); only the volume listing needs it.
 	ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error)
-	// FileRoots lists the File Manager roots the node actually exposes. An
-	// agent without the FileService (files disabled, or older) answers an
-	// Unimplemented error; the caller turns that into "files disabled" rather
-	// than guessing a root name.
 	FileRoots(ctx context.Context) ([]*agentv1.FileRoot, error)
-	// Close releases the underlying agent connection.
 	Close() error
 }
 
-// DialFunc opens the agent of the given server. It is satisfied by
-// AgentDial over *servers.ServerService in production.
 type DialFunc func(ctx context.Context, serverID uuid.UUID) (Node, error)
 
-// AgentDialer is the mTLS dial implemented by *servers.ServerService. The
-// HTTP layer type-asserts its server registry to this interface, so tests
-// that pass a fake registry simply leave the deploy dialer unwired.
 type AgentDialer interface {
 	DialDockerClient(ctx context.Context, id uuid.UUID, opts ...servers.DockerDialOption) (*servers.DockerClient, error)
 }
 
-// AgentDial adapts an AgentDialer to DialFunc. Each call owns its connection
-// and closes it when the deployment run ends.
 func AgentDial(dialer AgentDialer) DialFunc {
 	return func(ctx context.Context, serverID uuid.UUID) (Node, error) {
 		client, err := dialer.DialDockerClient(ctx, serverID)
@@ -141,7 +83,6 @@ func AgentDial(dialer AgentDialer) DialFunc {
 	}
 }
 
-// agentNode is the production Node over one mTLS agent connection.
 type agentNode struct {
 	docker  *servers.DockerClient
 	build   agentv1.BuildServiceClient
@@ -149,13 +90,8 @@ type agentNode struct {
 	files   agentv1.FileServiceClient
 }
 
-// Compile-time guarantee that agentNode satisfies the Node seam.
 var _ Node = (*agentNode)(nil)
 
-// newAgentNode binds an open agent connection to every service it exposes:
-// DockerService (the eight container RPCs), BuildService (BuildImage) and
-// ComposeService (the compose project RPCs). All three ride the same
-// connection the dialer opened.
 func newAgentNode(client *servers.DockerClient) *agentNode {
 	return &agentNode{
 		docker:  client,
@@ -165,9 +101,6 @@ func newAgentNode(client *servers.DockerClient) *agentNode {
 	}
 }
 
-// Build implements Node by streaming the build parameters, the context
-// tarball and the half-close on one goroutine while the response stream is
-// consumed on another, so build logs keep flowing while the context uploads.
 func (n *agentNode) Build(ctx context.Context, meta BuildMeta, contextTar []byte, log func([]byte)) (BuildOutcome, error) {
 	stream, err := n.build.BuildImage(ctx)
 	if err != nil {
@@ -214,8 +147,6 @@ func (n *agentNode) Build(ctx context.Context, meta BuildMeta, contextTar []byte
 	return outcome, nil
 }
 
-// sendBuild writes the meta message first, then the context tarball in
-// chunks, then half-closes the send side to tell the agent the upload is done.
 func (n *agentNode) sendBuild(stream grpc.BidiStreamingClient[agentv1.BuildImageRequest, agentv1.BuildImageResponse], meta BuildMeta, contextTar []byte) error {
 	err := stream.Send(&agentv1.BuildImageRequest{
 		Part: &agentv1.BuildImageRequest_Meta{Meta: &agentv1.BuildMeta{
@@ -246,7 +177,6 @@ func (n *agentNode) sendBuild(stream grpc.BidiStreamingClient[agentv1.BuildImage
 	return nil
 }
 
-// Pull implements Node.
 func (n *agentNode) Pull(ctx context.Context, image string) error {
 	if strings.TrimSpace(image) == "" {
 		return fmt.Errorf("%w: image is required", ErrValidation)
@@ -257,8 +187,6 @@ func (n *agentNode) Pull(ctx context.Context, image string) error {
 	return nil
 }
 
-// PullWithAuth implements Node: the credential travels in this request only
-// and is never persisted on the node.
 func (n *agentNode) PullWithAuth(ctx context.Context, image, username, password string) (string, error) {
 	if strings.TrimSpace(image) == "" {
 		return "", fmt.Errorf("%w: image is required", ErrValidation)
@@ -274,12 +202,6 @@ func (n *agentNode) PullWithAuth(ctx context.Context, image, username, password 
 	return response.GetDigest(), nil
 }
 
-// ComposeUp implements Node: the rendered document replaces the project's
-// previous file on the node before `up` runs, so every deploy is versioned
-// by the file it ran. The compose text itself never reaches the deploy log.
-// The request leaves the node's application-scope allowlist on (the safe
-// zero value): the control plane validated the same document before
-// sending it, and the node enforces it again.
 func (n *agentNode) ComposeUp(ctx context.Context, projectName string, composeYAML []byte) error {
 	if strings.TrimSpace(projectName) == "" {
 		return fmt.Errorf("%w: compose project name is required", ErrValidation)
@@ -298,7 +220,6 @@ func (n *agentNode) ComposeUp(ctx context.Context, projectName string, composeYA
 	return nil
 }
 
-// ComposePs implements Node.
 func (n *agentNode) ComposePs(ctx context.Context, projectName string) ([]ComposeContainer, error) {
 	if strings.TrimSpace(projectName) == "" {
 		return nil, fmt.Errorf("%w: compose project name is required", ErrValidation)
@@ -321,9 +242,6 @@ func (n *agentNode) ComposePs(ctx context.Context, projectName string) ([]Compos
 	return containers, nil
 }
 
-// ComposeValidate implements Node: the document is checked without
-// starting anything. The application path leaves the scope at its safe
-// zero value, so the node enforces the confinement allowlist.
 func (n *agentNode) ComposeValidate(ctx context.Context, projectName string, composeYAML []byte) ([]string, bool, error) {
 	if strings.TrimSpace(projectName) == "" {
 		return nil, false, fmt.Errorf("%w: compose project name is required", ErrValidation)
@@ -342,8 +260,6 @@ func (n *agentNode) ComposeValidate(ctx context.Context, projectName string, com
 	return response.GetServices(), response.GetConfinedEnforced(), nil
 }
 
-// ComposeDown implements Node: the document resolves the project on the
-// node, like ComposeUp. Named volumes survive the down.
 func (n *agentNode) ComposeDown(ctx context.Context, projectName string, composeYAML []byte) error {
 	if strings.TrimSpace(projectName) == "" {
 		return fmt.Errorf("%w: compose project name is required", ErrValidation)
@@ -361,7 +277,6 @@ func (n *agentNode) ComposeDown(ctx context.Context, projectName string, compose
 	return nil
 }
 
-// Run implements Node.
 func (n *agentNode) Run(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error) {
 	response, err := n.docker.RunImage(ctx, req)
 	if err != nil {
@@ -370,7 +285,6 @@ func (n *agentNode) Run(ctx context.Context, req *agentv1.CreateContainerRequest
 	return response.GetContainerId(), nil
 }
 
-// Stop implements Node.
 func (n *agentNode) Stop(ctx context.Context, containerID string) error {
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
@@ -381,7 +295,6 @@ func (n *agentNode) Stop(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// Start implements Node.
 func (n *agentNode) Start(ctx context.Context, containerID string) error {
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
@@ -392,8 +305,6 @@ func (n *agentNode) Start(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// Remove implements Node. The agent's Remove is idempotent: a container that is
-// already gone is reported as success, so a retried cleanup is safe.
 func (n *agentNode) Remove(ctx context.Context, containerID string) error {
 	if strings.TrimSpace(containerID) == "" {
 		return fmt.Errorf("%w: container id is required", ErrValidation)
@@ -404,7 +315,6 @@ func (n *agentNode) Remove(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// Containers implements Node.
 func (n *agentNode) Containers(ctx context.Context) ([]*agentv1.ContainerInfo, error) {
 	response, err := n.docker.ListContainers(ctx, &agentv1.ListContainersRequest{All: true})
 	if err != nil {
@@ -413,7 +323,6 @@ func (n *agentNode) Containers(ctx context.Context) ([]*agentv1.ContainerInfo, e
 	return response.GetContainers(), nil
 }
 
-// ContainersByLabel implements Node.
 func (n *agentNode) ContainersByLabel(ctx context.Context, labels map[string]string, all, resolveVolumes bool) ([]*agentv1.ContainerInfo, error) {
 	response, err := n.docker.ListContainers(ctx, &agentv1.ListContainersRequest{
 		Labels:               labels,
@@ -426,9 +335,6 @@ func (n *agentNode) ContainersByLabel(ctx context.Context, labels map[string]str
 	return response.GetContainers(), nil
 }
 
-// FileRoots implements Node over the FileService riding the same agent
-// connection. The error is returned unmapped so the caller can tell an absent
-// FileService (Unimplemented) from a transport failure.
 func (n *agentNode) FileRoots(ctx context.Context) ([]*agentv1.FileRoot, error) {
 	response, err := n.files.ListRoots(ctx, &agentv1.ListRootsRequest{})
 	if err != nil {
@@ -437,13 +343,8 @@ func (n *agentNode) FileRoots(ctx context.Context) ([]*agentv1.FileRoot, error) 
 	return response.GetRoots(), nil
 }
 
-// Close implements Node.
 func (n *agentNode) Close() error { return n.docker.Close() }
 
-// nodeImageBuilder adapts Node.Build to the builds.ImageBuilder seam, so the
-// four build engines stream their context to the node unchanged. One instance
-// belongs to a single deployment run: it captures the registry reference the
-// node reported for that run.
 type nodeImageBuilder struct {
 	node     Node
 	appID    uuid.UUID
@@ -453,17 +354,12 @@ type nodeImageBuilder struct {
 	built    bool
 }
 
-// Compile-time guarantee that nodeImageBuilder satisfies the seam.
 var _ builds.ImageBuilder = (*nodeImageBuilder)(nil)
 
-// newNodeBuilder binds a builder to one run of one deployment.
 func newNodeBuilder(node Node, appID, deployID uuid.UUID, log func([]byte)) *nodeImageBuilder {
 	return &nodeImageBuilder{node: node, appID: appID, deployID: deployID, log: log}
 }
 
-// Build implements builds.ImageBuilder. Log output is forwarded live to the
-// deploy log stream, so ImageBuildResult.Logs stays empty and engines that
-// write result.Logs to their LogWriter do not duplicate it.
 func (b *nodeImageBuilder) Build(ctx context.Context, contextTar []byte, opts builds.ImageBuildOptions) (builds.ImageBuildResult, error) {
 	if b.node == nil {
 		return builds.ImageBuildResult{}, fmt.Errorf("%w: no node configured for the build", ErrAgentUnavailable)
@@ -483,8 +379,6 @@ func (b *nodeImageBuilder) Build(ctx context.Context, contextTar []byte, opts bu
 	return builds.ImageBuildResult{Digest: outcome.Digest}, nil
 }
 
-// outcomeOf returns the node-reported registry reference of the last
-// successful build, if this builder performed one.
 func (b *nodeImageBuilder) outcomeOf() (BuildOutcome, bool) {
 	if b == nil || !b.built {
 		return BuildOutcome{}, false
@@ -492,21 +386,12 @@ func (b *nodeImageBuilder) outcomeOf() (BuildOutcome, bool) {
 	return b.outcome, true
 }
 
-// mapRPCError translates agent transport failures to deploy sentinels:
-// Unavailable/DeadlineExceeded/Canceled mean the agent could not serve the
-// call (the only retryable class), InvalidArgument means bad input, NotFound
-// means a missing Docker resource, and every other status is a terminal
-// failure. Unrecognised errors pass through unchanged.
 func mapRPCError(err error) error {
 	if err == nil {
 		return nil
 	}
 	switch status.Code(err) {
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled, codes.ResourceExhausted:
-		// ResourceExhausted covers a node whose reply exceeds the gRPC
-		// receive limit: it is the node being unable to answer this call, not
-		// a client error, so it maps to the same bounded 502 family instead of
-		// escaping as a generic 500.
 		return fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
 	case codes.InvalidArgument:
 		return fmt.Errorf("%w: %v", ErrValidation, err)

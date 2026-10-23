@@ -59,7 +59,6 @@ test("URL status follows edits and warns when localhost is missing", async ({ pa
   await expect(status).toContainText("Router: sync pending");
   await expect(status).toContainText("Save the URL");
   await expect(status).toContainText("Certificate: not applicable (HTTP)");
-  // The trial router is observable before the saved URL changes.
   trial = true;
   certificateStatus = "pending";
   await page.getByPlaceholder("https://gotham.example.com").fill("https://new.example.com");

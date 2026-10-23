@@ -1,12 +1,8 @@
-// Go-to-line popover (JUS-231): rejects zero, out-of-range and non-numeric
-// input inline, jumps on Enter for `line` and `line:column`, returns focus to
-// the editor on Escape, and shows the current line and the total.
 /* global document:readonly, KeyboardEvent:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import EditorGotoLine from "@/features/files/components/EditorGotoLine.vue";
-// Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
@@ -19,7 +15,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** mountGoto mounts the popover open over a 10-line document. */
 function mountGoto(jump = vi.fn(() => null)) {
   const wrapper = mount(EditorGotoLine, {
     attachTo: document.body,
@@ -29,7 +24,6 @@ function mountGoto(jump = vi.fn(() => null)) {
   return { wrapper, jump };
 }
 
-/** errorText reads the inline message. */
 function errorText(wrapper: ReturnType<typeof mountGoto>["wrapper"]): string {
   return wrapper.find('[role="alert"]').text();
 }

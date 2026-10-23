@@ -183,7 +183,6 @@ func TestReplayBackedMutationAuthorization(t *testing.T) {
 		t.Fatal("deploy identity changed")
 	}
 	decode(create(deployPath, "invalid", `{"force":true}`), 400)
-	// Current membership and revocation are read again before any receipt access.
 	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='read_only' WHERE team_id=$1 AND user_id=$2", teamID, principal); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +195,6 @@ func TestReplayBackedMutationAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	decode(create(path, "project", `{"name":"shop"}`), 401)
-	// The original no-header path still accepts ordinary callers without MCP headers.
 	decode(send("/api/v1/projects", "", `{"name":"legacy"}`, readToken.Token, teamID.String(), ""), 403)
 	legacy, err := tokenSvc.Create(ctx, principal, "legacy", []string{auth.ScopeDeploy})
 	if err != nil {

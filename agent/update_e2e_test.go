@@ -15,8 +15,6 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// fakeUpdateService answers RequestUpdate with one fixed offer, reporting no
-// update once the agent already runs the offered version.
 type fakeUpdateService struct {
 	agentv1.UnimplementedUpdateServiceServer
 	resp *agentv1.UpdateResponse
@@ -29,7 +27,6 @@ func (f *fakeUpdateService) RequestUpdate(_ context.Context, req *agentv1.Update
 	return f.resp, nil
 }
 
-// startFakeCPWithUpdate serves AgentService and UpdateService over bufconn.
 func startFakeCPWithUpdate(t *testing.T, agentSvc *fakeAgentService, updateSvc *fakeUpdateService) []grpc.DialOption {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
@@ -45,7 +42,6 @@ func startFakeCPWithUpdate(t *testing.T, agentSvc *fakeAgentService, updateSvc *
 	}
 }
 
-// reportedVersions returns the last agent_version each node reported.
 func reportedVersions(fake *fakeAgentService) map[string]string {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
@@ -58,9 +54,6 @@ func reportedVersions(fake *fakeAgentService) map[string]string {
 	return out
 }
 
-// TestTwoAgentsUpdateAllReportNewVersion is the plan's two-agent scenario run
-// in-process: two agents at v1.0.0 poll a fake CP that offers v1.2.0, both
-// apply it and both report v1.2.0 on their next heartbeat.
 func TestTwoAgentsUpdateAllReportNewVersion(t *testing.T) {
 	release := newAgentReleaseServer(t)
 	setTestPublicKey(t, release.public)
@@ -114,8 +107,6 @@ func TestTwoAgentsUpdateAllReportNewVersion(t *testing.T) {
 	t.Fatalf("agents did not both report v1.2.0: %v", reportedVersions(fakeAgent))
 }
 
-// TestHeartbeatReportsAgentVersion proves the agent includes its version in the
-// heartbeat stream.
 func TestHeartbeatReportsAgentVersion(t *testing.T) {
 	fake := &fakeAgentService{cpVersion: "test", cert: []byte("CERT"), heartbeatCh: make(chan *agentv1.HeartbeatRequest, 16)}
 	dialOptions := startFakeCP(t, fake)

@@ -8,12 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL, window:readonly */
-// JUS-123 browser tabs proof: the committed webdist is served statically with
-// the control-plane file API mocked in real Chromium. Measured claims:
-//   - two tabs keep independent paths and the active tab is a proper tablist,
-//   - the clipboard is shared, so a cut in one tab pastes in another,
-//   - the tablist is keyboard navigable (roles, arrow keys),
-//   - tab titles carry the full path and the strip scrolls at narrow widths.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -69,7 +63,6 @@ const root = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/** file builds one listing row. */
 function file(name: string, mode = 0o100644) {
   return {
     name,
@@ -81,7 +74,6 @@ function file(name: string, mode = 0o100644) {
   };
 }
 
-/** folder builds one directory row. */
 function folder(name: string) {
   return {
     name,
@@ -93,7 +85,6 @@ function folder(name: string) {
   };
 }
 
-/** listingFor returns a distinct listing per directory so paths are provable. */
 function listingFor(path: string) {
   if (path === "alpha") {
     return [file("a.txt")];
@@ -144,7 +135,6 @@ test.afterAll(async () => {
   });
 });
 
-/** openFiles seeds a session, mocks the file API and lands on the browser. */
 async function openFiles(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript((value) => {
@@ -182,24 +172,20 @@ async function openFiles(page: Page): Promise<void> {
   await expect(page.locator(".fm-label b").first()).toBeVisible();
 }
 
-/** rowFor returns the browser row whose name matches. */
 function rowFor(page: Page, name: string) {
   return page.locator(".fm-table .fm-row", {
     has: page.locator(`b:text-is("${name}")`),
   });
 }
 
-/** tabs returns every tab button in the tablist. */
 function tabs(page: Page) {
   return page.locator('.fm-tabstrip [role="tab"]');
 }
 
-/** activeTab returns the tab marked aria-selected. */
 function activeTab(page: Page) {
   return page.locator('.fm-tabstrip [role="tab"][aria-selected="true"]');
 }
 
-/** openExtraTab clicks + and waits for the new tab to appear. */
 async function openExtraTab(page: Page): Promise<void> {
   const before = await tabs(page).count();
   await page.locator(".fm-tab-add").click();
@@ -215,27 +201,22 @@ test("two tabs keep independent paths and the tab bar is a real tablist", async 
   await expect(tablist).toBeVisible();
   await expect(tabs(page)).toHaveCount(1);
 
-  // Descend into alpha in the first tab.
   await rowFor(page, "alpha").locator(".fm-label").dblclick();
   await expect(page.locator(".fm-label b").first()).toHaveText("a.txt");
 
-  // Open a second tab: it starts at the root and lists the folders again.
   await openExtraTab(page);
   await expect(tabs(page)).toHaveCount(2);
   await expect(activeTab(page)).toHaveText("volumes");
   await expect(page.locator(".fm-label b").first()).toHaveText("alpha");
 
-  // Back to the first tab: it is still inside alpha.
   await tabs(page).first().click();
   await expect(activeTab(page)).toHaveText("alpha");
   await expect(page.locator(".fm-label b").first()).toHaveText("a.txt");
 
-  // And the second tab is still at the root.
   await tabs(page).nth(1).click();
   await expect(activeTab(page)).toHaveText("volumes");
   await expect(page.locator(".fm-label b").first()).toHaveText("alpha");
 
-  // JUS-126: + sits immediately after the last tab, not at the far right.
   const lastTab = await tabs(page).nth(1).boundingBox();
   const addBox = await page.locator(".fm-tab-add").boundingBox();
   expect(lastTab).not.toBeNull();
@@ -249,10 +230,6 @@ test("the tablist rides on the card surface with the active tab highlighted (JUS
   await openFiles(page);
   await openExtraTab(page);
 
-  // The tabs and the + button share the strip (the + is the strip's last
-  // child so it follows the tabs and sticks at the visible end on overflow),
-  // which carries no fill, border, radius or padding of its own — the region
-  // sits on the card surface (JUS-150).
   await expect(page.locator(".fm-tabs > .fm-tabstrip")).toHaveCount(1);
   await expect(page.locator(".fm-tabstrip > .fm-tab-add")).toHaveCount(1);
   const group = await page.locator(".fm-tabs").evaluate((el) => {
@@ -274,8 +251,6 @@ test("the tablist rides on the card surface with the active tab highlighted (JUS
   expect(Number.parseFloat(group.radius)).toBe(0);
   expect(Number.parseFloat(group.padding)).toBe(0);
 
-  // Selection stays readable through the active tab's own indicator fill; the
-  // inactive tab and the strip stay transparent.
   const indicator = await page.evaluate(() => {
     const active = document.querySelector(".fm-tab.is-active") as HTMLElement;
     const inactive = document.querySelector(".fm-tab:not(.is-active)") as HTMLElement;
@@ -300,8 +275,6 @@ test("a focused tab draws its whole ring inside the scrolling strip (JUS-152)", 
 }) => {
   await openFiles(page);
 
-  // Keyboard focus (not a click) so :focus-visible matches. The arrow presses
-  // are no-ops on a lone tab; they only flag the keyboard modality.
   await activeTab(page).focus();
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("ArrowRight");
@@ -316,12 +289,10 @@ test("a focused tab draws its whole ring inside the scrolling strip (JUS-152)", 
     const width = Number.parseFloat(style.outlineWidth);
     const offset = Number.parseFloat(style.outlineOffset);
     const box = tab.getBoundingClientRect();
-    // The strip is the scroll container, so it clips at its own border box.
     const clip = strip.getBoundingClientRect();
     return {
       outline: style.outlineStyle,
       width,
-      // Positive means the ring reaches past the clip edge (i.e. is cut off).
       overhang: Math.max(
         clip.top - (box.top - offset - width),
         box.bottom + offset + width - clip.bottom,
@@ -332,8 +303,6 @@ test("a focused tab draws its whole ring inside the scrolling strip (JUS-152)", 
   });
 
   expect(ring).not.toBeNull();
-  // The shared ring is present and painted entirely within the strip, so a
-  // focused tab is never left with a clipped (invisible) indicator.
   expect(ring!.outline).not.toBe("none");
   expect(ring!.width).toBeGreaterThan(0);
   expect(ring!.overhang).toBeLessThanOrEqual(0.5);
@@ -349,7 +318,6 @@ test("a cut in one tab pastes into another tab (shared clipboard)", async ({
     await route.fulfill({ json: { entry: file("a.txt") } });
   });
 
-  // Tab A: enter alpha and cut a.txt from its row menu.
   await rowFor(page, "alpha").locator(".fm-label").dblclick();
   await expect(page.locator(".fm-label b").first()).toHaveText("a.txt");
   await rowFor(page, "a.txt").click({ button: "right" });
@@ -357,8 +325,6 @@ test("a cut in one tab pastes into another tab (shared clipboard)", async ({
   await expect(menu).toBeVisible();
   await menu.getByRole("menuitem", { name: "Cut" }).click();
 
-  // Tab B: a new tab at the root, still holding the clipboard. Paste lives in
-  // the toolbar's File operations menu since JUS-160.
   await openExtraTab(page);
   await page
     .locator(".fm-toolbar")
@@ -384,13 +350,11 @@ test("the tablist is keyboard navigable with arrow keys", async ({ page }) => {
   await openExtraTab(page);
   await expect(activeTab(page)).toHaveText("volumes");
 
-  // Focus the active tab and move left to the first tab.
   await activeTab(page).focus();
   await page.keyboard.press("ArrowLeft");
   await expect(tabs(page).first()).toHaveAttribute("aria-selected", "true");
   await expect(tabs(page).first()).toBeFocused();
 
-  // ArrowRight wraps back to the second tab.
   await page.keyboard.press("ArrowRight");
   await expect(tabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(tabs(page).nth(1)).toBeFocused();
@@ -402,9 +366,6 @@ test("the tablist exposes tabs with a panel and moves focus on close", async ({
   await openFiles(page);
   await openExtraTab(page);
 
-  // Every owned child of the tablist is a tab (no stray close buttons; the +
-  // is a sibling inside the scroll strip, not a tab), and the active tab
-  // controls the single panel that labels itself by that tab.
   const childRoles = await page.evaluate(() =>
     [...document.querySelectorAll(".fm-tablist > *")].map((element) =>
       element.getAttribute("role"),
@@ -419,12 +380,10 @@ test("the tablist exposes tabs with a panel and moves focus on close", async ({
   await expect(activeTab(page)).toHaveAttribute("aria-controls", "fm-tabpanel");
   await expect(panel).toHaveAttribute("aria-labelledby", activeId!);
 
-  // Closing the active tab via the × moves focus to the neighbour that takes over.
   await activeTab(page).locator(".fm-tab-close").click();
   await expect(tabs(page)).toHaveCount(1);
   await expect(activeTab(page)).toBeFocused();
 
-  // Delete on the sole tab is a no-op (the × is hidden there too).
   await activeTab(page).focus();
   await page.keyboard.press("Delete");
   await expect(tabs(page)).toHaveCount(1);
@@ -435,14 +394,11 @@ test("tab titles carry the full path and the strip scrolls at narrow widths", as
 }) => {
   await openFiles(page);
 
-  // A tab's accessible name is the full root-relative location (JUS-210: tabs
-  // carry no title tooltip).
   await rowFor(page, "alpha").locator(".fm-label").dblclick();
   await expect(page.locator(".fm-label b").first()).toHaveText("a.txt");
   await expect(activeTab(page)).toHaveAttribute("aria-label", "volumes/alpha");
   await expect(activeTab(page)).not.toHaveAttribute("title", /.+/);
 
-  // Open enough tabs that the strip must scroll instead of wrapping the page.
   for (let index = 0; index < 5; index += 1) {
     await openExtraTab(page);
   }
@@ -463,12 +419,8 @@ test("tab titles carry the full path and the strip scrolls at narrow widths", as
   expect(strip).not.toBeNull();
   expect(strip!.overflowX).toBe("auto");
   expect(strip!.scroll).toBeGreaterThan(strip!.client);
-  // The strip scrolls itself; the page never gains a horizontal scrollbar.
   expect(strip!.pageOverflow).toBeLessThanOrEqual(1);
 
-  // JUS-126: + follows the last tab and stays on-screen when the strip
-  // overflows: pinned to the visible right edge while the tabs scroll
-  // underneath it, instead of being pushed out of view.
   const addBox = await page.locator(".fm-tab-add").boundingBox();
   const stripBox = await page.locator(".fm-tabstrip").boundingBox();
   expect(addBox).not.toBeNull();
@@ -478,7 +430,6 @@ test("tab titles carry the full path and the strip scrolls at narrow widths", as
     "+ stuck to the strip's visible right edge",
   ).toBeLessThanOrEqual(1);
   expect(addBox!.x + addBox!.width).toBeLessThanOrEqual(420 + 1);
-  // Scrolling the strip leaves + pinned at the visible edge.
   await page.locator(".fm-tabstrip").evaluate((element) => {
     element.scrollLeft += 120;
   });

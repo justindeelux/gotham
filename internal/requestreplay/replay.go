@@ -1,4 +1,3 @@
-// Package requestreplay carries opt-in mutation identity to the resource transaction.
 package requestreplay
 
 import (
@@ -28,7 +27,6 @@ func ValidKey(key string) bool { return keyPattern.MatchString(key) }
 
 type contextKey struct{}
 
-// Request contains no payload. It belongs to one synchronous HTTP request.
 type Request struct {
 	Principal   uuid.UUID
 	Team        uuid.UUID
@@ -39,7 +37,6 @@ type Request struct {
 	Result      *Result
 }
 
-// Result preserves the accepted IDs even if postcommit enrichment fails.
 type Result struct {
 	ResourceID uuid.UUID `json:"resource_id"`
 	RelatedID  uuid.UUID `json:"related_id,omitempty"`
@@ -64,7 +61,6 @@ func Replayed(ctx context.Context) bool {
 	return result != nil && result.Replayed
 }
 
-// Begin validates the optional header before any receipt or resource access.
 func Begin(w http.ResponseWriter, r *http.Request, principal, team uuid.UUID, operation string, target uuid.UUID) (*http.Request, bool) {
 	values, present := r.Header[http.CanonicalHeaderKey("Idempotency-Key")]
 	if !present {
@@ -77,7 +73,6 @@ func Begin(w http.ResponseWriter, r *http.Request, principal, team uuid.UUID, op
 	return r.WithContext(With(r.Context(), &Request{Principal: principal, Team: team, Operation: operation, Target: target, Key: values[0]})), true
 }
 
-// Fingerprint hashes canonical decoded input. Secret-bearing input uses the stable server key.
 func Fingerprint(ctx context.Context, secret string, input any) error {
 	r := From(ctx)
 	if r == nil {
@@ -125,7 +120,6 @@ func WriteError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-// WriteAccepted recovers identity after a postcommit failure without claiming execution success.
 func WriteAccepted(w http.ResponseWriter, ctx context.Context, status int) bool {
 	result := ResultFrom(ctx)
 	if result == nil {
@@ -140,7 +134,6 @@ func WriteAccepted(w http.ResponseWriter, ctx context.Context, status int) bool 
 	return true
 }
 
-// RequireStrict is used only on the four aliases. Server middleware supplies token/team authorization.
 func RequireStrict(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Gotham-MCP-Contract") != "1" {

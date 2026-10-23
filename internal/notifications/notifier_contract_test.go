@@ -11,14 +11,6 @@ import (
 	"unicode/utf8"
 )
 
-// This file verifies each sender against the endpoint contract the real
-// provider publishes (status codes, 429 + Retry-After, error bodies,
-// per-transport content limits). It cannot reach Slack, Discord or Telegram;
-// the fakes below mirror the documented shapes, and the PR states exactly what
-// remains unverified against the live services.
-
-// providerServer starts a server whose handler both records the request and
-// answers with a fixed status/headers/body.
 func providerServer(t *testing.T, status int, headers map[string]string, body string) (*httptest.Server, *webhookCall) {
 	t.Helper()
 	call := &webhookCall{}
@@ -40,8 +32,6 @@ func providerServer(t *testing.T, status int, headers map[string]string, body st
 	return server, call
 }
 
-// TestDiscordAccepts204 proves Discord's real success code (204 No Content) is
-// a success.
 func TestDiscordAccepts204(t *testing.T) {
 	server, _ := providerServer(t, http.StatusNoContent, nil, "")
 	notifier := newDiscordNotifier(server.URL+"/api/webhooks/1/abc", server.Client())
@@ -50,8 +40,6 @@ func TestDiscordAccepts204(t *testing.T) {
 	}
 }
 
-// TestSlackAcceptsOK proves Slack's plain-text "ok" 200 is a success and the
-// payload keeps the documented {"text": ...} shape.
 func TestSlackAcceptsOK(t *testing.T) {
 	server, call := providerServer(t, http.StatusOK, nil, "ok")
 	notifier := newSlackNotifier(server.URL+"/services/T04/B07/secret", server.Client())
@@ -64,7 +52,6 @@ func TestSlackAcceptsOK(t *testing.T) {
 	}
 }
 
-// TestTelegramAcceptsOK proves the Bot API's {"ok":true} 200 is a success.
 func TestTelegramAcceptsOK(t *testing.T) {
 	server, _ := providerServer(t, http.StatusOK, nil, `{"ok":true,"result":{"message_id":1}}`)
 	notifier := newTelegramNotifier("7184:AAH-token", "-100", server.URL, server.Client())
@@ -73,9 +60,6 @@ func TestTelegramAcceptsOK(t *testing.T) {
 	}
 }
 
-// TestTelegramErrorBodyIsNotEchoed proves a Bot API error ({ok:false,
-// description:...}) is reported by status only: the token in the URL path and
-// the remote description must never reach the error.
 func TestTelegramErrorBodyIsNotEchoed(t *testing.T) {
 	const token = "7184:AAH-contract-secret-token"
 	server, _ := providerServer(t, http.StatusBadRequest, nil, `{"ok":false,"description":"chat 7184:AAH-contract-secret-token not found"}`)
@@ -91,8 +75,6 @@ func TestTelegramErrorBodyIsNotEchoed(t *testing.T) {
 	}
 }
 
-// TestRateLimitReportsRetryAfter proves a 429 surfaces the parsed delta-seconds
-// hint without echoing the header's raw form or the endpoint credential.
 func TestRateLimitReportsRetryAfter(t *testing.T) {
 	server, _ := providerServer(t, http.StatusTooManyRequests, map[string]string{"Retry-After": "30"}, "slow down")
 	notifier := newSlackNotifier(server.URL+"/services/T04/ratelimit-secret", server.Client())
@@ -107,8 +89,6 @@ func TestRateLimitReportsRetryAfter(t *testing.T) {
 	}
 }
 
-// TestRateLimitWithoutRetryAfter proves the hint degrades cleanly when the
-// header is absent or not a delta-seconds number (an HTTP-date is ignored).
 func TestRateLimitWithoutRetryAfter(t *testing.T) {
 	for name, header := range map[string]string{
 		"absent":      "",
@@ -139,13 +119,9 @@ func TestRateLimitWithoutRetryAfter(t *testing.T) {
 	}
 }
 
-// TestTransportsTruncateAtTheirLimit proves an over-long message is cut to each
-// transport's own limit, so a pathological resource name cannot make a provider
-// reject the payload. The cap includes the ellipsis and is rune-safe: the input
-// is astral (2 UTF-16 units per rune), so a byte or unit slip shows up.
 func TestTransportsTruncateAtTheirLimit(t *testing.T) {
 	event := fixedEvent()
-	event.Name = strings.Repeat("🚀", 3000) // astral runes: pushes Message past every limit
+	event.Name = strings.Repeat("🚀", 3000)
 
 	cases := map[string]struct {
 		limit    int
@@ -188,8 +164,6 @@ func TestTransportsTruncateAtTheirLimit(t *testing.T) {
 	}
 }
 
-// TestTruncateTextCapsIncludingEllipsisRuneSafe pins the cap semantics: the
-// ellipsis counts against the limit and truncation never splits a rune.
 func TestTruncateTextCapsIncludingEllipsisRuneSafe(t *testing.T) {
 	got := truncateText(strings.Repeat("🚀", 100), 10)
 	if !utf8.ValidString(got) {

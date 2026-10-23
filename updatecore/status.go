@@ -12,33 +12,16 @@ import (
 	"time"
 )
 
-// Status results recorded by the restart/healthcheck wrapper and the control
-// plane's pending marker.
 const (
-	// StatusStaged means the swap succeeded and the restart is pending.
-	StatusStaged = "staged"
-	// StatusOK means the new binary restarted and passed its health check.
-	StatusOK = "ok"
-	// StatusRolledBack means the new binary failed and the previous one was
-	// restored.
-	StatusRolledBack = "rolled_back"
-	// StatusRollbackFailed means the new binary failed and the previous one
-	// could not be restored.
+	StatusStaged         = "staged"
+	StatusOK             = "ok"
+	StatusRolledBack     = "rolled_back"
 	StatusRollbackFailed = "rollback_failed"
-	// StatusNoBackup means activation failed and no previous binary existed.
-	StatusNoBackup = "no_backup"
-	// StatusWrapperFailed means the privileged wrapper could not acquire the
-	// update lock (or otherwise failed closed before it could act); the control
-	// plane rolls back and records rolled_back/rollback_failed. An asynchronous
-	// wrapper exit is also handled by the control plane's rollback, not by this
-	// status.
-	StatusWrapperFailed = "wrapper_failed"
-	// StatusResuming means a staged update was re-launched at startup (crash
-	// or reboot during the health window) and its outcome is still pending.
-	StatusResuming = "resuming"
+	StatusNoBackup       = "no_backup"
+	StatusWrapperFailed  = "wrapper_failed"
+	StatusResuming       = "resuming"
 )
 
-// Status is the durable outcome of the most recent update attempt.
 type Status struct {
 	Result  string    `json:"result"`
 	Version string    `json:"version,omitempty"`
@@ -46,14 +29,10 @@ type Status struct {
 	At      time.Time `json:"at,omitempty"`
 }
 
-// StatusStore reads and writes the update status file. The privileged wrapper
-// writes it as root; the control plane only reads it.
 type StatusStore struct {
 	Path string
 }
 
-// NewStatusStore returns a store at path, or nil when path is empty (status
-// tracking disabled).
 func NewStatusStore(path string) *StatusStore {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -62,10 +41,6 @@ func NewStatusStore(path string) *StatusStore {
 	return &StatusStore{Path: path}
 }
 
-// Read loads the recorded status. A missing file returns (nil, nil): no update
-// has run yet. A non-regular file (FIFO, device, directory or symlink) is
-// ignored: both the pending marker and the status file live in a directory the
-// service user can write, and opening a planted FIFO would block.
 func (s *StatusStore) Read() (*Status, error) {
 	if s == nil {
 		return nil, nil
@@ -102,7 +77,6 @@ func (s *StatusStore) Read() (*Status, error) {
 	return status, nil
 }
 
-// Write records status atomically (temp file + rename).
 func (s *StatusStore) Write(status Status) error {
 	if s == nil {
 		return nil
@@ -136,8 +110,6 @@ func (s *StatusStore) Write(status Status) error {
 	return os.Rename(tmpName, s.Path)
 }
 
-// Remove deletes the store file, ignoring a missing file. It is used to clear
-// the pending marker once an update is confirmed.
 func (s *StatusStore) Remove() error {
 	if s == nil {
 		return nil
@@ -148,15 +120,10 @@ func (s *StatusStore) Remove() error {
 	return nil
 }
 
-// singleLine keeps a detail value on one line in the status file.
 func singleLine(value string) string {
 	return strings.NewReplacer("\n", " ", "\r", " ").Replace(value)
 }
 
-// readRegularFile reads path only when it is a regular file. Symlinks and
-// non-regular files (FIFO, device, directory) return (nil, nil) instead of
-// following a link or blocking; the open uses O_NONBLOCK so a FIFO swapped in
-// after the Lstat cannot block either. A missing file also returns (nil, nil).
 func readRegularFile(path string) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {

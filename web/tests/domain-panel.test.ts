@@ -1,6 +1,3 @@
-// JUS-236 Domains tab: the table renders one row per domain, the add/edit
-// modal pre-fills a compose service's port, and certificate actions target the
-// clicked row's intent instead of the primary domain (JUS-233 behaviours kept).
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h, nextTick, ref } from "vue";
@@ -106,7 +103,6 @@ function row(
   };
 }
 
-/** apiError builds the normalized ApiError shape the proxy client throws. */
 function apiError(status: number, message = "") {
   return { status, message, cause: null };
 }
@@ -171,7 +167,6 @@ function harness(app: Application) {
   return { wrapper, appRef, domains: () => domains! };
 }
 
-/** mountPanel renders the real domains card with the API mocked. */
 function mountPanel(app: Application = composeApp()) {
   const Panel = defineComponent({
     render: () =>
@@ -212,8 +207,6 @@ describe("Domains tab behavior", () => {
     d.handleServiceChange("worker");
     expect(d.draft.port).toBeNull();
 
-    // clearable NSelect emits null; Save must not throw and sends the empty
-    // release-default service.
     d.handleServiceChange(null);
     expect(d.draft.service).toBe("");
     d.draft.domain = "default.example.com";

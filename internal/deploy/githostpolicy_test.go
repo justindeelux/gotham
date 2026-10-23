@@ -17,10 +17,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// policyTestLookup resolves the table's DNS names to fixed answers without
-// DNS: public names to TEST-NET-3, git.internal to the cloud metadata
-// address (so the table pins that resolution defers to clone time and then
-// denies), and everything else to an error (fail-closed resolution).
 func policyTestLookup(_ context.Context, host string) ([]net.IP, error) {
 	switch host {
 	case "github.com", "git.example", "gitea.example":
@@ -32,27 +28,17 @@ func policyTestLookup(_ context.Context, host string) ([]net.IP, error) {
 	}
 }
 
-// gitHostPolicyRow is one entry of the shared allow/deny table. The same row
-// runs through the creation validators (public, private and deploy gates)
-// and the dial-time pin, so the two stages cannot drift: literals and tricks
-// refuse early, DNS names defer to the pin, and the pin refuses what the
-// validator could not see.
 type gitHostPolicyRow struct {
-	name string
-	url  string
-	// allowPrivate and devLocal select the operator settings for the row.
+	name         string
+	url          string
 	allowPrivate bool
 	devLocal     bool
-	// wantPublic, wantPrivate and wantDeploy are the creation-gate outcomes;
-	// wantPin is the dial-time outcome through policyTestLookup.
-	wantPublic  bool
-	wantPrivate bool
-	wantDeploy  bool
-	wantPin     bool
+	wantPublic   bool
+	wantPrivate  bool
+	wantDeploy   bool
+	wantPin      bool
 }
 
-// gitHostPolicyTable is the shared table: allowed/denied URLs including all
-// the numeric tricks, used by both the validators and the clone paths.
 var gitHostPolicyTable = []gitHostPolicyRow{
 	{name: "public https", url: "https://github.com/acme/demo.git", wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: true},
 	{name: "public https with port", url: "https://git.example:8443/acme/demo.git", wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: true},
@@ -61,19 +47,15 @@ var gitHostPolicyTable = []gitHostPolicyRow{
 	{name: "ssh with port", url: "ssh://git@git.example:2222/acme/demo.git", wantPublic: false, wantPrivate: true, wantDeploy: true, wantPin: true},
 	{name: "scp-like", url: "git@git.example:acme/demo.git", wantPublic: false, wantPrivate: true, wantDeploy: true, wantPin: true},
 
-	// Internal names defer: no literal to judge, so creation allows and the
-	// pin refuses the metadata address they resolve to.
 	{name: "internal name defers to pin", url: "https://git.internal/acme/demo.git", wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: false},
 	{name: "internal ssh defers to pin", url: "git@git.internal:acme/demo.git", wantPublic: false, wantPrivate: true, wantDeploy: true, wantPin: false},
 
-	// Loopback literals refuse at creation already.
 	{name: "loopback v4", url: "http://127.0.0.1/acme/demo.git", wantPin: false},
 	{name: "loopback with port", url: "https://127.0.0.1:8443/acme/demo.git", wantPin: false},
 	{name: "loopback v6", url: "http://[::1]/acme/demo.git", wantPin: false},
 	{name: "localhost", url: "http://localhost/acme/demo.git", wantPin: false},
 	{name: "localhost subdomain", url: "http://git.localhost/acme/demo.git", wantPin: false},
 
-	// Numeric-host tricks: decimal, hex, octal, shorthand and mapped forms.
 	{name: "decimal loopback", url: "http://2130706433/acme/demo.git", wantPin: false},
 	{name: "hex loopback", url: "http://0x7f000001/acme/demo.git", wantPin: false},
 	{name: "octal loopback", url: "http://017700000001/acme/demo.git", wantPin: false},
@@ -88,15 +70,12 @@ var gitHostPolicyTable = []gitHostPolicyRow{
 	{name: "scp loopback", url: "git@127.0.0.1:acme/demo.git", wantPublic: false, wantPrivate: false, wantDeploy: false, wantPin: false},
 	{name: "ssh private", url: "ssh://git@10.0.0.5/acme/demo.git", wantPublic: false, wantPrivate: false, wantDeploy: false, wantPin: false},
 
-	// Private ranges refuse by default.
 	{name: "rfc1918 10/8", url: "http://10.0.0.5/acme/demo.git", wantPin: false},
 	{name: "rfc1918 192.168/16", url: "https://192.168.1.10/acme/demo.git", wantPin: false},
 	{name: "rfc1918 172.16/12", url: "http://172.16.5.4/acme/demo.git", wantPin: false},
 	{name: "ula", url: "http://[fd00::1]/acme/demo.git", wantPin: false},
 	{name: "mapped private", url: "http://[::ffff:10.0.0.1]/acme/demo.git", wantPin: false},
 
-	// Always-denied ranges: link-local, unspecified, multicast, CGNAT,
-	// benchmarking, NAT64, 6to4.
 	{name: "metadata address", url: "http://169.254.169.254/latest/meta-data/", wantPin: false},
 	{name: "link-local v6", url: "http://[fe80::1]/acme/demo.git", wantPin: false},
 	{name: "zone id", url: "https://[fe80::1%25eth0]/acme/demo.git", wantPin: false},
@@ -111,20 +90,14 @@ var gitHostPolicyTable = []gitHostPolicyRow{
 	{name: "ipv4-compatible", url: "http://[::7f00:1]/acme/demo.git", wantPin: false},
 	{name: "6to4", url: "http://[2002:7f00:1::1]/acme/demo.git", wantPin: false},
 
-	// Credentials stay a creation refusal, never a dial-time surprise: the
-	// deploy gate keeps accepting the token-bearing shape the GS-5 flow
-	// builds internally, and the pin judges its host.
 	{name: "embedded token", url: "https://user:ghp_SECRET@git.example/acme/demo.git", wantPublic: false, wantPrivate: false, wantDeploy: true, wantPin: true},
 
-	// Unresolvable names pass creation (no DNS there) and refuse at the pin.
 	{name: "unresolvable defers to pin", url: "https://git.example.invalid/acme/demo.git", wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: false},
 
-	// The dev escape hatch keeps working for local fixtures.
 	{name: "local path dev", url: "/srv/fixtures/demo", devLocal: true, wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: true},
 	{name: "file url dev", url: "file:///srv/fixtures/demo", devLocal: true, wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: true},
 	{name: "local path default", url: "/srv/fixtures/demo", wantPublic: false, wantPrivate: false, wantDeploy: false, wantPin: true},
 
-	// The allow-private setting lifts RFC1918, ULA and loopback only.
 	{name: "private allowed 10/8", url: "http://10.0.0.5/acme/demo.git", allowPrivate: true, wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: true},
 	{name: "private allowed 192.168/16", url: "https://192.168.1.10/acme/demo.git", allowPrivate: true, wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: true},
 	{name: "private allowed loopback", url: "http://127.0.0.1/acme/demo.git", allowPrivate: true, wantPublic: true, wantPrivate: true, wantDeploy: true, wantPin: true},
@@ -142,8 +115,6 @@ var gitHostPolicyTable = []gitHostPolicyRow{
 	{name: "allow keeps localhost denied", url: "http://localhost/acme/demo.git", allowPrivate: true, wantPin: false},
 }
 
-// TestGitHostPolicyTable runs the shared allow/deny table through the
-// creation validators and the dial-time pin: one list drives both stages.
 func TestGitHostPolicyTable(t *testing.T) {
 	for _, row := range gitHostPolicyTable {
 		t.Run(row.name, func(t *testing.T) {
@@ -178,8 +149,6 @@ func TestGitHostPolicyTable(t *testing.T) {
 	}
 }
 
-// TestGitCloneRefusesBlockedHost pins the clone gate end to end: a blocked
-// remote fails validation before git runs, for every transport shape.
 func TestGitCloneRefusesBlockedHost(t *testing.T) {
 	t.Setenv(GitAllowPrivateHostsEnv, "false")
 	for _, url := range []string{
@@ -216,10 +185,6 @@ func TestGitCloneRefusesBlockedHost(t *testing.T) {
 	}
 }
 
-// redirectFixture is a two-server redirect oracle for the HIGH finding:
-// the first answers every request with a 302 to the second, which records
-// every hit. A git run that refuses redirects fails at the first server and
-// never touches the second; a run that follows them (the bypass) hits both.
 type redirectFixture struct {
 	first  *httptest.Server
 	second *httptest.Server
@@ -229,9 +194,6 @@ type redirectFixture struct {
 	secondHits int
 }
 
-// newRedirectFixture starts the oracle pair. Both serve on loopback, so
-// callers set the allow-private setting (the point under test is the
-// redirect, not the loopback block).
 func newRedirectFixture(t *testing.T) *redirectFixture {
 	t.Helper()
 	fix := &redirectFixture{}
@@ -252,15 +214,12 @@ func newRedirectFixture(t *testing.T) *redirectFixture {
 	return fix
 }
 
-// hits returns the per-server request counts.
 func (f *redirectFixture) hits() (first, second int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.firstHits, f.secondHits
 }
 
-// requireRealGit skips the caller without a git binary: the redirect tests
-// prove the production git/curl behaviour, which a fake runner cannot.
 func requireRealGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -268,10 +227,6 @@ func requireRealGit(t *testing.T) {
 	}
 }
 
-// TestGitCloneRefusesRedirect pins the HIGH fix on the clone path: a public
-// URL answering 302 to an internal host fails at the redirector — the
-// second server never receives a request, and the error quotes the 302
-// (proving git reached the redirector) without the redirect target.
 func TestGitCloneRefusesRedirect(t *testing.T) {
 	requireRealGit(t)
 	t.Setenv(GitAllowPrivateHostsEnv, "true")
@@ -301,9 +256,6 @@ func TestGitCloneRefusesRedirect(t *testing.T) {
 	}
 }
 
-// TestGitLsRemoteRefusesRedirect pins the HIGH fix on the default-branch
-// resolution path: with no branch pinned, the ls-remote fails at the
-// redirector before any clone runs.
 func TestGitLsRemoteRefusesRedirect(t *testing.T) {
 	requireRealGit(t)
 	t.Setenv(GitAllowPrivateHostsEnv, "true")
@@ -333,9 +285,6 @@ func TestGitLsRemoteRefusesRedirect(t *testing.T) {
 	}
 }
 
-// TestGitProbeRefusesRedirect pins the HIGH fix on the Test-connection
-// path: an anonymous https probe against a redirector fails without
-// touching the redirect target and without echoing its URL.
 func TestGitProbeRefusesRedirect(t *testing.T) {
 	requireRealGit(t)
 	t.Setenv(GitAllowPrivateHostsEnv, "true")
@@ -347,8 +296,6 @@ func TestGitProbeRefusesRedirect(t *testing.T) {
 	svc := NewService(Config{Repository: repo, Secret: testSecretKey, Logger: discardLogger()})
 	t.Cleanup(func() { _ = svc.Close() })
 
-	// The probe is throttled per caller+app; this service is fresh, so the
-	// single probe below always runs.
 	result, err := svc.TestGitConnection(context.Background(), userID, app.ID)
 	if err != nil {
 		t.Fatalf("TestGitConnection: %v", err)
@@ -368,9 +315,6 @@ func TestGitProbeRefusesRedirect(t *testing.T) {
 	}
 }
 
-// TestGitClonePinsPublicHost pins the TOCTOU mitigation: the ls-remote and
-// the clone both carry the resolved address via http.curloptResolve while
-// the log keeps the hostname.
 func TestGitClonePinsPublicHost(t *testing.T) {
 	t.Setenv(GitAllowPrivateHostsEnv, "false")
 	const url = "https://git.example/acme/demo.git"
@@ -408,8 +352,6 @@ func TestGitClonePinsPublicHost(t *testing.T) {
 		if !strings.Contains(joined, "git.example:443:203.0.113.10") {
 			t.Errorf("call %d env is missing the pinned address:\n%s", i, joined)
 		}
-		// The HIGH fix: every http(s) git invocation refuses redirects, on
-		// the keyless path as well as the credential path.
 		if value, ok := gitConfigValue(env, "http.followRedirects"); !ok || value != "false" {
 			t.Errorf("call %d env http.followRedirects = %q, want false:\n%s", i, value, joined)
 		}
@@ -419,8 +361,6 @@ func TestGitClonePinsPublicHost(t *testing.T) {
 	}
 }
 
-// TestGitMixedARecordsRefused pins the any-denied refusal: one public and
-// one blocked answer deny the whole host, however the answers are ordered.
 func TestGitMixedARecordsRefused(t *testing.T) {
 	t.Setenv(GitAllowPrivateHostsEnv, "false")
 	mixed := func(context.Context, string) ([]net.IP, error) {
@@ -451,9 +391,6 @@ func TestGitMixedARecordsRefused(t *testing.T) {
 	}
 }
 
-// TestParseGitAllowPrivateHosts pins the single flag reader: it matches the
-// config-file path (viper/cast: ParseBool strings, nonzero numbers), so "1"
-// and "true" agree on both readers and anything else stays denied.
 func TestParseGitAllowPrivateHosts(t *testing.T) {
 	for _, truthy := range []string{"true", "TRUE", "True", "1", "t", "T", "  true  "} {
 		if !parseGitAllowPrivateHosts(truthy) {
@@ -467,8 +404,6 @@ func TestParseGitAllowPrivateHosts(t *testing.T) {
 	}
 }
 
-// TestParseGitVersion pins the `git --version` reader behind the pin
-// startup warning, including trailing platform text.
 func TestParseGitVersion(t *testing.T) {
 	cases := []struct {
 		in     string
@@ -494,8 +429,6 @@ func TestParseGitVersion(t *testing.T) {
 	}
 }
 
-// TestGitRebindingRefused pins the DNS-rebinding guard: a host whose two
-// answers differ never dials, even when both answers are public.
 func TestGitRebindingRefused(t *testing.T) {
 	t.Setenv(GitAllowPrivateHostsEnv, "false")
 	var calls atomic.Int32
@@ -530,9 +463,6 @@ func TestGitRebindingRefused(t *testing.T) {
 	}
 }
 
-// TestGitProbeRefusesBlockedHost pins the Test-connection gates: a blocked
-// literal is a validation error, a name resolving to a blocked address is a
-// failed outcome — and neither dials nor leaks the address.
 func TestGitProbeRefusesBlockedHost(t *testing.T) {
 	t.Setenv(GitAllowPrivateHostsEnv, "false")
 
@@ -549,8 +479,6 @@ func TestGitProbeRefusesBlockedHost(t *testing.T) {
 		if !errors.Is(err, ErrValidation) {
 			t.Fatalf("err = %v, want ErrValidation", err)
 		}
-		// The refusal reads exactly like every other policy denial: no
-		// category, no address, no resolution signal.
 		if err.Error() != errGitHostNotAllowed.Error() {
 			t.Errorf("err = %q, want the generic refusal %q", err, errGitHostNotAllowed)
 		}
@@ -572,11 +500,10 @@ func TestGitProbeRefusesBlockedHost(t *testing.T) {
 			return nil, nil
 		}
 		svc := NewService(Config{
-			Repository: repo,
-			Secret:     testSecretKey,
-			Logger:     discardLogger(),
-			Source:     gitSource{keys: repo, creds: repo, run: run},
-			// git.internal resolves to the metadata address here.
+			Repository:    repo,
+			Secret:        testSecretKey,
+			Logger:        discardLogger(),
+			Source:        gitSource{keys: repo, creds: repo, run: run},
 			GitLookupHost: policyTestLookup,
 		})
 		t.Cleanup(func() { _ = svc.Close() })
@@ -587,8 +514,6 @@ func TestGitProbeRefusesBlockedHost(t *testing.T) {
 		if result.OK {
 			t.Errorf("result = %+v, want a refused probe", result)
 		}
-		// Same generic text as the literal path above: a refused name reads
-		// exactly like an unresolvable one, so the message is no oracle.
 		if result.Message != errGitHostNotAllowed.Error() {
 			t.Errorf("message = %q, want the generic refusal %q", result.Message, errGitHostNotAllowed)
 		}
@@ -604,8 +529,6 @@ func TestGitProbeRefusesBlockedHost(t *testing.T) {
 	})
 }
 
-// TestGitProbeAllowsPrivateHostWithSetting pins the escape hatch at the
-// probe: with the setting, a loopback probe reaches git.
 func TestGitProbeAllowsPrivateHostWithSetting(t *testing.T) {
 	t.Setenv(GitAllowPrivateHostsEnv, "true")
 	userID := uuid.New()
@@ -628,8 +551,6 @@ func TestGitProbeAllowsPrivateHostWithSetting(t *testing.T) {
 	}
 }
 
-// gitConfigValue reads one GIT_CONFIG_KEY_n/VALUE_n pair out of env for
-// assertions: the index links the key to its value.
 func gitConfigValue(env []string, key string) (string, bool) {
 	index := -1
 	for _, entry := range env {
@@ -655,8 +576,6 @@ func gitConfigValue(env []string, key string) (string, bool) {
 	return "", false
 }
 
-// TestScrubNetworkAddrs pins the deploy-log scrub: address literals in quoted
-// git output are hidden while hostnames and versions survive.
 func TestScrubNetworkAddrs(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -678,9 +597,6 @@ func TestScrubNetworkAddrs(t *testing.T) {
 	}
 }
 
-// TestQuoteGitOutputRedactsBeforeTruncation pins the error-quote order:
-// credentials and addresses are hidden before the 400-byte cut, so a cut
-// inside either can never expose its remainder.
 func TestQuoteGitOutputRedactsBeforeTruncation(t *testing.T) {
 	output := "https://user:secretpw@host/repo dial tcp 10.9.9.9:443" + strings.Repeat("B", 500)
 	quoted := quoteGitOutput(output)

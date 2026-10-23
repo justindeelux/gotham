@@ -12,20 +12,9 @@ import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
 import type { TerminalCommandFailure } from "@/features/terminal/transport/terminalRuntime";
 
-/**
- * Shared terminal surface (JUS-245): the one place xterm is displayed. Page
- * mode and the floating window both mount this component; it merely offers
- * its element to the tab's runtime, which owns the renderer, so moving between
- * the two re-parents the live buffer instead of reconnecting.
- *
- * JUS-249 splits the meta bar, status bar, lifecycle overlay and suggestion
- * strip into focused components; this file owns only the shared surface and
- * the keyboard boundary.
- */
 interface Props {
   tabId: string;
   variant: "page" | "window";
-  /** labelledBy names the window tab this panel belongs to. */
   labelledBy?: string;
 }
 
@@ -36,21 +25,14 @@ const quickCommands = useQuickCommandsStore();
 const surface = ref<HTMLElement | null>(null);
 const suggestionStrip = ref<{ focusOption: () => void } | null>(null);
 const commandNotice = ref("");
-/** terminalBox is the xterm wrapper the strip overlay is positioned in. */
 const terminalBox = ref<HTMLElement | null>(null);
 const hintId = computed<string>(() => `term-hint-${props.tabId}`);
 const tab = computed<TerminalTab | null>(() => terminal.findTab(props.tabId));
 
-/**
- * NO_PROMPT_MARKS_GRACE_MS lets a healthy shell deliver its first OSC 133
- * mark before the strip claims marks are unavailable. Without it the hint
- * flashes on every connect, while the shell is still printing its prompt.
- */
 const NO_PROMPT_MARKS_GRACE_MS = 1500;
 const noPromptMarksHint = ref(false);
 let promptHintTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** clearPromptHintTimer stops the pending grace check. */
 function clearPromptHintTimer(): void {
   if (promptHintTimer !== null) {
     clearTimeout(promptHintTimer);
@@ -58,10 +40,6 @@ function clearPromptHintTimer(): void {
   }
 }
 
-/**
- * The hint only appears after a connected session has stayed mark-less for
- * the grace period; a first prompt mark clears it immediately.
- */
 watch(
   () => [tab.value?.status, tab.value?.integrationDetected] as const,
   ([status, detected]) => {
@@ -80,19 +58,12 @@ watch(
   { immediate: true },
 );
 
-/** suggestion is the single abbreviation match the runtime reports. */
 const suggestion = computed(() => tab.value?.suggestion ?? null);
 
-/** hasAbbreviations decides whether the no-marks hint can explain suggestions. */
 const hasAbbreviations = computed<boolean>(() =>
   quickCommands.commands.some((command) => command.abbreviation !== undefined),
 );
 
-/**
- * suggestionBarVisible reserves a row only when it has something to say: a
- * match, a command notice, or the diagnostic about a shell without prompt
- * marks. An idle terminal keeps the whole viewport for the shell (JUS-275).
- */
 const suggestionBarVisible = computed<boolean>(
   () =>
     suggestion.value !== null ||
@@ -100,15 +71,12 @@ const suggestionBarVisible = computed<boolean>(
     (hasAbbreviations.value && noPromptMarksHint.value),
 );
 
-/** SUGGESTION_STRIP_HEIGHT mirrors the strip's fixed --space-12 height. */
 const SUGGESTION_STRIP_HEIGHT = 40;
 
-/** cursorRow is the rendered cursor cell, relative to the terminal box. */
 const cursorRow = ref<{ top: number; height: number } | null>(null);
 const terminalBoxHeight = ref<number>(0);
 let stopCursorWatch: (() => void) | null = null;
 
-/** updateCursorRow re-measures the prompt line the overlay must stay off. */
 function updateCursorRow(): void {
   const box = terminalBox.value;
   if (!box) {
@@ -123,26 +91,17 @@ function updateCursorRow(): void {
     : null;
 }
 
-/** stopCursorTracking drops the renderer cursor subscription. */
 function stopCursorTracking(): void {
   stopCursorWatch?.();
   stopCursorWatch = null;
 }
 
-/** startCursorTracking follows the live cursor while the strip is visible. */
 function startCursorTracking(): void {
   stopCursorTracking();
   updateCursorRow();
   stopCursorWatch = terminal.watchCursor(props.tabId, updateCursorRow);
 }
 
-/**
- * stripStyle keeps the suggestion overlay clear of the cursor row: above the
- * prompt when there is room, below it otherwise. It never changes the xterm
- * box, so showing a match sends no PTY resize frame. Until the renderer
- * reports a cursor (jsdom, hidden cursor) the overlay anchors to the top edge,
- * which still never covers the last row.
- */
 const stripStyle = computed<CSSProperties>(() => {
   const cursor = cursorRow.value;
   if (!cursor) {
@@ -156,21 +115,17 @@ const stripStyle = computed<CSSProperties>(() => {
   if (terminalBoxHeight.value - below >= height) {
     return { top: `${Math.round(below)}px` };
   }
-  // A terminal shorter than the strip plus the prompt line: keep the larger
-  // side free and let pointer-events pass the overlay's surface through.
   return cursor.top > terminalBoxHeight.value - below
     ? { top: "0px" }
     : { top: `${Math.max(0, Math.round(terminalBoxHeight.value - height))}px` };
 });
 
-/** surfaceLabel names the region for screen readers. */
 const surfaceLabel = computed<string>(() =>
   t("terminal.pane.detailLabel", {
     title: tab.value?.title ?? t("terminal.window.heading"),
   }),
 );
 
-/** insertFailureText maps a refused insertion onto localized guidance. */
 function insertFailureText(failure?: TerminalCommandFailure): string {
   switch (failure) {
     case "multiline-no-paste":
@@ -184,7 +139,6 @@ function insertFailureText(failure?: TerminalCommandFailure): string {
   }
 }
 
-/** acceptSuggestion replaces the abbreviation; it never presses Enter. */
 function acceptSuggestion(): void {
   const result = terminal.acceptSuggestion(props.tabId);
   if (!result.ok) {
@@ -195,45 +149,37 @@ function acceptSuggestion(): void {
   void nextTick(() => terminal.focus(props.tabId));
 }
 
-/** dismissSuggestion hides the strip and returns focus to the shell. */
 function dismissSuggestion(): void {
   terminal.dismissSuggestion(props.tabId);
   commandNotice.value = "";
   void nextTick(() => terminal.focus(props.tabId));
 }
 
-/** focusSuggestions moves keyboard focus onto the suggestion option. */
 function focusSuggestions(): void {
   void nextTick(() => suggestionStrip.value?.focusOption());
 }
 
-/** returnFocus leaves the explicitly focused list without dismissing it. */
 function returnFocus(): void {
   void nextTick(() => terminal.focus(props.tabId));
 }
 
-/** onMetaInserted announces a manual insert and lands focus in the shell. */
 function onMetaInserted(label: string): void {
   commandNotice.value = t("terminal.quickCommands.inserted", { label });
   void nextTick(() => terminal.focus(props.tabId));
 }
 
-/** onMetaClosed returns focus to the shell after the quick-command modal. */
 function onMetaClosed(): void {
   void nextTick(() => terminal.focus(props.tabId));
 }
 
-/** onCompositionStart suspends suggestions during IME composition. */
 function onCompositionStart(): void {
   terminal.setComposing(props.tabId, true);
 }
 
-/** onCompositionEnd keeps the mirror suspended until the next prompt mark. */
 function onCompositionEnd(): void {
   terminal.setComposing(props.tabId, false);
 }
 
-/** attachSurface hands the display element to the tab runtime. */
 function attachSurface(): void {
   const element = surface.value;
   if (element) {
@@ -241,17 +187,10 @@ function attachSurface(): void {
   }
 }
 
-/** focusTerminal keeps a click on the pane landing in the shell. */
 function focusTerminal(): void {
   terminal.focus(props.tabId);
 }
 
-/**
- * onSurfaceClick focuses xterm only when the click is on the terminal itself.
- * Clicks on the meta bar (theme menu, shortcuts, page actions) and on any
- * interactive control must keep their own focus: a button activated with
- * Enter must never hand the next keystroke to the shell.
- */
 function onSurfaceClick(event: MouseEvent): void {
   const target = event.target;
   if (
@@ -265,12 +204,10 @@ function onSurfaceClick(event: MouseEvent): void {
   focusTerminal();
 }
 
-/** retrySession starts a new PTY; it never replays prior input. */
 function retrySession(): void {
   void terminal.retry(props.tabId);
 }
 
-/** isTerminalKeyTarget keeps shortcuts out of the meta bar and popovers. */
 function isTerminalKeyTarget(event: KeyboardEvent): boolean {
   const target = event.target;
   if (!(target instanceof Element)) {
@@ -283,15 +220,6 @@ function isTerminalKeyTarget(event: KeyboardEvent): boolean {
   );
 }
 
-/**
- * onSurfaceKeydown handles two non-shell chords:
- * - Ctrl+Shift+E leaves xterm's input trap and focuses the window tab or page
- *   action. Windows reserves Ctrl+Shift+Escape for Task Manager, so the chord
- *   deliberately avoids it; Shift+Tab also leaves the shell.
- * - Ctrl+Shift+Space focuses a visible suggestion list from the terminal area.
- * Esc, Ctrl+Space, Tab and Enter are never intercepted here; they reach the
- * PTY unless the suggestion list is explicitly focused.
- */
 function onSurfaceKeydown(event: KeyboardEvent): void {
   if (
     event.code === "Space" &&
@@ -327,7 +255,6 @@ function onSurfaceKeydown(event: KeyboardEvent): void {
   action?.focus();
 }
 
-/** onWindowResize re-measures the prompt cell after a viewport change. */
 function onWindowResize(): void {
   if (suggestionBarVisible.value) {
     void nextTick(updateCursorRow);
@@ -348,8 +275,6 @@ onBeforeUnmount(() => {
   }
 });
 watch(() => props.tabId, attachSurface);
-// If the match disappears (prompt ended, Esc, paste), never leave focus
-// stranded on a removed option.
 watch(suggestion, (next) => {
   if (next !== null) {
     return;
@@ -359,8 +284,6 @@ watch(suggestion, (next) => {
     void nextTick(() => terminal.focus(props.tabId));
   }
 });
-// A retry swaps the runtime under the still-mounted surface; re-attach once
-// the new session exists so the fresh renderer lands in the same pane.
 watch(
   () => tab.value?.sessionId,
   () => {
@@ -369,9 +292,6 @@ watch(
     }
   },
 );
-// The suggestion row only exists while it has content. It is an overlay, so
-// the renderer box (and therefore the PTY size) never changes; while it is up
-// it follows the cursor so the prompt line always stays visible.
 watch(suggestionBarVisible, (visible) => {
   if (visible) {
     void nextTick(startCursorTracking);
@@ -380,7 +300,6 @@ watch(suggestionBarVisible, (visible) => {
   stopCursorTracking();
   cursorRow.value = null;
 });
-// A refit changes the cursor cell; re-measure while the overlay is up.
 watch(
   () => [tab.value?.rows, tab.value?.cols] as const,
   () => {
@@ -419,9 +338,6 @@ watch(
     </p>
     <div ref="terminalBox" class="term-terminal">
       <div ref="surface" class="term-screen" data-testid="terminal-screen" />
-      <!-- JUS-275: the suggestion row is an overlay anchored to the terminal
-           bottom. It never takes a row from xterm, so a match appearing or
-           disappearing sends no PTY resize frame. -->
       <TerminalSuggestionStrip
         v-if="suggestionBarVisible"
         ref="suggestionStrip"
@@ -452,8 +368,6 @@ watch(
   background: var(--surface-warm);
 }
 
-/* The light renderer gets a matching frame instead of a dark gutter around
- * the xterm canvas. The meta/status bars stay app chrome. */
 .term-surface[data-theme="gotham-light"] {
   background: var(--term-light-bg);
 }
@@ -470,8 +384,6 @@ watch(
   border: 0;
 }
 
-/* The terminal box: xterm plus the suggestion overlay, so the overlay never
- * changes the size the renderer fits into. */
 .term-terminal {
   position: relative;
   display: flex;
@@ -488,8 +400,6 @@ watch(
   overflow: hidden;
 }
 
-/* The runtime appends its xterm host here; the host owns the full box so
- * FitAddon measures the same rounded number of rows. */
 .term-screen :deep(.term-host) {
   width: 100%;
   height: 100%;

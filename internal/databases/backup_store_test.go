@@ -48,7 +48,6 @@ func TestLocalStoreRoundTrip(t *testing.T) {
 	if _, err := store.Get(context.Background(), location); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get after delete err = %v, want ErrNotFound", err)
 	}
-	// Deleting again is still success.
 	if err := store.Delete(context.Background(), location); err != nil {
 		t.Errorf("second Delete err = %v, want nil", err)
 	}
@@ -61,8 +60,6 @@ func TestLocalStoreRejectsEscapingKeysAndLocations(t *testing.T) {
 		t.Fatalf("newLocalStore: %v", err)
 	}
 
-	// A key with traversal is neutralised rather than followed: the bytes
-	// land inside the root directory instead of outside it.
 	location, err := store.Put(context.Background(), "../../etc/passwd", bytes.NewReader([]byte("x")), 1)
 	if err != nil {
 		t.Fatalf("Put with a traversal key: %v", err)
@@ -83,7 +80,6 @@ func TestLocalStoreRejectsEscapingKeysAndLocations(t *testing.T) {
 	if err := store.Delete(context.Background(), outside); !errors.Is(err, ErrValidation) {
 		t.Errorf("escaping location (Delete) err = %v, want ErrValidation", err)
 	}
-	// A system file must be unreachable through a crafted location.
 	if err := store.Delete(context.Background(), locationFilePrefix+"/etc/hosts"); !errors.Is(err, ErrValidation) {
 		t.Errorf("/etc/hosts err = %v, want ErrValidation", err)
 	}
@@ -97,7 +93,6 @@ func TestLocalStorePutChecksSize(t *testing.T) {
 	if _, err := store.Put(context.Background(), "k", bytes.NewReader([]byte("abc")), 99); err == nil {
 		t.Error("expected a size mismatch error")
 	}
-	// A mismatch must not leave a partial file behind.
 	if _, statErr := os.Stat(filepath.Join(store.dir, "k")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("partial file left behind: %v", statErr)
 	}
@@ -113,8 +108,6 @@ func TestSplitEndpoint(t *testing.T) {
 		{endpoint: "https://s3.example.com", host: "s3.example.com", secure: true},
 		{endpoint: "https://account.r2.cloudflarestorage.com", host: "account.r2.cloudflarestorage.com", secure: true},
 		{endpoint: "http://minio.gotham.internal:9000", host: "minio.gotham.internal:9000", secure: false},
-		// A bare endpoint defaults to TLS so a forgotten scheme cannot send
-		// credentials over plaintext.
 		{endpoint: "minio.gotham.internal:9000", host: "minio.gotham.internal:9000", secure: true},
 		{endpoint: " https://s3.example.com/ ", host: "s3.example.com", secure: true},
 		{endpoint: "", wantErr: true},

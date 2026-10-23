@@ -13,19 +13,15 @@ const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-// loadError keeps the raw failure; the banner renders through a computed so
-// a language switch refreshes it reactively.
 const rawError = ref<unknown>(null);
 const loadError = computed<string>(() =>
   rawError.value === null ? "" : describeAuthError(rawError.value),
 );
 
-/** backToLogin returns to the sign-in page after a failed callback. */
 async function backToLogin(): Promise<void> {
   await router.replace({ path: "/login", query: { error: "oauth_failed" } });
 }
 
-/** clearCode drops the one-time code from the address bar. */
 function clearCode(): void {
   window.history.replaceState(null, "", "/oauth/callback");
 }
@@ -38,16 +34,12 @@ onMounted(async () => {
       return;
     }
 
-    // The code is redeemed against the HttpOnly flow cookie so a crafted
-    // callback link cannot plant someone else's session in this browser.
     const response = await http.post<AuthResult>(
       "/auth/oauth/exchange",
       { code },
       { withCredentials: true },
     );
 
-    // An account with two-factor on gets no session here: hand the
-    // half-authenticated token to the login code step (JUS-196).
     if (response.data.mfa_required && response.data.mfa_token) {
       authStore.setMfaChallenge(response.data.mfa_token);
       clearCode();
@@ -59,8 +51,6 @@ onMounted(async () => {
 
     clearCode();
 
-    // Refresh through /auth/me so the shell never renders a placeholder after
-    // sign-in (A2-17).
     await authStore.fetchMe().catch(() => {});
 
     await router.replace({ path: "/dashboard" });

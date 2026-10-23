@@ -8,20 +8,10 @@ import { patchDisplayName } from "@/features/profile/api/profile";
 import { displayNameRules } from "@/features/profile/schemas/profile";
 import { onLocaleChange } from "@/shared/i18n";
 
-// Error convention (shared with the auth pages): client-side validation
-// errors render inline on the field via NFormItem; server-side submit
-// failures keep the raw error and render once in the NAlert above the form
-// through a computed, so a language switch refreshes the banner reactively.
 interface DisplayNameForm {
   displayName: string;
 }
 
-/**
- * useDisplayNameForm holds the display-name panel state. Created per panel
- * mount and dropped on unmount, so a typed name never survives a route
- * change. On success the auth store user is replaced and persisted, so the
- * sidebar follows without a reload.
- */
 export function useDisplayNameForm() {
   const { t } = useI18n();
   const authStore = useAuthStore();
@@ -39,13 +29,6 @@ export function useDisplayNameForm() {
 
   const rules: FormRules = displayNameRules();
 
-  /**
-   * visible tracks paths with currently-shown feedback (input/blur/submit).
-   * A language switch revalidates exactly those paths: already-visible
-   * errors refresh, pristine fields stay clean, and nothing submits or
-   * calls an API. The record clears on success so a cleared form stays
-   * pristine across later switches.
-   */
   const visible = createVisibleValidation();
   const trackedRules: FormRules = visible.trackRules(rules);
   const stopLocaleWatch = onLocaleChange(() => {
@@ -57,9 +40,6 @@ export function useDisplayNameForm() {
   });
 
   async function handleSubmit(): Promise<void> {
-    // Guard: a click on a submit button plus the native submit (or Enter
-    // plus the submit event) invoke this twice in the same tick; the second
-    // call must not start a second request.
     if (submitting.value) {
       return;
     }

@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// TestRedisPingRespectsTimeout points the pinger at a TCP listener that accepts
-// connections but never answers, then requires the ping to return within the
-// health budget instead of hanging on the socket timeout.
 func TestRedisPingRespectsTimeout(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -18,8 +15,6 @@ func TestRedisPingRespectsTimeout(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 
-	// Hold every accepted connection open so the server looks hung rather
-	// than closed.
 	var (
 		mu    sync.Mutex
 		conns []net.Conn

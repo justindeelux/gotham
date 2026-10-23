@@ -20,9 +20,6 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// TestDockerBuildLive builds and inspects a minimal image against the local
-// Docker daemon. It only runs when GOTHAM_E2E=1, is skipped in -short mode,
-// and is skipped when no daemon is reachable.
 func TestDockerBuildLive(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
@@ -60,7 +57,6 @@ func TestDockerBuildLive(t *testing.T) {
 		t.Fatalf("build: %v\nbuild output:\n%s", buildErr, logs.String())
 	}
 
-	// The built image must be resolvable by its tag on the node.
 	response, err := client.do(ctx, http.MethodGet, "/images/"+tag+"/json", nil)
 	if err != nil {
 		t.Fatalf("inspect built image: %v\nbuild output:\n%s", err, logs.String())
@@ -78,12 +74,6 @@ func TestDockerBuildLive(t *testing.T) {
 	}
 }
 
-// TestBuildServerLive runs the full BuildImage RPC against the local Docker
-// daemon: it bootstraps the node-local registry, builds a minimal context,
-// pushes the image, and expects a digest back. It only runs when
-// GOTHAM_E2E=1, is skipped in -short mode, and is skipped when no daemon is
-// reachable. The gotham-registry container and its volume are left in place,
-// matching how the agent keeps them between builds.
 func TestBuildServerLive(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live build RPCs")
@@ -187,14 +177,9 @@ func TestBuildServerLive(t *testing.T) {
 		t.Errorf("registry_image = %q, want %q", result.GetRegistryImage(), want)
 	}
 
-	// The pushed reference must be present in the node-local registry.
 	defer removeTestImage(t, docker, result.GetRegistryImage())
 }
 
-// TestRegistryLiveAuthAndIsolation bootstraps the real node registry and checks
-// it rejects an unauthenticated request, accepts the generated credential, and
-// is attached to the dedicated (non-default) network that workloads cannot
-// reach. It only runs when GOTHAM_E2E=1 and a daemon is reachable.
 func TestRegistryLiveAuthAndIsolation(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run the live registry test")
@@ -223,7 +208,6 @@ func TestRegistryLiveAuthAndIsolation(t *testing.T) {
 		t.Fatalf("read registry credential: %v", err)
 	}
 
-	// Unauthenticated: the /v2/ API must answer 401.
 	response, err := http.Get("http://" + address + "/v2/") //nolint:gosec // loopback test URL
 	if err != nil {
 		t.Fatalf("unauthenticated registry request: %v", err)
@@ -234,7 +218,6 @@ func TestRegistryLiveAuthAndIsolation(t *testing.T) {
 		t.Fatalf("unauthenticated status = %d; want 401", response.StatusCode)
 	}
 
-	// Authenticated: the generated credential must be accepted.
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/v2/", nil)
 	if err != nil {
 		t.Fatalf("build authenticated request: %v", err)
@@ -250,7 +233,6 @@ func TestRegistryLiveAuthAndIsolation(t *testing.T) {
 		t.Fatalf("authenticated status = %d; want 200", response.StatusCode)
 	}
 
-	// The registry must not share the default bridge with workloads.
 	info, err := client.inspectRegistryContainer(ctx)
 	if err != nil {
 		t.Fatalf("inspect registry: %v", err)
@@ -260,7 +242,6 @@ func TestRegistryLiveAuthAndIsolation(t *testing.T) {
 	}
 }
 
-// writeLiveContext writes a minimal FROM scratch build context.
 func writeLiveContext(t *testing.T, dst *bytes.Buffer) {
 	t.Helper()
 	writer := tar.NewWriter(dst)
@@ -285,7 +266,6 @@ func writeLiveContext(t *testing.T, dst *bytes.Buffer) {
 	}
 }
 
-// removeTestImage deletes an image tag created by a live test, best effort.
 func removeTestImage(t *testing.T, client *DockerClient, ref string) {
 	t.Helper()
 	response, err := client.do(context.Background(), http.MethodDelete, "/images/"+ref, nil)

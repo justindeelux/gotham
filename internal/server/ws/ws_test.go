@@ -16,7 +16,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// stubVerifier accepts one fixed token.
 type stubVerifier struct {
 	token string
 }
@@ -28,7 +27,6 @@ func (s stubVerifier) VerifyAccessToken(token string) (*auth.Claims, error) {
 	return nil, errors.New("unauthorized")
 }
 
-// fakeLogStream replays chunks, then fails with fail (io.EOF by default).
 type fakeLogStream struct {
 	grpc.ServerStreamingClient[agentv1.LogChunk]
 	chunks [][]byte
@@ -48,7 +46,6 @@ func (f *fakeLogStream) Recv() (*agentv1.LogChunk, error) {
 	return chunk, nil
 }
 
-// fakeStreamer feeds PublishStream without a live agent.
 type fakeStreamer struct {
 	stream grpc.ServerStreamingClient[agentv1.LogChunk]
 	err    error
@@ -58,7 +55,6 @@ func (f fakeStreamer) StreamLogs(context.Context, *agentv1.StreamLogsRequest, ..
 	return f.stream, f.err
 }
 
-// recordPublisher captures published payloads for assertions.
 type recordPublisher struct {
 	hub     *Hub
 	channel string
@@ -117,7 +113,6 @@ func receive(t *testing.T, conn *websocket.Conn) Message {
 	return msg
 }
 
-// collectLogs reads exactly want log messages, skipping subscribed acks.
 func collectLogs(t *testing.T, conn *websocket.Conn, want int) []string {
 	t.Helper()
 
@@ -135,7 +130,6 @@ func collectLogs(t *testing.T, conn *websocket.Conn, want int) []string {
 	return got
 }
 
-// nextNonAck reads the next message that is not a subscribed ack.
 func nextNonAck(t *testing.T, conn *websocket.Conn) Message {
 	t.Helper()
 
@@ -187,7 +181,6 @@ func TestTwoClientsReceiveIdenticalData(t *testing.T) {
 	hub, server := newTestServer(t)
 	channel := LogChannel("srv1", "ctr1")
 
-	// First client preselects via ?channel=, second subscribes with a frame.
 	first := dial(t, wsURL(server, "/?token="+testToken+"&channel="+channel))
 	second := dial(t, wsURL(server, "/?token="+testToken))
 	if err := websocket.JSON.Send(second, clientRequest{Subscribe: channel}); err != nil {
@@ -233,7 +226,6 @@ func TestTwoClientsReceiveIdenticalData(t *testing.T) {
 		t.Fatal("PublishStream did not return after EOF")
 	}
 
-	// EOF also produces a disconnect notice on the stream channel.
 	msg := nextNonAck(t, first)
 	if msg.Type != TypeDisconnect || msg.Channel != channel {
 		t.Errorf("post-EOF message = %+v, want disconnect on %q", msg, channel)
@@ -255,7 +247,6 @@ func TestKillStreamDisconnectNotice(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Mid-stream kill: one chunk, then the connection drops.
 	streamer := fakeStreamer{stream: &fakeLogStream{
 		chunks: [][]byte{[]byte("partial\n")},
 		fail:   errors.New("connection reset by peer"),

@@ -10,10 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestApplicationTeamIsolation is the Phase 8 exit criterion at the service
-// layer: a member of one team can neither see nor mutate another team's
-// applications, a read_only member reads but cannot mutate, and a user who
-// belongs to both teams sees only the active team of each request.
 func TestApplicationTeamIsolation(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	alice, bob := uuid.New(), uuid.New()
@@ -29,7 +25,6 @@ func TestApplicationTeamIsolation(t *testing.T) {
 	svc := newTestService(t, repo)
 	bg := context.Background()
 
-	// A member of team A sees exactly their team's application.
 	aliceCtx := teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
 	applications, err := svc.ListApplications(aliceCtx, alice, ApplicationFilter{})
 	if err != nil {
@@ -38,7 +33,6 @@ func TestApplicationTeamIsolation(t *testing.T) {
 	if len(applications) != 1 || applications[0].ID != inTeamA.ID {
 		t.Fatalf("team A list = %+v, want only its own application", applications)
 	}
-	// The other team's application is not visible, let alone mutable.
 	if _, err := svc.GetApplication(aliceCtx, alice, inTeamB.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-team Get = %v, want ErrNotFound", err)
 	}
@@ -52,7 +46,6 @@ func TestApplicationTeamIsolation(t *testing.T) {
 		t.Fatalf("cross-team GetEnv = %v, want ErrNotFound", err)
 	}
 
-	// A read_only member of team B can read its application but not mutate it.
 	viewerCtx := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamB, Role: teams.RoleReadOnly})
 	if _, err := svc.GetApplication(viewerCtx, bob, inTeamB.ID); err != nil {
 		t.Fatalf("read_only Get: %v", err)
@@ -71,14 +64,11 @@ func TestApplicationTeamIsolation(t *testing.T) {
 		t.Fatalf("read_only Delete = %v, want ErrForbidden", err)
 	}
 
-	// An admin of team B may mutate.
 	adminCtx := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamB, Role: teams.RoleAdmin})
 	if _, err := svc.UpdateApplication(adminCtx, bob, inTeamB.ID, UpdateApplicationInput{Name: &name}); err != nil {
 		t.Fatalf("admin Update: %v", err)
 	}
 
-	// The same user, active team A, sees only A's application again: the active
-	// team decides per request.
 	dualCtxA := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamA, Role: teams.RoleOwner})
 	if applications, err := svc.ListApplications(dualCtxA, bob, ApplicationFilter{}); err != nil || len(applications) != 1 || applications[0].ID != inTeamA.ID {
 		t.Fatalf("active team A list = %+v, %v; want team A's application", applications, err)
@@ -88,10 +78,6 @@ func TestApplicationTeamIsolation(t *testing.T) {
 	}
 }
 
-// TestApplicationServerMustBelongToTheActiveTeam is the F6 regression: a
-// resource can only be bound to a node of the caller's active team (or a
-// legacy node without a team). Creation, reassignment and deploy all refuse a
-// foreign team's node as if it did not exist.
 func TestApplicationServerMustBelongToTheActiveTeam(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	alice := uuid.New()
@@ -104,11 +90,9 @@ func TestApplicationServerMustBelongToTheActiveTeam(t *testing.T) {
 	bg := context.Background()
 	ctxA := teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
 
-	// A foreign team's node is not a valid target.
 	if _, err := svc.CreateApplication(ctxA, alice, validCreateInput(foreignNode)); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("create on a foreign node = %v, want ErrServerNotFound", err)
 	}
-	// The team's own node and a legacy shared node are.
 	ownInput := validCreateInput(ownNode)
 	ownInput.Name = "own-node-app"
 	own, err := svc.CreateApplication(ctxA, alice, ownInput)
@@ -121,13 +105,10 @@ func TestApplicationServerMustBelongToTheActiveTeam(t *testing.T) {
 		t.Fatalf("create on a legacy node: %v", err)
 	}
 
-	// Moving the application to a foreign node is refused too.
 	if _, err := svc.UpdateApplication(ctxA, alice, own.ID, UpdateApplicationInput{ServerID: &foreignNode}); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("reassign to a foreign node = %v, want ErrServerNotFound", err)
 	}
 
-	// An application stored against a foreign node (pre-fix row) cannot be
-	// deployed by a team that does not own that node.
 	legacyApp := testApplication(alice)
 	legacyApp.TeamID = teamA
 	legacyApp.ServerID = foreignNode

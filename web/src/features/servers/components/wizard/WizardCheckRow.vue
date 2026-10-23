@@ -72,9 +72,6 @@ defineProps<Props>();
   }
 }
 
-/* The label keeps a readable minimum width and whole words; it wraps onto
- * its own line on narrow rows instead of collapsing to one letter per line.
- * Only the long detail value may break anywhere (JUS-8). */
 .check-row > .grow {
   flex: 1 1 11rem;
   min-width: 0;

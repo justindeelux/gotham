@@ -15,17 +15,10 @@ import (
 	"time"
 )
 
-// defaultSMTPPort is the submission port used when the channel names none.
 const defaultSMTPPort = 587
 
-// defaultSMTPTimeout bounds one delivery when the caller's context carries no
-// deadline of its own.
 const defaultSMTPTimeout = 10 * time.Second
 
-// Mail is one outgoing notification email together with the transport
-// settings of its channel. Passing the whole document to the Mailer keeps the
-// SMTP implementation stateless and lets tests assert the effective delivery
-// settings with a fake.
 type Mail struct {
 	Host     string
 	Port     int
@@ -37,22 +30,14 @@ type Mail struct {
 	Body     string
 }
 
-// Mailer delivers one notification email. net/smtp implements it in
-// production (smtpMailer); tests inject a fake.
 type Mailer interface {
 	Send(ctx context.Context, mail Mail) error
 }
 
-// smtpMailer sends through a plain SMTP relay: optional STARTTLS when the
-// server offers it, optional PLAIN auth when a username is configured. It is
-// the only implementation that touches the network.
 type smtpMailer struct {
 	timeout time.Duration
 }
 
-// Send implements Mailer. The context bounds the whole conversation through
-// the connection deadline. Every step failure is classified: a relay's own
-// response text (which is arbitrary remote content) never reaches the error.
 func (m *smtpMailer) Send(ctx context.Context, mail Mail) error {
 	host := strings.TrimSpace(mail.Host)
 	if host == "" {
@@ -68,9 +53,6 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) error {
 	}
 	address := net.JoinHostPort(host, strconv.Itoa(port))
 
-	// The SMTP envelope needs bare addresses: a validated "Ops <ops@x>" must
-	// become MAIL FROM:<ops@x>, not the display string (which a relay rejects
-	// with 501). Display names stay in the rendered headers.
 	from, err := envelopeAddress(mail.From)
 	if err != nil {
 		return err
@@ -141,8 +123,6 @@ func (m *smtpMailer) Send(ctx context.Context, mail Mail) error {
 	return nil
 }
 
-// envelopeAddress reduces an RFC 5322 mailbox ("Ops <ops@example.com>") to the
-// bare address the SMTP envelope requires.
 func envelopeAddress(raw string) (string, error) {
 	parsed, err := mail.ParseAddress(strings.TrimSpace(raw))
 	if err != nil || parsed.Address == "" {
@@ -151,10 +131,6 @@ func envelopeAddress(raw string) (string, error) {
 	return parsed.Address, nil
 }
 
-// credentialsRequireTLS refuses to authenticate to a relay that did not
-// negotiate STARTTLS: the offer can be stripped in transit, and the SMTP
-// password would travel in the clear. A loopback relay is exempt because a
-// network attacker cannot downgrade a connection that never leaves the host.
 func credentialsRequireTLS(host string, startTLS bool) error {
 	if startTLS || isLoopbackHost(host) {
 		return nil
@@ -164,8 +140,6 @@ func credentialsRequireTLS(host string, startTLS bool) error {
 		host)
 }
 
-// isLoopbackHost reports whether an SMTP host is a loopback literal (with or
-// without a bracket or zone) or the name localhost.
 func isLoopbackHost(host string) bool {
 	host = strings.Trim(strings.TrimSpace(host), "[]")
 	if strings.EqualFold(host, "localhost") {
@@ -178,10 +152,6 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// smtpFailure renders one SMTP step failure without forwarding remote text: a
-// *textproto.Error contributes only its numeric status. A hostile or
-// misconfigured relay must never be able to inject credentials or arbitrary
-// content into a delivery error.
 func smtpFailure(step string, err error) error {
 	var protoErr *textproto.Error
 	if errors.As(err, &protoErr) {
@@ -190,8 +160,6 @@ func smtpFailure(step string, err error) error {
 	return fmt.Errorf("notifications: smtp %s failed: %s", step, transportCategory(err))
 }
 
-// renderMessage builds the RFC 5322 document (headers only; no MIME parts are
-// needed for a plain-text notification).
 func renderMessage(mail Mail) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "From: %s\r\n", sanitizeHeader(mail.From))
@@ -207,14 +175,10 @@ func renderMessage(mail Mail) []byte {
 	return b.Bytes()
 }
 
-// sanitizeHeader strips CR/LF so a crafted name or subject can never inject a
-// header.
 func sanitizeHeader(value string) string {
 	return strings.NewReplacer("\r", "", "\n", "").Replace(value)
 }
 
-// defaultMailer returns the SMTP implementation; a nil Mailer in Config means
-// production behavior.
 func defaultMailer(timeout time.Duration) Mailer {
 	return &smtpMailer{timeout: timeout}
 }

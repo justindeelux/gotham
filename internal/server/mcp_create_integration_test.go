@@ -288,7 +288,6 @@ func TestMCPCreationBacked(t *testing.T) {
 		args[field] = uuid.NewString()
 		call(cs, "application_create", args, "unsupported_or_not_found")
 	}
-	// Another user's connection stays foreign even when both users belong to this team.
 	other, err := st.CreateUser(ctx, uuid.NewString()+"@example.com", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -354,7 +353,6 @@ func TestMCPCreationBacked(t *testing.T) {
 	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='admin' WHERE team_id=$1 AND user_id=$2", teamID, principal); err != nil {
 		t.Fatal(err)
 	}
-	// A moved, deleted or expired target must never be replaced by replay.
 	var staging string
 	if err := pool.QueryRow(ctx, "SELECT id FROM environments WHERE project_id=$1 AND name='staging'", projectID).Scan(&staging); err != nil {
 		t.Fatal(err)
@@ -373,7 +371,6 @@ func TestMCPCreationBacked(t *testing.T) {
 	call(cs, "application_create", base("git_public"), "request_expired")
 }
 
-// Only the provider boundary is stubbed; receipts and resources use the real store.
 type mcpCreateHook struct {
 	calls int
 	err   error

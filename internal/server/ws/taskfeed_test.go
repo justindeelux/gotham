@@ -11,10 +11,6 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-// TestTaskSubscriptionReplaysSnapshot is the JUS-91 reconnect contract: a
-// tasks:{teamID} join first replays the team's running tasks (closed by a
-// task_snapshot marker) and then acknowledges the subscription, so the
-// progress card restores on mount, navigation and reconnect.
 func TestTaskSubscriptionReplaysSnapshot(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -53,9 +49,6 @@ func TestTaskSubscriptionReplaysSnapshot(t *testing.T) {
 	}
 }
 
-// TestTaskSubscriptionRequiresTeamMembership keeps one team's deploy progress
-// from leaking to another: a non-member gets a denied frame and never joins
-// the room.
 func TestTaskSubscriptionRequiresTeamMembership(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()

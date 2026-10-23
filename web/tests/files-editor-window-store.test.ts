@@ -1,6 +1,3 @@
-// JUS-232: the floating editor window persists its size, position and
-// minimized flag per user, clamps them back into the viewport on restore, and
-// exposes the open-tab count behind the rail badge.
 /* global window:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -21,7 +18,6 @@ import {
   writeEditorWindow,
 } from "@/features/files/utils/editorWindow";
 
-/** memoryStorage is a Map-backed localStorage stand-in. */
 function memoryStorage() {
   const values = new Map<string, string>();
   return {
@@ -32,7 +28,6 @@ function memoryStorage() {
   };
 }
 
-/** seedSession signs in one user so user-scoped stores pick up their key. */
 function seedSession(userId: string): void {
   window.localStorage.setItem(
     "gotham.auth.session",
@@ -40,13 +35,11 @@ function seedSession(userId: string): void {
   );
 }
 
-/** setViewport overrides the jsdom window size; restore afterwards. */
 function setViewport(width: number, height: number): void {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
   Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
 }
 
-/** makeTab builds one minimal open tab for the badge count. */
 function makeTab(id: string): EditorTab {
   return {
     id,
@@ -116,7 +109,6 @@ describe("editor window storage", () => {
     const state = { width: 900, height: 600, x: 10, y: 20, minimized: true };
     expect(writeEditorWindow(storage, "u-1", state)).toBe(true);
     expect(readEditorWindow(storage, "u-1")).toEqual(state);
-    // Another user never inherits the geometry.
     expect(readEditorWindow(storage, "u-2")).toEqual(DEFAULT_EDITOR_WINDOW);
   });
 
@@ -176,7 +168,6 @@ describe("useEditorWindowStore", () => {
     first.setSize(900, 600);
     first.setPosition(30, 40);
     first.setMinimized(true);
-    // A fresh store instance (a reload) restores the persisted geometry.
     setActivePinia(createPinia());
     const second = useEditorWindowStore();
     expect(second.width).toBe(900);
@@ -191,7 +182,6 @@ describe("useEditorWindowStore", () => {
     const store = useEditorWindowStore();
     store.setSize(900, 600);
     store.setPosition(100, 80);
-    // Margins included: 800 - 48 wide, 600 - 104 tall.
     expect(store.displayGeometry(800, 600)).toEqual({
       width: 752,
       height: 496,
@@ -205,13 +195,11 @@ describe("useEditorWindowStore", () => {
     const first = useEditorWindowStore();
     first.setSize(900, 600);
     first.setPosition(100, 80);
-    // Displaying on a phone fits on screen but leaves memory and storage alone.
     const fitted = first.displayGeometry(390, 844);
     expect(fitted.width).toBeLessThanOrEqual(390);
     expect(first.width).toBe(900);
     expect(first.height).toBe(600);
     expect(first.x).toBe(100);
-    // A fresh store instance (a reload) still restores the desktop geometry.
     setActivePinia(createPinia());
     const second = useEditorWindowStore();
     expect(second.width).toBe(900);
@@ -227,7 +215,6 @@ describe("useEditorWindowStore", () => {
     const fitted = store.displayGeometry(600, 800);
     expect(fitted.x).toBeNull();
     expect(fitted.y).toBeNull();
-    // Display-only: the persisted offset is untouched.
     expect(store.x).toBe(30);
     expect(store.y).toBe(40);
   });
@@ -271,7 +258,6 @@ describe("explicit resize persists the fitted size (JUS-232 fix round 3)", () =>
     seedSession("u-1");
     const store = useEditorWindowStore();
     store.setSize(1331, 936, 1600, 1000);
-    // ArrowLeft once at a 1366px viewport: one step off the displayed 1318.
     store.resizeBy(-16, 0, 1366, 800);
     expect(store.width).toBe(1302);
     expect(store.height).toBe(696);
@@ -282,8 +268,6 @@ describe("explicit resize persists the fitted size (JUS-232 fix round 3)", () =>
     seedSession("u-1");
     const store = useEditorWindowStore();
     store.setSize(1331, 936, 1600, 1000);
-    // First move of a drag started at the displayed 1318px, -40px in: the
-    // result lands on the persisted size, with no viewport-fitted jump.
     store.setSize(1318 - 40, 696, 1366, 800);
     expect(store.width).toBe(1278);
     expect(store.displayGeometry(1366, 800)).toEqual({
@@ -298,7 +282,6 @@ describe("explicit resize persists the fitted size (JUS-232 fix round 3)", () =>
     seedSession("u-1");
     const store = useEditorWindowStore();
     store.setSize(2000, 1500, 1440, 900);
-    // Width capped at 1440 - 48, height at 900 - 104.
     expect(store.width).toBe(1392);
     expect(store.height).toBe(796);
   });
@@ -309,9 +292,7 @@ describe("explicit resize persists the fitted size (JUS-232 fix round 3)", () =>
     first.setSize(1331, 936, 1600, 1000);
     first.resizeBy(-16, 0, 1366, 800);
     expect(first.width).toBe(1302);
-    // Merely displaying at another viewport writes nothing.
     first.displayGeometry(390, 844);
-    // A fresh store instance (a reload) restores the resized size.
     setActivePinia(createPinia());
     const second = useEditorWindowStore();
     expect(second.width).toBe(1302);
@@ -333,7 +314,6 @@ describe("edge and corner resizes persist size and position together (JUS-241)",
     const store = useEditorWindowStore();
     store.setSize(1000, 600, 1366, 800);
     store.setPosition(100, 100, 1000, 600);
-    // The left edge grows 40px to the right: the right edge stays put.
     store.resizeTo({ width: 960, height: 600, x: 140, y: 100 }, 1366, 800);
     expect(store.width).toBe(960);
     expect(store.height).toBe(600);

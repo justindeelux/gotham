@@ -14,9 +14,6 @@ import (
 	"time"
 )
 
-// buildpacksMarkerRepo returns a repository the Buildpacks engine detects. The
-// explicit BuildPack hint matters: go.mod also matches Railpack, which wins the
-// auto-detection order.
 func buildpacksMarkerRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -113,10 +110,6 @@ exit 1`)
 	}
 }
 
-// TestBuildpacksEngineE2E builds a small Go application with a real pack
-// installation against the local Docker daemon. The fixture pins a public
-// builder in project.toml so the run does not depend on the pack default
-// builder configured on this machine.
 func TestBuildpacksEngineE2E(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run live builds")
@@ -124,7 +117,6 @@ func TestBuildpacksEngineE2E(t *testing.T) {
 	if _, err := exec.LookPath(packCLI); err != nil {
 		t.Skipf("%s is not on PATH: %v", packCLI, err)
 	}
-	// pack drives the local daemon for detect, build and export.
 	requireDocker(t)
 
 	dir := t.TempDir()

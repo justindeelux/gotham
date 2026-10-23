@@ -1,7 +1,3 @@
-// JUS-250: the supplied logo asset, the host welcome banner, the named theme
-// persistence and the token-backed xterm palette. The banner tests assert the
-// EXACT bytes written to xterm (including wide vs narrow) and the asset hash,
-// because a trimmed logo or an injected escape sequence is a real regression.
 /* global StorageEvent:readonly, localStorage:readonly, window:readonly */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -49,7 +45,6 @@ const logoPath = resolve(
 const tokensPath = resolve(testsDir, "../src/shared/styles/tokens.css");
 const repoRoot = resolve(testsDir, "../..");
 
-/** bannerInfo builds one host banner input. */
 function bannerInfo(
   overrides: Partial<TerminalBannerInfo> = {},
 ): TerminalBannerInfo {
@@ -62,7 +57,6 @@ function bannerInfo(
   };
 }
 
-/** memoryStorage is a small Storage stand-in that can fail on demand. */
 function memoryStorage(initial: Record<string, string> = {}) {
   const data = new Map(Object.entries(initial));
   return {
@@ -90,8 +84,6 @@ describe("Gotham logo asset", () => {
     expect(TERMINAL_LOGO_SHA256).toBe(
       "76a2f2e19ef0f58326c1f79c5ac837cc25df96f40b7a6d606d292f27b177a274",
     );
-    // The ?raw import must preserve Unicode blocks, trailing spaces and the
-    // final line's absent newline.
     expect(TERMINAL_LOGO).toBe(bytes.toString("utf8"));
     expect(TERMINAL_LOGO.endsWith("\n")).toBe(false);
     expect(TERMINAL_LOGO.split("\n")).toHaveLength(19);
@@ -393,7 +385,6 @@ describe("terminal theme tokens", () => {
     expect(light.background).toBe("#fafafa");
     expect(light.foreground).toBe("#111111");
     expect(light.blue).toBe("#1d4ed8");
-    // Missing tokens are omitted, never replaced by a hard-coded literal.
     expect(light.red).toBeUndefined();
   });
 
@@ -403,7 +394,6 @@ describe("terminal theme tokens", () => {
   });
 });
 
-/** readCssTokens parses every custom-property declaration in tokens.css. */
 function readCssTokens(): Map<string, string> {
   const css = readFileSync(tokensPath, "utf8");
   const tokens = new Map<string, string>();
@@ -413,7 +403,6 @@ function readCssTokens(): Map<string, string> {
   return tokens;
 }
 
-/** resolveToken follows one level of var() to a concrete color value. */
 function resolveToken(tokens: Map<string, string>, name: string): string {
   const value = tokens.get(name);
   if (value === undefined) {
@@ -423,13 +412,11 @@ function resolveToken(tokens: Map<string, string>, name: string): string {
   return alias ? resolveToken(tokens, alias[1]!) : value;
 }
 
-/** channelLuminance is the WCAG 2.1 relative-luminance channel step. */
 function channelLuminance(channel: number): number {
   const unit = channel / 255;
   return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
 }
 
-/** relativeLuminance computes WCAG relative luminance for a hex color. */
 function relativeLuminance(hex: string): number {
   const value = hex.replace("#", "");
   const channels = [0, 2, 4].map((offset) =>
@@ -440,7 +427,6 @@ function relativeLuminance(hex: string): number {
   );
 }
 
-/** contrastRatio computes the WCAG ratio between two hex colors. */
 function contrastRatio(foreground: string, background: string): number {
   const [light, dark] = [
     relativeLuminance(foreground),
@@ -449,7 +435,6 @@ function contrastRatio(foreground: string, background: string): number {
   return (light! + 0.05) / (dark! + 0.05);
 }
 
-/** ANSI_FIELDS are the 16 palette entries xterm renders. */
 const ANSI_FIELDS = [
   "black",
   "red",
@@ -477,9 +462,6 @@ describe("terminal palette contrast", () => {
       for (const field of ANSI_FIELDS) {
         const color = resolveToken(tokens, `--term-${theme}-ansi-${field}`);
         const ratio = contrastRatio(color, background);
-        // True black can never reach 4.5:1 on a near-black surface; it must
-        // still be a visible neutral (>= 3:1). Every other ANSI entry keeps
-        // normal-text contrast (>= 4.5:1).
         const minimum = theme === "dark" && field === "black" ? 3 : 4.5;
         expect(
           ratio,

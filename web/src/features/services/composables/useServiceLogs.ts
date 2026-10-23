@@ -13,7 +13,6 @@ export type StreamStatus =
   | "closed"
   | "error";
 
-/** One rendered log line with a stable identity for the list key. */
 export interface LogLine {
   id: number;
   text: string;
@@ -25,12 +24,6 @@ export interface ServiceLogsSource {
   maxLines: Ref<number>;
 }
 
-/**
- * Shared state for the live log terminal (see ServiceLogs.vue): the
- * control plane streams the node agent's `docker compose logs` as a
- * plain-text chunked response (GET /services/{id}/logs), not over the realtime
- * hub, so this reader consumes the response body directly.
- */
 export interface ServiceLogsState {
   status: Ref<StreamStatus>;
   error: ComputedRef<string | null>;
@@ -50,31 +43,15 @@ export interface ServiceLogsState {
   handleScroll: () => void;
 }
 
-/**
- * sessionExpiredKey is the curated summary stored for a dead session; the
- * display text resolves in the active locale through streamError below.
- */
 const sessionExpiredKey = "services.errors.sessionExpired";
 
-/**
- * useServiceLogs owns the log stream lifecycle: open / consume / pause /
- * follow. Because the reader bypasses the axios instance, it honours the same
- * refresh-once contract itself: a 401 triggers the shared session refresh and
- * one retry before the error is surfaced as "session expired".
- */
 export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
   const status = ref<StreamStatus>("idle");
-  /**
-   * streamFailure retains the raw stream refusal; error derives its display
-   * text in the active locale so an open failure refreshes on a switch.
-   * A dead session stores a marker resolved through the services catalog.
-   */
   const streamFailure: Ref<unknown> = ref(null);
   const error = computed<string | null>(() => {
     if (streamFailure.value === null) {
       return null;
     }
-    // Tracks the locale when called during render or inside a computed.
     void activeLocale.value;
     const failure = streamFailure.value;
     if (
@@ -92,17 +69,13 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
   const selectedService = ref<string>("");
   const logBody = ref<HTMLElement | null>(null);
 
-  /** The in-flight request; aborted by Stop and on unmount. */
   let controller: AbortController | null = null;
 
-  /** Monotonic line id so appended lines never reuse a list key. */
   let nextLineId = 0;
 
-  /** Coalesces tail-scroll work across a burst of chunks. */
   let scrollQueued = false;
 
   const serviceOptions = computed<Array<{ label: string; value: string }>>(() => {
-    // Tracks the locale when called during render or inside a computed.
     void activeLocale.value;
     return [
       { label: String(i18n.global.t("services.logs.allServices")), value: "" },
@@ -111,7 +84,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
   });
 
   const statusLabel = computed<string>(() => {
-    // Tracks the locale when called during render or inside a computed.
     void activeLocale.value;
     const text = (key: string): string => String(i18n.global.t(key));
     if (isPaused.value) {
@@ -137,7 +109,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     "is-error": status.value === "error",
   }));
 
-  /** start opens a followed stream for the selected compose service. */
   async function start(): Promise<void> {
     stop();
     lines.value = [];
@@ -172,13 +143,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     }
   }
 
-  /**
-   * openStream issues the log request, refreshing the session once on 401. The
-   * reader cannot use the axios instance (it consumes a chunked body), so it
-   * wires the shared refresh flow manually. A failed refresh clears the stored
-   * session and surfaces the session-expired message; a second 401 is mapped by
-   * describeServiceError to the same message.
-   */
   async function openStream(signal: AbortSignal): Promise<Response> {
     const request = (): Promise<Response> =>
       fetch(
@@ -195,28 +159,21 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
 
     let response = await request();
     if (response.status === 401) {
-      // The session that starts the refresh; a replacement installed before this
-      // handler decides to expire must survive.
       const tokenBeforeRefresh = getRefreshToken();
       try {
         await refreshSession();
       } catch (error) {
         const stillCurrent = getRefreshToken() === tokenBeforeRefresh;
         if (!isStaleRefreshError(error) && stillCurrent) {
-          // Genuine auth failure for the current session: drop it and redirect to
-          // the login page instead of leaving the reader on a dead session.
           expireSession();
           throw new Error(sessionExpiredKey, { cause: error });
         }
-        // A newer session replaced this one mid-refresh: keep it and retry the
-        // request with its token below.
       }
       response = await request();
     }
     return response;
   }
 
-  /** stop aborts the stream; safe to call when idle. */
   function stop(): void {
     if (controller !== null) {
       controller.abort();
@@ -227,7 +184,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     }
   }
 
-  /** readBody consumes the chunked body into rendered lines. */
   async function readBody(
     body: ReadableStream<Uint8Array>,
     abort: AbortController,
@@ -248,22 +204,18 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
           appendLine(line);
         }
       }
-      // Flush the decoder: a trailing multi-byte character may still be held.
       buffer += decoder.decode();
       if (buffer !== "") {
         appendLine(buffer);
       }
     } finally {
       if (abort.signal.aborted) {
-        // Cancel the body before releasing the lock: a released reader can no
-        // longer cancel the stream, so the abort would leak the connection.
         await reader.cancel().catch(() => undefined);
       }
       reader.releaseLock();
     }
   }
 
-  /** appendLine adds a line to the view, or queues it while paused. */
   function appendLine(text: string): void {
     const line: LogLine = { id: ++nextLineId, text };
     const target = isPaused.value ? pending : lines;
@@ -274,7 +226,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     scheduleScroll();
   }
 
-  /** scheduleScroll coalesces tail-scroll work across a burst of chunks. */
   function scheduleScroll(): void {
     if (!isFollowing.value || scrollQueued) {
       return;
@@ -289,7 +240,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     });
   }
 
-  /** handleScroll disables follow when the reader scrolls away from the tail. */
   function handleScroll(): void {
     const element = logBody.value;
     if (!element) {
@@ -300,7 +250,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     isFollowing.value = distanceToBottom <= 24;
   }
 
-  /** togglePause freezes the view; resuming flushes the queued lines. */
   function togglePause(): void {
     isPaused.value = !isPaused.value;
     if (!isPaused.value && pending.value.length > 0) {
@@ -313,7 +262,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     scheduleScroll();
   }
 
-  /** toggleFollow flips tail-following and snaps to the tail when enabled. */
   function toggleFollow(): void {
     isFollowing.value = !isFollowing.value;
     if (isFollowing.value) {
@@ -321,13 +269,11 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     }
   }
 
-  /** clearLines drops the rendered buffer. */
   function clearLines(): void {
     lines.value = [];
     pending.value = [];
   }
 
-  /** toApiError maps a failed response to the shared ApiError shape. */
   async function toApiError(response: Response): Promise<unknown> {
     const text = await response.text().catch(() => "");
     let message: string;

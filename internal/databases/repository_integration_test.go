@@ -16,16 +16,8 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
-// Override with GOTHAM_TEST_DSN; an explicit value turns a missing database or
-// a failed migration into a test failure instead of a skip, matching
-// internal/store's integration test.
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
-// integrationEnv runs the embedded migrations and returns a repository backed
-// by a real PostgreSQL. It skips only when GOTHAM_TEST_DSN is unset; an
-// explicit DSN makes an unreachable database or a failed migration fatal. The
-// returned cleanup deletes everything the test seeded.
 func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	t.Helper()
 
@@ -38,8 +30,6 @@ func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -50,10 +40,7 @@ func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	// Registered first so LIFO order closes the pool after the row cleanups.
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -62,7 +49,6 @@ func integrationEnv(t *testing.T) (*storeRepository, *store.Store) {
 	return newStoreRepository(st), st
 }
 
-// seedUserAndServer registers the owner and the node a test database needs.
 func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
@@ -100,8 +86,6 @@ func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	return uuidFromPG(user.ID), uuidFromPG(server.ID)
 }
 
-// seedProjectEnvironment creates a team, a project and an environment on the
-// shared test database and returns their IDs, cleaning them up at test end.
 func seedProjectEnvironment(t *testing.T, st *store.Store) (teamID, projectID, envID uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
@@ -148,17 +132,11 @@ func seedProjectEnvironment(t *testing.T, st *store.Store) (teamID, projectID, e
 	return uuidFromPG(team.ID), uuidFromPG(project.ID), uuidFromPG(environment.ID)
 }
 
-// poolExec hides the pool type behind the Store so the test cleanup does not
-// need to thread the pool around.
 func poolExec(st *store.Store, ctx context.Context, query string, args ...any) error {
 	_, err := st.DB.Exec(ctx, query, args...)
 	return err
 }
 
-// TestUpdateDatabaseTargetKeepsUnsetPlacement pins F3 at the SQL level: a
-// Nil environment or server (the service zeroes placement the request
-// leaves alone) keeps the stored values instead of writing NULL, while a
-// set value moves the row.
 func TestUpdateDatabaseTargetKeepsUnsetPlacement(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()
@@ -196,9 +174,6 @@ func TestUpdateDatabaseTargetKeepsUnsetPlacement(t *testing.T) {
 	}
 }
 
-// TestRepositoryRoundTrip exercises the SQL behind the repository: the
-// migration, the ownership reads, the unique-name index, the sealed secrets
-// and the soft delete that keeps the row and its volume.
 func TestRepositoryRoundTrip(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()
@@ -253,8 +228,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("ownership = %s/%s, want %s/%s", fetched.UserID, fetched.ServerID, ownerID, serverID)
 	}
 
-	// Same name, same environment → conflict (per-environment uniqueness),
-	// even for another user; another environment may reuse the name.
 	duplicate := created
 	duplicate.ID = uuid.New()
 	if _, err := repo.CreateDatabase(ctx, duplicate); !errors.Is(err, ErrConflict) {
@@ -270,7 +243,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("another environment may reuse a name: %v", err)
 	}
 
-	// Sealed credentials round-trip through the SQL table.
 	secrets, err := sealCredentials(testSecret, created.ID, Credentials{
 		Username: "orders", Password: "pw-value", Database: "orders",
 	})
@@ -297,9 +269,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("opened = %+v", opened)
 	}
 
-	// Rename keeps every other column; a colliding rename inside one user
-	// conflicts, while another user may take the same name (the index is
-	// partial on user_id).
 	renamed, err := repo.UpdateDatabaseName(ctx, created.ID, "warehouse")
 	if err != nil {
 		t.Fatalf("UpdateDatabaseName: %v", err)
@@ -327,13 +296,10 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("another environment may reuse a name: %v", err)
 	}
 
-	// Status vocabulary is enforced by the CHECK constraint.
 	if _, err := repo.UpdateDatabaseStatus(ctx, renamed.ID, "not-a-status"); err == nil {
 		t.Error("an unknown status must be rejected by the CHECK constraint")
 	}
 
-	// The column-scoped writes do not clobber each other: a status change
-	// keeps the name and container id, and a rename keeps the status.
 	tagged, err := repo.UpdateDatabaseContainer(ctx, second.ID, "container-42")
 	if err != nil {
 		t.Fatalf("UpdateDatabaseContainer: %v", err)
@@ -357,7 +323,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("rename changed more than name: %+v", renamedAgain)
 	}
 
-	// The port pre-check sees the live row and ignores soft-deleted ones.
 	if inUse, err := repo.PublicPortInUse(ctx, serverID, 5433); err != nil || !inUse {
 		t.Errorf("PublicPortInUse(live) = %v, %v, want true", inUse, err)
 	}
@@ -365,8 +330,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("PublicPortInUse(free) = %v, %v, want false", inUse, err)
 	}
 
-	// The owner sees all three live databases (two in production, one in
-	// staging); a stranger sees only their own.
 	list, err := repo.ListDatabases(ctx, teams.Scope{UserID: ownerID})
 	if err != nil {
 		t.Fatalf("ListDatabasesByUser: %v", err)
@@ -382,9 +345,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("other user's list = %+v, want their one row", otherList)
 	}
 
-	// A soft-deleted row no longer reserves its port: the SQL fence must
-	// ignore it in PublicPortInUse (adding this row after the list check
-	// keeps the earlier counts stable).
 	portRow, err := repo.CreateDatabase(ctx, Database{
 		ID:            uuid.New(),
 		UserID:        ownerID,
@@ -412,7 +372,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("PublicPortInUse(port-check deleted) = %v, %v, want false", inUse, err)
 	}
 
-	// Soft delete hides the row and frees the name for reuse.
 	deleted, err := repo.SoftDeleteDatabase(ctx, renamed.ID)
 	if err != nil {
 		t.Fatalf("SoftDeleteDatabase: %v", err)
@@ -426,8 +385,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if _, err := repo.SoftDeleteDatabase(ctx, renamed.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second SoftDeleteDatabase = %v, want ErrNotFound", err)
 	}
-	// The fence is the SQL WHERE deleted_at IS NULL, not the fake: every
-	// scoped provisioning write must report no row on a soft-deleted row.
 	if _, err := repo.UpdateDatabaseName(ctx, renamed.ID, "zombie"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("UpdateDatabaseName after delete = %v, want ErrNotFound", err)
 	}
@@ -450,7 +407,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("GetDatabase(nil) = %v, want ErrNotFound", err)
 	}
 
-	// ServerExists resolves registered and unknown nodes.
 	if exists, err := repo.ServerExists(ctx, serverID, teams.Scope{UserID: ownerID}); err != nil || !exists {
 		t.Errorf("ServerExists(seeded) = %v, %v, want true", exists, err)
 	}
@@ -462,9 +418,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRepositoryRetentionQueries exercises the SQL the retention sweep depends
-// on: the <= cutoff boundary, oldest-first order, purge idempotence, the
-// live-row guard, and the documented cascade of the database's backup rows.
 func TestRepositoryRetentionQueries(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()
@@ -506,11 +459,9 @@ func TestRepositoryRetentionQueries(t *testing.T) {
 		}
 	}
 	setDeletedAt(old.ID, cutoff.Add(-time.Hour))
-	setDeletedAt(boundary.ID, cutoff) // inclusive: deleted_at <= cutoff
+	setDeletedAt(boundary.ID, cutoff)
 	setDeletedAt(fresh.ID, cutoff.Add(time.Hour))
 
-	// Pin the cascade the purge relies on: a backup and a schedule row for the
-	// expired database must vanish with it.
 	if _, err := st.DB.Exec(ctx,
 		"INSERT INTO backups (database_id, status, size, location, type) VALUES ($1, 'completed', 10, 'file:///tmp/fx8b', 'manual')",
 		pgUUID(old.ID)); err != nil {
@@ -553,7 +504,6 @@ func TestRepositoryRetentionQueries(t *testing.T) {
 		t.Errorf("schedule rows = %d, want 0 (the purge must cascade)", rows)
 	}
 
-	// Idempotent: a second purge is a no-op, and a live row is never removed.
 	if err := repo.PurgeDatabase(ctx, old.ID); err != nil {
 		t.Errorf("second PurgeDatabase = %v, want nil", err)
 	}

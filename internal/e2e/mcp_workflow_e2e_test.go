@@ -41,11 +41,6 @@ const (
 	mcpWorkflowSecret    = "gotham-mcp-workflow-secret-key"
 )
 
-// TestMCPAgentDeploymentWorkflow is the backed S8 proof: the real adapter over
-// a real PostgreSQL, Redis and mTLS node agent on Docker drives inspect/create
-// /deploy/poll/logs through the production strict REST aliases. It refuses the
-// shared development dependency ports, so a run can never touch
-// gotham-dev-postgres or gotham-dev-redis.
 func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	requireE2E(t)
 	requireIsolatedMCPEnvironment(t)
@@ -89,7 +84,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	}
 	pingCancel()
 
-	// Rows: one user who belongs to two teams, plus a node owned by team A.
 	user, err := st.CreateUser(ctx, fmt.Sprintf("mcp-e2e-%d@example.com", time.Now().UnixNano()), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -119,8 +113,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	if _, err := pool.Exec(ctx, "UPDATE servers SET status='ready', last_seen=now() WHERE id=$1", node.ID); err != nil {
 		t.Fatal(err)
 	}
-	// A legacy node (team_id NULL) predates teams and must stay visible to
-	// every team, while team A's node must stay invisible to team B.
 	legacy, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "mcp-legacy-node", Ip: "127.0.0.1", Port: 22, SshUser: "root"})
 	if err != nil {
 		t.Fatal(err)
@@ -148,8 +140,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id IN ($1,$2)", teamAID, teamBID); err != nil {
 			t.Logf("cleanup teams: %v", err)
 		}
-		// CreateUser auto-creates the owner's personal team (id = user id);
-		// it is not one of the fixture teams and must not survive the run.
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM team_members WHERE team_id=$1", userID); err != nil {
 			t.Logf("cleanup personal membership: %v", err)
 		}
@@ -165,7 +155,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		assertMCPWorkflowClean(t, cleanupCtx, pool, userID, teamAID, teamBID, nodeID, legacyID, workflowApps)
 	})
 
-	// The real agent on the local Docker daemon.
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	t.Cleanup(agentCancel)
 	agentNodeID := "mcp-e2e-" + uuid.NewString()[:8]
@@ -203,9 +192,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	router := chi.NewRouter()
 	router.Route("/api", func(api chi.Router) {
 		api.With(h.authorize).Get("/v1/mcp/context", h.context)
-		// A route whose only write gate is the production server.RequireTeamRole:
-		// no domain service below repeats the role check, so a read-only role
-		// refusing the request or an owner/admin reaching it pins that gate.
 		api.With(h.authorize).Post("/v1/role-probe", func(w http.ResponseWriter, _ *http.Request) {
 			h.roleProbeHits.Add(1)
 			w.WriteHeader(http.StatusNoContent)
@@ -249,8 +235,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		t.Fatal("revoked token initialized the adapter")
 	}
 
-	// Inspect the authorized nodes before mutating anything. The legacy node is
-	// shared; team A's node is not visible to team B.
 	nodes := h.call(t, owner, "nodes_list", map[string]any{"limit": 10})
 	if nodes["total"] != float64(2) {
 		t.Fatalf("nodes_list=%+v", nodes)
@@ -270,7 +254,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	if nodeOut["node"].(map[string]any)["status"] != "ready" {
 		t.Fatalf("node_overview=%+v", nodeOut)
 	}
-	// A stopped heartbeat is reported as stale by the stored snapshot.
 	if _, err := pool.Exec(ctx, "UPDATE servers SET last_seen=now()-interval '5 minutes' WHERE id=$1", nodeID); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +265,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create project -> returned production environment -> explicit staging.
 	project := h.call(t, owner, "project_create", map[string]any{"request_id": "mcp-project", "name": "mcp-shop"})
 	projectReceipt := project["receipt"].(map[string]any)
 	projectID := projectReceipt["resource_id"].(string)
@@ -294,7 +276,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	staging := h.call(t, owner, "environment_create", map[string]any{"request_id": "mcp-staging", "project_id": projectID, "name": "staging"})
 	stagingID := staging["environment"].(map[string]any)["id"].(string)
 
-	// A public Git application on the returned environment and managed node.
 	suffix := uuid.NewString()[:8]
 	marker := "gotham-mcp-v1-" + suffix
 	fixture := initFixture(t, "e2e/mcp-app-"+suffix)
@@ -314,10 +295,8 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 		removeImages(t, "gotham/"+appID)
 		removeLabelledContainers(t, "gotham.app_id="+appID)
 	})
-	// The configured value must be masked in the runtime log snapshot.
 	h.putEnv(t, deployToken.Token, teamAID, appID, "MCP_ECHO_SECRET", "secret-echo-sentinel")
 
-	// A public image application proves the second source without deploying it.
 	image := h.call(t, owner, "application_create", map[string]any{
 		"request_id": "mcp-image", "name": "mcp-image-" + suffix,
 		"environment_id": productionID, "server_id": nodeID.String(), "source_type": "image",
@@ -326,7 +305,6 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 	if image["application"].(map[string]any)["source_type"] != "image" {
 		t.Fatalf("image create=%+v", image)
 	}
-	// A private credential never round-trips, even on the creation response.
 	private := h.call(t, owner, "application_create", map[string]any{
 		"request_id": "mcp-private-image", "name": "mcp-private-" + suffix,
 		"environment_id": productionID, "server_id": nodeID.String(), "source_type": "image",
@@ -338,9 +316,6 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 	}
 	workflowApps = append(workflowApps, image["application"].(map[string]any)["id"].(string), private["application"].(map[string]any)["id"].(string))
 
-	// Read scope cannot deploy; read-only team membership cannot either. The
-	// direct HTTP probe pins the production role gate itself (a different
-	// 403 message than the deploy service's own write check).
 	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='read_only' WHERE team_id=$1 AND user_id=$2", teamAID, userID); err != nil {
 		t.Fatal(err)
 	}
@@ -358,8 +333,6 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 	h.expectError(t, foreign, "application_overview", map[string]any{"application_id": appID}, "unsupported_or_not_found")
 	h.expectError(t, foreign, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy-foreign"}, "unsupported_or_not_found")
 
-	// Deploy once and poll the exact receipt ID through the read-authorized
-	// status route. A 202 is acceptance, never completion.
 	accepted := h.call(t, owner, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy"})
 	receipt := accepted["receipt"].(map[string]any)
 	deploymentID := receipt["resource_id"].(string)
@@ -370,13 +343,10 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 	if terminal["state"] != "running" || terminal["terminal"] != true {
 		t.Fatalf("terminal deployment=%+v", terminal)
 	}
-	// Persisted build output is available after the terminal write.
 	buildLogs := h.call(t, owner, "deployment_logs", map[string]any{"application_id": appID, "deployment_id": deploymentID, "tail": 100})
 	if buildLogs["availability"] != "available" || buildLogs["log"] == "" {
 		t.Fatalf("deployment_logs=%+v", buildLogs)
 	}
-	// Runtime logs come from the live container, not the build row. The
-	// configured env value must arrive masked (<redacted>), not verbatim.
 	var runtimeLogs map[string]any
 	deadline := time.Now().Add(30 * time.Second)
 	for {
@@ -400,7 +370,6 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 	if overview["application"].(map[string]any)["id"] != appID || len(overview["pipeline"].([]any)) == 0 || overview["runtime"] == nil {
 		t.Fatalf("application_overview=%+v", overview)
 	}
-	// Replay returns the same release and creates no second job.
 	replayed := h.call(t, owner, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy"})
 	if replayed["receipt"].(map[string]any)["replayed"] != true || replayed["receipt"].(map[string]any)["resource_id"] != deploymentID {
 		t.Fatalf("replay=%+v", replayed)
@@ -410,8 +379,6 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 		t.Fatalf("replay created %d jobs (%v)", jobs, err)
 	}
 
-	// The failed half: a build that cannot finish stays failed with its
-	// persisted output, and the pipeline state is not promoted to runtime.
 	broken := newBrokenP4Fixture(t, "e2e/mcp-broken-"+suffix, "P4-BUILD-BOOM")
 	t.Cleanup(func() { removeContainersMatchingCommand(t, "P4-BUILD-BOOM") })
 	failedApp := h.call(t, owner, "application_create", map[string]any{
@@ -431,8 +398,6 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 	if !strings.Contains(fmt.Sprint(failedLogs["log"]), "P4-BUILD-BOOM") {
 		t.Fatalf("failed build log=%+v", failedLogs)
 	}
-	// The failed deploy replays the same failed ID and must not enqueue a
-	// hidden second job.
 	failedReplay := h.call(t, owner, "application_deploy", map[string]any{"application_id": failedID, "request_id": "mcp-failed-deploy"})
 	failedReceipt := failedReplay["receipt"].(map[string]any)
 	if failedReceipt["replayed"] != true || failedReceipt["resource_id"] != failedDeployment {
@@ -449,9 +414,6 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 	}
 }
 
-// requireIsolatedMCPEnvironment refuses the shared development services. A
-// plain `go test ./...` skips through requireE2E; an opt-in run without a
-// throwaway database/Redis fails instead of silently using 5432/6379.
 func requireIsolatedMCPEnvironment(t *testing.T) {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv(e2eDSNEnv))
@@ -483,22 +445,10 @@ type mcpWorkflowHarness struct {
 	roleProbeHits atomic.Int32
 }
 
-// currentUser is the fixed principal every token in this fixture belongs to.
 func (h *mcpWorkflowHarness) currentUser(context.Context) (uuid.UUID, bool) {
 	return h.userID, true
 }
 
-// authorize mirrors the production ControlPlane chain for the MCP surface:
-// bearer token -> method scope (read vs deploy) -> explicit team membership
-// -> owner/admin for mutations. The strict contract and Idempotency-Key are
-// enforced by the production requestreplay.RequireStrict wrapper per route.
-// authorize authenticates the bearer token, applies the method scope and the
-// explicit team membership, then delegates the owner/admin write gate to the
-// production server.RequireTeamRole. Token/scopes/team-header resolution is
-// mirrored because this harness wires a custom agent dialer that the full
-// internal/server constructor cannot inject; internal/server/mcp_*_test.go
-// remains the authority for RequireAuth and requireMCPTeam. The role gate is
-// pinned by roleProbe: removing it makes this test fail.
 func (h *mcpWorkflowHarness) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -535,8 +485,6 @@ func (h *mcpWorkflowHarness) authorize(next http.Handler) http.Handler {
 		scope := teams.Scope{UserID: identity.UserID, TeamID: teamID, Role: role}
 		ctx := teams.WithScope(r.Context(), scope)
 		if mutation {
-			// Use the production owner/admin gate rather than a local copy, so
-			// the read-only probe below fails if this gate is removed.
 			server.RequireTeamRole(teams.RoleOwner, teams.RoleAdmin)(next).ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -673,8 +621,6 @@ func nodeIDSet(out map[string]any) map[string]bool {
 	return ids
 }
 
-// putEnv writes the application's environment through the production
-// replace-env route so the deploy carries the value into the container.
 func (h *mcpWorkflowHarness) putEnv(t *testing.T, token string, team uuid.UUID, appID, key, value string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"env":[{"key":%q,"value":%q}]}`, key, value)
@@ -697,9 +643,6 @@ func (h *mcpWorkflowHarness) putEnv(t *testing.T, token string, team uuid.UUID, 
 	}
 }
 
-// roleProbe posts to a route whose only write gate is the production
-// server.RequireTeamRole. If that gate is removed or neutered, the read-only
-// request reaches the recording handler and the test fails.
 func (h *mcpWorkflowHarness) roleProbe(t *testing.T, token string, team uuid.UUID) (int, string) {
 	t.Helper()
 	request, err := http.NewRequest(http.MethodPost, h.baseURL+"/api/v1/role-probe", nil)
@@ -717,8 +660,6 @@ func (h *mcpWorkflowHarness) roleProbe(t *testing.T, token string, team uuid.UUI
 	return response.StatusCode, string(body)
 }
 
-// assertMCPWorkflowClean runs after the per-resource cleanups (t.Cleanup is
-// LIFO) and proves no fixture rows or Docker artifacts survived.
 func assertMCPWorkflowClean(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, teamA, teamB, nodeID, legacyID uuid.UUID, appIDs []string) {
 	t.Helper()
 	checks := []struct {

@@ -16,16 +16,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Log stream tuning.
-//
-//   - A stream is cancelled once its channel has had no hub subscribers for
-//     streamIdleGrace, so a client that vanishes without unsubscribing cannot
-//     leak an agent stream (B2-1/B1-8).
-//   - streamReplayLines bounds the per-channel replay ring, so a viewer that
-//     opens (or reopens) after the first tail was published still sees the last
-//     lines instead of an empty drawer (U2).
-//   - publish retries keep the agent stream alive while the Redis transport is
-//     down and a subscriber is still listening (U3).
 var (
 	streamIdleCheck         = 5 * time.Second
 	streamIdleGrace         = 30 * time.Second
@@ -34,21 +24,14 @@ var (
 	streamPublishMaxBackoff = 5 * time.Second
 )
 
-// LogStreamOpener dials (or otherwise obtains) a log streamer. A non-nil
-// closer is closed when the stream ends, so the opener owns the connection
-// lifecycle.
 type LogStreamOpener func(ctx context.Context) (LogStreamer, io.Closer, error)
 
-// managedStream is one active agent log stream plus its replay ring.
 type managedStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	replay *replayBuffer
 }
 
-// Realtime owns the mounted realtime resources: the hub, the optional Redis
-// client, the supervised bridge and the active log streams. Close releases all
-// of them, so a control-plane shutdown leaves nothing running (B1-8).
 type Realtime struct {
 	Hub    *Hub
 	logger *slog.Logger
@@ -68,12 +51,6 @@ type Realtime struct {
 	streamsWG sync.WaitGroup
 }
 
-// Mount registers WS /api/v1/ws on the /api router, starts the hub and —
-// unless REALTIME_ENABLED=false — a supervised Redis pub/sub bridge on
-// logs:{serverID}:{containerID} (config key redis.addr). authorize gates every
-// log subscription on the node's team; nil leaves subscriptions open. The
-// returned Realtime owns the lifecycle; call Close on shutdown. Mount is
-// intended as a one-line call from Server.routes.
 func Mount(api chi.Router, verifier TokenVerifier, redisAddr string, logger *slog.Logger, authorize SubscriptionAuthorizer) *Realtime {
 	if logger == nil {
 		logger = slog.Default()
@@ -112,9 +89,6 @@ func Mount(api chi.Router, verifier TokenVerifier, redisAddr string, logger *slo
 	return rt
 }
 
-// SetTaskFeed wires background-task subscriptions (tasks:{teamID} rooms with
-// a running-task replay on every join). It is a setter so Mount keeps its
-// signature and existing callers stay untouched.
 func (rt *Realtime) SetTaskFeed(authorize TaskAuthorizer, snapshot func(teamID string) []string) {
 	if rt == nil || rt.handler == nil {
 		return
@@ -122,23 +96,12 @@ func (rt *Realtime) SetTaskFeed(authorize TaskAuthorizer, snapshot func(teamID s
 	rt.handler.SetTaskFeed(authorize, snapshot)
 }
 
-// ActiveStreams reports how many agent log streams the manager is running.
-// Exposed for tests and diagnostics.
 func (rt *Realtime) ActiveStreams() int {
 	rt.streamsMu.Lock()
 	defer rt.streamsMu.Unlock()
 	return len(rt.streams)
 }
 
-// StartLogStream begins bridging an agent log stream for one container into
-// the realtime publisher. It is idempotent per channel while a stream is live:
-// the call replays the channel's recent lines to the (already subscribed)
-// caller instead of starting a second agent stream, and returns the number of
-// replay frames it published (0 for a fresh stream or an empty ring), so the
-// caller can size its replay window exactly (round-5 U1). A stale entry (its
-// context already cancelled) is replaced, so a POST racing the reaper still
-// gets a working stream (U6). The stream is cancelled when the control plane
-// shuts down or the channel has no subscribers for the idle grace.
 func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID string, req *agentv1.StreamLogsRequest) (int, error) {
 	if opener == nil {
 		return 0, errors.New("ws: log stream opener is nil")
@@ -149,12 +112,6 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 	if entry, ok := rt.streams[channel]; ok && entry.ctx.Err() == nil {
 		replay := entry.replay.snapshot()
 		rt.streamsMu.Unlock()
-		// The caller subscribes before starting (see LogViewer), so the replay
-		// reaches the new viewer. Frames are tagged Replay so a viewer that
-		// already has content skips them instead of duplicating history
-		// (round-2 U1); the returned count plus the end marker bound the batch
-		// so a live frame cannot truncate it and an existing viewer never
-		// renders a later batch (round-4/5 U1).
 		for _, msg := range replay {
 			msg.Replay = true
 			_ = rt.pub.Publish(rt.ctx, channel, mustJSON(msg))
@@ -167,7 +124,7 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 	rt.streams[channel] = entry
 	rt.streamsMu.Unlock()
 
-	rt.streamsWG.Add(2) // the stream forwarder and its idle reaper
+	rt.streamsWG.Add(2)
 	go func() {
 		defer rt.streamsWG.Done()
 		rt.reapIdleStream(ctx, cancel, channel)
@@ -179,9 +136,6 @@ func (rt *Realtime) StartLogStream(opener LogStreamOpener, serverID, containerID
 	return 0, nil
 }
 
-// runStream opens the agent stream and forwards it until it ends or the stream
-// context is cancelled, then removes the channel from the active set. It only
-// removes its own entry, so a replacement started after a reap is untouched.
 func (rt *Realtime) runStream(entry *managedStream, channel string, opener LogStreamOpener, serverID, containerID string, req *agentv1.StreamLogsRequest) {
 	ctx := entry.ctx
 	defer entry.cancel()
@@ -203,9 +157,6 @@ func (rt *Realtime) runStream(entry *managedStream, channel string, opener LogSt
 		defer func() { _ = closer.Close() }()
 	}
 
-	// The resilient publisher keeps the agent stream alive through a Redis
-	// outage while a subscriber is still listening (U3); the recorder keeps the
-	// replay ring for late viewers (U2).
 	pub := recordingPublisher{
 		inner: resilientPublisher{
 			inner:      rt.pub,
@@ -217,16 +168,12 @@ func (rt *Realtime) runStream(entry *managedStream, channel string, opener LogSt
 		ring: entry.replay,
 	}
 
-	// PublishStream only returns once the stream has ended (always with a
-	// non-nil reason). A live-context end is unexpected, so it is a warning.
 	streamErr := PublishStream(ctx, streamer, pub, serverID, containerID, req)
 	if ctx.Err() == nil {
 		rt.logger.Warn("ws: log stream ended", "channel", channel, "error", streamErr)
 	}
 }
 
-// reapIdleStream cancels the stream once its channel has had no hub
-// subscribers for streamIdleGrace.
 func (rt *Realtime) reapIdleStream(ctx context.Context, cancel context.CancelFunc, channel string) {
 	ticker := time.NewTicker(streamIdleCheck)
 	defer ticker.Stop()
@@ -250,9 +197,6 @@ func (rt *Realtime) reapIdleStream(ctx context.Context, cancel context.CancelFun
 	}
 }
 
-// Close releases the mounted realtime resources: it cancels every log stream
-// and the bridge, waits for them to finish, closes the Redis client and shuts
-// the hub down. It is safe to call once.
 func (rt *Realtime) Close() {
 	rt.cancel()
 
@@ -271,10 +215,6 @@ func (rt *Realtime) Close() {
 	rt.Hub.Close()
 }
 
-// recordingPublisher stores successfully published log frames in a replay ring.
-// It records before publishing so that a frame a subscriber can already see is
-// also replayable; an undelivered frame (the publish ultimately failed) is
-// removed again.
 type recordingPublisher struct {
 	inner Publisher
 	ring  *replayBuffer
@@ -291,17 +231,6 @@ func (p recordingPublisher) Publish(ctx context.Context, channel string, payload
 	return nil
 }
 
-// resilientPublisher retries a failed publish with bounded backoff while the
-// stream context is live and the channel still has subscribers. On the first
-// failure it broadcasts a disconnect notice straight to the hub (bypassing the
-// failed Redis transport), and on the first success after a failure it
-// broadcasts a resumed notice, so the viewer sees the interruption and its
-// recovery instead of a silently stalled "Streaming" state (U3).
-//
-// Gap: a bridge-only subscription drop (Redis accepts the subscription but
-// stops delivering) makes PUBLISH succeed with zero receivers, so frames during
-// that window are lost without an error here. Detecting it needs a bridge
-// health signal the publisher does not have; documented rather than guessed.
 type resilientPublisher struct {
 	inner      Publisher
 	hub        *Hub
@@ -317,9 +246,6 @@ func (p resilientPublisher) Publish(ctx context.Context, channel string, payload
 	for {
 		err := p.inner.Publish(ctx, channel, payload)
 		if err == nil {
-			// Only a recovered log frame means logs are flowing again. A
-			// terminal disconnect-notice publish must not emit "resumed"
-			// immediately before the close frame (round-3 U3).
 			if failed && isLogPayload(payload) {
 				p.hub.Broadcast(channel, resumedNotice(channel))
 				p.logger.Info("ws: log publish recovered", "channel", channel)
@@ -345,21 +271,17 @@ func (p resilientPublisher) Publish(ctx context.Context, channel string, payload
 	}
 }
 
-// isLogPayload reports whether a framed payload is a log chunk (as opposed to
-// a disconnect or resumed notice).
 func isLogPayload(payload []byte) bool {
 	var msg Message
 	return json.Unmarshal(payload, &msg) == nil && msg.Type == TypeLog
 }
 
-// replayBuffer holds the most recent log frames of one channel.
 type replayBuffer struct {
 	mu   sync.Mutex
 	max  int
 	data []Message
 }
 
-// newReplayBuffer builds a ring holding at most max log frames.
 func newReplayBuffer(max int) *replayBuffer {
 	if max < 0 {
 		max = 0
@@ -367,8 +289,6 @@ func newReplayBuffer(max int) *replayBuffer {
 	return &replayBuffer{max: max}
 }
 
-// add stores a log frame and reports whether it was stored. Disconnect/resumed
-// notices and any non-log frame are ignored.
 func (r *replayBuffer) add(payload []byte) bool {
 	if r.max == 0 {
 		return false
@@ -377,7 +297,7 @@ func (r *replayBuffer) add(payload []byte) bool {
 	if err := json.Unmarshal(payload, &msg); err != nil || msg.Type != TypeLog {
 		return false
 	}
-	msg.Replay = false // history is stored untagged; replay tags on the way out
+	msg.Replay = false
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.data = append(r.data, msg)
@@ -387,9 +307,6 @@ func (r *replayBuffer) add(payload []byte) bool {
 	return true
 }
 
-// removeLast drops the most recently added frame. The recording publisher is
-// the only producer for a channel, so this undoes the immediately preceding
-// add when that frame was never delivered.
 func (r *replayBuffer) removeLast() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -398,7 +315,6 @@ func (r *replayBuffer) removeLast() {
 	}
 }
 
-// snapshot returns a copy of the buffered frames, oldest first.
 func (r *replayBuffer) snapshot() []Message {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -14,13 +14,8 @@ import (
 	"time"
 )
 
-// jwtLifetime bounds an app JWT: GitHub accepts at most 10 minutes.
 const jwtLifetime = 9 * time.Minute
 
-// signAppJWT builds a GitHub App JWT (RS256): header and claims are JSON with
-// base64url encoding and no padding, signed with the app private key. iat is
-// backdated 60s for clock skew. The PEM must hold PKCS#1 or PKCS#8 RSA; the
-// key material never leaves this function and is never logged.
 func signAppJWT(appID int64, pemBytes []byte, now time.Time) (string, error) {
 	if appID == 0 {
 		return "", fmt.Errorf("%w: app id is required", ErrValidation)
@@ -47,7 +42,6 @@ func signAppJWT(appID int64, pemBytes []byte, now time.Time) (string, error) {
 	return payload + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
-// parseAppKey decodes an RSA private key from PEM (PKCS#1 or PKCS#8).
 func parseAppKey(pemBytes []byte) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
@@ -67,8 +61,6 @@ func parseAppKey(pemBytes []byte) (*rsa.PrivateKey, error) {
 	return key, nil
 }
 
-// redactedPEM keeps PEM-shaped errors out of logs: it reports only the block
-// type, never the contents.
 func redactedPEM(pemBytes []byte) string {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {

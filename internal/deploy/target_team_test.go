@@ -11,10 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestListRecentDeploymentsRespectsTeamScope is the JUS-193 dashboard-feed
-// scoping regression: the aggregate never lists a deployment of another
-// team's application (nor a preview), the creator-scoped fallback stays
-// inside the caller's own rows, and the page is bounded by limit.
 func TestListRecentDeploymentsRespectsTeamScope(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	alice := uuid.New()
@@ -55,7 +51,6 @@ func TestListRecentDeploymentsRespectsTeamScope(t *testing.T) {
 			got[0].ApplicationID, got[0].ApplicationName)
 	}
 
-	// team B sees its own two rows, newest first, bounded by limit.
 	gotB, err := svc.ListRecentDeployments(ctxB, teamB, 1)
 	if err != nil {
 		t.Fatalf("team B feed: %v", err)
@@ -68,7 +63,6 @@ func TestListRecentDeploymentsRespectsTeamScope(t *testing.T) {
 			gotB[0].ApplicationID, gotB[0].State)
 	}
 
-	// Without a team context the feed falls back to the creator's own rows.
 	gotUser, err := svc.ListRecentDeployments(context.Background(), alice, 10)
 	if err != nil {
 		t.Fatalf("creator feed: %v", err)
@@ -78,10 +72,6 @@ func TestListRecentDeploymentsRespectsTeamScope(t *testing.T) {
 	}
 }
 
-// TestRollbackRefusesApplicationBoundToForeignNode is the R1 regression: the
-// stored application→node check runs at the shared queue boundary, so a
-// rollback cannot queue a job for an application whose stored team does not own
-// its node (the deploy path already refused it).
 func TestRollbackRefusesApplicationBoundToForeignNode(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	alice := uuid.New()
@@ -107,15 +97,11 @@ func TestRollbackRefusesApplicationBoundToForeignNode(t *testing.T) {
 	if _, err := svc.Rollback(ctxA, alice, app.ID, release.ID); !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("cross-team rollback = %v, want ErrServerNotFound", err)
 	}
-	// Nothing was queued: the seeded release is the only deployment row.
 	if queued := listStored(t, repo, app.ID); len(queued) != 1 {
 		t.Fatalf("deployments after refused rollback = %d, want only the seeded release", len(queued))
 	}
 }
 
-// TestSystemDeployRefusesApplicationBoundToForeignNode covers the other queue
-// path that has no caller scope at all: a signature-verified webhook delivery
-// must not run an application on a node its stored team does not own.
 func TestSystemDeployRefusesApplicationBoundToForeignNode(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 
@@ -134,9 +120,6 @@ func TestSystemDeployRefusesApplicationBoundToForeignNode(t *testing.T) {
 	}
 }
 
-// TestQueueingAllowsLegacySharedNode keeps the documented exception honest: a
-// node without a team stays shared, so deploy, rollback and system deploys of
-// the application's own team keep working.
 func TestQueueingAllowsLegacySharedNode(t *testing.T) {
 	teamA := uuid.New()
 	alice := uuid.New()

@@ -24,7 +24,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// newTestFileServer builds a FileServer over two temp roots.
 func newTestFileServer(t *testing.T) (*FileServer, string) {
 	t.Helper()
 	cfg := Config{
@@ -58,8 +57,8 @@ func TestValidateFileRootTable(t *testing.T) {
 	}
 
 	valid := []string{
-		filepath.Join(data, "volumes"), // a descendant of a protected path
-		filepath.Join(base, "other"),   // unrelated
+		filepath.Join(data, "volumes"),
+		filepath.Join(base, "other"),
 	}
 	if err := os.MkdirAll(valid[1], 0o755); err != nil {
 		t.Fatal(err)
@@ -72,11 +71,11 @@ func TestValidateFileRootTable(t *testing.T) {
 
 	invalid := []string{
 		"relative/path",
-		base,                          // an ancestor of a protected path
-		data,                          // the protected path itself
-		secrets,                       // an exclusive protected path
-		filepath.Join(secrets, "sub"), // inside an exclusive path
-		proxy,                         // the proxy directory (ACME keys)
+		base,
+		data,
+		secrets,
+		filepath.Join(secrets, "sub"),
+		proxy,
 	}
 	for _, dir := range invalid {
 		if _, _, err := validateFileRoot(dir, protected); err == nil {
@@ -92,7 +91,6 @@ func TestValidateFileRootRejectsDangerousTrees(t *testing.T) {
 			t.Errorf("validateFileRoot(%q) = nil, want an error", dir)
 		}
 	}
-	// A root that is a symlink into a dangerous tree is judged by its target.
 	base := t.TempDir()
 	link := filepath.Join(base, "evil")
 	if err := os.Symlink("/etc", link); err != nil {
@@ -175,11 +173,6 @@ func TestFileServerListRoots(t *testing.T) {
 	}
 }
 
-// TestFileServerListReportsOwner pins that a listing entry carries the owning
-// user and group names resolved from the file's uid/gid (JUS-214). A temp file
-// and a symlink are owned by this process, so the expectation is resolved the
-// same way from the process ids, falling back to the numeric id when a name is
-// unavailable.
 func TestFileServerListReportsOwner(t *testing.T) {
 	t.Parallel()
 	server, volumeRoot := newTestFileServer(t)
@@ -189,8 +182,6 @@ func TestFileServerListReportsOwner(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(volumeRoot, "app", "owned.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A link keeps its own lstat owner, so its entry must report the same
-	// resolved name rather than dropping the owner.
 	if err := os.Symlink("owned.txt", filepath.Join(volumeRoot, "app", "link.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +212,6 @@ func TestFileServerListReportsOwner(t *testing.T) {
 	}
 }
 
-// TestNameCacheFallsBackToNumericID pins that an id with no passwd/group entry
-// keeps its numeric string, so a listing never fails over a missing name.
 func TestNameCacheFallsBackToNumericID(t *testing.T) {
 	t.Parallel()
 	names := newNameCache()
@@ -234,13 +223,11 @@ func TestNameCacheFallsBackToNumericID(t *testing.T) {
 	if got := names.group(absent); got != want {
 		t.Fatalf("group = %q, want %q", got, want)
 	}
-	// A repeated lookup is served from the cache with the same answer.
 	if got := names.owner(absent); got != want {
 		t.Fatalf("cached owner = %q, want %q", got, want)
 	}
 }
 
-// absentID returns an id no user and no group resolves to on this host.
 func absentID(t *testing.T) uint32 {
 	t.Helper()
 	for _, id := range []uint32{4294967295, 4294967294, 4000000000} {
@@ -355,7 +342,6 @@ func TestFileServerListCap(t *testing.T) {
 
 func TestFileChunkSizeBelowRecvCap(t *testing.T) {
 	t.Parallel()
-	// agentMaxRecvMsgSize is the gRPC server's receive cap (2 MiB).
 	const agentMaxRecvMsgSize = 2 << 20
 	if fileChunkSize >= agentMaxRecvMsgSize {
 		t.Fatalf("fileChunkSize %d is not below the %d receive cap", fileChunkSize, agentMaxRecvMsgSize)
@@ -401,7 +387,6 @@ func TestFileServerReadRange(t *testing.T) {
 		t.Fatalf("read %q, want %q", got.String(), "456789")
 	}
 
-	// Only an offset: read from there to EOF.
 	got.Reset()
 	if err := server.Read(&agentv1.ReadRequest{
 		Root: RootVolumes, Path: "range", Offset: 10,
@@ -419,7 +404,6 @@ func TestFileServerReadRange(t *testing.T) {
 	}
 }
 
-// collectReadStream implements the Read server stream without a transport.
 type collectReadStream struct {
 	grpc.ServerStream
 	sink  io.Writer
@@ -437,9 +421,6 @@ func (s *collectReadStream) Send(chunk *agentv1.ReadChunk) error {
 
 func (s *collectReadStream) Context() context.Context { return context.Background() }
 
-// startFileServiceTestServer serves the FileService over loopback and returns
-// a client. A nil server leaves the service unregistered, which the control
-// plane sees as Unimplemented.
 func startFileServiceTestServer(t *testing.T, server *FileServer) agentv1.FileServiceClient {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -485,8 +466,6 @@ func TestFileServicePresentWhenEnabled(t *testing.T) {
 	}
 }
 
-// TestFileEntryScrubsInvalidUTF8 proves an entry with invalid UTF-8 marshals:
-// without the scrub, proto3 rejects the string and the page would fail.
 func TestFileEntryScrubsInvalidUTF8(t *testing.T) {
 	t.Parallel()
 	entry := fileEntry(fsroot.Entry{Name: "bad-\xff\xfe", SymlinkTarget: "target-\x80"})
@@ -498,8 +477,6 @@ func TestFileEntryScrubsInvalidUTF8(t *testing.T) {
 	}
 }
 
-// TestNewFileServerSkipsMissingBuiltinRoots proves the lazily-created built-in
-// roots are skipped with a warning instead of aborting startup.
 func TestNewFileServerSkipsMissingBuiltinRoots(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
@@ -518,8 +495,6 @@ func TestNewFileServerSkipsMissingBuiltinRoots(t *testing.T) {
 	}
 }
 
-// TestNewFileServerFailsClosed proves a missing operator root still aborts
-// construction, so an explicit misconfiguration is not silently dropped.
 func TestNewFileServerFailsClosed(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
@@ -534,8 +509,6 @@ func TestNewFileServerFailsClosed(t *testing.T) {
 	}
 }
 
-// TestNewFileServerRejectsUnsafeRoot proves a root in a dangerous tree still
-// aborts construction.
 func TestNewFileServerRejectsUnsafeRoot(t *testing.T) {
 	t.Parallel()
 	cfg := Config{
@@ -548,7 +521,6 @@ func TestNewFileServerRejectsUnsafeRoot(t *testing.T) {
 	}
 }
 
-// TestRootsOverlap table-tests that equal or nested roots are detected.
 func TestRootsOverlap(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -570,8 +542,6 @@ func TestRootsOverlap(t *testing.T) {
 	}
 }
 
-// TestNewFileServerRejectsOverlappingRoots proves two operator roots that nest
-// are refused rather than one shadowing the other.
 func TestNewFileServerRejectsOverlappingRoots(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
@@ -589,8 +559,6 @@ func TestNewFileServerRejectsOverlappingRoots(t *testing.T) {
 	}
 }
 
-// TestValidateFileRootRejectsDockerDataRoot proves a non-default data root from
-// daemon.json is treated as a dangerous tree.
 func TestValidateFileRootRejectsDockerDataRoot(t *testing.T) {
 	base := t.TempDir()
 	dataRoot := filepath.Join(base, "docker-data")
@@ -613,8 +581,6 @@ func TestValidateFileRootRejectsDockerDataRoot(t *testing.T) {
 	}
 }
 
-// TestFileServerListNonUTF8Name proves a filename with invalid UTF-8 is
-// scrubbed so the page still marshals, instead of failing the whole List.
 func TestFileServerListNonUTF8Name(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
@@ -640,9 +606,6 @@ func TestFileServerListNonUTF8Name(t *testing.T) {
 	}
 }
 
-// TestCursorRoundTrip proves the cursor is reversible for names that are not
-// valid UTF-8, so a boundary name survives the proto3 string round trip that
-// scrubbing it would corrupt.
 func TestCursorRoundTrip(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"", "plain", "a\xff", "a\xffz", "\xfd\xfe\xff", "mixed-\x80-\x81"} {
@@ -660,9 +623,6 @@ func TestCursorRoundTrip(t *testing.T) {
 	}
 }
 
-// TestFileServerListMalformedCursor proves a cursor that is not the base64
-// token the agent emitted is rejected, never silently treated as the first
-// page (which would restart the listing).
 func TestFileServerListMalformedCursor(t *testing.T) {
 	t.Parallel()
 	server, _ := newTestFileServer(t)
@@ -675,9 +635,6 @@ func TestFileServerListMalformedCursor(t *testing.T) {
 	}
 }
 
-// TestFullAccessOpensWholeFilesystem pins the operator-approved mode: one
-// writable "system" root at "/" with no dangerous-tree or protected-path
-// rejection, and the env defaults (files on, full access on, "false" off).
 func TestFullAccessOpensWholeFilesystem(t *testing.T) {
 	cfg := Config{FileFullAccess: true}
 	roots := configuredFileRoots(cfg)

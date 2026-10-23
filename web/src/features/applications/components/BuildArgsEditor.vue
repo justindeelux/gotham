@@ -4,13 +4,6 @@ import { useI18n } from "vue-i18n";
 
 import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
 
-/**
- * Key/value editor for --build-arg pairs, shared by the wizard Source step
- * and the detail Dockerfile editor. Values render masked with click-to-reveal
- * and carry a no-secrets warning: ARG values are stored in plaintext,
- * visible to every app reader, and persist in image history on the node.
- */
-
 interface Props {
   modelValue: BuildArgRow[];
 }
@@ -23,7 +16,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** setRow replaces one row, keeping the draft immutable for the parent. */
 function setRow(index: number, patch: Partial<BuildArgRow>): void {
   emit(
     "update:modelValue",
@@ -33,12 +25,10 @@ function setRow(index: number, patch: Partial<BuildArgRow>): void {
   );
 }
 
-/** addRow appends an empty draft row. */
 function addRow(): void {
   emit("update:modelValue", [...props.modelValue, { key: "", value: "" }]);
 }
 
-/** removeRow drops one row by index. */
 function removeRow(index: number): void {
   emit(
     "update:modelValue",
@@ -87,9 +77,6 @@ function removeRow(index: number): void {
   align-items: center;
 }
 
-/* NAlert has no size prop: the light inline look overrides its theme vars
- * (subtle tint, tight padding, 13px text) and swaps the filled border box
- * for a left accent bar. */
 .arg-alert {
   --n-color: var(--warn-soft) !important;
   --n-padding: 8px 12px !important;

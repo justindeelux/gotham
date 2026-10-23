@@ -7,23 +7,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// versionsEnvelope wraps one file's snapshots (newest first).
 type versionsEnvelope struct {
 	Versions []Version `json:"versions"`
 }
 
-// versionBodyEnvelope wraps one snapshot body.
 type versionBodyEnvelope struct {
 	Version Version `json:"version"`
 	Content string  `json:"content"`
 }
 
-// deletedEnvelope reports a deleted snapshot.
 type deletedEnvelope struct {
 	Deleted bool `json:"deleted"`
 }
 
-// history serves GET .../files/history: one file's snapshots, newest first.
 func (h *handler) history(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -41,7 +37,6 @@ func (h *handler) history(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, versionsEnvelope{Versions: versions})
 }
 
-// historyVersion serves GET .../files/history/{version}: one read-only body.
 func (h *handler) historyVersion(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -60,7 +55,6 @@ func (h *handler) historyVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, versionBodyEnvelope{Version: body.Version, Content: body.Content})
 }
 
-// restoreVersion serves POST .../files/history/{version}/restore.
 func (h *handler) restoreVersion(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -79,7 +73,6 @@ func (h *handler) restoreVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, writeEnvelope(result))
 }
 
-// deleteVersion serves DELETE .../files/history/{version}.
 func (h *handler) deleteVersion(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -97,9 +90,6 @@ func (h *handler) deleteVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, deletedEnvelope{Deleted: true})
 }
 
-// versionParam parses the {version} path parameter, answering 400 on a bad
-// UUID. An opaque UUID (never a path or timestamp) is what keeps a crafted
-// version from reaching the store's file key.
 func versionParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "version"))
 	if err != nil {

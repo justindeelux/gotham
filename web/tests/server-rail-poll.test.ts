@@ -1,6 +1,3 @@
-// JUS-135: below the tablet breakpoint the ServerRail moves into a drawer and
-// unmounts on close, so it must never own (or stop) the shared server poll —
-// the app shell does. This pins that contract.
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -79,7 +76,6 @@ describe("ServerRail poll ownership (JUS-135)", () => {
     const wrapper = mount(ServerRail, { global: { plugins: [router, i18n] } });
     await flushPromises();
 
-    // The shell owns the interval; the rail only seeds the list when empty.
     expect(poll).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
 

@@ -27,7 +27,6 @@ func TestServiceSearchMapping(t *testing.T) {
 	}
 	svc := newTestService(t, registry, client)
 
-	// A read-only member may search, exactly like List.
 	listing, err := svc.Search(scopeCtx(teams.RoleReadOnly, teamID), server.ID, "volumes", "app", "config", true)
 	if err != nil {
 		t.Fatalf("Search err = %v", err)
@@ -105,7 +104,6 @@ func TestSearchRoute(t *testing.T) {
 		t.Fatalf("service call = %+v", svc.seenSearch)
 	}
 
-	// recursive defaults to false when the flag is absent.
 	svc.seenSearch = nil
 	if rec := doRequest(t, h, http.MethodGet, "/v1/servers/"+id.String()+"/files/search?root=volumes&query=config"); rec.Code != http.StatusOK {
 		t.Fatalf("search status = %d", rec.Code)
@@ -122,7 +120,6 @@ func TestSearchRouteEmptyResults(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	// results is always an array, never null, so the client can map it directly.
 	if got := rec.Body.String(); got != "{\"results\":[],\"truncated\":false}\n" {
 		t.Fatalf("body = %q", got)
 	}

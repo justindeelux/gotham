@@ -1,13 +1,3 @@
-// Command verify-chain is a self-update verification fixture, not a shipped
-// binary. deploy/verify-systemd.sh builds it with GOTHAM_GO and runs it as the
-// scratch unit's service binary.
-//
-// It exercises the real control-plane startup ordering with the real
-// internal/updates service: NewService (which runs startup Recover) -> Resume
-// (which must not block on the wrapper's lock) -> listen on /healthz. A
-// regression in that ordering (for example a blocking lock in Resume) makes the
-// fixture never listen, so the wrapper's health check fails and the script
-// reports a rollback instead of ok.
 package main
 
 import (
@@ -36,7 +26,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The real ordering under test: Resume before the listener exists.
 	if err := svc.Resume(context.Background()); err != nil {
 		logger.Warn("verify-chain: Resume returned an error", "error", err)
 	}

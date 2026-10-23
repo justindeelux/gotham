@@ -1,7 +1,3 @@
-// JUS-247: the application detail Terminal tab. Every seam is a faithful fake
-// (targets list, container create/close, host create/close and the renderer)
-// that can fail, delay or reject, so the tests assert request counts, the exact
-// target identity and session ids — not only rendered text.
 /* global document:readonly, HTMLElement:readonly, setTimeout:readonly, window:readonly */
 import { NSelect, NTabs } from "naive-ui";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -24,7 +20,6 @@ import viTerminal from "../src/features/terminal/locales/vi";
 import enApplications from "../src/features/applications/locales/en";
 import viApplications from "../src/features/applications/locales/vi";
 
-/** runtimeFakes records every renderer the store creates. */
 const runtimeFakes = vi.hoisted(() => {
   class FakeRuntime {
     options: {
@@ -71,7 +66,6 @@ const runtimeFakes = vi.hoisted(() => {
   return { FakeRuntime, instances };
 });
 
-/** apiFakes is the terminal HTTP seam: every call records its exact target. */
 const apiFakes = vi.hoisted(() => ({
   listTargets: vi.fn(),
   create: vi.fn(),
@@ -84,7 +78,6 @@ vi.mock("@/features/terminal/transport/terminalRuntime", () => ({
   TerminalRuntime: runtimeFakes.FakeRuntime,
 }));
 
-/** classify mirrors the real application classifier for the fake seam. */
 function classify(error: unknown): { code: string; message: string } {
   const api = error as { status?: number; message?: string } | null;
   const status = api?.status ?? null;
@@ -183,7 +176,6 @@ const deployment = {
   updated_at: "2026-10-01T00:00:00Z",
 };
 
-/** target builds one discovery row with the API's deterministic label. */
 function target(
   service: string,
   containerId: string,
@@ -202,7 +194,6 @@ function target(
   };
 }
 
-/** targetsResponse wraps rows in the discovery envelope. */
 function targetsResponse(
   containers: ReturnType<typeof target>[],
   sourceType = "compose",
@@ -223,7 +214,6 @@ const COMPOSE = [
   target("web", "cid-web-2", "gotham-shop-web-2", 2, "nginx:1"),
 ];
 
-/** applicationApiFakes replaces application reads with deterministic rows. */
 const applicationApiFakes = vi.hoisted(() => ({
   getApplication: vi.fn(),
   listDeployments: vi.fn(),
@@ -258,7 +248,6 @@ vi.mock("@/features/applications/api/previews", async (importOriginal) => {
   return { ...actual, listPreviews: applicationApiFakes.listPreviews };
 });
 
-/** teamsApiFakes lets a test make the role read fail or hang. */
 const teamsApiFakes = vi.hoisted(() => ({ listTeams: vi.fn() }));
 
 vi.mock("@/features/teams/api/teams", async (importOriginal) => {
@@ -278,7 +267,6 @@ vi.mock("@/features/servers/api/servers", async (importOriginal) => {
   return { ...actual, listServers: vi.fn().mockResolvedValue([]) };
 });
 
-// useMessage needs the app shell's NMessageProvider; tests only need the shape.
 vi.mock("naive-ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("naive-ui")>();
   return {
@@ -311,10 +299,8 @@ const { default: TerminalPageDock } = await import(
   "../src/features/terminal/components/TerminalPageDock.vue"
 );
 
-/** stub is the lazy route component used outside the page under test. */
 const stub = { template: "<div />" };
 
-/** pageRouter is the minimal route table (names match the app router). */
 function pageRouter() {
   return createRouter({
     history: createMemoryHistory(),
@@ -334,7 +320,6 @@ function pageRouter() {
 
 let seq = 0;
 
-/** labelFor resolves the discovered label a session echoes. */
 function labelFor(containerId: string): string {
   if (containerId === "cid-new") {
     return "gotham-shop-2";
@@ -363,7 +348,6 @@ function sessionFor(
     websocket_path: `/api/v1/applications/${applicationId}/terminal/sessions/session-${seq}/ws`,
     subprotocol: "gotham.terminal.v1",
     application_id: applicationId,
-    // Real backend shape: a single-container app omits `service`.
     ...(input.service !== "" ? { service: input.service } : {}),
     container_id: input.containerId,
     container_name: labelFor(input.containerId).split(" · ").at(-1),
@@ -417,7 +401,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** login signs in a non-operator account (a team owner needs no operator bit). */
 function login(pinia: Pinia, isAdmin = false): void {
   setActivePinia(pinia);
   const auth = useAuthStore();
@@ -432,7 +415,6 @@ function login(pinia: Pinia, isAdmin = false): void {
   };
 }
 
-/** mountDetail mounts the application detail page with heavy tabs stubbed. */
 async function mountDetail(
   path = `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_ID}?tab=terminal`,
   role: "owner" | "admin" | "read_only" | null = "owner",
@@ -486,12 +468,10 @@ async function mountDetail(
   return { wrapper, router, pinia, terminal: useTerminalStore(), teams };
 }
 
-/** tabButton finds one detail tab by its visible label. */
 function tabButton(wrapper: VueWrapper, label: string) {
   return wrapper.findAll(".n-tabs-tab").find((node) => node.text() === label)!;
 }
 
-/** selectValue emits an explicit service selection. */
 async function selectValue(wrapper: VueWrapper, key: string) {
   wrapper.findComponent(NSelect).vm.$emit("update:value", key);
   await flushPromises();
@@ -549,7 +529,6 @@ describe("application terminal tab ordering and laziness (JUS-247)", () => {
     expect(env).toBeGreaterThanOrEqual(0);
     expect(labels.indexOf("Terminal")).toBe(env + 1);
 
-    // Merely loading the page (and the other tabs) never discovers or creates.
     expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
     expect(apiFakes.create).toHaveBeenCalledTimes(0);
     expect(apiFakes.hostCreate).toHaveBeenCalledTimes(0);
@@ -575,7 +554,6 @@ describe("application terminal tab ordering and laziness (JUS-247)", () => {
       cols: 120,
       rows: 32,
     });
-    // A container tab never dials the host create route.
     expect(apiFakes.hostCreate).toHaveBeenCalledTimes(0);
 
     const tab = terminal.pageTabs[0]!;
@@ -654,7 +632,6 @@ describe("multi-service discovery and explicit selection (JUS-247)", () => {
       label: string;
       value: string;
     }>;
-    // Deterministic API order, replicas visibly distinct.
     expect(options.map((option) => option.label)).toEqual([
       "db · gotham-shop-db-1",
       "web · gotham-shop-web-1",
@@ -697,7 +674,6 @@ describe("multi-service discovery and explicit selection (JUS-247)", () => {
     await selectValue(wrapper, "web\u0000cid-web-1");
     const first = terminal.pageTabs[0]!;
 
-    // Cancel keeps the current shell and restores the visible selection.
     await selectValue(wrapper, "db\u0000cid-db");
     expect(terminal.closeRequest?.ids).toEqual([first.id]);
     terminal.cancelClose();
@@ -710,7 +686,6 @@ describe("multi-service discovery and explicit selection (JUS-247)", () => {
       "web\u0000cid-web-1",
     );
 
-    // Confirm releases exactly the old container session on the app route.
     await selectValue(wrapper, "db\u0000cid-db");
     terminal.confirmClose();
     await flushPromises();
@@ -737,7 +712,6 @@ describe("application terminal failure states (JUS-247)", () => {
     expect(wrapper.find(".app-term-empty").exists()).toBe(true);
     expect(wrapper.text()).toContain("No running containers");
 
-    // Nothing re-discovers on its own.
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(apiFakes.listTargets).toHaveBeenCalledTimes(1);
     await wrapper.find(".app-term-refresh").trigger("click");
@@ -856,7 +830,6 @@ describe("application terminal failure states (JUS-247)", () => {
     await nextTick();
     await flushPromises();
 
-    // One rediscovery, then exactly one POST with the NEW container id.
     expect(apiFakes.listTargets).toHaveBeenCalledTimes(2);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
@@ -971,7 +944,6 @@ describe("application terminal failure states (JUS-247)", () => {
     await flushPromises();
     expect(terminal.findTab(first.id)?.mode).toBe("window");
     expect(wrapper.find(".term-detached").exists()).toBe(true);
-    // JUS-255: the moved card exposes its actions once the window is minimized.
     useTerminalWindowStore().setMinimized(true);
     await nextTick();
 
@@ -987,7 +959,6 @@ describe("application terminal failure states (JUS-247)", () => {
     await nextTick();
     await flushPromises();
 
-    // One rediscovery + one fresh page POST; the detached window tab is kept.
     expect(apiFakes.listTargets).toHaveBeenCalledTimes(2);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
@@ -1051,7 +1022,6 @@ describe("application terminal failure states (JUS-247)", () => {
     await nextTick();
     expect(first.wrapper.find(".term-stage-closed").exists()).toBe(true);
 
-    // Logout resets the store (and therefore the restart marker).
     first.terminal.reset();
     const { pinia } = first;
     first.wrapper.unmount();
@@ -1142,7 +1112,6 @@ describe("application terminal failure states (JUS-247)", () => {
     expect(dock.text()).toContain("Paused");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // Resume goes back to the owning tab without a second shell.
     await dock.find(".term-dock-resume").trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.query.tab).toBe("terminal");
@@ -1155,7 +1124,6 @@ describe("application terminal failure states (JUS-247)", () => {
 describe("application terminal permissions (JUS-247)", () => {
   it("waits for a known role before any request (read_only cold load)", async () => {
     const { wrapper, teams } = await mountDetail(undefined, null);
-    // Role unknown: the tab is present but neutral, and nothing is requested.
     expect(wrapper.text()).toContain("Checking terminal access");
     expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
     expect(apiFakes.create).toHaveBeenCalledTimes(0);
@@ -1254,8 +1222,6 @@ describe("application terminal permissions (JUS-247)", () => {
     await flushPromises();
     await nextTick();
 
-    // The tab host only leaves; the app shell owns disposal (next test), so a
-    // transient canWrite gap can never kill a live PTY from here.
     expect(apiFakes.close).toHaveBeenCalledTimes(0);
     expect(terminal.pageTabs).toHaveLength(1);
     expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
@@ -1294,14 +1260,12 @@ describe("application terminal permissions (JUS-247)", () => {
     const tab = terminal.pageTabs[0]!;
     const appsStore = useApplicationsStore();
 
-    // The page's application row briefly disappears (refetch/cache churn).
     appsStore.applicationsById[APP_ID] = null as never;
     await flushPromises();
     await nextTick();
     expect(terminal.findTab(tab.id)).not.toBeNull();
     expect(apiFakes.close).toHaveBeenCalledTimes(0);
 
-    // Restoring the row re-adopts the same session, no second POST.
     appsStore.applicationsById[APP_ID] = application as never;
     await flushPromises();
     await nextTick();

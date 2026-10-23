@@ -13,9 +13,7 @@ import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 interface Props {
   show: boolean;
   mode: ExplorerDialogMode;
-  /** name is the entry being renamed/deleted; the initial value when renaming. */
   name: string;
-  /** existing are the target folder's names (duplicate guard). */
   existing: string[];
   busy: boolean;
 }
@@ -23,9 +21,7 @@ interface Props {
 const props = defineProps<Props>();
 const emit = defineEmits<{
   "update:show": [value: boolean];
-  /** submit carries the validated name (empty for a delete). */
   submit: [name: string];
-  /** after-leave fires once the modal has fully closed. */
   "after-leave": [];
 }>();
 
@@ -34,8 +30,6 @@ const { t } = useI18n();
 const draft = ref("");
 const touched = ref(false);
 
-// Every open starts from a clean field: a create starts empty, a rename starts
-// with the current name, and a delete has no field at all.
 watch(
   () => props.show,
   (open) => {
@@ -92,7 +86,6 @@ const confirmLabel = computed<string>(() => {
   }
 });
 
-/** errorKey is the first rule the entered name breaks, or null when usable. */
 const errorKey = computed<string | null>(() => {
   if (isDelete.value) {
     return null;
@@ -117,7 +110,6 @@ const feedback = computed<string>(() =>
 
 const valid = computed<boolean>(() => errorKey.value === null);
 
-/** submit validates the field and hands the normalized name to the caller. */
 function submit(): void {
   if (props.busy) {
     return;

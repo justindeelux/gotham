@@ -12,14 +12,8 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 )
 
-// caCertFileName is the CA certificate `gotham ca init` writes. It is the file
-// an operator copies to each node and passes to install-agent.sh --ca.
 const caCertFileName = "ca.crt"
 
-// runCA implements `gotham ca init`: it provisions the gRPC mTLS certificate
-// authority under the configured GOTHAM_CA_DIR. It is idempotent, so the
-// installer can run it on every (re)install; an existing CA is loaded, never
-// replaced.
 func runCA(args []string) int {
 	if len(args) == 0 {
 		caUsage(os.Stderr)
@@ -38,8 +32,6 @@ func runCA(args []string) int {
 	}
 }
 
-// runCAInit creates the CA when it is missing, persists the optional listener
-// SAN host list, and reports the certificate path. It is idempotent.
 func runCAInit(args []string) int {
 	hosts, err := parseHostFlags(args)
 	if err != nil {
@@ -76,8 +68,6 @@ func runCAInit(args []string) int {
 	return exitOK
 }
 
-// parseHostFlags accepts repeatable --host <name-or-ip> (and --host=) flags and
-// splits comma-separated values. Unknown flags are a usage error.
 func parseHostFlags(args []string) ([]string, error) {
 	var hosts []string
 	for i := 0; i < len(args); i++ {
@@ -105,7 +95,6 @@ func parseHostFlags(args []string) ([]string, error) {
 	return out, nil
 }
 
-// caUsage prints the `gotham ca` help.
 func caUsage(w io.Writer) {
 	fmt.Fprintf(w, `gotham ca <command>
 

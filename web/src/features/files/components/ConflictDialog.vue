@@ -10,12 +10,10 @@ const { t } = useI18n();
 const message = useMessage();
 const files = useFilesStore();
 
-/** show follows the store's pending conflict prompt. */
 const show = computed<boolean>(() => files.conflictPrompt !== null);
 const names = computed<string[]>(() => files.conflictPrompt?.names ?? []);
 const mode = computed<"move" | "copy">(() => files.conflictPrompt?.op ?? "copy");
 
-/** replace retries the conflicting names with overwrite=true. */
 async function replace(): Promise<void> {
   const summary = await files.resolveConflictPrompt(true);
   message.success(
@@ -28,7 +26,6 @@ async function replace(): Promise<void> {
   );
 }
 
-/** skip drops the conflicting names. */
 async function skip(): Promise<void> {
   await files.resolveConflictPrompt(false);
 }

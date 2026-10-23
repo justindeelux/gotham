@@ -1,6 +1,3 @@
-// JUS-232: the minimized code editor parks on the server rail as an icon
-// above Overview and Alert (separated by dividers), with a badge counting the
-// open tabs; a click restores the window.
 /* global document:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -22,7 +19,6 @@ const { default: ServerRail } = await import(
   "../src/features/servers/components/ServerRail.vue"
 );
 
-/** makeTab builds one minimal open tab for the badge count. */
 function makeTab(id: string): EditorTab {
   return {
     id,
@@ -67,7 +63,6 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-/** mountRail mounts the rail with two open editor tabs, minimized. */
 async function mountRail(count: number) {
   setActivePinia(createPinia());
   const router = railRouter();
@@ -107,9 +102,7 @@ describe("ServerRail editor icon (JUS-232)", () => {
   it("sits above Overview and Alert, split by dividers", async () => {
     const { wrapper } = await mountRail(1);
     const items = wrapper.findAll(".rail-foot .rail-item");
-    // The editor icon is the first foot item, ahead of Overview and Alert.
     expect(items[0]!.find(".rail-btn--editor").exists()).toBe(true);
-    // One divider against the server list, one against Overview/Alert.
     expect(wrapper.findAll(".rail-foot > .rail-sep")).toHaveLength(2);
     wrapper.unmount();
   });

@@ -14,11 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// DomainRedirect is one domain_redirects row as this package uses it: a rule
-// that sends one exact source host to one exact target host over HTTPS. Code
-// is the operator's intent (301 permanent or 302 temporary); Traefik
-// special-cases only GET, so GET answers 301/302 while HEAD and every other
-// method answer 308/307.
 type DomainRedirect struct {
 	ID            uuid.UUID
 	ApplicationID uuid.UUID
@@ -31,21 +26,15 @@ type DomainRedirect struct {
 	UpdatedAt     time.Time
 }
 
-// CreateRedirectInput is the validated input of a new redirect rule.
 type CreateRedirectInput struct {
-	// ApplicationID owns the rule and its node (required).
 	ApplicationID uuid.UUID
 	SourceDomain  string
 	TargetDomain  string
-	// Code defaults to 301 when zero.
-	Code int
-	// PreservePath defaults to true when nil.
-	PreservePath *bool
-	// Enabled defaults to true when nil.
-	Enabled *bool
+	Code          int
+	PreservePath  *bool
+	Enabled       *bool
 }
 
-// UpdateRedirectInput is a partial update: nil fields stay unchanged.
 type UpdateRedirectInput struct {
 	SourceDomain *string
 	TargetDomain *string
@@ -54,18 +43,14 @@ type UpdateRedirectInput struct {
 	Enabled      *bool
 }
 
-// RedirectService is the CRUD surface over domain_redirects.
 type RedirectService interface {
 	CreateRedirect(ctx context.Context, in CreateRedirectInput) (DomainRedirect, error)
-	// ListRedirects returns every rule newest first, or one application's
-	// rules when applicationID is not uuid.Nil.
 	ListRedirects(ctx context.Context, applicationID uuid.UUID) ([]DomainRedirect, error)
 	GetRedirect(ctx context.Context, id uuid.UUID) (DomainRedirect, error)
 	UpdateRedirect(ctx context.Context, id uuid.UUID, in UpdateRedirectInput) (DomainRedirect, error)
 	DeleteRedirect(ctx context.Context, id uuid.UUID) error
 }
 
-// RedirectWrite is the repository-level redirect write shape.
 type RedirectWrite struct {
 	ApplicationID uuid.UUID
 	SourceDomain  string
@@ -75,27 +60,17 @@ type RedirectWrite struct {
 	Enabled       bool
 }
 
-// ApplicationDomain is one application's base domain, used by the ownership
-// guard: a sequential conflicting write cannot shadow a routed host, and a
-// racing write is held back by the generator per committed snapshot.
 type ApplicationDomain struct {
 	ID     uuid.UUID
 	Domain string
 }
 
-// RedirectEndpoint is one enabled redirect rule's source and target hosts,
-// used by the two-directional no-chain guard: a proposed target must not be
-// another enabled rule's source, and a proposed source must not be another
-// enabled rule's target.
 type RedirectEndpoint struct {
 	ID     uuid.UUID
 	Source string
 	Target string
 }
 
-// RedirectStore is the persistence seam of the redirect surface. The
-// production implementation is storeRedirect over *store.Store; tests
-// substitute a fake.
 type RedirectStore interface {
 	GetApplication(ctx context.Context, id uuid.UUID) (ApplicationInfo, error)
 	CreateRedirect(ctx context.Context, in RedirectWrite) (DomainRedirect, error)
@@ -109,20 +84,14 @@ type RedirectStore interface {
 	ListEnabledRedirects(ctx context.Context) ([]RedirectEndpoint, error)
 }
 
-// storeRedirect adapts the shared store to the RedirectStore seam.
 type storeRedirect struct {
 	store *store.Store
 }
 
-// NewStoreRedirect adapts the shared store to the RedirectStore seam. It is
-// exported so internal/server can build the production redirect service over
-// one store.
 func NewStoreRedirect(st *store.Store) RedirectStore {
 	return storeRedirect{store: st}
 }
 
-// CreateRedirect stores one rule, mapping the unique source index to
-// ErrConflict.
 func (s storeRedirect) CreateRedirect(ctx context.Context, in RedirectWrite) (DomainRedirect, error) {
 	row, err := s.store.CreateDomainRedirect(ctx, sqlc.CreateDomainRedirectParams{
 		ApplicationID: pgUUID(in.ApplicationID),
@@ -138,7 +107,6 @@ func (s storeRedirect) CreateRedirect(ctx context.Context, in RedirectWrite) (Do
 	return redirectFromRow(row), nil
 }
 
-// GetRedirect returns one rule, or ErrNotFound.
 func (s storeRedirect) GetRedirect(ctx context.Context, id uuid.UUID) (DomainRedirect, error) {
 	row, err := s.store.GetDomainRedirect(ctx, pgUUID(id))
 	if err != nil {
@@ -147,7 +115,6 @@ func (s storeRedirect) GetRedirect(ctx context.Context, id uuid.UUID) (DomainRed
 	return redirectFromRow(row), nil
 }
 
-// GetRedirectBySource returns the rule claiming a source host, or ErrNotFound.
 func (s storeRedirect) GetRedirectBySource(ctx context.Context, source string) (DomainRedirect, error) {
 	row, err := s.store.GetDomainRedirectBySource(ctx, source)
 	if err != nil {
@@ -156,7 +123,6 @@ func (s storeRedirect) GetRedirectBySource(ctx context.Context, source string) (
 	return redirectFromRow(row), nil
 }
 
-// ListRedirects returns every rule, newest first.
 func (s storeRedirect) ListRedirects(ctx context.Context) ([]DomainRedirect, error) {
 	rows, err := s.store.ListDomainRedirects(ctx)
 	if err != nil {
@@ -169,7 +135,6 @@ func (s storeRedirect) ListRedirects(ctx context.Context) ([]DomainRedirect, err
 	return out, nil
 }
 
-// ListRedirectsByApplication returns one application's rules, newest first.
 func (s storeRedirect) ListRedirectsByApplication(ctx context.Context, applicationID uuid.UUID) ([]DomainRedirect, error) {
 	rows, err := s.store.ListDomainRedirectsByApplication(ctx, pgUUID(applicationID))
 	if err != nil {
@@ -182,7 +147,6 @@ func (s storeRedirect) ListRedirectsByApplication(ctx context.Context, applicati
 	return out, nil
 }
 
-// UpdateRedirect persists the mutable fields.
 func (s storeRedirect) UpdateRedirect(ctx context.Context, id uuid.UUID, in RedirectWrite) (DomainRedirect, error) {
 	row, err := s.store.UpdateDomainRedirect(ctx, sqlc.UpdateDomainRedirectParams{
 		ID:           pgUUID(id),
@@ -198,7 +162,6 @@ func (s storeRedirect) UpdateRedirect(ctx context.Context, id uuid.UUID, in Redi
 	return redirectFromRow(row), nil
 }
 
-// DeleteRedirect removes one rule.
 func (s storeRedirect) DeleteRedirect(ctx context.Context, id uuid.UUID) error {
 	if err := s.store.DeleteDomainRedirect(ctx, pgUUID(id)); err != nil {
 		return mapRedirectWriteError(err)
@@ -206,8 +169,6 @@ func (s storeRedirect) DeleteRedirect(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// ListApplicationBaseDomains returns every application's base domain for the
-// ownership guard.
 func (s storeRedirect) ListApplicationBaseDomains(ctx context.Context) ([]ApplicationDomain, error) {
 	rows, err := s.store.ListApplicationBaseDomains(ctx)
 	if err != nil {
@@ -220,13 +181,6 @@ func (s storeRedirect) ListApplicationBaseDomains(ctx context.Context) ([]Applic
 	return out, nil
 }
 
-// ListEnabledRedirects returns the endpoints of every enabled rule across
-// every node: the no-chain guard is global, not node-local, so a sequential
-// conflicting write (create, update or enable) is rejected even when its two
-// rules live on different nodes. The guard reads committed state, so
-// concurrent writes can still pass against old endpoints and persist a chain;
-// live fleet-wide chain-freedom then requires every affected node to converge
-// (see checkRedirectWrites and redirectsForServer for the exact limits).
 func (s storeRedirect) ListEnabledRedirects(ctx context.Context) ([]RedirectEndpoint, error) {
 	rows, err := s.store.ListEnabledRedirects(ctx)
 	if err != nil {
@@ -243,7 +197,6 @@ func (s storeRedirect) ListEnabledRedirects(ctx context.Context) ([]RedirectEndp
 	return out, nil
 }
 
-// GetApplication returns the application a rule belongs to, or ErrNotFound.
 func (s storeRedirect) GetApplication(ctx context.Context, id uuid.UUID) (ApplicationInfo, error) {
 	row, err := s.store.GetApplication(ctx, pgUUID(id))
 	if err != nil {
@@ -263,7 +216,6 @@ func (s storeRedirect) GetApplication(ctx context.Context, id uuid.UUID) (Applic
 	return info, nil
 }
 
-// redirectFromRow maps a stored redirect row into the domain model.
 func redirectFromRow(row sqlc.DomainRedirect) DomainRedirect {
 	redirect := DomainRedirect{
 		ID:            uuidFromPG(row.ID),
@@ -283,10 +235,6 @@ func redirectFromRow(row sqlc.DomainRedirect) DomainRedirect {
 	return redirect
 }
 
-// mapRedirectWriteError turns unique and foreign-key violations into
-// ErrConflict: the unique source index and the application reference surface
-// as actionable conflicts instead of a 500 (the service pre-checks cover the
-// common paths; these mappings catch the races).
 func mapRedirectWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -300,22 +248,14 @@ func mapRedirectWriteError(err error) error {
 	return err
 }
 
-// RedirectConfig wires the redirect CRUD service. Store is required; Resync is
-// optional and receives a best-effort trigger after every successful mutation
-// (a failed resync never fails the mutation).
 type RedirectConfig struct {
-	GuardDomains DomainGuard
-	// Store is the redirect persistence seam.
-	Store RedirectStore
-	// Logger defaults to slog.Default.
-	Logger *slog.Logger
-	// Resync pushes the new desired state to the nodes. nil disables it.
-	Resync func(ctx context.Context) error
-	// ResyncTimeout bounds one resync; default one minute.
+	GuardDomains  DomainGuard
+	Store         RedirectStore
+	Logger        *slog.Logger
+	Resync        func(ctx context.Context) error
 	ResyncTimeout time.Duration
 }
 
-// redirectService implements RedirectService over one store and resync hook.
 type redirectService struct {
 	guardDomains  DomainGuard
 	store         RedirectStore
@@ -324,12 +264,8 @@ type redirectService struct {
 	resyncTimeout time.Duration
 }
 
-// Compile-time guarantee that redirectService satisfies the CRUD contract.
 var _ RedirectService = (*redirectService)(nil)
 
-// NewDefaultRedirectService builds the production redirect CRUD service, or
-// nil (a nil interface) when there is no store or FEATURE_PROXY=false, so the
-// HTTP wiring can pass its result to Mount unconditionally.
 func NewDefaultRedirectService(cfg RedirectConfig) RedirectService {
 	if cfg.Store == nil || !Enabled() {
 		return nil
@@ -345,17 +281,6 @@ func NewDefaultRedirectService(cfg RedirectConfig) RedirectService {
 	return &redirectService{guardDomains: cfg.GuardDomains, store: cfg.Store, logger: logger, resync: cfg.Resync, resyncTimeout: timeout}
 }
 
-// CreateRedirect validates and stores one rule: the application must exist, be
-// assigned to a node and not be held back by a domain-uniqueness conflict; the
-// source must be a valid exact host that shadows no application base domain
-// and no other rule; the target must be a valid exact host that neither points
-// at another enabled rule's source nor is the target of one (the no-chain
-// guard checks both directions, globally), so a sequential conflicting write
-// cannot complete a chain. The guard is committed-state check-then-write, not
-// a database constraint: a racing write can still persist a chain, which the
-// generator then holds back per snapshot (see checkRedirectWrites and
-// redirectsForServer for the exact limits). Redirect rules are emitted only
-// for enabled rules of domain-healthy applications on their node.
 func (s *redirectService) CreateRedirect(ctx context.Context, in CreateRedirectInput) (DomainRedirect, error) {
 	if in.ApplicationID == uuid.Nil {
 		return DomainRedirect{}, fmt.Errorf("%w: application_id is required", ErrValidation)
@@ -414,8 +339,6 @@ func (s *redirectService) CreateRedirect(ctx context.Context, in CreateRedirectI
 	return created, nil
 }
 
-// ListRedirects returns the rules of the caller's active team, or one
-// application's rules when it belongs to that team.
 func (s *redirectService) ListRedirects(ctx context.Context, applicationID uuid.UUID) ([]DomainRedirect, error) {
 	var (
 		redirects []DomainRedirect
@@ -438,8 +361,6 @@ func (s *redirectService) ListRedirects(ctx context.Context, applicationID uuid.
 	return filtered, nil
 }
 
-// GetRedirect returns one rule of an application the caller's active team
-// owns; a foreign team's rule answers ErrNotFound.
 func (s *redirectService) GetRedirect(ctx context.Context, id uuid.UUID) (DomainRedirect, error) {
 	if id == uuid.Nil {
 		return DomainRedirect{}, fmt.Errorf("%w: redirect id is required", ErrValidation)
@@ -458,10 +379,6 @@ func (s *redirectService) GetRedirect(ctx context.Context, id uuid.UUID) (Domain
 	return redirect, nil
 }
 
-// UpdateRedirect applies a partial update. The owning application is re-read
-// so a rule can never be updated into an invalid application state (a
-// disabled domain or a detached node), and every updated value is re-validated
-// against the current claims of other rules and applications.
 func (s *redirectService) UpdateRedirect(ctx context.Context, id uuid.UUID, in UpdateRedirectInput) (DomainRedirect, error) {
 	if id == uuid.Nil {
 		return DomainRedirect{}, fmt.Errorf("%w: redirect id is required", ErrValidation)
@@ -530,7 +447,6 @@ func (s *redirectService) UpdateRedirect(ctx context.Context, id uuid.UUID, in U
 	return updated, nil
 }
 
-// DeleteRedirect removes one rule; the redirect stops with the next sync.
 func (s *redirectService) DeleteRedirect(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return fmt.Errorf("%w: redirect id is required", ErrValidation)
@@ -553,21 +469,6 @@ func (s *redirectService) DeleteRedirect(ctx context.Context, id uuid.UUID) erro
 	return nil
 }
 
-// checkRedirectWrites enforces the write-time guard rails against all other
-// state. excludeID is the rule being updated (uuid.Nil on create).
-//
-// The ownership guard is global: every application's base domain and every
-// enabled rule in the database is considered, not only those on the rule's
-// node, because the generated per-node routers are not the only way a source
-// could be claimed. The no-chain guard is two-directional: a proposed target
-// may not be another enabled rule's source, and a proposed source may not be
-// another enabled rule's target, so a sequential conflicting write (create,
-// update or enable) is rejected regardless of insertion order. It is a
-// check-then-write against committed state: a concurrent racing write is
-// caught by the generator's hold-back instead (see redirectsForServer), never
-// by a database constraint, and live fleet-wide chain-freedom additionally
-// requires every affected node to converge — SyncServer writes one node and
-// SyncAll applies nodes separately, with no atomic fleet replacement.
 func (s *redirectService) checkRedirectWrites(ctx context.Context, excludeID uuid.UUID, source, target string, enabled bool) error {
 	claimed, err := s.store.GetRedirectBySource(ctx, source)
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -608,10 +509,6 @@ func (s *redirectService) checkRedirectWrites(ctx context.Context, excludeID uui
 	return nil
 }
 
-// validateRedirectApplication rejects an application the rule could never
-// serve: a domain-disabled one (its route is already held back by the
-// uniqueness conflict, and its redirects are held back with it) or one with no
-// node to generate on.
 func validateRedirectApplication(app ApplicationInfo) error {
 	if app.DomainDisabled {
 		return fmt.Errorf("%w: the application's domain is disabled; resolve the duplicate-domain conflict first", ErrValidation)
@@ -622,8 +519,6 @@ func validateRedirectApplication(app ApplicationInfo) error {
 	return nil
 }
 
-// validateRedirectDomains normalizes and validates the source and target
-// hosts and rejects the self redirect. It returns the canonical values.
 func validateRedirectDomains(source, target string) (string, string, error) {
 	source = NormalizeDomain(source)
 	target = NormalizeDomain(target)
@@ -639,8 +534,6 @@ func validateRedirectDomains(source, target string) (string, string, error) {
 	return source, target, nil
 }
 
-// validateRedirectCode accepts only the two intents Traefik's redirectRegex
-// can express: 301 (permanent) and 302 (temporary).
 func validateRedirectCode(code int) error {
 	if code != RedirectCodePermanent && code != RedirectCodeTemporary {
 		return fmt.Errorf("%w: the redirect code must be %d or %d", ErrValidation, RedirectCodePermanent, RedirectCodeTemporary)
@@ -648,9 +541,6 @@ func validateRedirectCode(code int) error {
 	return nil
 }
 
-// notifyResync triggers the best-effort resync after a committed mutation. It
-// never fails the caller: the durable state is already correct, and the next
-// sync (manual or deploy-driven) converges the nodes.
 func (s *redirectService) notifyResync(ctx context.Context) {
 	if s == nil || s.resync == nil {
 		return

@@ -6,19 +6,11 @@ import (
 	"time"
 )
 
-// TestLeafClassificationCountsUnobservedNodes is the N1 regression: right after
-// an upgrade every existing node has agent_legacy_leaf NULL until it connects,
-// so the startup warning must count those nodes as unobserved (possibly legacy)
-// instead of reading as "zero legacy nodes". Assertions are one-sided because
-// the integration database is shared with other packages that also write
-// servers rows.
 func TestLeafClassificationCountsUnobservedNodes(t *testing.T) {
 	service, st, _ := newTestServiceWithAuthority(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// A node that has not connected since the column was added: node_id set,
-	// agent_legacy_leaf NULL (the first-boot-after-upgrade state).
 	unobservedID := uniqueNodeID("node-unobserved")
 	if _, err := st.DB.Exec(ctx,
 		`INSERT INTO servers (name, ip, port, ssh_user, node_id) VALUES ($1, '127.0.0.1', 22, 'root', $1)`,
@@ -42,8 +34,6 @@ func TestLeafClassificationCountsUnobservedNodes(t *testing.T) {
 		t.Fatalf("agent_legacy_leaf = %v before any connection, want NULL", *row.AgentLegacyLeaf)
 	}
 
-	// Once the gateway classifies it as modern, the row records that (and it
-	// leaves the unobserved bucket for that node).
 	if err := service.AuthorizeNodeKey(ctx, unobservedID, "fingerprint-modern", false); err != nil {
 		t.Fatalf("AuthorizeNodeKey(modern): %v", err)
 	}
@@ -55,7 +45,6 @@ func TestLeafClassificationCountsUnobservedNodes(t *testing.T) {
 		t.Fatalf("agent_legacy_leaf = %v, want a recorded modern (false) classification", row.AgentLegacyLeaf)
 	}
 
-	// A node observed with a pre-mTLS leaf is counted as legacy.
 	legacyID := uniqueNodeID("node-legacy")
 	if _, err := st.DB.Exec(ctx,
 		`INSERT INTO servers (name, ip, port, ssh_user, node_id) VALUES ($1, '127.0.0.1', 22, 'root', $1)`,

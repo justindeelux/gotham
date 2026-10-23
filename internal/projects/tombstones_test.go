@@ -14,10 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// tombstoneFixture is a team-owned project with two environments, a node,
-// and one service plus one database in the first environment, both
-// soft-deleted afterwards. The rows pin their environment, project and
-// server at the FK level while staying invisible to listings and counts.
 type tombstoneFixture struct {
 	teamID      uuid.UUID
 	userID      uuid.UUID
@@ -39,7 +35,7 @@ func seedTombstones(t *testing.T, ctx context.Context, st *store.Store) tombston
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuidOf(user.ID)
-	teamID := userID // personal team: team ID == user ID
+	teamID := userID
 
 	server, err := st.CreateServer(ctx, sqlc.CreateServerParams{
 		Name:    fmt.Sprintf("tomb-node-%d", suffix),
@@ -110,7 +106,6 @@ func seedTombstones(t *testing.T, ctx context.Context, st *store.Store) tombston
 	}
 }
 
-// tombstonedRowGone asserts the purge: the row no longer exists at all.
 func tombstonedRowGone(t *testing.T, ctx context.Context, st *store.Store, table string, id uuid.UUID) {
 	t.Helper()
 	var count int
@@ -123,9 +118,6 @@ func tombstonedRowGone(t *testing.T, ctx context.Context, st *store.Store, table
 	}
 }
 
-// TestDeleteEnvironmentPurgesTombstones pins F1: an environment holding only
-// soft-deleted workloads deletes cleanly (the tombstones are purged in the
-// same transaction), while a live workload still answers 409.
 func TestDeleteEnvironmentPurgesTombstones(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -149,7 +141,6 @@ func TestDeleteEnvironmentPurgesTombstones(t *testing.T) {
 	tombstonedRowGone(t, ctx, st, "services", fix.serviceID)
 	tombstonedRowGone(t, ctx, st, "databases", fix.databaseID)
 
-	// A live workload in another environment still blocks.
 	qaEnv, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
 		ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
 		ProjectID: pgtype.UUID{Bytes: fix.projectID, Valid: true},
@@ -175,9 +166,6 @@ func TestDeleteEnvironmentPurgesTombstones(t *testing.T) {
 	}
 }
 
-// TestDeleteProjectPurgesTombstones pins F1 for projects: tombstones across
-// every environment purge in the same transaction, and the project (with its
-// environments) goes.
 func TestDeleteProjectPurgesTombstones(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

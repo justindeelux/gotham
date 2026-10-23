@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// deployKeyUnderTest is the public key every deploy-key test registers.
 func deployKeyUnderTest() DeployKey {
 	return DeployKey{Title: "gotham:demo", Key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 gotham:deploy:abc"}
 }
@@ -86,7 +85,6 @@ func TestGitHubSourceRemoveDeployKey(t *testing.T) {
 		t.Errorf("request = %s %s, want DELETE /repos/o/r/keys/77", gotMethod, gotPath)
 	}
 
-	// An already-removed key is a success: removing stays idempotent.
 	status = http.StatusNotFound
 	if err := source.RemoveDeployKey(context.Background(), staticToken, "o/r", "77"); err != nil {
 		t.Errorf("RemoveDeployKey on 404: %v, want nil", err)
@@ -216,8 +214,6 @@ func TestGiteaSourceRemoveDeployKey(t *testing.T) {
 	}
 }
 
-// TestServiceAddDeployKey proves the service layer resolves the caller's stored
-// connection and hands the key to the provider implementation.
 func TestServiceAddDeployKey(t *testing.T) {
 	var gotPath string
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -243,8 +239,6 @@ func TestServiceAddDeployKey(t *testing.T) {
 	}
 }
 
-// TestServiceRemoveDeployKey mirrors the webhook delete: the stored connection
-// authenticates the call and a 404 stays a success.
 func TestServiceRemoveDeployKey(t *testing.T) {
 	status := http.StatusNoContent
 	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -268,8 +262,6 @@ func TestServiceRemoveDeployKey(t *testing.T) {
 	}
 }
 
-// TestServiceAddDeployKeyConnectionErrors covers the two connection failures
-// the deploy routes translate into statuses.
 func TestServiceAddDeployKeyConnectionErrors(t *testing.T) {
 	repo := newFakeRepo()
 	svc := newTestService(repo)

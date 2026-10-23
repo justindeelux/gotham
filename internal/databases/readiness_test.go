@@ -11,8 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// readinessDatabase returns a provisioned row plus a fake container list in
-// the given state, so a test can drive waitHealthy without a real agent.
 func readinessDatabase(cs *fakeContainers, state, health string) Database {
 	cs.listed = []containers.Container{{
 		ID:     "container-1",
@@ -30,10 +28,6 @@ func readinessDatabase(cs *fakeContainers, state, health string) Database {
 	}
 }
 
-// TestWaitHealthyRejectsRunningButStarting is the D1-10 regression: a
-// container that is up but whose engine healthcheck has not passed must not be
-// reported ready, and the wait must time out rather than succeed on state
-// alone.
 func TestWaitHealthyRejectsRunningButStarting(t *testing.T) {
 	cs := &fakeContainers{}
 	svc := newTestService(newFakeRepository(), cs)
@@ -46,8 +40,6 @@ func TestWaitHealthyRejectsRunningButStarting(t *testing.T) {
 	}
 }
 
-// TestWaitHealthyRejectsUnhealthy: an engine whose probe reports unhealthy is
-// not ready either.
 func TestWaitHealthyRejectsUnhealthy(t *testing.T) {
 	cs := &fakeContainers{}
 	svc := newTestService(newFakeRepository(), cs)
@@ -59,7 +51,6 @@ func TestWaitHealthyRejectsUnhealthy(t *testing.T) {
 	}
 }
 
-// TestWaitHealthyAcceptsHealthy: a healthy probe reports ready.
 func TestWaitHealthyAcceptsHealthy(t *testing.T) {
 	cs := &fakeContainers{}
 	svc := newTestService(newFakeRepository(), cs)
@@ -71,9 +62,6 @@ func TestWaitHealthyAcceptsHealthy(t *testing.T) {
 	}
 }
 
-// TestWaitHealthyLegacyContainerWithoutHealthcheck: a row created before
-// databases configured healthchecks has no health value and keeps the
-// pre-fix running-state behavior, so it does not hang on an absent probe.
 func TestWaitHealthyLegacyContainerWithoutHealthcheck(t *testing.T) {
 	cs := &fakeContainers{}
 	svc := newTestService(newFakeRepository(), cs)
@@ -85,8 +73,6 @@ func TestWaitHealthyLegacyContainerWithoutHealthcheck(t *testing.T) {
 	}
 }
 
-// TestWaitHealthyStoppedContainerIsNotReady: a stopped container is never
-// ready regardless of a stale health value.
 func TestWaitHealthyStoppedContainerIsNotReady(t *testing.T) {
 	cs := &fakeContainers{}
 	svc := newTestService(newFakeRepository(), cs)
@@ -98,8 +84,6 @@ func TestWaitHealthyStoppedContainerIsNotReady(t *testing.T) {
 	}
 }
 
-// TestRunHealthcheckRendersProbe proves a database run payload carries a
-// native healthcheck rendered from the engine's own probe command.
 func TestRunHealthcheckRendersProbe(t *testing.T) {
 	database, secrets := sealedSample(t, "orders", EnginePostgres, 0)
 	engine, _ := LookupEngine(EnginePostgres)
@@ -118,8 +102,6 @@ func TestRunHealthcheckRendersProbe(t *testing.T) {
 		t.Errorf("start period = %s, want the engine window %s",
 			options.Healthcheck.StartPeriod, engine.Healthcheck().Timeout)
 	}
-	// A short interval would exec the probe (mongosh/mysqladmin) every couple
-	// of seconds for the container's whole life.
 	if options.Healthcheck.Interval != 10*time.Second {
 		t.Errorf("healthcheck interval = %s, want 10s", options.Healthcheck.Interval)
 	}

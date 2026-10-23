@@ -1,6 +1,3 @@
-// JUS-248: backend terminal failures are mapped to stable, translatable
-// classes. The control plane's contract is the input: HTTP statuses for
-// create, bounded phrases for the attach stream.
 import { describe, expect, it } from "vitest";
 
 import { ZodError } from "zod";
@@ -16,8 +13,6 @@ import {
   terminalTargetsSchema,
 } from "@/features/terminal/schemas/terminal";
 
-// Literal create responses from the control plane's create contract. They are
-// kept as JSON strings so a backend shape drift is visible here.
 const HOST_NO_ROOT_RESPONSE = {
   id: "3f8c2a1e-0000-4000-8000-000000000001",
   server_id: "11111111-1111-4111-8111-111111111111",
@@ -55,8 +50,6 @@ const CONTAINER_RESPONSE = {
 
 describe("terminalSessionSchema", () => {
   it("accepts a host create response without a File manager root", () => {
-    // The Terminal page and the server detail tab create a host session with
-    // no root/cwd; the control plane omits both fields in that response.
     const parsed = terminalSessionSchema.parse(HOST_NO_ROOT_RESPONSE);
     expect(parsed.root).toBe("");
     expect(parsed.cwd).toBe("");
@@ -177,7 +170,6 @@ describe("terminalStreamFailureCode", () => {
   });
 });
 
-
 describe("applicationTerminalFailure (JUS-247)", () => {
   it("maps the container statuses and the 409 phrases", () => {
     expect(applicationTerminalFailure({ status: 403, message: "x" }).code).toBe(
@@ -216,7 +208,6 @@ describe("applicationTerminalFailure (JUS-247)", () => {
     expect(applicationTerminalFailure({ status: 503, message: "x" }).code).toBe(
       "terminalDisabled",
     );
-    // An unexpected 2xx target/create shape is badResponse, never network.
     expect(applicationTerminalFailure(new ZodError([])).code).toBe(
       "badResponse",
     );
@@ -256,8 +247,6 @@ describe("applicationTerminalTargetsSchema (JUS-247)", () => {
 });
 
 describe("terminalTargetsSchema (JUS-265)", () => {
-  // The backend shape, with every optional field omitted where the control
-  // plane omits it: target errors carry only source+code.
   const TARGETS = {
     servers: [
       { id: "11111111-1111-4111-8111-111111111111", name: "prod-01", status: "ready" },

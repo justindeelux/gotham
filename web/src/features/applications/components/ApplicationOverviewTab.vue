@@ -29,7 +29,6 @@ interface Props {
   pipelineSteps: PipelineStep[];
   descColumns: number;
   acting: boolean;
-  /** canWrite gates the compose editor: readers see it read-only. */
   canWrite?: boolean;
 }
 
@@ -44,7 +43,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** sourceLabel renders the GS-2 source type with the wizard's labels. */
 const sourceLabels: Record<string, string> = {
   git_public: "applications.wizard.sourceGitPublic",
   git_private: "applications.wizard.sourceGitPrivate",
@@ -55,13 +53,11 @@ const sourceLabels: Record<string, string> = {
   image: "applications.wizard.sourceImage",
 };
 
-/** sourceLabel renders the GS-2 source type with the wizard's labels. */
 const sourceLabel = computed<string>(() => {
   const key = props.application ? sourceLabels[props.application.source_type] : undefined;
   return key ? String(t(key)) : (props.application?.source_type ?? "—");
 });
 
-/** commitLine renders the short hash plus the message subject, or a dash. */
 const commitLine = computed<string>(() => {
   const sha = props.latest?.commit_sha ?? "";
   if (!sha) {
@@ -71,7 +67,6 @@ const commitLine = computed<string>(() => {
   return subject ? `${shortCommitSha(sha)} ${subject}` : shortCommitSha(sha);
 });
 
-/** isCompose reports a compose application for the compose rows. */
 const isCompose = computed<boolean>(() => props.application?.source_type === "compose");
 </script>
 

@@ -14,19 +14,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestProxyConfigHistorySequencing proves the R2 persistence contract against
-// a real database: unchanged content records nothing, a replaced predecessor
-// is retained for 24 hours measured from the replacement (not the original
-// push), pruning only removes predecessors whose retention elapsed, and a
-// pending record keeps the active version as the revert target.
 func TestProxyConfigHistorySequencing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	dsn := testDSN()
 	explicit := testDSNExplicit()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -38,8 +31,6 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -68,7 +59,6 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 	}
 	hashOf := func(marker string) string { return "hash-" + marker }
 
-	// A: first push, promoted and active.
 	versionA, changed, err := st.PrepareProxyConfigVersion(ctx, server.ID, content("A"), hashOf("A"))
 	if err != nil || !changed || !versionA.Pending {
 		t.Fatalf("prepare A: changed=%v pending=%v err=%v", changed, versionA.Pending, err)
@@ -77,17 +67,14 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 		t.Fatalf("promote A: %v", err)
 	}
 
-	// Unchanged content records nothing and keeps A active.
 	if _, changed, err = st.PrepareProxyConfigVersion(ctx, server.ID, content("A"), hashOf("A")); err != nil || changed {
 		t.Fatalf("unchanged prepare: changed=%v err=%v, want false/nil", changed, err)
 	}
 
-	// Backdate A's original push: retention must be measured from replacement.
 	if _, err := pool.Exec(ctx, "UPDATE proxy_config_versions SET created_at = now() - interval '3 days' WHERE id = $1", versionA.ID); err != nil {
 		t.Fatalf("backdate A: %v", err)
 	}
 
-	// B replaces A; A must survive even though its push is older than 24h.
 	versionB, _, err := st.PrepareProxyConfigVersion(ctx, server.ID, content("B"), hashOf("B"))
 	if err != nil {
 		t.Fatalf("prepare B: %v", err)
@@ -107,7 +94,6 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 		t.Fatalf("A superseded_at = %v, want set at replacement time", supersededAt)
 	}
 
-	// Expire A's retention window, then C prunes A and B becomes previous.
 	if _, err := pool.Exec(ctx, "UPDATE proxy_config_versions SET superseded_at = now() - interval '25 hours' WHERE id = $1", versionA.ID); err != nil {
 		t.Fatalf("expire A: %v", err)
 	}
@@ -130,8 +116,6 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 		t.Fatalf("previous after C = %q (err %v), want B", previous.ContentHash, err)
 	}
 
-	// A pending D records the intent but never becomes the revert target: the
-	// active C stays the actual prior while the node may serve D.
 	if _, _, err := st.PrepareProxyConfigVersion(ctx, server.ID, content("D"), hashOf("D")); err != nil {
 		t.Fatalf("prepare D: %v", err)
 	}
@@ -144,9 +128,6 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 		t.Fatalf("active = %q (err %v), want C", active.ContentHash, err)
 	}
 
-	// Aborting the ACTIVE row is a no-op: only pending records can be
-	// deleted, so the durable snapshot can never be lost through the abort
-	// path.
 	if err := st.AbortProxyConfigVersion(ctx, server.ID, active.ID); err != nil {
 		t.Fatalf("abort active: %v", err)
 	}
@@ -154,7 +135,6 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 		t.Fatalf("active row disappeared after an abort attempt: %v", err)
 	}
 
-	// Abort drops the pending intent; B is the predecessor again.
 	if err := st.AbortProxyConfigVersion(ctx, server.ID, pending.ID); err != nil {
 		t.Fatalf("abort D: %v", err)
 	}
@@ -167,7 +147,6 @@ func TestProxyConfigHistorySequencing(t *testing.T) {
 	}
 }
 
-// pruneBefore is the retention cutoff used by the tests (24h before now).
 func pruneBefore() pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: time.Now().Add(-24 * time.Hour), Valid: true}
 }

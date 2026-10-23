@@ -1,6 +1,3 @@
-// Toolchain App Store page (JUS-177, fix round 1): error state is
-// exclusive with the table/empty states, and detect-only plus
-// already-installed rows render a disabled checkbox with a visible reason.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h } from "vue";
@@ -142,8 +139,6 @@ describe("socket lifecycle", () => {
     first.unmount();
     expect(socketStub.unsubscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
     expect(socketStub.close).toHaveBeenCalledTimes(1);
-    // Remount keeps the node: the page must resubscribe (not just refresh),
-    // opening exactly one new socket and one new channel subscription.
     useServersStore().servers = [server()];
     const second = await mountPage();
     expect(useWebSocketMock).toHaveBeenCalledTimes(2);
@@ -169,8 +164,6 @@ describe("install selected", () => {
       }),
     ]);
     const wrapper = await mountPage();
-    // Rows sort by name (Docker, Git, Probe); the header checkbox is first.
-    // Table checkboxes are role=checkbox divs, not native inputs.
     const boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
     expect(boxes.length).toBe(4);
     await boxes[2].trigger("click");
@@ -182,10 +175,7 @@ describe("install selected", () => {
     expect(action).toBeDefined();
     await action?.trigger("click");
     await flushPromises();
-    // The checked installed + detect-only rows are excluded server-side too.
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git"], "install");
-    // The enqueue opens the queue modal (teleported focus trap): unmount so
-    // later tests own document focus.
     wrapper.unmount();
   });
 });
@@ -205,13 +195,10 @@ describe("row selectability", () => {
       }),
     ]);
     const wrapper = await mountPage();
-    // One table (single category), three rows: exactly two disabled boxes.
     expect(wrapper.findAll(".n-data-table").length).toBe(1);
     expect(wrapper.findAll(".n-checkbox--disabled").length).toBe(2);
-    // The disabled rows still explain themselves in text.
     expect(wrapper.text()).toContain("Detect-only");
     expect(wrapper.text()).toContain("Installed");
-    // Column titles come from the catalog, not hard-coded English.
     expect(wrapper.text()).toContain("Tool");
     expect(wrapper.text()).toContain("Actions");
     expect(useToolchainStore().tools).toHaveLength(3);
@@ -238,11 +225,9 @@ describe("category tabs (JUS-189)", () => {
     expect(tabs(wrapper)[0].attributes("tabindex")).toBe("0");
     expect(tabs(wrapper)[1].attributes("tabindex")).toBe("-1");
     expect(wrapper.find('[role="tabpanel"]').exists()).toBe(true);
-    // Build tab sorts by name (Git, Make); header checkbox is first.
     let boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
     await boxes[1].trigger("click");
     await flushPromises();
-    // Switch to the network tab: only Curl shows, Git stays checked.
     await tabs(wrapper)[1].trigger("click");
     await flushPromises();
     expect(tabs(wrapper)[1].attributes("aria-selected")).toBe("true");
@@ -252,13 +237,11 @@ describe("category tabs (JUS-189)", () => {
     expect(visibleRows[0].text()).toContain("Curl");
     await wrapper.findAll('.n-checkbox[role="checkbox"]')[1].trigger("click");
     await flushPromises();
-    // Switch back: the build tab badge reports the selection, Git is kept.
     await tabs(wrapper)[0].trigger("click");
     await flushPromises();
     expect(tabs(wrapper)[0].text()).toContain("1 selected");
     boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
     expect(boxes[1].attributes("aria-checked")).toBe("true");
-    // One bulk install covers tools from both tabs.
     const action = wrapper
       .findAll("button")
       .find((button) => button.text().includes("Install selected"));
@@ -276,7 +259,6 @@ describe("category tabs (JUS-189)", () => {
       tool({ id: "node", name: "Node", category: "runtime" }),
     ]);
     const wrapper = await mountPage();
-    // Focus assertions need a live document (detached nodes never take focus).
     globalThis.document.body.appendChild(wrapper.element);
     const tablist = wrapper.find('[role="tablist"]');
     expect(tabs(wrapper)[0].attributes("aria-selected")).toBe("true");
@@ -312,8 +294,6 @@ describe("category tabs (JUS-189)", () => {
     await boxes[1].trigger("click");
     await flushPromises();
     expect(tabs(wrapper)[0].text()).toContain("1 selected");
-    // Git reports back installed: the row is pruned, so both badge and
-    // footer fall back instead of disagreeing.
     useToolchainStore().tools = [
       tool({ id: "git", name: "Git", category: "build", installed: true, version: "2.47.1" }),
     ];
@@ -335,7 +315,6 @@ describe("category tabs (JUS-189)", () => {
     await flushPromises();
     expect(tabs(wrapper)[0].text()).toContain("1 of 2");
     expect(tabs(wrapper)[1].text()).toContain("0 of 1");
-    // Active tab shows only the match; the other tab's hit stays discoverable.
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
     await tabs(wrapper)[1].trigger("click");
     await flushPromises();

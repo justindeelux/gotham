@@ -29,7 +29,6 @@ func TestApplicationCannotClaimPanelHost(t *testing.T) {
 	if _, err := svc.CreatePreviewApplication(ctx, app.ID, PreviewApplicationInput{Name: "preview", Branch: "feat/test", BaseDomain: host}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("preview=%v", err)
 	}
-	// A legacy alias must not become the primary after the panel claims its host.
 	alias, err := repo.CreateApplicationDomain(ctx, ApplicationDomain{ApplicationID: app.ID, Domain: "panel.example.com", Port: 3000, Protocol: ProtocolHTTP})
 	if err != nil {
 		t.Fatal(err)

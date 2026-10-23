@@ -46,38 +46,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Phase 6 (BE-6.2) issuance acceptance. The test drives the real service
-// surface (store -> SSL services -> proxy.SyncService -> containers.Service ->
-// mTLS agent -> Docker) against a real Cloudflare zone and a real Let's
-// Encrypt ACME server, and asserts the certificate Traefik serves:
-//
-//   - a token preflight creates and deletes a TXT record through the
-//     Cloudflare API (stopping on 403 instead of retrying);
-//   - the DNS provider is created through proxy.DNSProviderService and the
-//     DNS-01 certificate intent through proxy.CertificateService;
-//   - the bootstrapped Traefik obtains the certificate and serves it for
-//     SNI=gotham.deelux.dev from the loopback gateway;
-//   - the served chain verifies with real signature validation against the
-//     selected CA's trust anchors (system roots for production, the pinned
-//     Let's Encrypt staging roots for staging) and the stored ACME leaf is
-//     byte-identical to the served one.
-//
-// Ownership: only Cloudflare TXT record IDs whose content equals a DNS-01
-// challenge value derived from this run's own ACME account key (read from
-// Traefik's acme.json and resolved through the CA) are ever deleted. A record
-// that cannot be proven owned is left in place and the test reports failure.
-//
-// Secrets: the CF token reaches this process through the environment, is
-// sealed through the normal provider surface and is delivered to Traefik as
-// a container environment variable only. It is never logged, rendered into a
-// document, or written to the evidence artifact; failure-path log dumps are
-// redacted before they are retained.
-
-// Environment knobs of the issuance acceptance test. GOTHAM_E2E_ACME_CA
-// defaults to staging so that running the suite can never burn production
-// rate limits by accident. GOTHAM_E2E_STAGING_ROOT_PEM optionally points at a
-// PEM file with additional Let's Encrypt staging trust anchors, so a future
-// staging root rotation can be handled without a code change.
 const (
 	p6IssuanceTokenEnv  = "CF_DNS_API_TOKEN"
 	p6IssuanceDomainEnv = "GOTHAM_TEST_DOMAIN"
@@ -87,9 +55,6 @@ const (
 	p6StagingRootEnv    = "GOTHAM_E2E_STAGING_ROOT_PEM"
 	p6IssuanceOptInEnv  = "GOTHAM_E2E_DNS01"
 
-	// p6LEStagingDirectory is the Let's Encrypt staging ACME directory the
-	// caServer knob renders for staging runs; the production run leaves the
-	// knob empty (Traefik's default).
 	p6LEStagingDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
 	p6IssuanceTimeout     = 6 * time.Minute
@@ -98,11 +63,6 @@ const (
 	p6TXTNamePrefix       = "_acme-challenge."
 )
 
-// TestP6DNS01Issuance is the live DNS-01 issuance acceptance. It needs two
-// explicit opt-ins: GOTHAM_E2E=1 for the Docker-backed suite and
-// GOTHAM_E2E_DNS01=1 for a real public zone and real ACME server, because the
-// CI E2E job sets only GOTHAM_E2E=1 and must skip green. Once both are set,
-// a missing credential, domain or zone fails the test instead of skipping.
 func TestP6DNS01Issuance(t *testing.T) {
 	requireE2E(t)
 	if !p6IssuanceOptIn() {
@@ -117,10 +77,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	defer cancel()
 	logger := testLogger(t)
 
-	// Cloudflare preflight first: prove the token can create and delete a TXT
-	// record in the zone before any ACME order exists. A 403 (or any other
-	// failure) stops the run here; there are no blind retries, and a failed
-	// preflight delete is retried before the run is abandoned.
 	cf := newCFAPI(token)
 	preflightCtx, preflightCancel := context.WithTimeout(ctx, time.Minute)
 	zoneID, err := p6CFPreflight(t, preflightCtx, cf, zone)
@@ -130,8 +86,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	}
 	t.Logf("cloudflare preflight ok: token created and deleted a TXT record in zone %s", zone)
 
-	// Docker, Postgres and the one local node: the same stack the BE-6.1
-	// acceptance test builds.
 	engine, err := agent.NewDockerClient(e2eDockerSock(), agent.WithRegistryStateDir(t.TempDir()))
 	if err != nil {
 		t.Fatalf("docker client for %s: %v", e2eDockerSock(), err)
@@ -158,9 +112,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	t.Cleanup(pool.Close)
 	st := store.New(pool)
 
-	// Every resource registers its cleanup immediately after it exists, so a
-	// later failure (a refused pre-existing proxy, a failed pull or sync, a
-	// failed insert) cannot leak it.
 	suffix := uuid.New().String()[:8]
 	userRow, err := st.CreateUser(ctx, "p6-issuance-"+suffix+"@example.com", nil)
 	if err != nil {
@@ -180,7 +131,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	t.Cleanup(func() { p6ExecCleanup(t, pool, "DELETE FROM servers WHERE id = $1", serverRow.ID) })
 	serverID := uuid.UUID(serverRow.ID.Bytes)
 
-	// The node agent rooted in a temp directory the CP mounts into Traefik.
 	nodeID := "p6-issuance-" + suffix
 	configDir := p6CanonicalTempDir(t)
 	acmeDir := configDir + "/acme"
@@ -192,14 +142,9 @@ func TestP6DNS01Issuance(t *testing.T) {
 		agent.WithProxyService(proxyAgent))
 
 	registry := p6Registry{server: &servers.Server{ID: serverID, IP: "127.0.0.1", NodeID: &nodeID}}
-	// R4: never remove a fixed-name container this test cannot prove it owns.
 	if existing := p6FindContainer(t, ctx, engine); existing != "" {
 		t.Fatalf("a gotham-traefik container already exists (%s); refusing to remove a possibly live proxy", existing)
 	}
-	// The proxy cleanup is installed before the sync: push can create the
-	// container before its verified write returns, so a failed sync must
-	// still be able to remove it. Removal is gated on the per-run config-dir
-	// label that only this test's sync could have produced.
 	t.Cleanup(func() { p6RemoveOwnedTraefik(t, engine, configDir) })
 	containerService := containers.NewService(containers.Config{
 		Registry: registry,
@@ -216,8 +161,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 		backendHost = "host.docker.internal"
 	}
 
-	// A trivial backend for the domain and the application/deployment rows
-	// the routing state is built from.
 	pullCtx, pullCancel := context.WithTimeout(ctx, p6PullTimeout)
 	if _, err := engine.PullImage(pullCtx, p6NginxImage, "", ""); err != nil {
 		pullCancel()
@@ -233,7 +176,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	})
 	p6CreateRunningDeployment(t, ctx, pool, appID, backend)
 
-	// A fresh deployment secret keys credential sealing for this run.
 	rawSecret := make([]byte, 32)
 	if _, err := rand.Read(rawSecret); err != nil {
 		t.Fatalf("random secret: %v", err)
@@ -241,8 +183,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	secret := hex.EncodeToString(rawSecret)
 	t.Setenv("GOTHAM_SECRET_KEY", secret)
 
-	// The DNS provider and the certificate intent go through the real service
-	// surface, exactly as the HTTP API wires them.
 	sslStore := proxy.NewStoreSSL(st)
 	providerService := proxy.NewDefaultProviderService(proxy.SSLConfig{Store: sslStore, Secret: secret, Logger: logger})
 	if providerService == nil {
@@ -271,22 +211,14 @@ func TestP6DNS01Issuance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create dns-01 certificate intent: %v", err)
 	}
-	// The certificate row must be removed before the provider row it
-	// references, so its cleanup is registered after the provider's (cleanups
-	// run last-in-first-out).
 	t.Cleanup(func() { p6ExecCleanup(t, pool, "DELETE FROM domain_certificates WHERE application_id = $1", appID) })
 	t.Logf("created dns-01 certificate intent %s for %s (resolver %s)", certificate.ID, certificate.Domain, proxy.DNSResolverName(proxy.ProviderCloudflare))
 
-	// Ownership state for the challenge TXT records: the values this run's
-	// ACME account can produce, and the Cloudflare record IDs that carry one.
 	resolverName := proxy.DNSResolverName(proxy.ProviderCloudflare)
 	acmeJSON := filepath.Join(acmeDir, "acme.json")
 	challengeName := p6TXTNamePrefix + domain
 	owned := newP6OwnedTXT()
 
-	// The TXT cleanup is installed before the sync: even a failed sync can
-	// leave a challenge record behind, and the cleanup re-derives ownership
-	// from this run's own account instead of trusting a baseline.
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cleanupCancel()
@@ -303,8 +235,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 		p6DeleteOwnedTXT(t, cleanupCtx, cf, zoneID, owned)
 	})
 
-	// The sync bootstraps Traefik with the DNS-01 resolver and the credential
-	// environment, and pushes the HTTPS route.
 	proxyService := proxy.NewService(proxy.Config{
 		Store:       st,
 		Containers:  containerService,
@@ -336,8 +266,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	p6AssertTraefikBootstrap(t, traefikID)
 	t.Logf("bootstrapped gotham-traefik %s", shortID(traefikID))
 
-	// The generated static document carries the knob: the staging directory
-	// for staging runs, no caServer key at all for production.
 	static, err := os.ReadFile(filepath.Join(configDir, proxy.StaticFileName(proxy.FormatYAML)))
 	if err != nil {
 		t.Fatalf("read generated static config: %v", err)
@@ -351,14 +279,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	}
 	t.Logf("generated resolver carries caServer=%t", caServer != "")
 
-	// Wait for the real issuance. Ownership never depends on ordering or on a
-	// baseline: every TXT record seen at the challenge name is only a
-	// candidate. The exact challenge value is derived after validation from
-	// this run's own ACME account (its valid authorization is reused by a new
-	// order), and only candidates carrying that value become owned. Records
-	// that cannot be matched are left untouched. Handshakes with SNI=domain
-	// serve as the on-demand trigger for Traefik's ACME flow; the flow may
-	// already be in flight when the first poll runs.
 	deadline := time.Now().Add(p6IssuanceTimeout)
 	var (
 		servedChain      []*x509.Certificate
@@ -397,9 +317,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	t.Logf("served certificate: subject=%q issuer=%q dns=%v not_after=%s",
 		leaf.Subject.CommonName, leaf.Issuer.CommonName, leaf.DNSNames, leaf.NotAfter.Format(time.RFC3339))
 
-	// Validation succeeded (the certificate exists), so the authorization is
-	// valid and a new order reuses it. Derive this run's exact challenge
-	// values and promote the candidates that carry one.
 	var deriveErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		var values []string
@@ -422,7 +339,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 		t.Fatalf("certificate issued but no observed Cloudflare TXT record carried this run's derived challenge value (saw %d candidate record(s)); every record was left untouched", owned.candidateCount())
 	}
 
-	// The stored ACME certificate must be the served leaf, byte for byte.
 	storageLeaf, err := p6ACMEStorageLeaf(acmeJSON, domain)
 	if err != nil {
 		t.Fatalf("decode the stored ACME certificate: %v", err)
@@ -433,9 +349,6 @@ func TestP6DNS01Issuance(t *testing.T) {
 	}
 	t.Logf("Traefik ACME storage holds the served leaf (serial %s)", leaf.SerialNumber)
 
-	// lego removes the challenge record after validation; wait for the API to
-	// show every owned record gone. The wait keeps observing, so a late record
-	// carrying a derived value cannot escape.
 	deletedByTest := false
 	if !p6WaitOwnedGone(ctx, cf, zoneID, challengeName, owned) {
 		t.Errorf("the ACME client did not remove its DNS-01 TXT record(s) within %s; deleting the owned record(s) from the test", p6IssuanceCleanupWait)
@@ -470,17 +383,10 @@ func TestP6DNS01Issuance(t *testing.T) {
 	}, servedChain)
 }
 
-// p6IssuanceOptIn reports whether live DNS-01 issuance was explicitly
-// requested. Only the exact value "1" opts in (mirroring requireE2E), so the
-// shared CI E2E job — which sets GOTHAM_E2E=1 without owner credentials —
-// skips this test instead of failing.
 func p6IssuanceOptIn() bool {
 	return os.Getenv(p6IssuanceOptInEnv) == "1"
 }
 
-// p6IssuanceEnv reads the credential environment. The GOTHAM_E2E_DNS01 opt-in
-// is an explicit request for a live issuance, so a missing value is a failure,
-// never a green skip.
 func p6IssuanceEnv(t *testing.T) (token, domain, zone string) {
 	t.Helper()
 	read := func(env string) string {
@@ -493,15 +399,12 @@ func p6IssuanceEnv(t *testing.T) (token, domain, zone string) {
 	return read(p6IssuanceTokenEnv), read(p6IssuanceDomainEnv), read(p6IssuanceZoneEnv)
 }
 
-// p6IssuanceCA resolves the CA selection. Production requires the explicit
-// value; anything unset defaults to staging.
 func p6IssuanceCA(t *testing.T) (name, caServer string) {
 	t.Helper()
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(p6IssuanceCAEnv))) {
 	case "", "staging":
 		return "staging", p6LEStagingDirectory
 	case "production":
-		// Production is Traefik's default: the knob must stay empty.
 		return "production", ""
 	default:
 		t.Fatalf("%s must be %q or %q", p6IssuanceCAEnv, "staging", "production")
@@ -509,14 +412,11 @@ func p6IssuanceCA(t *testing.T) (name, caServer string) {
 	}
 }
 
-// p6ServedTLSCross dials the loopback gateway with SNI=domain and returns the
-// served chain. The chain is verified below, so the dial itself skips
-// verification.
 func p6ServedTLSCross(domain string) ([]*x509.Certificate, error) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	conn, err := tls.DialWithDialer(dialer, "tcp", "127.0.0.1:443", &tls.Config{
 		ServerName:         domain,
-		InsecureSkipVerify: true, // The chain is verified by p6VerifyServedChain.
+		InsecureSkipVerify: true,
 	})
 	if err != nil {
 		return nil, err
@@ -528,7 +428,6 @@ func p6ServedTLSCross(domain string) ([]*x509.Certificate, error) {
 	return conn.ConnectionState().PeerCertificates, nil
 }
 
-// p6ChainSubjects flattens a chain's subjects for the evidence artifact.
 func p6ChainSubjects(chain []*x509.Certificate) []string {
 	subjects := make([]string, 0, len(chain))
 	for _, cert := range chain {
@@ -537,7 +436,6 @@ func p6ChainSubjects(chain []*x509.Certificate) []string {
 	return subjects
 }
 
-// p6VerifyHostnameText reports the hostname check result for evidence.
 func p6VerifyHostnameText(leaf *x509.Certificate, domain string) string {
 	if err := leaf.VerifyHostname(domain); err != nil {
 		return err.Error()
@@ -545,8 +443,6 @@ func p6VerifyHostnameText(leaf *x509.Certificate, domain string) string {
 	return "ok"
 }
 
-// p6RedactSecrets scrubs credential material out of text that may be retained
-// (failure-path log dumps). Only values this test holds are replaced.
 func p6RedactSecrets(text string) string {
 	for _, secret := range []string{os.Getenv(p6IssuanceTokenEnv)} {
 		if secret != "" {
@@ -556,13 +452,6 @@ func p6RedactSecrets(text string) string {
 	return text
 }
 
-// --- owned challenge TXT records -------------------------------------------
-
-// p6OwnedTXT tracks the DNS-01 challenge values derived from this run's own
-// ACME account, every TXT record observed at the challenge name, and the
-// records proven owned by an exact content match on a derived value. A record
-// is designated owned — and only then ever deleted — when its content equals a
-// value that only this run's account key can produce.
 type p6OwnedTXT struct {
 	mu         sync.Mutex
 	values     map[string]bool
@@ -570,7 +459,6 @@ type p6OwnedTXT struct {
 	ids        map[string]cfRecord
 }
 
-// newP6OwnedTXT returns an empty tracker.
 func newP6OwnedTXT() *p6OwnedTXT {
 	return &p6OwnedTXT{
 		values:     map[string]bool{},
@@ -579,8 +467,6 @@ func newP6OwnedTXT() *p6OwnedTXT {
 	}
 }
 
-// addValues merges derived challenge values and promotes the already-observed
-// candidates that carry one, returning the records newly proven owned.
 func (o *p6OwnedTXT) addValues(values []string) []cfRecord {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -592,14 +478,12 @@ func (o *p6OwnedTXT) addValues(values []string) []cfRecord {
 	return o.promoteLocked()
 }
 
-// valueCount returns the number of distinct derived values.
 func (o *p6OwnedTXT) valueCount() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return len(o.values)
 }
 
-// valuesCopy returns a copy of the derived values.
 func (o *p6OwnedTXT) valuesCopy() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -610,9 +494,6 @@ func (o *p6OwnedTXT) valuesCopy() []string {
 	return out
 }
 
-// observe records every listed challenge-name record as a candidate and
-// promotes the ones carrying a derived value, returning the newly owned
-// records. Candidates without a matching derived value are never owned.
 func (o *p6OwnedTXT) observe(records []cfRecord) []cfRecord {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -622,8 +503,6 @@ func (o *p6OwnedTXT) observe(records []cfRecord) []cfRecord {
 	return o.promoteLocked()
 }
 
-// promoteLocked promotes candidates matching a derived value. The caller holds
-// the lock.
 func (o *p6OwnedTXT) promoteLocked() []cfRecord {
 	var added []cfRecord
 	for id, record := range o.candidates {
@@ -641,7 +520,6 @@ func (o *p6OwnedTXT) promoteLocked() []cfRecord {
 	return added
 }
 
-// records returns a copy of the owned records.
 func (o *p6OwnedTXT) records() []cfRecord {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -652,18 +530,12 @@ func (o *p6OwnedTXT) records() []cfRecord {
 	return out
 }
 
-// candidateCount returns the number of distinct records observed at the
-// challenge name, owned or not.
 func (o *p6OwnedTXT) candidateCount() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return len(o.candidates)
 }
 
-// p6TXTValueMatches reports whether a Cloudflare TXT record content carries
-// the derived challenge value. Cloudflare stores the quoted form; the
-// comparison is exact (case included) after trimming the record's quoting and
-// surrounding whitespace.
 func p6TXTValueMatches(derived, content string) bool {
 	if derived == "" {
 		return false
@@ -671,9 +543,6 @@ func p6TXTValueMatches(derived, content string) bool {
 	return strings.TrimSpace(strings.Trim(content, `"`)) == derived
 }
 
-// p6DeleteOwnedTXT removes owned records, re-checking the current content
-// against a derived value first so a record whose content changed since
-// observation is never deleted. Cleanup failures fail the test.
 func p6DeleteOwnedTXT(t *testing.T, ctx context.Context, cf *cfAPI, zoneID string, owned *p6OwnedTXT) {
 	t.Helper()
 	records := owned.records()
@@ -707,10 +576,6 @@ func p6DeleteOwnedTXT(t *testing.T, ctx context.Context, cf *cfAPI, zoneID strin
 	}
 }
 
-// p6WaitOwnedGone waits for every owned record to be deleted through the API.
-// It keeps observing the challenge name so a late record carrying an already
-// derived value is promoted and cannot escape. It reports whether the ACME
-// client's own cleanup was observed within the wait.
 func p6WaitOwnedGone(ctx context.Context, cf *cfAPI, zoneID, challengeName string, owned *p6OwnedTXT) bool {
 	deadline := time.Now().Add(p6IssuanceCleanupWait)
 	for time.Now().Before(deadline) {
@@ -732,19 +597,6 @@ func p6WaitOwnedGone(ctx context.Context, cf *cfAPI, zoneID, challengeName strin
 	return false
 }
 
-// --- ACME ownership derivation ---------------------------------------------
-
-// p6DeriveChallengeValues resolves the DNS-01 challenge values this run's own
-// ACME account used to pass validation. It must run after the certificate is
-// issued: at that point the authorization is valid and Let's Encrypt reuses it
-// in a new order for the same account and identifier (RFC 8555 §7.1.4), so the
-// order's valid authorization exposes the exact challenge token the ACME
-// client solved. The TXT value is recomputed the same way the client does
-// (base64url(sha256(token + "." + account-key thumbprint))); a record carrying
-// it can only have been written by this account.
-//
-// Only valid authorizations are accepted: a pending one would carry a token
-// nobody solved and must never be treated as owned.
 func p6DeriveChallengeValues(ctx context.Context, caServer, acmeJSON, resolver, domain string) ([]string, error) {
 	account, err := p6ReadACMEAccount(acmeJSON, resolver)
 	if err != nil {
@@ -799,9 +651,6 @@ func p6DeriveChallengeValues(ctx context.Context, caServer, acmeJSON, resolver, 
 	return values, nil
 }
 
-// p6ReadACMEAccount extracts the stored ACME account key of one resolver from
-// Traefik's acme.json. The file also holds private keys, so it is parsed in
-// memory and never logged.
 func p6ReadACMEAccount(path, resolver string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -829,8 +678,6 @@ func p6ReadACMEAccount(path, resolver string) ([]byte, error) {
 	return entry.Account.PrivateKey, nil
 }
 
-// p6ParseAccountKey parses the account key encodings Traefik may store
-// (PKCS#1 DER, PKCS#8, SEC 1).
 func p6ParseAccountKey(der []byte) (crypto.Signer, error) {
 	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
 		return key, nil
@@ -847,18 +694,11 @@ func p6ParseAccountKey(der []byte) (crypto.Signer, error) {
 	return nil, errors.New("unsupported ACME account key encoding")
 }
 
-// p6ACMEOrder is the subset of an ACME order the derivation uses.
 type p6ACMEOrder struct {
 	Status         string   `json:"status"`
 	Authorizations []string `json:"authorizations"`
 }
 
-// p6ACMENewOrder asks the CA for an order covering domain. Let's Encrypt
-// reuses an existing pending or ready order for the same account and
-// identifiers (and reuses a still-valid authorization in a new order), so the
-// returned order is the one this run's ACME client is working on — or its
-// successor that shares the validated challenge. A reused order is answered
-// with 200 where a newly created order is 201; both are accepted.
 func p6ACMENewOrder(ctx context.Context, client *acme.Client, domain string) (*p6ACMEOrder, error) {
 	directory, err := client.Discover(ctx)
 	if err != nil {
@@ -887,10 +727,6 @@ func p6ACMENewOrder(ctx context.Context, client *acme.Client, domain string) (*p
 	return &order, nil
 }
 
-// p6ACMEPost signs payload (nil for a POST-as-GET, RFC 8555 §6.3) with the
-// account key and POSTs it to target, returning the status code and body.
-// x/crypto/acme does not wrap the order-reuse nuance above, so the JWS is
-// built here.
 func p6ACMEPost(ctx context.Context, client *acme.Client, target string, payload []byte) (int, []byte, error) {
 	directory, err := client.Discover(ctx)
 	if err != nil {
@@ -925,7 +761,6 @@ func p6ACMEPost(ctx context.Context, client *acme.Client, target string, payload
 	return response.StatusCode, data, nil
 }
 
-// p6ACMEHTTPNonce fetches a fresh replay nonce.
 func p6ACMEHTTPNonce(ctx context.Context, client *acme.Client, nonceURL string) (string, error) {
 	if nonceURL == "" {
 		return "", errors.New("acme nonce: directory exposes no newNonce URL")
@@ -953,9 +788,6 @@ func p6ACMEHTTPNonce(ctx context.Context, client *acme.Client, nonceURL string) 
 	return nonce, nil
 }
 
-// p6ACMEJWS builds an ACME-flavored JWS in flattened JSON serialization. A nil
-// payload is a POST-as-GET (empty payload field); the protected header carries
-// the account KID, the nonce and the request URL.
 func p6ACMEJWS(key crypto.Signer, kid, nonce, target string, payload []byte) ([]byte, error) {
 	alg, hash, err := p6JWSAlgorithm(key)
 	if err != nil {
@@ -1000,7 +832,6 @@ func p6ACMEJWS(key crypto.Signer, kid, nonce, target string, payload []byte) ([]
 	})
 }
 
-// p6JWSAlgorithm maps a signer to its JOSE algorithm and hash.
 func p6JWSAlgorithm(key crypto.Signer) (string, crypto.Hash, error) {
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
@@ -1018,12 +849,6 @@ func p6JWSAlgorithm(key crypto.Signer) (string, crypto.Hash, error) {
 	return "", 0, fmt.Errorf("unsupported ACME account key type %T", key)
 }
 
-// --- certificate chain verification ----------------------------------------
-
-// p6VerifyServedChain verifies servedChain for domain with real signature
-// validation against the selected CA's trust anchors: the system roots for
-// production (the staging chain cannot verify there), the pinned Let's
-// Encrypt staging roots for staging. Intermediates come from the served chain.
 func p6VerifyServedChain(caName, domain string, servedChain []*x509.Certificate) error {
 	roots, err := p6TrustAnchors(caName)
 	if err != nil {
@@ -1032,8 +857,6 @@ func p6VerifyServedChain(caName, domain string, servedChain []*x509.Certificate)
 	return p6VerifyChain(domain, servedChain, roots)
 }
 
-// p6VerifyChain runs x509 verification (signatures, validity, key usage and
-// DNSName) of the served chain against explicit roots.
 func p6VerifyChain(domain string, servedChain []*x509.Certificate, roots *x509.CertPool) error {
 	if len(servedChain) == 0 {
 		return errors.New("served chain is empty")
@@ -1050,7 +873,6 @@ func p6VerifyChain(domain string, servedChain []*x509.Certificate, roots *x509.C
 	return err
 }
 
-// p6TrustAnchors resolves the trust anchors of the selected CA.
 func p6TrustAnchors(caName string) (*x509.CertPool, error) {
 	if caName != "staging" {
 		roots, err := x509.SystemCertPool()
@@ -1070,7 +892,6 @@ func p6TrustAnchors(caName string) (*x509.CertPool, error) {
 			return nil, fmt.Errorf("parse pinned staging anchor: %w", err)
 		}
 		for _, cert := range certs {
-			// A production root must never masquerade as a staging anchor.
 			if !strings.Contains(cert.Subject.CommonName, "(STAGING)") {
 				return nil, fmt.Errorf("pinned staging anchor %q is not a staging certificate", cert.Subject.CommonName)
 			}
@@ -1098,7 +919,6 @@ func p6TrustAnchors(caName string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// p6PEMCertificates decodes every certificate block in pemBytes.
 func p6PEMCertificates(pemBytes []byte) ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
 	rest := pemBytes
@@ -1123,12 +943,7 @@ func p6PEMCertificates(pemBytes []byte) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
-// p6StagingRootsPEM pins the Let's Encrypt staging trust anchors (published at
-// https://letsencrypt.org/certs/staging/). Let's Encrypt rotates staging roots
-// rarely; a rotation fails this test loudly, and GOTHAM_E2E_STAGING_ROOT_PEM
-// can add the replacement anchor without a code change.
 var p6StagingRootsPEM = []string{
-	// (STAGING) Pretend Pear X1 (RSA), the root of the RSA staging chain.
 	`-----BEGIN CERTIFICATE-----
 MIIFmDCCA4CgAwIBAgIQU9C87nMpOIFKYpfvOHFHFDANBgkqhkiG9w0BAQsFADBm
 MQswCQYDVQQGEwJVUzEzMDEGA1UEChMqKFNUQUdJTkcpIEludGVybmV0IFNlY3Vy
@@ -1161,8 +976,6 @@ fxlB7VBBjX9v5oUep0o/j68R/iDlCOM4VVfRa8gX6T2FU7fNdatvGro7uQzIvWof
 gN9WUwCbEMBy/YhBSrXycKA8crgGg3x1mIsopn88JKwmMBa68oS7EHM9w7C4y71M
 7DiA+/9Qdp9RBWJpTS9i/mDnJg1xvo8Xz49mrrgfmcAXTCJqXi24NatI3Oc=
 -----END CERTIFICATE-----`,
-	// (STAGING) Bogus Broccoli X2 (ECDSA), the root of the ECDSA staging
-	// chain.
 	`-----BEGIN CERTIFICATE-----
 MIICTjCCAdSgAwIBAgIRAIPgc3k5LlLVLtUUvs4K/QcwCgYIKoZIzj0EAwMwaDEL
 MAkGA1UEBhMCVVMxMzAxBgNVBAoTKihTVEFHSU5HKSBJbnRlcm5ldCBTZWN1cml0
@@ -1180,9 +993,6 @@ vbtH7QiVzeKCOTQPINyRql6P
 -----END CERTIFICATE-----`,
 }
 
-// p6ACMEStorageLeaf decodes the stored certificate of domain from Traefik's
-// acme.json. Only the certificate is parsed; the file's key material is never
-// logged or copied.
 func p6ACMEStorageLeaf(path, domain string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1209,7 +1019,6 @@ func p6ACMEStorageLeaf(path, domain string) (*x509.Certificate, error) {
 			if entry.Domain.Main != domain && !slices.Contains(entry.Domain.SANs, domain) {
 				continue
 			}
-			// Traefik stores PEM bytes; tolerate raw DER.
 			if block, _ := pem.Decode(entry.Certificate); block != nil {
 				return x509.ParseCertificate(block.Bytes)
 			}
@@ -1219,10 +1028,6 @@ func p6ACMEStorageLeaf(path, domain string) (*x509.Certificate, error) {
 	return nil, fmt.Errorf("no stored certificate for %s", domain)
 }
 
-// --- database cleanup -------------------------------------------------------
-
-// p6ExecCleanup runs one cleanup statement, failing the test on error so a
-// leaked owned row can never pass as green.
 func p6ExecCleanup(t *testing.T, pool *pgxpool.Pool, statement string, args ...any) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1232,8 +1037,6 @@ func p6ExecCleanup(t *testing.T, pool *pgxpool.Pool, statement string, args ...a
 	}
 }
 
-// p6DiscoverOwnedTraefik returns the managed proxy container's id and whether
-// its per-run config-dir label proves this test created it.
 func p6DiscoverOwnedTraefik(engine *agent.DockerClient, configDir string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -1257,9 +1060,6 @@ func p6DiscoverOwnedTraefik(engine *agent.DockerClient, configDir string) (strin
 	return id, strings.TrimSpace(label) == configDir, nil
 }
 
-// p6RemoveOwnedTraefik removes the managed proxy container only when its
-// per-run config dir proves this test created it. A container that cannot be
-// proven owned is left in place and the failure is reported.
 func p6RemoveOwnedTraefik(t *testing.T, engine *agent.DockerClient, configDir string) {
 	t.Helper()
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
@@ -1281,17 +1081,11 @@ func p6RemoveOwnedTraefik(t *testing.T, engine *agent.DockerClient, configDir st
 	}
 }
 
-// --- Cloudflare API client -------------------------------------------------
-
-// cfAPI is a minimal Cloudflare v4 client for the acceptance test: token
-// verification, zone lookup and TXT record create/get/list/delete. The token
-// is held in memory and sent in the Authorization header only.
 type cfAPI struct {
 	token string
 	http  *http.Client
 }
 
-// cfRecord is the subset of a DNS record the test uses.
 type cfRecord struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -1299,29 +1093,23 @@ type cfRecord struct {
 	Content string `json:"content"`
 }
 
-// errCFNotFound marks a 404 from the Cloudflare API.
 var errCFNotFound = errors.New("cloudflare: not found")
 
-// newCFAPI builds the client.
 func newCFAPI(token string) *cfAPI {
 	return &cfAPI{token: token, http: &http.Client{Timeout: 30 * time.Second}}
 }
 
-// cfEnvelope is the Cloudflare v4 response envelope.
 type cfEnvelope struct {
 	Success bool            `json:"success"`
 	Errors  []cfAPIError    `json:"errors"`
 	Result  json.RawMessage `json:"result"`
 }
 
-// cfAPIError is one Cloudflare API error (no credential material).
 type cfAPIError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
-// do performs one API call and unwraps the result. Failures include the HTTP
-// status and Cloudflare's error codes, never the token.
 func (c *cfAPI) do(ctx context.Context, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -1368,7 +1156,6 @@ func (c *cfAPI) do(ctx context.Context, method, path string, body, out any) erro
 	return nil
 }
 
-// verifyToken checks the token itself before any zone operation.
 func (c *cfAPI) verifyToken(ctx context.Context) error {
 	var result struct {
 		Status string `json:"status"`
@@ -1382,7 +1169,6 @@ func (c *cfAPI) verifyToken(ctx context.Context) error {
 	return nil
 }
 
-// zoneID resolves one zone by name, failing when the token cannot see it.
 func (c *cfAPI) zoneID(ctx context.Context, zone string) (string, error) {
 	var zones []struct {
 		ID   string `json:"id"`
@@ -1397,7 +1183,6 @@ func (c *cfAPI) zoneID(ctx context.Context, zone string) (string, error) {
 	return zones[0].ID, nil
 }
 
-// listTXT lists the TXT records at one exact name.
 func (c *cfAPI) listTXT(ctx context.Context, zoneID, name string) ([]cfRecord, error) {
 	var records []cfRecord
 	path := fmt.Sprintf("/zones/%s/dns_records?type=TXT&name=%s&per_page=100", zoneID, url.QueryEscape(name))
@@ -1407,7 +1192,6 @@ func (c *cfAPI) listTXT(ctx context.Context, zoneID, name string) ([]cfRecord, e
 	return records, nil
 }
 
-// getRecord reads one DNS record by id; a missing record returns errCFNotFound.
 func (c *cfAPI) getRecord(ctx context.Context, zoneID, recordID string) (cfRecord, error) {
 	var record cfRecord
 	if err := c.do(ctx, http.MethodGet, "/zones/"+zoneID+"/dns_records/"+recordID, nil, &record); err != nil {
@@ -1416,7 +1200,6 @@ func (c *cfAPI) getRecord(ctx context.Context, zoneID, recordID string) (cfRecor
 	return record, nil
 }
 
-// createTXT creates one TXT record and returns its id.
 func (c *cfAPI) createTXT(ctx context.Context, zoneID, name, content string) (string, error) {
 	var created cfRecord
 	payload := map[string]any{"type": "TXT", "name": name, "content": content, "ttl": 120}
@@ -1426,19 +1209,10 @@ func (c *cfAPI) createTXT(ctx context.Context, zoneID, name, content string) (st
 	return created.ID, nil
 }
 
-// deleteRecord deletes one DNS record by id.
 func (c *cfAPI) deleteRecord(ctx context.Context, zoneID, recordID string) error {
 	return c.do(ctx, http.MethodDelete, "/zones/"+zoneID+"/dns_records/"+recordID, nil, nil)
 }
 
-// p6CFPreflight verifies the token, resolves the zone and proves the token can
-// create then delete a TXT record in it. Any failure (including 403) is
-// returned as-is; the caller stops instead of retrying. The created record is
-// registered for cleanup immediately, and both the normal and the cleanup
-// deletion re-read the record and delete it only while it still carries the
-// value this run generated (a changed record is left in place and fails the
-// test). A failed delete is retried a few times before the preflight gives
-// up, so a transient API error cannot leak the preflight record.
 func p6CFPreflight(t *testing.T, ctx context.Context, cf *cfAPI, zone string) (string, error) {
 	t.Helper()
 	if err := cf.verifyToken(ctx); err != nil {
@@ -1475,15 +1249,8 @@ func p6CFPreflight(t *testing.T, ctx context.Context, cf *cfAPI, zone string) (s
 	return "", fmt.Errorf("delete preflight TXT %s (%s): %w", recordID, name, deleteErr)
 }
 
-// errPreflightOwnership marks a preflight record whose content is no longer
-// the value this run created; it is left untouched and the test fails.
 var errPreflightOwnership = errors.New("preflight TXT identity changed")
 
-// p6DeletePreflightTXT deletes the preflight record only while its content
-// still equals the value this run generated, mirroring the challenge-record
-// cleanup: a missing record counts as already cleaned, a changed record is
-// left in place and fails the test, and other errors are returned so the
-// caller can retry.
 func p6DeletePreflightTXT(t *testing.T, ctx context.Context, cf *cfAPI, zoneID, recordID, name, value string) error {
 	t.Helper()
 	current, err := cf.getRecord(ctx, zoneID, recordID)
@@ -1503,11 +1270,6 @@ func p6DeletePreflightTXT(t *testing.T, ctx context.Context, cf *cfAPI, zoneID, 
 	return nil
 }
 
-// --- evidence ---------------------------------------------------------------
-
-// p6IssuanceEvidence is the redacted acceptance artifact written when
-// GOTHAM_E2E_EVIDENCE_DIR is set: certificate facts and challenge
-// observations only, never credentials or private keys.
 type p6IssuanceEvidence struct {
 	CA                           string   `json:"ca"`
 	CAServer                     string   `json:"ca_server,omitempty"`
@@ -1533,8 +1295,6 @@ type p6IssuanceEvidence struct {
 	RecordedAt                   string   `json:"recorded_at"`
 }
 
-// p6WriteIssuanceEvidence writes the redacted summary and the public chain PEM
-// when an evidence directory is configured.
 func p6WriteIssuanceEvidence(t *testing.T, caName string, evidence p6IssuanceEvidence, servedChain []*x509.Certificate) {
 	t.Helper()
 	dir := strings.TrimSpace(os.Getenv(p6IssuanceOutEnv))
@@ -1565,12 +1325,6 @@ func p6WriteIssuanceEvidence(t *testing.T, caName string, evidence p6IssuanceEvi
 	t.Logf("evidence written: %s, %s", jsonPath, pemPath)
 }
 
-// --- offline regressions ----------------------------------------------------
-
-// TestP6IssuanceTXTValueOwnership is the offline regression for the challenge
-// record ownership rule: only an exact content match on a derived challenge
-// value may mark a record owned, so a record created by any other client is
-// never tracked or deleted.
 func TestP6IssuanceTXTValueOwnership(t *testing.T) {
 	const derived = "uUdIZWNEZOpUmh5PIx-_-pk9J0DWQQ76EpK186qFyvA"
 	records := []cfRecord{
@@ -1582,8 +1336,6 @@ func TestP6IssuanceTXTValueOwnership(t *testing.T) {
 		{ID: "empty", Name: "_acme-challenge.example.com", Content: ""},
 	}
 
-	// Observed records are candidates only until a derived value exists: no
-	// record may ever be owned (and therefore deleted) on observation alone.
 	owned := newP6OwnedTXT()
 	if added := owned.observe(records); len(added) != 0 || len(owned.records()) != 0 {
 		t.Fatalf("records were owned before a derived value existed: %#v", added)
@@ -1592,7 +1344,6 @@ func TestP6IssuanceTXTValueOwnership(t *testing.T) {
 		t.Fatalf("candidate count = %d, want %d", owned.candidateCount(), len(records))
 	}
 
-	// Deriving the value promotes exactly the exact matches.
 	added := owned.addValues([]string{derived})
 	if len(added) != 2 {
 		t.Fatalf("addValues promoted %d records, want the 2 exact matches: %#v", len(added), added)
@@ -1606,8 +1357,6 @@ func TestP6IssuanceTXTValueOwnership(t *testing.T) {
 		t.Fatalf("owned = %d values = %d, want 2 owned and 1 value", len(owned.records()), owned.valueCount())
 	}
 
-	// A later record carrying the derived value is promoted on observation;
-	// non-matching records never are.
 	late := owned.observe([]cfRecord{
 		{ID: "owned-late", Name: "_acme-challenge.example.com", Content: derived},
 		{ID: "foreign-late", Name: "_acme-challenge.example.com", Content: `"yet-another"`},
@@ -1628,24 +1377,16 @@ func TestP6IssuanceTXTValueOwnership(t *testing.T) {
 	}
 }
 
-// TestP6IssuanceChainVerificationRejectsForgery is the offline regression for
-// the CA check: a forged chain carrying correct issuer names and a matching
-// hostname is accepted only by the roots that actually signed it, and rejected
-// by both the pinned staging anchors and the system (production) roots.
 func TestP6IssuanceChainVerificationRejectsForgery(t *testing.T) {
 	forgedRoot, forgedLeaf := p6ForgeChain(t, "(STAGING) Ersatz Emmental X1", "gotham.deelux.dev")
 	forged := []*x509.Certificate{forgedLeaf, forgedRoot}
 
-	// Positive control: real signature validation accepts the chain against
-	// the actual signer.
 	signerRoots := x509.NewCertPool()
 	signerRoots.AddCert(forgedRoot)
 	if err := p6VerifyChain("gotham.deelux.dev", forged, signerRoots); err != nil {
 		t.Fatalf("verification rejected a chain signed by the provided anchor: %v", err)
 	}
 
-	// The pinned staging anchors must reject it even though the names and the
-	// hostname are right.
 	stagingRoots, err := p6TrustAnchors("staging")
 	if err != nil {
 		t.Fatalf("staging anchors: %v", err)
@@ -1654,7 +1395,6 @@ func TestP6IssuanceChainVerificationRejectsForgery(t *testing.T) {
 		t.Fatal("forged staging chain with matching issuer names was accepted")
 	}
 
-	// Production (system roots) must reject it as well.
 	productionRoots, err := p6TrustAnchors("production")
 	if err != nil {
 		t.Fatalf("production anchors: %v", err)
@@ -1663,14 +1403,11 @@ func TestP6IssuanceChainVerificationRejectsForgery(t *testing.T) {
 		t.Fatal("forged production chain with matching issuer names was accepted")
 	}
 
-	// A correctly signed chain for another hostname must fail on DNSName.
 	if err := p6VerifyChain("other.example.com", forged, signerRoots); err == nil {
 		t.Fatal("chain verification ignored the requested hostname")
 	}
 }
 
-// p6ForgeChain builds a self-signed root and a leaf signed by it, both with
-// realistic names, without any trusted anchor.
 func p6ForgeChain(t *testing.T, rootCN, leafDNS string) (*x509.Certificate, *x509.Certificate) {
 	t.Helper()
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -1719,11 +1456,6 @@ func p6ForgeChain(t *testing.T, rootCN, leafDNS string) (*x509.Certificate, *x50
 	return root, leaf
 }
 
-// TestP6IssuanceACMENewOrder is the offline regression for the ownership
-// derivation plumbing: a fake ACME server verifies the signed new-order
-// request (signature, KID, nonce, URL and identifier payload) and answers the
-// first call with 201 Created and the second with 200 OK (the order-reuse
-// path), which both must be accepted.
 func TestP6IssuanceACMENewOrder(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -1811,7 +1543,7 @@ func TestP6IssuanceACMENewOrder(t *testing.T) {
 			}
 			status := http.StatusCreated
 			if calls > 1 {
-				status = http.StatusOK // reused order
+				status = http.StatusOK
 			}
 			writeJSON(t, w, status, map[string]any{
 				"status":         "pending",
@@ -1845,8 +1577,6 @@ func TestP6IssuanceACMENewOrder(t *testing.T) {
 	}
 }
 
-// writeJSON writes a JSON response with the given status for the fake ACME
-// server.
 func writeJSON(t *testing.T, w http.ResponseWriter, status int, payload any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")

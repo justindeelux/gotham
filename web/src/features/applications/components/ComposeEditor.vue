@@ -9,7 +9,6 @@ import CodeEditor from "@/features/files/components/CodeEditor.vue";
 
 interface Props {
   application: Application;
-  /** canWrite gates editing: readers see the document read-only. */
   canWrite: boolean;
 }
 
@@ -20,7 +19,6 @@ const editor = useComposeEditor(toRef(props, "application"));
 const { t } = useI18n();
 const message = useMessage();
 
-/** save confirms a landed write; the error stays in the banner. */
 async function save(): Promise<void> {
   if (await editor.handleSave()) {
     message.success(t("applications.compose.saved"));
@@ -113,9 +111,6 @@ async function save(): Promise<void> {
   border-color: var(--danger);
 }
 
-/* NAlert has no size prop: the light inline look overrides its theme vars
- * (subtle tint, tight padding, 13px text) and swaps the filled border box
- * for a left accent bar. */
 .notice-inline {
   --n-color: var(--warn-soft) !important;
   --n-padding: 8px 12px !important;

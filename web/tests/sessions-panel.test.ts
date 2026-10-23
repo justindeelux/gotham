@@ -1,6 +1,3 @@
-// Sessions panel (JUS-28): composable state, panel mounts, and the
-// confirm flows. The PF-2 backend ships in parallel, so the session routes
-// are mocked at the api-module boundary.
 import { NButton, NMessageProvider, NPopconfirm } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -111,7 +108,6 @@ function mountOptions(router: Router) {
   };
 }
 
-/** mountShell mounts a component under the message provider and a router. */
 async function mountShell(
   child: object,
   router: Router,
@@ -125,7 +121,6 @@ async function mountShell(
   return wrapper;
 }
 
-/** panelOf pulls the live composable out of a probe mount. */
 function probeComponent(
   target: { panel?: ReturnType<typeof useSessionsPanel> },
 ): object {
@@ -137,7 +132,6 @@ function probeComponent(
   });
 }
 
-/** clickPopoverPositive clicks the trigger, then the popover confirm. */
 async function confirmThroughPopover(row: VueWrapper): Promise<void> {
   await row.findComponent(NButton).trigger("click");
   await flushPromises();

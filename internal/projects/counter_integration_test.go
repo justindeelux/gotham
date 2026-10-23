@@ -12,8 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// seedResourceEnv creates a team, a project with two environments and a node
-// on the scratch database and returns their IDs.
 func seedResourceEnv(t *testing.T, ctx context.Context, st interface {
 	CreateTeam(context.Context, sqlc.CreateTeamParams) (sqlc.Team, error)
 	CreateProject(context.Context, sqlc.CreateProjectParams) (sqlc.Project, error)
@@ -67,9 +65,6 @@ func seedResourceEnv(t *testing.T, ctx context.Context, st interface {
 	return uuidOf(team.ID), uuidOf(project.ID), uuidOf(production.ID), uuidOf(staging.ID), uuidOf(server.ID)
 }
 
-// TestStoreCounterTalliesResources attaches one workload of each kind to
-// production and asserts the environment and project counts; staging stays
-// empty and previews count toward the totals.
 func TestStoreCounterTalliesResources(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

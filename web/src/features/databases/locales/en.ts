@@ -1,9 +1,3 @@
-/**
- * Databases English catalog. Keys are semantic whole sentences with named
- * parameters; raw technical values (engine names, versions, DSNs, cron
- * expressions, bucket names, paths, dumps, server diagnostics) are
- * interpolated, never translated.
- */
 const en = {
   validation: {
     nameRule: "Name must be 1-63 characters of letters, digits, ., _ or -.",

@@ -1,16 +1,3 @@
-// Row controls (JUS-162): a press or key inside a row's own control must not
-// drive the row's selection/activation. The folder-size cell (.fm-size) was
-// missing from the selector, so Enter/Space on Calculate/Cancel/Retry bubbled
-// to the list keydown handler (preventDefault + open/select). This pins the
-// selector so that cannot regress.
-//
-// JUS-217: the selector alone is not enough. A control that replaces itself on
-// activation (Calculate swaps its button for a spinner) detaches the event
-// target before the bubbled press reaches the row, so a target.closest() guard
-// misfires and the row selects anyway. The shared guard therefore reads the
-// event's dispatch-time path (composedPath), which survives the detach. These
-// tests pin that path-aware contract for click and Space/Enter on
-// Calculate/Cancel/Retry.
 /* global document, Element, Event, HTMLElement, MouseEvent, KeyboardEvent, window: readonly */
 import { describe, expect, it } from "vitest";
 
@@ -20,7 +7,6 @@ import {
   isRowControlTarget,
 } from "@/features/files/utils/rowControls";
 
-/** el builds one detached element tree from html and returns its first child. */
 function el(html: string): Element {
   const root = document.createElement("div");
   root.innerHTML = html;
@@ -60,7 +46,6 @@ describe("isRowControlTarget", () => {
   });
 });
 
-/** detachedEvent replays the JUS-217 race: the target unmounted mid-dispatch. */
 function detachedEvent(
   row: Element,
   targetHtml: string,
@@ -71,16 +56,12 @@ function detachedEvent(
   const cell = rowEl.querySelector(".fm-size") as HTMLElement;
   cell.insertAdjacentHTML("beforeend", targetHtml);
   const target = cell.lastElementChild as Element;
-  // The control activates and replaces itself before the press bubbles out,
-  // exactly like Calculate swapping its button for the loading spinner.
   const path = [target, ...ancestors(target, rowEl)];
   target.remove();
   const event =
     kind === "click"
       ? new MouseEvent("click", { bubbles: true })
       : new KeyboardEvent("keydown", { bubbles: true, key });
-  // jsdom freezes the dispatch-time path on composedPath, so stub it with the
-  // ancestors captured while the target was still mounted.
   Object.defineProperty(event, "composedPath", {
     value: () => [...path, document, window],
   });
@@ -88,7 +69,6 @@ function detachedEvent(
   return event;
 }
 
-/** ancestors lists the element's ancestors up to (and including) stop. */
 function ancestors(target: Element, stop: Element): Element[] {
   const chain: Element[] = [];
   let node = target.parentElement;
@@ -102,7 +82,6 @@ function ancestors(target: Element, stop: Element): Element[] {
   return chain;
 }
 
-/** sizeRow builds a folder row whose .fm-size cell holds a live region. */
 function sizeRow(): Element {
   const root = document.createElement("div");
   root.innerHTML =
@@ -115,7 +94,6 @@ function sizeRow(): Element {
 
 describe("isRowControlEvent", () => {
   it("keeps a click on the detached Calculate button off the row", () => {
-    // Icon-only Calculate: the press lands on the lucide svg inside the button.
     const event = detachedEvent(
       sizeRow(),
       '<button class="fm-size-action fm-size-action--icon"><svg></svg></button>',

@@ -1,6 +1,3 @@
-// NetworkForm DNS inputs (JUS-99): Primary/Alternate by default, a stored
-// third server stays editable behind an "Add DNS server" link, and saving
-// keeps the dns_servers array format with empties dropped.
 import { NMessageProvider } from "naive-ui";
 import { defineComponent, h, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";

@@ -18,16 +18,10 @@ const route = useRoute();
 const { sidebarRef } = useMobileNav();
 const { versionTag } = useAppVersion();
 
-// Live count: the only pill backed by a store. Every other section has no
-// backend yet, so no pill is rendered rather than a fabricated number.
 const serversCount = computed<number>(() => serversStore.servers.length);
 
 const activeKey = computed<string>(() => activeNavKey(route.path));
 
-/**
- * sections hides whole groups whose items are all admin-only for this
- * caller, so no orphan heading (e.g. System) renders with nothing under it.
- */
 const sections = computed(() => visibleNavSections(navSections, authStore.isPlatformAdmin));
 </script>
 
@@ -94,9 +88,6 @@ const sections = computed(() => visibleNavSections(navSections, authStore.isPlat
   color: var(--fg-2);
 }
 
-/* JUS-239: the head shows the brand wordmark instead of a text label. Only
- * the height is a token — the width follows the asset's own ratio, so the
- * lockup never needs a hard-coded pixel width. */
 .brand {
   display: block;
   height: var(--brand-wordmark-h);
@@ -215,8 +206,6 @@ a.nav-item.is-active .nav-count {
 @media (max-width: 1024px) {
   .sidebar {
     position: fixed;
-    /* JUS-135: the rail is a drawer below the tablet breakpoint, so the
-       sidebar drawer starts at the viewport's left edge. */
     left: 0;
     top: 0;
     bottom: 0;
@@ -233,7 +222,6 @@ a.nav-item.is-active .nav-count {
 }
 
 @media (max-width: 640px) {
-  /* Phone: every nav entry is a 44px touch target (B3-13). */
   .nav-item {
     min-height: 44px;
   }

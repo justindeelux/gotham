@@ -18,217 +18,79 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// Repository persists applications, deployments and the application
-// configuration the runtime payload is built from. It is implemented over
-// *store.Store (sqlc) in production and by fakes in tests.
 type Repository interface {
 	GetBoundedBuildLog(context.Context, uuid.UUID, uuid.UUID, LogOptions) (string, State, bool, error)
-	// GetApplication returns the application, or ErrNotFound.
 	GetApplication(ctx context.Context, appID uuid.UUID) (Application, error)
-	// ListApplications returns the applications of the scope's active team
-	// (or, without a team context, of the creator), newest first.
 	ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error)
-	// ListApplicationsByEnvironment returns one environment's applications,
-	// newest first (previews only when includePreviews is true).
 	ListApplicationsByEnvironment(ctx context.Context, environmentID uuid.UUID, includePreviews bool) ([]Application, error)
-	// ListApplicationsByProject returns every environment's applications of
-	// one project, newest first (previews only when includePreviews is true).
 	ListApplicationsByProject(ctx context.Context, projectID uuid.UUID, includePreviews bool) ([]Application, error)
-	// NameInEnvironment reports whether the environment holds another
-	// application with name (the move-collision pre-check).
 	NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error)
-	// ResolveEnvironment validates that environmentID belongs to teamID and
-	// returns it (ErrNotFound for a foreign or missing one).
 	ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error)
-	// ResolveProject validates that projectID belongs to teamID
-	// (ErrNotFound for a foreign or missing one).
 	ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error)
-	// HasLivePreviews reports whether the base application has live
-	// (non-deleted) preview bindings, so a move or server change can be
-	// refused while previews are open.
 	HasLivePreviews(ctx context.Context, appID uuid.UUID) (bool, error)
-	// CreateApplication stores a new application together with its env vars,
-	// sealed secrets and storages in one transaction.
 	CreateApplication(ctx context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error)
-	// UpdateApplication persists the mutable application fields.
 	UpdateApplication(ctx context.Context, app Application) (Application, error)
-	// DeleteApplication removes the application row; its configuration
-	// (env vars, secrets, storages, deployments) cascades with it.
 	DeleteApplication(ctx context.Context, appID uuid.UUID) error
-	// ReplaceEnvVars replaces the application's plain env vars and sealed
-	// secrets as one set.
 	ReplaceEnvVars(ctx context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error
-	// ReplaceStorages replaces the application's storage mappings as one set.
 	ReplaceStorages(ctx context.Context, appID uuid.UUID, storages []Storage) error
-	// ServerExists reports whether the target server is registered AND
-	// actionable by the caller's active team. A node of another team answers
-	// false, like a missing one, so node IDs cannot be probed (F6); a legacy
-	// node without a team stays shared.
 	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
-	// ServerTeam reports the team a registered node belongs to (uuid.Nil for a
-	// legacy shared node) and whether it exists. It backs the stored
-	// application→node invariant checked at the queue boundary.
 	ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error)
-	// GitHubAppOwnedBy reports whether the GitHub App connection belongs to
-	// the caller. A foreign id answers false, like a missing one, so
-	// connection IDs cannot be probed.
 	GitHubAppOwnedBy(ctx context.Context, id, userID uuid.UUID) (bool, error)
-	// CreateDeployment stores a new deployment row.
 	CreateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
-	// GetDeployment returns one deployment of an application, or ErrNotFound.
 	GetDeployment(ctx context.Context, appID, deploymentID uuid.UUID) (Deployment, error)
-	// ListDeployments returns an application's deployments, newest first.
 	ListDeployments(ctx context.Context, appID uuid.UUID) ([]Deployment, error)
-	// ListDeploymentsLimit returns at most limit of an application's newest
-	// deployments, so readers that only need the latest state (the dashboard
-	// running count) never pull the full history.
 	ListDeploymentsLimit(ctx context.Context, appID uuid.UUID, limit int) ([]Deployment, error)
-	// ListRecentDeployments returns the newest deployments across the
-	// applications of the scope's active team (or, without a team context, of
-	// the creator), newest first, at most limit rows. It backs the dashboard
-	// feed and never crosses the team boundary.
 	ListRecentDeployments(ctx context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error)
-	// FailStaleDeployments marks deployments left non-terminal by a previous
-	// control plane process as failed and reports how many were recovered.
 	FailStaleDeployments(ctx context.Context) (int64, error)
-	// UpdateDeployment persists the mutable deployment fields.
 	UpdateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
-	// UpdateDeploymentBuildLog persists the capped build log of a finished
-	// deployment (JUS-84). Best effort: a failure must only warn, never fail
-	// the run it records.
 	UpdateDeploymentBuildLog(ctx context.Context, id uuid.UUID, log string) error
-	// ListEnvVars returns the application's plain environment variables.
 	ListEnvVars(ctx context.Context, appID uuid.UUID) ([]EnvVar, error)
-	// ListSecrets returns the application's sealed secrets.
 	ListSecrets(ctx context.Context, appID uuid.UUID) ([]Secret, error)
-	// ListEnvConfig returns the application's plain env vars and sealed
-	// secrets from one snapshot, so a replace committing between them cannot
-	// drop a key from either collection. The runtime payload is assembled from
-	// it.
 	ListEnvConfig(ctx context.Context, appID uuid.UUID) ([]EnvVar, []Secret, error)
-	// ListStorages returns the application's volume map.
 	ListStorages(ctx context.Context, appID uuid.UUID) ([]Storage, error)
-	// GetDeployKey returns the deploy key of an application, or ErrNotFound.
 	GetDeployKey(ctx context.Context, appID uuid.UUID) (DeployKey, error)
-	// CreateDeployKey stores the mapping row together with the private key it
-	// points at, sealed with providers.SealSecret (the private_keys contract).
 	CreateDeployKey(ctx context.Context, key DeployKey, privateKeyPEM string) (DeployKey, error)
-	// DeleteDeployKey removes the deploy key the caller read: the mapping row
-	// and the private key it points at. The delete is fenced on key.ID, so a
-	// stale concurrent delete cannot remove a replacement key created after the
-	// read. It returns the removed mapping, or ErrNotFound when the fenced row
-	// was already gone.
 	DeleteDeployKey(ctx context.Context, key DeployKey) (DeployKey, error)
-	// DeletePrivateKey removes one sealed private key row by ID (its FK
-	// cascades the deploy-key mapping). It is the orphan-cleanup fallback when
-	// the fenced mapping delete fails before the application cascade would
-	// strand the sealed key.
 	DeletePrivateKey(ctx context.Context, privateKeyID uuid.UUID) error
-	// DeployKeyPrivatePEM opens an application's deploy private key for the
-	// cloner. An application without a key answers "" and no error, which is
-	// what keeps anonymous cloning the default.
 	DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error)
-	// UpsertGitCredential stores (or rotates) an application's sealed HTTPS
-	// token for git_private sources (GS-4). The token arrives already sealed
-	// with providers.SealSecret.
 	UpsertGitCredential(ctx context.Context, appID uuid.UUID, username, sealedToken string) error
-	// GetGitCredential returns an application's HTTPS credential metadata, or
-	// ErrNotFound when none is set. The sealed token never leaves the store
-	// through this method.
 	GetGitCredential(ctx context.Context, appID uuid.UUID) (GitCredential, error)
-	// GitCredential opens an application's HTTPS git credential for the
-	// cloner and the connection test. An application without one answers ""
-	// and no error, which is what keeps anonymous cloning the default.
 	GitCredential(ctx context.Context, appID uuid.UUID) (username, token string, err error)
-	// DeleteGitCredential removes an application's HTTPS credential row. It
-	// answers ErrNotFound when none is set, so the service can report the
-	// idempotent outcome honestly.
 	DeleteGitCredential(ctx context.Context, appID uuid.UUID) error
-	// CopyGitCredential copies the sealed HTTPS credential row to a preview
-	// sibling (the preview inherits the token like it inherits the deploy
-	// key). An application without one is a success with nothing copied.
 	CopyGitCredential(ctx context.Context, baseID, previewID uuid.UUID) error
-	// GetCertificateIntent returns an application's certificate configuration,
-	// or ErrNotFound when it has none. The preview clone reads it to copy an
-	// enabled wildcard DNS-01 intent onto the sibling.
 	GetCertificateIntent(ctx context.Context, appID uuid.UUID) (CertificateIntent, error)
-	// GetDNSProviderInfo returns the zones and usability of one DNS provider,
-	// or ErrNotFound (the certificate FK keeps a referenced row alive).
 	GetDNSProviderInfo(ctx context.Context, providerID uuid.UUID) (DNSProviderInfo, error)
-	// ListSharedVariables returns one application's project-level variables
-	// and its environment's variables (in that order) from one snapshot, so
-	// the deploy merge reads both scopes without a concurrent replace
-	// slipping between them. Secrets stay sealed; the payload opens them.
 	ListSharedVariables(ctx context.Context, projectID, environmentID uuid.UUID) (project []SharedVariable, environment []SharedVariable, err error)
-	// CreateCertificateIntent stores one application's certificate
-	// configuration. The per-application unique index is a conflict.
 	CreateCertificateIntent(ctx context.Context, in CertificateIntent) error
-	// CreateCertificateIntentIfAbsent stores one application's certificate
-	// configuration only when the (application, domain) pair has none, so a
-	// re-attach or an operator's existing intent is a silent no-op instead of
-	// a unique violation that would abort the caller's transaction (JUS-201).
 	CreateCertificateIntentIfAbsent(ctx context.Context, in CertificateIntent) error
-	// ListCertificateIntents returns one application's certificate intents,
-	// oldest first (JUS-201: the attach path skips a host an enabled wildcard
-	// intent already covers).
 	ListCertificateIntents(ctx context.Context, appID uuid.UUID) ([]CertificateIntent, error)
-	// DeleteAutoCertificateIntent removes the default http-01 non-wildcard
-	// intent of one (application, domain), leaving an operator's wildcard or
-	// dns-01 intent in place (JUS-201).
 	DeleteAutoCertificateIntent(ctx context.Context, appID uuid.UUID, domain string) error
-	// ListApplicationDomains returns one application's domains, primary
-	// first, then oldest first (JUS-89).
 	ListApplicationDomains(ctx context.Context, appID uuid.UUID) ([]ApplicationDomain, error)
-	// CreateApplicationDomain stores one domain row for an application. A
-	// host claimed by any row is a conflict (ErrDomainConflict for another
-	// application's claim, ErrValidation when already attached to this one).
 	CreateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error)
-	// UpdateApplicationDomain persists the mutable domain fields.
 	UpdateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error)
-	// ClearPrimaryApplicationDomains drops the primary flag of an application
-	// (the demote half of a promotion; the promote half follows in the same
-	// transaction so the partial unique index never sees two primaries).
 	ClearPrimaryApplicationDomains(ctx context.Context, appID uuid.UUID) error
-	// InTx runs fn with a transaction-scoped Repository: every Repository
-	// method called on tx shares one snapshot and commits atomically, so a
-	// domain write and its certificate intent can never drift apart.
 	InTx(ctx context.Context, fn func(tx Repository) error) error
-	// DeleteApplicationDomain removes one domain row of an application, or
-	// ErrNotFound.
 	DeleteApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) error
-	// DeleteApplicationDomains removes every domain row of an application.
 	DeleteApplicationDomains(ctx context.Context, appID uuid.UUID) error
-	// DomainClaim returns the row claiming host, or ErrNotFound. Disabled
-	// rows keep their claim paused, so they are returned too.
 	DomainClaim(ctx context.Context, domain string) (ApplicationDomain, error)
-	// ListRedirectSources returns every enabled redirect source host, so a
-	// new domain cannot shadow a redirect router.
 	ListRedirectSources(ctx context.Context) ([]string, error)
 }
 
-// storeRepository adapts *store.Store to Repository. secret opens sealed
-// values (application secrets, deploy private keys) with providers.SealSecret.
 type storeRepository struct {
 	store  *store.Store
 	secret string
 }
 
-// newStoreRepository builds the PostgreSQL-backed repository. secret is the
-// key providers.SealSecret seals values with; the same key must be configured
-// at read time, so it comes from the service Config either way.
 func newStoreRepository(st *store.Store, secret string) *storeRepository {
 	return &storeRepository{store: st, secret: secret}
 }
 
-// InTx runs fn with a transaction-scoped Repository over one store
-// transaction.
 func (r *storeRepository) InTx(ctx context.Context, fn func(tx Repository) error) error {
 	return r.store.InTx(ctx, func(tx *store.Store) error {
 		return fn(&storeRepository{store: tx, secret: r.secret})
 	})
 }
 
-// ClearPrimaryApplicationDomains drops the primary flag of an application.
 func (r *storeRepository) ClearPrimaryApplicationDomains(ctx context.Context, appID uuid.UUID) error {
 	if err := r.store.ClearPrimaryApplicationDomains(ctx, pgUUID(appID)); err != nil {
 		return fmt.Errorf("deploy: clear primary application domains: %w", err)
@@ -236,7 +98,6 @@ func (r *storeRepository) ClearPrimaryApplicationDomains(ctx context.Context, ap
 	return nil
 }
 
-// GetApplication loads one application, mapping a missing row to ErrNotFound.
 func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (Application, error) {
 	row, err := r.store.GetApplication(ctx, pgUUID(appID))
 	if err != nil {
@@ -252,8 +113,6 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 	return enriched[0], nil
 }
 
-// ListApplications loads the active team's applications, or the creator's when
-// no team context is present, newest first.
 func (r *storeRepository) ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error) {
 	var (
 		rows []sqlc.Application
@@ -270,7 +129,6 @@ func (r *storeRepository) ListApplications(ctx context.Context, scope teams.Scop
 	return r.enrich(ctx, rows)
 }
 
-// ListApplicationsByEnvironment implements Repository.
 func (r *storeRepository) ListApplicationsByEnvironment(ctx context.Context, environmentID uuid.UUID, includePreviews bool) ([]Application, error) {
 	rows, err := r.store.ListApplicationsByEnvironment(ctx, sqlc.ListApplicationsByEnvironmentParams{
 		EnvironmentID:   pgUUID(environmentID),
@@ -282,7 +140,6 @@ func (r *storeRepository) ListApplicationsByEnvironment(ctx context.Context, env
 	return r.enrich(ctx, rows)
 }
 
-// ListApplicationsByProject implements Repository.
 func (r *storeRepository) ListApplicationsByProject(ctx context.Context, projectID uuid.UUID, includePreviews bool) ([]Application, error) {
 	rows, err := r.store.ListApplicationsByProject(ctx, sqlc.ListApplicationsByProjectParams{
 		ProjectID:       pgUUID(projectID),
@@ -294,8 +151,6 @@ func (r *storeRepository) ListApplicationsByProject(ctx context.Context, project
 	return r.enrich(ctx, rows)
 }
 
-// NameInEnvironment implements Repository: the move-collision pre-check. The
-// comparison is exact, matching the (environment_id, name) unique index.
 func (r *storeRepository) NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error) {
 	collision, err := r.store.ApplicationNameInEnvironment(ctx, sqlc.ApplicationNameInEnvironmentParams{
 		EnvironmentID: pgUUID(environmentID),
@@ -308,8 +163,6 @@ func (r *storeRepository) NameInEnvironment(ctx context.Context, environmentID u
 	return collision, nil
 }
 
-// ResolveEnvironment implements Repository: a foreign or missing environment
-// answers ErrNotFound, so environment IDs cannot be probed across teams.
 func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error) {
 	row, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
 		ID:     pgUUID(environmentID),
@@ -328,7 +181,6 @@ func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID,
 	}, nil
 }
 
-// ResolveProject implements Repository.
 func (r *storeRepository) ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error) {
 	if _, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
 		ID:     pgUUID(projectID),
@@ -342,7 +194,6 @@ func (r *storeRepository) ResolveProject(ctx context.Context, projectID, teamID 
 	return projectID, nil
 }
 
-// HasLivePreviews implements Repository.
 func (r *storeRepository) HasLivePreviews(ctx context.Context, appID uuid.UUID) (bool, error) {
 	live, err := r.store.HasLivePreviewBindings(ctx, pgUUID(appID))
 	if err != nil {
@@ -351,16 +202,11 @@ func (r *storeRepository) HasLivePreviews(ctx context.Context, appID uuid.UUID) 
 	return live, nil
 }
 
-// enrich maps rows to the domain model and fills the environment, project
-// and server names from the contract. Rows of one listing share environments,
-// so each distinct parent is read once.
 func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Application) ([]Application, error) {
 	applications := make([]Application, 0, len(rows))
 	envs := make(map[uuid.UUID]sqlc.Environment)
 	projects := make(map[uuid.UUID]sqlc.Project)
 	servers := make(map[uuid.UUID]string)
-	// Primary domains are display derivation only (primary host, preview
-	// target), so they are read in one batch for the whole page.
 	primaries := make(map[uuid.UUID]ApplicationDomain)
 	if len(rows) > 0 {
 		ids := make([]pgtype.UUID, 0, len(rows))
@@ -434,11 +280,6 @@ func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Application) (
 	return applications, nil
 }
 
-// CreateApplication stores the application row and its configuration in a
-// single transaction, so a rejected child row (a duplicate key, a bad storage
-// name) never leaves an application without its settings behind. The primary
-// domain row joins the same transaction (JUS-89): a conflicting host rolls
-// back the application row too.
 func (r *storeRepository) CreateApplication(
 	ctx context.Context,
 	app Application,
@@ -486,7 +327,6 @@ func (r *storeRepository) CreateApplication(
 	return enriched[0], nil
 }
 
-// UpdateApplication persists the mutable application fields and returns the row.
 func (r *storeRepository) UpdateApplication(ctx context.Context, app Application) (Application, error) {
 	row, err := r.store.UpdateApplication(ctx, sqlc.UpdateApplicationParams{
 		ID:                         pgUUID(app.ID),
@@ -518,7 +358,6 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 	return enriched[0], nil
 }
 
-// DeleteApplication removes the application row (children cascade).
 func (r *storeRepository) DeleteApplication(ctx context.Context, appID uuid.UUID) error {
 	if err := r.store.DeleteApplication(ctx, pgUUID(appID)); err != nil {
 		return fmt.Errorf("deploy: delete application: %w", err)
@@ -526,8 +365,6 @@ func (r *storeRepository) DeleteApplication(ctx context.Context, appID uuid.UUID
 	return nil
 }
 
-// ReplaceEnvVars rewrites the plain env vars and sealed secrets of an
-// application as one set, inside a single transaction.
 func (r *storeRepository) ReplaceEnvVars(ctx context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error {
 	if err := r.store.ReplaceApplicationEnv(ctx, pgUUID(appID), envVarParams(envVars), secretParams(secrets)); err != nil {
 		return fmt.Errorf("deploy: replace env vars: %w", err)
@@ -535,8 +372,6 @@ func (r *storeRepository) ReplaceEnvVars(ctx context.Context, appID uuid.UUID, e
 	return nil
 }
 
-// ReplaceStorages rewrites the storage mappings of an application as one set,
-// inside a single transaction.
 func (r *storeRepository) ReplaceStorages(ctx context.Context, appID uuid.UUID, storages []Storage) error {
 	if err := r.store.ReplaceApplicationStorages(ctx, pgUUID(appID), storageParams(storages)); err != nil {
 		return fmt.Errorf("deploy: replace storages: %w", err)
@@ -544,8 +379,6 @@ func (r *storeRepository) ReplaceStorages(ctx context.Context, appID uuid.UUID, 
 	return nil
 }
 
-// ServerExists reports whether the server is registered on the control plane
-// and may be targeted by the caller's active team.
 func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
@@ -563,8 +396,6 @@ func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, 
 	return true, nil
 }
 
-// ServerTeam reports the team of a registered node (the zero UUID for a legacy
-// shared node) and whether it exists at all.
 func (r *storeRepository) ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error) {
 	if serverID == uuid.Nil {
 		return uuid.Nil, false, nil
@@ -579,9 +410,6 @@ func (r *storeRepository) ServerTeam(ctx context.Context, serverID uuid.UUID) (u
 	return uuidFromPG(row.TeamID), true, nil
 }
 
-// GitHubAppOwnedBy reports whether the GitHub App connection belongs to the
-// caller. A foreign or missing id answers false without distinguishing the
-// two, so connection IDs cannot be probed.
 func (r *storeRepository) GitHubAppOwnedBy(ctx context.Context, id, userID uuid.UUID) (bool, error) {
 	if id == uuid.Nil {
 		return false, nil
@@ -599,21 +427,15 @@ func (r *storeRepository) GitHubAppOwnedBy(ctx context.Context, id, userID uuid.
 	return true, nil
 }
 
-// CreateDeployment stores a queued deployment. The partial unique index on
-// active deployments turns a concurrent submit into ErrConflict.
 func (r *storeRepository) CreateDeployment(ctx context.Context, dep Deployment) (Deployment, error) {
 	row, err := r.store.CreateDeployment(ctx, sqlc.CreateDeploymentParams{
-		ApplicationID: pgUUID(dep.ApplicationID),
-		Kind:          string(dep.Kind),
-		State:         string(dep.State),
-		ImageTag:      dep.ImageTag,
-		RegistryImage: dep.RegistryImage,
-		Digest:        dep.Digest,
-		RollbackFrom:  pgUUID(dep.RollbackFrom),
-		// The compose document travels only for compose rollbacks (see
-		// Rollback); every other deployment stores empty values through the
-		// COALESCE defaults. The commit metadata travels the same way: a
-		// fresh clone records it, a rollback copies the target's.
+		ApplicationID:   pgUUID(dep.ApplicationID),
+		Kind:            string(dep.Kind),
+		State:           string(dep.State),
+		ImageTag:        dep.ImageTag,
+		RegistryImage:   dep.RegistryImage,
+		Digest:          dep.Digest,
+		RollbackFrom:    pgUUID(dep.RollbackFrom),
 		ComposeDocument: dep.ComposeDocument,
 		ComposeCommit:   dep.ComposeCommit,
 		CommitSha:       dep.CommitSHA,
@@ -630,7 +452,6 @@ func (r *storeRepository) CreateDeployment(ctx context.Context, dep Deployment) 
 	return deploymentFromRow(row), nil
 }
 
-// GetDeployment loads one deployment of an application.
 func (r *storeRepository) GetDeployment(ctx context.Context, appID, deploymentID uuid.UUID) (Deployment, error) {
 	row, err := r.store.GetDeployment(ctx, pgUUID(deploymentID), pgUUID(appID))
 	if err != nil {
@@ -642,7 +463,6 @@ func (r *storeRepository) GetDeployment(ctx context.Context, appID, deploymentID
 	return deploymentFromRow(row), nil
 }
 
-// ListDeployments loads every deployment of an application, newest first.
 func (r *storeRepository) ListDeployments(ctx context.Context, appID uuid.UUID) ([]Deployment, error) {
 	rows, err := r.store.ListDeploymentsByApp(ctx, pgUUID(appID))
 	if err != nil {
@@ -655,10 +475,6 @@ func (r *storeRepository) ListDeployments(ctx context.Context, appID uuid.UUID) 
 	return deployments, nil
 }
 
-// ListDeploymentsLimit loads at most limit deployments of an application,
-// newest first. A non-positive limit selects one row: the route rejects
-// ?limit=<1 with a 400 before this runs, so the guard only covers
-// in-process callers.
 func (r *storeRepository) ListDeploymentsLimit(ctx context.Context, appID uuid.UUID, limit int) ([]Deployment, error) {
 	if limit <= 0 {
 		limit = 1
@@ -674,9 +490,6 @@ func (r *storeRepository) ListDeploymentsLimit(ctx context.Context, appID uuid.U
 	return deployments, nil
 }
 
-// ListRecentDeployments loads the newest deployments across the scope's
-// applications, newest first, at most limit rows. Previews stay out of the
-// feed, matching the applications listing.
 func (r *storeRepository) ListRecentDeployments(ctx context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error) {
 	if limit <= 0 {
 		limit = 1
@@ -706,9 +519,6 @@ func (r *storeRepository) ListRecentDeployments(ctx context.Context, scope teams
 	return out, nil
 }
 
-// FailStaleDeployments marks deployments a previous control plane process
-// left in a non-terminal state as failed, unblocking the active-deployment
-// partial unique index for every application.
 func (r *storeRepository) FailStaleDeployments(ctx context.Context) (int64, error) {
 	n, err := r.store.FailStaleDeployments(ctx)
 	if err != nil {
@@ -717,28 +527,24 @@ func (r *storeRepository) FailStaleDeployments(ctx context.Context) (int64, erro
 	return n, nil
 }
 
-// UpdateDeployment persists the mutable deployment fields and returns the row.
 func (r *storeRepository) UpdateDeployment(ctx context.Context, dep Deployment) (Deployment, error) {
 	row, err := r.store.UpdateDeployment(ctx, sqlc.UpdateDeploymentParams{
-		ID:            pgUUID(dep.ID),
-		State:         string(dep.State),
-		ImageTag:      dep.ImageTag,
-		RegistryImage: dep.RegistryImage,
-		Digest:        dep.Digest,
-		Error:         dep.Error,
-		Attempt:       dep.Attempt,
-		ContainerID:   dep.ContainerID,
-		StartedAt:     pgTime(dep.StartedAt),
-		FinishedAt:    pgTime(dep.FinishedAt),
-		// The build step records the rendered compose document of a
-		// compose run here, so a rollback re-applies this release's file.
+		ID:              pgUUID(dep.ID),
+		State:           string(dep.State),
+		ImageTag:        dep.ImageTag,
+		RegistryImage:   dep.RegistryImage,
+		Digest:          dep.Digest,
+		Error:           dep.Error,
+		Attempt:         dep.Attempt,
+		ContainerID:     dep.ContainerID,
+		StartedAt:       pgTime(dep.StartedAt),
+		FinishedAt:      pgTime(dep.FinishedAt),
 		ComposeDocument: dep.ComposeDocument,
 		ComposeCommit:   dep.ComposeCommit,
-		// The clone step records the commit it checked out here.
-		CommitSha:     dep.CommitSHA,
-		CommitMessage: dep.CommitMessage,
-		CommitAuthor:  dep.CommitAuthor,
-		CommittedAt:   dep.CommittedAt,
+		CommitSha:       dep.CommitSHA,
+		CommitMessage:   dep.CommitMessage,
+		CommitAuthor:    dep.CommitAuthor,
+		CommittedAt:     dep.CommittedAt,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -749,9 +555,6 @@ func (r *storeRepository) UpdateDeployment(ctx context.Context, dep Deployment) 
 	return deploymentFromRow(row), nil
 }
 
-// UpdateDeploymentBuildLog persists the capped build log of a finished
-// deployment (JUS-84). It runs outside the state-machine writes so a
-// transition can never clobber it.
 func (r *storeRepository) UpdateDeploymentBuildLog(ctx context.Context, id uuid.UUID, log string) error {
 	if err := r.store.UpdateDeploymentBuildLog(ctx, sqlc.UpdateDeploymentBuildLogParams{
 		ID:       pgUUID(id),
@@ -762,7 +565,6 @@ func (r *storeRepository) UpdateDeploymentBuildLog(ctx context.Context, id uuid.
 	return nil
 }
 
-// ListEnvVars loads the application's plain environment variables.
 func (r *storeRepository) ListEnvVars(ctx context.Context, appID uuid.UUID) ([]EnvVar, error) {
 	rows, err := r.store.ListEnvVarsByApp(ctx, pgUUID(appID))
 	if err != nil {
@@ -781,7 +583,6 @@ func (r *storeRepository) ListEnvVars(ctx context.Context, appID uuid.UUID) ([]E
 	return vars, nil
 }
 
-// ListSecrets loads the application's sealed secrets (ciphertext untouched).
 func (r *storeRepository) ListSecrets(ctx context.Context, appID uuid.UUID) ([]Secret, error) {
 	rows, err := r.store.ListSecretsByApp(ctx, pgUUID(appID))
 	if err != nil {
@@ -800,11 +601,6 @@ func (r *storeRepository) ListSecrets(ctx context.Context, appID uuid.UUID) ([]S
 	return secrets, nil
 }
 
-// ListSharedVariables implements Repository: the project-level rows and one
-// environment's rows from one snapshot, split by scope so the merge can layer
-// them (project < environment). Secrets stay sealed; buildEnv opens every
-// ciphertext when the payload is assembled. A zero project or environment id
-// fails explicitly instead of silently matching no rows.
 func (r *storeRepository) ListSharedVariables(ctx context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, []SharedVariable, error) {
 	if projectID == uuid.Nil {
 		return nil, nil, fmt.Errorf("%w: application has no project assigned", ErrValidation)
@@ -833,7 +629,6 @@ func (r *storeRepository) ListSharedVariables(ctx context.Context, projectID, en
 	return project, environment, nil
 }
 
-// ListStorages loads the application's volume map.
 func (r *storeRepository) ListStorages(ctx context.Context, appID uuid.UUID) ([]Storage, error) {
 	rows, err := r.store.ListStoragesByApp(ctx, pgUUID(appID))
 	if err != nil {
@@ -853,9 +648,6 @@ func (r *storeRepository) ListStorages(ctx context.Context, appID uuid.UUID) ([]
 	return storages, nil
 }
 
-// ListEnvConfig loads the plain env vars and sealed secrets of an application
-// from one database snapshot, so a concurrent replace cannot leave a key in
-// neither collection (see store.ListEnvConfigByApp).
 func (r *storeRepository) ListEnvConfig(ctx context.Context, appID uuid.UUID) ([]EnvVar, []Secret, error) {
 	envRows, secretRows, err := r.store.ListEnvConfigByApp(ctx, pgUUID(appID))
 	if err != nil {
@@ -884,7 +676,6 @@ func (r *storeRepository) ListEnvConfig(ctx context.Context, appID uuid.UUID) ([
 	return vars, secrets, nil
 }
 
-// GetDeployKey loads the deploy key of an application, or ErrNotFound.
 func (r *storeRepository) GetDeployKey(ctx context.Context, appID uuid.UUID) (DeployKey, error) {
 	row, err := r.store.GetApplicationDeployKey(ctx, pgUUID(appID))
 	if err != nil {
@@ -896,10 +687,6 @@ func (r *storeRepository) GetDeployKey(ctx context.Context, appID uuid.UUID) (De
 	return deployKeyFromRow(row), nil
 }
 
-// CreateDeployKey stores the deploy key of an application, sealing the private
-// half with providers.SealSecret — the same base64(nonce||ciphertext) AES-256
-// GCM shape servers.EncryptKey writes into private_keys.encrypted_key, so both
-// readers open the same row format.
 func (r *storeRepository) CreateDeployKey(ctx context.Context, key DeployKey, privateKeyPEM string) (DeployKey, error) {
 	sealed, err := providers.SealSecret(r.secret, privateKeyPEM)
 	if err != nil {
@@ -922,9 +709,6 @@ func (r *storeRepository) CreateDeployKey(ctx context.Context, key DeployKey, pr
 	return deployKeyFromRow(row), nil
 }
 
-// DeleteDeployKey removes the deploy key the caller read, fenced on its mapping
-// ID. A stale delete whose row was replaced matches nothing and answers
-// ErrNotFound, leaving the replacement intact.
 func (r *storeRepository) DeleteDeployKey(ctx context.Context, key DeployKey) (DeployKey, error) {
 	row, err := r.store.DeleteApplicationDeployKey(ctx, pgUUID(key.ID), pgUUID(key.ApplicationID))
 	if err != nil {
@@ -936,8 +720,6 @@ func (r *storeRepository) DeleteDeployKey(ctx context.Context, key DeployKey) (D
 	return deployKeyFromRow(row), nil
 }
 
-// DeletePrivateKey removes one sealed private key row by ID. It is idempotent:
-// an already-gone row is not an error.
 func (r *storeRepository) DeletePrivateKey(ctx context.Context, privateKeyID uuid.UUID) error {
 	if err := r.store.DeletePrivateKey(ctx, pgUUID(privateKeyID)); err != nil {
 		return fmt.Errorf("deploy: delete private key: %w", err)
@@ -945,11 +727,6 @@ func (r *storeRepository) DeletePrivateKey(ctx context.Context, privateKeyID uui
 	return nil
 }
 
-// DeployKeyPrivatePEM opens an application's deploy private key for the
-// cloner. An application without a key answers "" and no error; a key that
-// cannot be opened (rotated secret, corrupted row) is an error — falling back
-// to an anonymous clone would hide the real problem behind an auth failure
-// from the Git host.
 func (r *storeRepository) DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error) {
 	mapping, err := r.store.GetApplicationDeployKey(ctx, pgUUID(appID))
 	if err != nil {
@@ -969,9 +746,6 @@ func (r *storeRepository) DeployKeyPrivatePEM(ctx context.Context, appID uuid.UU
 	return privatePEM, nil
 }
 
-// UpsertGitCredential implements Repository: it stores the sealed HTTPS
-// token of a git_private application (sealed by the caller with
-// providers.SealSecret, mirroring CreateDeployKey).
 func (r *storeRepository) UpsertGitCredential(ctx context.Context, appID uuid.UUID, username, sealedToken string) error {
 	if _, err := r.store.UpsertApplicationGitCredential(ctx, pgUUID(appID), username, sealedToken); err != nil {
 		return fmt.Errorf("deploy: upsert git credential: %w", err)
@@ -979,9 +753,6 @@ func (r *storeRepository) UpsertGitCredential(ctx context.Context, appID uuid.UU
 	return nil
 }
 
-// GetGitCredential implements Repository: the metadata callers may see. The
-// ciphertext stays in the row — only the connection test and the cloner open
-// it, through GitCredential below.
 func (r *storeRepository) GetGitCredential(ctx context.Context, appID uuid.UUID) (GitCredential, error) {
 	row, err := r.store.GetApplicationGitCredential(ctx, pgUUID(appID))
 	if err != nil {
@@ -993,10 +764,6 @@ func (r *storeRepository) GetGitCredential(ctx context.Context, appID uuid.UUID)
 	return GitCredential{Username: row.Username, UpdatedAt: timeFromPG(row.UpdatedAt)}, nil
 }
 
-// GitCredential implements Repository (and gitCredentialResolver): it opens
-// an application's HTTPS token for the cloner and the connection test. An
-// application without one answers empty strings and no error; a credential
-// that cannot be opened is an error, never a silent anonymous fallback.
 func (r *storeRepository) GitCredential(ctx context.Context, appID uuid.UUID) (string, string, error) {
 	row, err := r.store.GetApplicationGitCredential(ctx, pgUUID(appID))
 	if err != nil {
@@ -1012,8 +779,6 @@ func (r *storeRepository) GitCredential(ctx context.Context, appID uuid.UUID) (s
 	return row.Username, token, nil
 }
 
-// DeleteGitCredential implements Repository: it removes the row, answering
-// ErrNotFound when none is set.
 func (r *storeRepository) DeleteGitCredential(ctx context.Context, appID uuid.UUID) error {
 	if _, err := r.store.GetApplicationGitCredential(ctx, pgUUID(appID)); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1027,10 +792,6 @@ func (r *storeRepository) DeleteGitCredential(ctx context.Context, appID uuid.UU
 	return nil
 }
 
-// CopyGitCredential implements Repository: the preview sibling inherits the
-// sealed row as is (re-sealing would need the plaintext, which never leaves
-// the sealed store). The delete cascade on the applications FK removes the
-// copy with the sibling.
 func (r *storeRepository) CopyGitCredential(ctx context.Context, baseID, previewID uuid.UUID) error {
 	row, err := r.store.GetApplicationGitCredential(ctx, pgUUID(baseID))
 	if err != nil {
@@ -1045,10 +806,6 @@ func (r *storeRepository) CopyGitCredential(ctx context.Context, baseID, preview
 	return nil
 }
 
-// GetCertificateIntent loads the certificate configuration recorded for an
-// application's primary domain, or ErrNotFound. The preview wildcard clone
-// resolves the base intent through it; per-domain intents are listed through
-// the proxy surface.
 func (r *storeRepository) GetCertificateIntent(ctx context.Context, appID uuid.UUID) (CertificateIntent, error) {
 	rows, err := r.store.ListDomainCertificatesByApplication(ctx, pgUUID(appID))
 	if err != nil {
@@ -1086,8 +843,6 @@ func (r *storeRepository) GetCertificateIntent(ctx context.Context, appID uuid.U
 	return CertificateIntent{}, ErrNotFound
 }
 
-// GetDNSProviderInfo loads the zones and usability of one DNS provider, or
-// ErrNotFound.
 func (r *storeRepository) GetDNSProviderInfo(ctx context.Context, providerID uuid.UUID) (DNSProviderInfo, error) {
 	row, err := r.store.GetDNSProvider(ctx, pgUUID(providerID))
 	if err != nil {
@@ -1099,8 +854,6 @@ func (r *storeRepository) GetDNSProviderInfo(ctx context.Context, providerID uui
 	return DNSProviderInfo{Zones: append([]string{}, row.Zones...), Enabled: row.Enabled}, nil
 }
 
-// CreateCertificateIntent stores one application's certificate configuration.
-// The per-domain unique index surfaces as ErrConflict.
 func (r *storeRepository) CreateCertificateIntent(ctx context.Context, in CertificateIntent) error {
 	_, err := r.store.CreateDomainCertificate(ctx, sqlc.CreateDomainCertificateParams{
 		ApplicationID: pgUUID(in.ApplicationID),
@@ -1119,11 +872,6 @@ func (r *storeRepository) CreateCertificateIntent(ctx context.Context, in Certif
 	return nil
 }
 
-// CreateCertificateIntentIfAbsent stores one application's certificate
-// configuration unless the (application, domain) pair already has one
-// (JUS-201). A re-attach or an operator's intent is a silent no-op: the
-// statement never violates the unique index, so it cannot abort the caller's
-// transaction.
 func (r *storeRepository) CreateCertificateIntentIfAbsent(ctx context.Context, in CertificateIntent) error {
 	if _, err := r.store.CreateDomainCertificateIfAbsent(ctx, sqlc.CreateDomainCertificateIfAbsentParams{
 		ApplicationID: pgUUID(in.ApplicationID),
@@ -1138,8 +886,6 @@ func (r *storeRepository) CreateCertificateIntentIfAbsent(ctx context.Context, i
 	return nil
 }
 
-// ListCertificateIntents returns one application's certificate intents,
-// oldest first.
 func (r *storeRepository) ListCertificateIntents(ctx context.Context, appID uuid.UUID) ([]CertificateIntent, error) {
 	rows, err := r.store.ListDomainCertificatesByApplication(ctx, pgUUID(appID))
 	if err != nil {
@@ -1159,9 +905,6 @@ func (r *storeRepository) ListCertificateIntents(ctx context.Context, appID uuid
 	return intents, nil
 }
 
-// DeleteAutoCertificateIntent removes the default http-01 non-wildcard intent
-// of one (application, domain), leaving an operator's wildcard or dns-01
-// intent in place.
 func (r *storeRepository) DeleteAutoCertificateIntent(ctx context.Context, appID uuid.UUID, domain string) error {
 	if _, err := r.store.DeleteAutoDomainCertificate(ctx, sqlc.DeleteAutoDomainCertificateParams{
 		ApplicationID: pgUUID(appID),
@@ -1172,8 +915,6 @@ func (r *storeRepository) DeleteAutoCertificateIntent(ctx context.Context, appID
 	return nil
 }
 
-// ListApplicationDomains returns one application's domain rows, primary
-// first, then oldest first (JUS-89).
 func (r *storeRepository) ListApplicationDomains(ctx context.Context, appID uuid.UUID) ([]ApplicationDomain, error) {
 	rows, err := r.store.ListApplicationDomainsByApplication(ctx, pgUUID(appID))
 	if err != nil {
@@ -1186,9 +927,6 @@ func (r *storeRepository) ListApplicationDomains(ctx context.Context, appID uuid
 	return domains, nil
 }
 
-// CreateApplicationDomain stores one domain row. A host claimed by another
-// application's row surfaces as ErrDomainConflict; a host already attached
-// to this application surfaces as ErrValidation (the per-app index fired).
 func (r *storeRepository) CreateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
 	row, err := r.store.CreateApplicationDomain(ctx, sqlc.CreateApplicationDomainParams{
 		ApplicationID: pgUUID(domain.ApplicationID),
@@ -1215,7 +953,6 @@ func (r *storeRepository) CreateApplicationDomain(ctx context.Context, domain Ap
 	return applicationDomainFromRow(row), nil
 }
 
-// UpdateApplicationDomain persists the mutable domain fields.
 func (r *storeRepository) UpdateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
 	row, err := r.store.UpdateApplicationDomain(ctx, sqlc.UpdateApplicationDomainParams{
 		ID:        pgUUID(domain.ID),
@@ -1245,7 +982,6 @@ func (r *storeRepository) UpdateApplicationDomain(ctx context.Context, domain Ap
 	return applicationDomainFromRow(row), nil
 }
 
-// DeleteApplicationDomain removes one domain row of an application.
 func (r *storeRepository) DeleteApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) error {
 	if err := r.store.DeleteApplicationDomain(ctx, pgUUID(domainID), pgUUID(appID)); err != nil {
 		return fmt.Errorf("deploy: delete application domain: %w", err)
@@ -1253,7 +989,6 @@ func (r *storeRepository) DeleteApplicationDomain(ctx context.Context, appID, do
 	return nil
 }
 
-// DeleteApplicationDomains removes every domain row of an application.
 func (r *storeRepository) DeleteApplicationDomains(ctx context.Context, appID uuid.UUID) error {
 	if err := r.store.DeleteApplicationDomainsByApplication(ctx, pgUUID(appID)); err != nil {
 		return fmt.Errorf("deploy: delete application domains: %w", err)
@@ -1261,7 +996,6 @@ func (r *storeRepository) DeleteApplicationDomains(ctx context.Context, appID uu
 	return nil
 }
 
-// DomainClaim returns the row claiming host, or ErrNotFound.
 func (r *storeRepository) DomainClaim(ctx context.Context, domain string) (ApplicationDomain, error) {
 	row, err := r.store.GetApplicationDomainByNameAnyApp(ctx, domain)
 	if err != nil {
@@ -1273,8 +1007,6 @@ func (r *storeRepository) DomainClaim(ctx context.Context, domain string) (Appli
 	return applicationDomainFromRow(row), nil
 }
 
-// ListRedirectSources returns every enabled redirect source host, so a new
-// domain cannot shadow a redirect router.
 func (r *storeRepository) ListRedirectSources(ctx context.Context) ([]string, error) {
 	rows, err := r.store.ListEnabledRedirects(ctx)
 	if err != nil {
@@ -1287,7 +1019,6 @@ func (r *storeRepository) ListRedirectSources(ctx context.Context) ([]string, er
 	return sources, nil
 }
 
-// applicationDomainFromRow maps a stored domain row into the domain model.
 func applicationDomainFromRow(row sqlc.ApplicationDomain) ApplicationDomain {
 	domain := ApplicationDomain{
 		ID:            uuidFromPG(row.ID),
@@ -1308,8 +1039,6 @@ func applicationDomainFromRow(row sqlc.ApplicationDomain) ApplicationDomain {
 	return domain
 }
 
-// marshalBuildArgs encodes the --build-arg pairs for the build_args jsonb
-// column. An empty collection stores '{}', never NULL or JSON null.
 func marshalBuildArgs(args map[string]string) []byte {
 	if len(args) == 0 {
 		return []byte("{}")
@@ -1321,8 +1050,6 @@ func marshalBuildArgs(args map[string]string) []byte {
 	return data
 }
 
-// unmarshalBuildArgs decodes the build_args jsonb column. Empty or corrupt
-// values decode to nil, which the API renders as an empty object.
 func unmarshalBuildArgs(data []byte) map[string]string {
 	if len(data) == 0 {
 		return nil
@@ -1334,7 +1061,6 @@ func unmarshalBuildArgs(data []byte) map[string]string {
 	return args
 }
 
-// applicationFromRow maps a sqlc row to the domain model.
 func applicationFromRow(row sqlc.Application) Application {
 	return Application{
 		ID:                         uuidFromPG(row.ID),
@@ -1364,7 +1090,6 @@ func applicationFromRow(row sqlc.Application) Application {
 	}
 }
 
-// deployKeyFromRow maps a sqlc deploy-key row to the domain model.
 func deployKeyFromRow(row sqlc.ApplicationDeployKey) DeployKey {
 	return DeployKey{
 		ID:            uuidFromPG(row.ID),
@@ -1379,8 +1104,6 @@ func deployKeyFromRow(row sqlc.ApplicationDeployKey) DeployKey {
 	}
 }
 
-// envVarParams maps domain env vars to insert rows. The application_id is
-// stamped by the transactional store method, so it is left unset here.
 func envVarParams(envVars []EnvVar) []sqlc.InsertEnvVarParams {
 	params := make([]sqlc.InsertEnvVarParams, 0, len(envVars))
 	for _, v := range envVars {
@@ -1389,9 +1112,6 @@ func envVarParams(envVars []EnvVar) []sqlc.InsertEnvVarParams {
 	return params
 }
 
-// secretParams maps sealed secrets to insert rows. A secret keeps the ID the
-// service assigned (the stable `secret:<id>` reference the API hands out); an
-// unset one is generated here so the row never carries a NULL primary key.
 func secretParams(secrets []Secret) []sqlc.InsertSecretParams {
 	params := make([]sqlc.InsertSecretParams, 0, len(secrets))
 	for _, s := range secrets {
@@ -1408,7 +1128,6 @@ func secretParams(secrets []Secret) []sqlc.InsertSecretParams {
 	return params
 }
 
-// storageParams maps domain storages to insert rows (see envVarParams).
 func storageParams(storages []Storage) []sqlc.InsertStorageParams {
 	params := make([]sqlc.InsertStorageParams, 0, len(storages))
 	for _, s := range storages {
@@ -1421,12 +1140,6 @@ func storageParams(storages []Storage) []sqlc.InsertStorageParams {
 	return params
 }
 
-// applicationWriteError classifies a failed application write: the unique
-// index on (environment_id, name) surfaces as ErrValidation with a message the API
-// can show, a duplicate domain binding as ErrConflict (another application on
-// the same node owns the hostname), a foreign key violation on the
-// environment (deleted between validation and write) as ErrNotFound, and
-// every other failure is wrapped for the log.
 func applicationWriteError(err error, name string) error {
 	if pgErr := uniqueViolation(err); pgErr != nil {
 		switch pgErr.ConstraintName {
@@ -1444,41 +1157,33 @@ func applicationWriteError(err error, name string) error {
 	return fmt.Errorf("deploy: write application: %w", err)
 }
 
-// deploymentFromRow maps a sqlc row to the domain model.
 func deploymentFromRow(row sqlc.Deployment) Deployment {
 	return Deployment{
-		ID:            uuidFromPG(row.ID),
-		ApplicationID: uuidFromPG(row.ApplicationID),
-		Kind:          Kind(row.Kind),
-		State:         State(row.State),
-		ImageTag:      row.ImageTag,
-		RegistryImage: row.RegistryImage,
-		Digest:        row.Digest,
-		Error:         row.Error,
-		Attempt:       row.Attempt,
-		ContainerID:   row.ContainerID,
-		RollbackFrom:  uuidFromPG(row.RollbackFrom),
-		StartedAt:     timeFromPG(row.StartedAt),
-		FinishedAt:    timeFromPG(row.FinishedAt),
-		CreatedAt:     timeFromPG(row.CreatedAt),
-		UpdatedAt:     timeFromPG(row.UpdatedAt),
-		// The rendered compose document of a compose run, empty for every
-		// other deployment. It may hold substituted secret values and is
-		// never returned by the API.
+		ID:              uuidFromPG(row.ID),
+		ApplicationID:   uuidFromPG(row.ApplicationID),
+		Kind:            Kind(row.Kind),
+		State:           State(row.State),
+		ImageTag:        row.ImageTag,
+		RegistryImage:   row.RegistryImage,
+		Digest:          row.Digest,
+		Error:           row.Error,
+		Attempt:         row.Attempt,
+		ContainerID:     row.ContainerID,
+		RollbackFrom:    uuidFromPG(row.RollbackFrom),
+		StartedAt:       timeFromPG(row.StartedAt),
+		FinishedAt:      timeFromPG(row.FinishedAt),
+		CreatedAt:       timeFromPG(row.CreatedAt),
+		UpdatedAt:       timeFromPG(row.UpdatedAt),
 		ComposeDocument: row.ComposeDocument,
 		ComposeCommit:   row.ComposeCommit,
-		// The git commit the deployment cloned, empty for sources that
-		// never clone. The author is the name without the email.
-		CommitSHA:     row.CommitSha,
-		CommitMessage: row.CommitMessage,
-		CommitAuthor:  row.CommitAuthor,
-		CommittedAt:   row.CommittedAt,
-		// The capped build log stored at the terminal state (JUS-84).
-		BuildLog: row.BuildLog,
+		CommitSHA:       row.CommitSha,
+		CommitMessage:   row.CommitMessage,
+		CommitAuthor:    row.CommitAuthor,
+		CommittedAt:     row.CommittedAt,
+		BuildLog:        row.BuildLog,
 	}
 }
 
-// applicationDeploymentFromTeamRow maps one joined team-feed row (JUS-193).
 func applicationDeploymentFromTeamRow(row sqlc.ListRecentDeploymentsByTeamRow) ApplicationDeployment {
 	return ApplicationDeployment{
 		Deployment: deploymentFromRow(sqlc.Deployment{
@@ -1509,8 +1214,6 @@ func applicationDeploymentFromTeamRow(row sqlc.ListRecentDeploymentsByTeamRow) A
 	}
 }
 
-// applicationDeploymentFromUserRow is the creator-scoped mirror of
-// applicationDeploymentFromTeamRow.
 func applicationDeploymentFromUserRow(row sqlc.ListRecentDeploymentsByUserRow) ApplicationDeployment {
 	return ApplicationDeployment{
 		Deployment: deploymentFromRow(sqlc.Deployment{
@@ -1541,14 +1244,10 @@ func applicationDeploymentFromUserRow(row sqlc.ListRecentDeploymentsByUserRow) A
 	}
 }
 
-// isUniqueViolation reports whether err is a PostgreSQL unique-constraint
-// violation (SQLSTATE 23505), which the active-deployment index raises.
 func isUniqueViolation(err error) bool {
 	return uniqueViolation(err) != nil
 }
 
-// uniqueViolation returns the PostgreSQL unique-constraint violation, if any,
-// so callers can distinguish which index fired.
 func uniqueViolation(err error) *pgconn.PgError {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -1557,8 +1256,6 @@ func uniqueViolation(err error) *pgconn.PgError {
 	return nil
 }
 
-// pgUUID converts a domain UUID for sqlc. The zero UUID becomes an invalid
-// pgtype value, which serialises as NULL for nullable columns.
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	if id == uuid.Nil {
 		return pgtype.UUID{}
@@ -1566,7 +1263,6 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-// nullableString maps an empty domain string onto a SQL NULL.
 func nullableString(value string) *string {
 	if value == "" {
 		return nil
@@ -1574,7 +1270,6 @@ func nullableString(value string) *string {
 	return &value
 }
 
-// derefString maps a nullable SQL string onto an empty domain string.
 func derefString(value *string) string {
 	if value == nil {
 		return ""
@@ -1582,7 +1277,6 @@ func derefString(value *string) string {
 	return *value
 }
 
-// uuidFromPG converts a sqlc UUID column to the domain type (NULL → zero).
 func uuidFromPG(v pgtype.UUID) uuid.UUID {
 	if !v.Valid {
 		return uuid.Nil
@@ -1590,7 +1284,6 @@ func uuidFromPG(v pgtype.UUID) uuid.UUID {
 	return uuid.UUID(v.Bytes)
 }
 
-// pgTime converts a domain timestamp for sqlc (zero → NULL).
 func pgTime(t time.Time) pgtype.Timestamptz {
 	if t.IsZero() {
 		return pgtype.Timestamptz{}
@@ -1598,7 +1291,6 @@ func pgTime(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }
 
-// timeFromPG converts a sqlc timestamp column to the domain type.
 func timeFromPG(v pgtype.Timestamptz) time.Time {
 	if !v.Valid {
 		return time.Time{}

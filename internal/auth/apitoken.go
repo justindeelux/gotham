@@ -20,31 +20,24 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// API token generation and validation policy.
 const (
-	// APITokenPrefix marks an opaque API token so the auth middleware can tell
-	// it apart from a JWT without attempting verification.
 	APITokenPrefix = "gt1_"
 	apiTokenBytes  = 32
 	apiTokenMaxLen = 64
 )
 
-// API token scopes. They map to roles in a later phase.
 const (
 	ScopeRead   = "read"
 	ScopeDeploy = "deploy"
 	ScopeAdmin  = "admin"
 )
 
-// validAPITokenScopes is the closed set of scope names a token may carry.
 var validAPITokenScopes = map[string]struct{}{
 	ScopeRead:   {},
 	ScopeDeploy: {},
 	ScopeAdmin:  {},
 }
 
-// CreatedToken is the result of creating or rotating an API token. Token holds
-// the plaintext secret and is only ever returned once, at creation time.
 type CreatedToken struct {
 	ID        uuid.UUID
 	Name      string
@@ -53,7 +46,6 @@ type CreatedToken struct {
 	CreatedAt time.Time
 }
 
-// APIToken is API token metadata with the secret hash deliberately omitted.
 type APIToken struct {
 	ID         uuid.UUID
 	Name       string
@@ -63,21 +55,17 @@ type APIToken struct {
 	CreatedAt  time.Time
 }
 
-// TokenIdentity is the authenticated principal behind a valid API token.
 type TokenIdentity struct {
 	UserID uuid.UUID
 	Scopes []string
 }
 
-// APITokenService manages scoped API tokens on top of the store. The clock is
-// injectable so tests can exercise last-used timestamps without sleeping.
 type APITokenService struct {
 	store  *store.Store
 	logger *slog.Logger
 	now    func() time.Time
 }
 
-// NewAPITokenService builds an APITokenService.
 func NewAPITokenService(st *store.Store, logger *slog.Logger) *APITokenService {
 	if logger == nil {
 		logger = slog.Default()
@@ -85,8 +73,6 @@ func NewAPITokenService(st *store.Store, logger *slog.Logger) *APITokenService {
 	return &APITokenService{store: st, logger: logger, now: time.Now}
 }
 
-// Create validates name and scopes, generates a token, and stores only its
-// hash. The plaintext is returned in CreatedToken exactly once.
 func (s *APITokenService) Create(ctx context.Context, userID uuid.UUID, name string, scopes []string) (*CreatedToken, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" || len(trimmed) > apiTokenMaxLen {
@@ -122,8 +108,6 @@ func (s *APITokenService) Create(ctx context.Context, userID uuid.UUID, name str
 	}, nil
 }
 
-// List returns the metadata for every token owned by userID. The stored hash is
-// never exposed.
 func (s *APITokenService) List(ctx context.Context, userID uuid.UUID) ([]APIToken, error) {
 	rows, err := s.store.ListAPITokensByUser(ctx, pgUUID(userID))
 	if err != nil {
@@ -137,9 +121,6 @@ func (s *APITokenService) List(ctx context.Context, userID uuid.UUID) ([]APIToke
 	return tokens, nil
 }
 
-// Get returns the metadata of an owned, active token. A token that does not
-// exist, is not owned by userID, or is already revoked returns ErrNotFound.
-// The HTTP layer uses it to enforce the scope-grant subset rule on rotation.
 func (s *APITokenService) Get(ctx context.Context, userID, id uuid.UUID) (*APIToken, error) {
 	row, err := s.store.GetAPITokenByIDAndUser(ctx, sqlc.GetAPITokenByIDAndUserParams{
 		ID:     pgUUID(id),
@@ -158,8 +139,6 @@ func (s *APITokenService) Get(ctx context.Context, userID, id uuid.UUID) (*APITo
 	return &token, nil
 }
 
-// Revoke marks an owned, active token as revoked. A token that does not exist,
-// is not owned by userID, or is already revoked returns ErrNotFound.
 func (s *APITokenService) Revoke(ctx context.Context, userID, id uuid.UUID) error {
 	affected, err := s.store.RevokeAPIToken(ctx, sqlc.RevokeAPITokenParams{
 		ID:     pgUUID(id),
@@ -174,8 +153,6 @@ func (s *APITokenService) Revoke(ctx context.Context, userID, id uuid.UUID) erro
 	return nil
 }
 
-// Rotate revokes an owned, active token and issues a replacement carrying the
-// same name and scopes.
 func (s *APITokenService) Rotate(ctx context.Context, userID, id uuid.UUID) (*CreatedToken, error) {
 	current, err := s.store.GetAPITokenByIDAndUser(ctx, sqlc.GetAPITokenByIDAndUserParams{
 		ID:     pgUUID(id),
@@ -198,8 +175,6 @@ func (s *APITokenService) Rotate(ctx context.Context, userID, id uuid.UUID) (*Cr
 	return s.Create(ctx, userID, current.Name, current.Scopes)
 }
 
-// Authenticate resolves a plaintext API token to its owner and scopes. An
-// unknown or revoked token returns ErrUnauthorized.
 func (s *APITokenService) Authenticate(ctx context.Context, token string) (*TokenIdentity, error) {
 	if !strings.HasPrefix(token, APITokenPrefix) {
 		return nil, ErrUnauthorized
@@ -216,8 +191,6 @@ func (s *APITokenService) Authenticate(ctx context.Context, token string) (*Toke
 		return nil, ErrUnauthorized
 	}
 
-	// Recording the last use is best-effort: a failure must not reject a valid
-	// request.
 	if err := s.store.TouchAPITokenLastUsed(ctx, sqlc.TouchAPITokenLastUsedParams{
 		ID:         row.ID,
 		LastUsedAt: pgTimestamp(s.now()),
@@ -234,8 +207,6 @@ func (s *APITokenService) Authenticate(ctx context.Context, token string) (*Toke
 	}, nil
 }
 
-// ScopesContain reports whether scopes holds every name in required. When no
-// scope is required the check trivially passes.
 func ScopesContain(scopes []string, required ...string) bool {
 	if len(required) == 0 {
 		return true
@@ -253,20 +224,12 @@ func ScopesContain(scopes []string, required ...string) bool {
 	return true
 }
 
-// scopeGrantRank orders the scopes by privilege: admin ⊇ deploy ⊇ read. A
-// higher scope authorizes every lower one on a route, and a token may grant
-// every scope at or below its own when minting.
 var scopeGrantRank = map[string]int{
 	ScopeRead:   1,
 	ScopeDeploy: 2,
 	ScopeAdmin:  3,
 }
 
-// ScopesAuthorize reports whether scopes grant every scope in required under
-// the scope hierarchy admin ⊇ deploy ⊇ read: an admin token authorizes read
-// and deploy, a deploy token authorizes read. Route enforcement uses this;
-// ScopesContain stays the strict, exact-membership predicate for callers that
-// need it (the platform-operator check).
 func ScopesAuthorize(scopes []string, required ...string) bool {
 	if len(required) == 0 {
 		return true
@@ -286,19 +249,10 @@ func ScopesAuthorize(scopes []string, required ...string) bool {
 	return true
 }
 
-// CanGrantScopes reports whether a token holding held may mint or rotate a
-// token carrying every scope in requested. It is the minting view of the same
-// scope hierarchy: deploy may grant read/deploy, only admin may grant admin. A
-// JWT session holds every scope, so the HTTP layer skips this check for it.
 func CanGrantScopes(held, requested []string) bool {
 	return ScopesAuthorize(held, requested...)
 }
 
-// NormalizeScopes validates, trims and de-duplicates requested scopes,
-// defaulting to read-only when none are supplied. The HTTP layer calls it
-// before its admin-scope gate, so the list the gate authorizes and the list
-// that is persisted are the same canonical value (a padded or duplicated
-// "admin" can never slip past the gate and still be stored as admin).
 func NormalizeScopes(scopes []string) ([]string, error) {
 	if len(scopes) == 0 {
 		return []string{ScopeRead}, nil
@@ -320,8 +274,6 @@ func NormalizeScopes(scopes []string) ([]string, error) {
 	return normalized, nil
 }
 
-// newAPIToken generates an opaque API token and the SHA-256 hash persisted in
-// api_tokens.hash.
 func newAPIToken() (token string, hash string, err error) {
 	buf := make([]byte, apiTokenBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -331,13 +283,11 @@ func newAPIToken() (token string, hash string, err error) {
 	return token, hashAPIToken(token), nil
 }
 
-// hashAPIToken returns the hex-encoded SHA-256 of an API token.
 func hashAPIToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-// toAPIToken maps a stored row to the metadata representation.
 func toAPIToken(row sqlc.ApiToken) APIToken {
 	return APIToken{
 		ID:         uuid.UUID(row.ID.Bytes),
@@ -349,7 +299,6 @@ func toAPIToken(row sqlc.ApiToken) APIToken {
 	}
 }
 
-// optionalTime converts a nullable timestamptz into a pointer, nil when unset.
 func optionalTime(ts pgtype.Timestamptz) *time.Time {
 	if !ts.Valid {
 		return nil

@@ -1,9 +1,3 @@
-/**
- * English profile catalog (namespace `profile`): account facts, display-name
- * and change-password forms, session management copy and the validation
- * message keys the profile schemas store. Only values are translated in
- * `vi.ts`; keys, params and interpolation stay identical.
- */
 const en = {
   page: {
     eyebrow: "Settings · Account",
@@ -127,5 +121,4 @@ const en = {
 
 export default en;
 
-/** ProfileMessages is the shape every profile locale must satisfy. */
 export type ProfileMessages = typeof en;

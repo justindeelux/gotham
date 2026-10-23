@@ -2,7 +2,6 @@ package updatecore
 
 import "testing"
 
-// TestParseVersion covers the accepted tag shapes.
 func TestParseVersion(t *testing.T) {
 	cases := map[string]Version{
 		"v1.2.3":        {1, 2, 3, ""},
@@ -28,7 +27,6 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
-// TestVersionStringAndPrerelease covers the render helpers.
 func TestVersionStringAndPrerelease(t *testing.T) {
 	release, err := ParseVersion("v1.2.3")
 	if err != nil {
@@ -46,7 +44,6 @@ func TestVersionStringAndPrerelease(t *testing.T) {
 	}
 }
 
-// TestVersionCompare covers ordering, including prerelease rules.
 func TestVersionCompare(t *testing.T) {
 	cases := []struct {
 		a, b string

@@ -32,7 +32,6 @@ const stateDots: Record<DeploymentState, string> = {
   failed: "dot--failed",
 };
 
-/** In-flight states pulse; terminal states render a static dot. */
 const pulsing: ReadonlySet<DeploymentState> = new Set([
   "queued",
   "cloning",
@@ -51,7 +50,6 @@ const dotClass = computed<string>(() => stateDots[props.state] ?? "dot--queued")
 
 const dotPulse = computed<boolean>(() => pulsing.has(props.state));
 
-/** stateLabel renders the wire state through the display catalog. */
 const stateLabel = computed<string>(() => String(t(`applications.status.${props.state}`)));
 </script>
 

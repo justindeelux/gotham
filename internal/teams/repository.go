@@ -15,65 +15,34 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// Repository persists teams, memberships and invites. It is implemented over
-// *store.Store (sqlc) in production and by fakes in tests.
 type Repository interface {
-	// CreateTeam stores a team with userID as its owner in one transaction.
 	CreateTeam(ctx context.Context, team Team, ownerID uuid.UUID) (Team, error)
-	// GetTeam returns a team by ID, or ErrNotFound.
 	GetTeam(ctx context.Context, teamID uuid.UUID) (Team, error)
-	// GetTeamForUser returns a team with the caller's role, or ErrNotFound
-	// when the caller is not a member. It is the authorization read of every
-	// team-scoped route.
 	GetTeamForUser(ctx context.Context, teamID, userID uuid.UUID) (Team, error)
-	// ListTeamsByUser returns the caller's teams, each with the caller's role.
 	ListTeamsByUser(ctx context.Context, userID uuid.UUID) ([]Team, error)
-	// RenameTeam updates a team's name and returns the row, or ErrNotFound.
 	RenameTeam(ctx context.Context, teamID uuid.UUID, name string) (Team, error)
-	// DeleteTeamIfEmpty removes a team that owns no resources or nodes,
-	// atomically (the team row is locked while the owned rows are counted and
-	// the delete runs), or answers ErrTeamNotEmpty.
 	DeleteTeamIfEmpty(ctx context.Context, teamID uuid.UUID) error
-	// MutateMembership runs fn inside one transaction that locks the team row,
-	// handing it the locked team and its current memberships. fn may mutate
-	// through the MembershipTx and returns any policy error, which rolls the
-	// transaction back.
 	MutateMembership(ctx context.Context, teamID uuid.UUID, fn func(tx *MembershipTx) error) error
-	// GetMember returns one membership, or ErrNotFound.
 	GetMember(ctx context.Context, teamID, userID uuid.UUID) (Member, error)
-	// ListMembers returns a team's members with their account email.
 	ListMembers(ctx context.Context, teamID uuid.UUID) ([]Member, error)
-	// CreateInvite stores a hashed invite and returns it.
 	CreateInvite(ctx context.Context, invite Invite, tokenHash string) (Invite, error)
-	// ListInvites returns a team's invites, newest first.
 	ListInvites(ctx context.Context, teamID uuid.UUID) ([]Invite, error)
-	// GetInviteByTokenHash returns the invite behind a token hash, or
-	// ErrNotFound.
 	GetInviteByTokenHash(ctx context.Context, tokenHash string) (Invite, error)
-	// AcceptInvite consumes a pending invite and inserts the membership in one
-	// transaction. A replayed or expired token answers ErrInviteUsed /
-	// ErrInviteExpired; an existing membership answers ErrConflict.
 	AcceptInvite(ctx context.Context, tokenHash string, userID uuid.UUID) (Invite, error)
-	// DeleteInvite removes one invite of a team.
 	DeleteInvite(ctx context.Context, teamID, inviteID uuid.UUID) error
-	// UserEmail returns the account email of userID, or ErrNotFound.
 	UserEmail(ctx context.Context, userID uuid.UUID) (string, error)
 }
 
-// storeRepository adapts *store.Store to Repository.
 type storeRepository struct {
 	store *store.Store
 }
 
-// Compile-time guarantee.
 var _ Repository = (*storeRepository)(nil)
 
-// newStoreRepository builds the PostgreSQL-backed repository.
 func newStoreRepository(st *store.Store) *storeRepository {
 	return &storeRepository{store: st}
 }
 
-// CreateTeam implements Repository.
 func (r *storeRepository) CreateTeam(ctx context.Context, team Team, ownerID uuid.UUID) (Team, error) {
 	row, err := r.store.CreateTeamWithOwner(ctx, sqlc.CreateTeamParams{
 		ID:         pgUUID(team.ID),
@@ -86,7 +55,6 @@ func (r *storeRepository) CreateTeam(ctx context.Context, team Team, ownerID uui
 	return teamFromRow(row), nil
 }
 
-// GetTeam implements Repository.
 func (r *storeRepository) GetTeam(ctx context.Context, teamID uuid.UUID) (Team, error) {
 	row, err := r.store.GetTeam(ctx, pgUUID(teamID))
 	if err != nil {
@@ -98,7 +66,6 @@ func (r *storeRepository) GetTeam(ctx context.Context, teamID uuid.UUID) (Team, 
 	return teamFromRow(row), nil
 }
 
-// GetTeamForUser implements Repository.
 func (r *storeRepository) GetTeamForUser(ctx context.Context, teamID, userID uuid.UUID) (Team, error) {
 	row, err := r.store.GetTeamForUser(ctx, sqlc.GetTeamForUserParams{
 		ID:     pgUUID(teamID),
@@ -120,7 +87,6 @@ func (r *storeRepository) GetTeamForUser(ctx context.Context, teamID, userID uui
 	}, nil
 }
 
-// ListTeamsByUser implements Repository.
 func (r *storeRepository) ListTeamsByUser(ctx context.Context, userID uuid.UUID) ([]Team, error) {
 	rows, err := r.store.ListTeamsByUser(ctx, pgUUID(userID))
 	if err != nil {
@@ -140,7 +106,6 @@ func (r *storeRepository) ListTeamsByUser(ctx context.Context, userID uuid.UUID)
 	return teams, nil
 }
 
-// RenameTeam implements Repository.
 func (r *storeRepository) RenameTeam(ctx context.Context, teamID uuid.UUID, name string) (Team, error) {
 	row, err := r.store.UpdateTeam(ctx, sqlc.UpdateTeamParams{
 		ID:   pgUUID(teamID),
@@ -155,10 +120,6 @@ func (r *storeRepository) RenameTeam(ctx context.Context, teamID uuid.UUID, name
 	return teamFromRow(row), nil
 }
 
-// DeleteTeamIfEmpty implements Repository. A refused delete (the team still
-// owns rows) and a foreign-key violation from a racing insert both map to
-// ErrTeamNotEmpty, so the HTTP layer always answers 409 and never silently
-// cascades a resource.
 func (r *storeRepository) DeleteTeamIfEmpty(ctx context.Context, teamID uuid.UUID) error {
 	owned, err := r.store.DeleteTeamIfEmpty(ctx, pgUUID(teamID))
 	if err != nil {
@@ -177,7 +138,6 @@ func (r *storeRepository) DeleteTeamIfEmpty(ctx context.Context, teamID uuid.UUI
 	return nil
 }
 
-// MutateMembership implements Repository over the store's locking transaction.
 func (r *storeRepository) MutateMembership(ctx context.Context, teamID uuid.UUID, fn func(tx *MembershipTx) error) error {
 	err := r.store.MutateTeamMembership(ctx, pgUUID(teamID),
 		func(team sqlc.Team, members []sqlc.ListTeamMembersRow, writer *store.MembershipWriter) error {
@@ -209,7 +169,6 @@ func (r *storeRepository) MutateMembership(ctx context.Context, teamID uuid.UUID
 	return err
 }
 
-// GetMember implements Repository.
 func (r *storeRepository) GetMember(ctx context.Context, teamID, userID uuid.UUID) (Member, error) {
 	row, err := r.store.GetTeamMember(ctx, sqlc.GetTeamMemberParams{
 		TeamID: pgUUID(teamID),
@@ -224,7 +183,6 @@ func (r *storeRepository) GetMember(ctx context.Context, teamID, userID uuid.UUI
 	return memberFromRow(row), nil
 }
 
-// ListMembers implements Repository.
 func (r *storeRepository) ListMembers(ctx context.Context, teamID uuid.UUID) ([]Member, error) {
 	rows, err := r.store.ListTeamMembers(ctx, pgUUID(teamID))
 	if err != nil {
@@ -242,7 +200,6 @@ func (r *storeRepository) ListMembers(ctx context.Context, teamID uuid.UUID) ([]
 	return members, nil
 }
 
-// CreateInvite implements Repository.
 func (r *storeRepository) CreateInvite(ctx context.Context, invite Invite, tokenHash string) (Invite, error) {
 	row, err := r.store.CreateInvite(ctx, sqlc.CreateInviteParams{
 		TeamID:    pgUUID(invite.TeamID),
@@ -261,7 +218,6 @@ func (r *storeRepository) CreateInvite(ctx context.Context, invite Invite, token
 	return inviteFromRow(row), nil
 }
 
-// ListInvites implements Repository.
 func (r *storeRepository) ListInvites(ctx context.Context, teamID uuid.UUID) ([]Invite, error) {
 	rows, err := r.store.ListInvitesByTeam(ctx, pgUUID(teamID))
 	if err != nil {
@@ -274,7 +230,6 @@ func (r *storeRepository) ListInvites(ctx context.Context, teamID uuid.UUID) ([]
 	return invites, nil
 }
 
-// GetInviteByTokenHash implements Repository.
 func (r *storeRepository) GetInviteByTokenHash(ctx context.Context, tokenHash string) (Invite, error) {
 	row, err := r.store.GetInviteByTokenHash(ctx, tokenHash)
 	if err != nil {
@@ -286,9 +241,6 @@ func (r *storeRepository) GetInviteByTokenHash(ctx context.Context, tokenHash st
 	return inviteFromRow(row), nil
 }
 
-// AcceptInvite implements Repository. The store call consumes the invite and
-// inserts the membership in one transaction; a token that is unknown, expired
-// or already consumed matches no row.
 func (r *storeRepository) AcceptInvite(ctx context.Context, tokenHash string, userID uuid.UUID) (Invite, error) {
 	row, err := r.store.AcceptInvite(ctx, tokenHash, pgUUID(userID))
 	if err != nil {
@@ -304,7 +256,6 @@ func (r *storeRepository) AcceptInvite(ctx context.Context, tokenHash string, us
 	return inviteFromRow(row), nil
 }
 
-// DeleteInvite implements Repository.
 func (r *storeRepository) DeleteInvite(ctx context.Context, teamID, inviteID uuid.UUID) error {
 	if err := r.store.DeleteInvite(ctx, sqlc.DeleteInviteParams{
 		ID:     pgUUID(inviteID),
@@ -315,7 +266,6 @@ func (r *storeRepository) DeleteInvite(ctx context.Context, teamID, inviteID uui
 	return nil
 }
 
-// UserEmail implements Repository.
 func (r *storeRepository) UserEmail(ctx context.Context, userID uuid.UUID) (string, error) {
 	row, err := r.store.GetUserByID(ctx, pgUUID(userID))
 	if err != nil {
@@ -327,7 +277,6 @@ func (r *storeRepository) UserEmail(ctx context.Context, userID uuid.UUID) (stri
 	return row.Email, nil
 }
 
-// membersFromRows maps the joined membership rows (email included).
 func membersFromRows(rows []sqlc.ListTeamMembersRow) []Member {
 	members := make([]Member, 0, len(rows))
 	for _, row := range rows {
@@ -341,7 +290,6 @@ func membersFromRows(rows []sqlc.ListTeamMembersRow) []Member {
 	return members
 }
 
-// teamFromRow maps a stored team row.
 func teamFromRow(row sqlc.Team) Team {
 	return Team{
 		ID:         uuidFromPG(row.ID),
@@ -352,7 +300,6 @@ func teamFromRow(row sqlc.Team) Team {
 	}
 }
 
-// memberFromRow maps a stored membership row (without the joined email).
 func memberFromRow(row sqlc.TeamMember) Member {
 	return Member{
 		UserID:    uuidFromPG(row.UserID),
@@ -361,7 +308,6 @@ func memberFromRow(row sqlc.TeamMember) Member {
 	}
 }
 
-// inviteFromRow maps a stored invite row.
 func inviteFromRow(row sqlc.Invite) Invite {
 	invite := Invite{
 		ID:        uuidFromPG(row.ID),
@@ -379,24 +325,16 @@ func inviteFromRow(row sqlc.Invite) Invite {
 	return invite
 }
 
-// isUniqueViolation reports whether err is a PostgreSQL unique-constraint
-// violation (SQLSTATE 23505), raised by the membership primary key or the
-// invite token hash.
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// isForeignKeyViolation reports whether err is a PostgreSQL foreign-key
-// violation (SQLSTATE 23503), raised by the resource team_id RESTRICT
-// constraints when a team is deleted while a racing insert committed.
 func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
-// pgUUID converts a uuid.UUID for sqlc. The zero UUID becomes an invalid
-// pgtype value, which serialises as NULL for nullable columns.
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	if id == uuid.Nil {
 		return pgtype.UUID{}
@@ -404,7 +342,6 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-// uuidFromPG converts a sqlc UUID column to the domain type (NULL → zero).
 func uuidFromPG(v pgtype.UUID) uuid.UUID {
 	if !v.Valid {
 		return uuid.Nil
@@ -412,7 +349,6 @@ func uuidFromPG(v pgtype.UUID) uuid.UUID {
 	return uuid.UUID(v.Bytes)
 }
 
-// timeFromPG converts a sqlc timestamp column to the domain type.
 func timeFromPG(v pgtype.Timestamptz) time.Time {
 	if !v.Valid {
 		return time.Time{}
@@ -420,7 +356,6 @@ func timeFromPG(v pgtype.Timestamptz) time.Time {
 	return v.Time
 }
 
-// pgTimestamp converts a time.Time for sqlc.
 func pgTimestamp(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }

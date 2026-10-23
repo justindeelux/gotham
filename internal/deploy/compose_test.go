@@ -18,15 +18,11 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// InjectComposeWebPorts is the old single-target test helper: the production
-// path injects every domain's target, but these cases exercise one service.
 func InjectComposeWebPorts(rendered, service string, port, hostPort int32) (string, error) {
 	_ = hostPort
 	return InjectComposeDomainPorts(rendered, []ComposePortTarget{{Service: service, Port: port}})
 }
 
-// composeAppID is the fixed application id the scope tests confine binds to:
-// <managed root>/<appID> under the default root.
 var composeAppID = uuid.MustParse("11111111-1111-1111-1111-111111111111")
 
 const composeSafe = `services:
@@ -38,11 +34,6 @@ const composeSafe = `services:
     image: example.com/worker:1.0
 `
 
-// TestValidateComposeContent checks the GS-8 creation gate: pasted text is
-// required, capped at 256 KiB of valid YAML, and must pass the confinement
-// allowlist. The full bypass table (30+ hostile payloads with offending
-// paths) lives with the validator in composeguard; this pins the thin
-// gate: text rules, size, and representative allowlist verdicts.
 func TestValidateComposeContent(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -85,8 +76,6 @@ func TestValidateComposeContent(t *testing.T) {
 	}
 }
 
-// composeVolumeDoc is the decoded view of a rewritten document used by the
-// volume tests.
 type composeVolumeDoc struct {
 	Services map[string]struct {
 		Volumes []any `yaml:"volumes"`
@@ -107,10 +96,6 @@ func decodeComposeVolumeDoc(t *testing.T, content string) composeVolumeDoc {
 	return doc
 }
 
-// TestRewriteComposeManagedVolumes pins the deploy rewrite: declared and
-// undeclared named volumes become local binds under <root>/<appID>, host
-// binds, anonymous volumes and external declarations are untouched, and the
-// reserved namespace fails closed.
 func TestRewriteComposeManagedVolumes(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "volumes")
 	appID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
@@ -200,9 +185,6 @@ volumes:
 	})
 }
 
-// TestOrchestratorComposeManagedVolumes pins the deploy path: the document
-// the node runs carries the managed device for a declared volume and an
-// undeclared one that was auto-declared.
 func TestOrchestratorComposeManagedVolumes(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "volumes")
 	t.Setenv(envManagedVolumeRoot, root)
@@ -252,8 +234,6 @@ volumes:
 	}
 }
 
-// TestValidateComposeFilePath checks the in-repo reference: short, relative
-// and confined to the checkout.
 func TestValidateComposeFilePath(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -287,8 +267,6 @@ func TestValidateComposeFilePath(t *testing.T) {
 	}
 }
 
-// TestReadComposeFileScope checks the checkout read: the file must resolve
-// inside the directory, fit the size limit and not escape through symlinks.
 func TestReadComposeFileScope(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "deploy"), 0o755); err != nil {
@@ -324,8 +302,6 @@ func TestReadComposeFileScope(t *testing.T) {
 	})
 }
 
-// TestValidateComposeService checks the web service gate: structurally a
-// service name, and a member of the parsed list that the error names.
 func TestValidateComposeService(t *testing.T) {
 	if err := ValidateComposeService(composeSafe, "web"); err != nil {
 		t.Fatalf("member = %v, want nil", err)
@@ -344,8 +320,6 @@ func TestValidateComposeService(t *testing.T) {
 	if err := ValidateComposeService(composeSafe, "-bad"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("shape = %v, want ErrValidation", err)
 	}
-	// Repo-backed applications pass no document: only the shape is checked,
-	// membership waits for the deploy-time read.
 	if err := ValidateComposeService("", "web"); err != nil {
 		t.Fatalf("repo mode = %v, want nil", err)
 	}
@@ -354,7 +328,6 @@ func TestValidateComposeService(t *testing.T) {
 	}
 }
 
-// TestComposeImages checks the pull list: sorted, unique, trimmed.
 func TestComposeImages(t *testing.T) {
 	images, err := ComposeImages(`services:
   b:
@@ -372,9 +345,6 @@ func TestComposeImages(t *testing.T) {
 	}
 }
 
-// TestInjectComposeWebPorts checks the routing mapping: appended when
-// absent, kept when the container port is already published, and refused
-// without a container port or a web service.
 func TestInjectComposeWebPorts(t *testing.T) {
 	base := "services:\n  web:\n    image: example.com/app:1.0\n"
 
@@ -517,9 +487,6 @@ func TestInjectComposeWebPorts(t *testing.T) {
 	})
 }
 
-// TestValidateComposeSourceTable checks the source-type gate: exactly one of
-// pasted content or repository holds, the web service is required, and the
-// repository follows its git flow's rules.
 func TestValidateComposeSourceTable(t *testing.T) {
 	pasted := func(mutate func(*Application)) Application {
 		app := Application{
@@ -585,8 +552,6 @@ func TestValidateComposeSourceTable(t *testing.T) {
 	}
 }
 
-// TestSourceTypeImplementedCompose pins the GS-8 enrollment: compose deploys
-// as the last enabled source type, alongside every other known type.
 func TestSourceTypeImplementedCompose(t *testing.T) {
 	for _, source := range []string{"", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp, SourceDockerfile, SourceImage, SourceCompose} {
 		if !SourceTypeImplemented(source) {
@@ -600,8 +565,6 @@ func TestSourceTypeImplementedCompose(t *testing.T) {
 	}
 }
 
-// writeFileSource is a Source fake that materializes configured files: the
-// repo-backed compose tests seed the referenced compose file through it.
 type writeFileSource struct {
 	files map[string]string
 	calls int
@@ -624,9 +587,6 @@ func (s *writeFileSource) Clone(_ context.Context, _ Application, dir string, _ 
 	return nil
 }
 
-// testComposeApp returns a pasted compose application fixture. The web
-// service reads the API token from the project environment, which proves
-// secrets are injected as the compose project env at render time.
 func testComposeApp(userID uuid.UUID) Application {
 	return Application{
 		ID:            uuid.New(),
@@ -647,9 +607,6 @@ func testComposeApp(userID uuid.UUID) Application {
 	}
 }
 
-// TestOrchestratorComposePastedHappyPath pins the GS-8 deploy: no clone, the
-// rendered document (with the injected port mapping) reaches up after one
-// pull per image, and the web container is the recorded release.
 func TestOrchestratorComposePastedHappyPath(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -718,9 +675,6 @@ func TestOrchestratorComposePastedHappyPath(t *testing.T) {
 	}
 }
 
-// TestOrchestratorComposeRepoMode pins the repo-backed fetch: the checkout
-// is cloned, the referenced file is read and deployed, and the web service
-// membership is enforced against the file.
 func TestOrchestratorComposeRepoMode(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -789,10 +743,6 @@ func TestOrchestratorComposeRepoMode(t *testing.T) {
 	})
 }
 
-// TestOrchestratorComposeRollbackReapplies pins the GS-8 rollback: the
-// run ups the target release's stored document, not the live row. Deploy
-// v1, edit the application to v2, roll back to the v1 deployment: the v1
-// document is applied.
 func TestOrchestratorComposeRollbackReapplies(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -818,8 +768,6 @@ func TestOrchestratorComposeRollbackReapplies(t *testing.T) {
 	if v1.State != StateRunning {
 		t.Fatalf("setup deploy state = %s, want running", v1.State)
 	}
-	// The stored release carries the raw document: the secret reference,
-	// never the value.
 	if !strings.Contains(v1.ComposeDocument, "${API_TOKEN}") {
 		t.Fatalf("v1 recorded no raw document: %q", v1.ComposeDocument)
 	}
@@ -855,9 +803,6 @@ func TestOrchestratorComposeRollbackReapplies(t *testing.T) {
 	}
 }
 
-// TestOrchestratorComposeRollbackWithoutDocument pins the fail-closed edge:
-// a rollback whose target recorded no document fails instead of ups-ing an
-// empty project.
 func TestOrchestratorComposeRollbackWithoutDocument(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -879,8 +824,6 @@ func TestOrchestratorComposeRollbackWithoutDocument(t *testing.T) {
 	}
 }
 
-// TestCloneSourceCompose pins the direct entry: a pasted compose app
-// resolves without cloning, while an empty one fails validation.
 func TestCloneSourceCompose(t *testing.T) {
 	t.Run("pasted resolves without cloning", func(t *testing.T) {
 		src := &fakeSource{}
@@ -904,8 +847,6 @@ func TestCloneSourceCompose(t *testing.T) {
 	})
 }
 
-// TestValidateComposeTarget pins the submit gate: a compose application
-// needs its routed service, a container port and one of the two sources.
 func TestValidateComposeTarget(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -944,9 +885,6 @@ func TestValidateComposeTarget(t *testing.T) {
 	}
 }
 
-// TestRoutesComposeFields posts the compose payload through HTTP: create
-// echoes the stored document on the detail shape, the list omits it, and an
-// update replaces it.
 func TestRoutesComposeFields(t *testing.T) {
 	userID := uuid.New()
 	svc := newTestService(t, &fakeRepository{})
@@ -1068,9 +1006,6 @@ func TestRoutesComposeFields(t *testing.T) {
 	})
 }
 
-// TestServiceCreateCompose pins the write path: pasted content stores with
-// the repository cleared, the branch empty and no build pack, while a
-// dangerous document is a 400 that stores nothing.
 func TestServiceCreateCompose(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}
@@ -1144,9 +1079,6 @@ func TestServiceCreateCompose(t *testing.T) {
 	})
 }
 
-// TestServiceRollbackCompose pins the rollback queue boundary: a running
-// compose release with a stored document rolls back to that document, while
-// nothing released — or a release that recorded no document — is a 400.
 func TestServiceRollbackCompose(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -1178,11 +1110,6 @@ func TestServiceRollbackCompose(t *testing.T) {
 	}
 }
 
-// TestComposeGuardErrorsRedacted pins N4: a guard rejection on the
-// rendered document quotes the substituted secret value, so the message
-// must be redacted before it reaches the deployment row. The bind is
-// valid while the reference is unresolved and escapes the managed
-// directory once the secret (which contains a slash) substitutes in.
 func TestComposeGuardErrorsRedacted(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -1224,8 +1151,6 @@ func TestComposeGuardErrorsRedacted(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteComposeDown pins the teardown: deleting a compose
-// application downs its project through the agent, best effort.
 func TestServiceDeleteComposeDown(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -1241,9 +1166,6 @@ func TestServiceDeleteComposeDown(t *testing.T) {
 	}
 }
 
-// TestServiceDeleteComposeProbesUnverifiedNode pins the teardown gate: an
-// old agent that does not report enforcement still gets its project torn
-// down (teardown stays best effort), and the probe ran first.
 func TestServiceDeleteComposeProbesUnverifiedNode(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -1263,10 +1185,6 @@ func TestServiceDeleteComposeProbesUnverifiedNode(t *testing.T) {
 	}
 }
 
-// TestComposeNodeErrorsRedacted pins F3: a node error that echoes a project
-// secret value (the compose CLI quotes substituted values) must not reach
-// the deployment row. The seeded secret hunter2 travels only into the
-// rendered document; the stored error carries the redaction marker.
 func TestComposeNodeErrorsRedacted(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -1300,9 +1218,6 @@ func TestComposeNodeErrorsRedacted(t *testing.T) {
 	}
 }
 
-// TestServiceCreateComposeHostile pins the write gate against the review's
-// exploit repros: driver_opts binds, secrets file mounts, CAP_-prefixed
-// capabilities and namespace joins are all 400s that store nothing.
 func TestServiceCreateComposeHostile(t *testing.T) {
 	hostiles := []struct {
 		name    string
@@ -1342,9 +1257,6 @@ func TestServiceCreateComposeHostile(t *testing.T) {
 	}
 }
 
-// TestPreviewComposeBinds pins F4: a preview of a compose application with
-// managed binds is created with the binds rewritten to the preview's own
-// directory, and deploying it ups the rewritten document.
 func TestPreviewComposeBinds(t *testing.T) {
 	userID := uuid.New()
 	base := testComposeApp(userID)
@@ -1378,7 +1290,6 @@ func TestPreviewComposeBinds(t *testing.T) {
 		t.Errorf("preview content still mounts the base directory:\n%s", preview.ComposeContent)
 	}
 
-	// The preview deploys through its own project with the rewritten binds.
 	previewRepo := &fakeRepository{app: preview}
 	dep := seedDeployment(t, previewRepo, preview, Deployment{Kind: KindDeploy})
 	node := newMockNode()
@@ -1403,10 +1314,6 @@ func TestPreviewComposeBinds(t *testing.T) {
 	}
 }
 
-// TestComposeCapabilityProbe pins N2: the run refuses a node that accepts
-// the canary (a pre-confinement agent) before any document reaches it, and
-// proceeds on a node that refuses it with a validation error. The canary
-// itself is valid compose the allowlist refuses.
 func TestComposeCapabilityProbe(t *testing.T) {
 	newRun := func(node *mockNode) Deployment {
 		userID := uuid.New()
@@ -1458,9 +1365,6 @@ func TestComposeCapabilityProbe(t *testing.T) {
 	})
 }
 
-// TestComposeRollbackRedactsCurrentEnv pins L2: a rollback renders the
-// stored raw document with the current environment, so a node error echoing
-// the current secret value is redacted by the current env map.
 func TestComposeRollbackRedactsCurrentEnv(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
@@ -1496,10 +1400,6 @@ func TestComposeRollbackRedactsCurrentEnv(t *testing.T) {
 	}
 }
 
-// TestComposeDefaultEscapeRejected pins N1 at the deploy layer: a default
-// that resolves outside the managed directory (`${OPT:-..}` with OPT
-// unset) passes the raw allowlist but fails the rendered re-validation,
-// before anything reaches the node.
 func TestComposeDefaultEscapeRejected(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)

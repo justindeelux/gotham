@@ -1,27 +1,17 @@
-/**
- * Pure geometry for MetricsChart, the dependency-free SVG time-series chart.
- * No Vue components, no DOM: every function is unit-tested through
- * chart-model.test.ts. Only tickLabel reads the UI locale (for its Intl tag
- * via shared/i18n/locale, which itself only needs Vue's ref).
- */
 import { localeTag } from "@/shared/i18n/locale";
 import type { Locale } from "@/shared/i18n/locale";
 
-/** One point of a series; `at` is the bucket timestamp in milliseconds. */
 export interface ChartPoint {
   at: number;
   value: number;
 }
 
-/** One named line drawn on the chart. */
 export interface ChartSeries {
   name: string;
-  /** Any CSS color, including a design token such as `var(--accent)`. */
   color: string;
   points: ChartPoint[];
 }
 
-/** niceCeil rounds a value up to a readable 1/2/5×10ⁿ ceiling. */
 export function niceCeil(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return 1;
@@ -33,12 +23,6 @@ export function niceCeil(value: number): number {
   return nice * magnitude;
 }
 
-/**
- * splitSegments splits one series wherever the payload has a gap.
- * Consecutive points more than 1.5 buckets apart are a real hole in the
- * series (ListServerMetrics omits empty buckets) and start a new polyline
- * instead of being bridged — nothing is interpolated through a gap.
- */
 export function splitSegments(points: ChartPoint[], stepMs: number): ChartPoint[][] {
   const sorted = [...points].sort((a, b) => a.at - b.at);
   const groups: ChartPoint[][] = [];
@@ -58,7 +42,6 @@ export function splitSegments(points: ChartPoint[], stepMs: number): ChartPoint[
   return groups;
 }
 
-/** linePath renders one segment as an SVG polyline. */
 export function linePath(
   points: ChartPoint[],
   project: (_at: number, _value: number) => { x: number; y: number },
@@ -71,7 +54,6 @@ export function linePath(
     .join(" ");
 }
 
-/** areaPath closes one segment down to the baseline for the fill. */
 export function areaPath(
   points: ChartPoint[],
   project: (_at: number, _value: number) => { x: number; y: number },
@@ -86,7 +68,6 @@ export function areaPath(
   return closed;
 }
 
-/** tickLabel renders a bucket timestamp for the axis. */
 export function tickLabel(
   at: number,
   stepMs: number,

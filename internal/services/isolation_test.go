@@ -10,10 +10,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// TestServiceTeamIsolation is the Phase 8 exit criterion at the service layer:
-// a member of one team can neither see nor mutate another team's compose
-// services, a read_only member reads but cannot mutate, and creation stamps the
-// active team.
 func TestServiceTeamIsolation(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	alice, bob := uuid.New(), uuid.New()
@@ -23,7 +19,6 @@ func TestServiceTeamIsolation(t *testing.T) {
 	svc := newTestService(t, repo, agent)
 	bg := context.Background()
 
-	// Creation stamps the caller's active team.
 	mineCtx := teams.WithScope(bg, teams.Scope{UserID: bob, TeamID: teamB, Role: teams.RoleAdmin})
 	envID, _ := repo.seedEnvironment()
 	created, err := svc.Create(mineCtx, bob, CreateRequest{
@@ -54,7 +49,6 @@ func TestServiceTeamIsolation(t *testing.T) {
 		t.Fatalf("team A service team = %s, want %s", other.TeamID, teamA)
 	}
 
-	// Team B sees only its own service.
 	all, err := svc.List(mineCtx, bob, ServiceFilter{})
 	if err != nil {
 		t.Fatalf("list team B: %v", err)
@@ -63,7 +57,6 @@ func TestServiceTeamIsolation(t *testing.T) {
 		t.Fatalf("team B list = %+v, want only its own service", all)
 	}
 
-	// The other team's service cannot be read or mutated, not even by name.
 	aliceCtx := teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
 	if _, err := svc.Get(aliceCtx, alice, created.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-team Get = %v, want ErrNotFound", err)
@@ -81,7 +74,6 @@ func TestServiceTeamIsolation(t *testing.T) {
 		t.Fatalf("cross-team Delete = %v, want ErrNotFound", err)
 	}
 
-	// A read_only member of team A reads but cannot mutate.
 	viewerCtx := teams.WithScope(bg, teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleReadOnly})
 	if _, err := svc.Get(viewerCtx, alice, other.ID); err != nil {
 		t.Fatalf("read_only Get: %v", err)
@@ -108,14 +100,10 @@ func TestServiceTeamIsolation(t *testing.T) {
 	}
 }
 
-// ptr returns a pointer to v, for the optional update fields.
 func ptr[T any](v T) *T {
 	return &v
 }
 
-// TestServiceCreateRejectsForeignServer is the F6 regression for compose
-// services: a project can only be placed on a node of the caller's active team
-// (or a legacy node without a team).
 func TestServiceCreateRejectsForeignServer(t *testing.T) {
 	teamA, teamB := uuid.New(), uuid.New()
 	alice := uuid.New()

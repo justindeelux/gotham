@@ -16,28 +16,14 @@ import {
 } from "./terminal-support";
 import type { APIRequestContext, Page } from "@playwright/test";
 
-/**
- * JUS-265 add-tab picker on the REAL stack.
- *
- * A shared team with one prebuilt `nginx` application is created and deployed
- * through the public API against the same control plane and node agent the
- * browser talks to. The (+) control in the floating window and on the Terminal
- * page is then driven for real: the target list, the exact container create
- * payload, request counts, tab labels and isolation are asserted, while the
- * permission matrix and the empty/error states use real API responses and a
- * network-boundary failure (the sessions themselves stay real).
- */
-
 test.use({
   storageState: storageStatePath,
   viewport: { width: 1366, height: 900 },
 });
 
 const account = loadAccount();
-/** fresh is this file's own sign-in (see loginFresh). */
 let fresh: Awaited<ReturnType<typeof loginFresh>>;
 
-/** APP_IMAGE is pre-pulled by the UI E2E workflow. */
 const APP_IMAGE = process.env.GOTHAM_E2E_TERMINAL_IMAGE ?? "nginx:1.28.0-alpine";
 
 interface Seed {
@@ -55,15 +41,12 @@ let seed: Seed | null = null;
 
 test.beforeAll(async ({ request }) => {
   fresh = await loginFresh(request, account);
-  // One deployment serves every scenario in this file; the team is seeded
-  // before the first navigation so the picker reads the right team.
   seed = await seedTeamApplication(request);
 });
 
 test.beforeEach(async ({ page }) => {
   await installSession(page, fresh);
   if (seed !== null) {
-    // The picker is team-scoped; make the seeded team the active one.
     await page.addInitScript((teamId) => {
       window.localStorage.setItem("gotham.teams.active", teamId);
     }, seed.teamId);
@@ -87,7 +70,6 @@ test.afterAll(async ({ request }) => {
   seed = null;
 });
 
-/** teamHeaders scopes one API call to a team. */
 function teamHeaders(teamId: string, who: E2EAccount): Record<string, string> {
   const headers = authHeaders(who);
   if (teamId !== "") {
@@ -96,7 +78,6 @@ function teamHeaders(teamId: string, who: E2EAccount): Record<string, string> {
   return headers;
 }
 
-/** expectOK fails with the body so a seed failure is debuggable. */
 async function expectOK(
   response: { ok(): boolean; status(): number; text(): Promise<string> },
   what: string,
@@ -106,7 +87,6 @@ async function expectOK(
   }
 }
 
-/** requireTerminalNode is the CI interlock (missing node = failure in CI). */
 async function requireTerminalNode(request: APIRequestContext) {
   const server = await terminalServer(request, account);
   skipOrFail(
@@ -117,7 +97,6 @@ async function requireTerminalNode(request: APIRequestContext) {
   return server!;
 }
 
-/** seedTeamApplication creates a team, project, image application and deploy. */
 async function seedTeamApplication(request: APIRequestContext): Promise<Seed> {
   const server = await requireTerminalNode(request);
   const owner = authHeaders(account);
@@ -214,14 +193,12 @@ async function seedTeamApplication(request: APIRequestContext): Promise<Seed> {
   };
 }
 
-/** openPicker clicks the (+) control and waits for the list. */
 async function openPicker(page: Page, surface: "window" | "page"): Promise<void> {
   const scope = surface === "window" ? ".term-window" : ".term-page";
   await page.locator(`${scope} .term-add-tab`).click();
   await expect(page.locator(".term-targets")).toBeVisible();
 }
 
-/** pickTarget clicks one option by its visible label. */
 async function pickTarget(page: Page, label: string): Promise<void> {
   await page
     .locator(".term-target-option")
@@ -231,7 +208,6 @@ async function pickTarget(page: Page, label: string): Promise<void> {
   await expect(page.locator(".term-targets")).toHaveCount(0);
 }
 
-/** activeWindowScreen reads only the selected window tab's buffer. */
 async function activeWindowScreen(page: Page): Promise<string> {
   const panel = await page
     .locator(".term-tab-name[aria-selected='true']")
@@ -242,7 +218,6 @@ async function activeWindowScreen(page: Page): Promise<string> {
   return screenText(page, `#${panel}`);
 }
 
-/** watchTargetReads counts GET /terminal/targets and records the team header. */
 function watchTargetReads(page: Page): string[] {
   const reads: string[] = [];
   page.on("request", (request) => {
@@ -267,7 +242,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
     const traffic = watchTerminal(page);
     const reads = watchTargetReads(page);
 
-    // One host page session from the empty-state server cards.
     await page.goto(terminalPageURL);
     await expect(
       page.getByRole("heading", { name: "Terminal", level: 1 }),
@@ -284,13 +258,10 @@ test.describe.serial("add-tab picker on the real stack", () => {
       })
       .toBe(true);
 
-    // The same session moves into the window (no new create).
     await page.getByRole("button", { name: "Open in window" }).first().click();
     await expect(page.locator(".term-window")).toBeVisible();
     expect(traffic.createCount()).toBe(1);
 
-    // Window (+): the list carries the ready host and the seeded container,
-    // scoped to the active team.
     await openPicker(page, "window");
     expect(reads).toEqual([seed.teamId]);
     await expect(page.locator(".term-targets-group-title")).toContainText([
@@ -315,8 +286,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
     await expect(page.locator(".term-tab")).toHaveCount(2);
     await expect(page.locator(".term-tab").nth(1)).toContainText(seed.containerLabel);
 
-    // Tab isolation: the host tab keeps its buffer and socket; the container
-    // tab has a real prompt and no host banner.
     await page.locator(".term-tab-name").nth(0).click();
     await expect
       .poll(() => activeWindowScreen(page).then((text) => text.includes(marker)), {
@@ -331,8 +300,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
       .toBe(true);
     expect(await activeWindowScreen(page)).not.toContain("server: ");
 
-    // The Terminal page gets its own tab strip: open a host and a container
-    // page session through the same (+) control. The window keeps its two.
     await page.locator("#app-nav").getByRole("link", { name: "Dashboard" }).click();
     await expect(page).toHaveURL(/\/dashboard$/);
     await page.locator("#app-nav").getByRole("link", { name: "Terminal" }).click();
@@ -359,8 +326,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
       seed.containerLabel,
     );
 
-    // Page tab isolation: the host tab paints its own banner/prompt and the
-    // container tab its busybox prompt; neither reconnects.
     await page.locator(".term-page-tab-name").nth(0).click();
     await expect
       .poll(
@@ -401,8 +366,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator(".term-targets")).toBeVisible();
     await expect(page.locator(".term-targets input").first()).toBeFocused();
-    // Type through real key events: never fill() (which would hide a broken
-    // focus handoff).
     await page.keyboard.type(seed!.containerLabel);
     await expect(page.locator(".term-target-option")).toHaveCount(1);
     await page.keyboard.press("ArrowDown");
@@ -415,8 +378,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
     });
     await expect(page.locator(".term-tab")).toHaveCount(2);
 
-    // Space opens too, and Escape returns focus to the trigger without
-    // creating anything.
     await trigger.focus();
     await page.keyboard.press("Space");
     await expect(page.locator(".term-targets")).toBeVisible();
@@ -438,8 +399,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
       test.skip,
     );
 
-    // One extra account serves both denial cases: it is not a platform
-    // operator and it is invited to the seeded team as read_only.
     const viewerEmail = `ui-e2e-tab-viewer-${uniqueSuffix()}@example.com`;
     const viewerResponse = await request.post("/api/v1/auth/register", {
       data: { email: viewerEmail, password: "Gotham-E2E-Password1" },
@@ -447,7 +406,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
     await expectOK(viewerResponse, "register viewer");
     const viewer = (await viewerResponse.json()) as { access_token: string };
 
-    // Non-operator, personal scope: no host servers, and no 403 oracle.
     const memberTargets = await request.get("/api/v1/terminal/targets", {
       headers: { Authorization: `Bearer ${viewer.access_token}` },
     });
@@ -461,7 +419,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
     expect(memberBody.applications).toEqual([]);
     expect(memberBody.errors).toEqual([]);
 
-    // The operator in the seeded team sees the ready host and the container.
     const ownerTargets = await request.get("/api/v1/terminal/targets", {
       headers: teamHeaders(seed.teamId, account),
     });
@@ -476,9 +433,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
       seed.applicationId,
     );
 
-    // The same account as a read-only team member: it reads the team but may
-    // not open a shell — no server (not an operator) and no container (no
-    // write), and no error row that would leak the application's existence.
     const invite = await request.post(`/api/v1/teams/${seed.teamId}/invites`, {
       headers: authHeaders(account),
       data: { email: viewerEmail, role: "read_only" },
@@ -523,8 +477,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
     await page.getByRole("button", { name: "Open in window" }).first().click();
     await expect(page.locator(".term-window")).toBeVisible();
 
-    // Empty: the control plane's real envelope with no targets. Only the read
-    // is stubbed; the window/session stay real.
     await page.route("**/api/v1/terminal/targets", async (route) => {
       await route.fulfill({
         json: { servers: [], applications: [], errors: [], truncated: false },
@@ -538,8 +490,6 @@ test.describe.serial("add-tab picker on the real stack", () => {
     await expect(page.locator(".term-targets")).toHaveCount(0);
     await page.unroute("**/api/v1/terminal/targets");
 
-    // Error: a 503 at the network boundary renders the localized retry state,
-    // never the backend body. Retry then reads the real list.
     await page.route("**/api/v1/terminal/targets", async (route) => {
       await route.fulfill({
         status: 503,

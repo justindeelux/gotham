@@ -72,14 +72,14 @@ func TestNextCronTime(t *testing.T) {
 		{
 			name:       "sunday at three",
 			expression: "0 3 * * 0",
-			after:      time.Date(2026, 9, 27, 4, 0, 0, 0, utc), // Sunday
+			after:      time.Date(2026, 9, 27, 4, 0, 0, 0, utc),
 			want:       time.Date(2026, 10, 4, 3, 0, 0, 0, utc),
 		},
 		{
 			name:       "weekday range",
 			expression: "0 9 * * 1-5",
-			after:      time.Date(2026, 9, 27, 10, 0, 0, 0, utc), // Sunday
-			want:       time.Date(2026, 9, 28, 9, 0, 0, 0, utc),  // Monday
+			after:      time.Date(2026, 9, 27, 10, 0, 0, 0, utc),
+			want:       time.Date(2026, 9, 28, 9, 0, 0, 0, utc),
 		},
 		{
 			name:       "list of minutes",
@@ -210,7 +210,6 @@ func TestSchedulerSkipsBusyDatabaseAndKeepsCadence(t *testing.T) {
 		Enabled:    true,
 		NextRunAt:  time.Now().Add(-time.Minute),
 	})
-	// A manual backup already holds the database.
 	if !fixture.manager.claim(fixture.database.ID) {
 		t.Fatal("could not claim the database")
 	}
@@ -264,7 +263,7 @@ func TestSchedulerStartAndClose(t *testing.T) {
 	})
 
 	fixture.manager.scheduler.Start()
-	fixture.manager.scheduler.Start() // idempotent
+	fixture.manager.scheduler.Start()
 	waitFor(t, "a scheduled backup", func() bool { return fixture.backups.countBackups() == 1 })
 	fixture.manager.scheduler.Close()
 
@@ -274,7 +273,6 @@ func TestSchedulerStartAndClose(t *testing.T) {
 	}
 }
 
-// firstBackupID returns the id of the only (or first) recorded run.
 func firstBackupID(t *testing.T, fixture *backupFixture) uuid.UUID {
 	t.Helper()
 	fixture.backups.mu.Lock()
@@ -285,10 +283,6 @@ func firstBackupID(t *testing.T, fixture *backupFixture) uuid.UUID {
 	return fixture.backups.backupOrder[0]
 }
 
-// TestSchedulerFallBackRecoveryAdvancesFromServedSlot is the round-3 U1
-// regression: the fire call site must compute the next run from the served
-// slot, not only from `now`, or a catch-up started in a fall-back repeated hour
-// re-schedules (and then fires) the same wall-clock slot.
 func TestSchedulerFallBackRecoveryAdvancesFromServedSlot(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -297,11 +291,8 @@ func TestSchedulerFallBackRecoveryAdvancesFromServedSlot(t *testing.T) {
 	fixture := newBackupFixture(t)
 	fixture.manager.scheduler.loc = loc
 
-	// The schedule was due at 01:30 EDT; the scheduler catches up at 01:00 EST,
-	// the second pass of the repeated hour. Ambiguous instants are built via
-	// UTC because 01:00-01:59 local is ambiguous.
-	served := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC).In(loc) // 01:30 EDT
-	now := time.Date(2025, 11, 2, 6, 0, 0, 0, time.UTC).In(loc)     // 01:00 EST
+	served := time.Date(2025, 11, 2, 5, 30, 0, 0, time.UTC).In(loc)
+	now := time.Date(2025, 11, 2, 6, 0, 0, 0, time.UTC).In(loc)
 	schedule := fixture.backups.seedSchedule(BackupSchedule{
 		DatabaseID: fixture.database.ID,
 		Cron:       "30 1 * * *",

@@ -1,9 +1,3 @@
-// Package taskevents publishes background-task lifecycle events (queued,
-// running with step/progress, succeeded, failed) over the existing realtime
-// channel (WebSocket + Redis pub/sub). It covers deploys and any other long
-// task, including GitHub-webhook-triggered runs, which have no watching
-// client: the UI subscribes once in the app shell and renders a progress
-// card for every event on its team channel.
 package taskevents
 
 import (
@@ -13,11 +7,8 @@ import (
 	"sync"
 )
 
-// Status is the lifecycle state carried by an Event.
 type Status string
 
-// Event statuses. Terminal states leave the tracker; the UI auto-dismisses
-// succeeded cards and keeps failed ones.
 const (
 	StatusQueued    Status = "queued"
 	StatusRunning   Status = "running"
@@ -25,23 +16,17 @@ const (
 	StatusFailed    Status = "failed"
 )
 
-// Terminal reports whether s ends a task.
 func (s Status) Terminal() bool { return s == StatusSucceeded || s == StatusFailed }
 
-// KindDeploy is the event kind of application deploys and rollbacks.
 const KindDeploy = "deploy"
 
-// Event is one task lifecycle transition.
 type Event struct {
-	TaskID   string `json:"task_id"`
-	Kind     string `json:"kind"`
-	Name     string `json:"name"`
-	Status   Status `json:"status"`
-	Step     string `json:"step,omitempty"`
-	Progress int    `json:"progress,omitempty"` // 0-100
-	// Seq orders a task's events: queued is 1 and every later publish takes
-	// the next number, so a client that receives frames out of order (a live
-	// event racing the subscribe replay) ignores anything stale.
+	TaskID        string `json:"task_id"`
+	Kind          string `json:"kind"`
+	Name          string `json:"name"`
+	Status        Status `json:"status"`
+	Step          string `json:"step,omitempty"`
+	Progress      int    `json:"progress,omitempty"`
 	Seq           uint64 `json:"seq,omitempty"`
 	AppID         string `json:"app_id,omitempty"`
 	DeploymentID  string `json:"deployment_id,omitempty"`
@@ -53,40 +38,26 @@ type Event struct {
 	Error         string `json:"error,omitempty"`
 }
 
-// Channel returns the realtime room of one team's task events. Clients
-// subscribe once in the app shell, so webhook-triggered runs surface without
-// user action, and every (re)subscribe replays the running snapshot.
 func Channel(teamID string) string { return "tasks:" + teamID }
 
-// Publisher abstracts the realtime fan-out (Redis in production, hub direct
-// in tests). It mirrors the deploy Publisher seam so either satisfies it.
 type Publisher interface {
 	Publish(ctx context.Context, channel, payload string) error
 }
 
-// Frame is the JSON envelope exchanged with WebSocket clients. It mirrors
-// ws.Message without importing the HTTP server tree.
 type Frame struct {
 	Channel string `json:"channel"`
-	Type    string `json:"type"` // "task" or "task_snapshot"
+	Type    string `json:"type"`
 	Data    string `json:"data"`
 }
 
-// frameType is the realtime frame type of live task events.
 const frameType = "task"
 
-// SnapshotType is the frame type closing a running-task replay batch.
 const SnapshotType = "task_snapshot"
 
-// Emitter publishes task events to subscribers of the team channel.
-// A nil publisher is a no-op.
 type Emitter struct{ pub Publisher }
 
-// NewEmitter returns an Emitter publishing through pub.
 func NewEmitter(pub Publisher) *Emitter { return &Emitter{pub: pub} }
 
-// Emit publishes ev on its team channel. Errors are swallowed: realtime
-// updates are best-effort and must never fail the run they describe.
 func (e *Emitter) Emit(ctx context.Context, ev Event) {
 	if e == nil || e.pub == nil {
 		return
@@ -102,23 +73,16 @@ func (e *Emitter) Emit(ctx context.Context, ev Event) {
 	_ = e.pub.Publish(ctx, Channel(ev.TeamID), string(frame))
 }
 
-// Tracker keeps the currently running tasks per team so a fresh subscriber
-// (initial mount, navigation, WebSocket reconnect) restores them. It also
-// hands out each task's sequence numbers, so publishes stay monotonic even
-// when a fast terminal run races an earlier frame.
 type Tracker struct {
 	mu    sync.Mutex
-	tasks map[string]Event // by task ID
+	tasks map[string]Event
 	seq   map[string]uint64
 }
 
-// NewTracker returns an empty Tracker.
 func NewTracker() *Tracker {
 	return &Tracker{tasks: make(map[string]Event), seq: make(map[string]uint64)}
 }
 
-// Next returns the next sequence number of one task. The first call for a
-// task returns 1, so the queued publish (which always goes first) takes it.
 func (t *Tracker) Next(taskID string) uint64 {
 	if t == nil {
 		return 0
@@ -129,8 +93,6 @@ func (t *Tracker) Next(taskID string) uint64 {
 	return t.seq[taskID]
 }
 
-// Set records ev as running. Terminal events remove the task — and its
-// sequence counter, since task IDs are never reused — instead.
 func (t *Tracker) Set(ev Event) {
 	if t == nil {
 		return
@@ -145,8 +107,6 @@ func (t *Tracker) Set(ev Event) {
 	t.tasks[ev.TaskID] = ev
 }
 
-// Snapshot returns the running tasks of one team, sorted by task ID so the
-// replay order is deterministic.
 func (t *Tracker) Snapshot(teamID string) []Event {
 	if t == nil {
 		return nil
@@ -163,8 +123,6 @@ func (t *Tracker) Snapshot(teamID string) []Event {
 	return out
 }
 
-// SnapshotFrames renders the team snapshot as realtime frames, closed by a
-// task_snapshot marker so the client knows the replay batch ended.
 func (t *Tracker) SnapshotFrames(teamID string) []string {
 	events := t.Snapshot(teamID)
 	out := make([]string, 0, len(events)+1)

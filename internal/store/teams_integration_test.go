@@ -17,16 +17,11 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestCreateUserCreatesPersonalTeam verifies the runtime half of the 00019
-// invariant: every new account owns a personal team whose ID is the user's ID,
-// with the user as owner.
 func TestCreateUserCreatesPersonalTeam(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	dsn := testDSN()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if testDSNExplicit() {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -38,8 +33,6 @@ func TestCreateUserCreatesPersonalTeam(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -80,11 +73,6 @@ func TestCreateUserCreatesPersonalTeam(t *testing.T) {
 	}
 }
 
-// TestTeamsMigrationBackfillsPersonalTeams builds a disposable database,
-// migrates it to the pre-teams schema, seeds one user with one application,
-// database and service, then applies 00019 and asserts the backfill: a personal
-// team per user, the user as owner, every resource attributed to the creator's
-// personal team, and team_id NOT NULL on the three resource tables.
 func TestTeamsMigrationBackfillsPersonalTeams(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -128,8 +116,6 @@ func TestTeamsMigrationBackfillsPersonalTeams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init migrations: %v", err)
 	}
-	// 00019 is the teams migration; migrate to the newest pre-change version
-	// first so the legacy rows can be seeded.
 	if _, err := provider.UpTo(ctx, 18); err != nil {
 		t.Fatalf("migrate to 00018: %v", err)
 	}
@@ -174,14 +160,10 @@ func TestTeamsMigrationBackfillsPersonalTeams(t *testing.T) {
 		t.Fatalf("insert legacy server: %v", err)
 	}
 
-	// 00034 truncates the resource tables by design, so this backfill test
-	// stops at 00033: everything it asserts about lives below that wipe.
 	if _, err := provider.UpTo(ctx, 33); err != nil {
 		t.Fatalf("migrate to 00033: %v", err)
 	}
 
-	// One personal team per user, named after the account, with the user as
-	// owner.
 	for label, userID := range map[string]pgtype.UUID{"a": userA, "b": userB} {
 		var (
 			teamID     pgtype.UUID
@@ -209,7 +191,6 @@ func TestTeamsMigrationBackfillsPersonalTeams(t *testing.T) {
 		}
 	}
 
-	// Legacy resources are attributed to their creator's personal team.
 	for table, query := range map[string]string{
 		"applications": `SELECT team_id FROM applications WHERE user_id = $1`,
 		"databases":    `SELECT team_id FROM databases WHERE user_id = $1`,
@@ -224,8 +205,6 @@ func TestTeamsMigrationBackfillsPersonalTeams(t *testing.T) {
 		}
 	}
 
-	// The servers table has no owner column: the legacy node keeps team_id
-	// NULL, which is the documented pre-teams visibility.
 	var serverTeam pgtype.UUID
 	if err := pool.QueryRow(ctx, `SELECT team_id FROM servers WHERE name = 'legacy-node'`).Scan(&serverTeam); err != nil {
 		t.Fatalf("server team_id: %v", err)
@@ -234,7 +213,6 @@ func TestTeamsMigrationBackfillsPersonalTeams(t *testing.T) {
 		t.Errorf("legacy server team_id = %v, want NULL", serverTeam)
 	}
 
-	// team_id is NOT NULL on the three resource tables now.
 	var pgErr *pgconn.PgError
 	_, err = pool.Exec(ctx,
 		`INSERT INTO applications (user_id, name, clone_url, branch, build_pack, port, host_port)
@@ -243,8 +221,6 @@ func TestTeamsMigrationBackfillsPersonalTeams(t *testing.T) {
 		t.Fatalf("insert without team_id = %v, want a NOT NULL violation", err)
 	}
 
-	// Deleting a user cascades the membership; the personal team row stays
-	// until the account cleanup removes it (documented residual).
 	var memberships int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM team_members WHERE user_id = $1`, userA).Scan(&memberships); err != nil {
 		t.Fatalf("count memberships: %v", err)

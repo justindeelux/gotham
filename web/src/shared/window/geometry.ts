@@ -1,15 +1,4 @@
-/**
- * Shared floating-window geometry (JUS-232/JUS-241/JUS-245).
- *
- * The app shell hosts more than one floating surface (the code editor and the
- * terminal window). Their chrome differs, but the geometry contract is the
- * same: a size that never leaves the viewport band, a position that keeps the
- * title bar reachable, and eight resize grips whose opposite edge stays put.
- * The math lives here, free of DOM and store state, so both windows clamp
- * identically and the rules can be tested on their own.
- */
 
-/** WindowResizeDirection names the eight grips: four edges, four corners. */
 export type WindowResizeDirection =
   | "n"
   | "ne"
@@ -20,7 +9,6 @@ export type WindowResizeDirection =
   | "w"
   | "nw";
 
-/** WINDOW_RESIZE_DIRECTIONS lists every grip of a floating window frame. */
 export const WINDOW_RESIZE_DIRECTIONS: readonly WindowResizeDirection[] = [
   "n",
   "ne",
@@ -32,7 +20,6 @@ export const WINDOW_RESIZE_DIRECTIONS: readonly WindowResizeDirection[] = [
   "nw",
 ];
 
-/** WindowBox is a rectangle in viewport coordinates. */
 export interface WindowBox {
   x: number;
   y: number;
@@ -40,7 +27,6 @@ export interface WindowBox {
   height: number;
 }
 
-/** WindowResizeLimits is the size band a resize may never leave. */
 export interface WindowResizeLimits {
   minWidth: number;
   minHeight: number;
@@ -50,18 +36,11 @@ export interface WindowResizeLimits {
   viewportHeight: number;
 }
 
-/** WindowMargins reserves the shell chrome a floating window never covers. */
 export interface WindowMargins {
   side: number;
   chrome: number;
 }
 
-/**
- * clampWindowSize keeps a size inside the usable band: never below the
- * minimum, never larger than the viewport. On a viewport narrower than the
- * minimum (a phone), the floor yields to the viewport so the window always
- * fits with its margins.
- */
 export function clampWindowSize(
   width: number,
   height: number,
@@ -82,13 +61,6 @@ export function clampWindowSize(
   };
 }
 
-/**
- * clampWindowOffset keeps a floating window fully inside the viewport after a
- * title-bar drag: the window may never hang off an edge, so its title bar (and
- * the controls in it) can always be grabbed again. A window larger than the
- * viewport (a small screen) pins to the top-left corner instead of producing
- * a negative maximum.
- */
 export function clampWindowOffset(
   x: number,
   y: number,
@@ -103,12 +75,6 @@ export function clampWindowOffset(
   };
 }
 
-/**
- * windowResizeLimits derives the resize band from the viewport: the same
- * margins a window fits with, so a resize can never grow past the screen.
- * On a viewport narrower than the minimum (a phone) the floor yields to the
- * viewport, exactly like the size clamp does.
- */
 export function windowResizeLimits(
   viewportWidth: number,
   viewportHeight: number,
@@ -128,16 +94,6 @@ export function windowResizeLimits(
   };
 }
 
-/**
- * resizeWindowBox applies a pointer delta to a window box for one grip.
- *
- * The edges opposite the grip stay put: dragging the left edge moves the left
- * border and keeps the right one, dragging a corner keeps the opposite
- * corner. The size never leaves the limits band, and a size that is clamped
- * keeps its anchor: the opposite edge still does not move. The band itself
- * follows the anchor, so a window that is not flush with the viewport edge
- * cannot grow past it.
- */
 export function resizeWindowBox(
   direction: WindowResizeDirection,
   origin: WindowBox,
@@ -152,8 +108,6 @@ export function resizeWindowBox(
   const movesBottom =
     direction === "s" || direction === "sw" || direction === "se";
 
-  // The room a grip has: the room between the anchored edge and the viewport
-  // edge it may grow towards.
   const roomWidth = movesRight
     ? limits.viewportWidth - origin.x
     : origin.x + origin.width;
@@ -183,10 +137,6 @@ export function resizeWindowBox(
   };
 }
 
-/**
- * clampSize keeps a size inside its band. The floor yields to the ceiling, so
- * a viewport too small for the minimum size still fits the window on screen.
- */
 function clampSize(value: number, min: number, max: number): number {
   const floor = Math.min(min, max);
   return Math.min(Math.max(value, floor), max);

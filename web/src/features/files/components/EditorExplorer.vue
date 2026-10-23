@@ -53,7 +53,6 @@ import { windowRange as virtualWindow } from "@/features/files/utils/virtual";
 
 interface Props {
   serverId: string;
-  /** width is the panel's current drag width in px (200–480). */
   width?: number;
 }
 
@@ -70,12 +69,10 @@ const teams = useTeamsStore();
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 
-// ── Virtualized tree ─────────────────────────────────────────────────────
 const scrollEl = ref<HTMLElement | null>(null);
 const treeEl = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
 const { height: viewportHeight } = useElementSize(scrollEl);
-/** activeIndex is the roving tree row (the container owns DOM focus). */
 const activeIndex = ref(0);
 
 const rows = computed<ExplorerRow[]>(() => {
@@ -95,7 +92,6 @@ const rows = computed<ExplorerRow[]>(() => {
   return flattenTree(explorer.rootPath, explorer.dirs, explorer.isExpanded);
 });
 
-/** rowKey is the structural identity the active-index sync watches. */
 const rowKey = computed<string>(() => rows.value.map((row) => row.path).join("\n"));
 
 const windowRange = computed(() =>
@@ -109,21 +105,18 @@ const windowRange = computed(() =>
   ),
 );
 
-/** windowRows carries each row's stable flat index for the ARIA/active lookup. */
 const windowRows = computed(() =>
   rows.value
     .slice(windowRange.value.start, windowRange.value.end)
     .map((row, offset) => ({ row, index: windowRange.value.start + offset })),
 );
 
-// ── Panel root / selection helpers ───────────────────────────────────────
 const rootLabel = computed<string>(() =>
   explorer.rootPath === ""
     ? explorer.rootName
     : `${explorer.rootName} / ${explorer.rootPath}`,
 );
 
-/** selectedEntry resolves the focused row when it is a file or folder. */
 const selectedEntry = computed<ExplorerEntryRow | null>(() => {
   const row = rows.value.find(
     (item) => item.type === "entry" && item.path === explorer.selectedPath,
@@ -131,7 +124,6 @@ const selectedEntry = computed<ExplorerEntryRow | null>(() => {
   return row?.type === "entry" ? row : null;
 });
 
-/** selectedDirectory is the folder a "set as root" click would open. */
 const selectedDirectory = computed<string>(() => {
   const row = selectedEntry.value;
   if (row === null) {
@@ -140,13 +132,11 @@ const selectedDirectory = computed<string>(() => {
   return row.kind === "directory" ? row.path : parentPath(row.path);
 });
 
-/** activePath is the open editor tab's path, highlighted in the tree. */
 const activePath = computed<string>(() => {
   const tab = editor.activeTab;
   return tab && tab.root === explorer.rootName ? tab.path : "";
 });
 
-/** openPaths are every open tab, so the tree can mark them subtly. */
 const openPaths = computed<Set<string>>(() => {
   const paths = new Set<string>();
   for (const tab of editor.tabs) {
@@ -157,10 +147,7 @@ const openPaths = computed<Set<string>>(() => {
   return paths;
 });
 
-// ── Loading / mount ──────────────────────────────────────────────────────
 function bindExplorer(): void {
-  // The tree starts at the file browser's current folder, like aaPanel's
-  // editor panel; later browser navigation does not re-root it.
   explorer.bind(props.serverId, files.rootName, files.path);
   void explorer.init();
 }
@@ -181,12 +168,6 @@ watch(
   () => bindExplorer(),
 );
 
-// ── Keyboard ─────────────────────────────────────────────────────────────
-/**
- * syncActive keeps the roving row on a real entry after a structural change.
- * The new row is revealed (create/rename) but DOM focus stays on the tree
- * container, which keeps `aria-activedescendant` authoritative across windowing.
- */
 async function syncActive(): Promise<void> {
   const list = rows.value;
   if (list.length === 0) {
@@ -210,7 +191,6 @@ async function syncActive(): Promise<void> {
 
 watch(rowKey, () => void syncActive(), { flush: "post" });
 
-/** activateRow opens a file in a tab or toggles a folder. */
 async function activateRow(row: ExplorerEntryRow): Promise<void> {
   if (row.kind === "directory") {
     if (explorer.searchActive) {
@@ -223,7 +203,6 @@ async function activateRow(row: ExplorerEntryRow): Promise<void> {
   await editor.openFile(props.serverId, teams.activeTeamId, explorer.rootName, row.path);
 }
 
-/** onRowClick focuses the tree and performs the row's default action. */
 function onRowClick(row: ExplorerRow, index: number): void {
   treeEl.value?.focus({ preventScroll: true });
   if (row.type === "status") {
@@ -254,17 +233,14 @@ const { activeRow, revealIndex, onTreeFocus, onTreeKeydown } = useTreeKeyboard({
   openMenu: (row) => openMenuAtRow(row),
 });
 
-/** onScroll drives the window from the scrollport. */
 function onScroll(event: Event): void {
   scrollTop.value = (event.currentTarget as HTMLElement).scrollTop;
 }
 
-/** statusDir resolves the folder an inline status row belongs to. */
 function statusDir(row: ExplorerRow): string {
   return row.type === "status" ? row.dir : "";
 }
 
-// ── Row context menu ─────────────────────────────────────────────────────
 const menuOpen = ref(false);
 const menuRow = ref<ExplorerEntryRow | null>(null);
 const menuX = ref(0);
@@ -274,7 +250,6 @@ const menuOptions = computed<DropdownOption[]>(() =>
   menuRow.value === null ? [] : rowMenuOptions(menuRow.value),
 );
 
-/** rowMenuOptions lists the actions available on one row. */
 function rowMenuOptions(row: ExplorerEntryRow): DropdownOption[] {
   const options: DropdownOption[] = [];
   if (row.kind === "directory") {
@@ -296,7 +271,6 @@ function rowMenuOptions(row: ExplorerEntryRow): DropdownOption[] {
   return options;
 }
 
-/** openMenuAt opens the one controlled row menu at an anchor element. */
 function openMenuAt(row: ExplorerEntryRow, anchor: HTMLElement | null): void {
   const rect = anchor?.getBoundingClientRect() ?? null;
   menuRow.value = row;
@@ -305,24 +279,20 @@ function openMenuAt(row: ExplorerEntryRow, anchor: HTMLElement | null): void {
   menuOpen.value = true;
 }
 
-/** openRowMenu opens the menu from a row's ⋮ button. */
 function openRowMenu(row: ExplorerEntryRow, event: MouseEvent): void {
   const target = event.currentTarget;
   openMenuAt(row, target instanceof HTMLElement ? target : null);
 }
 
-/** openMenuAtRow is the keyboard (ContextMenu / Shift+F10) entry point. */
 function openMenuAtRow(row: ExplorerEntryRow): void {
   const element = document.getElementById(`ex-row-${activeIndex.value}`);
   openMenuAt(row, element);
 }
 
-/** onMenuShow keeps the controlled dropdown in step with its own dismissal. */
 function onMenuShow(value: boolean): void {
   menuOpen.value = value;
 }
 
-/** onMenuSelect dispatches one row action from the controlled menu. */
 function onMenuSelect(key: string | number): void {
   menuOpen.value = false;
   const row = menuRow.value;
@@ -331,7 +301,6 @@ function onMenuSelect(key: string | number): void {
   }
 }
 
-/** onRowMenu dispatches one row action. */
 function onRowMenu(key: string, row: ExplorerEntryRow): void {
   switch (key) {
     case "open":
@@ -357,7 +326,6 @@ function onRowMenu(key: string, row: ExplorerEntryRow): void {
   }
 }
 
-// ── Search ───────────────────────────────────────────────────────────────
 const searchText = computed<string>({
   get: () => explorer.searchQuery,
   set: (value) => explorer.setSearchQuery(value),
@@ -370,7 +338,6 @@ const includeSubdirectories = computed<boolean>({
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 const SEARCH_DEBOUNCE_MS = 250;
 
-/** runSearchNow fires the search immediately (Enter or Retry). */
 function runSearchNow(): void {
   if (searchTimer !== null) {
     clearTimeout(searchTimer);
@@ -394,24 +361,19 @@ watch(
   },
 );
 
-/** clearSearch restores the tree. */
 function clearSearch(): void {
   explorer.clearSearch();
   void nextTick(() => treeEl.value?.focus({ preventScroll: true }));
 }
 
-// ── Create / rename / delete dialogs ─────────────────────────────────────
 interface DialogState {
   mode: ExplorerDialogMode;
   path: string;
   name: string;
   dir: string;
-  /** isDirectory lets a search-hit delete recurse without a cached listing. */
   isDirectory: boolean;
 }
 
-// `dialog` stays populated through the modal's leave transition (so its title
-// and label never flash back to the create defaults); `dialogOpen` drives show.
 const dialog = ref<DialogState | null>(null);
 const dialogOpen = ref(false);
 const dialogBusy = ref(false);
@@ -424,7 +386,6 @@ const dialogExisting = computed<string[]>(() => {
   return (explorer.dirs[state.dir]?.entries ?? []).map((entry) => entry.name);
 });
 
-/** isDirtyBlocked warns and refuses a write blocked by an unsaved tab. */
 function isDirtyBlocked(path: string): boolean {
   const blocked = explorer.blockingNames([path]);
   if (blocked.length === 0) {
@@ -436,10 +397,6 @@ function isDirtyBlocked(path: string): boolean {
   return true;
 }
 
-/**
- * beginCreate refreshes the target directory before opening the dialog, so the
- * duplicate guard works for a never-expanded folder (and for search hits).
- */
 async function beginCreate(kind: "file" | "directory", dir?: string): Promise<void> {
   const folder = dir ?? (selectedDirectory.value || explorer.rootPath);
   await explorer.load(folder, true);
@@ -453,10 +410,6 @@ async function beginCreate(kind: "file" | "directory", dir?: string): Promise<vo
   dialogOpen.value = true;
 }
 
-/**
- * beginRename refreshes the parent first (same duplicate guard reason), then
- * opens the dialog. A dirty entry is refused before any dialog appears.
- */
 async function beginRename(row: ExplorerEntryRow): Promise<void> {
   if (isDirtyBlocked(row.path)) {
     return;
@@ -473,7 +426,6 @@ async function beginRename(row: ExplorerEntryRow): Promise<void> {
   dialogOpen.value = true;
 }
 
-/** beginDelete opens the recycle-bin confirmation, refusing a dirty entry first. */
 function beginDelete(row: ExplorerEntryRow): void {
   if (isDirtyBlocked(row.path)) {
     return;
@@ -488,19 +440,16 @@ function beginDelete(row: ExplorerEntryRow): void {
   dialogOpen.value = true;
 }
 
-/** requestCloseDialog starts the leave transition without clearing the state. */
 function requestCloseDialog(): void {
   dialogOpen.value = false;
 }
 
-/** finishCloseDialog clears the state only after the modal has left. */
 function finishCloseDialog(): void {
   if (!dialogOpen.value) {
     dialog.value = null;
   }
 }
 
-/** submitDialog performs the dialog's mutation and reports the outcome. */
 async function submitDialog(name: string): Promise<void> {
   const state = dialog.value;
   if (state === null || dialogBusy.value) {
@@ -535,8 +484,6 @@ async function submitDialog(name: string): Promise<void> {
       );
       dialogOpen.value = false;
     } else if (state.mode !== "delete" && isConflictError(err)) {
-      // The server creates exclusively and refuses an occupied rename target,
-      // so a 409 is the authoritative "name taken" answer.
       message.error(
         String(t("files.editor.explorer.nameTaken", { name })),
       );
@@ -548,8 +495,6 @@ async function submitDialog(name: string): Promise<void> {
   }
 }
 
-// ── Toolbar actions ──────────────────────────────────────────────────────
-/** setSelectedAsRoot re-roots the tree at the selected folder. */
 function setSelectedAsRoot(): void {
   if (selectedDirectory.value === "") {
     return;
@@ -557,12 +502,10 @@ function setSelectedAsRoot(): void {
   void explorer.setRoot(explorer.rootName, selectedDirectory.value);
 }
 
-/** refreshTree reloads the root and every expanded folder. */
 function refreshTree(): void {
   void explorer.refresh();
 }
 
-// ── Resize ───────────────────────────────────────────────────────────────
 const {
   dragging: resizing,
   onPointerDown: onSplitDown,
@@ -576,13 +519,11 @@ const {
   onChange: (width) => emit("resize", width),
 });
 
-/** panelStyle pins the width and publishes the shared row height to CSS. */
 const panelStyle = computed<CSSProperties>(() => ({
   width: `${props.width}px`,
   "--ex-row-height": `${EXPLORER_ROW_HEIGHT}px`,
 }) as CSSProperties);
 
-/** activeDescendant points at the active row while it is a real entry. */
 const activeDescendant = computed<string | undefined>(() =>
   activeRow.value?.type === "entry" ? `ex-row-${activeIndex.value}` : undefined,
 );
@@ -1026,7 +967,6 @@ const activeDescendant = computed<string | undefined>(() =>
   opacity: 1;
 }
 
-/* Touch has no hover: keep the row menu reachable. */
 @media (hover: none) {
   .ex-menu {
     opacity: 1;

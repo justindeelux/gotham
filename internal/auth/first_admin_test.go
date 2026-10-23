@@ -18,11 +18,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// scratchService migrates a fresh database, opens a store on it, and returns
-// a Service wired to an ephemeral signer. First-admin tests need an empty
-// users table, which the shared dev database cannot guarantee, so each test
-// gets its own database (dropped on cleanup). It skips when no database is
-// reachable.
 func scratchService(t *testing.T) (*Service, *store.Store) {
 	t.Helper()
 
@@ -80,7 +75,6 @@ func scratchService(t *testing.T) (*Service, *store.Store) {
 	return New(store.New(pool), signer, logger), store.New(pool)
 }
 
-// claimRole verifies the access token and returns its role claim.
 func claimRole(t *testing.T, svc *Service, accessToken string) string {
 	t.Helper()
 
@@ -91,10 +85,6 @@ func claimRole(t *testing.T, svc *Service, accessToken string) string {
 	return claims.Role
 }
 
-// TestServiceFirstRegistrationBecomesAdmin proves the JUS-21 bootstrap: the
-// account registered on an empty instance is the platform admin (user field
-// and token claim), the next open registration is refused, and a later
-// account created under the test/dev override is a plain user.
 func TestServiceFirstRegistrationBecomesAdmin(t *testing.T) {
 	svc, _ := scratchService(t)
 	ctx := context.Background()
@@ -127,10 +117,6 @@ func TestServiceFirstRegistrationBecomesAdmin(t *testing.T) {
 	}
 }
 
-// TestServiceConcurrentFirstRegistrations races registrations on an empty
-// instance: exactly one wins the bootstrap and the winner is the admin; every
-// loser is refused. Without the advisory lock in CreateFirstUser several
-// racers would all insert and this test would see multiple admins.
 func TestServiceConcurrentFirstRegistrations(t *testing.T) {
 	svc, _ := scratchService(t)
 	ctx := context.Background()
@@ -177,10 +163,6 @@ func TestServiceConcurrentFirstRegistrations(t *testing.T) {
 	}
 }
 
-// TestOAuthBootstrapIsAdminWithOverrideOnAndOff proves the F1 consistency:
-// the first OAuth sign-up on an empty instance is the platform admin whether
-// or not the test/dev open-registration override is on, and later sign-ups
-// under the override are plain users.
 func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
 	for _, override := range []bool{false, true} {
 		t.Run(fmt.Sprintf("override=%v", override), func(t *testing.T) {
@@ -236,11 +218,6 @@ func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
 	}
 }
 
-// TestServiceTokenRoleFollowsDatabase proves the token role is read from the
-// account row at issue time: a plain login mints "user", promoting the row
-// mints "admin", refresh keeps the current role, and demoting the row is
-// picked up by the next refresh — so a stale role never survives longer than
-// the access-token TTL.
 func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
@@ -303,8 +280,6 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 		t.Fatalf("refreshed access-token role = %q, want %q (refresh must keep the role)", got, adminRole)
 	}
 
-	// Demotion is picked up by the next refresh: the stale "admin" role does
-	// not outlive the access-token TTL.
 	setAdmin(false)
 	afterDemote, err := svc.Refresh(ctx, refreshed.RefreshToken, SessionMeta{})
 	if err != nil {

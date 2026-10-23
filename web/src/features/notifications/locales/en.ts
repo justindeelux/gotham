@@ -1,9 +1,3 @@
-/**
- * English catalog for the notifications feature: page shell, team scope
- * card, channel cards, and the channel create/edit dialog.
- * Wire values (channel kinds, event keys, URLs, ports, email addresses)
- * stay raw; only framing copy lives here.
- */
 const en = {
   page: {
     eyebrow: "Team · Notifications",

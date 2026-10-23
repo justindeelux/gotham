@@ -11,8 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 )
 
-// hangingContainers simulates a dead agent: ListFresh blocks until the
-// caller's context ends, like a gRPC dial to an unresolvable address.
 type hangingContainers struct {
 	containers.ContainerService
 	entered chan struct{}
@@ -29,8 +27,6 @@ func (h *hangingContainers) List(context.Context, uuid.UUID) ([]containers.Conta
 	return nil, nil
 }
 
-// gatedContainers blocks the first ListFresh until the test releases it,
-// simulating a stalled agent list during which a job starts.
 type gatedContainers struct {
 	containers.ContainerService
 	release chan struct{}
@@ -64,9 +60,6 @@ func (g *gatedContainers) Remove(_ context.Context, _ uuid.UUID, containerID str
 	return nil
 }
 
-// TestSweepSkipsJobStartedMidList is the JUS-51 race regression: a job that
-// claims its lease and writes its run row while the sweep's list is stalled
-// must not have its fresh container removed once the list returns.
 func TestSweepSkipsJobStartedMidList(t *testing.T) {
 	backups := newFakeBackupRepository()
 	serverID := uuid.New()
@@ -93,10 +86,6 @@ func TestSweepSkipsJobStartedMidList(t *testing.T) {
 		manager.sweepJobContainers()
 	}()
 
-	// The job starts while the list is stalled: wait until the sweep is
-	// inside ListFresh (guards already read on old code), then lease,
-	// then the run row (the order startRun guarantees), then its
-	// container appears.
 	select {
 	case <-gated.entered:
 	case <-time.After(10 * time.Second):
@@ -130,9 +119,6 @@ func TestSweepSkipsJobStartedMidList(t *testing.T) {
 	}
 }
 
-// TestStartupSweepDoesNotBlockConstructor is the JUS-51 regression: the
-// constructor must return while the node sweep is still stalled on a dead
-// agent, so HTTP startup never waits on agent I/O.
 func TestStartupSweepDoesNotBlockConstructor(t *testing.T) {
 	backups := newFakeBackupRepository()
 	backups.serverIDs = []uuid.UUID{uuid.New()}

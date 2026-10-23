@@ -20,7 +20,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Localhost reconciliation scans all nodes; unrelated loopback fixtures must be isolated.
 func newLocalhostTestService(t *testing.T) (*ServerService, *store.Store) {
 	t.Helper()
 	_, admin := newTestService(t)
@@ -96,7 +95,6 @@ func TestEnsureLocalhostLegacyNode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// A second startup must retain the same UUID and live inventory status.
 			if err := s.EnsureLocalhost(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -229,9 +227,6 @@ func TestLocalhostRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = st.DB.Exec(context.Background(), "DELETE FROM servers WHERE node_id = 'localhost'") })
-	// One agent key across the loopback attempts (JUS-194): the first loopback
-	// attempt is the certificate-less bootstrap, the next ones present the
-	// issued certificate (a re-registration of the same node).
 	key := testKey(t)
 	csr := testCSR(t, key, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "localhost"}, DNSNames: []string{"localhost"}})
 	var issued []byte

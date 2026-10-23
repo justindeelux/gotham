@@ -29,7 +29,6 @@ func TestControlPlaneTrialSyncIgnoresOtherApplications(t *testing.T) {
 			remote := uuid.New()
 			f.service.nodes = panelNodes{[]NamedNode{{ID: f.serverID, Name: "localhost"}, {ID: remote, Name: "remote"}}}
 			f.source.setApps(ProxiedApplication{ID: uuid.New(), ServerID: f.serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}})
-			// A remote node failure must not affect the panel's local write.
 			dial := f.service.dial
 			f.service.dial = func(ctx context.Context, id uuid.UUID) (AgentClient, error) {
 				if id == remote {

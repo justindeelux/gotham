@@ -13,10 +13,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// maxBodyBytes bounds an apply request body (it only carries a channel name).
 const maxBodyBytes = 1 << 16
 
-// checkResponse is the GET /v1/updates/check body.
 type checkResponse struct {
 	Current     string     `json:"current"`
 	Available   bool       `json:"available"`
@@ -26,14 +24,9 @@ type checkResponse struct {
 	HTMLURL     string     `json:"html_url,omitempty"`
 	Asset       string     `json:"asset,omitempty"`
 	PublishedAt *time.Time `json:"published_at,omitempty"`
-	// LastUpdate is the durable outcome of the most recent update attempt, so a
-	// failed or rolled-back update is visible instead of silently "successful".
-	LastUpdate *Status `json:"last_update,omitempty"`
+	LastUpdate  *Status    `json:"last_update,omitempty"`
 }
 
-// changelogEntryBody is one entry of the GET /v1/updates/changelog body. Notes
-// and the release link stay admin-gated like check notes; non-admins get the
-// version metadata only.
 type changelogEntryBody struct {
 	Version     string     `json:"version"`
 	Channel     string     `json:"channel,omitempty"`
@@ -42,20 +35,15 @@ type changelogEntryBody struct {
 	PublishedAt *time.Time `json:"published_at,omitempty"`
 }
 
-// changelogResponse is the GET /v1/updates/changelog body: every release newer
-// than current newest-first (bounded), the running version's own entry when up
-// to date, or an empty list for an unknown current version.
 type changelogResponse struct {
 	Current string               `json:"current"`
 	Entries []changelogEntryBody `json:"entries"`
 }
 
-// applyRequest is the optional POST /v1/updates/apply body.
 type applyRequest struct {
 	Channel string `json:"channel,omitempty"`
 }
 
-// applyResponse is the POST /v1/updates/apply body.
 type applyResponse struct {
 	Applied bool   `json:"applied"`
 	Version string `json:"version,omitempty"`
@@ -64,35 +52,17 @@ type applyResponse struct {
 	Restart bool   `json:"restart"`
 }
 
-// errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
 }
 
-// handler serves the self-update routes for one Service.
 type handler struct {
 	svc     Service
-	sched   Scheduler // nil when svc has no schedule surface
+	sched   Scheduler
 	isAdmin func(*http.Request) bool
 	logger  *slog.Logger
 }
 
-// Mount registers the self-update endpoints on r:
-//
-//	GET  /v1/updates/check   (any authenticated caller)
-//	GET  /v1/updates/changelog (any authenticated caller; notes admin-gated)
-//	POST /v1/updates/apply   (platform operator only)
-//	GET  /v1/updates/schedule (any authenticated caller)
-//	PUT  /v1/updates/schedule (platform operator only)
-//
-// auth is the server's RequireAuth + read-scope chain (the check is a read);
-// adminAuth is the server's RequireAuth + RequirePlatformAdmin chain, because
-// applying an update replaces the whole runtime and must not be reachable from
-// a plain session. isAdmin
-// reports whether the (already authenticated) caller is a platform operator, so
-// release notes and filesystem-path details are only exposed to operators. A
-// nil svc or FEATURE_UPDATES=false mounts nothing, so the control plane can call
-// Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, adminAuth func(http.Handler) http.Handler, isAdmin func(*http.Request) bool, svc Service) {
 	if svc == nil || !Enabled() {
 		return
@@ -119,7 +89,6 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, adminAuth func(ht
 	})
 }
 
-// check serves GET /v1/updates/check.
 func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 	release, err := h.svc.Check(r.Context())
 	if err != nil {
@@ -146,8 +115,6 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 	if last != nil {
 		status := *last
 		if !admin {
-			// Never expose filesystem paths (the wrapper's detail) or other
-			// operator-only context to a plain session.
 			status.Detail = ""
 		}
 		response.LastUpdate = &status
@@ -155,9 +122,6 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// changelog serves GET /v1/updates/changelog. Release bodies and links stay
-// admin-gated like check notes; everyone else gets version metadata only. An
-// unknown current version (dev builds) yields an empty list, not an error.
 func (h *handler) changelog(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.svc.Changelog(r.Context())
 	if err != nil {
@@ -169,7 +133,6 @@ func (h *handler) changelog(w http.ResponseWriter, r *http.Request) {
 	for _, entry := range entries {
 		body := changelogEntryBody{Version: entry.Version, Channel: entry.Channel}
 		if entry.PublishedAt.IsZero() {
-			// Omit the zero time so the viewer does not render year-1 dates.
 		} else {
 			published := entry.PublishedAt
 			body.PublishedAt = &published
@@ -183,7 +146,6 @@ func (h *handler) changelog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// apply serves POST /v1/updates/apply.
 func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
 	var request applyRequest
 	if err := decodeOptionalBody(r, &request); err != nil {
@@ -204,8 +166,6 @@ func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getSchedule serves GET /v1/updates/schedule. The raw check error is
-// operator-only because it can carry release-server detail.
 func (h *handler) getSchedule(w http.ResponseWriter, r *http.Request) {
 	state := h.sched.ScheduleState()
 	if !h.isAdmin(r) {
@@ -214,7 +174,6 @@ func (h *handler) getSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, state)
 }
 
-// putSchedule serves PUT /v1/updates/schedule.
 func (h *handler) putSchedule(w http.ResponseWriter, r *http.Request) {
 	var schedule Schedule
 	decoder := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes))
@@ -237,13 +196,11 @@ func (h *handler) putSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, state)
 }
 
-// validationBody is the 422 body for an invalid schedule.
 type validationBody struct {
 	Message string            `json:"message"`
 	Fields  map[string]string `json:"fields"`
 }
 
-// writeServiceError maps update sentinels to HTTP responses.
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNoPublicKey):
@@ -266,7 +223,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// decodeOptionalBody decodes a JSON body into dst, tolerating an empty body.
 func decodeOptionalBody(r *http.Request, dst any) error {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
@@ -280,7 +236,6 @@ func decodeOptionalBody(r *http.Request, dst any) error {
 	return decoder.Decode(dst)
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

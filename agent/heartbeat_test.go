@@ -32,28 +32,20 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// fakeAgentService is an in-memory AgentServiceServer.
 type fakeAgentService struct {
 	agentv1.UnimplementedAgentServiceServer
 
-	cpVersion   string
-	cert        []byte
-	registerErr error
-	heartbeatCh chan *agentv1.HeartbeatRequest
-	// registerGate, when non-nil, blocks Register until it is closed or the
-	// call's context is canceled.
-	registerGate chan struct{}
-	// heartbeatFail closes the stream with an error after the first message.
+	cpVersion     string
+	cert          []byte
+	registerErr   error
+	heartbeatCh   chan *agentv1.HeartbeatRequest
+	registerGate  chan struct{}
 	heartbeatFail bool
 
-	mu         sync.Mutex
-	registers  []*agentv1.RegisterRequest
-	heartbeats []*agentv1.HeartbeatRequest
-	// registerTokens is the enrollment-token metadata seen on each Register
-	// (aligned with registers); empty means no token was sent.
+	mu             sync.Mutex
+	registers      []*agentv1.RegisterRequest
+	heartbeats     []*agentv1.HeartbeatRequest
 	registerTokens []string
-	// heartbeatNodes is the node id carried in the heartbeat stream metadata,
-	// aligned with heartbeats (the request itself carries no node id).
 	heartbeatNodes []string
 }
 
@@ -112,8 +104,6 @@ func (f *fakeAgentService) Heartbeat(stream grpc.ClientStreamingServer[agentv1.H
 	}
 }
 
-// firstRegisterToken returns the token sent on the first Register ("" when
-// none was sent).
 func (f *fakeAgentService) firstRegisterToken() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -129,8 +119,6 @@ func (f *fakeAgentService) registerCount() int {
 	return len(f.registers)
 }
 
-// startFakeCP starts an in-process control plane and returns dial options that
-// route the agent to it.
 func startFakeCP(t *testing.T, fake *fakeAgentService) []grpc.DialOption {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
@@ -225,8 +213,6 @@ func TestAgentRegisterAndHeartbeat(t *testing.T) {
 		t.Errorf("DockerVersion = %q; want 24.0.5", register.GetDockerVersion())
 	}
 
-	// The agent must send a CSR bound to its node identity so the CP can issue
-	// a certificate for the agent's own keypair.
 	if len(register.GetCsr()) == 0 {
 		t.Fatal("RegisterRequest.csr is empty")
 	}
@@ -241,8 +227,6 @@ func TestAgentRegisterAndHeartbeat(t *testing.T) {
 		t.Errorf("CSR signature is invalid: %v", err)
 	}
 
-	// The certificate returned by the CP is persisted next to the key, and the
-	// key generated for the CSR is written once.
 	if data, err := os.ReadFile(filepath.Join(certDir, certFileName)); err != nil {
 		t.Errorf("agent.crt not persisted: %v", err)
 	} else if string(data) != "CERTIFICATE" {
@@ -290,8 +274,6 @@ func TestAgentRetriesRegisterUntilCanceled(t *testing.T) {
 	}
 }
 
-// TestNextBackoffGrowthAndCap pins the exponential growth and the cap that the
-// jittered schedule is built on (A3-12).
 func TestNextBackoffGrowthAndCap(t *testing.T) {
 	const max = 30 * time.Second
 	got := time.Second
@@ -310,11 +292,7 @@ func TestNextBackoffGrowthAndCap(t *testing.T) {
 	}
 }
 
-// TestJitterBounded pins the A3-12 jitter bounds: every wait stays within ±20%
-// of the nominal backoff and is clamped to [min, max].
 func TestJitterBounded(t *testing.T) {
-	// Pin the documented fraction against a literal so changing the constant
-	// cannot silently change the tested bound.
 	if backoffJitterFraction != 0.2 {
 		t.Fatalf("backoffJitterFraction = %v; want 0.2", backoffJitterFraction)
 	}
@@ -339,8 +317,6 @@ func TestJitterBounded(t *testing.T) {
 			above++
 		}
 	}
-	// The samples must actually spread around the base and land on both sides;
-	// otherwise the "jitter" is a no-op.
 	if len(seen) < 100 {
 		t.Fatalf("jitter produced only %d distinct values; want real spread", len(seen))
 	}
@@ -362,16 +338,12 @@ func TestJitterBounded(t *testing.T) {
 	}
 }
 
-// TestAgentRegisterFailureBackoffIsJittered is the A3-12 guard for the
-// register-failure path: the wait is jittered around the nominal backoff, so a
-// fixed random source yields a deterministic lower/upper schedule rather than
-// the bare backoff.
 func TestAgentRegisterFailureBackoffIsJittered(t *testing.T) {
 	const (
 		min = 10 * time.Millisecond
 		max = time.Second
 	)
-	lower := []time.Duration{min, 16 * time.Millisecond, 32 * time.Millisecond} // nominal -20%, floor-clamped
+	lower := []time.Duration{min, 16 * time.Millisecond, 32 * time.Millisecond}
 	upper := []time.Duration{12 * time.Millisecond, 24 * time.Millisecond, 48 * time.Millisecond}
 
 	for _, tc := range []struct {
@@ -414,10 +386,6 @@ func TestAgentRegisterFailureBackoffIsJittered(t *testing.T) {
 	}
 }
 
-// TestBackoffResetAfterHealthySession pins the reset gate (U7): a session at
-// least backoffResetAfter long resets the backoff to the floor, a shorter one
-// keeps growing. Both schedules are driven deterministically through the
-// injected rand/sleep seams.
 func TestBackoffResetAfterHealthySession(t *testing.T) {
 	const min = 10 * time.Millisecond
 	delays := func(resetAfter time.Duration) []time.Duration {
@@ -433,7 +401,7 @@ func TestBackoffResetAfterHealthySession(t *testing.T) {
 			WithBackoffResetAfter(resetAfter),
 			WithDialOptions(dialOptions...),
 		)
-		runner.randFloat = func() float64 { return 0 } // nominal -20%
+		runner.randFloat = func() float64 { return 0 }
 		var got []time.Duration
 		runner.sleep = func(_ context.Context, d time.Duration) bool {
 			got = append(got, d)
@@ -445,16 +413,12 @@ func TestBackoffResetAfterHealthySession(t *testing.T) {
 		return got
 	}
 
-	// A session longer than the (tiny) reset window resets before every wait, so
-	// the delay stays at the jittered floor.
 	short := delays(time.Nanosecond)
 	for i, d := range short {
 		if d < 8*time.Millisecond || d > min {
 			t.Fatalf("reset-window session: delay[%d] = %v; want ~%v", i, d, min)
 		}
 	}
-	// A session shorter than the (huge) reset window never resets, so the delay
-	// grows: 10, 20, 40, 80ms (each -20% jitter).
 	long := delays(time.Hour)
 	want := []time.Duration{min, 16 * time.Millisecond, 32 * time.Millisecond, 64 * time.Millisecond}
 	if len(long) != len(want) {
@@ -467,11 +431,6 @@ func TestBackoffResetAfterHealthySession(t *testing.T) {
 	}
 }
 
-// TestAgentShortSessionsDoNotHotLoop is the A3-12 guard: a control plane that
-// accepts Register but drops every heartbeat stream must not make the agent
-// retry at the floor. Before the fix the backoff reset to the floor after each
-// short "success", pinning the loop at the minimum; now the backoff keeps
-// growing until a session lasts backoffResetAfter.
 func TestAgentShortSessionsDoNotHotLoop(t *testing.T) {
 	fake := &fakeAgentService{heartbeatFail: true}
 	dialOptions := startFakeCP(t, fake)
@@ -486,9 +445,6 @@ func TestAgentShortSessionsDoNotHotLoop(t *testing.T) {
 		WithDialOptions(dialOptions...),
 	)
 
-	// 250ms is far too short for the pre-fix floor-pinned loop to look like
-	// anything but a hot loop (it would attempt roughly every 10ms), while the
-	// growing schedule fits only a handful of attempts.
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	if err := runner.Run(ctx, nil); err != nil {
@@ -510,8 +466,6 @@ func assertHeartbeat(t *testing.T, heartbeat *agentv1.HeartbeatRequest, wantCont
 			t.Errorf("%s usage = %v; want 0..1", name, value)
 		}
 	}
-	// The I/O rates are zero on the first sample and on platforms that cannot
-	// report them; they must never be negative or NaN.
 	for name, value := range map[string]float64{
 		"net rx":     heartbeat.GetNetRxBps(),
 		"net tx":     heartbeat.GetNetTxBps(),
@@ -530,7 +484,6 @@ func assertHeartbeat(t *testing.T, heartbeat *agentv1.HeartbeatRequest, wantCont
 	}
 }
 
-// parseCSRRequest decodes the first PKCS#10 certificate request in a PEM blob.
 func parseCSRRequest(t *testing.T, csrPEM []byte) *x509.CertificateRequest {
 	t.Helper()
 
@@ -545,8 +498,6 @@ func parseCSRRequest(t *testing.T, csrPEM []byte) *x509.CertificateRequest {
 	return csr
 }
 
-// newAgentConn builds a client connection with the agent's own dial options
-// (including the fake CP's bufconn dialer).
 func newAgentConn(t *testing.T, runner *Agent) *grpc.ClientConn {
 	t.Helper()
 	options, err := runner.dialOptionsFor()
@@ -561,8 +512,6 @@ func newAgentConn(t *testing.T, runner *Agent) *grpc.ClientConn {
 	return conn
 }
 
-// TestAgentRegisterDeadlineBounded is the FX-3 item-10 guard: a stalled control
-// plane cannot pin a registration attempt past the per-attempt deadline.
 func TestAgentRegisterDeadlineBounded(t *testing.T) {
 	fake := &fakeAgentService{registerGate: make(chan struct{})}
 	defer close(fake.registerGate)
@@ -588,9 +537,6 @@ func TestAgentRegisterDeadlineBounded(t *testing.T) {
 	}
 }
 
-// TestAgentHeartbeatCancelsStreamOnReturn is the FX-3 item-11 guard: the
-// heartbeat stream's own context is canceled when the call returns, so a
-// reconnect cannot leak the stream.
 func TestAgentHeartbeatCancelsStreamOnReturn(t *testing.T) {
 	fake := &fakeAgentService{heartbeatFail: true}
 	dialOptions := startFakeCP(t, fake)
@@ -626,7 +572,6 @@ func TestAgentHeartbeatCancelsStreamOnReturn(t *testing.T) {
 	}
 }
 
-// TestRenewalDelaySchedulesBeforeExpiry pins the FX-3 item-7 renewal schedule.
 func TestRenewalDelaySchedulesBeforeExpiry(t *testing.T) {
 	certPEM, _, err := generateSelfSigned()
 	if err != nil {
@@ -635,7 +580,6 @@ func TestRenewalDelaySchedulesBeforeExpiry(t *testing.T) {
 	runner := NewAgent(Config{CertDir: t.TempDir()}, discardLogger(), nil, WithRenewBefore(30*24*time.Hour))
 
 	got := runner.renewalDelay(certPEM)
-	// selfSignedValidity is 365 days; renewing 30 days early leaves ~335.
 	if got < 330*24*time.Hour || got > 340*24*time.Hour {
 		t.Fatalf("renewalDelay = %v, want ~335d", got)
 	}
@@ -647,9 +591,6 @@ func TestRenewalDelaySchedulesBeforeExpiry(t *testing.T) {
 	}
 }
 
-// TestAgentReRegistersBeforeCertificateExpiry is the FX-3 item-7 end-to-end
-// behaviour: a short-lived certificate makes the agent re-register before it
-// lapses rather than waiting for a stream failure.
 func TestAgentReRegistersBeforeCertificateExpiry(t *testing.T) {
 	fake := &fakeAgentService{cert: shortLivedCertPEM(t, 2*time.Second)}
 	dialOptions := startFakeCP(t, fake)
@@ -689,7 +630,6 @@ func TestAgentReRegistersBeforeCertificateExpiry(t *testing.T) {
 	}
 }
 
-// shortLivedCertPEM returns a self-signed certificate valid for validity.
 func shortLivedCertPEM(t *testing.T, validity time.Duration) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

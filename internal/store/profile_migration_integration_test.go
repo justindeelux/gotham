@@ -17,10 +17,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// TestProfileDisplayNameMigration builds a disposable database at the
-// pre-profile schema, seeds a user, then rolls 00032 up and down: up adds a
-// nullable display_name that accepts a value and NULL but rejects the empty
-// string and overlong names; down drops the column again.
 func TestProfileDisplayNameMigration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -64,7 +60,6 @@ func TestProfileDisplayNameMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init migrations: %v", err)
 	}
-	// 00032 is the profile migration; stop at the newest pre-change version.
 	if _, err := provider.UpTo(ctx, 31); err != nil {
 		t.Fatalf("migrate to 00031: %v", err)
 	}

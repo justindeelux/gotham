@@ -7,12 +7,6 @@ export interface EngineMeta {
   port: number;
 }
 
-/**
- * Engine catalogue mirroring internal/databases (*Engine.Image/PortSpec).
- * The version list offers known-good tags; any tag matching the backend
- * version pattern is accepted via the custom input is not needed — the
- * select covers the defaults and recent majors.
- */
 export const ENGINES: EngineMeta[] = [
   {
     value: "postgres",
@@ -56,12 +50,10 @@ export const ENGINES: EngineMeta[] = [
   },
 ];
 
-/** engineByValue resolves the catalogue entry, falling back to PostgreSQL. */
 export function engineByValue(value: string): EngineMeta {
   return ENGINES.find((item) => item.value === value) ?? ENGINES[0];
 }
 
-/** versionOptionsFor lists the image-tag choices of one engine. */
 export function versionOptionsFor(
   engine: EngineMeta,
 ): Array<{ label: string; value: string }> {
@@ -71,7 +63,6 @@ export function versionOptionsFor(
   }));
 }
 
-/** effectiveVersionFor applies the engine default when no tag is picked. */
 export function effectiveVersionFor(
   engine: EngineMeta,
   version: string,
@@ -79,7 +70,6 @@ export function effectiveVersionFor(
   return version || engine.defaultVersion;
 }
 
-/** imagePreviewFor renders the repo:tag preview of one engine choice. */
 export function imagePreviewFor(engine: EngineMeta, version: string): string {
   return `${engine.repo}:${effectiveVersionFor(engine, version)}`;
 }

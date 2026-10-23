@@ -1,6 +1,5 @@
 import type en from "./en";
 
-/** Vietnamese instance-settings catalog: same keys as `en.ts`, translated values. */
 const vi: typeof en = {
   page: {
     eyebrow: "Cài đặt · Quản trị nền tảng",

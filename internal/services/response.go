@@ -5,12 +5,6 @@ import (
 	"time"
 )
 
-// ServiceResponse is the wire representation of a service. compose_yaml is
-// omitted from list responses (a document may be a megabyte); env is always
-// included because its values are already embedded in the rendered documents
-// the owner can read, and the UI needs them to prefill the editor.
-// project_name is the Gotham project; the compose project name rides
-// compose_project.
 type ServiceResponse struct {
 	ID              string            `json:"id"`
 	Name            string            `json:"name"`
@@ -29,11 +23,6 @@ type ServiceResponse struct {
 	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
-// NewServiceResponse maps a domain service to its wire representation. The
-// domain map is computed from the stored document and environment; a document
-// that no longer renders reports no routes instead of failing the read (the
-// deploy path is where the error surfaces). The projects resources surface
-// reuses this constructor, so the shapes cannot drift.
 func NewServiceResponse(service Service, withCompose bool) ServiceResponse {
 	response := ServiceResponse{
 		ID:              service.ID.String(),

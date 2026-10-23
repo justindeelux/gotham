@@ -1,8 +1,3 @@
-// Two-factor login second step (JUS-196 fix round 1): the auth store clears the
-// half-authenticated challenge on cancel/sign-out and reports it stale after
-// the token's five-minute lifetime; useMfaChallenge clears the code field and
-// returns the user to the password step when the token is dead or the account
-// is locked out.
 /* global window: readonly */
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h, nextTick } from "vue";
@@ -142,7 +137,6 @@ describe("useMfaChallenge", () => {
     expect(holder.mfa!.errorMessage.value).toContain("did not match");
     expect(holder.mfa!.form.code).toBe("");
     expect(focus).toHaveBeenCalled();
-    // The challenge survives a plain wrong code: the user can retry.
     expect(authStore.mfaPending).toBe(true);
     wrapper.unmount();
   });
@@ -216,7 +210,6 @@ describe("MfaChallengeForm", () => {
   });
 
   it("emits expired instead of success when the challenge is dead", async () => {
-    // No challenge at all: the form must not stay on a dead code step.
     const wrapper: VueWrapper = mount(MfaChallengeForm, {
       global: { plugins: [i18n] },
     });

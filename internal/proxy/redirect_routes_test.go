@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeRedirectService is a canned RedirectService.
 type fakeRedirectService struct {
 	redirect DomainRedirect
 	err      error
@@ -65,7 +64,6 @@ func (f *fakeRedirectService) DeleteRedirect(context.Context, uuid.UUID) error {
 	return f.err
 }
 
-// fakeCertificateStatusService is a canned CertificateStatusService.
 type fakeCertificateStatusService struct {
 	observations map[uuid.UUID]CertificateStatusObservation
 	calls        int
@@ -85,7 +83,6 @@ func (f *fakeCertificateStatusService) CertificateStatuses(_ context.Context, ce
 	return out
 }
 
-// sampleRedirect is the rule the wire tests render.
 func sampleRedirect() DomainRedirect {
 	return DomainRedirect{
 		ID:            uuid.MustParse("eeeeeeee-0000-0000-0000-000000000005"),
@@ -100,8 +97,6 @@ func sampleRedirect() DomainRedirect {
 	}
 }
 
-// newRedirectRoutes mounts the sync endpoint plus the redirect endpoints
-// behind a no-op auth middleware.
 func newRedirectRoutes(svc RedirectService) http.Handler {
 	r := chi.NewRouter()
 	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, nil, nil, svc, nil)
@@ -112,7 +107,6 @@ func TestRedirectRoutesCRUD(t *testing.T) {
 	svc := &fakeRedirectService{redirect: sampleRedirect()}
 	r := newRedirectRoutes(svc)
 
-	// Create.
 	body := `{"application_id":"dddddddd-0000-0000-0000-000000000004","source_domain":"old.example.com","target_domain":"new.example.com","code":302,"preserve_path":false,"enabled":false}`
 	recorder := httptest.NewRecorder()
 	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/proxy/redirects", strings.NewReader(body)))
@@ -134,7 +128,6 @@ func TestRedirectRoutesCRUD(t *testing.T) {
 		t.Fatalf("create response = %#v", created.Redirect)
 	}
 
-	// List, unfiltered and filtered.
 	recorder = httptest.NewRecorder()
 	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/proxy/redirects", nil))
 	if recorder.Code != http.StatusOK {
@@ -157,14 +150,12 @@ func TestRedirectRoutesCRUD(t *testing.T) {
 		t.Fatalf("filtered list status = %d, application = %s", recorder.Code, svc.lastListApplicationID)
 	}
 
-	// Get.
 	recorder = httptest.NewRecorder()
 	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/proxy/redirects/"+sampleRedirect().ID.String(), nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("get status = %d, want 200", recorder.Code)
 	}
 
-	// Patch.
 	recorder = httptest.NewRecorder()
 	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodPatch, "/v1/proxy/redirects/"+sampleRedirect().ID.String(),
 		strings.NewReader(`{"enabled":false,"target_domain":"elsewhere.example.com"}`)))
@@ -178,7 +169,6 @@ func TestRedirectRoutesCRUD(t *testing.T) {
 		t.Fatalf("patch must stay partial: %#v", svc.lastUpdate)
 	}
 
-	// Delete.
 	recorder = httptest.NewRecorder()
 	r.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/v1/proxy/redirects/"+sampleRedirect().ID.String(), nil))
 	if recorder.Code != http.StatusNoContent || svc.deleteCalls != 1 {
@@ -265,10 +255,6 @@ func TestRedirectRoutesShareTheSyncAuthBoundary(t *testing.T) {
 	}
 }
 
-// TestCertificateResponseCarriesObservedStatus proves the certificate API
-// surfaces the computed status: present carries not_after, unknown does not,
-// and a nil status service leaves the response byte-compatible with BE-6.2
-// consumers.
 func TestCertificateResponseCarriesObservedStatus(t *testing.T) {
 	certificate := sampleCertificate()
 	expiry := time.Date(2026, 12, 1, 12, 0, 0, 0, time.UTC)
@@ -299,7 +285,6 @@ func TestCertificateResponseCarriesObservedStatus(t *testing.T) {
 		t.Fatalf("not_after = %v, want %s", listed.Certificates[0].NotAfter, expiry)
 	}
 
-	// Unknown never fabricates an expiry and the list still answers 200.
 	unknown := &fakeCertificateStatusService{}
 	r = chi.NewRouter()
 	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, nil,
@@ -320,7 +305,6 @@ func TestCertificateResponseCarriesObservedStatus(t *testing.T) {
 		t.Fatalf("status = %q, want unknown", unknownBody.Certificates[0].Status)
 	}
 
-	// Without a status service the response carries no status fields at all.
 	r = chi.NewRouter()
 	Mount(r, func(next http.Handler) http.Handler { return next }, passthroughAuth, &fakeProxyService{}, nil,
 		&fakeCertificateService{certificate: certificate}, nil, nil)

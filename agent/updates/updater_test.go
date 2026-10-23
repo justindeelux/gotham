@@ -21,13 +21,10 @@ import (
 )
 
 const (
-	// testAgentVersion is the release the fixture publishes; testAgentCurrent
-	// is the version the simulated agent starts at.
 	testAgentVersion = "v1.2.0"
 	testAgentCurrent = "v1.0.0"
 )
 
-// agentReleaseServer serves a signed agent release (artifact + manifest + sig).
 type agentReleaseServer struct {
 	server       *httptest.Server
 	public       ed25519.PublicKey
@@ -73,7 +70,6 @@ func newAgentReleaseServer(t *testing.T, tamperSignature bool) *agentReleaseServ
 	}
 }
 
-// offer builds the CP response the agent receives.
 func (r *agentReleaseServer) offer() *agentv1.UpdateResponse {
 	return &agentv1.UpdateResponse{
 		UpdateAvailable:      true,
@@ -87,23 +83,15 @@ func (r *agentReleaseServer) offer() *agentv1.UpdateResponse {
 	}
 }
 
-// setTestPublicKey installs the release key the agent's embedded key would
-// carry in a release build (the dev override applies only when none is
-// embedded).
 func setTestPublicKey(t *testing.T, public ed25519.PublicKey) {
 	t.Helper()
 	t.Setenv(updatecore.PublicKeyEnv, base64.StdEncoding.EncodeToString(public))
 }
 
-// noopAgentRestart reports the wrapper exited cleanly without restarting.
 func noopAgentRestart(context.Context) (func() error, error) {
 	return func() error { return nil }, nil
 }
 
-// healthyRestart models the privileged wrapper succeeding: it records an `ok`
-// status for version in the authoritative status file and reports the wrapper
-// exited cleanly. This is what a real wrapper writes after it restarts the unit
-// and the health check passes.
 func healthyRestart(statusPath, version string) updatecore.RestartFunc {
 	return func(context.Context) (func() error, error) {
 		if err := updatecore.NewStatusStore(statusPath).Write(updatecore.Status{
@@ -115,8 +103,6 @@ func healthyRestart(statusPath, version string) updatecore.RestartFunc {
 	}
 }
 
-// rolledBackRestart models a wrapper that restarted, failed its health check,
-// restored the old binary and recorded rolled_back.
 func rolledBackRestart(statusPath, version string) updatecore.RestartFunc {
 	return func(context.Context) (func() error, error) {
 		if err := updatecore.NewStatusStore(statusPath).Write(updatecore.Status{
@@ -128,7 +114,6 @@ func rolledBackRestart(statusPath, version string) updatecore.RestartFunc {
 	}
 }
 
-// fakeUpdateClient is a minimal UpdateServiceClient.
 type fakeUpdateClient struct {
 	resp *agentv1.UpdateResponse
 	err  error
@@ -138,7 +123,6 @@ func (f *fakeUpdateClient) RequestUpdate(context.Context, *agentv1.UpdateRequest
 	return f.resp, f.err
 }
 
-// updaterTestConfig builds a Config whose Updater writes only under dir.
 func updaterTestConfig(t *testing.T, target string, restart updatecore.RestartFunc) Config {
 	t.Helper()
 	dir := filepath.Dir(target)
@@ -158,9 +142,6 @@ func updaterTestConfig(t *testing.T, target string, restart updatecore.RestartFu
 	}
 }
 
-// TestAgentUpdaterAppliesVerifiedOffer is the agent end to end: a CP offer is
-// downloaded, verified, swapped (keeping .old) and, once the wrapper records
-// the new binary healthy, the new version is reported.
 func TestAgentUpdaterAppliesVerifiedOffer(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -186,16 +167,11 @@ func TestAgentUpdaterAppliesVerifiedOffer(t *testing.T) {
 	if runner.current != testAgentVersion {
 		t.Fatalf("Version() = %q, want %s", runner.current, testAgentVersion)
 	}
-	// A healthy staged update must not leave a spurious failed-attempt count
-	// (it would otherwise be snapshotted as an unexpected change).
 	if _, err := os.Stat(filepath.Join(filepath.Dir(target), "update.backoff")); !os.IsNotExist(err) {
 		t.Fatalf("update.backoff exists after a healthy update: %v", err)
 	}
 }
 
-// TestAgentUpdaterLoadsKeyRing proves the embedded current + next ring flows
-// into the agent's applier: a manifest signed by the pre-positioned next key
-// verifies, and an unknown key is refused.
 func TestAgentUpdaterLoadsKeyRing(t *testing.T) {
 	current, _, err := updatecore.GenerateKey()
 	if err != nil {
@@ -242,8 +218,6 @@ func TestAgentUpdaterLoadsKeyRing(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterKeepsVersionWhenWrapperRollsBack is M1: a wrapper that rolls
-// back must not make the node report the new version.
 func TestAgentUpdaterKeepsVersionWhenWrapperRollsBack(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -262,8 +236,6 @@ func TestAgentUpdaterKeepsVersionWhenWrapperRollsBack(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterRefusesDowngrade is M3: a validly signed older release must
-// not roll the agent back.
 func TestAgentUpdaterRefusesDowngrade(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -286,7 +258,6 @@ func TestAgentUpdaterRefusesDowngrade(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterRefusesSameVersion is M3: an equal-version offer is refused.
 func TestAgentUpdaterRefusesSameVersion(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -306,8 +277,6 @@ func TestAgentUpdaterRefusesSameVersion(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterRollsBackOnTamperedSignature proves a tampered manifest never
-// touches the running binary and the old version keeps being reported.
 func TestAgentUpdaterRollsBackOnTamperedSignature(t *testing.T) {
 	release := newAgentReleaseServer(t, true)
 	setTestPublicKey(t, release.public)
@@ -331,8 +300,6 @@ func TestAgentUpdaterRollsBackOnTamperedSignature(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterRejectsDigestMismatch proves an artifact that does not match
-// the signed manifest digest is refused.
 func TestAgentUpdaterRejectsDigestMismatch(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -352,8 +319,6 @@ func TestAgentUpdaterRejectsDigestMismatch(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterIgnoresPlainOfferWithoutAutoUpdate proves a non-rollout offer
-// is not applied unless unattended auto-update is on.
 func TestAgentUpdaterIgnoresPlainOfferWithoutAutoUpdate(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -378,8 +343,6 @@ func TestAgentUpdaterIgnoresPlainOfferWithoutAutoUpdate(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterDoesNotBlockOnNonRegularMarker proves a planted FIFO at the
-// pending/status path cannot hang the Updater (the BE-9.1 guard class).
 func TestAgentUpdaterDoesNotBlockOnNonRegularMarker(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -409,9 +372,6 @@ func TestAgentUpdaterDoesNotBlockOnNonRegularMarker(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterIgnoresStaleOKStatus is N2: a stale `ok` for the same version
-// (for example from a previous install) is not trusted; only a recent healthy
-// status is adopted.
 func TestAgentUpdaterIgnoresStaleOKStatus(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -435,8 +395,6 @@ func TestAgentUpdaterIgnoresStaleOKStatus(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterBacksOffAfterFailedUpdate is N5: after a failed attempt the
-// same version is not re-applied until the backoff lapses.
 func TestAgentUpdaterBacksOffAfterFailedUpdate(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -466,17 +424,12 @@ func TestAgentUpdaterBacksOffAfterFailedUpdate(t *testing.T) {
 		t.Fatal("no backoff recorded after a rolled_back outcome")
 	}
 
-	// A second poll within the backoff must not re-download/re-apply.
 	runner.checkOnce(context.Background(), client)
 	if launches != 1 {
 		t.Fatalf("wrapper launches = %d, want 1 (backoff must suppress the retry)", launches)
 	}
 }
 
-// TestAgentUpdaterSeedsBackoffFromRolledBackStatus is the restart-loop fix: a
-// durable rolled_back status for a newer version makes a freshly started agent
-// skip that release on its first poll (the backoff is seeded, not just the
-// in-memory map).
 func TestAgentUpdaterSeedsBackoffFromRolledBackStatus(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -486,7 +439,6 @@ func TestAgentUpdaterSeedsBackoffFromRolledBackStatus(t *testing.T) {
 		t.Fatalf("write target: %v", err)
 	}
 	dir := filepath.Dir(target)
-	// The wrapper recorded a rollback of the offered version.
 	if err := updatecore.NewStatusStore(filepath.Join(dir, "update.status")).Write(updatecore.Status{
 		Result: updatecore.StatusRolledBack, Version: testAgentVersion, At: time.Now().UTC(),
 	}); err != nil {
@@ -511,9 +463,6 @@ func TestAgentUpdaterSeedsBackoffFromRolledBackStatus(t *testing.T) {
 	}
 }
 
-// TestAgentUpdaterAppliesAfterReset proves the operator retry path: after
-// `gotham-agent update reset` the agent clears the seeded backoff and applies
-// the same version again.
 func TestAgentUpdaterAppliesAfterReset(t *testing.T) {
 	release := newAgentReleaseServer(t, false)
 	setTestPublicKey(t, release.public)
@@ -537,7 +486,6 @@ func TestAgentUpdaterAppliesAfterReset(t *testing.T) {
 	runner := newTestUpdater(t, cfg)
 	client := &fakeUpdateClient{resp: release.offer()}
 
-	// Before the reset the failed release is skipped.
 	runner.checkOnce(context.Background(), client)
 	if launches != 0 {
 		t.Fatalf("wrapper launches = %d before reset, want 0", launches)
@@ -552,7 +500,6 @@ func TestAgentUpdaterAppliesAfterReset(t *testing.T) {
 	}
 }
 
-// readFileString reads path, failing the test on error.
 func readFileString(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -562,11 +509,6 @@ func readFileString(t *testing.T, path string) string {
 	return string(data)
 }
 
-// TestReleaseFromOfferBinding is the C2 regression matrix: an agent accepts only
-// its own release family/arch/manifest/channel and refuses the control-plane
-// family, a wrong arch, a wrong manifest, an empty channel and a beta offer on
-// any non-beta node (the inverse of the G2 PoC). It also pins the F3 fallback:
-// an unknown configured channel behaves like stable.
 func TestReleaseFromOfferBinding(t *testing.T) {
 	arch := runtime.GOARCH
 	otherArch := "arm64"

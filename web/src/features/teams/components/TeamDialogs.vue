@@ -7,7 +7,6 @@ import { acceptLink, registerLink } from "@/features/teams/utils/teamLinks";
 import { expiryLabel } from "@/shared/utils/format";
 import { useTeamsPageContext } from "@/features/teams/composables/useTeamsPage";
 
-/** TeamDialogs renders the create/rename/invite/one-time-token modals. */
 const teamsStore = useTeamsStore();
 const {
   createOpen,

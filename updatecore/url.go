@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// DefaultHTTPClient builds an HTTP client that bounds redirects, revalidates
-// every hop, refuses https downgrades, and blocks link-local/metadata dials.
 func DefaultHTTPClient(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = safeDialContext
@@ -32,21 +30,14 @@ func DefaultHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
-// ErrBadURL is returned when a release URL is not an acceptable http(s)
-// destination.
 var ErrBadURL = errors.New("updates: unacceptable URL")
 
-// metadataIPs are IPv6/IPv4 addresses of cloud metadata services that are not
-// already covered by the link-local ranges.
 var metadataIPs = []net.IP{
-	net.ParseIP("fd00:ec2::254"),   // AWS IMDS over IPv6
-	net.ParseIP("169.254.169.254"), // AWS/GCP/Azure IMDS (link-local, kept explicit)
-	net.ParseIP("100.100.100.200"), // Alibaba Cloud
+	net.ParseIP("fd00:ec2::254"),
+	net.ParseIP("169.254.169.254"),
+	net.ParseIP("100.100.100.200"),
 }
 
-// validateURL accepts an absolute http(s) URL. Plain http is only accepted for
-// loopback hosts so tests and local mirrors work without weakening production
-// transport. Link-local/metadata destinations are refused.
 func validateURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" {
@@ -64,11 +55,8 @@ func validateURL(raw string) error {
 	return validateOutboundHost(parsed.Hostname())
 }
 
-// ValidateURL reports whether raw is an acceptable release destination.
 func ValidateURL(raw string) error { return validateURL(raw) }
 
-// validateRedirect rejects a redirect target and refuses an https upgrade path
-// from downgrading to plain http.
 func validateRedirect(previous *url.URL, next *url.URL) error {
 	if err := validateURL(next.String()); err != nil {
 		return err
@@ -79,9 +67,6 @@ func validateRedirect(previous *url.URL, next *url.URL) error {
 	return nil
 }
 
-// validateOutboundHost refuses literal link-local/metadata addresses. Private
-// ranges stay allowed: a self-hosted mirror on a private network is a
-// legitimate configuration.
 func validateOutboundHost(host string) error {
 	host = strings.TrimSpace(host)
 	if split, _, err := net.SplitHostPort(host); err == nil {
@@ -101,7 +86,6 @@ func validateOutboundHost(host string) error {
 	return nil
 }
 
-// isBlockedIP reports whether ip is a link-local/metadata destination.
 func isBlockedIP(ip net.IP) bool {
 	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return true
@@ -114,9 +98,6 @@ func isBlockedIP(ip net.IP) bool {
 	return false
 }
 
-// safeDialContext resolves the host and refuses to connect to a
-// link-local/metadata address, so DNS cannot smuggle a request to a cloud
-// metadata service.
 func safeDialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
@@ -151,7 +132,6 @@ func safeDialContext(ctx context.Context, network, address string) (net.Conn, er
 	return nil, fmt.Errorf("%w: no allowed address for %s", ErrBadURL, host)
 }
 
-// isLoopbackHost reports whether host is a loopback literal or "localhost".
 func isLoopbackHost(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true

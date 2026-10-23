@@ -1,8 +1,3 @@
-/**
- * Terminal English catalog (JUS-245): the shared page surface, the floating
- * tabbed window, its confirmation dialog and lifecycle states. Session
- * values (target, cwd, shell, exit codes) are interpolated, never translated.
- */
 const en = {
   window: {
     label: "Terminal window",
@@ -77,15 +72,10 @@ const en = {
     badResponse:
       "The control plane sent an unexpected response. Start a new session to try again.",
     generic: "The terminal could not be started.",
-    // Attach failures before the shell started (JUS-260). The browser cannot
-    // read the HTTP status of a refused handshake, so these stay honest about
-    // what is known rather than claiming a specific cause.
     originRefused:
       "The terminal connection was refused before it opened. Your session may have expired, or a proxy blocked the panel's origin. Sign in again, then start a new session.",
     sessionExpired:
       "The terminal closed before the shell started. The session may have expired; start a new session.",
-    // Application container targets (JUS-247). Deliberately distinct from the
-    // host classes above: a container failure must never claim a host capability.
     applicationForbidden:
       "You need write access to this application's team to open a container shell.",
     applicationNotFound: "This application is no longer available.",

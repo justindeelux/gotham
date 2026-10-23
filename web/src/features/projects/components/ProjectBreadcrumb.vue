@@ -4,19 +4,11 @@ import { RouterLink } from "vue-router";
 
 import { activeLocale, i18n } from "@/shared/i18n";
 
-/**
- * Breadcrumb for the project surfaces: `Projects / <project>` on the detail
- * page, `Projects / <project> / <environment>` on the environment page
- * (PE-5), and `Projects / <project> / <environment> / <resource>` on the
- * nested resource pages. Long names truncate with a native tooltip.
- */
 const props = defineProps<{
   projectName: string;
   projectId: string;
   environmentName?: string;
-  /** Links the environment crumb to the environment page when set. */
   environmentId?: string;
-  /** Appends a current resource crumb when set. */
   resourceName?: string;
 }>();
 
@@ -26,15 +18,12 @@ interface Crumb {
   current: boolean;
 }
 
-/** landmarkLabel names the nav landmark in the active locale. */
 const landmarkLabel = computed<string>(() => {
   void activeLocale.value;
   return String(i18n.global.t("projects.breadcrumb.label"));
 });
 
 const crumbs = computed<Crumb[]>(() => {
-  // Real scope names ride through untouched; only the root label and the
-  // landmark name translate. Tracking the locale refreshes both on switch.
   void activeLocale.value;
   const trail: Crumb[] = [
     {

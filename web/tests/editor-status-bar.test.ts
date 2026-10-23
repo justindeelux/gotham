@@ -1,13 +1,8 @@
-// Editor status bar (JUS-221): the footer reflects the active tab, the
-// line-ending and tab-size pickers emit their choice, and read-only/loading
-// tabs hide the edit affordances while keeping an accessible name on each
-// clickable item.
 import { mount } from "@vue/test-utils";
 import { NPopselect } from "naive-ui";
 import { describe, expect, it } from "vitest";
 
 import EditorStatusBar from "@/features/files/components/EditorStatusBar.vue";
-// Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
@@ -15,7 +10,6 @@ import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 resetLocaleState();
 syncComposerLocale("en");
 
-/** tab builds one ready file tab, overridable per case. */
 function tab(overrides: Partial<EditorTab> = {}): EditorTab {
   return {
     id: "tab-1",
@@ -41,7 +35,6 @@ function tab(overrides: Partial<EditorTab> = {}): EditorTab {
   };
 }
 
-/** mountBar mounts the footer with an English catalog and default props. */
 function mountBar(
   overrides: Partial<EditorTab> = {},
   props: Partial<{
@@ -65,7 +58,6 @@ function mountBar(
   });
 }
 
-/** item finds a footer button by its accessible name. */
 function item(wrapper: ReturnType<typeof mountBar>, label: string) {
   const button = wrapper
     .findAll("button")
@@ -76,7 +68,6 @@ function item(wrapper: ReturnType<typeof mountBar>, label: string) {
   return button;
 }
 
-/** byText finds a footer button by its visible text (its accessible name). */
 function byText(wrapper: ReturnType<typeof mountBar>, text: string) {
   const button = wrapper.findAll("button").find((candidate) => candidate.text() === text);
   if (!button) {
@@ -96,8 +87,6 @@ describe("EditorStatusBar", () => {
     expect(wrapper.text()).toContain("PHP");
     expect(wrapper.text()).toContain("Tab 4");
     expect(wrapper.text()).toContain("1.50 KiB");
-    // Every clickable item carries an accessible name; the text items take
-    // theirs from their visible label, so the name and content agree.
     expect(byText(wrapper, "2 versions")).toBeTruthy();
     expect(item(wrapper, "Save encoding: UTF-8")).toBeTruthy();
     expect(item(wrapper, "Line ending: LF")).toBeTruthy();
@@ -144,8 +133,6 @@ describe("EditorStatusBar", () => {
         (button) => button.attributes("aria-label") === "Save encoding: UTF-8",
       ),
     ).toBe(false);
-    // The line-ending switch is an edit, so only the view-only tab-size and
-    // language pickers stay available.
     expect(wrapper.findAllComponents(NPopselect)).toHaveLength(2);
     expect(byText(wrapper, "Tab 4")).toBeTruthy();
   });

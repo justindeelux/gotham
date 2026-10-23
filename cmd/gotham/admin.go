@@ -22,13 +22,8 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// adminEnvFile is the service environment file the installer maintains. The
-// admin CLI reads it when run outside systemd (systemd itself exports it via
-// EnvironmentFile), so `sudo -u gotham -- gotham admin create` finds GOTHAM_DATABASE_DSN.
 const adminEnvFile = "/etc/gotham/gotham.env"
 
-// runAdmin implements `gotham admin`: operator account management on the
-// server host (P-A3).
 func runAdmin(args []string) int {
 	if len(args) == 0 {
 		adminUsage(os.Stderr)
@@ -51,7 +46,6 @@ func runAdmin(args []string) int {
 	}
 }
 
-// adminUsage prints the admin subcommand help.
 func adminUsage(w io.Writer) {
 	fmt.Fprintf(w, `gotham admin
 
@@ -78,8 +72,6 @@ Configuration comes from gotham.yaml / GOTHAM_* environment variables; when
 `, adminEnvFile)
 }
 
-// runAdminCreate creates an account, refusing once the instance has one
-// unless --force is given (P-A2: exactly one admin account).
 func runAdminCreate(args []string) int {
 	fs := flag.NewFlagSet("admin create", flag.ContinueOnError)
 	email := fs.String("email", "", "account email (required)")
@@ -144,10 +136,6 @@ func runAdminCreate(args []string) int {
 			return exitError
 		}
 
-		// The count above is a friendly pre-check; the insert itself carries the
-		// same atomic first-account guard as web registration, so two operators
-		// (or an operator racing a registration) cannot both win without
-		// --force.
 		if *force {
 			_, err = st.CreateUser(ctx, normalized, &hash)
 		} else {
@@ -175,9 +163,6 @@ func runAdminCreate(args []string) int {
 	})
 }
 
-// runAdminExists reports whether the instance already has an account, so the
-// installer can skip creation on a re-run without parsing the database. It
-// prints "admin-exists: true|false" and exits 0; any failure exits 1.
 func runAdminExists(args []string) int {
 	fs := flag.NewFlagSet("admin exists", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
@@ -218,10 +203,6 @@ func runAdminExists(args []string) int {
 	return exitOK
 }
 
-// runAdminResetPassword replaces the argon2id hash of an existing account,
-// deletes its sessions, and clears its TOTP two-factor configuration. That last
-// part is the documented recovery path for a self-hoster who lost the
-// authenticator device (JUS-196): host/DB access is the recovery authority.
 func runAdminResetPassword(args []string) int {
 	fs := flag.NewFlagSet("admin reset-password", flag.ContinueOnError)
 	email := fs.String("email", "", "account email (required)")
@@ -258,10 +239,6 @@ func runAdminResetPassword(args []string) int {
 	})
 }
 
-// checkAdminPasswordFlags rejects combining --password, --password-stdin and
-// --generate-password: they are mutually exclusive password sources. An
-// explicitly passed --password counts even when empty (it still selects the
-// flag source); only an omitted --password falls through to the prompt.
 func checkAdminPasswordFlags(passwordSet, passwordStdin, generatePassword bool) error {
 	n := 0
 	if passwordSet {
@@ -279,9 +256,6 @@ func checkAdminPasswordFlags(passwordSet, passwordStdin, generatePassword bool) 
 	return nil
 }
 
-// adminHashPlaintext validates an already-resolved password with the same
-// policy as registration and returns its argon2id-encoded hash. Unlike
-// adminPasswordHash it never prompts: an empty value fails validation.
 func adminHashPlaintext(password string) (string, error) {
 	if err := auth.ValidatePassword(password); err != nil {
 		return "", err
@@ -289,14 +263,8 @@ func adminHashPlaintext(password string) (string, error) {
 	return auth.HashPassword(password)
 }
 
-// maxPasswordStdinBytes bounds the --password-stdin read: a piped password is
-// at most 128 characters, so 1 KiB is generous and keeps a stray dump from
-// allocating unbounded memory in a local operator command.
 const maxPasswordStdinBytes = 1024
 
-// readPasswordLine reads a single password line from r. Only the first line
-// is significant (a trailing newline is stripped); every other byte of it,
-// including spaces, is significant.
 func readPasswordLine(r io.Reader) (string, error) {
 	data, err := io.ReadAll(io.LimitReader(r, maxPasswordStdinBytes+1))
 	if err != nil {
@@ -313,16 +281,10 @@ func readPasswordLine(r io.Reader) (string, error) {
 	return line, nil
 }
 
-// printGeneratedPassword reports a generated password exactly once, on the
-// given writer only. runAdminCreate passes os.Stdout after a successful
-// insert; failures never reach it, and nothing is ever written to stderr.
 func printGeneratedPassword(w io.Writer, password string) {
 	fmt.Fprintf(w, "generated-password: %s\n", password)
 }
 
-// generateAdminPassword returns a 32-character random password (24 bytes from
-// crypto/rand, base64url without padding). It satisfies the shared password
-// policy (length bounds) and never touches the process list or disk.
 func generateAdminPassword() (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
@@ -335,10 +297,6 @@ func generateAdminPassword() (string, error) {
 	return password, nil
 }
 
-// adminPasswordHash resolves the password (the flag value when given, otherwise
-// a hidden double prompt on the terminal), validates it with the same policy as
-// registration, and returns the argon2id-encoded hash the store expects. The
-// plaintext never leaves this function.
 func adminPasswordHash(password, prompt, confirm string) (string, error) {
 	if password == "" {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
@@ -361,7 +319,6 @@ func adminPasswordHash(password, prompt, confirm string) (string, error) {
 	return auth.HashPassword(password)
 }
 
-// readPassword prints prompt and reads a hidden answer from the terminal.
 func readPassword(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)
 	line, err := term.ReadPassword(int(os.Stdin.Fd()))
@@ -372,9 +329,6 @@ func readPassword(prompt string) (string, error) {
 	return string(line), nil
 }
 
-// withAdminStore loads the configuration (including the service env file), and
-// runs fn with an open store. It parses the flags first so --env-file and
-// invalid flag errors short-circuit before any database work.
 func withAdminStore(fs *flag.FlagSet, fn func(ctx context.Context, st *store.Store) int) int {
 	if fs.NFlag() == 0 && fs.NArg() == 0 {
 		adminUsage(os.Stderr)
@@ -401,9 +355,6 @@ func withAdminStore(fs *flag.FlagSet, fn func(ctx context.Context, st *store.Sto
 	return fn(ctx, store.New(pool))
 }
 
-// loadEnvFile applies KEY=VALUE lines from the service environment file. It is
-// silent when the file is missing and never overrides an already-set variable,
-// so the shell always wins.
 func loadEnvFile(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -426,8 +377,6 @@ func loadEnvFile(path string) {
 	}
 }
 
-// isUniqueViolation reports whether err is a PostgreSQL unique-constraint
-// violation (SQLSTATE 23505).
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"

@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-// runAgentWrapper runs the shared wrapper installed under the agent name
-// (gotham-agent-update) with fake systemctl/curl/flock shims, against an
-// agent-shaped configuration. It never touches a real install.
 func runAgentWrapper(t *testing.T, systemctlExit int, health string, withConf bool) wrapperResult {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -71,8 +68,6 @@ func runAgentWrapper(t *testing.T, systemctlExit int, health string, withConf bo
 		}
 	}
 
-	// Install the shared wrapper under the agent name so it selects the agent
-	// default configuration branch.
 	source, err := filepath.Abs(filepath.Join("..", "..", "deploy", "gotham-update.sh"))
 	if err != nil {
 		t.Fatalf("resolve script: %v", err)
@@ -111,8 +106,6 @@ func runAgentWrapper(t *testing.T, systemctlExit int, health string, withConf bo
 	return result
 }
 
-// TestAgentWrapperRestartsAndRecordsOK proves the agent-named wrapper restarts
-// the fixed unit and records a healthy outcome.
 func TestAgentWrapperRestartsAndRecordsOK(t *testing.T) {
 	result := runAgentWrapper(t, 0, healthAlwaysOK, true)
 	if result.exitCode != 0 {
@@ -126,8 +119,6 @@ func TestAgentWrapperRestartsAndRecordsOK(t *testing.T) {
 	}
 }
 
-// TestAgentWrapperRollsBackOnFailedRestart proves a failed restart restores the
-// previous binary and records rolled_back.
 func TestAgentWrapperRollsBackOnFailedRestart(t *testing.T) {
 	result := runAgentWrapper(t, 1, healthAlwaysOK, true)
 	if result.exitCode == 0 {
@@ -141,9 +132,6 @@ func TestAgentWrapperRollsBackOnFailedRestart(t *testing.T) {
 	}
 }
 
-// TestAgentWrapperFailsClosedWithoutConf proves the agent wrapper refuses to
-// run without its root-owned configuration instead of falling back to the
-// control-plane defaults.
 func TestAgentWrapperFailsClosedWithoutConf(t *testing.T) {
 	result := runAgentWrapper(t, 0, healthAlwaysOK, false)
 	if result.exitCode != 2 {
@@ -154,8 +142,6 @@ func TestAgentWrapperFailsClosedWithoutConf(t *testing.T) {
 	}
 }
 
-// TestAgentWrapperRefusesArguments pins the no-argument contract the sudoers
-// rule relies on.
 func TestAgentWrapperRefusesArguments(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("gotham-update.sh targets POSIX")
@@ -185,10 +171,6 @@ func TestAgentWrapperRefusesArguments(t *testing.T) {
 	}
 }
 
-// TestAgentUnitWiring pins the unit settings the update chain depends on:
-// KillMode=process (the wrapper must survive the restart cgroup), the fixed
-// binary path, the update paths, and the absence of NoNewPrivileges (the agent
-// needs setuid sudo for the fixed wrapper).
 func TestAgentUnitWiring(t *testing.T) {
 	unit, err := os.ReadFile(filepath.Join("..", "..", "deploy", "gotham-agent.service"))
 	if err != nil {
@@ -211,12 +193,6 @@ func TestAgentUnitWiring(t *testing.T) {
 	}
 }
 
-// TestAgentInstallerEnsuresDockerGroup guards the node-startup contract the
-// "install Docker from the App Store after the agent is registered" copy
-// depends on: the agent registers without Docker, so the installer must create
-// the docker group before enabling the unit, or systemd fails the unit at start
-// (status 216/GROUP) on a node that has no docker group yet. Both the
-// checked-in unit and the fallback unit install-agent.sh writes join that group.
 func TestAgentInstallerEnsuresDockerGroup(t *testing.T) {
 	installer := readRepoFile(t, "deploy/install-agent.sh")
 

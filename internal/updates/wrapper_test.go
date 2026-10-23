@@ -14,58 +14,39 @@ import (
 	"time"
 )
 
-// wrapperResult captures the outcome of one gotham-update.sh run.
 type wrapperResult struct {
-	exitCode int
-	target   string
-	backup   string
-	status   string
-	pending  string
-	output   string
-	// statusDir is the scratch root-owned status directory of the run.
-	statusDir string
-	// systemctlLog is the fake systemctl call log (mode rate-limit only).
+	exitCode     int
+	target       string
+	backup       string
+	status       string
+	pending      string
+	output       string
+	statusDir    string
 	systemctlLog string
 }
 
-// health modes for the fake curl shim.
 const (
-	healthAlwaysOK    = "ok"             // the service is always healthy
-	healthAlwaysFail  = "fail"           // the service is never healthy
-	healthAfterBackup = "after-rollback" // healthy only once the old binary is back
+	healthAlwaysOK    = "ok"
+	healthAlwaysFail  = "fail"
+	healthAfterBackup = "after-rollback"
 )
 
-// systemctl shim modes.
 const (
-	// systemctlRateLimit models systemd's start rate limit: a restart succeeds
-	// once, then fails with "Start request repeated too quickly" until
-	// reset-failed clears the failed state.
 	systemctlRateLimit = "rate-limit"
 )
 
-// wrapperEnv describes one wrapper run.
 type wrapperEnv struct {
 	systemctlExit int
 	health        string
-	// systemctlMode selects a richer fake systemctl. Empty uses systemctlExit.
 	systemctlMode string
-	// flockShim selects a richer fake flock. Empty exits 0 immediately.
-	flockShim string
-	// setup runs after the default files are created, to plant symlinks etc.
-	setup func(dir, target, statusPath string)
+	flockShim     string
+	setup         func(dir, target, statusPath string)
 }
 
-// flock shim modes.
 const (
-	// flockSwapWhileWaiting models the service user swapping the lock path
-	// while root waits on it: the wrapper must refuse, not run unserialized.
 	flockSwapWhileWaiting = "swap"
 )
 
-// runWrapper runs the deployed wrapper with fake systemctl/curl shims. It
-// reproduces the reviewers' repros: a restart that exits nonzero must still
-// restore the previous binary, and a pre-planted symlink must not redirect the
-// root status write.
 func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -165,10 +146,6 @@ func runWrapper(t *testing.T, env wrapperEnv) wrapperResult {
 	return result
 }
 
-// readRegularOrEmpty returns a file's contents only when it is a regular file.
-// The tests plant FIFOs/symlinks at the wrapper's paths, and os.ReadFile on one
-// would block the harness forever; anything non-regular (or missing) yields "".
-// The open uses O_NONBLOCK so even a swap after the Lstat cannot block.
 func readRegularOrEmpty(path string) string {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
@@ -190,9 +167,6 @@ func readRegularOrEmpty(path string) string {
 	return string(data)
 }
 
-// sanitizedEnv returns os.Environ() without sudo's variables. The harness
-// models the non-sudo GOTHAM_UPDATER_CONF seam, so how `go test` was invoked
-// (plain or via sudo) must not change what the wrapper touches.
 func sanitizedEnv() []string {
 	env := os.Environ()
 	filtered := make([]string, 0, len(env))
@@ -207,8 +181,6 @@ func sanitizedEnv() []string {
 	return filtered
 }
 
-// realInstallPresent reports whether this host has a real Gotham control plane.
-// Safety tests skip rather than risk acting on it.
 func realInstallPresent() bool {
 	for _, path := range []string{"/etc/gotham/updater.conf", "/var/lib/gotham", "/var/lib/gotham-updater"} {
 		if _, err := os.Stat(path); err == nil {
@@ -218,8 +190,6 @@ func realInstallPresent() bool {
 	return false
 }
 
-// TestSanitizedEnvStripsSudo pins the harness itself: CI has no SUDO_*
-// variables, so without this a revert of sanitizedEnv would still pass CI.
 func TestSanitizedEnvStripsSudo(t *testing.T) {
 	t.Setenv("SUDO_USER", "root")
 	t.Setenv("SUDO_UID", "0")
@@ -233,9 +203,6 @@ func TestSanitizedEnvStripsSudo(t *testing.T) {
 	}
 }
 
-// writeGuardShim writes a command that records its use in sentinel and then
-// fails, so a stray wrapper run cannot act on the host (and the test can prove
-// the PATH shim was consulted).
 func writeGuardShim(t *testing.T, path, sentinel string) {
 	t.Helper()
 	script := "#!/bin/sh\n: > \"" + sentinel + "\"\nexit 1\n"
@@ -244,7 +211,6 @@ func writeGuardShim(t *testing.T, path, sentinel string) {
 	}
 }
 
-// writeShim writes a fake command that exits with code.
 func writeShim(t *testing.T, path string, code int) {
 	t.Helper()
 	script := "#!/bin/sh\nexit " + strconv.Itoa(code) + "\n"
@@ -253,9 +219,6 @@ func writeShim(t *testing.T, path string, code int) {
 	}
 }
 
-// writeSystemctlShim writes a fake systemctl that optionally snapshots the
-// status directory listing (WRAPPER_TEST_STATUS_LIST) so a test can observe
-// what the wrapper left there while it held the lock, then exits with code.
 func writeSystemctlShim(t *testing.T, path string, code int) {
 	t.Helper()
 	script := "#!/bin/sh\n" +
@@ -268,9 +231,6 @@ func writeSystemctlShim(t *testing.T, path string, code int) {
 	}
 }
 
-// writeFlockSwapShim writes a fake flock that simulates the service user
-// replacing the lock path while root waits on it: it swaps the lock file and
-// exits 0 as if the lock had been acquired.
 func writeFlockSwapShim(t *testing.T, path string) {
 	t.Helper()
 	script := "#!/bin/sh\n" +
@@ -284,10 +244,6 @@ func writeFlockSwapShim(t *testing.T, path string) {
 	}
 }
 
-// writeRateLimitShim writes a fake systemctl that models systemd's start rate
-// limit: the first restart succeeds, later restarts fail with "Start request
-// repeated too quickly" until reset-failed clears the failed state. Every call
-// is appended to logPath so a test can assert reset-failed was invoked.
 func writeRateLimitShim(t *testing.T, path, logPath string) {
 	t.Helper()
 	script := "#!/bin/sh\n" +
@@ -314,7 +270,6 @@ func writeRateLimitShim(t *testing.T, path, logPath string) {
 	}
 }
 
-// writeCurlShim writes the fake health probe.
 func writeCurlShim(t *testing.T, path, health string) {
 	t.Helper()
 	var script string
@@ -335,9 +290,6 @@ func writeCurlShim(t *testing.T, path, health string) {
 	}
 }
 
-// TestWrapperRollsBackWhenRestartFails reproduces the reviewer's repro: a
-// failing systemctl restart must still restore the old binary and exit
-// nonzero.
 func TestWrapperRollsBackWhenRestartFails(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{systemctlExit: 1, health: healthAlwaysOK})
 
@@ -358,10 +310,6 @@ func TestWrapperRollsBackWhenRestartFails(t *testing.T) {
 	}
 }
 
-// TestWrapperRestartFailRollbackUnhealthy proves the failed-restart branch
-// health-checks the restored binary (item 6 / R7): when the first restart fails
-// and the restored binary is also unhealthy, the outcome is rollback_failed,
-// not a false rolled_back.
 func TestWrapperRestartFailRollbackUnhealthy(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{systemctlExit: 1, health: healthAlwaysFail})
 
@@ -382,10 +330,6 @@ func TestWrapperRestartFailRollbackUnhealthy(t *testing.T) {
 	}
 }
 
-// TestWrapperClearsRateLimitOnRollback proves a crash-looping new binary that
-// trips systemd's start rate limit does not turn a healthy rollback into
-// rollback_failed: the wrapper clears the failed state with reset-failed before
-// every restart, so the rollback restart succeeds and the restored binary runs.
 func TestWrapperClearsRateLimitOnRollback(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{
 		systemctlMode: systemctlRateLimit,
@@ -409,8 +353,6 @@ func TestWrapperClearsRateLimitOnRollback(t *testing.T) {
 	}
 }
 
-// TestWrapperRollsBackWhenHealthFails proves a restarted-but-unhealthy new
-// binary is rolled back to the (healthy) previous one.
 func TestWrapperRollsBackWhenHealthFails(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAfterBackup})
 
@@ -425,8 +367,6 @@ func TestWrapperRollsBackWhenHealthFails(t *testing.T) {
 	}
 }
 
-// TestWrapperReportsRollbackFailed proves that when neither binary is healthy
-// the outcome is recorded as rollback_failed rather than a false ok.
 func TestWrapperReportsRollbackFailed(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAlwaysFail})
 
@@ -438,8 +378,6 @@ func TestWrapperReportsRollbackFailed(t *testing.T) {
 	}
 }
 
-// TestWrapperKeepsHealthyBinary proves a healthy new binary is kept and the
-// backup is retained.
 func TestWrapperKeepsHealthyBinary(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAlwaysOK})
 
@@ -457,9 +395,6 @@ func TestWrapperKeepsHealthyBinary(t *testing.T) {
 	}
 }
 
-// TestWrapperRecoversMissingTarget proves the wrapper restores the backup when
-// the target is missing (an older crash layout), so ExecStart always finds a
-// binary.
 func TestWrapperRecoversMissingTarget(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{
 		systemctlExit: 0,
@@ -482,8 +417,6 @@ func TestWrapperRecoversMissingTarget(t *testing.T) {
 	}
 }
 
-// TestWrapperRefusesSymlinkedStatus reproduces the reviewer's root-file clobber:
-// a symlinked status path planted by the service user must not be followed.
 func TestWrapperRefusesSymlinkedStatus(t *testing.T) {
 	victimDir := t.TempDir()
 	victim := filepath.Join(victimDir, "victim")
@@ -512,8 +445,6 @@ func TestWrapperRefusesSymlinkedStatus(t *testing.T) {
 	}
 }
 
-// TestWrapperStatusWriteIsSafe is a static guard: the status temp file must be
-// created with mktemp (O_EXCL), never a predictable `${STATUS}.tmp.$$`.
 func TestWrapperStatusWriteIsSafe(t *testing.T) {
 	script, err := os.ReadFile(filepath.Join("..", "..", "deploy", "gotham-update.sh"))
 	if err != nil {
@@ -546,8 +477,6 @@ func TestWrapperStatusWriteIsSafe(t *testing.T) {
 	}
 }
 
-// TestWrapperRefusesSymlinkedLock reproduces N1: a Gotham-planted update.lock
-// symlink must not make root truncate/modify the target.
 func TestWrapperRefusesSymlinkedLock(t *testing.T) {
 	victimDir := t.TempDir()
 	victim := filepath.Join(victimDir, "victim-root-only")
@@ -580,11 +509,6 @@ func TestWrapperRefusesSymlinkedLock(t *testing.T) {
 	}
 }
 
-// TestWrapperPinsLockInode proves the lock inode is pinned into the root-owned
-// status directory before it is opened: the fake systemctl snapshots the
-// directory while the wrapper holds the lock, and the pin must be there. The
-// pin is what stops a swapped-in FIFO from blocking root's open(2); a skipped
-// pin would silently fall back to the racy open.
 func TestWrapperPinsLockInode(t *testing.T) {
 	listing := filepath.Join(t.TempDir(), "status-listing")
 	t.Setenv("WRAPPER_TEST_STATUS_LIST", listing)
@@ -600,8 +524,6 @@ func TestWrapperPinsLockInode(t *testing.T) {
 	}
 }
 
-// TestWrapperRemovesLockPin proves the pin is transient: it is removed when the
-// wrapper exits, so it cannot accumulate in the root-owned directory.
 func TestWrapperRemovesLockPin(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{systemctlExit: 0, health: healthAlwaysOK})
 
@@ -616,14 +538,7 @@ func TestWrapperRemovesLockPin(t *testing.T) {
 	}
 }
 
-// TestWrapperSweepsStaleLockPins proves the start-time sweep: a pin left by a
-// wrapper that died without its trap (SIGKILL/OOM) is removed before the next
-// pin is made, so a reused PID cannot silently degrade the run to the racy
-// fallback open. A pin whose embedded PID is alive is left alone, and the pin
-// path itself is still used.
 func TestWrapperSweepsStaleLockPins(t *testing.T) {
-	// Above kernel.pid_max on Linux (2^22) and the macOS max PID, so the PID
-	// cannot exist and kill -0 must fail.
 	const deadPID = 4194305
 	livePID := os.Getpid()
 
@@ -656,9 +571,6 @@ func TestWrapperSweepsStaleLockPins(t *testing.T) {
 	if _, err := os.Lstat(livePin); err != nil {
 		t.Fatalf("live pin %s was removed: %v", livePin, err)
 	}
-	// A silent fallback could also exit 0, but the snapshot taken while the
-	// wrapper held the lock only shows a pin when ln succeeded after the stale
-	// entry was swept.
 	data, err := os.ReadFile(listing)
 	if err != nil {
 		t.Fatalf("read the status dir snapshot: %v", err)
@@ -668,10 +580,6 @@ func TestWrapperSweepsStaleLockPins(t *testing.T) {
 	}
 }
 
-// TestWrapperRefusesLockSwappedWhileWaiting proves the post-flock inode check:
-// when the lock path is replaced while root waits on it, the wrapper refuses
-// instead of running the update while the control plane locks a different
-// inode.
 func TestWrapperRefusesLockSwappedWhileWaiting(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{
 		systemctlExit: 0,
@@ -702,10 +610,6 @@ func TestWrapperRefusesLockSwappedWhileWaiting(t *testing.T) {
 	}
 }
 
-// TestWrapperRefusesStatusDirOutsideRootOwnership proves the status directory
-// floor is enforced at run time: a symlinked status directory (a shape the
-// installer never produces) is refused, the update still runs, and no
-// authoritative status is written into the unsafe path.
 func TestWrapperRefusesStatusDirOutsideRootOwnership(t *testing.T) {
 	result := runWrapper(t, wrapperEnv{
 		systemctlExit: 0,
@@ -733,8 +637,6 @@ func TestWrapperRefusesStatusDirOutsideRootOwnership(t *testing.T) {
 	}
 }
 
-// TestWrapperHardensPendingRead reproduces L1: a symlinked or FIFO pending
-// marker must not leak a root-only version line or hang root.
 func TestWrapperHardensPendingRead(t *testing.T) {
 	t.Run("symlink", func(t *testing.T) {
 		victimDir := t.TempDir()
@@ -777,16 +679,12 @@ func TestWrapperHardensPendingRead(t *testing.T) {
 				}
 			},
 		})
-		// A hang would trip the harness timeout; reaching here proves it did not.
 		if !strings.Contains(result.status, "result=ok") {
 			t.Fatalf("status = %q, want ok (no hang, no FIFO read)", result.status)
 		}
 	})
 }
 
-// TestReadRegularOrEmptyNeverBlocks proves the harness read helper returns
-// promptly for FIFOs, symlinks, directories and missing paths (os.ReadFile on a
-// FIFO would block forever).
 func TestReadRegularOrEmptyNeverBlocks(t *testing.T) {
 	dir := t.TempDir()
 	fifo := filepath.Join(dir, "fifo")
@@ -830,9 +728,6 @@ func TestReadRegularOrEmptyNeverBlocks(t *testing.T) {
 	}
 }
 
-// TestRunWrapperDoesNotBlockOnNonRegularPaths plants a FIFO or a symlink at
-// every path runWrapper reads and asserts it returns within a short deadline; a
-// planted FIFO must never hang the harness (the round-6 CI hang).
 func TestRunWrapperDoesNotBlockOnNonRegularPaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("gotham-update.sh targets POSIX")
@@ -879,7 +774,6 @@ func TestRunWrapperDoesNotBlockOnNonRegularPaths(t *testing.T) {
 	}
 }
 
-// plantFIFO replaces path with a FIFO.
 func plantFIFO(t *testing.T, path string) {
 	t.Helper()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -890,7 +784,6 @@ func plantFIFO(t *testing.T, path string) {
 	}
 }
 
-// plantSymlink replaces path with a dangling symlink.
 func plantSymlink(t *testing.T, path string) {
 	t.Helper()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -901,9 +794,6 @@ func plantSymlink(t *testing.T, path string) {
 	}
 }
 
-// TestWrapperRemovesNonRegularPendingOnFailClosed proves a planted FIFO pending
-// marker is removed even when the wrapper fails closed on the lock, so it can
-// never hang a later reader (the round-6 CI hang).
 func TestWrapperRemovesNonRegularPendingOnFailClosed(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("gotham-update.sh targets POSIX")
@@ -931,7 +821,6 @@ func TestWrapperRemovesNonRegularPendingOnFailClosed(t *testing.T) {
 	}
 }
 
-// TestWrapperRejectsArguments proves the no-argument contract.
 func TestWrapperRejectsArguments(t *testing.T) {
 	script, err := filepath.Abs(filepath.Join("..", "..", "deploy", "gotham-update.sh"))
 	if err != nil {
@@ -949,10 +838,6 @@ func TestWrapperRejectsArguments(t *testing.T) {
 	}
 }
 
-// TestWrapperIgnoresEnvUnderSudo proves a GOTHAM_* override cannot change the
-// wrapper's configuration when it runs through sudo. It never touches a real
-// install: it skips when one is present, and every command the wrapper could
-// use to act on the host is replaced by a failing shim that records its use.
 func TestWrapperIgnoresEnvUnderSudo(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("gotham-update.sh targets POSIX")

@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// Repo is one repository visible to an installation.
 type Repo struct {
 	ExternalID    string
 	Name          string
@@ -24,15 +23,12 @@ type Repo struct {
 	HTMLURL       string
 }
 
-// Branch is one branch of a repository.
 type Branch struct {
 	Name      string
 	Commit    string
 	Protected bool
 }
 
-// ManifestConversion is the app credential set GitHub returns for a manifest
-// code. WebhookSecret and PEM are sensitive and must never be logged.
 type ManifestConversion struct {
 	ID            int64
 	Slug          string
@@ -42,57 +38,36 @@ type ManifestConversion struct {
 	PEM           string
 }
 
-// InstallationToken is a short-lived token for one installation.
 type InstallationToken struct {
 	Token     string
 	ExpiresAt time.Time
 }
 
-// GitHubAPI is the GitHub REST surface this package needs. Production code
-// uses httpAPI; tests substitute a fake, so no test touches the network.
 type GitHubAPI interface {
-	// ExchangeManifest converts a manifest code into the app credentials.
 	ExchangeManifest(ctx context.Context, code string) (ManifestConversion, error)
-	// GetInstallation verifies an installation belongs to the app and returns
-	// the account login. It authenticates with the app JWT.
 	GetInstallation(ctx context.Context, installationID int64, jwt string) (InstallationInfo, error)
-	// CreateInstallationToken mints a short-lived token for an installation,
-	// authenticated with the app JWT.
 	CreateInstallationToken(ctx context.Context, installationID int64, jwt string) (InstallationToken, error)
-	// ListInstallationRepos lists the repositories of an installation,
-	// reporting whether the page walk hit its bound (truncated).
 	ListInstallationRepos(ctx context.Context, token string) ([]Repo, bool, error)
-	// ListBranches lists the branches of repo ("owner/name").
 	ListBranches(ctx context.Context, token, repo string) ([]Branch, error)
 }
 
-// InstallationInfo is what GET /app/installations/{id} proves: the
-// installation exists, belongs to this app, and names the account.
 type InstallationInfo struct {
 	ID      int64
 	Account string
 	AppID   int64
 }
 
-// repoListPageSize is the installation repository page size, and
-// maxRepoListPages bounds the page walk so a host that always answers full
-// pages cannot loop the lister forever (1000 repos).
 const (
 	repoListPageSize = 100
 	maxRepoListPages = 10
 )
 
-// httpAPI implements GitHubAPI against one API base URL
-// (https://api.github.com or a GitHub Enterprise /api/v3 root).
 type httpAPI struct {
 	apiBase     string
 	client      *http.Client
 	allowUnsafe bool
 }
 
-// NewHTTPAPI builds the production GitHubAPI for apiBase. allowUnsafe permits
-// the loopback hosts tests use; production leaves it false, and then every
-// connection is dial-guarded to public IPs (see net.go).
 func NewHTTPAPI(apiBase string, allowUnsafe bool) GitHubAPI {
 	apiBase = strings.TrimRight(strings.TrimSpace(apiBase), "/")
 	return &httpAPI{
@@ -109,8 +84,6 @@ func NewHTTPAPI(apiBase string, allowUnsafe bool) GitHubAPI {
 	}
 }
 
-// noRedirect refuses redirects: the GitHub API answers directly, and a
-// redirect to an attacker host must never be followed with credentials.
 func noRedirect(_ *http.Request, _ []*http.Request) error {
 	return errRedirect
 }
@@ -146,9 +119,6 @@ func (a *httpAPI) ExchangeManifest(ctx context.Context, code string) (ManifestCo
 	}, nil
 }
 
-// flexibleString decodes a JSON string that GitHub sometimes wraps: the
-// manifest conversion returns webhook_secret as a plain string, but older
-// Enterprise releases nest it, so both shapes are accepted defensively.
 type flexibleString string
 
 func (s *flexibleString) UnmarshalJSON(raw []byte) error {
@@ -167,10 +137,6 @@ func (s *flexibleString) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// GetInstallation verifies the installation belongs to the app: GitHub only
-// answers when the JWT's app owns the installation, so a recorded id is
-// proof, not a claim. The manifest code never appears in errors (see
-// redactCode): the installation id is not sensitive.
 func (a *httpAPI) GetInstallation(ctx context.Context, installationID int64, jwt string) (InstallationInfo, error) {
 	if installationID <= 0 {
 		return InstallationInfo{}, fmt.Errorf("%w: installation id is required", ErrValidation)
@@ -220,10 +186,6 @@ func (a *httpAPI) CreateInstallationToken(ctx context.Context, installationID in
 
 func (a *httpAPI) ListInstallationRepos(ctx context.Context, token string) ([]Repo, bool, error) {
 	repos := make([]Repo, 0)
-	// Installations can hold more than one page: follow pages until a short
-	// one, bounded so a misbehaving host cannot page forever. Hitting the
-	// bound truncates and reports it, so callers can say so instead of
-	// silently serving a partial list.
 	for page := 1; page <= maxRepoListPages; page++ {
 		endpoint := fmt.Sprintf("%s/installation/repositories?per_page=%d&page=%d", a.apiBase, repoListPageSize, page)
 		var out struct {
@@ -264,8 +226,6 @@ func (a *httpAPI) ListBranches(ctx context.Context, token, repo string) ([]Branc
 	if strings.Count(strings.TrimSpace(repo), "/") != 1 {
 		return nil, fmt.Errorf("%w: repository must be owner/name", ErrValidation)
 	}
-	// Branches page like repositories: follow pages until a short one,
-	// bounded the same way.
 	branches := make([]Branch, 0)
 	for page := 1; page <= maxRepoListPages; page++ {
 		var out []struct {
@@ -296,9 +256,6 @@ func (a *httpAPI) post(ctx context.Context, endpoint string, body any, out any) 
 	return a.postWithAuth(ctx, endpoint, "", out)
 }
 
-// postWithAuth posts an empty body, authenticating with the app JWT when set.
-// Neither endpoint takes parameters and neither sends credentials in the
-// body, so the body stays empty.
 func (a *httpAPI) postWithAuth(ctx context.Context, endpoint, jwt string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
@@ -315,8 +272,6 @@ func (a *httpAPI) get(ctx context.Context, endpoint, token string, out any) erro
 	return a.getWithAuth(ctx, endpoint, token, out)
 }
 
-// getWithAuth issues a GET, authenticating with a bearer token or app JWT.
-// The credential is never part of the error text.
 func (a *httpAPI) getWithAuth(ctx context.Context, endpoint, credential string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -337,9 +292,6 @@ func (a *httpAPI) do(req *http.Request, out any) error {
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
-		// url.Error embeds the full request URL (including the single-use
-		// manifest code), so only the wrapped reason crosses into the error:
-		// redactCode covers the path this code prints, never the URL.
 		var urlErr *url.Error
 		if errors.As(err, &urlErr) {
 			return fmt.Errorf("githubapp: request %s: %v", redactCode(req.URL.Path), urlErr.Err)
@@ -363,9 +315,6 @@ func (a *httpAPI) do(req *http.Request, out any) error {
 	return nil
 }
 
-// redactCode hides the manifest conversion code in request paths: the code is
-// a single-use credential, so it must never reach logs through a wrapped
-// url.Error. Every other path passes through unchanged.
 func redactCode(path string) string {
 	return manifestCodePattern.ReplaceAllString(path, "/app-manifests/[redacted]/conversions")
 }

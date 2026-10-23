@@ -13,8 +13,6 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// This fake implements the same optional-team visibility contract as the registry.
-// Its separate global map ensures handlers cannot accidentally serialize fleet data.
 type observedRegistry struct {
 	*fakeServerService
 	versions map[string]servers.AgentVersion
@@ -77,7 +75,6 @@ func TestAuthorizedNodeVersions(t *testing.T) {
 			registry.versions[*tc.node] = servers.AgentVersion{NodeID: *tc.node, Version: tc.version, At: now}
 		}
 	}
-	// A deleted node's retained heartbeat must not resurrect it.
 	deleted := uuid.New()
 	registry.versions[deleted.String()] = servers.AgentVersion{Version: "deleted-version", At: now}
 	token := mustCreateToken(t, tokens, auth.ScopeRead)

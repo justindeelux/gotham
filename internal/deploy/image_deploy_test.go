@@ -12,8 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// testImageApplication returns an image-source application with a sealed
-// private-registry credential.
 func testImageApplication(t *testing.T, userID uuid.UUID) Application {
 	t.Helper()
 	sealed, err := providers.SealSecret(testSecretKey, "s3cret-token")
@@ -54,8 +52,6 @@ func TestOrchestratorImageDeployPullsAndRuns(t *testing.T) {
 	if !ok {
 		t.Fatal("deployment row is gone")
 	}
-	// No repository to clone and nothing to build: the pushing step (where
-	// the pull happens) follows queued directly.
 	want := []State{StateQueued, StatePushing, StateStarting, StateRunning}
 	if got := repo.persistedStates(); !statesEqual(got, want) {
 		t.Errorf("states = %s, want %s", renderStates(got), renderStates(want))
@@ -121,8 +117,6 @@ func TestOrchestratorImageRedeployPullsAgain(t *testing.T) {
 	first := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
 	o.run(context.Background(), job{app: app, dep: first})
 
-	// The tag moved upstream: the next pull resolves a new digest, which the
-	// redeploy records on its own row.
 	node.digest = "sha256:moveddigest"
 	second := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
 	o.run(context.Background(), job{app: app, dep: second})
@@ -152,7 +146,6 @@ func TestOrchestratorImageRollbackUsesPinnedDigest(t *testing.T) {
 		RollbackFrom:  uuid.New(),
 	})
 	node := newMockNode()
-	// The node pulls the pinned bits, so it resolves the pinned digest.
 	node.digest = digest
 	o := newTestOrchestrator(Config{
 		Repository: repo,
@@ -346,7 +339,6 @@ func TestServiceImageRollbackPinsDigest(t *testing.T) {
 		RegistryImage: app.ImageRef,
 		Digest:        digest,
 	})
-	// seedDeployment marks finished; a rollback target must be running.
 	_ = target
 
 	rolled, err := svc.Rollback(ctx, user, app.ID, uuid.Nil)
@@ -505,8 +497,6 @@ func TestServiceImageCredentialBoundToRegistryHost(t *testing.T) {
 		if !strings.Contains(err.Error(), "both a username and a password") {
 			t.Errorf("err = %v; want the halves refusal", err)
 		}
-		// The refusal happens before the write: the old reference and the
-		// old username are still stored.
 		stored, storedErr := svc.GetApplication(ctx, user, created.ID)
 		if storedErr != nil {
 			t.Fatalf("GetApplication: %v", storedErr)
@@ -530,8 +520,6 @@ func TestServiceImageCredentialBoundToRegistryHost(t *testing.T) {
 
 	t.Run("rollback to another host pulls without the credential", func(t *testing.T) {
 		app := testImageApplication(t, uuid.New())
-		// The application has since moved (credential re-entered for the new
-		// host); the rollback target is pinned to the old one.
 		app.ImageRef = "other.example.net/team/app:2.0"
 		repo := &fakeRepository{app: app}
 		digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -544,7 +532,6 @@ func TestServiceImageCredentialBoundToRegistryHost(t *testing.T) {
 			RollbackFrom:  uuid.New(),
 		})
 		node := newMockNode()
-		// The node pulls the pinned bits, so it resolves the pinned digest.
 		node.digest = digest
 		pub := &recordPublisher{}
 		o := newTestOrchestrator(Config{
@@ -671,7 +658,6 @@ func TestOrchestratorImagePinMismatchFails(t *testing.T) {
 func TestOrchestratorImageRollbackWithoutDigestLogsLoudly(t *testing.T) {
 	app := testImageApplication(t, uuid.New())
 	repo := &fakeRepository{app: app}
-	// A release recorded before digest resolution: no digest to pin.
 	dep := seedDeployment(t, repo, app, Deployment{
 		Kind:          KindRollback,
 		ImageTag:      app.ImageRef,

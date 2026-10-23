@@ -12,10 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestGitHubAppPersistence runs migration 00038 and exercises the GitHub App
-// queries: owner scoping, installation upsert, atomic cache replace (revoked
-// repos disappear), per-connection application counts, push targets and the
-// delete cascade. It skips when no database is reachable.
 func TestGitHubAppPersistence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -82,7 +78,6 @@ func TestGitHubAppPersistence(t *testing.T) {
 		t.Fatalf("CreateGitHubApp: %v", err)
 	}
 
-	// Owner scoping: another user cannot read the app.
 	if _, err := st.GetGitHubAppByIDAndUser(ctx, sqlc.GetGitHubAppByIDAndUserParams{
 		ID:     app.ID,
 		UserID: other.ID,
@@ -116,7 +111,6 @@ func TestGitHubAppPersistence(t *testing.T) {
 		t.Fatalf("upsert is not idempotent: %+v", again)
 	}
 
-	// The installation join backs webhook verification.
 	byInstall, err := st.ListGitHubAppsByInstallationID(ctx, 999)
 	if err != nil {
 		t.Fatalf("ListGitHubAppsByInstallationID: %v", err)
@@ -143,7 +137,6 @@ func TestGitHubAppPersistence(t *testing.T) {
 	if err := st.ReplaceGitHubRepoCache(ctx, app.ID, 999, repos("web", "api")); err != nil {
 		t.Fatalf("ReplaceGitHubRepoCache: %v", err)
 	}
-	// Revoking "api" upstream removes it from the cache.
 	if err := st.ReplaceGitHubRepoCache(ctx, app.ID, 999, repos("web")); err != nil {
 		t.Fatalf("ReplaceGitHubRepoCache again: %v", err)
 	}
@@ -158,8 +151,6 @@ func TestGitHubAppPersistence(t *testing.T) {
 		t.Fatalf("cache after revoke = %+v", cached)
 	}
 
-	// Per-connection counts and push targets join applications against the
-	// granted repos. Seed one application watching acme/web directly.
 	var projectID, envID, serverID pgtype.UUID
 	if err := pool.QueryRow(ctx, `INSERT INTO projects (team_id, name) VALUES ($1, $2) RETURNING id`,
 		user.ID, "shop").Scan(&projectID); err != nil {
@@ -187,9 +178,6 @@ func TestGitHubAppPersistence(t *testing.T) {
 			t.Logf("cleanup application: %v", err)
 		}
 	})
-	// The disconnect warning names applications by link, like push routing
-	// and cloning: a linked row counts even when its grant was revoked, and
-	// an unlinked row never counts even when granted.
 	names, err := st.ListGitHubAppApplicationNames(ctx, sqlc.ListGitHubAppApplicationNamesParams{
 		UserID:      user.ID,
 		GithubAppID: app.ID,
@@ -211,7 +199,6 @@ func TestGitHubAppPersistence(t *testing.T) {
 	if len(targets) != 1 || targets[0].Branch != "main" {
 		t.Fatalf("push targets = %+v", targets)
 	}
-	// Unlinked rows never deploy through the app, even watching the repo.
 	if _, err := pool.Exec(ctx, `INSERT INTO applications
 		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack)
 		VALUES ($1, $1, $2, $3, 'legacy', 'github', 'acme/web', 'git@github.com:acme/web.git', 'github_app', 'main', 'dockerfile')`,
@@ -225,16 +212,12 @@ func TestGitHubAppPersistence(t *testing.T) {
 	}); err != nil || len(targets) != 1 {
 		t.Fatalf("targets with legacy row = %+v, %v", targets, err)
 	}
-	// The unlinked row watches a granted repo but is not linked: the
-	// disconnect warning ignores it.
 	if names, err := st.ListGitHubAppApplicationNames(ctx, sqlc.ListGitHubAppApplicationNamesParams{
 		UserID:      user.ID,
 		GithubAppID: app.ID,
 	}); err != nil || len(names) != 1 {
 		t.Fatalf("linked applications with legacy row = %+v, %v", names, err)
 	}
-	// A linked row whose grant was revoked still counts: the disconnect
-	// clears its link.
 	if _, err := pool.Exec(ctx, `INSERT INTO applications
 		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, github_app_id)
 		VALUES ($1, $1, $2, $3, 'stale', 'github', 'acme/gone', 'https://github.com/acme/gone.git', 'github_app', 'main', 'dockerfile', $4)`,
@@ -257,14 +240,12 @@ func TestGitHubAppPersistence(t *testing.T) {
 		t.Fatalf("another user's targets = %+v, %v", targets, err)
 	}
 
-	// Delete cascades to installations and cache.
 	if _, err := st.DeleteGitHubApp(ctx, sqlc.DeleteGitHubAppParams{
 		ID:     app.ID,
 		UserID: user.ID,
 	}); err != nil {
 		t.Fatalf("DeleteGitHubApp: %v", err)
 	}
-	// Deleting the connection unlinks instead of deleting the application.
 	var link pgtype.UUID
 	if err := pool.QueryRow(ctx, `SELECT github_app_id FROM applications WHERE id = $1`, appID).Scan(&link); err != nil {
 		t.Fatalf("link after delete: %v", err)

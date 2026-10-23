@@ -1,8 +1,3 @@
-// Wizard SSH post-create flow (GS-4 fix round 1): an SSH private source
-// creates the application and its deploy key WITHOUT queueing the first
-// deploy; Deploy stays gated until a connection test passes or the operator
-// confirms the registration. The HTTPS flow still seals the token and
-// auto-deploys. The api and store modules are mocked at the boundary.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -75,8 +70,6 @@ async function harness() {
 }
 
 async function setSource(wiz: ReturnType<typeof useCreateAppWizard>, patch: Record<string, unknown>) {
-  // Assign the type first and flush, so the watcher's field reset lands
-  // before the type's own fields (as in the real UI flow).
   wiz.form.sourceType = patch.sourceType as typeof wiz.form.sourceType;
   await nextTick();
   Object.assign(wiz.form, patch);
@@ -114,12 +107,10 @@ describe("wizard SSH post-create flow", () => {
     await wiz.handleSubmit();
     expect(mockCreate).toHaveBeenCalledOnce();
     expect(mockCreateKey).toHaveBeenCalledWith("app1");
-    // No blind first deploy: the operator has not registered the key yet.
     expect(mockDeploy).not.toHaveBeenCalled();
     expect(wiz.createdKey.value?.publicKey).toBe("ssh-ed25519 AAAA key");
     expect(emitted).toEqual([]);
 
-    // Deploy stays disabled until a test passes or the operator confirms.
     expect(wiz.canDeployCreated.value).toBe(false);
     await wiz.runCreatedKeyTest();
     expect(mockProbe).toHaveBeenCalledWith("app1");
@@ -158,7 +149,6 @@ describe("wizard SSH post-create flow", () => {
     expect(wiz.keyRecovery.value?.application).toEqual(testApp());
     expect(emitted).toEqual([]);
 
-    // Retry lands on the key step without recreating the application.
     mockCreateKey.mockResolvedValueOnce({ public_key: "ssh-ed25519 AAAA key" });
     await wiz.retryKeyCreation();
     expect(mockCreate).toHaveBeenCalledOnce();

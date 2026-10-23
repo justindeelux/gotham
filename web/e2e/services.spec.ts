@@ -8,8 +8,6 @@ import {
   uniqueSuffix,
 } from "./support";
 
-// Reuse the authenticated session so the page starts signed in; the seed
-// calls authenticate separately with the access token from global setup.
 test.use({ storageState: storageStatePath });
 
 interface TemplateSummary {
@@ -26,22 +24,6 @@ interface ServicePayload {
   env: Record<string, string>;
 }
 
-/**
- * FE-7.1: drives the real add-resource service picker and wizard against the
- * control plane.
- *
- * Covers the catalog rendering in the picker, the dynamic form generated from
- * the template schema (required + default), the rendered compose preview,
- * service creation from the render with the secret `env` map, and the service
- * appearing on the environment page. The render contract is asserted at the API
- * boundary: `compose_yaml` keeps the `${field}` reference while the value
- * travels only in `env`.
- *
- * The control plane has no node agent, so a live deploy cannot be asserted
- * here (it is covered by the gated internal/e2e P7 tests); this smoke stops
- * after creation and never fakes a deploy result. When the services feature is
- * disabled, every route answers 404/503 and the smoke skips.
- */
 test.describe("services & templates", () => {
   test("picker → dynamic form → compose preview → create service", async ({
     page,
@@ -76,8 +58,6 @@ test.describe("services & templates", () => {
     const dbPassword = `e2e-db-${suffix}-9f2a-secret`;
     const rootPassword = `e2e-root-${suffix}-4c1b-secret`;
 
-    // A server row is required before a service can be stored. No agent is
-    // connected, so nothing deploys and no container exists.
     const serverResponse = await request.post("/api/v1/servers", {
       headers,
       data: { name: nodeName, ip: seedNodeAddress, ssh_user: "root" },
@@ -85,7 +65,6 @@ test.describe("services & templates", () => {
     expect(serverResponse.status(), await serverResponse.text()).toBe(201);
     const { projectId, projectName, environmentId } = await seedProjectEnvironment(request, headers);
 
-    // ── the add-resource picker loads the live catalog ───────────────────
     await page.goto(environmentURL(projectId, environmentId));
     await page.getByRole("button", { name: "Add resource" }).first().click();
     const picker = page.locator(".n-modal.app-modal");
@@ -97,7 +76,6 @@ test.describe("services & templates", () => {
       ).toBeVisible();
     }
 
-    // ── opening a template renders the dynamic form ──────────────────────
     await picker.locator('[data-template="wordpress"]').click();
     const wizard = page
       .locator(".n-modal")
@@ -113,7 +91,6 @@ test.describe("services & templates", () => {
         `field ${key} comes from the template schema`,
       ).toBeVisible();
     }
-    // The default comes from the schema; secrets never carry one.
     await expect(step1.locator(".field-db_name input")).toHaveValue("wordpress");
     await expect(step1.locator(".field-db_password input")).toHaveValue("");
     await expect(step1.locator(".field-db_password input")).toHaveAttribute(
@@ -121,7 +98,6 @@ test.describe("services & templates", () => {
       "password",
     );
 
-    // A missing required field blocks the step and shows the schema message.
     await wizard.getByRole("button", { name: "Next" }).click();
     await expect(step1.getByText("This field is required.").first()).toBeVisible();
     await expect(wizard.locator('[data-testid="wizard-step-2"]')).toBeHidden();
@@ -131,7 +107,6 @@ test.describe("services & templates", () => {
     await step1.locator(".field-db_root_password input").fill(rootPassword);
     await wizard.getByRole("button", { name: "Next" }).click();
 
-    // ── rendering shows the compose preview without any secret ───────────
     const step2 = wizard.locator('[data-testid="wizard-step-2"]');
     await expect(step2).toBeVisible();
     const preview = step2.locator('[data-testid="compose-preview"]');
@@ -142,28 +117,21 @@ test.describe("services & templates", () => {
     await expect(preview).not.toContainText(rootPassword);
     await expect(step2).toContainText("2 services");
 
-    // ── name + node, then create the service from the render ─────────────
     await wizard.getByRole("button", { name: "Next" }).click();
     const step3 = wizard.locator('[data-testid="wizard-step-3"]');
     await expect(step3).toBeVisible();
     await step3.locator(".field-service-name input").fill(serviceName);
-    // The picker preselects the environment scope, so the summary shows the
-    // seeded project and environment instead of the selects.
     await expect(step3).toContainText(`${projectName} / production`);
-    // The seeded node is pending (no agent validated it); pending nodes stay
-    // selectable, only offline ones are disabled.
     await step3.locator(".wizard__metaform .n-select").click();
     await page
       .locator(".n-base-select-option")
       .filter({ hasText: nodeName })
       .click();
-    // The create request carries the scope the wizard shows.
     const createRequest = page.waitForRequest(
       (request) =>
         request.url().endsWith("/api/v1/services") &&
         request.method() === "POST",
     );
-    // The wizard footer (not the step body) carries the submit button.
     await wizard.getByRole("button", { name: "Create service" }).click();
     const createBody = (await createRequest).postDataJSON() as Record<string, unknown>;
     expect(createBody["environment_id"]).toBe(environmentId);
@@ -172,8 +140,6 @@ test.describe("services & templates", () => {
     await expect(created).toBeVisible();
     await expect(created).toContainText(serviceName);
 
-    // The create request carries the render's env map: the API stores the
-    // secret values there and keeps only `${field}` in the document.
     const listResponse = await request.get("/api/v1/services", { headers });
     expect(listResponse.status(), await listResponse.text()).toBe(200);
     const { services } = (await listResponse.json()) as {
@@ -196,16 +162,13 @@ test.describe("services & templates", () => {
     expect(detail.compose_yaml).not.toContain(dbPassword);
     expect(detail.compose_yaml).not.toContain(rootPassword);
 
-    // ── the created service appears on the environment page ─────────────
     await wizard.getByRole("button", { name: "Close", exact: true }).click();
-    // Closing the wizard restores the add-resource picker.
     await expect(picker).toBeVisible();
     await page.goto(environmentURL(projectId, environmentId));
     const row = page.locator(".resource-table tbody tr").filter({ hasText: serviceName });
     await expect(row).toHaveCount(1);
     await expect(row).toContainText("creating");
 
-    // ── secret hygiene: values stay out of the DOM and browser storage ───
     const browserStorage = await page.evaluate(() =>
       [JSON.stringify(localStorage), JSON.stringify(sessionStorage)].join("\n"),
     );
@@ -214,8 +177,6 @@ test.describe("services & templates", () => {
     expect(await page.content()).not.toContain(dbPassword);
     expect(await page.content()).not.toContain(rootPassword);
 
-    // The guardrail fixture asserts console errors and 5xx responses at
-    // teardown; the happy path must also leave no failed API request behind.
     expect(
       guardrails.apiFailures,
       `unexpected failed API requests:\n${guardrails.apiFailures.join("\n")}`,

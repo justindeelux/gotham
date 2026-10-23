@@ -22,20 +22,9 @@ import {
   loginFresh,
 } from "./terminal-support";
 
-/**
- * JUS-251 regressions for the real bugs the live browser proof found.
- *
- * Each scenario drives the real control plane, the real node agent and a real
- * PTY; a fake that accepted whatever the UI sent is exactly what missed these
- * defects. The `sleep`/fd scenario is Linux/macOS native: it inspects the
- * agent process this run started (GOTHAM_E2E_AGENT_PID), never a developer's
- * long-lived agent.
- */
-
 test.use({ storageState: storageStatePath });
 
 const account = loadAccount();
-/** fresh is this file's own sign-in (see loginFresh). */
 let fresh: Awaited<ReturnType<typeof loginFresh>>;
 
 test.beforeAll(async ({ request }) => {
@@ -46,7 +35,6 @@ test.beforeEach(async ({ page }) => {
   await installSession(page, fresh);
 });
 
-/** requireTerminalNode skips when the real node is unavailable. */
 async function requireTerminalNode(request: Parameters<typeof terminalServer>[0]) {
   skipOrFail(
     !(await isPlatformAdmin(request, account)),
@@ -75,8 +63,6 @@ test.describe("terminal regressions", () => {
     await pickServer(page, server.name);
     const create = await waitForCreate(traffic);
 
-    // The exact payload that used to be rejected: no root, no cwd, no empty
-    // strings either. The real backend must answer 201 and the PTY must work.
     expect(create.status).toBe(201);
     expect(create.body).toEqual({
       target: "host",
@@ -92,7 +78,6 @@ test.describe("terminal regressions", () => {
     await expect
       .poll(async () => (await screenText(page)).includes(marker))
       .toBe(true);
-    // A default directory was chosen by the agent, never by the browser.
     const text = await screenText(page);
     expect(text).not.toContain("cwd");
   });
@@ -107,8 +92,6 @@ test.describe("terminal regressions", () => {
 
     await page.goto(fileManagerURL(server.id));
     await expect(page.locator(".files-page, main")).toBeVisible();
-    // Walk into the platform's temp directory; its relative path is the cwd
-    // the browser must send and the absolute path is what the PTY must show.
     const relative = serverTemporaryRoot(server.os);
     for (const segment of relative.split("/")) {
       await page.getByRole("cell", { name: segment, exact: true }).dblclick();
@@ -117,7 +100,6 @@ test.describe("terminal regressions", () => {
     await page.waitForTimeout(500);
     expect(traffic.createCount()).toBe(0);
 
-    // The guard is a double-click: two clicks before the first await settles.
     await page
       .getByRole("button", { name: "Open terminal here" })
       .dblclick({ delay: 40 });
@@ -131,7 +113,6 @@ test.describe("terminal regressions", () => {
     expect(String(create.body?.root)).not.toBe("");
     expect(traffic.createCount()).toBe(1);
 
-    // The session is in the floating window and starts in that folder.
     await expect(page.locator(".term-window")).toBeVisible();
     await expect
       .poll(() => screenText(page, ".term-window").then((text) => text.includes("/" + relative)))
@@ -174,15 +155,12 @@ test.describe("terminal regressions", () => {
       .poll(async () => (await screenText(page)).includes("server: " + server.name))
       .toBe(true);
 
-    // A job-control background job in its own process group. `sleep 7617` is
-    // distinctive enough that no unrelated process can match this assertion.
     await focusTerminal(page);
     await runCommand(context, page, "sleep 7617 &");
     await expect
       .poll(() => processRunning("sleep 7617"))
       .toBe(true);
 
-    // Close from the pane, confirm the dialog.
     await page.getByRole("button", { name: "Close terminal" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Close terminal" }).click();
     await expect
@@ -194,21 +172,13 @@ test.describe("terminal regressions", () => {
       "the session's background sleep survived close (JUS-254)",
     ).toBe(true);
 
-    // Descriptor release: only asserted when the workflow tells us which
-    // agent pid it started. The macOS fallback keeps the check useful on a
-    // developer machine; a missing inspection tool skips only this part.
     if (pid !== null && baseline !== null) {
-      // ptmxCount throws when /proc (or lsof) cannot be read, so a failed
-      // inspection fails this assertion instead of passing vacuously.
       await expect
         .poll(async () => ptmxCount(pid), { timeout: 20_000 })
         .toBe(baseline);
     }
   });
 
-  // One independent test per breakpoint: a regression at 1280/480/390 must be
-  // reported even when 1366 fails first (the previous loop aborted at the
-  // first failure and hid the other sizes).
   for (const [width, height] of [
     [1366, 800],
     [1280, 720],
@@ -233,8 +203,6 @@ test.describe("terminal regressions", () => {
         .toBe(true);
       await page.getByRole("button", { name: "Open in window" }).first().click();
       await expect(page.locator(".term-window")).toBeVisible();
-      // The page pane now carries the moved notice. It must never paint above
-      // the window: probe the window's centre, corners and status bar.
       await expect(page.locator(".term-pane")).toContainText(
         /open in the window|Minimize the window/i,
       );

@@ -11,19 +11,14 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// storeRepository adapts *store.Store to Repository. Sealed secrets cross this
-// boundary still sealed; the service opens them only for signing and
-// verification.
 type storeRepository struct {
 	store *store.Store
 }
 
-// newStoreRepository builds the PostgreSQL-backed repository.
 func newStoreRepository(st *store.Store) *storeRepository {
 	return &storeRepository{store: st}
 }
 
-// CreateApp stores a new GitHub App with its sealed secrets.
 func (r *storeRepository) CreateApp(ctx context.Context, app GitHubApp, webhookSecret, privateKey string) (GitHubApp, error) {
 	row, err := r.store.CreateGitHubApp(ctx, sqlc.CreateGitHubAppParams{
 		UserID:              pgUUID(app.UserID),
@@ -42,7 +37,6 @@ func (r *storeRepository) CreateApp(ctx context.Context, app GitHubApp, webhookS
 	return appFromRow(row), nil
 }
 
-// GetApp loads one app owned by userID with its installations.
 func (r *storeRepository) GetApp(ctx context.Context, id, userID uuid.UUID) (GitHubApp, error) {
 	row, err := r.store.GetGitHubAppByIDAndUser(ctx, sqlc.GetGitHubAppByIDAndUserParams{
 		ID:     pgUUID(id),
@@ -62,7 +56,6 @@ func (r *storeRepository) GetApp(ctx context.Context, id, userID uuid.UUID) (Git
 	return app, nil
 }
 
-// GetSealed loads one app owned by userID with its still-sealed secrets.
 func (r *storeRepository) GetSealed(ctx context.Context, id, userID uuid.UUID) (SealedApp, error) {
 	row, err := r.store.GetGitHubAppByIDAndUser(ctx, sqlc.GetGitHubAppByIDAndUserParams{
 		ID:     pgUUID(id),
@@ -74,8 +67,6 @@ func (r *storeRepository) GetSealed(ctx context.Context, id, userID uuid.UUID) (
 	return sealedFromRow(row), nil
 }
 
-// GetSealedByID loads one app with its still-sealed secrets without a user
-// scope, for webhook handling where the signature is the authentication.
 func (r *storeRepository) GetSealedByID(ctx context.Context, id uuid.UUID) (SealedApp, error) {
 	row, err := r.store.GetGitHubAppByID(ctx, pgUUID(id))
 	if err != nil {
@@ -84,7 +75,6 @@ func (r *storeRepository) GetSealedByID(ctx context.Context, id uuid.UUID) (Seal
 	return sealedFromRow(row), nil
 }
 
-// ListApps returns every app owned by userID with installations.
 func (r *storeRepository) ListApps(ctx context.Context, userID uuid.UUID) ([]GitHubApp, error) {
 	rows, err := r.store.ListGitHubAppsByUser(ctx, pgUUID(userID))
 	if err != nil {
@@ -105,7 +95,6 @@ func (r *storeRepository) ListApps(ctx context.Context, userID uuid.UUID) ([]Git
 	return apps, nil
 }
 
-// DeleteApp removes an app and, by foreign key, its installations and cache.
 func (r *storeRepository) DeleteApp(ctx context.Context, id, userID uuid.UUID) error {
 	n, err := r.store.DeleteGitHubApp(ctx, sqlc.DeleteGitHubAppParams{
 		ID:     pgUUID(id),
@@ -120,7 +109,6 @@ func (r *storeRepository) DeleteApp(ctx context.Context, id, userID uuid.UUID) e
 	return nil
 }
 
-// UpsertInstallation records an installation of an app.
 func (r *storeRepository) UpsertInstallation(ctx context.Context, appID uuid.UUID, installationID int64, account string) (Installation, error) {
 	row, err := r.store.UpsertGitHubInstallation(ctx, sqlc.UpsertGitHubInstallationParams{
 		GithubAppID:    pgUUID(appID),
@@ -133,7 +121,6 @@ func (r *storeRepository) UpsertInstallation(ctx context.Context, appID uuid.UUI
 	return installationFromRow(row), nil
 }
 
-// ListInstallations returns the installations of one app.
 func (r *storeRepository) ListInstallations(ctx context.Context, appID uuid.UUID) ([]Installation, error) {
 	rows, err := r.store.ListGitHubInstallations(ctx, pgUUID(appID))
 	if err != nil {
@@ -146,8 +133,6 @@ func (r *storeRepository) ListInstallations(ctx context.Context, appID uuid.UUID
 	return insts, nil
 }
 
-// DeleteInstallation removes one installation (and its cache by foreign key)
-// after GitHub reports it deleted.
 func (r *storeRepository) DeleteInstallation(ctx context.Context, installationID int64, appID uuid.UUID) error {
 	rows, err := r.store.ListGitHubInstallations(ctx, pgUUID(appID))
 	if err != nil {
@@ -164,8 +149,6 @@ func (r *storeRepository) DeleteInstallation(ctx context.Context, installationID
 	return nil
 }
 
-// AppsByInstallationID returns every app holding an installation (with sealed
-// secrets), so webhook verification can try each candidate secret.
 func (r *storeRepository) AppsByInstallationID(ctx context.Context, installationID int64) ([]SealedApp, error) {
 	rows, err := r.store.ListGitHubAppsByInstallationID(ctx, installationID)
 	if err != nil {
@@ -178,8 +161,6 @@ func (r *storeRepository) AppsByInstallationID(ctx context.Context, installation
 	return apps, nil
 }
 
-// ReplaceRepoCache atomically overwrites the cached repository list of one
-// installation: repos revoked upstream disappear instead of lingering.
 func (r *storeRepository) ReplaceRepoCache(ctx context.Context, appID uuid.UUID, installationID int64, repos []Repo) error {
 	params := make([]sqlc.UpsertGitHubRepoCacheParams, 0, len(repos))
 	for _, repo := range repos {
@@ -202,7 +183,6 @@ func (r *storeRepository) ReplaceRepoCache(ctx context.Context, appID uuid.UUID,
 	return nil
 }
 
-// ListRepoCache returns the cached repository list of one installation.
 func (r *storeRepository) ListRepoCache(ctx context.Context, appID uuid.UUID, installationID int64) ([]Repo, error) {
 	rows, err := r.store.ListGitHubRepoCache(ctx, sqlc.ListGitHubRepoCacheParams{
 		GithubAppID:    pgUUID(appID),
@@ -227,8 +207,6 @@ func (r *storeRepository) ListRepoCache(ctx context.Context, appID uuid.UUID, in
 	return repos, nil
 }
 
-// ListApplicationNamesForApp names the caller's applications linked to one
-// connection, for the disconnect warning.
 func (r *storeRepository) ListApplicationNamesForApp(ctx context.Context, userID, appID uuid.UUID) ([]string, error) {
 	names, err := r.store.ListGitHubAppApplicationNames(ctx, sqlc.ListGitHubAppApplicationNamesParams{
 		UserID:      pgUUID(userID),
@@ -240,9 +218,6 @@ func (r *storeRepository) ListApplicationNamesForApp(ctx context.Context, userID
 	return names, nil
 }
 
-// PushTargets returns the applications linked to the app and watching repo
-// (lowercased owner/name), for webhook push routing. Only linked
-// applications deploy through the app: unlinked rows keep the per-hook flow.
 func (r *storeRepository) PushTargets(ctx context.Context, appID, userID uuid.UUID, repo string) ([]AppPushTarget, error) {
 	rows, err := r.store.ListGitHubAppPushTargets(ctx, sqlc.ListGitHubAppPushTargetsParams{
 		UserID:      pgUUID(userID),
@@ -293,7 +268,6 @@ func installationFromRow(row sqlc.GithubInstallation) Installation {
 	}
 }
 
-// pgUUID converts a uuid.UUID to the pgx type (invalid for the nil UUID).
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	if id == uuid.Nil {
 		return pgtype.UUID{}
@@ -301,7 +275,6 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-// uuidFromPG converts a pgx UUID to uuid.UUID.
 func uuidFromPG(id pgtype.UUID) uuid.UUID {
 	if !id.Valid {
 		return uuid.Nil

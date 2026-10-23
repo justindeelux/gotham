@@ -14,8 +14,6 @@ import (
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
-// fakeTerminalResolver implements the narrow deploy seam the application
-// authorizer consumes.
 type fakeTerminalResolver struct {
 	access    deploy.TerminalApplicationAccess
 	accessErr error
@@ -36,8 +34,6 @@ func (f fakeTerminalResolver) TerminalApplicationAccess(context.Context, uuid.UU
 	return f.access, nil
 }
 
-// newApplicationAuthorizer builds the authorizer over a rotating auth store and
-// a team service that grants role to userID.
 func newApplicationAuthorizer(t *testing.T, userID uuid.UUID, role teams.Role) (applicationTerminalAuthorizer, *rotatingAuth, uuid.UUID, deploy.TerminalApplicationAccess) {
 	t.Helper()
 	signIn := time.Now().UTC().Truncate(time.Microsecond)
@@ -82,7 +78,6 @@ func TestApplicationAuthorizerRequiresWriteAccess(t *testing.T) {
 		if _, err := authorizer.Authorize(context.Background(), authorizerClaims(userID, sessionID), target); err == nil {
 			t.Fatal("a read-only member was authorized")
 		}
-		// Revalidation is definitive, not a transient failure.
 		marker := terminal.Marker{SignInAt: time.Now().UTC()}
 		if ok, err := authorizer.Revalidate(context.Background(), authorizerClaims(userID, sessionID), marker, target); err != nil || ok {
 			t.Fatalf("read-only revalidate = (%v, %v), want (false, nil)", ok, err)
@@ -91,8 +86,6 @@ func TestApplicationAuthorizerRequiresWriteAccess(t *testing.T) {
 	t.Run("cross-team member", func(t *testing.T) {
 		userID := uuid.New()
 		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleAdmin)
-		// Replace the membership with a different user: the caller is not a
-		// member of the application's team.
 		teamService := newFakeTeamService()
 		teamService.allow(access.TeamID, uuid.New(), teams.RoleOwner)
 		authorizer.teams = teamService
@@ -143,7 +136,6 @@ func TestApplicationAuthorizerSurvivesRefreshRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
-	// Rotate the refresh token: a new sid with the same sign-in created_at.
 	replacementID := uuid.New()
 	store.rotate(sessionID, replacementID)
 	if ok, err := authorizer.Revalidate(context.Background(), claims, marker, target); err != nil || !ok {
@@ -155,9 +147,6 @@ func TestApplicationAuthorizerSurvivesRefreshRotation(t *testing.T) {
 	}
 }
 
-// TestApplicationAuthorizerAcceptsPreRotationToken pins the same JUS-258 rule
-// on the container route: a token minted before a refresh rotation attaches
-// while its sign-in lineage is alive.
 func TestApplicationAuthorizerAcceptsPreRotationToken(t *testing.T) {
 	userID := uuid.New()
 	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
@@ -178,8 +167,6 @@ func TestApplicationAuthorizerAcceptsPreRotationToken(t *testing.T) {
 	}
 }
 
-// TestApplicationAuthorizerRefusesPreRotationTokenOfRevokedFamily proves a
-// revoked family never attaches even though its revoked row is on record.
 func TestApplicationAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.T) {
 	userID := uuid.New()
 	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)

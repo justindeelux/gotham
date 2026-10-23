@@ -21,257 +21,95 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// FeatureEnv is the kill switch for the whole applications surface:
-// FEATURE_APPLICATIONS=false removes the routes and refuses new deployments,
-// leaving Phases 0–3 unaffected.
 const FeatureEnv = "FEATURE_APPLICATIONS"
 
-// Enabled reports whether the applications feature is on. Only an explicit
-// false disables it — unset (or any other value) keeps it enabled, matching
-// ws.RealtimeEnabled.
 func Enabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "false")
 }
 
-// DefaultHookTimeout bounds one best-effort Git-host hook call (install on
-// create, remove on delete; Config.HookTimeout overrides it).
-//
-// The budget, with webhooks.hookRollbackTimeout (3s): a create whose provider
-// answers at this deadline and whose hook-row write then fails spends at most
-// 8s + 3s = 11s before it answers, leaving 4s of the SPA's 15s request timeout
-// (web/src/shared/api/http.ts) for everything else. Raising either bound must keep
-// the sum safely below that timeout — TestHookBudgetsStayUnderSPARequestTimeout
-// in internal/webhooks pins it.
 const DefaultHookTimeout = 8 * time.Second
 
-// DeployService is the control-plane surface the HTTP layer depends on. It is
-// implemented by Service and by fakes in route tests.
 type DeployService interface {
 	GetApplicationLogs(context.Context, uuid.UUID, uuid.UUID, LogOptions) (ApplicationLogs, error)
 	GetDeploymentLogs(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, LogOptions) (DeploymentLogs, error)
 	GetApplicationRuntime(ctx context.Context, userID, appID uuid.UUID) (ApplicationRuntime, error)
-	// CreateApplication stores an application together with the environment
-	// and storage configuration sent with it.
 	CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error)
-	// InstallHook installs the provider hook of an application that was just
-	// created (BE-4.4). The call is bounded (Config.HookTimeout) and a
-	// failure is logged with the configured logger; callers must never fail
-	// the create on it — the application row is already committed and the
-	// explicit idempotent webhook route is the retry path.
-	//
-	// attempted is false when no hook lifecycle is wired: there is no outcome
-	// to report, and the create response omits the webhook field.
 	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) (attempted bool, err error)
-	// ListApplications returns the caller's applications, newest first,
-	// optionally scoped to one environment or project.
 	ListApplications(ctx context.Context, userID uuid.UUID, filter ApplicationFilter) ([]Application, error)
-	// GetApplication returns one application the caller owns (404 otherwise).
 	GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error)
-	// UpdateApplication applies a partial update to the mutable fields.
 	UpdateApplication(ctx context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error)
-	// ListDomains returns one application's domains, primary first, then
-	// oldest first (JUS-89).
 	ListDomains(ctx context.Context, userID, appID uuid.UUID) ([]ApplicationDomain, error)
-	// AddDomain attaches one more hostname with its port, optional compose
-	// service and protocol: a host another application owns answers
-	// ErrDomainConflict, a host already attached answers ErrValidation.
 	AddDomain(ctx context.Context, userID, appID uuid.UUID, in DomainInput) (ApplicationDomain, error)
-	// UpdateDomain edits one attached hostname and its routing target.
 	UpdateDomain(ctx context.Context, userID, appID, domainID uuid.UUID, in DomainInput) (ApplicationDomain, error)
-	// RemoveDomain detaches one hostname, promoting the oldest remaining row
-	// when the primary is removed.
 	RemoveDomain(ctx context.Context, userID, appID, domainID uuid.UUID) error
-	// SetPrimaryDomain makes one attached hostname the primary.
 	SetPrimaryDomain(ctx context.Context, userID, appID, domainID uuid.UUID) error
-	// DeleteApplication stops the current container best effort and deletes
-	// the application; its configuration cascades.
 	DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error
-	// GetEnv returns the environment: plain values and secret references.
 	GetEnv(ctx context.Context, userID, appID uuid.UUID) ([]EnvEntry, error)
-	// ReplaceEnv replaces the environment collection and returns it as stored.
 	ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entries []EnvEntry) ([]EnvEntry, error)
-	// GetStorages returns the application's storage mappings.
 	GetStorages(ctx context.Context, userID, appID uuid.UUID) ([]Storage, error)
-	// ListVolumes returns the application's volumes as configured and as
-	// observed on its node (read-only; never creates or modifies anything).
 	ListVolumes(ctx context.Context, userID, appID uuid.UUID) (VolumeListing, error)
-	// ReplaceStorages replaces the storage collection and returns it as stored.
 	ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, storages []Storage) ([]Storage, error)
-	// Stop stops the container of the newest deployment.
 	Stop(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
-	// Start restarts the container of the newest deployment.
 	Start(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
-	// CreateDeployKey generates and registers an SSH deploy key for a private
-	// repository; an application that already has one gets it back. A
-	// provider-less git_private application gets a locally managed key the
-	// operator registers by hand.
 	CreateDeployKey(ctx context.Context, userID, appID uuid.UUID) (DeployKey, error)
-	// GetDeployKey returns an application's deploy key (the public half
-	// only); an application without one answers ErrNotFound.
 	GetDeployKey(ctx context.Context, userID, appID uuid.UUID) (DeployKey, error)
-	// SetGitCredential stores (or rotates) an application's HTTPS token for
-	// git_private sources. The token is sealed and never returned.
 	SetGitCredential(ctx context.Context, userID, appID uuid.UUID, username, token string) (GitCredentialState, error)
-	// GetGitCredential reports whether an application's HTTPS credential is
-	// set and the username it carries. The token itself is never returned.
 	GetGitCredential(ctx context.Context, userID, appID uuid.UUID) (GitCredentialState, error)
-	// DeleteGitCredential removes an application's HTTPS credential; an
-	// application without one reports false.
 	DeleteGitCredential(ctx context.Context, userID, appID uuid.UUID) (bool, error)
-	// TestGitConnection probes an application's remote with git ls-remote
-	// and the stored credential, and classifies the outcome.
 	TestGitConnection(ctx context.Context, userID, appID uuid.UUID) (GitConnectionResult, error)
-	// DeleteDeployKey removes the deploy key from the Git host and the
-	// database; an application without one reports false.
 	DeleteDeployKey(ctx context.Context, userID, appID uuid.UUID) (bool, error)
-	// Deploy queues a deployment of the application's current revision.
 	Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
-	// ListDeployments returns the application's deployments, newest first.
 	ListDeployments(ctx context.Context, userID, appID uuid.UUID) ([]Deployment, error)
-	// ListDeploymentsLimit returns at most limit of the application's newest
-	// deployments (clamped server-side), so latest-state readers never pull
-	// the full history.
 	ListDeploymentsLimit(ctx context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error)
-	// ListRecentDeployments returns the newest deployments across every
-	// application the caller can see (their active team, or their own rows
-	// without a team context), newest first, at most limit rows (clamped).
-	// It backs the dashboard feed and never crosses the team boundary.
 	ListRecentDeployments(ctx context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error)
-	// GetDeployment returns one exact release after application read authorization.
 	GetDeployment(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error)
 
-	// GetDeploymentBuildLog returns the persisted build log of one
-	// deployment (JUS-84). Same ownership as the deployment reads: a foreign
-	// deployment answers ErrNotFound. Empty while the run is in flight.
 	GetDeploymentBuildLog(ctx context.Context, userID, appID, deploymentID uuid.UUID) (string, error)
-	// Rollback queues a deployment of a previous release's image. A zero
-	// deploymentID selects the previous successful deployment automatically.
 	Rollback(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error)
 }
 
-// HookLifecycle installs and removes the Git-host hook that turns a push
-// into a deployment. The server wires it to the webhooks service (BE-4.4);
-// without it the applications surface keeps working and hooks stay manageable
-// through the explicit webhook routes.
-//
-// InstallHook takes the create request because the public callback origin is
-// request-derived (the trusted proxy's X-Forwarded-Proto plus Host, exactly
-// like the explicit webhook route); a caller without a request must use that
-// route instead.
 type HookLifecycle interface {
-	// InstallHook installs the application's provider hook, deriving the
-	// public callback origin from r. It is idempotent: an application that
-	// already has a hook reports success without installing a second one.
 	InstallHook(ctx context.Context, userID, appID uuid.UUID, r *http.Request) error
-	// RemoveHook removes the application's provider hook and its stored row;
-	// an application without a hook is a success.
 	RemoveHook(ctx context.Context, userID, appID uuid.UUID) error
 }
 
-// ToolStatus reports the catalog tools detected on one node. The toolchain
-// service implements it by dialing the node agent; a nil status disables the
-// build-pack gate (buildtool.Available stays the last guard at build time).
 type ToolStatus interface {
-	// InstalledToolIDs returns the catalog ids installed on the node.
 	InstalledToolIDs(ctx context.Context, serverID uuid.UUID) (map[string]bool, error)
 }
 
-// Config wires a Service. Store (or an explicit Repository) is required for
-// anything beyond tests; Secret opens sealed application secrets, RedisAddr
-// feeds the realtime publisher, and Dial is the mTLS agent dialer. Every
-// tunable falls back to a documented default.
 type Config struct {
-	GuardDomains proxy.DomainGuard
-	// Store is the PostgreSQL-backed repository. Ignored when Repository is set.
-	Store *store.Store
-	// Repository overrides Store (tests).
-	Repository Repository
-	// Secret is the key providers.SealSecret sealed application secrets with.
-	Secret string
-	// RedisAddr is the realtime publisher's Redis address; empty disables it.
-	RedisAddr string
-	// Publisher overrides the Redis publisher built from RedisAddr (tests).
-	Publisher Publisher
-	// Dial opens a node agent; nil fails deployments with ErrAgentUnavailable.
-	Dial DialFunc
-	// KeyRegistrar registers and removes deploy keys on the Git host; nil
-	// disables deploy-key creation (the routes answer a clear error).
-	KeyRegistrar KeyRegistrar
-	// Proxy is notified after application mutations and successful
-	// deployments so the node's Traefik configuration follows the
-	// application state. Best effort: a sync failure is logged, never
-	// returned. nil disables the notifications.
-	Proxy ProxySync
-	// TLSForDomains reports whether an attached application domain should
-	// get an HTTPS certificate intent by default (JUS-201). It mirrors the
-	// panel domain's condition — an https control-plane URL means this
-	// instance terminates TLS — so an http-only dev box (no URL, or a plain
-	// http one) keeps attaching plain-HTTP domains. nil disables the default.
-	TLSForDomains func(context.Context) bool
-	// Notifier receives one terminal deployment result (running or failed).
-	// Best effort: delivery runs asynchronously and can never fail a
-	// deployment. nil disables notifications, which is also the
-	// FEATURE_NOTIFICATIONS=false path.
-	Notifier Notifier
-	// Source clones the repository; nil selects git on the control plane.
-	Source Source
-	// GitAllowPrivateHosts lifts the SSRF host policy for RFC1918, ULA and
-	// loopback git remotes (self-hosted git; see SetGitAllowPrivateHosts).
-	// It mirrors the deploy.git_allow_private_hosts config key. Zero keeps
-	// the default deny.
+	GuardDomains         proxy.DomainGuard
+	Store                *store.Store
+	Repository           Repository
+	Secret               string
+	RedisAddr            string
+	Publisher            Publisher
+	Dial                 DialFunc
+	KeyRegistrar         KeyRegistrar
+	Proxy                ProxySync
+	TLSForDomains        func(context.Context) bool
+	Notifier             Notifier
+	Source               Source
 	GitAllowPrivateHosts bool
-	// GitLookupHost resolves git remote hostnames for the SSRF host policy;
-	// nil selects the system resolver. Tests pin answers through it.
-	GitLookupHost gitHostLookupFunc
-	// AppTokens builds token-authenticated clone URLs for linked github_app
-	// applications (GS-5); nil keeps every clone on the legacy path.
-	AppTokens appTokenResolver
-	// PreviewCleanup tears down resources that hang off an application
-	// outside the deploy schema before the application row is deleted
-	// (BE-8.1 preview siblings). A returned error aborts the delete: deleting
-	// the base application would cascade the preview bindings away while the
-	// siblings survive, leaving them untracked. Container stops inside the
-	// callback stay best effort. nil disables the hook.
-	PreviewCleanup func(ctx context.Context, appID uuid.UUID) error
-	// Hooks resolves the provider-hook lifecycle (BE-4.4). It is a function
-	// because the webhook service is built after this one — it consumes this
-	// service as its deployer — so the server's closure returns it once it
-	// exists. nil, or a closure answering nil, disables automatic hook
-	// management; the explicit webhook routes keep working either way.
-	Hooks func() HookLifecycle
-	// HookTimeout bounds one best-effort hook call against a provider that
-	// accepts the connection and then stalls. Zero selects
-	// DefaultHookTimeout (8s). The bound is a request-path safety net, not a
-	// retry budget: a timeout is logged like any other hook failure.
-	HookTimeout time.Duration
-	// Emitter overrides the publisher-based realtime emitter (tests).
-	Emitter *Emitter
-	// Tasks tracks running background tasks for the progress card snapshot;
-	// nil selects a private tracker. The server reads it back through
-	// TaskTracker to replay running tasks on WebSocket (re)subscribe.
-	Tasks *taskevents.Tracker
-	// Logger defaults to slog.Default.
-	Logger *slog.Logger
-	// Workers is the pool size, QueueSize the job buffer.
-	Workers     int
-	QueueSize   int
-	MaxAttempts int
-	// StepTimeout bounds clone/push/start; BuildTimeout bounds the build step;
-	// HealthTimeout is the post-start health window and HealthPoll its interval.
-	StepTimeout   time.Duration
-	BuildTimeout  time.Duration
-	HealthTimeout time.Duration
-	HealthPoll    time.Duration
-	// ControlTimeout bounds one manual start/stop agent call so a hung agent
-	// cannot pin the application lock indefinitely. Zero selects
-	// containerCleanupTimeout (15s).
-	ControlTimeout time.Duration
-	// ToolStatus, when set, gates a deploy on the target node's installed
-	// build toolchains (see ToolStatus). nil disables the gate.
-	ToolStatus ToolStatus
+	GitLookupHost        gitHostLookupFunc
+	AppTokens            appTokenResolver
+	PreviewCleanup       func(ctx context.Context, appID uuid.UUID) error
+	Hooks                func() HookLifecycle
+	HookTimeout          time.Duration
+	Emitter              *Emitter
+	Tasks                *taskevents.Tracker
+	Logger               *slog.Logger
+	Workers              int
+	QueueSize            int
+	MaxAttempts          int
+	StepTimeout          time.Duration
+	BuildTimeout         time.Duration
+	HealthTimeout        time.Duration
+	HealthPoll           time.Duration
+	ControlTimeout       time.Duration
+	ToolStatus           ToolStatus
 }
 
-// repository resolves the configured repository implementation.
 func (c Config) repository() Repository {
 	if c.Repository != nil {
 		return c.Repository
@@ -282,50 +120,25 @@ func (c Config) repository() Repository {
 	return nil
 }
 
-// Service is the deploy domain service: it validates and queues deployments,
-// lists them, drives rollbacks, and runs them on the orchestrator's worker
-// pool. It also owns the application hook and deploy-key lifecycles
-// (installing/removing the Git-host integration with the application). It is
-// safe for concurrent use.
 type Service struct {
-	guardDomains proxy.DomainGuard
-	// tlsForDomains gates the default HTTPS intent of an attached domain
-	// (see Config.TLSForDomains); nil keeps every attachment plain-HTTP.
+	guardDomains  proxy.DomainGuard
 	tlsForDomains func(context.Context) bool
 	*Orchestrator
-	// registrar talks to the Git host for deploy keys; nil when no provider
-	// service is wired (creation then answers a clear error instead of a nil
-	// dereference).
-	registrar KeyRegistrar
-	// previewCleanup, when set, runs before an application row is deleted (see
-	// Config.PreviewCleanup).
+	registrar      KeyRegistrar
 	previewCleanup func(ctx context.Context, appID uuid.UUID) error
-	// hooks resolves the provider-hook lifecycle lazily (see Config.Hooks).
-	hooks func() HookLifecycle
-	// hookTimeout bounds one hook call (see Config.HookTimeout).
-	hookTimeout time.Duration
-	// controlTimeout bounds one manual start/stop agent call (see
-	// Config.ControlTimeout).
+	hooks          func() HookLifecycle
+	hookTimeout    time.Duration
 	controlTimeout time.Duration
-	// locks serializes the operations that must not interleave on one
-	// application: deployment submission, manual container control, an update
-	// that moves the application between nodes, and deletion.
-	locks appLocks
-	// probeMu and probeLast throttle the connection probe per caller and
-	// application (see probeAllowed).
-	probeMu   sync.Mutex
-	probeLast map[probeThrottleKey]time.Time
+	locks          appLocks
+	probeMu        sync.Mutex
+	probeLast      map[probeThrottleKey]time.Time
 }
 
-// appLocks holds one mutex per application so different applications proceed
-// concurrently. Entries are never reclaimed; they are bounded by the number of
-// applications and one pointer each.
 type appLocks struct {
 	mu    sync.Mutex
 	locks map[uuid.UUID]*sync.Mutex
 }
 
-// lock acquires the mutex of one application and returns its release.
 func (l *appLocks) lock(appID uuid.UUID) func() {
 	l.mu.Lock()
 	if l.locks == nil {
@@ -341,13 +154,8 @@ func (l *appLocks) lock(appID uuid.UUID) func() {
 	return mu.Unlock
 }
 
-// Compile-time guarantee that Service satisfies the route-level contract.
 var _ DeployService = (*Service)(nil)
 
-// NewService builds a Service from cfg. The returned service has no
-// repository only when cfg carries none; methods then fail with a clear
-// error instead of panicking. Construction runs the boot-time recovery
-// sweep, before any worker can pick up a deployment.
 func NewService(cfg Config) *Service {
 	o := newOrchestrator(cfg)
 	o.recoverStale()
@@ -371,8 +179,6 @@ func NewService(cfg Config) *Service {
 	}
 }
 
-// hookLifecycle resolves the configured hook lifecycle, tolerating a closure
-// that answers nil (the webhook service is absent).
 func (s *Service) hookLifecycle() HookLifecycle {
 	if s == nil || s.hooks == nil {
 		return nil
@@ -380,12 +186,6 @@ func (s *Service) hookLifecycle() HookLifecycle {
 	return s.hooks()
 }
 
-// recoverStale marks deployments abandoned by a previous control plane
-// process as failed. It runs once at construction: a row stuck in
-// cloning/building/starting can never resume, and the active-deployment
-// partial unique index would turn every later deploy or rollback of that
-// application into a permanent 409. The sweep is best-effort — a database
-// error is logged and must not stop the control plane from booting.
 func (o *Orchestrator) recoverStale() {
 	if o.repo == nil {
 		return
@@ -402,9 +202,6 @@ func (o *Orchestrator) recoverStale() {
 	}
 }
 
-// NewDefaultService builds the production service for the HTTP wiring. It
-// returns nil (a nil DeployService) when there is no database or the feature
-// flag is off, so callers can pass its result to Mount unconditionally.
 func NewDefaultService(cfg Config) DeployService {
 	if cfg.Store == nil && cfg.Repository == nil {
 		return nil
@@ -418,7 +215,6 @@ func NewDefaultService(cfg Config) DeployService {
 	return NewService(cfg)
 }
 
-// Close stops the worker pool and releases the realtime publisher.
 func (s *Service) Close() error {
 	err := s.Orchestrator.Close()
 	if closer, ok := s.emitter.pub.(interface{ Close() error }); ok {
@@ -429,7 +225,6 @@ func (s *Service) Close() error {
 	return err
 }
 
-// Deploy queues a deployment of the application's current revision.
 func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployment, error) {
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
@@ -453,11 +248,6 @@ func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployme
 	return s.deployApplication(ctx, app)
 }
 
-// DeploySystem queues a deployment for a system trigger (a push webhook) that
-// has no authenticated caller: the application is addressed by ID because
-// ownership was established when its webhook was installed. Everything else —
-// validation, the active-deployment guard, the state machine — is exactly what
-// Deploy does.
 func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
@@ -475,8 +265,6 @@ func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment
 	return s.deployApplication(ctx, app)
 }
 
-// deployApplication validates a loaded application and runs it on the worker
-// pool. It is the shared tail of Deploy and DeploySystem.
 func (s *Service) deployApplication(ctx context.Context, app Application) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
@@ -490,28 +278,16 @@ func (s *Service) deployApplication(ctx context.Context, app Application) (Deplo
 	return s.submit(ctx, app, Deployment{Kind: KindDeploy, State: StateQueued})
 }
 
-// validateBuildToolchain refuses an explicit build pack whose external tool is
-// not installed on the target node, so the create answers a clear 4xx instead
-// of a deployment that fails at "railpack is not on PATH". The Dockerfile and
-// static engines need no external CLI and are always allowed; EngineAuto
-// resolves at build time and is left to buildtool.Available, the last guard. A
-// lookup that cannot complete (no toolchain surface, or an unreachable agent)
-// is skipped rather than blocking an otherwise valid deploy.
 func (s *Service) validateBuildToolchain(ctx context.Context, app Application) error {
 	if s.toolStatus == nil || app.ServerID == uuid.Nil {
 		return nil
 	}
-	// Dockerfile, compose and image sources carry no build-pack build: the
-	// orchestrator forces the Dockerfile engine for dockerfiles and builds
-	// compose/image runs another way. A stale build_pack left on such a row
-	// (e.g. an update that switched the source type) must not 4xx the deploy.
 	switch NormalizeSourceType(app.SourceType, app.Provider) {
 	case SourceDockerfile, SourceCompose, SourceImage:
 		return nil
 	}
 	kind, err := builds.ParseEngineKind(app.BuildPack)
 	if err != nil {
-		// validateDeployTarget already reports an unknown build pack.
 		return nil
 	}
 	required := builds.EngineTools(kind)
@@ -533,17 +309,8 @@ func (s *Service) validateBuildToolchain(ctx context.Context, app Application) e
 	return nil
 }
 
-// checkStoredTarget enforces the stored application→node invariant at the queue
-// boundary: an application may only run on a node of its own team, or on a
-// legacy node without a team. It compares the application's STORED team with
-// the node's team — not the caller's active team — so every queue path is
-// covered, including rollback and signature-verified system deploys whose
-// worker context carries no team scope at all. Caller membership and role stay
-// enforced at the entry points (application()). The refusal is ErrNotFound, so
-// a foreign node cannot be probed through the deploy surface.
 func (s *Service) checkStoredTarget(ctx context.Context, app Application) error {
 	if app.ServerID == uuid.Nil {
-		// validateDeployTarget reports the missing node with its own message.
 		return nil
 	}
 	teamID, found, err := s.repo.ServerTeam(ctx, app.ServerID)
@@ -559,12 +326,6 @@ func (s *Service) checkStoredTarget(ctx context.Context, app Application) error 
 	return nil
 }
 
-// Rollback queues a deployment of a previous release's image. The stored
-// image reference is copied onto the new rollback row, which is what makes
-// "back to the old version" a normal state-machine run rather than a rewind.
-// An image source rolls back to the previous digest, not the moving tag.
-// A compose application has no built image: its rollback re-applies the
-// stored compose file (pull images + up -d), exactly like a redeploy.
 func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
@@ -582,10 +343,6 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 			return Deployment{}, fmt.Errorf("%w: deployment %s is not a released compose deployment",
 				ErrValidation, target.ID)
 		}
-		// A compose rollback re-applies the target release's stored
-		// document, not the live row: the run ups exactly what that
-		// release ran. A target that recorded no document (it predates
-		// the snapshot, or never rendered one) cannot roll back.
 		if strings.TrimSpace(target.ComposeDocument) == "" {
 			return Deployment{}, fmt.Errorf("%w: deployment %s recorded no compose document to roll back to",
 				ErrValidation, target.ID)
@@ -624,8 +381,6 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 		ImageTag:      target.ImageTag,
 		RegistryImage: registryImage,
 		Digest:        target.Digest,
-		// A rollback redeploys the target's bits, so it keeps the
-		// target's commit as well: there is no fresh clone to read.
 		CommitSHA:     target.CommitSHA,
 		CommitMessage: target.CommitMessage,
 		CommitAuthor:  target.CommitAuthor,
@@ -634,7 +389,6 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 	})
 }
 
-// ListDeployments returns the application's deployments, newest first.
 func (s *Service) ListDeployments(ctx context.Context, userID, appID uuid.UUID) ([]Deployment, error) {
 	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
@@ -649,13 +403,8 @@ func (s *Service) ListDeployments(ctx context.Context, userID, appID uuid.UUID) 
 	return deployments, nil
 }
 
-// maxDeploymentListLimit caps one ?limit= page of the deployments list.
 const maxDeploymentListLimit = 100
 
-// ListDeploymentsLimit returns at most limit of the application's newest
-// deployments. A non-positive limit selects one row (the newest deployment):
-// the route rejects ?limit=<1 with a 400 before this runs, so the guard only
-// covers in-process callers; values above the server maximum are clamped.
 func (s *Service) ListDeploymentsLimit(ctx context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error) {
 	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return nil, err
@@ -676,10 +425,6 @@ func (s *Service) ListDeploymentsLimit(ctx context.Context, userID, appID uuid.U
 	return deployments, nil
 }
 
-// ListRecentDeployments returns the newest deployments across every
-// application the caller can see (their active team, or their own rows without
-// a team context), newest first, at most limit rows (clamped). It backs the
-// dashboard feed and never crosses the team boundary.
 func (s *Service) ListRecentDeployments(ctx context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error) {
 	if s == nil || s.repo == nil {
 		return nil, errors.New("deploy: repository is not configured")
@@ -700,9 +445,6 @@ func (s *Service) ListRecentDeployments(ctx context.Context, userID uuid.UUID, l
 	return deployments, nil
 }
 
-// GetDeploymentBuildLog returns the persisted build log of one deployment.
-// Ownership mirrors the deployment reads: a foreign deployment answers
-// ErrNotFound, so deployment IDs cannot be probed.
 func (s *Service) GetDeploymentBuildLog(ctx context.Context, userID, appID, deploymentID uuid.UUID) (string, error) {
 	if _, err := s.application(ctx, userID, appID, false); err != nil {
 		return "", err
@@ -717,10 +459,6 @@ func (s *Service) GetDeploymentBuildLog(ctx context.Context, userID, appID, depl
 	return deployment.BuildLog, nil
 }
 
-// application loads an application of the caller's active team, mapping a row
-// of another team (or, without a team context, of another creator) to
-// ErrNotFound so application IDs cannot be probed. A write additionally needs
-// an owner/admin role; a read_only member may read.
 func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, write bool) (Application, error) {
 	if s == nil || s.repo == nil {
 		return Application{}, errors.New("deploy: repository is not configured")
@@ -741,12 +479,6 @@ func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, writ
 	return app, nil
 }
 
-// validateDeployTarget rejects an application that cannot be deployed: no
-// server assigned, an unknown or not-yet-implemented source type, no
-// cloneable repository, or an unknown build pack. Image sources carry a
-// validated reference instead of a repository and build pack. Compose
-// applications carry a validated document (or a repository with an in-repo
-// file) and a routed web service instead of a repository and build pack.
 func validateDeployTarget(app Application) error {
 	if app.ServerID == uuid.Nil {
 		return fmt.Errorf("%w: application has no server assigned", ErrValidation)
@@ -757,9 +489,6 @@ func validateDeployTarget(app Application) error {
 	if !SourceTypeImplemented(app.SourceType) {
 		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
 	}
-	// Dockerfile applications carry no repository: the stored text is the
-	// build context, re-validated here so an edit that slipped past update
-	// validation still fails the deploy instead of the build.
 	if app.SourceType == SourceDockerfile {
 		if err := ValidateDockerfileContent(app.DockerfileContent); err != nil {
 			return err
@@ -775,8 +504,6 @@ func validateDeployTarget(app Application) error {
 	if err := validateCloneURL(strings.TrimSpace(app.CloneURL)); err != nil {
 		return err
 	}
-	// A linked row created before the https rule (or edited around the API)
-	// still fails the deploy instead of embedding a token in plaintext.
 	if err := validateLinkedCloneURL(app); err != nil {
 		return err
 	}
@@ -786,12 +513,6 @@ func validateDeployTarget(app Application) error {
 	return nil
 }
 
-// validateComposeTarget rejects a compose application that cannot be
-// deployed: no release web service, or neither pasted content nor a
-// repository with an in-repo file path. The full document validation ran at
-// write time; the deploy re-validates without executing anything, so a row
-// edited around the API still fails before touching the node. Domain ports
-// are per domain and validated on the domain write path.
 func validateComposeTarget(app Application) error {
 	if strings.TrimSpace(app.ComposeService) == "" {
 		return fmt.Errorf("%w: compose source needs a web service", ErrValidation)
@@ -806,9 +527,6 @@ func validateComposeTarget(app Application) error {
 	return nil
 }
 
-// rollbackTarget resolves the deployment a rollback redeploys: an explicit
-// ID when the client named one, otherwise the previous successful release
-// (falling back to the only release, which re-runs it).
 func (s *Service) rollbackTarget(ctx context.Context, appID, deploymentID uuid.UUID) (Deployment, error) {
 	if deploymentID != uuid.Nil {
 		return s.repo.GetDeployment(ctx, appID, deploymentID)
@@ -818,7 +536,7 @@ func (s *Service) rollbackTarget(ctx context.Context, appID, deploymentID uuid.U
 		return Deployment{}, err
 	}
 	running := make([]Deployment, 0, 2)
-	for _, dep := range deployments { // newest first
+	for _, dep := range deployments {
 		if dep.State == StateRunning {
 			running = append(running, dep)
 		}
@@ -833,12 +551,6 @@ func (s *Service) rollbackTarget(ctx context.Context, appID, deploymentID uuid.U
 	}
 }
 
-// previousContainer returns the container the next release should retire: the
-// newest one this application started, whether its deployment succeeded or
-// failed (a container left running by a failed deploy must still be stopped).
-// A lookup failure is returned, never swallowed: the pre-Run reconcile removes
-// every app-labelled container except this one, so an unresolved previous
-// would take the live release down with it.
 func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) (string, error) {
 	deployments, err := s.repo.ListDeployments(ctx, appID)
 	if err != nil {
@@ -853,15 +565,6 @@ func (s *Service) previousContainer(ctx context.Context, appID uuid.UUID) (strin
 	return "", nil
 }
 
-// submit persists a queued deployment, enqueues its run and returns the row.
-// It is the single queue boundary of deploy, rollback and system deploys, so
-// the stored application→node check runs here: no queue path can hand the
-// worker an application bound to another team's node. The application lock is
-// held only across the active-deployment check and the create; the queued row
-// already makes delete, a move and manual control answer 409, so the lock is
-// released before a potentially blocking enqueue. When the queue rejects the
-// job the row is marked failed immediately, so it never sits in a non-terminal
-// state and blocks the active-deployment index.
 func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (Deployment, error) {
 	app, created, previous, err := s.createDeployment(ctx, app, dep)
 	if err != nil {
@@ -870,11 +573,6 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 	if requestreplay.Replayed(ctx) {
 		return created, nil
 	}
-	// The run is queued: surface it on the progress card BEFORE the worker
-	// can publish anything, including webhook-triggered (DeploySystem) runs
-	// that share this boundary. Publishing first keeps every task's frames
-	// monotonic (queued is sequence 1); a fast terminal run can never land
-	// before its queued frame and leave a ghost queued card behind.
 	s.publishTask(ctx, app, created, taskevents.StatusQueued, "", 0, "")
 	if err := s.enqueue(ctx, job{
 		app:      app,
@@ -887,10 +585,6 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 	return created, nil
 }
 
-// createDeployment is the locked part of submit: re-read the stored
-// application (a concurrent move must not leave the worker on a stale target),
-// re-validate it, enforce the stored application→node invariant, persist the
-// queued row and pick the container the run will replace.
 func (s *Service) createDeployment(ctx context.Context, app Application, dep Deployment) (Application, Deployment, string, error) {
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
@@ -915,20 +609,12 @@ func (s *Service) createDeployment(ctx context.Context, app Application, dep Dep
 	}
 	previous, err := s.previousContainer(ctx, app.ID)
 	if err != nil {
-		// The previous container must be known before the deployment starts:
-		// an empty previous would let the worker's pre-Run reconcile remove
-		// the live release as if it were an orphan. Fail the freshly created
-		// row here (it has not run) rather than hand the worker a blind job.
 		s.abandon(app, created, fmt.Errorf("deploy: resolve previous container: %w", err))
 		return Application{}, Deployment{}, "", fmt.Errorf("deploy: resolve previous container: %w", err)
 	}
 	return app, created, previous, nil
 }
 
-// abandon marks a deployment that never started running as failed. The queued
-// card was already published by submit, so abandon always publishes the
-// terminal failed frame from the passed application (never a re-read that
-// could fail and strand the card).
 func (s *Service) abandon(app Application, created Deployment, cause error) {
 	fresh, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -1,5 +1,3 @@
-// DeployLogs branch: a finished deployment reads the persisted build log
-// (JUS-84) while an in-flight one keeps the realtime stream.
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -97,7 +95,6 @@ describe("DeployLogs", () => {
     await flushPromises();
     const stored = wrapper.find(".deploy-logs__stored").element;
     mockedBuildLog.mockClear();
-    // The detail page re-polls deployments: same id and state, new object.
     await wrapper.setProps({ deployment: { ...deployment("failed"), updated_at: "later" } });
     await flushPromises();
     expect(mockedBuildLog).not.toHaveBeenCalled();
@@ -126,7 +123,6 @@ describe("DeployLogs", () => {
     );
     const wrapper = mountLogs(deployment("failed"));
     await flushPromises();
-    // Loading, not the generic empty copy and not the missing-log copy.
     expect(wrapper.text()).toContain("Loading the stored log");
     expect(wrapper.find(".deploy-logs__stored").exists()).toBe(false);
     resolve("late lines");

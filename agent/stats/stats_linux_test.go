@@ -4,9 +4,6 @@ package stats
 
 import "testing"
 
-// TestReadIOFromProc verifies the real /proc and /sys reads on the production
-// target: both hooks must answer without error and report a device set that
-// excludes the loop and ram pseudo devices.
 func TestReadIOFromProc(t *testing.T) {
 	if _, _, err := readNetwork(); err != nil {
 		t.Errorf("readNetwork: %v", err)

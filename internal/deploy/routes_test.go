@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeDeployService is a scriptable DeployService for route tests.
 type fakeDeployService struct {
 	deploy      Deployment
 	deployErr   error
@@ -22,13 +21,11 @@ type fakeDeployService struct {
 	rollback    Deployment
 	rollbackErr error
 
-	// applications CRUD and configuration.
-	application Application
-	createErr   error
-	listApps    []Application
-	listAppsErr error
-	getErr      error
-	// dashboard feed (JUS-193).
+	application       Application
+	createErr         error
+	listApps          []Application
+	listAppsErr       error
+	getErr            error
 	recentDeployments []ApplicationDeployment
 	recentErr         error
 	seenRecentLimit   int
@@ -45,7 +42,6 @@ type fakeDeployService struct {
 	start             Deployment
 	startErr          error
 
-	// deploy keys.
 	deployKey       DeployKey
 	createKeyErr    error
 	getKeyErr       error
@@ -54,7 +50,6 @@ type fakeDeployService struct {
 	deletedKeyCalls int
 	createdKeyFor   uuid.UUID
 
-	// git credentials and connection probes (GS-4).
 	gitCredState    GitCredentialState
 	gitCredErr      error
 	seenGitUsername string
@@ -63,7 +58,6 @@ type fakeDeployService struct {
 	connResult      GitConnectionResult
 	connErr         error
 
-	// provider hook lifecycle (BE-4.4).
 	installAttempted bool
 	installCalls     int
 	installErr       error
@@ -74,26 +68,22 @@ type fakeDeployService struct {
 	seenLimit       int
 	seenRollback    uuid.UUID
 	seenRollbackSet bool
-	// persisted build log (JUS-84): seenRollback carries the deployment id.
-	buildLog     string
-	buildLogErr  error
-	seenCreate   CreateApplicationInput
-	seenUpdate   UpdateApplicationInput
-	seenEntries  []EnvEntry
-	seenStorages []Storage
-	// domains (JUS-89).
-	domains        []ApplicationDomain
-	domainsErr     error
-	domain         ApplicationDomain
-	domainErr      error
-	seenDomain     string
-	applicationErr error
+	buildLog        string
+	buildLogErr     error
+	seenCreate      CreateApplicationInput
+	seenUpdate      UpdateApplicationInput
+	seenEntries     []EnvEntry
+	seenStorages    []Storage
+	domains         []ApplicationDomain
+	domainsErr      error
+	domain          ApplicationDomain
+	domainErr       error
+	seenDomain      string
+	applicationErr  error
 }
 
-// Compile-time guarantee that fakeDeployService satisfies the route seam.
 var _ DeployService = (*fakeDeployService)(nil)
 
-// CreateApplication implements DeployService.
 func (f *fakeDeployService) CreateApplication(_ context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error) {
 	f.seenUser, f.seenCreate = userID, in
 	if f.createErr != nil {
@@ -102,7 +92,6 @@ func (f *fakeDeployService) CreateApplication(_ context.Context, userID uuid.UUI
 	return f.application, nil
 }
 
-// ListApplications implements DeployService.
 func (f *fakeDeployService) ListApplications(_ context.Context, userID uuid.UUID, _ ApplicationFilter) ([]Application, error) {
 	f.seenUser = userID
 	if f.listAppsErr != nil {
@@ -111,7 +100,6 @@ func (f *fakeDeployService) ListApplications(_ context.Context, userID uuid.UUID
 	return f.listApps, nil
 }
 
-// ListRecentDeployments implements DeployService.
 func (f *fakeDeployService) ListRecentDeployments(_ context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error) {
 	f.seenUser, f.seenRecentLimit = userID, limit
 	if f.recentErr != nil {
@@ -120,7 +108,6 @@ func (f *fakeDeployService) ListRecentDeployments(_ context.Context, userID uuid
 	return f.recentDeployments, nil
 }
 
-// GetApplication implements DeployService.
 func (f *fakeDeployService) GetApplication(_ context.Context, userID, appID uuid.UUID) (Application, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	if f.getErr != nil {
@@ -129,7 +116,6 @@ func (f *fakeDeployService) GetApplication(_ context.Context, userID, appID uuid
 	return f.application, nil
 }
 
-// UpdateApplication implements DeployService.
 func (f *fakeDeployService) UpdateApplication(_ context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error) {
 	f.seenUser, f.seenApplication, f.seenUpdate = userID, appID, in
 	if f.updateErr != nil {
@@ -138,20 +124,17 @@ func (f *fakeDeployService) UpdateApplication(_ context.Context, userID, appID u
 	return f.application, nil
 }
 
-// DeleteApplication implements DeployService.
 func (f *fakeDeployService) DeleteApplication(_ context.Context, userID, appID uuid.UUID) error {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.deleteErr
 }
 
-// InstallHook implements DeployService.
 func (f *fakeDeployService) InstallHook(_ context.Context, userID, appID uuid.UUID, _ *http.Request) (bool, error) {
 	f.seenUser, f.installedFor = userID, appID
 	f.installCalls++
 	return f.installAttempted, f.installErr
 }
 
-// CreateDeployKey implements DeployService.
 func (f *fakeDeployService) CreateDeployKey(_ context.Context, userID, appID uuid.UUID) (DeployKey, error) {
 	f.seenUser, f.createdKeyFor = userID, appID
 	if f.createKeyErr != nil {
@@ -160,7 +143,6 @@ func (f *fakeDeployService) CreateDeployKey(_ context.Context, userID, appID uui
 	return f.deployKey, nil
 }
 
-// DeleteDeployKey implements DeployService.
 func (f *fakeDeployService) DeleteDeployKey(_ context.Context, userID, appID uuid.UUID) (bool, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	f.deletedKeyCalls++
@@ -170,7 +152,6 @@ func (f *fakeDeployService) DeleteDeployKey(_ context.Context, userID, appID uui
 	return f.deletedKey, nil
 }
 
-// GetDeployKey implements DeployService.
 func (f *fakeDeployService) GetDeployKey(_ context.Context, userID, appID uuid.UUID) (DeployKey, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	if f.getKeyErr != nil {
@@ -179,7 +160,6 @@ func (f *fakeDeployService) GetDeployKey(_ context.Context, userID, appID uuid.U
 	return f.deployKey, nil
 }
 
-// SetGitCredential implements DeployService.
 func (f *fakeDeployService) SetGitCredential(_ context.Context, userID, appID uuid.UUID, username, token string) (GitCredentialState, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	f.seenGitUsername, f.seenGitToken = username, token
@@ -189,7 +169,6 @@ func (f *fakeDeployService) SetGitCredential(_ context.Context, userID, appID uu
 	return f.gitCredState, nil
 }
 
-// GetGitCredential implements DeployService.
 func (f *fakeDeployService) GetGitCredential(_ context.Context, userID, appID uuid.UUID) (GitCredentialState, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	if f.gitCredErr != nil {
@@ -198,7 +177,6 @@ func (f *fakeDeployService) GetGitCredential(_ context.Context, userID, appID uu
 	return f.gitCredState, nil
 }
 
-// TestGitConnection implements DeployService.
 func (f *fakeDeployService) TestGitConnection(_ context.Context, userID, appID uuid.UUID) (GitConnectionResult, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	if f.connErr != nil {
@@ -207,7 +185,6 @@ func (f *fakeDeployService) TestGitConnection(_ context.Context, userID, appID u
 	return f.connResult, nil
 }
 
-// DeleteGitCredential implements DeployService.
 func (f *fakeDeployService) DeleteGitCredential(_ context.Context, userID, appID uuid.UUID) (bool, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	if f.gitCredErr != nil {
@@ -216,7 +193,6 @@ func (f *fakeDeployService) DeleteGitCredential(_ context.Context, userID, appID
 	return f.deletedGitCred, nil
 }
 
-// GetEnv implements DeployService.
 func (f *fakeDeployService) GetEnv(_ context.Context, userID, appID uuid.UUID) ([]EnvEntry, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	if f.envErr != nil {
@@ -225,7 +201,6 @@ func (f *fakeDeployService) GetEnv(_ context.Context, userID, appID uuid.UUID) (
 	return f.env, nil
 }
 
-// ReplaceEnv implements DeployService.
 func (f *fakeDeployService) ReplaceEnv(_ context.Context, userID, appID uuid.UUID, entries []EnvEntry) ([]EnvEntry, error) {
 	f.seenUser, f.seenApplication, f.seenEntries = userID, appID, entries
 	if f.envErr != nil {
@@ -237,7 +212,6 @@ func (f *fakeDeployService) ReplaceEnv(_ context.Context, userID, appID uuid.UUI
 	return entries, nil
 }
 
-// GetStorages implements DeployService.
 func (f *fakeDeployService) GetStorages(_ context.Context, userID, appID uuid.UUID) ([]Storage, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	if f.storagesErr != nil {
@@ -246,7 +220,6 @@ func (f *fakeDeployService) GetStorages(_ context.Context, userID, appID uuid.UU
 	return f.storages, nil
 }
 
-// ListVolumes implements DeployService.
 func (f *fakeDeployService) ListVolumes(_ context.Context, userID, appID uuid.UUID) (VolumeListing, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	if f.volumesErr != nil {
@@ -255,7 +228,6 @@ func (f *fakeDeployService) ListVolumes(_ context.Context, userID, appID uuid.UU
 	return f.volumes, nil
 }
 
-// ReplaceStorages implements DeployService.
 func (f *fakeDeployService) ReplaceStorages(_ context.Context, userID, appID uuid.UUID, storages []Storage) ([]Storage, error) {
 	f.seenUser, f.seenApplication, f.seenStorages = userID, appID, storages
 	if f.storagesErr != nil {
@@ -267,32 +239,26 @@ func (f *fakeDeployService) ReplaceStorages(_ context.Context, userID, appID uui
 	return storages, nil
 }
 
-// Stop implements DeployService.
 func (f *fakeDeployService) Stop(_ context.Context, userID, appID uuid.UUID) (Deployment, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.stop, f.stopErr
 }
 
-// Start implements DeployService.
 func (f *fakeDeployService) Start(_ context.Context, userID, appID uuid.UUID) (Deployment, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.start, f.startErr
 }
 
-// Deploy implements DeployService.
 func (f *fakeDeployService) Deploy(_ context.Context, userID, appID uuid.UUID) (Deployment, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.deploy, f.deployErr
 }
 
-// ListDeployments implements DeployService.
 func (f *fakeDeployService) ListDeployments(_ context.Context, userID, appID uuid.UUID) ([]Deployment, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.list, f.listErr
 }
 
-// ListDeploymentsLimit implements DeployService: the newest slice of the
-// canned list, bounded to limit rows.
 func (f *fakeDeployService) ListDeploymentsLimit(_ context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error) {
 	f.seenUser, f.seenApplication, f.seenLimit = userID, appID, limit
 	if f.listErr != nil {
@@ -304,53 +270,45 @@ func (f *fakeDeployService) ListDeploymentsLimit(_ context.Context, userID, appI
 	return f.list, nil
 }
 
-// Rollback implements DeployService.
 func (f *fakeDeployService) Rollback(_ context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	f.seenRollback, f.seenRollbackSet = deploymentID, true
 	return f.rollback, f.rollbackErr
 }
 
-// GetDeploymentBuildLog implements DeployService.
 func (f *fakeDeployService) GetDeploymentBuildLog(_ context.Context, userID, appID, deploymentID uuid.UUID) (string, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	f.seenRollback, f.seenRollbackSet = deploymentID, true
 	return f.buildLog, f.buildLogErr
 }
 
-// ListDomains implements DeployService.
 func (f *fakeDeployService) ListDomains(_ context.Context, userID, appID uuid.UUID) ([]ApplicationDomain, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.domains, f.domainsErr
 }
 
-// AddDomain implements DeployService.
 func (f *fakeDeployService) AddDomain(_ context.Context, userID, appID uuid.UUID, in DomainInput) (ApplicationDomain, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	f.seenDomain = in.Domain
 	return f.domain, f.domainErr
 }
 
-// UpdateDomain implements DeployService.
 func (f *fakeDeployService) UpdateDomain(_ context.Context, userID, appID, domainID uuid.UUID, in DomainInput) (ApplicationDomain, error) {
 	f.seenUser, f.seenApplication = userID, appID
 	f.seenDomain = in.Domain
 	return f.domain, f.domainErr
 }
 
-// RemoveDomain implements DeployService.
 func (f *fakeDeployService) RemoveDomain(_ context.Context, userID, appID, domainID uuid.UUID) error {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.applicationErr
 }
 
-// SetPrimaryDomain implements DeployService.
 func (f *fakeDeployService) SetPrimaryDomain(_ context.Context, userID, appID, domainID uuid.UUID) error {
 	f.seenUser, f.seenApplication = userID, appID
 	return f.applicationErr
 }
 
-// newRouteServer mounts the deploy routes with a no-op auth middleware.
 func newRouteServer(svc DeployService, userID UserIDFunc) http.Handler {
 	r := chi.NewRouter()
 	auth := func(next http.Handler) http.Handler { return next }
@@ -358,12 +316,10 @@ func newRouteServer(svc DeployService, userID UserIDFunc) http.Handler {
 	return r
 }
 
-// alwaysUser returns a UserIDFunc for one user.
 func alwaysUser(id uuid.UUID) UserIDFunc {
 	return func(context.Context) (uuid.UUID, bool) { return id, true }
 }
 
-// deploymentPath renders one of the application deployment routes.
 func deploymentPath(appID uuid.UUID, action string) string {
 	path := "/v1/applications/" + appID.String()
 	if action == "" {
@@ -510,9 +466,6 @@ func TestRoutesListDeploymentsLimit(t *testing.T) {
 	})
 }
 
-// TestRoutesRecentDeployments covers the dashboard feed: the aggregate
-// endpoint forwards the caller and a bounded limit and names the application
-// each row ran for.
 func TestRoutesRecentDeployments(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
 	svc := &fakeDeployService{recentDeployments: []ApplicationDeployment{

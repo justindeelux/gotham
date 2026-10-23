@@ -27,7 +27,6 @@ import type {
 import { onLocaleChange } from "@/shared/i18n/locale";
 import { desiredPollIntervalMs } from "@/shared/utils/polling";
 
-/** One deployment-history poll timer per application. */
 interface PollEntry {
   handle: ReturnType<typeof setInterval>;
   active: boolean;
@@ -40,54 +39,38 @@ export const useApplicationsStore = defineStore("applications", () => {
   const storagesByApp = ref<Record<string, StorageMapping[]>>({});
   const loading = ref(false);
   const error = ref<string | null>(null);
-  /**
-   * errorRaw keeps the failure `error` was derived from, so a language switch
-   * re-derives the curated summary in the new locale without refetching. Raw
-   * server diagnostics inside still pass through untouched.
-   */
   const errorRaw = ref<unknown>(null);
   const acting = ref(false);
   const savingEnv = ref(false);
   const savingStorages = ref(false);
 
-  // One poll timer per application; the store instance is a singleton so a
-  // single map is enough for the whole app. `pollEpoch` invalidates in-flight
-  // refreshes when polling is torn down, so a late response cannot restart a
-  // timer after the component unmounted.
   const pollTimers = new Map<string, PollEntry>();
   let pollEpoch = 0;
 
-  /** applicationOf returns the cached application, if one was fetched. */
   function applicationOf(appId: string): Application | null {
     return applicationsById.value[appId] ?? null;
   }
 
-  /** deploymentsOf returns the cached deployments of one application. */
   function deploymentsOf(appId: string): Deployment[] {
     return deploymentsByApp.value[appId] ?? [];
   }
 
-  /** activeDeployment returns the newest non-terminal deployment, if any. */
   function activeDeployment(appId: string): Deployment | null {
     return deploymentsOf(appId).find((item) => isActiveDeployment(item)) ?? null;
   }
 
-  /** latestDeployment returns the newest deployment, if any. */
   function latestDeployment(appId: string): Deployment | null {
     return deploymentsOf(appId)[0] ?? null;
   }
 
-  /** envOf returns the cached environment rows of one application. */
   function envOf(appId: string): EnvVar[] {
     return envByApp.value[appId] ?? [];
   }
 
-  /** storagesOf returns the cached storage mappings of one application. */
   function storagesOf(appId: string): StorageMapping[] {
     return storagesByApp.value[appId] ?? [];
   }
 
-  /** fetchApplication loads one application by id. */
   async function fetchApplication(appId: string): Promise<Application> {
     loading.value = true;
     error.value = null;
@@ -105,10 +88,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /**
-   * update applies a partial update (rename, move environment, change node)
-   * and merges the returned row into the cache.
-   */
   async function update(
     appId: string,
     input: UpdateApplicationInput,
@@ -123,7 +102,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /** fetchDeployments loads the deployment history of one application. */
   async function fetchDeployments(appId: string): Promise<void> {
     const epoch = pollEpoch;
     loading.value = true;
@@ -132,7 +110,7 @@ export const useApplicationsStore = defineStore("applications", () => {
     try {
       const deployments = await listDeployments(appId);
       if (epoch !== pollEpoch) {
-        return; // the page was left while this initial load was in flight
+        return;
       }
       deploymentsByApp.value[appId] = deployments;
       settlePolling(appId);
@@ -148,12 +126,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /**
-   * refreshDeployments reloads the history without toggling loading. A
-   * response that resolves after polling was torn down (an application switch
-   * or unmount) is discarded: applying it would restart a timer the owner
-   * already cancelled.
-   */
   async function refreshDeployments(appId: string): Promise<void> {
     const epoch = pollEpoch;
     try {
@@ -174,14 +146,12 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /** fetchEnv loads the environment collection of one application. */
   async function fetchEnv(appId: string): Promise<EnvVar[]> {
     const env = await getEnv(appId);
     envByApp.value[appId] = env;
     return env;
   }
 
-  /** saveEnv replaces the environment collection and refreshes the cache. */
   async function saveEnv(appId: string, env: EnvVar[]): Promise<EnvVar[]> {
     savingEnv.value = true;
     try {
@@ -193,14 +163,12 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /** fetchStorages loads the storage collection of one application. */
   async function fetchStorages(appId: string): Promise<StorageMapping[]> {
     const storages = await getStorages(appId);
     storagesByApp.value[appId] = storages;
     return storages;
   }
 
-  /** saveStorages replaces the storage collection and refreshes the cache. */
   async function saveStorages(
     appId: string,
     storages: StorageMapping[],
@@ -215,14 +183,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /**
-   * settlePolling ensures the application has a history poll at the cadence
-   * its state calls for: fast while a deployment is in flight, slow when idle
-   * so a deployment triggered elsewhere (a provider webhook, another session)
-   * is still discovered. The cadence is re-evaluated on every fetch, so an
-   * active deployment switches the timer to fast and a finished one back to
-   * idle.
-   */
   function settlePolling(appId: string): void {
     const active = activeDeployment(appId) !== null;
     const entry = pollTimers.get(appId) ?? null;
@@ -240,7 +200,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     });
   }
 
-  /** stopPolling clears the timer of one application; safe when idle. */
   function stopPolling(appId: string): void {
     const entry = pollTimers.get(appId) ?? null;
     if (entry !== null) {
@@ -249,10 +208,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /**
-   * stopAllPolling clears every deployment timer and invalidates in-flight
-   * refreshes, so a late response cannot restart polling after teardown.
-   */
   function stopAllPolling(): void {
     pollEpoch += 1;
     for (const entry of pollTimers.values()) {
@@ -261,20 +216,12 @@ export const useApplicationsStore = defineStore("applications", () => {
     pollTimers.clear();
   }
 
-  // A retained failure banner re-derives its curated summary when the
-  // language changes; the draft/route/polling state is untouched, and raw
-  // diagnostics inside re-resolve to the same passthrough text.
   onLocaleChange(() => {
     if (errorRaw.value !== null) {
       error.value = describeApplicationError(errorRaw.value);
     }
   });
 
-  /**
-   * reset drops every cached collection and stops polling, so the next
-   * sign-in never sees the previous account's applications. Called on
-   * sign-out (see the auth store).
-   */
   function reset(): void {
     stopAllPolling();
     applicationsById.value = {};
@@ -289,10 +236,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     savingStorages.value = false;
   }
 
-  /**
-   * remove deletes an application and drops its cached collections, so the
-   * environment table converges without relying on a remount.
-   */
   async function remove(appId: string): Promise<void> {
     acting.value = true;
     try {
@@ -307,7 +250,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /** deploy queues a deployment of the application's current revision. */
   async function deploy(appId: string): Promise<Deployment> {
     acting.value = true;
     try {
@@ -319,7 +261,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /** rollback queues a rollback, optionally to one named deployment. */
   async function rollback(
     appId: string,
     deploymentId?: string,
@@ -337,11 +278,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /**
-   * stopApp stops the container of the newest deployment, then refreshes the
-   * deployment history. The row is untouched: the deployment still describes
-   * its release.
-   */
   async function stopApp(appId: string): Promise<Deployment> {
     acting.value = true;
     try {
@@ -353,7 +289,6 @@ export const useApplicationsStore = defineStore("applications", () => {
     }
   }
 
-  /** startApp restarts the container of the newest deployment. */
   async function startApp(appId: string): Promise<Deployment> {
     acting.value = true;
     try {

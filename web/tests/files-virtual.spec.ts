@@ -8,20 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL, window:readonly */
-// JUS-137 windowed listing proof: the committed webdist is served statically
-// with the control-plane file API mocked in real Chromium. Measured claims on a
-// 5,000-entry directory:
-//   - only the visible rows (plus overscan) are in the DOM — a bounded node
-//     count — while the footer, the aria row count and select-all still speak
-//     for the whole listing;
-//   - scrolling materialises the far rows and drops the near ones, and the
-//     sticky header stays pinned across the window;
-//   - selection (select-all, ctrl/cmd-click, per-row checkbox), activation
-//     (Enter / double-click) and the row menu (Shift+F10) work on rendered rows
-//     inside a windowed list;
-//   - a renamed entry that sorts to the far end is scrolled back into view even
-//     though it was outside the rendered window;
-//   - the grid view windows the same way at its own row height.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -77,10 +63,8 @@ const root = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/** COUNT is the large-directory size the issue names (5,000 entries). */
 const COUNT = 5000;
 
-/** bigListing is one folder row plus 5,000 files (the folder sorts first). */
 function bigListing() {
   return [
     {
@@ -102,12 +86,6 @@ function bigListing() {
   ];
 }
 
-/**
- * folderListing is the 150-entry listing inside `aaa-dir`. It deliberately ends
- * with an entry named `file-0000.txt` — the same name the root listing has near
- * its top — so a focus pin leaked from the root into this folder is observable
- * (the entry sorts outside the folder's window).
- */
 function folderListing(): Listing {
   return [
     ...Array.from({ length: 149 }, (_, index) => ({
@@ -169,10 +147,8 @@ test.afterAll(async () => {
   });
 });
 
-/** Mutable listing so a rename is visible on the next list call. */
 type Listing = ReturnType<typeof bigListing>;
 
-/** openFiles seeds a session, mocks the file API and lands on the big folder. */
 async function openFiles(page: Page): Promise<{ listing: Listing }> {
   const listing: Listing = bigListing();
   const state = { listing };
@@ -246,12 +222,10 @@ async function openFiles(page: Page): Promise<{ listing: Listing }> {
   return { listing };
 }
 
-/** rows is the rendered (windowed) list rows. */
 function rows(page: Page) {
   return page.locator(".fm-table .fm-row:not(.fm-head)");
 }
 
-/** rowFor returns the browser row whose name matches. */
 function rowFor(page: Page, name: string) {
   return page.locator(".fm-table .fm-row", {
     has: page.locator(`b:text-is("${name}")`),
@@ -264,12 +238,10 @@ test.describe("windowed list", () => {
   }) => {
     await openFiles(page);
 
-    // Only the visible window is rendered, nowhere near 5,000 rows.
     const rendered = await rows(page).count();
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(60);
 
-    // The listing itself still reports every entry.
     await expect(page.locator(".fm-foot")).toContainText("5000 entries");
     await expect(page.locator(".fm-table")).toHaveAttribute(
       "aria-rowcount",
@@ -282,7 +254,6 @@ test.describe("windowed list", () => {
   }) => {
     await openFiles(page);
 
-    // Top of the list: the first entry is rendered, the last is not.
     await expect(rowFor(page, "aaa-dir")).toBeVisible();
     await expect(page.locator(".fm-table b", { hasText: "file-4998.txt" })).toHaveCount(0);
 
@@ -291,16 +262,13 @@ test.describe("windowed list", () => {
       element.scrollTop = element.scrollHeight;
     });
 
-    // Bottom: the last entry is rendered, the first dropped from the DOM.
     await expect(page.locator(".fm-table b", { hasText: "file-4998.txt" })).toBeVisible();
     await expect(rowFor(page, "aaa-dir")).toHaveCount(0);
     expect(await rows(page).count()).toBeLessThan(60);
 
-    // The sticky header rode the top of the scrollport instead of scrolling away.
     await wrap.evaluate((element) => {
       element.scrollTop = 4000;
     });
-    // Let the scroll land (and the window re-render) before measuring.
     await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeGreaterThan(3000);
     const wrapBox = (await wrap.boundingBox())!;
     const headBox = (await page.locator(".fm-head").boundingBox())!;
@@ -313,13 +281,10 @@ test.describe("windowed list", () => {
     expect(await rows(page).count()).toBeLessThan(60);
 
     await page.locator(".fm-head .n-checkbox").click();
-    // 5,000 selected though only the window is in the DOM.
     await expect(page.locator(".fm-bulk-count")).toContainText("5000 selected");
-    // The reserved bulk-actions slot is now visible.
     await expect(page.locator(".fm-selection-actions")).toHaveCSS("visibility", "visible");
 
     await page.getByRole("button", { name: "Clear", exact: true }).click();
-    // The live summary empties; the hidden reserve sizer stays mounted.
     await expect(page.locator(".fm-bulk-count-live")).toHaveText("");
     await expect(page.locator(".fm-bulk-count-live")).toHaveCSS("visibility", "hidden");
   });
@@ -330,7 +295,6 @@ test.describe("windowed list", () => {
     await openFiles(page);
     const first = rowFor(page, "file-0000.txt");
 
-    // Cmd+click (Ctrl on other platforms) toggles without a context menu.
     await first.click({ modifiers: ["Meta"] });
     await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
 
@@ -386,7 +350,6 @@ test.describe("windowed list", () => {
     });
     await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
 
-    // 1,000 matches stays windowed, but the stored offset points past its end.
     await page.locator(".fm-search input").fill("file-0");
     await expect(page.locator(".fm-foot")).toContainText("1000 of 5000 entries");
     await expect.poll(() => rows(page).count()).toBeGreaterThan(0);
@@ -395,9 +358,7 @@ test.describe("windowed list", () => {
 
   test("sorting reorders the whole listing before it is windowed", async ({ page }) => {
     await openFiles(page);
-    // Name asc: the first file row is the smallest name.
     await expect(rows(page).nth(1)).toContainText("file-0000.txt");
-    // Size desc: the largest file sorts first, taken from the far end of 5,000.
     await page.getByRole("button", { name: "Size", exact: true }).click();
     await page.getByRole("button", { name: "Size", exact: true }).click();
     await expect(rows(page).nth(1)).toContainText("file-4998.txt");
@@ -413,14 +374,12 @@ test.describe("windowed list", () => {
       element.scrollTop = element.scrollHeight;
     });
 
-    // Rename the bottom row to a name that now sorts to the very top.
     await rowFor(page, "file-4998.txt").getByRole("button", { name: /More actions/ }).click();
     await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
     const dialog = page.locator(".n-modal").filter({ hasText: "Rename entry" });
     await dialog.locator("input").fill("0000-renamed.txt");
     await dialog.getByRole("button", { name: "Rename", exact: true }).click();
 
-    // The browser scrolled the far-away row back into the visible band.
     await expect(page.locator(".fm-table b").filter({ hasText: "0000-renamed.txt" })).toBeVisible();
     const top = await wrap.evaluate((element) => element.scrollTop);
     expect(top).toBeLessThan(120);
@@ -436,8 +395,6 @@ test.describe("windowed list", () => {
     });
     await expect(rowFor(page, "file-4998.txt")).toBeVisible();
 
-    // Create a folder that sorts to the very top: the listing grows, which used
-    // to make the scroll-replay watcher stomp the reveal with the old offset.
     await page.getByRole("button", { name: "New", exact: true }).click();
     await page.getByRole("menuitem", { name: "New folder", exact: true }).click();
     const dialog = page.locator(".n-modal").filter({ hasText: "New folder" });
@@ -452,14 +409,12 @@ test.describe("windowed list", () => {
 });
 
 test.describe("keyboard focus retention across the window", () => {
-  /** renderedNames is the data-entry list of the rows currently in the DOM. */
   async function renderedNames(page: Page): Promise<string[]> {
     return rows(page).evaluateAll((nodes) =>
       nodes.map((node) => (node as HTMLElement).dataset.entry ?? ""),
     );
   }
 
-  /** focusedEntry is the data-entry of the row that owns focus, or null. */
   async function focusedEntry(page: Page): Promise<string | null> {
     return page.evaluate(() => {
       const active = document.activeElement as HTMLElement | null;
@@ -475,20 +430,15 @@ test.describe("keyboard focus retention across the window", () => {
     await label.focus();
     await expect(label).toBeFocused();
 
-    // Scroll it far out of the window: the pin keeps the row mounted, so focus
-    // is never dropped to <body>.
     const wrap = page.locator(".table-wrap");
     await wrap.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
     await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
-    // The focused row is pinned OUTSIDE the rendered window (not merely still in
-    // it): the pin is what keeps it mounted and focused.
     await expect(page.locator(".fm-row.is-pinned")).toHaveCount(1);
     await expect(label).toBeFocused();
     await expect(label).toBeAttached();
 
-    // ...and scrolling back shows the same focused row again.
     await wrap.evaluate((element) => {
       element.scrollTop = 0;
     });
@@ -503,8 +453,6 @@ test.describe("keyboard focus retention across the window", () => {
     const initial = await renderedNames(page);
     expect(initial.length).toBeGreaterThan(0);
 
-    // Focus the last rendered row's last control (its ⋮ menu button); its own
-    // focus scroll advances the window.
     await rows(page).last().getByRole("button", { name: /More actions/ }).focus();
     await expect
       .poll(async () => (await renderedNames(page)).some((name) => !initial.includes(name)))
@@ -527,7 +475,6 @@ test.describe("keyboard focus retention across the window", () => {
     const menu = page.getByRole("menu", { name: "More actions for file-0000.txt" });
     await expect(menu).toBeVisible();
 
-    // Scrolling the row out of the window keeps the pinned row (and its menu).
     await page.locator(".table-wrap").evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
@@ -543,13 +490,10 @@ test.describe("keyboard focus retention across the window", () => {
     await label.focus();
     await expect(label).toBeFocused();
 
-    // Click row B's Size cell: it is not focusable, so focus falls to <body>.
-    // The blur must NOT be read as our own re-render and pull focus back to A.
     await rowFor(page, "file-0000.txt").locator(".fm-cell--size").click();
     await expect.poll(() => focusedEntry(page)).not.toBe("aaa-dir");
     await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
 
-    // Enter must not act on the stale row (which would open aaa-dir).
     await page.keyboard.press("Enter");
     await expect(page.locator(".fm-foot")).toContainText("5000 entries");
     await expect(rowFor(page, "aaa-dir")).toBeVisible();
@@ -561,7 +505,6 @@ test.describe("keyboard focus retention across the window", () => {
     await label.focus();
     await expect(label).toBeFocused();
 
-    // The footer band is plain, non-focusable content outside the scroller.
     await page.locator(".fm-foot .grow").click();
     await expect.poll(() => focusedEntry(page)).not.toBe("file-0000.txt");
     await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
@@ -569,15 +512,12 @@ test.describe("keyboard focus retention across the window", () => {
 
   test("dismissing the row menu with Escape releases the pin", async ({ page }) => {
     await openFiles(page);
-    // Right-click (which does not move focus) then dismiss with Escape, which
-    // the dropdown drives itself via its show model.
     await rowFor(page, "aaa-dir").click({ button: "right" });
     const menu = page.getByRole("menu", { name: "More actions for aaa-dir" });
     await expect(menu).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
 
-    // Scroll the row out of the window: nothing may stay pinned.
     const wrap = page.locator(".table-wrap");
     await wrap.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
@@ -589,14 +529,9 @@ test.describe("keyboard focus retention across the window", () => {
 
   test("a folder change resets the focus pin", async ({ page }) => {
     await openFiles(page);
-    // Focus a root entry whose name (file-0000.txt) also exists inside aaa-dir,
-    // where it sorts outside the folder's window.
     await rowFor(page, "file-0000.txt").locator(".fm-label").focus();
     await expect(rowFor(page, "file-0000.txt").locator(".fm-label")).toBeFocused();
 
-    // Navigate through the folder's row menu: a right-click does not move focus,
-    // so a stale name would survive into the new listing and pin the same-named
-    // row there (file-0000.txt sorts outside the folder's window).
     await rowFor(page, "aaa-dir").click({ button: "right" });
     const menu = page.getByRole("menu", { name: "More actions for aaa-dir" });
     await expect(menu).toBeVisible();
@@ -615,15 +550,9 @@ test.describe("keyboard focus retention across the window", () => {
     await openFiles(page);
     const wrap = page.locator(".table-wrap");
 
-    // Click the first row's label: pointer-initiated focus must not nudge the
-    // scroll (the flag suppresses it), and the flag must then be spent.
     await rowFor(page, "file-0000.txt").locator(".fm-label").click();
     expect(await wrap.evaluate((el) => el.scrollTop)).toBe(0);
 
-    // Focus the last rendered row (below the fold) without a native scroll: the
-    // reveal must come from scrollEntryIntoView on this non-pointer focus. With
-    // the flag left set from the click, no reveal happens and the row stays
-    // hidden below the fold.
     await page.evaluate(() => {
       const rows = document.querySelectorAll<HTMLElement>(
         ".fm-table .fm-row:not(.fm-head)",
@@ -649,12 +578,9 @@ test.describe("keyboard focus retention across the window", () => {
     await expect.poll(() => wrap.evaluate((el) => el.scrollTop)).toBeGreaterThan(1000);
     await expect(page.locator(".fm-row.is-pinned")).toHaveCount(1);
 
-    // Focus the sticky header's Name sort button: it lives inside the scroller
-    // but owns no row, so the pin must be released rather than left stale.
     await page.getByRole("button", { name: "Name", exact: true }).focus();
     await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
 
-    // Scrolling back does not resurrect the dropped pin.
     await wrap.evaluate((element) => {
       element.scrollTop = 0;
     });
@@ -667,22 +593,17 @@ test.describe("windowed grid", () => {
     page,
   }) => {
     await openFiles(page);
-    // Scroll the list far down first: a view switch must not carry that offset
-    // into the grid and render a blank window.
     await page.locator(".table-wrap").evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
     await page.getByRole("button", { name: "Grid view" }).click();
     await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
 
-    // The grid window is a few whole rows (7 columns x ~9 rows at 1440px), far
-    // below the 5,000 tiles of the listing.
     const rendered = await page.locator(".fm-grid .fm-tile").count();
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(80);
 
     const grid = page.locator(".fm-grid");
-    // The spacers still make the scroller span the whole grid.
     const metrics = await grid.evaluate((element) => ({
       scrollHeight: element.scrollHeight,
       clientHeight: element.clientHeight,
@@ -715,8 +636,6 @@ test.describe("windowed grid", () => {
     });
     await expect.poll(() => grid.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
 
-    // Pinned outside the window, still focused, and still placed inside the
-    // grid's own width.
     await expect(page.locator(".fm-tile-wrap.is-pinned")).toHaveCount(1);
     await expect(tile).toBeFocused();
     const gridBox = (await grid.boundingBox())!;
@@ -730,8 +649,6 @@ test.describe("windowed grid", () => {
     await page.getByRole("button", { name: "Grid view" }).click();
     await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
 
-    // The grid is a list whose items carry their true listing position and the
-    // full listing size — the grid's equivalent of the list's aria-rowcount.
     await expect(page.locator(".fm-grid")).toHaveAttribute("role", "list");
     const tiles = page.locator(".fm-grid .fm-tile-wrap");
     expect(await tiles.count()).toBeLessThan(80);
@@ -748,10 +665,6 @@ test.describe("windowed grid", () => {
     await page.getByRole("button", { name: "Grid view" }).click();
     await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
 
-    // measured compares the app's own grid height against the height implied by
-    // the layout's real column count (the browser's resolved auto-fill). A stale
-    // internal column count leaves the spacers too short, so the app height
-    // diverges from the layout by tens of thousands of px.
     const measured = () =>
       page.evaluate(() => {
         const grid = document.querySelector(".fm-grid") as HTMLElement;
@@ -773,7 +686,6 @@ test.describe("windowed grid", () => {
         .toBeLessThan(400);
     };
 
-    // Narrow (fewer columns), then widen back, all in one session.
     await page.setViewportSize({ width: 900, height: 900 });
     await expectFollows();
     await page.setViewportSize({ width: 600, height: 900 });
@@ -781,7 +693,6 @@ test.describe("windowed grid", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await expectFollows();
 
-    // A zoom change reflows the same way (CSS px shrink) without a viewport edit.
     await page.evaluate(() => {
       document.documentElement.style.zoom = "1.5";
     });
@@ -794,7 +705,6 @@ test.describe("windowed grid", () => {
 });
 
 test.describe("row keyboard navigation (JUS-139)", () => {
-  /** focusedEntry is the data-entry of the row that owns focus, or null. */
   async function focusedEntry(page: Page): Promise<string | null> {
     return page.evaluate(() => {
       const active = document.activeElement as HTMLElement | null;
@@ -815,13 +725,11 @@ test.describe("row keyboard navigation (JUS-139)", () => {
     await page.keyboard.press("ArrowUp");
     await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
 
-    // PageDown moves a viewport of rows.
     await page.keyboard.press("PageDown");
     await expect.poll(() => focusedEntry(page)).not.toBe("file-0000.txt");
     const paged = await focusedEntry(page);
     expect(paged).not.toBeNull();
 
-    // End materialises the last row of the 5,000-entry listing.
     await page.keyboard.press("End");
     await expect.poll(() => focusedEntry(page)).toBe("file-4998.txt");
     await expect(
@@ -841,7 +749,6 @@ test.describe("row keyboard navigation (JUS-139)", () => {
     await page.keyboard.press(" ");
     await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
     await page.keyboard.press(" ");
-    // The live summary empties; the hidden reserve sizer stays mounted (JUS-141).
     await expect(page.locator(".fm-bulk-count-live")).toHaveText("");
 
     await page.keyboard.press("ControlOrMeta+a");
@@ -909,7 +816,6 @@ test.describe("row keyboard navigation (JUS-139)", () => {
     page,
   }) => {
     await openFiles(page);
-    // Exactly one rendered label is a Tab stop; the rest are -1.
     await expect(
       page.locator('.fm-table .fm-label[tabindex="0"]'),
     ).toHaveCount(1);
@@ -918,7 +824,6 @@ test.describe("row keyboard navigation (JUS-139)", () => {
       total - 1,
     );
 
-    // The roving tabindex follows the arrow keys.
     await rowFor(page, "aaa-dir").locator(".fm-label").focus();
     await page.keyboard.press("ArrowDown");
     await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
@@ -929,7 +834,6 @@ test.describe("row keyboard navigation (JUS-139)", () => {
       page.locator('.fm-row[data-entry="aaa-dir"] .fm-label'),
     ).toHaveAttribute("tabindex", "-1");
 
-    // aria-selected reflects the Space toggle; the row count is unchanged.
     await page.keyboard.press(" ");
     await expect(
       page.locator('.fm-row[data-entry="file-0000.txt"]'),
@@ -939,7 +843,6 @@ test.describe("row keyboard navigation (JUS-139)", () => {
       String(COUNT + 1),
     );
 
-    // Keyboard focus paints the shared focus ring.
     const focused = page.locator('.fm-row[data-entry="file-0000.txt"] .fm-label');
     const outline = await focused.evaluate(
       (element) => getComputedStyle(element).outlineStyle,
@@ -954,26 +857,20 @@ test.describe("row keyboard navigation (JUS-139)", () => {
     const nameHeader = page.locator('.fm-head .fm-name[aria-sort]');
     await expect(nameHeader).toHaveAttribute("aria-sort", "ascending");
 
-    // Enter on the Name sort header toggles the sort; it must not activate the
-    // roving row (which used to navigate into aaa-dir).
     await page.getByRole("button", { name: "Name", exact: true }).focus();
     await page.keyboard.press("Enter");
     await expect(nameHeader).toHaveAttribute("aria-sort", "descending");
     await expect(page.locator(".fm-foot")).toContainText("5000 entries");
     await expect(rowFor(page, "aaa-dir")).toBeVisible();
 
-    // Space sorts the Size column and must not toggle a row's selection.
     await page.getByRole("button", { name: "Size", exact: true }).focus();
     await page.keyboard.press(" ");
     await expect(page.locator('.fm-head .fm-cell--size[aria-sort]')).toHaveAttribute(
       "aria-sort",
       "ascending",
     );
-    // Sorting keeps the selection empty, so the live summary stays blank (the
-    // hidden reserve sizer is not the live count — JUS-141).
     await expect(page.locator(".fm-bulk-count-live")).toHaveText("");
 
-    // Space on the select-all checkbox selects every entry.
     await page.locator(".fm-head .n-checkbox").focus();
     await page.keyboard.press(" ");
     await expect(page.locator(".fm-bulk-count")).toContainText("5000 selected");
@@ -988,8 +885,6 @@ test.describe("row keyboard navigation (JUS-139)", () => {
     await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
     await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
 
-    // Blur, then scroll the roving row far out of the window: the stop falls
-    // back to the first rendered row instead of disappearing.
     await page.locator(".fm-foot .grow").click();
     const wrap = page.locator(".table-wrap");
     await wrap.evaluate((element) => {
@@ -1001,7 +896,6 @@ test.describe("row keyboard navigation (JUS-139)", () => {
     await expect(page.locator('.fm-row[data-entry="file-0000.txt"]')).toHaveCount(0);
     await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
 
-    // Scrolling back restores the stop on the roving row.
     await wrap.evaluate((element) => {
       element.scrollTop = 0;
     });
@@ -1038,8 +932,6 @@ test.describe("row keyboard navigation (JUS-139)", () => {
 
   test("a folder change re-resolves the roving stop", async ({ page }) => {
     await openFiles(page);
-    // Rove onto file-0000.txt, a name that also exists inside aaa-dir (where it
-    // sorts outside the window): the new folder must not inherit the stop.
     await rowFor(page, "aaa-dir").locator(".fm-label").focus();
     await page.keyboard.press("ArrowDown");
     await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");

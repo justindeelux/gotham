@@ -21,7 +21,6 @@ interface Props {
 const props = defineProps<Props>();
 const emit = defineEmits<{
   "update:show": [value: boolean];
-  /** created reports the new entry's name so the browser can reveal it. */
   created: [name: string];
 }>();
 
@@ -32,8 +31,6 @@ const files = useFilesStore();
 const name = ref("");
 const touched = ref(false);
 
-// Reset the field each time the dialog opens so a previous value never leaks
-// into a new create.
 watch(
   () => props.show,
   (open) => {
@@ -52,7 +49,6 @@ const nameError = computed<string>(() =>
 );
 const valid = computed<boolean>(() => validateEntryName(name.value) === null);
 
-/** submit creates the file or folder, surfacing any failure in a toast. */
 async function submit(): Promise<void> {
   if (files.acting) {
     return;

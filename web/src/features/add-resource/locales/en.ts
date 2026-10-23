@@ -1,9 +1,3 @@
-/**
- * English catalog for the Add-resource picker (GS-1). Display copy only:
- * template slugs, engine values, image tags and ports stay raw values
- * interpolated as parameters. Template card descriptions resolve through
- * the templates overlay with fallback to provider metadata.
- */
 const en = {
   tabs: {
     label: "Resource type",

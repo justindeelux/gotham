@@ -10,12 +10,6 @@ import (
 	"time"
 )
 
-// fakeGitHub serves the documented GitHub REST shapes the production client
-// consumes, so the client is proven against the wire format without network
-// access. Payloads mirror the real schemas: the manifest conversion returns
-// webhook_secret as a plain string with owner/permissions/events siblings,
-// the installation object carries account and app_id, and the token response
-// carries permissions.
 func fakeGitHub(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -80,9 +74,6 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-// TestConversionAcceptsBothSecretShapes proves the decoder reads the
-// documented plain-string webhook_secret and still accepts a nested object,
-// so an Enterprise variant never breaks Connect.
 func TestConversionAcceptsBothSecretShapes(t *testing.T) {
 	for _, body := range []string{
 		`{"id":1,"pem":"p","webhook_secret":"plain"}`,
@@ -108,15 +99,12 @@ func TestConversionAcceptsBothSecretShapes(t *testing.T) {
 	}
 }
 
-// TestRepoPagination proves multi-page installations list fully and a host
-// that always answers full pages stops at the bound.
 func TestRepoPagination(t *testing.T) {
 	paged := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page := r.URL.Query().Get("page")
 		var repos []map[string]any
 		switch page {
 		case "", "1":
-			// A full first page forces the walk on.
 			for i := 0; i < repoListPageSize; i++ {
 				repos = append(repos, map[string]any{
 					"id": i, "name": "r", "full_name": "acme/r",

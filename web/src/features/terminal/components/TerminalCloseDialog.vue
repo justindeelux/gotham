@@ -5,13 +5,6 @@ import { useI18n } from "vue-i18n";
 
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 
-/**
- * Close confirmation for terminals (JUS-245). Every terminating path — the
- * window close control, a tab's close button, Alt+Shift+W, Delete on a focused
- * tab and the sign-out gate — routes through `requestClose`, so this one
- * dialog owns the cancel/confirm semantics. Cancel keeps every PTY alive;
- * confirm releases exactly the listed sessions.
- */
 const emit = defineEmits<{ confirmed: [] }>();
 const { t } = useI18n();
 const terminal = useTerminalStore();
@@ -25,16 +18,12 @@ const closing = computed(() => {
 });
 const multi = computed<boolean>(() => closing.value.length > 1);
 
-/** cancel keeps the sessions and returns focus to the window. */
 function cancel(): void {
   terminal.cancelClose();
 }
 
-/** confirm closes exactly the sessions listed in the dialog. */
 function confirm(): void {
   terminal.confirmClose();
-  // The caller (window/page host) returns keyboard focus to a surviving tab or
-  // the rail; the dialog's trigger may have just been removed.
   emit("confirmed");
 }
 </script>
@@ -77,10 +66,6 @@ function confirm(): void {
 </template>
 
 <style scoped>
-/* JUS-261: the shared footer row. Both actions are pushed to the end and keep
-   a token-based gap, so "Keep terminals" and "Close terminal" never touch.
-   The modal contract (fixed header/footer, bounded content) stays in the
-   shared .app-modal styles. */
 .dialog-foot {
   display: flex;
   align-items: center;

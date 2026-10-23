@@ -28,24 +28,6 @@ import { useProjectsStore } from "@/features/projects/stores/projects";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
-/**
- * Projects list (`/projects`, PE-4 Linear JUS-33).
- *
- * A card per project (name,
- * description, environment count, resource counts per type), a name search,
- * a create dialog, and an empty state inviting the first project. Viewers
- * see the list but no create button. The mockup's health line ("all
- * running") has no contract field behind it, so no health is shown rather
- * than a fabricated one.
- *
- * The create form renders through NForm with schema rules (inline client
- * errors) and visible labels; a 409 taken name renders inline on the name
- * field. Submits run from an Enter keydown (never keyup, which would fire
- * from the keystroke that opened the dialog).
- *
- * Thin route component: UI state lives in `useProjectsPage`, data in the
- * projects store.
- */
 const projectsStore = useProjectsStore();
 const page = useProjectsPage();
 const {
@@ -62,11 +44,6 @@ const {
   handleCreate,
   reload,
 } = page;
-/**
- * visible tracks create-form paths with shown feedback; a language switch
- * revalidates exactly those paths so visible errors refresh while pristine
- * fields stay clean (shared visibleValidation pattern via features/auth).
- */
 const createVisible = createVisibleValidation();
 const createRules = createVisible.trackRules(projectCreateRules());
 const createFormRef = ref<FormInst | null>(null);
@@ -79,17 +56,11 @@ onUnmounted(() => {
   stopCreateLocaleWatch();
 });
 
-/**
- * t renders page copy in the active locale (tracks language switches).
- * Called during render, so labels, counts and dialog text refresh without
- * losing the search query or the create draft.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
 }
 
-/** unit picks the singular/plural unit label for a count. */
 function unit(one: string, other: string, count: number): string {
   return t(count === 1 ? one : other, { count });
 }

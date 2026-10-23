@@ -11,20 +11,10 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TOTP persistence (JUS-196). A missing row means two-factor authentication was
-// never configured; a disabled row is a pending enrollment. The boolean results
-// report whether the guarded statement matched a row: false means the account's
-// TOTP state moved concurrently (already enabled, code step already used, or
-// code already consumed), so the caller must fail closed.
-
-// GetUserTOTP returns the account's TOTP row (pgx.ErrNoRows when unconfigured).
 func (s *Store) GetUserTOTP(ctx context.Context, userID pgtype.UUID) (sqlc.GetUserTOTPRow, error) {
 	return s.queries.GetUserTOTP(ctx, userID)
 }
 
-// UpsertUserTOTPSecret stores a pending (not yet enabled) secret and clears any
-// stale lock state. It reports false when the account is already enabled, so a
-// live secret is never overwritten by a re-enrollment that lost the race.
 func (s *Store) UpsertUserTOTPSecret(ctx context.Context, userID pgtype.UUID, secretEnc string) (bool, error) {
 	_, err := s.queries.UpsertUserTOTPSecret(ctx, sqlc.UpsertUserTOTPSecretParams{
 		UserID:    userID,
@@ -33,8 +23,6 @@ func (s *Store) UpsertUserTOTPSecret(ctx context.Context, userID pgtype.UUID, se
 	return matched(err)
 }
 
-// EnableUserTOTP flips a pending secret on with its recovery-code hashes and
-// the enrollment step, reporting false when the row was already enabled.
 func (s *Store) EnableUserTOTP(ctx context.Context, userID pgtype.UUID, lastStep int64, recoveryCodes []string) (bool, error) {
 	_, err := s.queries.EnableUserTOTP(ctx, sqlc.EnableUserTOTPParams{
 		UserID:        userID,
@@ -44,8 +32,6 @@ func (s *Store) EnableUserTOTP(ctx context.Context, userID pgtype.UUID, lastStep
 	return matched(err)
 }
 
-// AdvanceUserTOTPStep records an accepted code's step, reporting false when it
-// was already used or is older (the replay guard).
 func (s *Store) AdvanceUserTOTPStep(ctx context.Context, userID pgtype.UUID, step int64) (bool, error) {
 	_, err := s.queries.AdvanceUserTOTPStep(ctx, sqlc.AdvanceUserTOTPStepParams{
 		UserID: userID,
@@ -54,8 +40,6 @@ func (s *Store) AdvanceUserTOTPStep(ctx context.Context, userID pgtype.UUID, ste
 	return matched(err)
 }
 
-// ConsumeRecoveryCode removes one recovery-code hash, reporting false when it
-// was already consumed.
 func (s *Store) ConsumeRecoveryCode(ctx context.Context, userID pgtype.UUID, codeHash string) (bool, error) {
 	_, err := s.queries.ConsumeRecoveryCode(ctx, sqlc.ConsumeRecoveryCodeParams{
 		UserID:   userID,
@@ -64,8 +48,6 @@ func (s *Store) ConsumeRecoveryCode(ctx context.Context, userID pgtype.UUID, cod
 	return matched(err)
 }
 
-// ReplaceUserTOTPRecoveryCodes swaps in a fresh recovery-code set, reporting
-// false when TOTP is no longer enabled.
 func (s *Store) ReplaceUserTOTPRecoveryCodes(ctx context.Context, userID pgtype.UUID, recoveryCodes []string) (bool, error) {
 	_, err := s.queries.ReplaceUserTOTPRecoveryCodes(ctx, sqlc.ReplaceUserTOTPRecoveryCodesParams{
 		UserID:        userID,
@@ -74,12 +56,6 @@ func (s *Store) ReplaceUserTOTPRecoveryCodes(ctx context.Context, userID pgtype.
 	return matched(err)
 }
 
-// BeginUserTOTPAttempt reserves one second-factor attempt before the code is
-// checked, reporting false when the account is already locked at now. It counts
-// the attempt and arms the lockout once threshold is reached in one statement,
-// so a parallel burst cannot all pass the check: at most threshold attempts
-// reach the verifier and the counter never overshoots. A correct code rolls the
-// attempt back with ClearUserTOTPFailures.
 func (s *Store) BeginUserTOTPAttempt(ctx context.Context, userID pgtype.UUID, threshold int, now, lockedUntil time.Time) (bool, error) {
 	_, err := s.queries.BeginUserTOTPAttempt(ctx, sqlc.BeginUserTOTPAttemptParams{
 		UserID:      userID,
@@ -90,19 +66,14 @@ func (s *Store) BeginUserTOTPAttempt(ctx context.Context, userID pgtype.UUID, th
 	return matched(err)
 }
 
-// ClearUserTOTPFailures resets the consecutive-failure counter and drops any
-// lock after a correct code (TOTP or recovery).
 func (s *Store) ClearUserTOTPFailures(ctx context.Context, userID pgtype.UUID) error {
 	return s.queries.ClearUserTOTPFailures(ctx, userID)
 }
 
-// DeleteUserTOTP removes the account's TOTP configuration. It is idempotent.
 func (s *Store) DeleteUserTOTP(ctx context.Context, userID pgtype.UUID) error {
 	return s.queries.DeleteUserTOTP(ctx, userID)
 }
 
-// matched maps a guarded-statement result to its boolean: a missing row is
-// reported as (false, nil), any other error passes through.
 func matched(err error) (bool, error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil

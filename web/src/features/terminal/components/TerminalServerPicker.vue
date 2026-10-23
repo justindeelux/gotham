@@ -6,12 +6,6 @@ import { RouterLink } from "vue-router";
 import type { Server } from "@/features/servers";
 import { serverStatusKey } from "@/features/servers";
 
-/**
- * Server chooser for the standalone terminal page (JUS-246). It only emits a
- * selection; the page composable owns the confirmed switch and the single
- * create. Offline/validating nodes stay selectable so their unavailable state
- * is visible, but no shell is ever dialled for them.
- */
 interface Props {
   servers: Server[];
 }
@@ -20,7 +14,6 @@ defineProps<Props>();
 const emit = defineEmits<{ select: [serverId: string] }>();
 const { t } = useI18n();
 
-/** statusLabel localizes the server lifecycle word. */
 function statusLabel(server: Server): string {
   return t(serverStatusKey(server.status));
 }
@@ -71,8 +64,6 @@ function statusLabel(server: Server): string {
 
 .server-picker {
   display: grid;
-  /* Token-derived minimum: 15rem keeps two cards on a desktop and one on a
-   * phone without a hard-coded pixel track. */
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
   gap: var(--space-3);
 }

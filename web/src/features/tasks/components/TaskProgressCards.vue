@@ -13,7 +13,6 @@ onMounted(() => {
   tasksStore.connect();
 });
 
-/** tagType maps a task status to its Naive UI tag. */
 function tagType(status: TaskStatus, unknown: boolean): "default" | "info" | "success" | "error" | "warning" {
   if (unknown) {
     return "warning";
@@ -30,7 +29,6 @@ function tagType(status: TaskStatus, unknown: boolean): "default" | "info" | "su
   }
 }
 
-/** statusLabel names the card state, flagging tasks whose outcome is unknown. */
 function statusLabel(card: { event: { status: TaskStatus }; unknown: boolean }): string {
   if (card.unknown) {
     return t("tasks.card.status.unknown");
@@ -38,7 +36,6 @@ function statusLabel(card: { event: { status: TaskStatus }; unknown: boolean }):
   return String(t(`tasks.card.status.${card.event.status}`));
 }
 
-/** progressOf shows queued work at zero; terminal work is complete. */
 function progressOf(status: TaskStatus, progress: number): number {
   if (status === "queued") {
     return 0;
@@ -49,14 +46,11 @@ function progressOf(status: TaskStatus, progress: number): number {
   return progress;
 }
 
-/** stepLabel renders the raw deploy step through the catalog, falling back
- * to the streamed text for steps this client does not know. */
 function stepLabel(step: string): string {
   const key = `tasks.card.steps.${step}`;
   return te(key) ? String(t(key)) : step;
 }
 
-/** hasLogLink reports whether the card can deep-link to the deploy logs. */
 function hasLogLink(task: { appId: string; projectId: string; environmentId: string }): boolean {
   return task.appId !== "" && task.projectId !== "" && task.environmentId !== "";
 }

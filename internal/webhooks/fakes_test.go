@@ -15,7 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// fakeRepository is a scriptable in-memory Repository.
 type fakeRepository struct {
 	mu sync.Mutex
 
@@ -24,22 +23,14 @@ type fakeRepository struct {
 	secret string
 	target *Target
 
-	// claims keys a delivery by commit SHA (or delivery ID when the body has
-	// no SHA) the way the partial unique indexes do.
 	claims   map[string]Event
 	released []uuid.UUID
 
-	// previews keys a binding by "appID/prNumber" the way the unique index
-	// does.
 	previews       map[string]Preview
 	previewListErr error
 
-	// reservations mirrors preview_deliveries: keyed by the partial unique
-	// index the database enforces (start: app/pr/sha, close: app/pr).
-	reservations  map[string]DeliveryReservation
-	claimStoreErr error
-	// promoteErr fails a promotion; promoteErrAt selects the 1-based call that
-	// fails (0 = every call while promoteErr is set).
+	reservations   map[string]DeliveryReservation
+	claimStoreErr  error
 	promoteErr     error
 	promoteErrAt   int
 	promoteCalls   int
@@ -52,8 +43,7 @@ type fakeRepository struct {
 	markClosedErr  error
 	orphanPreviews []Preview
 	orphanApps     []uuid.UUID
-	// now overrides the fake's clock for lease expiry (tests).
-	now func() time.Time
+	now            func() time.Time
 
 	getAppErr    error
 	createErr    error
@@ -68,7 +58,6 @@ type fakeRepository struct {
 	targetsCalls int
 }
 
-// clock returns the fake's clock (defaults to time.Now).
 func (r *fakeRepository) clock() time.Time {
 	if r.now != nil {
 		return r.now()
@@ -76,14 +65,10 @@ func (r *fakeRepository) clock() time.Time {
 	return time.Now()
 }
 
-// newFakeRepository returns a repository holding one application on the main
-// branch with no hook installed yet.
 func newFakeRepository() *fakeRepository {
 	return newFakeRepositoryFor(providers.NameGitHub)
 }
 
-// newFakeRepositoryFor returns a repository whose application is watched by
-// the given provider.
 func newFakeRepositoryFor(provider string) *fakeRepository {
 	return &fakeRepository{
 		app: Application{
@@ -103,11 +88,8 @@ func newFakeRepositoryFor(provider string) *fakeRepository {
 	}
 }
 
-// testHookSecret is the signing secret every fake target carries; the tests
-// sign their deliveries with the same value.
 const testHookSecret = "hook-secret"
 
-// withTarget installs the hook and delivery target of the application.
 func (r *fakeRepository) withTarget() *fakeRepository {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -139,7 +121,6 @@ func (r *fakeRepository) withTarget() *fakeRepository {
 	return r
 }
 
-// GetApplication implements Repository.
 func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -152,7 +133,6 @@ func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (App
 	return r.app, nil
 }
 
-// GetWebhook implements Repository.
 func (r *fakeRepository) GetWebhook(_ context.Context, appID uuid.UUID) (Hook, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -162,8 +142,6 @@ func (r *fakeRepository) GetWebhook(_ context.Context, appID uuid.UUID) (Hook, e
 	return *r.hook, nil
 }
 
-// CreateWebhook implements Repository, keeping the secret unsealed so tests
-// can read it back.
 func (r *fakeRepository) CreateWebhook(_ context.Context, hook Hook, secret string) (Hook, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -196,7 +174,6 @@ func (r *fakeRepository) CreateWebhook(_ context.Context, hook Hook, secret stri
 	return hook, nil
 }
 
-// DeleteWebhook implements Repository.
 func (r *fakeRepository) DeleteWebhook(_ context.Context, appID uuid.UUID) (Hook, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -209,7 +186,6 @@ func (r *fakeRepository) DeleteWebhook(_ context.Context, appID uuid.UUID) (Hook
 	return hook, nil
 }
 
-// Targets implements Repository, honouring the case-insensitive repo match.
 func (r *fakeRepository) Targets(_ context.Context, provider, repo string) ([]Target, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -224,7 +200,6 @@ func (r *fakeRepository) Targets(_ context.Context, provider, repo string) ([]Ta
 	return []Target{*r.target}, nil
 }
 
-// ClaimEvent implements Repository with the same uniqueness the database has.
 func (r *fakeRepository) ClaimEvent(_ context.Context, event Event) (Event, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -236,7 +211,7 @@ func (r *fakeRepository) ClaimEvent(_ context.Context, event Event) (Event, erro
 		key = event.DeliveryID
 	}
 	if key == "" {
-		key = uuid.NewString() // nothing to dedupe by: every delivery is new
+		key = uuid.NewString()
 	}
 	if existing, taken := r.claims[key]; taken {
 		return existing, ErrDuplicate
@@ -247,8 +222,6 @@ func (r *fakeRepository) ClaimEvent(_ context.Context, event Event) (Event, erro
 	return event, nil
 }
 
-// ReleaseEvent implements Repository. It honours ctx cancellation like a real
-// database client, so a test can pin that cleanup runs on a detached context.
 func (r *fakeRepository) ReleaseEvent(ctx context.Context, eventID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -267,8 +240,6 @@ func (r *fakeRepository) ReleaseEvent(ctx context.Context, eventID uuid.UUID) er
 	return nil
 }
 
-// LinkEventDeployment implements Repository. It honours ctx cancellation like a
-// real database client, so a test can pin that the link runs detached.
 func (r *fakeRepository) LinkEventDeployment(ctx context.Context, eventID, deploymentID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -287,19 +258,16 @@ func (r *fakeRepository) LinkEventDeployment(ctx context.Context, eventID, deplo
 	return nil
 }
 
-// claimCount reports how many deliveries are currently claimed.
 func (r *fakeRepository) claimCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.claims)
 }
 
-// previewKey is the fake's unique (application, PR) key.
 func previewKey(appID uuid.UUID, prNumber int) string {
 	return fmt.Sprintf("%s/%d", appID, prNumber)
 }
 
-// GetPreview implements Repository.
 func (r *fakeRepository) GetPreview(_ context.Context, appID uuid.UUID, prNumber int) (Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -313,8 +281,6 @@ func (r *fakeRepository) GetPreview(_ context.Context, appID uuid.UUID, prNumber
 	return preview, nil
 }
 
-// GetPreviewByApplication implements Repository: the live binding a preview
-// sibling backs (the terminal deploy comment hook's lookup).
 func (r *fakeRepository) GetPreviewByApplication(_ context.Context, previewAppID uuid.UUID) (Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -329,8 +295,6 @@ func (r *fakeRepository) GetPreviewByApplication(_ context.Context, previewAppID
 	return Preview{}, ErrNotFound
 }
 
-// UpsertPreview implements Repository with the unique-key semantics of the
-// database.
 func (r *fakeRepository) UpsertPreview(_ context.Context, preview Preview) (Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -351,7 +315,6 @@ func (r *fakeRepository) UpsertPreview(_ context.Context, preview Preview) (Prev
 	return preview, nil
 }
 
-// ListPreviews implements Repository.
 func (r *fakeRepository) ListPreviews(_ context.Context, appID uuid.UUID) ([]Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -367,8 +330,6 @@ func (r *fakeRepository) ListPreviews(_ context.Context, appID uuid.UUID) ([]Pre
 	return previews, nil
 }
 
-// MarkPreviewClosing implements Repository: the close intent is persisted
-// before a teardown.
 func (r *fakeRepository) MarkPreviewClosing(_ context.Context, previewID uuid.UUID) (Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -387,8 +348,6 @@ func (r *fakeRepository) MarkPreviewClosing(_ context.Context, previewID uuid.UU
 	return Preview{}, ErrNotFound
 }
 
-// MarkPreviewClosed implements Repository: binding deleted and the PR's
-// reservations cleared atomically (the fake mutates both under its lock).
 func (r *fakeRepository) MarkPreviewClosed(_ context.Context, appID uuid.UUID, prNumber int) (Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -413,7 +372,6 @@ func (r *fakeRepository) MarkPreviewClosed(_ context.Context, appID uuid.UUID, p
 	return preview, nil
 }
 
-// ListClosingPreviews implements Repository.
 func (r *fakeRepository) ListClosingPreviews(_ context.Context, before time.Time) ([]Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -429,7 +387,6 @@ func (r *fakeRepository) ListClosingPreviews(_ context.Context, before time.Time
 	return closing, nil
 }
 
-// PurgeExpiredPreviewReservations implements Repository.
 func (r *fakeRepository) PurgeExpiredPreviewReservations(_ context.Context) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -447,8 +404,6 @@ func (r *fakeRepository) PurgeExpiredPreviewReservations(_ context.Context) (int
 	return purged, nil
 }
 
-// ReservationKey is the fake's unique key: the signed revision for a start,
-// the PR for a close (the two partial unique indexes of preview_deliveries).
 func ReservationKey(reservation DeliveryReservation) string {
 	if reservation.Kind == ReservationClose {
 		return fmt.Sprintf("%s/%d/close", reservation.ApplicationID, reservation.PRNumber)
@@ -456,7 +411,6 @@ func ReservationKey(reservation DeliveryReservation) string {
 	return fmt.Sprintf("%s/%d/%s", reservation.ApplicationID, reservation.PRNumber, reservation.HeadSHA)
 }
 
-// claimReservationKey is ReservationKey for a claim request.
 func claimReservationKey(claim PreviewClaim) string {
 	return ReservationKey(DeliveryReservation{
 		ApplicationID: claim.ApplicationID, PRNumber: claim.PRNumber,
@@ -464,13 +418,8 @@ func claimReservationKey(claim PreviewClaim) string {
 	})
 }
 
-// leaseTTL is the fake's reservation lifetime (the migration's default).
 const leaseTTL = 15 * time.Minute
 
-// ClaimPreviewDelivery implements Repository with the same decision the store
-// transaction makes: purge the PR's expired leases, dedupe a start against the
-// live binding's current head or an in-flight lease for that head, enforce the
-// live cap for a new preview, then reserve.
 func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewClaim) (PreviewClaimResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -493,9 +442,6 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 		current := binding
 		result.Binding = &current
 	}
-	// F-1: a live close reservation owns the pull request even before any
-	// binding exists, so a start that arrives while the close is in flight is
-	// retryable instead of provisioning a sibling the close cannot see.
 	closeInFlight := r.hasLiveCloseLocked(claim.ApplicationID, claim.PRNumber, now)
 
 	reserve := func() {
@@ -521,9 +467,6 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 	switch claim.Kind {
 	case ReservationClose:
 		if !hasBinding || binding.State == PreviewDeleted {
-			// MEDIUM-1: with no live binding, a leftover close marker is
-			// replaced so the redelivery re-runs the idempotent clear instead
-			// of being acked duplicate.
 			for key, reservation := range r.reservations {
 				if reservation.ApplicationID == claim.ApplicationID &&
 					reservation.PRNumber == claim.PRNumber && reservation.Kind == ReservationClose {
@@ -537,8 +480,6 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 		case closeInFlight:
 			result.Retryable = true
 		case hasBinding && binding.State == PreviewClosing:
-			// N4: a close owns the preview even at the delivery's own head;
-			// the same-SHA reopen stays retryable until the teardown completes.
 			result.Retryable = true
 		case hasBinding && binding.State != PreviewDeleted && binding.HeadSHA == claim.HeadSHA:
 			result.Duplicate = true
@@ -557,9 +498,6 @@ func (r *fakeRepository) ClaimPreviewDelivery(_ context.Context, claim PreviewCl
 	return result, nil
 }
 
-// liveCountLocked counts the distinct pull requests of one application that
-// are live (non-deleted binding) or in flight (unexpired start lease),
-// excluding excludePR — the caller's own slot must not deny its next head.
 func (r *fakeRepository) liveCountLocked(appID uuid.UUID, now time.Time, excludePR int) int {
 	prs := make(map[int]bool)
 	for _, preview := range r.previews {
@@ -576,10 +514,6 @@ func (r *fakeRepository) liveCountLocked(appID uuid.UUID, now time.Time, exclude
 	return len(prs)
 }
 
-// WritePreviewBinding implements Repository with the same fence the store
-// transaction applies: the claim lease must still exist and be unexpired, a
-// closing binding is owned by its close, and a write that would make the
-// binding live re-checks the quota.
 func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBindingWrite) (PreviewBindingWriteResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -597,9 +531,6 @@ func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBin
 		return PreviewBindingWriteResult{Refused: BindingRefusedLease}, nil
 	}
 
-	// F-1: a live close reservation owns the pull request even when no binding
-	// exists yet; a start that claimed before the close can never promote after
-	// it.
 	if r.hasLiveCloseLocked(write.ApplicationID, write.PRNumber, now) {
 		return PreviewBindingWriteResult{Refused: BindingRefusedClosing}, nil
 	}
@@ -645,8 +576,6 @@ func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBin
 	return PreviewBindingWriteResult{Binding: &stored}, nil
 }
 
-// hasCloseMarker reports whether a close reservation is present (test helper;
-// unlike hasLiveCloseLocked it ignores expiry).
 func (r *fakeRepository) hasCloseMarker(appID uuid.UUID, prNumber int) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -659,8 +588,6 @@ func (r *fakeRepository) hasCloseMarker(appID uuid.UUID, prNumber int) bool {
 	return false
 }
 
-// hasLiveCloseLocked reports whether a close reservation for the pull request
-// is still in flight (an expired marker fences nothing). Callers hold r.mu.
 func (r *fakeRepository) hasLiveCloseLocked(appID uuid.UUID, prNumber int, now time.Time) bool {
 	for _, reservation := range r.reservations {
 		if reservation.ApplicationID == appID && reservation.PRNumber == prNumber &&
@@ -671,7 +598,6 @@ func (r *fakeRepository) hasLiveCloseLocked(appID uuid.UUID, prNumber int, now t
 	return false
 }
 
-// reservationByIDLocked find a reservation by id (test helper).
 func (r *fakeRepository) reservationByIDLocked(id uuid.UUID) (DeliveryReservation, bool) {
 	for _, reservation := range r.reservations {
 		if reservation.ID == id {
@@ -681,7 +607,6 @@ func (r *fakeRepository) reservationByIDLocked(id uuid.UUID) (DeliveryReservatio
 	return DeliveryReservation{}, false
 }
 
-// ReleasePreviewDelivery implements Repository.
 func (r *fakeRepository) ReleasePreviewDelivery(_ context.Context, reservationID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -696,7 +621,6 @@ func (r *fakeRepository) ReleasePreviewDelivery(_ context.Context, reservationID
 	return nil
 }
 
-// ClearPreviewDeliveries implements Repository.
 func (r *fakeRepository) ClearPreviewDeliveries(_ context.Context, appID uuid.UUID, prNumber int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -711,14 +635,12 @@ func (r *fakeRepository) ClearPreviewDeliveries(_ context.Context, appID uuid.UU
 	return nil
 }
 
-// countLiveForTest reports the fake's live count (test helper).
 func (r *fakeRepository) countLiveForTest(appID uuid.UUID) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.liveCountLocked(appID, r.clock(), 0)
 }
 
-// ListOrphanedPreviews implements Repository.
 func (r *fakeRepository) ListOrphanedPreviews(_ context.Context) ([]Preview, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -738,7 +660,6 @@ func (r *fakeRepository) ListOrphanedPreviews(_ context.Context) ([]Preview, err
 	return orphans, nil
 }
 
-// ListOrphanedPreviewApplications implements Repository.
 func (r *fakeRepository) ListOrphanedPreviewApplications(_ context.Context, _ time.Time) ([]uuid.UUID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -748,7 +669,6 @@ func (r *fakeRepository) ListOrphanedPreviewApplications(_ context.Context, _ ti
 	return append([]uuid.UUID{}, r.orphanApps...), nil
 }
 
-// MarkPreviewsDeletedForSibling implements Repository.
 func (r *fakeRepository) MarkPreviewsDeletedForSibling(_ context.Context, previewAppID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -763,8 +683,6 @@ func (r *fakeRepository) MarkPreviewsDeletedForSibling(_ context.Context, previe
 		preview.DeletedAt = time.Now().UTC()
 		preview.UpdatedAt = preview.DeletedAt
 		r.previews[key] = preview
-		// The store clears the ledger with the close; leaving a lease behind
-		// would authorize a stale promotion.
 		for reservationKey, reservation := range r.reservations {
 			if reservation.ApplicationID == preview.ApplicationID && reservation.PRNumber == preview.PRNumber {
 				delete(r.reservations, reservationKey)
@@ -774,14 +692,12 @@ func (r *fakeRepository) MarkPreviewsDeletedForSibling(_ context.Context, previe
 	return nil
 }
 
-// reservationCount reports how many preview reservations are held.
 func (r *fakeRepository) reservationCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.reservations)
 }
 
-// fakeInstaller records hook installations instead of calling a Git host.
 type fakeInstaller struct {
 	mu sync.Mutex
 
@@ -792,7 +708,6 @@ type fakeInstaller struct {
 	deleteErr error
 }
 
-// CreateWebhook implements Installer.
 func (f *fakeInstaller) CreateWebhook(_ context.Context, target providers.HookTarget, hook providers.Webhook) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -804,7 +719,6 @@ func (f *fakeInstaller) CreateWebhook(_ context.Context, target providers.HookTa
 	return uuid.NewString(), nil
 }
 
-// DeleteWebhook implements Installer.
 func (f *fakeInstaller) DeleteWebhook(_ context.Context, _ providers.HookTarget, hookID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -815,17 +729,12 @@ func (f *fakeInstaller) DeleteWebhook(_ context.Context, _ providers.HookTarget,
 	return nil
 }
 
-// fakeDeployer records queued deployments instead of running the state
-// machine, and implements PreviewProvisioner so the preview path can be
-// driven end to end without a database.
 type fakeDeployer struct {
 	mu sync.Mutex
 
 	deployed []uuid.UUID
 	err      error
-	// missing marks sibling applications DeploySystem must answer ErrNotFound
-	// for (a preview deleted out of band).
-	missing map[uuid.UUID]bool
+	missing  map[uuid.UUID]bool
 
 	provisioned  []deploy.PreviewApplicationInput
 	provisionID  uuid.UUID
@@ -834,7 +743,6 @@ type fakeDeployer struct {
 	deleteErr    error
 }
 
-// DeploySystem implements Deployer.
 func (f *fakeDeployer) DeploySystem(_ context.Context, appID uuid.UUID) (deploy.Deployment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -853,7 +761,6 @@ func (f *fakeDeployer) DeploySystem(_ context.Context, appID uuid.UUID) (deploy.
 	}, nil
 }
 
-// CreatePreviewApplication implements PreviewProvisioner.
 func (f *fakeDeployer) CreatePreviewApplication(_ context.Context, _ uuid.UUID, in deploy.PreviewApplicationInput) (deploy.Application, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -865,7 +772,6 @@ func (f *fakeDeployer) CreatePreviewApplication(_ context.Context, _ uuid.UUID, 
 	return deploy.Application{ID: f.provisionID, Name: in.Name, Branch: in.Branch}, nil
 }
 
-// DeleteSystemApplication implements PreviewProvisioner.
 func (f *fakeDeployer) DeleteSystemApplication(_ context.Context, appID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -876,35 +782,30 @@ func (f *fakeDeployer) DeleteSystemApplication(_ context.Context, appID uuid.UUI
 	return nil
 }
 
-// setErr replaces the scripted DeploySystem error.
 func (f *fakeDeployer) setErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.err = err
 }
 
-// deployCount reports how many deployments were queued.
 func (f *fakeDeployer) deployCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.deployed)
 }
 
-// provisionCount reports how many siblings were created.
 func (f *fakeDeployer) provisionCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.provisioned)
 }
 
-// deleteCount reports how many siblings were torn down.
 func (f *fakeDeployer) deleteCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.deleted)
 }
 
-// fakeCommenter records PR comments instead of calling a Git host.
 type fakeCommenter struct {
 	mu sync.Mutex
 
@@ -914,7 +815,6 @@ type fakeCommenter struct {
 	err     error
 }
 
-// CreatePullRequestComment implements Commenter.
 func (f *fakeCommenter) CreatePullRequestComment(_ context.Context, target providers.HookTarget, number int, body string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -924,15 +824,12 @@ func (f *fakeCommenter) CreatePullRequestComment(_ context.Context, target provi
 	return f.err
 }
 
-// commentCount reports how many comments were posted.
 func (f *fakeCommenter) commentCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.numbers)
 }
 
-// newTestService builds a Service over the given seams with a generous rate
-// limit; tests that care about the limit build their own.
 func newTestService(repo *fakeRepository, installer *fakeInstaller, deployer *fakeDeployer) *Service {
 	return newTestServiceWith(Config{
 		Repository:  repo,
@@ -943,7 +840,6 @@ func newTestService(repo *fakeRepository, installer *fakeInstaller, deployer *fa
 	})
 }
 
-// newTestServiceWith builds a Service from a config, defaulting the logger.
 func newTestServiceWith(cfg Config) *Service {
 	if cfg.Logger == nil {
 		cfg.Logger = discardLogger()
@@ -951,7 +847,6 @@ func newTestServiceWith(cfg Config) *Service {
 	return NewService(cfg)
 }
 
-// discardLogger keeps operational logging out of the test output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

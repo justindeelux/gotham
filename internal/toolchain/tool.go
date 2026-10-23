@@ -4,8 +4,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Tool is one catalog entry with its detected state on a node, reduced from the
-// agent's ToolInfo. The JSON tags are the wire shape the Web UI reads.
 type Tool struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
@@ -22,7 +20,6 @@ type Tool struct {
 	VersionOK     bool     `json:"version_ok"`
 }
 
-// toolFromProto converts one agent catalog entry to its wire form.
 func toolFromProto(p *agentv1.ToolInfo) Tool {
 	return Tool{
 		ID:            p.GetId(),

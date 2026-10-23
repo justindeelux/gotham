@@ -15,51 +15,39 @@ import AppTooltip from "@/shared/ui/AppTooltip.vue";
 
 const { t } = useI18n();
 const store = useEditorSettingsStore();
-// storeToRefs keeps the binding live: update() replaces the settings object,
-// so a plain `store.settings` snapshot would go stale after the first change.
 const { settings } = storeToRefs(store);
 
 const show = ref(false);
 const triggerRef = ref<HTMLElement | null>(null);
 const contentRef = ref<HTMLElement | null>(null);
 
-/** themeOptions are the two editor surfaces. */
 const themeOptions = computed(() => [
   { label: t("files.editor.settings.themeDark"), value: "dark" },
   { label: t("files.editor.settings.themeLight"), value: "light" },
 ]);
 
-/** familyOptions are the two token-backed font stacks. */
 const familyOptions = computed(() => [
   { label: t("files.editor.settings.fontMono"), value: "mono" },
   { label: t("files.editor.settings.fontSans"), value: "sans" },
 ]);
 
-/** sizeOptions are the offered font sizes, in pixels. */
 const sizeOptions = EDITOR_FONT_SIZES.map((size) => ({ label: `${size}px`, value: size }));
 
-/** tabOptions are the offered indentation widths. */
 const tabOptions = EDITOR_TAB_SIZES.map((size) => ({ label: String(size), value: size }));
 
-/** indentOptions switch between spaces and tabs. */
 const indentOptions = computed(() => [
   { label: t("files.editor.settings.indentSpaces"), value: "spaces" },
   { label: t("files.editor.settings.indentTabs"), value: "tabs" },
 ]);
 
-/** commit merges one preference change; the store persists and broadcasts it. */
 function commit(patch: Partial<EditorSettings>): void {
   store.update(patch);
 }
 
-/** close hides the popover and returns focus to its trigger. */
 function close(): void {
   show.value = false;
 }
 
-// A keyboard user must land inside the panel on open and on the trigger again
-// after Escape; NPopover alone moves neither. The panel is teleported, so its
-// ref becomes available only once the body has mounted.
 watch(contentRef, (element) => {
   if (element && show.value) {
     element
@@ -73,7 +61,6 @@ watch(show, async (value) => {
     return;
   }
   await nextTick();
-  // The popover's trigger is the anchor span around the tooltip and button.
   triggerRef.value?.querySelector<HTMLElement>("button")?.focus();
 });
 </script>
@@ -169,8 +156,6 @@ watch(show, async (value) => {
         />
       </label>
 
-      <!-- Switches are not wrapped in <label>: a label click would toggle the
-           switch a second time in some browsers. -->
       <div class="ed-settings-row">
         <span>{{ t("files.editor.settings.autocomplete") }}</span>
         <NSwitch
@@ -265,8 +250,6 @@ watch(show, async (value) => {
   padding: var(--space-1);
 }
 
-/* The popover trigger is an anchor span around the tooltip + button; it keeps
-   the button's inline size in the toolbar row. */
 .ed-settings-anchor {
   display: inline-flex;
 }

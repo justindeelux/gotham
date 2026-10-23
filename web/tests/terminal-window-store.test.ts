@@ -1,5 +1,3 @@
-// JUS-245: the floating terminal window persists its geometry per user and
-// clamps it into the viewport, using the same shared math as the editor.
 /* global window:readonly */
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +15,6 @@ import {
   writeTerminalWindow,
 } from "@/features/terminal/utils/terminalWindow";
 
-/** memoryStorage is a Map-backed localStorage stand-in. */
 function memoryStorage() {
   const values = new Map<string, string>();
   return {
@@ -28,7 +25,6 @@ function memoryStorage() {
   };
 }
 
-/** seedSession signs in one user so the store picks up their key. */
 function seedSession(userId: string): void {
   window.localStorage.setItem(
     "gotham.auth.session",
@@ -106,7 +102,6 @@ describe("terminal window store geometry", () => {
 
     store.setSize(2000, 2000, 390, 844);
     expect(store.width).toBe(342);
-    // A phone still fits the chrome bound rather than shrinking to nothing.
     expect(store.height).toBe(740);
   });
 
@@ -122,7 +117,6 @@ describe("terminal window store geometry", () => {
     const narrow = store.displayGeometry(390, 844);
     expect(narrow.x).toBeNull();
     expect(narrow.y).toBeNull();
-    // Display fitting never rewrites the saved position.
     expect(store.x).toBe(200);
   });
 

@@ -1,6 +1,3 @@
-// Paste feedback (JUS-111 fix round 2): the toolbar paste action must report the
-// transfer outcome instead of silently no-opping. useMessage is stubbed and the
-// files API is mocked, so the browser runs under a real pinia + i18n.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messages = {
@@ -50,7 +47,6 @@ const root: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -85,11 +81,6 @@ beforeEach(() => {
 });
 
 describe("files browser paste feedback", () => {
-  /**
-   * openFileOps opens the toolbar's File Operations menu (JUS-160: paste lives
-   * there instead of a standalone button) and returns its rendered item
-   * bodies (naive-ui binds the select on the inner body div).
-   */
   async function openFileOps(
     wrapper: VueWrapper,
   ): Promise<ReturnType<VueWrapper["findAll"]>> {
@@ -218,8 +209,6 @@ describe("files browser paste feedback", () => {
     await pasteItem!.trigger("click");
     await flushPromises();
 
-    // The move is refused before the agent call and the cut stays on the
-    // clipboard so the user can save the buffer and paste again.
     expect(vi.mocked(moveEntry)).not.toHaveBeenCalled();
     expect(messages.warning).toHaveBeenCalledTimes(1);
     expect(store.hasClipboard).toBe(true);

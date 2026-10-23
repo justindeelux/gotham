@@ -17,68 +17,36 @@ import (
 )
 
 const (
-	// defaultToolTimeout bounds one install or uninstall. The long value is
-	// deliberate: a package install and a Railpack/BuildKit download can take
-	// minutes on a slow node, but a wedged command still cannot hold the node's
-	// one install slot forever.
 	defaultToolTimeout = 15 * time.Minute
-	// defaultToolHelper is the fixed, root-owned privileged helper installed by
-	// deploy/install-agent.sh and reached only through its verb-pinned sudoers
-	// rule. The Go side passes a catalog id; the helper owns the executable argv.
-	defaultToolHelper = "/usr/libexec/gotham/gotham-toolctl"
+	defaultToolHelper  = "/usr/libexec/gotham/gotham-toolctl"
 )
 
-// Final stream statuses, matching the proto's ToolResult.status values.
 const (
 	toolStatusSucceeded = "succeeded"
 	toolStatusFailed    = "failed"
 )
 
-// Helper verbs, one per direction. They are the only arguments the sudoers rule
-// grants, so they must match deploy/install-toolctl-sudoers.sh exactly.
 const (
 	helperInstallVerb   = "install-tool"
 	helperUninstallVerb = "uninstall-tool"
 )
 
-// ToolServer implements agentv1.ToolServiceServer. ListTools reports the host
-// tool catalog with each tool's detected state; InstallTool and UninstallTool
-// run the catalog installers on this node, streaming output and a final result.
-//
-// Every privileged command is the fixed gotham-toolctl helper with a catalog id
-// (deploy/gotham-toolctl.sh): the agent never builds a root argv from request
-// data, and the helper validates the id against its allow-list.
-//
-// The install/uninstall surface is guarded by a node-wide lock: only one runs
-// at a time, so two deploys cannot install over each other, and a second call
-// is refused with ResourceExhausted rather than queued.
 type ToolServer struct {
 	agentv1.UnimplementedToolServiceServer
 
-	// runner executes the helper. It is a seam for tests.
-	runner commandRunner
-	// helper is the privileged helper path.
-	helper string
-	// installed reports whether a tool is present, used for idempotency and
-	// dependency checks. It is a seam for tests.
-	installed func(id string) bool
-	// inUse reports whether a tool is busy, so an uninstall can refuse.
-	inUse func(id string) (bool, string)
-	// beginUninstall marks an uninstall in flight so a build cannot start into
-	// its removal window; the returned function clears the mark.
+	runner         commandRunner
+	helper         string
+	installed      func(id string) bool
+	inUse          func(id string) (bool, string)
 	beginUninstall func(id string) func()
-	// timeout bounds one install or uninstall.
-	timeout time.Duration
-	log     *slog.Logger
+	timeout        time.Duration
+	log            *slog.Logger
 
-	// lock serialises installs and uninstalls on this node.
 	lock sync.Mutex
 }
 
-// ToolServerOption tunes a ToolServer.
 type ToolServerOption func(*ToolServer)
 
-// NewToolServer returns a ToolService implementation over the host catalog.
 func NewToolServer(options ...ToolServerOption) *ToolServer {
 	server := &ToolServer{
 		runner:         execRunner{},
@@ -95,8 +63,6 @@ func NewToolServer(options ...ToolServerOption) *ToolServer {
 	return server
 }
 
-// WithToolUse wires the node's tool-use tracker so an uninstall refuses while a
-// build is running and a build cannot start while an uninstall is running.
 func WithToolUse(tracker *ToolUseTracker) ToolServerOption {
 	return func(s *ToolServer) {
 		if tracker != nil {
@@ -106,32 +72,26 @@ func WithToolUse(tracker *ToolUseTracker) ToolServerOption {
 	}
 }
 
-// withToolRunner substitutes the command runner (tests).
 func withToolRunner(runner commandRunner) ToolServerOption {
 	return func(s *ToolServer) { s.runner = runner }
 }
 
-// withToolHelper substitutes the privileged helper path (tests).
 func withToolHelper(path string) ToolServerOption {
 	return func(s *ToolServer) { s.helper = path }
 }
 
-// withToolInstalled substitutes the presence check (tests).
 func withToolInstalled(fn func(string) bool) ToolServerOption {
 	return func(s *ToolServer) { s.installed = fn }
 }
 
-// withToolInUse substitutes the in-use check (tests).
 func withToolInUse(fn func(string) (bool, string)) ToolServerOption {
 	return func(s *ToolServer) { s.inUse = fn }
 }
 
-// withToolTimeout substitutes the install timeout (tests).
 func withToolTimeout(timeout time.Duration) ToolServerOption {
 	return func(s *ToolServer) { s.timeout = timeout }
 }
 
-// ListTools returns every catalog entry with its detected state on this node.
 func (s *ToolServer) ListTools(_ context.Context, _ *agentv1.ListToolsRequest) (*agentv1.ListToolsResponse, error) {
 	detections := toolcatalog.DetectAll()
 	tools := make([]*agentv1.ToolInfo, 0, len(detections))
@@ -159,23 +119,14 @@ func (s *ToolServer) ListTools(_ context.Context, _ *agentv1.ListToolsRequest) (
 	return &agentv1.ListToolsResponse{Tools: tools}, nil
 }
 
-// InstallTool installs one catalog tool and its missing dependencies, streaming
-// each command's output and a final result.
 func (s *ToolServer) InstallTool(request *agentv1.InstallToolRequest, stream grpc.ServerStreamingServer[agentv1.ToolEvent]) error {
 	return s.execute(request.GetId(), true, stream)
 }
 
-// UninstallTool removes one catalog tool the same way.
 func (s *ToolServer) UninstallTool(request *agentv1.InstallToolRequest, stream grpc.ServerStreamingServer[agentv1.ToolEvent]) error {
 	return s.execute(request.GetId(), false, stream)
 }
 
-// execute runs one install or uninstall. A request the node will never satisfy
-// (unknown id, a detect-only tool, a tool in use, another install running) is
-// refused with a gRPC status error before any command runs, so the control
-// plane can tell a refusal from a failed install. A command that ran and failed
-// is reported in-band as a ToolResult with status "failed", so the stream still
-// carries the actionable exit code.
 func (s *ToolServer) execute(id string, install bool, stream grpc.ServerStreamingServer[agentv1.ToolEvent]) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -192,8 +143,6 @@ func (s *ToolServer) execute(id string, install bool, stream grpc.ServerStreamin
 	}
 
 	if !install {
-		// Mark the uninstall before the in-use check so a build cannot start
-		// in the gap between reading "not in use" and pulling the tool out.
 		release := s.beginUninstall(id)
 		defer release()
 		if reason := s.uninstallRefusal(id); reason != "" {
@@ -241,8 +190,6 @@ func (s *ToolServer) execute(id string, install bool, stream grpc.ServerStreamin
 			continue
 		}
 		if runErr != nil {
-			// A cancelled client is a cancelled RPC, not a failed install:
-			// report the transport error instead of a result nobody reads.
 			if parentErr := stream.Context().Err(); parentErr != nil {
 				return status.FromContextError(parentErr).Err()
 			}
@@ -254,8 +201,6 @@ func (s *ToolServer) execute(id string, install bool, stream grpc.ServerStreamin
 				sender.note("could not run: " + runErr.Error())
 				return sender.result(toolStatusFailed, -1)
 			}
-			// A non-zero exit is a normal failure: fall through and report it
-			// with its own exit code.
 		}
 		return sender.result(toolStatusFailed, code)
 	}
@@ -264,10 +209,6 @@ func (s *ToolServer) execute(id string, install bool, stream grpc.ServerStreamin
 	return sender.result(toolStatusSucceeded, 0)
 }
 
-// uninstallRefusal returns why a tool must not be removed, or "" when it is
-// safe: nothing is using it and no installed tool depends on it. A tool a
-// present tool depends on is refused so removing it never breaks a working
-// build path (railpack needs buildkit, which needs docker).
 func (s *ToolServer) uninstallRefusal(id string) string {
 	if inUse, reason := s.inUse(id); inUse {
 		if reason == "" {
@@ -283,8 +224,6 @@ func (s *ToolServer) uninstallRefusal(id string) string {
 	return ""
 }
 
-// toolOrder returns the ids to act on: dependency-first for an install, the
-// single id for an uninstall.
 func toolOrder(id string, install bool) ([]string, error) {
 	if install {
 		return toolcatalog.InstallOrder(id)
@@ -292,9 +231,6 @@ func toolOrder(id string, install bool) ([]string, error) {
 	return toolcatalog.UninstallOrder(id)
 }
 
-// toolPlanError maps a catalog error onto a gRPC status: an unknown id is bad
-// input, a refusal the node will never satisfy is a failed precondition, and
-// anything else is internal.
 func toolPlanError(id string, err error) error {
 	switch {
 	case errors.Is(err, toolcatalog.ErrUnknownTool):

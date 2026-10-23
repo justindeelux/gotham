@@ -1,7 +1,3 @@
-// Store race tests for the projects surface (PE-4 fix round 1).
-// A response that lost to a team or project switch must never write state:
-// the first read resolves last and is dropped, the current read wins, and
-// the spinner is released exactly once.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,7 +36,6 @@ function project(id: string, name: string) {
   };
 }
 
-/** deferred returns a promise with its resolve exposed. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -68,12 +63,9 @@ describe("projects store races", () => {
       .mockReturnValueOnce(second.promise);
 
     const readA = store.fetchProjects();
-    // The selection switches while the first read is in flight; the page
-    // refetches for the new team.
     teams.activeTeamId = "team-b";
     const readB = store.fetchProjects();
 
-    // The stale read resolves last: it must not overwrite team B's list.
     second.resolve([project("b-1", "bee")]);
     await readB;
     first.resolve([project("a-1", "aye")]);

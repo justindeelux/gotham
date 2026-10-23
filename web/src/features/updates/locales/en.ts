@@ -1,8 +1,3 @@
-/**
- * English updates catalog (namespace `updates`): Settings → Updates page,
- * schedule form and validation messages. Only values are translated in
- * `vi.ts`; keys and params stay identical.
- */
 const en = {
   page: {
     eyebrow: "Settings · System",

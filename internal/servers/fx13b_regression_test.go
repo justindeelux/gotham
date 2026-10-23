@@ -17,9 +17,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestServiceOfflineSweepMarksStaleNode covers A4-6: a node that stops
-// heartbeating must transition ready -> offline and the persisted row must carry
-// the status, so every read reports the contract the FE already understands.
 func TestServiceOfflineSweepMarksStaleNode(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -54,8 +51,6 @@ func TestServiceOfflineSweepMarksStaleNode(t *testing.T) {
 		t.Fatalf("status after heartbeat = %q, want %q", ready.Status, StatusReady)
 	}
 
-	// Advance the service clock past the heartbeat window: the next read sweeps
-	// the node offline.
 	now := service.now()
 	service.now = func() time.Time { return now.Add(heartbeatOfflineAfter + time.Second) }
 
@@ -74,7 +69,6 @@ func TestServiceOfflineSweepMarksStaleNode(t *testing.T) {
 		t.Errorf("persisted status = %q, want %q", persisted.Status, StatusOffline)
 	}
 
-	// A fresh heartbeat brings the node back ready.
 	service.now = time.Now
 	if err := service.RecordHeartbeat(ctx, nodeID, &agentv1.HeartbeatRequest{CpuUsage: 0.2}); err != nil {
 		t.Fatalf("RecordHeartbeat after offline: %v", err)
@@ -97,9 +91,6 @@ func TestServiceOfflineSweepMarksStaleNode(t *testing.T) {
 	}
 }
 
-// TestServiceConcurrentRegistrationConverges covers A4-12: a burst of
-// registrations for one node id must converge on exactly one row, with no
-// orphan row left behind with a NULL node_id.
 func TestServiceConcurrentRegistrationConverges(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -158,9 +149,6 @@ func TestServiceConcurrentRegistrationConverges(t *testing.T) {
 	}
 }
 
-// TestServiceRegistrationClaimsOperatorServer covers A4-12's duplicate half: an
-// operator-created server (node_id NULL) whose address matches the registering
-// node is updated in place, not duplicated.
 func TestServiceRegistrationClaimsOperatorServer(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -207,9 +195,6 @@ func TestServiceRegistrationClaimsOperatorServer(t *testing.T) {
 	}
 }
 
-// TestServiceRegistrationClaimsOperatorServerByHostname covers the common
-// case: the agent's default node id is the hostname the operator typed as the
-// server address, so enrollment must claim that row too.
 func TestServiceRegistrationClaimsOperatorServerByHostname(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -243,9 +228,6 @@ func TestServiceRegistrationClaimsOperatorServerByHostname(t *testing.T) {
 	}
 }
 
-// TestServicePassphraseProtectedKeyValidation covers A4-13: a
-// passphrase-protected key validates when the passphrase is supplied, and fails
-// closed with a clear, typed error when it is missing or wrong.
 func TestServicePassphraseProtectedKeyValidation(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -280,19 +262,16 @@ func TestServicePassphraseProtectedKeyValidation(t *testing.T) {
 		}
 	})
 
-	// Missing passphrase: typed ErrValidation with a clear, actionable message.
 	if _, err := service.Validate(ctx, created.ID, ValidateAuth{}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Validate without a passphrase = %v, want ErrValidation", err)
 	} else if !strings.Contains(err.Error(), "passphrase") {
 		t.Errorf("err = %v, want it to name the missing passphrase", err)
 	}
 
-	// Wrong passphrase: still a typed validation failure.
 	if _, err := service.Validate(ctx, created.ID, ValidateAuth{Passphrase: "wrong"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Validate with the wrong passphrase = %v, want ErrValidation", err)
 	}
 
-	// Correct passphrase: the node validates.
 	if _, err := service.Validate(ctx, created.ID, ValidateAuth{Passphrase: "s3cret"}); err != nil {
 		t.Fatalf("Validate with the passphrase: %v", err)
 	}
@@ -300,15 +279,11 @@ func TestServicePassphraseProtectedKeyValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	// Validation alone never sets last_seen: that is the agent's heartbeat.
 	if fetched.LastSeen != nil {
 		t.Errorf("last_seen after SSH validation = %v, want nil (A4-15)", fetched.LastSeen)
 	}
 }
 
-// TestServiceValidateReadyNodeKeepsReady covers fix round 1 U2: re-validating a
-// ready node must not leave it stuck in `validating`. The status is restored
-// from the node's fresh heartbeat.
 func TestServiceValidateReadyNodeKeepsReady(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -343,7 +318,6 @@ func TestServiceValidateReadyNodeKeepsReady(t *testing.T) {
 		}
 	})
 
-	// Attach a node id and give the node a fresh heartbeat so it is ready.
 	nodeID := uniqueNodeID("ready-node-id")
 	if _, err := st.DB.Exec(ctx, "UPDATE servers SET node_id = $2 WHERE id = $1", pgUUID(created.ID), nodeID); err != nil {
 		t.Fatalf("attach node id: %v", err)
@@ -359,7 +333,6 @@ func TestServiceValidateReadyNodeKeepsReady(t *testing.T) {
 		t.Fatalf("status before validate = %q, want %q", before.Status, StatusReady)
 	}
 
-	// Re-validation succeeds and must restore ready, not leave validating.
 	result, err := service.Validate(ctx, created.ID, ValidateAuth{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -376,9 +349,6 @@ func TestServiceValidateReadyNodeKeepsReady(t *testing.T) {
 	}
 }
 
-// TestServerStatusAfterValidationTransitions covers the atomic status restore
-// directly, including the mid-validation heartbeat case (a fresh last_seen must
-// win over the pending an agentless validation would set).
 func TestServerStatusAfterValidationTransitions(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -427,9 +397,6 @@ func TestServerStatusAfterValidationTransitions(t *testing.T) {
 	}
 }
 
-// TestServiceValidateRestoresStatusWhenAgentInfoWriteFails covers fix round 2
-// U1: a failure to record the SSH inventory must not leave the node stuck in
-// validating.
 func TestServiceValidateRestoresStatusWhenAgentInfoWriteFails(t *testing.T) {
 	service, st := newTestService(t)
 
@@ -464,7 +431,6 @@ func TestServiceValidateRestoresStatusWhenAgentInfoWriteFails(t *testing.T) {
 		}
 	})
 
-	// The SSH probes succeed, but recording the inventory fails.
 	st.BeforeUpdateServerAgentInfo = func() error { return errors.New("agent info write forced to fail") }
 	t.Cleanup(func() { st.BeforeUpdateServerAgentInfo = nil })
 

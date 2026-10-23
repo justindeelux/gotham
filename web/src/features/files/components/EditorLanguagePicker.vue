@@ -10,7 +10,6 @@ import {
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
 interface Props {
-  /** language is the tab's current (detected or manually picked) mode. */
   language: EditorLanguageId;
 }
 
@@ -22,7 +21,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** options lists every shipped language under its full name. */
 const options = computed(() =>
   editorLanguages.map((language) => ({
     label: language.name,
@@ -30,7 +28,6 @@ const options = computed(() =>
   })),
 );
 
-/** selectLanguage forwards the picker value to the tab store. */
 function selectLanguage(value: string | number): void {
   emit("select", value as EditorLanguageId);
 }

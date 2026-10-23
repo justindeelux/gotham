@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-// fakeDirEntry lets a test drive the page builder with an entry whose stat
-// fails, standing in for a file deleted between the directory read and Info.
 type fakeDirEntry struct {
 	name string
 	info os.FileInfo
@@ -39,7 +37,6 @@ func (f fakeFileInfo) ModTime() time.Time { return time.Unix(0, 0) }
 func (f fakeFileInfo) IsDir() bool        { return false }
 func (f fakeFileInfo) Sys() any           { return nil }
 
-// openInternalRoot opens a temp directory as a root for an internal test.
 func openInternalRoot(t *testing.T, dir string) *Root {
 	t.Helper()
 	info, err := os.Stat(dir)
@@ -54,8 +51,6 @@ func openInternalRoot(t *testing.T, dir string) *Root {
 	return root
 }
 
-// TestPageSkipsVanishedEntry pins that one entry that vanishes between the
-// directory read and its stat is skipped instead of aborting the page.
 func TestPageSkipsVanishedEntry(t *testing.T) {
 	root := openInternalRoot(t, t.TempDir())
 
@@ -72,10 +67,6 @@ func TestPageSkipsVanishedEntry(t *testing.T) {
 	}
 }
 
-// TestListAllEntriesVanishAdvancesCursor pins the loop fix: when every entry
-// of a truncated page vanishes between ReadDir and its stat, the page is empty
-// but the cursor must still advance to the last directory name seen, not to
-// the last surviving entry (which does not exist).
 func TestListAllEntriesVanishAdvancesCursor(t *testing.T) {
 	root := openInternalRoot(t, t.TempDir())
 
@@ -97,9 +88,6 @@ func TestListAllEntriesVanishAdvancesCursor(t *testing.T) {
 	}
 }
 
-// TestListScanCapIsExplicitError proves a directory larger than the scan cap
-// is refused, never returned as a silently partial page that would strand a
-// client in a paging loop.
 func TestListScanCapIsExplicitError(t *testing.T) {
 	old := listScanCap
 	listScanCap = 4
@@ -117,9 +105,6 @@ func TestListScanCapIsExplicitError(t *testing.T) {
 	}
 }
 
-// TestMapErrorCodes pins the error vocabulary, including the escape
-// classification so a change to the stdlib message is caught here rather than
-// surfacing as an Internal error.
 func TestMapErrorCodes(t *testing.T) {
 	cases := []struct {
 		name string
@@ -142,8 +127,6 @@ func TestMapErrorCodes(t *testing.T) {
 	}
 }
 
-// TestCopyDepthBound pins the recursion bound: a copy deeper than maxCopyDepth
-// fails explicitly instead of recursing without bound.
 func TestCopyDepthBound(t *testing.T) {
 	old := maxCopyDepth
 	maxCopyDepth = 1
@@ -162,9 +145,6 @@ func TestCopyDepthBound(t *testing.T) {
 	}
 }
 
-// TestRemoveStaleTempsDepthBound pins the sweeper bound: it stops descending
-// past maxSweepDepth, so a staging file buried deeper than the cap survives
-// (a documented ceiling) while a shallow one is still removed.
 func TestRemoveStaleTempsDepthBound(t *testing.T) {
 	old := maxSweepDepth
 	maxSweepDepth = 1
@@ -199,11 +179,6 @@ func TestRemoveStaleTempsDepthBound(t *testing.T) {
 	}
 }
 
-// TestListBoundedRetainedHeap proves a directory far larger than the page does
-// not retain memory proportional to its size: the page is limit entries and
-// the live heap after the call holds only the page, not the directory. The
-// streaming batches are garbage, so a regression that buffered the whole
-// directory would show up as a live heap on the order of the entry count.
 func TestListBoundedRetainedHeap(t *testing.T) {
 	oldBatch := listBatchSize
 	listBatchSize = 64

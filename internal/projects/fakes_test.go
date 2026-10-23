@@ -13,21 +13,14 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// discardLogger keeps the service's operational logging out of the test
-// output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeRepository is an in-memory Repository that mimics the SQL semantics
-// tests care about: team scoping, case-insensitive name uniqueness and
-// project cascades.
 type fakeRepository struct {
 	mu           sync.Mutex
 	projects     map[uuid.UUID]Project
 	environments map[uuid.UUID]Environment
-	// variables holds one scope's rows, keyed by project ID with the
-	// environment ID (Nil for the project level) nested inside.
 	variables    map[uuid.UUID]map[uuid.UUID][]SharedVariable
 	previewBases map[uuid.UUID]uuid.UUID
 }
@@ -221,7 +214,6 @@ func (f *fakeRepository) CountEnvironments(_ context.Context, projectID uuid.UUI
 	return count, nil
 }
 
-// PreviewBaseIDs implements Repository over the scripted preview mapping.
 func (f *fakeRepository) PreviewBaseIDs(_ context.Context, _ uuid.UUID, previewAppIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -234,7 +226,6 @@ func (f *fakeRepository) PreviewBaseIDs(_ context.Context, _ uuid.UUID, previewA
 	return bases, nil
 }
 
-// fakeCounter is a ResourceCounter with scripted counts.
 type fakeCounter struct {
 	mu           sync.Mutex
 	environments map[uuid.UUID]ResourceCounts
@@ -277,21 +268,16 @@ func (f *fakeCounter) CountEnvironmentPreviews(_ context.Context, environmentID 
 	return f.previewEnvs[environmentID], f.err
 }
 
-// newTestService wires the real service onto the in-memory repository with
-// the given team scope.
 func newTestService(repo *fakeRepository, counter ResourceCounter, userID, teamID uuid.UUID, role teams.Role) (*Service, context.Context) {
 	svc := NewService(Config{Repository: repo, Counter: counter, Logger: discardLogger()})
 	ctx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: role})
 	return svc, ctx
 }
 
-// equalFold compares names the way the lower(name) indexes do.
 func equalFold(a, b string) bool {
 	return strings.EqualFold(a, b)
 }
 
-// ListVariables implements Repository: one scope's rows, ordered by key like
-// the SQL query.
 func (f *fakeRepository) ListVariables(_ context.Context, projectID, environmentID uuid.UUID) ([]SharedVariable, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -300,9 +286,6 @@ func (f *fakeRepository) ListVariables(_ context.Context, projectID, environment
 	return rows, nil
 }
 
-// ReplaceVariables implements Repository: the whole set is swapped. The
-// build runs under the fake's mutex, mimicking the locked store transaction
-// (concurrent PUTs serialize; the build sees the latest committed set).
 func (f *fakeRepository) ReplaceVariables(_ context.Context, projectID, environmentID uuid.UUID, build func(existing []SharedVariable) ([]SharedVariable, error)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -321,7 +304,6 @@ func (f *fakeRepository) ReplaceVariables(_ context.Context, projectID, environm
 	return nil
 }
 
-// sortSharedVariables orders rows by key (the SQL ORDER BY key ASC).
 func sortSharedVariables(rows []SharedVariable) {
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
 }

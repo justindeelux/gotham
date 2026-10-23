@@ -24,7 +24,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Server lifecycle statuses.
 const (
 	StatusPending    = "pending"
 	StatusValidating = "validating"
@@ -33,120 +32,78 @@ const (
 	StatusError      = "error"
 )
 
-// defaultSSHPort is used when a create request omits the port.
 const defaultSSHPort = 22
 
-// heartbeatOfflineAfter bounds how long a ready node may go without an agent
-// heartbeat before it is reported offline. The agent heartbeats every 10s, so
-// three missed cycles mark a node unreachable without waiting on the gateway's
-// 2-minute idle-stream timeout.
 const heartbeatOfflineAfter = 30 * time.Second
 
-// Server is a managed node. It is the domain representation, decoupled from the
-// sqlc row so the HTTP and gRPC layers never see storage types.
 type Server struct {
-	ID       uuid.UUID
-	Name     string
-	IP       string
-	Port     int
-	SSHUser  string
-	SSHKeyID *uuid.UUID
-	// HasPassword reports whether a password secret is stored for the node.
-	// The secret itself is never exposed outside the domain service.
-	HasPassword bool
-	// TeamID is the owning team. The zero UUID marks a legacy node that
-	// predates teams: it stays visible to every authenticated caller, which
-	// is the documented Phase 8 residual for the shared node registry.
-	TeamID         uuid.UUID
-	Status         string
-	NodeID         *string
-	OS             *string
-	DockerVersion  *string
-	Arch           *string
-	TotalMem       *int64
-	TotalDisk      *int64
-	CPUUsage       *float64
-	MemUsage       *float64
-	DiskUsage      *float64
-	ContainerCount *int64
-	LastSeen       *time.Time
-	// HostKeyFingerprint is the TOFU-pinned SSH host key of the node, in
-	// OpenSSH SHA256 form. nil until the node has been validated once.
+	ID                 uuid.UUID
+	Name               string
+	IP                 string
+	Port               int
+	SSHUser            string
+	SSHKeyID           *uuid.UUID
+	HasPassword        bool
+	TeamID             uuid.UUID
+	Status             string
+	NodeID             *string
+	OS                 *string
+	DockerVersion      *string
+	Arch               *string
+	TotalMem           *int64
+	TotalDisk          *int64
+	CPUUsage           *float64
+	MemUsage           *float64
+	DiskUsage          *float64
+	ContainerCount     *int64
+	LastSeen           *time.Time
 	HostKeyFingerprint *string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
 
-// PrivateKey is the metadata of a stored SSH private key. The encrypted
-// material is never exposed.
 type PrivateKey struct {
 	ID        uuid.UUID
 	Name      string
 	CreatedAt time.Time
 }
 
-// ValidationResult reports the outcome of an SSH validation run.
 type ValidationResult struct {
 	Checks []CheckResult
 	Server *Server
 }
 
-// ValidateAuth selects the credentials for a validation run. An explicit key or
-// password overrides the key attached to the server.
 type ValidateAuth struct {
-	KeyID    uuid.UUID
-	Password string
-	// Passphrase decrypts a passphrase-protected private key for this run only.
-	// It is never persisted; a key stored without its passphrase is unusable
-	// until the caller supplies one at validation time.
-	Passphrase string
-	// TrustHostKey is the operator's explicit consent to trust an unpinned host
-	// key on this run. It is required for password auth to a node that has
-	// never been validated (there is no key to TOFU-pin against) and is
-	// ignored once the node is pinned.
+	KeyID        uuid.UUID
+	Password     string
+	Passphrase   string
 	TrustHostKey bool
 }
 
-// Config wires a ServerService.
 type Config struct {
 	Store     *store.Store
 	Authority *Authority
 	Secret    string
 	Version   string
 	Logger    *slog.Logger
-	// Updater resolves verified agent update offers (BE-9.2). nil disables the
-	// agent update surface on the gRPC gateway.
-	Updater AgentUpdateOfferer
+	Updater   AgentUpdateOfferer
 }
 
-// ServerService is the node-management domain service: server registry, SSH
-// validation, private-key storage, agent registration, and heartbeat recording.
 type ServerService struct {
-	store     *store.Store
-	authority *Authority
-	secret    string
-	version   string
-	logger    *slog.Logger
-	updater   AgentUpdateOfferer
-	// agentUpdate is the agent version map and rollout marker (BE-9.2).
+	store       *store.Store
+	authority   *Authority
+	secret      string
+	version     string
+	logger      *slog.Logger
+	updater     AgentUpdateOfferer
 	agentUpdate agentUpdateState
 
-	// metricMu guards lastMetricAt, the per-node wall-clock timestamp of the
-	// last persisted time-series sample. It bounds an unauthenticated heartbeat
-	// flood's growth of server_metrics without touching the live snapshot.
 	metricMu     sync.Mutex
 	lastMetricAt map[string]time.Time
-	// installs marks the servers with a Docker install in flight, so a double
-	// click, a second tab, or an install racing another holds one run per node
-	// (the node package manager is not concurrency-safe) and answers 409.
-	installs sync.Map // map[uuid.UUID]struct{}
-	// now is the clock, overridable in tests.
-	now func() time.Time
+	installs     sync.Map
+	now          func() time.Time
 }
 
-// NewService builds a ServerService. When secret is empty an ephemeral
-// encryption secret is generated and a warning is logged: encrypted private
-// keys then do not survive a restart.
 func NewService(cfg Config) *ServerService {
 	logger := cfg.Logger
 	if logger == nil {
@@ -174,17 +131,8 @@ func NewService(cfg Config) *ServerService {
 	}
 }
 
-// Version returns the control-plane build version this service reports to
-// agents; the self-update surface uses it as the running version.
 func (s *ServerService) Version() string { return s.version }
 
-// Add registers a new server. sshKeyID may be the zero UUID when no key is
-// attached, and password may be empty when no password is used. Exactly one
-// credential may be given: a key id or a password, not both. The password is
-// encrypted with the same mechanism as private keys and is never returned.
-// userID is recorded as the creator, and the node is stamped with the
-// caller's active team; a request without a team scope leaves team_id NULL,
-// which is the legacy shared-node behavior.
 func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip string, port int, sshUser string, sshKeyID uuid.UUID, password string) (*Server, error) {
 	name = strings.TrimSpace(name)
 	ip = strings.TrimSpace(ip)
@@ -223,8 +171,6 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 
 	var encryptedPassword *string
 	if password != "" {
-		// The secret is encrypted before it touches the store and never
-		// logged; validation errors below never echo it.
 		secret, err := EncryptKey(password, s.secret)
 		if err != nil {
 			return nil, err
@@ -249,9 +195,6 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 	return serverFromRow(row), nil
 }
 
-// List returns the managed servers of the caller's active team plus every
-// legacy node (team_id NULL). Without a team scope it returns every server,
-// which is the pre-teams behavior.
 func (s *ServerService) List(ctx context.Context) ([]Server, error) {
 	s.sweepOffline(ctx)
 	scope := teams.ScopeFor(ctx, uuid.Nil)
@@ -275,9 +218,6 @@ func (s *ServerService) List(ctx context.Context) ([]Server, error) {
 	return servers, nil
 }
 
-// Get returns one server, or ErrNotFound. A node outside the active team
-// answers ErrNotFound so node IDs cannot be probed; a legacy node (team_id
-// NULL) stays readable by every authenticated caller.
 func (s *ServerService) Get(ctx context.Context, id uuid.UUID) (*Server, error) {
 	s.sweepOffline(ctx)
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
@@ -294,12 +234,6 @@ func (s *ServerService) Get(ctx context.Context, id uuid.UUID) (*Server, error) 
 	return server, nil
 }
 
-// Delete removes a server, or returns ErrNotFound. A node outside the active
-// team is not deletable; a legacy node stays deletable by any authenticated
-// caller, matching pre-teams behavior. A node that still holds applications,
-// services or databases is refused with ErrConflict naming the blocking
-// resources (the FK is RESTRICT, so the database would refuse the delete
-// anyway; the pre-check turns it into the contract's 409).
 func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
@@ -324,9 +258,6 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 	volumes, err := s.store.DeleteServerPurging(ctx, pgUUID(id))
 	if err != nil {
-		// A resource created past the pre-check trips the RESTRICT
-		// reference instead: still a 409, with a fresh listing when the
-		// re-read succeeds.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == foreignKeyViolation {
 			if blocking, listErr := s.blockingResources(ctx, id); listErr == nil && blocking != "" {
@@ -346,8 +277,6 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// blockingResources names the workloads pinned to a server, grouped by kind
-// ("" when the server is free). Each kind shows at most maxBlockers names.
 func (s *ServerService) blockingResources(ctx context.Context, id uuid.UUID) (string, error) {
 	groups := make([]string, 0, 3)
 	applications, err := s.store.ListApplicationsByServer(ctx, pgUUID(id))
@@ -374,10 +303,8 @@ func (s *ServerService) blockingResources(ctx context.Context, id uuid.UUID) (st
 	return strings.Join(groups, ", "), nil
 }
 
-// maxBlockers caps the names shown per kind in the 409 body.
 const maxBlockers = 5
 
-// blockerNames joins at most maxBlockers names with an "and N more" tail.
 func blockerNames(names []string) string {
 	if len(names) > maxBlockers {
 		return strings.Join(names[:maxBlockers], ", ") +
@@ -419,12 +346,6 @@ func databaseNames(rows []sqlc.ListDatabasesByServerRow) string {
 	return blockerNames(names)
 }
 
-// UpdateParams edits a server. A nil field leaves the column unchanged; a
-// non-nil field writes it. SSHKeyID points to the new key, or to the zero
-// UUID to detach the key without attaching another. Password points to the
-// new secret (which replaces any attached key), or to "" to forget the stored
-// secret. The secret itself is never exposed: the API layer reads Password
-// from the request body only.
 type UpdateParams struct {
 	Name     *string
 	IP       *string
@@ -434,21 +355,6 @@ type UpdateParams struct {
 	Password *string
 }
 
-// Update applies a PATCH edit. Changing the address (ip), port, ssh user or
-// either credential clears the pinned host key and returns the node to
-// pending: the pin belongs to the old endpoint/identity, so the node must be
-// revalidated before it is trusted again. Only an actual change resets
-// anything: re-sending the stored address or the attached key, or a name-only
-// edit, leaves the pin and status alone. Revalidation itself stays an
-// explicit POST /v1/servers/{id}/validate call — a metadata edit must not
-// block on a 15s SSH dial. A node outside the active team answers ErrNotFound
-// so node IDs cannot be probed.
-//
-// The read-modify-write runs under a row lock (SELECT ... FOR UPDATE): the
-// merge is computed from the locked row, so a concurrent heartbeat,
-// RegisterNode, ResetHostKey or Validate write is never reverted by a stale
-// read, and status is rewritten only when the address or credentials actually
-// changed.
 func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateParams) (*Server, error) {
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
@@ -469,8 +375,6 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 		return nil, fmt.Errorf("%w: the localhost node cannot be edited", ErrConflict)
 	}
 
-	// Scalar validation depends only on the request, so it runs before the
-	// row lock. A nil field leaves the column unchanged.
 	var newName, newIP, newUser *string
 	var newPort *int
 	if params.Name != nil {
@@ -501,16 +405,11 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 		}
 		newUser = &v
 	}
-	// Single auth mode holds for PATCH as it does for create: a key and a
-	// password together are a 400.
 	if params.SSHKeyID != nil && params.Password != nil &&
 		*params.SSHKeyID != uuid.Nil && *params.Password != "" {
 		return nil, fmt.Errorf("%w: provide either ssh_key_id or password, not both", ErrValidation)
 	}
 
-	// Resolve the requested credentials outside the row lock: the keys table
-	// is immutable (no key update path), so no concurrent writer here can
-	// invalidate the lookup.
 	var wantKey pgtype.UUID
 	wantKeySet := params.SSHKeyID != nil
 	if params.SSHKeyID != nil {
@@ -562,7 +461,6 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 				credentialChanged = true
 			}
 			keyID = wantKey
-			// Single auth mode: attaching a key forgets any stored password.
 			if encryptedPassword != nil {
 				encryptedPassword = nil
 				credentialChanged = true
@@ -570,7 +468,6 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 		}
 		if wantPasswordSet {
 			if wantPassword == nil {
-				// Forgetting the secret; a detached key goes with it.
 				if encryptedPassword != nil {
 					encryptedPassword = nil
 					credentialChanged = true
@@ -580,9 +477,6 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 					credentialChanged = true
 				}
 			} else {
-				// Setting the secret detaches the key. A re-sent identical
-				// secret is not a change (the nonce prevents comparing
-				// ciphertext, so decrypt and compare instead).
 				if keyID.Valid {
 					keyID = pgtype.UUID{}
 					credentialChanged = true
@@ -599,9 +493,6 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 		status := locked.Status
 		fingerprint := locked.HostKeyFingerprint
 		if addressChanged || credentialChanged {
-			// The pin and the derived status belong to the old
-			// endpoint/identity: forget the pin and go back through
-			// validation.
 			fingerprint = nil
 			status = StatusPending
 		}
@@ -629,7 +520,6 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 	return serverFromRow(updated), nil
 }
 
-// sameKeyID reports whether two nullable key references identify the same key.
 func sameKeyID(a, b pgtype.UUID) bool {
 	if a.Valid != b.Valid {
 		return false
@@ -637,9 +527,6 @@ func sameKeyID(a, b pgtype.UUID) bool {
 	return !a.Valid || a.Bytes == b.Bytes
 }
 
-// storedPasswordEquals reports whether plain matches the stored encrypted
-// secret. An undecryptable stored value counts as a mismatch, so the secret
-// is rewritten rather than kept.
 func (s *ServerService) storedPasswordEquals(stored *string, plain string) bool {
 	if stored == nil || *stored == "" {
 		return false
@@ -651,9 +538,6 @@ func (s *ServerService) storedPasswordEquals(stored *string, plain string) bool 
 	return decrypted == plain
 }
 
-// ResetHostKey forgets a node's pinned SSH host key, so the next validation
-// re-pins it. It is the operator escape hatch after a legitimate host key
-// rotation; a team member cannot reset a node outside their team.
 func (s *ServerService) ResetHostKey(ctx context.Context, id uuid.UUID) (*Server, error) {
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
@@ -683,8 +567,6 @@ func (s *ServerService) ResetHostKey(ctx context.Context, id uuid.UUID) (*Server
 	return serverFromRow(updated), nil
 }
 
-// scopeID renders a scope UUID for audit logs, leaving it empty when the caller
-// had no team/user scope, so logs never show the zero UUID as an actor.
 func scopeID(id uuid.UUID) string {
 	if id == uuid.Nil {
 		return ""
@@ -692,15 +574,6 @@ func scopeID(id uuid.UUID) string {
 	return id.String()
 }
 
-// pinHostKey persists a first-use host key fingerprint with compare-and-set
-// semantics, guarded on the endpoint and credentials the validation ran
-// against. When the guarded write affects 0 rows the row is re-read: an
-// endpoint or credential mismatch means a concurrent PATCH moved the node, so
-// the stale pin is dropped with errServerChanged instead of pinning the OLD
-// host's key onto the NEW address (JUS-5 fix round 1, defect 1). A pin that
-// landed concurrently is accepted on a match and fails closed on a mismatch;
-// a row cleared in the window (an operator reset) is retried once. A pin that
-// never lands is an error, so a node is never reported ready un-pinned.
 func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, row sqlc.Server, fingerprint string) error {
 	guard := endpointGuardOf(id, row)
 	for attempt := 0; attempt < 2; attempt++ {
@@ -713,8 +586,6 @@ func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, row sqlc.S
 			SshKeyID:           guard.SshKeyID,
 			EncryptedPassword:  guard.EncryptedPassword,
 		}); err == nil {
-			// The fingerprint is public; log it so operators can audit the
-			// first pin. A routine pin is Info; only resets/mismatches Warn.
 			s.logger.Info("servers: host key pinned on first use",
 				"server_id", id.String(),
 				"host_key_fingerprint", fingerprint,
@@ -724,7 +595,6 @@ func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, row sqlc.S
 			return fmt.Errorf("persist host key fingerprint: %w", err)
 		}
 
-		// Lost the guarded write: re-read and decide.
 		fresh, readErr := s.store.GetServerByID(ctx, pgUUID(id))
 		if readErr != nil {
 			return fmt.Errorf("persist host key fingerprint: %w", readErr)
@@ -734,20 +604,15 @@ func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, row sqlc.S
 		}
 		switch stored := fingerprintOf(fresh.HostKeyFingerprint); {
 		case stored == fingerprint:
-			return nil // someone else pinned the same key: benign
+			return nil
 		case stored != "":
 			return fmt.Errorf("host key changed while pinning: got %s, want %s", fingerprint, stored)
 		default:
-			// The row was cleared in the window (an operator reset landed):
-			// loop and re-run the guarded write so the pin is not silently
-			// skipped.
 		}
 	}
 	return fmt.Errorf("persist host key fingerprint: node %s was cleared repeatedly while pinning", id)
 }
 
-// endpointGuard captures the endpoint identity a validation ran against, so
-// every later write can be conditional on the row still matching it.
 type endpointGuard struct {
 	ID                pgtype.UUID
 	Ip                string
@@ -757,7 +622,6 @@ type endpointGuard struct {
 	EncryptedPassword *string
 }
 
-// endpointGuardOf snapshots the guarded columns of row.
 func endpointGuardOf(id uuid.UUID, row sqlc.Server) endpointGuard {
 	return endpointGuard{
 		ID:                pgUUID(id),
@@ -769,8 +633,6 @@ func endpointGuardOf(id uuid.UUID, row sqlc.Server) endpointGuard {
 	}
 }
 
-// sameEndpoint reports whether fresh still carries the endpoint and
-// credentials row had when the validation read it.
 func sameEndpoint(fresh, row sqlc.Server) bool {
 	return fresh.Ip == row.Ip &&
 		fresh.Port == row.Port &&
@@ -779,9 +641,6 @@ func sameEndpoint(fresh, row sqlc.Server) bool {
 		sameSecret(fresh.EncryptedPassword, row.EncryptedPassword)
 }
 
-// sameSecret compares two stored (encrypted) secrets by ciphertext. A PATCH
-// that sets even an identical password re-encrypts with a fresh nonce, so any
-// ciphertext difference means a concurrent credential write.
 func sameSecret(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -789,7 +648,6 @@ func sameSecret(a, b *string) bool {
 	return *a == *b
 }
 
-// AddPrivateKey encrypts and stores an SSH private key.
 func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM string) (*PrivateKey, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -821,15 +679,6 @@ func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM s
 	}, nil
 }
 
-// keyForTeam fetches a private key by ID and enforces that it belongs to the
-// caller's active team (JUS-5 fix round 1, defect 4a; tightened in fix round
-// 2). A key from another team answers the same unknown-key validation error as
-// a missing key, so key IDs cannot be probed across teams. A legacy key
-// (team_id NULL: never backfilled because it is unreferenced, shared by
-// several teams, or attached only to legacy nodes) is usable only by a caller
-// without a team scope (the pre-teams path) and by a team that already
-// references it on one of its own nodes; every other team-scoped caller gets
-// unknown-key. A request without a team scope keeps pre-teams behavior.
 func (s *ServerService) keyForTeam(ctx context.Context, id uuid.UUID) (sqlc.PrivateKey, error) {
 	key, err := s.store.GetPrivateKeyByID(ctx, pgUUID(id))
 	if err != nil {
@@ -861,13 +710,6 @@ func (s *ServerService) keyForTeam(ctx context.Context, id uuid.UUID) (sqlc.Priv
 	return key, nil
 }
 
-// Validate runs the SSH probes against a server and, on success, records the
-// gathered agent info and restores the status derived from the node's last
-// heartbeat. auth selects the credentials; when it is empty the server's stored
-// key is used.
-//
-// It returns the per-check results even when validation fails, together with an
-// error wrapping ErrValidation (or ErrNotFound / ErrNoCredentials).
 func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth ValidateAuth) (*ValidationResult, error) {
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
@@ -889,25 +731,11 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		return nil, err
 	}
 
-	// A pinned node is always verified against its pin. An unpinned node is
-	// trusted on first use for public-key auth, or when the operator explicitly
-	// asked for it. TOFU is inherent: an on-path attacker present at the very
-	// first validation can win the pin (the deploy key proves the caller holds
-	// a credential, not that the peer is the intended host). Password auth is
-	// refused unless the operator opts in, because a first-use MITM there also
-	// captures the node password.
 	policy := HostKeyPolicy{Pinned: fingerprintOf(row.HostKeyFingerprint)}
 	if policy.Pinned == "" {
 		policy.AcceptUnpinned = len(credentials.PrivateKeyPEM) > 0 || auth.TrustHostKey
 	}
 
-	// Every write below is conditional on the row still matching the endpoint
-	// and credentials validated here (JUS-5 fix round 1, defect 1): a
-	// concurrent PATCH that moved the node clears the pin and returns it to
-	// pending, and the stale validation must drop its writes instead of
-	// pinning the OLD host's key onto the NEW address or overwriting the new
-	// status. A heartbeat touches none of the guarded columns, so it never
-	// blocks these writes.
 	guard := endpointGuardOf(id, row)
 	if _, err := s.store.SetServerStatusGuarded(ctx, sqlc.SetServerStatusGuardedParams{
 		ID:                guard.ID,
@@ -927,9 +755,6 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 	checks, info, fingerprint, err := ValidateNode(ctx, server.IP, server.Port, server.SSHUser, credentials, policy)
 	result := &ValidationResult{Checks: checks, Server: server}
 
-	// failValidation records a failed run without overwriting a concurrent
-	// PATCH: the guarded error write affects 0 rows when the endpoint moved
-	// on, leaving the new pending status alone.
 	failValidation := func(format string, args ...any) (*ValidationResult, error) {
 		if _, guardErr := s.store.SetServerStatusGuarded(ctx, sqlc.SetServerStatusGuardedParams{
 			ID:                guard.ID,
@@ -959,13 +784,6 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		}
 	}
 
-	// The handshake succeeded against a host that is now trusted: persist the
-	// TOFU pin so every later validation fails closed on a different key. A
-	// first pin only (fingerprint != policy.Pinned) and only when the row
-	// still matches the validated endpoint: a concurrent PATCH drops the pin
-	// attempt instead of pinning the old host's key onto the new address. A
-	// failed or losing pin write fails the validation — the node never
-	// reports ready without a durable pin.
 	if fingerprint != "" && fingerprint != policy.Pinned {
 		if err := s.pinHostKey(ctx, id, row, fingerprint); err != nil {
 			return failValidation("%v", err)
@@ -989,10 +807,6 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		if errors.Is(err, pgx.ErrNoRows) {
 			return failValidation("server changed during validation")
 		}
-		// The SSH run succeeded but the inventory write failed. Restore the
-		// heartbeat-derived status so the node does not stay stuck in
-		// validating; a restore failure is logged and the original error is
-		// still returned (fix round 2 U1).
 		if _, restoreErr := s.store.SetServerStatusAfterValidationGuarded(ctx, sqlc.SetServerStatusAfterValidationGuardedParams{
 			ID:                guard.ID,
 			LastSeen:          pgtype.Timestamptz{Time: s.now().Add(-heartbeatOfflineAfter), Valid: true},
@@ -1008,14 +822,6 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		return result, fmt.Errorf("record agent info: %w", err)
 	}
 
-	// SSH reachability is not agent readiness: restore the node's status from
-	// its last heartbeat at the moment of the write (A4-15/B4-9). A previously
-	// ready node with a live agent stays ready; a node that heartbeated during
-	// the validation stays ready; an agentless node is pending; a node whose
-	// agent stopped is offline. Deriving it in one guarded statement prevents
-	// a concurrent heartbeat from being clobbered (fix round 1 U2) and a
-	// concurrent PATCH from being overwritten (defect 1): 0 rows means the
-	// endpoint moved on, and the stale success is dropped.
 	updated, err := s.store.SetServerStatusAfterValidationGuarded(ctx, sqlc.SetServerStatusAfterValidationGuardedParams{
 		ID:                guard.ID,
 		LastSeen:          pgtype.Timestamptz{Time: s.now().Add(-heartbeatOfflineAfter), Valid: true},
@@ -1036,12 +842,6 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 	return &ValidationResult{Checks: checks, Server: serverFromRow(updated)}, nil
 }
 
-// InstallDocker installs Docker Engine on a server over SSH, streaming the
-// installer output to out. It resolves the credentials and host-key policy the
-// same way Validate does but never writes to the database: the operator re-runs
-// the probe afterwards, and that run records the outcome. It is the in-product
-// alternative to the App Store install for a node whose agent is not installed
-// yet, which is exactly the state the Add-server wizard validates in.
 func (s *ServerService) InstallDocker(ctx context.Context, id uuid.UUID, auth ValidateAuth, out io.Writer) error {
 	row, err := s.store.GetServerByID(ctx, pgUUID(id))
 	if err != nil {
@@ -1058,9 +858,6 @@ func (s *ServerService) InstallDocker(ctx context.Context, id uuid.UUID, auth Va
 		return ErrNotFound
 	}
 
-	// One install per node: a second concurrent run would race the node's
-	// package manager (lock contention, half-started services). A duplicate
-	// submit is a conflict, not a second install.
 	if !s.lockInstall(id) {
 		return fmt.Errorf("%w: a Docker install is already running for this server", ErrConflict)
 	}
@@ -1079,22 +876,15 @@ func (s *ServerService) InstallDocker(ctx context.Context, id uuid.UUID, auth Va
 	return InstallDockerNode(ctx, server.IP, server.Port, server.SSHUser, credentials, policy, out)
 }
 
-// lockInstall claims the single install slot for a server, reporting false when
-// one is already running.
 func (s *ServerService) lockInstall(id uuid.UUID) bool {
 	_, running := s.installs.LoadOrStore(id, struct{}{})
 	return !running
 }
 
-// unlockInstall releases a server's install slot.
 func (s *ServerService) unlockInstall(id uuid.UUID) {
 	s.installs.Delete(id)
 }
 
-// NodeKeyFingerprint returns the client key fingerprint bound to a node ("" when
-// none is bound yet) and whether the node is enrolled at all. It backs the
-// gateway's bootstrap decision: only a node that is not yet key-bound may enroll
-// without a client certificate.
 func (s *ServerService) NodeKeyFingerprint(ctx context.Context, nodeID string) (string, bool, error) {
 	row, err := s.store.GetServerByNodeID(ctx, &nodeID)
 	if err != nil {
@@ -1109,18 +899,6 @@ func (s *ServerService) NodeKeyFingerprint(ctx context.Context, nodeID string) (
 	return *row.AgentKeyFingerprint, true, nil
 }
 
-// AuthorizeNodeKey checks the fingerprint of the client key an agent
-// authenticated with against the key bound to its node, binding the key on the
-// first authenticated use (a node enrolled before mutual TLS has no stored key —
-// the upgrade path) and refusing a different key thereafter (JUS-194). It returns
-// ErrNotFound for an unknown node and ErrConflict for a key that does not match,
-// so a rotated or reassigned node cannot keep acting as this node.
-//
-// legacyLeaf records whether the accepted certificate was a serverAuth-only leaf
-// issued before mutual TLS, so the operator can count the nodes that still have
-// to renew before the legacy-leaf sunset (JUS-194 M5). The write happens only
-// when the bound key or the leaf kind changes, so the per-heartbeat check is a
-// no-op once both are known.
 func (s *ServerService) AuthorizeNodeKey(ctx context.Context, nodeID, fingerprint string, legacyLeaf bool) error {
 	if nodeID == "" {
 		return fmt.Errorf("%w: node id is required", ErrValidation)
@@ -1151,7 +929,6 @@ func (s *ServerService) AuthorizeNodeKey(ctx context.Context, nodeID, fingerprin
 		AgentLegacyLeaf:     &legacyLeaf,
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Bounded by a concurrent bind to a different key.
 			return fmt.Errorf("%w: node is bound to a different agent key", ErrConflict)
 		}
 		return fmt.Errorf("bind node key: %w", err)
@@ -1162,8 +939,6 @@ func (s *ServerService) AuthorizeNodeKey(ctx context.Context, nodeID, fingerprin
 	return nil
 }
 
-// LegacyLeafNodeCount returns how many enrolled nodes last authenticated with a
-// legacy serverAuth-only leaf (JUS-194 M5). Zero is the healthy state.
 func (s *ServerService) LegacyLeafNodeCount(ctx context.Context) (int64, error) {
 	count, err := s.store.CountLegacyAgentLeaves(ctx)
 	if err != nil {
@@ -1172,10 +947,6 @@ func (s *ServerService) LegacyLeafNodeCount(ctx context.Context) (int64, error) 
 	return count, nil
 }
 
-// UnobservedLeafNodeCount returns how many enrolled nodes have not presented a
-// certificate since the legacy-leaf column was added (JUS-194 N1). They are
-// unclassified — possibly legacy — so the sunset warning must not read as "zero
-// legacy nodes" on the first boot after an upgrade.
 func (s *ServerService) UnobservedLeafNodeCount(ctx context.Context) (int64, error) {
 	count, err := s.store.CountUnobservedAgentLeaves(ctx)
 	if err != nil {
@@ -1184,14 +955,6 @@ func (s *ServerService) UnobservedLeafNodeCount(ctx context.Context) (int64, err
 	return count, nil
 }
 
-// RegisterNode handles an agent Register call: it finds or creates the server
-// for the node, records the reported capabilities, and returns the CP version.
-//
-// It does not issue a certificate: a node certificate is only ever issued from
-// a CSR bound to the authenticated identity (Gateway.Register). A certificate
-// signed for a control-plane-generated key would be unusable because the CP
-// never hands that key over, so the no-CSR case returns no certificate and the
-// agent falls back to its own (self-signed) key.
 func (s *ServerService) RegisterNode(ctx context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("%w: request is required", ErrValidation)
@@ -1201,12 +964,6 @@ func (s *ServerService) RegisterNode(ctx context.Context, req *agentv1.RegisterR
 		return nil, err
 	}
 
-	// Registration is fenced on the node identity: concurrent registers of the
-	// same node converge on one row. An unclaimed operator-created row whose
-	// address matches is claimed first so enrollment updates it instead of
-	// inserting a duplicate; otherwise the node-id unique constraint makes the
-	// upsert conflict-safe. Either way a race cannot leave a duplicate or an
-	// orphan node_id NULL row (A4-12).
 	os, dockerVersion, arch := strPtr(req.GetOs()), strPtr(req.GetDockerVersion()), strPtr(req.GetArch())
 	totalMem, totalDisk := ptrInt64(req.GetTotalMem()), ptrInt64(req.GetTotalDisk())
 
@@ -1249,12 +1006,6 @@ func (s *ServerService) RegisterNode(ctx context.Context, req *agentv1.RegisterR
 	return &agentv1.RegisterResponse{CpVersion: s.version}, nil
 }
 
-// claimUnregisteredServer associates a node identity with an unclaimed
-// operator-created server row whose address matches the node id (an IP literal
-// or a hostname the operator entered). It returns a zero Server (ID.Valid false)
-// when there is nothing to claim. A unique clash (an operator row and an
-// already-registered row share the address) is treated as "nothing to claim":
-// the caller's upsert then targets the existing node row.
 func (s *ServerService) claimUnregisteredServer(ctx context.Context, nodeID string) (sqlc.Server, error) {
 	if nodeID == "" {
 		return sqlc.Server{}, nil
@@ -1274,15 +1025,10 @@ func (s *ServerService) claimUnregisteredServer(ctx context.Context, nodeID stri
 	}
 }
 
-// uniqueViolation is PostgreSQL's unique_violation SQLSTATE.
 const uniqueViolation = "23505"
 
-// foreignKeyViolation is PostgreSQL's foreign_key_violation SQLSTATE: a
-// resource created past the delete pre-check trips the RESTRICT reference.
 const foreignKeyViolation = "23503"
 
-// ipFromNodeID returns the node id when it is an IP literal, or "" otherwise,
-// so a hostname node is stored with an empty address rather than a bogus one.
 func ipFromNodeID(nodeID string) string {
 	if net.ParseIP(nodeID) != nil {
 		return nodeID
@@ -1290,9 +1036,6 @@ func ipFromNodeID(nodeID string) string {
 	return ""
 }
 
-// RecordHeartbeat records one heartbeat message from the node identified by
-// nodeID. Redis publish lands with realtime in Phase 3; for now the event is
-// logged.
 func (s *ServerService) RecordHeartbeat(ctx context.Context, nodeID string, req *agentv1.HeartbeatRequest) error {
 	if nodeID == "" {
 		return fmt.Errorf("%w: node id is required", ErrValidation)
@@ -1320,13 +1063,8 @@ func (s *ServerService) RecordHeartbeat(ctx context.Context, nodeID string, req 
 		return fmt.Errorf("record heartbeat: %w", err)
 	}
 
-	// The time series is appended after the snapshot update: the row already
-	// carries the latest values, so a failed append must not fail the
-	// heartbeat.
 	s.recordMetric(ctx, row.ID, req)
 
-	// The agent reports its build version on the heartbeat, which is how the
-	// version map updates after a self-update and survives a reconnect.
 	s.RecordAgentVersion(nodeID, req.GetAgentVersion())
 
 	s.logger.Debug("servers: heartbeat",
@@ -1339,11 +1077,6 @@ func (s *ServerService) RecordHeartbeat(ctx context.Context, nodeID string, req 
 	return nil
 }
 
-// sweepOffline flips ready nodes whose last heartbeat is older than
-// heartbeatOfflineAfter to offline. It runs on the read path so every list and
-// detail response carries the live status the FE already understands (A4-6). A
-// sweep failure is logged, never surfaced: a stale status is better than a
-// failed read.
 func (s *ServerService) sweepOffline(ctx context.Context) {
 	cutoff := s.now().Add(-heartbeatOfflineAfter)
 	if err := s.store.MarkStaleServersOffline(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true}); err != nil {
@@ -1351,7 +1084,6 @@ func (s *ServerService) sweepOffline(ctx context.Context) {
 	}
 }
 
-// credentials resolves the SSH credentials for a validation run.
 func (s *ServerService) credentials(ctx context.Context, row sqlc.Server, auth ValidateAuth) (SSHAuth, error) {
 	switch {
 	case auth.Password != "":
@@ -1373,16 +1105,6 @@ func (s *ServerService) credentials(ctx context.Context, row sqlc.Server, auth V
 	}
 }
 
-// loadKeyAuth loads and decrypts a private key into an SSHAuth. passphrase
-// decrypts a passphrase-protected PEM for this run and is never stored. explicit
-// distinguishes an operator-supplied key ID from the server's attached key so
-// the error text matches the cause. An operator-supplied key from another
-// team answers unknown-key, like Add and Update (defect 4a); an attached key
-// the caller's team can no longer see answers the same attached-key error as
-// a deleted key. An attached legacy key (team_id NULL) always loads: the
-// server's own team authorization already gated the read, and the key is the
-// node's credential rather than an operator-supplied UUID, so a legacy node
-// stays validatable from any team scope.
 func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, passphrase string, explicit bool) (SSHAuth, error) {
 	if explicit {
 		key, err := s.keyForTeam(ctx, uuidFromPG(id))
@@ -1408,7 +1130,6 @@ func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, passphr
 	return s.decryptKeyAuth(key.EncryptedKey, passphrase)
 }
 
-// decryptKeyAuth decrypts stored key material into an SSHAuth for one run.
 func (s *ServerService) decryptKeyAuth(encrypted, passphrase string) (SSHAuth, error) {
 	plain, err := DecryptKey(encrypted, s.secret)
 	if err != nil {
@@ -1417,7 +1138,6 @@ func (s *ServerService) decryptKeyAuth(encrypted, passphrase string) (SSHAuth, e
 	return SSHAuth{PrivateKeyPEM: []byte(plain), Passphrase: passphrase}, nil
 }
 
-// serverFromRow maps a sqlc row to the domain type.
 func serverFromRow(row sqlc.Server) *Server {
 	server := &Server{
 		ID:                 uuidFromPG(row.ID),
@@ -1452,7 +1172,6 @@ func serverFromRow(row sqlc.Server) *Server {
 	return server
 }
 
-// failedChecks synthesises the full probe list for a connection-level failure.
 func failedChecks(detail string) []CheckResult {
 	return []CheckResult{
 		{Name: checkDocker, OK: false, Detail: detail},
@@ -1462,7 +1181,6 @@ func failedChecks(detail string) []CheckResult {
 	}
 }
 
-// pgUUID converts a uuid.UUID to the pgx type (valid unless nil).
 func pgUUID(id uuid.UUID) pgtype.UUID {
 	if id == uuid.Nil {
 		return pgtype.UUID{}
@@ -1470,7 +1188,6 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-// uuidFromPG converts a pgx UUID to uuid.UUID.
 func uuidFromPG(id pgtype.UUID) uuid.UUID {
 	if !id.Valid {
 		return uuid.Nil
@@ -1478,7 +1195,6 @@ func uuidFromPG(id pgtype.UUID) uuid.UUID {
 	return uuid.UUID(id.Bytes)
 }
 
-// timePtr converts a nullable timestamp to a pointer.
 func timePtr(ts pgtype.Timestamptz) *time.Time {
 	if !ts.Valid {
 		return nil
@@ -1487,7 +1203,6 @@ func timePtr(ts pgtype.Timestamptz) *time.Time {
 	return &t
 }
 
-// fingerprintOf dereferences a nullable fingerprint column.
 func fingerprintOf(fp *string) string {
 	if fp == nil {
 		return ""
@@ -1495,7 +1210,6 @@ func fingerprintOf(fp *string) string {
 	return *fp
 }
 
-// strPtr returns a pointer to s, or nil when s is empty.
 func strPtr(s string) *string {
 	if s == "" {
 		return nil
@@ -1503,17 +1217,13 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// ptrInt64 returns a pointer to a copy of v.
 func ptrInt64(v int64) *int64 {
 	return &v
 }
 
-// randomSecret returns a base64-encoded 32-byte random secret.
 func randomSecret() string {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		// crypto/rand.Read only fails on a broken system RNG; there is no
-		// safe fallback for key material.
 		panic(fmt.Sprintf("servers: generate secret: %v", err))
 	}
 	return base64.StdEncoding.EncodeToString(buf)

@@ -16,9 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/config"
 )
 
-// newScopeTestServer builds a server with the fake auth, token and server
-// services, so the token routes and the resource routes (servers) are mounted
-// on the real router for the containment matrix.
 func newScopeTestServer(t *testing.T) (*Server, *fakeTokenService) {
 	t.Helper()
 
@@ -56,9 +53,6 @@ func mustCreateAdminToken(t *testing.T, tokens *fakeTokenService) *auth.CreatedT
 	return created
 }
 
-// TestResourceScopeContainment is the FX-2c matrix: a read token may read a
-// resource route but not mutate one, a deploy token may mutate, and a JWT
-// session passes everything.
 func TestResourceScopeContainment(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 
@@ -82,9 +76,6 @@ func TestResourceScopeContainment(t *testing.T) {
 		"jwt session reads":        {http.MethodGet, "/api/v1/servers", "", session, http.StatusOK, ""},
 		"jwt session mutates":      {http.MethodPost, "/api/v1/servers", createBody, session, http.StatusCreated, ""},
 		"no token is unauthorized": {http.MethodGet, "/api/v1/servers", "", "", http.StatusUnauthorized, ""},
-		// The subset gate runs before the platform-operator gate, so the message
-		// isolates CanGrantScopes (the deploy token is not a platform operator
-		// either, but the subset check rejects it first).
 		"read token cannot mint":   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
 		"deploy cannot mint admin": {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
 		"deploy can mint read":     {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
@@ -111,9 +102,6 @@ func TestResourceScopeContainment(t *testing.T) {
 	}
 }
 
-// TestRotateRevokeRespectScopeGrant proves a token cannot rotate or revoke a
-// more privileged token: a read token is refused on a deploy token, while the
-// deploy token manages its own.
 func TestRotateRevokeRespectScopeGrant(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 
@@ -127,31 +115,26 @@ func TestRotateRevokeRespectScopeGrant(t *testing.T) {
 		t.Fatalf("create revoke target: %v", err)
 	}
 
-	// A read token cannot rotate a deploy token.
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", "Bearer "+readToken)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("read token rotating deploy token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// The deploy token itself may rotate the deploy token.
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", "Bearer "+rotateTarget.Token)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("deploy token rotating deploy token = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// A read token cannot revoke a deploy token.
 	rec = doRequest(t, s, http.MethodDelete, "/api/v1/tokens/"+revokeTarget.ID.String(), "", "Bearer "+readToken)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("read token revoking deploy token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// The deploy token may revoke its own deploy token.
 	rec = doRequest(t, s, http.MethodDelete, "/api/v1/tokens/"+revokeTarget.ID.String(), "", "Bearer "+revokeTarget.Token)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("deploy token revoking deploy token = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// A read token may revoke a read token it owns.
 	readTarget, err := tokens.Create(context.Background(), testUserID, "read", []string{auth.ScopeRead})
 	if err != nil {
 		t.Fatalf("create read target: %v", err)
@@ -161,10 +144,6 @@ func TestRotateRevokeRespectScopeGrant(t *testing.T) {
 	}
 }
 
-// TestRotateAdminTokenRequiresPlatformOperator is the fix-round-1 R1 regression:
-// a non-operator session owning an admin token must not be able to rotate it
-// into a fresh admin secret. Fix round 2 S1: revoke is de-escalating, so the
-// owner may always kill a leaked admin token even after losing operator status.
 func TestRotateAdminTokenRequiresPlatformOperator(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	const session = "Bearer valid-token"
@@ -184,22 +163,17 @@ func TestRotateAdminTokenRequiresPlatformOperator(t *testing.T) {
 		t.Fatalf("message = %q, want %q", body.Message, platformAdminScopeDenied)
 	}
 
-	// Revoke stays available to the owner: a non-operator may kill their own
-	// admin token.
 	rec = doRequest(t, s, http.MethodDelete, "/api/v1/tokens/"+revokeTarget.ID.String(), "", session)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("non-operator revoking admin token = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// An operator-listed session may rotate the surviving token.
 	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", session); rec.Code != http.StatusOK {
 		t.Fatalf("operator rotating admin token = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
-// TestRequireResourceScopesClassifier exercises the method/path classification
-// directly, including the deploy-gated secret read.
 func TestRequireResourceScopesClassifier(t *testing.T) {
 	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	handler := requireResourceScopes(stub)
@@ -211,56 +185,49 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 		api    bool
 		want   int
 	}{
-		"read reads":                   {http.MethodGet, "/api/v1/servers", []string{auth.ScopeRead}, true, http.StatusOK},
-		"deploy reads":                 {http.MethodGet, "/api/v1/servers", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		"read cannot mutate":           {http.MethodPost, "/api/v1/servers", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy mutates":               {http.MethodPost, "/api/v1/servers", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		"read cannot delete":           {http.MethodDelete, "/api/v1/servers/x", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"read cannot read credentials": {http.MethodGet, "/api/v1/databases/x/credentials", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy reads credentials":     {http.MethodGet, "/api/v1/databases/x/credentials", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		"admin reads credentials":      {http.MethodGet, "/api/v1/databases/x/credentials", []string{auth.ScopeAdmin}, true, http.StatusOK},
-		"jwt reads credentials":        {http.MethodGet, "/api/v1/databases/x/credentials", nil, false, http.StatusOK},
-		// File content is deploy-gated like /credentials (fix-round-1 #1).
+		"read reads":                              {http.MethodGet, "/api/v1/servers", []string{auth.ScopeRead}, true, http.StatusOK},
+		"deploy reads":                            {http.MethodGet, "/api/v1/servers", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot mutate":                      {http.MethodPost, "/api/v1/servers", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy mutates":                          {http.MethodPost, "/api/v1/servers", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot delete":                      {http.MethodDelete, "/api/v1/servers/x", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot read credentials":            {http.MethodGet, "/api/v1/databases/x/credentials", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy reads credentials":                {http.MethodGet, "/api/v1/databases/x/credentials", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"admin reads credentials":                 {http.MethodGet, "/api/v1/databases/x/credentials", []string{auth.ScopeAdmin}, true, http.StatusOK},
+		"jwt reads credentials":                   {http.MethodGet, "/api/v1/databases/x/credentials", nil, false, http.StatusOK},
 		"read cannot read files content":          {http.MethodGet, "/api/v1/servers/x/files/content", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"deploy reads files content":              {http.MethodGet, "/api/v1/servers/x/files/content", []string{auth.ScopeDeploy}, true, http.StatusOK},
 		"admin reads files content":               {http.MethodGet, "/api/v1/servers/x/files/content", []string{auth.ScopeAdmin}, true, http.StatusOK},
 		"jwt reads files content":                 {http.MethodGet, "/api/v1/servers/x/files/content", nil, false, http.StatusOK},
 		"read cannot read content trailing slash": {http.MethodGet, "/api/v1/servers/x/files/content/", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"read cannot read content with query":     {http.MethodGet, "/api/v1/servers/x/files/content?root=r&path=p", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		// The other file reads stay read-scoped.
-		"read reads files roots": {http.MethodGet, "/api/v1/servers/x/files/roots", []string{auth.ScopeRead}, true, http.StatusOK},
-		"read reads files list":  {http.MethodGet, "/api/v1/servers/x/files/list", []string{auth.ScopeRead}, true, http.StatusOK},
-		"read reads files stat":  {http.MethodGet, "/api/v1/servers/x/files/stat", []string{auth.ScopeRead}, true, http.StatusOK},
-		// The ticket mint is deploy-gated by method.
-		"read cannot mint download ticket": {http.MethodPost, "/api/v1/servers/x/files/download-ticket", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy mints download ticket":     {http.MethodPost, "/api/v1/servers/x/files/download-ticket", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		// Every file write route is deploy-gated by method (JUS-108).
-		"read cannot put file content": {http.MethodPut, "/api/v1/servers/x/files/content", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy puts file content":     {http.MethodPut, "/api/v1/servers/x/files/content", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		"jwt puts file content":        {http.MethodPut, "/api/v1/servers/x/files/content", nil, false, http.StatusOK},
-		"read cannot upload":           {http.MethodPost, "/api/v1/servers/x/files/upload", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy uploads":               {http.MethodPost, "/api/v1/servers/x/files/upload", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		"read cannot mkdir":            {http.MethodPost, "/api/v1/servers/x/files/mkdir", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"read cannot create":           {http.MethodPost, "/api/v1/servers/x/files/create", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"read cannot rename":           {http.MethodPost, "/api/v1/servers/x/files/rename", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"read cannot move":             {http.MethodPost, "/api/v1/servers/x/files/move", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"read cannot copy":             {http.MethodPost, "/api/v1/servers/x/files/copy", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"read cannot chmod":            {http.MethodPost, "/api/v1/servers/x/files/chmod", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy chmods":                {http.MethodPost, "/api/v1/servers/x/files/chmod", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		// Archives are mutations: deploy-scoped by method like the other writes.
-		"read cannot compress":     {http.MethodPost, "/api/v1/servers/x/files/compress", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy compresses":        {http.MethodPost, "/api/v1/servers/x/files/compress", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		"jwt compresses":           {http.MethodPost, "/api/v1/servers/x/files/compress", nil, false, http.StatusOK},
-		"read cannot extract":      {http.MethodPost, "/api/v1/servers/x/files/extract", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy extracts":          {http.MethodPost, "/api/v1/servers/x/files/extract", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		"read cannot delete entry": {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy deletes entry":     {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		// Bypass variants: the method decides, so a trailing slash, a doubled
-		// slash or a query string cannot downgrade a write to the read scope.
-		"read cannot mkdir trailing slash": {http.MethodPost, "/api/v1/servers/x/files/mkdir/", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"read cannot mkdir with query":     {http.MethodPost, "/api/v1/servers/x/files/mkdir?root=r&path=p", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"read cannot upload double slash":  {http.MethodPost, "/api/v1/servers/x/files//upload", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"jwt mutates":                      {http.MethodPost, "/api/v1/servers", nil, false, http.StatusOK},
+		"read reads files roots":                  {http.MethodGet, "/api/v1/servers/x/files/roots", []string{auth.ScopeRead}, true, http.StatusOK},
+		"read reads files list":                   {http.MethodGet, "/api/v1/servers/x/files/list", []string{auth.ScopeRead}, true, http.StatusOK},
+		"read reads files stat":                   {http.MethodGet, "/api/v1/servers/x/files/stat", []string{auth.ScopeRead}, true, http.StatusOK},
+		"read cannot mint download ticket":        {http.MethodPost, "/api/v1/servers/x/files/download-ticket", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy mints download ticket":            {http.MethodPost, "/api/v1/servers/x/files/download-ticket", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot put file content":            {http.MethodPut, "/api/v1/servers/x/files/content", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy puts file content":                {http.MethodPut, "/api/v1/servers/x/files/content", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"jwt puts file content":                   {http.MethodPut, "/api/v1/servers/x/files/content", nil, false, http.StatusOK},
+		"read cannot upload":                      {http.MethodPost, "/api/v1/servers/x/files/upload", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy uploads":                          {http.MethodPost, "/api/v1/servers/x/files/upload", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot mkdir":                       {http.MethodPost, "/api/v1/servers/x/files/mkdir", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot create":                      {http.MethodPost, "/api/v1/servers/x/files/create", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot rename":                      {http.MethodPost, "/api/v1/servers/x/files/rename", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot move":                        {http.MethodPost, "/api/v1/servers/x/files/move", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot copy":                        {http.MethodPost, "/api/v1/servers/x/files/copy", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot chmod":                       {http.MethodPost, "/api/v1/servers/x/files/chmod", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy chmods":                           {http.MethodPost, "/api/v1/servers/x/files/chmod", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot compress":                    {http.MethodPost, "/api/v1/servers/x/files/compress", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy compresses":                       {http.MethodPost, "/api/v1/servers/x/files/compress", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"jwt compresses":                          {http.MethodPost, "/api/v1/servers/x/files/compress", nil, false, http.StatusOK},
+		"read cannot extract":                     {http.MethodPost, "/api/v1/servers/x/files/extract", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy extracts":                         {http.MethodPost, "/api/v1/servers/x/files/extract", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot delete entry":                {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy deletes entry":                    {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot mkdir trailing slash":        {http.MethodPost, "/api/v1/servers/x/files/mkdir/", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot mkdir with query":            {http.MethodPost, "/api/v1/servers/x/files/mkdir?root=r&path=p", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot upload double slash":         {http.MethodPost, "/api/v1/servers/x/files//upload", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"jwt mutates":                             {http.MethodPost, "/api/v1/servers", nil, false, http.StatusOK},
 	}
 
 	for label, tc := range tests {
@@ -279,9 +246,6 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 	}
 }
 
-// TestFilesContentScopeGate proves the real mounted chain deploy-gates file
-// content (fix-round-1 #1): a read-scoped API token is refused with
-// "insufficient scope", while a deploy token passes the gate.
 func TestFilesContentScopeGate(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
@@ -301,24 +265,17 @@ func TestFilesContentScopeGate(t *testing.T) {
 		t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
 	}
 
-	// The deploy token passes the scope gate but not the platform-operator gate
-	// that limits the whole file surface to admins.
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
 	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "insufficient scope") {
 		t.Fatalf("deploy token content = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
 	}
 
-	// An admin token passes both gates; the unwired fake agent then fails
-	// downstream, which is any status other than a refusal.
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+mustCreateToken(t, tokens, auth.ScopeAdmin))
 	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
 		t.Fatalf("admin token content = %d, want the gates to pass", rec.Code)
 	}
 }
 
-// TestFilesWriteScopeGate proves the real mounted chain deploy-gates every file
-// write route: a read-scoped API token is refused with "insufficient scope",
-// while a deploy token passes the scope gate.
 func TestFilesWriteScopeGate(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
@@ -356,9 +313,6 @@ func TestFilesWriteScopeGate(t *testing.T) {
 			if body.Message != "insufficient scope" {
 				t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
 			}
-			// The deploy token passes the scope gate but not the platform-operator
-			// gate; an admin token passes both and the unwired fake agent then
-			// fails downstream, which is any status other than a refusal.
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+deployToken)
 			if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "insufficient scope") {
 				t.Fatalf("deploy token = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
@@ -371,14 +325,6 @@ func TestFilesWriteScopeGate(t *testing.T) {
 	}
 }
 
-// TestAuthScopeWrappers covers the four chains the server mounts. It pins the
-// presence and ordering of RequireAuth plus the scope gate on each: admin
-// rejects read/deploy and accepts admin/JWT, the resource and team chains split
-// reads from mutations, and every chain rejects a missing token. Note that
-// readScopeAuth is not distinguishable from bare RequireAuth for a valid token,
-// because read is the baseline scope every token carries (deploy/admin imply
-// it); its row pins the authentication leg, and the intent is documented on the
-// helper itself.
 func TestAuthScopeWrappers(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
@@ -400,27 +346,25 @@ func TestAuthScopeWrappers(t *testing.T) {
 		bearer  string
 		want    int
 	}{
-		"read accepts read":           {"readScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusOK},
-		"read accepts deploy":         {"readScopeAuth", http.MethodGet, "Bearer " + deployToken, http.StatusOK},
-		"read accepts admin":          {"readScopeAuth", http.MethodGet, "Bearer " + adminToken, http.StatusOK},
-		"read accepts jwt":            {"readScopeAuth", http.MethodGet, session, http.StatusOK},
-		"read rejects none":           {"readScopeAuth", http.MethodGet, "", http.StatusUnauthorized},
-		"admin rejects read":          {"adminScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusForbidden},
-		"admin rejects deploy":        {"adminScopeAuth", http.MethodGet, "Bearer " + deployToken, http.StatusForbidden},
-		"admin accepts admin":         {"adminScopeAuth", http.MethodGet, "Bearer " + adminToken, http.StatusOK},
-		"admin accepts jwt":           {"adminScopeAuth", http.MethodGet, session, http.StatusOK},
-		"admin rejects none":          {"adminScopeAuth", http.MethodGet, "", http.StatusUnauthorized},
-		"resource read reads":         {"resourceScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusOK},
-		"resource read cannot mutate": {"resourceScopeAuth", http.MethodPost, "Bearer " + readToken, http.StatusForbidden},
-		"resource deploy mutates":     {"resourceScopeAuth", http.MethodPost, "Bearer " + deployToken, http.StatusOK},
-		"resource jwt mutates":        {"resourceScopeAuth", http.MethodPost, session, http.StatusOK},
-		"resource rejects none":       {"resourceScopeAuth", http.MethodPost, "", http.StatusUnauthorized},
-		"team read reads":             {"withTeam", http.MethodGet, "Bearer " + readToken, http.StatusOK},
-		"team read cannot mutate":     {"withTeam", http.MethodPost, "Bearer " + readToken, http.StatusForbidden},
-		"team deploy mutates":         {"withTeam", http.MethodPost, "Bearer " + deployToken, http.StatusOK},
-		"team rejects none":           {"withTeam", http.MethodPost, "", http.StatusUnauthorized},
-		// Container terminal control routes require an interactive session:
-		// neither a read-scope nor a deploy-scope API token may list or create.
+		"read accepts read":                   {"readScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusOK},
+		"read accepts deploy":                 {"readScopeAuth", http.MethodGet, "Bearer " + deployToken, http.StatusOK},
+		"read accepts admin":                  {"readScopeAuth", http.MethodGet, "Bearer " + adminToken, http.StatusOK},
+		"read accepts jwt":                    {"readScopeAuth", http.MethodGet, session, http.StatusOK},
+		"read rejects none":                   {"readScopeAuth", http.MethodGet, "", http.StatusUnauthorized},
+		"admin rejects read":                  {"adminScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusForbidden},
+		"admin rejects deploy":                {"adminScopeAuth", http.MethodGet, "Bearer " + deployToken, http.StatusForbidden},
+		"admin accepts admin":                 {"adminScopeAuth", http.MethodGet, "Bearer " + adminToken, http.StatusOK},
+		"admin accepts jwt":                   {"adminScopeAuth", http.MethodGet, session, http.StatusOK},
+		"admin rejects none":                  {"adminScopeAuth", http.MethodGet, "", http.StatusUnauthorized},
+		"resource read reads":                 {"resourceScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusOK},
+		"resource read cannot mutate":         {"resourceScopeAuth", http.MethodPost, "Bearer " + readToken, http.StatusForbidden},
+		"resource deploy mutates":             {"resourceScopeAuth", http.MethodPost, "Bearer " + deployToken, http.StatusOK},
+		"resource jwt mutates":                {"resourceScopeAuth", http.MethodPost, session, http.StatusOK},
+		"resource rejects none":               {"resourceScopeAuth", http.MethodPost, "", http.StatusUnauthorized},
+		"team read reads":                     {"withTeam", http.MethodGet, "Bearer " + readToken, http.StatusOK},
+		"team read cannot mutate":             {"withTeam", http.MethodPost, "Bearer " + readToken, http.StatusForbidden},
+		"team deploy mutates":                 {"withTeam", http.MethodPost, "Bearer " + deployToken, http.StatusOK},
+		"team rejects none":                   {"withTeam", http.MethodPost, "", http.StatusUnauthorized},
 		"terminal read token cannot list":     {"applicationTerminalAuth", http.MethodGet, "Bearer " + readToken, http.StatusForbidden},
 		"terminal deploy token cannot create": {"applicationTerminalAuth", http.MethodPost, "Bearer " + deployToken, http.StatusForbidden},
 		"terminal admin token refused":        {"applicationTerminalAuth", http.MethodPost, "Bearer " + adminToken, http.StatusForbidden},
@@ -447,10 +391,6 @@ func TestAuthScopeWrappers(t *testing.T) {
 	}
 }
 
-// TestTeamsMountRequiresAdminScope pins the production teams mount wiring
-// (server.go passes s.adminScopeAuth): a read token is refused before the team
-// service, so reverting that call to RequireAuth fails here. teams.Mount is a
-// no-op without a team service, so the router is rebuilt with one injected.
 func TestTeamsMountRequiresAdminScope(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
@@ -468,8 +408,6 @@ func TestTeamsMountRequiresAdminScope(t *testing.T) {
 		t.Fatalf("read token GET /api/v1/teams = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	// An admin token passes the scope gate; the fake team service then answers
-	// an unimplemented error, so the route is reached rather than refused.
 	if rec := doRequest(t, s, http.MethodGet, "/api/v1/teams", "", "Bearer "+adminToken); rec.Code == http.StatusForbidden {
 		t.Fatalf("admin token GET /api/v1/teams = 403, want the scope gate to pass")
 	}

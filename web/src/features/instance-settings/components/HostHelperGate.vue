@@ -10,28 +10,14 @@ import {
 } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
 
-/**
- * HostHelperGate renders the one accurate reason a host section is read-only
- * and, when the in-product install can help, the "Install host helper" action
- * with its installer-output modal (JUS-185). It is meant to render only while
- * its section is not editable; the owning form shows nothing once it is.
- */
 const props = defineProps<{ state: InstanceState; section: "network" | "system" }>();
 const emit = defineEmits<{ saved: [state: InstanceState] }>();
 const { t } = useI18n();
 
-/** supported is whether this host can run the section's stack at all. */
 const supported = computed<boolean>(() =>
   props.section === "network" ? props.state.host.network_stack : props.state.host.system_stack,
 );
 
-/**
- * installable mirrors the host's repair rule: the in-product install can only
- * succeed when the helper file is missing (so the drop-in with the pinned repair
- * verb is still in place) and the root-owned payload exists. A Denied host, or
- * one without the payload, has no privileged path — the honest "update the
- * control plane" message is shown instead of an install that would fail.
- */
 const installable = computed<boolean>(
   () => props.state.host.helper === "missing" && props.state.host.repair,
 );
@@ -50,8 +36,6 @@ async function handleInstall(): Promise<void> {
   errorMessage.value = "";
   try {
     const result = await installHostHelper();
-    // Success unlocks the section: the owner re-renders from the new state and
-    // removes this gate. The log is only shown for a failure to fix.
     emit("saved", result.settings);
   } catch (error) {
     errorMessage.value = errorText(error) || t("instance-settings.helper.installFailed");

@@ -75,7 +75,6 @@ describe("shared account menu", () => {
     expect(header.textContent).toContain("Ada Lovelace");
     expect(header.textContent).toContain("ada@gotham.dev");
     expect(header.textContent).toContain("admin");
-    // With a real display name the name and email lines differ, so both stay.
     expect(header.querySelector(".account-menu-name")!.textContent).toBe("Ada Lovelace");
     expect(header.querySelector(".account-menu-email")!.textContent).toBe("ada@gotham.dev");
     expect(header.querySelector("button, a, [tabindex]")).toBeNull();
@@ -93,8 +92,6 @@ describe("shared account menu", () => {
     const { wrapper } = await mountMenu(true, "   ");
     const header = globalThis.document.querySelector(".account-menu-header")!;
     expect(header.querySelector(".account-menu-name")!.textContent).toBe("ada@gotham.dev");
-    // JUS-197: without a display name the header shows the address once —
-    // the email line is dropped instead of duplicating the name line.
     expect(header.querySelector(".account-menu-email")).toBeNull();
     expect(header.textContent!.match(/ada@gotham\.dev/g)).toHaveLength(1);
     syncComposerLocale("vi");
@@ -113,8 +110,6 @@ describe("shared account menu", () => {
     auth.user = { ...auth.user!, is_platform_admin: true };
     await flushPromises();
     const header = globalThis.document.querySelector(".account-menu-header")!;
-    // The team role stays first; the instance flag reads "Platform admin"
-    // so it cannot be confused with the team admin role.
     expect(header.querySelector(".account-menu-role")!.textContent)
       .toBe("admin · Platform admin");
     syncComposerLocale("vi");
@@ -151,8 +146,6 @@ describe("shared account menu", () => {
     wrapper.findComponent(NDropdown).vm.$emit("select", "sign-out");
     await flushPromises();
     await nextTick();
-    // The cancel aborts the sign-out and leaves the keyboard user on the
-    // trigger instead of document.body (JUS-246 review carry-over).
     expect(router.currentRoute.value.name).not.toBe("login");
     const trigger = globalThis.document.querySelector<HTMLElement>(
       '[aria-haspopup="menu"]',

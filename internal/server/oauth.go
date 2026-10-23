@@ -19,56 +19,34 @@ import (
 	"github.com/justindeelux/gotham/internal/clientip"
 )
 
-// oauthStateCookieMaxAge is the state cookie lifetime in seconds. It matches the
-// server-side state TTL.
 const oauthStateCookieMaxAge = 600
 
-// oauthFlowCookieMaxAge is the flow-binding cookie lifetime in seconds. It
-// matches the state cookie so the binding survives the provider round-trip.
 const oauthFlowCookieMaxAge = 600
 
-// oauthRandomBytes is the entropy of the flow binding and the one-time
-// exchange code.
 const oauthRandomBytes = 32
 
-// One-time exchange-code bookkeeping. A code is single-use and expires after
-// oauthExchangeTTL; expired entries are swept by a background goroutine.
 const (
 	oauthExchangeTTL           = 60 * time.Second
 	oauthExchangeCleanupPeriod = time.Minute
-	// oauthExchangeCapacity bounds how many pending exchange codes the store
-	// keeps, so a flood of callbacks cannot grow it without limit.
-	oauthExchangeCapacity = 10000
+	oauthExchangeCapacity      = 10000
 )
 
-// errOAuthCodeStoreFull reports that the exchange-code store hit its cap.
 var errOAuthCodeStoreFull = errors.New("oauth: exchange code store full")
 
-// oauthFailureRedirect is where a failed callback sends the browser. The query
-// never carries error details so nothing is leaked to logs or referrers.
 const oauthFailureRedirect = "/login?error=oauth_failed"
 
-// oauthCallbackPath is the SPA route that redeems the one-time exchange code
-// after a successful callback.
 const oauthCallbackPath = "/oauth/callback"
 
-// oauthExchangeRequest is the body of the exchange endpoint.
 type oauthExchangeRequest struct {
 	Code string `json:"code"`
 }
 
-// OAuthService is the subset of auth.OAuthService the HTTP layer depends on.
-// Keeping it an interface lets tests substitute a fake without a database or a
-// real provider.
 type OAuthService interface {
 	Begin(ctx context.Context, providerName, redirectBase string) (url string, state string, err error)
 	Callback(ctx context.Context, providerName, code, state string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Close()
 }
 
-// mountOAuthRoutes registers the OAuth2 endpoints under /api. The login redirect
-// (which allocates server-side state) and the exchange endpoint are rate
-// limited; the callback is not, because the provider drives it.
 func (s *Server) mountOAuthRoutes(api chi.Router) {
 	api.Route("/v1/auth/oauth", func(r chi.Router) {
 		r.With(s.rateLimit).Get("/{provider}/login", s.handleOAuthLogin)
@@ -77,12 +55,6 @@ func (s *Server) mountOAuthRoutes(api chi.Router) {
 	})
 }
 
-// insecureOAuthRejected reports whether an insecure request must not take part
-// in an OAuth flow. The plain cookies such a request sets are shadowable by a
-// sibling host, so the flow is refused on every leg (login, callback, exchange)
-// unless the deployment explicitly opts into plain-HTTP development with an
-// http:// redirect base. An empty or unparseable base is treated as requiring
-// HTTPS (fail closed).
 func (s *Server) insecureOAuthRejected(r *http.Request) bool {
 	if s.isSecureRequest(r) {
 		return false
@@ -91,14 +63,6 @@ func (s *Server) insecureOAuthRejected(r *http.Request) bool {
 	return base == "" || strings.HasPrefix(base, "https://")
 }
 
-// handleOAuthLogin starts the authorization flow: it asks the service to mint a
-// state, binds the browser to the flow with a state cookie and a random flow
-// cookie, and redirects to the provider. Unknown or disabled providers answer
-// 404.
-//
-// An insecure request must not start a flow that returns to an HTTPS origin:
-// the plain cookies it would set are shadowable by a sibling host, so such a
-// flow is refused outright.
 func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 
@@ -131,20 +95,11 @@ func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
-// handleOAuthCallback completes the flow. The state cookie must match the query
-// state (constant-time) and the flow cookie must be present; the service then
-// resolves the account and returns a token pair. Instead of forwarding the
-// tokens, the handler stores them behind a random one-time code bound to the
-// flow cookie and redirects the SPA to redeem that code, so a crafted callback
-// link cannot plant a session. Every failure redirects to the login page with a
-// generic error code.
 func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 	queryState := r.URL.Query().Get("state")
 	code := r.URL.Query().Get("code")
 
-	// An insecure callback on an HTTPS deployment is refused before any cookie
-	// or code is trusted (H1).
 	if s.insecureOAuthRejected(r) {
 		s.logger.Warn("oauth: insecure callback rejected", "provider", provider)
 		s.redirectOAuthFailure(w, r)
@@ -179,17 +134,11 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The flow cookie stays: the SPA needs it to redeem the code.
 	http.SetCookie(w, s.oauthStateCookie(r, "", -1))
 	http.Redirect(w, r, s.oauthSuccessLocation(exchangeCode), http.StatusFound)
 }
 
-// handleOAuthExchange redeems a one-time code for the token pair that the
-// callback withheld. The flow cookie must match the value stored with the code;
-// a missing, wrong, expired, or already-redeemed code answers a generic 401.
 func (s *Server) handleOAuthExchange(w http.ResponseWriter, r *http.Request) {
-	// An insecure redemption on an HTTPS deployment is refused before the code
-	// is consumed (H1).
 	if s.insecureOAuthRejected(r) {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
@@ -216,17 +165,10 @@ func (s *Server) handleOAuthExchange(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newAuthResponse(result))
 }
 
-// oauthSuccessLocation builds the post-login redirect: an /oauth/callback route
-// on the configured origin (or a relative path when no redirect URL is set)
-// carrying the one-time exchange code.
 func (s *Server) oauthSuccessLocation(code string) string {
 	return s.oauthRedirectBase() + oauthCallbackPath + "?code=" + url.QueryEscape(code)
 }
 
-// oauthRedirectBase derives the post-login origin: the explicit GitHub
-// callback URL (scheme and host only) wins when set, otherwise the instance
-// control-plane URL names the origin. It returns "" when neither is usable,
-// which makes the success redirect relative to the current origin.
 func (s *Server) oauthRedirectBase() string {
 	raw := strings.TrimSpace(s.cfg.Snapshot().OAuth.GitHub.RedirectURL)
 	if raw == "" {
@@ -243,8 +185,6 @@ func (s *Server) oauthRedirectBase() string {
 	return parsed.Scheme + "://" + parsed.Host
 }
 
-// controlPlaneURL returns the effective instance control-plane URL (""
-// when unset or unreadable, which keeps today's behavior).
 func (s *Server) controlPlaneURL() string {
 	if s.instanceSvc == nil {
 		return ""
@@ -256,9 +196,6 @@ func (s *Server) controlPlaneURL() string {
 	return strings.TrimSpace(cp)
 }
 
-// controlPlaneURLSource adapts the instance control-plane URL to the
-// context-scoped resolver the domain packages accept. Nil when no instance
-// service exists, which keeps today's behavior everywhere.
 func (s *Server) controlPlaneURLSource() func(context.Context) string {
 	if s.instanceSvc == nil {
 		return nil
@@ -272,17 +209,11 @@ func (s *Server) controlPlaneURLSource() func(context.Context) string {
 	}
 }
 
-// redirectOAuthFailure clears both OAuth cookies and redirects to the login
-// page.
 func (s *Server) redirectOAuthFailure(w http.ResponseWriter, r *http.Request) {
 	s.clearOAuthCookies(w, r)
 	http.Redirect(w, r, oauthFailureRedirect, http.StatusFound)
 }
 
-// clearOAuthCookies expires both OAuth protocol cookies under both name sets,
-// so a pending cookie issued under the other scheme (a plain HTTP cookie) is
-// cleared by an HTTPS logout and vice versa. The __Host- deletions carry
-// Secure/Path=/ and are ignored where they do not apply.
 func (s *Server) clearOAuthCookies(w http.ResponseWriter, r *http.Request) {
 	for _, name := range []string{
 		auth.StateCookieName,
@@ -294,8 +225,6 @@ func (s *Server) clearOAuthCookies(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// newOAuthFlowBinding mints a random value binding the browser that started the
-// flow to the exchange that redeems it.
 func newOAuthFlowBinding() (string, error) {
 	buf := make([]byte, oauthRandomBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -304,21 +233,14 @@ func newOAuthFlowBinding() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// oauthStateCookie builds the state cookie with the name for the request's
-// scheme: the __Host- name over HTTPS, the plain name over insecure HTTP.
 func (s *Server) oauthStateCookie(r *http.Request, value string, maxAge int) *http.Cookie {
 	return s.oauthCookie(r, s.oauthStateCookieName(r), value, maxAge)
 }
 
-// oauthFlowCookie builds the flow-binding cookie with the name for the
-// request's scheme.
 func (s *Server) oauthFlowCookie(r *http.Request, value string, maxAge int) *http.Cookie {
 	return s.oauthCookie(r, s.oauthFlowCookieName(r), value, maxAge)
 }
 
-// oauthStateCookieName selects the state cookie name for the request's scheme.
-// Over HTTPS the __Host- prefix makes the cookie immune to shadowing by a
-// sibling subdomain, which cannot set a __Host- cookie with a Domain.
 func (s *Server) oauthStateCookieName(r *http.Request) string {
 	if s.isSecureRequest(r) {
 		return auth.StateCookieNameSecure
@@ -326,7 +248,6 @@ func (s *Server) oauthStateCookieName(r *http.Request) string {
 	return auth.StateCookieName
 }
 
-// oauthFlowCookieName selects the flow cookie name for the request's scheme.
 func (s *Server) oauthFlowCookieName(r *http.Request) string {
 	if s.isSecureRequest(r) {
 		return auth.FlowCookieNameSecure
@@ -334,10 +255,6 @@ func (s *Server) oauthFlowCookieName(r *http.Request) string {
 	return auth.FlowCookieName
 }
 
-// oauthCookieValue returns the single value of the OAuth protocol cookie named
-// name. It fails closed when the cookie is absent or appears more than once: a
-// planted duplicate cannot win the read, which is the best-effort defense for
-// insecure HTTP where the __Host- prefix cannot be enforced.
 func oauthCookieValue(r *http.Request, name string) (string, bool) {
 	value := ""
 	count := 0
@@ -353,10 +270,6 @@ func oauthCookieValue(r *http.Request, name string) (string, bool) {
 	return value, true
 }
 
-// oauthCookie builds an OAuth protocol cookie: HttpOnly, SameSite=Lax, and
-// Secure when the request is served over HTTPS. A __Host- cookie is always
-// Secure even for an insecure deletion, so the browser recognises it as a
-// deletion of the HTTPS-issued cookie.
 func (s *Server) oauthCookie(r *http.Request, name, value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
@@ -369,8 +282,6 @@ func (s *Server) oauthCookie(r *http.Request, name, value string, maxAge int) *h
 	}
 }
 
-// oauthCookieSecure reports whether a cookie with name should carry Secure: a
-// __Host- cookie always does; otherwise it follows the request scheme.
 func (s *Server) oauthCookieSecure(r *http.Request, name string) bool {
 	if strings.HasPrefix(name, "__Host-") {
 		return true
@@ -378,23 +289,14 @@ func (s *Server) oauthCookieSecure(r *http.Request, name string) bool {
 	return s.isSecureRequest(r)
 }
 
-// isSecureRequest reports whether the request reached us over HTTPS, directly
-// or through a trusted TLS-terminating proxy. X-Forwarded-Proto is honored only
-// when the direct peer is a configured trusted proxy, so a client cannot claim
-// HTTPS by sending the header itself.
 func (s *Server) isSecureRequest(r *http.Request) bool {
 	return clientip.IsSecure(r, s.trustedProxies)
 }
 
-// constantTimeEqual compares two strings without leaking their contents through
-// timing.
 func constantTimeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// oauthCodeStore holds pending exchange codes in memory. Entries are single-use
-// and expire after oauthExchangeTTL; expired entries are swept by a background
-// goroutine. It mirrors the auth package's OAuth state store.
 type oauthCodeStore struct {
 	mu      sync.Mutex
 	entries map[string]oauthExchangeEntry
@@ -403,9 +305,6 @@ type oauthCodeStore struct {
 	once    sync.Once
 }
 
-// oauthExchangeEntry is one callback result waiting to be claimed by the browser
-// that started the flow. secure records whether the callback arrived over TLS so
-// the exchange cannot be downgraded to plain HTTP.
 type oauthExchangeEntry struct {
 	result    *auth.AuthResult
 	binding   string
@@ -413,8 +312,6 @@ type oauthExchangeEntry struct {
 	expiresAt time.Time
 }
 
-// newOAuthCodeStore builds a store and starts its cleanup goroutine. Callers
-// must Close it to stop that goroutine.
 func newOAuthCodeStore() *oauthCodeStore {
 	s := &oauthCodeStore{
 		entries: make(map[string]oauthExchangeEntry),
@@ -425,8 +322,6 @@ func newOAuthCodeStore() *oauthCodeStore {
 	return s
 }
 
-// NewCode mints a random one-time code bound to binding and the request scheme
-// (secure) and remembers result until TTL expiry.
 func (s *oauthCodeStore) NewCode(result *auth.AuthResult, binding string, secure bool) (string, error) {
 	buf := make([]byte, oauthRandomBytes)
 	if _, err := rand.Read(buf); err != nil {
@@ -449,10 +344,6 @@ func (s *oauthCodeStore) NewCode(result *auth.AuthResult, binding string, secure
 	return code, nil
 }
 
-// Exchange consumes code and returns the token pair only when binding matches
-// the value stored at callback time (constant-time) and the request scheme
-// matches the one recorded at callback (no downgrade). It reports ok=false for
-// an unknown, already-consumed, expired, foreign, or scheme-mismatched code.
 func (s *oauthCodeStore) Exchange(code, binding string, secure bool) (*auth.AuthResult, bool) {
 	s.mu.Lock()
 	entry, ok := s.entries[code]
@@ -476,7 +367,6 @@ func (s *oauthCodeStore) Exchange(code, binding string, secure bool) (*auth.Auth
 	return entry.result, true
 }
 
-// cleanupLoop evicts expired codes until Close is called.
 func (s *oauthCodeStore) cleanupLoop() {
 	ticker := time.NewTicker(oauthExchangeCleanupPeriod)
 	defer ticker.Stop()
@@ -491,7 +381,6 @@ func (s *oauthCodeStore) cleanupLoop() {
 	}
 }
 
-// cleanup drops codes whose expiry has passed.
 func (s *oauthCodeStore) cleanup(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -503,7 +392,6 @@ func (s *oauthCodeStore) cleanup(now time.Time) {
 	}
 }
 
-// Close stops the cleanup goroutine. It is safe to call more than once.
 func (s *oauthCodeStore) Close() {
 	s.once.Do(func() { close(s.stop) })
 }

@@ -1,4 +1,3 @@
-// Unit tests for the log viewer formatting helpers (JUS-24 split of LogViewer).
 
 import { describe, expect, it } from "vitest";
 

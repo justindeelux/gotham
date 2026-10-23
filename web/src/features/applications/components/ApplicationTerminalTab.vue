@@ -8,25 +8,10 @@ import { useApplicationTerminalTab } from "@/features/applications/composables/u
 import TerminalSessionStage from "@/features/terminal/components/TerminalSessionStage.vue";
 import { errorKey } from "@/features/terminal/utils/terminal";
 
-/**
- * Application detail Terminal tab (JUS-247).
- *
- * The tab is a thin host: the composable owns lazy target discovery, the
- * single-target auto-open, the explicit multi-service selector and every
- * recovery path (Retry/Start new session/Refresh rediscover before re-POST).
- * The session itself is the same TerminalSessionStage/TerminalPane the server
- * tab uses, so the buffer, dock, rail count, close confirmation and one-way
- * window transfer are shared, never forked.
- *
- * While the team role is still unknown (`accessKnown` false) this renders a
- * neutral state and mounts no discovery: a read_only account sees zero
- * terminal requests, not a shell that is revoked a tick later.
- */
 interface Props {
   applicationId: string;
   applicationName: string;
   accessKnown: boolean;
-  /** accessError means the team role could not be read (e.g. /teams 500). */
   accessError: boolean;
   canWrite: boolean;
   active: boolean;
@@ -59,7 +44,6 @@ const {
   active: () => props.active,
 });
 
-/** errorText is bounded catalog copy; the backend body is never rendered. */
 const errorText = computed<string>(() => t(errorKey(targetsError.value)));
 </script>
 

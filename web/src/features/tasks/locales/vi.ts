@@ -1,9 +1,5 @@
 import type { TasksMessages } from "./en";
 
-/**
- * Tasks Vietnamese catalog: translated message values only.
- * Keys stay English per the repo language rule.
- */
 const vi: TasksMessages = {
   card: {
     title: "Tác vụ nền",

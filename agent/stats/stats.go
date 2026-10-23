@@ -1,9 +1,3 @@
-// Package stats samples host resource usage for the Gotham node agent.
-//
-// It deliberately depends only on the standard library and golang.org/x/sys so
-// the agent can be built as a standalone binary that never imports gotham
-// internal packages. Every metric is best-effort: a metric that cannot be read
-// is reported as zero rather than failing the heartbeat.
 package stats
 
 import (
@@ -19,11 +13,6 @@ import (
 	"time"
 )
 
-// Usage is a point-in-time sample of host resource usage. CPU, Mem and Disk are
-// fractions in the range 0..1. The *Bps fields are byte-per-second rates
-// measured between consecutive samples; they are zero on the first sample and
-// on a platform that cannot report them. TotalMem and TotalDisk are byte
-// counts.
 type Usage struct {
 	CPU          float64
 	Mem          float64
@@ -36,18 +25,13 @@ type Usage struct {
 	TotalDisk    uint64
 }
 
-// errUnsupported is returned by platform hooks that cannot provide a metric.
 var errUnsupported = errors.New("stats: metric unsupported on this platform")
 
-// cpuTimes holds a CPU counter sample: cumulative idle and total jiffies.
 type cpuTimes struct {
 	idle  uint64
 	total uint64
 }
 
-// counterPair is one I/O source's cumulative byte counters together with the
-// instant they were read, so a rate is only ever computed from two consecutive
-// reads of the same source.
 type counterPair struct {
 	in    uint64
 	out   uint64
@@ -55,9 +39,6 @@ type counterPair struct {
 	valid bool
 }
 
-// rates derives the byte-per-second rates from the previous read of the same
-// source. Without a previous read both rates are zero: the first sample only
-// establishes the baseline.
 func (c counterPair) rates(previous counterPair) (in, out float64) {
 	if !previous.valid {
 		return 0, 0
@@ -66,10 +47,6 @@ func (c counterPair) rates(previous counterPair) (in, out float64) {
 	return byteRate(c.in, previous.in, elapsed), byteRate(c.out, previous.out, elapsed)
 }
 
-// byteRate converts the delta of two cumulative byte counters over elapsed into
-// a byte-per-second rate. A counter that moved backwards (a reset or a
-// replaced device) or a non-positive interval reports zero for that interval
-// instead of a bogus spike.
 func byteRate(current, previous uint64, elapsed time.Duration) float64 {
 	if elapsed <= 0 || current < previous {
 		return 0
@@ -77,9 +54,6 @@ func byteRate(current, previous uint64, elapsed time.Duration) float64 {
 	return float64(current-previous) / elapsed.Seconds()
 }
 
-// Sampler computes CPU usage and I/O rates from the delta between consecutive
-// samples. Create one sampler and reuse it: the first sample reports zero for
-// every rate because there is no previous counter to compare against.
 type Sampler struct {
 	mu       sync.Mutex
 	lastCPU  cpuTimes
@@ -88,11 +62,8 @@ type Sampler struct {
 	lastDisk counterPair
 }
 
-// New returns a ready-to-use Sampler.
 func New() *Sampler { return &Sampler{} }
 
-// Sample returns the current resource usage. Metrics that are unavailable are
-// zero. The returned error is non-nil only when no metric could be read.
 func (s *Sampler) Sample() (Usage, error) {
 	var (
 		usage   Usage
@@ -166,11 +137,8 @@ func (s *Sampler) Sample() (Usage, error) {
 	return usage, nil
 }
 
-// OSVersion returns a human-readable OS release string (for example
-// "6.1.0-13-amd64") or "" when it cannot be determined.
 func OSVersion() string { return osVersion() }
 
-// TotalMemory returns the total physical memory in bytes, or 0 when unknown.
 func TotalMemory() uint64 {
 	_, total, err := readMemory()
 	if err != nil {
@@ -179,8 +147,6 @@ func TotalMemory() uint64 {
 	return total
 }
 
-// TotalDisk returns the total size of the filesystem mounted at path in bytes,
-// or 0 when unknown.
 func TotalDisk(path string) uint64 {
 	_, total, err := readDisk(path)
 	if err != nil {
@@ -189,7 +155,6 @@ func TotalDisk(path string) uint64 {
 	return total
 }
 
-// readDisk reports the used and total bytes of the filesystem at path.
 func readDisk(path string) (used, total uint64, err error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
@@ -204,27 +169,19 @@ func readDisk(path string) (used, total uint64, err error) {
 	return total - free, total, nil
 }
 
-// parseNetDev sums the bytes received and transmitted by every interface in a
-// /proc/net/dev document. The loopback device is skipped: loopback traffic
-// never leaves the host and would otherwise sit permanently on the charts. A
-// line that cannot be parsed (an alias-style name, a truncated or non-numeric
-// counter row) is skipped rather than failing the read, so one unreadable
-// interface never zeroes the host's network metric; only a document with no
-// parsable interface at all is an error.
 func parseNetDev(r io.Reader) (rx, tx uint64, err error) {
 	scanner := bufio.NewScanner(r)
 	seen := false
 	for scanner.Scan() {
 		name, counters, ok := strings.Cut(scanner.Text(), ":")
 		if !ok {
-			continue // the two header lines have no colon
+			continue
 		}
 		name = strings.TrimSpace(name)
 		if name == "" || name == "lo" {
 			continue
 		}
 		fields := strings.Fields(counters)
-		// rx_bytes and tx_bytes are the 1st and 9th counter.
 		if len(fields) < 9 {
 			continue
 		}
@@ -249,18 +206,13 @@ func parseNetDev(r io.Reader) (rx, tx uint64, err error) {
 	return rx, tx, nil
 }
 
-// sectorSize is the unit of the read/written counters in /proc/diskstats.
 const sectorSize = 512
 
-// parseDiskStats sums the bytes read and written by the devices in devices, a
-// set of whole-device names. Partition lines are not part of such a set, so the
-// same I/O is never counted twice through a whole disk and its partition.
 func parseDiskStats(r io.Reader, devices map[string]struct{}) (read, write uint64, err error) {
 	scanner := bufio.NewScanner(r)
 	seen := false
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		// major minor name reads_read reads_merged sectors_read ... writes_written
 		if len(fields) < 10 {
 			continue
 		}
@@ -288,13 +240,10 @@ func parseDiskStats(r io.Reader, devices map[string]struct{}) (read, write uint6
 	return read, write, nil
 }
 
-// pseudoBlockDevice reports whether a /sys/block entry is a pseudo device with
-// no real I/O: loop (loop-mounted images), ram and zram (RAM-backed swap).
 func pseudoBlockDevice(name string) bool {
 	return strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "zram")
 }
 
-// clampFraction constrains v to the 0..1 range, mapping NaN to 0.
 func clampFraction(v float64) float64 {
 	if math.IsNaN(v) || v < 0 {
 		return 0

@@ -9,43 +9,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// RouterKind names the control-plane row a generated router comes from.
 type RouterKind string
 
 const (
-	// RouterKindControlPlane serves the instance panel; it has no owning application.
 	RouterKindControlPlane RouterKind = "control_plane"
-	// RouterKindApplication is a router serving an application's base domain.
-	RouterKindApplication RouterKind = "application"
-	// RouterKindService is a router serving a compose service's declared host.
-	RouterKindService RouterKind = "service"
-	// RouterKindRedirect is a router sending one host to another (its
-	// redirectRegex middleware terminates the request before any backend).
-	RouterKindRedirect RouterKind = "redirect"
+	RouterKindApplication  RouterKind = "application"
+	RouterKindService      RouterKind = "service"
+	RouterKindRedirect     RouterKind = "redirect"
 )
 
-// RouterSyncStatus is one node's configuration state as observed on read:
-// the freshly generated documents are compared against the last synced
-// version in history.
 type RouterSyncStatus string
 
 const (
-	// RouterSyncSynced means the node serves the current generated state.
-	RouterSyncSynced RouterSyncStatus = "synced"
-	// RouterSyncPending means the generated state differs from the last
-	// synced version (or was never synced): run a proxy sync.
+	RouterSyncSynced  RouterSyncStatus = "synced"
 	RouterSyncPending RouterSyncStatus = "pending"
-	// RouterSyncUnknown means no sync history is available, so no claim is
-	// possible.
 	RouterSyncUnknown RouterSyncStatus = "unknown"
 )
 
-// RouterInfo is one generated Traefik router as served on a node: the host
-// rule, the backend service, the entrypoints, the TLS resolver (empty for
-// plain HTTP) and the owning control-plane row. One row covers both the web
-// and the websecure router of a host, so entrypoints list both for HTTPS
-// hosts. OwnerID is the owning application or service id, or the redirect
-// rule id for RouterKindRedirect.
 type RouterInfo struct {
 	Certificate *PanelCertificateState `json:"certificate,omitempty"`
 	Host        string                 `json:"host"`
@@ -62,9 +42,6 @@ type RouterInfo struct {
 	ServerName  string                 `json:"server_name,omitempty"`
 }
 
-// RouterNodeState is one node's read outcome. Error is set (and no rows are
-// reported for the node) when the node could not be read: an unreachable
-// node is reported, never filled with fabricated rows.
 type RouterNodeState struct {
 	ServerID    uuid.UUID        `json:"server_id"`
 	ServerName  string           `json:"server_name,omitempty"`
@@ -73,26 +50,18 @@ type RouterNodeState struct {
 	Diagnostics []Diagnostic     `json:"diagnostics,omitempty"`
 }
 
-// RouterListResponse is the body of GET /v1/proxy/routers.
 type RouterListResponse struct {
 	Diagnostics []Diagnostic      `json:"diagnostics,omitempty"`
 	Routers     []RouterInfo      `json:"routers"`
 	Nodes       []RouterNodeState `json:"nodes"`
 }
 
-// RouterService lists the generated Traefik routers of one node (or every
-// node when serverID is uuid.Nil) from the same generator state a sync would
-// push. Implementations must never invent rows for a node they cannot read.
 type RouterService interface {
 	ListRouters(ctx context.Context, serverID uuid.UUID) (RouterListResponse, error)
 }
 
-// Compile-time guarantee that SyncService satisfies the read contract.
 var _ RouterService = (*SyncService)(nil)
 
-// AsRouterService returns svc as a RouterService when it implements the read
-// side, or nil so the HTTP wiring can pass its result to the mount
-// unconditionally.
 func AsRouterService(svc ProxyService) RouterService {
 	if routers, ok := svc.(RouterService); ok {
 		return routers
@@ -100,20 +69,15 @@ func AsRouterService(svc ProxyService) RouterService {
 	return nil
 }
 
-// NamedNode is one registered node with its display name.
 type NamedNode struct {
 	ID   uuid.UUID
 	Name string
 }
 
-// namedNodeSource optionally lists registered nodes with display names. The
-// production storeSource implements it; other NodeSources keep reporting ids
-// only.
 type namedNodeSource interface {
 	ListNamedNodes(ctx context.Context) ([]NamedNode, error)
 }
 
-// ListNamedNodes maps the server registry to node ids and display names.
 func (s storeSource) ListNamedNodes(ctx context.Context) ([]NamedNode, error) {
 	rows, err := s.store.ListServers(ctx)
 	if err != nil {
@@ -128,12 +92,6 @@ func (s storeSource) ListNamedNodes(ctx context.Context) ([]NamedNode, error) {
 	return nodes, nil
 }
 
-// ListRouters regenerates each requested node's routing state in memory and
-// reports the resulting routers plus the per-node sync status. It writes
-// nothing: the documents are the same bytes a sync would push. A node whose
-// containers cannot be listed (unreachable agent) is reported with an error
-// and contributes no rows; a single-node request for such a node fails, so
-// the API answers 502 instead of an empty-but-200 list that looks healthy.
 func (s *SyncService) ListRouters(ctx context.Context, serverID uuid.UUID) (RouterListResponse, error) {
 	if s == nil || s.source == nil {
 		return RouterListResponse{}, errors.New("proxy: application source is not configured")
@@ -189,10 +147,6 @@ func (s *SyncService) ListRouters(ctx context.Context, serverID uuid.UUID) (Rout
 	return response, nil
 }
 
-// listNodeRouters resolves one node's live endpoints, regenerates its
-// documents and reads the router rows back from the generated configuration,
-// so the list is literally what a sync would push — never a parallel
-// re-implementation of the generator.
 func (s *SyncService) listNodeRouters(ctx context.Context, apps []ProxiedApplication, proxiedServices []ProxiedService, rules []RedirectRule, providers []DNSProvider, access map[uuid.UUID]providerAccess, appNames, serviceNames map[uuid.UUID]string, serverID uuid.UUID, serverName string) ([]RouterInfo, RouterNodeState, error) {
 	state := RouterNodeState{ServerID: serverID, ServerName: serverName, SyncStatus: RouterSyncUnknown}
 	nodeList, err := s.listNodeContainers(ctx, serverID)
@@ -211,11 +165,6 @@ func (s *SyncService) listNodeRouters(ctx context.Context, apps []ProxiedApplica
 	return routers, state, nil
 }
 
-// routersFromConfig reads the router rows back from a generated
-// configuration: one row per host for application and service routes (the web
-// and websecure routers merged), plus one row per redirect rule. appRoutes
-// counts the leading application routes of routes; the rest are service
-// routes.
 func routersFromConfig(cfg ProxyConfig, routes []Route, appRoutes int, redirects []Redirect, ruleOwners map[uuid.UUID]uuid.UUID, serverID uuid.UUID, serverName string, appNames, serviceNames map[uuid.UUID]string) []RouterInfo {
 	routers := make([]RouterInfo, 0, len(routes)+len(redirects))
 	for i, route := range routes {
@@ -284,8 +233,6 @@ func routersFromConfig(cfg ProxyConfig, routes []Route, appRoutes int, redirects
 	return routers
 }
 
-// redirectOwners maps redirect rule ids to their owning application on one
-// node, so redirect rows can name the owning resource.
 func redirectOwners(rules []RedirectRule, serverID uuid.UUID) map[uuid.UUID]uuid.UUID {
 	owners := make(map[uuid.UUID]uuid.UUID, len(rules))
 	for _, rule := range rules {
@@ -296,7 +243,6 @@ func redirectOwners(rules []RedirectRule, serverID uuid.UUID) map[uuid.UUID]uuid
 	return owners
 }
 
-// containsName reports whether list holds name.
 func containsName(list []string, name string) bool {
 	for _, entry := range list {
 		if entry == name {
@@ -306,9 +252,6 @@ func containsName(list []string, name string) bool {
 	return false
 }
 
-// routerNodeSet resolves the requested nodes: exactly serverID when set,
-// otherwise every node hosting a routable row plus every registered node
-// (mirroring SyncAll, so removing the last domain stays visible too).
 func (s *SyncService) routerNodeSet(ctx context.Context, apps []ProxiedApplication, serverID uuid.UUID) ([]uuid.UUID, map[uuid.UUID]string, error) {
 	names := map[uuid.UUID]string{}
 	if named, ok := s.nodes.(namedNodeSource); ok && named != nil {
@@ -356,8 +299,6 @@ func (s *SyncService) routerNodeSet(ctx context.Context, apps []ProxiedApplicati
 	return ids, names, nil
 }
 
-// applicationNames maps application ids to display names for the owning
-// resource column.
 func applicationNames(apps []ProxiedApplication) map[uuid.UUID]string {
 	names := make(map[uuid.UUID]string, len(apps))
 	for _, app := range apps {
@@ -368,7 +309,6 @@ func applicationNames(apps []ProxiedApplication) map[uuid.UUID]string {
 	return names
 }
 
-// proxiedServiceNames maps compose service ids to display names.
 func proxiedServiceNames(services []ProxiedService) map[uuid.UUID]string {
 	names := make(map[uuid.UUID]string, len(services))
 	for _, service := range services {
@@ -379,7 +319,6 @@ func proxiedServiceNames(services []ProxiedService) map[uuid.UUID]string {
 	return names
 }
 
-// sortRouters orders rows by host for a stable response.
 func sortRouters(routers []RouterInfo) {
 	sort.Slice(routers, func(i, j int) bool {
 		if routers[i].Host != routers[j].Host {
@@ -389,10 +328,6 @@ func sortRouters(routers []RouterInfo) {
 	})
 }
 
-// routerSyncStatus compares the freshly generated documents against the last
-// synced version: equal means the node serves the current state, anything
-// else means a sync is due. Without history (or on a lookup failure) no
-// claim is possible.
 func (s *SyncService) routerSyncStatus(ctx context.Context, serverID uuid.UUID, files []File) RouterSyncStatus {
 	if s.history == nil {
 		return RouterSyncUnknown

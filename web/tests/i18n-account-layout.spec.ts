@@ -8,11 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global URL, document, window, HTMLElement, HTMLInputElement, requestAnimationFrame:readonly */
-// Real-browser proof for the I18N-2 shell/auth/profile surfaces: the
-// committed webdist is served statically with the control-plane API mocked,
-// a session and locale are seeded in localStorage, and real Chromium
-// measures the real Naive UI DOM (no backend involved). This replaces the
-// earlier source-regex topbar check with committed layout assertions.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -69,7 +64,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -105,7 +99,6 @@ interface MockState {
   apiCalls: number;
 }
 
-/** mockApi counts every API call and answers the owned auth/profile routes. */
 async function mockApi(page: Page, state: MockState): Promise<void> {
   await page.route("**/api/v1/**", async (route) => {
     state.apiCalls += 1;
@@ -147,7 +140,6 @@ async function mockApi(page: Page, state: MockState): Promise<void> {
   });
 }
 
-/** seedStorage writes the locale and (optionally) a signed-in session. */
 async function seedStorage(
   page: Page,
   locale: string,
@@ -172,7 +164,6 @@ async function seedStorage(
   );
 }
 
-/** overflowOf reports horizontal overflow of the whole document. */
 async function overflowOf(page: Page): Promise<{ scroll: number; inner: number }> {
   return page.evaluate(() => ({
     scroll: document.documentElement.scrollWidth,
@@ -187,12 +178,6 @@ interface Box {
   height: number;
 }
 
-/**
- * settledBox measures an element only after webfonts load and its box is
- * stable across animation frames. Popup entrance transitions and font swaps
- * can otherwise report pre-final geometry; polling for stability (bounded,
- * no arbitrary sleeps) makes the measurement deterministic.
- */
 async function settledBox(
   page: Page,
   selector: string,
@@ -234,7 +219,6 @@ for (const locale of ["en", "vi"]) {
       const overflow = await overflowOf(page);
       expect(overflow.scroll).toBeLessThanOrEqual(overflow.inner);
 
-      // The same selector lives in the auth shell with a readable label.
       const selector = page.locator(".auth-main .language-select");
       await expect(selector).toBeVisible();
       const heading = await page.locator(".auth-title").textContent();
@@ -243,9 +227,6 @@ for (const locale of ["en", "vi"]) {
         .locator("#login-email")
         .getAttribute("placeholder");
       expect(placeholder?.trim().length).toBeGreaterThan(0);
-      // JUS-197: phones lose the auth aside, so the compact brand lockup
-      // in the main column must carry the logo instead (tablet widths and
-      // up keep the full-width card without it).
       const brand = page.locator(".auth-mobile-brand");
       if (width === 390) {
         await expect(brand).toBeVisible();
@@ -272,7 +253,6 @@ for (const locale of ["en", "vi"]) {
       const overflow = await overflowOf(page);
       expect(overflow.scroll).toBeLessThanOrEqual(overflow.inner);
 
-      // Essential controls stay visible and inside the viewport.
       const rects = await page
         .locator(".topbar-right .language-select, .topbar-right [aria-label]")
         .evaluateAll((nodes) =>
@@ -288,10 +268,6 @@ for (const locale of ["en", "vi"]) {
       const selector = page.locator(".topbar-right .language-select");
       await expect(selector).toBeVisible();
 
-      // JUS-136: features that have not shipped must not leave a disabled
-      // control in the shell. Each locator below matches a placeholder that
-      // used to render (search box, notifications/docs stubs, the inert
-      // "API tokens" nav entry) and can fail if one comes back.
       expect(await page.locator(".topbar .search").count()).toBe(0);
       expect(await page.locator(".topbar .is-stub").count()).toBe(0);
       expect(await page.locator("#app-nav .is-disabled").count()).toBe(0);
@@ -308,9 +284,6 @@ for (const locale of ["en", "vi"]) {
       await page.goto(`${baseURL}/settings/profile`);
       await page.locator("#profile-new-password").waitFor();
 
-      // Authenticated identity actually resolves: the account card shows
-      // the real display name and email, never the signed-in fallback or
-      // empty facts from a degraded envelope mock.
       expect(await page.locator(".identity-name").textContent()).toContain(
         "Ada",
       );
@@ -342,7 +315,6 @@ for (const locale of ["en", "vi"]) {
         };
       });
       if (width === 390) {
-        // Narrow containers stack the pair: full-width usable inputs.
         expect(pair.stacked).toBe(true);
         expect(pair.inputWidth).toBeGreaterThanOrEqual(200);
         expect(pair.placeholderFits).toBe(true);
@@ -369,8 +341,6 @@ test("auth footnote renders exact sentence per locale", async ({ page }) => {
     const text = await page.locator(".auth-footnote").evaluate((node) =>
       (node.textContent ?? "").replace(/\s+/g, " ").trim(),
     );
-    // Exact match: no joined words in EN, no stray space before the
-    // period in VI.
     expect(text).toBe(exact[locale]);
     await page.evaluate(() => window.localStorage.clear());
   }
@@ -427,7 +397,6 @@ for (const locale of ["en", "vi"] as const) {
       await page.goto(`${baseURL}/settings/profile`);
       await page.locator(".session-row").first().waitFor();
 
-      // Bulk confirm: buttons visible and fully inside the viewport.
       await page.getByRole("button", { name: labels.bulk }).click();
       const bulk = page.locator(".n-popconfirm");
       await bulk.waitFor();
@@ -442,14 +411,11 @@ for (const locale of ["en", "vi"] as const) {
         expect(box!.x).toBeGreaterThanOrEqual(-1);
         expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
       }
-      // Dismissing via the negative action closes without any API call.
       const callsBefore = state.apiCalls;
       await bulk.getByRole("button", { name: labels.negative }).click();
       await bulk.waitFor({ state: "detached" });
       expect(state.apiCalls).toBe(callsBefore);
 
-      // Row confirms: every row (first/current and non-current) contains
-      // its popconfirm and buttons fully inside the viewport.
       const rowCount = await page.locator(".session-row").count();
       expect(rowCount).toBeGreaterThanOrEqual(2);
       for (let index = 0; index < rowCount; index += 1) {
@@ -470,11 +436,6 @@ for (const locale of ["en", "vi"] as const) {
         expect(rowPositiveBox!.x + rowPositiveBox!.width).toBeLessThanOrEqual(
           width + 1,
         );
-        // Dismiss via negative: closes with no API call. On the last row,
-        // additionally switch locale through the dropdown menu: selecting
-        // from the menu layer dismisses the open confirm (Naive popover
-        // layering) with zero API calls, and the re-opened confirm renders
-        // the flipped text inside the viewport with stable focus.
         const rowCallsBefore = state.apiCalls;
         let dismissName = labels.negative;
         if (index === rowCount - 1) {
@@ -488,7 +449,6 @@ for (const locale of ["en", "vi"] as const) {
           await expect(selector).toBeFocused();
           await row.waitFor({ state: "detached" });
           expect(state.apiCalls).toBe(rowCallsBefore);
-          // Re-open in the new locale: flipped text, contained, dismissible.
           await page
             .locator(".session-row")
             .nth(index)

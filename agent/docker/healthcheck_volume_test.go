@@ -12,8 +12,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestToDockerHealthcheck pins the proto→Docker HealthConfig mapping: CMD is
-// prepended, seconds become nanoseconds, and nil/empty disables the check.
 func TestToDockerHealthcheck(t *testing.T) {
 	tests := []struct {
 		name string
@@ -68,8 +66,6 @@ func equalHealthcheck(a, b *dockerHealthcheck) bool {
 	return true
 }
 
-// TestBuildCreateBodyHealthcheck proves the healthcheck reaches the Docker
-// create body, and that an absent one leaves an image's own healthcheck alone.
 func TestBuildCreateBodyHealthcheck(t *testing.T) {
 	body, err := buildCreateBody(&agentv1.CreateContainerRequest{
 		Image: "postgres:18",
@@ -99,8 +95,6 @@ func TestBuildCreateBodyHealthcheck(t *testing.T) {
 	}
 }
 
-// TestListContainersSetsHealth proves the agent surfaces the Docker health
-// status on ContainerInfo for the control plane's readiness gate.
 func TestListContainersSetsHealth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/containers/json") {
@@ -122,8 +116,6 @@ func TestListContainersSetsHealth(t *testing.T) {
 	}
 }
 
-// TestDockerClientRemoveVolumeHTTP pins the HTTP shape of the volume delete:
-// DELETE, force=true, path-escaped name, and 404-as-success idempotence.
 func TestDockerClientRemoveVolumeHTTP(t *testing.T) {
 	var mu sync.Mutex
 	var method, requestURI string
@@ -158,7 +150,6 @@ func TestDockerClientRemoveVolumeHTTP(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// A name needing escaping must be path-escaped, not injected into the path.
 	if err := client.RemoveVolume(context.Background(), "gotham-db-a/b c"); err != nil {
 		t.Fatalf("RemoveVolume(escaped): %v", err)
 	}
@@ -169,7 +160,6 @@ func TestDockerClientRemoveVolumeHTTP(t *testing.T) {
 		t.Errorf("request %q was not path-escaped", gotURI)
 	}
 
-	// 404 is success: the sweep must be retryable after the first removal.
 	if err := client.RemoveVolume(context.Background(), "missing"); err != nil {
 		t.Errorf("RemoveVolume(404) = %v, want nil", err)
 	}

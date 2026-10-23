@@ -1,6 +1,3 @@
-// Folder size "Calculate" (JUS-162): the API client's route/params and the
-// composable's idle → loading → done / error / cancel state machine. The axios
-// layer is mocked, so the real api module runs without a DOM or network.
 /* global AbortSignal, document: readonly */
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -32,7 +29,6 @@ import {
 
 const get = http.get as unknown as Mock;
 
-/** canceledError mirrors axios's abort error so isCanceledError recognises it. */
 function canceledError(): Error {
   const error = new Error("canceled");
   error.name = "CanceledError";
@@ -138,13 +134,11 @@ describe("useFolderSize", () => {
     const first = requestFolderSize("srv", "team", "volumes", "apps");
     cancelFolderSize("srv", "volumes", "apps");
 
-    // A fresh walk for the same key starts before the old one settles.
     get.mockImplementationOnce(() => new Promise(() => {}));
     void requestFolderSize("srv", "team", "volumes", "apps");
 
     await first;
 
-    // The stale rejection must not flip the new walk back to idle.
     expect(folderSizeState("srv", "volumes", "apps").status).toBe("loading");
   });
 
@@ -154,30 +148,24 @@ describe("useFolderSize", () => {
     teams.activeTeamId = "team";
     const store = useFilesStore();
 
-    // init: roots, then the first listing.
     get.mockResolvedValueOnce({
       data: { roots: [{ name: "volumes", path: "/v", writable: true, free_bytes: 0 }] },
     });
     get.mockResolvedValueOnce({ data: { entries: [], truncated: false, cursor: "" } });
     await store.init("server-1");
 
-    // Size one folder.
     get.mockResolvedValueOnce({
       data: { bytes: 42, entries: 1, skipped: 0, truncated: false },
     });
     await requestFolderSize("server-1", "team", "volumes", "apps");
     expect(folderSizeState("server-1", "volumes", "apps").status).toBe("done");
 
-    // A refresh reloads the listing and must drop the cached size.
     get.mockResolvedValueOnce({ data: { entries: [], truncated: false, cursor: "" } });
     await store.refresh();
     expect(folderSizeState("server-1", "volumes", "apps").status).toBe("idle");
   });
 });
 
-// JUS-216: the idle cell renders a quiet icon-only Calculate button — an
-// aria-label for assistive tech, no visible text, no tooltip (JUS-210), and a
-// lucide glyph.
 describe("FolderSizeCell idle Calculate", () => {
   it("renders an icon button with an aria-label and no text or title", () => {
     setActivePinia(createPinia());

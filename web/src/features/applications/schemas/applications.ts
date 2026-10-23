@@ -1,25 +1,5 @@
 import { z } from "zod";
 
-/**
- * Application form schemas (V9 sweep). Every predicate below replaces one
- * hand-written check in `useCreateAppWizard` or `useApplicationDomain` with
- * the identical acceptance; the composables derive their gates from these
- * schemas so there is a single source of truth.
- *
- * Regex exceptions (deliberate, historic patterns kept verbatim):
- * NAME_PATTERN and HOST_PATTERN stay inside plain
- * `.regex`/`.refine` rules because they ARE the exact historic expressions —
- * re-spelling them in another form would risk acceptance drift. Only
- * hostDomainSchema carries a user-visible message; every other schema below
- * is gate-only (consumers read `.success`), so they use zod's default
- * messages and have no catalog entries.
- */
-
-/**
- * Message catalog: only strings the UI shows. Gate-only schemas use zod
- * defaults (never surfaced). The domain message is a namespaced catalog key
- * resolved at invocation time, so visible feedback follows a language switch.
- */
 export const applicationMessages = {
   domain: "applications.validation.domain",
   domainPort: "applications.validation.domainPort",
@@ -27,23 +7,14 @@ export const applicationMessages = {
 } as const;
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{2,30}$/;
-/** HOST_PATTERN mirrors the generator's ValidateDomain boundary. */
 const HOST_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 
-/** appNameSchema replaces NAME_PATTERN.test(name.trim()) in sourceValid. */
 export const appNameSchema = z.string().trim().regex(NAME_PATTERN);
 
-/** branchSchema replaces branch.trim() !== "". Gate-only. */
 export const branchSchema = z.string().trim().min(1);
 
-/** providerSchema replaces providerId === "" (a select output, never padded). */
 export const providerSchema = z.string().min(1);
 
-/**
- * sourceTypeSchema is the GS-2 application source model: which fetcher the
- * deploy orchestrator uses. Only git-backed types are implemented; the
- * wizard gates continuation on sourceTypeImplemented below.
- */
 export const sourceTypeSchema = z.enum([
   "git_public",
   "git_private",
@@ -56,9 +27,6 @@ export const sourceTypeSchema = z.enum([
 
 export type SourceType = z.infer<typeof sourceTypeSchema>;
 
-/** sourceTypeImplemented gates the wizard Source step on scope: public
- * and private git, the connected-provider flows, pasted Dockerfiles (GS-7),
- * prebuilt container images (GS-9) and compose documents (GS-8, last). */
 export function sourceTypeImplemented(value: string): boolean {
   return (
     value === "git_public" ||
@@ -71,21 +39,8 @@ export function sourceTypeImplemented(value: string): boolean {
   );
 }
 
-/**
- * maxDockerfileBytes caps pasted Dockerfile text at 64 KiB, matching
- * MaxDockerfileBytes in internal/deploy/dockerfile.go.
- */
 export const maxDockerfileBytes = 64 * 1024;
 
-/**
- * dockerfileContentSchema replaces the GS-7 creation gate: the trimmed value
- * must be non-empty with a FROM instruction (comments and blank lines
- * ignored, case-insensitive first word), while the size cap applies to the
- * raw bytes, exactly like the server's len() check — trailing whitespace
- * counts. Bytes are measured with TextEncoder so multi-byte text matches;
- * deeper validation happens on the node at build time.
- * Gate-only: consumers read `.success`.
- */
 export const dockerfileContentSchema = z
   .string()
   .refine((value) => value.trim().length > 0)
@@ -101,9 +56,6 @@ export const dockerfileContentSchema = z
     }),
   );
 
-/** buildArgKeySchema replaces the key check for one --build-arg pair: the
- * same container-variable shape the API enforces (no spaces, '=' or NUL,
- * 128 chars max). Gate-only. */
 export const buildArgKeySchema = z
   .string()
   .trim()
@@ -111,34 +63,17 @@ export const buildArgKeySchema = z
   .max(128)
   .refine((value) => !/[= \t\r\n\0]/.test(value));
 
-/**
- * maxBuildArgValueBytes caps one --build-arg value at 4 KiB, matching
- * MaxBuildArgValueBytes in internal/deploy/dockerfile.go.
- */
 export const maxBuildArgValueBytes = 4 * 1024;
 
-/** buildArgValueSchema bounds one --build-arg value in bytes (TextEncoder,
- * like the server) and rejects NUL, which Postgres jsonb refuses. Gate-only. */
 export const buildArgValueSchema = z
   .string()
   .refine((value) => new TextEncoder().encode(value).length <= maxBuildArgValueBytes)
   .refine((value) => !value.includes("\0"));
 
-/** cloneUrlSchema replaces cloneUrl.trim() !== "". Gate-only. */
 export const cloneUrlSchema = z.string().trim().min(1);
 
-/**
- * isPublicGitUrl mirrors ValidatePublicGitURL's production allow-list
- * (internal/deploy/gitpublic.go): a keyless public source takes http, https
- * or git with a host and no embedded credentials. SSH transports need a
- * deploy key, so the gate refuses them here instead of letting the clone
- * spend the ambient SSH identity.
- */
 export function isPublicGitUrl(value: string): boolean {
   const trimmed = value.trim();
-  // Whitespace and control characters can smuggle a second argv token or a
-  // newline into logs; the loop form keeps the control range out of a regex
-  // literal (no-control-regex).
   if (trimmed === "" || /\s/.test(trimmed)) {
     return false;
   }
@@ -148,9 +83,6 @@ export function isPublicGitUrl(value: string): boolean {
       return false;
     }
   }
-  // The authority follows "://" directly: a leading slash means there is no
-  // host (this also keeps WHATWG parsing aligned with Go's net/url, which
-  // reads "https:///o/r.git" as hostless).
   const sep = trimmed.indexOf("://");
   const afterScheme = sep < 0 ? "" : trimmed.slice(sep + 3);
   if (afterScheme === "" || afterScheme.startsWith("/")) {
@@ -172,20 +104,12 @@ export function isPublicGitUrl(value: string): boolean {
   return parsed.username === "" && parsed.password === "";
 }
 
-/** publicCloneUrlSchema gates the git_public URL field. Gate-only. */
 export const publicCloneUrlSchema = z
   .string()
   .trim()
   .min(1)
   .refine(isPublicGitUrl);
 
-/**
- * isImageRef mirrors ValidateImageReference (internal/deploy/image.go):
- * [host[:port]/]path[:tag][@sha256:hex], no whitespace, lowercase path
- * components, a valid tag when present, and never a loopback registry host
- * (the node-local registry scope). A bare `latest` tag stays valid: the
- * wizard warns, it does not refuse.
- */
 export function isImageRef(value: string): boolean {
   const ref = value.trim();
   if (ref === "" || ref.length > 255 || /\s/.test(ref)) {
@@ -235,13 +159,6 @@ export function isImageRef(value: string): boolean {
   return name.split("/").every((component) => /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(component));
 }
 
-/**
- * isPublicRegistryHost accepts a registry host that is not the node-local
- * scope, mirroring checkRegistryHost (internal/deploy/image.go): bracketed
- * IPv6 literals, host:port with port 1-65535, plain IPs (loopback and
- * unspecified refused, including inet_aton shorthand), the localhost
- * spellings, or dot-separated RFC 1123 labels.
- */
 export function isPublicRegistryHost(host: string): boolean {
   if (host.startsWith("[")) {
     const end = host.indexOf("]");
@@ -263,8 +180,6 @@ export function isPublicRegistryHost(host: string): boolean {
     return isRegistryPort(rest.slice(1));
   }
   if (host.includes(":")) {
-    // Unbracketed IPv6 is not a valid registry host; a second colon is a
-    // malformed host:port.
     if ((host.match(/:/g) ?? []).length !== 1) {
       return false;
     }
@@ -277,7 +192,6 @@ export function isPublicRegistryHost(host: string): boolean {
   return isRegistryName(host);
 }
 
-/** isRegistryPort accepts the Docker registry port range 1-65535. */
 function isRegistryPort(port: string): boolean {
   if (!/^\d{1,5}$/.test(port)) {
     return false;
@@ -286,18 +200,12 @@ function isRegistryPort(port: string): boolean {
   return value >= 1 && value <= 65535;
 }
 
-/**
- * isRegistryName validates a registry host without a port: an IP address
- * (loopback and unspecified refused, including inet_aton shorthand), the
- * localhost spellings, or dot-separated RFC 1123 labels.
- */
 function isRegistryName(bare: string): boolean {
   if (bare === "") {
     return false;
   }
   const kind = ipLiteralKind(bare) ?? numericDotsKind(bare);
   if (kind === "invalid") {
-    // Numeric but out of range (999.1.1.1): never a DNS name, mirroring Go.
     return false;
   }
   if (kind === "loopback" || kind === "unspecified") {
@@ -321,10 +229,6 @@ const IMAGE_LABEL_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
 
 type IpKind = "loopback" | "unspecified" | "address";
 
-/**
- * ipLiteralKind classifies a strict IP literal (dotted-quad IPv4 or IPv6):
- * null when it is neither.
- */
 function ipLiteralKind(host: string): IpKind | null {
   const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (v4) {
@@ -346,12 +250,6 @@ function ipLiteralKind(host: string): IpKind | null {
   return ipv6Kind(host);
 }
 
-/**
- * ipv6Kind classifies a valid IPv6 literal: the all-zero address, the
- * loopback address (including the expanded 0:0:0:0:0:0:0:1 spelling) and
- * v4-mapped loopback/unspecified (::ffff:127.0.0.1), mirroring Go's
- * IsLoopback/IsUnspecified.
- */
 function ipv6Kind(host: string): IpKind {
   const expanded = expandIpv6(host) ?? [];
   if (expanded.every((value) => value === 0)) {
@@ -372,11 +270,6 @@ function ipv6Kind(host: string): IpKind {
   return "address";
 }
 
-/**
- * expandIpv6 renders a valid IPv6 literal as 8 hextets, honouring one ::
- * compression and one dotted-quad tail (the ::ffff:1.2.3.4 form). Null when
- * the literal is malformed.
- */
 function expandIpv6(host: string): Array<number> | null {
   let head = host;
   let tail: Array<number> = [];
@@ -417,18 +310,10 @@ function expandIpv6(host: string): Array<number> | null {
   return [...left.map(parse), ...zeros, ...right.map(parse), ...tail];
 }
 
-/** isIpv6Address accepts colon-separated hextets with one :: compression. */
 function isIpv6Address(host: string): boolean {
   return expandIpv6(host) !== null;
 }
 
-/**
- * numericDotsKind classifies classic dotted-decimal shorthand (a, a.b, a.b.c,
- * a.b.c.d, decimal parts only): loopback for 127/8, unspecified for 0,
- * address for any other value. Null when the host is not numeric at all (the
- * DNS path owns it); "invalid" when it is numeric but out of range, which can
- * never be a DNS name either — mirroring Go, which rejects it outright.
- */
 function numericDotsKind(host: string): IpKind | "invalid" | null {
   if (!/^[0-9.]+$/.test(host) || !host.includes(".")) {
     return null;
@@ -477,19 +362,12 @@ function numericDotsKind(host: string): IpKind | "invalid" | null {
   if (unsigned >>> 24 === 0x7f) {
     return "loopback";
   }
-  // A zero value arises only from all-zero parts here.
   if (unsigned === 0) {
     return "unspecified";
   }
   return "address";
 }
 
-/**
- * isLatestImageTag reports a reference whose effective tag is `latest`
- * (explicit or implied): the wizard warns that redeploys follow the moving
- * tag, it does not block. A digest-pinned reference is frozen and never
- * warns, even when its tag reads `latest`.
- */
 export function isLatestImageTag(value: string): boolean {
   const ref = value.trim();
   const at = ref.indexOf("@");
@@ -504,16 +382,8 @@ export function isLatestImageTag(value: string): boolean {
   return true;
 }
 
-/** imageRefSchema gates the image reference field. Gate-only. */
 export const imageRefSchema = z.string().trim().min(1).refine(isImageRef);
 
-/**
- * isPrivateGitUrl mirrors ValidatePrivateGitURL
- * (internal/deploy/gitprivate.go): a provider-less private source takes
- * ssh://, scp-like [user@]host:path or http(s) with a host and no embedded
- * credentials. Local paths exist only behind the backend dev flag, so the
- * gate refuses them here.
- */
 export function isPrivateGitUrl(value: string): boolean {
   const trimmed = value.trim();
   if (trimmed === "" || /\s/.test(trimmed)) {
@@ -550,17 +420,11 @@ export function isPrivateGitUrl(value: string): boolean {
     return parsed.username === "" && parsed.password === "";
   }
   if (scheme === "ssh:") {
-    // A user without a password is the ssh login name (git@host); a
-    // password is a credential smuggled into the stored URL.
     return parsed.hostname !== "" && parsed.password === "";
   }
   return false;
 }
 
-/**
- * isScpLikeUrl mirrors the backend scp shape: ssh://-less
- * [user@]host:path (the git@host:path fast path plus the generic form).
- */
 export function isScpLikeUrl(value: string): boolean {
   if (value.startsWith("git@")) {
     return true;
@@ -574,15 +438,12 @@ export function isScpLikeUrl(value: string): boolean {
   return colon > at && (slash === -1 || slash > at);
 }
 
-/** privateCloneUrlSchema gates the git_private URL field. Gate-only. */
 export const privateCloneUrlSchema = z
   .string()
   .trim()
   .min(1)
   .refine(isPrivateGitUrl);
 
-/** isHttpsGitUrl reports an https clone URL (the token transport). Plain
- * http never counts: the stored token is injected over TLS only. */
 export function isHttpsGitUrl(value: string): boolean {
   const sep = value.trim().indexOf("://");
   if (sep < 0) {
@@ -591,11 +452,9 @@ export function isHttpsGitUrl(value: string): boolean {
   return value.trim().slice(0, sep).toLowerCase() === "https";
 }
 
-/** repoSchema replaces repoFullName === "" (a select output, never padded). */
-export const repoSchema = z.string().min(1);/** serverSchema replaces serverId === "" (a select output, never padded). */
+export const repoSchema = z.string().min(1);
 export const serverSchema = z.string().min(1);
 
-/** domainPortSchema gates one domain's target container port (1-65535). */
 export const domainPortSchema = z
   .number({
     required_error: "applications.validation.domainPort",
@@ -605,11 +464,8 @@ export const domainPortSchema = z
   .min(1, "applications.validation.domainPort")
   .max(65535, "applications.validation.domainPort");
 
-/** domainProtocolSchema selects the Traefik entrypoint; http is the default. */
 export const domainProtocolSchema = z.enum(["http", "https"]);
 
-/** domainServiceSchema allows an empty service (the release web service) or a
- * structurally valid compose service name. */
 export const domainServiceSchema = z
   .string()
   .trim()
@@ -618,38 +474,21 @@ export const domainServiceSchema = z
     { message: "applications.validation.domainService" },
   );
 
-/**
- * hostDomainSchema mirrors isValidDomain exactly: the caller lowercases and
- * trims first, so the schema takes the value as-is — empty clears, otherwise
- * 253 chars max and the hostname shape.
- */
 export const hostDomainSchema = z.string().refine(
   (value) => value === "" || (value.length <= 253 && HOST_PATTERN.test(value)),
   { message: applicationMessages.domain },
 );
 
-/** MAX_COMPOSE_BYTES mirrors MaxComposeBytes (GS-8): pasted text is capped
- * at 256 KiB, measured in UTF-8 bytes like the server. */
 export const MAX_COMPOSE_BYTES = 256 * 1024;
 
-/** MAX_COMPOSE_FILE_PATH mirrors MaxComposeFilePathBytes (GS-8). */
 export const MAX_COMPOSE_FILE_PATH = 256;
 
-/** COMPOSE_SERVICE_PATTERN mirrors the Services service-name alphabet. */
 export const COMPOSE_SERVICE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
 
-/** composeModeSchema selects the compose input: pasted text or a repo file. */
 export const composeModeSchema = z.enum(["paste", "repo"]);
 
 export type ComposeMode = z.infer<typeof composeModeSchema>;
 
-/**
- * composeContentSchema gates pasted compose text: non-empty, within the byte
- * budget, and declaring a top-level `services:` mapping. The server runs
- * the full Services validation (images, scope, membership); the client only
- * refuses what is structurally hopeless, so a valid document is never
- * blocked here.
- */
 export const composeContentSchema = z
   .string()
   .trim()
@@ -657,19 +496,12 @@ export const composeContentSchema = z
   .refine((value) => new TextEncoder().encode(value).length <= MAX_COMPOSE_BYTES)
   .refine((value) => /^services\s*:/m.test(value));
 
-/** composeServiceSchema gates the routed web service name. Gate-only. */
 export const composeServiceSchema = z
   .string()
   .trim()
   .min(1)
   .regex(COMPOSE_SERVICE_PATTERN);
 
-/**
- * composeFileSchema gates the in-repo compose file path: a short relative
- * reference that cannot escape the checkout. Gate-only; the server
- * re-validates before the join. The length is mirrored in UTF-8 bytes like
- * the server.
- */
 export const composeFileSchema = z
   .string()
   .trim()

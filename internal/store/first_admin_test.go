@@ -16,10 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// scratchStore creates a fresh database on the dev Postgres host, migrates it,
-// and returns a Store on it. First-admin tests need an empty users table,
-// which the shared dev database cannot guarantee, so each test gets its own
-// database (dropped on cleanup). It skips when no database is reachable.
 func scratchStore(t *testing.T) *store.Store {
 	t.Helper()
 
@@ -76,9 +72,6 @@ func scratchStore(t *testing.T) *store.Store {
 	return store.New(pool)
 }
 
-// TestStoreFirstUserIsPlatformAdmin proves the JUS-21 column semantics: the
-// bootstrap account is flagged admin, a plain insert is not, and a row written
-// without the column (every pre-migration row) reads back non-admin.
 func TestStoreFirstUserIsPlatformAdmin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -110,8 +103,6 @@ func TestStoreFirstUserIsPlatformAdmin(t *testing.T) {
 		}
 	})
 
-	// A row inserted without naming the column is how every pre-migration row
-	// looks after the upgrade: the default must keep it non-admin.
 	var legacy bool
 	if err := st.DB.QueryRow(ctx,
 		`INSERT INTO users (email) VALUES ($1) RETURNING is_platform_admin`,
@@ -123,10 +114,6 @@ func TestStoreFirstUserIsPlatformAdmin(t *testing.T) {
 	}
 }
 
-// TestStoreConcurrentFirstRegistrationsYieldOneAdmin races bootstrap inserts on
-// a fresh database: exactly one wins and the winner is the platform admin.
-// Without the advisory lock in CreateFirstUser the NOT EXISTS guard passes in
-// every transaction and this test sees multiple winners.
 func TestStoreConcurrentFirstRegistrationsYieldOneAdmin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

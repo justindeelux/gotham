@@ -15,8 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// fakeOAuthProvider is a deterministic OAuthProvider: no network, scripted
-// results.
 type fakeOAuthProvider struct {
 	name        string
 	identity    *OAuthIdentity
@@ -44,13 +42,10 @@ func (f *fakeOAuthProvider) Identity(_ context.Context, _ *oauth2.Token) (*OAuth
 	return f.identity, nil
 }
 
-// testLogger returns a logger that discards output.
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// newTestOAuth builds an OAuthService without a store. It is enough for state
-// and pre-persistence tests.
 func newTestOAuth(t *testing.T, providers ...OAuthProvider) *OAuthService {
 	t.Helper()
 
@@ -59,8 +54,6 @@ func newTestOAuth(t *testing.T, providers ...OAuthProvider) *OAuthService {
 	return oauth
 }
 
-// newTestOAuthWithStore builds an OAuthService backed by the dev database so
-// callbacks can create and look up real users.
 func newTestOAuthWithStore(t *testing.T, providers ...OAuthProvider) (*OAuthService, *store.Store) {
 	t.Helper()
 
@@ -87,7 +80,6 @@ func TestStateStoreRoundtripAndDeleteOnRead(t *testing.T) {
 		t.Fatalf("Validate = (%q, %v), want (github, true)", provider, ok)
 	}
 
-	// Single-use: a second validation must fail.
 	if _, ok := states.Validate(state); ok {
 		t.Fatal("Validate accepted an already-consumed state")
 	}
@@ -105,7 +97,6 @@ func TestStateStoreTTLExpiry(t *testing.T) {
 		t.Fatalf("NewState: %v", err)
 	}
 
-	// Just before expiry the state is still valid.
 	states.now = func() time.Time { return base.Add(oauthStateTTL - time.Second) }
 	if _, ok := states.Validate(state); !ok {
 		t.Fatal("Validate rejected a state before its TTL")
@@ -148,7 +139,6 @@ func TestStateStoreCapacity(t *testing.T) {
 	states := newStateStore()
 	t.Cleanup(states.Close)
 
-	// Fill the store to its cap; all entries are live, so no sweep frees room.
 	for i := 0; i < oauthStateCapacity; i++ {
 		if _, err := states.NewState("github"); err != nil {
 			t.Fatalf("NewState #%d: %v", i, err)
@@ -194,12 +184,10 @@ func TestOAuthCallbackStateMismatch(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	// Unknown state.
 	if _, err := oauth.Callback(ctx, "github", "code", "bogus-state", SessionMeta{}); !errors.Is(err, ErrStateMismatch) {
 		t.Fatalf("Callback(bad state) error = %v, want ErrStateMismatch", err)
 	}
 
-	// State issued for one provider cannot complete another.
 	if _, _, err := oauth.Begin(ctx, "github", ""); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -234,10 +222,6 @@ func TestOAuthCallbackUnknownProvider(t *testing.T) {
 }
 
 func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
-	// A private scratch database: the closed-instance precondition must not
-	// depend on the shared database, whose users table other packages'
-	// cleanups empty concurrently (that race reopened registration and
-	// flaked the closed-instance tests).
 	svc, st := scratchService(t)
 	provider := &fakeOAuthProvider{name: "github"}
 	oauth := NewOAuthService(svc, testLogger(), provider)
@@ -245,8 +229,6 @@ func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
 	requireClosedInstance(t, svc)
 	ctx := context.Background()
 
-	// Closed registration must refuse an unseen OAuth identity (P-A2) rather
-	// than create an uninvited account.
 	email := uniqueEmail("oauth-closed")
 	cleanupUser(t, st, email)
 	provider.identity = &OAuthIdentity{Email: email, Name: "Uninvited"}
@@ -266,8 +248,6 @@ func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
 func TestOAuthCallbackCreatesUser(t *testing.T) {
 	provider := &fakeOAuthProvider{name: "github"}
 	oauth, st := newTestOAuthWithStore(t, provider)
-	// The shared test database has accounts; open registration to exercise the
-	// account-creation path itself (the closed policy is covered above).
 	oauth.auth.AllowOpenRegistration = true
 	ctx := context.Background()
 
@@ -353,8 +333,6 @@ func TestOAuthCallbackExistingUserLogsIn(t *testing.T) {
 
 	email := uniqueEmail("oauth-existing")
 	cleanupUser(t, st, email)
-	// Registration is closed once accounts exist (P-A2); seed the local
-	// account directly through the store.
 	hash, err := HashPassword("s3cret-password")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
@@ -379,7 +357,6 @@ func TestOAuthCallbackExistingUserLogsIn(t *testing.T) {
 		t.Fatalf("Callback user ID = %q, want existing %q", result.User.ID, registeredID)
 	}
 
-	// The local password must still work: OAuth login must not clobber it.
 	if _, err := oauth.auth.Login(ctx, email, "s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("Login after OAuth: %v", err)
 	}

@@ -8,7 +8,6 @@ import { roleLabel, teamText } from "@/features/teams/api/teams";
 import { expiryLabel, relativeTime } from "@/shared/utils/format";
 import { useTeamsPageContext } from "@/features/teams/composables/useTeamsPage";
 
-/** TeamInvitesPanel renders the invites tab: invite action, table, revoke. */
 const {
   canManage,
   invites,

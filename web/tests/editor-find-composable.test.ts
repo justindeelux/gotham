@@ -1,7 +1,3 @@
-// Find bar behavior that is not visual (JUS-231): the query scan is debounced,
-// a catastrophic pattern is refused before it reaches the editor, and the
-// replace row is remembered per tab. The session is a spy, so these assert the
-// calls the composable makes rather than CodeMirror's own internals.
 /* global performance:readonly */
 import { effectScope, nextTick, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +10,6 @@ import type {
 
 const STATUS: EditorSearchStatus = { total: 2, current: 1, capped: false };
 
-/** makeSession builds the searchable-editor shape the composable expects. */
 function makeSession() {
   return {
     search: {
@@ -34,7 +29,6 @@ function makeSession() {
   };
 }
 
-/** setup runs the composable inside an effect scope so disposal is testable. */
 function setup() {
   const session = makeSession();
   const tab = ref("tab-a");
@@ -120,11 +114,9 @@ describe("useEditorFind", () => {
     find.openFind(false);
     expect(find.replaceExpanded.value).toBe(false);
 
-    // The replace binding forces the row open.
     find.openFind(true);
     expect(find.replaceExpanded.value).toBe(true);
 
-    // A close/reopen on the same tab keeps what the user last chose.
     find.closeFind(false);
     find.openFind(false);
     expect(find.replaceExpanded.value).toBe(true);
@@ -136,8 +128,6 @@ describe("useEditorFind", () => {
     find.openFind(false);
     session.search.setOptions.mockClear();
 
-    // The composable deliberately has no cursor hook; the components never call
-    // queueStatus from onCursor. An edit adds one coalesced recount instead.
     find.queueStatus();
     find.queueStatus();
     vi.advanceTimersByTime(250);

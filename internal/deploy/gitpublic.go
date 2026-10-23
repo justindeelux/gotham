@@ -8,19 +8,6 @@ import (
 	"unicode"
 )
 
-// Public git sources (GS-3) are keyless by definition: the control plane
-// clones them with no deploy key and no provider credentials. The validation
-// below keeps that property structural — only credential-free http(s)/git
-// URLs are accepted, so an SSH URL can never reach a clone that would spend
-// the control plane's ambient ~/.ssh identity, and a token-bearing URL can
-// never be stored as clone_url.
-
-// ValidatePublicGitURL accepts the clone URLs a keyless public-git source
-// may carry: http, https or git, with a host and no userinfo. SSH transports
-// (ssh:// and scp-like git@host:path) are refused with a message naming the
-// alternative, because they need a credential the public flow never has.
-// Local paths and file:// URLs exist only for development fixtures behind
-// GOTHAM_DEV_CLONE_LOCAL; production keeps the allow-list remote-only.
 func ValidatePublicGitURL(raw string) error {
 	url := strings.TrimSpace(raw)
 	if url == "" {
@@ -69,12 +56,9 @@ func ValidatePublicGitURL(raw string) error {
 	}
 }
 
-// errPublicSSH is the shared refusal for SSH transports on a keyless source.
 var errPublicSSH = fmt.Errorf("%w: SSH clone URLs need a deploy key: use a public http(s) or git URL, or a private-git source",
 	ErrValidation)
 
-// hasURLWhitespace reports whitespace and control characters, which can
-// smuggle a second argv token or a newline into logs.
 func hasURLWhitespace(url string) bool {
 	for _, r := range url {
 		if unicode.IsSpace(r) || unicode.IsControl(r) {
@@ -84,11 +68,6 @@ func hasURLWhitespace(url string) bool {
 	return false
 }
 
-// isSSHTransportURL reports the transports a keyless clone must never
-// attempt: ssh:// URLs and scp-like [user@]host:path values. It is the
-// deploy-time half of ValidatePublicGitURL: creation validation keeps new
-// rows clean, this keeps legacy rows (stored before GS-3) from spending the
-// control plane's ambient SSH identity.
 func isSSHTransportURL(url string) bool {
 	if strings.Contains(url, "://") {
 		scheme, _, _ := strings.Cut(url, "://")
@@ -97,8 +76,6 @@ func isSSHTransportURL(url string) bool {
 	if strings.HasPrefix(url, "git@") {
 		return true
 	}
-	// Generic scp syntax [user@]host:path: an "@" before the first ":" and
-	// no "/" before that "@" (a path never looks like that).
 	if at := strings.Index(url, "@"); at > 0 {
 		colon := strings.Index(url, ":")
 		slash := strings.Index(url, "/")
@@ -109,11 +86,6 @@ func isSSHTransportURL(url string) bool {
 	return false
 }
 
-// defaultBranchFor resolves the default branch of a remote with
-// git ls-remote --symref, so an application with no branch pins whatever HEAD
-// points at instead of guessing "main". Failures carry the classified hint
-// (branch not found, unreachable, not found, needs credentials) the clone
-// path reuses.
 func defaultBranchFor(ctx context.Context, run cloneRunner, rawURL string, env []string) (string, error) {
 	runner := run
 	if runner == nil {
@@ -139,8 +111,6 @@ func defaultBranchFor(ctx context.Context, run cloneRunner, rawURL string, env [
 		ErrValidation, RedactCloneURL(rawURL))
 }
 
-// parseSymrefBranch reads the `ref: refs/heads/<name>\tHEAD` line ls-remote
-// --symref prints, and answers "" when no well-formed default is present.
 func parseSymrefBranch(output string) string {
 	for line := range strings.Lines(strings.TrimSpace(output)) {
 		ref, _, _ := strings.Cut(line, "\t")
@@ -157,12 +127,6 @@ func parseSymrefBranch(output string) string {
 	return ""
 }
 
-// classifyGitFailure maps git stderr to the actionable hint the wizard and
-// the deploy log append after the quoted error. A repository that answers
-// "not found" over https may simply be private (hosts hide existence), so
-// that hint names both cases; "" means no known shape matched. Status codes
-// are matched with their git phrasing ("returned error: 403"), never bare
-// digits, so a port number can never trigger the auth hint.
 func classifyGitFailure(output string) string {
 	lower := strings.ToLower(output)
 	switch {

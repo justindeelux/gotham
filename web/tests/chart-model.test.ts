@@ -1,4 +1,3 @@
-// Pure geometry for MetricsChart, the dependency-free SVG time-series chart.
 import { describe, expect, it } from "vitest";
 
 import {

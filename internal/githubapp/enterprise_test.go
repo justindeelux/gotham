@@ -12,9 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestManifestEnterpriseURLs proves the manifest base URL is bound to the
-// state and used by the callback: a GitHub Enterprise base stores Enterprise
-// URLs, and the exchange never goes to api.github.com.
 func TestManifestEnterpriseURLs(t *testing.T) {
 	svc, _, api, userID := testFixture()
 	api.pem = testKeyPEM(t)
@@ -42,7 +39,6 @@ func TestManifestEnterpriseURLs(t *testing.T) {
 		t.Fatalf("exchange went to %v", exchanged)
 	}
 
-	// github.com stays on the defaults.
 	manifest2, err := svc.StartManifest(context.Background(), userID, "", "gotham", "https://gotham.example")
 	if err != nil {
 		t.Fatal(err)
@@ -55,9 +51,6 @@ func TestManifestEnterpriseURLs(t *testing.T) {
 		t.Fatalf("stored urls = %q %q", app2.BaseURL, app2.APIBaseURL)
 	}
 
-	// Hostile base URLs are refused: downgrade, userinfo, path, query and
-	// malformed input. A lookalike domain is accepted as an Enterprise host
-	// but must never map to the github.com defaults.
 	for _, base := range []string{
 		"http://ghe.example.com",
 		"https://github.com@127.0.0.1",
@@ -78,8 +71,6 @@ func TestManifestEnterpriseURLs(t *testing.T) {
 	}
 }
 
-// TestManifestStateExpiry proves an expired state refuses redeem, using an
-// injected clock.
 func TestManifestStateExpiry(t *testing.T) {
 	now := time.Now()
 	store := &stateStore{entries: make(map[string]stateEntry), now: func() time.Time { return now }}
@@ -104,9 +95,6 @@ func TestManifestStateExpiry(t *testing.T) {
 	}
 }
 
-// TestManifestCodeRedacted proves a failed manifest conversion never carries
-// the single-use code in its error text: neither an HTTP 500 nor a transport
-// failure (closed server, whose *url.Error embeds the full URL).
 func TestManifestCodeRedacted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -132,16 +120,11 @@ func TestManifestCodeRedacted(t *testing.T) {
 	if strings.Contains(err.Error(), "super-secret-code") {
 		t.Fatalf("transport error leaks the manifest code: %v", err)
 	}
-	// writeServiceError logs the error text, so the redacted text is what can
-	// reach the logs through the callback path.
 	if strings.Contains(closedURL, "super-secret-code") {
 		t.Fatal("test setup leaked the code into the URL")
 	}
 }
 
-// TestGuardHostRejectsNonPublic proves literal non-public IPs are refused,
-// with and without ports, in v4 and v6, including transition embeddings and
-// IPv4-mapped forms.
 func TestGuardHostRejectsNonPublic(t *testing.T) {
 	for _, host := range []string{
 		"127.0.0.1", "::1", "10.0.0.1", "192.168.1.1", "172.16.0.1",
@@ -158,8 +141,6 @@ func TestGuardHostRejectsNonPublic(t *testing.T) {
 	}
 }
 
-// TestNormalizeGitHubURLsEnterpriseShapes pins URL normalization: ports are
-// kept, github.com (any case) selects the defaults, paths are refused.
 func TestNormalizeGitHubURLsEnterpriseShapes(t *testing.T) {
 	svc, _, _, _ := testFixture()
 	web, api, err := svc.normalizeGitHubURLs("https://ghe.example.com:8443")
@@ -178,8 +159,6 @@ func TestNormalizeGitHubURLsEnterpriseShapes(t *testing.T) {
 	}
 }
 
-// TestManifestSetupURL proves the manifest carries the browser setup route,
-// so GitHub returns the installation_id to the SPA after install.
 func TestManifestSetupURL(t *testing.T) {
 	svc, _, _, userID := testFixture()
 	manifest, err := svc.StartManifest(context.Background(), userID, "", "gotham", "https://gotham.example")
@@ -193,9 +172,6 @@ func TestManifestSetupURL(t *testing.T) {
 	if redirect != "https://gotham.example/api/v1/providers/github-app/callback" {
 		t.Fatalf("redirect_url = %v", manifest.Manifest["redirect_url"])
 	}
-	// pull_request stays unsubscribed until previews support app-signed
-	// deliveries; push drives deploys and the installation events refresh
-	// the cache.
 	events, _ := manifest.Manifest["default_events"].([]string)
 	want := []string{"push"}
 	if len(events) != len(want) {
@@ -208,8 +184,6 @@ func TestManifestSetupURL(t *testing.T) {
 	}
 }
 
-// TestManifestURLsHaveNoQuery proves every URL in the manifest parses and
-// carries no query string: GitHub rejects a redirect_url with a query.
 func TestManifestURLsHaveNoQuery(t *testing.T) {
 	svc, _, _, userID := testFixture()
 	manifest, err := svc.StartManifest(context.Background(), userID, "", "gotham", "https://gotham.example")

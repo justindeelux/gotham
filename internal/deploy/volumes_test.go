@@ -13,9 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestValidateHostBind pins the confinement rule: an explicit bind must be a
-// direct child of <root>/<appID>, known-dangerous targets are always rejected,
-// and a named volume (non-absolute) or empty managed path is accepted.
 func TestValidateHostBind(t *testing.T) {
 	root := t.TempDir()
 	appID := uuid.New()
@@ -56,9 +53,6 @@ func TestValidateHostBind(t *testing.T) {
 	}
 }
 
-// TestValidateHostBindRejectsSymlinks pins the fail-closed walk: a symlink at
-// the bind path or at any component (including the app directory itself) is
-// refused, so Docker never resolves it to an arbitrary host location.
 func TestValidateHostBindRejectsSymlinks(t *testing.T) {
 	root := t.TempDir()
 	appID := uuid.New()
@@ -67,7 +61,6 @@ func TestValidateHostBindRejectsSymlinks(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	// Symlink at the bind path itself (dangling and live).
 	dangling := filepath.Join(appDir, "dangling")
 	if err := os.Symlink("/nonexistent", dangling); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
@@ -83,7 +76,6 @@ func TestValidateHostBindRejectsSymlinks(t *testing.T) {
 		t.Fatalf("live symlink err = %v, want ErrValidation", err)
 	}
 
-	// The app directory itself replaced by a symlink to elsewhere.
 	otherRoot := t.TempDir()
 	otherApp := uuid.New()
 	if err := os.Symlink("/etc", filepath.Join(otherRoot, otherApp.String())); err != nil {
@@ -94,9 +86,6 @@ func TestValidateHostBindRejectsSymlinks(t *testing.T) {
 	}
 }
 
-// TestValidateHostBindFailsClosedOnLstatError pins that a non-ENOENT Lstat
-// error (here ENOTDIR because the app path is a regular file) is refused, not
-// treated as "does not exist".
 func TestValidateHostBindFailsClosedOnLstatError(t *testing.T) {
 	root := t.TempDir()
 	appID := uuid.New()
@@ -109,8 +98,6 @@ func TestValidateHostBindFailsClosedOnLstatError(t *testing.T) {
 	}
 }
 
-// TestManagedHostPath pins the managed default, the per-application named
-// volume namespace and the pass-through of an explicit managed child.
 func TestManagedHostPath(t *testing.T) {
 	root := t.TempDir()
 	appID := uuid.New()
@@ -141,9 +128,6 @@ func TestManagedHostPath(t *testing.T) {
 	}
 }
 
-// TestStorageNormalizationIsIdempotent pins P1: feeding an already-normalized
-// row (as a GET→PUT round-trip does) back through normalizeStorages must not
-// prefix a named volume a second time or move a derived bind.
 func TestStorageNormalizationIsIdempotent(t *testing.T) {
 	appID := uuid.New()
 	root := t.TempDir()
@@ -183,9 +167,6 @@ func TestStorageNormalizationIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestWarnStorageChanges pins P3/P4: a blanked explicit path and a re-namespaced
-// named volume warn, while a re-save that resolves to the stored derived path
-// does not.
 func TestWarnStorageChanges(t *testing.T) {
 	newService := func(t *testing.T, repo *fakeRepository) (*Service, *bytes.Buffer) {
 		t.Helper()
@@ -246,8 +227,6 @@ func TestWarnStorageChanges(t *testing.T) {
 	})
 }
 
-// TestWarnManagedVolumeRoot pins L6/P7: the control plane warns when the root
-// is unset or is set to a relative value.
 func TestWarnManagedVolumeRoot(t *testing.T) {
 	record := func(t *testing.T) (*slog.Logger, *bytes.Buffer) {
 		t.Helper()
@@ -283,10 +262,6 @@ func TestWarnManagedVolumeRoot(t *testing.T) {
 	})
 }
 
-// TestManagedHostPathRejectsForgedNamespace pins Q1: a value that already
-// carries this application's prefix is accepted only when its suffix is
-// sanitized; a forged suffix (a colon, a space, an empty or traversal suffix)
-// is rejected instead of reaching the Docker spec verbatim.
 func TestManagedHostPathRejectsForgedNamespace(t *testing.T) {
 	root := t.TempDir()
 	appID := uuid.New()
@@ -308,8 +283,6 @@ func TestManagedHostPathRejectsForgedNamespace(t *testing.T) {
 	}
 }
 
-// TestWarnLegacyStorageResolution pins Q3: a pre-change bare named volume warns
-// once at deploy, while an already-normalized row does not.
 func TestWarnLegacyStorageResolution(t *testing.T) {
 	appID := uuid.New()
 	var logs bytes.Buffer

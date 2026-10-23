@@ -10,8 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// GuardDomains reserves a domain write against concurrent panel changes in the
-// single control-plane process. The caller must release after persisting it.
 func (s *Service) GuardDomains(ctx context.Context, hosts ...string) (func(), error) {
 	s.domainLock.Lock()
 	rec, err := s.repo.Load(ctx)
@@ -39,7 +37,6 @@ func (s *Service) GuardDomains(ctx context.Context, hosts ...string) (func(), er
 	return s.domainLock.Unlock, nil
 }
 
-// ControlPlaneURLs reads the proposed and fallback routes from one stored snapshot.
 func (s *Service) ControlPlaneURLs(ctx context.Context) ([]string, error) {
 	rec, err := s.repo.Load(ctx)
 	if err != nil {
@@ -52,7 +49,6 @@ func (s *Service) ControlPlaneURLs(ctx context.Context) ([]string, error) {
 	return urls, nil
 }
 
-// ReconcilePanelCertificates serializes the settings snapshot and intent mutation with URL changes.
 func (s *Service) ReconcilePanelCertificates(ctx context.Context) error {
 	s.domainLock.Lock()
 	defer s.domainLock.Unlock()
@@ -99,8 +95,6 @@ func (s *Service) syncControlPlaneURL(ctx context.Context) error {
 	return s.ResyncProxy(syncCtx)
 }
 
-// scheduleDomainRevert is called with domainLock held; restart reconciliation
-// re-arms it so expiry never depends on another API request.
 func (s *Service) scheduleDomainRevert(deadline time.Time) {
 	if s.domainClosed {
 		return
@@ -158,14 +152,12 @@ func (s *Service) revertControlPlaneURL(ctx context.Context, actor uuid.UUID, re
 	if s.domainTimer != nil {
 		s.domainTimer.Stop()
 	}
-	// Both routers were retained during the trial: a failed cleanup still leaves the old host reachable.
 	if err := s.syncControlPlaneURL(ctx); err != nil {
 		s.logger.Warn("instance reverted URL; proxy cleanup failed", "error", err)
 	}
 	return nil
 }
 
-// ConfirmControlPlaneURL requires a request through the new host after sync.
 func (s *Service) ConfirmControlPlaneURL(ctx context.Context, actor uuid.UUID, requestHost string) (State, error) {
 	if err := s.reconcileControlPlaneURL(ctx); err != nil {
 		return State{}, err
@@ -180,7 +172,6 @@ func (s *Service) ConfirmControlPlaneURL(ctx context.Context, actor uuid.UUID, r
 	if p == nil {
 		return State{}, ErrNoDomainPending
 	}
-	// Recheck after acquiring the lock: another write or sync may have consumed the deadline.
 	if !s.now().Before(p.Deadline) {
 		if err := s.revertControlPlaneURL(ctx, actor, rec); err != nil {
 			return State{}, err
@@ -191,7 +182,6 @@ func (s *Service) ConfirmControlPlaneURL(ctx context.Context, actor uuid.UUID, r
 		return State{}, ErrDomainNotSynced
 	}
 	confirmationURL := p.Proposed
-	// Clearing the URL retires the old route, so confirm that intent through the old host.
 	if confirmationURL == "" && p.Previous != nil {
 		confirmationURL = *p.Previous
 	}
@@ -213,7 +203,6 @@ func (s *Service) ConfirmControlPlaneURL(ctx context.Context, actor uuid.UUID, r
 	return s.stateLocked(ctx, rec), nil
 }
 
-// RevertControlPlaneURL cancels the trial immediately.
 func (s *Service) RevertControlPlaneURL(ctx context.Context, actor uuid.UUID) (State, error) {
 	s.domainLock.Lock()
 	defer s.domainLock.Unlock()
@@ -231,7 +220,6 @@ func (s *Service) RevertControlPlaneURL(ctx context.Context, actor uuid.UUID) (S
 	return s.stateLocked(ctx, rec), err
 }
 
-// Close stops this process's timer; the persisted trial is resumed on restart.
 func (s *Service) Close() {
 	s.domainLock.Lock()
 	defer s.domainLock.Unlock()

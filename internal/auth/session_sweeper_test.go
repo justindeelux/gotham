@@ -12,7 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestSessionSweepCutoffs pins the two retention thresholds.
 func TestSessionSweepCutoffs(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	expiredBefore, revokedBefore := sessionSweepCutoffs(now)
@@ -25,9 +24,6 @@ func TestSessionSweepCutoffs(t *testing.T) {
 	}
 }
 
-// TestSessionSweeperSweepsStaleSessions drives the sweep against a real
-// database: expired rows past the grace period and long-revoked rows go, while
-// fresh and recently unusable rows stay. It skips without Postgres.
 func TestSessionSweeperSweepsStaleSessions(t *testing.T) {
 	_, st := newTestService(t)
 	ctx := context.Background()
@@ -63,8 +59,6 @@ func TestSessionSweeperSweepsStaleSessions(t *testing.T) {
 	createSession("expired-stale", now.Add(-8*24*time.Hour), time.Time{})
 	createSession("revoked-recent", now.Add(time.Hour), now.Add(-24*time.Hour))
 	createSession("revoked-stale", now.Add(time.Hour), now.Add(-31*24*time.Hour))
-	// A row revoked yesterday but expired long ago must survive: the 30-day
-	// reuse window is measured from revocation, not expiry.
 	createSession("revoked-recent-expired", now.Add(-10*24*time.Hour), now.Add(-24*time.Hour))
 
 	sweeper := NewSessionSweeper(st, slog.New(slog.NewTextHandler(io.Discard, nil)))

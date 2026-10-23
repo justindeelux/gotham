@@ -18,11 +18,9 @@ const teams = useTeamsStore();
 const name = ref("");
 const touched = ref(false);
 
-/** show follows the store's pending save-as prompt. */
 const show = computed<boolean>(() => editor.saveAsTab !== null);
 const tabName = computed<string>(() => editor.saveAsTab?.name ?? "");
 
-/** directoryOf returns the parent path of a root-relative path. */
 function directoryOf(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash === -1 ? "" : path.slice(0, slash);
@@ -35,11 +33,6 @@ watch(show, (open) => {
   }
 });
 
-/**
- * existsInFolder is an advisory hint for the current listing only (the store
- * performs the authoritative exclusive-create probe, so a stale or paginated
- * listing can never cause a clobber).
- */
 const collides = computed<boolean>(() => {
   const tab = editor.saveAsTab;
   if (!tab || directoryOf(tab.path) !== files.path) {
@@ -65,7 +58,6 @@ const valid = computed<boolean>(
   () => validateEntryName(name.value) === null && !collides.value,
 );
 
-/** submit writes the buffer to a sibling file and retargets the tab. */
 async function submit(): Promise<void> {
   const tab = editor.saveAsTab;
   if (!tab || tab.saving) {
@@ -79,7 +71,6 @@ async function submit(): Promise<void> {
   const outcome = await editor.saveAsCopy(tab.id, teams.activeTeamId, target);
   if (outcome === "saved") {
     message.success(String(t("files.editor.saveAsSaved", { name: target })));
-    // The copy is a new entry: refresh the listing so it appears.
     void files.refresh();
   } else if (outcome === "conflict") {
     message.error(String(t("files.editor.saveAsExists", { name: target })));

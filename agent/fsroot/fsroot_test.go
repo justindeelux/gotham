@@ -141,8 +141,6 @@ func TestSymlinkEscape(t *testing.T) {
 	}
 	root := openRoot(t, dir)
 
-	// A symlink is listed, not followed: its kind is symlink and the escape
-	// has not been performed by listing it.
 	entries, _, _, err := root.List(".", "", 10)
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -156,7 +154,6 @@ func TestSymlinkEscape(t *testing.T) {
 		}
 	}
 
-	// Opening or walking through the link must fail closed.
 	if _, _, err := root.OpenRegular("linkfile"); !errors.Is(err, fsroot.ErrEscape) {
 		t.Errorf("OpenRegular(linkfile) error = %v, want ErrEscape", err)
 	}
@@ -188,7 +185,6 @@ func TestSymlinkSwap(t *testing.T) {
 		t.Fatalf("list before swap: %v", err)
 	}
 
-	// Swap the real directory for an escaping symlink between operations.
 	if err := os.RemoveAll(inner); err != nil {
 		t.Fatal(err)
 	}
@@ -235,8 +231,6 @@ func TestSpecialFiles(t *testing.T) {
 		t.Errorf("socket kind = %v, want KindSpecial", kinds["sock"])
 	}
 
-	// A FIFO must never be opened for streaming: O_NONBLOCK returns at once
-	// and the type check refuses it.
 	if _, _, err := root.OpenRegular("pipe"); !errors.Is(err, fsroot.ErrSpecial) {
 		t.Errorf("OpenRegular(pipe) error = %v, want ErrSpecial", err)
 	}
@@ -247,8 +241,6 @@ func TestSpecialFiles(t *testing.T) {
 	if os.Geteuid() != 0 {
 		return
 	}
-	// A character device exercises the fstat path: open succeeds, the type
-	// check refuses it.
 	dev := filepath.Join(dir, "null")
 	if err := syscall.Mknod(dev, syscall.S_IFCHR|0o600, int(unixMkdev(1, 3))); err != nil {
 		t.Fatalf("mknod: %v", err)
@@ -285,11 +277,6 @@ func TestStatMissing(t *testing.T) {
 	}
 }
 
-// TestListPagesEveryNameExactlyOnce drives List with a page size far below the
-// directory size and proves the regression that shipped as truncated=true with
-// an empty cursor cannot recur: every page that reports truncated must carry a
-// cursor that strictly advances, and the walk terminates having yielded every
-// name exactly once, in sorted order.
 func TestListPagesEveryNameExactlyOnce(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -334,9 +321,6 @@ func TestListPagesEveryNameExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestOpenDetectsSwappedRoot proves the descriptor is compared against the
-// identity captured before the open, not a fresh stat of the path: a directory
-// replaced between validation and open is refused.
 func TestOpenDetectsSwappedRoot(t *testing.T) {
 	t.Parallel()
 	base := t.TempDir()
@@ -349,8 +333,6 @@ func TestOpenDetectsSwappedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Move the validated directory aside and put a different one at the path,
-	// standing in for a swap between the validation stat and the open.
 	if err := os.Rename(dir, dir+".old"); err != nil {
 		t.Fatal(err)
 	}
@@ -362,8 +344,6 @@ func TestOpenDetectsSwappedRoot(t *testing.T) {
 	}
 }
 
-// unixMkdev packs a device number the same way Linux' makedev does, so a char
-// device can be created root-only in the special-file test.
 func unixMkdev(major, minor uint32) uint64 {
 	return (uint64(major) << 8) | uint64(minor)
 }

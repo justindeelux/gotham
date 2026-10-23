@@ -27,10 +27,6 @@ const {
     </NAlert>
 
     <NForm ref="formRef" :model="form" :rules="rules" @submit.prevent="handleSubmit">
-      <!-- Hidden username for password managers (Chrome warns without one):
-        no name attribute so it is never submitted, readonly + tabindex -1
-        so it is never edited or focused, aria-hidden + clipped so it is
-        never announced or seen. Value follows the signed-in email. -->
       <input
         class="username-fix"
         type="text"
@@ -59,10 +55,6 @@ const {
         />
       </NFormItem>
 
-      <!-- form-container gives the shared 480px container query an
-        ancestor, so the password pair stacks on narrow panels instead of
-        squeezing side by side (NForm does not merge extra classes onto its
-        root, so a plain wrapper carries it). -->
       <div class="form-container">
         <div class="form-row">
           <NFormItem
@@ -114,7 +106,6 @@ const {
 </template>
 
 <style scoped>
-/* Visually hidden without affecting layout: absolute so it takes no space. */
 .username-fix {
   position: absolute;
   width: 1px;

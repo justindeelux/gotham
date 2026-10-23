@@ -20,30 +20,17 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// File names used inside Config.CertDir.
 const (
 	certFileName = "agent.crt"
 	keyFileName  = "agent.key"
 )
 
-// selfSignedValidity is how long a generated development certificate lasts.
 const selfSignedValidity = 365 * 24 * time.Hour
 
-// controlPlaneURI mirrors internal/servers.ControlPlaneURI: the URI SAN of the
-// control-plane client credential. The agent cannot import internal/servers
-// (cross-scope rule), so the literal is duplicated and pinned by
-// TestControlPlaneIdentityLiteral plus the end-to-end CP dial test.
 const controlPlaneURI = "spiffe://gotham/control-plane"
 
-// controlPlaneClientName is the legacy control-plane client common name,
-// accepted only during the rollout window (see verifyControlPlanePeer).
 const controlPlaneClientName = "gotham-control-plane"
 
-// verifyControlPlanePeer is the agent-side half of the two-role identity model
-// (JUS-194 fix round 1). Agents run the Docker, Compose, File, Build, Proxy and
-// Tool services (RCE-class), so the listener must accept ONLY the control plane:
-// a node leaf chains to the same CA and now carries clientAuth, so without this
-// check any enrolled node could act as the CP toward every other agent.
 func verifyControlPlanePeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	if len(rawCerts) == 0 {
 		return fmt.Errorf("agent: no client certificate presented")
@@ -56,10 +43,6 @@ func verifyControlPlanePeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	return err
 }
 
-// verifyControlPlaneCert is the certificate-level check behind
-// verifyControlPlanePeer and the gRPC interceptor. It reports whether the
-// credential was accepted through the legacy rollout branch, so the caller can
-// log it.
 func verifyControlPlaneCert(cert *x509.Certificate) (legacy bool, err error) {
 	if cert.IsCA {
 		return false, fmt.Errorf("agent: a CA certificate is not a control-plane credential")
@@ -69,14 +52,6 @@ func verifyControlPlaneCert(cert *x509.Certificate) (legacy bool, err error) {
 			return false, nil
 		}
 	}
-	// Rollout grace: a control plane upgraded after this agent still presents the
-	// pre-change credential, which has no URI SAN. It is unambiguous because
-	// only the control plane can obtain it: its extended key usage is clientAuth
-	// ALONE (a node leaf always carries serverAuth too) and its identity is the
-	// reserved control-plane name. A node cannot present a matching certificate.
-	// shortcut: this branch is bounded and non-exploitable (only the CA mints
-	// such a credential); drop it once the CP-side URI SAN is mandatory, in the
-	// same release that tightens the gateway's legacy-leaf sunset (docs/TODO.md).
 	if len(cert.ExtKeyUsage) == 1 && cert.ExtKeyUsage[0] == x509.ExtKeyUsageClientAuth &&
 		cert.Subject.CommonName == controlPlaneClientName {
 		return true, nil
@@ -84,16 +59,6 @@ func verifyControlPlaneCert(cert *x509.Certificate) (legacy bool, err error) {
 	return false, fmt.Errorf("agent: client certificate is not the control plane")
 }
 
-// clientCredentials returns transport credentials that verify the CP server
-// certificate against the PEM bundle at caPath and present the node's own
-// certificate as a mutual-TLS client certificate (JUS-194) when certPath/keyPath
-// point at an existing pair. The pair is loaded on every handshake, so a
-// certificate renewed at re-registration takes effect without a restart; a
-// missing pair presents none, which is the one certificate-less bootstrap
-// connection. An empty caPath returns insecure credentials for local
-// development; Config.Load only accepts an empty CA when
-// GOTHAM_AGENT_INSECURE=true, so this path is reachable only through the
-// explicit development opt-in. It reports dev = true in that case.
 func clientCredentials(caPath, certPath, keyPath string) (credentials.TransportCredentials, bool, error) {
 	if caPath == "" {
 		return insecure.NewCredentials(), true, nil
@@ -108,8 +73,6 @@ func clientCredentials(caPath, certPath, keyPath string) (credentials.TransportC
 			pair, err := tls.LoadX509KeyPair(certPath, keyPath)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
-					// No certificate issued yet: present none so the control
-					// plane treats this as a bootstrap registration.
 					return &tls.Certificate{}, nil
 				}
 				return nil, fmt.Errorf("agent: load client keypair: %w", err)
@@ -120,24 +83,10 @@ func clientCredentials(caPath, certPath, keyPath string) (credentials.TransportC
 	return credentials.NewTLS(config), false, nil
 }
 
-// ClientCertPath returns the path of the node certificate the agent presents to
-// the control plane and serves its own listeners with: the file SaveAgentCert
-// writes.
 func ClientCertPath(certDir string) string {
 	return filepath.Join(certDir, certFileName)
 }
 
-// ServerCredentials builds credentials for the agent's DockerService server.
-// certPEM is the certificate issued by the CP at registration and keyPEM its
-// matching private key. When caPath is non-empty the server requires and
-// verifies client certificates; otherwise it does not request one.
-//
-// With no certificate and no CA the agent would serve plaintext: that is only
-// returned when allowInsecure is set (the explicit development opt-in), and the
-// caller must additionally bind the listener to loopback. Without the opt-in it
-// is an error, so a misconfiguration cannot silently expose a plaintext Docker
-// control channel. With a CA configured but no issued certificate it falls back
-// to a self-signed certificate (still TLS).
 func ServerCredentials(certPEM, keyPEM []byte, caPath string, allowInsecure bool) (credentials.TransportCredentials, error) {
 	if len(certPEM) == 0 && caPath == "" {
 		if !allowInsecure {
@@ -176,11 +125,6 @@ func ServerCredentials(certPEM, keyPEM []byte, caPath string, allowInsecure bool
 	return credentials.NewTLS(config), nil
 }
 
-// ServerCredentialsFromFiles is ServerCredentials for a certificate and key
-// that live on disk and are rewritten on renewal. The TLS handshake loads them
-// on demand, so a re-registration that persists a fresh certificate takes
-// effect without restarting the gRPC server. caPath enables the same client
-// verification as ServerCredentials.
 func ServerCredentialsFromFiles(certPath, keyPath, caPath string) (credentials.TransportCredentials, error) {
 	if certPath == "" || keyPath == "" {
 		return nil, fmt.Errorf("agent: certificate and key paths are required")
@@ -212,9 +156,6 @@ func ServerCredentialsFromFiles(certPath, keyPath, caPath string) (credentials.T
 	return credentials.NewTLS(config), nil
 }
 
-// KeyPath returns the private-key path LoadOrGenerateKey resolves for the given
-// explicit override and cert dir, so callers that need the on-disk path (for
-// ServerCredentialsFromFiles) agree with the loader.
 func KeyPath(keyFile, certDir string) string {
 	if keyFile != "" {
 		return keyFile
@@ -222,8 +163,6 @@ func KeyPath(keyFile, certDir string) string {
 	return filepath.Join(certDir, keyFileName)
 }
 
-// SaveAgentCert persists the certificate issued by the CP as
-// <certDir>/agent.crt and returns the path written.
 func SaveAgentCert(certDir string, certPEM []byte) (string, error) {
 	if len(certPEM) == 0 {
 		return "", fmt.Errorf("agent: empty certificate from control plane")
@@ -235,9 +174,6 @@ func SaveAgentCert(certDir string, certPEM []byte) (string, error) {
 	return path, nil
 }
 
-// LoadOrGenerateKey returns the agent private key in PEM form. It reads keyFile
-// when set, otherwise <certDir>/agent.key, generating and persisting a new
-// P-256 key when neither exists.
 func LoadOrGenerateKey(keyFile, certDir string) ([]byte, error) {
 	path := keyFile
 	if path == "" {
@@ -259,7 +195,6 @@ func LoadOrGenerateKey(keyFile, certDir string) ([]byte, error) {
 	return keyPEM, nil
 }
 
-// loadCertPool reads a PEM bundle into a certificate pool.
 func loadCertPool(path string) (*x509.CertPool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -272,8 +207,6 @@ func loadCertPool(path string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// generateSelfSigned returns a fresh P-256 self-signed certificate and key in
-// PEM form, valid for localhost.
 func generateSelfSigned() (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -308,10 +241,6 @@ func generateSelfSigned() (certPEM, keyPEM []byte, err error) {
 	return certPEM, keyPEM, nil
 }
 
-// savePEM writes data to path atomically, creating the parent directory with
-// 0o700 and the file with 0o600. The temp-then-rename write matters because the
-// file-backed server credentials read the certificate on each handshake while a
-// renewal may be rewriting it.
 func savePEM(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("agent: create cert dir: %w", err)

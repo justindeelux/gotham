@@ -28,7 +28,6 @@ func (s *Service) lookupReplay(ctx context.Context) error {
 	return repo.LookupRequestReceipt(ctx)
 }
 
-// SaveRequestHook records only a safe enum, never provider text or credentials.
 func (s *Service) SaveRequestHook(ctx context.Context, outcome string) error {
 	repo, ok := s.repo.(interface {
 		SaveRequestHook(context.Context, string) error
@@ -53,7 +52,6 @@ func fingerprintApplication(ctx context.Context, secret string, app Application,
 		env = append(env, entry)
 	}
 	sort.Slice(env, func(i, j int) bool { return env[i].Key < env[j].Key })
-	// A fixed placeholder canonicalizes derived managed paths before the real ID exists.
 	storages, err := normalizeStorages(uuid.UUID{15: 1}, input.Storage)
 	if err != nil {
 		return err

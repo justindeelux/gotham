@@ -45,7 +45,6 @@ type applicationCreateRequest struct {
 	ComposeService    string            `json:"compose_service,omitempty"`
 }
 
-// String UUIDs match the SDK JSON schema as well as the native wire format.
 type mutationReceipt struct {
 	ResourceID string    `json:"resource_id"`
 	RelatedID  string    `json:"related_id,omitempty"`
@@ -169,7 +168,6 @@ func validateCreateReceipt(receipt *mutationReceipt) error {
 	return nil
 }
 
-// Each variant permits only fields the native source actually consumes. Backend owns content validation.
 func applicationCreateSchema() map[string]any {
 	text := func() map[string]any { return map[string]any{"type": "string", "minLength": 1} }
 	common := map[string]any{"request_id": map[string]any{"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"}, "name": text(), "environment_id": text(), "server_id": text()}

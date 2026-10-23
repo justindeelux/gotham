@@ -1,4 +1,3 @@
-// Unit tests for the server metrics view helpers (JUS-24 split of ServerDetailPage).
 
 import { describe, expect, it } from "vitest";
 

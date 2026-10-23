@@ -18,9 +18,6 @@ func imageIDs(images []appImage) []string {
 	return ids
 }
 
-// TestSelectStaleImages pins the retention selection: the current deploy and
-// every active image are always kept, the newest history is kept, and older
-// images are removed.
 func TestSelectStaleImages(t *testing.T) {
 	app := "gotham/web"
 	images := []appImage{
@@ -89,9 +86,6 @@ func TestSelectStaleImages(t *testing.T) {
 	}
 }
 
-// TestDockerClientPruneAppImages exercises the removal against the Engine API:
-// only this application's stale images are removed, and the active image and
-// current deploy survive.
 func TestDockerClientPruneAppImages(t *testing.T) {
 	type image struct {
 		ID       string   `json:"Id"`
@@ -142,9 +136,6 @@ func TestDockerClientPruneAppImages(t *testing.T) {
 	}
 }
 
-// TestPruneAppImagesContinuesAfterRemovalError is the U9 regression: one
-// failing removal must not prevent the older images from being reclaimed, and
-// the failure is still reported.
 func TestPruneAppImagesContinuesAfterRemovalError(t *testing.T) {
 	type image struct {
 		ID       string   `json:"Id"`
@@ -154,8 +145,6 @@ func TestPruneAppImagesContinuesAfterRemovalError(t *testing.T) {
 	images := []image{
 		{ID: "sha256:new", RepoTags: []string{"gotham/web:dep-9"}, Created: 900},
 	}
-	// Seven non-protected images; the newest five are kept, so dep-3, dep-2 and
-	// dep-1 are removed. dep-3 fails; dep-2 and dep-1 must still be removed.
 	for i := 8; i >= 1; i-- {
 		name := "dep-" + strconv.Itoa(i)
 		images = append(images, image{
@@ -195,8 +184,6 @@ func TestPruneAppImagesContinuesAfterRemovalError(t *testing.T) {
 	}
 }
 
-// TestDockerClientRemoveImageIdempotent pins that a missing image is not an
-// error, so a retried cleanup cannot fail a deploy.
 func TestDockerClientRemoveImageIdempotent(t *testing.T) {
 	client := newTestDockerClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -207,8 +194,6 @@ func TestDockerClientRemoveImageIdempotent(t *testing.T) {
 	}
 }
 
-// TestAppImageTagIgnoresSharedPrefix guards the repo filter: an application
-// whose id prefixes another's must not adopt its images.
 func TestAppImageTagIgnoresSharedPrefix(t *testing.T) {
 	if _, ok := appImageTag([]string{"gotham/web2:dep"}, "gotham/web"); ok {
 		t.Error("gotham/web2 must not match gotham/web")

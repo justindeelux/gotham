@@ -18,11 +18,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// This file is the JUS-263 proof: bash host sessions get a real PTY with
-// TERM/COLORTERM, colour defaults, the operator's own rc and OSC 133 marks;
-// the integration is idempotent, optional, and cannot be driven by the caller.
-
-// terminalTestBash returns an installed bash or skips the test.
 func terminalTestBash(t *testing.T) string {
 	t.Helper()
 	for _, candidate := range []string{"/bin/bash", "/usr/bin/bash"} {
@@ -37,7 +32,6 @@ func terminalTestBash(t *testing.T) string {
 	return ""
 }
 
-// bashMajorMinor reports the running bash version.
 func bashMajorMinor(t *testing.T, bash string) (int, int) {
 	t.Helper()
 	out, err := exec.Command(bash, "-c", `printf '%s %s' "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"`).Output()
@@ -59,15 +53,11 @@ func bashMajorMinor(t *testing.T, bash string) (int, int) {
 	return major, minor
 }
 
-// promptMark is one OSC 133 mark captured from a real PTY.
 type promptMark struct {
 	kind   byte
 	status string
 }
 
-// scanPromptMarks parses the marks in output with the same narrow rules the web
-// scanner uses: OSC 133 or 633, BEL or ST terminated, A/B/C/D only. Anything
-// else is ignored.
 func scanPromptMarks(output string) []promptMark {
 	var marks []promptMark
 	for i := 0; i < len(output); i++ {
@@ -108,7 +98,6 @@ func scanPromptMarks(output string) []promptMark {
 	return marks
 }
 
-// markKinds renders the marks in order, e.g. "DAB".
 func markKinds(marks []promptMark) string {
 	var kinds strings.Builder
 	for _, mark := range marks {
@@ -117,7 +106,6 @@ func markKinds(marks []promptMark) string {
 	return kinds.String()
 }
 
-// terminalTestPTY is a real PTY running bash with the agent's environment.
 type terminalTestPTY struct {
 	write   func(string)
 	stop    func()
@@ -126,8 +114,6 @@ type terminalTestPTY struct {
 	all     func() string
 }
 
-// startTerminalTestBash starts bash on a real PTY with the same environment the
-// agent gives a host session, with HOME pointing at home.
 func startTerminalTestBash(t *testing.T, bash string, args []string, home string) *terminalTestPTY {
 	t.Helper()
 	env := terminalEnv()
@@ -135,7 +121,6 @@ func startTerminalTestBash(t *testing.T, bash string, args []string, home string
 	return startTerminalTestShell(t, bash, args, env)
 }
 
-// startTerminalTestShell starts shell on a real PTY with the given environment.
 func startTerminalTestShell(t *testing.T, shell string, args []string, env []string) *terminalTestPTY {
 	t.Helper()
 	cmd := exec.Command(shell, args...)
@@ -177,9 +162,6 @@ func startTerminalTestShell(t *testing.T, shell string, args []string, env []str
 		},
 		all: snapshot,
 		settle: func() {
-			// Let the line editor take over the terminal before typing: bytes
-			// written while the shell is still in canonical mode are echoed and
-			// redrawn.
 			last := ""
 			for stable := 0; stable < 10; stable++ {
 				time.Sleep(15 * time.Millisecond)
@@ -202,9 +184,6 @@ func startTerminalTestShell(t *testing.T, shell string, args []string, env []str
 			return ""
 		},
 		stop: func() {
-			// Closing the master does not interrupt a blocking read on darwin
-			// (no poller registration), so end the shell first and bound the
-			// wait for the read goroutine.
 			if cmd.Process != nil {
 				_ = cmd.Process.Signal(syscall.SIGHUP)
 			}
@@ -228,7 +207,6 @@ func startTerminalTestShell(t *testing.T, shell string, args []string, env []str
 	}
 }
 
-// writeTempBashrc writes a temporary HOME with a .bashrc.
 func writeTempBashrc(t *testing.T, content string) string {
 	t.Helper()
 	home := t.TempDir()
@@ -240,9 +218,6 @@ func writeTempBashrc(t *testing.T, content string) string {
 	return home
 }
 
-// TestResolveTerminalShellPreference pins the integrated shell order ($SHELL
-// when bash/zsh, then bash, then zsh) and the pre-JUS-263 fallback when the
-// integration is disabled.
 func TestResolveTerminalShellPreference(t *testing.T) {
 	statWith := func(existing map[string]os.FileMode) func(string) (os.FileInfo, error) {
 		return func(path string) (os.FileInfo, error) {
@@ -352,7 +327,6 @@ func TestResolveTerminalShellPreference(t *testing.T) {
 	})
 }
 
-// fakeFileInfo is the minimal os.FileInfo firstUsableShell needs.
 type fakeFileInfo struct{ mode os.FileMode }
 
 func (f fakeFileInfo) Name() string       { return "shell" }
@@ -362,9 +336,6 @@ func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
 func (f fakeFileInfo) IsDir() bool        { return false }
 func (f fakeFileInfo) Sys() any           { return nil }
 
-// TestTerminalEnvDefaults pins the child environment: terminal description,
-// a UTF-8 default only when no locale is set, correct identity variables, and
-// no agent secret inherited.
 func TestTerminalEnvDefaults(t *testing.T) {
 	t.Setenv("LANG", "")
 	t.Setenv("LC_ALL", "")
@@ -405,9 +376,6 @@ func TestTerminalEnvDefaults(t *testing.T) {
 	}
 }
 
-// TestTerminalEnvKeepsExplicitLocale proves an operator-set locale is not
-// replaced, including a non-UTF-8 one, and a container image locale is not
-// overridden by the agent default.
 func TestTerminalEnvKeepsExplicitLocale(t *testing.T) {
 	t.Setenv("LANG", "en_GB.UTF-8")
 	t.Setenv("LC_ALL", "")
@@ -431,7 +399,6 @@ func TestTerminalEnvKeepsExplicitLocale(t *testing.T) {
 	}
 }
 
-// deleteEnv removes a variable for the duration of the test.
 func deleteEnv(t *testing.T, name string) {
 	t.Helper()
 	value, present := os.LookupEnv(name)
@@ -447,7 +414,6 @@ func deleteEnv(t *testing.T, name string) {
 	})
 }
 
-// lookupTerminalEnv returns the first value of name.
 func lookupTerminalEnv(env []string, name string) (string, bool) {
 	for _, entry := range env {
 		key, value, ok := strings.Cut(entry, "=")
@@ -468,8 +434,6 @@ func countTerminalEnv(env []string, name string) int {
 	return count
 }
 
-// TestTerminalBashRcfileIsPrivateAndConstant proves the rcfile's location,
-// permissions, cleanup and that its content never carries request data.
 func TestTerminalBashRcfileIsPrivateAndConstant(t *testing.T) {
 	args, cleanup, err := terminalBashRcArgs("/bin/bash", true)
 	if err != nil {
@@ -501,7 +465,6 @@ func TestTerminalBashRcfileIsPrivateAndConstant(t *testing.T) {
 		t.Fatal("rcfile content differs from the agent constant")
 	}
 
-	// A second session gets its own file with byte-identical content.
 	secondArgs, secondCleanup, err := terminalBashRcArgs("/bin/bash", true)
 	if err != nil {
 		t.Fatalf("terminalBashRcArgs (second): %v", err)
@@ -567,8 +530,6 @@ func TestContainerBashCommand(t *testing.T) {
 	}
 }
 
-// TestTerminalBashIntegrationScript runs the exact rcfile the agent writes on a
-// real PTY: colours, marks, the operator's rc, status marks and idempotency.
 func TestTerminalBashIntegrationScript(t *testing.T) {
 	bash := terminalTestBash(t)
 	major, minor := bashMajorMinor(t, bash)
@@ -592,7 +553,6 @@ func TestTerminalBashIntegrationScript(t *testing.T) {
 	shell.waitFor("GOTHAMCUSTOM> ")
 	shell.settle()
 
-	// The operator's rc is sourced, its prompt survives, and its aliases win.
 	shell.write("echo \"userrc=$GOTHAM_TEST_USER_RC\"\r")
 	shell.waitFor("userrc=1")
 	shell.write("ls\r")
@@ -603,29 +563,23 @@ func TestTerminalBashIntegrationScript(t *testing.T) {
 		t.Fatal("the coloured default prompt overrode the operator's custom PS1")
 	}
 
-	// TERM/COLORTERM and a UTF-8 locale reach the shell.
 	shell.write("echo \"env=$TERM|$COLORTERM|$LANG\"\r")
 	shell.waitFor("env=xterm-256color|truecolor|")
 	if localeMissing(shell.all()) {
 		t.Fatalf("no UTF-8 locale reached the shell: %q", shell.all())
 	}
 
-	// PS0 carries the C mark. Asserting the variable as well as the emitted
-	// escape covers bash 3.2, where PS0 exists but is not evaluated.
 	shell.write("printf 'ps0=%s\\n' \"$PS0\"; echo PS0-\"\"DONE\r")
 	ps0Output := shell.waitFor("PS0-DONE\r\n")
 	if !strings.Contains(ps0Output, "133;C") {
 		t.Fatalf("PS0 does not carry the OSC 133 C mark: %q", ps0Output)
 	}
 
-	// A succeeding then a failing command: D carries the real status. The
-	// follow-up command proves the prompt after `false` was rendered.
 	shell.write("true\r")
 	shell.write("false\r")
 	shell.write("echo after-false\r")
 	shell.waitFor("after-false\r\n")
 
-	// Sourcing the same file again is a no-op (one mark set per prompt).
 	shell.write(". '" + rcfile + "'\r")
 	shell.write("echo idempotent-ok\r")
 	shell.waitFor("idempotent-ok\r\n")
@@ -668,9 +622,6 @@ func TestTerminalBashIntegrationScript(t *testing.T) {
 	}
 }
 
-// TestTerminalBashRcfileIsIdempotent proves the "already loaded" guard: sourcing
-// the rcfile a second time does not re-run the operator's startup file and does
-// not duplicate the per-prompt marks.
 func TestTerminalBashRcfileIsIdempotent(t *testing.T) {
 	bash := terminalTestBash(t)
 	args, cleanup, err := terminalBashRcArgs(bash, true)
@@ -682,8 +633,6 @@ func TestTerminalBashRcfileIsIdempotent(t *testing.T) {
 	home := writeTempBashrc(t, `printf 'sourced\n' >> "$HOME/rc-sources"`)
 	shell := startTerminalTestBash(t, bash, []string{"--rcfile", rcfile}, home)
 	defer shell.stop()
-	// The prompt mark is ready once the integration hook ran; the prompt text
-	// itself differs for root ("# ") and non-root ("$ ").
 	shell.waitFor("\x1b]133;B")
 	shell.settle()
 
@@ -713,9 +662,6 @@ func TestTerminalBashRcfileIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestTerminalBashErrexitUserRcKeepsSession proves a user rc that enables
-// set -e/-u cannot kill the integration: the probes run with errexit disabled
-// and the user's intent is restored afterwards.
 func TestTerminalBashErrexitUserRcKeepsSession(t *testing.T) {
 	bash := terminalTestBash(t)
 	args, cleanup, err := terminalBashRcArgs(bash, true)
@@ -726,8 +672,6 @@ func TestTerminalBashErrexitUserRcKeepsSession(t *testing.T) {
 	home := writeTempBashrc(t, "set -u\nset -e\n")
 	shell := startTerminalTestBash(t, bash, []string{"--rcfile", args[1]}, home)
 	defer shell.stop()
-	// The prompt mark is ready once the integration hook ran; the prompt text
-	// itself differs for root ("# ") and non-root ("$ ").
 	shell.waitFor("\x1b]133;B")
 	shell.settle()
 
@@ -738,15 +682,13 @@ func TestTerminalBashErrexitUserRcKeepsSession(t *testing.T) {
 	shell.waitFor("STILL-ALIVE\r\n")
 }
 
-// TestTerminalBashStartFailureRemovesRcfile proves the integration directory is
-// removed when the PTY cannot be started (the shell binary is missing).
 func TestTerminalBashStartFailureRemovesRcfile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	terminal := NewTerminalServer(TerminalConfig{Logger: discardLogger()})
 	spec := terminalStart{
 		Target: terminalTargetHost,
-		Shell:  filepath.Join(tmp, "missing", "bash"), // basename bash, parent absent
+		Shell:  filepath.Join(tmp, "missing", "bash"),
 		Dir:    tmp,
 		Cols:   80,
 		Rows:   24,
@@ -763,9 +705,6 @@ func TestTerminalBashStartFailureRemovesRcfile(t *testing.T) {
 	}
 }
 
-// TestTerminalBashThemePromptKeepsMarks proves a theme that rewrites PS1 from
-// its own PROMPT_COMMAND entry does not lose the B mark: the repair function
-// runs last and only appends the zero-width mark.
 func TestTerminalBashThemePromptKeepsMarks(t *testing.T) {
 	bash := terminalTestBash(t)
 	args, cleanup, err := terminalBashRcArgs(bash, true)
@@ -791,13 +730,10 @@ func TestTerminalBashThemePromptKeepsMarks(t *testing.T) {
 	}
 }
 
-// localeMissing reports whether the rendered env line has an empty locale.
 func localeMissing(text string) bool {
 	return strings.Contains(text, "env=xterm-256color|truecolor|\r\n")
 }
 
-// TestTerminalBashColourAliases proves the default aliases are installed (when
-// the operator did not set one) and that `ls` emits SGR colours on a PTY.
 func TestTerminalBashColourAliases(t *testing.T) {
 	bash := terminalTestBash(t)
 	args, cleanup, err := terminalBashRcArgs(bash, true)
@@ -808,8 +744,6 @@ func TestTerminalBashColourAliases(t *testing.T) {
 	home := writeTempBashrc(t, "")
 	shell := startTerminalTestBash(t, bash, []string{"--rcfile", args[1]}, home)
 	defer shell.stop()
-	// The prompt mark is ready once the integration hook ran; the prompt text
-	// itself differs for root ("# ") and non-root ("$ ").
 	shell.waitFor("\x1b]133;B")
 	shell.settle()
 	shell.write("alias ls; alias grep; alias diff; echo ALIAS-''DONE\r")
@@ -830,19 +764,14 @@ func TestTerminalBashColourAliases(t *testing.T) {
 	}
 }
 
-// lsSupportsColour reports whether the host's ls understands --color.
 func lsSupportsColour(bash string) bool {
 	return exec.Command(bash, "-c", "ls --color=auto -d / >/dev/null 2>&1").Run() == nil
 }
 
-// TestTerminalBashHostSessionIntegration proves the gRPC host path starts bash
-// with the integration and reports it in the opened event.
 func TestTerminalBashHostSessionIntegration(t *testing.T) {
 	bash := terminalTestBash(t)
 	home := writeTempBashrc(t, "")
 	_, terminal, rootName, _ := terminalTestFixture(t)
-	// The fixture's own temp dirs are created above; from here on the agent's
-	// per-session integration directory lands in tmp and must be removed.
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	t.Setenv("HOME", home)
@@ -875,7 +804,6 @@ func TestTerminalBashHostSessionIntegration(t *testing.T) {
 	}
 	waitForOutput(t, stream, "\x1b]133;B")
 
-	// The private rcfile is removed when the shell exits.
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("exit\r")}}); err != nil {
 		t.Fatalf("send exit: %v", err)
 	}
@@ -898,8 +826,6 @@ func TestTerminalBashHostSessionIntegration(t *testing.T) {
 	}
 }
 
-// TestTerminalBashIntegrationOffSwitch proves the disabled integration keeps a
-// plain bash session (no marks, no rcfile) while still starting bash.
 func TestTerminalBashIntegrationOffSwitch(t *testing.T) {
 	bash := terminalTestBash(t)
 	_, terminal, rootName, _ := terminalTestFixture(t)
@@ -931,7 +857,6 @@ func TestTerminalBashIntegrationOffSwitch(t *testing.T) {
 	}
 }
 
-// waitForOutputText accumulates output until marker appears and returns it.
 func waitForOutputText(t *testing.T, stream agentv1.TerminalService_OpenTerminalClient, marker string) string {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -955,8 +880,6 @@ func waitForOutputText(t *testing.T, stream agentv1.TerminalService_OpenTerminal
 	return ""
 }
 
-// TestTerminalShSessionHasNoIntegration proves a non-bash shell (sh) is
-// unchanged: no marks, no forced arguments.
 func TestTerminalShSessionHasNoIntegration(t *testing.T) {
 	sh := "/bin/sh"
 	if info, err := os.Stat(sh); err != nil || !info.Mode().IsRegular() {
@@ -995,8 +918,6 @@ func TestTerminalShSessionHasNoIntegration(t *testing.T) {
 	}
 }
 
-// containerExecInner strips the fixed pid/kill wrapper from a recorded exec
-// command and returns the shell command the user gets.
 func containerExecInner(t *testing.T, command []string) []string {
 	t.Helper()
 	if len(command) < 5 || command[0] != "/bin/sh" || command[1] != "-c" || command[2] != docker.ExecWrapperCommand || command[3] != "gotham-terminal" {
@@ -1005,9 +926,6 @@ func containerExecInner(t *testing.T, command []string) []string {
 	return command[4:]
 }
 
-// TestDockerExecBashIntegrationCommand pins the container command and env: a
-// probed bash is started through the fixed wrapper with the constant script and
-// a terminal description, while no curl/request data is involved.
 func TestDockerExecBashIntegrationCommand(t *testing.T) {
 	api := newFakeExecAPI(t)
 	api.probeOutput = "/bin/bash\n"
@@ -1054,8 +972,6 @@ func TestDockerExecBashIntegrationCommand(t *testing.T) {
 	}
 }
 
-// TestDockerExecBashIntegrationDisabled proves the off switch keeps the plain
-// shell command (no rcfile, no extra arguments).
 func TestDockerExecBashIntegrationDisabled(t *testing.T) {
 	api := newFakeExecAPI(t)
 	api.probeOutput = "/bin/bash\n"
@@ -1080,8 +996,6 @@ func TestDockerExecBashIntegrationDisabled(t *testing.T) {
 	}
 }
 
-// TestDockerExecWithoutBashUnchanged proves an image with no bash (alpine nginx)
-// keeps its exact previous interactive command.
 func TestDockerExecWithoutBashUnchanged(t *testing.T) {
 	api := newFakeExecAPI(t)
 	api.probeOutput = "/bin/sh\n"
@@ -1102,8 +1016,6 @@ func TestDockerExecWithoutBashUnchanged(t *testing.T) {
 	}
 }
 
-// TestDockerExecKeepsImageLocale proves the container's own locale survives the
-// agent's terminal environment.
 func TestDockerExecKeepsImageLocale(t *testing.T) {
 	api := newFakeExecAPI(t)
 	api.probeOutput = "/bin/bash\n"

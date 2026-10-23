@@ -12,8 +12,6 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// fixtureRelease is a minimal GitHub release fixture; asset URLs are generated
-// from the serving host so they stay absolute and reachable.
 type fixtureRelease struct {
 	Tag        string
 	Prerelease bool
@@ -22,8 +20,6 @@ type fixtureRelease struct {
 	Assets     []string
 }
 
-// releasesHandler serves a GitHub-Releases-like array. A non-zero status makes
-// the request fail instead.
 func releasesHandler(releases []fixtureRelease, status int, delay time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if delay > 0 {
@@ -62,7 +58,6 @@ func releasesHandler(releases []fixtureRelease, status int, delay time.Duration)
 	}
 }
 
-// platformAssets is the asset set a complete, signable release carries.
 func platformAssets() []string {
 	return []string{
 		"gotham-linux-amd64",
@@ -71,7 +66,6 @@ func platformAssets() []string {
 	}
 }
 
-// newChecker points a Checker at a fixture server for the running architecture.
 func newChecker(t *testing.T, server *httptest.Server) *Checker {
 	t.Helper()
 	return &Checker{
@@ -83,7 +77,6 @@ func newChecker(t *testing.T, server *httptest.Server) *Checker {
 	}
 }
 
-// TestCheckerResolvesNewerRelease covers newer/equal/older and asset mapping.
 func TestCheckerResolvesNewerRelease(t *testing.T) {
 	server := httptest.NewServer(releasesHandler([]fixtureRelease{
 		{Tag: "v1.2.0", Body: "notes", Assets: platformAssets()},
@@ -124,8 +117,6 @@ func TestCheckerResolvesNewerRelease(t *testing.T) {
 	}
 }
 
-// TestCheckerPicksNewest covers multiple releases and prerelease filtering per
-// channel.
 func TestCheckerPicksNewest(t *testing.T) {
 	releases := []fixtureRelease{
 		{Tag: "v1.1.0", Assets: platformAssets()},
@@ -164,9 +155,6 @@ func TestCheckerPicksNewest(t *testing.T) {
 	}
 }
 
-// TestCheckerLabelsOfferWithReleaseChannel is M4: the offer carries the
-// release's own channel, not the subscriber's, so a beta subscriber can take a
-// newer stable release and still bind it to the stable signed manifest.
 func TestCheckerLabelsOfferWithReleaseChannel(t *testing.T) {
 	server := httptest.NewServer(releasesHandler([]fixtureRelease{
 		{Tag: "v1.2.0", Body: "stable notes", Assets: platformAssets()},
@@ -186,7 +174,6 @@ func TestCheckerLabelsOfferWithReleaseChannel(t *testing.T) {
 		t.Errorf("beta subscriber offer = channel %q prerelease %t, want stable/false", release.Channel, release.Prerelease)
 	}
 
-	// A stable subscriber still never sees a prerelease.
 	prerelease := httptest.NewServer(releasesHandler([]fixtureRelease{
 		{Tag: "v1.3.0-rc.1", Prerelease: true, Assets: platformAssets()},
 	}, 0, 0))
@@ -200,8 +187,6 @@ func TestCheckerLabelsOfferWithReleaseChannel(t *testing.T) {
 	}
 }
 
-// TestCheckerFailures covers missing assets, HTTP errors, empty releases and
-// timeouts.
 func TestCheckerFailures(t *testing.T) {
 	t.Run("missing asset", func(t *testing.T) {
 		server := httptest.NewServer(releasesHandler([]fixtureRelease{

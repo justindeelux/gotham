@@ -1,7 +1,3 @@
-// JUS-245: the terminal runtime owns one xterm renderer, one WebSocket and the
-// heartbeat. These tests use a faithful fake socket (open/message/close/error
-// are all controllable), so lifecycle bugs — an early "connected", a reconnect,
-// input before open, a leaked timer — fail here instead of hiding behind a stub.
 /* global document:readonly, HTMLElement:readonly, TextDecoder:readonly, TextEncoder:readonly, URL:readonly, window:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,7 +23,6 @@ import {
   buildTerminalBanner,
 } from "@/features/terminal/utils/terminalBanner";
 
-/** serverFrame wraps an opcode + payload into one binary frame. */
 function serverFrame(opcode: number, payload: Uint8Array = new Uint8Array()): ArrayBuffer {
   const bytes = new Uint8Array(payload.length + 1);
   bytes[0] = opcode;
@@ -35,12 +30,10 @@ function serverFrame(opcode: number, payload: Uint8Array = new Uint8Array()): Ar
   return bytes.buffer;
 }
 
-/** jsonFrame encodes a JSON control payload. */
 function jsonFrame(opcode: number, value: unknown): ArrayBuffer {
   return serverFrame(opcode, new TextEncoder().encode(JSON.stringify(value)));
 }
 
-/** openFrame is the server's PTY confirmation with its create-time size. */
 function openFrame(): ArrayBuffer {
   return jsonFrame(0x04, {
     shell: "/bin/bash",
@@ -50,7 +43,6 @@ function openFrame(): ArrayBuffer {
   });
 }
 
-/** FakeSocket is a fully controllable WebSocket stand-in. */
 class FakeSocket implements TerminalSocket {
   binaryType = "arraybuffer";
   readyState = 0;
@@ -85,13 +77,11 @@ class FakeSocket implements TerminalSocket {
     this.onclose?.({ code: 1000, reason: "" });
   }
 
-  /** opcodes returns the first byte of every frame the client sent. */
   opcodes(): number[] {
     return this.sent.map((frame) => frame[0]!);
   }
 }
 
-/** FakeTerminal records writes and lets the test drive user input/resize. */
 class FakeTerminal {
   static last: FakeTerminal | null = null;
 
@@ -117,7 +107,6 @@ class FakeTerminal {
   }
 
   loadAddon(): void {
-    // The FitAddon is exercised separately; the runtime only needs it loaded.
   }
 
   onData(listener: (_data: string) => void): { dispose: () => void } {
@@ -163,7 +152,6 @@ class FakeTerminal {
   }
 }
 
-/** FakeFit records fits and reports the fitted box through the terminal. */
 class FakeFit {
   static fits = 0;
   static cols = 100;
@@ -171,17 +159,13 @@ class FakeFit {
 
   fit(): void {
     FakeFit.fits += 1;
-    // A real FitAddon calls terminal.resize(), which fires onResize with the
-    // measured columns/rows; the fake does the same so ordering is exercised.
     FakeTerminal.last?.resize(FakeFit.cols, FakeFit.rows);
   }
 
   dispose(): void {
-    // no-op
   }
 }
 
-/** setup builds one runtime with a captured socket and state log. */
 function setup(extra: Partial<TerminalRuntimeOptions> = {}) {
   FakeTerminal.last = null;
   FakeFit.fits = 0;
@@ -237,7 +221,6 @@ function setup(extra: Partial<TerminalRuntimeOptions> = {}) {
   };
 }
 
-/** connectedRuntime returns a runtime whose server has confirmed `opened`. */
 async function connectedRuntime() {
   const context = setup();
   const connecting = context.runtime.connect();
@@ -300,8 +283,6 @@ describe("TerminalRuntime handshake", () => {
     terminal.type("pwd");
     expect(context.socket.opcodes()).not.toContain(CLIENT_INPUT);
 
-    // The transport is open but the server has not confirmed the PTY yet:
-    // input is still dropped rather than queued for replay.
     context.socket.open();
     terminal.type("ls");
     expect(context.socket.opcodes()).not.toContain(CLIENT_INPUT);
@@ -357,7 +338,6 @@ describe("TerminalRuntime failure copy", () => {
     });
     await runtime.connect();
     expect(runtime.getStatus()).toBe("error");
-    // No English runtime string reaches the UI: the catalog owns the copy.
     expect(context.states.at(-1)).toEqual({
       status: "error",
       errorCode: "auth",
@@ -375,7 +355,6 @@ describe("TerminalRuntime failure copy", () => {
 });
 
 describe("TerminalRuntime initial size", () => {
-  /** measure makes the detached xterm host look laid out to FitAddon. */
   function measure(runtime: TerminalRuntime): void {
     const host = runtime.getHost();
     if (!host) {
@@ -396,8 +375,6 @@ describe("TerminalRuntime initial size", () => {
     await context.runtime.connect();
     context.socket.open();
     const terminal = context.terminal();
-    // The surface attaches and ResizeObserver fits while the PTY is still
-    // pending; the frame must wait for `opened` and then use the fitted box.
     measure(context.runtime);
     FakeFit.cols = 104;
     FakeFit.rows = 28;
@@ -411,7 +388,6 @@ describe("TerminalRuntime initial size", () => {
     );
     expect(resizes).toHaveLength(1);
     expect([...resizes[0]!]).toEqual([CLIENT_RESIZE, 0, 104, 0, 28]);
-    // The server's create-time size never overwrites the fitted one.
     const connected = context.states.find(
       (patch) => patch.status === "connected",
     );
@@ -435,7 +411,6 @@ describe("TerminalRuntime initial size", () => {
     );
     expect(resizes).toHaveLength(1);
     expect([...resizes[0]!]).toEqual([CLIENT_RESIZE, 0, 96, 0, 24]);
-    // A repeated identical fit does not spam the PTY.
     context.runtime.fit();
     expect(
       context.socket.sent.filter((frame) => frame[0] === CLIENT_RESIZE),
@@ -465,8 +440,6 @@ describe("TerminalRuntime lifecycle", () => {
   it("reports a refused handshake before opened as an origin refusal and never reconnects", async () => {
     const context = setup();
     await context.runtime.connect();
-    // The handshake never upgraded (the control plane's 403 origin check
-    // answers before the upgrade), so onopen is never called.
     context.socket.serverClose(1006);
     expect(context.runtime.getStatus()).toBe("error");
     expect(context.states.at(-1)).toEqual({
@@ -474,7 +447,6 @@ describe("TerminalRuntime lifecycle", () => {
       errorCode: "originRefused",
     });
     vi.advanceTimersByTime(TERMINAL_HEARTBEAT_MS * 4);
-    // One socket was created for the whole lifetime: retry is the only path.
     expect(context.states.filter((state) => state.status === "error")).toHaveLength(1);
   });
 
@@ -482,8 +454,6 @@ describe("TerminalRuntime lifecycle", () => {
     const context = setup();
     await context.runtime.connect();
     context.socket.open();
-    // The upgrade succeeded but the server closed before confirming the PTY
-    // (for example the relay failed or the pending session expired).
     context.socket.serverClose(1006);
     expect(context.runtime.getStatus()).toBe("error");
     expect(context.states.at(-1)).toEqual({
@@ -503,7 +473,6 @@ describe("TerminalRuntime lifecycle", () => {
     const context = await connectedRuntime();
     context.socket.message(serverFrame(0x03, new TextEncoder().encode("agent offline")));
     expect(context.runtime.getStatus()).toBe("error");
-    // Unknown relay text is never retained: it can carry host paths.
     expect(context.states.at(-1)).toEqual({
       status: "error",
       errorCode: "generic",
@@ -555,7 +524,6 @@ describe("TerminalRuntime lifecycle", () => {
     expect(terminal.disposed).toBe(true);
     expect(context.runtime.getHost()).toBeNull();
     expect(context.socket.closed).toBe(true);
-    // A second dispose is a no-op, not another close frame.
     context.socket.sent = [];
     context.runtime.dispose(true);
     expect(context.socket.sent).toEqual([]);
@@ -582,14 +550,12 @@ describe("TerminalRuntime attach", () => {
     const context = setup();
     const container = document.createElement("div");
     document.body.append(container);
-    // Attach before connect: the surface mounted in the same tick as the tab.
     context.runtime.attach(container);
     await context.runtime.connect();
     expect(context.runtime.getHost()?.parentElement).toBe(container);
   });
 });
 
-/** measure makes the detached xterm host look laid out to FitAddon. */
 function measureHost(runtime: TerminalRuntime, width = 2200, height = 900): void {
   const host = runtime.getHost();
   if (!host) {
@@ -605,7 +571,6 @@ function measureHost(runtime: TerminalRuntime, width = 2200, height = 900): void
   });
 }
 
-/** BANNER_INFO is one host session's display metadata. */
 const BANNER_INFO = {
   version: "v0.2.1-dev",
   serverName: "prod-01",
@@ -613,7 +578,6 @@ const BANNER_INFO = {
   target: "host",
 };
 
-/** decodeWrites turns xterm's recorded byte writes back into text. */
 function decodeWrites(terminal: FakeTerminal): string[] {
   return terminal.written.map((bytes) => new TextDecoder().decode(bytes));
 }
@@ -629,8 +593,6 @@ describe("TerminalRuntime theme", () => {
     context.socket.sent = [];
     context.runtime.setTheme("gotham-light");
 
-    // xterm's option is the live palette: the same renderer, socket and
-    // session keep running, and no keystroke was fabricated.
     expect(terminal.options.theme).toMatchObject({ background: "#fafafa" });
     expect(terminal.disposed).toBe(false);
     expect(context.socket.closed).toBe(false);
@@ -651,7 +613,6 @@ describe("TerminalRuntime welcome banner", () => {
     FakeFit.rows = 40;
     const opened = openFrame();
     context.socket.message(opened);
-    // A duplicate confirmation still yields exactly one banner.
     context.socket.message(opened);
     const terminal = context.terminal();
     const banners = decodeWrites(terminal).filter((text) =>
@@ -664,7 +625,6 @@ describe("TerminalRuntime welcome banner", () => {
     expect(context.socket.opcodes()).not.toContain(CLIENT_INPUT);
     expect(context.socket.opcodes()).toContain(CLIENT_RESIZE);
 
-    // Attach, fit, theme change and detach are not new sessions.
     const first = document.createElement("div");
     const second = document.createElement("div");
     document.body.append(first, second);
@@ -706,10 +666,7 @@ describe("TerminalRuntime welcome banner", () => {
   });
 
   it("never delays output or input for a hung version lookup", async () => {
-    // A /version request that never settles: the session must still connect
-    // and the first server bytes must flush a version-less banner first.
     const hung = new Promise<string | null>(() => {
-      // Intentionally never resolves.
     });
     const context = setup({
       banner: { ...BANNER_INFO, version: null },
@@ -733,7 +690,6 @@ describe("TerminalRuntime welcome banner", () => {
 
   it("falls back to a version-less banner after the display-only cap", async () => {
     const hung = new Promise<string | null>(() => {
-      // Intentionally never resolves.
     });
     const context = setup({
       banner: { ...BANNER_INFO, version: null },
@@ -778,7 +734,6 @@ describe("TerminalRuntime welcome banner", () => {
 
   it("flushes the banner before the first keystroke when metadata is slow", async () => {
     const hung = new Promise<string | null>(() => {
-      // Intentionally never resolves.
     });
     const context = setup({
       banner: { ...BANNER_INFO, version: null },
@@ -808,19 +763,16 @@ describe("TerminalRuntime welcome banner", () => {
     context.socket.message(openFrame());
     vi.advanceTimersByTime(BANNER_VERSION_WAIT_MS);
 
-    // The banner is a renderer write only; it never becomes prompt state.
     expect(decodeWrites(context.terminal()).join("")).toContain("Gotham v0.2.1-dev");
     expect(context.runtime.getPromptState()).toMatchObject({
       phase: "unknown",
       detected: false,
     });
 
-    // Typing with only the banner on screen cannot suggest.
     context.terminal().type("g");
     context.terminal().type("s");
     expect(context.runtime.getSuggestionState().suggestion).toBeNull();
 
-    // A real shell B mark after the banner enables the suggestion normally.
     context.socket.message(
       serverFrame(0x01, new TextEncoder().encode("\x1b]133;B\x07")),
     );

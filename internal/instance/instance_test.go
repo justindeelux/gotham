@@ -152,7 +152,6 @@ func TestNetworkConfirmAndRevert(t *testing.T) {
 		t.Fatalf("confirm without pending: %v", err)
 	}
 
-	// Unconfirmed change: the deadline passes and the desired state reverts.
 	next := goodNet()
 	next.IPv4.Address = "10.0.0.6/24"
 	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: next}); err != nil {
@@ -164,7 +163,6 @@ func TestNetworkConfirmAndRevert(t *testing.T) {
 		t.Fatalf("auto-revert: %+v %v", st.Network, err)
 	}
 
-	// Manual revert.
 	svc.now = func() time.Time { return now }
 	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: next}); err != nil {
 		t.Fatal(err)
@@ -177,9 +175,6 @@ func TestNetworkConfirmAndRevert(t *testing.T) {
 	}
 }
 
-// staticLive is the JUS-100 scene: the host is static but the stored record
-// still carries the DHCP defaults, so a DNS-only change must apply minimally
-// and a static-to-DHCP switch must need an explicit confirmation.
 func staticLive() (HostNetwork, Stored) {
 	live := HostNetwork{
 		Interface:  "ens160",
@@ -209,7 +204,6 @@ func TestNetworkDNSOnlyOnStaticHost(t *testing.T) {
 	svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	svc.lookup = func(string) string { return "" }
 
-	// The incident request: only the resolvers differ from the host truth.
 	req := liveNet(host.live, "9.9.9.9")
 	st, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: req})
 	if err != nil || st.Pending == nil {
@@ -234,7 +228,6 @@ func TestNetworkRiskyChangeNeedsConfirmation(t *testing.T) {
 		return svc
 	}
 
-	// Static-to-DHCP on the active interface without the flag is refused.
 	svc := newSvcLive()
 	risky := liveNet(host.live)
 	risky.IPv4 = IPConfig{Mode: ModeDHCP}
@@ -245,7 +238,6 @@ func TestNetworkRiskyChangeNeedsConfirmation(t *testing.T) {
 		t.Fatal("refused change reached the host")
 	}
 
-	// A changed static address is equally risky.
 	svc = newSvcLive()
 	moved := liveNet(host.live)
 	moved.IPv4.Address = "103.176.22.99/24"
@@ -253,7 +245,6 @@ func TestNetworkRiskyChangeNeedsConfirmation(t *testing.T) {
 		t.Fatalf("address change without confirmation: %v", err)
 	}
 
-	// With the flag the same change applies through the full path.
 	svc = newSvcLive()
 	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: risky, ConfirmInterfaceChange: true}); err != nil {
 		t.Fatalf("confirmed change rejected: %v", err)
@@ -278,7 +269,6 @@ func TestGetReportsHostTruth(t *testing.T) {
 		st.Network.IPv4.Gateway != "103.176.22.1" {
 		t.Fatalf("form would show stale defaults: %+v", st.Network.IPv4)
 	}
-	// While a change is pending the desired (not live) values are shown.
 	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: liveNet(host.live, "9.9.9.9")}); err != nil {
 		t.Fatal(err)
 	}
@@ -289,9 +279,6 @@ func TestGetReportsHostTruth(t *testing.T) {
 }
 
 func TestGetReportsEffectiveLinkDNS(t *testing.T) {
-	// JUS-101: the helper reports the link DNS as the effective resolvers
-	// (resolved prefers per-link over global), so Get must surface them
-	// instead of the stored servers.
 	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
 	host.live, _ = staticLive()
 	host.live.DNSServers = []string{"8.8.8.8", "8.8.4.4"}
@@ -321,9 +308,6 @@ func TestUnsupportedHostAndHelperFailure(t *testing.T) {
 	}
 }
 
-// TestHostStates covers the four capability-probe outcomes (JUS-185): a ready
-// helper, a missing helper file, a helper present but refused by sudo, and a
-// host that does not run the network stack.
 func TestHostStates(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -362,8 +346,6 @@ func TestHostStates(t *testing.T) {
 	}
 }
 
-// TestInstallHostHelper installs the helper when it is missing and the repair
-// path exists, refuses when it cannot run, and no-ops on a ready helper.
 func TestInstallHostHelper(t *testing.T) {
 	host := &fakeHost{host: Host{Helper: HelperMissing, Repair: true, NetworkStack: true}, installLog: "installed gotham-hostctl\n"}
 	svc, _ := newSvc(host)
@@ -377,8 +359,6 @@ func TestInstallHostHelper(t *testing.T) {
 		t.Fatalf("want host error: %v", err)
 	}
 
-	// A Denied host, or one without the payload/drop-in, has no pinned repair
-	// path: the call is refused before any sudo, not answered with a 502.
 	denied := &fakeHost{host: Host{Helper: HelperDenied, Repair: false, NetworkStack: true}}
 	svc = NewService(&fakeRepo{}, denied, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	svc.lookup = func(string) string { return "" }

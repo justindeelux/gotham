@@ -4,8 +4,6 @@ package terminal
 
 import "os"
 
-// Non-unix hosts are not a supported agent target. These stubs keep the package
-// buildable for tooling; a session on such a host fails at StartWithSize.
 var (
 	terminalHangup    os.Signal = os.Interrupt
 	terminalTerminate os.Signal = os.Interrupt

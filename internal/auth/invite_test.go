@@ -17,9 +17,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// storeInvites implements InviteAcceptor over the raw store, mirroring the
-// teams-domain peek/accept contract so the invite-registration tests exercise
-// the real store glue without importing teams.
 type storeInvites struct {
 	store *store.Store
 }
@@ -41,16 +38,11 @@ func (a storeInvites) AcceptInvite(ctx context.Context, userID uuid.UUID, token 
 	return err
 }
 
-// hashTestToken returns the hex SHA-256 of an invite token, the same digest
-// the teams domain stores.
 func hashTestToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-// newTestInvite stores a pending invite for email and returns the raw token.
-// The invite's team is the throwaway owner's personal team (its ID equals the
-// owner's user ID); everything is cleaned up afterwards.
 func newTestInvite(t *testing.T, st *store.Store, email string) string {
 	t.Helper()
 
@@ -89,11 +81,6 @@ func newTestInvite(t *testing.T, st *store.Store, email string) string {
 	return token
 }
 
-// TestServiceRegisterClosedWithoutInvite: on an instance that already has
-// accounts, Register refuses without a token (P-A2). It runs on a private
-// scratch database: the closed-instance precondition must not depend on the
-// shared database, whose users table other packages' cleanups empty
-// concurrently (that race reopened registration and flaked this test).
 func TestServiceRegisterClosedWithoutInvite(t *testing.T) {
 	svc, st := scratchService(t)
 	requireClosedInstance(t, svc)
@@ -107,13 +94,11 @@ func TestServiceRegisterClosedWithoutInvite(t *testing.T) {
 		t.Fatalf("Register error = %v, want ErrRegistrationClosed", err)
 	}
 
-	// A bad token is indistinguishable from a closed instance.
 	_, err = svc.Register(ctx, email, "s3cret-password", "not-a-real-token", storeInvites{st}, SessionMeta{})
 	if !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("Register(bad token) error = %v, want ErrRegistrationClosed", err)
 	}
 
-	// An invite issued to a different email admits nobody else.
 	_, err = svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, uniqueEmail("other")), storeInvites{st}, SessionMeta{})
 	if !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("Register(foreign invite) error = %v, want ErrRegistrationClosed", err)
@@ -124,8 +109,6 @@ func TestServiceRegisterClosedWithoutInvite(t *testing.T) {
 	}
 }
 
-// TestServiceRegisterInviteAccepts: a valid invite creates the account, joins
-// it to the invited team, and the invite cannot admit a second account.
 func TestServiceRegisterInviteAccepts(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
@@ -147,7 +130,6 @@ func TestServiceRegisterInviteAccepts(t *testing.T) {
 		t.Fatalf("parse user ID: %v", err)
 	}
 
-	// The invite row is marked accepted.
 	invite, err := st.GetInviteByTokenHash(ctx, hashTestToken(token))
 	if err != nil {
 		t.Fatalf("GetInviteByTokenHash: %v", err)
@@ -156,7 +138,6 @@ func TestServiceRegisterInviteAccepts(t *testing.T) {
 		t.Error("invite was not marked accepted")
 	}
 
-	// The fresh account is a member of the invited team.
 	if _, err := st.GetTeamMember(ctx, sqlc.GetTeamMemberParams{
 		TeamID: invite.TeamID,
 		UserID: pgUUID(userID),
@@ -164,12 +145,10 @@ func TestServiceRegisterInviteAccepts(t *testing.T) {
 		t.Fatalf("membership missing: %v", err)
 	}
 
-	// The account now exists: a replay of the token is an email collision.
 	if _, err := svc.Register(ctx, email, "s3cret-password", token, storeInvites{st}, SessionMeta{}); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("Register(replayed token) error = %v, want ErrEmailTaken", err)
 	}
 
-	// And the token admits nobody else: the email gate answers closed.
 	other := uniqueEmail("replay")
 	cleanupUser(t, st, other)
 	if _, err := svc.Register(ctx, other, "s3cret-password", token, storeInvites{st}, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {

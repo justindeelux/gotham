@@ -8,10 +8,6 @@ import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
 /* global URL, window:readonly, getComputedStyle:readonly */
-// JUS-75 round 1: real-browser proof that the create-application notices are
-// light, the two Change links are unambiguous, and the Compose web-service
-// select is visible at 1440x900. Same mocked-API webdist harness as
-// environment-layout.spec.ts: static file server, seeded session, no backend.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -99,7 +95,6 @@ test.beforeAll(async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       let path = decodeURIComponent(url.pathname);
       if (path === "/" || !extname(path)) {
-        // SPA fallback: client-side routes serve index.html.
         path = "/index.html";
       }
       const file = resolve(webdistRoot, `.${path}`);
@@ -133,7 +128,6 @@ test.afterAll(async () => {
 
 const envPath = `${projectId}/environments/${environmentId}`;
 
-/** mockApi seeds the session and answers the calls the wizard makes. */
 async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -172,7 +166,6 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
-/** openWizard opens the create-application wizard preselected to one source. */
 async function openWizard(page: Page, cardText: string): Promise<Locator> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
@@ -186,12 +179,10 @@ async function openWizard(page: Page, cardText: string): Promise<Locator> {
   await expect(
     wizard.getByRole("heading", { name: "Create application", exact: true }),
   ).toBeVisible();
-  // Let the modal entrance transition settle before measuring boxes.
   await page.waitForTimeout(500);
   return wizard;
 }
 
-/** noticeBox measures one rendered warning notice inside the wizard. */
 async function noticeBox(wizard: Locator, text: string): Promise<{ height: number }> {
   const notice = wizard.locator(".n-alert").filter({ hasText: text }).first();
   await expect(notice).toBeVisible();
@@ -201,7 +192,6 @@ async function noticeBox(wizard: Locator, text: string): Promise<{ height: numbe
 }
 
 test("JUS-75 notices render light and short in a real DOM", async ({ page }) => {
-  // Compose secrets notice.
   const compose = await openWizard(page, "Docker Compose");
   const secrets = await noticeBox(compose, "Do not paste secrets");
   expect(secrets.height, "compose secrets notice height").toBeLessThanOrEqual(64);
@@ -224,14 +214,12 @@ test("JUS-75 notices render light and short in a real DOM", async ({ page }) => 
   expect(composeStyle.background, "notice tint is translucent").toMatch(/\/ 0\.16\)/);
   await page.keyboard.press("Escape");
 
-  // Latest-tag warning (appears after typing a moving tag).
   const image = await openWizard(page, "Container image");
   await image.locator("input[placeholder='registry.example.com/team/app:1.2']").fill("app:latest");
   const latest = await noticeBox(image, "moving latest tag");
   expect(latest.height, "latest-tag notice height").toBeLessThanOrEqual(64);
   await page.keyboard.press("Escape");
 
-  // Build-args warning in the Dockerfile step.
   const docker = await openWizard(page, "Dockerfile");
   const args = await noticeBox(docker, "Do not put secrets here");
   expect(args.height, "build-args notice height").toBeLessThanOrEqual(64);
@@ -280,7 +268,6 @@ test("JUS-75 the two header links are unambiguous in a real DOM", async ({ page 
   const wizard = await openWizard(page, "Docker Compose");
   await expect(wizard.getByRole("button", { name: "Change scope" })).toBeVisible();
   await expect(wizard.getByRole("button", { name: "Change source" })).toBeVisible();
-  // No element carries the bare ambiguous label anymore.
   const bareCount = await wizard.evaluate(
     (element) =>
       Array.from(element.querySelectorAll("*")).filter(
@@ -301,7 +288,6 @@ test("JUS-75 the Compose web-service select is visible at 1440x900", async ({
   expect(selectBox, "service select has a box").not.toBeNull();
   const bodyBox = await wizard.locator(".wizard-body").boundingBox();
   expect(bodyBox, "wizard body has a box").not.toBeNull();
-  // Fully inside the scroll body viewport: no scrolling needed to reach it.
   expect(selectBox!.y).toBeGreaterThanOrEqual(bodyBox!.y - 1);
   expect(selectBox!.y + selectBox!.height).toBeLessThanOrEqual(bodyBox!.y + bodyBox!.height + 1);
 });

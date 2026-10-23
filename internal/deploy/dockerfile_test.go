@@ -13,9 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestValidateDockerfileContent checks the GS-7 creation gate: pasted text is
-// required, capped at 64 KiB, and must contain a FROM instruction. Nothing is
-// executed; deeper validation happens on the node at build time.
 func TestValidateDockerfileContent(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -52,8 +49,6 @@ func TestValidateDockerfileContent(t *testing.T) {
 	}
 }
 
-// TestValidateBuildArgs checks the --build-arg collection gate: bounded
-// count, container-variable keys, bounded values.
 func TestValidateBuildArgs(t *testing.T) {
 	if err := ValidateBuildArgs(nil); err != nil {
 		t.Fatalf("nil args = %v, want nil", err)
@@ -85,9 +80,6 @@ func TestValidateBuildArgs(t *testing.T) {
 	}
 }
 
-// TestCloneSourceDockerfile pins the GS-7 fetch step: no clone runs, the
-// stored text lands as the only file, invalid content fails before anything
-// is written, and a retry clears a stale checkout first.
 func TestCloneSourceDockerfile(t *testing.T) {
 	const content = "FROM alpine:3.20\nCMD [\"echo\", \"hi\"]\n"
 
@@ -149,16 +141,12 @@ func TestCloneSourceDockerfile(t *testing.T) {
 	})
 }
 
-// TestBuildDockerfileSource pins the GS-7 build step: build-pack detection
-// is skipped, the Dockerfile engine is forced, the stored --build-arg pairs
-// ride the BuildImage meta, and the streamed context carries exactly the
-// stored text as its only file.
 func TestBuildDockerfileSource(t *testing.T) {
 	const content = "FROM alpine:3.20\nARG APP_ENV\nCMD [\"echo\", \"hi\"]\n"
 	app := testApplication(uuid.New())
 	app.SourceType = SourceDockerfile
 	app.DockerfileContent = content
-	app.BuildPack = "railpack" // ignored: detection is skipped for dockerfiles
+	app.BuildPack = "railpack"
 	app.BuildArgs = map[string]string{"APP_ENV": "production"}
 	repo := &fakeRepository{app: app}
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
@@ -178,8 +166,6 @@ func TestBuildDockerfileSource(t *testing.T) {
 		t.Fatalf("build calls = %d, want 1", len(node.metas))
 	}
 	meta := node.metas[0]
-	// An empty engine means a Dockerfile build on the node (the
-	// ImageBuildOptions contract); the Dockerfile path names the file.
 	if meta.Engine != "" && meta.Engine != "dockerfile" {
 		t.Errorf("engine = %q, want empty or dockerfile", meta.Engine)
 	}
@@ -201,9 +187,6 @@ func TestBuildDockerfileSource(t *testing.T) {
 	}
 }
 
-// TestCreateApplicationDockerfileNormalizes pins finding-7 behavior: stale
-// repo fields are cleared for dockerfile rows, and raw build args are
-// validated before normalization, exactly like the update path.
 func TestCreateApplicationDockerfileNormalizes(t *testing.T) {
 	newInput := func() CreateApplicationInput {
 		in := validCreateInput(uuid.New())
@@ -242,9 +225,6 @@ func TestCreateApplicationDockerfileNormalizes(t *testing.T) {
 	})
 }
 
-// TestUpdateApplicationDockerfile pins the detail-page edit path: stored
-// text and args change together, other source types refuse both, and invalid
-// content is rejected without touching the row.
 func TestUpdateApplicationDockerfile(t *testing.T) {
 	const content = "FROM alpine:3.20\n"
 
@@ -312,9 +292,6 @@ func TestUpdateApplicationDockerfile(t *testing.T) {
 	})
 }
 
-// TestPreviewCopiesDockerfileFields pins the intended inheritance: a preview
-// of a dockerfile base builds the same stored text with the same build args
-// (build-time values, not sealed secrets, which stay excluded).
 func TestPreviewCopiesDockerfileFields(t *testing.T) {
 	userID := uuid.New()
 	base := testApplication(userID)
@@ -346,9 +323,6 @@ func TestPreviewCopiesDockerfileFields(t *testing.T) {
 	}
 }
 
-// TestValidateDeployTargetDockerfile pins the submit gate: a dockerfile app
-// deploys without any clone URL, and empty stored text fails the deploy
-// instead of the build.
 func TestValidateDeployTargetDockerfile(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceDockerfile
@@ -363,8 +337,6 @@ func TestValidateDeployTargetDockerfile(t *testing.T) {
 	}
 }
 
-// TestRedeployAfterEditBuildsLatestText pins the detail-page contract: after
-// the stored text changes, the next deploy streams the new text to the node.
 func TestRedeployAfterEditBuildsLatestText(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -404,7 +376,6 @@ func TestRedeployAfterEditBuildsLatestText(t *testing.T) {
 	}
 }
 
-// readTar lists the regular files of a tar context by name.
 func readTar(t *testing.T, data []byte) ([]string, map[string]string) {
 	t.Helper()
 	var names []string

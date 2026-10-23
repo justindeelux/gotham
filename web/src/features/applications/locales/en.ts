@@ -1,9 +1,3 @@
-/**
- * Applications English catalog. Keys are semantic whole sentences with named
- * parameters; values are the shipped English copy baseline. Raw wire values
- * (deployment/preview states in payloads, env keys, domains, commands,
- * image tags, secrets) never pass through these messages.
- */
 const en = {
   tabs: {
     overview: "Overview",
@@ -20,11 +14,6 @@ const en = {
     breadcrumb: "Breadcrumb",
     loadingApp: "Loading the application…",
   },
-  /**
-   * Application container terminal (JUS-247). Discovery and lifecycle errors
-   * themselves live in the shared terminal catalog under `terminal.errors.*`
-   * so the tab, the dock and the floating window show identical bounded copy.
-   */
   terminal: {
     tab: "Terminal",
     title: "Application terminal",
@@ -686,5 +675,4 @@ const en = {
 
 export default en;
 
-/** ApplicationsMessages is the shape every locale must satisfy. */
 export type ApplicationsMessages = typeof en;

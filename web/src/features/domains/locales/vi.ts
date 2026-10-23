@@ -1,9 +1,3 @@
-/**
- * Vietnamese catalog for the domains feature. Keys mirror `en.ts` exactly;
- * only values are translated. Wire values (provider types, challenge modes,
- * redirect codes, domains, URLs, Traefik middleware names, product names)
- * stay untranslated by design.
- */
 const vi = {
   page: {
     eyebrow: "Vận hành · Reverse proxy",
@@ -234,10 +228,6 @@ const vi = {
     emptyHint:
       "Một quy tắc gửi một tên miền nguồn chính xác tới một tên miền đích " +
       "chính xác. Đích phải tự phục vụ chứng chỉ của nó.",
-    /**
-     * Rule count with library pluralization (one | other): Vietnamese
-     * repeats the identical segment so the strict en/vi segment parity holds.
-     */
     rulesSummary:
       "{total} quy tắc · {enabled} đang bật. GET trả lời mã đã lưu; các " +
       "phương thức khác trả lời 308/307 để giữ phương thức. | " +

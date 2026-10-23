@@ -1,6 +1,3 @@
-// GS-9 image source: reference validation mirrors internal/deploy/image.go,
-// the wizard gates and payload carry the image shape, and the detail page
-// shows the reference without branch/build-pack rows.
 import { mount } from "@vue/test-utils";
 import { NInput, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -86,16 +83,13 @@ describe("image reference validation", () => {
     expect(isLatestImageTag("nginx")).toBe(true);
     expect(isLatestImageTag("nginx:1.25")).toBe(false);
     expect(isLatestImageTag("nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")).toBe(false);
-    // Pinned even with a latest tag: the digest freezes the release.
     expect(isLatestImageTag("nginx:latest@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")).toBe(false);
   });
 
   it("implements the image source type", () => {
     expect(sourceTypeImplemented("image")).toBe(true);
     expect(sourceTypeImplemented("dockerfile")).toBe(true);
-    // Private git deploys since GS-4 (merged after this test was written).
     expect(sourceTypeImplemented("git_private")).toBe(true);
-    // Compose deploys since GS-8, last of the source types.
     expect(sourceTypeImplemented("compose")).toBe(true);
   });
 });
@@ -260,15 +254,12 @@ describe("image detail page", () => {
   });
 });
 
-/** Controllable canWrite for the DetailPage gate test below. */
 let detailCanWrite = true;
 
 vi.mock("@/features/applications/composables/useApplicationDetail", () => ({
   useApplicationDetail: () => mockImageDetail(),
 }));
 
-/** mockImageDetail stands in for the detail composable: real refs for every
- * value the template reads, no-ops for handlers. */
 function mockImageDetail() {
   const appsStore = {
     loading: false,

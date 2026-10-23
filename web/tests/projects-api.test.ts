@@ -1,6 +1,3 @@
-// API-layer tests for the projects client (PE-4 fix round 1).
-// Pins the contract paths, bodies and team headers, plus warn-only
-// envelope parsing of every response including the mutation answers.
 import { describe, expect, it, vi } from "vitest";
 
 /* global console: readonly */

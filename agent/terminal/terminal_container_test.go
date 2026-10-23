@@ -24,10 +24,8 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// testContainerID is a full lowercase Docker id (the only shape the agent accepts).
 const testContainerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-// fakeContainerExec hands the terminal server one controllable exec session.
 type fakeContainerExec struct {
 	sessions chan *fakeExecSession
 	err      error
@@ -57,7 +55,6 @@ func (f *fakeContainerExec) Exec(_ context.Context, containerID string, opts doc
 	return session, nil
 }
 
-// options returns the options the terminal server passed to Exec.
 func (f *fakeContainerExec) options() docker.ExecOptions {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -80,8 +77,6 @@ type fakeExecSession struct {
 	once     sync.Once
 }
 
-// Kill records that the exec process tree was ended. The fake's Close is
-// independent so the test can assert the terminal calls Kill before releasing.
 func (s *fakeExecSession) Kill(context.Context) error {
 	s.mu.Lock()
 	s.killed = true
@@ -128,10 +123,6 @@ func (s *fakeExecSession) dimensions() (uint16, uint16) {
 	return s.cols, s.rows
 }
 
-// TestTerminalContainerIntegrationWiring proves the terminal server's container
-// path forwards its own integration policy to Exec: on by default, off when the
-// server was built with IntegrationDisabled (the GOTHAM_AGENT_TERMINAL_INTEGRATION
-// switch). Driving Exec directly would not cover this wiring.
 func TestTerminalContainerIntegrationWiring(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
@@ -170,9 +161,6 @@ func TestTerminalContainerIntegrationWiring(t *testing.T) {
 	}
 }
 
-// TestTerminalContainerStreamsResizesAndExits covers the transport contract for
-// a container target with a faithful fake exec: output, input, resize and the
-// final exit event travel on the same stream as a host shell.
 func TestTerminalContainerStreamsResizesAndExits(t *testing.T) {
 	exec := &fakeContainerExec{sessions: make(chan *fakeExecSession, 1)}
 	terminal := NewTerminalServer(TerminalConfig{
@@ -236,8 +224,6 @@ func TestTerminalContainerStreamsResizesAndExits(t *testing.T) {
 	}
 }
 
-// TestTerminalContainerErrorsAreActionable proves missing/stopped images and
-// Docker failures map onto stable gRPC codes and phrases.
 func TestTerminalContainerErrorsAreActionable(t *testing.T) {
 	cases := []struct {
 		name string
@@ -275,8 +261,6 @@ func TestTerminalContainerErrorsAreActionable(t *testing.T) {
 	}
 }
 
-// TestDockerClientExecHijacksStream covers the Docker Engine client directly:
-// container inspect, shell probe, interactive exec, resize and exit status.
 func TestDockerClientExecHijacksStream(t *testing.T) {
 	api := newFakeExecAPI(t)
 	client, err := docker.NewDockerClient(api.server.URL)
@@ -304,9 +288,6 @@ func TestDockerClientExecHijacksStream(t *testing.T) {
 	if _, err := session.Write([]byte("echo hi\n")); err != nil {
 		t.Fatalf("write input: %v", err)
 	}
-	// The fake daemon reads input on its own goroutine. Wait for that read to
-	// complete before closing the stream: Close can reset the connection and
-	// discard bytes the server has not drained yet.
 	select {
 	case <-api.inputRead:
 	case <-time.After(5 * time.Second):
@@ -333,7 +314,6 @@ func TestDockerClientExecHijacksStream(t *testing.T) {
 	if len(creates) != 3 {
 		t.Fatalf("exec creates = %d, want the probe, the interactive exec and the kill helper", len(creates))
 	}
-	// The probe must be the fixed shell-probe command, never caller input.
 	if len(creates[0]) != 3 || creates[0][0] != "/bin/sh" || creates[0][1] != "-c" || creates[0][2] != docker.ShellProbeCommand {
 		t.Fatalf("probe command = %v", creates[0])
 	}
@@ -356,7 +336,6 @@ func TestDockerClientExecHijacksStream(t *testing.T) {
 	}
 }
 
-// TestDockerClientExecRejectsStoppedContainer covers the explicit precondition.
 func TestDockerClientExecRejectsStoppedContainer(t *testing.T) {
 	api := newFakeExecAPI(t)
 	api.running = false
@@ -369,7 +348,6 @@ func TestDockerClientExecRejectsStoppedContainer(t *testing.T) {
 	}
 }
 
-// TestDockerClientExecReportsMissingShell covers an image with no POSIX shell.
 func TestDockerClientExecReportsMissingShell(t *testing.T) {
 	api := newFakeExecAPI(t)
 	api.probeExit = 127
@@ -383,8 +361,6 @@ func TestDockerClientExecReportsMissingShell(t *testing.T) {
 	}
 }
 
-// TestDockerClientExecCleanupFailureIsReturned proves a missing helper is not
-// swallowed: Close returns the cleanup error.
 func TestDockerClientExecCleanupFailureIsReturned(t *testing.T) {
 	api := newFakeExecAPI(t)
 	api.killCreateFail = true
@@ -401,8 +377,6 @@ func TestDockerClientExecCleanupFailureIsReturned(t *testing.T) {
 	}
 }
 
-// TestDockerClientExecSurvivorsAreReturned proves a helper that reports
-// survivors fails the close instead of reporting success.
 func TestDockerClientExecSurvivorsAreReturned(t *testing.T) {
 	api := newFakeExecAPI(t)
 	api.killSurvivors = true
@@ -419,10 +393,6 @@ func TestDockerClientExecSurvivorsAreReturned(t *testing.T) {
 	}
 }
 
-// TestDockerClientExecRealContainer is the required live integration check: it
-// starts a throwaway container on the local Docker daemon, opens an interactive
-// exec, runs a command, resizes it, closes the exec and removes the container.
-// It never reuses the shared development Postgres/Redis containers.
 func TestDockerClientExecRealContainer(t *testing.T) {
 	if os.Getenv("GOTHAM_E2E") != "1" {
 		t.Skip("set GOTHAM_E2E=1 to run the live container exec test")
@@ -478,7 +448,6 @@ func TestDockerClientExecRealContainer(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	// Closing the exec must not stop the application container.
 	containers, err := client.ListContainers(ctx, true, nil, false)
 	if err != nil {
 		t.Fatalf("list after exec close: %v", err)
@@ -494,7 +463,6 @@ func TestDockerClientExecRealContainer(t *testing.T) {
 	}
 }
 
-// readExecUntil reads until marker appears or the deadline expires.
 func readExecUntil(reader io.Reader, marker string, timeout time.Duration) string {
 	done := make(chan string, 1)
 	go func() {
@@ -523,8 +491,6 @@ func readExecUntil(reader io.Reader, marker string, timeout time.Duration) strin
 	}
 }
 
-// fakeExecAPI is a minimal Docker Engine API for the exec path. The start
-// endpoint hijacks the connection exactly like the daemon.
 type fakeExecAPI struct {
 	server *httptest.Server
 
@@ -539,10 +505,8 @@ type fakeExecAPI struct {
 	envs           [][]string
 	imageEnv       []string
 	inputs         strings.Builder
-	// inputRead is signalled once per line the interactive exec reads, so
-	// tests can wait for the daemon to drain the hijacked stream.
-	inputRead   chan struct{}
-	resizeQuery string
+	inputRead      chan struct{}
+	resizeQuery    string
 }
 
 func newFakeExecAPI(t *testing.T) *fakeExecAPI {
@@ -605,7 +569,6 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 			return
 		}
 		if id != "exec2" {
-			// The kill helper runs non-interactively and exits immediately.
 			api.mu.Lock()
 			survivors := api.killSurvivors
 			api.execRunning = false
@@ -668,7 +631,6 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 	return api
 }
 
-// command returns the recorded Cmd of the n-th created exec (1-based).
 func (a *fakeExecAPI) command(number int) []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -678,7 +640,6 @@ func (a *fakeExecAPI) command(number int) []string {
 	return append([]string(nil), a.commands[number-1]...)
 }
 
-// env returns the recorded Env of the n-th created exec (1-based).
 func (a *fakeExecAPI) env(number int) []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -700,7 +661,6 @@ func (a *fakeExecAPI) input() string {
 	return a.inputs.String()
 }
 
-// waitForCondition polls cond until it is true or the deadline expires.
 func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool, message string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

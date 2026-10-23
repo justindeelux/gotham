@@ -1,9 +1,3 @@
-/**
- * English auth catalog (namespace `auth`): shell value props, sign-in /
- * registration / invite / OAuth copy, password-strength labels and the
- * validation message keys the auth schemas store. Only values are
- * translated in `vi.ts`; keys, params and interpolation stay identical.
- */
 const en = {
   shell: {
     eyebrow: "Self-hosted PaaS",
@@ -117,5 +111,4 @@ const en = {
 
 export default en;
 
-/** AuthMessages is the shape every auth locale must satisfy. */
 export type AuthMessages = typeof en;

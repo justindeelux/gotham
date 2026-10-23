@@ -49,7 +49,6 @@ func TestSDKLifecycle(t *testing.T) {
 			if _, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "not_registered"}); err == nil {
 				t.Fatal("unknown tool accepted")
 			}
-			// Later packages register typed handlers through the same SDK surface.
 			sdk.AddTool(server, &sdk.Tool{Name: "test_read", Description: "Test typed REST registration"}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, testOutput, error) {
 				client, _ := NewClient(testConfig(api.URL))
 				result, err := client.Context(ctx)

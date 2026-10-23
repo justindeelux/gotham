@@ -17,18 +17,10 @@ import (
 	"github.com/justindeelux/gotham/internal/deploy"
 )
 
-// deliveryPathPrefix is the public path the Git host posts to, relative to the
-// control plane's origin. It mirrors where Mount registers the route once the
-// server has mounted this package under /api.
 const deliveryPathPrefix = "/api/v1/webhooks"
 
-// UserIDFunc resolves the authenticated user from the request context. The
-// server passes its own accessor, so this package never imports the HTTP
-// server (it mirrors the deploy and providers packages for the same reason).
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
-// hookResponse is the wire representation of an installed hook. The signing
-// secret never appears here.
 type hookResponse struct {
 	ID            string    `json:"id"`
 	ApplicationID string    `json:"application_id"`
@@ -38,14 +30,10 @@ type hookResponse struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// hookEnvelope wraps a single hook.
 type hookEnvelope struct {
 	Hook hookResponse `json:"hook"`
 }
 
-// previewResponse is the wire representation of one preview binding. It
-// carries no secrets: the sibling application is referenced by ID, and the
-// branch/host are the operator-facing facts of the preview.
 type previewResponse struct {
 	ID                   string     `json:"id"`
 	ApplicationID        string     `json:"application_id"`
@@ -62,44 +50,24 @@ type previewResponse struct {
 	DeletedAt            *time.Time `json:"deleted_at,omitempty"`
 }
 
-// previewListEnvelope wraps an application's previews.
 type previewListEnvelope struct {
 	Previews []previewResponse `json:"previews"`
 }
 
-// deleteEnvelope reports an idempotent delete.
 type deleteEnvelope struct {
 	Deleted bool `json:"deleted"`
 }
 
-// errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
 }
 
-// handler serves the webhook routes for one Service.
 type handler struct {
 	svc    *Service
 	userID UserIDFunc
 	logger *slog.Logger
 }
 
-// Mount registers the webhook endpoints on r:
-//
-//	POST   /v1/webhooks/{provider}          (public: signature-verified)
-//	POST   /v1/applications/{id}/webhooks   (authenticated, idempotent)
-//	DELETE /v1/applications/{id}/webhooks   (authenticated, idempotent;
-//	                                         ?force=true forgets the stored
-//	                                         hook when the host is gone)
-//	GET    /v1/applications/{id}/previews   (authenticated; previews enabled)
-//
-// auth wraps the management group: the server passes its team chain
-// (RequireAuth + RequireTeam + the write gate), and the service additionally
-// authorizes the parent application's team and role, so a creator demoted to
-// read_only or removed from the team can no longer install or remove a hook.
-// The delivery route deliberately has no auth middleware: it authenticates
-// each delivery with the per-hook secret instead of a session. A nil svc
-// mounts nothing, so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc *Service) {
 	if svc == nil {
 		return
@@ -113,15 +81,11 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/applications/{id}/webhooks", h.create)
 		protected.Delete("/v1/applications/{id}/webhooks", h.delete)
 		if Enabled() {
-			// The preview surface does not exist with FEATURE_PREVIEWS=false:
-			// no listing route, no delivery handling, no sweep.
 			protected.Get("/v1/applications/{id}/previews", h.listPreviews)
 		}
 	})
 }
 
-// receive serves POST /v1/webhooks/{provider}: verify the delivery, then queue
-// a deployment for the application it belongs to.
 func (h *handler) receive(w http.ResponseWriter, r *http.Request) {
 	provider := strings.ToLower(strings.TrimSpace(chi.URLParam(r, "provider")))
 
@@ -130,8 +94,6 @@ func (h *handler) receive(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	// Only a queued deployment is a 202: everything else is a completed
-	// no-op that the provider's delivery log should record as delivered.
 	status := http.StatusOK
 	if delivery.Status == StatusQueued {
 		status = http.StatusAccepted
@@ -139,8 +101,6 @@ func (h *handler) receive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, delivery)
 }
 
-// create serves POST .../webhooks: install the push hook of an application.
-// Repeating the call returns the hook that is already installed.
 func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -159,12 +119,6 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, hookEnvelope{Hook: newHookResponse(hook)})
 }
 
-// delete serves DELETE .../webhooks: remove the hook of an application. An
-// application without a hook answers 200 with deleted=false. ?force=true
-// forgets the stored hook WITHOUT contacting the Git host — the documented
-// escape hatch for deleting an application whose provider connection is gone
-// or stalling; the remote hook is then left behind and only the warning
-// records it. Every other value keeps the strict, host-first semantics.
 func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -189,17 +143,11 @@ func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, deleteEnvelope{Deleted: deleted})
 }
 
-// forceRequested reports whether the caller asked for the force escape hatch
-// (?force=true). Any other value (including an unparsable one) keeps the
-// strict semantics, so a typo can never silently orphan a remote hook.
 func forceRequested(r *http.Request) bool {
 	force, err := strconv.ParseBool(strings.TrimSpace(r.URL.Query().Get("force")))
 	return err == nil && force
 }
 
-// listPreviews serves GET /v1/applications/{id}/previews: the application's
-// preview bindings, newest first, for callers whose team may read the
-// application.
 func (h *handler) listPreviews(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -222,13 +170,6 @@ func (h *handler) listPreviews(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, previewListEnvelope{Previews: response})
 }
 
-// callbackBaseURL derives the public origin of the delivery route: the
-// instance control-plane URL when it is set, otherwise the management
-// request (scheme from the trusted proxy's X-Forwarded-Proto or direct TLS,
-// host from the request). Forwarded scheme headers from an untrusted peer
-// are ignored, so a client cannot redirect the callback to http. A proxy
-// that drops X-Forwarded-Proto yields http, which the host then rejects
-// loudly instead of silently mis-routing deliveries.
 func (s *Service) callbackBaseURL(r *http.Request) string {
 	if s.controlPlaneURL != nil {
 		if base := strings.TrimSpace(s.controlPlaneURL(r.Context())); base != "" {
@@ -242,7 +183,6 @@ func (s *Service) callbackBaseURL(r *http.Request) string {
 	return scheme + "://" + r.Host + deliveryPathPrefix
 }
 
-// currentUser resolves the authenticated user, answering 401 when absent.
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	if h.userID == nil {
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: "unauthorized"})
@@ -256,8 +196,6 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID
 	return userID, true
 }
 
-// applicationIDParam parses the {id} path parameter, answering 400 on a bad
-// UUID.
 func applicationIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -267,24 +205,15 @@ func applicationIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool
 	return id, true
 }
 
-// writeServiceError maps service sentinels to HTTP responses. The 401 of a
-// delivery must not distinguish "unknown repository" from "bad signature".
 func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrBadRequest), errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrUnauthorized):
-		// Both "no hook watches this repository" and "signature does not
-		// verify" answer alike, so a probe cannot tell them apart.
 		writeJSON(w, http.StatusUnauthorized, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrRateLimited):
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrRetryable):
-		// 503: the delivery was not acted on (a conflicting deployment is
-		// running, a duplicate's winning claim is not yet durable, or a
-		// transient dependency failed). The message names the condition without
-		// leaking provider or database detail, and the Git host can redeliver
-		// the same event.
 		h.logger.Warn("webhooks: retryable delivery failure", "error", err)
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "delivery can be retried"})
 	case errors.Is(err, ErrNotFound):
@@ -304,7 +233,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// newPreviewResponse maps a stored preview binding to its wire form.
 func newPreviewResponse(p Preview) previewResponse {
 	response := previewResponse{
 		ID:                   p.ID.String(),
@@ -327,7 +255,6 @@ func newPreviewResponse(p Preview) previewResponse {
 	return response
 }
 
-// newHookResponse maps a stored hook to its wire representation.
 func newHookResponse(h Hook) hookResponse {
 	return hookResponse{
 		ID:            h.ID.String(),
@@ -339,7 +266,6 @@ func newHookResponse(h Hook) hookResponse {
 	}
 }
 
-// writeJSON serialises payload with the given HTTP status.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

@@ -16,7 +16,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// savedVersion is one recorded snapshot the fake store saw.
 type savedVersion struct {
 	root    string
 	path    string
@@ -24,8 +23,6 @@ type savedVersion struct {
 	content string
 }
 
-// fakeHistory is a scriptable HistoryStore. It records the canonical path key
-// of every call, the context error a save observed, and every deleted revision.
 type fakeHistory struct {
 	mu sync.Mutex
 
@@ -84,15 +81,12 @@ func (f *fakeHistory) DeleteVersion(_ context.Context, _ uuid.UUID, _, path stri
 	return f.deleted, f.delErr
 }
 
-// savedCount reports how many snapshots were recorded.
 func (f *fakeHistory) savedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.saves)
 }
 
-// newHistoryService wires a test service with a history store and returns the
-// seeded server and team.
 func newHistoryService(t *testing.T, client *fakeFileClient, history HistoryStore) (*Service, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	teamID := uuid.New()
@@ -105,8 +99,6 @@ func newHistoryService(t *testing.T, client *fakeFileClient, history HistoryStor
 	return svc, server.ID, teamID
 }
 
-// TestSaveRecordsPriorBody proves one save snapshots the body it replaced, with
-// the read etag, and only after the write committed.
 func TestSaveRecordsPriorBody(t *testing.T) {
 	client := &fakeFileClient{
 		statResp:  &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 4, Etag: `"v1"`}},
@@ -131,8 +123,6 @@ func TestSaveRecordsPriorBody(t *testing.T) {
 	}
 }
 
-// TestForceSaveDoesNotSnapshot proves a write with no read etag (a force-save
-// or a create) has no known prior and records nothing.
 func TestForceSaveDoesNotSnapshot(t *testing.T) {
 	client := &fakeFileClient{writeResp: writeEntry()}
 	history := &fakeHistory{}
@@ -148,8 +138,6 @@ func TestForceSaveDoesNotSnapshot(t *testing.T) {
 	}
 }
 
-// TestRestoreSnapshotsCurrentBody proves a restore snapshots what it replaces,
-// writes the version under the current etag, and records the prior body.
 func TestRestoreSnapshotsCurrentBody(t *testing.T) {
 	client := &fakeFileClient{
 		statResp:  &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 7, Etag: `"v1"`}},
@@ -174,8 +162,6 @@ func TestRestoreSnapshotsCurrentBody(t *testing.T) {
 	}
 }
 
-// TestRestoreRecreatesDeletedFile proves restoring a deleted path creates it
-// instead of failing on a missing etag.
 func TestRestoreRecreatesDeletedFile(t *testing.T) {
 	client := &fakeFileClient{
 		statErr:   status.Error(codes.NotFound, "gone"),
@@ -195,9 +181,6 @@ func TestRestoreRecreatesDeletedFile(t *testing.T) {
 	}
 }
 
-// TestRestoreRefusesUnreadableCurrent proves a restore of a file that cannot be
-// read as text is refused before anything is written, so an over-limit body
-// cannot be replaced without a snapshot.
 func TestRestoreRefusesUnreadableCurrent(t *testing.T) {
 	client := &fakeFileClient{
 		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 9, Etag: `"v1"`}},
@@ -214,8 +197,6 @@ func TestRestoreRefusesUnreadableCurrent(t *testing.T) {
 	}
 }
 
-// TestHistoryPathConfinement proves the history surface refuses traversal-shaped
-// paths and a missing version id before touching the store or the agent.
 func TestHistoryPathConfinement(t *testing.T) {
 	history := &fakeHistory{}
 	svc := NewService(Config{Registry: newFakeRegistry(), HistoryMaxVersions: 10, HistoryMaxBytes: 1024})
@@ -259,8 +240,6 @@ func TestHistoryPathConfinement(t *testing.T) {
 	}
 }
 
-// TestHistoryUnavailable proves a service with no store answers 503-shaped
-// ErrHistoryUnavailable instead of an empty list.
 func TestHistoryUnavailable(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -271,8 +250,6 @@ func TestHistoryUnavailable(t *testing.T) {
 	}
 }
 
-// TestHistoryListsNewestFirst proves the service passes the store order through
-// unchanged (the store query is newest-first).
 func TestHistoryListsNewestFirst(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -294,10 +271,6 @@ func TestHistoryListsNewestFirst(t *testing.T) {
 	}
 }
 
-// TestSaveSkipsSnapshotOnEtagMismatch proves a pre-save read whose etag does
-// not match the If-Match the agent validates never records a body: the file
-// moved between the caller's read and ours, so the read body is not provably
-// the body the commit replaces.
 func TestSaveSkipsSnapshotOnEtagMismatch(t *testing.T) {
 	client := &fakeFileClient{
 		statResp:  &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 4, Etag: `"v1"`}},
@@ -317,8 +290,6 @@ func TestSaveSkipsSnapshotOnEtagMismatch(t *testing.T) {
 	}
 }
 
-// TestSnapshotFailureDoesNotFailSave proves a history store error is logged and
-// ignored after a committed save (the save result already succeeded).
 func TestSnapshotFailureDoesNotFailSave(t *testing.T) {
 	client := &fakeFileClient{
 		statResp:  &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 4, Etag: `"v1"`}},
@@ -338,9 +309,6 @@ func TestSnapshotFailureDoesNotFailSave(t *testing.T) {
 	}
 }
 
-// TestSnapshotInsertSurvivesRequestCancellation proves the snapshot insert runs
-// on a detached context: the client disconnecting right after the agent commit
-// must not lose the revision.
 func TestSnapshotInsertSurvivesRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(scopeCtx(teams.RoleOwner, uuid.New()))
 	defer cancel()
@@ -357,8 +325,6 @@ func TestSnapshotInsertSurvivesRequestCancellation(t *testing.T) {
 	svc := newTestService(t, registry, client)
 	svc.SetHistoryStore(history)
 
-	// Rebind the scope to the seeded team, then cancel the request from the
-	// fake stream's commit.
 	ctx = teams.WithScope(ctx, teams.Scope{UserID: uuid.New(), TeamID: teamID, Role: teams.RoleOwner})
 	if _, err := svc.Write(ctx, server.ID, WriteRequest{
 		Root: "volumes", Path: "a.txt", ExpectEtag: `"v1"`, Size: 3,
@@ -373,8 +339,6 @@ func TestSnapshotInsertSurvivesRequestCancellation(t *testing.T) {
 	}
 }
 
-// TestRestoreSnapshotsBeforeWriteAndAbortsOnFailure proves a restore whose
-// pre-snapshot cannot be stored aborts without touching the file.
 func TestRestoreSnapshotsBeforeWriteAndAbortsOnFailure(t *testing.T) {
 	client := &fakeFileClient{
 		statResp:  &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 7, Etag: `"v1"`}},
@@ -396,8 +360,6 @@ func TestRestoreSnapshotsBeforeWriteAndAbortsOnFailure(t *testing.T) {
 	}
 }
 
-// TestRestoreDropsPreSnapshotOnConflict proves a refused restore removes the
-// revision it recorded first, so no phantom history entry remains.
 func TestRestoreDropsPreSnapshotOnConflict(t *testing.T) {
 	saveID := uuid.New()
 	client := &fakeFileClient{
@@ -420,8 +382,6 @@ func TestRestoreDropsPreSnapshotOnConflict(t *testing.T) {
 	}
 }
 
-// TestHistoryCanonicalizesPath proves one file has one history key regardless
-// of "." / duplicate / trailing separators, for list and restore.
 func TestHistoryCanonicalizesPath(t *testing.T) {
 	history := &fakeHistory{
 		versions: []Version{{ID: uuid.New(), Size: 3}},

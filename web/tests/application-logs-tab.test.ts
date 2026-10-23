@@ -32,7 +32,6 @@ interface LogProbe {
   serversError?: unknown;
 }
 
-/** logProbe holds the canned API answers driving the detail composable. */
 function logProbe(): LogProbe {
   const scope = globalThis as Record<string, unknown>;
   scope.__logProbe ??= { apps: [], deployments: {}, servers: [] };
@@ -80,10 +79,8 @@ vi.mock("@/features/projects/api/variables", async (importOriginal) => {
   };
 });
 
-/** probe holds the canned API answers driving the detail composable. */
 const probe: LogProbe = logProbe();
 
-/** dep builds a deployment row with only id/state varying. */
 function dep(id: string, state: Deployment["state"]): Deployment {
   return {
     id,
@@ -104,7 +101,6 @@ function dep(id: string, state: Deployment["state"]): Deployment {
   };
 }
 
-/** app builds an application row with only id/node varying. */
 function app(id: string, serverId: string | null): Application {
   return {
     id,
@@ -130,7 +126,6 @@ function app(id: string, serverId: string | null): Application {
   };
 }
 
-/** srv builds a node row with only id varying. */
 function srv(id: string): Server {
   return {
     id,
@@ -167,7 +162,6 @@ beforeEach(() => {
   probe.serversError = null;
 });
 
-/** props builds tab props with a selected node and deployment. */
 function props(overrides: Record<string, unknown> = {}) {
   return {
     logServerId: "server-1",
@@ -183,7 +177,6 @@ function props(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** mountTab renders the tab with heavy children stubbed out. */
 function mountTab(tabProps: Record<string, unknown>) {
   return mount(ApplicationLogsTab, {
     props: tabProps as never,
@@ -251,7 +244,6 @@ describe("ApplicationLogsTab selects", () => {
   });
 });
 
-/** mountDetail mounts the real composable behind a message provider. */
 async function mountDetail(appId: string) {
   setActivePinia(createPinia());
   const router = createRouter({
@@ -288,12 +280,10 @@ async function mountDetail(appId: string) {
   return { wrapper, router, detail };
 }
 
-/** stopTimers tears down polling so no test leaks an interval. */
 function stopTimers() {
   try {
     useApplicationsStore().stopAllPolling();
   } catch {
-    // The store was never created; nothing polls.
   }
 }
 

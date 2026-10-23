@@ -23,12 +23,6 @@ import { totpCodeRules } from "@/features/profile/schemas/totp";
 import { useCopyText } from "@/shared/composables/useCopyText";
 import { downloadText } from "@/shared/utils/download";
 
-/**
- * TotpConfirmDialog asks for the password and a current code before turning
- * two-factor off or regenerating the recovery codes (JUS-196), so a stolen
- * interactive session cannot do either alone. Regenerating then reveals the
- * fresh codes once.
- */
 const props = defineProps<{
   show: boolean;
   mode: "disable" | "regenerate";
@@ -36,7 +30,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:show": [value: boolean];
-  /** done reports the change was committed, so the card refreshes. */
   done: [];
 }>();
 
@@ -54,19 +47,12 @@ const errorMessage = computed<string>(() =>
   rawError.value === null ? "" : describeAuthError(rawError.value),
 );
 const form = reactive({ password: "", code: "" });
-// A computed so the password rule follows a late /auth/me load.
 const rules = computed(() => totpCodeRules(hasPassword.value));
 
 const codes = ref<string[]>([]);
 
-/**
- * gateCodes is true while the freshly regenerated recovery codes are on screen
- * (and not yet acknowledged), so the modal is not dismissable then and the codes
- * cannot be lost.
- */
 const gateCodes = computed<boolean>(() => codes.value.length > 0);
 
-/** downloadCodes saves the regenerated codes as a text file. */
 function downloadCodes(): void {
   downloadText("gotham-recovery-codes.txt", `${codes.value.join("\n")}\n`);
 }
@@ -99,7 +85,6 @@ const submitLabel = computed(() =>
     : t("profile.totp.regenerateSubmit"),
 );
 
-/** submit runs the chosen action after validating the fields. */
 async function submit(): Promise<void> {
   if (submitting.value) {
     return;
@@ -134,7 +119,6 @@ async function submit(): Promise<void> {
   }
 }
 
-/** close dismisses the dialog, reporting whether the state changed. */
 function close(changed: boolean): void {
   emit("update:show", false);
   if (changed) {
@@ -160,7 +144,6 @@ function close(changed: boolean): void {
         {{ errorMessage }}
       </NAlert>
 
-      <!-- The fresh codes replace the form once regeneration succeeded. -->
       <template v-if="codes.length > 0">
         <NText depth="3">{{ t("profile.totp.codesHint") }}</NText>
         <ul class="totp-codes">

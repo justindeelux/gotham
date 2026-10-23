@@ -30,13 +30,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// pe7Harness is the Phase 13 (PE-7) acceptance fixture: the p4 deploy stack
-// (real control plane deploy routes, Postgres, Redis, mTLS node agent on the
-// local Docker daemon) plus the projects, services and databases surfaces on
-// the same router, so one flow can prove project -> environment -> application
-// -> deploy end to end, including the shared-variable merge and the 409
-// guards. Like the p4/p7 harnesses it runs only behind requireE2E and fails
-// on a missing precondition instead of skipping green.
 type pe7Harness struct {
 	baseURL  string
 	client   *http.Client
@@ -46,12 +39,6 @@ type pe7Harness struct {
 	st       *store.Store
 }
 
-// newPE7Harness boots the stack. The services surface is wired without an
-// agent dialer (create/update-refusal paths never dial) and the databases
-// surface with a container service whose dial always fails (the exercised
-// paths — update refusal, delete of a never-provisioned row, list — never
-// reach it); the only real node work is the application deploy, exactly like
-// the p4 suite.
 func newPE7Harness(t *testing.T) *pe7Harness {
 	t.Helper()
 	requireE2E(t)
@@ -176,11 +163,6 @@ func newPE7Harness(t *testing.T) *pe7Harness {
 		projects.Mount(r, requireAuth, userIDFunc, projectSvc)
 		services.Mount(r, requireAuth, userIDFunc, composeSvc)
 		databases.Mount(r, requireAuth, requireAuth, userIDFunc, databaseSvc)
-		// The node registry lives in internal/server (the full HTTP
-		// server, too heavy for this harness), so the delete guard is
-		// exercised through the real domain service with production's
-		// exact status mapping (see handleDeleteServer/writeServerError:
-		// ErrConflict -> 409 with the service text).
 		r.Delete("/v1/servers/{id}", func(w http.ResponseWriter, req *http.Request) {
 			id, err := uuid.Parse(chi.URLParam(req, "id"))
 			if err != nil {
@@ -215,7 +197,6 @@ func newPE7Harness(t *testing.T) *pe7Harness {
 	}
 }
 
-// api performs one API call against the harness control plane.
 func (h *pe7Harness) api(t *testing.T, method, path string, body, out any) (int, string) {
 	t.Helper()
 	var reader io.Reader
@@ -251,15 +232,12 @@ func (h *pe7Harness) api(t *testing.T, method, path string, body, out any) (int,
 	return response.StatusCode, string(raw)
 }
 
-// writePE7JSON serialises payload with the given HTTP status.
 func writePE7JSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-// containerEnv returns the environment the container was started with.
-// addDomain attaches one routed host through the public API.
 func (h *pe7Harness) addDomain(t *testing.T, appID, domain string, port int32, protocol string) {
 	t.Helper()
 	status, body := h.api(t, http.MethodPost, "/v1/applications/"+appID+"/domains", map[string]any{
@@ -270,7 +248,6 @@ func (h *pe7Harness) addDomain(t *testing.T, appID, domain string, port int32, p
 	}
 }
 
-// appURL resolves the application's current published host port.
 func (h *pe7Harness) appURL(t *testing.T, appID string) string {
 	t.Helper()
 	return fmt.Sprintf("http://127.0.0.1:%d/index.html", pe7PublishedHostPort(t, appID, p4ContainerPort))
@@ -329,19 +306,11 @@ func (h *pe7Harness) containerEnv(t *testing.T, containerID string) map[string]s
 	return env
 }
 
-// TestPE7ProjectsFlow proves the Phase 13 happy path end to end against real
-// infrastructure: create project (production comes with it) -> add an
-// environment -> create an application on the node -> deploy -> running, with
-// the project < environment < application variable merge visible in the
-// deployed container; then the move and the 409 guards (environment delete
-// with resources, service/database server change, server delete with live
-// resources).
 func TestPE7ProjectsFlow(t *testing.T) {
 	h := newPE7Harness(t)
 	suffix := uuid.New().String()[:8]
 	ctx := context.Background()
 
-	// 1. The project arrives with its production environment in one tx.
 	var createdProject struct {
 		Project struct {
 			ID   string `json:"id"`
@@ -362,7 +331,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	projectID := createdProject.Project.ID
 	productionID := createdProject.Environments[0].ID
 
-	// 2. A second environment for the move later.
 	var createdEnv struct {
 		Environment struct {
 			ID   string `json:"id"`
@@ -375,7 +343,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	}
 	stagingID := createdEnv.Environment.ID
 
-	// 3. Shared variables at both scopes. Secrets must never come back.
 	putVariables := func(path string, variables []map[string]any) {
 		t.Helper()
 		var out any
@@ -406,8 +373,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		}
 	}
 
-	// 4. The application in production, with its own env: it wins every
-	// overlap, including over a shared secret (plain over sealed).
 	fixture := newP4Fixture(t, "e2e/pe7-app-"+suffix, "gotham-pe7-v1-"+suffix)
 	var createdApp struct {
 		Application p4Application `json:"application"`
@@ -429,9 +394,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	h.addDomain(t, appID, "pe7-app-"+suffix+".example.test", p4ContainerPort, "http")
 	t.Cleanup(func() { removeImages(t, "gotham/"+appID) })
 	t.Cleanup(func() { removeLabelledContainers(t, "gotham.app_id="+appID) })
-	// Resource rows go before the harness server rows (registered earlier,
-	// so they run later): on a mid-flow failure the node row's RESTRICT
-	// references are gone by the time its delete runs.
 	t.Cleanup(func() { h.deleteAppRow(t, appID) })
 	status, raw = h.api(t, http.MethodPut, "/v1/applications/"+appID+"/env", map[string]any{"env": []map[string]string{
 		{"key": "PE7_WIN", "value": "application"},
@@ -442,7 +404,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		t.Fatalf("PUT application env: status %d: %s", status, raw)
 	}
 
-	// 5. Deploy and prove it runs.
 	queued := h.deployApp(t, appID)
 	running := h.waitAppTerminal(t, appID, queued.ID)
 	if running.State != "running" {
@@ -453,9 +414,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	}
 	waitForHTTPBody(t, h.appURL(t, appID), fixture.marker)
 
-	// 6. The merged precedence is what the container actually started with:
-	// project < environment < application, secrets materialised in plaintext
-	// only in the node payload.
 	env := h.containerEnv(t, running.ContainerID)
 	for key, want := range map[string]string{
 		"PE7_SHARED":    "environment",
@@ -471,7 +429,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		}
 	}
 
-	// 7. The resources envelope lists the application in its environment.
 	var resources struct {
 		Applications []struct {
 			ID            string `json:"id"`
@@ -488,7 +445,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		t.Fatalf("resources envelope lists %d applications, want the one: %s", len(resources.Applications), raw)
 	}
 
-	// 8. Move the application to staging.
 	var moved struct {
 		Application p4Application `json:"application"`
 	}
@@ -510,17 +466,12 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		t.Fatalf("moved application environment = %q, want %q", got.Application.EnvironmentID, stagingID)
 	}
 
-	// 9. An environment with resources cannot be deleted; empty it first via
-	// the API, then the delete succeeds.
 	if status, raw := h.api(t, http.MethodDelete, "/v1/environments/"+stagingID, nil, nil); status != http.StatusConflict {
 		t.Fatalf("DELETE non-empty environment: status %d, want 409: %s", status, raw)
 	} else if !strings.Contains(raw, "still has resources") {
 		t.Fatalf("DELETE non-empty environment body = %q, want the still-has-resources refusal", raw)
 	}
 
-	// 10. A deployed service cannot change node: seed one deploy row (the
-	// service itself is created through the real API, no agent needed) and
-	// move the attempt to a second node.
 	secondServer, err := h.st.CreateServer(ctx, sqlc.CreateServerParams{
 		Name: "pe7-e2e-node-2", Ip: "127.0.0.1", Port: 22, SshUser: "root",
 	})
@@ -562,8 +513,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		t.Fatalf("PATCH service server body = %q, want the pinned refusal", raw)
 	}
 
-	// 11. A database cannot change node once created: seed the row (status
-	// creating, no container — provisioning never ran) and try the move.
 	dbRow, err := h.st.CreateDatabase(ctx, sqlc.CreateDatabaseParams{
 		ID: pgUUID(uuid.New()), UserID: pgUUID(h.userID), ServerID: pgUUID(h.serverID),
 		EnvironmentID: pgUUID(uuid.MustParse(stagingID)), Name: "pe7-db-" + suffix,
@@ -582,18 +531,12 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		t.Fatalf("PATCH database server body = %q, want the pinned refusal", raw)
 	}
 
-	// 12. The node still holds the application, the service and the database:
-	// deleting it is refused with the blocking list.
 	if status, raw := h.api(t, http.MethodDelete, "/v1/servers/"+h.serverID.String(), nil, nil); status != http.StatusConflict {
 		t.Fatalf("DELETE live server: status %d, want 409: %s", status, raw)
 	} else if !strings.Contains(raw, "server still has resources") {
 		t.Fatalf("DELETE live server body = %q, want the still-has-resources refusal", raw)
 	}
 
-	// 13. Tear down through the API: the application (its container goes
-	// with it), the never-provisioned database (no container to stop), then
-	// the seeded service rows at the store (never deployed, so no node
-	// state). The emptied environment deletes; the last one is refused.
 	if status, raw := h.api(t, http.MethodDelete, "/v1/applications/"+appID, nil, nil); status != http.StatusNoContent {
 		t.Fatalf("DELETE application: status %d: %s", status, raw)
 	}
@@ -618,9 +561,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	t.Logf("pe7 flow ok: project=%s app=%s service=%s db=%s", projectID, appID, serviceID, dbID)
 }
 
-// deleteAppRow removes the application through the API (its container goes
-// with it), falling back to a row delete when the API path already failed.
-// Best-effort: it runs as a cleanup, so it never fails the test.
 func (h *pe7Harness) deleteAppRow(t *testing.T, appID string) {
 	t.Helper()
 	if status, _ := h.api(t, http.MethodDelete, "/v1/applications/"+appID, nil, nil); status == http.StatusNoContent || status == http.StatusNotFound {
@@ -633,9 +573,6 @@ func (h *pe7Harness) deleteAppRow(t *testing.T, appID string) {
 	}
 }
 
-// deleteServiceRows hard-deletes the seeded service and its deploy rows. The
-// service never deployed, so no node state exists; a hard delete (not the
-// soft delete) also drops the server_id RESTRICT reference.
 func (h *pe7Harness) deleteServiceRows(t *testing.T, serviceID string) {
 	t.Helper()
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -649,9 +586,6 @@ func (h *pe7Harness) deleteServiceRows(t *testing.T, serviceID string) {
 	}
 }
 
-// deleteDatabaseRow hard-deletes the seeded database row. It never
-// provisioned, so no container or volume exists; a hard delete drops the
-// server_id RESTRICT reference the soft delete would keep.
 func (h *pe7Harness) deleteDatabaseRow(t *testing.T, dbID string) {
 	t.Helper()
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -661,7 +595,6 @@ func (h *pe7Harness) deleteDatabaseRow(t *testing.T, dbID string) {
 	}
 }
 
-// deployApp queues a deployment of the current revision (202).
 func (h *pe7Harness) deployApp(t *testing.T, appID string) p4Deployment {
 	t.Helper()
 	var envelope p4DeploymentEnvelope
@@ -672,7 +605,6 @@ func (h *pe7Harness) deployApp(t *testing.T, appID string) p4Deployment {
 	return envelope.Deployment
 }
 
-// waitAppTerminal polls until the named deployment reaches running or failed.
 func (h *pe7Harness) waitAppTerminal(t *testing.T, appID, deploymentID string) p4Deployment {
 	t.Helper()
 	deadline := time.Now().Add(p4DeployWait)

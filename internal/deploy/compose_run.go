@@ -15,23 +15,13 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// Compose source limits (GS-8). The pasted text travels to the node as the
-// project's compose file, so it is capped like the task requires; the
-// in-repo file path is a short relative reference, never a document.
 const (
-	// MaxComposeBytes caps pasted compose text at 256 KiB.
-	MaxComposeBytes = 256 << 10
-	// MaxComposeFilePathBytes caps the in-repo compose file path.
+	MaxComposeBytes         = 256 << 10
 	MaxComposeFilePathBytes = 256
 )
 
-// composeServiceNamePattern is the compose service identifier alphabet,
-// mirroring the Services surface (internal/services).
 var composeServiceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 
-// ValidateComposeFilePath checks the in-repo compose file reference of a
-// repo-backed compose application: a short relative path that cannot escape
-// the checkout. The content itself is validated after the clone.
 func ValidateComposeFilePath(path string) error {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -59,11 +49,6 @@ func ValidateComposeFilePath(path string) error {
 	return nil
 }
 
-// ValidateComposeService checks the web service name: structurally a compose
-// service name, and a member of the document's parsed service list when the
-// document is available (pasted content). Repo-backed applications pass an
-// empty document: membership is enforced at deploy time, once the file is
-// read from the checkout.
 func ValidateComposeService(content, service string) error {
 	trimmed := strings.TrimSpace(service)
 	if trimmed == "" {
@@ -88,9 +73,6 @@ func ValidateComposeService(content, service string) error {
 		ErrValidation, service, strings.Join(spec.Services, ", "))
 }
 
-// ComposeImages returns the sorted image references the document's services
-// declare. The orchestrator pulls each one before `up`, so a redeploy is
-// pull images + up -d.
 func ComposeImages(content string) ([]string, error) {
 	var doc composeAppDocument
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
@@ -110,32 +92,19 @@ func ComposeImages(content string) ([]string, error) {
 	return images, nil
 }
 
-// composeAppDocument is the subset of a compose document the orchestrator
-// decodes: service images for the pull list. Structural validation belongs
-// to the confinement allowlist, not to this shape.
 type composeAppDocument struct {
 	Services map[string]composeAppService `yaml:"services"`
 }
 
-// composeAppService is the subset of a compose service the orchestrator
-// decodes.
 type composeAppService struct {
 	Image string `yaml:"image"`
 }
 
-// ComposePortTarget is one domain's routing target in a compose document: the
-// service that serves the host and the container port the proxy must reach.
 type ComposePortTarget struct {
 	Service string
 	Port    int32
 }
 
-// InjectComposeDomainPorts ensures the rendered document publishes every
-// domain's container port on the service it names. An existing routable
-// mapping for the port is kept (the user's declaration wins); otherwise a
-// bare container port is appended, letting Docker assign an ephemeral host
-// port that the proxy resolves. An application with no domains changes
-// nothing, and a target must name a service the document declares.
 func InjectComposeDomainPorts(rendered string, targets []ComposePortTarget) (string, error) {
 	if len(targets) == 0 {
 		return rendered, nil
@@ -196,9 +165,6 @@ func InjectComposeDomainPorts(rendered string, targets []ComposePortTarget) (str
 	return string(out), nil
 }
 
-// composePortEntries normalizes a service's ports field to its raw entries.
-// An absent field means no mappings; a present non-list is rejected rather
-// than silently replaced.
 func composePortEntries(raw any) ([]any, error) {
 	if raw == nil {
 		return nil, nil
@@ -210,10 +176,6 @@ func composePortEntries(raw any) ([]any, error) {
 	return entries, nil
 }
 
-// isLoopbackAddress reports whether a host binding is loopback-only: the
-// proxy ignores loopback bindings, so a loopback-only user mapping must not
-// suppress the injected routable one. An empty host binds all interfaces
-// and is routable.
 func isLoopbackAddress(host string) bool {
 	trimmed := strings.TrimSpace(host)
 	if trimmed == "" {
@@ -223,12 +185,6 @@ func isLoopbackAddress(host string) bool {
 		strings.EqualFold(trimmed, "localhost") || trimmed == "::1"
 }
 
-// portMapped reports whether a ports entry already publishes the container
-// port on a routable binding. It understands ranges ("8000-8010:8000-8010",
-// where a port inside the range counts as mapped), the [ip:]host:container
-// forms (a loopback host does not count: the proxy ignores loopback
-// bindings, so a loopback-only user mapping must not suppress the injected
-// routable one) and the long syntax (a loopback host_ip does not count).
 func portMapped(entry any, port string) bool {
 	switch value := entry.(type) {
 	case string:
@@ -239,7 +195,6 @@ func portMapped(entry any, port string) bool {
 		host := ""
 		rest := strings.TrimSpace(target)
 		if strings.HasPrefix(rest, "[") {
-			// An IPv6 host binding brackets the address: [::1]:8080:3000.
 			end := strings.Index(rest, "]")
 			if end < 0 {
 				return false
@@ -268,9 +223,6 @@ func portMapped(entry any, port string) bool {
 	}
 }
 
-// portInRange reports whether port falls inside a "lo-hi" range. A malformed
-// range is the node's compose validation to refuse, never a mapping to
-// trust, so it answers false.
 func portInRange(port, span string) bool {
 	bounds := strings.SplitN(span, "-", 2)
 	if len(bounds) != 2 {
@@ -291,18 +243,8 @@ func portInRange(port, span string) bool {
 	return want >= lo && want <= hi
 }
 
-// composeNamedVolumePattern matches a compose named volume reference: one
-// path segment, starting with an alphanumeric character.
 var composeNamedVolumePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
-// RewriteComposeManagedVolumes maps every named volume of a rendered compose
-// document onto the application's managed directory. A volume used by a
-// service without a top-level declaration is auto-declared; a declared one
-// keeps its name and is redefined. Both become local volumes whose device
-// is <root>/<appID>/<name>, so Docker stores their data where the file
-// manager and backups can reach it instead of its own default mountpoint.
-// An external declaration is left untouched (the confined allowlist rejects
-// external volumes, so this only matters to a direct caller of the rewrite).
 func RewriteComposeManagedVolumes(rendered, root string, appID uuid.UUID) (string, error) {
 	if strings.TrimSpace(rendered) == "" {
 		return "", fmt.Errorf("%w: compose document is required", ErrValidation)
@@ -380,8 +322,6 @@ func RewriteComposeManagedVolumes(rendered, root string, appID uuid.UUID) (strin
 	return string(out), nil
 }
 
-// composeVolumeSource returns the named-volume source of one service mount,
-// or false for an anonymous volume, a host bind or an unparseable entry.
 func composeVolumeSource(entry any) (string, bool) {
 	source := ""
 	switch mount := entry.(type) {
@@ -407,8 +347,6 @@ func composeVolumeSource(entry any) (string, bool) {
 	return source, true
 }
 
-// validateComposeVolumeName keeps a rewritten name a safe single path
-// segment outside the managed-database namespace.
 func validateComposeVolumeName(name string) error {
 	if !composeNamedVolumePattern.MatchString(name) {
 		return fmt.Errorf("%w: volume source %q is not a valid named volume", ErrValidation, name)
@@ -419,9 +357,6 @@ func validateComposeVolumeName(name string) error {
 	return nil
 }
 
-// isExternalVolume reports whether a top-level volume declaration is
-// external. The rewrite never changes such a volume; a confined deploy
-// rejects it before reaching here.
 func isExternalVolume(definition any) bool {
 	mapping, ok := definition.(map[string]any)
 	if !ok {
@@ -437,31 +372,16 @@ func isExternalVolume(definition any) bool {
 	return true
 }
 
-// rewriteManagedBindsForPreview rewrites managed bind prefixes that name
-// another application directory to the preview's own directory, so a
-// preview inherits the document shape without ever mounting (or writing)
-// the base application's data. Named volumes need no rewrite: compose
-// prefixes them with the project name, which already differs per preview.
 func rewriteManagedBindsForPreview(content, root string, previewID uuid.UUID) string {
 	prefix := regexp.QuoteMeta(filepath.Clean(root)) + `/[0-9a-fA-F-]{36}/`
 	replacement := filepath.Clean(root) + "/" + previewID.String() + "/"
 	return regexp.MustCompile(prefix).ReplaceAllString(content, replacement)
 }
 
-// teardownStubDocument is the minimal valid document a best-effort teardown
-// falls back to when the stored document no longer resolves: `down
-// --remove-orphans` removes the project's containers whatever services the
-// document declares, so the sidecars are still reached.
 func teardownStubDocument() string {
 	return "services:\n  gotham-teardown:\n    image: scratch\n"
 }
 
-// composeProjectEnv assembles the substitution environment of a compose
-// deploy: the application's plain env vars and opened secrets, layered over
-// the shared scopes exactly like a container start, plus the PORT default.
-// The map is what services.Render substitutes into the document; secret
-// values never reach a stored row, a log line or an error (see Render and
-// services.Redact at the call sites).
 func composeProjectEnv(envVars []EnvVar, secrets []Secret, project, environment []SharedVariable, secretKey string, port int32) (map[string]string, error) {
 	envVars, secrets = mergeSharedVariables(project, environment, envVars, secrets)
 	env := make(map[string]string, len(envVars)+len(secrets)+1)
@@ -495,7 +415,6 @@ func composeProjectEnv(envVars []EnvVar, secrets []Secret, project, environment 
 	return env, nil
 }
 
-// scalarString renders a YAML scalar the way compose interpolates it.
 func scalarString(raw any) string {
 	switch value := raw.(type) {
 	case nil:

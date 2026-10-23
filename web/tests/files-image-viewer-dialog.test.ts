@@ -1,8 +1,3 @@
-// Image viewer dialog (JUS-204): ticket+blob load, object-URL lifecycle
-// (revoke after the leave transition and on unmount), stale-load
-// invalidation, classified vs viewer-copy errors, retry and <img> decode
-// errors. The files API is mocked; teleport is stubbed so the modal stays
-// inside the wrapper.
 /* global Blob:readonly, URL:readonly, AbortSignal:readonly */
 import { NModal } from "naive-ui";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -36,10 +31,8 @@ const ticketMock = vi.mocked(issueDownloadTicket);
 const blobMock = vi.mocked(fetchDownloadBlob);
 const createObjectURLMock = vi.fn<(_blob: Blob) => string>();
 const revokeObjectURLMock = vi.fn<(_url: string) => void>();
-/** nextUrlId numbers the minted mock URLs from 0 per test. */
 let nextUrlId = 0;
 
-/** entry builds one image row with sensible defaults. */
 function entry(name: string): FilesEntry {
   return {
     name,
@@ -51,7 +44,6 @@ function entry(name: string): FilesEntry {
   };
 }
 
-/** props builds the dialog props with sensible defaults. */
 function props(overrides: Record<string, unknown> = {}) {
   return {
     show: false,
@@ -64,7 +56,6 @@ function props(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** mountDialog mounts the dialog with i18n and a stubbed teleport. */
 function mountDialog(dialogProps: Record<string, unknown> = {}) {
   return mount(ImageViewerDialog, {
     props: props(dialogProps),
@@ -72,13 +63,11 @@ function mountDialog(dialogProps: Record<string, unknown> = {}) {
   });
 }
 
-/** afterLeave fires the modal's leave transition end on the wrapper. */
 async function afterLeave(wrapper: ReturnType<typeof mount>): Promise<void> {
   wrapper.findComponent(NModal).vm.$emit("after-leave");
   await flushPromises();
 }
 
-/** buttonWith finds a button whose visible label contains `text`. */
 function buttonWith(
   wrapper: ReturnType<typeof mount>,
   text: string,
@@ -86,7 +75,6 @@ function buttonWith(
   return wrapper.findAll("button").find((button) => button.text().includes(text));
 }
 
-/** deferred returns a promise with its resolve/reject exposed. */
 function deferred<T>() {
   let resolve!: (_value: T) => void;
   let reject!: (_reason: unknown) => void;
@@ -143,8 +131,6 @@ describe("image viewer dialog", () => {
     await flushPromises();
     expect(createObjectURLMock).toHaveBeenCalledTimes(1);
 
-    // Close drops the stage (NModal unmounts its body) but the URL is
-    // revoked only after the leave transition, never mid-fade.
     await wrapper.setProps({ show: false });
     await flushPromises();
     expect(wrapper.find(".viewer-stage img").exists()).toBe(false);
@@ -172,8 +158,6 @@ describe("image viewer dialog", () => {
     await flushPromises();
     expect(ticketMock).toHaveBeenCalledTimes(1);
 
-    // Closing invalidates the in-flight load; the late ticket must not
-    // start a blob fetch or mint an object URL.
     await wrapper.setProps({ show: false });
     ticket.resolve("ticket-late");
     await flushPromises();

@@ -6,12 +6,6 @@ import { useServiceDetailContext } from "@/features/services/composables/useServ
 import { activeLocale, i18n } from "@/shared/i18n";
 import { relativeTime } from "@/shared/utils/format";
 
-/** ServiceOverviewCard renders the service facts and the timeline stub. */
-
-/**
- * t renders card copy in the active locale (tracks language switches).
- * Called during render, so labels refresh without reloading the service.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));

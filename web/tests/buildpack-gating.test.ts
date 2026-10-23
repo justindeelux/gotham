@@ -1,8 +1,3 @@
-// JUS-179 build-pack gating: the picker only offers build packs whose toolchain
-// is installed on the target node, offers an inline Install that enqueues the
-// engine's deps through the toolchain store and opens the JUS-178 modal, and
-// re-enables automatically as the store reloads the catalog. The toolchain
-// store is mocked so the states are driven directly.
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -35,7 +30,6 @@ import {
 import { useServersStore } from "@/features/servers";
 import { registerDiscoveredCatalogs } from "@/shared/i18n";
 
-/** mountWizard exposes the raw wizard state without rendering a step. */
 function mountWizard() {
   setActivePinia(createPinia());
   let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
@@ -49,7 +43,6 @@ function mountWizard() {
   return { w: wiz!, wrapper };
 }
 
-/** selectNode points the wizard and the (mocked) store at one node. */
 function selectNode(w: ReturnType<typeof useCreateAppWizard>, id = "srv-1"): void {
   w.form.serverId = id;
   toolchainStore.serverId = id;
@@ -99,7 +92,6 @@ describe("build-pack gating on the target node", () => {
     expect(railpack.missing).toBe("railpack");
     const buildpacks = w.buildPackChoices.value.find((choice) => choice.value === "buildpacks")!;
     expect(buildpacks.selectable).toBe(true);
-    // Auto stays selectable because Buildpacks is installed.
     const auto = w.buildPackChoices.value.find((choice) => choice.value === "")!;
     expect(auto.selectable).toBe(true);
     wrapper.unmount();
@@ -117,7 +109,6 @@ describe("build-pack gating on the target node", () => {
     const railpack = w.buildPackChoices.value.find((choice) => choice.value === "railpack")!;
     expect(railpack.selectable).toBe(true);
     expect(railpack.missing).toBeNull();
-    // Buildpacks is missing, so no CLI engine at all is not the case here.
     expect(w.noBuildEngine.value).toBe(false);
     wrapper.unmount();
   });
@@ -152,7 +143,6 @@ describe("build-pack gating on the target node", () => {
     const auto = w.buildPackChoices.value.find((choice) => choice.value === "")!;
     expect(auto.selectable).toBe(false);
     expect(w.buildPackValid.value).toBe(false);
-    // Dockerfile and static stay available.
     for (const value of ["dockerfile", "static"]) {
       expect(w.buildPackChoices.value.find((choice) => choice.value === value)!.selectable).toBe(true);
     }
@@ -237,7 +227,6 @@ describe("node tool fetch state", () => {
     toolchainStore.failure = new Error("agent unreachable");
     expect(w.nodeToolsLoading.value).toBe(false);
     expect(w.nodeToolsError.value).toBe(true);
-    // Fail-open: an unknown catalog never disables every pack.
     expect(w.buildPackChoices.value.every((choice) => choice.selectable)).toBe(true);
     await w.retryNodeTools();
     expect(toolchainStore.refresh).toHaveBeenCalledTimes(1);
@@ -264,8 +253,6 @@ describe("toolchain socket lifecycle", () => {
     w.closeWizard();
     expect(toolchainStore.closeQueueModal).toHaveBeenCalled();
     expect(toolchainStore.disconnect).toHaveBeenCalled();
-    // Forgetting the node makes the next open re-subscribe instead of reusing
-    // a dead socket.
     expect(toolchainStore.serverId).toBe("");
     wrapper.unmount();
   });

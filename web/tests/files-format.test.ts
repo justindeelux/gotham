@@ -1,7 +1,3 @@
-// Files footer pluralisation and the bulk-count reserve sizer (JUS-141 fix
-// rounds 1-2): the breakdown counts read "1 folder" / "2 folders" in en and vi,
-// and `widestBytesLabel` must bound EVERY subset label (formatBytes is
-// non-monotonic across unit and decimal boundaries).
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { ownerModeLabel, widestBytesLabel } from "@/features/files/utils/files";
@@ -16,9 +12,6 @@ import { formatBytes } from "@/shared/utils/format";
 
 describe("widestBytesLabel", () => {
   it("bounds every label in [0, total] across the rounding bands", () => {
-    // The round-1 bound missed toFixed rounding up just below a 10^k boundary:
-    // 921,549 totals in 102400..1023948 were one char short of the widest
-    // subset label (a "100.00 KiB" subset of a "100.0 KiB" total).
     const limit = 1_050_000;
     let widestSoFar = 0;
     const failures: number[] = [];
@@ -33,17 +26,17 @@ describe("widestBytesLabel", () => {
 
   it("bounds the named boundary cases", () => {
     const cases: Array<[total: number, subset: number]> = [
-      [102400, 102399], // "100.0 KiB" total, "100.00 KiB" subset (BLOCK-1)
+      [102400, 102399],
       [102400, 1],
       [102399, 102398],
-      [1048576, 1047552], // "1023.0 KiB" subset vs "1.00 MiB" total
+      [1048576, 1047552],
       [1048576, 1024],
       [1048576, 1],
       [14745, 14000],
       [500, 1],
       [0, 0],
       [1024, 1024],
-      [1073741824, 1048575], // "1023.9 MiB" subset vs "1.00 GiB" total
+      [1073741824, 1048575],
     ];
     for (const [total, subset] of cases) {
       expect(
@@ -55,13 +48,11 @@ describe("widestBytesLabel", () => {
 
   it("covers the [99.995, 100) x unit bands for B/KiB/MiB/GiB", () => {
     for (const base of [1, 1024, 1024 ** 2, 1024 ** 3]) {
-      // A subset whose value is 99.999 formats as the wider "100.00 X".
       const peak = base * 100 - 1;
       const total = base * 100;
       expect(widestBytesLabel(total).length).toBeGreaterThanOrEqual(
         formatBytes(peak).length,
       );
-      // Rounding up inside a unit (999.99 -> "1000.0") is covered too.
       expect(widestBytesLabel(base * 1000).length).toBeGreaterThanOrEqual(
         formatBytes(base * 1000 - 1).length,
       );
@@ -141,8 +132,6 @@ describe("files footer plurals", () => {
   });
 });
 
-// JUS-214: the Owner/Mode list cell shows "owner / mode", falling back to the
-// octal mode alone when the agent reported no owner (an older agent).
 describe("ownerModeLabel", () => {
   const entry = (overrides: Partial<FilesEntry>): FilesEntry => ({
     name: "f",

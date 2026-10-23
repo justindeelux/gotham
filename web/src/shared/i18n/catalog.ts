@@ -1,18 +1,7 @@
-/**
- * Catalog checks shared by the foundation test and sibling feature workers.
- * Catalogs are plain nested objects of vue-i18n messages using named
- * parameters (`{name}`) and library pluralization (`one | other`).
- *
- * Message validity is decided by the real vue-i18n compiler
- * (`@intlify/message-compiler`, the exact version backing our vue-i18n),
- * not by a hand-rolled grammar: a message the compiler rejects can never
- * ship, whatever characters it contains.
- */
 import { baseCompile } from "@intlify/message-compiler";
 
 type Dict = Record<string, unknown>;
 
-/** leafEntries flattens a nested catalog to dotted key/value pairs. */
 export function leafEntries(dict: Dict, prefix = ""): Array<[string, unknown]> {
   const out: Array<[string, unknown]> = [];
   for (const [key, value] of Object.entries(dict)) {
@@ -26,7 +15,6 @@ export function leafEntries(dict: Dict, prefix = ""): Array<[string, unknown]> {
   return out;
 }
 
-/** messageParams collects the named `{param}` placeholders in a message. */
 export function messageParams(message: string): string[] {
   const params = new Set<string>();
   for (const match of message.matchAll(/\{(\w+)\}/g)) {
@@ -35,12 +23,6 @@ export function messageParams(message: string): string[] {
   return [...params].sort();
 }
 
-/**
- * compileError returns null when the vue-i18n compiler accepts a message,
- * otherwise the compiler's error text. Literal braces, `@` and `|` must use
- * the documented escapes (`{'{'}`, `{'@'}`, `{'|'}`); nested `{{x}}` and bare
- * `@` links throw here exactly as they would at render time.
- */
 export function compileError(message: string): string | null {
   try {
     baseCompile(message, {
@@ -54,10 +36,6 @@ export function compileError(message: string): string | null {
   }
 }
 
-/**
- * pluralSegments splits a message on top-level `|` (plural separators),
- * ignoring pipes inside `{...}` groups such as a literal `{'|'}`.
- */
 export function pluralSegments(message: string): string[] {
   const segments: string[] = [];
   let depth = 0;
@@ -91,13 +69,6 @@ export interface ParityIssue {
   detail?: string;
 }
 
-/**
- * checkCatalogParity compares an English reference catalog against its
- * Vietnamese translation: equal leaf-key sets, nonempty translations,
- * matching named parameters, matching plural-segment counts, and
- * compiler-accepted message syntax on both sides. Returns every issue
- * found; empty means the catalogs agree.
- */
 export function checkCatalogParity(en: Dict, vi: Dict): ParityIssue[] {
   const issues: ParityIssue[] = [];
   const enLeaves = new Map(leafEntries(en));
@@ -153,10 +124,6 @@ export function checkCatalogParity(en: Dict, vi: Dict): ParityIssue[] {
   return issues;
 }
 
-/**
- * registerNamespace merges one namespaced feature catalog into a locale
- * tree, rejecting duplicate namespaces (two files claiming one namespace).
- */
 export function registerNamespace(
   tree: Record<string, unknown>,
   namespace: string,

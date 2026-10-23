@@ -106,7 +106,6 @@ func TestMissingLocalhostDiagnosticIsGlobal(t *testing.T) {
 	if strings.Count(logs.String(), "control-plane route skipped") != 1 {
 		t.Fatalf("list warnings: %s", logs.String())
 	}
-	// The sync endpoint preserves the successful node results alongside the global diagnostic.
 	recorder := postSync(t, newRoutes(&fakeProxyService{allResults: results, allErr: &PartialError{Diagnostics: rows.Diagnostics}}), "")
 	var response syncResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {

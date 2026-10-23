@@ -15,35 +15,19 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 )
 
-// Service is the template surface the HTTP layer depends on: the loaded
-// catalog. It is implemented by *Catalog; the route tests can substitute their
-// own implementation.
 type Service interface {
-	// List returns every template's metadata, sorted by slug.
 	List() []Template
-	// Get returns one template by slug.
 	Get(slug string) (Template, bool)
-	// Render validates the supplied values and renders the template's
-	// compose document. The result has already passed services.Parse.
 	Render(slug string, values map[string]any) (RenderResult, error)
 }
 
-// Catalog is the loaded, validated set of templates.
 type Catalog struct {
 	bySlug map[string]Template
 	order  []string
 }
 
-// Compile-time guarantee that Catalog satisfies the route contract.
 var _ Service = (*Catalog)(nil)
 
-// NewDefaultService loads the catalog embedded in the binary: the repository's
-// templates/ directory. It returns nil when the services feature is off (the
-// rendered documents would have nowhere to deploy) or when a built-in template
-// fails validation. A failed load is logged and leaves the surface unmounted
-// (the routes are absent), it does not stop control-plane startup: a shipped
-// template that fails validation is a build defect the load-time catalog tests
-// catch before release, and at runtime the rest of the platform keeps working.
 func NewDefaultService(logger *slog.Logger) Service {
 	if !services.Enabled() {
 		return nil
@@ -59,10 +43,6 @@ func NewDefaultService(logger *slog.Logger) Service {
 	return catalog
 }
 
-// Load reads and validates every template below fsys. Each immediate
-// subdirectory is one template: its name is the slug, and template.yaml plus
-// compose.yaml must both be present and valid. Load fails on the first
-// invalid template, so a catalog is either fully valid or absent.
 func Load(fsys fs.FS) (*Catalog, error) {
 	if fsys == nil {
 		return nil, errors.New("templates: no template filesystem")
@@ -94,12 +74,6 @@ func Load(fsys fs.FS) (*Catalog, error) {
 	return catalog, nil
 }
 
-// loadTemplate reads and validates one template directory: the metadata, the
-// placeholder scan of compose.yaml (every placeholder names a declared field,
-// every declared field is referenced) and the structural compose subset the
-// deploy path requires (image-only services, no build/extends/env_file/
-// include). Value-dependent checks (domains, volume names, paths) stay in the
-// runtime services.Parse call, because only a render has the values.
 func loadTemplate(fsys fs.FS, slug string) (Template, error) {
 	metadata, err := fs.ReadFile(fsys, slug+"/template.yaml")
 	if err != nil {
@@ -133,9 +107,6 @@ func loadTemplate(fsys fs.FS, slug string) (Template, error) {
 	return template, nil
 }
 
-// validatePlaceholders walks every string scalar of the raw compose document
-// without substituting anything: it proves that each {{ .field }} names a
-// declared field and that no declared field is dead metadata.
 func validatePlaceholders(slug string, template Template, node *yaml.Node) error {
 	known := make(map[string]bool, len(template.Fields))
 	for _, field := range template.Fields {
@@ -166,19 +137,11 @@ func validatePlaceholders(slug string, template Template, node *yaml.Node) error
 	return nil
 }
 
-// composeStructure is the value-independent subset of a compose document a
-// template must satisfy at load: services are image-only (no build context,
-// no file includes, no extends, no external env files). The rules mirror
-// services.Parse, which re-checks them after substitution together with the
-// value-dependent ones; a template that cannot deploy is rejected before it
-// enters the gallery instead of failing on every render.
 type composeStructure struct {
 	Include  any                       `yaml:"include"`
 	Services map[string]composeService `yaml:"services"`
 }
 
-// composeService is the subset of one service definition the structural check
-// inspects.
 type composeService struct {
 	Image   string `yaml:"image"`
 	Build   any    `yaml:"build"`
@@ -186,10 +149,6 @@ type composeService struct {
 	EnvFile any    `yaml:"env_file"`
 }
 
-// validateComposeStructure applies the deploy-path structural rules to the raw
-// template document. Placeholders are allowed anywhere a value may carry them:
-// service names, images and the forbidden keys are only checked for presence,
-// never against substituted values, so a field-driven image is fine.
 func validateComposeStructure(slug string, node *yaml.Node) error {
 	var document composeStructure
 	if err := node.Decode(&document); err != nil {
@@ -223,7 +182,6 @@ func validateComposeStructure(slug string, node *yaml.Node) error {
 	return nil
 }
 
-// List returns the catalog metadata sorted by slug.
 func (c *Catalog) List() []Template {
 	listed := make([]Template, 0, len(c.order))
 	for _, slug := range c.order {
@@ -232,7 +190,6 @@ func (c *Catalog) List() []Template {
 	return listed
 }
 
-// Get returns the template with the given slug.
 func (c *Catalog) Get(slug string) (Template, bool) {
 	template, ok := c.bySlug[slug]
 	return template, ok

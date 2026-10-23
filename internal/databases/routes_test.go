@@ -14,8 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// fakeDatabaseService is a scriptable DatabaseService for route tests: every
-// method records its arguments and returns the configured value.
 type fakeDatabaseService struct {
 	create    Database
 	creds     Credentials
@@ -45,7 +43,6 @@ type fakeDatabaseService struct {
 	seenVerbs    []string
 }
 
-// Compile-time guarantee that fakeDatabaseService satisfies the route seam.
 var _ DatabaseService = (*fakeDatabaseService)(nil)
 
 func (f *fakeDatabaseService) Create(_ context.Context, userID uuid.UUID, req CreateRequest) (Database, Credentials, error) {
@@ -90,32 +87,26 @@ func (f *fakeDatabaseService) Restart(_ context.Context, userID, databaseID uuid
 	return f.action("restart", userID, databaseID)
 }
 
-// action records a lifecycle verb and returns the scripted outcome.
 func (f *fakeDatabaseService) action(verb string, userID, databaseID uuid.UUID) (Database, error) {
 	f.seenVerbs = append(f.seenVerbs, verb)
 	f.seenUser, f.seenDatabase = userID, databaseID
 	return f.lifecycle, f.lifecycleErr
 }
 
-// passthroughAuth stands in for RequireAuth in route tests.
 func passthroughAuth(next http.Handler) http.Handler { return next }
 
-// passthroughScope stands in for the server's deploy-scope middleware.
 func passthroughScope(next http.Handler) http.Handler { return next }
 
-// newRouteServer mounts the database routes with a no-op auth middleware.
 func newRouteServer(svc DatabaseService, userID UserIDFunc) http.Handler {
 	r := chi.NewRouter()
 	Mount(r, passthroughAuth, passthroughScope, userID, svc)
 	return r
 }
 
-// alwaysUser returns a UserIDFunc for one user.
 func alwaysUser(id uuid.UUID) UserIDFunc {
 	return func(context.Context) (uuid.UUID, bool) { return id, true }
 }
 
-// databasePath renders one of the database routes.
 func databasePath(databaseID uuid.UUID, suffix string) string {
 	if databaseID == uuid.Nil {
 		return "/v1/databases" + suffix
@@ -123,7 +114,6 @@ func databasePath(databaseID uuid.UUID, suffix string) string {
 	return "/v1/databases/" + databaseID.String() + suffix
 }
 
-// sampleRow is the domain row the fakes hand back.
 func sampleRow(userID uuid.UUID) Database {
 	return Database{
 		ID:            uuid.New(),
@@ -142,8 +132,6 @@ func sampleRow(userID uuid.UUID) Database {
 	}
 }
 
-// TestCreateRouteReturnsRowAndCredentials asserts the 201 payload and that the
-// request fields reach the service intact.
 func TestCreateRouteReturnsRowAndCredentials(t *testing.T) {
 	userID := uuid.New()
 	row := sampleRow(userID)
@@ -185,7 +173,6 @@ func TestCreateRouteReturnsRowAndCredentials(t *testing.T) {
 	}
 }
 
-// TestCreateRouteRejections covers the 400 paths of the create body.
 func TestCreateRouteRejections(t *testing.T) {
 	userID := uuid.New()
 	serverID := uuid.New()
@@ -226,7 +213,6 @@ func TestCreateRouteRejections(t *testing.T) {
 		})
 	}
 
-	// A valid body still parses the server id it was given.
 	svc := &fakeDatabaseService{create: sampleRow(userID)}
 	srv := newRouteServer(svc, alwaysUser(userID))
 	rec := httptest.NewRecorder()
@@ -240,7 +226,6 @@ func TestCreateRouteRejections(t *testing.T) {
 	}
 }
 
-// TestListGetAndCredentialsRoutes covers the read endpoints.
 func TestListGetAndCredentialsRoutes(t *testing.T) {
 	userID, databaseID := uuid.New(), uuid.New()
 
@@ -322,7 +307,6 @@ func TestListGetAndCredentialsRoutes(t *testing.T) {
 	})
 }
 
-// TestUpdateAndDeleteRoutes covers rename and soft delete.
 func TestUpdateAndDeleteRoutes(t *testing.T) {
 	userID, databaseID := uuid.New(), uuid.New()
 
@@ -361,8 +345,6 @@ func TestUpdateAndDeleteRoutes(t *testing.T) {
 	})
 }
 
-// TestLifecycleRoutes walks the three verbs and checks they are routed to the
-// matching service method.
 func TestLifecycleRoutes(t *testing.T) {
 	userID, databaseID := uuid.New(), uuid.New()
 	row := sampleRow(userID)
@@ -387,7 +369,6 @@ func TestLifecycleRoutes(t *testing.T) {
 	}
 }
 
-// TestServiceErrorMapping pins the sentinel → HTTP status table.
 func TestServiceErrorMapping(t *testing.T) {
 	userID, databaseID := uuid.New(), uuid.New()
 
@@ -448,8 +429,6 @@ func TestServiceErrorMapping(t *testing.T) {
 	}
 }
 
-// TestRoutesRequireAuthentication: every endpoint answers 401 without a user,
-// and none of them reaches the service.
 func TestRoutesRequireAuthentication(t *testing.T) {
 	userID, databaseID := uuid.New(), uuid.New()
 	svc := &fakeDatabaseService{get: sampleRow(userID), create: sampleRow(userID), lifecycle: sampleRow(userID)}
@@ -479,8 +458,6 @@ func TestRoutesRequireAuthentication(t *testing.T) {
 	}
 }
 
-// TestMountIsNoopWhenDisabled: a nil service or FEATURE_DATABASES=false mounts
-// nothing, so the control plane can call Mount unconditionally.
 func TestMountIsNoopWhenDisabled(t *testing.T) {
 	userID := uuid.New()
 

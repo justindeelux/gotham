@@ -14,8 +14,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// gatedNode wraps a mockNode so a test can hold one RPC open and observe what
-// may (or may not) run concurrently with it.
 type gatedNode struct {
 	*mockNode
 	entered sync.Once
@@ -23,8 +21,6 @@ type gatedNode struct {
 	gate    chan struct{}
 }
 
-// newGatedNode returns a mock agent whose Start blocks until release is closed,
-// signalling on gate once it has been entered.
 func newGatedNode() *gatedNode {
 	return &gatedNode{
 		mockNode: newMockNode(),
@@ -33,27 +29,21 @@ func newGatedNode() *gatedNode {
 	}
 }
 
-// Start blocks until release is closed, then delegates to the mock.
 func (g *gatedNode) Start(ctx context.Context, containerID string) error {
 	g.entered.Do(func() { close(g.gate) })
 	<-g.release
 	return g.mockNode.Start(ctx, containerID)
 }
 
-// blockingNode is a mock agent whose Stop blocks until its context ends,
-// returning ErrAgentUnavailable, so a test can exercise the manual-control
-// timeout.
 type blockingNode struct {
 	*mockNode
 	stopStarted chan struct{}
 }
 
-// newBlockingNode returns a mock agent whose Stop never answers on its own.
 func newBlockingNode() *blockingNode {
 	return &blockingNode{mockNode: newMockNode(), stopStarted: make(chan struct{}, 1)}
 }
 
-// Stop blocks until ctx is done, then reports the agent unreachable.
 func (b *blockingNode) Stop(ctx context.Context, _ string) error {
 	select {
 	case b.stopStarted <- struct{}{}:
@@ -63,8 +53,6 @@ func (b *blockingNode) Stop(ctx context.Context, _ string) error {
 	return fmt.Errorf("%w: %v", ErrAgentUnavailable, ctx.Err())
 }
 
-// dialPerServer returns a DialFunc that hands out the node registered for each
-// server id and fails like a missing node otherwise.
 func dialPerServer(nodes map[uuid.UUID]Node) DialFunc {
 	return func(_ context.Context, serverID uuid.UUID) (Node, error) {
 		if node, ok := nodes[serverID]; ok {
@@ -74,17 +62,11 @@ func dialPerServer(nodes map[uuid.UUID]Node) DialFunc {
 	}
 }
 
-// TestDeleteApplicationRefusedWhileDeploying is the item-1 regression: a delete
-// races the worker between Run and the health/transition and would cascade the
-// deployment row, orphaning a running container. The delete must answer
-// ErrConflict while any deployment is non-terminal.
 func TestDeleteApplicationRefusedWhileDeploying(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
 	node := newMockNode()
-	// Build the service first so the boot-time stale sweep does not fail the
-	// in-flight row the test is about to seed.
 	svc := newNodeService(t, repo, node)
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateStarting, ContainerID: node.containerID})
 
@@ -103,11 +85,6 @@ func TestDeleteApplicationRefusedWhileDeploying(t *testing.T) {
 	}
 }
 
-// TestManualTargetSelectionSerializedWithSubmit is the item-2 regression: the
-// active-deployment check must not finish before the agent call while a
-// concurrent deploy retires the selected container. With the application lock
-// held across target selection and the RPC, a submit cannot cross the queue
-// boundary until the manual call completes.
 func TestManualTargetSelectionSerializedWithSubmit(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -153,9 +130,6 @@ func TestManualTargetSelectionSerializedWithSubmit(t *testing.T) {
 	}
 }
 
-// TestOrchestratorRetirementFailureFailsClosed is the item-3 regression: a
-// previous container that cannot be confirmed stopped must fail the deploy
-// closed, never start a second release alongside it.
 func TestOrchestratorRetirementFailureFailsClosed(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -177,9 +151,6 @@ func TestOrchestratorRetirementFailureFailsClosed(t *testing.T) {
 	}
 }
 
-// TestOrchestratorRetirementAbsenceProceeds is the other half of item 3: a stop
-// that fails because the container is already gone is a confirmed retirement,
-// so the replacement still starts.
 func TestOrchestratorRetirementAbsenceProceeds(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -197,9 +168,6 @@ func TestOrchestratorRetirementAbsenceProceeds(t *testing.T) {
 	}
 }
 
-// TestOrchestratorRuntimeFailureKeepsPreviousRunning is the item-4 regression:
-// the runtime payload is assembled before the previous container is retired, so
-// a secret/volume/config failure leaves the live release running.
 func TestOrchestratorRuntimeFailureKeepsPreviousRunning(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -223,10 +191,6 @@ func TestOrchestratorRuntimeFailureKeepsPreviousRunning(t *testing.T) {
 	}
 }
 
-// TestOrchestratorForcesFailedWhenRunningPersistFails is the item-5 regression:
-// a failed `→ running` write must not leave the in-memory state terminal, or
-// fail() can no longer record the terminal failure and the row stays wedged in
-// a non-terminal state the active-deployment index refuses to release.
 func TestOrchestratorForcesFailedWhenRunningPersistFails(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app, failUpdateState: StateRunning}
@@ -246,9 +210,6 @@ func TestOrchestratorForcesFailedWhenRunningPersistFails(t *testing.T) {
 	}
 }
 
-// TestOrchestratorStartRetryReconcilesOrphan is the item-6 regression: a Run
-// whose response was lost can leave a container behind under the deterministic
-// name; the retry must reconcile it instead of colliding and orphaning it.
 func TestOrchestratorStartRetryReconcilesOrphan(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -284,9 +245,6 @@ func TestOrchestratorStartRetryReconcilesOrphan(t *testing.T) {
 	}
 }
 
-// TestOrchestratorRemovesRetiredContainer is the item-8 regression: after the
-// replacement runs, the retired container is removed so stopped layers do not
-// accumulate.
 func TestOrchestratorRemovesRetiredContainer(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -305,9 +263,6 @@ func TestOrchestratorRemovesRetiredContainer(t *testing.T) {
 	}
 }
 
-// TestUpdateApplicationStopsContainerOnPreviousNode is the item-7 regression:
-// moving an application to another node stops the container it left behind on
-// the previous one.
 func TestUpdateApplicationStopsContainerOnPreviousNode(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -339,9 +294,6 @@ func TestUpdateApplicationStopsContainerOnPreviousNode(t *testing.T) {
 	}
 }
 
-// TestDeleteApplicationRemovesEveryLabeledContainer is the item-8 delete half:
-// every container carrying the application label (including orphans a failed
-// deploy left) is removed, while another application's container is untouched.
 func TestDeleteApplicationRemovesEveryLabeledContainer(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -368,7 +320,6 @@ func TestDeleteApplicationRemovesEveryLabeledContainer(t *testing.T) {
 	}
 }
 
-// containsString reports membership in a string slice.
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -378,19 +329,14 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// TestSubmitUsesFreshApplicationAfterMove is the review regression for the
-// stale snapshot: a caller that loaded the application before a move must not
-// have the worker deploy to the previous node. submit re-reads the stored row
-// under the application lock.
 func TestSubmitUsesFreshApplicationAfterMove(t *testing.T) {
 	userID := uuid.New()
-	app := testApplication(userID) // snapshot on the old server
+	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
 	oldNode := newMockNode()
 	newNode := newMockNode()
 	newServer := uuid.New()
 
-	// The move lands after the caller took its snapshot.
 	moved := app
 	moved.ServerID = newServer
 	if _, err := repo.UpdateApplication(context.Background(), moved); err != nil {
@@ -404,9 +350,7 @@ func TestSubmitUsesFreshApplicationAfterMove(t *testing.T) {
 		Secret:     testSecretKey,
 		Logger:     discardLogger(),
 		Emitter:    NewEmitter(&recordPublisher{}),
-		// The move is what this test pins; the clone itself is a fake so no
-		// git binary, DNS or network is involved.
-		Source: &fakeSource{},
+		Source:     &fakeSource{},
 		Dial: func(_ context.Context, serverID uuid.UUID) (Node, error) {
 			mu.Lock()
 			dialed = append(dialed, serverID)
@@ -423,8 +367,6 @@ func TestSubmitUsesFreshApplicationAfterMove(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = svc.Close() })
 
-	// stale is the caller's pre-move snapshot; submit must ignore it in favour
-	// of the stored row.
 	stale := app
 	created, err := svc.submit(context.Background(), stale, Deployment{Kind: KindDeploy, State: StateQueued})
 	if err != nil {
@@ -461,16 +403,11 @@ func TestSubmitUsesFreshApplicationAfterMove(t *testing.T) {
 	}
 }
 
-// TestUpdateApplicationRefusesMoveWhileDeploying is the review regression for
-// the move path: changing the server while a deployment is non-terminal would
-// leave an untracked container on the previous node, so it is refused like a
-// delete or a manual control.
 func TestUpdateApplicationRefusesMoveWhileDeploying(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
 	node := newMockNode()
-	// Build the service first so the stale sweep does not fail the row.
 	svc := newNodeService(t, repo, node)
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateStarting, ContainerID: node.containerID})
 	newServer := uuid.New()
@@ -488,10 +425,6 @@ func TestUpdateApplicationRefusesMoveWhileDeploying(t *testing.T) {
 	}
 }
 
-// TestManualControlReadsServerUnderLock pins the control-container re-read: a
-// concurrent move that lands after the first read but before the lock is held
-// must still make the manual call target the node the application is bound to
-// once the lock is held.
 func TestManualControlReadsServerUnderLock(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -501,9 +434,6 @@ func TestManualControlReadsServerUnderLock(t *testing.T) {
 	newServer := uuid.New()
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateRunning, ContainerID: oldNode.containerID})
 
-	// The first GetApplication (before the lock) returns the old server; the
-	// hook moves the stored row immediately afterwards, so only the re-read
-	// under the lock sees the new server.
 	var once sync.Once
 	repo.onGetApplication = func() {
 		once.Do(func() {
@@ -534,8 +464,6 @@ func TestManualControlReadsServerUnderLock(t *testing.T) {
 	}
 }
 
-// TestManualControlBoundedByTimeout is the T2 regression: a hung agent must not
-// pin the application lock; the manual call is bounded by ControlTimeout.
 func TestManualControlBoundedByTimeout(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -563,9 +491,6 @@ func TestManualControlBoundedByTimeout(t *testing.T) {
 	}
 }
 
-// TestOrchestratorFailFromQueuedSetsStartedAt is the review regression for
-// forceFail: a failure before the run ever leaves queued (for example a dial
-// failure) still records the deployment start clock.
 func TestOrchestratorFailFromQueuedSetsStartedAt(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -586,10 +511,6 @@ func TestOrchestratorFailFromQueuedSetsStartedAt(t *testing.T) {
 	}
 }
 
-// TestOrchestratorReconcilesOrphanFromDifferentDeployment is the T1 regression:
-// an orphan a lost Run response left behind (its deployment id never recorded)
-// survives while the agent is down; a later deploy must clear it by app label
-// before starting, or a pinned host port wedges every later deploy.
 func TestOrchestratorReconcilesOrphanFromDifferentDeployment(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -614,8 +535,6 @@ func TestOrchestratorReconcilesOrphanFromDifferentDeployment(t *testing.T) {
 		t.Fatalf("orphans = %d, want the one left by the lost response", len(node.orphans))
 	}
 
-	// The agent recovers. The next deployment must remove the orphan — whose
-	// deployment id differs — before it starts.
 	node.removeErr = nil
 	node.runFailures = 0
 	node.runErrLeavesContainer = false
@@ -633,9 +552,6 @@ func TestOrchestratorReconcilesOrphanFromDifferentDeployment(t *testing.T) {
 	}
 }
 
-// TestTransitionKeepsStateOnPersistFailure pins the transition copy-on-write:
-// a failed persist must not advance the in-memory state past what the database
-// stored.
 func TestTransitionKeepsStateOnPersistFailure(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app, failUpdateState: StateCloning}
@@ -651,9 +567,6 @@ func TestTransitionKeepsStateOnPersistFailure(t *testing.T) {
 	}
 }
 
-// TestForceFailKeepsCommittedRunning pins the forceFail guard: an ambiguous
-// write that committed the running state but reported an error must not be
-// downgraded to failed by the failure path.
 func TestForceFailKeepsCommittedRunning(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app, updateErrAfterPersist: StateRunning}
@@ -669,15 +582,11 @@ func TestForceFailKeepsCommittedRunning(t *testing.T) {
 	}
 }
 
-// TestDeleteSystemApplicationRefusesWhileDeploying covers the preview teardown
-// in-flight guard: a preview with a non-terminal deployment answers ErrConflict
-// and no container is removed.
 func TestDeleteSystemApplicationRefusesWhileDeploying(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.IsPreview = true
 	repo := &fakeRepository{app: app}
 	node := newMockNode()
-	// Build the service first so the stale sweep does not fail the row.
 	svc := newNodeService(t, repo, node)
 	seedDeployment(t, repo, app, Deployment{Kind: KindDeploy, State: StateStarting, ContainerID: node.containerID})
 
@@ -693,26 +602,17 @@ func TestDeleteSystemApplicationRefusesWhileDeploying(t *testing.T) {
 	}
 }
 
-// TestUnresolvedPreviousContainerFailsDeployClosed is the item-5 regression: a
-// deployment whose previous container cannot be resolved must not start. The
-// pre-Run reconcile removes every app-labelled container, so a blind job with
-// an empty previous would take the live release down; the submit fails closed
-// and the fresh row is terminal.
 func TestUnresolvedPreviousContainerFailsDeployClosed(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
 	repo := &fakeRepository{app: app}
 	node := newMockNode()
 	player := newNodeService(t, repo, node)
-	// The live release is recorded, but the list that would resolve it fails.
 	repo.listDeploymentsErr = errors.New("database unavailable")
 
 	if _, err := player.Deploy(context.Background(), userID, app.ID); err == nil {
 		t.Fatal("deploy succeeded although the previous container could not be resolved")
 	}
-	// The failed deploy must leave exactly one terminal row behind: without
-	// this, the loop below passes vacuously when Deploy fails before creating
-	// the deployment.
 	if len(repo.deployments) != 1 {
 		t.Fatalf("deployments = %d, want exactly one (the fresh failed row)", len(repo.deployments))
 	}
@@ -730,16 +630,10 @@ func TestUnresolvedPreviousContainerFailsDeployClosed(t *testing.T) {
 	}
 }
 
-// TestEnvReadUsesSingleSnapshotSeam is the item-1 regression: the runtime
-// payload must read plain vars and secrets from one snapshot (ListEnvConfig),
-// not from two separate collection reads that a concurrent replace can land
-// between and drop a key. The store-halves integration test proves the
-// snapshot is real; here we pin that the orchestrator takes the seam, and that
-// the assembled payload still carries both collections.
 func TestEnvReadUsesSingleSnapshotSeam(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
-	envVars, secrets := testEnv(t) // plain FOO=bar + secret API_TOKEN
+	envVars, secrets := testEnv(t)
 	repo.envVars, repo.secrets = envVars, secrets
 	node := newMockNode()
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
@@ -764,9 +658,6 @@ func TestEnvReadUsesSingleSnapshotSeam(t *testing.T) {
 	}
 }
 
-// TestPreviousContainerPropagatesError pins the repository seam: a listing
-// failure must surface, so callers can fail closed instead of racing the
-// reconcile with an empty previous.
 func TestPreviousContainerPropagatesError(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)

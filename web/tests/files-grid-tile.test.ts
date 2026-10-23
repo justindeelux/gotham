@@ -1,7 +1,3 @@
-// JUS-215/216/232: the grid tile carries the file-type icon before the name
-// on top, the type / owner-mode / size lines on the bottom-left and the
-// relative modified age in the selection row at the bottom-right; the checkbox
-// is a bare control in the tile's bottom-left corner, sharing its row.
 /* global document:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -47,7 +43,6 @@ const root: FilesRoot = {
   free_bytes: 1,
 };
 
-/** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
   return {
     kind: "file",
@@ -93,7 +88,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** mountGrid mounts the browser in grid view and settles it. */
 async function mountGrid(): Promise<VueWrapper> {
   await useFilesStore().init("server-1");
   const wrapper = mount(FilesBrowser, {
@@ -108,7 +102,6 @@ async function mountGrid(): Promise<VueWrapper> {
   return wrapper;
 }
 
-/** tile finds one tile by entry name. */
 function tile(wrapper: VueWrapper, name: string) {
   return wrapper.find(`.fm-tile-wrap[data-entry="${name}"]`);
 }
@@ -120,20 +113,15 @@ describe("grid tile layout", () => {
     expect(top.exists()).toBe(true);
     expect(top.find(".fm-mark").exists()).toBe(true);
     expect(top.find(".fm-tile-name b").text()).toBe("app.yaml");
-    // The relative age left the top line for the selection row's right end.
     expect(top.find(".fm-tile-ago").exists()).toBe(false);
     const bottom = tile(wrapper, "app.yaml").find(".fm-tile-bottom");
     expect(bottom.exists()).toBe(true);
-    // The age no longer rides inside the tile body: it shares the selection
-    // row with the checkbox.
     expect(bottom.find(".fm-tile-ago").exists()).toBe(false);
     const foot = tile(wrapper, "app.yaml").find(".fm-tile-foot");
     expect(foot.exists()).toBe(true);
     const ago = foot.find(".fm-tile-ago").text();
     expect(ago.length).toBeGreaterThan(0);
-    // Relative, never the absolute "YYYY-MM-DD HH:mm" stamp the tile used to show.
     expect(ago).not.toMatch(/\d{4}-\d{2}-\d{2}/);
-    // The checkbox and the age are siblings on the same row.
     expect(tile(wrapper, "app.yaml").find(".fm-tile-check").exists()).toBe(true);
   });
 
@@ -158,7 +146,6 @@ describe("grid tile layout", () => {
     const wrap = tile(wrapper, "app.yaml");
     const check = wrap.find(".fm-tile-check");
     expect(check.exists()).toBe(true);
-    // Bare: a plain label around the box, never a background tile.
     expect(check.element.tagName).toBe("LABEL");
     expect(
       check.find('[aria-label="Select app.yaml"]').exists(),

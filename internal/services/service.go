@@ -19,49 +19,26 @@ import (
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
-// FeatureEnv is the kill switch for the whole services surface:
-// FEATURE_SERVICES=false removes the routes and refuses new services, so the
-// feature can be turned off without a rebuild.
 const FeatureEnv = "FEATURE_SERVICES"
 
-// Enabled reports whether the services feature is on. Only an explicit false
-// disables it — unset (or any other value) keeps it enabled, matching
-// databases.Enabled and deploy.Enabled.
 func Enabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "false")
 }
 
-// defaultDeployTimeout bounds one deploy's agent calls when Config carries no
-// timeout. An up can pull images, so the default is generous.
 const defaultDeployTimeout = 15 * time.Minute
 
-// namePattern is the API-facing service name: a Docker-safe identifier of
-// 1–63 characters.
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 
-// envKeyPattern is the environment variable name alphabet.
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// CreateRequest is the input of Service.Create. The document is validated
-// (rendered against Env) before it is stored, so a stored service is always
-// deployable.
 type CreateRequest struct {
-	Name string
-	// EnvironmentID is the environment the service belongs to; it must be in
-	// the caller's team.
+	Name          string
 	EnvironmentID uuid.UUID
-	// ServerID is the node that runs the project; it must exist.
-	ServerID uuid.UUID
-	// ComposeYAML is the user-supplied compose document.
-	ComposeYAML string
-	// Env is the ${VAR} substitution input.
-	Env map[string]string
+	ServerID      uuid.UUID
+	ComposeYAML   string
+	Env           map[string]string
 }
 
-// UpdateRequest carries the mutable fields of a service. A nil pointer keeps
-// the stored value; an empty Env map clears the environment. EnvironmentID
-// moves the service to another environment of the same team; ServerID changes
-// the node (refused while a deploy is in flight).
 type UpdateRequest struct {
 	Name          *string           `json:"name,omitempty"`
 	ComposeYAML   *string           `json:"compose_yaml,omitempty"`
@@ -70,79 +47,41 @@ type UpdateRequest struct {
 	ServerID      *uuid.UUID        `json:"-"`
 }
 
-// ServiceFilter scopes a list to one environment or project of the caller's
-// team (the ?environment_id= and ?project_id= filters). At most one may be
-// set; a foreign ID answers ErrNotFound.
 type ServiceFilter struct {
 	EnvironmentID uuid.UUID
 	ProjectID     uuid.UUID
 }
 
-// ServiceService is the control-plane surface the HTTP layer depends on. It is
-// implemented by Service and by fakes in the route tests.
 type ServiceService interface {
-	// Create stores a validated service (status creating); it does not
-	// deploy.
 	Create(ctx context.Context, userID uuid.UUID, req CreateRequest) (Service, error)
-	// List returns the caller's live services, newest first, optionally
-	// scoped to one environment or project.
 	List(ctx context.Context, userID uuid.UUID, filter ServiceFilter) ([]Service, error)
-	// Get returns one service the caller owns (404 for anyone else's).
 	Get(ctx context.Context, userID, serviceID uuid.UUID) (Service, error)
-	// Update patches the mutable fields and re-validates the result.
 	Update(ctx context.Context, userID, serviceID uuid.UUID, req UpdateRequest) (Service, error)
-	// Delete stops the project (named volumes intact) and soft-deletes the
-	// row.
 	Delete(ctx context.Context, userID, serviceID uuid.UUID) error
-	// Deploy renders, validates and starts the project, recording one deploy
-	// row.
 	Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Service, Deploy, error)
-	// Stop takes the project down; named volumes keep their data.
 	Stop(ctx context.Context, userID, serviceID uuid.UUID) (Service, error)
-	// Restart restarts a running project in place, or starts a stopped one.
 	Restart(ctx context.Context, userID, serviceID uuid.UUID) (Service, error)
-	// Containers lists the project's containers from the node.
 	Containers(ctx context.Context, userID, serviceID uuid.UUID) ([]ComposeContainer, error)
-	// Logs streams the project's or one compose service's logs. The returned
-	// stream owns the node connection and closes it when it ends.
 	Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (LogStream, error)
-	// Deploys returns the deploy history, newest first.
 	Deploys(ctx context.Context, userID, serviceID uuid.UUID) ([]Deploy, error)
 }
 
-// RouteSync re-synchronizes one node's Phase 6 proxy configuration. It is
-// satisfied by proxy.ProxyService and called best effort after a lifecycle
-// change that affects what a domain routes to (or whether it routes at all).
 type RouteSync interface {
 	SyncServer(ctx context.Context, serverID uuid.UUID) error
 }
 
-// DialFunc opens the node agent's ComposeService for one server.
 type DialFunc func(ctx context.Context, serverID uuid.UUID) (ComposeAgent, error)
 
-// Config wires a Service. Store (or an explicit Repository) and Dial are
-// required for anything beyond tests.
 type Config struct {
-	GuardDomains proxy.DomainGuard
-	// Store is the PostgreSQL-backed repository. Ignored when Repository is
-	// set.
-	Store *store.Store
-	// Repository overrides Store (tests).
-	Repository Repository
-	// Dial opens the compose service on the target node; it is plugged in by
-	// the HTTP wiring with the servers package's mTLS dialer.
-	Dial DialFunc
-	// Proxy receives a best-effort resync after a deploy, stop, restart or
-	// delete so the node's Traefik configuration follows the service's
-	// routing state. nil disables the notifications.
-	Proxy RouteSync
-	// Logger defaults to slog.Default.
-	Logger *slog.Logger
-	// DeployTimeout overrides how long one deploy's agent calls may take.
+	GuardDomains  proxy.DomainGuard
+	Store         *store.Store
+	Repository    Repository
+	Dial          DialFunc
+	Proxy         RouteSync
+	Logger        *slog.Logger
 	DeployTimeout time.Duration
 }
 
-// repository resolves the configured repository implementation.
 func (c Config) repository() Repository {
 	if c.Repository != nil {
 		return c.Repository
@@ -153,9 +92,6 @@ func (c Config) repository() Repository {
 	return nil
 }
 
-// service is the compose-service domain service: it validates and stores
-// documents, renders them per deploy and drives the node agent's compose
-// surface. It is safe for concurrent use.
 type service struct {
 	guardDomains  proxy.DomainGuard
 	repo          Repository
@@ -166,12 +102,8 @@ type service struct {
 	locks         keyedLocks
 }
 
-// Compile-time guarantee that service satisfies the route-level contract.
 var _ ServiceService = (*service)(nil)
 
-// NewService builds the compose-service domain service from cfg. The returned
-// service has no repository or dialer only when cfg carries none; methods then
-// fail with a clear error instead of panicking.
 func NewService(cfg Config) ServiceService {
 	logger := cfg.Logger
 	if logger == nil {
@@ -191,23 +123,16 @@ func NewService(cfg Config) ServiceService {
 	}
 }
 
-// keyedLocks serializes work per key (one service id) with a refcounted entry
-// per key, so the map stays bounded by the operations in flight. It is the
-// in-process lock the single control plane process uses for lifecycle
-// serialization (the proxy service relies on the same single-process
-// assumption).
 type keyedLocks struct {
 	mu      sync.Mutex
 	entries map[uuid.UUID]*keyedLock
 }
 
-// keyedLock is one key's mutex plus its holder/waiter count.
 type keyedLock struct {
 	mu   sync.Mutex
 	refs int
 }
 
-// acquire takes the key's lock and returns its release function.
 func (l *keyedLocks) acquire(key uuid.UUID) func() {
 	l.mu.Lock()
 	if l.entries == nil {
@@ -233,10 +158,6 @@ func (l *keyedLocks) acquire(key uuid.UUID) func() {
 	}
 }
 
-// NewDefaultService builds the production service for the HTTP wiring. It
-// returns nil (a nil ServiceService) when there is no database, no agent
-// dialer or the feature flag is off, so callers can pass its result to Mount
-// unconditionally.
 func NewDefaultService(cfg Config) ServiceService {
 	if cfg.repository() == nil || cfg.Dial == nil {
 		return nil
@@ -247,9 +168,6 @@ func NewDefaultService(cfg Config) ServiceService {
 	return NewService(cfg)
 }
 
-// Create stores a validated service. The document is rendered against the
-// request's environment, so a service that would fail to render is rejected
-// here instead of at deploy time.
 func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateRequest) (Service, error) {
 	if !Enabled() {
 		return Service{}, ErrDisabled
@@ -307,9 +225,6 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	return s.repo.CreateService(ctx, service)
 }
 
-// List returns the active team's live services, newest first. Without a team
-// context it returns the creator's services, which is the pre-teams behavior.
-// A filter scopes the list to one environment or project of the team.
 func (s *service) List(ctx context.Context, userID uuid.UUID, filter ServiceFilter) ([]Service, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -339,19 +254,10 @@ func (s *service) List(ctx context.Context, userID uuid.UUID, filter ServiceFilt
 	return services, nil
 }
 
-// Get returns one service of the caller's active team.
 func (s *service) Get(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
 	return s.service(ctx, userID, serviceID, false)
 }
 
-// Update patches a service of the active team and re-validates the result. The
-// stored document is always the renderable one: a patch that introduces an
-// unresolvable environment reference is rejected. The write touches only the
-// config columns, so it can never clobber a lifecycle status a concurrent
-// deploy/stop is writing. It runs under the service's lifecycle lock with a
-// fresh read, so a concurrent deploy or delete serializes against it; the
-// placement columns (environment, server) are only written when the request
-// changes them, so a stale snapshot can never undo a committed move.
 func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req UpdateRequest) (Service, error) {
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
@@ -372,9 +278,6 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	if req.Env != nil {
 		service.Env = normalizeEnv(req.Env)
 	}
-	// A move to another environment stays in the team (a foreign environment
-	// answers 404) and refuses a name the target already holds (409), per the
-	// per-environment uniqueness.
 	if req.EnvironmentID != nil && *req.EnvironmentID != service.EnvironmentID {
 		if _, err := s.repo.ResolveEnvironment(ctx, *req.EnvironmentID, service.TeamID); err != nil {
 			return Service{}, err
@@ -388,9 +291,6 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 		}
 		service.EnvironmentID = *req.EnvironmentID
 	}
-	// A node change is refused once the compose project runs on a node: only
-	// a service that was never deployed may move. A deploy in flight is
-	// refused with the contract's 409 either way.
 	if req.ServerID != nil && *req.ServerID != service.ServerID {
 		if *req.ServerID == uuid.Nil {
 			return Service{}, fmt.Errorf("%w: server_id is required", ErrValidation)
@@ -429,10 +329,6 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 		return Service{}, err
 	}
 	defer releaseDomain()
-	// Placement columns the request leaves alone are zeroed, so the
-	// conditional write below keeps the freshly read values instead of a
-	// possibly stale snapshot (a Nil UUID never persists: both columns are
-	// NOT NULL). The repository returns the stored row.
 	if req.EnvironmentID == nil {
 		service.EnvironmentID = uuid.Nil
 	}
@@ -442,15 +338,6 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	return s.repo.UpdateServiceConfig(ctx, service)
 }
 
-// Delete stops the project and soft-deletes the row. Named volumes are never
-// touched: they are the project's data and outlive both the containers and the
-// row's visibility.
-//
-// When the stored document no longer renders, the newest successfully
-// deployed snapshot is used to stop the project instead of skipping the node
-// call: soft-deleting a row must never hide a project that may still be
-// running. If no snapshot exists either, the row is retained with an error so
-// an operator can fix or redeploy the service.
 func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error {
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
@@ -488,8 +375,6 @@ func (s *service) Delete(ctx context.Context, userID, serviceID uuid.UUID) error
 	return nil
 }
 
-// latestRunningSnapshot returns the newest successfully deployed rendered
-// document, or nil when the service was never deployed successfully.
 func (s *service) latestRunningSnapshot(ctx context.Context, service Service) (*Deploy, error) {
 	deploys, err := s.repo.ListServiceDeploys(ctx, service.ID, deployHistoryLimit)
 	if err != nil {
@@ -503,11 +388,6 @@ func (s *service) latestRunningSnapshot(ctx context.Context, service Service) (*
 	return nil, nil
 }
 
-// Deploy renders the stored document, validates it on the node and starts the
-// project, recording one deploy row whose snapshot is the rendered document.
-// It is serialized with the other lifecycle operations of the same service and
-// writes only the status column on completion, so a concurrent configuration
-// edit is never overwritten.
 func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Service, Deploy, error) {
 	if !Enabled() {
 		return Service{}, Deploy{}, ErrDisabled
@@ -545,8 +425,6 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 	defer cancel()
 	composeYAML := []byte(rendered.ComposeYAML)
 	if _, err := agent.Validate(deployCtx, project, composeYAML); err != nil {
-		// Nothing on the node changed: the previous version, if any, is
-		// still the running one, so the service keeps its status.
 		return s.failDeploy(ctx, service, deploy, "", err)
 	}
 	if err := agent.Up(deployCtx, project, composeYAML, false); err != nil {
@@ -565,8 +443,6 @@ func (s *service) Deploy(ctx context.Context, userID, serviceID uuid.UUID) (Serv
 	return service, deploy, nil
 }
 
-// Stop takes the project down. The named volumes keep every byte, so a stopped
-// service is fully recoverable by a deploy or a restart.
 func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
@@ -589,7 +465,6 @@ func (s *service) Stop(ctx context.Context, userID, serviceID uuid.UUID) (Servic
 	return service, nil
 }
 
-// Restart restarts a running project in place and starts a stopped one.
 func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Service, error) {
 	service, release, err := s.lifecycle(ctx, userID, serviceID)
 	if err != nil {
@@ -626,7 +501,6 @@ func (s *service) Restart(ctx context.Context, userID, serviceID uuid.UUID) (Ser
 	return service, nil
 }
 
-// Containers lists the project's containers as the node reports them.
 func (s *service) Containers(ctx context.Context, userID, serviceID uuid.UUID) ([]ComposeContainer, error) {
 	service, err := s.service(ctx, userID, serviceID, false)
 	if err != nil {
@@ -647,14 +521,6 @@ func (s *service) Containers(ctx context.Context, userID, serviceID uuid.UUID) (
 	return containers, nil
 }
 
-// Logs streams the project's logs (or one compose service's) from the node.
-// The returned stream owns the agent connection and closes it when it ends.
-//
-// The compose service selector is validated against the stored document before
-// the node is dialed, so an unknown selector is a validation error instead of
-// a CLI refusal that would arrive as the stream's first output. The terminal
-// stream error is redacted like every other node error: only application log
-// content is passed through untouched.
 func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, composeService string, tail int64, follow bool) (LogStream, error) {
 	service, err := s.service(ctx, userID, serviceID, false)
 	if err != nil {
@@ -668,9 +534,6 @@ func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, compose
 		return nil, fmt.Errorf("%w: tail must not be negative", ErrValidation)
 	}
 	if composeService != "" {
-		// A document that no longer renders is not fatal for a log read (the
-		// node may still have the project's file); the selector check simply
-		// cannot run and the agent validates instead.
 		if rendered, renderErr := Render(service.ComposeYAML, service.Env); renderErr == nil {
 			if !slices.Contains(rendered.Spec.Services, composeService) {
 				return nil, fmt.Errorf("%w: no compose service %q in this project", ErrValidation, composeService)
@@ -689,28 +552,19 @@ func (s *service) Logs(ctx context.Context, userID, serviceID uuid.UUID, compose
 	return &redactingLogStream{inner: stream, env: service.Env}, nil
 }
 
-// redactingLogStream applies the service environment's redaction boundary to a
-// node log stream's terminal error, which is stored and logged after the HTTP
-// response has already started. Chunks (actual application log content) pass
-// through untouched, and the error chain stays matchable through Unwrap.
 type redactingLogStream struct {
 	inner LogStream
 	env   map[string]string
 }
 
-// Compile-time guarantee.
 var _ LogStream = (*redactingLogStream)(nil)
 
-// Chunks implements LogStream.
 func (s *redactingLogStream) Chunks() <-chan []byte { return s.inner.Chunks() }
 
-// Err implements LogStream.
 func (s *redactingLogStream) Err() error { return RedactError(s.inner.Err(), s.env) }
 
-// Close implements LogStream.
 func (s *redactingLogStream) Close() error { return s.inner.Close() }
 
-// Deploys returns the deploy history, newest first.
 func (s *service) Deploys(ctx context.Context, userID, serviceID uuid.UUID) ([]Deploy, error) {
 	service, err := s.service(ctx, userID, serviceID, false)
 	if err != nil {
@@ -726,9 +580,6 @@ func (s *service) Deploys(ctx context.Context, userID, serviceID uuid.UUID) ([]D
 	return deploys, nil
 }
 
-// down dials the node and runs compose down with the given rendered document,
-// mapping every failure to a sentinel and redacting the service environment
-// values from the message.
 func (s *service) down(ctx context.Context, service Service, composeYAML []byte) error {
 	agent, err := s.dialAgent(ctx, service.ServerID)
 	if err != nil {
@@ -743,8 +594,6 @@ func (s *service) down(ctx context.Context, service Service, composeYAML []byte)
 	return nil
 }
 
-// setStatus writes only the status column, so a lifecycle completion can never
-// overwrite a concurrent configuration edit with a stale row.
 func (s *service) setStatus(ctx context.Context, service Service, status Status) (Service, error) {
 	updated, err := s.repo.UpdateServiceStatus(ctx, service.ID, status)
 	if err != nil {
@@ -753,21 +602,10 @@ func (s *service) setStatus(ctx context.Context, service Service, status Status)
 	return updated, nil
 }
 
-// lifecycleLock serializes the lifecycle operations (deploy, stop, restart,
-// delete) of one service so two actions cannot interleave and report
-// contradictory outcomes. A single control plane process makes an in-process
-// lock sufficient, matching the proxy service's single-process assumption.
 func (s *service) lifecycleLock(serviceID uuid.UUID) func() {
 	return s.locks.acquire(serviceID)
 }
 
-// lifecycle loads a service of the caller's active team while holding its
-// lifecycle lock. Every lifecycle operation mutates, so it is authorized as a
-// write. The authoritative row read happens after the lock is acquired, so a
-// queued operation always acts on the state its predecessor left behind: a
-// Restart queued behind a Delete reads the deleted row and refuses instead of
-// resurrecting containers. The returned release function must be deferred by
-// the caller.
 func (s *service) lifecycle(ctx context.Context, userID, serviceID uuid.UUID) (Service, func(), error) {
 	if err := s.ready(); err != nil {
 		return Service{}, nil, err
@@ -784,10 +622,6 @@ func (s *service) lifecycle(ctx context.Context, userID, serviceID uuid.UUID) (S
 	return service, release, nil
 }
 
-// syncProxy asks the Phase 6 proxy to re-synchronize the node's routing
-// configuration after a lifecycle change. It is best effort by contract: the
-// mutation is already durable, a failed sync is logged and the next sync
-// converges the node.
 func (s *service) syncProxy(ctx context.Context, serverID uuid.UUID) {
 	if s.proxy == nil || serverID == uuid.Nil {
 		return
@@ -798,9 +632,6 @@ func (s *service) syncProxy(ctx context.Context, serverID uuid.UUID) {
 	}
 }
 
-// failDeploy records a failed attempt (error redacted) and returns the
-// original error. status optionally moves the service itself; an empty status
-// keeps it, which is what a validation failure before any node change gets.
 func (s *service) failDeploy(ctx context.Context, service Service, deploy Deploy, status Status, cause error) (Service, Deploy, error) {
 	err := RedactError(cause, service.Env)
 	deploy.State = DeployFailed
@@ -820,7 +651,6 @@ func (s *service) failDeploy(ctx context.Context, service Service, deploy Deploy
 	return service, updated, err
 }
 
-// ready reports a service that was built without its required dependencies.
 func (s *service) ready() error {
 	if s == nil || s.repo == nil {
 		return errors.New("services: repository is not configured")
@@ -828,9 +658,6 @@ func (s *service) ready() error {
 	return nil
 }
 
-// teamIDFor resolves the team a resource call operates in: the request's
-// active team, or the caller's personal team when no team context is present
-// (the pre-teams path), matching the projects surface.
 func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
 	scope := teams.ScopeFor(ctx, userID)
 	if scope.Active() {
@@ -839,10 +666,6 @@ func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
 	return teams.PersonalTeamID(userID)
 }
 
-// service loads a service of the caller's active team, mapping a row of
-// another team (or, without a team context, of another creator) to ErrNotFound
-// so service IDs cannot be probed. A write additionally needs an owner/admin
-// role. Soft-deleted rows are already filtered out by the repository.
 func (s *service) service(ctx context.Context, userID, serviceID uuid.UUID, write bool) (Service, error) {
 	if err := s.ready(); err != nil {
 		return Service{}, err
@@ -863,7 +686,6 @@ func (s *service) service(ctx context.Context, userID, serviceID uuid.UUID, writ
 	return service, nil
 }
 
-// dialAgent opens the compose service on the service's node.
 func (s *service) dialAgent(ctx context.Context, serverID uuid.UUID) (ComposeAgent, error) {
 	if s.dial == nil {
 		return nil, fmt.Errorf("%w: no agent dialer is configured", ErrAgentUnavailable)
@@ -875,7 +697,6 @@ func (s *service) dialAgent(ctx context.Context, serverID uuid.UUID) (ComposeAge
 	return agent, nil
 }
 
-// validateEnv checks environment variable names (values are never inspected).
 func validateEnv(env map[string]string) error {
 	if len(env) > MaxEnvVars {
 		return fmt.Errorf("%w: at most %d environment variables", ErrValidation, MaxEnvVars)
@@ -888,7 +709,6 @@ func validateEnv(env map[string]string) error {
 	return nil
 }
 
-// normalizeEnv makes a nil map an empty one, so jsonb writes are stable.
 func normalizeEnv(env map[string]string) map[string]string {
 	if env == nil {
 		return map[string]string{}

@@ -12,9 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestListPrimaryApplicationDomainsScoped proves the read enrichment query is
-// scoped to the application ids it is given instead of scanning every domain
-// on the platform.
 func TestListPrimaryApplicationDomainsScoped(t *testing.T) {
 	if err := store.ProbeOnce(context.Background(), testDSN()); err != nil {
 		if testDSNExplicit() {

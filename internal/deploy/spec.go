@@ -14,43 +14,18 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// portsLabel mirrors containers.portsLabel. The agent ListContainers contract
-// carries no port bindings, so the control plane stores the mapping on the
-// container and reads it back when listing; the constant is duplicated rather
-// than imported to keep the runtime payload independent of the container DTOs.
 const portsLabel = "gotham.ports"
 
-// Gotham label keys applied to every application container.
 const (
 	labelManaged      = "gotham.managed"
 	labelAppID        = "gotham.app_id"
 	labelDeploymentID = "gotham.deployment_id"
 )
 
-// portEnvKey is the environment variable every PaaS platform (Heroku,
-// Railway, Coolify) injects so the process binds the port the host mapping
-// actually points at.
 const portEnvKey = "PORT"
 
-// invalidNameChars matches anything outside the Docker container-name alphabet
-// ([a-zA-Z0-9][a-zA-Z0-9_.-]).
 var invalidNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 
-// buildRunRequest assembles the agent container-create payload for a
-// deployment: image (node registry reference when the build produced one),
-// environment variables plus decrypted secrets, the storage volume map, the
-// port mappings and the gotham.* labels. Every port is published on an
-// ephemeral host port; the proxy resolves the published binding of the
-// container port each domain names (JUS-233).
-//
-// Secrets are opened with providers.OpenSecret, the single AES-256-GCM helper
-// in this codebase; plaintext exists only in the returned request. A secret
-// whose key collides with a plain env var wins: Docker applies the last
-// occurrence of a duplicated key, so secrets are appended after env vars.
-//
-// The payload also defaults PORT to port (the primary domain's target port)
-// when one is declared, so images built without a Dockerfile listen where the
-// domain mapping points.
 func buildRunRequest(
 	app Application,
 	dep Deployment,
@@ -98,11 +73,6 @@ func buildRunRequest(
 	}, nil
 }
 
-// buildEnv renders env vars first and decrypted secrets second so a colliding
-// key resolves to the secret. Defaults (only the PORT fallback today) fill the
-// gaps: a key present in either collection always wins. The result is sorted
-// by key (secrets keep their relative order over an env var of the same name)
-// for a deterministic payload.
 func buildEnv(envVars []EnvVar, secrets []Secret, secretKey string, defaults map[string]string) ([]string, error) {
 	plain := make(map[string]string, len(envVars))
 	for _, v := range envVars {
@@ -156,14 +126,6 @@ func buildEnv(envVars []EnvVar, secrets []Secret, secretKey string, defaults map
 	return env, nil
 }
 
-// mergeSharedVariables layers shared variables beneath the application's own
-// (project < environment < application). A key set at a nearer scope wins
-// outright, whether it is plain or sealed: an application plain var hides a
-// shared secret of the same key and vice versa. Shared secrets stay sealed
-// end to end — their ciphertext passes through untouched and buildEnv opens
-// it with the other secrets. The output is sorted by key for a deterministic
-// payload. Preview deploys merge through the same path: a preview inherits
-// its base application's environment, so it sees the same shared scopes.
 func mergeSharedVariables(project, environment []SharedVariable, envVars []EnvVar, secrets []Secret) ([]EnvVar, []Secret) {
 	plain := make(map[string]string)
 	sealed := make(map[string]string)
@@ -221,12 +183,6 @@ func mergeSharedVariables(project, environment []SharedVariable, envVars []EnvVa
 	return mergedVars, mergedSecrets
 }
 
-// volumeSpecs renders the storage map as Docker mount specs. A named volume
-// (a non-absolute host) is passed through unchanged; an absolute host is a bind
-// and is confined to the application's managed directory; an empty host is a
-// managed bind derived as <managed root>/<appID>/<name> (see managedHostPath).
-// The container path must always be absolute: a relative one would resolve
-// against the image's working directory.
 func volumeSpecs(root string, appID uuid.UUID, storages []Storage) ([]string, error) {
 	if len(storages) == 0 {
 		return nil, nil
@@ -246,11 +202,6 @@ func volumeSpecs(root string, appID uuid.UUID, storages []Storage) ([]string, er
 	return specs, nil
 }
 
-// domainTargetPorts returns the distinct target ports of the enabled domain
-// rows and the port of the primary row (or the first enabled one). It is the
-// single-container port derivation: every domain's port must be published on
-// the container so the proxy can reach it. A domainless application returns
-// nil ports and port 0.
 func domainTargetPorts(domains []ApplicationDomain) ([]int32, int32) {
 	ports := make([]int32, 0, len(domains))
 	primaryPort := int32(0)
@@ -269,15 +220,6 @@ func domainTargetPorts(domains []ApplicationDomain) ([]int32, int32) {
 	return ports, primaryPort
 }
 
-// defaultPortEnv returns the PORT fallback for the runtime payload: an
-// image built without a Dockerfile (Railpack, buildpacks) starts whatever the
-// repository declares — often its own default port — while the proxy routes
-// the domains' container ports, so the platform tells the process which port
-// to bind, the same way Heroku, Railway and Coolify inject PORT. The default
-// applies only when a port is known (> 0) and neither an env var nor a secret
-// already defines PORT; an explicit value (including a sealed secret
-// reference) always wins, and an application with no domain sees no change at
-// all.
 func defaultPortEnv(port int32, envVars []EnvVar, secrets []Secret) map[string]string {
 	if port <= 0 {
 		return nil
@@ -295,10 +237,6 @@ func defaultPortEnv(port int32, envVars []EnvVar, secrets []Secret) map[string]s
 	return map[string]string{portEnvKey: strconv.Itoa(int(port))}
 }
 
-// portSpecs renders the distinct target ports of an application's domains as
-// bare container ports, letting the agent assign a free host port; the proxy
-// resolves each domain's published binding. The order is deterministic so a
-// redeploy produces the same container-create payload.
 func portSpecs(ports []int32) []string {
 	seen := make(map[int32]bool, len(ports))
 	specs := make([]string, 0, len(ports))
@@ -313,9 +251,6 @@ func portSpecs(ports []int32) []string {
 	return specs
 }
 
-// containerName derives a Docker-safe, unique container name from the
-// application and deployment: "gotham-<app>-<deploy prefix>". The deploy
-// prefix keeps a rollback container from colliding with the one it replaces.
 func containerName(app Application, dep Deployment) string {
 	name := strings.ToLower(app.Name)
 	name = strings.Trim(invalidNameChars.ReplaceAllString(name, "-"), "-")
@@ -329,23 +264,16 @@ func containerName(app Application, dep Deployment) string {
 	return "gotham-" + name + "-" + deploy
 }
 
-// truncateError bounds the message persisted on the deployments row so one
-// runaway build log cannot bloat the table. The limit fits the ~3 KiB
-// toolchain failure tail buildtool appends to build errors, prefix included.
-// The cut is rune-safe: a trailing partial UTF-8 sequence is dropped rather
-// than storing invalid UTF-8.
 func truncateError(err error) string {
 	if err == nil {
 		return ""
 	}
 	const limit = 4096
-	// Postgres rejects invalid UTF-8 in text columns, and toolchain output is
-	// untrusted bytes, so sanitize before measuring.
 	message := strings.ToValidUTF8(strings.TrimSpace(err.Error()), "\uFFFD")
 	if len(message) > limit {
 		cut := message[:limit]
 		for len(cut) > 0 && !utf8.ValidString(cut) {
-			cut = cut[:len(cut)-1] // drop only a trailing partial rune
+			cut = cut[:len(cut)-1]
 		}
 		return cut + "…"
 	}

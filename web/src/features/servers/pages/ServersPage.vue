@@ -48,14 +48,12 @@ const {
 
 const { t } = useI18n();
 
-/** emptyDescription renders the card empty state for each data condition. */
 const emptyDescription = computed<string>(() =>
   serversStore.servers.length === 0
     ? t("servers.page.emptyNone")
     : t("servers.page.emptyFiltered"),
 );
 
-/** emptyHint points a blank registry at creation, a filtered one at the filters. */
 const emptyHint = computed<string>(() =>
   serversStore.servers.length === 0
     ? t("servers.page.emptyNoneHint")
@@ -111,8 +109,6 @@ const emptyHint = computed<string>(() =>
 
       <NSpin v-if="serversStore.loading && filteredServers.length === 0" class="servers-loading" />
       <template v-else-if="filteredServers.length > 0">
-        <!-- Node usage bars render through usageView in ServerCard, keeping
-             the shared 80% danger threshold (no hard-coded comparisons). -->
         <div class="grid cols-2 node-list" data-od-id="node-list">
           <ServerCard
             v-for="server in pagedServers"
@@ -239,10 +235,6 @@ const emptyHint = computed<string>(() =>
   }
 }
 
-/* ── Node grid ──
-   The list region is a grid of node cards, not a data table. These rules
-   (.node-card family, grid/avatar/tag/meter/kv utilities) are not carried
-   globally by the app; tokens come from styles/tokens.css. */
 .servers-pagination {
   display: flex;
   justify-content: flex-end;

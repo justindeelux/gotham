@@ -1,6 +1,3 @@
-// I18N-2 acceptance: live switching on the login and profile forms keeps
-// drafts, refreshes labels/errors/banners/titles reactively, and never
-// changes password policy, triggers, required marks, or navigation.
 /* global document: readonly, window: readonly, HTMLInputElement: readonly */
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -173,13 +170,11 @@ describe("login live switch", () => {
     auth.user = null;
     const { wrapper } = await mountWith(LoginPage);
 
-    // Pristine form: switching shows no errors anywhere.
     setLocale("vi", null);
     await nextTick();
     await flushPromises();
     expect(wrapper.find(".n-form-item-blank--error").exists()).toBe(false);
 
-    // Blur with a bad value: English feedback appears before any submit.
     setLocale("en", null);
     await nextTick();
     await setInput(wrapper, "#login-email", "not-an-email");
@@ -189,10 +184,8 @@ describe("login live switch", () => {
     expect(wrapper.find(".n-form-item-feedback").text()).toContain(
       "Enter a valid email address",
     );
-    // Only the blurred field shows feedback; the untouched password does not.
     expect(wrapper.findAll(".n-form-item-blank--error")).toHaveLength(1);
 
-    // Switching refreshes exactly the visible error; draft and route kept.
     setLocale("vi", null);
     await nextTick();
     await flushPromises();
@@ -214,8 +207,6 @@ describe("owned feature catalogs keep key/param/plural parity", () => {
     const authVi = (await import("@/features/auth/locales/vi")).default;
     const profileEn = (await import("@/features/profile/locales/en")).default;
     const profileVi = (await import("@/features/profile/locales/vi")).default;
-    // Same gate the foundation suite runs on the shared catalogs: equal
-    // leaf keys, matching params, valid syntax and equal plural segments.
     expect(checkCatalogParity(authEn, authVi)).toEqual([]);
     expect(checkCatalogParity(profileEn, profileVi)).toEqual([]);
   });
@@ -252,8 +243,6 @@ describe("shell selector and account menu", () => {
     auth.wrapper.unmount();
     globalThis.document.body.innerHTML = "";
 
-    // AppTopbar consumes the mobile-nav injection, so it mounts under a
-    // provider like the real AppLayout supplies.
     seedAuth();
     const provider = defineComponent({
       setup() {
@@ -311,7 +300,6 @@ describe("profile banners react to the locale", () => {
     await nextTick();
     await flushPromises();
 
-    // Blur with a 65-character name: feedback before any submit.
     await setInput(wrapper, "#profile-display-name", "x".repeat(65));
     await wrapper.find("#profile-display-name").trigger("blur");
     await flushPromises();
@@ -326,8 +314,6 @@ describe("profile banners react to the locale", () => {
       "Tên hiển thị phải từ 1-64 ký tự",
     );
 
-    // Fix the value and submit successfully: the banner clears and a later
-    // switch shows no pristine errors on the untouched form.
     setLocale("en", null);
     await nextTick();
     await setInput(wrapper, "#profile-display-name", "Ada L");
@@ -374,7 +360,6 @@ describe("profile banners react to the locale", () => {
     await nextTick();
     await flushPromises();
     expect(wrapper.find(".n-alert").text()).toContain("Quá nhiều lần thử");
-    // The draft survives the switch; the policy gate is unchanged.
     expect(
       (wrapper.find("#profile-new-password").element as HTMLInputElement)
         .value,
@@ -414,7 +399,6 @@ describe("profile banners react to the locale", () => {
     await flushPromises();
     await nextTick();
     expect(mockChange).toHaveBeenCalledTimes(1);
-    // Success clears the fields with no errors showing.
     for (const id of [
       "#profile-current-password",
       "#profile-new-password",
@@ -426,8 +410,6 @@ describe("profile banners react to the locale", () => {
       ).toBe("");
     }
     expect(wrapper.find(".n-form-item-blank--error").exists()).toBe(false);
-    // A later locale switch must not surface required errors on the
-    // cleared pristine fields, and issues no second API call.
     setLocale("vi", null);
     await nextTick();
     await flushPromises();
@@ -515,8 +497,6 @@ describe("unknown diagnostics carry a localized summary", () => {
     setLocale("vi", null);
     await nextTick();
     await flushPromises();
-    // Localized summary in Vietnamese, raw diagnostic retained verbatim,
-    // no second API call from the switch itself.
     expect(wrapper.find(".n-alert").text()).toContain(
       "Yêu cầu thất bại: invalid email or password",
     );
@@ -580,8 +560,6 @@ describe("unknown diagnostics carry a localized summary", () => {
     await flushPromises();
     await nextTick();
     await nextTick();
-    // One localized fallback, never a duplicated generic summary, and the
-    // locale switch issues no second accept POST.
     expect(wrapper.find(".n-alert").text()).toBe(
       "Something went wrong. Please try again.",
     );
@@ -596,8 +574,6 @@ describe("unknown diagnostics carry a localized summary", () => {
   });
 
   it("keeps distinct guidance for blank-message known invite statuses", async () => {
-    // describeTeamError curates per-status fallbacks when the server sends
-    // status without message; only genuinely unknown failures collapse.
     const cases: Array<{ status: number; en: string; expectedVi: string }> = [
       {
         status: 400,
@@ -660,8 +636,6 @@ describe("unknown diagnostics carry a localized summary", () => {
       await nextTick();
       await flushPromises();
       const viText = wrapper.find(".n-alert").text();
-      // Curated fallbacks are locale-aware since I18N-8: assert the full
-      // localized string per status, not the English fallback verbatim.
       expect(viText).toBe(expectedVi);
       wrapper.unmount();
       globalThis.document.body.innerHTML = "";
@@ -695,7 +669,6 @@ describe("session row invalid timestamps", () => {
     setLocale("vi", null);
     await nextTick();
     expect(wrapper.find("time").attributes("title")).toBe("không rõ");
-    // The IP fallback still uses its own key.
     expect(wrapper.text()).toContain("không rõ");
     wrapper.unmount();
   });

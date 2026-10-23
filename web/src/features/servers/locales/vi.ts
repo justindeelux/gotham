@@ -1,10 +1,5 @@
 import type { ServersMessages } from "./en";
 
-/**
- * Servers Vietnamese catalog. Keys mirror `en.ts` exactly; only values
- * are translated. Wire values, technical units, commands, placeholders
- * and diagnostics stay untranslated by design.
- */
 const vi: ServersMessages = {
   status: {
     ready: "Sẵn sàng",

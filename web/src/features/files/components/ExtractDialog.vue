@@ -10,7 +10,6 @@ import { useFilesStore } from "@/features/files/stores/files";
 
 interface Props {
   show: boolean;
-  /** entry is the archive to unpack into the current directory. */
   entry: FilesEntry | null;
 }
 
@@ -34,10 +33,8 @@ watch(
   },
 );
 
-/** name is the archive's display name. */
 const name = computed<string>(() => props.entry?.name ?? "");
 
-/** submit unpacks the archive and surfaces any failure in a toast. */
 async function submit(): Promise<void> {
   if (!props.entry || files.acting) {
     return;

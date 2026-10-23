@@ -1,6 +1,3 @@
-// NetworkForm static-host guard (JUS-100): the form loads the host's real
-// static configuration, a DNS-only edit saves without touching the interface,
-// and a static-to-DHCP switch needs an explicit confirmation.
 import { NMessageProvider } from "naive-ui";
 import { defineComponent, h, nextTick } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";

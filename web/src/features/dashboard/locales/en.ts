@@ -1,9 +1,3 @@
-/**
- * Dashboard English catalog: header, KPI tiles, server health grid and
- * the heartbeat/components/activity/alerts aside. Pure helpers read this
- * dictionary through an explicit locale parameter (English when omitted),
- * so unit harnesses keep byte-identical output without a provider.
- */
 const en = {
   header: {
     eyebrow: "Overview",
@@ -69,5 +63,4 @@ const en = {
 
 export default en;
 
-/** DashboardMessages is the shape every dashboard locale must satisfy. */
 export type DashboardMessages = typeof en;

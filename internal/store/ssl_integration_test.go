@@ -16,19 +16,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-// TestSSLCertificateStorage proves the BE-6.2 persistence contract against a
-// real database: the sealed credential round-trips, the allowlist/zone/unique
-// constraints hold, the one-certificate-per-application index holds, the
-// provider/certificate reference guards reject dangling rows, and the routing
-// query carries the certificate intent.
 func TestSSLCertificateStorage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	dsn := testDSN()
 	explicit := testDSNExplicit()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -40,8 +33,6 @@ func TestSSLCertificateStorage(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -113,7 +104,6 @@ func TestSSLCertificateStorage(t *testing.T) {
 		t.Fatalf("sealed credential round-trip = (%q, %v)", opened, err)
 	}
 
-	// At most one enabled provider per type.
 	if _, err := st.CreateDNSProvider(ctx, sqlc.CreateDNSProviderParams{
 		Provider:   "cloudflare",
 		Zones:      []string{"other.com"},
@@ -122,7 +112,6 @@ func TestSSLCertificateStorage(t *testing.T) {
 	}); err == nil {
 		t.Fatal("second enabled provider of the same type was accepted")
 	}
-	// The allowlist is a schema constraint.
 	if _, err := st.CreateDNSProvider(ctx, sqlc.CreateDNSProviderParams{
 		Provider:   "route53",
 		Zones:      []string{"example.net"},
@@ -143,7 +132,6 @@ func TestSSLCertificateStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create certificate: %v", err)
 	}
-	// One certificate config per application.
 	if _, err := st.CreateDomainCertificate(ctx, sqlc.CreateDomainCertificateParams{
 		ApplicationID: app.ID,
 		Domain:        "app.example.com",
@@ -152,7 +140,6 @@ func TestSSLCertificateStorage(t *testing.T) {
 	}); err == nil {
 		t.Fatal("second certificate config for the same application was accepted")
 	}
-	// Wildcard is dns-01 only and dns-01 needs a provider.
 	app2, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID: user.ID, TeamID: teamID, ServerID: server.ID, EnvironmentID: envID,
 		Name:      "ssl-app-wild",
@@ -173,7 +160,6 @@ func TestSSLCertificateStorage(t *testing.T) {
 		t.Fatal("wildcard with http-01 was accepted")
 	}
 
-	// A referenced provider cannot be deleted (foreign key).
 	if err := st.DeleteDNSProvider(ctx, provider.ID); err == nil {
 		t.Fatal("deleting a referenced provider was accepted")
 	}
@@ -185,7 +171,6 @@ func TestSSLCertificateStorage(t *testing.T) {
 		t.Fatalf("enabled count = %d (%v), want 1", count, err)
 	}
 
-	// The routing queries carry the certificate intent for the application.
 	rows, err := st.ListProxiedApplications(ctx)
 	if err != nil {
 		t.Fatalf("list proxied applications: %v", err)
@@ -219,8 +204,6 @@ func TestSSLCertificateStorage(t *testing.T) {
 		t.Fatal("proxied certificate intent missing")
 	}
 
-	// Deleting the application cascades the certificate config, which then
-	// releases the provider.
 	if err := st.DeleteApplication(ctx, app.ID); err != nil {
 		t.Fatalf("delete application: %v", err)
 	}
@@ -232,19 +215,12 @@ func TestSSLCertificateStorage(t *testing.T) {
 	}
 }
 
-// TestSSLProviderMetaUpdatePreservesCredential proves the credential-
-// preserving provider update against a real database: a non-rotation update
-// changes every mutable field without touching the sealed ciphertext, while an
-// explicit rotation replaces it. This is the lost-update guard for concurrent
-// name-only edits versus credential rotation.
 func TestSSLProviderMetaUpdatePreservesCredential(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	dsn := testDSN()
 	explicit := testDSNExplicit()
-	// ProbeOnce fails fast when no database is listening, sparing Open's
-	// retry loop; an Open failure past a good probe is a real error.
 	if err := store.ProbeOnce(ctx, dsn); err != nil {
 		if explicit {
 			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
@@ -256,8 +232,6 @@ func TestSSLProviderMetaUpdatePreservesCredential(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	// Open proved the database is reachable, so a migration error is a real
-	// failure, never a skip (D1-12).
 	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
 		t.Fatalf("migration failed: %v", err)
 	}
@@ -316,8 +290,6 @@ func TestSSLProviderMetaUpdatePreservesCredential(t *testing.T) {
 	}
 }
 
-// uuidFromPGType renders a pgtype.UUID for comparison without importing the
-// proxy package.
 func uuidFromPGType(id pgtype.UUID) string {
 	if !id.Valid {
 		return ""

@@ -7,7 +7,6 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// NewServer verifies current authorization before exposing the SDK lifecycle.
 func NewServer(ctx context.Context, cfg Config, version string, logger *slog.Logger) (*sdk.Server, error) {
 	client, err := NewClient(cfg)
 	if err != nil {
@@ -24,7 +23,6 @@ func NewServer(ctx context.Context, cfg Config, version string, logger *slog.Log
 	return server, nil
 }
 
-// registerTools is extended by subsequent read and mutation work packages.
 func registerTools(server *sdk.Server, client *Client) {
 	registerObservationTools(server, client)
 	registerDiscoveryTools(server, client)

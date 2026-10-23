@@ -1,7 +1,3 @@
-// JUS-275: the shared floating-window frame owns the chrome and the
-// drag/resize mechanics both floating tools reuse. These checks pin the
-// contract the editor and terminal rely on: slots land in the frame, a drag
-// never starts on interactive chrome, and the grips report shared geometry.
 /* global document:readonly, Element:readonly, MouseEvent:readonly, window:readonly */
 import { mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -34,7 +30,6 @@ function mountFrame() {
   });
 }
 
-/** firePointer dispatches a pointer-ish mouse event jsdom can carry. */
 function firePointer(
   target: Element,
   type: string,
@@ -103,7 +98,6 @@ describe("FloatingWindow", () => {
     firePointer(action, "pointermove", { clientX: 130, clientY: 140 });
     expect(wrapper.emitted("drag")).toBeUndefined();
 
-    // A custom control that only carries role=button owns its clicks too.
     const roleAction = wrapper.find(".slot-role-action").element;
     firePointer(roleAction, "pointerdown", { clientX: 30, clientY: 40 });
     firePointer(roleAction, "pointermove", { clientX: 130, clientY: 140 });

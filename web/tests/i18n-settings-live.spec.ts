@@ -8,15 +8,7 @@ import { expect, test } from "@playwright/test";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 
 /* global window:readonly, document:readonly, StorageEvent:readonly, setTimeout:readonly */
-// window/document/StorageEvent/setTimeout run inside page.evaluate (browser
-// context) or Node timers; the repo lint envs do not cover tests/, so the
 // globals are declared here (same pattern as form-feedback.spec.ts).
-
-// Real-component en/vi proof for I18N-8 (replaces static-replica-only
-// coverage): the built SPA from vite preview, deterministic route mocks (no
-// backend, no outbound delivery), locale via the real storage tab-sync path.
-// Teams / Notifications / Domains pages at 390/900/1280, dialog checks, a
-// live ChannelCard failure/draft switch and a retained team 409.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(testsDir, "..");
@@ -27,8 +19,6 @@ const user = {
   id: "u1",
   email: "owner@example.com",
   created_at: "2026-01-01T00:00:00Z",
-  // JUS-197: the domains/teams pages under test are platform-admin-gated,
-  // so the fixture owner carries the instance flag (as on a real instance).
   is_platform_admin: true,
 };
 
@@ -67,7 +57,6 @@ const discordChannel = {
 
 const shopApp = { id: "app-1", name: "Shop", primary_domain: "shop.example.com" };
 
-/** ApiLog counts every mocked API call for no-request-on-switch proofs. */
 interface ApiLog {
   calls: string[];
 }
@@ -76,7 +65,6 @@ function json(status: number, body: unknown) {
   return { status, contentType: "application/json", body: JSON.stringify(body) };
 }
 
-/** installMocks fulfills every API call the three pages can make. */
 async function installMocks(
   context: BrowserContext,
   log: ApiLog,
@@ -158,7 +146,6 @@ async function installMocks(
   });
 }
 
-/** openPage seeds session+locale, installs mocks and navigates to a route. */
 async function openPage(
   browser: Browser,
   routePath: string,
@@ -188,7 +175,6 @@ async function openPage(
   return { context, page };
 }
 
-/** switchLocale flips language through the real storage tab-sync path. */
 async function switchLocale(page: Page, locale: "en" | "vi"): Promise<void> {
   await page.evaluate((lang: string) => {
     window.localStorage.setItem("gotham-locale", lang);
@@ -198,7 +184,6 @@ async function switchLocale(page: Page, locale: "en" | "vi"): Promise<void> {
   }, locale);
 }
 
-/** expectNoOverflow asserts the document never scrolls sideways. */
 async function expectNoOverflow(page: Page, label: string): Promise<void> {
   const overflow = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -250,7 +235,6 @@ for (const width of [390, 900, 1280] as const) {
     const { context, page } = await openPage(browser, "/teams", "en", width, log);
     try {
       await expect(page.getByRole("heading", { name: "Teams", exact: true })).toBeVisible();
-      // Select the long-named team so the header-extra pressure is real.
       await page.getByRole("button", { name: "Platform Engineering" }).click();
       await expect(page.getByText("your role: owner")).toBeVisible();
       await expectNoOverflow(page, `teams en ${width}`);
@@ -265,7 +249,6 @@ for (const width of [390, 900, 1280] as const) {
         page.getByText("vai trò của bạn: chủ sở hữu"),
       ).toBeVisible();
       await expectNoOverflow(page, `teams vi ${width}`);
-      // Regression guard for the 390px crush (was a 28px title column).
       const titleWidth = await page
         .locator(".team-card .n-card-header__main")
         .evaluate((element) => element.getBoundingClientRect().width);
@@ -429,7 +412,6 @@ test("I18N-8 channel draft survives a switch with zero API calls", async ({
     expect(callsBefore).toBeGreaterThan(0);
     await switchLocale(page, "vi");
     await expect(page.getByText("Kênh thông báo mới")).toBeVisible();
-    // Draft, scope pick and gating survive; the switch sends nothing.
     await expect(page.locator('[aria-label="Tên kênh"] input')).toHaveValue("Typed channel");
     await expect(page.locator('[aria-label="URL webhook"] input')).toHaveValue("https://typed/hook");
     await expect(page.getByRole("button", { name: "Tạo kênh" })).toBeEnabled();
@@ -486,7 +468,6 @@ test("I18N-8 team rename 409 keeps the raw refusal identical in both locales", a
   });
   try {
     await expect(page.getByRole("heading", { name: "Teams", exact: true })).toBeVisible();
-    // The personal team is selected first; rename targets it.
     await page.getByRole("button", { name: "Rename" }).first().click();
     await page.locator('[aria-label="Team name"] input').fill("Taken");
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -494,7 +475,6 @@ test("I18N-8 team rename 409 keeps the raw refusal identical in both locales", a
     expect(page.locator('[aria-label="Team name"] input')).toHaveValue("Taken");
 
     await switchLocale(page, "vi");
-    // Known refusal: identical raw text, typed value and open dialog kept.
     await expect(page.getByText("name taken")).toBeVisible();
     await expect(page.locator('[aria-label="Tên nhóm"] input')).toHaveValue("Taken");
     await expect(page.getByText("Đổi tên nhóm")).toBeVisible();

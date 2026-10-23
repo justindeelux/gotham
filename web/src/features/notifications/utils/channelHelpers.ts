@@ -7,14 +7,11 @@ import type {
   NotificationKind,
 } from "@/features/notifications/api/notifications";
 
-/** The mutable config draft of the create/edit modal. */
 export interface ChannelForm {
   name: string;
   kind: NotificationKind;
   enabled: boolean;
-  /** Subscribed event keys; the backend requires at least one. */
   events: NotificationEventKey[];
-  /** Empty for a team-wide channel. */
   resourceType: ChannelScope;
   resourceId: string;
   webhook_url: string;
@@ -25,27 +22,22 @@ export interface ChannelForm {
   username: string;
   password: string;
   from: string;
-  /** Comma/space separated recipient list. */
   to: string;
 }
 
-/** Resource scope of a channel: team-wide or one resource. */
 export type ChannelScope = "" | "application" | "database";
 
-/** One selectable resource of the picker. */
 export interface ResourceOption {
   id: string;
   name: string;
 }
 
-/** Masked secrets as read, so an untouched field is never sent back. */
 export interface ChannelSecrets {
   webhook_url: string;
   bot_token: string;
   password: string;
 }
 
-/** emptyChannelForm is the create draft: a Discord webhook with every event. */
 export function emptyChannelForm(): ChannelForm {
   return {
     name: "",
@@ -66,10 +58,6 @@ export function emptyChannelForm(): ChannelForm {
   };
 }
 
-/**
- * allowedEvents lists the event keys a scope can actually deliver:
- * applications emit deploys, databases emit backups, team-wide gets all.
- */
 export function allowedEvents(scope: ChannelScope): NotificationEventKey[] {
   switch (scope) {
     case "application":
@@ -81,7 +69,6 @@ export function allowedEvents(scope: ChannelScope): NotificationEventKey[] {
   }
 }
 
-/** keepDeliverableEvents narrows a selection to what the scope can deliver. */
 export function keepDeliverableEvents(
   scope: ChannelScope,
   events: NotificationEventKey[],
@@ -91,7 +78,6 @@ export function keepDeliverableEvents(
   return kept.length > 0 ? kept : deliverable;
 }
 
-/** parseRecipients splits a comma/newline separated address list. */
 export function parseRecipients(raw: string): string[] {
   return raw
     .split(/[\s,]+/)
@@ -99,11 +85,6 @@ export function parseRecipients(raw: string): string[] {
     .filter((value) => value !== "");
 }
 
-/**
- * buildConfig maps the draft onto the request config. A secret is only sent
- * when it differs from the masked value read back (an untouched masked field
- * must never overwrite the stored secret).
- */
 export function buildConfig(draft: ChannelForm, originals: ChannelSecrets): ChannelConfig {
   const config: ChannelConfig = {};
   switch (draft.kind) {
@@ -157,10 +138,6 @@ export function buildConfig(draft: ChannelForm, originals: ChannelSecrets): Chan
   return config;
 }
 
-/**
- * resourceScopeInput maps the scope draft onto the request pair. The empty
- * pair clears a stored override (both halves are always sent together).
- */
 export function resourceScopeInput(
   draft: Pick<ChannelForm, "resourceType" | "resourceId">,
 ): { resource_type: string; resource_id: string } {
@@ -173,11 +150,6 @@ export function resourceScopeInput(
   };
 }
 
-/**
- * configSummary renders the non-secret routing facts of a channel. Secret
- * material aside, every technical value (URLs, hosts, ports, addresses)
- * renders verbatim; only the framing words resolve in the current locale.
- */
 export function configSummary(channel: NotificationChannel): string {
   const config = channel.config;
   switch (channel.kind) {
@@ -204,10 +176,6 @@ export function configSummary(channel: NotificationChannel): string {
   }
 }
 
-/**
- * scopeLabel renders the channel's resource scope for the card header.
- * The resource name itself is user data and stays verbatim.
- */
 export function scopeLabel(
   channel: NotificationChannel,
   resolveName: (_resourceType: string, _resourceId: string) => string | undefined,

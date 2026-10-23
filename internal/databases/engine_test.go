@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// sampleCredentials is the credential set the engine table-driven tests feed
-// into EnvSpec and Healthcheck.CommandFor.
 var sampleCredentials = Credentials{
 	Username:     "app",
 	Password:     "s3cret-pw",
@@ -16,9 +14,6 @@ var sampleCredentials = Credentials{
 	RootPassword: "root-pw",
 }
 
-// TestEngineSpecs pins every engine's container shape: default and explicit
-// image tag, standard environment, internal port, data directory and
-// readiness probe. A change here is a change to what gets deployed.
 func TestEngineSpecs(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -145,8 +140,6 @@ func TestEngineSpecs(t *testing.T) {
 	}
 }
 
-// TestRegistryCoversEveryEngine pins the registry contents and their order —
-// the API lists and the UI picker read it.
 func TestRegistryCoversEveryEngine(t *testing.T) {
 	want := []string{EnginePostgres, EngineMySQL, EngineMariaDB, EngineMongoDB, EngineRedis}
 	got := EngineNames()
@@ -166,7 +159,6 @@ func TestRegistryCoversEveryEngine(t *testing.T) {
 	}
 }
 
-// TestParseEngine exercises the alias and error paths of parseEngine.
 func TestParseEngine(t *testing.T) {
 	tests := []struct {
 		input     string
@@ -207,11 +199,7 @@ func TestParseEngine(t *testing.T) {
 	}
 }
 
-// TestValidateVersion pins the image-tag alphabet: no colons, slashes or
-// whitespace may reach the image reference.
 func TestValidateVersion(t *testing.T) {
-	// Surrounding whitespace is tolerated (the service trims before storing);
-	// the tag alphabet itself stays strict.
 	valid := []string{"", "16", "16-alpine", "8.0.36", "7.4.0-beta.1", "LATEST", " 16", "16\n"}
 	for _, version := range valid {
 		if err := ValidateVersion(version); err != nil {
@@ -226,13 +214,9 @@ func TestValidateVersion(t *testing.T) {
 	}
 }
 
-// TestHealthcheckCommandFor checks the credential placeholders render per
-// engine, including the separate MySQL/MariaDB root login.
 func TestHealthcheckCommandFor(t *testing.T) {
 	engine, _ := LookupEngine(EnginePostgres)
 	got := engine.Healthcheck().CommandFor(sampleCredentials)
-	// -h 127.0.0.1 keeps the probe on TCP: the bare command answers over the
-	// unix socket the first-boot server listens on before TCP is up.
 	want := []string{"pg_isready", "-h", "127.0.0.1", "-U", "app", "-d", "appdb"}
 	if !equalStrings(got, want) {
 		t.Errorf("postgres probe = %v, want %v", got, want)
@@ -262,8 +246,6 @@ func TestHealthcheckCommandFor(t *testing.T) {
 	}
 }
 
-// TestRedisNeedsCommandSpec pins the one engine whose official image requires
-// an explicit run command to enable authentication and persistence.
 func TestRedisNeedsCommandSpec(t *testing.T) {
 	engine, ok := LookupEngine(EngineRedis)
 	if !ok {
@@ -285,8 +267,6 @@ func TestRedisNeedsCommandSpec(t *testing.T) {
 	}
 }
 
-// TestHealthcheckWindows pins the per-engine provisioning windows so a typo
-// cannot shorten them to a flaky wait.
 func TestHealthcheckWindows(t *testing.T) {
 	for _, name := range EngineNames() {
 		engine, _ := LookupEngine(name)
@@ -297,7 +277,6 @@ func TestHealthcheckWindows(t *testing.T) {
 	}
 }
 
-// mustEngine resolves an engine or fails the test.
 func mustEngine(t *testing.T, name string) DatabaseEngine {
 	t.Helper()
 	engine, ok := LookupEngine(name)
@@ -307,7 +286,6 @@ func mustEngine(t *testing.T, name string) DatabaseEngine {
 	return engine
 }
 
-// envKeys extracts the sorted KEY list of a KEY=VALUE environment.
 func envKeys(env []string) []string {
 	keys := make([]string, 0, len(env))
 	for _, entry := range env {
@@ -317,7 +295,6 @@ func envKeys(env []string) []string {
 	return keys
 }
 
-// equalStrings compares two string slices order-sensitively.
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

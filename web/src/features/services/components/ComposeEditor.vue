@@ -5,29 +5,15 @@ import { computed, ref, watch } from "vue";
 import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import { activeLocale, i18n } from "@/shared/i18n";
 
-/**
- * Monospace compose document viewer/editor.
- *
- * The component owns the edit draft; the parent owns persistence. `save`
- * carries the draft text and the editor stays in edit mode until the parent
- * flips `editing` back to false (so a failed save never loses the draft).
- */
-
 interface Props {
   modelValue: string;
-  /** Two-way with v-model:editing. */
   editing?: boolean;
   saving?: boolean;
   readonly?: boolean;
   label?: string;
-  /** Placeholder shown when the stored document is empty. */
   emptyText?: string;
 }
 
-/**
- * t renders editor copy in the active locale (tracks language switches).
- * Called during render, so labels refresh without losing the edit draft.
- */
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
   return String(i18n.global.t(key, params ?? {}));
@@ -69,27 +55,21 @@ watch(
 
 const isDirty = computed<boolean>(() => draft.value !== props.modelValue);
 
-/** labelText is the caller override or the localized compose wording. */
 const labelText = computed<string>(() => props.label || t("services.compose.defaultLabel"));
 
-/** emptyLabel is the caller override or the localized empty wording. */
 const emptyLabel = computed<string>(() => props.emptyText || t("services.compose.emptyText"));
 
-/** startEdit opens the editor seeded with the stored document. */
 function startEdit(): void {
   draft.value = props.modelValue;
   emit("update:editing", true);
 }
 
-/** cancel discards the draft and returns to the read view. */
 function cancel(): void {
   draft.value = props.modelValue;
   emit("update:editing", false);
 }
 
-/** save hands the draft to the parent; the parent persists and closes. */
 function save(): void {
-  // Ctrl/Cmd+S in the embedded editor must not rewrite an unchanged document.
   if (!isDirty.value) {
     return;
   }

@@ -12,7 +12,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// writeSizedFile creates a file of exactly size bytes under dir.
 func writeSizedFile(t *testing.T, dir, name string, size int) {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -32,13 +31,11 @@ func TestDirectorySizeSumsTreeAndSkipsLinks(t *testing.T) {
 	writeSizedFile(t, filepath.Join(rootDir, "sub"), "b.txt", 200)
 	writeSizedFile(t, sub, "c.txt", 300)
 
-	// A symlink to a file outside the root must be skipped, never followed.
 	outside := t.TempDir()
 	writeSizedFile(t, outside, "secret.txt", 1<<20)
 	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(rootDir, "link")); err != nil {
 		t.Fatal(err)
 	}
-	// A symlink to a directory inside the root is also not descended.
 	if err := os.Symlink(filepath.Join(rootDir, "sub"), filepath.Join(rootDir, "sublink")); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +50,6 @@ func TestDirectorySizeSumsTreeAndSkipsLinks(t *testing.T) {
 	if resp.GetBytes() != 600 {
 		t.Errorf("bytes = %d, want 600", resp.GetBytes())
 	}
-	// a.txt, sub, sub/b.txt, sub/deep, sub/deep/c.txt, link, sublink = 7 names.
 	if resp.GetEntries() != 7 {
 		t.Errorf("entries = %d, want 7", resp.GetEntries())
 	}
@@ -177,9 +173,6 @@ func TestDirectorySizeHidesTrash(t *testing.T) {
 	}
 }
 
-// cancelAfterCtx reports context.Canceled from the (after+1)-th Err call, so a
-// test can cancel deterministically in the middle of a walk (after N entries)
-// instead of relying on a timing race.
 type cancelAfterCtx struct {
 	context.Context
 	after int
@@ -200,8 +193,6 @@ func TestDirectorySizeCancelsMidWalk(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		writeSizedFile(t, rootDir, string(rune('a'+i))+".txt", 10)
 	}
-	// Cancel after two entries are seen: the walk must abort mid-directory, not
-	// before it starts.
 	ctx := &cancelAfterCtx{Context: context.Background(), after: 2}
 	_, err := server.DirectorySize(ctx, &agentv1.DirectorySizeRequest{Root: "volumes"})
 	if status.Code(err) != codes.Canceled {
@@ -215,7 +206,6 @@ func TestDirectorySizeCancelsMidWalk(t *testing.T) {
 func TestDirectorySizeDepthCapIsPartial(t *testing.T) {
 	t.Parallel()
 	server, rootDir := newTestFileServer(t)
-	// One nesting level past the cap, so the walk stops and flags truncated.
 	dir := rootDir
 	for i := 0; i <= fileArchiveDepth; i++ {
 		dir = filepath.Join(dir, "d")
@@ -252,8 +242,6 @@ func TestDirectorySizeRefusesSymlinkedPath(t *testing.T) {
 		if err := os.Symlink(tc.target, link); err != nil {
 			t.Fatal(err)
 		}
-		// path is lstat-ed, so a symlink is never treated as the directory it
-		// points at — it is refused, matching Stat.
 		_, err := server.DirectorySize(context.Background(), &agentv1.DirectorySizeRequest{
 			Root: "volumes",
 			Path: "link-" + tc.name,

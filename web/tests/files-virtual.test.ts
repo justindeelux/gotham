@@ -1,10 +1,3 @@
-// JUS-137 windowing maths. The list/grid render only the visible slice plus
-// overscan; these pure helpers decide that slice and the pixel spacers that
-// stand in for the unrendered rows. The tests pin the invariants the component
-// relies on: the rendered slice is bounded on a huge directory, the spacers plus
-// the rendered items always sum to the whole listing (so the scrollbar and
-// cross-row select-all stay honest), the sticky-header lead is not counted as
-// visible, and the grid window is always row-aligned.
 import { describe, expect, it } from "vitest";
 
 import {
@@ -19,10 +12,8 @@ describe("windowRange", () => {
   it("renders a bounded slice at the top of a 5,000-row directory", () => {
     const range = windowRange(5000, 36, 0, 500, 34);
     expect(range.start).toBe(0);
-    // ~14 visible rows + overscan, nowhere near 5,000.
     expect(range.end).toBe(18);
     expect(range.padTop).toBe(0);
-    // The spacer covers every unrendered row.
     expect(range.padBottom).toBe((5000 - 18) * 36);
   });
 
@@ -40,9 +31,7 @@ describe("windowRange", () => {
   });
 
   it("does not count a row hidden under the sticky header as visible", () => {
-    // scrollTop is under the 34px lead: the first row is still rendered.
     expect(windowRange(1000, 36, 20, 500, 34).start).toBe(0);
-    // Past the lead the first row scrolls away but overscan keeps a buffer.
     expect(windowRange(1000, 36, 34 + 36 * 10, 500, 34).start).toBe(6);
   });
 
@@ -67,7 +56,6 @@ describe("clampScrollTop", () => {
   });
 
   it("clamps a stale deep offset after the listing shrank", () => {
-    // 5,000 rows of 36px -> 150 rows: the old offset is far past the new end.
     expect(clampScrollTop(180_000, 150 * 36, 400)).toBe(150 * 36 - 400);
   });
 
@@ -117,7 +105,6 @@ describe("gridWindow", () => {
 
 describe("renderedKey", () => {
   it("never collides across a separator a filename could contain", () => {
-    // A filename may hold any byte but "/", so a plain join would alias these.
     expect(renderedKey(["a\nb"])).not.toBe(renderedKey(["a", "b"]));
     expect(renderedKey(["a|b"])).not.toBe(renderedKey(["a", "b"]));
     expect(renderedKey(["a", "b"])).toBe(renderedKey(["a", "b"]));

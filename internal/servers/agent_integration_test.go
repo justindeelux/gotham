@@ -23,10 +23,6 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// TestAgentGatewayEndToEnd drives the real agent package against the real CP
-// gateway and a real database: the agent generates a keypair, sends a CSR in
-// Register, receives a CA-signed certificate for that key, persists it, starts
-// its DockerService with it, and streams heartbeats the CP records.
 func TestAgentGatewayEndToEnd(t *testing.T) {
 	service, st, authority := newTestServiceWithAuthority(t)
 
@@ -50,7 +46,6 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 
 	gatewayAddr := gateway.listener.Addr().String()
 
-	// The agent trusts the CP CA by file path.
 	caDir := t.TempDir()
 	caPath := filepath.Join(caDir, "ca.crt")
 	if err := os.WriteFile(caPath, authority.CACertPEM(), 0o600); err != nil {
@@ -78,8 +73,6 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 	registered := make(chan *agentv1.RegisterResponse, 1)
 	dockerAddr := make(chan string, 1)
 
-	// onRegister mirrors cmd/gotham-agent: start the DockerService server with
-	// the freshly issued certificate and record the RegisterResponse.
 	var serverOnce sync.Once
 	onRegister := func(response *agentv1.RegisterResponse) error {
 		var startErr error
@@ -120,7 +113,6 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- runner.Run(ctx, onRegister) }()
 
-	// 1. Register succeeded and returned a certificate for the agent's key.
 	var response *agentv1.RegisterResponse
 	select {
 	case response = <-registered:
@@ -139,9 +131,6 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 		t.Fatalf("issued agent certificate failed verification: %v", err)
 	}
 
-	// 2. The registry now holds the node's row with its reported capabilities.
-	// Registration alone does not make a node ready: ready means a live agent
-	// heartbeat (A4-15/B4-9), asserted after step 3.
 	row := waitForServer(t, st, nodeID)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -157,8 +146,6 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 		t.Errorf("docker_version = %v, want 24.0.7", row.DockerVersion)
 	}
 
-	// 3. Heartbeats flow through the gateway and update metrics/last_seen; the
-	// first recorded heartbeat is what marks the node ready.
 	updated := waitForHeartbeat(t, st, nodeID)
 	if updated.Status != StatusReady {
 		t.Errorf("server status after heartbeat = %q, want %q", updated.Status, StatusReady)
@@ -173,8 +160,6 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 		t.Errorf("container_count = %v, want 1", updated.ContainerCount)
 	}
 
-	// 4. The agent persisted its key and the CA-signed certificate, and the
-	// certificate matches the key it stored.
 	agentCert := readAgentCert(t, certDir)
 	if !agentCert.PublicKey.(*ecdsa.PublicKey).Equal(cert.PublicKey) {
 		t.Error("persisted agent certificate public key mismatch")
@@ -190,8 +175,6 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 		t.Fatalf("agent.key block = %v, want EC PRIVATE KEY", block)
 	}
 
-	// 5. The agent's DockerService is reachable over mTLS using a CP-issued
-	// client certificate, proving the issued cert is usable end to end.
 	var addr string
 	select {
 	case addr = <-dockerAddr:
@@ -214,8 +197,6 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 	}
 }
 
-// waitForServer polls the registry until the node's row appears, failing the
-// test after a few seconds.
 func waitForServer(t *testing.T, st *store.Store, nodeID string) sqlc.Server {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -233,7 +214,6 @@ func waitForServer(t *testing.T, st *store.Store, nodeID string) sqlc.Server {
 	}
 }
 
-// waitForHeartbeat polls until the node records its first heartbeat metrics.
 func waitForHeartbeat(t *testing.T, st *store.Store, nodeID string) sqlc.Server {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -251,8 +231,6 @@ func waitForHeartbeat(t *testing.T, st *store.Store, nodeID string) sqlc.Server 
 	}
 }
 
-// assertDockerServiceReachable dials the agent's DockerService over mTLS with a
-// CP-issued client certificate and lists its containers.
 func assertDockerServiceReachable(t *testing.T, authority *Authority, addr, serverName string) {
 	t.Helper()
 
@@ -288,7 +266,6 @@ func assertDockerServiceReachable(t *testing.T, authority *Authority, addr, serv
 	}
 }
 
-// readAgentCert reads and parses <certDir>/agent.crt.
 func readAgentCert(t *testing.T, certDir string) *x509.Certificate {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(certDir, "agent.crt"))
@@ -298,7 +275,6 @@ func readAgentCert(t *testing.T, certDir string) *x509.Certificate {
 	return parseCertPEM(t, data)
 }
 
-// e2eDockerClient is a minimal in-memory dockerClient for the agent.
 type e2eDockerClient struct {
 	version    string
 	containers []*agentv1.ContainerInfo

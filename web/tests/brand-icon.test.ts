@@ -7,16 +7,13 @@ import BrandIcon from "@/features/add-resource/components/BrandIcon.vue";
 import { brandFor, templateBrand } from "@/features/add-resource/utils/brands";
 import { ENGINES } from "@/features/databases/utils/databaseEngines";
 
-// Vitest runs from web/, so the token sheet is read from the project root.
 const tokensCss = readFileSync("src/shared/styles/tokens.css", "utf8");
 
-/** Every vendored glyph, keyed by its assets/brands file name. */
 const brandFiles = import.meta.glob(
   "../src/features/add-resource/assets/brands/*.svg",
   { eager: true },
 );
 
-/** tokenHex reads one color token from the design-token stylesheet. */
 function tokenHex(name: string): string {
   const match = new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6})`).exec(tokensCss);
   if (!match) {
@@ -25,7 +22,6 @@ function tokenHex(name: string): string {
   return match[1];
 }
 
-/** luminance is the WCAG relative luminance of a #rrggbb color. */
 function luminance(hex: string): number {
   const value = Number.parseInt(hex.slice(1), 16);
   const channel = (raw: number): number => {
@@ -39,7 +35,6 @@ function luminance(hex: string): number {
   );
 }
 
-/** contrastRatio is the WCAG ratio between two #rrggbb colors. */
 function contrastRatio(a: string, b: string): number {
   const first = luminance(a);
   const second = luminance(b);
@@ -54,7 +49,6 @@ describe("BrandIcon", () => {
     const glyph = wrapper.find(".brand-icon__glyph");
     expect(glyph.exists()).toBe(true);
     expect(wrapper.find(".brand-icon__letters").exists()).toBe(false);
-    // The URL rides one CSS variable the scoped mask rules consume.
     expect(glyph.attributes("style")).toContain("--brand-icon-logo");
   });
 

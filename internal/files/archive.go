@@ -11,29 +11,22 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// Archive format tokens the HTTP API accepts for compress. The format is
-// otherwise inferred from the archive's extension on extract.
 const (
 	ArchiveFormatZip   = "zip"
 	ArchiveFormatTar   = "tar"
 	ArchiveFormatTarGz = "tar.gz"
 )
 
-// maxArchiveSources bounds how many sources one compress request may name, so
-// the request cannot build an unbounded proto message.
 const maxArchiveSources = 1024
 
-// CompressRequest describes one archive build (POST /files/compress).
 type CompressRequest struct {
 	Root        string   `json:"root"`
 	Sources     []string `json:"sources"`
 	Destination string   `json:"destination"`
-	// Format is one of "zip", "tar" or "tar.gz".
-	Format    string `json:"format"`
-	Overwrite bool   `json:"overwrite"`
+	Format      string   `json:"format"`
+	Overwrite   bool     `json:"overwrite"`
 }
 
-// ExtractRequest describes one archive unpack (POST /files/extract).
 type ExtractRequest struct {
 	Root        string `json:"root"`
 	Source      string `json:"source"`
@@ -41,7 +34,6 @@ type ExtractRequest struct {
 	Overwrite   bool   `json:"overwrite"`
 }
 
-// archiveFormat maps the API's format token onto the agent's enum.
 func archiveFormat(format string) (agentv1.ArchiveFormat, error) {
 	switch strings.TrimSpace(format) {
 	case ArchiveFormatZip:
@@ -55,10 +47,6 @@ func archiveFormat(format string) (agentv1.ArchiveFormat, error) {
 	}
 }
 
-// Compress builds one archive from sources inside a single root, drains the
-// agent's progress stream and returns the created archive's entry. It is a
-// mutation: the caller must hold a write-capable role (resolve enforces it) and
-// the agent must own a writable root.
 func (s *Service) Compress(ctx context.Context, serverID uuid.UUID, req CompressRequest) (entry Entry, err error) {
 	defer func() {
 		s.audit(ctx, serverID, "compress", req.Root, req.Destination, err,
@@ -124,9 +112,6 @@ func (s *Service) Compress(ctx context.Context, serverID uuid.UUID, req Compress
 	return newEntry(info), nil
 }
 
-// Extract unpacks one archive into a destination directory inside a single
-// root, draining the agent's progress stream. It is a mutation, gated like
-// Compress.
 func (s *Service) Extract(ctx context.Context, serverID uuid.UUID, req ExtractRequest) (err error) {
 	defer func() {
 		s.audit(ctx, serverID, "extract", req.Root, req.Source, err,

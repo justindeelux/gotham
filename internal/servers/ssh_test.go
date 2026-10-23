@@ -19,44 +19,27 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// sshProbeServer is a tiny in-process SSH server that answers the fixed probe
-// and Docker-install commands with canned output, so validation and install can
-// be tested without a real node.
 type sshProbeServer struct {
 	listener      net.Listener
 	password      string
 	dockerMissing bool
-	// uid answers `id -u`; empty means root ("0").
-	uid string
-	// osRelease is the output of the /etc/os-release probe; empty means
-	// "debian".
-	osRelease string
-	// aptGet makes the `command -v apt-get` fallback probe succeed.
-	aptGet bool
-	// arch answers `uname -m`; empty means "x86_64".
-	arch string
-	// sudoOK answers `sudo -n true` for a non-root user.
-	sudoOK bool
-	// installStatus is the exit status of the install commands (0 by default).
+	uid           string
+	osRelease     string
+	aptGet        bool
+	arch          string
+	sudoOK        bool
 	installStatus uint32
-	// installBlock, when non-nil, holds the install command open until closed,
-	// so a cancellation can be exercised.
-	installBlock chan struct{}
+	installBlock  chan struct{}
 
 	mu       sync.Mutex
 	commands []string
 }
 
-// startSSHProbeServer starts the probe server on a random localhost port and
-// returns its address, the SHA256 fingerprint of its host key, and a stop
-// function.
 func startSSHProbeServer(t *testing.T, password string, dockerMissing bool) (string, string, func()) {
 	t.Helper()
 	return startSSHServer(t, &sshProbeServer{password: password, dockerMissing: dockerMissing})
 }
 
-// startSSHServer starts a customized probe server (privilege, distribution and
-// architecture overrides) on a random localhost port.
 func startSSHServer(t *testing.T, server *sshProbeServer) (string, string, func()) {
 	t.Helper()
 
@@ -76,7 +59,7 @@ func startSSHServer(t *testing.T, server *sshProbeServer) (string, string, func(
 
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
-			return nil, nil // accept any public key
+			return nil, nil
 		},
 	}
 	if server.password != "" {
@@ -102,7 +85,6 @@ func startSSHServer(t *testing.T, server *sshProbeServer) (string, string, func(
 	return server.listener.Addr().String(), ssh.FingerprintSHA256(signer.PublicKey()), func() { _ = server.listener.Close() }
 }
 
-// handle performs the SSH handshake and answers session exec requests.
 func (s *sshProbeServer) handle(conn net.Conn, config *ssh.ServerConfig) {
 	defer func() { _ = conn.Close() }()
 
@@ -126,7 +108,6 @@ func (s *sshProbeServer) handle(conn net.Conn, config *ssh.ServerConfig) {
 	}
 }
 
-// serveSession reads exec requests and replies with canned probe output.
 func (s *sshProbeServer) serveSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer func() { _ = channel.Close() }()
 
@@ -148,8 +129,6 @@ func (s *sshProbeServer) serveSession(channel ssh.Channel, requests <-chan *ssh.
 		block := s.installBlock
 		s.mu.Unlock()
 
-		// Hold an install command open until the test releases it, so a
-		// cancellation can be observed before the command finishes.
 		if block != nil && strings.Contains(payload.Command, "install") {
 			<-block
 		}
@@ -166,7 +145,6 @@ func (s *sshProbeServer) serveSession(channel ssh.Channel, requests <-chan *ssh.
 	}
 }
 
-// lastCommand returns the most recently exec'd command.
 func (s *sshProbeServer) lastCommand() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -176,7 +154,6 @@ func (s *sshProbeServer) lastCommand() string {
 	return s.commands[len(s.commands)-1]
 }
 
-// cannedOutput maps a fixed command to its canned output and exit status.
 func (s *sshProbeServer) cannedOutput(command string) (stdout, stderr string, status uint32) {
 	switch {
 	case strings.Contains(command, "docker version"):
@@ -226,7 +203,6 @@ func (s *sshProbeServer) cannedOutput(command string) (stdout, stderr string, st
 	}
 }
 
-// testPrivateKeyPEM generates an ed25519 key and returns its OpenSSH PEM.
 func testPrivateKeyPEM(t *testing.T) []byte {
 	t.Helper()
 
@@ -241,8 +217,6 @@ func testPrivateKeyPEM(t *testing.T) []byte {
 	return pem.EncodeToMemory(block)
 }
 
-// testEncryptedPrivateKeyPEM generates an ed25519 key and returns its OpenSSH
-// PEM encrypted with passphrase.
 func testEncryptedPrivateKeyPEM(t *testing.T, passphrase string) []byte {
 	t.Helper()
 
@@ -257,7 +231,6 @@ func testEncryptedPrivateKeyPEM(t *testing.T, passphrase string) []byte {
 	return pem.EncodeToMemory(block)
 }
 
-// target splits a host:port address into a probe target.
 func target(t *testing.T, addr string) (string, int) {
 	t.Helper()
 
@@ -272,7 +245,6 @@ func target(t *testing.T, addr string) (string, int) {
 	return host, port
 }
 
-// checkByName returns the named check result.
 func checkByName(t *testing.T, checks []CheckResult, name string) CheckResult {
 	t.Helper()
 
@@ -383,8 +355,6 @@ func TestValidateNodeRejectsBadInput(t *testing.T) {
 	}
 }
 
-// TestValidateNodePinsHostKey covers the first-use (TOFU) path: an unpinned host
-// the policy trusts reports the fingerprint the caller must persist.
 func TestValidateNodePinsHostKey(t *testing.T) {
 	addr, wantFingerprint, stop := startSSHProbeServer(t, "hunter2", false)
 	defer stop()
@@ -403,8 +373,6 @@ func TestValidateNodePinsHostKey(t *testing.T) {
 	}
 }
 
-// TestValidateNodePinnedHostKeyAccepted proves a pinned host key validates even
-// when the policy would not trust an unpinned host.
 func TestValidateNodePinnedHostKeyAccepted(t *testing.T) {
 	addr, fingerprint, stop := startSSHProbeServer(t, "hunter2", false)
 	defer stop()
@@ -423,8 +391,6 @@ func TestValidateNodePinnedHostKeyAccepted(t *testing.T) {
 	}
 }
 
-// TestValidateNodePinnedHostKeyChangeFailsClosed proves a MITM cannot swap the
-// node's key after the first pin: validation is refused.
 func TestValidateNodePinnedHostKeyChangeFailsClosed(t *testing.T) {
 	addr, _, stop := startSSHProbeServer(t, "hunter2", false)
 	defer stop()
@@ -440,8 +406,6 @@ func TestValidateNodePinnedHostKeyChangeFailsClosed(t *testing.T) {
 	}
 }
 
-// TestValidateNodeRefusesUnpinnedHost covers the password-auth default: with no
-// pin and no explicit operator trust, an unknown host is refused.
 func TestValidateNodeRefusesUnpinnedHost(t *testing.T) {
 	addr, _, stop := startSSHProbeServer(t, "hunter2", false)
 	defer stop()
@@ -457,9 +421,6 @@ func TestValidateNodeRefusesUnpinnedHost(t *testing.T) {
 	}
 }
 
-// TestValidateNodeStopsAtDeadlineOnStalledHandshake covers A4-14: a peer that
-// accepts the TCP connection and then never completes the SSH handshake must not
-// hang validation past the run's deadline.
 func TestValidateNodeStopsAtDeadlineOnStalledHandshake(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -474,7 +435,6 @@ func TestValidateNodeStopsAtDeadlineOnStalledHandshake(t *testing.T) {
 		if err != nil {
 			return
 		}
-		// Hold the connection open, answering nothing.
 		<-released
 		_ = conn.Close()
 	}()
@@ -493,7 +453,6 @@ func TestValidateNodeStopsAtDeadlineOnStalledHandshake(t *testing.T) {
 	}
 }
 
-// TestParsePrivateKeyPassphrase covers the parser's passphrase branches.
 func TestParsePrivateKeyPassphrase(t *testing.T) {
 	pemBytes := testEncryptedPrivateKeyPEM(t, "s3cret")
 
@@ -546,8 +505,6 @@ func TestInstallDockerNodeRootApt(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeNonRootUsesSudo proves a non-root SSH user with
-// passwordless escalation runs the same fixed argv with the sudo prefix.
 func TestInstallDockerNodeNonRootUsesSudo(t *testing.T) {
 	server := &sshProbeServer{password: "hunter2", uid: "1000", sudoOK: true}
 	addr, _, stop := startSSHServer(t, server)
@@ -565,8 +522,6 @@ func TestInstallDockerNodeNonRootUsesSudo(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeNonRootWithoutSudo refuses before any output when the
-// SSH user is neither root nor able to escalate.
 func TestInstallDockerNodeNonRootWithoutSudo(t *testing.T) {
 	server := &sshProbeServer{password: "hunter2", uid: "1000"}
 	addr, _, stop := startSSHServer(t, server)
@@ -587,8 +542,6 @@ func TestInstallDockerNodeNonRootWithoutSudo(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeFedoraMobyEngine proves the Fedora plan installs the
-// upstream engine package, not the podman `docker` alias.
 func TestInstallDockerNodeFedoraMobyEngine(t *testing.T) {
 	server := &sshProbeServer{password: "hunter2", osRelease: "fedora\n"}
 	addr, _, stop := startSSHServer(t, server)
@@ -609,8 +562,6 @@ func TestInstallDockerNodeFedoraMobyEngine(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeAlpineStartsService proves the Alpine plan enables and
-// starts the daemon with OpenRC, so the follow-up probe sees it running.
 func TestInstallDockerNodeAlpineStartsService(t *testing.T) {
 	server := &sshProbeServer{password: "hunter2", osRelease: "alpine\n"}
 	addr, _, stop := startSSHServer(t, server)
@@ -628,9 +579,6 @@ func TestInstallDockerNodeAlpineStartsService(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeRHELFamilyUnsupported proves the RHEL family is refused
-// honestly: their base repositories ship no Docker Engine, so the automatic
-// installer must not claim support (and must not add a third-party repo).
 func TestInstallDockerNodeRHELFamilyUnsupported(t *testing.T) {
 	for _, id := range []string{"rhel", "centos", "rocky", "almalinux", "oracle", "amzn"} {
 		t.Run(id, func(t *testing.T) {
@@ -655,8 +603,6 @@ func TestInstallDockerNodeRHELFamilyUnsupported(t *testing.T) {
 	}
 }
 
-// TestMatchDistroClassifiesBeforeIDLike proves an id is classified by its own
-// token first: Rocky's ID_LIKE carries fedora, which must not make it supported.
 func TestMatchDistroClassifiesBeforeIDLike(t *testing.T) {
 	if family, id := matchDistro("rocky\nrhel centos fedora\n"); family != "" || id != "rocky" {
 		t.Errorf("matchDistro(rocky) = %q/%q, want unsupported/rocky", family, id)
@@ -675,8 +621,6 @@ func TestMatchDistroClassifiesBeforeIDLike(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeFallbackProbe covers the /etc/os-release-less node: an
-// unknown id falls back to the fixed apt-get probe.
 func TestInstallDockerNodeFallbackProbe(t *testing.T) {
 	server := &sshProbeServer{password: "hunter2", osRelease: "void\n", aptGet: true}
 	addr, _, stop := startSSHServer(t, server)
@@ -713,9 +657,6 @@ func TestInstallDockerNodeUnsupportedDistro(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeNonZeroExit proves a failing install streams the header
-// and returns an error that still carries the remote exit status, so the client
-// marker can report it.
 func TestInstallDockerNodeNonZeroExit(t *testing.T) {
 	server := &sshProbeServer{password: "hunter2", installStatus: 100}
 	addr, _, stop := startSSHServer(t, server)
@@ -736,8 +677,6 @@ func TestInstallDockerNodeNonZeroExit(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeCancelledStopsPromptly proves a cancelled context stops
-// waiting on a still-running remote install instead of hanging.
 func TestInstallDockerNodeCancelledStopsPromptly(t *testing.T) {
 	block := make(chan struct{})
 	server := &sshProbeServer{password: "hunter2", installBlock: block}
@@ -766,8 +705,6 @@ func TestInstallDockerNodeCancelledStopsPromptly(t *testing.T) {
 	close(block)
 }
 
-// TestValidateNodeDockerInstallableFlag proves the probe tells the UI whether
-// the automatic install covers the node, so it is never offered where it fails.
 func TestValidateNodeDockerInstallableFlag(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -799,7 +736,6 @@ func TestValidateNodeDockerInstallableFlag(t *testing.T) {
 	}
 }
 
-// waitFor polls cond until it holds or a short deadline passes.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -829,8 +765,6 @@ func TestInstallDockerNodeUnsupportedArch(t *testing.T) {
 	}
 }
 
-// TestInstallDockerNodeRefusesUnpinnedHost proves the install honours the same
-// host-key policy as validation: an unpinned host without consent is refused.
 func TestInstallDockerNodeRefusesUnpinnedHost(t *testing.T) {
 	server := &sshProbeServer{password: "hunter2"}
 	addr, _, stop := startSSHServer(t, server)

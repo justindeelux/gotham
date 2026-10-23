@@ -12,8 +12,6 @@ import (
 	"github.com/justindeelux/gotham/internal/githubapp"
 )
 
-// staticTokenResolver hands the cloner a fixed token clone URL without a
-// GitHub App, recording what it was asked for.
 type staticTokenResolver struct {
 	tokenURL string
 	err      error
@@ -23,10 +21,8 @@ type staticTokenResolver struct {
 	gotURL   string
 }
 
-// Compile-time guarantee that staticTokenResolver satisfies the seam.
 var _ appTokenResolver = (*staticTokenResolver)(nil)
 
-// TokenCloneURL implements appTokenResolver.
 func (r *staticTokenResolver) TokenCloneURL(_ context.Context, _ uuid.UUID, appID uuid.UUID, repo, cloneURL string) (string, error) {
 	r.calls++
 	r.gotAppID = appID
@@ -38,11 +34,6 @@ func (r *staticTokenResolver) TokenCloneURL(_ context.Context, _ uuid.UUID, appI
 	return r.tokenURL, nil
 }
 
-// TestGitSourceCloneGitHubAppUsesToken proves a github_app application clones
-// with a fresh installation token: the token lands in the clone URL userinfo,
-// the log line carries the redacted URL, and the stored clone URL is never
-// rewritten with the token. The stored URL is the wizard's https clone_url
-// (private repos included): the token cloner only accepts http(s).
 func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp
@@ -68,9 +59,6 @@ func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	if resolver.calls != 1 {
 		t.Fatalf("token calls = %d, want 1 (fresh per attempt)", resolver.calls)
 	}
-	// The resolver receives the linked connection, the application repo and
-	// stored URL: that is what lets the real service resolve the granting
-	// installation of that connection instead of assuming one.
 	if resolver.gotAppID != app.GitHubAppID {
 		t.Errorf("resolver app id = %v, want the linked connection %v", resolver.gotAppID, app.GitHubAppID)
 	}
@@ -97,10 +85,6 @@ func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	}
 }
 
-// TestGitSourceCloneGitHubAppWithoutResolverKeepsLegacy proves a github_app
-// clone without a token resolver keeps the legacy behaviour instead of
-// failing: configurations without a GitHub App service (tests, custom
-// wiring) clone exactly as before.
 func TestGitSourceCloneGitHubAppWithoutResolverKeepsLegacy(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp
@@ -119,10 +103,6 @@ func TestGitSourceCloneGitHubAppWithoutResolverKeepsLegacy(t *testing.T) {
 	}
 }
 
-// TestGitSourceCloneGitHubAppUnlinkedKeepsLegacy proves an unlinked
-// application never touches the resolver: a provider=github application with
-// an SSH clone URL and a deploy key clones through the deploy-key path
-// exactly as before GitHub App connections existed.
 func TestGitSourceCloneGitHubAppUnlinkedKeepsLegacy(t *testing.T) {
 	privatePEM, _, _, err := generateDeployKeyPair("gotham:deploy:test")
 	if err != nil {
@@ -163,9 +143,6 @@ func TestGitSourceCloneGitHubAppUnlinkedKeepsLegacy(t *testing.T) {
 	}
 }
 
-// TestGitSourceCloneLinkedWithoutGrantFails proves a linked application
-// whose connection no longer grants the repo fails the deploy: no other
-// connection is consulted and no anonymous clone is attempted.
 func TestGitSourceCloneLinkedWithoutGrantFails(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp
@@ -193,9 +170,6 @@ func TestGitSourceCloneLinkedWithoutGrantFails(t *testing.T) {
 	}
 }
 
-// TestGitSourceCloneGitHubAppTokenFailureFails proves a token failure that is
-// not "no grant" (host mismatch, mint failure) fails the clone instead of
-// silently cloning anonymously.
 func TestGitSourceCloneGitHubAppTokenFailureFails(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp

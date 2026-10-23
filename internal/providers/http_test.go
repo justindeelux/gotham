@@ -13,7 +13,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// mustURL parses a URL or fails the test.
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	parsed, err := url.Parse(raw)
@@ -23,9 +22,6 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	return parsed
 }
 
-// TestValidateBaseURL is the C1-15 / U2 regression: stored base URLs are
-// checked before they become outbound targets. Non-canonical numeric forms are
-// left to the dial-time guard (providerDialControl), which sees the resolved IP.
 func TestValidateBaseURL(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -71,9 +67,6 @@ func TestValidateBaseURL(t *testing.T) {
 	}
 }
 
-// TestProviderDialControl is the U2 regression: the resolved IP is refused even
-// when validation only saw a name (covers DNS rebinding and non-canonical
-// numeric forms such as 2130706433 / 0x7f.0.0.1 / 127.1, which resolve here).
 func TestProviderDialControl(t *testing.T) {
 	control := providerDialControl(false)
 	cases := []struct {
@@ -103,8 +96,6 @@ func TestProviderDialControl(t *testing.T) {
 	}
 }
 
-// TestCheckProviderRedirect is the U1 regression: cross-origin and unsafe
-// redirects are refused; same-origin redirects keep working.
 func TestCheckProviderRedirect(t *testing.T) {
 	check := checkProviderRedirect(false)
 	origin := mustURL(t, "https://gitlab.example/api/v4/projects")
@@ -138,9 +129,6 @@ func TestCheckProviderRedirect(t *testing.T) {
 	}
 }
 
-// TestProviderRedirectRefusedEndToEnd drives 302 and 307 through a real client
-// and proves the cross-origin target is never reached (so a 307 cannot replay
-// its body to another origin).
 func TestProviderRedirectRefusedEndToEnd(t *testing.T) {
 	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
@@ -153,8 +141,6 @@ func TestProviderRedirectRefusedEndToEnd(t *testing.T) {
 				http.Redirect(w, r, target.URL+"/steal", status)
 			})
 
-			// allowUnsafe lets the loopback host check pass, so the refusal
-			// here can only come from the cross-origin condition.
 			client := &http.Client{CheckRedirect: checkProviderRedirect(true)}
 			req, err := http.NewRequest(http.MethodPost, origin.URL, strings.NewReader("secret-body"))
 			if err != nil {
@@ -170,8 +156,6 @@ func TestProviderRedirectRefusedEndToEnd(t *testing.T) {
 	}
 }
 
-// TestProviderRedirectSameOriginAllowed proves a same-origin redirect still
-// works.
 func TestProviderRedirectSameOriginAllowed(t *testing.T) {
 	var hits int32
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
@@ -194,10 +178,6 @@ func TestProviderRedirectSameOriginAllowed(t *testing.T) {
 	}
 }
 
-// TestProviderClientRefusesCrossOriginRedirect proves the guard is wired into
-// the client the sources actually use, not just the helper. It drives 302 and
-// 307 through the real source client with allowUnsafe, so only the cross-origin
-// condition can refuse (the reviewer's U3 case).
 func TestProviderClientRefusesCrossOriginRedirect(t *testing.T) {
 	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
@@ -221,9 +201,6 @@ func TestProviderClientRefusesCrossOriginRedirect(t *testing.T) {
 	}
 }
 
-// TestProviderDialGuardRefusesLoopbackSource proves the dial guard is wired
-// into the transport: a strict source cannot reach a loopback provider even
-// when base_url validation is bypassed.
 func TestProviderDialGuardRefusesLoopbackSource(t *testing.T) {
 	var requests int32
 	srv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -231,7 +208,7 @@ func TestProviderDialGuardRefusesLoopbackSource(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	source := newGitHubSource(Provider{BaseURL: srv.URL}, false) // strict
+	source := newGitHubSource(Provider{BaseURL: srv.URL}, false)
 	if _, err := source.ListRepos(context.Background(), staticToken); err == nil {
 		t.Fatal("a strict source reached a loopback provider")
 	}
@@ -240,9 +217,6 @@ func TestProviderDialGuardRefusesLoopbackSource(t *testing.T) {
 	}
 }
 
-// TestProviderExchangeIsGuarded is the round-2 U1 regression: the token
-// exchange must run on the guarded client, not oauth2's http.DefaultClient
-// fallback. In strict mode a loopback token endpoint must never be reached.
 func TestProviderExchangeIsGuarded(t *testing.T) {
 	var hits int32
 	tokenSrv := serve(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -286,8 +260,6 @@ func TestProviderExchangeIsGuarded(t *testing.T) {
 	}
 }
 
-// TestProviderHTTPTimeout is the C1-14 regression: a hung provider call is
-// bounded by the shared timeout, and the server sees exactly one request.
 func TestProviderHTTPTimeout(t *testing.T) {
 	old := providerHTTPTimeout
 	providerHTTPTimeout = 50 * time.Millisecond
@@ -316,8 +288,6 @@ func TestProviderHTTPTimeout(t *testing.T) {
 	}
 }
 
-// TestProviderHTTPHonorsCallerDeadline proves the timeout wraps the caller's
-// context rather than replacing it.
 func TestProviderHTTPHonorsCallerDeadline(t *testing.T) {
 	old := providerHTTPTimeout
 	providerHTTPTimeout = time.Hour
@@ -344,9 +314,6 @@ func TestProviderHTTPHonorsCallerDeadline(t *testing.T) {
 	}
 }
 
-// TestProviderRefreshBounded is the U3 regression: an oauth2 refresh inside the
-// transport against a hanging token endpoint is bounded, even with no caller
-// deadline.
 func TestProviderRefreshBounded(t *testing.T) {
 	old := providerHTTPTimeout
 	providerHTTPTimeout = 80 * time.Millisecond
@@ -386,9 +353,6 @@ func TestProviderRefreshBounded(t *testing.T) {
 	}
 }
 
-// TestProviderListingDeadline is the U6 regression: a listing that drip-feeds
-// full pages is bounded by the overall listing deadline, not just the per-call
-// timeout.
 func TestProviderListingDeadline(t *testing.T) {
 	old := providerListingTimeout
 	providerListingTimeout = 80 * time.Millisecond
@@ -397,8 +361,6 @@ func TestProviderListingDeadline(t *testing.T) {
 	var requests int32
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&requests, 1)
-		// A full page every time, but slow enough that the overall deadline
-		// fires after the first few.
 		select {
 		case <-time.After(40 * time.Millisecond):
 		case <-r.Context().Done():

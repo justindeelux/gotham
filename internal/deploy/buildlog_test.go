@@ -53,8 +53,6 @@ func TestSanitizeBuildLogRejectsInvalidUTF8(t *testing.T) {
 	if !strings.Contains(got, "last line") {
 		t.Errorf("sanitized log = %q, want the tail kept", got)
 	}
-	// An invalid sequence straddling the tail cut must not leave a partial
-	// rune at the head either.
 	raw = strings.Repeat("\xff", maxBuildLogBytes+10) + "tail"
 	if got := sanitizeBuildLog(raw); !utf8.ValidString(got) || !strings.HasSuffix(got, "tail") {
 		t.Errorf("cut log invalid or missing tail: %q", got)
@@ -84,7 +82,7 @@ func TestLogRecorderNilSafe(t *testing.T) {
 func TestLogRecorderBoundsMemory(t *testing.T) {
 	var rec logRecorder
 	line := strings.Repeat("x", 100)
-	const lines = 10000 // ~1 MiB of input against a 256 KiB cap
+	const lines = 10000
 	for i := 0; i < lines; i++ {
 		rec.record(line)
 	}
@@ -98,15 +96,11 @@ func TestLogRecorderBoundsMemory(t *testing.T) {
 	rec.mu.Lock()
 	held := len(rec.lines)
 	rec.mu.Unlock()
-	// ~256 KiB / 101 B per line ≈ 2600 lines held; anything near 10000
-	// means the cap only applies at finalize.
 	if held > 4000 {
 		t.Errorf("held lines = %d, want a bounded tail", held)
 	}
 }
 
-// orderPublisher reports whether the stored log was already on the row when
-// a terminal state line was published.
 type orderPublisher struct {
 	mu                   sync.Mutex
 	repo                 *fakeRepository

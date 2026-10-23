@@ -8,56 +8,35 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
-// portsLabel carries operator-declared port mappings ("host:container",
-// comma-separated) on a container. The agent ListContainers contract does not
-// yet transport Docker port bindings, so the control plane surfaces ports from
-// this label until the contract gains a ports field.
 const portsLabel = "gotham.ports"
 
-// Docker health statuses, as reported in a container's health field.
 const (
 	HealthStarting  = "starting"
 	HealthHealthy   = "healthy"
 	HealthUnhealthy = "unhealthy"
 )
 
-// Container is the shared wire representation of a container running on a
-// managed node.
 type Container struct {
-	ID      string     `json:"id"`
-	Name    string     `json:"name"`
-	Image   string     `json:"image"`
-	State   string     `json:"state"`
-	Status  string     `json:"status"`
-	Ports   []string   `json:"ports"`
-	Created *time.Time `json:"created,omitempty"`
-	// PortsReported marks engine-reported bindings (true) versus the legacy
-	// gotham.ports label fallback (false). Routing decisions must not trust
-	// declared-only ports (R1), so it is internal and never serialised.
-	PortsReported bool `json:"-"`
-	// Mounts are the engine-reported bind mounts; RestartPolicy is the
-	// container's native Docker restart policy (empty when unknown). Both are
-	// internal evidence for managed-container convergence (R5).
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Image         string            `json:"image"`
+	State         string            `json:"state"`
+	Status        string            `json:"status"`
+	Ports         []string          `json:"ports"`
+	Created       *time.Time        `json:"created,omitempty"`
+	PortsReported bool              `json:"-"`
 	Labels        map[string]string `json:"-"`
 	Mounts        []ContainerMount  `json:"-"`
 	RestartPolicy string            `json:"-"`
-	// Health is the container's Docker health status ("starting", "healthy",
-	// "unhealthy") when it declares a healthcheck; empty when it does not.
-	// Database readiness is gated on it, so unlike the other internal fields
-	// it must survive the Redis list cache, which marshals the DTO with
-	// encoding/json.
-	Health string `json:"health,omitempty"`
+	Health        string            `json:"health,omitempty"`
 }
 
-// ContainerMount is one engine-reported bind mount of a container.
 type ContainerMount struct {
 	Source      string
 	Destination string
 	ReadOnly    bool
 }
 
-// RunOptions describes a raw container to create and start immediately via
-// the agent's RunImage RPC.
 type RunOptions struct {
 	Image         string            `json:"image"`
 	Name          string            `json:"name,omitempty"`
@@ -69,14 +48,9 @@ type RunOptions struct {
 	Volumes       []string          `json:"volumes,omitempty"`
 	Networks      []string          `json:"networks,omitempty"`
 	RestartPolicy string            `json:"restart_policy,omitempty"`
-	// Healthcheck optionally configures the container's native Docker
-	// healthcheck. A nil value leaves the image's own healthcheck untouched.
-	Healthcheck *Healthcheck `json:"healthcheck,omitempty"`
+	Healthcheck   *Healthcheck      `json:"healthcheck,omitempty"`
 }
 
-// Healthcheck is a container's native Docker healthcheck: Test is the
-// exec-form command run inside the container (no shell), and the durations
-// bound how Docker schedules and judges it.
 type Healthcheck struct {
 	Test        []string
 	Interval    time.Duration
@@ -85,7 +59,6 @@ type Healthcheck struct {
 	StartPeriod time.Duration
 }
 
-// validate rejects run requests without an image.
 func (o RunOptions) validate() error {
 	if strings.TrimSpace(o.Image) == "" {
 		return ErrValidation
@@ -93,7 +66,6 @@ func (o RunOptions) validate() error {
 	return nil
 }
 
-// toProto maps run options onto the agent contract.
 func (o RunOptions) toProto() *agentv1.CreateContainerRequest {
 	return &agentv1.CreateContainerRequest{
 		Image:         strings.TrimSpace(o.Image),
@@ -110,9 +82,6 @@ func (o RunOptions) toProto() *agentv1.CreateContainerRequest {
 	}
 }
 
-// toProto maps the healthcheck onto the agent contract. A nil healthcheck or
-// an empty test renders nil so the agent leaves the image's own healthcheck
-// (or its absence) untouched.
 func (h *Healthcheck) toProto() *agentv1.ContainerHealthcheck {
 	if h == nil || len(h.Test) == 0 {
 		return nil
@@ -126,8 +95,6 @@ func (h *Healthcheck) toProto() *agentv1.ContainerHealthcheck {
 	}
 }
 
-// newContainer maps one agent ContainerInfo onto the shared DTO. Ports is
-// never nil so the API renders [] rather than null.
 func newContainer(info *agentv1.ContainerInfo) Container {
 	container := Container{
 		Ports: []string{},
@@ -152,7 +119,6 @@ func newContainer(info *agentv1.ContainerInfo) Container {
 	return container
 }
 
-// mountsFromInfo maps the engine-reported bind mounts.
 func mountsFromInfo(info *agentv1.ContainerInfo) []ContainerMount {
 	mounts := make([]ContainerMount, 0, len(info.GetMounts()))
 	for _, mount := range info.GetMounts() {
@@ -165,10 +131,6 @@ func mountsFromInfo(info *agentv1.ContainerInfo) []ContainerMount {
 	return mounts
 }
 
-// portsFromInfo renders the engine-reported port bindings as the same
-// "host:container" / "ip:host:container" strings the gotham.ports label uses
-// and reports whether the data came from the engine. Older agents report no
-// bindings at all, so the label remains a display fallback only.
 func portsFromInfo(info *agentv1.ContainerInfo) (ports []string, reported bool) {
 	ports = []string{}
 	for _, binding := range info.GetPorts() {
@@ -190,8 +152,6 @@ func portsFromInfo(info *agentv1.ContainerInfo) (ports []string, reported bool) 
 	return portsFromLabels(info.GetLabels()), false
 }
 
-// portsFromLabels extracts operator-declared port mappings from the
-// gotham.ports label. It always returns a non-nil slice.
 func portsFromLabels(labels map[string]string) []string {
 	ports := []string{}
 	raw, ok := labels[portsLabel]

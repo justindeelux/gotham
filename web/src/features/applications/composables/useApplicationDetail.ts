@@ -35,10 +35,6 @@ import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { pipelineStepsFor } from "@/features/applications/utils/deployPipeline";
 import { createRequestGeneration } from "@/shared/utils/requestGeneration";
 
-/**
- * State, data loading and mutations behind the application detail page.
- * The page itself only handles route params, layout and tab composition.
- */
 export function useApplicationDetail() {
   const route = useRoute();
   const router = useRouter();
@@ -59,11 +55,6 @@ export function useApplicationDetail() {
   const deleting = ref(false);
   const envDraft = ref<EnvVar[]>([]);
   const envLoading = ref(false);
-  /**
-   * envErrorRaw keeps the failure behind the env banner; envError derives its
-   * display text in the current locale so a language switch refreshes the
-   * banner without clearing the draft or refetching.
-   */
   const envErrorRaw = ref<unknown>(null);
   const envError = computed<string | null>(() => {
     if (envErrorRaw.value === null) {
@@ -72,14 +63,9 @@ export function useApplicationDetail() {
     void activeLocale.value;
     return describeApplicationError(envErrorRaw.value);
   });
-  // `envLoadedFor` names the application whose environment actually loaded. Save
-  // is only enabled while it matches the current application, so an empty draft
-  // from a failed read (or a draft left over from another application) can never
-  // be written over unknown data.
   const envLoadedFor = ref<string>("");
   const storagesDraft = ref<StorageMapping[]>([]);
   const storagesLoading = ref(false);
-  /** storagesErrorRaw/storagesError mirror the env pair for volumes. */
   const storagesErrorRaw = ref<unknown>(null);
   const storagesError = computed<string | null>(() => {
     if (storagesErrorRaw.value === null) {
@@ -89,7 +75,6 @@ export function useApplicationDetail() {
     return describeApplicationError(storagesErrorRaw.value);
   });
   const storagesLoadedFor = ref<string>("");
-  /** volumes/volumesError is the read-only storage listing of every source. */
   const volumes = ref<VolumeListing | null>(null);
   const volumesLoading = ref(false);
   const volumesErrorRaw = ref<unknown>(null);
@@ -102,26 +87,15 @@ export function useApplicationDetail() {
   });
   const volumesLoadedFor = ref<string>("");
 
-  // Inherited shared variables (PE-6): the project's and the environment's
-  // masked sets, shown read-only above the application editor with their
-  // origin. Context only — a failed read renders as no section, never an
-  // error over the application editor the user came to change.
   const inheritedVars = ref<InheritedVariable[]>([]);
   const inheritedLoading = ref(false);
   const inheritedReady = ref(false);
 
-  // Invalidates in-flight config reads when the route's application changes, so
-  // a late response cannot overwrite the new application's draft.
   const draftGeneration = createRequestGeneration();
 
-  // Previews (FE-8.1). `previewsLoaded` is only set by a successful read, so an
-  // unavailable list can never render as a confirmed-empty one: a failure keeps
-  // the previously loaded rows and shows an explicit error with a retry, and a
-  // feature-flag 404 hides the whole tab instead of erroring.
   const previews = ref<Preview[]>([]);
   const previewsLoading = ref(false);
   const previewsLoaded = ref(false);
-  /** previewsErrorRaw/previewsError mirror the env pair for previews. */
   const previewsErrorRaw = ref<unknown>(null);
   const previewsError = computed<string | null>(() => {
     if (previewsErrorRaw.value === null) {
@@ -132,10 +106,8 @@ export function useApplicationDetail() {
   });
   const previewsAvailable = ref(true);
 
-  /** isNarrow stacks the two-column descriptions on small screens. */
   const isNarrow = useMediaQuery("(max-width: 640px)");
 
-  /** descColumns renders descriptions in one column below 640px. */
   const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 
   const deployments = computed<Deployment[]>(() => appsStore.deploymentsOf(appId.value));
@@ -144,28 +116,17 @@ export function useApplicationDetail() {
     appsStore.applicationOf(appId.value),
   );
 
-  /** displayName prefers the stored name, falling back to the id head. */
   const displayName = computed<string>(() => application.value?.name ?? shortId.value);
 
-  /** hasContainer reports whether any deployment started a container. */
   const hasContainer = computed<boolean>(() =>
     deployments.value.some((item) => item.container_id !== ""),
   );
 
-  /**
-   * tr resolves one applications message in the current locale. Reading
-   * activeLocale pins the calling computed to the language switch.
-   */
   function tr(key: string, params?: Record<string, string | number>): string {
     void activeLocale.value;
     return String(i18n.global.t(key, params ?? {}));
   }
 
-  /**
-   * controlHint explains why stop/start are unavailable, if they are: an
-   * in-flight deployment owns the container right now, or no deployment ever
-   * started one (the backend would answer 404).
-   */
   const controlHint = computed<string | null>(() => {
     if (active.value !== null) {
       return tr("applications.detail.controlInProgress");
@@ -180,30 +141,16 @@ export function useApplicationDetail() {
 
   const active = computed<Deployment | null>(() => appsStore.activeDeployment(appId.value));
 
-  /**
-   * containerStopped tracks a stop/start the deployment row cannot express:
-   * stopping leaves the deployment state "running" (the release still describes
-   * the container), so the header tag and the Stop/Start buttons read this local
-   * truth instead of `latest.state` alone (C4-19).
-   */
   const containerStopped = ref(false);
 
-  /**
-   * stoppedForContainer names the container the local stop override applies to.
-   * stopApp → refreshDeployments must not clear the override when the refresh
-   * merely re-keys the row for the same container.
-   */
   const stoppedForContainer = ref<string>("");
 
-  /** containerIsRunning is the live view of the newest deployment's container. */
   const containerIsRunning = computed<boolean>(
     () => latest.value?.state === "running" && !containerStopped.value,
   );
 
-  /** shortId renders the head of the application UUID for the header. */
   const shortId = computed<string>(() => appId.value.slice(0, 8));
 
-  /** brand resolves the avatar identity from the application's source metadata. */
   const brand = computed<BrandMark>(() =>
     applicationBrand(
       application.value?.source_type ?? "",
@@ -212,12 +159,10 @@ export function useApplicationDetail() {
     ),
   );
 
-  /** runningDeployments lists terminal running rows eligible for rollback. */
   const runningDeployments = computed<Deployment[]>(() =>
     deployments.value.filter((item) => item.state === "running"),
   );
 
-  /** runtimeDeployment streams the newest running deployment's container. */
   const runtimeDeployment = computed<Deployment | null>(
     () =>
       deployments.value.find(
@@ -225,12 +170,10 @@ export function useApplicationDetail() {
       ) ?? null,
   );
 
-  /** logTarget resolves the deployment selected in the Logs tab. */
   const logTarget = computed<Deployment | null>(
     () => deployments.value.find((item) => item.id === logDeploymentId.value) ?? active.value ?? latest.value,
   );
 
-  /** effectiveLogServerId streams the explicit pick, else the app node, else the first node. */
   const effectiveLogServerId = computed<string>(() => {
     const servers = serversStore.servers;
     if (
@@ -260,17 +203,10 @@ export function useApplicationDetail() {
     })),
   );
 
-  /**
-   * Logs tab picks stay explicit-only: an empty id means "follow the
-   * default", so the tab keeps tracking the active/latest deployment and the
-   * application node without default-writing watchers (no ordering bugs, no
-   * stale pins, warm caches and late arrivals just work).
-   */
   const defaultLogDeploymentId = computed<string>(
     () => active.value?.id ?? latest.value?.id ?? "",
   );
 
-  /** displayedLogDeploymentId shows the explicit pick while listed, else the default. */
   const displayedLogDeploymentId = computed<string>(() =>
     logDeploymentId.value !== "" &&
     deployments.value.some((item) => item.id === logDeploymentId.value)
@@ -278,7 +214,6 @@ export function useApplicationDetail() {
       : defaultLogDeploymentId.value,
   );
 
-  /** defaultLogServerId prefers the application node when known, else the first node. */
   const defaultLogServerId = computed<string>(() => {
     const servers = serversStore.servers;
     const appServer = application.value?.server_id ?? "";
@@ -288,7 +223,6 @@ export function useApplicationDetail() {
     return servers[0]?.id ?? "";
   });
 
-  /** displayedLogServerId shows the explicit pick while listed, else the default. */
   const displayedLogServerId = computed<string>(() =>
     logServerId.value !== "" &&
     serversStore.servers.some((server) => server.id === logServerId.value)
@@ -296,10 +230,8 @@ export function useApplicationDetail() {
       : defaultLogServerId.value,
   );
 
-  /** pipelineSteps maps the latest deployment onto done/active/todo/failed. */
   const pipelineSteps = computed(() => pipelineStepsFor(latest.value));
 
-  /** fetchAll loads the application, its history, config and node list. */
   async function fetchAll(): Promise<void> {
     if (!appId.value) {
       return;
@@ -308,12 +240,8 @@ export function useApplicationDetail() {
     try {
       application = await appsStore.fetchApplication(appId.value);
     } catch {
-      // The store already exposes the error; the alert renders it.
     }
     if (application) {
-      // The row ids are the authority: a wrong project/environment in the
-      // URL replaces it with the canonical nested URL instead of rendering
-      // silently. The route watcher reloads from there.
       const canonical = resolveEnvironmentScope(
         { projectId: application.project_id, environmentId: application.environment_id },
         {
@@ -332,7 +260,6 @@ export function useApplicationDetail() {
     try {
       await appsStore.fetchDeployments(appId.value);
     } catch {
-      // The store already exposes the error; the alert renders it.
     }
     void loadEnv();
     void loadStorages();
@@ -342,7 +269,6 @@ export function useApplicationDetail() {
     void serversStore.fetchServers().catch(() => undefined);
   }
 
-  /** loadEnv refreshes the environment draft shown in the editor. */
   async function loadEnv(): Promise<void> {
     const target = appId.value;
     if (target === "") {
@@ -354,7 +280,7 @@ export function useApplicationDetail() {
     try {
       const env = await appsStore.fetchEnv(target);
       if (!draftGeneration.isCurrent(token) || target !== appId.value) {
-        return; // superseded by an application switch
+        return;
       }
       envDraft.value = [...env];
       envLoadedFor.value = target;
@@ -362,9 +288,6 @@ export function useApplicationDetail() {
       if (!draftGeneration.isCurrent(token) || target !== appId.value) {
         return;
       }
-      // Never present a failed read as an empty collection: keep the draft in an
-      // error state and clear envLoadedFor so Save stays disabled until a
-      // successful read. An unknown server state is never overwritten.
       envErrorRaw.value = error;
       envLoadedFor.value = "";
     } finally {
@@ -374,7 +297,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /** loadInherited refreshes the read-only project/environment context rows. */
   async function loadInherited(): Promise<void> {
     const target = appId.value;
     const scope = application.value;
@@ -386,14 +308,12 @@ export function useApplicationDetail() {
     const environmentId = scope.environment_id;
     inheritedLoading.value = true;
     try {
-      // Either scope may fail independently (a 404 on one must not drop
-      // the other scope's rows): render whichever half succeeded.
       const [projectResult, environmentResult] = await Promise.allSettled([
         getProjectVariables(teamId, projectId),
         getEnvironmentVariables(teamId, environmentId),
       ]);
       if (target !== appId.value) {
-        return; // superseded by an application switch
+        return;
       }
       const projectVars =
         projectResult.status === "fulfilled" ? projectResult.value : [];
@@ -410,8 +330,6 @@ export function useApplicationDetail() {
       if (target !== appId.value) {
         return;
       }
-      // Context only: a failed read renders as no section, and the
-      // application editor below keeps working.
       inheritedVars.value = [];
       inheritedReady.value = false;
     } finally {
@@ -421,7 +339,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /** loadStorages refreshes the volume draft shown in the editor. */
   async function loadStorages(): Promise<void> {
     const target = appId.value;
     if (target === "") {
@@ -450,10 +367,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /**
-   * loadVolumes refreshes the read-only storage listing. A failure keeps the
-   * previously loaded rows and shows an explicit error, never an empty list.
-   */
   async function loadVolumes(): Promise<void> {
     const target = appId.value;
     if (target === "") {
@@ -482,12 +395,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /**
-   * loadPreviews refreshes the application's preview bindings. A feature-flag
-   * 404 hides the tab; any other failure keeps the rows already shown and
-   * surfaces an explicit error with a retry (an unavailable list is never
-   * rendered as an empty one).
-   */
   async function loadPreviews(): Promise<void> {
     if (!appId.value) {
       return;
@@ -511,11 +418,8 @@ export function useApplicationDetail() {
     }
   }
 
-  /** handleSaveEnv replaces the whole environment collection. */
   async function handleSaveEnv(): Promise<void> {
     const target = appId.value;
-    // Refuse to write a draft that does not belong to the current application:
-    // an empty or stale draft must never replace unknown server-side data.
     if (target === "" || envLoadedFor.value !== target) {
       return;
     }
@@ -523,8 +427,6 @@ export function useApplicationDetail() {
     envErrorRaw.value = null;
     try {
       const saved = await appsStore.saveEnv(target, envDraft.value);
-      // Guard by generation as well as id: A→B→A must not let A's old save
-      // response overwrite the draft B's navigation reloaded.
       if (target !== appId.value || !draftGeneration.isCurrent(token)) {
         return;
       }
@@ -538,7 +440,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /** handleSaveStorages replaces the whole storage collection. */
   async function handleSaveStorages(): Promise<void> {
     const target = appId.value;
     if (target === "" || storagesLoadedFor.value !== target) {
@@ -561,7 +462,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /** handleDeploy queues a redeploy of the current revision. */
   async function handleDeploy(): Promise<void> {
     try {
       await appsStore.deploy(appId.value);
@@ -571,7 +471,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /** handleRollback queues a rollback to the selected running deployment. */
   async function handleRollback(): Promise<void> {
     rollingBack.value = true;
     try {
@@ -585,12 +484,9 @@ export function useApplicationDetail() {
     }
   }
 
-  /** handleStop stops the container of the newest deployment. */
   async function handleStop(): Promise<void> {
     try {
       await appsStore.stopApp(appId.value);
-      // A stop leaves the deployment row "running"; reflect the live container
-      // so the tag flips and Stop disables (C4-19).
       containerStopped.value = true;
       stoppedForContainer.value = latest.value?.container_id ?? "";
       message.success(tr("applications.detail.stopSent"));
@@ -599,7 +495,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /** handleStart restarts the container of the newest deployment. */
   async function handleStart(): Promise<void> {
     try {
       await appsStore.startApp(appId.value);
@@ -611,24 +506,17 @@ export function useApplicationDetail() {
     }
   }
 
-  /** openRollback preselects the previous release and opens the dialog. */
   function openRollback(): void {
     const candidates = runningDeployments.value;
-    // Default to the previous successful release; fall back to the only one.
     rollbackTarget.value = candidates[1]?.id ?? candidates[0]?.id ?? "";
     rollbackOpen.value = true;
   }
 
-  /** showLogsFor jumps to the Logs tab with a deployment preselected. */
   function showLogsFor(deploymentId: string): void {
     logDeploymentId.value = deploymentId;
     activeTab.value = "logs";
   }
 
-  /**
-   * Detail tab names a `?tab=` deep link may select. The page still owns the
-   * per-application fallbacks (a compose app never shows Storage).
-   */
   const DETAIL_TABS = new Set([
     "overview",
     "deployments",
@@ -641,18 +529,11 @@ export function useApplicationDetail() {
     "settings",
   ]);
 
-  /** routeTab returns the detail tab named by ?tab=, or null when absent. */
   function routeTab(): string | null {
     const tab = route.query.tab;
     return typeof tab === "string" && DETAIL_TABS.has(tab) ? tab : null;
   }
 
-  /**
-   * applyRouteTab selects the deep-linked tab once the application row is
-   * loaded. Storage exists for every source now (JUS-273), so no tab needs a
-   * source-type fallback; the row gate only keeps a stale query from selecting
-   * a pane before the source is known.
-   */
   function applyRouteTab(app: Application | null): void {
     if (app === null) {
       return;
@@ -664,17 +545,14 @@ export function useApplicationDetail() {
     activeTab.value = tab;
   }
 
-  /** openRollbackFor preselects a deployment and opens the dialog. */
   function openRollbackFor(deploymentId: string): void {
     rollbackTarget.value = deploymentId;
     rollbackOpen.value = true;
   }
 
-  /** canWrite follows the contract's roles: viewers read, members write. */
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
   const moveSaving = ref(false);
-  /** moveErrorRaw/moveError mirror the env pair for location writes. */
   const moveErrorRaw = ref<unknown>(null);
   const moveError = computed<string | null>(() => {
     if (moveErrorRaw.value === null) {
@@ -684,14 +562,6 @@ export function useApplicationDetail() {
     return describeApplicationError(moveErrorRaw.value);
   });
 
-  /**
-   * handleMove applies the location settings (move environment, change
-   * node). Only changed fields ride the PUT; a move retargets the nested
-   * route to the new environment. The contract's 409 refusals (open
-   * previews, in-flight deploy, name collision) render inline through
-   * moveError. The navigation is identity-guarded: leaving the resource
-   * mid-request never yanks the user back to it.
-   */
   async function handleMove(scope: {
     projectId: string;
     environmentId: string;
@@ -717,7 +587,7 @@ export function useApplicationDetail() {
     try {
       const updated = await appsStore.update(targetId, input);
       if (targetId !== appId.value) {
-        return; // the route moved on while the write was in flight
+        return;
       }
       message.success(tr("applications.detail.locationSaved"));
       await refreshProjectCounts([current.project_id, updated.project_id]);
@@ -745,12 +615,6 @@ export function useApplicationDetail() {
     }
   }
 
-  /**
-   * handleDelete removes the application and returns to its environment. The
-   * store drops the cached row, the projects refresh converges the counts,
-   * and the environment page reloads its resource list on mount, so the row
-   * disappears. The navigation is identity-guarded like the move above.
-   */
   async function handleDelete(): Promise<void> {
     const current = application.value;
     const targetId = appId.value;
@@ -781,30 +645,21 @@ export function useApplicationDetail() {
     }
   }
 
-  /**
-   * refreshProjectCounts invalidates the projects store after a move, so
-   * project/environment counts converge without relying on a remount.
-   */
   async function refreshProjectCounts(projectIds: string[]): Promise<void> {
     try {
       await projectsStore.fetchProjects();
     } catch {
-      // The store already exposes the error; counts converge on next load.
     }
     const detail = projectsStore.detail;
     if (detail && projectIds.includes(detail.id)) {
       try {
         await projectsStore.fetchDetail(detail.id);
       } catch {
-        // Same as above; the detail alert renders it.
       }
     }
   }
 
-  // The detail route is reused when navigating between applications, and a
-  // move keeps the id while the environment changes: reload on either.
   watch([appId, () => String(route.params.environmentId ?? "")], () => {
-    // Invalidate any in-flight config read for the previous application.
     draftGeneration.bump();
     activeTab.value = "overview";
     containerStopped.value = false;
@@ -838,9 +693,6 @@ export function useApplicationDetail() {
     void fetchAll();
   });
 
-  // A new deployment's container supersedes any local stop/start override —
-  // but a refresh that merely re-keys the row for the same stopped container
-  // keeps it.
   watch(
     () => latest.value?.id,
     () => {
@@ -858,9 +710,6 @@ export function useApplicationDetail() {
     },
   );
 
-  // The application row can arrive after the route, and a same-route
-  // navigation only swaps params, so ?tab= is applied reactively instead of
-  // once on mount. A compose row resolves a stale storage query to Overview.
   watch(
     [() => application.value?.id ?? "", () => route.query.tab],
     () => {
@@ -870,8 +719,6 @@ export function useApplicationDetail() {
   );
 
   onMounted(() => {
-    // A progress-card "View logs" link (?logs=<deploymentId>, JUS-91) wins
-    // over ?tab= because it carries the exact deployment to select.
     void fetchAll().then(() => {
       const logs = route.query.logs;
       if (typeof logs === "string" && logs !== "") {
@@ -957,5 +804,4 @@ export function useApplicationDetail() {
   };
 }
 
-/** DetailState is the shared shape passed from the page to its tab panels. */
 export type DetailState = ReturnType<typeof useApplicationDetail>;

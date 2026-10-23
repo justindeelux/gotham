@@ -12,12 +12,8 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 )
 
-// testSecretKey is the key testEnv seals application secrets with; the
-// orchestrator must open them with the same value.
 const testSecretKey = "test-secret-key"
 
-// newTestOrchestrator builds an orchestrator over the fakes with timers short
-// enough for a unit test.
 func newTestOrchestrator(cfg Config) *Orchestrator {
 	if cfg.Secret == "" {
 		cfg.Secret = testSecretKey
@@ -40,8 +36,6 @@ func newTestOrchestrator(cfg Config) *Orchestrator {
 	return newOrchestrator(cfg)
 }
 
-// seedDeployment inserts a deployment row so the orchestrator has something to
-// update, mirroring what Service.submit persists before enqueueing.
 func seedDeployment(t *testing.T, repo *fakeRepository, app Application, dep Deployment) Deployment {
 	t.Helper()
 	dep.ApplicationID = app.ID
@@ -55,7 +49,6 @@ func seedDeployment(t *testing.T, repo *fakeRepository, app Application, dep Dep
 	return created
 }
 
-// statesEqual compares two state walks.
 func statesEqual(got, want []State) bool {
 	if len(got) != len(want) {
 		return false
@@ -68,7 +61,6 @@ func statesEqual(got, want []State) bool {
 	return true
 }
 
-// renderStates makes a walk readable in failure output.
 func renderStates(states []State) string {
 	out := make([]string, 0, len(states))
 	for _, state := range states {
@@ -77,7 +69,6 @@ func renderStates(states []State) string {
 	return "[" + strings.Join(out, " ") + "]"
 }
 
-// dialAlways is a DialFunc that hands out one node.
 func dialAlways(node Node) DialFunc {
 	return func(context.Context, uuid.UUID) (Node, error) { return node, nil }
 }
@@ -186,8 +177,6 @@ func TestOrchestratorHappyPath(t *testing.T) {
 	wantChannel := DeployChannel(app.ServerID, dep.ID)
 	var sawTransition, sawImage, sawStop bool
 	for _, event := range pub.payloads() {
-		// Task lifecycle frames (JUS-91) share the publisher on
-		// tasks:{teamID}; only log events belong to this assertion.
 		if strings.HasPrefix(event.Channel, "tasks:") {
 			continue
 		}
@@ -570,8 +559,6 @@ func TestPushStep(t *testing.T) {
 		if node.pullCalls != 0 {
 			t.Errorf("pull calls = %d, want 0 (no registry reference exists)", node.pullCalls)
 		}
-		// The regression: the previous container must not be stopped when the
-		// new image cannot be transferred.
 		if len(node.stopped) != 0 {
 			t.Errorf("stopped = %v; want no container retired before the image is available", node.stopped)
 		}

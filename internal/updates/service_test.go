@@ -13,8 +13,6 @@ import (
 	"github.com/justindeelux/gotham/updatecore"
 )
 
-// newTestService wires a Service at a fixture release server with a no-op
-// restart hook and a temporary binary/status path.
 func newTestService(t *testing.T, server *httptest.Server, current string, cfg func(*Config)) Service {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,7 +40,6 @@ func newTestService(t *testing.T, server *httptest.Server, current string, cfg f
 	return svc
 }
 
-// TestServiceUpToDate proves Apply reports a no-op when nothing is newer.
 func TestServiceUpToDate(t *testing.T) {
 	server := httptest.NewServer(releasesHandler([]fixtureRelease{
 		{Tag: "v1.0.0", Assets: platformAssets()},
@@ -59,9 +56,6 @@ func TestServiceUpToDate(t *testing.T) {
 	}
 }
 
-// TestServiceApplierUsesKeyRing proves the embedded current + next key ring
-// flows through FromEnv into the applier: a manifest signed by the
-// pre-positioned next key verifies, and an unknown key is refused.
 func TestServiceApplierUsesKeyRing(t *testing.T) {
 	current, _, err := updatecore.GenerateKey()
 	if err != nil {
@@ -117,8 +111,6 @@ func TestServiceApplierUsesKeyRing(t *testing.T) {
 	}
 }
 
-// TestServiceApplyNeedsPublicKey proves Apply fails closed without a key even
-// when a newer release exists.
 func TestServiceApplyNeedsPublicKey(t *testing.T) {
 	server := httptest.NewServer(releasesHandler([]fixtureRelease{
 		{Tag: "v1.2.0", Assets: platformAssets()},
@@ -135,8 +127,6 @@ func TestServiceApplyNeedsPublicKey(t *testing.T) {
 	}
 }
 
-// TestServiceApplyChannel proves the per-request channel override selects a
-// prerelease on beta.
 func TestServiceApplyChannel(t *testing.T) {
 	server := httptest.NewServer(releasesHandler([]fixtureRelease{
 		{Tag: "v1.2.0", Assets: platformAssets()},
@@ -157,7 +147,6 @@ func TestServiceApplyChannel(t *testing.T) {
 	}
 }
 
-// TestServiceStartAutoDisabled proves the loop is a no-op when disabled.
 func TestServiceStartAutoDisabled(t *testing.T) {
 	server := httptest.NewServer(releasesHandler(nil, 0, 0))
 	defer server.Close()
@@ -166,11 +155,9 @@ func TestServiceStartAutoDisabled(t *testing.T) {
 	svc := newTestService(t, server, "v1.0.0", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	svc.StartAuto(ctx) // must not block or panic
+	svc.StartAuto(ctx)
 }
 
-// TestServiceCurrentAndRollback covers the read-only accessors and the
-// no-backup rollback path.
 func TestServiceCurrentAndRollback(t *testing.T) {
 	server := httptest.NewServer(releasesHandler(nil, 0, 0))
 	defer server.Close()
@@ -184,8 +171,6 @@ func TestServiceCurrentAndRollback(t *testing.T) {
 	}
 }
 
-// TestDefaultRestartMissingScript proves a missing wrapper is reported rather
-// than silently skipping the restart.
 func TestDefaultRestartMissingScript(t *testing.T) {
 	_, err := defaultRestart("/nonexistent/gotham-update")(context.Background())
 	if err == nil {
@@ -193,7 +178,6 @@ func TestDefaultRestartMissingScript(t *testing.T) {
 	}
 }
 
-// TestServiceStartAutoRuns exercises the auto-update loop once.
 func TestServiceStartAutoRuns(t *testing.T) {
 	t.Setenv(AutoUpdateEnv, "true")
 	server := httptest.NewServer(releasesHandler([]fixtureRelease{

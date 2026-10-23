@@ -9,8 +9,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// newTestService builds a Service over the fake repository and closes its
-// worker pool when the test ends.
 func newTestService(t *testing.T, repo *fakeRepository) *Service {
 	t.Helper()
 	svc := NewService(Config{Repository: repo, Secret: testSecretKey, Logger: discardLogger()})
@@ -18,7 +16,6 @@ func newTestService(t *testing.T, repo *fakeRepository) *Service {
 	return svc
 }
 
-// listStored reads the stored deployments through the mutex-protected seam.
 func listStored(t *testing.T, repo *fakeRepository, appID uuid.UUID) []Deployment {
 	t.Helper()
 	deployments, err := repo.ListDeployments(context.Background(), appID)
@@ -117,9 +114,6 @@ func TestServiceDeployQueuesDeployment(t *testing.T) {
 	}
 }
 
-// TestServiceDeploySystem covers the system trigger a push webhook uses: the
-// application is addressed directly because the delivery has no authenticated
-// caller, and every guard Deploy applies still holds.
 func TestServiceDeploySystemQueuesWithoutCaller(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
@@ -137,8 +131,6 @@ func TestServiceDeploySystemQueuesWithoutCaller(t *testing.T) {
 		t.Errorf("stored %d deployments, want 1", len(stored))
 	}
 
-	// Unknown application and the zero ID are refused without a caller to
-	// blame, so a stale webhook row cannot queue anything.
 	if _, err := svc.DeploySystem(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown application err = %v, want ErrNotFound", err)
 	}
@@ -149,7 +141,7 @@ func TestServiceDeploySystemQueuesWithoutCaller(t *testing.T) {
 
 func TestServiceDeploySystemValidatesTarget(t *testing.T) {
 	app := testApplication(uuid.New())
-	app.ServerID = uuid.Nil // no node to run it on
+	app.ServerID = uuid.Nil
 	repo := &fakeRepository{app: app}
 	svc := newTestService(t, repo)
 
@@ -436,10 +428,6 @@ func TestServiceWithoutRepository(t *testing.T) {
 	}
 }
 
-// TestServiceSweepsStaleDeployments covers the boot-time recovery sweep: a
-// deployment abandoned by a previous control plane process can never resume,
-// and its row would block every later deploy of the application through the
-// active-deployment partial unique index. Running deployments are left alone.
 func TestServiceSweepsStaleDeployments(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -482,8 +470,6 @@ func TestServiceSweepsStaleDeployments(t *testing.T) {
 	}
 }
 
-// TestServiceSurvivesSweepFailure pins the contract that a failing recovery
-// sweep is logged, not fatal: the control plane must still boot.
 func TestServiceSurvivesSweepFailure(t *testing.T) {
 	repo := &fakeRepository{failStaleErr: errors.New("database is down")}
 	svc := NewService(Config{Repository: repo, Secret: testSecretKey, Logger: discardLogger()})

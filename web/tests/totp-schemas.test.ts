@@ -1,6 +1,3 @@
-// Two-factor schemas (JUS-196): the code field accepts an authenticator code or
-// a recovery code and rejects obviously wrong input; the transport envelopes
-// validate the server shapes.
 import { describe, expect, it } from "vitest";
 
 import { twoFactorCodeSchema } from "@/features/auth";

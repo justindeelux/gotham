@@ -64,9 +64,6 @@ func TestPanelCertificatesMigrationPreservesExistingIntents(t *testing.T) {
 		t.Fatal(err)
 	}
 	team, environment, _ := seedEnvColumns(t, ctx, st, pool)
-	// Seed the server with SQL: the generated queries target the current schema,
-	// which carries columns a later migration adds (agent_key_fingerprint, 57),
-	// while this test pins the schema at 51 (see the sibling migration tests).
 	var nodeID pgtype.UUID
 	if err := pool.QueryRow(ctx, `INSERT INTO servers (name, ip, port, ssh_user) VALUES ('localhost', '127.0.0.1', 22, 'root') RETURNING id`).Scan(&nodeID); err != nil {
 		t.Fatal(err)
@@ -75,7 +72,6 @@ func TestPanelCertificatesMigrationPreservesExistingIntents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Seed at version 51 with SQL: the version-52 generated queries select owner_kind.
 	for _, domain := range []string{"app.example.com", "alias.example.com"} {
 		if _, err := pool.Exec(ctx, `INSERT INTO domain_certificates (application_id,domain) VALUES ($1,$2)`, app.ID, domain); err != nil {
 			t.Fatal(err)
@@ -122,7 +118,6 @@ func TestPanelCertificatesMigrationPreservesExistingIntents(t *testing.T) {
 	if !found {
 		t.Fatal("panel has no ACME status target")
 	}
-	// The nullable owner must still enforce the application foreign key.
 	if _, err := st.CreateDomainCertificate(ctx, sqlc.CreateDomainCertificateParams{ApplicationID: pgtype.UUID{Bytes: [16]byte{1}, Valid: true}, Domain: "missing.example.com", Enabled: true, Challenge: "http-01"}); err == nil {
 		t.Fatal("application foreign key lost")
 	}

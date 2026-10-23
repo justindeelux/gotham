@@ -1,9 +1,3 @@
-/**
- * Vietnamese catalog for the teams feature. Keys mirror `en.ts` exactly;
- * only values are translated. Role words shown through the shared
- * `common.roles` catalog are not duplicated here; team names, emails,
- * tokens and URLs stay raw parameters.
- */
 const vi = {
   page: {
     eyebrow: "Nhóm · Kiểm soát truy cập",
@@ -26,10 +20,6 @@ const vi = {
   },
   list: {
     title: "Nhóm của bạn",
-    /**
-     * Team count with library pluralization (one | other): Vietnamese
-     * repeats the identical segment so the strict en/vi segment parity holds.
-     */
     count: "{count} nhóm | {count} nhóm",
     rename: "Đổi tên",
     delete: "Xóa",

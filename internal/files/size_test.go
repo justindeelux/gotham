@@ -23,7 +23,6 @@ func TestDirectorySizeServiceReadScope(t *testing.T) {
 	}
 	svc := newTestService(t, registry, client)
 
-	// read_only is enough: sizing is metadata, like List and Stat.
 	size, err := svc.DirectorySize(scopeCtx(teams.RoleReadOnly, teamID), server.ID, "volumes", "apps")
 	if err != nil {
 		t.Fatalf("DirectorySize: %v", err)

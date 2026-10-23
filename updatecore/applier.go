@@ -13,95 +13,43 @@ import (
 )
 
 const (
-	// DefaultMaxBytes bounds the release artifact download (a Gotham binary is
-	// tens of MiB; the ceiling leaves headroom without allowing a disk-fill).
-	DefaultMaxBytes = 200 << 20
-	// maxManifestBytes bounds the signed manifest.
-	maxManifestBytes = 64 << 10
-	// maxSignatureBytes bounds a detached signature file.
+	DefaultMaxBytes   = 200 << 20
+	maxManifestBytes  = 64 << 10
 	maxSignatureBytes = 4 << 10
-	// OldSuffix is the suffix of the retained previous binary.
-	OldSuffix = ".old"
+	OldSuffix         = ".old"
 )
 
-// Download/verification/apply failures.
 var (
-	// ErrDownload is returned when the artifact cannot be fetched.
-	ErrDownload = errors.New("updates: download failed")
-	// ErrTooLarge is returned when a download exceeds its bound.
-	ErrTooLarge = errors.New("updates: download too large")
-	// ErrChecksumMismatch is returned when the artifact SHA-256 differs from
-	// the signed manifest.
+	ErrDownload         = errors.New("updates: download failed")
+	ErrTooLarge         = errors.New("updates: download too large")
 	ErrChecksumMismatch = errors.New("updates: checksum mismatch")
-	// ErrApply is returned when the binary swap fails.
-	ErrApply = errors.New("updates: apply failed")
-	// ErrNoBackup is returned when no previous binary exists to roll back to.
-	ErrNoBackup = errors.New("updates: no previous binary to roll back to")
-	// ErrNoUpdate is returned when Apply is called without a release.
-	ErrNoUpdate = errors.New("updates: no update available")
-	// ErrUpdatePending is returned when a previous update is staged and has
-	// not been confirmed healthy or rolled back.
-	ErrUpdatePending = errors.New("updates: a previous update is still pending")
+	ErrApply            = errors.New("updates: apply failed")
+	ErrNoBackup         = errors.New("updates: no previous binary to roll back to")
+	ErrNoUpdate         = errors.New("updates: no update available")
+	ErrUpdatePending    = errors.New("updates: a previous update is still pending")
 )
 
-// RestartFunc launches the privileged restart/healthcheck wrapper and returns a
-// waiter for its exit. The launch error is for an immediate failure; the waiter
-// error is observed asynchronously (the wrapper normally restarts this
-// process, so it cannot be awaited inline).
 type RestartFunc func(ctx context.Context) (wait func() error, err error)
 
-// ApplyOutcome reports what Apply did.
 type ApplyOutcome struct {
-	// Version is the version named by the signed manifest.
 	Version string
-	// Staged is true when a restart/healthcheck wrapper was launched and the
-	// new version is not yet proven healthy.
-	Staged bool
+	Staged  bool
 }
 
-// Applier downloads and verifies a release, then installs the binary.
-//
-// The signed manifest authenticates the release identity and artifact digest;
-// the artifact is never touched before those checks pass. Installation is
-// serialized by a process-external lock, uses a unique staging file, keeps the
-// previous binary as a hard-linked <binary>.old so the target is never absent,
-// gates a second apply while one is staged, and is recoverable after a crash.
 type Applier struct {
-	// Client is the HTTP client; a bounded default is used when nil.
-	Client *http.Client
-	// Verifier holds the release public key. When nil, Apply fails closed.
-	Verifier *Verifier
-	// BinaryPath is the fixed target executable. It is resolved once by the
-	// service and must never come from the live inode after a swap.
-	BinaryPath string
-	// OldPath is where the previous binary is retained; empty means
-	// <BinaryPath>.old.
-	OldPath string
-	// LockPath is the serialization lock; empty means <BinaryPath>.lock.
-	LockPath string
-	// Pending records the staged/pending marker (control-plane-owned) that
-	// gates a second apply.
-	Pending *StatusStore
-	// Status is the authoritative root-owned status, read only to reconcile a
-	// stale pending marker.
-	Status *StatusStore
-	// Restart launches the restart/healthcheck wrapper.
-	Restart RestartFunc
-	// Timeout bounds each metadata download (signed manifest and detached
-	// signature) when Client is nil. It deliberately does not bound the
-	// artifact body, which is much larger; see ArtifactTimeout.
-	Timeout time.Duration
-	// ArtifactTimeout bounds the release-artifact body download when Client is
-	// nil. It is kept separate from Timeout so the short metadata bound never
-	// caps the tens-of-MiB binary fetch (a separate, much longer budget).
+	Client          *http.Client
+	Verifier        *Verifier
+	BinaryPath      string
+	OldPath         string
+	LockPath        string
+	Pending         *StatusStore
+	Status          *StatusStore
+	Restart         RestartFunc
+	Timeout         time.Duration
 	ArtifactTimeout time.Duration
-	// MaxBytes bounds the artifact download.
-	MaxBytes int64
+	MaxBytes        int64
 }
 
-// Apply downloads and verifies the release, installs the artifact, and (when
-// configured) launches the restart wrapper. The current binary is left
-// untouched unless the manifest signature and the artifact digest both verify.
 func (a *Applier) Apply(ctx context.Context, rel *Release) (*ApplyOutcome, error) {
 	if rel == nil {
 		return nil, ErrNoUpdate
@@ -153,9 +101,6 @@ func (a *Applier) Apply(ctx context.Context, rel *Release) (*ApplyOutcome, error
 		if a.pendingInFlight() {
 			return ErrUpdatePending
 		}
-		// Mark the update pending before touching the binary so a crash at any
-		// point leaves the staged gate set (fail closed) rather than an
-		// unconfirmed swap.
 		if a.Pending != nil {
 			if err := a.Pending.Write(Status{Result: StatusStaged, Version: manifest.Version}); err != nil {
 				return fmt.Errorf("%w: record pending: %v", ErrApply, err)
@@ -193,12 +138,6 @@ func (a *Applier) Apply(ctx context.Context, rel *Release) (*ApplyOutcome, error
 	return &ApplyOutcome{Version: manifest.Version, Staged: true}, nil
 }
 
-// monitorRestart handles an asynchronous wrapper failure: when the launched
-// wrapper exits without recording its own result (for example a denied sudo),
-// it restores the known-good binary and records a terminal outcome, so the
-// unproven binary is never left armed at ExecStart and the gate can reopen
-// without the next apply hardlinking the unproven binary over the last known
-// good one.
 func (a *Applier) monitorRestart(wait func() error, version string) {
 	if wait == nil {
 		return
@@ -213,7 +152,6 @@ func (a *Applier) monitorRestart(wait func() error, version string) {
 	_ = withFileLock(a.lockPath(binPath), func() error {
 		pending, err := a.Pending.Read()
 		if a.Pending == nil || err != nil || pending == nil || !inFlight(pending.Result) {
-			// The wrapper recorded a result (or another path resolved it).
 			return nil
 		}
 		if version == "" {
@@ -230,8 +168,6 @@ func (a *Applier) monitorRestart(wait func() error, version string) {
 	})
 }
 
-// Rollback restores the retained previous binary over the current one and
-// clears the pending marker. It is serialized with Apply.
 func (a *Applier) Rollback() error {
 	binPath, err := a.binaryPath()
 	if err != nil {
@@ -248,10 +184,6 @@ func (a *Applier) Rollback() error {
 	})
 }
 
-// Recover repairs a crash-interrupted swap, cleans stale staging files and
-// reconciles a stale pending marker. It reports whether it restored a missing
-// target from its backup. It is safe to call at startup and skips while the
-// privileged wrapper holds the lock.
 func (a *Applier) Recover() (bool, error) {
 	binPath, err := a.binaryPath()
 	if err != nil {
@@ -270,15 +202,11 @@ func (a *Applier) Recover() (bool, error) {
 		return false, err
 	}
 	if !acquired {
-		// The wrapper owns the transaction; it will finish recovery.
 		return false, nil
 	}
 	return restored, nil
 }
 
-// recoverLocked cleans stale staging files, restores the backup when the target
-// is missing, and clears a pending marker the wrapper already superseded. The
-// caller must hold the lock.
 func (a *Applier) recoverLocked(binPath string) error {
 	dir := filepath.Dir(binPath)
 	pattern := filepath.Join(dir, "."+filepath.Base(binPath)+".new.*")
@@ -300,10 +228,6 @@ func (a *Applier) recoverLocked(binPath string) error {
 	return nil
 }
 
-// reconcilePending clears a staged pending marker when the crash left nothing
-// to activate (target and backup are the same inode) or when the authoritative
-// status is at least as new (the wrapper finished but could not remove the
-// marker).
 func (a *Applier) reconcilePending(binPath string) {
 	if a.Pending == nil {
 		return
@@ -312,8 +236,6 @@ func (a *Applier) reconcilePending(binPath string) {
 	if err != nil || pending == nil || pending.Result != StatusStaged {
 		return
 	}
-	// Crash before commit: the target was never replaced, so target and backup
-	// still reference the same inode. Nothing was staged; reopen the gate.
 	if targetInfo, err := os.Stat(binPath); err == nil {
 		if backupInfo, err := os.Stat(a.oldPath(binPath)); err == nil && os.SameFile(targetInfo, backupInfo) {
 			_ = a.Pending.Remove()
@@ -332,9 +254,6 @@ func (a *Applier) reconcilePending(binPath string) {
 	}
 }
 
-// installLocked writes data to a unique staging file, fsyncs it, and swaps it
-// into place. The current binary is first hard-linked to the backup, so the
-// target path is never absent at any instant. The caller must hold the lock.
 func (a *Applier) installLocked(binPath string, data []byte) error {
 	dir := filepath.Dir(binPath)
 	base := filepath.Base(binPath)
@@ -373,9 +292,6 @@ func (a *Applier) installLocked(binPath string, data []byte) error {
 		return fmt.Errorf("%w: chmod: %v", ErrApply, err)
 	}
 
-	// Replace the previous backup and hardlink the current (known-good) binary
-	// to it. os.Link never removes the target, so a crash here leaves both the
-	// target and the backup in place.
 	if err := os.Remove(backup); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: replace backup: %v", ErrApply, err)
 	}
@@ -391,8 +307,6 @@ func (a *Applier) installLocked(binPath string, data []byte) error {
 	return nil
 }
 
-// restoreLocked renames the backup over the target. The rename is atomic, so
-// the target is never absent. The caller must hold the lock.
 func (a *Applier) restoreLocked(binPath string) error {
 	backup := a.oldPath(binPath)
 	if isSymlink(backup) {
@@ -408,14 +322,10 @@ func (a *Applier) restoreLocked(binPath string) error {
 	return nil
 }
 
-// inFlight reports whether a pending result means an update is still awaiting
-// its outcome (staged, or resumed after a crash).
 func inFlight(result string) bool {
 	return result == StatusStaged || result == StatusResuming
 }
 
-// pendingInFlight reports whether an update is awaiting its outcome; a second
-// apply is refused while it is.
 func (a *Applier) pendingInFlight() bool {
 	if a.Pending == nil {
 		return false
@@ -424,17 +334,6 @@ func (a *Applier) pendingInFlight() bool {
 	return err == nil && pending != nil && inFlight(pending.Result)
 }
 
-// ResumeStaged relaunches the wrapper when a staged update is still pending at
-// startup (a crash, reboot or OOM during the health window), so the new binary
-// is health-checked or rolled back instead of running unproven behind a closed
-// gate. It rewrites the marker to resuming first, so a second startup cannot
-// relaunch again; it never loops.
-//
-// It uses a non-blocking lock: on a normal update the wrapper holds the lock
-// through the restart and the whole health window, and the restarted binary
-// must not wait for it (waiting would deadlock the update against itself). A
-// held lock means the wrapper already owns this update's outcome, so the resume
-// is skipped.
 func (a *Applier) ResumeStaged(ctx context.Context) error {
 	if a.Restart == nil {
 		return nil
@@ -461,7 +360,6 @@ func (a *Applier) ResumeStaged(ctx context.Context) error {
 		return err
 	}
 	if !acquired {
-		// The wrapper is already handling this update; never wait for it.
 		return nil
 	}
 	if !resume {
@@ -483,23 +381,14 @@ func (a *Applier) ResumeStaged(ctx context.Context) error {
 	return nil
 }
 
-// fetch downloads rawURL into memory, bounded by maxBytes, with the short
-// metadata timeout. It is used for the small manifest/signature fetches.
 func (a *Applier) fetch(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
 	return a.fetchBounded(ctx, rawURL, maxBytes, defaultDuration(a.Timeout, defaultTimeout))
 }
 
-// fetchArtifact downloads the release artifact with the long, separate
-// artifact budget. The body is the tens-of-MiB binary, so it must not be capped
-// by the metadata timeout.
 func (a *Applier) fetchArtifact(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
 	return a.fetchBounded(ctx, rawURL, maxBytes, defaultDuration(a.ArtifactTimeout, defaultArtifactTimeout))
 }
 
-// fetchBounded downloads rawURL into memory. The caller's context and the
-// per-request timeout both bound the whole request including the body read; the
-// default client deliberately carries no client-level Timeout, which would
-// otherwise cap the artifact fetch at the metadata bound.
 func (a *Applier) fetchBounded(ctx context.Context, rawURL string, maxBytes int64, timeout time.Duration) ([]byte, error) {
 	if err := validateURL(rawURL); err != nil {
 		return nil, err
@@ -537,8 +426,6 @@ func (a *Applier) fetchBounded(ctx context.Context, rawURL string, maxBytes int6
 	return data, nil
 }
 
-// bindManifest rejects a release whose signed manifest does not describe the
-// selected asset (a metadata compromise cannot relabel an older artifact).
 func bindManifest(manifest Manifest, rel *Release) error {
 	switch {
 	case manifest.Version != rel.Version:
@@ -555,8 +442,6 @@ func bindManifest(manifest Manifest, rel *Release) error {
 	return nil
 }
 
-// binaryPath returns the fixed target path resolved at construction. It never
-// consults the live inode, so a rename cannot drift it.
 func (a *Applier) binaryPath() (string, error) {
 	path := strings.TrimSpace(a.BinaryPath)
 	if path == "" {
@@ -568,7 +453,6 @@ func (a *Applier) binaryPath() (string, error) {
 	return path, nil
 }
 
-// lockPath resolves the serialization lock file.
 func (a *Applier) lockPath(binPath string) string {
 	if strings.TrimSpace(a.LockPath) != "" {
 		return a.LockPath
@@ -576,7 +460,6 @@ func (a *Applier) lockPath(binPath string) string {
 	return binPath + ".lock"
 }
 
-// oldPath resolves where the previous binary is retained.
 func (a *Applier) oldPath(binPath string) string {
 	if strings.TrimSpace(a.OldPath) != "" {
 		return a.OldPath
@@ -584,7 +467,6 @@ func (a *Applier) oldPath(binPath string) string {
 	return binPath + OldSuffix
 }
 
-// maxBytes returns the download bound.
 func (a *Applier) maxBytes() int64 {
 	if a.MaxBytes > 0 {
 		return a.MaxBytes
@@ -592,20 +474,16 @@ func (a *Applier) maxBytes() int64 {
 	return DefaultMaxBytes
 }
 
-// fileExists reports whether path exists.
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
-// isSymlink reports whether path is a symbolic link.
 func isSymlink(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode()&os.ModeSymlink != 0
 }
 
-// syncDir best-effort fsyncs a directory so a rename is durable. Some
-// filesystems reject fsync on a directory, so the error is ignored.
 func syncDir(dir string) {
 	if handle, err := os.Open(dir); err == nil {
 		_ = handle.Sync()

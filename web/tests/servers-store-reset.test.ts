@@ -1,9 +1,3 @@
-// JUS-143: hardening the servers store reset and the shell-owned poll.
-//
-// reset() is called on sign-out (see the auth store). It must invalidate any
-// list load still in flight so a previous-account response cannot resolve into
-// the next account's session, and the shared poll must keep a single timer no
-// matter how many seeding sites arm it.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -66,7 +60,6 @@ describe("servers store reset (JUS-143)", () => {
     const previous = deferred<Server[]>();
     vi.mocked(listServers).mockReturnValueOnce(previous.promise);
 
-    // A load for the previous account is in flight when sign-out resets.
     const inFlight = store.fetchServers();
     expect(store.loading).toBe(true);
 
@@ -76,10 +69,8 @@ describe("servers store reset (JUS-143)", () => {
     previous.resolve([server("srv-1", "prev-account")]);
     await inFlight;
 
-    // The stale response must not repopulate the list after reset.
     expect(store.servers).toEqual([]);
 
-    // Signing in as another account loads and applies its own list.
     vi.mocked(listServers).mockResolvedValueOnce([server("srv-2", "next-account")]);
     await store.fetchServers();
     expect(store.servers.map((item) => item.name)).toEqual(["next-account"]);

@@ -15,8 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
-// memProviderRepo is an in-memory providers.Repository, so the push test can
-// run the real provider service without a database.
 type memProviderRepo struct {
 	mu        sync.Mutex
 	providers map[uuid.UUID]providers.Provider
@@ -90,9 +88,6 @@ func (f *memProviderRepo) ListCachedRepos(_ context.Context, _ uuid.UUID) ([]pro
 	return nil, nil
 }
 
-// TestGitLabPushViaFakeGitLabQueuesDeploy is the GS-6 acceptance link: the
-// hook is installed through the real provider service against a fake GitLab
-// API, then a push signed with the installed secret queues a deployment.
 func TestGitLabPushViaFakeGitLabQueuesDeploy(t *testing.T) {
 	var installed map[string]any
 	gitlab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +107,6 @@ func TestGitLabPushViaFakeGitLabQueuesDeploy(t *testing.T) {
 	t.Cleanup(gitlab.Close)
 
 	providerRepo := newMemProviderRepo()
-	// No factory override: the default GitLab source talks to the fake.
 	providerSvc := providers.NewService(providers.Config{
 		Repository: providerRepo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
 	})

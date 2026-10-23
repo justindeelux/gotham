@@ -41,7 +41,6 @@ const probing = ref(false);
 const probe = ref<ConnectionResult | null>(null);
 const probeError = ref("");
 
-/** load reads the public key (404 means none yet) and the credential state. */
 async function load(): Promise<void> {
   keyLoading.value = true;
   credLoading.value = true;
@@ -67,7 +66,6 @@ async function load(): Promise<void> {
   }
 }
 
-/** isNotFound reports a 404-shaped API error (no key stored yet). */
 function isNotFound(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -77,7 +75,6 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
-/** generateKey creates the local deploy key and shows the public half. */
 async function generateKey(): Promise<void> {
   keySaving.value = true;
   keyError.value = "";
@@ -90,7 +87,6 @@ async function generateKey(): Promise<void> {
   }
 }
 
-/** removeKey deletes the deploy key from the server. */
 async function removeKey(): Promise<void> {
   keyRemoving.value = true;
   keyError.value = "";
@@ -104,7 +100,6 @@ async function removeKey(): Promise<void> {
   }
 }
 
-/** saveCredential stores (or rotates) the HTTPS token. */
 async function saveCredential(): Promise<void> {
   credSaving.value = true;
   credError.value = "";
@@ -118,7 +113,6 @@ async function saveCredential(): Promise<void> {
   }
 }
 
-/** removeCredential deletes the stored HTTPS token. */
 async function removeCredential(): Promise<void> {
   credRemoving.value = true;
   credError.value = "";
@@ -133,7 +127,6 @@ async function removeCredential(): Promise<void> {
   }
 }
 
-/** runProbe tests the remote with the stored credential and shows the verdict. */
 async function runProbe(): Promise<void> {
   probing.value = true;
   probe.value = null;

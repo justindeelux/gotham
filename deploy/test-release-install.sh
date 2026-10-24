@@ -1796,7 +1796,8 @@ echo "PASS: a pre-bootstrap release skips admin creation with the manual command
 # service user (gotham.env is root:gotham 0640, group-readable), never root.
 if grep -q 'sudo ${INSTALL_PATH} admin' "${INSTALL_SH}" \
     || grep -q 'sudo /var/lib/gotham/bin/gotham admin' "${INSTALL_SH}" \
-    || grep -q 'sudo /var/lib/gotham/bin/gotham admin' "${SCRIPT_DIR}/../docs/guide/install.md"; then
+    || grep -q 'sudo /var/lib/gotham/bin/gotham admin' "${SCRIPT_DIR}/../docs/guide/first-login.md" \
+    || grep -q 'sudo /var/lib/gotham/bin/gotham admin' "${SCRIPT_DIR}/../docs/guide/index.md"; then
     echo "FAIL: an active manual admin command still runs as root (JUS-39)" >&2
     exit 1
 fi

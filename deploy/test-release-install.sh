@@ -72,6 +72,12 @@ SERVE="${SCRATCH}/serve"
 ROOT="${SCRATCH}/root"
 mkdir -p "${SERVE}"
 
+# Exercise the actual CLI container wiring over mTLS before the shell tail's
+# command-binary seams can hide missing agent dialers.
+echo "==> localhost agent wiring (mTLS)"
+go test ./cmd/gotham -run '^TestInstanceContainerAgentWiringMTLS$' -count=1
+echo "PASS: the domain CLI container service reaches the mTLS agent"
+
 echo "==> building signer and ${ARCH} snapshot binaries"
 go build -o "${SCRATCH}/signer" ./cmd/signer
 go build -o "${SERVE}/gotham-linux-${ARCH}" ./cmd/gotham

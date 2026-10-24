@@ -64,7 +64,7 @@ func instanceSetURL(raw string) error {
 	}
 	secret, _, _ := server.ResolveSecretKey(cfg.SecretKey, cfg.CA.Dir)
 	nodes := servers.NewService(servers.Config{Store: st, Authority: authority, Secret: secret})
-	containerService := containers.NewDefaultService(nodes, cfg.Redis.Addr)
+	containerService := newInstanceContainers(nodes, cfg.Redis.Addr)
 	defer func() { _ = containerService.Close() }()
 	px := proxy.NewService(proxy.Config{
 		Store: st, Services: services.NewProxySource(st), Containers: containerService,
@@ -86,6 +86,19 @@ func instanceSetURL(raw string) error {
 		fmt.Printf("Open http://%s and confirm the domain in General settings before %s; HTTPS starts after confirmation.\n", mustPanelHost(raw), p.Deadline.Format(time.RFC3339))
 	}
 	return nil
+}
+
+type instanceAgentRegistry interface {
+	containers.Registry
+	DialDockerClient(context.Context, uuid.UUID, ...servers.DockerDialOption) (*servers.DockerClient, error)
+}
+
+func newInstanceContainers(nodes instanceAgentRegistry, redisAddr string) *containers.Service {
+	service := containers.NewDefaultService(nodes, redisAddr)
+	service.SetDial(func(ctx context.Context, node *servers.Server) (containers.DockerClient, error) {
+		return nodes.DialDockerClient(ctx, node.ID)
+	})
+	return service
 }
 
 func mustPanelHost(raw string) string {

@@ -72,10 +72,11 @@
 # Redis from the distribution when it ships 6.2 or newer, otherwise 7.2 from
 # packages.redis.io. Third-party repositories are used only after every needed
 # signing-key fingerprint is verified; a mismatch aborts before any repository
-# or package is written or installed. The local database role gets a random
-# password generated at install and stored only in gotham.env (a re-run keeps
-# it). An existing older major version is never upgraded automatically: the
-# installer warns and points at the upgrade guide.
+# or package is written or installed. A fresh install creates the local role
+# with a random password stored only in gotham.env; an existing role and DSN
+# are never changed (the legacy fixed password only produces a warning with the
+# manual change command). An existing older major version is never upgraded
+# automatically: the installer warns and points at the upgrade guide.
 #
 # Runtime configuration overrides:
 #   GOTHAM_DATABASE_DSN       managed PostgreSQL DSN; skips local provisioning
@@ -473,63 +474,36 @@ DEFAULT_REDIS="localhost:6379"
 _admin_xtrace_off
 ENV_PREV=""
 if [ -f "${ENV_FILE}" ]; then
-    ENV_PREV="$(cat "${ENV_FILE}")"
+    ENV_PREV="$(cat "${ENV_FILE}")" \
+        || die "cannot read ${ENV_FILE}; fix its permissions or set GOTHAM_DATABASE_DSN"
 fi
 env_prev() {
     printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
 }
-# The only passwords this installer owns are the legacy fixed one and the
-# 32-character value its own generator produces. A local-form DSN with any
-# other password was set by the operator: it is kept untouched.
-_is_installer_password() {
-    case "$1" in
-        gotham) return 0 ;;
-        *[!A-Za-z0-9_-]*) return 1 ;;
-        *) [ "${#1}" -eq 32 ] ;;
-    esac
-}
-# LOCAL_DSN is 1 when this installer owns the local database: no DSN was given
-# and none was stored, a previous run stored the legacy default, or it stored a
-# local DSN with a generated-shape password. Anything else (including a local
-# DSN an operator edited) is managed and never touched.
+# LOCAL_DSN means the local PostgreSQL/Redis services are this installer's to
+# install and keep running. FRESH_LOCAL_DB means no DSN exists yet, so the
+# role and database are created with a new random password. A stored DSN is
+# never rewritten and its existing role is never touched.
 LOCAL_DSN=0
+FRESH_LOCAL_DB=0
 DB_PASSWORD=""
-DB_OLD_PASSWORD=""
 if [ -n "${GOTHAM_DATABASE_DSN:-}" ]; then
-    # An explicit DSN is managed by the operator and is never reprovisioned;
-    # only the legacy built-in default still asks for the local services.
+    # An explicit DSN is managed by the operator: no local provisioning.
     DSN="${GOTHAM_DATABASE_DSN}"
-    if [ "${DSN}" = "${DEFAULT_DSN}" ]; then
-        LOCAL_DSN=1
-        DB_OLD_PASSWORD="gotham"
-    fi
 else
     DSN="$(env_prev GOTHAM_DATABASE_DSN)"
     if [ -z "${DSN}" ]; then
         LOCAL_DSN=1
+        FRESH_LOCAL_DB=1
     else
         case "${DSN}" in
-            "${DEFAULT_DSN}")
-                LOCAL_DSN=1
-                DB_OLD_PASSWORD="gotham"
-                ;;
-            postgres://gotham:*@localhost:5432/gotham\?sslmode=disable)
-                DB_PASSWORD="${DSN#postgres://gotham:}"
-                DB_PASSWORD="${DB_PASSWORD%@localhost:5432/gotham?sslmode=disable}"
-                if _is_installer_password "${DB_PASSWORD}"; then
-                    LOCAL_DSN=1
-                    DB_OLD_PASSWORD="${DB_PASSWORD}"
-                else
-                    # Operator-set local password: keep the DSN and the role.
-                    DB_PASSWORD=""
-                fi
-                ;;
+            postgres://gotham:*@localhost:5432/*\?sslmode=disable) LOCAL_DSN=1 ;;
         esac
     fi
 fi
-# Install and configure the local services only when this installer owns the
-# DSN and the operator did not ask to skip dependencies. The dependency test
-# seam runs in a GOTHAM_INSTALL_ROOT sandbox only.
+# Install and configure the local services only when this installer owns them
+# and the operator did not ask to skip dependencies. The dependency test seam
+# runs in a GOTHAM_INSTALL_ROOT sandbox only.
 PROVISION_LOCAL_DEPS=0
 if [ "${LOCAL_DSN}" -eq 1 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ "${DRY_RUN}" -eq 0 ]; then
     if [ "${TEST_MODE}" -eq 0 ] || [ "${GOTHAM_INSTALL_TEST_DEPS:-0}" = "1" ]; then
@@ -750,16 +724,10 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
 TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
-# One EXIT path for every abort: if the database role password was changed and
-# the new gotham.env is not installed yet, restore the previous password, then
-# remove the private scratch material. INT/TERM abort (exit 1) and therefore
-# pass through it too. rollback_database_role is defined later, so guard it.
+# One EXIT path for every abort: remove the private scratch material (the
+# prepared gotham.env temp holds the secret key and the database password).
+# INT/TERM abort (exit 1) and therefore pass through it too.
 _install_cleanup() {
-    if [ "${DB_ROLE_CHANGED:-0}" -eq 1 ] && [ -n "${ENV_TMP:-}" ] \
-        && command -v rollback_database_role >/dev/null 2>&1; then
-        rollback_database_role \
-            || echo "gotham-install: WARNING: could not restore the previous database password; re-run the installer" >&2
-    fi
     rm -rf "${WORK_DIR}"
     [ -z "${ENV_TMP:-}" ] || rm -f "${ENV_TMP}"
     [ -z "${_DEPS_KEY_DIR:-}" ] || rm -rf "${_DEPS_KEY_DIR}"
@@ -1247,12 +1215,13 @@ else
 fi
 
 # ---- Control-plane configuration --------------------------------------------
-# Generate the local database password here (not in the env-write subshell) so
-# the dependency step below uses the same value. It is written only to
-# gotham.env and travels to psql on stdin; xtrace is off around generation and
-# the env write so `sh -x` never logs it.
+# A fresh local install gets a random database password here (not inside the
+# env-write subshell) so the dependency step below uses the same value. It is
+# written only to gotham.env and travels to psql on stdin; xtrace is off around
+# generation and the env write so `sh -x` never logs it. A stored DSN is never
+# regenerated or rewritten.
 _admin_xtrace_off
-if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ] && [ -z "${DB_PASSWORD}" ]; then
+if [ "${FRESH_LOCAL_DB}" -eq 1 ] && [ "${PROVISION_LOCAL_DEPS}" -eq 1 ] && [ -z "${DB_PASSWORD}" ]; then
     DB_PASSWORD="$(_admin_generate_password)" || DB_PASSWORD=""
     case "${DB_PASSWORD}" in
         '' | *[!A-Za-z0-9_-]*) die "could not generate a database password" ;;
@@ -1260,6 +1229,29 @@ if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ] && [ -z "${DB_PASSWORD}" ]; then
     DSN="postgres://gotham:${DB_PASSWORD}@localhost:5432/gotham?sslmode=disable"
 fi
 _admin_xtrace_on
+
+# The legacy fixed password is never changed automatically, but the owner must
+# know. One warning here and the same text in the final summary.
+LEGACY_DB_PASSWORD_NOTE=""
+case "${DSN}" in
+    postgres://gotham:gotham@localhost:5432/*)
+        LEGACY_DB_PASSWORD_NOTE="  Database: WARNING: ${ENV_FILE} uses the old default password.
+    Change it manually:
+      sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+      ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
+      SQL
+      then set GOTHAM_DATABASE_DSN in ${ENV_FILE} to the same password and
+      run: sudo systemctl restart gotham
+"
+        log "WARNING: ${ENV_FILE} uses the old default database password; it was left unchanged."
+        log "         Change it with:
+         sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+         ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
+         SQL
+         then set GOTHAM_DATABASE_DSN in ${ENV_FILE} to the same password and
+         run: sudo systemctl restart gotham"
+        ;;
+esac
 
 log "writing ${ENV_FILE}"
 run mkdir -p "${ETC_DIR}"
@@ -1274,6 +1266,8 @@ JWT_PUB="${ETC_DIR}/jwt_ed25519.pub"
 ENV_TMP=""
 _admin_xtrace_off
 if [ "${DRY_RUN}" -eq 0 ]; then
+    # A previous kill can leave a root-only env temp holding secrets.
+    rm -f "${ENV_FILE}".tmp.*
     ENV_TMP="${ENV_FILE}.tmp.$$"
     # Restrictive umask only around the secret material, so it is never briefly
     # world-readable; the shared directories stay 0755 (base umask 022).
@@ -1340,9 +1334,8 @@ fi
 _admin_xtrace_on
 
 # install_env_file atomically replaces gotham.env with the prepared temp file
-# and fixes permissions. Returning 1 means the file was not replaced (the
-# caller can roll the role back); returning 2 means it was replaced but a
-# permission fix failed (env and role already match, do not roll back).
+# and fixes permissions. Returning nonzero lets the caller abort with the old
+# file still in place (the temp is removed here).
 install_env_file() {
     [ "${DRY_RUN}" -eq 1 ] && return 0
     [ -n "${ENV_TMP}" ] || return 0
@@ -1359,7 +1352,7 @@ install_env_file() {
     }
     ENV_TMP=""
     if [ "${TEST_MODE}" -eq 0 ]; then
-        chown root:"${SERVICE_USER}" "${ENV_FILE}" || return 2
+        chown root:"${SERVICE_USER}" "${ENV_FILE}" || return 1
     fi
     return 0
 }
@@ -1561,23 +1554,36 @@ _deps_write_repo() {
     _DEPS_APT_UPDATED=0
 }
 
-# _deps_pin_redis keeps the 7.2 series after install. Without this, a routine
+# _deps_pin_redis keeps the 7.2 series after install. Without it a routine
 # `apt upgrade` moves redis-server/redis-tools to 8.x (a new major with a
-# different license). Idempotent: the file is rendered again on every run.
+# different license). Priority 990 beats the repository's 500 without allowing
+# a downgrade of an already-installed newer version. Idempotent: the file is
+# rendered again on every run.
 _deps_pin_redis() {
     _dp_dir="${_DEPS_APT_ROOT}/etc/apt/preferences.d"
     mkdir -p "${_dp_dir}"
     chmod 0755 "${_dp_dir}"
     _dp_file="${_dp_dir}/gotham-redis.pref"
     _dp_tmp="${_dp_file}.tmp.$$"
-    if ! printf 'Package: redis-server redis-tools\nPin: version 6:%s.*\nPin-Priority: 1001\n' \
+    if ! printf 'Package: redis-server redis-tools\nPin: version 6:%s.*\nPin-Priority: 990\n' \
         "${REDIS_PINNED_SERIES}" >"${_dp_tmp}"; then
         die "could not write the Redis version pin"
     fi
     chmod 0644 "${_dp_tmp}"
     mv -f "${_dp_tmp}" "${_dp_file}" || die "could not install the Redis version pin"
     _DEPS_WRITTEN_FILES="${_DEPS_WRITTEN_FILES} ${_dp_file}"
-    _DEPS_APT_UPDATED=0
+}
+
+# _deps_ensure_redis_pin re-applies the pin whenever packages.redis.io is the
+# source this installer wrote. On a re-run Redis is already installed (the
+# package action is "keep"), so the pin must not depend on that action: if the
+# file was removed, an `apt upgrade` would otherwise cross to 8.x.
+_deps_ensure_redis_pin() {
+    _dep_list="${_DEPS_APT_ROOT}/etc/apt/sources.list.d/redis.list"
+    [ -f "${_dep_list}" ] || return 0
+    grep -q 'packages\.redis\.io/deb' "${_dep_list}" || return 0
+    grep -qF "signed-by=${_DEPS_APT_ROOT}/etc/apt/keyrings/redis.gpg" "${_dep_list}" || return 0
+    _deps_pin_redis
 }
 
 # _pg_server_version prints the PostgreSQL server major serving the DSN port
@@ -1688,8 +1694,10 @@ install_planned_dependencies() {
     if [ -n "${_redis_key}" ]; then
         _deps_write_repo "${_redis_key}" "${REDIS_KEY_FINGERPRINT}" redis \
             "${REDIS_REPO_URL} ${_dd_codename} main" "Redis"
-        _deps_pin_redis
     fi
+    # Re-apply on every run, not only when Redis is installed now: a re-run
+    # with Redis already installed would otherwise leave a deleted pin missing.
+    _deps_ensure_redis_pin
     rm -rf "${_DEPS_KEY_DIR}"
     _DEPS_KEY_DIR=""
     if [ "${PG_ACTION}" = "distro" ] || [ "${PG_ACTION}" = "pgdg" ] \
@@ -1731,131 +1739,28 @@ install_planned_dependencies() {
     [ -n "${REDIS_VERSION}" ] || REDIS_VERSION="unknown"
 }
 
-# _dsn_database prints the database named in the local DSN (the one the
-# control plane will use). The managed DSNs are all URL form; anything odd
-# falls back to the Gotham default.
-_dsn_database() {
-    _dbd="gotham"
-    case "${DSN}" in
-        postgres://*)
-            _dbd="${DSN#postgres://}"
-            case "${_dbd}" in
-                */*) _dbd="${_dbd#*/}" ;;
-                *) _dbd="gotham" ;;
-            esac
-            _dbd="${_dbd%%\?*}"
-            [ -n "${_dbd}" ] || _dbd="gotham"
-            ;;
-    esac
-    printf '%s\n' "${_dbd}"
-}
-
-# _pg_login_works succeeds when the gotham role can authenticate over TCP with
-# password $1 against database $2. Verify against the database the control
-# plane uses, not "postgres": a hardened server may revoke CONNECT there.
-_pg_login_works() {
-    PGPASSWORD="$1" psql -h 127.0.0.1 -U gotham -d "$2" -tAc 'SELECT 1' >/dev/null 2>&1
-}
-
-_pg_database_exists() {
-    runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" | grep -q 1
-}
-
-# provision_local_database brings the gotham role to the password the DSN will
-# carry and creates its database. The database is created before an existing
-# role's password is touched, and every change is verified with a real login
-# against that database. A failed verification restores the previous password;
-# a success records DB_ROLE_CHANGED so the EXIT trap or install_env_file can
-# roll back if anything fails before the new gotham.env is in place. The
-# password travels on stdin, never on a command line, and xtrace is off so
-# `sh -x` cannot log it.
-DB_ROLE_CHANGED=0
-DB_OLD_PASSWORD_WORKS=0
+# provision_local_database creates the role and database for a fresh local
+# install only (no DSN was stored). The password is generated above and travels
+# on stdin, never on a command line. An existing role or database means this is
+# not a fresh host: the owner decision is to never reset it, so abort before
+# touching the database and let the operator supply its DSN.
 provision_local_database() {
     _admin_xtrace_off
     case "${DB_PASSWORD}" in
-        '' | *[!A-Za-z0-9_-]*) die "local database password holds characters this installer does not write; set GOTHAM_DATABASE_DSN and GOTHAM_SKIP_DEPS=1, or reset the role by hand" ;;
+        '' | *[!A-Za-z0-9_-]*) die "could not generate a valid database password" ;;
     esac
-    # Only the managed local DSNs reach here, so the database is either
-    # 'gotham' or an operator-chosen name in a local-form DSN.
-    _db_name="$(_dsn_database)"
-    [ -n "${_db_name}" ] || _db_name="gotham"
-    _role_exists=0
     if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='gotham'" | grep -q 1; then
-        _role_exists=1
+        die "an existing PostgreSQL role 'gotham' was found but no GOTHAM_DATABASE_DSN is stored in ${ENV_FILE}; refusing to reset it. Restore ${ENV_FILE} or set GOTHAM_DATABASE_DSN (with GOTHAM_SKIP_DEPS=1) to keep the existing database."
     fi
-    _db_exists=0
-    _pg_database_exists "${_db_name}" && _db_exists=1
-    if [ "${_role_exists}" -eq 0 ]; then
-        printf "CREATE ROLE gotham LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
-            | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
-            || die "could not create the gotham database role; gotham.env was not changed"
-        DB_ROLE_CHANGED=1
-        if [ "${_db_exists}" -eq 0 ]; then
-            runuser -u postgres -- createdb -O gotham -- "${_db_name}" \
-                || die "could not create the ${_db_name} database; gotham.env was not changed"
-        fi
-        if ! _pg_login_works "${DB_PASSWORD}" "${_db_name}"; then
-            die "the new gotham role cannot log in to ${_db_name}; gotham.env was not changed"
-        fi
-        _admin_xtrace_on
-        return 0
+    if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='gotham'" | grep -q 1; then
+        die "an existing PostgreSQL database 'gotham' was found but no GOTHAM_DATABASE_DSN is stored in ${ENV_FILE}; refusing to take it over. Restore ${ENV_FILE} or set GOTHAM_DATABASE_DSN (with GOTHAM_SKIP_DEPS=1) to keep the existing database."
     fi
-    # An existing role: create the database first, so a createdb failure
-    # happens before the password is touched.
-    if [ "${_db_exists}" -eq 0 ]; then
-        runuser -u postgres -- createdb -O gotham -- "${_db_name}" \
-            || die "could not create the ${_db_name} database; gotham.env was not changed"
-    fi
-    if _pg_login_works "${DB_PASSWORD}" "${_db_name}"; then
-        log "database role gotham already accepts the stored password; keeping it"
-    else
-        if [ -n "${DB_OLD_PASSWORD}" ] && [ "${DB_OLD_PASSWORD}" != "${DB_PASSWORD}" ] \
-            && _pg_login_works "${DB_OLD_PASSWORD}" "${_db_name}"; then
-            DB_OLD_PASSWORD_WORKS=1
-            if [ "${DB_OLD_PASSWORD}" = "gotham" ]; then
-                log "replacing the legacy fixed database password"
-            else
-                log "updating the gotham role to the password stored in gotham.env"
-            fi
-        else
-            log "the existing gotham role does not accept the stored password; setting the local database password"
-        fi
-        printf "ALTER ROLE gotham WITH LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
-            | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
-            || die "could not update the gotham database role; gotham.env was not changed"
-        DB_ROLE_CHANGED=1
-        if ! _pg_login_works "${DB_PASSWORD}" "${_db_name}"; then
-            if rollback_database_role; then
-                die "the gotham role cannot log in to ${_db_name} with the new password; the previous password was restored and gotham.env was not changed"
-            fi
-            die "the gotham role cannot log in to ${_db_name} with the new password and the previous password could not be restored; restore it manually (gotham.env was not changed)"
-        fi
-    fi
+    printf "CREATE ROLE gotham LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
+        | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
+        || die "could not create the gotham database role; gotham.env was not changed"
+    runuser -u postgres -- createdb -O gotham -- gotham \
+        || die "could not create the gotham database; gotham.env was not changed"
     _admin_xtrace_on
-}
-
-# rollback_database_role restores the previous working password. It is called
-# from every abort path after a change (the EXIT/INT/TERM trap) until the new
-# gotham.env is installed, and directly when a post-change login fails. It
-# returns nonzero when it could not restore and verify the old password.
-rollback_database_role() {
-    [ "${DB_ROLE_CHANGED}" -eq 1 ] || return 0
-    [ "${DB_OLD_PASSWORD_WORKS}" -eq 1 ] || return 0
-    _admin_xtrace_off
-    _rollback_rc=0
-    printf "ALTER ROLE gotham WITH LOGIN PASSWORD '%s';\n" "${DB_OLD_PASSWORD}" \
-        | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - >/dev/null 2>&1 \
-        || _rollback_rc=1
-    if [ "${_rollback_rc}" -eq 0 ]; then
-        _pg_login_works "${DB_OLD_PASSWORD}" "$(_dsn_database)" || _rollback_rc=1
-    fi
-    _admin_xtrace_on
-    if [ "${_rollback_rc}" -eq 0 ]; then
-        DB_ROLE_CHANGED=0
-        return 0
-    fi
-    return 1
 }
 
 DEPS_SUMMARY=""
@@ -1877,25 +1782,20 @@ if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ]; then
     install_planned_dependencies
     log "enabling PostgreSQL and Redis"
     systemctl enable --now postgresql redis-server || die "could not start PostgreSQL/Redis"
-    provision_local_database
+    # A stored DSN means an existing role and database: leave both untouched.
+    # Only a fresh install creates them, and it refuses to take over an
+    # existing role/database without a stored DSN.
+    if [ "${FRESH_LOCAL_DB}" -eq 1 ]; then
+        provision_local_database
+    fi
     log "PostgreSQL ${PG_VERSION} and Redis ${REDIS_VERSION} are ready"
     DEPS_SUMMARY="  Database: PostgreSQL ${PG_VERSION} (local)
   Cache:    Redis ${REDIS_VERSION} (local)
 "
 fi
-# The role now accepts the password the DSN carries (or this install does not
-# manage the database), so replacing gotham.env can no longer lock the control
-# plane out. If the atomic replacement fails, restore the old role password.
-if install_env_file; then
-    :
-else
-    _env_rc=$?
-    if [ "${_env_rc}" -eq 1 ]; then
-        rollback_database_role
-        die "could not replace ${ENV_FILE}; the previous file was kept"
-    fi
-    die "${ENV_FILE} was replaced but its permissions could not be fixed; re-run the installer"
-fi
+# Replacing gotham.env is the last step: the DSN and the role it names are
+# already in place (fresh) or were never touched (existing install).
+install_env_file || die "could not replace ${ENV_FILE}; the previous file was kept"
 if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" != "1" ]; then
     log "test mode: skipping service activation and the localhost agent install"
     log "done (test install under ${PREFIX})"
@@ -2131,7 +2031,7 @@ Gotham ${VERSION} is installed.
 ${DOMAIN_CONFIRM_NOTE}
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
-${DEPS_SUMMARY}
+${DEPS_SUMMARY}${LEGACY_DB_PASSWORD_NOTE}
 
 First login:
 ${ADMIN_FIRST_LOGIN}

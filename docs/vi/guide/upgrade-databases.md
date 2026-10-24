@@ -14,8 +14,9 @@ thử với Gotham:
 | Redis | Redis của bản phân phối khi đã là 6.2 trở lên, ngược lại là 7.2 từ kho chính thức của Redis |
 
 Bạn không cần chọn hay cấu hình gì. Trình cài đặt in ra phiên bản cuối cùng khi
-chạy xong, và mật khẩu cơ sở dữ liệu cục bộ được tạo lúc cài rồi lưu trong
-`/etc/gotham/gotham.env` (chỉ root và dịch vụ `gotham` đọc được).
+chạy xong. Khi cài mới, mật khẩu cơ sở dữ liệu cục bộ được tạo và lưu trong
+`/etc/gotham/gotham.env` (chỉ root và dịch vụ `gotham` đọc được); bản cài sẵn
+giữ nguyên mật khẩu của nó.
 
 ## Kiểm tra phiên bản đang cài
 
@@ -36,6 +37,26 @@ và giữ nguyên dịch vụ hiện tại, vì nâng cấp major của PostgreS
 kế hoạch và sao lưu. Trang này dành cho việc đó.
 
 Khi thấy cảnh báo, Gotham vẫn chạy bình thường. Hãy nâng cấp khi thuận tiện.
+
+## Mật khẩu cơ sở dữ liệu mặc định cũ
+
+Các bản cài cũ tạo role `gotham` với mật khẩu `gotham`. Trình cài đặt không bao
+giờ đổi mật khẩu của role đã có: nếu thấy mật khẩu mặc định cũ, nó in cảnh báo
+(và nhắc lại trong phần tóm tắt cuối) rồi để nguyên cơ sở dữ liệu. Hãy đổi khi
+thuận tiện:
+
+```sh
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
+SQL
+```
+
+Sau đó đặt `GOTHAM_DATABASE_DSN` trong `/etc/gotham/gotham.env` thành cùng mật
+khẩu và khởi động lại Gotham:
+
+```sh
+sudo systemctl restart gotham
+```
 
 ## Trước khi bắt đầu
 
@@ -113,21 +134,26 @@ Trước tiên thêm kho và khóa ký:
 
 ```sh
 sudo apt-get install -y lsb-release curl gpg
+curl -fsSL https://packages.redis.io/gpg -o /tmp/redis-archive-keyring.asc
+sudo gpg --show-keys /tmp/redis-archive-keyring.asc
+# The fingerprint must be 54318FA4052D1E61A6B6F7BB5F4349D6BF53AA0C.
 sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://packages.redis.io/gpg \
-  | sudo gpg --dearmor -o /etc/apt/keyrings/redis-archive-keyring.gpg
+sudo gpg --dearmor -o /etc/apt/keyrings/redis-archive-keyring.gpg /tmp/redis-archive-keyring.asc
 sudo chmod 0644 /etc/apt/keyrings/redis-archive-keyring.gpg
 echo "deb [signed-by=/etc/apt/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" \
   | sudo tee /etc/apt/sources.list.d/redis.list
 sudo apt-get update
 ```
 
-Sau đó cài server và tools. `sudo apt-get install redis-server redis-tools`
-lấy bản mới nhất mà kho cung cấp; nếu muốn dòng 7.2 như trình cài đặt dùng, hãy
-ghim tương tự:
+Sau đó cài server và tools, và giữ chúng ở dòng 7.2 bằng một ghim apt:
 
 ```sh
 sudo apt-get install "redis-server=6:7.2.*" "redis-tools=6:7.2.*"
+sudo tee /etc/apt/preferences.d/gotham-redis.pref >/dev/null <<'EOF'
+Package: redis-server redis-tools
+Pin: version 6:7.2.*
+Pin-Priority: 990
+EOF
 ```
 
 Rồi khởi động lại Redis và Gotham:
@@ -137,10 +163,11 @@ sudo systemctl restart redis-server
 sudo systemctl start gotham
 ```
 
-Khi trình cài đặt dùng packages.redis.io, nó cũng ghi
-`/etc/apt/preferences.d/gotham-redis.pref`, giữ `redis-server` và `redis-tools`
-ở dòng 7.2 để `apt upgrade` thông thường không chuyển sang 8.x. Muốn nâng cấp
-có chủ đích, hãy xóa tệp đó, chạy `sudo apt-get update`, rồi nâng cấp.
+Khi trình cài đặt dùng packages.redis.io, nó tự ghi tệp ghim đó và ghi lại ở
+mỗi lần chạy. Tệp ghim giữ `redis-server` và `redis-tools` ở dòng 7.2 để `apt
+upgrade` thông thường không chuyển sang 8.x; mức ưu tiên 990 không hạ cấp một
+phiên bản mới hơn đã cài. Muốn nâng cấp có chủ đích, hãy xóa tệp đó, chạy
+`sudo apt-get update`, rồi nâng cấp.
 
 Redis giữ bộ nhớ đệm và hàng đợi, không giữ bản ghi nền tảng mà PostgreSQL lưu,
 nên bộ nhớ đệm mất sẽ được tạo lại. Nếu Redis này còn phục vụ workload khác, hãy

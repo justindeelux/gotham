@@ -14,9 +14,10 @@ tested with Gotham:
 | Redis | your distribution's Redis when it is 6.2 or newer, otherwise 7.2 from the official Redis repository |
 
 You do not need to choose or configure anything. The installer prints the
-versions it ended up with at the end of the run, and the local database
-password is generated at install time and stored in
-`/etc/gotham/gotham.env` (readable by root and the `gotham` service only).
+versions it ended up with at the end of the run. On a new install the local
+database password is generated and stored in `/etc/gotham/gotham.env`
+(readable by root and the `gotham` service only); an existing install keeps
+its password.
 
 ## Check the installed versions
 
@@ -38,6 +39,26 @@ PostgreSQL major upgrade must be planned and backed up. That is what this page
 is for.
 
 If you see the warning, Gotham keeps working. Upgrade when convenient.
+
+## The old default database password
+
+Older installs created the `gotham` role with the password `gotham`. The
+installer never changes an existing role's password: if it finds the old
+default, it prints a warning (also repeated in the final summary) and leaves
+the database untouched. Change it when convenient:
+
+```sh
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
+SQL
+```
+
+Then set `GOTHAM_DATABASE_DSN` in `/etc/gotham/gotham.env` to the same password
+and restart Gotham:
+
+```sh
+sudo systemctl restart gotham
+```
 
 ## Before you start
 
@@ -117,21 +138,27 @@ key:
 
 ```sh
 sudo apt-get install -y lsb-release curl gpg
+curl -fsSL https://packages.redis.io/gpg -o /tmp/redis-archive-keyring.asc
+sudo gpg --show-keys /tmp/redis-archive-keyring.asc
+# The fingerprint must be 54318FA4052D1E61A6B6F7BB5F4349D6BF53AA0C.
 sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://packages.redis.io/gpg \
-  | sudo gpg --dearmor -o /etc/apt/keyrings/redis-archive-keyring.gpg
+sudo gpg --dearmor -o /etc/apt/keyrings/redis-archive-keyring.gpg /tmp/redis-archive-keyring.asc
 sudo chmod 0644 /etc/apt/keyrings/redis-archive-keyring.gpg
 echo "deb [signed-by=/etc/apt/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" \
   | sudo tee /etc/apt/sources.list.d/redis.list
 sudo apt-get update
 ```
 
-Then install the server and tools. `sudo apt-get install redis-server
-redis-tools` takes the newest release the repository serves; if you want the
-7.2 series the installer uses, pin it the same way:
+Then install the server and tools, and keep them on the 7.2 series with an apt
+pin:
 
 ```sh
 sudo apt-get install "redis-server=6:7.2.*" "redis-tools=6:7.2.*"
+sudo tee /etc/apt/preferences.d/gotham-redis.pref >/dev/null <<'EOF'
+Package: redis-server redis-tools
+Pin: version 6:7.2.*
+Pin-Priority: 990
+EOF
 ```
 
 Then restart Redis and Gotham:
@@ -141,11 +168,11 @@ sudo systemctl restart redis-server
 sudo systemctl start gotham
 ```
 
-When the installer used packages.redis.io, it also wrote
-`/etc/apt/preferences.d/gotham-redis.pref`, which keeps `redis-server` and
-`redis-tools` on the 7.2 series so a routine `apt upgrade` does not move to
-8.x. To upgrade deliberately, delete that file, run `sudo apt-get update`, and
-upgrade.
+When the installer used packages.redis.io, it writes that pin automatically
+and re-applies it on every run. The pin keeps `redis-server` and `redis-tools`
+on the 7.2 series so a routine `apt upgrade` does not move to 8.x; priority 990
+does not downgrade an already-installed newer version. To upgrade
+deliberately, delete the file, run `sudo apt-get update`, and upgrade.
 
 Redis holds caches and queues, not the platform records PostgreSQL keeps, so a
 lost cache is rebuilt. If other workloads share this Redis, check their data

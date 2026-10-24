@@ -112,6 +112,47 @@ sudo gotham-agent update reset
 Cài lại một phiên bản cụ thể là một lần cài bình thường với
 `GOTHAM_VERSION=vX.Y.Z`; xem [Cài đặt](/vi/guide/install).
 
+## Cài lại trên một máy đã có
+
+Chạy lại trình cài đặt trên một máy đã cài để nâng cấp tại chỗ. Nó giữ
+`/etc/gotham/gotham.env`: các khóa được quản lý (`GOTHAM_DATABASE_DSN`,
+`GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`, `GOTHAM_SECRET_KEY`, các đường dẫn khóa JWT)
+được làm mới — DSN đưa trên dòng lệnh thắng, nếu không thì giữ giá trị hiện có — và
+mọi khóa người vận hành thêm (`AUTO_UPDATE`, `PLATFORM_ADMINS`, ...) được để
+nguyên. Một DSN được quản lý không bao giờ bị thay bằng mặc định cục bộ, và
+PostgreSQL/Redis cục bộ chỉ được cấp phát khi DSN phân giải được là mặc định cục bộ
+dựng sẵn. Trình cài đặt khởi động lại `gotham.service` sau khi cài lại, nên tệp
+nhị phân vừa cài chính là tệp đang chạy (không khởi động lại thì một máy đã nâng
+cấp vẫn phục vụ phiên bản trước).
+
+Một máy được cài trước thay đổi mTLS giờ sẽ nhận một CA, nên gateway gRPC chuyển
+từ plaintext sang TLS. Các agent đã cài trước đó kết nối bằng plaintext và không
+có CA, nên chúng **chuyển sang ngoại tuyến** (Register và Heartbeat thất bại an
+toàn ở bước bắt tay) cho đến khi từng agent được cài lại kèm CA:
+
+```sh
+scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .           # on each node
+sudo gotham/deploy/install-agent.sh --ca ./ca.crt
+```
+
+Tệp nhị phân của agent không cần cập nhật; chỉ `/etc/gotham/agent.env` có thêm
+`GOTHAM_AGENT_CA=/etc/gotham/ca.crt`. Nếu bạn chưa với tới control plane bằng một
+tên nằm trong SAN của listener, hãy thêm nó trước (`--cp-host`; xem
+[Thêm node](/vi/guide/nodes)).
+
+Các bản phát hành không có `admin exists` (`v0.2.0`) bỏ qua việc tạo tài khoản tự
+động và in lệnh `admin create` thủ công thay vì thất bại với cảnh báo cơ sở dữ
+liệu; các bản phát hành không có lệnh admin nào (`v0.1.0` và sớm hơn) in hướng dẫn
+nâng cấp thay vào đó, vì tệp nhị phân đó cũng không tạo được tài khoản.
+
+Khi nâng cấp từ một trình cài đặt cũ, việc từ chối dấu nháy cũng áp dụng cho các
+giá trị được giữ nguyên từ `agent.env` hiện có, nên một node id chứa dấu nháy do
+trình cài đặt cũ ghi sẽ chặn việc nâng cấp với lỗi rõ ràng nêu đúng khóa — hãy gỡ
+dấu nháy khỏi `agent.env` và chạy lại. Điều tương tự cũng đúng với `gotham.env`:
+một DSN hoặc giá trị Redis được giữ nguyên có dấu nháy hoặc dấu gạch chéo ngược ở
+cuối sẽ chặn việc nâng cấp và nêu đúng khóa — sửa giá trị trong `gotham.env` (DSN
+dạng keyword có giá trị đặt trong dấu nháy phải dùng dạng URL) rồi chạy lại.
+
 ## Phạm vi xác minh
 
 Với cả hai tệp nhị phân, manifest được ký bằng khóa phát hành nhúng trong tệp nhị

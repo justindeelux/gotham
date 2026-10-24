@@ -28,9 +28,18 @@ export default defineConfig({
               items: [
                 { text: "Getting started", link: "/guide/" },
                 { text: "Install", link: "/guide/install" },
+                { text: "First login", link: "/guide/first-login" },
+                { text: "Domain and HTTPS", link: "/guide/domain-and-https" },
+                { text: "Add nodes", link: "/guide/nodes" },
+                { text: "Remote file service", link: "/guide/file-service" },
+                { text: "Git sources and SSRF", link: "/guide/git-sources" },
                 { text: "Updates", link: "/guide/updates" },
                 { text: "Troubleshooting", link: "/guide/troubleshooting" },
               ],
+            },
+            {
+              text: "Maintainers",
+              items: [{ text: "Release and signing", link: "/guide/release-signing" }],
             },
           ],
           "/using/": [
@@ -93,9 +102,18 @@ export default defineConfig({
               items: [
                 { text: "Bắt đầu", link: "/vi/guide/" },
                 { text: "Cài đặt", link: "/vi/guide/install" },
+                { text: "Đăng nhập lần đầu", link: "/vi/guide/first-login" },
+                { text: "Tên miền và HTTPS", link: "/vi/guide/domain-and-https" },
+                { text: "Thêm node", link: "/vi/guide/nodes" },
+                { text: "Dịch vụ tệp từ xa", link: "/vi/guide/file-service" },
+                { text: "Nguồn Git và SSRF", link: "/vi/guide/git-sources" },
                 { text: "Cập nhật", link: "/vi/guide/updates" },
                 { text: "Xử lý sự cố", link: "/vi/guide/troubleshooting" },
               ],
+            },
+            {
+              text: "Người bảo trì",
+              items: [{ text: "Phát hành và ký", link: "/vi/guide/release-signing" }],
             },
           ],
           "/vi/using/": [

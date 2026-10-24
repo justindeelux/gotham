@@ -76,7 +76,7 @@ của agent:
 Ở chế độ toàn bộ hệ thống tệp, thư mục cấp cao nhất của một ứng dụng trong thư mục
 gốc volume được quản lý vẫn được bảo vệ khỏi đổi tên và xóa khi có container đang
 mount nó. Giải thích chi tiết hơn về các chế độ, quyền sở hữu và quyền truy cập
-nằm trong [Cài đặt](/vi/guide/install#dich-vu-tep-tu-xa).
+nằm trong [Dịch vụ tệp từ xa](/vi/guide/file-service).
 
 ### Duyệt và tìm kiếm
 

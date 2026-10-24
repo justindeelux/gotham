@@ -77,7 +77,7 @@ space. Roots come from the agent's configuration:
 In whole-filesystem mode an application's top-level directory in the managed
 volumes root is still protected from rename and delete while a container mounts
 it. The deeper explanation of modes, ownership and permissions is in
-[Install](/guide/install#remote-file-service).
+[Remote file service](/guide/file-service).
 
 ### Browse and search
 

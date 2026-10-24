@@ -12,7 +12,7 @@ cũng cần Docker; các công cụ build là tùy chọn.
 Việc cài đặt và gỡ bỏ chạy trên node qua một helper máy chủ cố định, thuộc sở hữu
 root. Control plane và agent chỉ truyền một id trong danh mục; helper sở hữu lệnh
 nó chạy và tự kiểm tra lại id với danh sách cho phép của chính nó. Xem
-[Cài đặt](/vi/guide/install) để biết cách helper được đặt lên một node.
+[Thêm node](/vi/guide/nodes) để biết cách helper được đặt lên một node.
 
 ## Chọn node
 
@@ -124,7 +124,7 @@ nhưng chỉ cài Railpack là chưa đủ — nó còn cần BuildKit và Docke
 - **Thiếu helper máy chủ hoặc helper từ chối lệnh** — một node chỉ được cập nhật
   qua tính năng tự cập nhật của agent có thể còn bản cài cũ trên máy chủ. Hãy chạy
   lại trình cài đặt node, vốn có tính lũy đẳng, rồi thử lại; xem
-  [Cài đặt](/vi/guide/install).
+  [Thêm node](/vi/guide/nodes).
 - **Công cụ đang được dùng** — lệnh gỡ bỏ bị từ chối khi đang có bản build chạy,
   hoặc khi một công cụ đã cài khác phụ thuộc vào nó. Hãy gỡ công cụ phụ thuộc
   trước (Railpack trước BuildKit).

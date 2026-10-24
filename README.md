@@ -11,10 +11,12 @@ Design priorities (in order):
 
 ## Install
 
-Control-plane and node-agent install, first login, updates and the
-release/signing flow live in [`docs/guide/install.md`](docs/guide/install.md). Releases are
-signed with Ed25519; the installer and the built-in updater verify the signed
-manifest and the artifact digest before installing anything. The installer
+Control-plane and node-agent install live in
+[`docs/guide/install.md`](docs/guide/install.md); first login, HTTPS, nodes,
+updates and the release/signing flow have their own pages under
+[`docs/guide/`](docs/guide/). Releases are signed with Ed25519; the installer
+and the built-in updater verify the signed manifest and the artifact digest
+before installing anything. The installer
 collects the first admin credentials up front and creates the account before
 the service starts (interactive prompt with `GOTHAM_ADMIN_EMAIL` as the
 default, or `GOTHAM_ADMIN_EMAIL` non-interactively), and is idempotent on

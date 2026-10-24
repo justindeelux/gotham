@@ -51,8 +51,11 @@ While it runs, the installer:
 1. picks the newest release for your CPU, verifies its Ed25519 signature, and
    checks the artifact's SHA-256 against the signed manifest (which is bound to
    the version, architecture and file name);
-2. installs PostgreSQL and Redis from the distribution packages (unless you
-   point it at managed services);
+2. installs PostgreSQL 16 and Redis 6.2 or newer (7.2 from the official Redis
+   repository when your distribution is older) — the local database password
+   is generated at install time — unless you point it at managed services;
+   [Database versions and upgrades](/guide/upgrade-databases) explains what is
+   installed and how to upgrade it by hand;
 3. installs the control plane (binary in `/var/lib/gotham/bin`, updater
    `/usr/libexec/gotham/gotham-update`, unit
    `/etc/systemd/system/gotham.service`), then Docker and the node agent on the

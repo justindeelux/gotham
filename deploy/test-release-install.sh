@@ -863,7 +863,8 @@ echo "PASS: the agent.env lookup default matches the path install-agent.sh write
 # install-agent.sh --full dry path.
 unset GOTHAM_INSTALL_TEST GOTHAM_INSTALL_ROOT GOTHAM_OS_RELEASE_FILE \
     GOTHAM_TEST_UNAME_M GOTHAM_AGENT_ENV_FILE GOTHAM_APT_ROOT \
-    GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT
+    GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT \
+    GOTHAM_INSTALL_TEST_DEPS
 prod_dry() {
     GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
     GOTHAM_VERSION="${VERSION}" \
@@ -878,6 +879,7 @@ GOTHAM_AGENT_ENV_FILE="${R2_ENV}" \
 GOTHAM_APT_ROOT="${SCRATCH}/hostile-apt-root" \
 GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/hostile-agent.sh" \
 GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
+GOTHAM_INSTALL_TEST_DEPS=1 \
 GOTHAM_INSTALL_TEST_ADMIN_BIN="${SCRATCH}/hostile-admin.sh" \
 GOTHAM_INSTALL_TEST_ADMIN_TTY="${SCRATCH}/hostile-tty" \
 prod_dry >"${SCRATCH}/prod-hostile.log" 2>&1
@@ -896,7 +898,7 @@ fi
 echo "PASS: a production run ignores every test seam (H1/M1, hermetic)"
 unset GOTHAM_OS_RELEASE_FILE GOTHAM_TEST_UNAME_M GOTHAM_AGENT_ENV_FILE \
     GOTHAM_APT_ROOT GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT \
-    GOTHAM_INSTALL_TEST_ADMIN_BIN GOTHAM_INSTALL_TEST_ADMIN_TTY
+    GOTHAM_INSTALL_TEST_DEPS GOTHAM_INSTALL_TEST_ADMIN_BIN GOTHAM_INSTALL_TEST_ADMIN_TTY
 # Gating, proved behaviourally rather than by grepping the source: the
 # hermetic differential above shows every seam ignored outside test mode, and
 # the refusal / no-RUN_AGENT / scrub-dump runs show the script seam needs a
@@ -1438,7 +1440,10 @@ SHIM
         echo "FAIL: a hostile seam value leaked into the real run (R4)" >&2
         exit 1
     fi
-    grep -q 'GOTHAM_LEGACY_LOCAL_NODE_ID=.*gotham-migrate.*old-installed-host-agent' "${SCRATCH}/rr-systemctl.log" \
+    # The migration call passes the legacy node id after the install path; the
+    # DSN travels on stdin now, so collapse the sh -c newlines before matching.
+    tr '\n' ' ' <"${SCRATCH}/rr-systemctl.log" \
+        | grep -q 'gotham-migrate [^ ]* old-installed-host-agent' \
         || { echo "FAIL: migration did not receive the saved local agent identity" >&2; exit 1; }
     echo "PASS: a real run reaches the agent step on the real script and never runs the seam fake (R4)"
 
@@ -2272,5 +2277,343 @@ unset DOMAIN_WAIT_RC
 echo "PASS: agent readiness failure skips domain setup and preserves HTTP"
 unset DOMAIN_TEST_LOG DOMAIN_TEST_RC GOTHAM_DOMAIN
 echo "PASS: standalone domain success and failure preserve the install and login summary"
+
+# ---- D1-D4: pinned PostgreSQL/Redis versions and the database password ------
+# The dependency step normally runs only on a real host. GOTHAM_INSTALL_TEST_DEPS=1
+# (sandbox test mode) runs it against shims and exits right after it, so the
+# real selection, repository-key and role-provisioning code is exercised here.
+echo "==> pinned PostgreSQL/Redis selection and database password (D1-D4)"
+DEPS_SRC="${INSTALL_SH_OVERRIDE:-${SCRIPT_DIR}/install.sh}"
+DEPS_DIR="${SCRATCH}/deps"
+DEPS_SHIM="${DEPS_DIR}/shim"
+DEPS_IMPL="${DEPS_DIR}/impl"
+DEPS_STATE="${DEPS_DIR}/state"
+DEPS_APT="${DEPS_DIR}/apt"
+mkdir -p "${DEPS_SHIM}" "${DEPS_IMPL}" "${DEPS_STATE}"
+export DEPS_STATE DEPS_IMPL DEPS_SHIM
+
+# Sandbox copy: bake the test paths into the two fixed production variables
+# (the same pattern as bake_installer above).
+DEPS_INSTALL_SH="${DEPS_DIR}/install.sh"
+sed -e "s|^_DEPS_OS_RELEASE=/etc/os-release|_DEPS_OS_RELEASE=${DEPS_DIR}/os-release|" \
+    -e "s|^_DEPS_APT_ROOT=$|_DEPS_APT_ROOT=${DEPS_APT}|" \
+    "${DEPS_SRC}" >"${DEPS_INSTALL_SH}"
+grep -qxF "_DEPS_OS_RELEASE=${DEPS_DIR}/os-release" "${DEPS_INSTALL_SH}" \
+    || { echo "FAIL: could not bake the dependency os-release path" >&2; exit 1; }
+grep -qxF "_DEPS_APT_ROOT=${DEPS_APT}" "${DEPS_INSTALL_SH}" \
+    || { echo "FAIL: could not bake the dependency apt root" >&2; exit 1; }
+for _sib in release-verify.sh gotham-update.sh gotham-updater.conf \
+    install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
+    gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
+    gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh \
+    gotham-hostbootstrap-fetch.sh gotham-signing-key.pub gotham-hostctl.sh; do
+    ln -sf "${SCRIPT_DIR}/${_sib}" "${DEPS_DIR}/${_sib}"
+done
+
+REAL_CURL="$(command -v curl)"
+export REAL_CURL
+cat >"${DEPS_SHIM}/curl" <<'SHIM'
+#!/bin/sh
+case "$*" in
+    *postgresql.org* | *packages.redis.io*) ;;
+    *) exec "${REAL_CURL:?}" "$@" ;;
+esac
+out=""; prev=""
+for arg in "$@"; do
+    if [ "${prev}" = "-o" ]; then out="${arg}"; fi
+    prev="${arg}"
+done
+[ -n "${out}" ] || exit 22
+case "$*" in
+    *postgresql.org*) printf 'pgdg\n' >"${out}" ;;
+    *packages.redis.io*) printf 'redis\n' >"${out}" ;;
+    *) exit 22 ;;
+esac
+printf '%s\n' "$*" >>"${DEPS_STATE}/curl.log"
+exit 0
+SHIM
+cat >"${DEPS_SHIM}/gpg" <<'SHIM'
+#!/bin/sh
+case "$*" in
+    *--show-keys*)
+        last=""
+        for arg in "$@"; do last="${arg}"; done
+        case "$(cat "${last}" 2>/dev/null)" in
+            pgdg)
+                echo 'pub:u:4096:1:0000000000000000:0:0:::::'
+                printf 'fpr:::::::::%s:\n' "$(cat "${DEPS_STATE}/fp_pgdg")"
+                ;;
+            redis)
+                echo 'pub:u:4096:1:0000000000000000:0:0:::::'
+                printf 'fpr:::::::::%s:\n' "$(cat "${DEPS_STATE}/fp_redis")"
+                ;;
+            *) echo unreadable ;;
+        esac
+        exit 0
+        ;;
+    *--dearmor*)
+        out=""; prev=""
+        for arg in "$@"; do
+            if [ "${prev}" = "-o" ]; then out="${arg}"; fi
+            prev="${arg}"
+        done
+        [ -n "${out}" ] || exit 1
+        cat >"${out}"
+        exit 0
+        ;;
+esac
+exit 1
+SHIM
+cat >"${DEPS_SHIM}/apt-cache" <<'SHIM'
+#!/bin/sh
+case "$*" in
+    *"policy postgresql"*) name=pg ;;
+    *"policy redis-server"*) name=redis ;;
+    *) exit 0 ;;
+esac
+printf '%s package:\n' "${name}"
+if [ -f "${DEPS_STATE}/${name}_candidate" ]; then
+    printf '  Candidate: %s\n' "$(cat "${DEPS_STATE}/${name}_candidate")"
+else
+    printf '  Candidate: (none)\n'
+fi
+exit 0
+SHIM
+cat >"${DEPS_SHIM}/apt-get" <<'SHIM'
+#!/bin/sh
+printf 'apt-get %s\n' "$*" >>"${DEPS_STATE}/apt.log"
+case "$*" in
+    *install*)
+        case "$*" in
+            *postgresql*)
+                printf '16.4\n' >"${DEPS_STATE}/pg_version"
+                ln -sf "${DEPS_IMPL}/psql" "${DEPS_SHIM}/psql"
+                ;;
+        esac
+        case "$*" in
+            *=6:7.2*)
+                printf '7.2.16\n' >"${DEPS_STATE}/redis_version"
+                ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+                ;;
+            *redis*)
+                printf '7.0.15\n' >"${DEPS_STATE}/redis_version"
+                ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+                ;;
+        esac
+        ;;
+esac
+exit 0
+SHIM
+cat >"${DEPS_IMPL}/psql" <<'SHIM'
+#!/bin/sh
+printf '%s\n' "$*" >>"${DEPS_STATE}/psql-argv.log"
+case "$*" in
+    *--version*)
+        [ -f "${DEPS_STATE}/pg_version" ] || exit 127
+        printf 'psql (PostgreSQL) %s\n' "$(cat "${DEPS_STATE}/pg_version")"
+        exit 0
+        ;;
+esac
+[ -f "${DEPS_STATE}/pg_version" ] || exit 127
+case "$*" in
+    *"FROM pg_roles"*) [ -f "${DEPS_STATE}/role" ] && printf '1\n' ;;
+    *"FROM pg_database"*) [ -f "${DEPS_STATE}/db" ] && printf '1\n' ;;
+    *)
+        cat >>"${DEPS_STATE}/psql-stdin.log"
+        case "$(cat "${DEPS_STATE}/psql-stdin.log")" in
+            *"ROLE gotham"*) touch "${DEPS_STATE}/role" ;;
+        esac
+        ;;
+esac
+exit 0
+SHIM
+cat >"${DEPS_SHIM}/createdb" <<'SHIM'
+#!/bin/sh
+printf 'createdb %s\n' "$*" >>"${DEPS_STATE}/createdb.log"
+touch "${DEPS_STATE}/db"
+exit 0
+SHIM
+cat >"${DEPS_IMPL}/redis-server" <<'SHIM'
+#!/bin/sh
+[ -f "${DEPS_STATE}/redis_version" ] || exit 127
+printf 'Redis server v=%s sha=00000000:0 malloc=jemalloc-5.1.0 bits=64 build=0\n' \
+    "$(cat "${DEPS_STATE}/redis_version")"
+exit 0
+SHIM
+cat >"${DEPS_SHIM}/runuser" <<'SHIM'
+#!/bin/sh
+[ "$1" = "-u" ] && shift 3
+exec "$@"
+SHIM
+cat >"${DEPS_SHIM}/systemctl" <<'SHIM'
+#!/bin/sh
+printf 'systemctl %s\n' "$*" >>"${DEPS_STATE}/systemctl.log"
+exit 0
+SHIM
+chmod +x "${DEPS_SHIM}/curl" "${DEPS_SHIM}/gpg" "${DEPS_SHIM}/apt-cache" \
+    "${DEPS_SHIM}/apt-get" "${DEPS_SHIM}/createdb" "${DEPS_SHIM}/runuser" \
+    "${DEPS_SHIM}/systemctl" "${DEPS_IMPL}/psql" "${DEPS_IMPL}/redis-server"
+
+# deps_reset starts each case from an empty package/host state, with the real
+# pinned fingerprints unless the case overrides one.
+deps_reset() {
+    rm -rf "${DEPS_STATE}" "${DEPS_APT}"
+    mkdir -p "${DEPS_STATE}"
+    rm -f "${DEPS_SHIM}/psql" "${DEPS_SHIM}/redis-server"
+    : >"${DEPS_STATE}/apt.log"
+    : >"${DEPS_STATE}/curl.log"
+    : >"${DEPS_STATE}/psql-argv.log"
+    : >"${DEPS_STATE}/psql-stdin.log"
+    : >"${DEPS_STATE}/createdb.log"
+    : >"${DEPS_STATE}/systemctl.log"
+    printf 'B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8\n' >"${DEPS_STATE}/fp_pgdg"
+    printf '54318FA4052D1E61A6B6F7BB5F4349D6BF53AA0C\n' >"${DEPS_STATE}/fp_redis"
+}
+deps_fixture() {
+    printf 'ID=%s\nVERSION_CODENAME=%s\n' "$1" "$2" >"${DEPS_DIR}/os-release"
+}
+deps_env_dsn() {
+    sed -n 's/^GOTHAM_DATABASE_DSN=//p' "$1/etc/gotham/gotham.env" | head -n1
+}
+deps_run() { # $1 root, $2.. sh flags
+    _dr_root="$1"; shift
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+    GOTHAM_INSTALL_ROOT="${_dr_root}" \
+    GOTHAM_INSTALL_TEST_DEPS=1 \
+    GOTHAM_SKIP_DEPS=0 \
+    DEPS_STATE="${DEPS_STATE}" \
+    PATH="${DEPS_SHIM}:${PATH}" \
+        sh "$@" "${DEPS_INSTALL_SH}"
+}
+
+# D1: a modern distro installs its own PostgreSQL and Redis (no third-party
+# repository, no key download), with a generated password that stays out of
+# the logs and off every command line; a re-run keeps it.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D1_ROOT="${SCRATCH}/deps-modern"
+deps_run "${D1_ROOT}" -x >"${DEPS_DIR}/d1.log" 2>&1 \
+    || { echo "FAIL: modern-distro dependency install failed (D1)" >&2; cat "${DEPS_DIR}/d1.log" >&2; exit 1; }
+grep -q 'installing PostgreSQL from the distribution packages' "${DEPS_DIR}/d1.log" \
+    || { echo "FAIL: a modern distro did not use its PostgreSQL package (D1)" >&2; cat "${DEPS_STATE}/apt.log" >&2; exit 1; }
+grep -q 'installing Redis from the distribution packages' "${DEPS_DIR}/d1.log" \
+    || { echo "FAIL: a modern distro did not use its Redis package (D1)" >&2; exit 1; }
+grep -q '^apt-get install -y postgresql$' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: the distribution PostgreSQL package was not installed (D1)" >&2; cat "${DEPS_STATE}/apt.log" >&2; exit 1; }
+grep -q '^apt-get install -y redis-server$' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: the distribution Redis package was not installed (D1)" >&2; exit 1; }
+if grep -qE 'postgresql-16|=6:7\.2' "${DEPS_STATE}/apt.log"; then
+    echo "FAIL: a modern distro used a pinned third-party package (D1)" >&2; exit 1
+fi
+[ ! -s "${DEPS_STATE}/curl.log" ] \
+    || { echo "FAIL: a modern distro downloaded a repository key (D1)" >&2; exit 1; }
+grep -q 'PostgreSQL 16.4 and Redis 7.0 are ready' "${DEPS_DIR}/d1.log" \
+    || { echo "FAIL: the installed versions were not logged (D1)" >&2; exit 1; }
+D1_DSN="$(deps_env_dsn "${D1_ROOT}")"
+case "${D1_DSN}" in
+    postgres://gotham:*@localhost:5432/gotham\?sslmode=disable) ;;
+    *) echo "FAIL: gotham.env does not hold a local DSN (D1): ${D1_DSN}" >&2; exit 1 ;;
+esac
+D1_PW="${D1_DSN#postgres://gotham:}"
+D1_PW="${D1_PW%@localhost:5432/gotham?sslmode=disable}"
+[ "${D1_PW}" != "gotham" ] && [ "${#D1_PW}" -ge 24 ] \
+    || { echo "FAIL: the database password is not random (D1)" >&2; exit 1; }
+if grep -Fq "${D1_PW}" "${DEPS_DIR}/d1.log" "${DEPS_STATE}/psql-argv.log"; then
+    echo "FAIL: the database password appeared in a log or on a command line (D1)" >&2; exit 1
+fi
+grep -q "CREATE ROLE gotham LOGIN PASSWORD" "${DEPS_STATE}/psql-stdin.log" \
+    || { echo "FAIL: the role SQL did not travel on stdin (D1)" >&2; exit 1; }
+: >"${DEPS_STATE}/psql-stdin.log"
+deps_run "${D1_ROOT}" >"${DEPS_DIR}/d1-second.log" 2>&1 \
+    || { echo "FAIL: re-running the dependency step failed (D1)" >&2; cat "${DEPS_DIR}/d1-second.log" >&2; exit 1; }
+[ "$(deps_env_dsn "${D1_ROOT}")" = "${D1_DSN}" ] \
+    || { echo "FAIL: a re-run rotated the database password (D1)" >&2; exit 1; }
+[ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
+    || { echo "FAIL: a re-run changed the existing role (D1)" >&2; exit 1; }
+grep -q 'keeping its password' "${DEPS_DIR}/d1-second.log" \
+    || { echo "FAIL: a re-run did not report keeping the role password (D1)" >&2; exit 1; }
+echo "PASS: modern distro versions, random password (no log/argv leak), idempotent re-run (D1)"
+
+# D2: an old distro (Ubuntu 22.04 packages) gets PostgreSQL 16 from PGDG and
+# Redis pinned to the 7.2 series from packages.redis.io, both keys verified.
+deps_reset
+deps_fixture ubuntu jammy
+printf '14.13-0ubuntu0.22.04.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:6.0.16-1ubuntu0.1\n' >"${DEPS_STATE}/redis_candidate"
+D2_ROOT="${SCRATCH}/deps-old-distro"
+deps_run "${D2_ROOT}" >"${DEPS_DIR}/d2.log" 2>&1 \
+    || { echo "FAIL: old-distro dependency install failed (D2)" >&2; cat "${DEPS_DIR}/d2.log" >&2; exit 1; }
+grep -q '^apt-get install -y postgresql-16$' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: PostgreSQL 16 was not installed from PGDG (D2)" >&2; exit 1; }
+grep -qF 'apt-get install -y redis-server=6:7.2.* redis-tools=6:7.2.*' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: Redis was not pinned to the 7.2 series (D2)" >&2; exit 1; }
+grep -q 'postgresql.org/media/keys/ACCC4CF8.asc' "${DEPS_STATE}/curl.log" \
+    || { echo "FAIL: the PGDG key was not fetched (D2)" >&2; exit 1; }
+grep -q 'packages.redis.io/gpg' "${DEPS_STATE}/curl.log" \
+    || { echo "FAIL: the Redis key was not fetched (D2)" >&2; exit 1; }
+for _f in "${DEPS_APT}/etc/apt/keyrings/pgdg.gpg" "${DEPS_APT}/etc/apt/keyrings/redis.gpg" \
+    "${DEPS_APT}/etc/apt/sources.list.d/pgdg.list" "${DEPS_APT}/etc/apt/sources.list.d/redis.list"; do
+    [ -f "${_f}" ] || { echo "FAIL: missing ${_f} (D2)" >&2; exit 1; }
+done
+grep -qF "signed-by=${DEPS_APT}/etc/apt/keyrings/pgdg.gpg" "${DEPS_APT}/etc/apt/sources.list.d/pgdg.list" \
+    || { echo "FAIL: the PGDG source is not signed-by its keyring (D2)" >&2; exit 1; }
+grep -qF "jammy-pgdg main" "${DEPS_APT}/etc/apt/sources.list.d/pgdg.list" \
+    || { echo "FAIL: the PGDG suite is wrong (D2)" >&2; exit 1; }
+grep -qF "signed-by=${DEPS_APT}/etc/apt/keyrings/redis.gpg" "${DEPS_APT}/etc/apt/sources.list.d/redis.list" \
+    || { echo "FAIL: the Redis source is not signed-by its keyring (D2)" >&2; exit 1; }
+grep -q 'packages.redis.io/deb jammy main' "${DEPS_APT}/etc/apt/sources.list.d/redis.list" \
+    || { echo "FAIL: the Redis suite is wrong (D2)" >&2; exit 1; }
+echo "PASS: old distro selects PGDG PostgreSQL 16 and pinned Redis 7.2, signed-by keyrings (D2)"
+
+# D3: existing older services are never upgraded; the installer warns with the
+# upgrade guide and continues.
+deps_reset
+deps_fixture ubuntu jammy
+printf '14.13\n' >"${DEPS_STATE}/pg_version"
+printf '6.0.16\n' >"${DEPS_STATE}/redis_version"
+ln -sf "${DEPS_IMPL}/psql" "${DEPS_SHIM}/psql"
+ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+D3_ROOT="${SCRATCH}/deps-old-existing"
+deps_run "${D3_ROOT}" >"${DEPS_DIR}/d3.log" 2>&1 \
+    || { echo "FAIL: a host with older services did not continue (D3)" >&2; cat "${DEPS_DIR}/d3.log" >&2; exit 1; }
+grep -q 'WARNING: PostgreSQL 14.13 is older than 16' "${DEPS_DIR}/d3.log" \
+    || { echo "FAIL: no warning for an old existing PostgreSQL (D3)" >&2; exit 1; }
+grep -q 'WARNING: Redis 6.0 is older than 6.2' "${DEPS_DIR}/d3.log" \
+    || { echo "FAIL: no warning for an old existing Redis (D3)" >&2; exit 1; }
+[ "$(grep -c 'upgrade-databases' "${DEPS_DIR}/d3.log")" -eq 2 ] \
+    || { echo "FAIL: the warnings do not link the upgrade guide (D3)" >&2; exit 1; }
+[ ! -s "${DEPS_STATE}/apt.log" ] \
+    || { echo "FAIL: an older existing service triggered a package install (D3)" >&2; exit 1; }
+[ ! -e "${DEPS_APT}/etc/apt/keyrings" ] \
+    || { echo "FAIL: an older existing service added a repository (D3)" >&2; exit 1; }
+echo "PASS: existing older PostgreSQL/Redis warn without upgrade (D3)"
+
+# D4: a tampered repository key aborts before any package is installed.
+deps_reset
+deps_fixture ubuntu jammy
+printf '14.13\n' >"${DEPS_STATE}/pg_candidate"
+printf '6.0.16\n' >"${DEPS_STATE}/redis_candidate"
+printf 'DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF\n' >"${DEPS_STATE}/fp_redis"
+D4_ROOT="${SCRATCH}/deps-bad-key"
+if deps_run "${D4_ROOT}" >"${DEPS_DIR}/d4.log" 2>&1; then
+    echo "FAIL: a wrong Redis key fingerprint was accepted (D4)" >&2; exit 1
+fi
+grep -q 'Redis signing key fingerprint mismatch' "${DEPS_DIR}/d4.log" \
+    || { echo "FAIL: a wrong key did not abort with a fingerprint error (D4)" >&2; cat "${DEPS_DIR}/d4.log" >&2; exit 1; }
+if grep -q 'apt-get install' "${DEPS_STATE}/apt.log"; then
+    echo "FAIL: a package was installed before the bad key aborted (D4)" >&2
+    cat "${DEPS_STATE}/apt.log" >&2
+    exit 1
+fi
+[ ! -f "${DEPS_STATE}/pg_version" ] && [ ! -f "${DEPS_STATE}/redis_version" ] \
+    || { echo "FAIL: a service was installed despite the bad key (D4)" >&2; exit 1; }
+[ ! -e "${DEPS_APT}/etc/apt/sources.list.d/redis.list" ] \
+    || { echo "FAIL: the unverified Redis repository was written (D4)" >&2; exit 1; }
+echo "PASS: a wrong repository key aborts before installing anything (D4)"
+unset DEPS_STATE
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

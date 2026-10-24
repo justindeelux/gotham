@@ -60,6 +60,19 @@
 #                               instead of /dev/tty. Without the BIN seam test
 #                               mode skips admin creation; /dev/tty is never
 #                               opened in test mode unless the TTY seam is set.
+#   GOTHAM_INSTALL_TEST_DEPS=1  test-only: with GOTHAM_INSTALL_ROOT, run the
+#                               PostgreSQL/Redis dependency step against PATH
+#                               shims and exit right after it, so the selection
+#                               and password logic is testable without root.
+#
+# Local PostgreSQL and Redis are installed at tested versions: PostgreSQL 16
+# (from the PGDG apt repository when the distribution package is older) and
+# Redis from the distribution when it ships 6.2 or newer, otherwise 7.2 from
+# packages.redis.io. A third-party repository is used only after its signing
+# key fingerprint is verified; a mismatch aborts before installing. The local
+# database role gets a random password generated at install and stored only in
+# gotham.env (a re-run keeps it). An existing older major version is never
+# upgraded automatically: the installer warns and points at the upgrade guide.
 #
 # Runtime configuration overrides:
 #   GOTHAM_DATABASE_DSN       managed PostgreSQL DSN; skips local provisioning
@@ -123,6 +136,30 @@ DEFAULT_REPO="justindeelux/gotham"
 # embeds the same key in the binaries. Never fetch this from the download
 # channel.
 GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
+
+# ---- Pinned third-party apt repositories ------------------------------------
+# Used only when the distribution package is too old. Each key is downloaded
+# over TLS and its fingerprint compared with the values below before it is
+# trusted; a mismatch aborts the install. The fingerprints were verified
+# against the official key files (2026-10):
+#   PostgreSQL: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+#   Redis:      https://packages.redis.io/gpg
+PGDG_KEY_URL="https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+PGDG_KEY_FINGERPRINT="B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+PGDG_REPO_URL="https://apt.postgresql.org/pub/repos/apt"
+REDIS_KEY_URL="https://packages.redis.io/gpg"
+REDIS_KEY_FINGERPRINT="54318FA4052D1E61A6B6F7BB5F4349D6BF53AA0C"
+REDIS_REPO_URL="https://packages.redis.io/deb"
+# Tested target and the series pinned on hosts whose distro Redis is older.
+MIN_POSTGRES_MAJOR="16"
+MIN_REDIS_VERSION="6.2"
+REDIS_PINNED_SERIES="7.2"
+DB_UPGRADE_DOCS_URL="https://github.com/justindeelux/gotham/blob/main/docs/guide/upgrade-databases.md"
+
+# Fixed production paths. The test suite bakes scratch values into a copy of
+# this script (the same pattern as the agent installer's os-release seam).
+_DEPS_OS_RELEASE=/etc/os-release
+_DEPS_APT_ROOT=
 
 DRY_RUN=0
 CP_HOSTS_OPT=""
@@ -418,8 +455,48 @@ fi
 env_prev() {
     printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
 }
-DSN="${GOTHAM_DATABASE_DSN:-$(env_prev GOTHAM_DATABASE_DSN)}"
-DSN="${DSN:-${DEFAULT_DSN}}"
+# LOCAL_DSN is 1 when this installer owns the local database: no DSN was given
+# and none was stored, or a previous run stored the legacy default or the
+# local form with the generated password. Anything else is a managed DSN and
+# is never touched.
+LOCAL_DSN=0
+DB_PASSWORD=""
+DB_PASSWORD_KEEP=0
+if [ -n "${GOTHAM_DATABASE_DSN:-}" ]; then
+    # An explicit DSN is managed by the operator and is never reprovisioned;
+    # only the legacy built-in default still asks for the local services.
+    DSN="${GOTHAM_DATABASE_DSN}"
+    [ "${DSN}" = "${DEFAULT_DSN}" ] && LOCAL_DSN=1
+else
+    DSN="$(env_prev GOTHAM_DATABASE_DSN)"
+    if [ -z "${DSN}" ]; then
+        LOCAL_DSN=1
+    else
+        case "${DSN}" in
+            "${DEFAULT_DSN}") LOCAL_DSN=1 ;;
+            postgres://gotham:*@localhost:5432/gotham\?sslmode=disable)
+                LOCAL_DSN=1
+                DB_PASSWORD="${DSN#postgres://gotham:}"
+                DB_PASSWORD="${DB_PASSWORD%@localhost:5432/gotham?sslmode=disable}"
+                DB_PASSWORD_KEEP=1
+                ;;
+        esac
+    fi
+fi
+# Install and configure the local services only when this installer owns the
+# DSN and the operator did not ask to skip dependencies. The dependency test
+# seam runs in a GOTHAM_INSTALL_ROOT sandbox only.
+PROVISION_LOCAL_DEPS=0
+if [ "${LOCAL_DSN}" -eq 1 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ "${DRY_RUN}" -eq 0 ]; then
+    if [ "${TEST_MODE}" -eq 0 ] || [ "${GOTHAM_INSTALL_TEST_DEPS:-0}" = "1" ]; then
+        PROVISION_LOCAL_DEPS=1
+    fi
+fi
+# With provisioning skipped, an install that never wrote a DSN keeps the
+# documented default so an existing local database keeps working.
+if [ "${LOCAL_DSN}" -eq 1 ] && [ "${PROVISION_LOCAL_DEPS}" -eq 0 ] && [ -z "${DSN}" ]; then
+    DSN="${DEFAULT_DSN}"
+fi
 REDIS_ADDR="${GOTHAM_REDIS_ADDR:-$(env_prev GOTHAM_REDIS_ADDR)}"
 REDIS_ADDR="${REDIS_ADDR:-${DEFAULT_REDIS}}"
 
@@ -1124,12 +1201,27 @@ else
 fi
 
 # ---- Control-plane configuration --------------------------------------------
+# Generate the local database password here (not in the env-write subshell) so
+# the dependency step below uses the same value. It is written only to
+# gotham.env and travels to psql on stdin; xtrace is off around generation and
+# the env write so `sh -x` never logs it.
+if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ] && [ -z "${DB_PASSWORD}" ]; then
+    _admin_xtrace_off
+    DB_PASSWORD="$(_admin_generate_password)" || DB_PASSWORD=""
+    case "${DB_PASSWORD}" in
+        '' | *[!A-Za-z0-9_-]*) die "could not generate a database password" ;;
+    esac
+    DSN="postgres://gotham:${DB_PASSWORD}@localhost:5432/gotham?sslmode=disable"
+    _admin_xtrace_on
+fi
+
 log "writing ${ENV_FILE}"
 run mkdir -p "${ETC_DIR}"
 run chmod 0755 "${ETC_DIR}"
 JWT_KEY="${ETC_DIR}/jwt_ed25519.key"
 JWT_PUB="${ETC_DIR}/jwt_ed25519.pub"
 
+_admin_xtrace_off
 if [ "${DRY_RUN}" -eq 0 ]; then
     # Restrictive umask only around the secret material, so it is never briefly
     # world-readable; the shared directories stay 0755 (base umask 022).
@@ -1200,6 +1292,7 @@ if [ "${DRY_RUN}" -eq 0 ]; then
 else
     echo "[dry-run] write ${ENV_FILE}, ${JWT_KEY}, ${JWT_PUB}"
 fi
+_admin_xtrace_on
 
 # ---- Certificate authority (mTLS) -------------------------------------------
 # Provision the CA the gRPC gateway uses for TLS. `gotham ca init` is
@@ -1269,7 +1362,7 @@ fi
 log "installing systemd unit ${SERVICE_FILE}"
 render_file "${SCRIPT_DIR}/gotham.service" "${SERVICE_FILE}" 0644
 
-if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" != "1" ]; then
+if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" != "1" ] && [ "${GOTHAM_INSTALL_TEST_DEPS:-0}" != "1" ]; then
     log "test mode: skipping service activation and the localhost agent install"
     log "done (test install under ${PREFIX})"
     exit 0
@@ -1277,30 +1370,289 @@ fi
 # GOTHAM_INSTALL_TEST_RUN_AGENT=1 (sandbox test mode only) runs past
 # the exit above with shims for systemctl and the agent installer, so the
 # suite can execute the real agent-failure path end to end.
+# GOTHAM_INSTALL_TEST_DEPS=1 (sandbox test mode only) instead runs the
+# dependency step below against shims and exits right after it.
 
 # ---- Dependencies (PostgreSQL + Redis) --------------------------------------
-# Only provision local services when the resolved DSN is the built-in local
-# default; a managed DSN (from the CLI or a previous install) is left alone.
-if [ "${DRY_RUN}" -eq 0 ] && [ "${TEST_MODE}" -eq 0 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ] && [ "${DSN}" = "${DEFAULT_DSN}" ]; then
-    if ! command -v psql >/dev/null 2>&1 || ! command -v redis-server >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then
-            log "installing PostgreSQL and Redis"
-            # Package maintainer scripts must run under a normal umask.
-            ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update )
-            ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql redis-server )
-        else
-            die "PostgreSQL and Redis are required; install them or set GOTHAM_DATABASE_DSN and GOTHAM_SKIP_DEPS=1"
-        fi
+# Compare two dotted numeric versions: 0 when $1 >= $2, 1 otherwise.
+_version_at_least() {
+    awk -v got="$1" -v min="$2" 'BEGIN {
+        n = split(got, g, ".")
+        m = split(min, r, ".")
+        for (i = 1; i <= m; i++) {
+            a = (i <= n && g[i] ~ /^[0-9]+$/) ? g[i] + 0 : 0
+            b = r[i] + 0
+            if (a > b) exit 0
+            if (a < b) exit 1
+        }
+        exit 0
+    }'
+}
+
+# Strip a Debian epoch and any suffix, then keep the first $2 components.
+_version_cut() {
+    printf '%s' "$1" | sed 's/^[0-9][0-9]*://' | sed 's/^[^0-9]*//' \
+        | sed 's/[^0-9.].*$//' | awk -F. -v n="$2" '{
+            out = $1
+            for (i = 2; i <= n; i++) out = out "." $i
+            print out
+        }'
+}
+
+_deps_candidate() {
+    apt-cache policy "$1" 2>/dev/null | sed -n 's/^  Candidate: //p' | head -n1
+}
+
+# _deps_apt_update refreshes the package lists once per install. The flag is
+# reset when a new repository is added (the caller then refreshes again).
+_DEPS_APT_UPDATED=0
+_deps_apt_update() {
+    [ "${_DEPS_APT_UPDATED}" -eq 1 ] && return 0
+    ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update ) \
+        || die "could not update the package lists"
+    _DEPS_APT_UPDATED=1
+}
+
+_deps_apt_install() {
+    ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ) \
+        || die "could not install: $*"
+}
+
+# _deps_distro_codename reads the codename both third-party repositories key
+# their suites on.
+_deps_distro_codename() {
+    _dd_codename=""
+    if [ -f "${_DEPS_OS_RELEASE}" ]; then
+        _dd_codename="$(sed -n 's/^VERSION_CODENAME=//p' "${_DEPS_OS_RELEASE}" | head -n1 | tr -d '"')"
     fi
+    if [ -z "${_dd_codename}" ]; then
+        _dd_codename="$(lsb_release -cs 2>/dev/null || true)"
+    fi
+    [ -n "${_dd_codename}" ] \
+        || die "could not determine the distribution codename from ${_DEPS_OS_RELEASE}"
+}
+
+# _deps_add_repo downloads a third-party signing key over TLS, verifies its
+# fingerprint against the pinned value, and installs a signed-by keyring plus
+# the repository line. It aborts on any mismatch before the repo is used.
+# args: key URL, pinned fingerprint, keyring/source base name, repo line tail,
+# human-readable repository name.
+_deps_add_repo() {
+    _dr_key_tmp="$(mktemp "${TMPDIR:-/tmp}/gotham-apt-key.XXXXXX")" \
+        || die "could not create a temporary key file"
+    if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 3 "$1" -o "${_dr_key_tmp}"; then
+        rm -f "${_dr_key_tmp}"
+        die "could not download the $5 signing key"
+    fi
+    _dr_fp="$(gpg --show-keys --with-colons "${_dr_key_tmp}" 2>/dev/null \
+        | awk -F: '$1 == "fpr" { print $10; exit }' | tr -d '[:space:]')"
+    _dr_keys="$(gpg --show-keys --with-colons "${_dr_key_tmp}" 2>/dev/null \
+        | awk -F: '$1 == "pub" { n++ } END { print n + 0 }')"
+    if [ "${_dr_fp}" != "$2" ] || [ "${_dr_keys}" != "1" ]; then
+        rm -f "${_dr_key_tmp}"
+        die "$5 signing key fingerprint mismatch (got '${_dr_fp:-unreadable}', ${_dr_keys:-0} primary key(s)); refusing to use it"
+    fi
+    _dr_keyrings="${_DEPS_APT_ROOT}/etc/apt/keyrings"
+    _dr_sources="${_DEPS_APT_ROOT}/etc/apt/sources.list.d"
+    mkdir -p "${_dr_keyrings}" "${_dr_sources}"
+    chmod 0755 "${_dr_keyrings}" "${_dr_sources}"
+    # The dearmored keyring must end in .gpg: apt silently ignores binary key
+    # material in a .asc signed-by file and fails later with NO_PUBKEY.
+    _dr_keyring="${_dr_keyrings}/$3.gpg"
+    _dr_keyring_tmp="${_dr_keyring}.tmp.$$"
+    if ! gpg --dearmor -o "${_dr_keyring_tmp}" <"${_dr_key_tmp}"; then
+        rm -f "${_dr_key_tmp}" "${_dr_keyring_tmp}"
+        die "could not import the $5 signing key"
+    fi
+    rm -f "${_dr_key_tmp}"
+    chmod 0644 "${_dr_keyring_tmp}"
+    mv -f "${_dr_keyring_tmp}" "${_dr_keyring}"
+    _dr_source="${_dr_sources}/$3.list"
+    if ! printf 'deb [signed-by=%s] %s\n' "${_dr_keyring}" "$4" >"${_dr_source}.tmp.$$"; then
+        die "could not write the $5 repository line"
+    fi
+    chmod 0644 "${_dr_source}.tmp.$$"
+    mv -f "${_dr_source}.tmp.$$" "${_dr_source}"
+    _DEPS_APT_UPDATED=0
+}
+
+# plan_postgresql decides between keeping an installed PostgreSQL, the
+# distribution package, and PGDG. An existing major is never upgraded; a
+# too-old one only produces the warning and points at the upgrade guide.
+plan_postgresql() {
+    PG_ACTION=""
+    if command -v psql >/dev/null 2>&1; then
+        PG_ACTION="keep"
+        PG_VERSION="$(psql --version 2>/dev/null | awk '{
+            for (i = 1; i <= NF; i++) if ($i ~ /^[0-9][0-9]*\./) { print $i; exit }
+        }')"
+        [ -n "${PG_VERSION}" ] || PG_VERSION="unknown"
+        if [ "${PG_VERSION}" != "unknown" ] \
+            && ! _version_at_least "$(_version_cut "${PG_VERSION}" 1)" "${MIN_POSTGRES_MAJOR}"; then
+            log "WARNING: PostgreSQL ${PG_VERSION} is older than ${MIN_POSTGRES_MAJOR}; it is left as-is (major upgrades are never automatic)."
+            log "         Upgrade guide: ${DB_UPGRADE_DOCS_URL}"
+        fi
+        return 0
+    fi
+    _pg_candidate="$(_deps_candidate postgresql)"
+    if [ -n "${_pg_candidate}" ] && [ "${_pg_candidate}" != "(none)" ] \
+        && _version_at_least "$(_version_cut "${_pg_candidate}" 1)" "${MIN_POSTGRES_MAJOR}"; then
+        PG_ACTION="distro"
+    else
+        PG_ACTION="pgdg"
+    fi
+}
+
+# plan_redis decides between keeping an installed Redis (6.2 or newer is
+# supported and left alone), the distribution package, and packages.redis.io
+# pinned to the 7.2 series. An existing older Redis is never upgraded.
+plan_redis() {
+    REDIS_ACTION=""
+    if command -v redis-server >/dev/null 2>&1; then
+        REDIS_ACTION="keep"
+        REDIS_VERSION="$(redis-server --version 2>/dev/null \
+            | sed -n 's/.*v=\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
+        [ -n "${REDIS_VERSION}" ] || REDIS_VERSION="unknown"
+        if [ "${REDIS_VERSION}" != "unknown" ] \
+            && ! _version_at_least "${REDIS_VERSION}" "${MIN_REDIS_VERSION}"; then
+            log "WARNING: Redis ${REDIS_VERSION} is older than ${MIN_REDIS_VERSION}; it is left as-is (no automatic upgrade)."
+            log "         Upgrade guide: ${DB_UPGRADE_DOCS_URL}"
+        fi
+        return 0
+    fi
+    _redis_candidate="$(_deps_candidate redis-server)"
+    if [ -n "${_redis_candidate}" ] && [ "${_redis_candidate}" != "(none)" ] \
+        && _version_at_least "$(_version_cut "${_redis_candidate}" 2)" "${MIN_REDIS_VERSION}"; then
+        REDIS_ACTION="distro"
+    else
+        REDIS_ACTION="repo"
+    fi
+}
+
+# install_planned_dependencies adds any needed pinned repository (verifying
+# every key first, so a bad key aborts before a single package is installed)
+# and then installs the planned packages.
+install_planned_dependencies() {
+    if [ "${PG_ACTION}" = "pgdg" ]; then
+        log "the distribution PostgreSQL is older than ${MIN_POSTGRES_MAJOR}; using the PGDG apt repository"
+    fi
+    if [ "${REDIS_ACTION}" = "repo" ]; then
+        log "the distribution Redis is older than ${MIN_REDIS_VERSION}; using packages.redis.io pinned to ${REDIS_PINNED_SERIES}"
+    fi
+    if [ "${PG_ACTION}" = "pgdg" ] || [ "${REDIS_ACTION}" = "repo" ]; then
+        command -v gpg >/dev/null 2>&1 || _deps_apt_install ca-certificates gnupg
+        _deps_distro_codename
+    fi
+    # Verify and add both keys before installing anything, so a tampered key
+    # leaves the host untouched.
+    if [ "${PG_ACTION}" = "pgdg" ]; then
+        _deps_add_repo "${PGDG_KEY_URL}" "${PGDG_KEY_FINGERPRINT}" pgdg \
+            "${PGDG_REPO_URL} ${_dd_codename}-pgdg main" "PGDG"
+    fi
+    if [ "${REDIS_ACTION}" = "repo" ]; then
+        _deps_add_repo "${REDIS_KEY_URL}" "${REDIS_KEY_FINGERPRINT}" redis \
+            "${REDIS_REPO_URL} ${_dd_codename} main" "Redis"
+    fi
+    if [ "${PG_ACTION}" = "distro" ] || [ "${PG_ACTION}" = "pgdg" ] \
+        || [ "${REDIS_ACTION}" = "distro" ] || [ "${REDIS_ACTION}" = "repo" ]; then
+        [ "${_DEPS_APT_UPDATED}" -eq 1 ] || _deps_apt_update
+    fi
+    case "${PG_ACTION}" in
+        distro)
+            log "installing PostgreSQL from the distribution packages"
+            _deps_apt_install postgresql
+            ;;
+        pgdg) _deps_apt_install "postgresql-${MIN_POSTGRES_MAJOR}" ;;
+    esac
+    case "${REDIS_ACTION}" in
+        distro)
+            log "installing Redis from the distribution packages"
+            _deps_apt_install redis-server
+            ;;
+        repo)
+            # The repository epoch is 6: on both jammy and bookworm; pinning
+            # both packages keeps apt from mixing 7.2 with a newer redis-tools.
+            _deps_apt_install "redis-server=6:${REDIS_PINNED_SERIES}.*" \
+                "redis-tools=6:${REDIS_PINNED_SERIES}.*"
+            ;;
+    esac
+    PG_VERSION="$(psql --version 2>/dev/null | awk '{
+        for (i = 1; i <= NF; i++) if ($i ~ /^[0-9][0-9]*\./) { print $i; exit }
+    }')"
+    [ -n "${PG_VERSION}" ] || PG_VERSION="unknown"
+    REDIS_VERSION="$(redis-server --version 2>/dev/null \
+        | sed -n 's/.*v=\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
+    [ -n "${REDIS_VERSION}" ] || REDIS_VERSION="unknown"
+}
+
+# provision_local_database creates the gotham role and database matching the
+# DSN. The password travels to psql on stdin, never on a command line, and
+# xtrace is off so `sh -x` cannot log it. An existing role keeps its password
+# when the stored DSN already holds it; the legacy fixed password is rotated.
+provision_local_database() {
+    _admin_xtrace_off
+    _need_role_sql=1
+    _role_exists=0
+    if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='gotham'" | grep -q 1; then
+        _role_exists=1
+        [ "${DB_PASSWORD_KEEP}" -eq 1 ] && _need_role_sql=0
+    fi
+    # The password reaches single-quoted SQL, so only the generated alphabet is
+    # accepted there. A stored DSN whose role already exists needs no SQL.
+    if [ "${_need_role_sql}" -eq 1 ]; then
+        case "${DB_PASSWORD}" in
+            '' | *[!A-Za-z0-9_-]*) die "internal error: invalid local database password" ;;
+        esac
+    fi
+    if [ "${_role_exists}" -eq 1 ]; then
+        if [ "${DB_PASSWORD_KEEP}" -eq 1 ]; then
+            log "database role gotham already exists; keeping its password"
+        else
+            log "replacing the legacy fixed database password with the generated one"
+            printf "ALTER ROLE gotham WITH LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
+                | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
+                || die "could not update the gotham database role"
+        fi
+    else
+        printf "CREATE ROLE gotham LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
+            | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
+            || die "could not create the gotham database role"
+    fi
+    _admin_xtrace_on
+    if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='gotham'" | grep -q 1; then
+        runuser -u postgres -- createdb -O gotham gotham \
+            || die "could not create the gotham database"
+    fi
+}
+
+DEPS_SUMMARY=""
+if [ "${DRY_RUN}" -eq 1 ] && [ "${LOCAL_DSN}" -eq 1 ] && [ "${GOTHAM_SKIP_DEPS:-0}" != "1" ]; then
+    log "would install PostgreSQL ${MIN_POSTGRES_MAJOR} and Redis ${MIN_REDIS_VERSION}+ (distribution packages when new enough)"
+fi
+# Only provision local services when this installer owns the DSN; a managed
+# DSN (from the CLI or a previous install) is left alone.
+if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ]; then
+    command -v apt-get >/dev/null 2>&1 \
+        || die "PostgreSQL and Redis are required; install them or set GOTHAM_DATABASE_DSN and GOTHAM_SKIP_DEPS=1"
+    # Candidate versions come from the package lists; refresh them once when a
+    # package is missing (a fully installed host never touches the network).
+    if ! command -v psql >/dev/null 2>&1 || ! command -v redis-server >/dev/null 2>&1; then
+        _deps_apt_update
+    fi
+    plan_postgresql
+    plan_redis
+    install_planned_dependencies
     log "enabling PostgreSQL and Redis"
     systemctl enable --now postgresql redis-server || die "could not start PostgreSQL/Redis"
-    # Idempotent role + database matching the default DSN.
-    if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='gotham'" | grep -q 1; then
-        runuser -u postgres -- psql -c "CREATE ROLE gotham LOGIN PASSWORD 'gotham'"
-    fi
-    if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='gotham'" | grep -q 1; then
-        runuser -u postgres -- createdb -O gotham gotham
-    fi
+    provision_local_database
+    log "PostgreSQL ${PG_VERSION} and Redis ${REDIS_VERSION} are ready"
+    DEPS_SUMMARY="  Database: PostgreSQL ${PG_VERSION} (local)
+  Cache:    Redis ${REDIS_VERSION} (local)
+"
+fi
+if [ "${GOTHAM_INSTALL_TEST_DEPS:-0}" = "1" ] && [ "${TEST_MODE}" -eq 1 ]; then
+    log "test mode: dependencies installed (sandbox)"
+    exit 0
 fi
 
 # ---- Migrate + start --------------------------------------------------------
@@ -1308,12 +1660,17 @@ fi
 # tail with a systemctl shim instead).
 if [ "${DRY_RUN}" -eq 0 ] && [ "${TEST_MODE}" -eq 0 ]; then
     log "applying database migrations"
-    # Pass the DSN and binary path positionally: interpolating the DSN into a
-    # single-quoted sh -c would let a quote in the DSN run commands as the
-    # service user.
-    runuser -u "${SERVICE_USER}" -- sh -c \
-        'cd / && GOTHAM_DATABASE_DSN="$1" GOTHAM_LEGACY_LOCAL_NODE_ID="$3" exec "$2" migrate up' gotham-migrate "${DSN}" "${INSTALL_PATH}" "${LEGACY_LOCAL_NODE_ID}" \
+    # The DSN (which may hold the generated password) travels on stdin, not on
+    # a command line, and is exported by the child shell before exec.
+    _admin_xtrace_off
+    printf '%s\n' "${DSN}" | runuser -u "${SERVICE_USER}" -- sh -c \
+        'IFS= read -r GOTHAM_DATABASE_DSN
+         export GOTHAM_DATABASE_DSN
+         GOTHAM_LEGACY_LOCAL_NODE_ID="$2"
+         export GOTHAM_LEGACY_LOCAL_NODE_ID
+         cd / && exec "$1" migrate up' gotham-migrate "${INSTALL_PATH}" "${LEGACY_LOCAL_NODE_ID}" \
         || die "database migrations failed (check PostgreSQL and GOTHAM_DATABASE_DSN)"
+    _admin_xtrace_on
 fi
 
 # ---- First admin account: creation (phase 2) --------------------------------
@@ -1417,6 +1774,7 @@ fi
                     -u GOTHAM_AGENT_ENV_FILE -u GOTHAM_TEST_UNAME_M \
                     -u GOTHAM_INSTALL_TEST -u GOTHAM_INSTALL_TEST_RUN_AGENT \
                     -u GOTHAM_INSTALL_TEST_AGENT_SCRIPT \
+                    -u GOTHAM_INSTALL_TEST_DEPS \
                     -u GOTHAM_INSTALL_TEST_PUBLIC_KEY \
                     -u GOTHAM_INSTALL_TEST_ADMIN_BIN \
                     -u GOTHAM_INSTALL_TEST_ADMIN_TTY \
@@ -1523,6 +1881,7 @@ Gotham ${VERSION} is installed.
 ${DOMAIN_CONFIRM_NOTE}
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
+${DEPS_SUMMARY}
 
 First login:
 ${ADMIN_FIRST_LOGIN}

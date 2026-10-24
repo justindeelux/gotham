@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/url"
+	"os"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"google.golang.org/grpc/peer"
 
 	"github.com/justindeelux/gotham/internal/servers"
+	"github.com/justindeelux/gotham/internal/store"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -87,5 +90,94 @@ func TestInstanceContainerAgentWiringMTLS(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].ID != "traefik" {
 		t.Fatalf("containers = %+v", listed)
+	}
+}
+
+type readinessAgent struct {
+	instanceDockerAgent
+	called chan struct{}
+}
+
+func (a readinessAgent) ListContainers(ctx context.Context, req *agentv1.ListContainersRequest) (*agentv1.ListContainersResponse, error) {
+	select {
+	case a.called <- struct{}{}:
+	default:
+	}
+	return a.instanceDockerAgent.ListContainers(ctx, req)
+}
+
+func TestWaitLocalhostRequiresHeartbeatAndMTLS(t *testing.T) {
+	dsn := os.Getenv("GOTHAM_TEST_DSN")
+	if dsn == "" {
+		t.Skip("GOTHAM_TEST_DSN required for readiness integration")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	admin, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	name := fmt.Sprintf("instance_ready_%d", time.Now().UnixNano())
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = admin.Exec(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)") }()
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Path = "/" + name
+	if err := store.Migrate(ctx, parsed.String(), store.MigrateUp); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(ctx, parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(ctx, `INSERT INTO servers(name,ip,ssh_user,node_id) VALUES('localhost','127.0.0.1','','localhost')`); err != nil {
+		t.Fatal(err)
+	}
+	caDir := t.TempDir()
+	authority, err := servers.LoadOrCreateAuthority(caDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, key, err := authority.IssueServerCert([]string{"localhost.agent.gotham.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.X509KeyPair(cert, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:9443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpc := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: authority.Pool(), MinVersion: tls.VersionTLS12})))
+	called := make(chan struct{}, 1)
+	agentv1.RegisterDockerServiceServer(rpc, readinessAgent{called: called})
+	go func() { _ = rpc.Serve(listener) }()
+	defer rpc.Stop()
+	t.Setenv("GOTHAM_DATABASE_DSN", parsed.String())
+	t.Setenv("GOTHAM_CA_DIR", caDir)
+	t.Setenv("GOTHAM_REDIS_ADDR", "127.0.0.1:1")
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		_, _ = db.Exec(ctx, `UPDATE servers SET status='ready',last_seen=now() WHERE node_id='localhost'`)
+	}()
+	started := time.Now()
+	if got := runInstance([]string{"wait-localhost"}); got != exitOK {
+		t.Fatalf("exit = %d", got)
+	}
+	if time.Since(started) < 100*time.Millisecond {
+		t.Fatal("returned before heartbeat")
+	}
+	select {
+	case <-called:
+	default:
+		t.Fatal("readiness skipped the authenticated listener probe")
 	}
 }

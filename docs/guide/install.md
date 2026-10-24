@@ -30,6 +30,8 @@ curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/ins
 
 The installer asks for the admin email (default `admin@example.com`), password (Enter generates one), and an optional panel domain (Enter skips). A generated password is printed once. Docker is installed automatically for the localhost agent.
 
+Before applying a domain, the installer waits up to **60 seconds** for the localhost agent to be ready. A timeout leaves the host HTTP address available.
+
 The domain must resolve to this host and ports 80/443 must be free. Cloudflare records must be **DNS-only**. Open the domain over HTTP and confirm it in General settings within **2 minutes** to start HTTPS issuance; an unconfirmed trial reverts automatically. Invalid domains or DNS failures warn and leave the host HTTP address available.
 
 ```sh

@@ -1434,12 +1434,16 @@ if [ "${TEST_MODE}" -eq 1 ]; then
     DOMAIN_BIN="${GOTHAM_INSTALL_TEST_ADMIN_BIN:-${INSTALL_PATH}}"
 fi
 if [ -n "${DOMAIN}" ]; then
+    log "waiting up to 60 seconds for the localhost agent before domain setup"
     log "Cloudflare users: set the panel record to DNS-only (grey cloud). Ports 80/443 must reach this host."
     if [ "${DRY_RUN}" -eq 1 ]; then
+        echo "[dry-run] ${INSTALL_PATH} instance wait-localhost (up to 60 seconds)"
         echo "[dry-run] ${INSTALL_PATH} instance set-url https://${DOMAIN}"
     elif [ "${TEST_MODE}" -eq 1 ] && [ -z "${GOTHAM_INSTALL_TEST_ADMIN_BIN:-}" ]; then
         log "test mode: skipping domain setup (no command binary seam)"
     elif GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
+        "${DOMAIN_BIN}" instance wait-localhost && \
+        GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
         "${DOMAIN_BIN}" instance set-url "https://${DOMAIN}"; then
         # Re-arm the persisted trial timer in the long-running service.
         run systemctl restart "${BINARY_NAME}.service"

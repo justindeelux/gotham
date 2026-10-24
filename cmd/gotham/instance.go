@@ -21,8 +21,15 @@ import (
 )
 
 func runInstance(args []string) int {
+	if len(args) == 1 && args[0] == "wait-localhost" {
+		if err := waitForLocalhost(); err != nil {
+			fmt.Fprintf(os.Stderr, "instance wait-localhost: %v\n", err)
+			return exitError
+		}
+		return exitOK
+	}
 	if len(args) != 2 || args[0] != "set-url" {
-		fmt.Fprintln(os.Stderr, "Usage: gotham instance set-url <http(s)://host>")
+		fmt.Fprintln(os.Stderr, "Usage: gotham instance set-url <http(s)://host> | wait-localhost")
 		return exitUsage
 	}
 	if err := instanceSetURL(args[1]); err != nil {
@@ -34,7 +41,7 @@ func runInstance(args []string) int {
 
 func instanceSetURL(raw string) error {
 	raw = strings.ToLower(strings.TrimRight(strings.TrimSpace(raw), "/"))
-	loadEnvFile(adminEnvFile)
+	loadEnvFile()
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -151,4 +158,46 @@ func checkPanelURL(ctx context.Context, raw string) error {
 		_ = listener.Close()
 	}
 	return nil
+}
+
+// Wait for both a recorded heartbeat and the agent's authenticated RPC listener.
+func waitForLocalhost() error {
+	loadEnvFile()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := store.Open(ctx, cfg.Database.DSN)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	authority, err := servers.LoadAuthority(cfg.CA.Dir)
+	if err != nil {
+		return err
+	}
+	st := store.New(pool)
+	nodes := servers.NewService(servers.Config{Store: st, Authority: authority})
+	inventory := newInstanceContainers(nodes, cfg.Redis.Addr)
+	defer func() { _ = inventory.Close() }()
+	nodeID := "localhost"
+	for {
+		probe, stop := context.WithTimeout(ctx, time.Second)
+		row, readErr := st.GetServerByNodeID(probe, &nodeID)
+		if readErr == nil && row.Status == servers.StatusReady && row.LastSeen.Valid {
+			_, readErr = inventory.ListFresh(probe, uuid.UUID(row.ID.Bytes))
+			if readErr == nil {
+				stop()
+				return nil
+			}
+		}
+		stop()
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("localhost agent is not ready after 60 seconds: %w", ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
 }

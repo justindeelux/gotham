@@ -1459,6 +1459,7 @@ state="${ADMIN_STATE_DIR:?}"
 # The fake stands in for the `gotham` binary, so it receives the full
 # `admin <subcommand> ...` line like the real one.
 if [ "$1" = instance ]; then
+    if [ "$2" = wait-localhost ]; then exit "${DOMAIN_WAIT_RC:-0}"; fi
     [ "$2" = set-url ] || exit 2
     printf '%s\n' "$@" >"${DOMAIN_TEST_LOG}"
     exit "${DOMAIN_TEST_RC:-0}"
@@ -2257,6 +2258,17 @@ grep -q 'WARNING: domain setup failed' "${SCRATCH}/bad-domain-out.log"
 grep -q 'Web UI:   http://.*:8000' "${SCRATCH}/bad-domain-out.log"
 [ -f "${SCRATCH}/bad-domain-root/etc/gotham/gotham.env" ] \
     || { echo "FAIL: failed domain rolled back the installation" >&2; exit 1; }
+rm -f "${DOMAIN_TEST_LOG}"
+export DOMAIN_WAIT_RC=1
+mkdir "${SCRATCH}/not-ready-admin"
+ADMIN_EMAIL=domain@example.com ADMIN_TTY="" ADMIN_PWFILE="" \
+    run_admin_install "${SCRATCH}/not-ready-root" "${SCRATCH}/not-ready-admin" \
+    "${SCRATCH}/not-ready-out.log" "${SCRATCH}/not-ready-err.log"
+[ ! -e "${DOMAIN_TEST_LOG}" ] || { echo "FAIL: set-url ran before agent readiness" >&2; exit 1; }
+grep -q 'WARNING: domain setup failed' "${SCRATCH}/not-ready-out.log"
+grep -q 'Web UI:   http://.*:8000' "${SCRATCH}/not-ready-out.log"
+unset DOMAIN_WAIT_RC
+echo "PASS: agent readiness failure skips domain setup and preserves HTTP"
 unset DOMAIN_TEST_LOG DOMAIN_TEST_RC GOTHAM_DOMAIN
 echo "PASS: standalone domain success and failure preserve the install and login summary"
 

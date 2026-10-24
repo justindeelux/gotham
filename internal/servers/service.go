@@ -894,6 +894,13 @@ func (s *ServerService) NodeKeyFingerprint(ctx context.Context, nodeID string) (
 		return "", false, fmt.Errorf("lookup node key: %w", err)
 	}
 	if row.AgentKeyFingerprint == nil {
+		// EnsureLocalhost reserves this row before any agent has enrolled.
+		if nodeID == "localhost" && row.Status == StatusPending && !row.LastSeen.Valid &&
+			row.Os == nil && row.DockerVersion == nil && row.Arch == nil &&
+			row.TotalMem == nil && row.TotalDisk == nil && row.AgentLegacyLeaf == nil &&
+			row.SshUser == "" && !row.TeamID.Valid {
+			return "", false, nil
+		}
 		return "", true, nil
 	}
 	return *row.AgentKeyFingerprint, true, nil

@@ -172,7 +172,7 @@ func runAdminExists(args []string) int {
 		fmt.Fprintf(os.Stderr, "admin exists takes no arguments\n")
 		return exitUsage
 	}
-	loadEnvFile(adminEnvFile)
+	loadEnvFile()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -334,7 +334,7 @@ func withAdminStore(fs *flag.FlagSet, fn func(ctx context.Context, st *store.Sto
 		adminUsage(os.Stderr)
 		return exitUsage
 	}
-	loadEnvFile(adminEnvFile)
+	loadEnvFile()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -355,8 +355,8 @@ func withAdminStore(fs *flag.FlagSet, fn func(ctx context.Context, st *store.Sto
 	return fn(ctx, store.New(pool))
 }
 
-func loadEnvFile(path string) {
-	data, err := os.ReadFile(path)
+func loadEnvFile() {
+	data, err := os.ReadFile(adminEnvFile)
 	if err != nil {
 		return
 	}

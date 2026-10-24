@@ -41,6 +41,8 @@ func run(args []string) int {
 		return runMCP(args[1:])
 	case "serve":
 		return runServe()
+	case "instance":
+		return runInstance(args[1:])
 	case "admin":
 		return runAdmin(args[1:])
 	case "migrate":
@@ -325,6 +327,8 @@ Usage:
   gotham admin reset-password
                             Replace a password and revoke its sessions
   gotham migrate [verb]     Run database migrations (up, down, status; default up)
+  gotham instance set-url <url>
+                            Try a panel URL through the instance service
   gotham ca init            Create the gRPC mTLS certificate authority
   gotham update [command]   Check, apply or roll back a self-update
   gotham version            Print the version

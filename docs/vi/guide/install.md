@@ -9,7 +9,7 @@ tiên, cập nhật và quay lui, cùng luồng phát hành/ký.
 
 ## Yêu cầu
 
-- **Máy chủ control plane:** Ubuntu 22.04 (hoặc bất kỳ Linux có systemd) với `curl`,
+- **Máy chủ control plane:** Ubuntu 22.04 / Debian có systemd với `curl`,
   `openssl` 3, `sudo` (kèm `visudo`) và `coreutils`. Trình cài đặt cấp phát
   PostgreSQL và Redis từ gói của bản phân phối trừ khi bạn trỏ nó tới dịch vụ được
   quản lý bằng `GOTHAM_DATABASE_DSN` / `GOTHAM_REDIS_ADDR` (hoặc đặt
@@ -22,12 +22,21 @@ tiên, cập nhật và quay lui, cùng luồng phát hành/ký.
 
 ## Control plane
 
-Chạy trình cài đặt từ một bản checkout, để nó dùng được các tệp đi kèm (wrapper cập
-nhật thuộc sở hữu root, cấu hình của nó, quy tắc sudoers và unit systemd):
+Chạy một lệnh trên máy Ubuntu/Debian, không cần clone repository:
 
 ```sh
-git clone https://github.com/justindeelux/gotham.git
-sudo gotham/deploy/install.sh
+curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/install.sh | sudo sh
+```
+
+Trình cài đặt hỏi email quản trị (mặc định `admin@example.com`), mật khẩu (Enter để tạo tự động), và tên miền tùy chọn (Enter để bỏ qua). Mật khẩu tự tạo chỉ được in một lần. Docker được cài tự động cho agent localhost.
+
+Trước khi áp dụng tên miền, trình cài đặt chờ tối đa **60 giây** để agent localhost sẵn sàng. Nếu hết thời gian chờ, địa chỉ HTTP của máy chủ vẫn khả dụng.
+
+Tên miền phải trỏ DNS về máy này và các cổng 80/443 phải còn trống; Cloudflare phải ở chế độ **DNS-only**. Mở URL HTTP của tên miền và xác nhận trong General settings trong vòng **2 phút** để bắt đầu cấp chứng chỉ HTTPS; nếu không xác nhận kịp, URL tự khôi phục. Nếu DNS hoặc tên miền không hợp lệ, cài đặt vẫn tiếp tục qua HTTP trên địa chỉ máy chủ.
+
+```sh
+# Tùy chọn tên miền khi chạy không tương tác
+curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/install.sh | sudo sh -s -- --domain panel.example.com
 ```
 
 Trình cài đặt:

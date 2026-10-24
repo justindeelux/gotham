@@ -478,10 +478,20 @@ fi
 env_prev() {
     printf '%s\n' "${ENV_PREV}" | sed -n "s/^$1=//p" | head -n1
 }
+# The only passwords this installer owns are the legacy fixed one and the
+# 32-character value its own generator produces. A local-form DSN with any
+# other password was set by the operator: it is kept untouched.
+_is_installer_password() {
+    case "$1" in
+        gotham) return 0 ;;
+        *[!A-Za-z0-9_-]*) return 1 ;;
+        *) [ "${#1}" -eq 32 ] ;;
+    esac
+}
 # LOCAL_DSN is 1 when this installer owns the local database: no DSN was given
-# and none was stored, or a previous run stored the legacy default or the
-# local form with the generated password. Anything else is a managed DSN and
-# is never touched.
+# and none was stored, a previous run stored the legacy default, or it stored a
+# local DSN with a generated-shape password. Anything else (including a local
+# DSN an operator edited) is managed and never touched.
 LOCAL_DSN=0
 DB_PASSWORD=""
 DB_OLD_PASSWORD=""
@@ -504,10 +514,15 @@ else
                 DB_OLD_PASSWORD="gotham"
                 ;;
             postgres://gotham:*@localhost:5432/gotham\?sslmode=disable)
-                LOCAL_DSN=1
                 DB_PASSWORD="${DSN#postgres://gotham:}"
                 DB_PASSWORD="${DB_PASSWORD%@localhost:5432/gotham?sslmode=disable}"
-                DB_OLD_PASSWORD="${DB_PASSWORD}"
+                if _is_installer_password "${DB_PASSWORD}"; then
+                    LOCAL_DSN=1
+                    DB_OLD_PASSWORD="${DB_PASSWORD}"
+                else
+                    # Operator-set local password: keep the DSN and the role.
+                    DB_PASSWORD=""
+                fi
                 ;;
         esac
     fi
@@ -735,10 +750,21 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
 TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
-# Clean up the private scratch dir on normal exit, and abort on a signal (a
-# cleanup-only INT/TERM trap would let the install carry on). The prepared
-# gotham.env temp and any verified-key scratch dir are removed too.
-trap 'rm -rf "${WORK_DIR}"; [ -z "${ENV_TMP:-}" ] || rm -f "${ENV_TMP}"; [ -z "${_DEPS_KEY_DIR:-}" ] || rm -rf "${_DEPS_KEY_DIR}"' EXIT
+# One EXIT path for every abort: if the database role password was changed and
+# the new gotham.env is not installed yet, restore the previous password, then
+# remove the private scratch material. INT/TERM abort (exit 1) and therefore
+# pass through it too. rollback_database_role is defined later, so guard it.
+_install_cleanup() {
+    if [ "${DB_ROLE_CHANGED:-0}" -eq 1 ] && [ -n "${ENV_TMP:-}" ] \
+        && command -v rollback_database_role >/dev/null 2>&1; then
+        rollback_database_role \
+            || echo "gotham-install: WARNING: could not restore the previous database password; re-run the installer" >&2
+    fi
+    rm -rf "${WORK_DIR}"
+    [ -z "${ENV_TMP:-}" ] || rm -f "${ENV_TMP}"
+    [ -z "${_DEPS_KEY_DIR:-}" ] || rm -rf "${_DEPS_KEY_DIR}"
+}
+trap '_install_cleanup' EXIT
 trap 'exit 1' INT TERM
 materialize_public_key "${PUBKEY_SOURCE}" "${PUBKEY_FILE}"
 
@@ -845,7 +871,7 @@ _admin_prompt_traps() {
 
 # Put back exactly what _admin_prompt_traps replaced.
 _admin_restore_prompt_traps() {
-    trap 'rm -rf "${WORK_DIR}"' EXIT
+    trap '_install_cleanup' EXIT
     trap 'exit 1' INT TERM
     trap - HUP QUIT
 }
@@ -1497,33 +1523,60 @@ _deps_fetch_key() {
 }
 
 # _deps_write_repo installs a verified key as a signed-by keyring plus the
-# repository line. Files written here are recorded so a failed apt update can
-# remove exactly what this run added. args: verified key file, keyring/source
-# base name, repo line tail, human-readable repository name.
+# repository line. Only the key with the pinned fingerprint is exported into
+# the keyring, so extra packets in the downloaded file cannot ride along. Files
+# written here are recorded so a failed apt update can remove exactly what this
+# run added. args: verified key file, pinned fingerprint, keyring/source base
+# name, repo line tail, human-readable repository name.
 _deps_write_repo() {
     _dr_keyrings="${_DEPS_APT_ROOT}/etc/apt/keyrings"
     _dr_sources="${_DEPS_APT_ROOT}/etc/apt/sources.list.d"
     mkdir -p "${_dr_keyrings}" "${_dr_sources}"
     chmod 0755 "${_dr_keyrings}" "${_dr_sources}"
-    # The dearmored keyring must end in .gpg: apt silently ignores binary key
-    # material in a .asc signed-by file and fails later with NO_PUBKEY.
-    _dr_keyring="${_dr_keyrings}/$2.gpg"
+    # apt requires a binary keyring ending in .gpg (a .asc signed-by file is
+    # read as ASCII-armored and binary content in it is ignored). Export by
+    # fingerprint from the scratch GNUPGHOME: only the verified key lands here.
+    _dr_keyring="${_dr_keyrings}/$3.gpg"
     _dr_keyring_tmp="${_dr_keyring}.tmp.$$"
-    if ! GNUPGHOME="${_DEPS_KEY_DIR}/gnupg" gpg --dearmor -o "${_dr_keyring_tmp}" <"$1"; then
+    if ! GNUPGHOME="${_DEPS_KEY_DIR}/gnupg" gpg --import "$1" >/dev/null 2>&1 \
+        || ! GNUPGHOME="${_DEPS_KEY_DIR}/gnupg" gpg --export "$2" >"${_dr_keyring_tmp}" 2>/dev/null; then
         rm -f "${_dr_keyring_tmp}"
-        die "could not import the $4 signing key"
+        die "could not import the $5 signing key"
     fi
+    [ -s "${_dr_keyring_tmp}" ] || {
+        rm -f "${_dr_keyring_tmp}"
+        die "could not export the $5 signing key"
+    }
     chmod 0644 "${_dr_keyring_tmp}"
     mv -f "${_dr_keyring_tmp}" "${_dr_keyring}" \
-        || die "could not install the $4 signing key"
-    _dr_source="${_dr_sources}/$2.list"
-    if ! printf 'deb [signed-by=%s] %s\n' "${_dr_keyring}" "$3" >"${_dr_source}.tmp.$$"; then
-        die "could not write the $4 repository line"
+        || die "could not install the $5 signing key"
+    _dr_source="${_dr_sources}/$3.list"
+    if ! printf 'deb [signed-by=%s] %s\n' "${_dr_keyring}" "$4" >"${_dr_source}.tmp.$$"; then
+        die "could not write the $5 repository line"
     fi
     chmod 0644 "${_dr_source}.tmp.$$"
     mv -f "${_dr_source}.tmp.$$" "${_dr_source}" \
-        || die "could not install the $4 repository line"
+        || die "could not install the $5 repository line"
     _DEPS_WRITTEN_FILES="${_DEPS_WRITTEN_FILES} ${_dr_keyring} ${_dr_source}"
+    _DEPS_APT_UPDATED=0
+}
+
+# _deps_pin_redis keeps the 7.2 series after install. Without this, a routine
+# `apt upgrade` moves redis-server/redis-tools to 8.x (a new major with a
+# different license). Idempotent: the file is rendered again on every run.
+_deps_pin_redis() {
+    _dp_dir="${_DEPS_APT_ROOT}/etc/apt/preferences.d"
+    mkdir -p "${_dp_dir}"
+    chmod 0755 "${_dp_dir}"
+    _dp_file="${_dp_dir}/gotham-redis.pref"
+    _dp_tmp="${_dp_file}.tmp.$$"
+    if ! printf 'Package: redis-server redis-tools\nPin: version 6:%s.*\nPin-Priority: 1001\n' \
+        "${REDIS_PINNED_SERIES}" >"${_dp_tmp}"; then
+        die "could not write the Redis version pin"
+    fi
+    chmod 0644 "${_dp_tmp}"
+    mv -f "${_dp_tmp}" "${_dp_file}" || die "could not install the Redis version pin"
+    _DEPS_WRITTEN_FILES="${_DEPS_WRITTEN_FILES} ${_dp_file}"
     _DEPS_APT_UPDATED=0
 }
 
@@ -1629,12 +1682,13 @@ install_planned_dependencies() {
     fi
     # Both keys are verified; writing a repository is now safe.
     if [ -n "${_pgdg_key}" ]; then
-        _deps_write_repo "${_pgdg_key}" pgdg \
+        _deps_write_repo "${_pgdg_key}" "${PGDG_KEY_FINGERPRINT}" pgdg \
             "${PGDG_REPO_URL} ${_dd_codename}-pgdg main" "PGDG"
     fi
     if [ -n "${_redis_key}" ]; then
-        _deps_write_repo "${_redis_key}" redis \
+        _deps_write_repo "${_redis_key}" "${REDIS_KEY_FINGERPRINT}" redis \
             "${REDIS_REPO_URL} ${_dd_codename} main" "Redis"
+        _deps_pin_redis
     fi
     rm -rf "${_DEPS_KEY_DIR}"
     _DEPS_KEY_DIR=""
@@ -1677,19 +1731,44 @@ install_planned_dependencies() {
     [ -n "${REDIS_VERSION}" ] || REDIS_VERSION="unknown"
 }
 
+# _dsn_database prints the database named in the local DSN (the one the
+# control plane will use). The managed DSNs are all URL form; anything odd
+# falls back to the Gotham default.
+_dsn_database() {
+    _dbd="gotham"
+    case "${DSN}" in
+        postgres://*)
+            _dbd="${DSN#postgres://}"
+            case "${_dbd}" in
+                */*) _dbd="${_dbd#*/}" ;;
+                *) _dbd="gotham" ;;
+            esac
+            _dbd="${_dbd%%\?*}"
+            [ -n "${_dbd}" ] || _dbd="gotham"
+            ;;
+    esac
+    printf '%s\n' "${_dbd}"
+}
+
 # _pg_login_works succeeds when the gotham role can authenticate over TCP with
-# password $1. This is the same path the control plane uses (localhost DSN), so
-# it proves the stored DSN works rather than merely looking current.
+# password $1 against database $2. Verify against the database the control
+# plane uses, not "postgres": a hardened server may revoke CONNECT there.
 _pg_login_works() {
-    PGPASSWORD="$1" psql -h 127.0.0.1 -U gotham -d postgres -tAc 'SELECT 1' >/dev/null 2>&1
+    PGPASSWORD="$1" psql -h 127.0.0.1 -U gotham -d "$2" -tAc 'SELECT 1' >/dev/null 2>&1
+}
+
+_pg_database_exists() {
+    runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='$1'" | grep -q 1
 }
 
 # provision_local_database brings the gotham role to the password the DSN will
-# carry and creates the database. It verifies a real login after any change, so
-# a stored DSN that no longer authenticates is healed instead of trusted. A
-# success records DB_ROLE_CHANGED so install_env_file can roll back if the
-# atomic env replacement fails. The password travels on stdin, never on a
-# command line, and xtrace is off so `sh -x` cannot log it.
+# carry and creates its database. The database is created before an existing
+# role's password is touched, and every change is verified with a real login
+# against that database. A failed verification restores the previous password;
+# a success records DB_ROLE_CHANGED so the EXIT trap or install_env_file can
+# roll back if anything fails before the new gotham.env is in place. The
+# password travels on stdin, never on a command line, and xtrace is off so
+# `sh -x` cannot log it.
 DB_ROLE_CHANGED=0
 DB_OLD_PASSWORD_WORKS=0
 provision_local_database() {
@@ -1697,57 +1776,86 @@ provision_local_database() {
     case "${DB_PASSWORD}" in
         '' | *[!A-Za-z0-9_-]*) die "local database password holds characters this installer does not write; set GOTHAM_DATABASE_DSN and GOTHAM_SKIP_DEPS=1, or reset the role by hand" ;;
     esac
+    # Only the managed local DSNs reach here, so the database is either
+    # 'gotham' or an operator-chosen name in a local-form DSN.
+    _db_name="$(_dsn_database)"
+    [ -n "${_db_name}" ] || _db_name="gotham"
     _role_exists=0
     if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='gotham'" | grep -q 1; then
         _role_exists=1
     fi
-    if [ "${_role_exists}" -eq 1 ]; then
-        if _pg_login_works "${DB_PASSWORD}"; then
-            log "database role gotham already accepts the stored password; keeping it"
-        else
-            if [ -n "${DB_OLD_PASSWORD}" ] && [ "${DB_OLD_PASSWORD}" != "${DB_PASSWORD}" ] \
-                && _pg_login_works "${DB_OLD_PASSWORD}"; then
-                DB_OLD_PASSWORD_WORKS=1
-                if [ "${DB_OLD_PASSWORD}" = "gotham" ]; then
-                    log "replacing the legacy fixed database password"
-                else
-                    log "updating the gotham role to the password stored in gotham.env"
-                fi
-            else
-                log "the existing gotham role does not accept the stored password; setting the local database password"
-            fi
-            printf "ALTER ROLE gotham WITH LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
-                | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
-                || die "could not update the gotham database role; gotham.env was not changed"
-            _pg_login_works "${DB_PASSWORD}" \
-                || die "the gotham role cannot log in with the new password; gotham.env was not changed"
-            DB_ROLE_CHANGED=1
-        fi
-    else
+    _db_exists=0
+    _pg_database_exists "${_db_name}" && _db_exists=1
+    if [ "${_role_exists}" -eq 0 ]; then
         printf "CREATE ROLE gotham LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
             | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
             || die "could not create the gotham database role; gotham.env was not changed"
-        _pg_login_works "${DB_PASSWORD}" \
-            || die "the new gotham role cannot log in; gotham.env was not changed"
         DB_ROLE_CHANGED=1
+        if [ "${_db_exists}" -eq 0 ]; then
+            runuser -u postgres -- createdb -O gotham -- "${_db_name}" \
+                || die "could not create the ${_db_name} database; gotham.env was not changed"
+        fi
+        if ! _pg_login_works "${DB_PASSWORD}" "${_db_name}"; then
+            die "the new gotham role cannot log in to ${_db_name}; gotham.env was not changed"
+        fi
+        _admin_xtrace_on
+        return 0
+    fi
+    # An existing role: create the database first, so a createdb failure
+    # happens before the password is touched.
+    if [ "${_db_exists}" -eq 0 ]; then
+        runuser -u postgres -- createdb -O gotham -- "${_db_name}" \
+            || die "could not create the ${_db_name} database; gotham.env was not changed"
+    fi
+    if _pg_login_works "${DB_PASSWORD}" "${_db_name}"; then
+        log "database role gotham already accepts the stored password; keeping it"
+    else
+        if [ -n "${DB_OLD_PASSWORD}" ] && [ "${DB_OLD_PASSWORD}" != "${DB_PASSWORD}" ] \
+            && _pg_login_works "${DB_OLD_PASSWORD}" "${_db_name}"; then
+            DB_OLD_PASSWORD_WORKS=1
+            if [ "${DB_OLD_PASSWORD}" = "gotham" ]; then
+                log "replacing the legacy fixed database password"
+            else
+                log "updating the gotham role to the password stored in gotham.env"
+            fi
+        else
+            log "the existing gotham role does not accept the stored password; setting the local database password"
+        fi
+        printf "ALTER ROLE gotham WITH LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
+            | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
+            || die "could not update the gotham database role; gotham.env was not changed"
+        DB_ROLE_CHANGED=1
+        if ! _pg_login_works "${DB_PASSWORD}" "${_db_name}"; then
+            if rollback_database_role; then
+                die "the gotham role cannot log in to ${_db_name} with the new password; the previous password was restored and gotham.env was not changed"
+            fi
+            die "the gotham role cannot log in to ${_db_name} with the new password and the previous password could not be restored; restore it manually (gotham.env was not changed)"
+        fi
     fi
     _admin_xtrace_on
-    if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='gotham'" | grep -q 1; then
-        runuser -u postgres -- createdb -O gotham gotham \
-            || die "could not create the gotham database"
-    fi
 }
 
-# rollback_database_role restores the previous working password when the
-# atomic gotham.env replacement fails after the role was changed.
+# rollback_database_role restores the previous working password. It is called
+# from every abort path after a change (the EXIT/INT/TERM trap) until the new
+# gotham.env is installed, and directly when a post-change login fails. It
+# returns nonzero when it could not restore and verify the old password.
 rollback_database_role() {
     [ "${DB_ROLE_CHANGED}" -eq 1 ] || return 0
     [ "${DB_OLD_PASSWORD_WORKS}" -eq 1 ] || return 0
     _admin_xtrace_off
+    _rollback_rc=0
     printf "ALTER ROLE gotham WITH LOGIN PASSWORD '%s';\n" "${DB_OLD_PASSWORD}" \
-        | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - >/dev/null 2>&1
-    _pg_login_works "${DB_OLD_PASSWORD}"
+        | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - >/dev/null 2>&1 \
+        || _rollback_rc=1
+    if [ "${_rollback_rc}" -eq 0 ]; then
+        _pg_login_works "${DB_OLD_PASSWORD}" "$(_dsn_database)" || _rollback_rc=1
+    fi
     _admin_xtrace_on
+    if [ "${_rollback_rc}" -eq 0 ]; then
+        DB_ROLE_CHANGED=0
+        return 0
+    fi
+    return 1
 }
 
 DEPS_SUMMARY=""

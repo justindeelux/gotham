@@ -88,6 +88,9 @@ restore: dump with `pg_dumpall`, create a fresh cluster, restore the dump into
 it with `psql`. The [PostgreSQL documentation](https://www.postgresql.org/docs/current/upgrading.html)
 covers both methods.
 
+The installer installs the versioned `postgresql-16` package, so package
+upgrades stay on 16.x; no version pin is needed for PostgreSQL.
+
 ## Upgrade Redis
 
 Redis 6.2 and newer can be replaced in place by a newer release; it reads data
@@ -137,6 +140,12 @@ Then restart Redis and Gotham:
 sudo systemctl restart redis-server
 sudo systemctl start gotham
 ```
+
+When the installer used packages.redis.io, it also wrote
+`/etc/apt/preferences.d/gotham-redis.pref`, which keeps `redis-server` and
+`redis-tools` on the 7.2 series so a routine `apt upgrade` does not move to
+8.x. To upgrade deliberately, delete that file, run `sudo apt-get update`, and
+upgrade.
 
 Redis holds caches and queues, not the platform records PostgreSQL keeps, so a
 lost cache is rebuilt. If other workloads share this Redis, check their data

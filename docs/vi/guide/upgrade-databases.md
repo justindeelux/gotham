@@ -85,6 +85,9 @@ bằng `pg_dumpall`, tạo cluster mới, rồi restore bằng `psql`. [Tài li�
 PostgreSQL](https://www.postgresql.org/docs/current/upgrading.html) trình bày cả
 hai cách.
 
+Trình cài đặt cài gói có phiên bản `postgresql-16`, nên nâng cấp gói vẫn ở dòng
+16.x; PostgreSQL không cần ghim phiên bản.
+
 ## Nâng cấp Redis
 
 Redis 6.2 trở lên có thể được thay bằng bản mới hơn tại chỗ; nó đọc được dữ
@@ -133,6 +136,11 @@ Rồi khởi động lại Redis và Gotham:
 sudo systemctl restart redis-server
 sudo systemctl start gotham
 ```
+
+Khi trình cài đặt dùng packages.redis.io, nó cũng ghi
+`/etc/apt/preferences.d/gotham-redis.pref`, giữ `redis-server` và `redis-tools`
+ở dòng 7.2 để `apt upgrade` thông thường không chuyển sang 8.x. Muốn nâng cấp
+có chủ đích, hãy xóa tệp đó, chạy `sudo apt-get update`, rồi nâng cấp.
 
 Redis giữ bộ nhớ đệm và hàng đợi, không giữ bản ghi nền tảng mà PostgreSQL lưu,
 nên bộ nhớ đệm mất sẽ được tạo lại. Nếu Redis này còn phục vụ workload khác, hãy

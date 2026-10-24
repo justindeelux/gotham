@@ -72,6 +72,12 @@ SERVE="${SCRATCH}/serve"
 ROOT="${SCRATCH}/root"
 mkdir -p "${SERVE}"
 
+# Exercise the actual CLI container wiring over mTLS before the shell tail's
+# command-binary seams can hide missing agent dialers.
+echo "==> localhost agent wiring (mTLS)"
+go test ./cmd/gotham -run '^TestInstanceContainerAgentWiringMTLS$' -count=1
+echo "PASS: the domain CLI container service reaches the mTLS agent"
+
 echo "==> building signer and ${ARCH} snapshot binaries"
 go build -o "${SCRATCH}/signer" ./cmd/signer
 go build -o "${SERVE}/gotham-linux-${ARCH}" ./cmd/gotham
@@ -86,6 +92,20 @@ echo "==> signing manifests"
     -version "${VERSION}" -arch "${ARCH}" -channel stable -out "${SERVE}/gotham-manifest-${ARCH}.txt" >/dev/null
 "${SCRATCH}/signer" manifest -key "${SCRATCH}/signing.key" -in "${SERVE}/gotham-agent-linux-${ARCH}" \
     -version "${VERSION}" -arch "${ARCH}" -channel stable -out "${SERVE}/gotham-agent-manifest-${ARCH}.txt" >/dev/null
+
+# Bind the standalone payload to the same signed manifest as the binary.
+BUNDLE="gotham-deploy-${VERSION}.tar.gz"
+tar -czf "${SERVE}/${BUNDLE}" -C "${SCRIPT_DIR}" \
+    install.sh release-verify.sh install-agent-lib.sh gotham-update.sh \
+    gotham-updater.conf install-sudoers.sh gotham.service \
+    gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh \
+    gotham-toolctl.sh gotham-signing-key.pub install-agent.sh \
+    gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
+    install-toolctl-sudoers.sh
+printf 'deploy_file=%s\ndeploy_sha256=%s\n' "${BUNDLE}" "$(sha "${SERVE}/${BUNDLE}")" \
+    >>"${SERVE}/gotham-manifest-${ARCH}.txt"
+"${SCRATCH}/signer" sign -key "${SCRATCH}/signing.key" \
+    -in "${SERVE}/gotham-manifest-${ARCH}.txt" >/dev/null
 
 # Fake releases server: a static file server plus GitHub-style routes so the
 # default "latest" resolution (a 302 from <releases>/latest) can be exercised.
@@ -192,6 +212,81 @@ bake_installer() {
         ln -sf "${SCRIPT_DIR}/${_sib}" "$(dirname "$1")/${_sib}"
     done
 }
+
+echo "==> standalone install without a checkout"
+mkdir "${SCRATCH}/standalone"
+cp "${INSTALL_SH}" "${SCRATCH}/standalone/install.sh"
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" GOTHAM_INSTALL_ROOT="${SCRATCH}/standalone-root" \
+    sh "${SCRATCH}/standalone/install.sh" >"${SCRATCH}/standalone.log" 2>&1 \
+    || { cat "${SCRATCH}/standalone.log" >&2; exit 1; }
+[ -x "${SCRATCH}/standalone-root/var/lib/gotham/bin/gotham" ] \
+    || { echo "FAIL: standalone binary not installed" >&2; exit 1; }
+# Piped/stdin installs must never source planted siblings from the cwd.
+mkdir "${SCRATCH}/planted"
+printf '%s\n' 'echo UNVERIFIED-CWD-CODE >&2; exit 97' >"${SCRATCH}/planted/release-verify.sh"
+cp "${SCRATCH}/planted/release-verify.sh" "${SCRATCH}/planted/install-agent-lib.sh"
+for input_mode in redirect pipe; do
+    if [ "${input_mode}" = redirect ]; then
+        (
+            cd "${SCRATCH}/planted"
+            GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" GOTHAM_VERSION="${VERSION}" \
+            GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" GOTHAM_INSTALL_ROOT="${SCRATCH}/stdin-root" \
+                sh <"${INSTALL_SH}"
+        ) >"${SCRATCH}/stdin.log" 2>&1 \
+            || { cat "${SCRATCH}/stdin.log" >&2; exit 1; }
+    else
+        cat "${INSTALL_SH}" | (
+            cd "${SCRATCH}/planted"
+            GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" GOTHAM_VERSION="${VERSION}" \
+            GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" GOTHAM_INSTALL_ROOT="${SCRATCH}/pipe-root" \
+                sh -s -- --domain ' HTTPS://PANEL.EXAMPLE.COM/ '
+        ) >"${SCRATCH}/pipe.log" 2>&1 \
+            || { cat "${SCRATCH}/pipe.log" >&2; exit 1; }
+    fi
+done
+[ -x "${SCRATCH}/stdin-root/var/lib/gotham/bin/gotham" ] && \
+[ -x "${SCRATCH}/pipe-root/var/lib/gotham/bin/gotham" ] \
+    || { echo "FAIL: piped/stdin install did not bootstrap" >&2; exit 1; }
+if grep -q UNVERIFIED-CWD-CODE "${SCRATCH}/stdin.log" "${SCRATCH}/pipe.log"; then
+    echo "FAIL: stdin install sourced unverified cwd code" >&2; exit 1
+fi
+echo "PASS: piped and redirected installs ignore planted cwd siblings"
+
+# A well-formed signature from another key must also fail before extraction.
+cp "${SERVE}/gotham-manifest-${ARCH}.txt.sig" "${SCRATCH}/good-signature"
+"${SCRATCH}/signer" keygen -out "${SCRATCH}/wrong.key" >/dev/null
+"${SCRATCH}/signer" sign -key "${SCRATCH}/wrong.key" \
+    -in "${SERVE}/gotham-manifest-${ARCH}.txt" >/dev/null
+if GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" GOTHAM_INSTALL_ROOT="${SCRATCH}/wrong-signature-root" \
+    sh "${SCRATCH}/standalone/install.sh" >"${SCRATCH}/wrong-signature.log" 2>&1; then
+    echo "FAIL: wrong signature accepted" >&2; exit 1
+fi
+grep -q 'manifest signature verification FAILED' "${SCRATCH}/wrong-signature.log"
+[ ! -e "${SCRATCH}/wrong-signature-root" ] || { echo "FAIL: wrong signature mutated host" >&2; exit 1; }
+cp "${SCRATCH}/good-signature" "${SERVE}/gotham-manifest-${ARCH}.txt.sig"
+echo "PASS: standalone bootstrap rejects a valid-looking wrong signature"
+
+cp "${SERVE}/${BUNDLE}" "${SCRATCH}/good-bundle"
+printf tampered >>"${SERVE}/${BUNDLE}"
+if GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" GOTHAM_INSTALL_ROOT="${SCRATCH}/tampered-root" \
+    sh "${SCRATCH}/standalone/install.sh" >"${SCRATCH}/tampered.log" 2>&1; then
+    echo "FAIL: tampered standalone bundle accepted" >&2; exit 1
+fi
+grep -q 'deploy bundle digest mismatch' "${SCRATCH}/tampered.log"
+[ ! -e "${SCRATCH}/tampered-root" ] || { echo "FAIL: tampered bundle mutated host" >&2; exit 1; }
+cp "${SCRATCH}/good-bundle" "${SERVE}/${BUNDLE}"
+mv "${SERVE}/gotham-manifest-${ARCH}.txt.sig" "${SCRATCH}/bundle.sig"
+if GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" GOTHAM_VERSION="${VERSION}" \
+GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" GOTHAM_INSTALL_ROOT="${SCRATCH}/unsigned-root" \
+    sh "${SCRATCH}/standalone/install.sh" >"${SCRATCH}/unsigned.log" 2>&1; then
+    echo "FAIL: unsigned standalone bundle accepted" >&2; exit 1
+fi
+[ ! -e "${SCRATCH}/unsigned-root" ] || { echo "FAIL: unsigned bundle mutated host" >&2; exit 1; }
+mv "${SCRATCH}/bundle.sig" "${SERVE}/gotham-manifest-${ARCH}.txt.sig"
+echo "PASS: standalone install verifies the bundle before execution"
 
 echo "==> install (happy path)"
 run_install >/dev/null
@@ -1350,6 +1445,11 @@ cat >"${SCRATCH}/fake-admin.sh" <<'SHIM'
 state="${ADMIN_STATE_DIR:?}"
 # The fake stands in for the `gotham` binary, so it receives the full
 # `admin <subcommand> ...` line like the real one.
+if [ "$1" = instance ]; then
+    [ "$2" = set-url ] || exit 2
+    printf '%s\n' "$@" >"${DOMAIN_TEST_LOG}"
+    exit "${DOMAIN_TEST_RC:-0}"
+fi
 cmd="$1"
 shift || true
 if [ "${cmd}" = "admin" ]; then
@@ -1753,6 +1853,14 @@ PATH="${SYS_SHIM}:${PATH}" \
 grep -q '\[dry-run\] /var/lib/gotham/bin/gotham admin create --email' "${SCRATCH}/f-out.log" \
     || { echo "FAIL: --dry-run does not show the admin step on the real binary (JUS-22/f)" >&2; cat "${SCRATCH}/f-out.log" >&2; exit 1; }
 echo "PASS: --dry-run prompts nothing and changes nothing (JUS-22/f)"
+GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" GOTHAM_VERSION="${VERSION}" \
+GOTHAM_SKIP_DEPS=1 GOTHAM_INSTALL_TEST=1 \
+GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" PATH="${SYS_SHIM}:${PATH}" \
+    sh "${INSTALL_SH}" --dry-run --domain ' HTTPS://PANEL.EXAMPLE.COM/ ' >"${SCRATCH}/domain-dry.log" 2>&1
+grep -q 'instance set-url https://panel.example.com' "${SCRATCH}/domain-dry.log" \
+    || { echo "FAIL: --domain did not reach the instance command" >&2; exit 1; }
+echo "PASS: --domain uses instance set-url"
+
 
 # JUS-22/g-h: interactive prompt under a pty, driven by deploy/pty-drive.py
 # (stdlib only; python3 is already required above): every SEND waits for its
@@ -1769,6 +1877,8 @@ EXPECT Admin password
 SEND PtY-s3cret!
 EXPECT Confirm password
 SEND PtY-s3cret!
+EXPECT Panel domain
+SEND
 EXPECT-EOF
 SCRIPT
 cat >"${SCRATCH}/pty-h.txt" <<'SCRIPT'
@@ -1780,6 +1890,8 @@ SEND pty2@example.com
 EXPECT Admin password
 SEND
 EXPECT Confirm password
+SEND
+EXPECT Panel domain
 SEND
 EXPECT-EOF
 SCRIPT
@@ -1898,6 +2010,8 @@ EXPECT Admin password
 SEND long-enough-PW1
 EXPECT Confirm password
 SEND long-enough-PW1
+EXPECT Panel domain
+SEND
 EXPECT-EOF
 SCRIPT
 K_STATE="${SCRATCH}/admin-state-policy"
@@ -1924,6 +2038,8 @@ EXPECT Admin password
 SEND Retry-pw123
 EXPECT Confirm password
 SEND Retry-pw123
+EXPECT Panel domain
+SEND
 EXPECT Could not create the account
 EXPECT Admin password
 SEND Retry-pw123
@@ -1956,6 +2072,8 @@ EXPECT Admin password
 SEND Bound-pw123
 EXPECT Confirm password
 SEND Bound-pw123
+EXPECT Panel domain
+SEND
 EXPECT Admin password
 SEND Bound-pw123
 EXPECT Confirm password
@@ -1990,8 +2108,11 @@ chmod 600 "${SCRATCH}/admin-default-pw.txt"
 cat >"${SCRATCH}/pty-m.txt" <<'SCRIPT'
 EXPECT Admin email \[default@example.com\]
 SEND
+EXPECT Panel domain
+SEND  HTTPS://PANEL.EXAMPLE.COM/
 EXPECT-EOF
 SCRIPT
+export DOMAIN_TEST_LOG="${SCRATCH}/prompt-domain.log"
 M_STATE="${SCRATCH}/admin-state-default"
 mkdir -p "${M_STATE}"
 export GOTHAM_INSTALL_ROOT="${SCRATCH}/root-admin-default"
@@ -2012,6 +2133,10 @@ if grep -q 'Admin password' "${SCRATCH}/m-out.clean"; then
     echo "FAIL: the password file did not suppress the prompt (JUS-22/m)" >&2
     exit 1
 fi
+[ "$(cat "${DOMAIN_TEST_LOG}")" = "$(printf 'instance\nset-url\nhttps://panel.example.com')" ] \
+    || { echo "FAIL: prompted domain was not normalized" >&2; exit 1; }
+grep -q 'within 2 minutes' "${SCRATCH}/m-out.log"
+unset DOMAIN_TEST_LOG
 echo "PASS: env values are prompt defaults on a terminal (JUS-22/m)"
 
 # JUS-22/n: a group/world-readable password file warns but still works.
@@ -2059,5 +2184,31 @@ fi
 grep -q '^+' "${SCRATCH}/x-err.log" \
     || { echo "FAIL: xtrace produced no trace lines at all (JUS-22/x)" >&2; exit 1; }
 echo "PASS: sh -x never prints the password (JUS-22/x)"
+
+# Run the standalone tail with the existing command-binary seam. Domain
+# failures must leave the successful install and its host HTTP login intact.
+INSTALL_SH="${SCRATCH}/standalone/install.sh"
+export DOMAIN_TEST_LOG="${SCRATCH}/domain-command.log"
+export GOTHAM_DOMAIN=' HTTPS://PANEL.EXAMPLE.COM/ '
+mkdir "${SCRATCH}/domain-admin"
+ADMIN_EMAIL=domain@example.com ADMIN_TTY="" ADMIN_PWFILE="" \
+    run_admin_install "${SCRATCH}/domain-root" "${SCRATCH}/domain-admin" \
+    "${SCRATCH}/domain-out.log" "${SCRATCH}/domain-err.log"
+[ "$(cat "${DOMAIN_TEST_LOG}")" = "$(printf 'instance\nset-url\nhttps://panel.example.com')" ] \
+    || { echo "FAIL: standalone domain command arguments differ" >&2; exit 1; }
+grep -q 'Web UI:   http://panel.example.com' "${SCRATCH}/domain-out.log"
+grep -q 'DNS-only' "${SCRATCH}/domain-out.log"
+export DOMAIN_TEST_RC=1
+export GOTHAM_DOMAIN=invalid-domain
+mkdir "${SCRATCH}/bad-domain-admin"
+ADMIN_EMAIL=domain@example.com ADMIN_TTY="" ADMIN_PWFILE="" \
+    run_admin_install "${SCRATCH}/bad-domain-root" "${SCRATCH}/bad-domain-admin" \
+    "${SCRATCH}/bad-domain-out.log" "${SCRATCH}/bad-domain-err.log"
+grep -q 'WARNING: domain setup failed' "${SCRATCH}/bad-domain-out.log"
+grep -q 'Web UI:   http://.*:8000' "${SCRATCH}/bad-domain-out.log"
+[ -f "${SCRATCH}/bad-domain-root/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: failed domain rolled back the installation" >&2; exit 1; }
+unset DOMAIN_TEST_LOG DOMAIN_TEST_RC GOTHAM_DOMAIN
+echo "PASS: standalone domain success and failure preserve the install and login summary"
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

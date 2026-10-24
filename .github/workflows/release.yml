@@ -114,6 +114,17 @@ jobs:
           go install github.com/goreleaser/goreleaser/v2@v2.18.0
           echo "$(go env GOPATH)/bin" >>"$GITHUB_PATH"
 
+      - name: Pack standalone deploy bundle
+        run: |
+          mkdir -p release-assets
+          tar -czf "release-assets/gotham-deploy-${GITHUB_REF_NAME}.tar.gz" -C deploy \
+            install.sh release-verify.sh install-agent-lib.sh gotham-update.sh \
+            gotham-updater.conf install-sudoers.sh gotham.service \
+            gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh \
+            gotham-toolctl.sh gotham-signing-key.pub install-agent.sh \
+            gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
+            install-toolctl-sudoers.sh
+
       - name: GoReleaser release (draft)
         env:
           GOTHAM_UPDATE_PUBLIC_KEY: ${{ secrets.GOTHAM_UPDATE_PUBLIC_KEY }}
@@ -210,6 +221,18 @@ jobs:
               -version "$tag" -arch "$arch" -channel "$channel" \
               "${helper_args[@]}" \
               -out "signed/${prefix}-${arch}.txt"
+            if [ "$base" = "gotham" ]; then
+              bundle="gotham-deploy-${tag}.tar.gz"
+              deploy_sha="$(sha256sum "release-assets/$bundle" | awk '{print $1}')"
+              printf '%s' "$deploy_sha" | grep -Eq '^[0-9a-f]{64}$' || {
+                echo "::error::could not hash deploy bundle $bundle"
+                exit 1
+              }
+              printf 'deploy_file=%s\ndeploy_sha256=%s\n' "$bundle" "$deploy_sha" \
+                >>"signed/${prefix}-${arch}.txt"
+              "$RUNNER_TEMP/gotham-signer" sign -key "$key" \
+                -in "signed/${prefix}-${arch}.txt" >/dev/null
+            fi
             count=$((count + 1))
           done
           [ "$count" = "4" ] || { echo "::error::expected 4 signed binaries, got $count"; exit 1; }
@@ -234,7 +257,7 @@ jobs:
             | head -n1)"
           [ -n "$release_id" ] || { echo "::error::draft release for ${tag} not found"; exit 1; }
 
-          base="gotham-linux-amd64 gotham-linux-arm64 gotham-agent-linux-amd64 gotham-agent-linux-arm64 checksums.txt gotham-signing-key.pub"
+          base="gotham-linux-amd64 gotham-linux-arm64 gotham-agent-linux-amd64 gotham-agent-linux-arm64 checksums.txt gotham-signing-key.pub gotham-deploy-${tag}.tar.gz"
           expected="$base gotham-manifest-amd64.txt gotham-manifest-amd64.txt.sig gotham-manifest-arm64.txt gotham-manifest-arm64.txt.sig gotham-agent-manifest-amd64.txt gotham-agent-manifest-amd64.txt.sig gotham-agent-manifest-arm64.txt gotham-agent-manifest-arm64.txt.sig gotham-hosthelpers.tar.gz"
 
           assets_now() {

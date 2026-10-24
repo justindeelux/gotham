@@ -163,6 +163,7 @@ DB_UPGRADE_DOCS_URL="https://github.com/justindeelux/gotham/blob/main/docs/guide
 # this script (the same pattern as the agent installer's os-release seam).
 _DEPS_OS_RELEASE=/etc/os-release
 _DEPS_APT_ROOT=
+_DEPS_PG_LIB_DIR=/usr/lib/postgresql
 
 DRY_RUN=0
 CP_HOSTS_OPT=""
@@ -1537,9 +1538,9 @@ _pg_server_version() {
         [ -n "${_psv}" ] || _psv="$(pg_lsclusters --no-header 2>/dev/null | awk 'NR == 1 { print $1 }')"
     fi
     if [ -z "${_psv}" ]; then
-        for _psbin in /usr/lib/postgresql/*/bin/postgres; do
+        for _psbin in "${_DEPS_PG_LIB_DIR}"/*/bin/postgres; do
             [ -x "${_psbin}" ] || continue
-            _psv="${_psbin#/usr/lib/postgresql/}"
+            _psv="${_psbin#"${_DEPS_PG_LIB_DIR}"/}"
             _psv="${_psv%%/*}"
             break
         done

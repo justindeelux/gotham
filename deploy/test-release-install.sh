@@ -2291,19 +2291,40 @@ DEPS_SHIM="${DEPS_DIR}/shim"
 DEPS_IMPL="${DEPS_DIR}/impl"
 DEPS_STATE="${DEPS_DIR}/state"
 DEPS_APT="${DEPS_DIR}/apt"
-mkdir -p "${DEPS_SHIM}" "${DEPS_IMPL}" "${DEPS_STATE}"
+DEPS_PG_LIB="${DEPS_DIR}/pg-lib"
+DEPS_BIN="${DEPS_DIR}/bin"
+mkdir -p "${DEPS_SHIM}" "${DEPS_IMPL}" "${DEPS_STATE}" "${DEPS_PG_LIB}" "${DEPS_BIN}"
 export DEPS_STATE DEPS_IMPL DEPS_SHIM
 
-# Sandbox copy: bake the test paths into the two fixed production variables
-# (the same pattern as bake_installer above).
+# Sandbox copy: bake the test paths into the fixed production variables (the
+# same pattern as bake_installer above).
 DEPS_INSTALL_SH="${DEPS_DIR}/install.sh"
 sed -e "s|^_DEPS_OS_RELEASE=/etc/os-release|_DEPS_OS_RELEASE=${DEPS_DIR}/os-release|" \
     -e "s|^_DEPS_APT_ROOT=$|_DEPS_APT_ROOT=${DEPS_APT}|" \
+    -e "s|^_DEPS_PG_LIB_DIR=/usr/lib/postgresql|_DEPS_PG_LIB_DIR=${DEPS_PG_LIB}|" \
     "${DEPS_SRC}" >"${DEPS_INSTALL_SH}"
 grep -qxF "_DEPS_OS_RELEASE=${DEPS_DIR}/os-release" "${DEPS_INSTALL_SH}" \
     || { echo "FAIL: could not bake the dependency os-release path" >&2; exit 1; }
 grep -qxF "_DEPS_APT_ROOT=${DEPS_APT}" "${DEPS_INSTALL_SH}" \
     || { echo "FAIL: could not bake the dependency apt root" >&2; exit 1; }
+grep -qxF "_DEPS_PG_LIB_DIR=${DEPS_PG_LIB}" "${DEPS_INSTALL_SH}" \
+    || { echo "FAIL: could not bake the PostgreSQL server directory" >&2; exit 1; }
+# A hermetic PATH: every real tool the installer needs, except the host's
+# PostgreSQL and Redis binaries, so the runner's own install cannot leak into
+# the version detection. The shims above still win.
+for _dbin in $(printf '%s' "${PATH}" | tr ':' ' '); do
+    [ -d "${_dbin}" ] || continue
+    for _dbf in "${_dbin}"/*; do
+        [ -f "${_dbf}" ] && [ -x "${_dbf}" ] || continue
+        _dbn="${_dbf##*/}"
+        case "${_dbn}" in
+            psql | postgres | pg_lsclusters | pg_ctl* | pg_config | pg_createcluster | \
+                pg_dropcluster | pg_upgradecluster | redis-server | redis-cli | redis-sentinel) continue ;;
+        esac
+        [ -e "${DEPS_BIN}/${_dbn}" ] && continue
+        ln -sf "${_dbf}" "${DEPS_BIN}/${_dbn}"
+    done
+done
 for _sib in release-verify.sh gotham-update.sh gotham-updater.conf \
     install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
     gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
@@ -2551,7 +2572,7 @@ deps_run() { # $1 root, $2.. sh flags
     GOTHAM_INSTALL_TEST_RUN_AGENT=0 \
     GOTHAM_SKIP_DEPS=0 \
     DEPS_STATE="${DEPS_STATE}" \
-    PATH="${DEPS_SHIM}:${PATH}" \
+    PATH="${DEPS_SHIM}:${DEPS_BIN}" \
         sh "$@" "${DEPS_INSTALL_SH}"
 }
 

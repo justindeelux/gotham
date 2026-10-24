@@ -52,8 +52,8 @@ While it runs, the installer:
    checks the artifact's SHA-256 against the signed manifest (which is bound to
    the version, architecture and file name);
 2. installs PostgreSQL 16 and Redis 6.2 or newer (7.2 from the official Redis
-   repository when your distribution is older) — the local database password
-   is generated at install time — unless you point it at managed services;
+   repository when your distribution is older) — a fresh install generates the
+   local database password — unless you point it at managed services;
    [Database versions and upgrades](/guide/upgrade-databases) explains what is
    installed and how to upgrade it by hand;
 3. installs the control plane (binary in `/var/lib/gotham/bin`, updater

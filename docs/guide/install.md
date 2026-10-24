@@ -29,24 +29,34 @@ repository checkout.
 Run this one command on the server. It downloads the installer and starts it
 with root rights:
 
-<<< @/snippets/install-command.sh{sh}
+<<< @/snippets/install-command.sh#plain{sh}
 
-The installer asks three questions. Press Enter to keep the default:
+The installer asks these questions, in order. Press Enter to accept the
+recommendation:
 
 | Prompt | What to answer |
 |---|---|
-| `Admin email [admin@example.com]` | The address of the first account. Press Enter to use `admin@example.com`, or type your own. |
-| `Admin password (empty to generate)` | The password for that account, typed twice (8 to 128 characters). Press Enter and the installer generates a strong password and prints it once at the end. |
+| `Admin email [admin@example.com] (empty keeps it, - to skip)` | The address of the first account. Press Enter to use `admin@example.com`, type your own, or type `-` to create no account now. |
+| `Admin password (empty to generate)` | The password for that account, 8 to 128 characters. Type nothing and press Enter to have a strong password generated and printed once at the end. |
+| `Confirm password` | The same password again. A mismatch or a password outside the length limits asks again. |
 | `Panel domain (optional, Enter skips)` | A domain such as `panel.example.com`, if it already points at this server. Press Enter to skip and use the server address for now. |
+| `Enable the file manager on this node? [y/N]` | **No**, unless you want platform operators to browse and edit every file on this host. Yes runs the agent as root without systemd sandboxing (see [Remote file service](/guide/file-service)). You can change the answer later by re-running `deploy/install-agent.sh`. |
+
+The file-manager question appears while the host agent is installed, after the
+first four. `--no-file-manager` answers it without a prompt, and a run without
+a terminal skips it (the answer is No).
 
 While it runs, the installer:
 
-1. picks the newest release for your CPU and verifies its Ed25519 signature
-   before using any file from it;
+1. picks the newest release for your CPU, verifies its Ed25519 signature, and
+   checks the artifact's SHA-256 against the signed manifest (which is bound to
+   the version, architecture and file name);
 2. installs PostgreSQL and Redis from the distribution packages (unless you
    point it at managed services);
-3. installs the control plane (binary, updater and systemd unit), then Docker
-   and the node agent on the same host;
+3. installs the control plane (binary in `/var/lib/gotham/bin`, updater
+   `/usr/libexec/gotham/gotham-update`, unit
+   `/etc/systemd/system/gotham.service`), then Docker and the node agent on the
+   same host (`install-agent.sh --full --ca`, pinned to the same release tag);
 4. applies the database migrations and creates the admin account before the
    panel accepts connections, so nobody can register first;
 5. prints the panel URL, the login, and a generated password if you asked for
@@ -71,8 +81,8 @@ Open that URL and sign in. The local server is already listed under
 **Servers** as `localhost`. Continue with [First login](/guide/first-login).
 
 The agent for this host is part of the same run and is not optional. If only
-that last step fails, the panel stays installed and the installer prints the
-exact command to retry it.
+that last step fails, nothing is rolled back: the panel stays installed and
+running, and the installer exits nonzero with the exact command to retry it.
 
 If the install stops, [Troubleshooting](/guide/troubleshooting) covers the
 common causes.
@@ -89,14 +99,38 @@ later in the panel. See [Domain and HTTPS](/guide/domain-and-https).
 
 ### Unattended install
 
-On a server without a terminal the installer never prompts. Start it with
-`GOTHAM_ADMIN_EMAIL` set (and, optionally, `GOTHAM_ADMIN_PASSWORD_FILE` pointing
-at a root-readable file that holds the password) and it creates the account
-without asking. Without an email it skips account creation and prints the
-manual command.
+Inside a `curl | sudo sh` run, the variables must go **after** `sudo` and before
+`sh`; setting them on `curl` only configures `curl`, and `sudo` starts the
+installer with a fresh environment. Create the password file first (one line,
+root-only):
 
-To see every step without changing the server, pass `--dry-run` the same way
-as `--domain`.
+```sh
+sudo install -m 0600 -o root -g root /dev/null /root/gotham-admin-password
+sudo nano /root/gotham-admin-password   # type the password on one line and save
+```
+
+Then run:
+
+<<< @/snippets/install-command.sh#unattended{sh}
+
+The installer creates the admin account without prompting and prints the login
+at the end. The password travels from the file on stdin, so it never appears in
+the process list or shell history. Leave out `GOTHAM_ADMIN_PASSWORD_FILE` and a
+random password is generated and printed once; leave out `GOTHAM_ADMIN_EMAIL`
+as well and no account is created now, so the installer prints the manual
+command.
+
+For a manual checkout, pass the same variables before the script:
+
+```sh
+sudo GOTHAM_ADMIN_EMAIL=ops@example.com \
+  GOTHAM_ADMIN_PASSWORD_FILE=/root/gotham-admin-password \
+  deploy/install.sh
+```
+
+To see every step without changing the server, pass `--dry-run`:
+
+<<< @/snippets/install-command.sh#dry-run{sh}
 
 ## Manual install (from a checkout)
 
@@ -146,8 +180,6 @@ explains the matching runtime settings.
 | `GOTHAM_SKIP_DEPS=1` | Do not install or configure PostgreSQL/Redis. |
 | `GOTHAM_ADMIN_EMAIL` | Email of the first admin account for an unattended install. |
 | `GOTHAM_ADMIN_PASSWORD_FILE` | File holding the first admin password (single line, root-readable). |
-| `GOTHAM_INSTALL_ROOT` | Install under a prefix instead of `/` (testing only; enables test mode). |
-| `GOTHAM_INSTALL_TEST_PUBLIC_KEY` | Test-only: replace the pinned release key; only honoured with `GOTHAM_INSTALL_ROOT`. |
 | `--dry-run` | Print every step without changing the host. |
 | `--cp-host <name-or-ip>` | Add a name or IP to the agent gateway certificate; see [Add nodes](/guide/nodes). |
 

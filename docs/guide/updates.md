@@ -113,7 +113,10 @@ Reinstalling a specific version is a normal install with
 ## Reinstalling on an existing host
 
 Run the installer again on a host that is already installed to upgrade it in
-place. It keeps `/etc/gotham/gotham.env`: the managed keys
+place. Before it changes any file it refuses an unsupported platform and a host
+that already has a remote `agent.env` (a node installed from another control
+plane): move that remote agent, or repoint it explicitly, before retrying. It
+keeps `/etc/gotham/gotham.env`: the managed keys
 (`GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`,
 `GOTHAM_SECRET_KEY`, the JWT key paths) are refreshed — a DSN given on the
 command line wins, otherwise the existing value is kept — and any operator-added

@@ -92,3 +92,9 @@ ghim không khớp):
 ```sh
 sh deploy/test-release-install.sh
 ```
+
+Hai biến của trình cài đặt chỉ tồn tại cho bộ thử này: `GOTHAM_INSTALL_ROOT` cài
+dưới một tiền tố không phải `/` và bật chế độ test (không cần root), còn
+`GOTHAM_INSTALL_TEST_PUBLIC_KEY` thay khóa phát hành đã ghim — nó chỉ được dùng
+khi có `GOTHAM_INSTALL_ROOT`, nếu không trình cài đặt cảnh báo và bỏ qua. Không
+bao giờ đặt một trong hai trên máy chủ thật.

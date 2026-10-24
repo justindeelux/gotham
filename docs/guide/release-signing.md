@@ -93,3 +93,9 @@ pinned-key mismatch):
 ```sh
 sh deploy/test-release-install.sh
 ```
+
+Two installer variables exist only for this harness: `GOTHAM_INSTALL_ROOT`
+installs under a non-`/` prefix and enables test mode (non-root), and
+`GOTHAM_INSTALL_TEST_PUBLIC_KEY` replaces the pinned release key — it is
+honoured only when `GOTHAM_INSTALL_ROOT` is set, otherwise the installer warns
+and ignores it. Never set either on a real host.

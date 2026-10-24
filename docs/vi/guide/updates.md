@@ -114,7 +114,10 @@ Cài lại một phiên bản cụ thể là một lần cài bình thường v�
 
 ## Cài lại trên một máy đã có
 
-Chạy lại trình cài đặt trên một máy đã cài để nâng cấp tại chỗ. Nó giữ
+Chạy lại trình cài đặt trên một máy đã cài để nâng cấp tại chỗ. Trước khi thay
+đổi bất kỳ tệp nào, nó từ chối một nền tảng không được hỗ trợ và một máy đã có
+`agent.env` từ xa (một node được cài từ control plane khác): hãy di chuyển agent
+từ xa đó, hoặc trỏ lại nó một cách tường minh, trước khi thử lại. Nó giữ
 `/etc/gotham/gotham.env`: các khóa được quản lý (`GOTHAM_DATABASE_DSN`,
 `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`, `GOTHAM_SECRET_KEY`, các đường dẫn khóa JWT)
 được làm mới — DSN đưa trên dòng lệnh thắng, nếu không thì giữ giá trị hiện có — và

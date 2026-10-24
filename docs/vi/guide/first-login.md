@@ -46,6 +46,10 @@ khoản ngay sau các migration cơ sở dữ liệu, trước khi dịch vụ k
   `an account already exists (created by someone else?)`.
 - **`--dry-run`** không hỏi gì và không thay đổi gì.
 
+Việc tự đăng ký vẫn đóng khi tài khoản đó đã tồn tại. Chỉ cho các instance test
+hoặc phát triển, `GOTHAM_AUTH_ALLOW_REGISTRATION=true` trong môi trường của dịch
+vụ mở lại việc tự đăng ký; không bao giờ để nó bật trên một instance thật.
+
 Mật khẩu không bao giờ được truyền làm đối số dòng lệnh, không bao giờ được đặt
 trong biến môi trường, và không bao giờ được ghi ra đĩa, tệp môi trường, log hay
 lịch sử shell: nó chỉ đi tới tệp nhị phân qua stdin (việc trace `sh -x` bị tắt

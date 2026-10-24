@@ -28,24 +28,33 @@ repository.
 
 Chạy một lệnh này trên máy chủ. Lệnh tải trình cài đặt và chạy nó với quyền root:
 
-<<< @/snippets/install-command.sh{sh}
+<<< @/snippets/install-command.sh#plain{sh}
 
-Trình cài đặt hỏi ba câu. Nhấn Enter để giữ giá trị mặc định:
+Trình cài đặt hỏi những câu này, theo thứ tự. Nhấn Enter để nhận gợi ý:
 
 | Câu hỏi | Bạn trả lời gì |
 |---|---|
-| `Admin email [admin@example.com]` | Địa chỉ của tài khoản đầu tiên. Nhấn Enter để dùng `admin@example.com`, hoặc nhập địa chỉ của bạn. |
-| `Admin password (empty to generate)` | Mật khẩu cho tài khoản đó, nhập hai lần (8 đến 128 ký tự). Nhấn Enter để trình cài đặt tạo một mật khẩu mạnh và in một lần ở cuối. |
+| `Admin email [admin@example.com] (empty keeps it, - to skip)` | Địa chỉ của tài khoản đầu tiên. Nhấn Enter để dùng `admin@example.com`, nhập địa chỉ của bạn, hoặc nhập `-` để chưa tạo tài khoản. |
+| `Admin password (empty to generate)` | Mật khẩu cho tài khoản đó, 8 đến 128 ký tự. Không nhập gì và nhấn Enter để trình cài đặt tạo một mật khẩu mạnh và in một lần ở cuối. |
+| `Confirm password` | Nhập lại mật khẩu. Nếu không khớp hoặc ngoài giới hạn độ dài, trình cài đặt hỏi lại. |
 | `Panel domain (optional, Enter skips)` | Một tên miền như `panel.example.com`, nếu nó đã trỏ về máy chủ này. Nhấn Enter để bỏ qua và dùng địa chỉ máy chủ trước. |
+| `Enable the file manager on this node? [y/N]` | **Không**, trừ khi bạn muốn người vận hành nền tảng duyệt và sửa mọi tệp trên máy này. Chọn có sẽ chạy agent dưới root mà không có sandbox của systemd (xem [Dịch vụ tệp từ xa](/vi/guide/file-service)). Bạn có thể đổi câu trả lời sau bằng cách chạy lại `deploy/install-agent.sh`. |
+
+Câu hỏi về trình quản lý tệp xuất hiện trong lúc cài agent của máy chủ, sau bốn
+câu đầu. `--no-file-manager` trả lời câu đó mà không hỏi, và một lần chạy không
+có terminal sẽ bỏ qua nó (câu trả lời là Không).
 
 Trong khi chạy, trình cài đặt:
 
-1. chọn bản phát hành mới nhất cho CPU của bạn và xác minh chữ ký Ed25519 trước
-   khi dùng bất kỳ tệp nào từ đó;
+1. chọn bản phát hành mới nhất cho CPU của bạn, xác minh chữ ký Ed25519, và kiểm
+   tra SHA-256 của artifact với manifest đã ký (manifest được ràng buộc với phiên
+   bản, kiến trúc và tên tệp);
 2. cài PostgreSQL và Redis từ gói của bản phân phối (trừ khi bạn trỏ tới dịch vụ
    được quản lý);
-3. cài control plane (tệp nhị phân, updater và unit systemd), rồi Docker và
-   node agent trên cùng máy chủ;
+3. cài control plane (tệp nhị phân trong `/var/lib/gotham/bin`, updater
+   `/usr/libexec/gotham/gotham-update`, unit
+   `/etc/systemd/system/gotham.service`), rồi Docker và node agent trên cùng máy
+   chủ (`install-agent.sh --full --ca`, ghim cùng thẻ phát hành);
 4. áp dụng các migration cơ sở dữ liệu và tạo tài khoản quản trị trước khi
    bảng điều khiển nhận kết nối, nên không ai đăng ký trước được;
 5. in URL bảng điều khiển, thông tin đăng nhập, và mật khẩu tự tạo nếu bạn đã
@@ -70,8 +79,8 @@ Mở URL đó và đăng nhập. Máy chủ cục bộ đã được liệt kê 
 tên `localhost`. Tiếp tục với [Đăng nhập lần đầu](/vi/guide/first-login).
 
 Agent cho chính máy chủ này là một phần của cùng lần chạy và không thể bỏ qua.
-Nếu chỉ bước cuối đó thất bại, bảng điều khiển vẫn được cài và trình cài đặt in
-đúng lệnh để thử lại.
+Nếu chỉ bước cuối đó thất bại, không có gì bị quay lui: bảng điều khiển vẫn được
+cài và đang chạy, và trình cài đặt thoát với mã lỗi cùng đúng lệnh để thử lại.
 
 Nếu quá trình cài dừng lại, [Xử lý sự cố](/vi/guide/troubleshooting) nêu các
 nguyên nhân thường gặp.
@@ -88,13 +97,36 @@ chỉ máy chủ và bạn có thể đặt tên miền sau trong bảng điều
 
 ### Cài không tương tác
 
-Trên máy chủ không có terminal, trình cài đặt không bao giờ hỏi. Hãy chạy nó với
-`GOTHAM_ADMIN_EMAIL` được đặt (và tùy chọn `GOTHAM_ADMIN_PASSWORD_FILE` trỏ tới
-một tệp chỉ root đọc được chứa mật khẩu) để tạo tài khoản mà không cần hỏi.
-Không có email thì trình cài đặt bỏ qua việc tạo tài khoản và in lệnh thủ công.
+Trong một lần chạy `curl | sudo sh`, các biến phải nằm **sau** `sudo` và trước
+`sh`; đặt chúng trên `curl` chỉ cấu hình `curl`, còn `sudo` khởi động trình cài
+đặt với môi trường mới. Hãy tạo tệp mật khẩu trước (một dòng, chỉ root đọc được):
 
-Để xem mọi bước mà không thay đổi máy chủ, truyền `--dry-run` theo cùng cách như
-`--domain`.
+```sh
+sudo install -m 0600 -o root -g root /dev/null /root/gotham-admin-password
+sudo nano /root/gotham-admin-password   # nhập mật khẩu trên một dòng rồi lưu
+```
+
+Rồi chạy:
+
+<<< @/snippets/install-command.sh#unattended{sh}
+
+Trình cài đặt tạo tài khoản quản trị mà không hỏi và in thông tin đăng nhập ở
+cuối. Mật khẩu đi từ tệp qua stdin, nên nó không bao giờ xuất hiện trong danh
+sách tiến trình hay lịch sử shell. Bỏ `GOTHAM_ADMIN_PASSWORD_FILE` thì một mật
+khẩu ngẫu nhiên được tạo và in một lần; bỏ cả `GOTHAM_ADMIN_EMAIL` thì chưa tài
+khoản nào được tạo, và trình cài đặt in lệnh thủ công.
+
+Với một bản checkout thủ công, truyền cùng các biến trước script:
+
+```sh
+sudo GOTHAM_ADMIN_EMAIL=ops@example.com \
+  GOTHAM_ADMIN_PASSWORD_FILE=/root/gotham-admin-password \
+  deploy/install.sh
+```
+
+Để xem mọi bước mà không thay đổi máy chủ, truyền `--dry-run`:
+
+<<< @/snippets/install-command.sh#dry-run{sh}
 
 ## Cài thủ công (từ bản checkout)
 
@@ -144,8 +176,6 @@ thích các thiết lập lúc chạy tương ứng.
 | `GOTHAM_SKIP_DEPS=1` | Không cài hay cấu hình PostgreSQL/Redis. |
 | `GOTHAM_ADMIN_EMAIL` | Email của tài khoản quản trị đầu tiên cho lần cài không tương tác. |
 | `GOTHAM_ADMIN_PASSWORD_FILE` | Tệp chứa mật khẩu quản trị đầu tiên (một dòng, chỉ root đọc được). |
-| `GOTHAM_INSTALL_ROOT` | Cài dưới một tiền tố thay vì `/` (chỉ để test; bật chế độ test). |
-| `GOTHAM_INSTALL_TEST_PUBLIC_KEY` | Chỉ để test: thay khóa phát hành đã ghim; chỉ được dùng với `GOTHAM_INSTALL_ROOT`. |
 | `--dry-run` | In mọi bước mà không thay đổi máy chủ. |
 | `--cp-host <name-or-ip>` | Thêm một tên hoặc IP vào chứng chỉ gateway của agent; xem [Thêm node](/vi/guide/nodes). |
 

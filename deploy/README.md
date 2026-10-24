@@ -53,7 +53,7 @@ hard requirement.
 `deploy/install.sh` automates the layout below for a clean systemd host:
 download → verify the signed manifest and artifact digest → install the binary,
 wrapper, config, status directory, sudoers rule and unit → migrate → start. It
-uses the shared `release-verify.sh`; see `docs/guide/install.md`.
+uses the shared `release-verify.sh`; see `docs/guide/release-signing.md`.
 
 The manual layout it produces is:
 

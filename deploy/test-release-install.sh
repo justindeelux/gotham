@@ -19,7 +19,7 @@
 #     GOTHAM_INSTALL_TEST_AGENT_SCRIPT (R4);
 #   - pinned PostgreSQL/Redis selection, repository-key verification, the Redis
 #     pin, and the new-role password / legacy warning / stored-DSN handling
-#     (D1-D9).
+#     (D1-D10).
 #
 # The installer's public key is the provisioned release key; the tests inject an
 # ephemeral key through GOTHAM_INSTALL_TEST_PUBLIC_KEY (test mode only), and the
@@ -2281,11 +2281,11 @@ echo "PASS: agent readiness failure skips domain setup and preserves HTTP"
 unset DOMAIN_TEST_LOG DOMAIN_TEST_RC GOTHAM_DOMAIN
 echo "PASS: standalone domain success and failure preserve the install and login summary"
 
-# ---- D1-D9: pinned PostgreSQL/Redis versions and the database password ------
+# ---- D1-D10: pinned PostgreSQL/Redis versions and the database password ------
 # The dependency step normally runs only on a real host. GOTHAM_INSTALL_TEST_DEPS=1
 # (sandbox test mode) runs it against shims and exits right after it, so the
 # real selection, repository-key and role-provisioning code is exercised here.
-echo "==> pinned PostgreSQL/Redis selection and database password (D1-D9)"
+echo "==> pinned PostgreSQL/Redis selection and database password (D1-D10)"
 DEPS_SRC="${INSTALL_SH_OVERRIDE:-${SCRIPT_DIR}/install.sh}"
 DEPS_DIR="${SCRATCH}/deps"
 DEPS_SHIM="${DEPS_DIR}/shim"
@@ -2459,6 +2459,8 @@ esac
 case "$*" in
     *"FROM pg_roles"*) [ -f "${DEPS_STATE}/role" ] && printf '1\n' ;;
     *"FROM pg_database"*) [ -f "${DEPS_STATE}/db" ] && printf '1\n' ;;
+    *"DROP DATABASE"*) rm -f "${DEPS_STATE}/db" ;;
+    *"DROP ROLE"*) rm -f "${DEPS_STATE}/role" "${DEPS_STATE}/role_pw" ;;
     *)
         sql="$(cat)"
         printf '%s\n' "${sql}" >>"${DEPS_STATE}/psql-stdin.log"
@@ -2468,6 +2470,10 @@ case "$*" in
                 sed -n "s/.*PASSWORD '\([^']*\)'.*/\1/p" <<EOF >"${DEPS_STATE}/role_pw"
 ${sql}
 EOF
+                if [ -f "${DEPS_STATE}/term_after_create" ]; then
+                    rm -f "${DEPS_STATE}/term_after_create"
+                    kill -TERM "${PPID}" 2>/dev/null
+                fi
                 ;;
         esac
         ;;
@@ -2482,6 +2488,10 @@ SHIM
 cat >"${DEPS_SHIM}/createdb" <<'SHIM'
 #!/bin/sh
 printf 'createdb %s\n' "$*" >>"${DEPS_STATE}/createdb.log"
+if [ -f "${DEPS_STATE}/fail_createdb" ]; then
+    rm -f "${DEPS_STATE}/fail_createdb"
+    exit 1
+fi
 touch "${DEPS_STATE}/db"
 exit 0
 SHIM
@@ -2519,7 +2529,8 @@ deps_reset() {
     rm -f "${DEPS_STATE}/pg_version" "${DEPS_STATE}/pg_cluster" \
         "${DEPS_STATE}/redis_version" "${DEPS_STATE}/role" \
         "${DEPS_STATE}/role_pw" "${DEPS_STATE}/db" \
-        "${DEPS_STATE}/fail_second_update" "${DEPS_STATE}/update_count"
+        "${DEPS_STATE}/fail_second_update" "${DEPS_STATE}/update_count" \
+        "${DEPS_STATE}/fail_createdb" "${DEPS_STATE}/term_after_create"
     printf 'B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8\n' >"${DEPS_STATE}/fp_pgdg"
     printf '54318FA4052D1E61A6B6F7BB5F4349D6BF53AA0C\n' >"${DEPS_STATE}/fp_redis"
 }
@@ -2733,6 +2744,10 @@ grep -q 'uses the old default database password' "${DEPS_DIR}/d5.log" \
     || { echo "FAIL: no warning for the legacy default password (D5)" >&2; exit 1; }
 grep -q 'ALTER ROLE gotham WITH LOGIN PASSWORD' "${DEPS_DIR}/d5.log" \
     || { echo "FAIL: the legacy warning has no manual command (D5)" >&2; exit 1; }
+grep -qx 'SQL' "${DEPS_DIR}/d5.log" \
+    || { echo "FAIL: the printed heredoc terminator is not copy-pasteable (D5)" >&2; exit 1; }
+grep -qx "ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';" "${DEPS_DIR}/d5.log" \
+    || { echo "FAIL: the printed ALTER statement is indented (D5)" >&2; exit 1; }
 [ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
     || { echo "FAIL: the legacy password was rotated automatically (D5)" >&2; exit 1; }
 [ "$(cat "${DEPS_STATE}/role_pw")" = "gotham" ] \
@@ -2787,6 +2802,12 @@ if deps_run "${D7_ROOT}" >"${DEPS_DIR}/d7.log" 2>&1; then
 fi
 grep -q 'refusing to reset it' "${DEPS_DIR}/d7.log" \
     || { echo "FAIL: the existing-role refusal message is missing (D7)" >&2; cat "${DEPS_DIR}/d7.log" >&2; exit 1; }
+grep -qx "  sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'" "${DEPS_DIR}/d7.log" \
+    || { echo "FAIL: the refusal has no copy-pasteable recovery command (D7)" >&2; exit 1; }
+grep -qx 'DROP DATABASE IF EXISTS gotham;' "${DEPS_DIR}/d7.log" \
+    || { echo "FAIL: the refusal recovery does not drop the database (D7)" >&2; exit 1; }
+grep -qx 'DROP ROLE IF EXISTS gotham;' "${DEPS_DIR}/d7.log" \
+    || { echo "FAIL: the refusal recovery does not drop the role (D7)" >&2; exit 1; }
 [ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
     || { echo "FAIL: the installer touched the existing role (D7)" >&2; exit 1; }
 [ ! -e "${D7_ROOT}/etc/gotham/gotham.env" ] \
@@ -2831,6 +2852,68 @@ if [ -n "$(find "${DEPS_APT}" -type f 2>/dev/null)" ]; then
     exit 1
 fi
 echo "PASS: a failed apt update removes the repository files this run added (D9)"
+
+# D10: an interrupted FRESH install drops only what this run created, and a
+# re-run afterwards succeeds. Covers createdb failing and a signal after
+# CREATE ROLE.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D10_ROOT="${SCRATCH}/deps-fresh-createdb-fail"
+touch "${DEPS_STATE}/fail_createdb"
+if deps_run "${D10_ROOT}" >"${DEPS_DIR}/d10.log" 2>&1; then
+    echo "FAIL: a failing createdb did not abort the fresh install (D10)" >&2; exit 1
+fi
+grep -q 'removing the partially created gotham role/database' "${DEPS_DIR}/d10.log" \
+    || { echo "FAIL: the interrupted fresh install left its role behind (D10)" >&2; cat "${DEPS_DIR}/d10.log" >&2; exit 1; }
+[ ! -f "${DEPS_STATE}/role" ] && [ ! -f "${DEPS_STATE}/db" ] \
+    || { echo "FAIL: the partially created role/database survived (D10)" >&2; exit 1; }
+[ ! -e "${D10_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: a DSN was written despite the abort (D10)" >&2; exit 1; }
+if ls "${D10_ROOT}"/etc/gotham/gotham.env.tmp.* >/dev/null 2>&1; then
+    echo "FAIL: a stale gotham.env temp survived the abort (D10)" >&2; exit 1
+fi
+deps_run "${D10_ROOT}" >"${DEPS_DIR}/d10-retry.log" 2>&1 \
+    || { echo "FAIL: the re-run after a failed createdb did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10-retry.log" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ -f "${D10_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: the re-run did not create the role/database/env (D10)" >&2; exit 1; }
+# A signal after CREATE ROLE but before createdb: the trap must drop the role.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D10B_ROOT="${SCRATCH}/deps-fresh-term"
+touch "${DEPS_STATE}/term_after_create"
+if deps_run "${D10B_ROOT}" >"${DEPS_DIR}/d10b.log" 2>&1; then
+    echo "FAIL: a TERM after CREATE ROLE did not abort the fresh install (D10)" >&2; exit 1
+fi
+[ ! -f "${DEPS_STATE}/role" ] && [ ! -f "${DEPS_STATE}/db" ] \
+    || { echo "FAIL: a signal left the partially created role/database behind (D10)" >&2; exit 1; }
+deps_run "${D10B_ROOT}" >"${DEPS_DIR}/d10b-retry.log" 2>&1 \
+    || { echo "FAIL: the re-run after a signal did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10b-retry.log" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ -f "${D10B_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: the re-run after a signal did not create the role/database/env (D10)" >&2; exit 1; }
+echo "PASS: an interrupted fresh install cleans up its own role/database; re-runs succeed (D10)"
 unset DEPS_STATE
+
+# JUS-22/x2: a --domain run under sh -x must not print the stored DB password.
+# Reuse D1's root, whose gotham.env holds the generated password.
+export DOMAIN_TEST_LOG="${SCRATCH}/domain-xtrace.log"
+export GOTHAM_DOMAIN="panel.example.com"
+mkdir -p "${SCRATCH}/admin-state-domain-xtrace"
+ADMIN_EMAIL="" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_XTRACE=1 \
+    run_admin_install "${D1_ROOT}" "${SCRATCH}/admin-state-domain-xtrace" \
+    "${SCRATCH}/dx-out.log" "${SCRATCH}/dx-err.log" \
+    || { echo "FAIL: the --domain xtrace run failed (JUS-22/x2)" >&2; cat "${SCRATCH}/dx-err.log" >&2; exit 1; }
+[ "$(cat "${DOMAIN_TEST_LOG}")" = "$(printf 'instance\nset-url\nhttps://panel.example.com')" ] \
+    || { echo "FAIL: the --domain run did not reach set-url (JUS-22/x2)" >&2; exit 1; }
+if grep -Fq "${D1_PW}" "${SCRATCH}/dx-out.log" "${SCRATCH}/dx-err.log"; then
+    echo "FAIL: sh -x printed the database password during --domain setup (JUS-22/x2)" >&2; exit 1
+fi
+grep -q '^+' "${SCRATCH}/dx-err.log" \
+    || { echo "FAIL: the --domain xtrace run produced no trace lines (JUS-22/x2)" >&2; exit 1; }
+unset DOMAIN_TEST_LOG GOTHAM_DOMAIN
+echo "PASS: sh -x plus --domain never prints the database password (JUS-22/x2)"
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

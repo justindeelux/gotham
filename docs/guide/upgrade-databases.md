@@ -53,12 +53,31 @@ ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
 SQL
 ```
 
-Then set `GOTHAM_DATABASE_DSN` in `/etc/gotham/gotham.env` to the same password
-and restart Gotham:
+Use only letters, digits, `_` and `-` in the password (or URL-encode it in the
+DSN), and do not use a single quote. Then set `GOTHAM_DATABASE_DSN` in
+`/etc/gotham/gotham.env` to the same password and restart Gotham:
 
 ```sh
 sudo systemctl restart gotham
 ```
+
+## A fresh install that stopped early
+
+A fresh install creates the database role and database before it writes
+`gotham.env`. If it fails in between, it removes what it created. After a hard
+kill it cannot, and the next run refuses to take over the existing role. Only
+if this is a new server with no Gotham data, remove the leftovers and run the
+installer again:
+
+```sh
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+DROP DATABASE IF EXISTS gotham;
+DROP ROLE IF EXISTS gotham;
+SQL
+```
+
+If there is Gotham data to keep, restore `gotham.env` or set
+`GOTHAM_DATABASE_DSN` (with `GOTHAM_SKIP_DEPS=1`) instead.
 
 ## Before you start
 

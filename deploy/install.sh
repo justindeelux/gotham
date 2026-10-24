@@ -724,16 +724,38 @@ fi
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
 TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
-# One EXIT path for every abort: remove the private scratch material (the
-# prepared gotham.env temp holds the secret key and the database password).
-# INT/TERM abort (exit 1) and therefore pass through it too.
+# A FRESH install creates the role and database before gotham.env is written.
+# If it aborts in that window, remove only the objects this run created and
+# only while the env is not installed yet; a stored-DSN install never reaches
+# this (FRESH_LOCAL_DB is 0) and pre-existing objects are never dropped.
+_drop_fresh_db_objects() {
+    [ "${FRESH_LOCAL_DB:-0}" -eq 1 ] && [ -n "${ENV_TMP:-}" ] || return 0
+    [ "${DB_ROLE_CREATED:-0}" -eq 1 ] || [ "${DB_DATABASE_CREATED:-0}" -eq 1 ] || return 0
+    command -v runuser >/dev/null 2>&1 && command -v psql >/dev/null 2>&1 || return 1
+    log "removing the partially created gotham role/database from this failed install"
+    if [ "${DB_DATABASE_CREATED:-0}" -eq 1 ]; then
+        runuser -u postgres -- psql -v ON_ERROR_STOP=0 -q \
+            -c 'DROP DATABASE IF EXISTS gotham' >/dev/null 2>&1 || true
+    fi
+    if [ "${DB_ROLE_CREATED:-0}" -eq 1 ]; then
+        runuser -u postgres -- psql -v ON_ERROR_STOP=0 -q \
+            -c 'DROP ROLE IF EXISTS gotham' >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# One EXIT path for every abort: drop objects from an interrupted fresh install,
+# then remove the private scratch material (the prepared gotham.env temp holds
+# the secret key and the database password). INT/TERM/HUP/QUIT abort (exit 1)
+# and therefore pass through it too.
 _install_cleanup() {
+    _drop_fresh_db_objects || true
     rm -rf "${WORK_DIR}"
     [ -z "${ENV_TMP:-}" ] || rm -f "${ENV_TMP}"
     [ -z "${_DEPS_KEY_DIR:-}" ] || rm -rf "${_DEPS_KEY_DIR}"
 }
 trap '_install_cleanup' EXIT
-trap 'exit 1' INT TERM
+trap 'exit 1' INT TERM HUP QUIT
 materialize_public_key "${PUBKEY_SOURCE}" "${PUBKEY_FILE}"
 
 if [ "${DRY_RUN}" -eq 1 ]; then
@@ -840,8 +862,7 @@ _admin_prompt_traps() {
 # Put back exactly what _admin_prompt_traps replaced.
 _admin_restore_prompt_traps() {
     trap '_install_cleanup' EXIT
-    trap 'exit 1' INT TERM
-    trap - HUP QUIT
+    trap 'exit 1' INT TERM HUP QUIT
 }
 
 # Hidden single-line prompt on the tty into _ADMIN_SECRET. Empty input is a
@@ -1236,20 +1257,20 @@ LEGACY_DB_PASSWORD_NOTE=""
 case "${DSN}" in
     postgres://gotham:gotham@localhost:5432/*)
         LEGACY_DB_PASSWORD_NOTE="  Database: WARNING: ${ENV_FILE} uses the old default password.
-    Change it manually:
-      sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
-      ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
-      SQL
-      then set GOTHAM_DATABASE_DSN in ${ENV_FILE} to the same password and
-      run: sudo systemctl restart gotham
+    Change it manually (use only letters, digits, _ and -, with no quote):
+  sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
+SQL
+    Then set GOTHAM_DATABASE_DSN in ${ENV_FILE} to the same password and
+    run: sudo systemctl restart gotham
 "
         log "WARNING: ${ENV_FILE} uses the old default database password; it was left unchanged."
-        log "         Change it with:
-         sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
-         ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
-         SQL
-         then set GOTHAM_DATABASE_DSN in ${ENV_FILE} to the same password and
-         run: sudo systemctl restart gotham"
+        log "  Change it with (use only letters, digits, _ and -, with no quote):
+  sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
+SQL
+  then set GOTHAM_DATABASE_DSN in ${ENV_FILE} to the same password and
+  run: sudo systemctl restart gotham"
         ;;
 esac
 
@@ -1260,9 +1281,10 @@ JWT_KEY="${ETC_DIR}/jwt_ed25519.key"
 JWT_PUB="${ETC_DIR}/jwt_ed25519.pub"
 
 # Render the new environment into a root-only temp file now, but do not move it
-# over gotham.env yet: the database role must accept the new password first.
-# install_env_file below performs the atomic rename once the dependency step
-# has verified the role. A failure in between leaves the old file in place.
+# over gotham.env yet: a fresh install creates the role and database first.
+# install_env_file below performs the atomic rename after the dependency step
+# (which never touches a stored DSN). A failure in between leaves the old file
+# in place, and the cleanup trap removes a partially created fresh role/database.
 ENV_TMP=""
 _admin_xtrace_off
 if [ "${DRY_RUN}" -eq 0 ]; then
@@ -1346,8 +1368,9 @@ install_env_file() {
         chown root:root "${JWT_PUB}" || return 1
     fi
     mv -f "${ENV_TMP}" "${ENV_FILE}" || {
+        # Keep ENV_TMP set: it is the "new env is not live" marker the cleanup
+        # uses to drop objects a fresh run created before losing the password.
         rm -f "${ENV_TMP}"
-        ENV_TMP=""
         return 1
     }
     ENV_TMP=""
@@ -1742,22 +1765,36 @@ install_planned_dependencies() {
 # provision_local_database creates the role and database for a fresh local
 # install only (no DSN was stored). The password is generated above and travels
 # on stdin, never on a command line. An existing role or database means this is
-# not a fresh host: the owner decision is to never reset it, so abort before
-# touching the database and let the operator supply its DSN.
+# not a fresh host: never reset it; abort and give the operator the safe
+# recovery commands. The cleanup trap drops only what this run creates.
+DB_ROLE_CREATED=0
+DB_DATABASE_CREATED=0
+DB_REFUSAL_HELP="If this is a brand-new server and these are leftovers from an interrupted install, remove them with:
+  sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+DROP DATABASE IF EXISTS gotham;
+DROP ROLE IF EXISTS gotham;
+SQL
+Only do this if there is no Gotham data to keep. Otherwise restore ${ENV_FILE} or set GOTHAM_DATABASE_DSN (with GOTHAM_SKIP_DEPS=1) to keep the existing database."
 provision_local_database() {
     _admin_xtrace_off
     case "${DB_PASSWORD}" in
         '' | *[!A-Za-z0-9_-]*) die "could not generate a valid database password" ;;
     esac
     if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='gotham'" | grep -q 1; then
-        die "an existing PostgreSQL role 'gotham' was found but no GOTHAM_DATABASE_DSN is stored in ${ENV_FILE}; refusing to reset it. Restore ${ENV_FILE} or set GOTHAM_DATABASE_DSN (with GOTHAM_SKIP_DEPS=1) to keep the existing database."
+        die "an existing PostgreSQL role 'gotham' was found but no GOTHAM_DATABASE_DSN is stored in ${ENV_FILE}; refusing to reset it.
+${DB_REFUSAL_HELP}"
     fi
     if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='gotham'" | grep -q 1; then
-        die "an existing PostgreSQL database 'gotham' was found but no GOTHAM_DATABASE_DSN is stored in ${ENV_FILE}; refusing to take it over. Restore ${ENV_FILE} or set GOTHAM_DATABASE_DSN (with GOTHAM_SKIP_DEPS=1) to keep the existing database."
+        die "an existing PostgreSQL database 'gotham' was found but no GOTHAM_DATABASE_DSN is stored in ${ENV_FILE}; refusing to take it over.
+${DB_REFUSAL_HELP}"
     fi
+    # Mark the objects before creating them: a signal deferred until after the
+    # command returns must still make the EXIT trap drop them.
+    DB_ROLE_CREATED=1
     printf "CREATE ROLE gotham LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
         | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
         || die "could not create the gotham database role; gotham.env was not changed"
+    DB_DATABASE_CREATED=1
     runuser -u postgres -- createdb -O gotham -- gotham \
         || die "could not create the gotham database; gotham.env was not changed"
     _admin_xtrace_on
@@ -1949,17 +1986,28 @@ if [ -n "${DOMAIN}" ]; then
         echo "[dry-run] ${INSTALL_PATH} instance set-url https://${DOMAIN}"
     elif [ "${TEST_MODE}" -eq 1 ] && [ -z "${GOTHAM_INSTALL_TEST_ADMIN_BIN:-}" ]; then
         log "test mode: skipping domain setup (no command binary seam)"
-    elif GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
-        "${DOMAIN_BIN}" instance wait-localhost && \
-        GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
-        "${DOMAIN_BIN}" instance set-url "https://${DOMAIN}"; then
-        # Re-arm the persisted trial timer in the long-running service.
-        run systemctl restart "${BINARY_NAME}.service"
-        PANEL_URL="http://${DOMAIN}"
-        DOMAIN_CONFIRM_NOTE="  Confirm the domain in General settings within 2 minutes to start HTTPS."
-        log "Open ${PANEL_URL} and confirm the domain in General settings within 2 minutes to start HTTPS."
     else
-        log "WARNING: domain setup failed; continuing on the host HTTP address. Set the domain in General settings later."
+        # The DSN (with the generated password) travels in the environment of
+        # these calls; keep xtrace off so `sh -x` never logs it.
+        _admin_xtrace_off
+        if GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
+            "${DOMAIN_BIN}" instance wait-localhost && \
+            GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
+            "${DOMAIN_BIN}" instance set-url "https://${DOMAIN}"; then
+            _domain_rc=0
+        else
+            _domain_rc=1
+        fi
+        _admin_xtrace_on
+        if [ "${_domain_rc}" -eq 0 ]; then
+            # Re-arm the persisted trial timer in the long-running service.
+            run systemctl restart "${BINARY_NAME}.service"
+            PANEL_URL="http://${DOMAIN}"
+            DOMAIN_CONFIRM_NOTE="  Confirm the domain in General settings within 2 minutes to start HTTPS."
+            log "Open ${PANEL_URL} and confirm the domain in General settings within 2 minutes to start HTTPS."
+        else
+            log "WARNING: domain setup failed; continuing on the host HTTP address. Set the domain in General settings later."
+        fi
     fi
 fi
 

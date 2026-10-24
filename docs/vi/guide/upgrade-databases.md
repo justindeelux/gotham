@@ -51,12 +51,30 @@ ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';
 SQL
 ```
 
-Sau đó đặt `GOTHAM_DATABASE_DSN` trong `/etc/gotham/gotham.env` thành cùng mật
-khẩu và khởi động lại Gotham:
+Chỉ dùng chữ cái, chữ số, `_` và `-` trong mật khẩu (hoặc mã hóa URL khi đặt
+trong DSN), và không dùng dấu nháy đơn. Sau đó đặt `GOTHAM_DATABASE_DSN` trong
+`/etc/gotham/gotham.env` thành cùng mật khẩu và khởi động lại Gotham:
 
 ```sh
 sudo systemctl restart gotham
 ```
+
+## Bản cài mới bị dừng giữa chừng
+
+Bản cài mới tạo role và cơ sở dữ liệu trước khi ghi `gotham.env`. Nếu lỗi xảy
+ra ở giữa, nó xóa những gì mình đã tạo. Nếu bị kill cứng thì không xóa được, và
+lần chạy sau sẽ từ chối tiếp quản role đã có. Chỉ khi đây là máy chủ mới và
+không có dữ liệu Gotham, hãy xóa phần còn lại rồi chạy lại trình cài đặt:
+
+```sh
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+DROP DATABASE IF EXISTS gotham;
+DROP ROLE IF EXISTS gotham;
+SQL
+```
+
+Nếu có dữ liệu Gotham cần giữ, hãy khôi phục `gotham.env` hoặc đặt
+`GOTHAM_DATABASE_DSN` (với `GOTHAM_SKIP_DEPS=1`) thay vì xóa.
 
 ## Trước khi bắt đầu
 

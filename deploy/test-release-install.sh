@@ -2512,9 +2512,32 @@ cat >"${DEPS_SHIM}/systemctl" <<'SHIM'
 printf 'systemctl %s\n' "$*" >>"${DEPS_STATE}/systemctl.log"
 exit 0
 SHIM
+REAL_MV="$(command -v mv)"
+export REAL_MV
+cat >"${DEPS_SHIM}/mv" <<'SHIM'
+#!/bin/sh
+if [ -f "${DEPS_STATE}/fail_env_mv" ]; then
+    case "$*" in
+        *gotham.env.tmp*)
+            rm -f "${DEPS_STATE}/fail_env_mv"
+            exit 1
+            ;;
+    esac
+fi
+"${REAL_MV:?}" "$@" || exit $?
+if [ -f "${DEPS_STATE}/term_after_env_mv" ]; then
+    case "$*" in
+        *gotham.env.tmp*)
+            rm -f "${DEPS_STATE}/term_after_env_mv"
+            kill -TERM "${PPID}" 2>/dev/null
+            ;;
+    esac
+fi
+exit 0
+SHIM
 chmod +x "${DEPS_SHIM}/curl" "${DEPS_SHIM}/gpg" "${DEPS_SHIM}/apt-cache" \
     "${DEPS_SHIM}/apt-get" "${DEPS_SHIM}/pg_lsclusters" "${DEPS_SHIM}/createdb" \
-    "${DEPS_SHIM}/runuser" "${DEPS_SHIM}/systemctl" \
+    "${DEPS_SHIM}/runuser" "${DEPS_SHIM}/systemctl" "${DEPS_SHIM}/mv" \
     "${DEPS_IMPL}/psql" "${DEPS_IMPL}/redis-server"
 
 # deps_reset starts each case from an empty package/host state, with the real
@@ -2530,7 +2553,8 @@ deps_reset() {
         "${DEPS_STATE}/redis_version" "${DEPS_STATE}/role" \
         "${DEPS_STATE}/role_pw" "${DEPS_STATE}/db" \
         "${DEPS_STATE}/fail_second_update" "${DEPS_STATE}/update_count" \
-        "${DEPS_STATE}/fail_createdb" "${DEPS_STATE}/term_after_create"
+        "${DEPS_STATE}/fail_createdb" "${DEPS_STATE}/term_after_create" \
+        "${DEPS_STATE}/fail_env_mv" "${DEPS_STATE}/term_after_env_mv"
     printf 'B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8\n' >"${DEPS_STATE}/fp_pgdg"
     printf '54318FA4052D1E61A6B6F7BB5F4349D6BF53AA0C\n' >"${DEPS_STATE}/fp_redis"
 }
@@ -2894,6 +2918,48 @@ deps_run "${D10B_ROOT}" >"${DEPS_DIR}/d10b-retry.log" 2>&1 \
     || { echo "FAIL: the re-run after a signal did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10b-retry.log" >&2; exit 1; }
 [ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ -f "${D10B_ROOT}/etc/gotham/gotham.env" ] \
     || { echo "FAIL: the re-run after a signal did not create the role/database/env (D10)" >&2; exit 1; }
+# A signal right after the env mv: the env is live, so the trap must NOT drop
+# the role/database, and a re-run must succeed on the stored DSN.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D10C_ROOT="${SCRATCH}/deps-env-live-term"
+touch "${DEPS_STATE}/term_after_env_mv"
+if deps_run "${D10C_ROOT}" >"${DEPS_DIR}/d10c.log" 2>&1; then
+    echo "FAIL: a TERM right after the env mv did not abort (D10)" >&2; exit 1
+fi
+[ -f "${D10C_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: the env was not live when the signal arrived (D10)" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] \
+    || { echo "FAIL: a signal after a successful mv dropped the live role/database (D10)" >&2; exit 1; }
+if grep -q 'removing the partially created' "${DEPS_DIR}/d10c.log"; then
+    echo "FAIL: a signal after a successful mv tried to drop the role/database (D10)" >&2; exit 1
+fi
+: >"${DEPS_STATE}/psql-stdin.log"
+deps_run "${D10C_ROOT}" >"${DEPS_DIR}/d10c-retry.log" 2>&1 \
+    || { echo "FAIL: the re-run after an env-live signal did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10c-retry.log" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
+    || { echo "FAIL: the re-run after an env-live signal did not use the stored DSN (D10)" >&2; exit 1; }
+# A failed mv (no signal) must still drop: the temp file remains, so the env
+# is not live.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D10D_ROOT="${SCRATCH}/deps-env-mv-fail"
+touch "${DEPS_STATE}/fail_env_mv"
+if deps_run "${D10D_ROOT}" >"${DEPS_DIR}/d10d.log" 2>&1; then
+    echo "FAIL: a failing env mv did not abort (D10)" >&2; exit 1
+fi
+[ ! -f "${DEPS_STATE}/role" ] && [ ! -f "${DEPS_STATE}/db" ] \
+    || { echo "FAIL: a failed env mv left the fresh role/database behind (D10)" >&2; exit 1; }
+[ ! -e "${D10D_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: a failed env mv left a live DSN (D10)" >&2; exit 1; }
+deps_run "${D10D_ROOT}" >"${DEPS_DIR}/d10d-retry.log" 2>&1 \
+    || { echo "FAIL: the re-run after a failed env mv did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10d-retry.log" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ -f "${D10D_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: the re-run after a failed env mv did not create everything (D10)" >&2; exit 1; }
 echo "PASS: an interrupted fresh install cleans up its own role/database; re-runs succeed (D10)"
 unset DEPS_STATE
 

@@ -729,7 +729,10 @@ TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
 # only while the env is not installed yet; a stored-DSN install never reaches
 # this (FRESH_LOCAL_DB is 0) and pre-existing objects are never dropped.
 _drop_fresh_db_objects() {
-    [ "${FRESH_LOCAL_DB:-0}" -eq 1 ] && [ -n "${ENV_TMP:-}" ] || return 0
+    [ "${FRESH_LOCAL_DB:-0}" -eq 1 ] || return 0
+    # The temp file is the "env is not live yet" marker: mv consumes it, so a
+    # signal after a successful mv leaves ENV_TMP set but nothing to drop.
+    [ -n "${ENV_TMP:-}" ] && [ -f "${ENV_TMP}" ] || return 0
     [ "${DB_ROLE_CREATED:-0}" -eq 1 ] || [ "${DB_DATABASE_CREATED:-0}" -eq 1 ] || return 0
     command -v runuser >/dev/null 2>&1 && command -v psql >/dev/null 2>&1 || return 1
     log "removing the partially created gotham role/database from this failed install"
@@ -1368,9 +1371,8 @@ install_env_file() {
         chown root:root "${JWT_PUB}" || return 1
     fi
     mv -f "${ENV_TMP}" "${ENV_FILE}" || {
-        # Keep ENV_TMP set: it is the "new env is not live" marker the cleanup
-        # uses to drop objects a fresh run created before losing the password.
-        rm -f "${ENV_TMP}"
+        # Leave the temp in place: it is the "env is not live" marker, so the
+        # EXIT trap drops objects this fresh run created. The cleanup removes it.
         return 1
     }
     ENV_TMP=""

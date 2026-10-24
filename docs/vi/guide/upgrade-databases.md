@@ -22,7 +22,7 @@ chạy xong, và mật khẩu cơ sở dữ liệu cục bộ được tạo lú
 ```sh
 psql --version
 redis-server --version
-sudo cat /etc/gotham/gotham.env
+sudo grep '^GOTHAM_DATABASE_DSN=' /etc/gotham/gotham.env
 ```
 
 Dòng `GOTHAM_DATABASE_DSN` trong tệp đó là chuỗi kết nối Gotham dùng, bao gồm
@@ -87,28 +87,56 @@ hai cách.
 
 ## Nâng cấp Redis
 
-Redis 6.2 trở lên có thể thay thế tại chỗ; nó đọc được dữ liệu do phiên bản cũ
-ghi ra.
+Redis 6.2 trở lên có thể được thay bằng bản mới hơn tại chỗ; nó đọc được dữ
+liệu do phiên bản cũ ghi ra. Cách nâng cấp phụ thuộc vào việc bản phân phối của
+bạn đã có 6.2 trở lên hay chưa:
 
-- Nếu dùng gói của bản phân phối:
-  ```sh
-  sudo apt-get update
-  sudo apt-get install --only-upgrade redis-server redis-tools
-  ```
-- Nếu dùng kho chính thức của Redis, làm theo
-  [redis.io/docs/latest/operate/oss_and_stack/install/install-stack/apt](https://redis.io/docs/latest/operate/oss_and_stack/install/install-stack/apt/)
-  và nâng cấp các gói `redis`.
+```sh
+redis-server --version
+apt-cache policy redis-server
+```
 
-Sau đó khởi động lại Redis và Gotham:
+**Bản phân phối có 6.2 trở lên.** Nâng cấp các gói của bản phân phối:
+
+```sh
+sudo apt-get update
+sudo apt-get install --only-upgrade redis-server redis-tools
+```
+
+**Bản phân phối có Redis cũ hơn** (ví dụ Ubuntu 22.04 có 6.0, đã hết hỗ trợ).
+`--only-upgrade` không thể vượt lên phiên bản được hỗ trợ, nên hãy thêm kho
+chính thức của Redis rồi cài từ đó; việc này thay thế gói của bản phân phối.
+Trước tiên thêm kho và khóa ký:
+
+```sh
+sudo apt-get install -y lsb-release curl gpg
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://packages.redis.io/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/redis-archive-keyring.gpg
+sudo chmod 0644 /etc/apt/keyrings/redis-archive-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/redis.list
+sudo apt-get update
+```
+
+Sau đó cài server và tools. `sudo apt-get install redis-server redis-tools`
+lấy bản mới nhất mà kho cung cấp; nếu muốn dòng 7.2 như trình cài đặt dùng, hãy
+ghim tương tự:
+
+```sh
+sudo apt-get install "redis-server=6:7.2.*" "redis-tools=6:7.2.*"
+```
+
+Rồi khởi động lại Redis và Gotham:
 
 ```sh
 sudo systemctl restart redis-server
 sudo systemctl start gotham
 ```
 
-Redis không giữ dữ liệu mà Gotham không thể tạo lại (phiên và hàng đợi), nên
-mất bộ nhớ đệm không phải mất dữ liệu. PostgreSQL mới là cơ sở dữ liệu quan
-trọng: luôn sao lưu nó trước.
+Redis giữ bộ nhớ đệm và hàng đợi, không giữ bản ghi nền tảng mà PostgreSQL lưu,
+nên bộ nhớ đệm mất sẽ được tạo lại. Nếu Redis này còn phục vụ workload khác, hãy
+kiểm tra dữ liệu của chúng trước.
 
 ## Cơ sở dữ liệu được quản lý
 

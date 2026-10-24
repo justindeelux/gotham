@@ -23,7 +23,7 @@ password is generated at install time and stored in
 ```sh
 psql --version
 redis-server --version
-sudo cat /etc/gotham/gotham.env
+sudo grep '^GOTHAM_DATABASE_DSN=' /etc/gotham/gotham.env
 ```
 
 The `GOTHAM_DATABASE_DSN` line in that file is the connection string Gotham
@@ -90,17 +90,46 @@ covers both methods.
 
 ## Upgrade Redis
 
-Redis 6.2 and newer can be replaced in place; it reads data written by older
-versions.
+Redis 6.2 and newer can be replaced in place by a newer release; it reads data
+written by older versions. How to upgrade depends on whether your distribution
+already ships 6.2 or newer:
 
-- If you use the distribution packages:
-  ```sh
-  sudo apt-get update
-  sudo apt-get install --only-upgrade redis-server redis-tools
-  ```
-- If you use the official Redis repository, follow
-  [redis.io/docs/latest/operate/oss_and_stack/install/install-stack/apt](https://redis.io/docs/latest/operate/oss_and_stack/install/install-stack/apt/)
-  and upgrade the `redis` packages.
+```sh
+redis-server --version
+apt-cache policy redis-server
+```
+
+**Your distribution ships 6.2 or newer.** Upgrade the distribution packages:
+
+```sh
+sudo apt-get update
+sudo apt-get install --only-upgrade redis-server redis-tools
+```
+
+**Your distribution ships an older Redis** (Ubuntu 22.04, for example, ships
+6.0, which is end of life). `--only-upgrade` cannot cross to a supported
+version there, so add the official Redis repository and install from it; this
+replaces the distribution package. First add the repository and its signing
+key:
+
+```sh
+sudo apt-get install -y lsb-release curl gpg
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://packages.redis.io/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/redis-archive-keyring.gpg
+sudo chmod 0644 /etc/apt/keyrings/redis-archive-keyring.gpg
+echo "deb [signed-by=/etc/apt/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/redis.list
+sudo apt-get update
+```
+
+Then install the server and tools. `sudo apt-get install redis-server
+redis-tools` takes the newest release the repository serves; if you want the
+7.2 series the installer uses, pin it the same way:
+
+```sh
+sudo apt-get install "redis-server=6:7.2.*" "redis-tools=6:7.2.*"
+```
 
 Then restart Redis and Gotham:
 
@@ -109,9 +138,9 @@ sudo systemctl restart redis-server
 sudo systemctl start gotham
 ```
 
-Redis holds no data Gotham cannot rebuild (sessions and queues), so a lost
-cache is not a data loss. PostgreSQL is the database that matters: always back
-that one up first.
+Redis holds caches and queues, not the platform records PostgreSQL keeps, so a
+lost cache is rebuilt. If other workloads share this Redis, check their data
+first.
 
 ## Managed databases
 

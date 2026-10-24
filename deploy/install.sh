@@ -60,19 +60,22 @@
 #                               instead of /dev/tty. Without the BIN seam test
 #                               mode skips admin creation; /dev/tty is never
 #                               opened in test mode unless the TTY seam is set.
-#   GOTHAM_INSTALL_TEST_DEPS=1  test-only: with GOTHAM_INSTALL_ROOT, run the
-#                               PostgreSQL/Redis dependency step against PATH
-#                               shims and exit right after it, so the selection
-#                               and password logic is testable without root.
+#   GOTHAM_INSTALL_TEST_DEPS=1  test-only: with GOTHAM_INSTALL_ROOT and a
+#                               baked test apt root, run the PostgreSQL/Redis
+#                               dependency step against PATH shims and exit
+#                               after writing gotham.env, so the selection,
+#                               role and password logic is testable without
+#                               root.
 #
 # Local PostgreSQL and Redis are installed at tested versions: PostgreSQL 16
 # (from the PGDG apt repository when the distribution package is older) and
 # Redis from the distribution when it ships 6.2 or newer, otherwise 7.2 from
-# packages.redis.io. A third-party repository is used only after its signing
-# key fingerprint is verified; a mismatch aborts before installing. The local
-# database role gets a random password generated at install and stored only in
-# gotham.env (a re-run keeps it). An existing older major version is never
-# upgraded automatically: the installer warns and points at the upgrade guide.
+# packages.redis.io. Third-party repositories are used only after every needed
+# signing-key fingerprint is verified; a mismatch aborts before any repository
+# or package is written or installed. The local database role gets a random
+# password generated at install and stored only in gotham.env (a re-run keeps
+# it). An existing older major version is never upgraded automatically: the
+# installer warns and points at the upgrade guide.
 #
 # Runtime configuration overrides:
 #   GOTHAM_DATABASE_DSN       managed PostgreSQL DSN; skips local provisioning
@@ -319,6 +322,23 @@ run() {
     "$@"
 }
 
+# Keep xtrace (sh -x) from printing secrets: every command line the shell
+# traces is expanded first, so assignments, tests and the stdin printf would
+# all leak a password. Regions are never nested; each off has its on. Defined
+# before the input validation so the stored DSN is read with xtrace off too.
+_admin_xtrace_off() {
+    case $- in
+        *x*) _ADMIN_XTRACE_WAS_ON=1; set +x ;;
+        *) _ADMIN_XTRACE_WAS_ON=0 ;;
+    esac
+}
+_admin_xtrace_on() {
+    if [ "${_ADMIN_XTRACE_WAS_ON:-0}" = "1" ]; then
+        set -x
+    fi
+    _ADMIN_XTRACE_WAS_ON=0
+}
+
 # _is_loopback_cp_addr reports whether a GOTHAM_AGENT_CP_ADDR value points at
 # this host's loopback: a numeric 127.0.0.0/8 IPv4 literal, "localhost" (any
 # case), or ::1 (bare or bracketed, with or without :port). Anything else,
@@ -447,7 +467,9 @@ DEFAULT_REDIS="localhost:6379"
 
 # Values a previous install already wrote, so a repair/upgrade keeps a managed
 # DSN and operator edits instead of falling back to local defaults. A DSN or
-# Redis address given on the command line still wins.
+# Redis address given on the command line still wins. The whole block reads
+# and splits the stored DSN (and therefore its password), so xtrace is off.
+_admin_xtrace_off
 ENV_PREV=""
 if [ -f "${ENV_FILE}" ]; then
     ENV_PREV="$(cat "${ENV_FILE}")"
@@ -461,24 +483,30 @@ env_prev() {
 # is never touched.
 LOCAL_DSN=0
 DB_PASSWORD=""
-DB_PASSWORD_KEEP=0
+DB_OLD_PASSWORD=""
 if [ -n "${GOTHAM_DATABASE_DSN:-}" ]; then
     # An explicit DSN is managed by the operator and is never reprovisioned;
     # only the legacy built-in default still asks for the local services.
     DSN="${GOTHAM_DATABASE_DSN}"
-    [ "${DSN}" = "${DEFAULT_DSN}" ] && LOCAL_DSN=1
+    if [ "${DSN}" = "${DEFAULT_DSN}" ]; then
+        LOCAL_DSN=1
+        DB_OLD_PASSWORD="gotham"
+    fi
 else
     DSN="$(env_prev GOTHAM_DATABASE_DSN)"
     if [ -z "${DSN}" ]; then
         LOCAL_DSN=1
     else
         case "${DSN}" in
-            "${DEFAULT_DSN}") LOCAL_DSN=1 ;;
+            "${DEFAULT_DSN}")
+                LOCAL_DSN=1
+                DB_OLD_PASSWORD="gotham"
+                ;;
             postgres://gotham:*@localhost:5432/gotham\?sslmode=disable)
                 LOCAL_DSN=1
                 DB_PASSWORD="${DSN#postgres://gotham:}"
                 DB_PASSWORD="${DB_PASSWORD%@localhost:5432/gotham?sslmode=disable}"
-                DB_PASSWORD_KEEP=1
+                DB_OLD_PASSWORD="${DB_PASSWORD}"
                 ;;
         esac
     fi
@@ -496,6 +524,11 @@ fi
 # documented default so an existing local database keeps working.
 if [ "${LOCAL_DSN}" -eq 1 ] && [ "${PROVISION_LOCAL_DEPS}" -eq 0 ] && [ -z "${DSN}" ]; then
     DSN="${DEFAULT_DSN}"
+fi
+# The dependency test seam must never reach the real /etc/apt: production
+# leaves _DEPS_APT_ROOT empty, and only the test suite bakes a scratch root.
+if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ] && [ "${TEST_MODE}" -eq 1 ] && [ -z "${_DEPS_APT_ROOT}" ]; then
+    die "GOTHAM_INSTALL_TEST_DEPS requires a baked test apt root; refusing to touch the real /etc/apt"
 fi
 REDIS_ADDR="${GOTHAM_REDIS_ADDR:-$(env_prev GOTHAM_REDIS_ADDR)}"
 REDIS_ADDR="${REDIS_ADDR:-${DEFAULT_REDIS}}"
@@ -522,6 +555,7 @@ case "${REDIS_ADDR}" in
     *\\) die "GOTHAM_REDIS_ADDR must not end with a backslash (systemd would join it with the next line)" ;;
     *\'* | *\"*) die "GOTHAM_REDIS_ADDR must not contain quotes (got '${REDIS_ADDR}')" ;;
 esac
+_admin_xtrace_on
 
 {
     # Platform and prior-agent lookups only read files. _la_agent_env is the
@@ -701,8 +735,9 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-install.XXXXXX")"
 PUBKEY_FILE="${WORK_DIR}/release.pub"
 TMP_BINARY="${WORK_DIR}/${BINARY_NAME}"
 # Clean up the private scratch dir on normal exit, and abort on a signal (a
-# cleanup-only INT/TERM trap would let the install carry on).
-trap 'rm -rf "${WORK_DIR}"' EXIT
+# cleanup-only INT/TERM trap would let the install carry on). The prepared
+# gotham.env temp and any verified-key scratch dir are removed too.
+trap 'rm -rf "${WORK_DIR}"; [ -z "${ENV_TMP:-}" ] || rm -f "${ENV_TMP}"; [ -z "${_DEPS_KEY_DIR:-}" ] || rm -rf "${_DEPS_KEY_DIR}"' EXIT
 trap 'exit 1' INT TERM
 materialize_public_key "${PUBKEY_SOURCE}" "${PUBKEY_FILE}"
 
@@ -831,22 +866,6 @@ _admin_prompt_secret() {
     IFS= read -r _ADMIN_SECRET <"${_ADMIN_TTY_ACTIVE}" || true
     _admin_restore_tty
     printf '\n' >"${_ADMIN_TTY_ACTIVE}"
-}
-
-# Keep xtrace (sh -x) from printing secrets: every command line the shell
-# traces is expanded first, so assignments, tests and the stdin printf would
-# all leak the password. Regions are never nested; each off has its on.
-_admin_xtrace_off() {
-    case $- in
-        *x*) _ADMIN_XTRACE_WAS_ON=1; set +x ;;
-        *) _ADMIN_XTRACE_WAS_ON=0 ;;
-    esac
-}
-_admin_xtrace_on() {
-    if [ "${_ADMIN_XTRACE_WAS_ON:-0}" = "1" ]; then
-        set -x
-    fi
-    _ADMIN_XTRACE_WAS_ON=0
 }
 
 # Forget every in-memory secret. Called the moment the binary has the
@@ -1205,15 +1224,15 @@ fi
 # the dependency step below uses the same value. It is written only to
 # gotham.env and travels to psql on stdin; xtrace is off around generation and
 # the env write so `sh -x` never logs it.
+_admin_xtrace_off
 if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ] && [ -z "${DB_PASSWORD}" ]; then
-    _admin_xtrace_off
     DB_PASSWORD="$(_admin_generate_password)" || DB_PASSWORD=""
     case "${DB_PASSWORD}" in
         '' | *[!A-Za-z0-9_-]*) die "could not generate a database password" ;;
     esac
     DSN="postgres://gotham:${DB_PASSWORD}@localhost:5432/gotham?sslmode=disable"
-    _admin_xtrace_on
 fi
+_admin_xtrace_on
 
 log "writing ${ENV_FILE}"
 run mkdir -p "${ETC_DIR}"
@@ -1221,8 +1240,14 @@ run chmod 0755 "${ETC_DIR}"
 JWT_KEY="${ETC_DIR}/jwt_ed25519.key"
 JWT_PUB="${ETC_DIR}/jwt_ed25519.pub"
 
+# Render the new environment into a root-only temp file now, but do not move it
+# over gotham.env yet: the database role must accept the new password first.
+# install_env_file below performs the atomic rename once the dependency step
+# has verified the role. A failure in between leaves the old file in place.
+ENV_TMP=""
 _admin_xtrace_off
 if [ "${DRY_RUN}" -eq 0 ]; then
+    ENV_TMP="${ENV_FILE}.tmp.$$"
     # Restrictive umask only around the secret material, so it is never briefly
     # world-readable; the shared directories stay 0755 (base umask 022).
     (
@@ -1237,14 +1262,10 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             openssl pkey -in "${JWT_KEY}" -pubout -out "${JWT_PUB}"
         fi
         # Rewrite the managed keys and keep every other (operator) line untouched.
-        env_tmp="${ENV_FILE}.tmp.$$"
-        # The temp copy is root-only and holds the secret key: remove it if any
-        # step below aborts. The success path moves it into place first, so this
-        # is a no-op then. INT/TERM must abort, not merely clean up: a trap that
-        # only removes the temp would let the subshell resume and `mv` a temp
-        # holding just the operator lines over gotham.env, silently dropping the
-        # managed keys and the secret.
-        trap 'rm -f "${env_tmp}"' EXIT
+        # The temp copy is root-only and holds the secret key. It survives this
+        # subshell on purpose: install_env_file moves it into place after the
+        # database role has the new password. The caller removes it on abort,
+        # and INT/TERM abort rather than let a partial file be installed.
         trap 'exit 1' INT TERM
         {
             echo "# Gotham control-plane environment. Read by gotham.service (EnvironmentFile)."
@@ -1254,7 +1275,7 @@ if [ "${DRY_RUN}" -eq 0 ]; then
             echo "GOTHAM_SECRET_KEY=${SECRET_KEY}"
             echo "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=${JWT_KEY}"
             echo "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=${JWT_PUB}"
-        } >"${env_tmp}"
+        } >"${ENV_TMP}"
         if [ -n "${ENV_PREV}" ]; then
             # Keep the operator lines: drop every managed key (tolerating leading
             # whitespace, so a hand-indented key cannot silently override the
@@ -1276,23 +1297,45 @@ if [ "${DRY_RUN}" -eq 0 ]; then
                 *) die "could not filter the existing ${ENV_FILE} (grep exit ${filter_status})" ;;
             esac
             if [ -n "${preserved}" ]; then
-                printf '%s\n' "${preserved}" >>"${env_tmp}" \
+                printf '%s\n' "${preserved}" >>"${ENV_TMP}" \
                     || die "could not preserve operator settings in ${ENV_FILE}"
             fi
         fi
-        chmod 0640 "${env_tmp}"
-        mv -f "${env_tmp}" "${ENV_FILE}"
-        chmod 0640 "${ENV_FILE}" "${JWT_KEY}"
-        chmod 0644 "${JWT_PUB}"
-    )
-    if [ "${TEST_MODE}" -eq 0 ]; then
-        chown root:"${SERVICE_USER}" "${ENV_FILE}" "${JWT_KEY}"
-        chown root:root "${JWT_PUB}"
-    fi
+        chmod 0640 "${ENV_TMP}"
+    ) || {
+        rm -f "${ENV_TMP}"
+        ENV_TMP=""
+        die "could not prepare the new ${ENV_FILE}; the existing file was kept"
+    }
 else
     echo "[dry-run] write ${ENV_FILE}, ${JWT_KEY}, ${JWT_PUB}"
 fi
 _admin_xtrace_on
+
+# install_env_file atomically replaces gotham.env with the prepared temp file
+# and fixes permissions. Returning 1 means the file was not replaced (the
+# caller can roll the role back); returning 2 means it was replaced but a
+# permission fix failed (env and role already match, do not roll back).
+install_env_file() {
+    [ "${DRY_RUN}" -eq 1 ] && return 0
+    [ -n "${ENV_TMP}" ] || return 0
+    chmod 0640 "${JWT_KEY}" || return 1
+    chmod 0644 "${JWT_PUB}" || return 1
+    if [ "${TEST_MODE}" -eq 0 ]; then
+        chown root:"${SERVICE_USER}" "${JWT_KEY}" || return 1
+        chown root:root "${JWT_PUB}" || return 1
+    fi
+    mv -f "${ENV_TMP}" "${ENV_FILE}" || {
+        rm -f "${ENV_TMP}"
+        ENV_TMP=""
+        return 1
+    }
+    ENV_TMP=""
+    if [ "${TEST_MODE}" -eq 0 ]; then
+        chown root:"${SERVICE_USER}" "${ENV_FILE}" || return 2
+    fi
+    return 0
+}
 
 # ---- Certificate authority (mTLS) -------------------------------------------
 # Provision the CA the gRPC gateway uses for TLS. `gotham ca init` is
@@ -1362,16 +1405,9 @@ fi
 log "installing systemd unit ${SERVICE_FILE}"
 render_file "${SCRIPT_DIR}/gotham.service" "${SERVICE_FILE}" 0644
 
-if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" != "1" ] && [ "${GOTHAM_INSTALL_TEST_DEPS:-0}" != "1" ]; then
-    log "test mode: skipping service activation and the localhost agent install"
-    log "done (test install under ${PREFIX})"
-    exit 0
-fi
-# GOTHAM_INSTALL_TEST_RUN_AGENT=1 (sandbox test mode only) runs past
-# the exit above with shims for systemctl and the agent installer, so the
-# suite can execute the real agent-failure path end to end.
-# GOTHAM_INSTALL_TEST_DEPS=1 (sandbox test mode only) instead runs the
-# dependency step below against shims and exits right after it.
+# The dependency step below runs before the test-mode exit: it provisions the
+# database role before gotham.env is replaced, and a test-mode run still needs
+# the env file written before it stops.
 
 # ---- Dependencies (PostgreSQL + Redis) --------------------------------------
 # Compare two dotted numeric versions: 0 when $1 >= $2, 1 otherwise.
@@ -1403,13 +1439,14 @@ _deps_candidate() {
     apt-cache policy "$1" 2>/dev/null | sed -n 's/^  Candidate: //p' | head -n1
 }
 
-# _deps_apt_update refreshes the package lists once per install. The flag is
-# reset when a new repository is added (the caller then refreshes again).
+# _deps_apt_update refreshes the package lists once per install. It returns
+# nonzero instead of dying so the caller can remove repository files it just
+# added when the new source does not work. The flag is reset when a new
+# repository is added.
 _DEPS_APT_UPDATED=0
 _deps_apt_update() {
     [ "${_DEPS_APT_UPDATED}" -eq 1 ] && return 0
-    ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update ) \
-        || die "could not update the package lists"
+    ( umask 022; DEBIAN_FRONTEND=noninteractive apt-get update ) || return 1
     _DEPS_APT_UPDATED=1
 }
 
@@ -1432,48 +1469,83 @@ _deps_distro_codename() {
         || die "could not determine the distribution codename from ${_DEPS_OS_RELEASE}"
 }
 
-# _deps_add_repo downloads a third-party signing key over TLS, verifies its
-# fingerprint against the pinned value, and installs a signed-by keyring plus
-# the repository line. It aborts on any mismatch before the repo is used.
-# args: key URL, pinned fingerprint, keyring/source base name, repo line tail,
-# human-readable repository name.
-_deps_add_repo() {
-    _dr_key_tmp="$(mktemp "${TMPDIR:-/tmp}/gotham-apt-key.XXXXXX")" \
-        || die "could not create a temporary key file"
-    if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 3 "$1" -o "${_dr_key_tmp}"; then
-        rm -f "${_dr_key_tmp}"
-        die "could not download the $5 signing key"
+# _deps_fetch_key downloads a third-party signing key over TLS and verifies its
+# fingerprint (and that the file holds exactly one primary key) against the
+# pinned value. It writes nothing outside the private scratch dir, so the caller
+# can verify every key before adding any repository.
+# args: key URL, pinned fingerprint, keyring/source base name, human-readable
+# repository name. Sets _dk_file to the downloaded key.
+_deps_fetch_key() {
+    if [ -z "${_DEPS_KEY_DIR}" ]; then
+        _DEPS_KEY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gotham-apt-keys.XXXXXX")" \
+            || die "could not create a temporary key directory"
+        mkdir -m 0700 "${_DEPS_KEY_DIR}/gnupg"
     fi
-    _dr_fp="$(gpg --show-keys --with-colons "${_dr_key_tmp}" 2>/dev/null \
+    _dk_file="${_DEPS_KEY_DIR}/$3.asc"
+    if ! curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 \
+        "$1" -o "${_dk_file}"; then
+        die "could not download the $4 signing key"
+    fi
+    _dk_fp="$(GNUPGHOME="${_DEPS_KEY_DIR}/gnupg" gpg --show-keys --with-colons "${_dk_file}" 2>/dev/null \
         | awk -F: '$1 == "fpr" { print $10; exit }' | tr -d '[:space:]')"
-    _dr_keys="$(gpg --show-keys --with-colons "${_dr_key_tmp}" 2>/dev/null \
+    _dk_keys="$(GNUPGHOME="${_DEPS_KEY_DIR}/gnupg" gpg --show-keys --with-colons "${_dk_file}" 2>/dev/null \
         | awk -F: '$1 == "pub" { n++ } END { print n + 0 }')"
-    if [ "${_dr_fp}" != "$2" ] || [ "${_dr_keys}" != "1" ]; then
-        rm -f "${_dr_key_tmp}"
-        die "$5 signing key fingerprint mismatch (got '${_dr_fp:-unreadable}', ${_dr_keys:-0} primary key(s)); refusing to use it"
+    if [ "${_dk_fp}" != "$2" ] || [ "${_dk_keys}" != "1" ]; then
+        die "$4 signing key fingerprint mismatch (got '${_dk_fp:-unreadable}', ${_dk_keys:-0} primary key(s)); refusing to use it"
     fi
+}
+
+# _deps_write_repo installs a verified key as a signed-by keyring plus the
+# repository line. Files written here are recorded so a failed apt update can
+# remove exactly what this run added. args: verified key file, keyring/source
+# base name, repo line tail, human-readable repository name.
+_deps_write_repo() {
     _dr_keyrings="${_DEPS_APT_ROOT}/etc/apt/keyrings"
     _dr_sources="${_DEPS_APT_ROOT}/etc/apt/sources.list.d"
     mkdir -p "${_dr_keyrings}" "${_dr_sources}"
     chmod 0755 "${_dr_keyrings}" "${_dr_sources}"
     # The dearmored keyring must end in .gpg: apt silently ignores binary key
     # material in a .asc signed-by file and fails later with NO_PUBKEY.
-    _dr_keyring="${_dr_keyrings}/$3.gpg"
+    _dr_keyring="${_dr_keyrings}/$2.gpg"
     _dr_keyring_tmp="${_dr_keyring}.tmp.$$"
-    if ! gpg --dearmor -o "${_dr_keyring_tmp}" <"${_dr_key_tmp}"; then
-        rm -f "${_dr_key_tmp}" "${_dr_keyring_tmp}"
-        die "could not import the $5 signing key"
+    if ! GNUPGHOME="${_DEPS_KEY_DIR}/gnupg" gpg --dearmor -o "${_dr_keyring_tmp}" <"$1"; then
+        rm -f "${_dr_keyring_tmp}"
+        die "could not import the $4 signing key"
     fi
-    rm -f "${_dr_key_tmp}"
     chmod 0644 "${_dr_keyring_tmp}"
-    mv -f "${_dr_keyring_tmp}" "${_dr_keyring}"
-    _dr_source="${_dr_sources}/$3.list"
-    if ! printf 'deb [signed-by=%s] %s\n' "${_dr_keyring}" "$4" >"${_dr_source}.tmp.$$"; then
-        die "could not write the $5 repository line"
+    mv -f "${_dr_keyring_tmp}" "${_dr_keyring}" \
+        || die "could not install the $4 signing key"
+    _dr_source="${_dr_sources}/$2.list"
+    if ! printf 'deb [signed-by=%s] %s\n' "${_dr_keyring}" "$3" >"${_dr_source}.tmp.$$"; then
+        die "could not write the $4 repository line"
     fi
     chmod 0644 "${_dr_source}.tmp.$$"
-    mv -f "${_dr_source}.tmp.$$" "${_dr_source}"
+    mv -f "${_dr_source}.tmp.$$" "${_dr_source}" \
+        || die "could not install the $4 repository line"
+    _DEPS_WRITTEN_FILES="${_DEPS_WRITTEN_FILES} ${_dr_keyring} ${_dr_source}"
     _DEPS_APT_UPDATED=0
+}
+
+# _pg_server_version prints the PostgreSQL server major serving the DSN port
+# and fails when no server is installed. A psql client alone is not a server:
+# pg_lsclusters only prints clusters, and the server binary path is the
+# fallback for hosts without postgresql-common.
+_pg_server_version() {
+    _psv=""
+    if command -v pg_lsclusters >/dev/null 2>&1; then
+        _psv="$(pg_lsclusters --no-header 2>/dev/null | awk '$3 == 5432 { print $1; exit }')"
+        [ -n "${_psv}" ] || _psv="$(pg_lsclusters --no-header 2>/dev/null | awk 'NR == 1 { print $1 }')"
+    fi
+    if [ -z "${_psv}" ]; then
+        for _psbin in /usr/lib/postgresql/*/bin/postgres; do
+            [ -x "${_psbin}" ] || continue
+            _psv="${_psbin#/usr/lib/postgresql/}"
+            _psv="${_psv%%/*}"
+            break
+        done
+    fi
+    [ -n "${_psv}" ] || return 1
+    printf '%s\n' "${_psv}"
 }
 
 # plan_postgresql decides between keeping an installed PostgreSQL, the
@@ -1481,14 +1553,9 @@ _deps_add_repo() {
 # too-old one only produces the warning and points at the upgrade guide.
 plan_postgresql() {
     PG_ACTION=""
-    if command -v psql >/dev/null 2>&1; then
+    if PG_VERSION="$(_pg_server_version)"; then
         PG_ACTION="keep"
-        PG_VERSION="$(psql --version 2>/dev/null | awk '{
-            for (i = 1; i <= NF; i++) if ($i ~ /^[0-9][0-9]*\./) { print $i; exit }
-        }')"
-        [ -n "${PG_VERSION}" ] || PG_VERSION="unknown"
-        if [ "${PG_VERSION}" != "unknown" ] \
-            && ! _version_at_least "$(_version_cut "${PG_VERSION}" 1)" "${MIN_POSTGRES_MAJOR}"; then
+        if ! _version_at_least "${PG_VERSION}" "${MIN_POSTGRES_MAJOR}"; then
             log "WARNING: PostgreSQL ${PG_VERSION} is older than ${MIN_POSTGRES_MAJOR}; it is left as-is (major upgrades are never automatic)."
             log "         Upgrade guide: ${DB_UPGRADE_DOCS_URL}"
         fi
@@ -1529,9 +1596,11 @@ plan_redis() {
     fi
 }
 
-# install_planned_dependencies adds any needed pinned repository (verifying
-# every key first, so a bad key aborts before a single package is installed)
-# and then installs the planned packages.
+# install_planned_dependencies verifies every needed repository key before it
+# writes any repository file, so a tampered second key leaves /etc/apt
+# untouched, then updates the lists and installs the planned packages. If the
+# new sources make apt update fail, the files this run added are removed
+# again.
 install_planned_dependencies() {
     if [ "${PG_ACTION}" = "pgdg" ]; then
         log "the distribution PostgreSQL is older than ${MIN_POSTGRES_MAJOR}; using the PGDG apt repository"
@@ -1540,22 +1609,45 @@ install_planned_dependencies() {
         log "the distribution Redis is older than ${MIN_REDIS_VERSION}; using packages.redis.io pinned to ${REDIS_PINNED_SERIES}"
     fi
     if [ "${PG_ACTION}" = "pgdg" ] || [ "${REDIS_ACTION}" = "repo" ]; then
+        # gnupg comes from the distribution and is trusted by its own keyring;
+        # it is the tool used to verify the third-party keys below.
         command -v gpg >/dev/null 2>&1 || _deps_apt_install ca-certificates gnupg
         _deps_distro_codename
     fi
-    # Verify and add both keys before installing anything, so a tampered key
-    # leaves the host untouched.
+    _DEPS_KEY_DIR=""
+    _DEPS_WRITTEN_FILES=""
+    _pgdg_key=""
+    _redis_key=""
     if [ "${PG_ACTION}" = "pgdg" ]; then
-        _deps_add_repo "${PGDG_KEY_URL}" "${PGDG_KEY_FINGERPRINT}" pgdg \
-            "${PGDG_REPO_URL} ${_dd_codename}-pgdg main" "PGDG"
+        _deps_fetch_key "${PGDG_KEY_URL}" "${PGDG_KEY_FINGERPRINT}" pgdg "PGDG"
+        _pgdg_key="${_dk_file}"
     fi
     if [ "${REDIS_ACTION}" = "repo" ]; then
-        _deps_add_repo "${REDIS_KEY_URL}" "${REDIS_KEY_FINGERPRINT}" redis \
+        _deps_fetch_key "${REDIS_KEY_URL}" "${REDIS_KEY_FINGERPRINT}" redis "Redis"
+        _redis_key="${_dk_file}"
+    fi
+    # Both keys are verified; writing a repository is now safe.
+    if [ -n "${_pgdg_key}" ]; then
+        _deps_write_repo "${_pgdg_key}" pgdg \
+            "${PGDG_REPO_URL} ${_dd_codename}-pgdg main" "PGDG"
+    fi
+    if [ -n "${_redis_key}" ]; then
+        _deps_write_repo "${_redis_key}" redis \
             "${REDIS_REPO_URL} ${_dd_codename} main" "Redis"
     fi
+    rm -rf "${_DEPS_KEY_DIR}"
+    _DEPS_KEY_DIR=""
     if [ "${PG_ACTION}" = "distro" ] || [ "${PG_ACTION}" = "pgdg" ] \
         || [ "${REDIS_ACTION}" = "distro" ] || [ "${REDIS_ACTION}" = "repo" ]; then
-        [ "${_DEPS_APT_UPDATED}" -eq 1 ] || _deps_apt_update
+        if [ "${_DEPS_APT_UPDATED}" -ne 1 ] && ! _deps_apt_update; then
+            # A source the repository does not serve (for example a codename it
+            # has not published) must not break every later apt update.
+            for _dwf in ${_DEPS_WRITTEN_FILES}; do
+                rm -f "${_dwf}"
+            done
+            _DEPS_WRITTEN_FILES=""
+            die "could not update the package lists with the new repository; removed the files this run added"
+        fi
     fi
     case "${PG_ACTION}" in
         distro)
@@ -1576,53 +1668,85 @@ install_planned_dependencies() {
                 "redis-tools=6:${REDIS_PINNED_SERIES}.*"
             ;;
     esac
-    PG_VERSION="$(psql --version 2>/dev/null | awk '{
-        for (i = 1; i <= NF; i++) if ($i ~ /^[0-9][0-9]*\./) { print $i; exit }
-    }')"
-    [ -n "${PG_VERSION}" ] || PG_VERSION="unknown"
+    if ! PG_VERSION="$(_pg_server_version)"; then
+        PG_VERSION="unknown"
+    fi
     REDIS_VERSION="$(redis-server --version 2>/dev/null \
         | sed -n 's/.*v=\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
     [ -n "${REDIS_VERSION}" ] || REDIS_VERSION="unknown"
 }
 
-# provision_local_database creates the gotham role and database matching the
-# DSN. The password travels to psql on stdin, never on a command line, and
-# xtrace is off so `sh -x` cannot log it. An existing role keeps its password
-# when the stored DSN already holds it; the legacy fixed password is rotated.
+# _pg_login_works succeeds when the gotham role can authenticate over TCP with
+# password $1. This is the same path the control plane uses (localhost DSN), so
+# it proves the stored DSN works rather than merely looking current.
+_pg_login_works() {
+    PGPASSWORD="$1" psql -h 127.0.0.1 -U gotham -d postgres -tAc 'SELECT 1' >/dev/null 2>&1
+}
+
+# provision_local_database brings the gotham role to the password the DSN will
+# carry and creates the database. It verifies a real login after any change, so
+# a stored DSN that no longer authenticates is healed instead of trusted. A
+# success records DB_ROLE_CHANGED so install_env_file can roll back if the
+# atomic env replacement fails. The password travels on stdin, never on a
+# command line, and xtrace is off so `sh -x` cannot log it.
+DB_ROLE_CHANGED=0
+DB_OLD_PASSWORD_WORKS=0
 provision_local_database() {
     _admin_xtrace_off
-    _need_role_sql=1
+    case "${DB_PASSWORD}" in
+        '' | *[!A-Za-z0-9_-]*) die "local database password holds characters this installer does not write; set GOTHAM_DATABASE_DSN and GOTHAM_SKIP_DEPS=1, or reset the role by hand" ;;
+    esac
     _role_exists=0
     if runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='gotham'" | grep -q 1; then
         _role_exists=1
-        [ "${DB_PASSWORD_KEEP}" -eq 1 ] && _need_role_sql=0
-    fi
-    # The password reaches single-quoted SQL, so only the generated alphabet is
-    # accepted there. A stored DSN whose role already exists needs no SQL.
-    if [ "${_need_role_sql}" -eq 1 ]; then
-        case "${DB_PASSWORD}" in
-            '' | *[!A-Za-z0-9_-]*) die "internal error: invalid local database password" ;;
-        esac
     fi
     if [ "${_role_exists}" -eq 1 ]; then
-        if [ "${DB_PASSWORD_KEEP}" -eq 1 ]; then
-            log "database role gotham already exists; keeping its password"
+        if _pg_login_works "${DB_PASSWORD}"; then
+            log "database role gotham already accepts the stored password; keeping it"
         else
-            log "replacing the legacy fixed database password with the generated one"
+            if [ -n "${DB_OLD_PASSWORD}" ] && [ "${DB_OLD_PASSWORD}" != "${DB_PASSWORD}" ] \
+                && _pg_login_works "${DB_OLD_PASSWORD}"; then
+                DB_OLD_PASSWORD_WORKS=1
+                if [ "${DB_OLD_PASSWORD}" = "gotham" ]; then
+                    log "replacing the legacy fixed database password"
+                else
+                    log "updating the gotham role to the password stored in gotham.env"
+                fi
+            else
+                log "the existing gotham role does not accept the stored password; setting the local database password"
+            fi
             printf "ALTER ROLE gotham WITH LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
                 | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
-                || die "could not update the gotham database role"
+                || die "could not update the gotham database role; gotham.env was not changed"
+            _pg_login_works "${DB_PASSWORD}" \
+                || die "the gotham role cannot log in with the new password; gotham.env was not changed"
+            DB_ROLE_CHANGED=1
         fi
     else
         printf "CREATE ROLE gotham LOGIN PASSWORD '%s';\n" "${DB_PASSWORD}" \
             | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - \
-            || die "could not create the gotham database role"
+            || die "could not create the gotham database role; gotham.env was not changed"
+        _pg_login_works "${DB_PASSWORD}" \
+            || die "the new gotham role cannot log in; gotham.env was not changed"
+        DB_ROLE_CHANGED=1
     fi
     _admin_xtrace_on
     if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='gotham'" | grep -q 1; then
         runuser -u postgres -- createdb -O gotham gotham \
             || die "could not create the gotham database"
     fi
+}
+
+# rollback_database_role restores the previous working password when the
+# atomic gotham.env replacement fails after the role was changed.
+rollback_database_role() {
+    [ "${DB_ROLE_CHANGED}" -eq 1 ] || return 0
+    [ "${DB_OLD_PASSWORD_WORKS}" -eq 1 ] || return 0
+    _admin_xtrace_off
+    printf "ALTER ROLE gotham WITH LOGIN PASSWORD '%s';\n" "${DB_OLD_PASSWORD}" \
+        | runuser -u postgres -- psql -v ON_ERROR_STOP=1 -q -f - >/dev/null 2>&1
+    _pg_login_works "${DB_OLD_PASSWORD}"
+    _admin_xtrace_on
 }
 
 DEPS_SUMMARY=""
@@ -1636,8 +1760,8 @@ if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ]; then
         || die "PostgreSQL and Redis are required; install them or set GOTHAM_DATABASE_DSN and GOTHAM_SKIP_DEPS=1"
     # Candidate versions come from the package lists; refresh them once when a
     # package is missing (a fully installed host never touches the network).
-    if ! command -v psql >/dev/null 2>&1 || ! command -v redis-server >/dev/null 2>&1; then
-        _deps_apt_update
+    if ! _pg_server_version >/dev/null || ! command -v redis-server >/dev/null 2>&1; then
+        _deps_apt_update || die "could not update the package lists"
     fi
     plan_postgresql
     plan_redis
@@ -1650,10 +1774,27 @@ if [ "${PROVISION_LOCAL_DEPS}" -eq 1 ]; then
   Cache:    Redis ${REDIS_VERSION} (local)
 "
 fi
-if [ "${GOTHAM_INSTALL_TEST_DEPS:-0}" = "1" ] && [ "${TEST_MODE}" -eq 1 ]; then
-    log "test mode: dependencies installed (sandbox)"
+# The role now accepts the password the DSN carries (or this install does not
+# manage the database), so replacing gotham.env can no longer lock the control
+# plane out. If the atomic replacement fails, restore the old role password.
+if install_env_file; then
+    :
+else
+    _env_rc=$?
+    if [ "${_env_rc}" -eq 1 ]; then
+        rollback_database_role
+        die "could not replace ${ENV_FILE}; the previous file was kept"
+    fi
+    die "${ENV_FILE} was replaced but its permissions could not be fixed; re-run the installer"
+fi
+if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" != "1" ]; then
+    log "test mode: skipping service activation and the localhost agent install"
+    log "done (test install under ${PREFIX})"
     exit 0
 fi
+# GOTHAM_INSTALL_TEST_RUN_AGENT=1 (sandbox test mode only) runs past
+# the exit above with shims for systemctl and the agent installer, so the
+# suite can execute the real agent-failure path end to end.
 
 # ---- Migrate + start --------------------------------------------------------
 # Skipped in test mode (no database there; the agent-failure suite covers the

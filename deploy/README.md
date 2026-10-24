@@ -1,1004 +1,301 @@
-# Gotham deployment
+# Gotham deployment files
 
-| File | Purpose |
+Reference for the scripts, systemd units and configs in `deploy/`: what each
+one is for, who runs it and the flags that matter. Operator instructions live in
+the docs; this page does not repeat them.
+
+| Task | Read |
 |---|---|
-| `install.sh` | Signed one-line control-plane installer (INFRA-9.1) |
-| `release-verify.sh` | Shared signature + digest verification for the installers |
-| `gotham-signing-key.pub` | Published release signing public key (embedded in the binaries and installers) |
-| `release-key-rotation.md` | Runbook: the embedded current + next key ring, planned rotation, compromise/loss recovery |
-| `test-release-install.sh` | Local (no GitHub) dry run of the sign → serve → verify → install chain |
-| `gotham.service` | Control-plane systemd unit |
-| `gotham-update.sh` | Privileged restart/healthcheck/rollback wrapper (shared; installed as `gotham-update` for the CP and `gotham-agent-update` for the agent) |
-| `gotham-updater.conf` | Root-owned wrapper configuration (install to `/etc/gotham/updater.conf`) |
-| `install-sudoers.sh` | Grants the service user the wrapper (and nothing else) |
-| `verify-systemd.sh` | Root-only integration check for a Linux host with systemd |
-| `verify-agent-update.sh` | Root-only end-to-end check of the agent remote-update flow (BE-9.2) on a Linux/systemd/Docker host |
-| `gotham-agent.service`, `install-agent.sh` | Node agent (installer verifies the signed manifest) |
-| `gotham-agent-updater.conf` | Root-owned agent wrapper configuration (install to `/etc/gotham/agent-updater.conf`) |
-| `install-agent-sudoers.sh` | Grants the agent user the agent wrapper (and nothing else) |
-| `compose.dev.yml` | Local PostgreSQL + Redis |
+| Install the control plane or a node | [Install](../docs/guide/install.md), [Add nodes](../docs/guide/nodes.md) |
+| Update, roll back, reinstall | [Updates](../docs/guide/updates.md) |
+| Panel domain and HTTPS | [Domain and HTTPS](../docs/guide/domain-and-https.md) |
+| Node file manager | [Remote file service](../docs/guide/file-service.md) |
+| Build and sign a release | [Release and signing](../docs/guide/release-signing.md) |
 
-## Control-plane self-update layout
+## Installers
 
-The self-update chain splits privileges so that compromising the control plane
-cannot escalate to root or redirect a root write:
+### `install.sh` — control-plane installer
 
-| Path | Owner | Writable by `gotham` | Why |
-|---|---|---|---|
-| `/var/lib/gotham/bin/gotham` | `gotham` | yes | Fixed `ExecStart` and swap target (`StateDirectory`). |
-| `/var/lib/gotham/bin/gotham.old` | `gotham` | yes | Hardlink to the last known good binary. |
-| `/var/lib/gotham/update.pending` | `gotham` | yes | Staged-update marker that gates a second apply. |
-| `/var/lib/gotham/update.lock` | `gotham` | yes | Lock shared with the wrapper. |
-| `/usr/libexec/gotham/gotham-update` | root | **no** | Privileged wrapper (no arguments). |
-| `/etc/gotham/updater.conf` | root | **no** | Fixed binary/service/health/status/pending/lock. |
-| `/var/lib/gotham-updater/update.status` | root | **no** (read-only) | Authoritative outcome; the root wrapper writes it in a root-owned directory, so a symlink planted by the service user cannot redirect the write. |
+Run by the operator as root, on a fresh Ubuntu 22.04 / Debian host or to
+reinstall an existing one. It picks the newest release, verifies the signed
+manifest and artifact digest, installs PostgreSQL/Redis (unless pointed at
+managed services), the binary, updater and unit, applies migrations, creates the
+first admin, and installs the localhost agent. A re-run preserves
+`/etc/gotham/gotham.env` and restarts the service.
 
-The unit runs `/var/lib/gotham/bin/gotham serve`, keeps `KillMode=process` so
-the wrapper survives the restart cgroup, and does **not** set
-`NoNewPrivileges` because the control plane invokes the fixed root-owned wrapper
-with `sudo -n`. sudoers grants exactly:
+Two ways to run the same file:
 
-```
-gotham ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-update ""
-```
+- **Piped or downloaded alone** — bootstraps: it downloads the signed
+  `gotham-deploy-<version>.tar.gz` deploy bundle, verifies it against the
+  signed manifest, then runs the bundled installer. Needs `curl`, `openssl` 3,
+  `base64`, `mktemp`, `tar`.
+- **From a checkout** — runs in place and needs its sibling files in `deploy/`
+  (`release-verify.sh`, `install-agent*.sh`, the units and configs).
 
-The trailing `""` pins the wrapper to **zero arguments** (`sudoers(5)`: a
-command with no argument list permits any arguments; `""` permits none). The
-wrapper also refuses to run with arguments and, when `SUDO_USER`/`SUDO_UID` is
-set, ignores every `GOTHAM_*` override, so `env_reset` and `!SETENV` remain a
-hard requirement.
+Flags: `--domain <host>` (or the prompt), `--cp-host <name-or-ip>` (repeatable,
+adds gRPC listener SANs), `--file-manager` / `--no-file-manager`, `--dry-run`,
+`--help` (prints the file header).
 
-## Install
+Environment: `GOTHAM_VERSION`, `GOTHAM_RELEASES_URL`, `GOTHAM_BASE_URL`,
+`GOTHAM_REPO`, `GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_SKIP_DEPS`,
+`GOTHAM_ADMIN_EMAIL`, `GOTHAM_ADMIN_PASSWORD_FILE`.
 
-`deploy/install.sh` automates the layout below for a clean systemd host:
-download → verify the signed manifest and artifact digest → install the binary,
-wrapper, config, status directory, sudoers rule and unit → migrate → start. It
-uses the shared `release-verify.sh`; see `docs/guide/release-signing.md`.
+Test seams (never set on a real host): `GOTHAM_INSTALL_ROOT` (non-`/` sandbox,
+enables test mode), `GOTHAM_INSTALL_TEST_PUBLIC_KEY` (only with the root
+sandbox), `GOTHAM_INSTALL_TEST=1` (honour OS/agent-env seams, only with
+`--dry-run`), `GOTHAM_INSTALL_TEST_RUN_AGENT` + `GOTHAM_INSTALL_TEST_AGENT_SCRIPT`,
+`GOTHAM_INSTALL_TEST_ADMIN_BIN` + `GOTHAM_INSTALL_TEST_ADMIN_TTY`.
 
-The manual layout it produces is:
+### `install-agent.sh` — node-agent installer
 
-```sh
-# 1. Install the binary, the wrapper, the config and the root-owned status dir.
-install -d -o gotham -g gotham -m 0755 /var/lib/gotham/bin
-# The binary MUST be owned by the service user: the updater hardlinks it to
-# <binary>.old, and fs.protected_hardlinks=1 (the default on Debian/Ubuntu/
-# Fedora) makes os.Link of a root-owned file fail with EPERM.
-install -m 0755 -o gotham -g gotham gotham /var/lib/gotham/bin/gotham
-install -d -m 0755 -o root -g root /usr/libexec/gotham
-install -m 0755 gotham-update.sh /usr/libexec/gotham/gotham-update
-install -m 0644 gotham-updater.conf /etc/gotham/updater.conf
-install -d -m 0755 -o root -g root /var/lib/gotham-updater
+Run by the operator as root on each node. Installs the agent binary into
+`/var/lib/gotham-agent/bin`, writes `/etc/gotham/agent.env`, installs the shared
+update wrapper as `gotham-agent-update`, its sudoers rule and the unit, then
+starts it. Re-running is a safe reinstall: keys the invocation does not set
+keep their previous value. It verifies the same signed manifest as the control
+plane and **fails closed without a CA**.
 
-# 2. Install the unit and the sudoers rule.
-install -m 0644 gotham.service /etc/systemd/system/gotham.service
-sudo deploy/install-sudoers.sh gotham
-systemctl daemon-reload && systemctl enable --now gotham
-```
+Flags: `--ca <path>` (or `GOTHAM_AGENT_CA_FILE`), `--enrollment-token-file
+<path>` (first registration), `--insecure` (local development only),
+`--full` (install Docker Engine + compose plugin on Ubuntu/Debian),
+`--file-manager` / `--no-file-manager`, `--dry-run`.
 
-`util-linux` (`flock`) is required by the wrapper; without it the wrapper fails
-closed and refuses to update rather than running unserialized.
+Key values the installer writes to `agent.env` (a key it does not set keeps the
+value a previous run wrote): `GOTHAM_AGENT_CP_ADDR`,
+`GOTHAM_AGENT_NODE_ID`, `GOTHAM_AGENT_LISTEN_ADDR`, `GOTHAM_AGENT_CA`,
+`GOTHAM_AGENT_CERT_DIR`, `GOTHAM_AGENT_KEY`, `GOTHAM_AGENT_DOCKER_SOCK`,
+`GOTHAM_AGENT_LOG_LEVEL`, `GOTHAM_AGENT_AUTO_UPDATE`,
+`GOTHAM_AGENT_UPDATE_INTERVAL`, `GOTHAM_AGENT_UPDATE_CHANNEL`,
+`GOTHAM_AGENT_ENROLLMENT_TOKEN`, `GOTHAM_AGENT_FILES`.
 
-## Certificate authority (mTLS)
+### `install-agent-lib.sh` — agent installer internals
 
-`install.sh` provisions the gRPC certificate authority with `gotham ca init`,
-which writes `ca.crt` + `ca.key` (`0600`) into `GOTHAM_CA_DIR`
-(`/var/lib/gotham/ca`, owned by the `gotham` service user) and is idempotent — a
-reinstall keeps the existing CA. `gotham serve` loads it and the gRPC gateway
-runs TLS, presenting a server certificate signed by the CA and **requiring** the
-agent to authenticate with the node certificate issued at enrollment (JUS-194).
-A directory holding exactly one of `ca.crt`/`ca.key` is an **incomplete CA** and
-is refused at startup rather than silently downgraded to plaintext, and a
-`ca.key` readable by group or others is refused too (it signs every agent
-certificate). With no CA at all, serve refuses to start unless the operator sets
-`GOTHAM_GRPC_INSECURE=true` (development only); only then does the gateway run
-plaintext and log a warning.
+Sourced by `install-agent.sh`, never executed. Holds the reinstall logic
+(`agent_env_write`, `agent_env_validate`, `agent_service_restart`) and the
+`--full` Docker setup (`ensure_docker_full`). Fixed production paths are
+assigned on source and cannot be redirected from the environment. Exercised by
+`test-agent-install.sh`.
 
-### Mutual TLS: enrollment and the enrollment token
+### `release-verify.sh` — release verification
 
-The agent generates a key, sends a CSR on `Register`, and receives a node leaf
-with both `serverAuth` (the CP dials the node's services) and `clientAuth` (the
-node authenticates to the agent channel). It presents that leaf on every
-subsequent connection. The gateway binds the leaf to the node: the certificate
-identity must equal the claimed `node-id`, and its public key must be the key
-recorded for that node (bound on the first authenticated connection), so a
-certificate for node A cannot act as node B, a foreign, expired or CA certificate
-is refused, and removing or re-keying a node closes its live stream.
+Sourced by both installers, never executed. Implements `verify_release`:
+manifest signature against the pinned Ed25519 key, manifest binding to the
+requested version/architecture/file name, then the artifact SHA-256 against the
+signed manifest. Any failure aborts. Installs signal handlers for one
+verification and cleans its scratch directory.
 
-A node's **first ever** registration carries no certificate. It is gated by the
-enrollment token. The control plane uses `GOTHAM_GRPC_ENROLLMENT_TOKEN` when set,
-otherwise it generates one on first start and persists it at
-`<GOTHAM_CA_DIR>/enrollment-token` (0600) — so a TLS control plane fails closed by
-default. `GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true` is the explicit, loudly-logged
-opt-in for trust-on-first-use instead.
+### `gotham-signing-key.pub` — release public key
 
-To add a node, pass the token from the environment or a root-only file — never on
-the command line, where `ps`, `/proc/<pid>/cmdline` and shell history expose it:
+PEM Ed25519 public key, safe to publish. It is embedded in both binaries and in
+the installers, and uploaded as a release asset. The private key never lives in
+this repository; see `release-key-rotation.md`.
 
-```sh
-# control plane: read the generated token (or set GOTHAM_GRPC_ENROLLMENT_TOKEN)
-sudo cat /var/lib/gotham/ca/enrollment-token
-# each node — preferred: a root-owned file, mode 0600, not a symlink
-sudo install -m 0600 /dev/stdin /root/cp-enrollment-token   # paste the token, end with Ctrl-D
-sudo deploy/install-agent.sh --ca ./ca.crt --enrollment-token-file /root/cp-enrollment-token
-# alternative: the environment, read without echo (never `sudo VAR=<token> cmd`:
-# that puts the secret in sudo's argv and in shell history)
-read -rs GOTHAM_AGENT_ENROLLMENT_TOKEN && export GOTHAM_AGENT_ENROLLMENT_TOKEN
-sudo -E deploy/install-agent.sh --ca ./ca.crt
-```
+### `release-key-rotation.md` — signing-key runbook
 
-`--enrollment-token-file` refuses a missing file, a directory, a symlink, a file
-readable by group or others, a non-root owner when the installer runs as root,
-and an unreadable/unparsable one; it never prints the value.
+Maintainer runbook for the embedded current + next key ring, planned rotations,
+and compromise/loss recovery. Related: `.goreleaser.yaml`,
+`.github/workflows/release.yml`, `updatecore/sign.go`.
 
-Only the first enrollment needs it: the agent sends the token only while it holds
-no certificate **and only over a CA-pinned TLS channel** (a plaintext
-`GOTHAM_AGENT_INSECURE` agent logs that it is dropping the token rather than
-sending it in the clear), and every later `Register`, `Heartbeat` and
-`RequestUpdate` uses the node certificate. The operator may then delete
-`GOTHAM_AGENT_ENROLLMENT_TOKEN` from `/etc/gotham/agent.env`. A certificate-less
-caller with no (or a wrong) token gets the same refusal, so it cannot use the
-error to enumerate node ids.
+## Self-update chain
 
-**Legacy-leaf sunset.** Pre-mutual-TLS (serverAuth-only) node certificates are
-accepted only until `GOTHAM_GRPC_LEGACY_LEAF_UNTIL` (default
-`2027-01-15T00:00:00Z`; `none` disables). `serve` logs the date and how many nodes
-still present one at startup, and warns on each accept; after the date such a
-leaf is refused and the node must re-enroll (online nodes renew automatically
-long before, since the leaf is 90 days).
+The control plane and the agent use the same layout: the service user owns the
+binary and the pending/lock markers; a root-owned wrapper next to a root-owned
+config performs the restart and records the durable outcome. sudoers grants the
+bare wrapper with **zero arguments**.
 
-**Upgrading an already-enrolled node.** Nodes enrolled before mutual TLS hold a
-`serverAuth`-only leaf. The gateway keeps accepting it (the extended key usage is
-not constrained) and binds its key on the first authenticated connection, so an
-existing node keeps working with no operator action; it receives a dual-EKU leaf
-on its next renewal. The node key and leaf live in `GOTHAM_AGENT_CERT_DIR` and are
-untouched by a self-update, so an update cannot brick an enrolled agent. A node
-whose key cannot be proven (for example its registry row was deleted) must be
-re-enrolled — with the enrollment token (environment or `--enrollment-token-file`)
-when the control plane requires one.
-
-The listener certificate SANs are the operator-declared hosts
-(`install.sh --cp-host <name-or-ip>` repeated, or `GOTHAM_GRPC_HOSTS=<a,b>`)
-persisted as `<GOTHAM_CA_DIR>/hosts`, plus the bind-address host, the loopback
-names and the machine hostname. A remote agent must dial one of these SANs or the
-handshake fails closed; add the control plane's public name/IP at install time.
-`gotham ca init --host <name-or-ip>` sets the list directly, and
-`GOTHAM_GRPC_HOSTS` in the service environment overrides it at runtime.
-
-To add a node, copy `ca.crt` (never `ca.key`) to it and install the agent with
-`--ca`:
-
-```sh
-scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
-sudo GOTHAM_AGENT_NODE_ID=worker-1 GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 \
-    deploy/install-agent.sh --ca ./ca.crt
-```
-
-The control plane installer always installs and starts the local agent with
-`--full`, using the same release tag, node ID `localhost` and control-plane
-address `127.0.0.1:9442`. There is no option to skip it. Unsupported platforms
-and an existing remote `agent.env` fail before mutation; move that remote
-agent or explicitly repoint it before retrying. Re-running upgrades the local
-agent identity to `localhost` while preserving its other settings.
-
-The control plane ensures the shared `localhost` registry entry on startup
-and rejects deletion and PATCH with HTTP 409. Readiness requires agent
-heartbeats. Migration 49 uses the saved `agent.env` identity supplied by the
-installer, preserving the UUID and workload references even after a hostname
-change. For manual migrations, set `GOTHAM_LEGACY_LOCAL_NODE_ID` to that ID;
-forward migration 51 additionally selects a single loopback-addressed node with
-any custom ID, including agent addresses such as `localhost:9443` or `[::1]:9443`.
-Startup repeats that check before creating a node. Apps, databases, services and
-routers keep their existing server UUID. Migration 51 can remove an empty,
-pending, never-registered `localhost` placeholder with no foreign-key references
-before renaming the legacy node. A registered/referenced collision or multiple
-local candidates fails with reconciliation guidance: inspect the
-saved `agent.env` and server records, reconcile workloads and remove duplicate
-local-agent entries before retrying. No workloads are merged or deleted for you.
-Startup scans only when `localhost` is absent, so a later registration cannot
-block a restart. Detection uses the recorded IP/agent address, excluding IPs
-copied from agent-chosen IP node IDs. Nodes without agent registration data or
-with an SSH user, key, or password are not candidates. Non-loopback or missing
-legacy addresses still require the saved identity hint for migration 49;
-migration 51 ignores it.
-
-For panel HTTPS, save an `https://` control-plane URL in General settings and
-confirm the proposed host during the trial. The `localhost` proxy creates a
-panel-owned certificate intent and serves HTTPS without an application. Keep
-ports 80 and 443 reachable. HTTP-01 requires the domain's A/AAAA records to point
-**directly at this box**, with Cloudflare's proxy disabled (DNS only). For a
-proxied Cloudflare domain, configure a DNS provider and change the panel intent
-to DNS-01 through `/api/v1/proxy/panel-certificates/{id}`; see
-[panel HTTPS setup](../docs/guide/domain-and-https.md). HTTP stays available
-while issuance is pending or failed, and redirects only after an unexpired
-certificate is observed. Confirmation retires the previous host's intent;
-reverting retires the proposed host's intent. Certificate errors never fail a
-settings save or block a revert.
-
-After a manual upgrade, set `GOTHAM_AGENT_NODE_ID=localhost` in the local agent's
-saved environment (normally `/etc/gotham/agent.env`) and restart the agent. The
-installer updates it automatically; retaining the old ID can register a duplicate
-legacy node again.
-
-The exact `localhost` identity may register only from a loopback peer. Other
-listener identities and aliases stay reserved. Its server certificate uses
-`localhost.agent.gotham.invalid`, verified by the CP on its local-agent dial,
-instead of any CP listener SAN. Enrollment rejects a configuration that also
-assigns that SAN to the CP. The Git remote host policy
-is independent of node identity validation. A node's first registration is the
-one certificate-less connection and is gated by the enrollment token (see
-"Mutual TLS" above); every later connection presents the node certificate.
-An agent install failure leaves the control plane running and exits nonzero
-with a shell-quoted agent-only retry command.
-
-`install-agent.sh` fails closed without a CA; `--insecure` is the
-development-only override that leaves the agent channel in plaintext. The agent
-itself also fails closed: with no CA it refuses to start unless
-`GOTHAM_AGENT_INSECURE=true`, and its plaintext listener is confined to
-loopback.
-
-Remote `install-agent.sh` runs must set a distinct `GOTHAM_AGENT_NODE_ID`
-and the remote `GOTHAM_AGENT_CP_ADDR`; the agent's default identity is
-`localhost`. See `docs/guide/nodes.md`, "Install the agent on the node".
-
-Re-running `install-agent.sh` is a safe reinstall: values the invocation does not
-set (for example the control plane address and node id) are kept from the
-existing `agent.env`, operator-added keys are preserved, and a running agent is
-restarted onto the newly installed binary. Pass a value again (flag or
-environment) to override it. Upgrading from an older installer: the quote
-rejection below also applies to values preserved from an existing `agent.env`,
-so a node id containing a quote written by an older installer now blocks the
-upgrade with a clear error naming the key — remove the quote from `agent.env`
-and re-run.
-
-Every value written to `agent.env` is validated before the installer changes
-anything (service user, directories, binary, CA): control characters and
-trailing backslashes are rejected everywhere, the node id mirrors the
-agent's own gate (at most 253 bytes; no spaces, tabs, `*`, `/` or
-backslashes) and additionally refuses quotes (systemd's EnvironmentFile
-parser strips a leading quote and unquotes a balanced pair, so the unit
-would see a different value than the installer wrote — proven on Ubuntu
-22.04), `CERT_DIR`/`KEY`/`CA` must be absolute paths without
-whitespace, quotes or backslashes, the docker endpoint must be
-`unix:///abs/path`, `/abs/path` or `tcp://host:port`, the dial and listen
-addresses must be `host:port` without spaces, quotes or `=`, auto-update
-accepts only `true`/`false` (the agent only honours `true`), and the
-interval must match Go durations (surrounding whitespace trimmed as the
-agent trims it; day/week units and overflowing values Go errors on are
-refused) while the channel must match channel names. `install.sh` runs the
-same agent checks before its mandatory local agent step, plus the DSN/Redis gate (control
-characters, a trailing backslash, quotes), which always runs before the first
-mutation, so a bad value fails the run with nothing created; a failing agent
-step itself still keeps the control plane. `GOTHAM_DATABASE_DSN` and
-`GOTHAM_REDIS_ADDR` get the same control-character check before they go into
-`gotham.env`. Upgrading from an older installer: the DSN/Redis gate also
-applies to values preserved from an existing `gotham.env`, so a DSN with
-quotes or a trailing backslash written by an older installer now blocks the
-upgrade with a clear error naming the key — fix the value in `gotham.env`
-(keyword DSNs with quoted values must use the URL form) and re-run.
-
-`install-agent.sh --full` (or `GOTHAM_AGENT_FULL=1`) also installs Docker
-Engine and the compose plugin from the official Docker apt repository before
-anything else. It is off by default and on for the localhost agent the
-control-plane installer sets up. The repository key is fingerprint-pinned
-before use and every package is apt-verified; on non-Ubuntu/Debian distros it
-fails with the manual step instead of guessing. Re-running it is a no-op when
-`docker compose version` already works.
-
-Re-running `install.sh` on a pre-existing plaintext control plane flips it to
-TLS; agents installed before that go offline until they are reinstalled with
-`--ca` (see `docs/guide/updates.md`, "Reinstalling on an existing host").
-
-
-## Outcome, gate and recovery
-
-- The control plane writes `staged` to `/var/lib/gotham/update.pending`, swaps
-  the binary (hardlinking the previous one to `<binary>.old`, so the fixed
-  `ExecStart` is never absent), then runs the wrapper.
-- While the pending marker is `staged`, a second **Apply is refused**
-  (`409`/`ErrUpdatePending`); the wrapper removes the marker once it records the
-  final `ok` / `rolled_back` / `rollback_failed` / `no_backup` status in the
-  root-owned status file.
-- If the wrapper cannot be launched, the control plane rolls back and records
-  `rolled_back` (or `rollback_failed`); a wrapper that exits without recording
-  its own outcome (`monitorRestart`) is treated the same way, so the unproven
-  binary is never left armed and the next apply cannot lose the known-good
-  backup.
-- If the wrapper cannot acquire the update lock it fails closed, records
-  `wrapper_failed` in the root-owned status, and exits nonzero; the pending
-  marker is left in place so the gate stays closed and the control plane's
-  monitor rolls back.
-- If the status directory is not an existing, non-symlink, root-owned directory
-  the wrapper refuses to record there and falls back to the checked lock open
-  (the residual above). With a usable directory the lock failure above records
-  `wrapper_failed` and leaves the marker `staged`; with an unusable one, if the
-  fallback open fails the wrapper exits nonzero with no status recorded and
-  again leaves a regular `staged` marker until the monitor or the next startup
-  resolves it (fail closed), while if it succeeds the update proceeds, removes
-  the pending marker and exits 0 with no root-owned status record. Either way
-  the wrapper never performs a root write into a service-writable directory.
-- If the host crashes or reboots during the health window, the next startup sees
-  a `staged` marker and relaunches the wrapper once (marker rewritten to
-  `resuming`, so it never loops); the new binary is then health-checked or
-  rolled back.
-- A crash *before* the commit rename leaves target and `<binary>.old` as the
-  same inode; startup recovery clears the marker so the gate reopens.
-- **systemd start rate limit.** A new binary that starts but crash-loops (for
-  example a broken build) makes systemd trip its start rate limit and mark the
-  unit failed, after which `systemctl restart` is refused with "Start request
-  repeated too quickly". Before every restart the wrapper clears that state with
-  `systemctl reset-failed "<service>"` (best-effort), so the rollback restart
-  still runs the restored binary and the outcome is `rolled_back`, not
-  `rollback_failed` with the service left down. The shared wrapper therefore
-  covers the control plane and the agent identically.
-- `GET /api/v1/updates/check` returns the outcome; release notes and the
-  wrapper's `detail` (which can contain paths) are only shown to a platform
-  operator.
-- Operator reset for a stale `staged`/`resuming` marker (for example after a
-  hard kill): `gotham update reset` or `rm -f /var/lib/gotham/update.pending`.
-- Run `gotham update apply`/`rollback` as the service user
-  (`sudo -u gotham /var/lib/gotham/bin/gotham update apply`). Run as root, the
-  swap installs a `root:root 0755` binary over the service-owned one and the
-  next service-run apply fails at the hardlink backup (`fs.protected_hardlinks`
-  EPERM); the CLI refuses a mismatched binary owner with a clear message.
-  `gotham update rollback` only restores the file — the running process keeps
-  the current binary until `systemctl restart gotham`.
-- **Failed-release backoff (`AUTO_UPDATE`).** The scheduled check/apply loop
-  mirrors the agent's durable backoff: a `rolled_back`/`rollback_failed` status
-  for a newer version seeds a persisted failed-attempt count
-  (`/var/lib/gotham/update.backoff`), so the loop does not re-download and
-  re-apply the same release on every interval and restart the control plane in a
-  loop. The delay escalates 5m, 10m, 20m, 40m, then caps at 1h; a **newer**
-  release is offered immediately, and `gotham update reset` clears the backoff
-  for an operator-forced retry.
-- Crash recovery: the target is never absent, but if an older version left it
-  missing, both `Applier.Recover` (startup) and the wrapper restore
-  `<binary>.old` before starting the service.
-
-## File-manager uploads (staging)
-
-The remote file manager is served by the control plane directly; its upload
-endpoints are **not** routed through the node's Traefik, so the file feature does
-not touch the edge read timeout. Traefik's public entrypoints (`web`/`websecure`)
-keep their v3 default `readTimeout` of **60 s**, which caps reading a request
-**including its body** and is a ceiling for any tenant application that itself
-accepts large uploads.
-
-A streamed upload body is staged on the control plane before it reaches the node
-agent. Staging is bounded and configurable:
-
-| Variable | Default | Purpose |
+| Path | Owner | Writable by service |
 |---|---|---|
-| `FILES_SPOOL_DIR` | `$TMPDIR/gotham-spool` (`0700`) | Directory for staged upload bodies. |
-| `FILES_SPOOL_CONCURRENCY` | `4` | Max upload bodies staged at once; beyond it an upload answers 429. |
-| `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Ceiling for a write/upload body; above it 413. |
+| `/var/lib/gotham/bin/gotham`, `/var/lib/gotham-agent/bin/gotham-agent` | service user | yes (StateDirectory) |
+| `/usr/libexec/gotham/gotham-update`, `gotham-agent-update` | root | no |
+| `/etc/gotham/updater.conf`, `/etc/gotham/agent-updater.conf` | root | no |
+| `/var/lib/gotham-updater/update.status`, `/var/lib/gotham-agent-updater/update.status` | root | read-only |
 
-The spool directory is swept at startup and hourly, removing abandoned
-`gotham-upload-*` files older than 24 h, and the staging volume's free space is
-checked against the ceiling before any body is written (507 when it cannot hold
-the body).
+### `gotham-update.sh` — privileged restart/healthcheck/rollback wrapper
+
+Installed under two names: `gotham-update` (control plane) and
+`gotham-agent-update` (agent). Takes **no arguments**; the name selects the
+default config. Root-only steps: restart the fixed unit, probe the loopback
+`/healthz`, roll back to the previous binary on failure, write the status.
+Exit codes: `0` healthy, `1` rolled back or rollback failed, `2` invalid config.
+Under sudo it ignores every `GOTHAM_*` override; the root-owned config is the
+only source of paths.
+
+### `gotham-updater.conf`, `gotham-agent-updater.conf` — wrapper config
+
+Installed as `/etc/gotham/updater.conf` and `/etc/gotham/agent-updater.conf`,
+`root:root 0644`. Keys: `GOTHAM_BINARY`, `GOTHAM_SERVICE`, `GOTHAM_HEALTH`,
+`GOTHAM_TIMEOUT` (30 s), `GOTHAM_STATUS`, `GOTHAM_PENDING`, `GOTHAM_LOCK`. The
+control-plane config also carries the release base and staging root used by the
+host-helper refresh.
+
+### `gotham.service`, `gotham-agent.service` — systemd units
+
+Installed by the respective installer (or by hand to
+`/etc/systemd/system/`). Fixed `ExecStart` on the service-owned binary;
+`KillMode=process` keeps the wrapper alive across the restart; the units do not
+set `NoNewPrivileges` because they invoke the fixed wrapper with `sudo -n`.
+
+### `install-sudoers.sh`, `install-agent-sudoers.sh` — update-wrapper grants
+
+Root-only, run by the installer or by hand after a manual install:
+
+```sh
+sudo deploy/install-sudoers.sh [service-user]        # default: gotham
+sudo deploy/install-agent-sudoers.sh [service-user]  # default: gotham-agent
+```
+
+Each writes one drop-in (`/etc/sudoers.d/gotham-update` or
+`/etc/sudoers.d/gotham-agent-update`) granting the bare wrapper command with an
+empty argument list, validates it with `visudo`, and requires the `sudo`
+package.
+
+## Host helpers
+
+### `gotham-hostbootstrap.sh` — installs the host helpers
+
+The single installer of `gotham-hostctl`, `gotham-toolctl`, the canonical
+wrapper, the root-owned release public key and the fetch helper. Run by
+`install.sh` as root, or manually as the recovery/upgrade bridge:
+
+```sh
+sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user> <version> [--allow-downgrade]
+```
+
+Writes fixed root-owned paths under `/usr/libexec/gotham/` and a sudoers drop-in
+for the control-plane user, validates sudoers with `visudo`, is idempotent,
+refuses symlinked destinations, and records a root-owned high-water mark so a
+replayed older signed payload is refused. `apply` reapplies the local payload;
+`apply-release <dir> <version>` applies a verified payload; `version-cmp <a>
+<b>` prints `-1/0/1`. Test seam: `GOTHAM_HOST_BOOTSTRAP_ROOT` (only without
+sudo).
+
+### `gotham-hostbootstrap-fetch.sh` — verified helper-payload fetch
+
+Run by the root update wrapper; usage:
+
+```sh
+gotham-hostbootstrap-fetch <release-base> <version> <arch> <key> <dest-dir> <staged-binary>
+```
+
+Downloads the manifest, signature and payload into a root-owned `0700`
+directory (10 MiB cap), verifies the manifest with the root-owned key, binds the
+payload and the manifest to the binary being restarted, and extracts only then.
+The signed version, not the caller's `version`, decides what is applied.
+
+### `gotham-hostctl.sh` — host settings helper
+
+Installed root-owned and reached only through its sudoers drop-in. Verbs:
+`status`, `apply-network`, `confirm-network`, `revert-network`, `apply-system`.
+Values arrive on stdin as `key=value` and are re-validated. Only
+systemd-networkd, systemd-resolved and systemd-timesyncd are supported, and it
+owns only its `05-gotham.*` drop-ins. A network change is tentative: a systemd
+timer reverts it (30–600 s window) unless the operator confirms. `status` also
+reports the live default-route interface. Test seams: `GOTHAM_HOSTCTL_ROOT`,
+`GOTHAM_HOSTCTL_DRYRUN` (only without sudo).
+
+### `gotham-toolctl.sh` — host build-tool installer
+
+Installed root-owned by the agent installer and by `gotham-hostbootstrap.sh`;
+the agent calls it through a `verb + tool id` sudoers rule. Verbs:
+`install-tool <id>`, `uninstall-tool <id>`. Ids: `railpack`, `buildkit`, `pack`,
+`docker`, `git` (Docker is never uninstalled). Downloads are pinned (sha256
+constants; BuildKit is the digest-pinned `moby/buildkit:v0.34.0` image); a
+mismatch aborts. Runs one job at a time (`flock`, `RuntimeMaxSec=840`) and
+re-executes itself through a transient `systemd-run` unit to escape the agent's
+read-only sandbox. Exit codes: `0` ok, `1` command failed, `2` usage, `3` tool
+not allowed, `4` checksum mismatch, `5` unsupported platform, `6` job already
+running. Dry run:
+`GOTHAM_TOOLCTL_DRYRUN=1 GOTHAM_TOOLCTL_ARCH=amd64 GOTHAM_TOOLCTL_DISTRO=apt
+gotham-toolctl install-tool <id>` (only without sudo).
+
+### `install-toolctl-sudoers.sh` — tool-helper grant
+
+Root-only; run by `install-agent.sh` or by hand:
+
+```sh
+sudo deploy/install-toolctl-sudoers.sh [service-user]   # default: gotham-agent
+```
+
+Writes `/etc/sudoers.d/gotham-toolctl` with one rule per verb and id, and
+validates it with `visudo`. Keep its id lists in sync with
+`agent/tools/server.go` and `gotham-toolctl.sh`.
+
+## Development and verification
+
+### `compose.dev.yml`
+
+PostgreSQL 16 + Redis 7 for local development, bound to `127.0.0.1` only with
+dev-only credentials:
+
+```sh
+docker compose -f deploy/compose.dev.yml up -d
+docker compose -f deploy/compose.dev.yml down
+```
+
+### `pty-drive.py`
+
+Test utility that drives an interactive child through a pty, waiting for each
+prompt before typing. Standard library only. Used by `test-release-install.sh`
+for the installer's prompt tests; `--no-ctty` runs the child without a
+controlling terminal.
+
+### `verify-chain/main.go`
+
+Small fixture built by `verify-systemd.sh` (or reused via
+`GOTHAM_CHAIN_BINARY`): serves the loopback health endpoint and exercises the
+update service's `Resume` ordering without a real release.
+
+### `*_test.go` — Go unit tests
+
+`go test ./deploy` covers the dev compose loopback ports (`compose_test.go`),
+`gotham-hostctl.sh` parsing/refusals (`hostctl_test.go`) and
+`gotham-toolctl.sh` allow-lists, pinned downloads and ordering
+(`toolctl_test.go`).
+
+### Shell test suites (no root, no host changes)
+
+| Script | Covers | Needs |
+|---|---|---|
+| `test-agent-install.sh` | `agent_env_*` reinstall semantics, restart, `--full` Docker setup | `sh`, `grep`, `sed`, `awk`, `stat`, `readlink`, `mktemp` |
+| `test-host-bootstrap.sh` | `gotham-hostbootstrap.sh` on a fake root, sudoers validation, refusals | `sh`, `mktemp` (fake `visudo` built in) |
+| `test-host-helper-refresh.sh` | signed helper fetch/apply, binary binding, anti-rollback, archive guards | `go`, `openssl`, `curl`, `tar`, `base64` |
+| `test-release-install.sh` | sign → serve → verify → install, reinstall, dry-run and prompt paths | `go`, `openssl` 3, `curl`, `python3` |
+
+Run each from the repository root, e.g. `sh deploy/test-release-install.sh`.
+
+### Root-only verification gates
+
+| Script | Run | Covers |
+|---|---|---|
+| `verify-systemd.sh` | `sudo [GOTHAM_GO=/path/to/go] deploy/verify-systemd.sh` | scratch service + real wrapper: status, rollback, cgroup survival, staged/resume wiring, launch chain |
+| `verify-agent-update.sh` | `sudo GOTHAM_GO=/path/to/go sh deploy/verify-agent-update.sh` | fleet agent rollout end to end, tampered asset, signed-but-broken release rollback |
+
+Both use scratch units, users, databases, ports and directories, and clean up on
+exit. They need a Linux host with systemd (and Docker for the agent flow); they
+are manual merge gates, not CI jobs. `verify-agent-update.sh` also uses the
+`gotham-dev-postgres` container (`VERIFY_*` variables in its header override
+the defaults).
+
+CI runs `sh -n` over `deploy/*.sh`, `actionlint` over the workflows, and the
+four shell suites (`test-release-install.sh`, `test-agent-install.sh`,
+`test-host-bootstrap.sh`, `test-host-helper-refresh.sh`) on every PR; the Go
+job runs `go test ./deploy` with the rest of the module.
 
 ## Known residuals
 
-- **File manager — container volumes are read-mostly (owner decision).** The
-  agent runs as unprivileged `gotham-agent`, so Docker's `root:root 0755`
-  application bind directories can be listed and (world-readable) files read but
-  not written; a `0600` file is unreadable. To make a container volume editable,
-  provisioning must make `<root>/<appID>` agent-writable — **either** the CP
-  chowns it to `gotham-agent`, **or** a shared group plus a setgid (`2775`) dir
-  (the agent must join the group). Superseded for operators who accept the risk:
-  the installer's file-manager "yes" runs the agent as root (details:
-  `docs/guide/file-service.md` → "Whole-filesystem mode (default)").
-- **File manager — root-stat symlink swap (LOW).** `agent/files/files.go`
-  `validateFileRoot` resolves the root with `EvalSymlinks` then re-`os.Stat`s the
-  resolved path; a component swapped between the calls is followed by `os.Stat`.
-  `fsroot.Open` re-verifies the opened descriptor, so confinement holds, but the
-  comparison identity can be the swapped one. Fix: capture the identity fd-first
-  (`O_PATH`/`openat` + `fstat`, or `Lstat`).
-- **File manager — global upload-staging semaphore.** `FILES_SPOOL_CONCURRENCY`
-  bounds all staged uploads on a control plane, so one team can starve others
-  with 429s; a per-team cap is the upgrade.
-- **File manager — hard-link bypass note (LOW).** A writable root can hold a hard
-  link whose other name is outside the root; the in-place rewrite writes the
-  shared inode, so an edit through the linked name also changes the outside file.
-  Creating the link needs the agent uid to already be able to write the target,
-  and roots are operator-controlled, so the exposure is small (`nlink>1` is also
-  why the writer keeps the inode instead of renaming).
-- **File manager — recycle bin has no retention, plus documented edges (JUS-122).**
-  Deletes move into `<root>/.gotham-trash/<id>/{data,meta.json}` and stay until a
-  restore, a purge, or an empty. There is **no age/size auto-expiry** in v1, so a
-  large mass-delete keeps its bytes on the root filesystem until an operator
-  empties the bin. A restore renames the payload back to its recorded path but
-  does **not** recreate a missing parent directory, so restoring `d/f` after `d`
-  was also deleted fails `NotFound` and the caller must name a destination. The
-  listing is capped (`fileTrashMaxList`) and reports `truncated`, never a silent
-  drop. Deletes serialise per path, but a cross-device recycle delete (a
-  bind-mounted subtree) copies the tree under the path lock, so a very large one
-  can hold a single path stripe. **Rollout order:** `permanent` defaults off, so
-  upgrade the control plane (or enable the bin UI) **before** the agent — a new
-  agent behind an old control plane recycles deletes with no way to see or
-  restore them; an old agent behind a new control plane answers 501
-  (`ErrAgentOutdated`).
-- **`KillMode=process` applies to every stop (children handled in Go).**
-  `KillMode=process` is required so the wrapper survives the update restart, so
-  systemd itself does not kill control-plane children (`git`/`ssh`) on
-  `systemctl stop`/`restart`. The cloner compensates: it runs `git` in its own
-  process group and kills the whole group when the clone context is cancelled
-  (step timeout, deploy cancellation, graceful service shutdown), and on Linux
-  it sets `PR_SET_PDEATHSIG` (SIGKILL) on the forking thread, so a hard
-  `SIGKILL`/OOM of the control plane still kills `git` even though no Go code
-  runs. Residual: after a hard kill, a grandchild that escaped git's process
-  group (`setsid`) can outlive the service until its own socket timeouts. Only
-  the cgroup path closes that completely: re-exec the wrapper into a transient
-  scope (`systemd-run --unit=gotham-update-<id> --collect`) and restore the
-  default `control-group` mode — a root/dbus workflow that stays the upgrade
-  path. Guards: `TestRunGitCancelKillsProcessGroup` and
-  `TestRunGitChildDiesWithItsParent` (`internal/deploy/cloner_test.go`).
-- **Root `mv` inside the gotham-owned binary directory (INFO).** `restore`
-  performs a root rename of `<binary>.old` over `<binary>` in the service-owned
-  `bin` directory, so a tightly timed path swap could make root rename a
-  different pair of files. `rename(2)` requires write + search permission on
-  both parent directories, and every directory on that path is owned by the
-  service user, so a successful rename can only move service-user files inside
-  service-writable space; a destination in a root-owned directory fails with
-  `ENOENT`/`EACCES`, and no root-owned file can become the source. The status
-  write is not exposed: `write_status` and `acquire_lock` refuse unless
-  `GOTHAM_STATUS`'s directory is an existing, non-symlink, **root-owned**
-  directory (runtime `-O` check in `status_dir_usable`), matching
-  `/var/lib/gotham-updater` root:root 0755 — created by `deploy/install.sh`
-  (which runs as root), outside the unit's `ReadWritePaths` and unreachable
-  through the sudoers grant. The theoretical upgrade path for the rename itself
-  remains performing it as the service user (`runuser`/`setpriv`).
-- **Root reads the gotham-owned pending marker** (for the version label only).
-  It is guarded to a regular, non-symlink file and the value is sanitized; the
-  marker is also read by the control plane. Upgrade path: the same
+- **Wrapper lock fallback (LOW).** `acquire_lock` pins the service-owned lock
+  inode into the root-owned status directory and opens only that; when no pin
+  can be made (missing status directory, no hardlink support) it falls back to a
+  checked read-only open, where a FIFO swapped in between check and open can
+  block root. Worst case is a self-DoS by an already-compromised service user.
+  Durable fix: move the lock into a root-owned directory or the
   `runuser`/`setpriv` handoff.
-- **If only the wrapper dies during the health window (LOW).** A wrapper that is
-  killed or OOM-killed (but not a host crash) after it restarted the unit leaves
-  the update `staged`: the old process's monitor died with the restart and the
-  new process already skipped `Resume` while the wrapper held the lock. The
-  unproven binary keeps serving until the next restart (when startup `Resume`
-  fires) or `gotham update reset`. This is deliberate fail-closed behavior and
-  must not change. Guards: `TestResumeStagedRelaunches` and
-  `TestResumeStagedLaunchErrorRollsBack` (`updatecore/applier_test.go`) prove a
-  later startup resumes or rolls back, `TestResumeStagedSkipsWhileLockHeld`
-  (`updatecore/resume_unix_test.go`) proves a live wrapper is never awaited,
-  `TestMonitorRestartRollsBack` / `TestWrapperFailedPreservesKnownGood` prove a
-  wrapper that dies without recording cannot arm the unproven binary, and
-  `TestServiceAutoUpdateBacksOffRolledBackRelease` / `TestUpdateBackoff*`
-  (`internal/updates/backoff_test.go`) prove the AUTO_UPDATE loop does not
-  re-apply the same failed release.
-- **Wrapper lock open is pinned (LOW, reduced).** `acquire_lock` no longer
-  opens the service-swappable lock path directly: `ln` hardlinks whatever inode
-  the path resolves to into the root-owned status directory (`link(2)` never
-  opens the inode, so a FIFO swapped in cannot block it), the pinned name is
-  required to be a regular, non-symlink file that still matches the lock path,
-  and only that name is opened read-only. The pinned name cannot be swapped out
-  of a root-owned directory, and locking the hardlink locks the same inode the
-  control plane locks. A post-`flock` check refuses when the lock path was
-  replaced while root waited, and each run first sweeps pins whose embedded PID
-  is no longer alive (or is its own PID, i.e. PID reuse), so a pin left by a
-  hard-killed wrapper cannot silently degrade a later run to the fallback.
-  Residual: when no pin can be made (missing status
-  directory, hardlinks unsupported), the wrapper falls back to the previous
-  checked read-only open, where a FIFO swapped in between the check and the open
-  can still block root; the worst case stays a self-DoS by an
-  already-compromised service user, and the durable fix is moving the lock into
-  a root-owned directory or the `runuser`/`setpriv` handoff.
-- **systemd start-limit tuning (LOW).** `Restart=always` + `RestartSec=5` means a
-  crash-looping new binary can trip the default start rate limit during the
-  wrapper's health window; the wrapper now clears it with `reset-failed`, so the
-  rollback is correct. Operators who prefer the unit to give up sooner (or later)
-  can tune `StartLimitIntervalSec`/`StartLimitBurst`/`RestartSec` in the unit;
-  the wrapper does not depend on the exact values.
-- **Beta channel binding (M4) — resolved.** Offers now carry the release's own
-  channel (`stable` unless the GitHub release is a prerelease), and the agent
-  accepts stable offers on every non-beta configuration, so a beta node takes a
-  newer stable release; stable nodes still never see prereleases and the
-  offer→manifest channel binding stays enforced (`internal/updates/checker.go`,
-  `agent/updates/updater.go`).
-- **The agent channel is mutual (LOW-4, JUS-194) — resolved.** The TLS listener
-  requires a client certificate and the gateway verifies it per RPC: identity must
-  match the claimed node id and the key must match the key bound to the node, for
-  `Register`, `Heartbeat` (re-checked per message) and `RequestUpdate`. Removing
-  or re-keying a node invalidates the credential and closes its live stream.
-  The agent listeners accept **only** the control-plane credential (a client
-  certificate carrying the `spiffe://gotham/control-plane` URI SAN, checked in
-  the TLS handshake and again in a gRPC interceptor), so a node leaf can never
-  act as the control plane toward another node. Residuals: an open-enrollment
-  opt-in (`GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT`) is trust-on-first-use (logged);
-  there is no CRL/serial set, so revocation is key-based (delete/rotate) plus
-  the 90-day leaf; and the per-IP limiter stays keyed per peer IP (agents behind
-  one NAT share a bucket). See "Mutual TLS" above.
-- **Key ring shipped; remote revocation of a compromised key still needs
-  upgrades (R1, residual).** Every release binary now embeds the current plus an
-  optional pre-positioned next key (`updatecore.NextPublicKey`), verifies
-  manifests against any key in the ring, and the release workflow validates and
-  asserts the next key when configured — see `release-key-rotation.md`. A lost
-  key is recoverable by promoting the pre-shipped next key through a release the
-  installed fleet already trusts. What remains is inherent: a **compromised**
-  current key cannot be revoked on a node that has not yet received a ring
-  release (the anchor is compiled in), so those nodes still need an upgrade or
-  reinstall; the runbook covers the emergency sequencing.
-- **`GOTHAM_UPDATE_CURRENT` pin — resolved for release builds (INFO).** The
-  override still exists for `deploy/verify-systemd.sh` and tests, but a build
-  that embeds release key material ignores it (with a warning) and reports the
-  node-registry version, so a stray environment value cannot pin a production
-  build; `/etc/gotham/gotham.env` stays root-owned (`internal/server/server.go`,
-  `updatecore.HasEmbeddedKey`).
-- **`release-verify.sh` cleans up on a signal (I5) — resolved.** The shared
-  verifier installs EXIT/INT/TERM/HUP handlers for the duration of one
-  verification, chaining the caller's handlers instead of clobbering them,
-  restoring them on success and aborting nonzero on a signal, so a
-  SIGINT/SIGTERM mid-download can no longer leave `/tmp/gotham-verify.XXXXXX`
-  behind (`deploy/release-verify.sh`).
-- **M9 real-release evidence is partial.** A signed `v0.1.0` release (14 assets)
-  was installed on a clean Ubuntu 22.04 container and re-installed; the signed
-  manifests and artifact digests verify with the pinned key, and the two-agent
-  systemd update path is proven on the test box. Still unproven: applying a
-  *newer* GitHub-hosted release through `gotham update` (control plane and agent
-  rollout) and exercising the unattended `AUTO_UPDATE` loop. See
-  `docs/plans/10-self-update-release.md` and `docs/TODO.md` (LOW-4).
-- **Release trigger custody (INFO).** The release job and PR CI now run on
-  GitHub-hosted runners and the signing key stays in the approval-gated
-  `release` environment, so untrusted `pull_request` code no longer shares a host
-  with `GOTHAM_UPDATE_SIGNING_KEY`. The reviewer gate still governs *who can
-  build a signed release*: keep the `v*` tag ruleset and the required reviewers
-  limited to project owners. Actions stay SHA-pinned and the sqlc download stays
-  checksum-verified.
-
-## Node-agent self-update layout
-
-The agent reuses the same hardened wrapper, installed under the agent name
-(`gotham-agent-update`) so it selects `/etc/gotham/agent-updater.conf` by
-default and fails closed if that root-owned file is missing (it must never fall
-back to the control-plane defaults). The privilege split is the same:
-
-| Path | Owner | Writable by `gotham-agent` | Why |
-|---|---|---|---|
-| `/var/lib/gotham-agent/bin/gotham-agent` | `gotham-agent` | yes | Fixed `ExecStart` and swap target (`StateDirectory`). |
-| `/var/lib/gotham-agent/bin/gotham-agent.old` | `gotham-agent` | yes | Hardlink to the last known good binary. |
-| `/var/lib/gotham-agent/update.pending` | `gotham-agent` | yes | Staged-update marker that gates a second apply. |
-| `/var/lib/gotham-agent/update.lock` | `gotham-agent` | yes | Lock shared with the wrapper. |
-| `/var/lib/gotham-agent/update.retry` | `gotham-agent` | yes | Operator retry marker: a running agent clears its failed-update backoff when it appears. |
-| `/var/lib/gotham-agent/update.backoff` | `gotham-agent` | yes | Persisted failed-attempt count so the seeded backoff escalates across restarts. |
-| `/usr/libexec/gotham/gotham-agent-update` | root | **no** | Privileged wrapper (no arguments). |
-| `/etc/gotham/agent-updater.conf` | root | **no** | Fixed binary/service/health/status/pending/lock. |
-| `/var/lib/gotham-agent-updater/update.status` | root | **no** (read-only) | Authoritative outcome. |
-
-The agent unit keeps `KillMode=process` (the wrapper must survive the restart
-cgroup) and does **not** set `NoNewPrivileges` (the agent invokes the fixed
-wrapper with `sudo -n`). sudoers grants exactly:
-
-```
-gotham-agent ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-agent-update ""
-```
-
-The agent serves a loopback liveness endpoint (`GOTHAM_AGENT_HEALTH_ADDR`,
-default `127.0.0.1:8001/healthz`) that the wrapper probes after a restart. It
-reports process liveness only, never the control-plane connection, so a node
-whose CP is temporarily unreachable is not rolled back.
-
-Install (see `install-agent.sh`):
-
-```sh
-install -d -o gotham-agent -g gotham-agent -m 0755 /var/lib/gotham-agent/bin
-install -m 0755 -o gotham-agent -g gotham-agent gotham-agent /var/lib/gotham-agent/bin/gotham-agent
-install -m 0755 deploy/gotham-update.sh /usr/libexec/gotham/gotham-agent-update
-install -m 0644 deploy/gotham-agent-updater.conf /etc/gotham/agent-updater.conf
-install -d -m 0755 -o root -g root /var/lib/gotham-agent-updater
-sudo deploy/install-agent-sudoers.sh gotham-agent
-```
-
-The same residuals as the control-plane wrapper apply (root `mv` inside the
-agent-owned `bin`, root read of the agent-owned pending marker, wrapper-death
-window); the shared wrapper carries the same mitigations (pinned lock open,
-root-owned status-directory floor enforced at run time) and the upgrade path is
-the same `runuser`/`setpriv` handoff.
-
-### Failed-release backoff and operator retry
-
-A release that fails to activate is rolled back and the root-owned status
-records `rolled_back`/`rollback_failed` with its version. The agent seeds a
-durable-status backoff at startup and persists the failed-attempt count
-(agent-owned `update.backoff`), so the seeded delay escalates across the wrapper
-restarts that follow each rollback — 5m, 10m, 20m, 40m, then capped at 1h —
-instead of a flat retry, and a wrapper restart does not immediately re-apply the
-same broken release and crash-loop while the rollout target is unchanged. A
-**newer** release is applied automatically; only retrying the *same* version
-needs the operator path:
-
-```sh
-sudo gotham-agent update reset   # clears the pending marker, the status (as root),
-                                 # the agent-owned retry marker and the attempt count
-```
-
-A running agent consumes `update.retry` on its next poll and clears its
-in-memory backoff; a non-root `gotham-agent update reset` still works through
-that marker (it just cannot remove the root-owned status file). The command
-resolves paths from the process environment, then `/etc/gotham/agent.env` (the
-systemd `EnvironmentFile`; `GOTHAM_AGENT_ENV_FILE` overrides the path), then the
-built-in defaults. It does **not** see `Environment=` values that exist only on
-the unit: put custom paths in `/etc/gotham/agent.env` (or export them) so a
-service with custom paths is reset correctly. The retry marker is written with a
-temp-file + rename and the mode is set on the file descriptor, so a symlink or
-FIFO planted by the service user in its own directory cannot redirect or block a
-root run.
-
-Keep `GOTHAM_AGENT_UPDATE_RETRY`/`_BACKOFF` **directly in the agent's
-StateDirectory** (`/var/lib/gotham-agent`). A nested path (for example
-`…/gotham-agent/state/update.retry`) would put an intermediate directory the
-service user can replace with a symlink on the write path; the reset CLI refuses
-a symlinked immediate parent, but a plain nested directory is not otherwise
-special-cased. Quoted values in `agent.env` (`KEY="value"`) are unquoted on
-read.
-
-## Linux/systemd verification
-
-`sudo deploy/verify-systemd.sh` runs a scratch service and the real wrapper on a
-systemd host. See the script header and the BE-9.1 report for exactly what it
-proves.
-
-CI covers the installer chain on every PR: the `installer` job in
-`.github/workflows/ci.yml` runs `sh -n` over `deploy/*.sh`, `actionlint` over the
-workflows, and `deploy/test-release-install.sh` (the checkout-level chain with a
-loopback fake releases server and no host changes). The two scripts that need a
-real systemd host and root — `deploy/verify-systemd.sh` and
-`deploy/verify-agent-update.sh` — stay **manual** merge gates, run on the test
-box with their logs attached to the milestone report.
-
-## Agent remote-update verification (BE-9.2)
-
-`sudo GOTHAM_GO=/path/to/go sh deploy/verify-agent-update.sh` is the merge gate
-for the agent remote-update flow. It is entirely scratch — scratch systemd units
-(`gotham-agent-verify-<pid>-a/b`), a scratch user, a scratch database
-(`<base>_verify_<pid>`), a high scratch port range and a scratch directory — and
-cleans all of it up on EXIT/INT/TERM. It never touches a real
-`gotham`/`gotham-agent` unit, database, certificate or binary.
-
-It builds the control plane and two agent versions from this repository with the
-release Ed25519 public key **embedded** via `-ldflags` (the dev env override is
-not used), signs a `v2.0.0` agent release with `cmd/signer`, serves it from a
-loopback `python3 -m http.server`, runs a scratch control plane and two scratch
-agents as systemd units (with the shared wrapper, its config and a scratch
-sudoers rule), and drives the operator API. Postgres is reached through the
-`gotham-dev-postgres` container (`VERIFY_DATABASE_URL` overrides the DSN).
-
-Checks (the reviewer's three merge confirmations plus the target/negative cases):
-
-- **C1** `update-all` with the control plane already on the newest version starts
-  a rollout anyway (the target is the agent release family, not the CP version).
-- **C2** both agents restart through the root-owned wrapper and their status
-  files record `ok`, keeping the previous binary as `gotham-agent.old`.
-- **C3** both heartbeats converge on the new version and the planted install
-  directories are otherwise byte-identical (md5+mtime, excluding exactly the
-  binary, backup, pending/lock/retry/backoff markers and status files).
-- **C4** the control plane resolves the agent release family (`v2.0.0`).
-- **NEG1** a tampered asset (manifest digest mismatch) leaves the agents on the
-  old version.
-- **NEG2** a validly signed but broken release rolls back and records
-  `rolled_back`, leaving the agents on the old version.
-
-A tampered **manifest** is rejected at the control plane before any agent sees
-it, and a tampered **digest** is rejected at the agent before the swap, so those
-two paths are covered by the `internal/updates` and `agent` unit tests
-(`TestAgentUpdaterRejectsTamperedManifest`, `TestAgentUpdaterRejectsDigestMismatch`)
-and by NEG1 end to end; the wrapper rollback status is covered by NEG2.
-
-## Instance settings host helper (JUS-92)
-
-`Settings → Instance` applies network (DNS, IPv4/IPv6) and system (hostname, NTP)
-settings through `gotham-hostctl.sh`, a fixed root-owned helper with the same
-privilege model as the update wrapper. The control plane (never the agent) runs
-`/usr/libexec/gotham/gotham-hostctl <verb>` through its verb-pinned sudoers rule.
-
-**Install (root-trusted source only).** `deploy/gotham-hostbootstrap.sh` is the
-single installer of the helper. `install.sh` (run by the operator as root) runs
-it once as `sh deploy/gotham-hostbootstrap.sh create <control-plane-user>
-<version>`; the
-self-update wrapper refreshes the helper from the signed release on every update
-(see *Helper refresh on self-update* below), applying the root-owned payload at
-`/usr/libexec/gotham/hostbootstrap/`. `create` writes only fixed root-owned paths:
-
-- `/usr/libexec/gotham/gotham-hostctl` and `gotham-toolctl` and the canonical
-  `gotham-update` wrapper (root:root 0755), plus the root-owned release public key
-  `gotham-signing-key.pub` and the fetch helper `gotham-hostbootstrap-fetch.sh`;
-- the payload `/usr/libexec/gotham/hostbootstrap/` (the same scripts, the
-  rendered `gotham-hostctl.sudoers`, and its own installer copy);
-- `/etc/sudoers.d/gotham-hostctl` for the actual control-plane user: the five
-  hostctl verbs plus the single pinned `gotham-toolctl install-tool
-  gotham-hostctl` repair verb.
-
-Each file is written to a `mktemp` file in its destination directory and renamed
-atomically; a symlinked destination is refused; a sudoers drop-in is validated
-with `visudo -cf` before the rename, so a broken file is never left behind. It is
-idempotent and reads no environment or configuration (the console name is the
-control-plane user the installer passes). No root process ever executes or reads
-as code a file the service user can write: the wrapper only runs the root-owned
-payload after verifying it against the signed release, and the service binary
-(owned by the service user) is never run as root.
-
-The agent's `/etc/sudoers.d/gotham-toolctl` is installed by `install-agent.sh`
-(`install-toolctl-sudoers.sh`), unchanged; the control plane's refresh only
-rewrites the host-helper payload, so a custom service user's hostctl grant is
-never rewritten for `gotham`.
-
-**In-product install: only where it can succeed.** The pinned repair rule
-(`gotham-toolctl install-tool gotham-hostctl`) lives in the same drop-in as the
-hostctl verbs, so it is only reachable while that drop-in exists. The control
-plane cannot read `/etc/sudoers.d` (root 0750) to test that directly, so it asks
-the sudo policy itself (`sudo -n -l <pinned command>`, read-only, no password for
-the NOPASSWD rule). It offers **Install host helper** only when the helper file
-is missing *and* that probe succeeds *and* the root-owned payload is present —
-then the pinned repair verb reinstalls the helper and its drop-in from the
-payload.
-
-In every other read-only state there is no privileged path from the control plane
-by design, and re-running the (root, operator) installer is the recovery. The page
-states plainly: **"Host changes are provisioned by the control-plane installer, so
-a platform administrator must re-run it (or upgrade) to enable them."** That
-covers:
-
-- the drop-in is gone or names another user ("Denied") — the repair rule is
-  refused with it;
-- the payload was never installed (a host installed before this feature).
-
-**Helper refresh on self-update (JUS-188).** The helper content ships inside the
-signed release, and the root update wrapper refreshes it on every self-update —
-root-side, from a root-only staging directory. The control plane stages nothing:
-a payload staged by the service user is exactly the root-escalation path the
-helper design forbids. Instead:
-
-1. the release ships `gotham-hosthelpers.tar.gz`, and the control-plane manifest
-   binds its sha256 (`helper_file`, `helper_sha256`) **inside the signed bytes**,
-   in the same Ed25519 signature that already authenticates the release. The
-   fields cannot be added or stripped without invalidating the signature;
-2. `gotham-update` (root) fetches the manifest, its signature and the payload into
-   a root-owned 0700 directory (`deploy/gotham-hostbootstrap-fetch.sh`), verifies
-   the manifest against the **root-owned** release public key
-   (`/usr/libexec/gotham/gotham-signing-key.pub`), checks that the signed manifest
-   describes the very binary root is about to restart (its signed `sha256` must
-   equal the staged binary's digest) and that the payload digest matches the
-   signed `helper_sha256`, refusing absolute/`..`/symlink/non-regular/duplicate
-   archive entries. A manifest with no helper binding is a clean no-op, never an
-   unverified install;
-3. only then does it run the verified payload's `apply-release <dir> <version>`,
-   which installs the live `gotham-hostctl`/`gotham-toolctl`, refreshes the
-   root-owned payload and the wrapper itself, and **regenerates** the drop-in from
-   the recorded control-plane user with the released hostbootstrap's verb set
-   (`visudo -cf` before anything live is touched, so a bad drop-in changes
-   nothing).
-
-**Anti-rollback.** The version used to gate the apply is the signature-verified
-one, not the value in the service-writable pending marker: the marker only
-locates the release, and any value that does not match the staged binary's signed
-manifest fails closed. Root keeps a root-owned monotonic high-water mark at
-`/usr/libexec/gotham/hostbootstrap/version` (written atomically), and the
-comparison is made **in code already installed on the host** — the update wrapper
-reads the mark and asks the installed helper's `version-cmp` before it runs the
-fetched payload — so an older validly-signed helper payload cannot skip (or
-ship a disabled version of) the check by being the code that performs it. The
-payload's own `apply-release` makes the same comparison as a second layer. A
-payload whose signed version is lower than the mark is refused (equal versions
-re-apply idempotently), and a **missing, empty or malformed** mark refuses the
-release too: an unmarked or unparseable host is one the bridge never seeded
-properly, and treating it as "version 0" would accept any replayable signed
-payload. A release version that is not `vMAJOR.MINOR.PATCH[-prerelease][+build]`
-is refused the same way (a garbage value never compares as `0.0.0`). `install.sh`
-seeds the mark with the release it installs, and `create` requires that version.
-A `create` re-run that would *lower* the mark is refused unless the operator
-passes `--allow-downgrade`; a malformed existing mark is repaired instead of
-blocking the repair.
-
-Every failure is logged and skipped, so a broken or tampered payload can never
-block or roll back an update. A host that predates the refresh support (no
-root-owned key or fetch helper) is a clean no-op; it gains the support with the
-one-time bridge below and refreshes its own content on every later self-update.
-
-**One-time bridge (hosts installed before JUS-188).** `gotham-hostbootstrap
-create` now also installs the root-owned release public key, the fetch helper and
-the canonical wrapper next to the helper, so a single root command on a legacy
-host enables the refresh. `install.sh` runs it, and it is also the manual
-recovery/upgrade command:
-
-```sh
-sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user> <version>
-```
-
-The version is required: `create` seeds the high-water mark from it, and without
-a seeded mark the refresh refuses every release. Pass `--allow-downgrade` if you
-really need to lower the recorded mark (for example, reinstalling from an older
-checkout).
-
-There is no privileged path from the control plane to install the anchor: the
-service user cannot write `/usr/libexec/gotham`, so only the (root, operator)
-installer or this command can provision it. Once provisioned, helper *content*
-and the wrapper upgrade through self-update like the binary does.
-
-- sudoers grants exactly five verbs (`status`, `apply-network`, `confirm-network`,
-  `revert-network`, `apply-system`), plus the single repair verb
-  `gotham-toolctl install-tool gotham-hostctl`; values arrive on stdin and are
-  re-validated.
-- Supported stack: systemd-networkd + systemd-resolved + systemd-timesyncd. Gotham
-  owns only `05-gotham.network`, `resolved.conf.d/05-gotham.conf` and
-  `timesyncd.conf.d/05-gotham.conf`; other hosts report the sections as unsupported.
-- A network change is tentative: a systemd timer reverts it after 120 s unless the
-  operator confirms in the UI, so a wrong address cannot lock them out.
-- `status` also reports `host_network`: the default-route interface as the
-  host sees it (live addresses/gateways from `ip`, modes from the winning
-  `.network` file, effective DNS from resolvectl). The control plane seeds the
-  Network form from it, so the form shows the host truth instead of the stored
-  `dhcp` defaults.
-- A DNS-only change (`dns_only=true`, sent by the control plane when the
-  interface fields match the host) writes `resolved.conf.d/05-gotham.conf`,
-  a DNS-only networkd drop-in on the winning `.network` file
-  (`<name>.network.d/05-gotham.conf` with `DNS=` only, never
-  `Address`/`Gateway`/`[Route]`) and sets the link DNS at runtime
-  (`resolvectl dns`), so per-link DNS from a netplan-generated file no
-  longer shadows the change; `networkctl reload` (never `reconfigure`) picks
-  up the drop-in, so addresses/routes stay untouched. Neither apply nor
-  revert reconfigures the interface in that path. Revert restores the link
-  drop-in and the runtime link DNS exactly as snapshotted, plus the files
-  the apply snapshotted, so a DNS-only revert cannot delete a pre-existing
-  interface file.
-- The control plane refuses server-side any apply that would disturb the
-  active interface (static-to-DHCP, a different address/gateway) unless the
-  request carries `confirm_interface_change=true`; the UI shows a warning and
-  a confirmation checkbox for exactly those changes.
-- Never apply `ipv4_mode=dhcp` (or a different static address/gateway) on the
-  interface you are connected through without that confirmation: the host drops
-  its current address as soon as networkd reconfigures, and only the revert
-  timer brings it back. Verify DNS, hostname and NTP first; exercise address
-  changes from the console. `revert_after` accepts 30–600 s (the control plane
-  passes 120 s).
-
-### JUS-100 postscript (2026-10-10): a DNS-only change dropped the static IPv4
-
-On the shared test box (static IPv4 via netplan, `dhcp4: no`) changing only
-the DNS servers cut the box off the network until the 120 s auto-revert fired.
-Root cause, all three at once: the form showed the stored `dhcp` default
-instead of the host's static config, so Apply sent `ipv4_mode=dhcp` with the
-new DNS; `apply-network` unconditionally rewrote the whole `05-gotham.network`
-(`DHCP=ipv4`, no `Address`/`Gateway`); nothing refused a static-to-DHCP switch
-on the active interface. Fixed by the four bullets above (host-truth status,
-DNS-only apply path, server-side confirmation guard, form warning); covered by
-`deploy/hostctl_test.go` (`TestHostctlStatusReportsHostTruth`,
-`TestHostctlDNSOnlyLeavesInterfaceAlone`), `internal/instance` service tests
-and `web/tests/network-guard.test.ts`.
-
-### JUS-101 postscript (2026-10-11): a DNS-only change was ignored with per-link DNS
-
-On the same box the JUS-100 fix was safe but ineffective: the new servers
-landed in the global drop-in while `Link 2 (ens160)` kept `8.8.8.8 8.8.4.4`
-from `/run/systemd/network/10-netplan-ens160.network`, and resolved prefers
-per-link DNS, so `resolvectl query` kept using the old servers. Fixed by
-also writing a DNS-only networkd drop-in on the winning `.network` file and
-setting the link DNS at runtime in the DNS-only path (revert restores both
-exactly; `status` already reported the link DNS as the effective list);
-covered by `TestHostctlDNSOnlyOverridesLinkDNS` and
-`TestGetReportsEffectiveLinkDNS`.
-
-## Host tool installer (JUS-175)
-
-The node agent's `ToolService` installs and removes the host tools the platform
-builds with (Railpack, BuildKit, `pack`, Docker, git) through
-`gotham-toolctl.sh`, a fixed root-owned helper with the same privilege model as
-the update wrapper and `gotham-hostctl`.
-
-```sh
-sudo install -D -m 0755 -o root -g root deploy/gotham-toolctl.sh /usr/libexec/gotham/gotham-toolctl
-sudo deploy/install-toolctl-sudoers.sh gotham-agent
-```
-
-- sudoers grants exactly one rule per verb and tool id (`install-tool <id>`,
-  `uninstall-tool <id>`, no wildcards); the agent passes only a catalog id and
-  the helper owns every executable argv, so a compromised agent cannot name a
-  package, a URL or an extra flag.
-- Detected-only host units (the systemd units, `networkctl`, `systemctl`) have
-  no installer: the agent refuses them with `FAILED_PRECONDITION`.
-- Downloads are pinned: Railpack and `pack` come from versioned release
-  tarballs with sha256 constants in the helper, BuildKit from the digest-pinned
-  `moby/buildkit:v0.34.0` image. A mismatch aborts.
-- The agent resolves dependencies (`railpack → buildkit → docker`), installs
-  one tool per helper call, runs one install at a time per node, and refuses an
-  uninstall while a build runs or an installed tool depends on it.
-- The agent unit is sandboxed (`ProtectSystem=full`), so the helper re-executes
-  itself via `systemd-run --pipe --wait --collect` in a transient unit outside
-  the unit's read-only namespace. The streamed output is the helper's
-  stdout/stderr.
-- The transient unit carries `RuntimeMaxSec=840` (under the agent's 15-minute
-  request timeout), the helper holds a `flock` for the whole job so two jobs
-  can never overlap. The shell may defer the graceful-cancel trap until
-  foreground `systemd-run` returns, so cancellation can leave the unit running
-  until it finishes or reaches its runtime bound. A node that updated only via
-  agent self-update must re-run `deploy/install-agent.sh` to get the
-  helper and sudoers rule.
-- Standalone dry-run for a debugging host (as root):
-  `GOTHAM_TOOLCTL_DRYRUN=1 GOTHAM_TOOLCTL_ARCH=amd64 GOTHAM_TOOLCTL_DISTRO=apt
-  /usr/libexec/gotham/gotham-toolctl install-tool railpack`. The
-  `GOTHAM_TOOLCTL_*` overrides are honoured only without sudo, like hostctl.
-- Covered by `deploy/toolctl_test.go` (allow-list refusals, pinned/verified
-  downloads per arch, the git-vs-docker unit step, BuildKit tag-last order and
-  the test root redirect).
-
-## Hardening lessons (self-update and release, Phase 9)
-
-**Privileges (root touching service-owned paths)**
-- Never let root *follow* a path the service user controls: write via
-  temp-file+`rename` or `O_EXCL`/no-follow; open locks **read-only** (`exec 9<`, `flock`
-  works on read-only fds) after `-f`/`! -L` guards.
-- Reading a path the service user can replace is a hang vector: require a **regular
-  file** (no FIFO/symlink) before `Read`/`head`; in Go, `Lstat`/`open(O_NONBLOCK)`.
-- Keep authoritative writes (status/outcome) in a **root-owned directory** the service
-  cannot replace; keep the service-writable handoff separate.
-- The wrapper/unit/sudoers must live **outside** any service-writable directory, and
-  sudoers must pin the exact command with a trailing `""` (no args) — a bare path allows
-  arbitrary argv.
-- `umask` scoping: a global `umask 077` makes `mkdir -p /etc/...` 0700 and breaks the
-  service user; scope it to the secret/env writes and `chmod 0755` shared dirs.
-- Commit the exec bit for every script invoked directly (`git ls-files -s` → 100755);
-  a 644 helper fails with `bad interpreter` only on the printed-shell path.
-
-**Atomic activation / recovery**
-- Gap-free swap: `hardlink(target, backup)` then `rename(staging, target)` — the target
-  is never absent, so `ExecStart` can never miss it mid-update.
-- Keep the last known good until the new binary is **proven healthy**, then consume it;
-  a second apply must not overwrite an unproven backup (gate on the staged/pending state).
-- Serialize applies with a process-external `flock`; the wrapper must take the *same*
-  lock when restoring.
-- Crash recovery must also work from the wrapper (systemd cannot exec a missing target),
-  e.g. restore `.old` when the target is missing; startup `Recover` alone is not enough.
-- Startup resume must use a **non-blocking** lock (`tryFileLock`): waiting on the lock the
-  wrapper holds makes every healthy update deadlock and roll back after a health timeout.
-- The binary path must come from fixed configuration (unit env), never from
-  `os.Executable()` after a swap (on Linux it resolves to the renamed `.old`).
-
-**systemd**
-- `KillMode=process` lets a root wrapper survive the service's own restart; the wrapper
-  must also survive the cgroup (`setsid`) and re-`systemctl reset-failed` before a
-  restart after a crash loop, otherwise a broken new binary wedges the unit in
-  "start request repeated too quickly" and the rollback restart is refused.
-- After restoring the previous binary, **health-check it** before recording
-  `rolled_back`; otherwise a healthy restore is reported as failed.
-
-**Don't re-apply a broken release**
-- Persist the failed-attempt count/status and seed the backoff at startup; otherwise each
-  restart forgets the failure and re-applies the same broken release forever. Provide an
-  operator reset (`gotham update reset`, `gotham-agent update reset`).
-
-**Trust chain**
-- Embed the public key in the binary (env override only when the embedded key is empty,
-  and never in release builds); fail closed with no key.
-- Verify the **signed manifest** (version/channel/arch/file/sha256) before any write,
-  bind it to the offered release identity (no relabel/downgrade), require checksums, refuse
-  equal/older versions, and never trust metadata for the digest.
-- Bind an offered artifact to its **family** (agent vs control plane) and channel; an
-  empty channel must not skip the check.
-- Agent→CP registration is mutual (JUS-194): the agent presents the node leaf the
-  CP issued at enrollment and the gateway verifies it per RPC, binding the
-  certificate identity and key to the node; the node-control listener requires
-  client certs when a CA exists.
-- Creating the CA must be part of the install (the serve path only *loads* it), and the
-  certificate SANs must include the address agents actually dial, not just loopback.
-
-**Release/distribution**
-- Gate the signing job behind a GitHub **Environment with required reviewers**; keep the
-  signing key out of repo-level secrets (env secrets only) and SHA-pin every action.
-- Assert completeness (all assets) before publishing; look drafts up via the releases
-  **list** (the by-tag endpoint 404s for drafts) and parse JSON with `jq`, not fragile
-  greps.
-- Separate the artifact download budget from the metadata timeout (`http.Client.Timeout`
-  includes the body; ~28 MB fails on slow links under a 10 s cap).
-- Make installers idempotent and owner-aware (preserve operator env edits, refuse to
-  apply as the wrong user, restore ownership), verify before install, and keep install
-  artifacts (wrapper/unit/sudoers) under the same signed/verified trust as the binary.
-
-**Tests/e2e**
-- Tests must never touch production paths when run as root: `TestMain` sandboxes that
-  disable the feature and point every path at a temp dir, plus a guard asserting paths
-  stay inside it; a test that shells out to the system wrapper must strip
-  `SUDO_USER/SUDO_UID/SUDO_GID` and shim `systemctl`/`mv`.
-- Harness reads of test-controlled paths must be non-blocking/regular-file-only too
-  (a planted FIFO hung a whole CI package for 600 s).
-- On a shared box that runs the product, e2e must never dial `127.0.0.1` with the
-  product's own ports: seed nodes on an unused loopback/address so the dial is a fast
-  refusal, otherwise a live agent answers `Unimplemented` and the flow stalls.
+- **Root rename in the service-owned binary directory (INFO).** `restore`
+  renames `<binary>.old` over `<binary>`; every directory on that path is
+  service-owned, so a tight path swap can only move service-owned files inside
+  service-writable space, never a root-owned source or destination.
+- **Root reads the pending marker (INFO).** Used for the version label only; it
+  is guarded to a regular, non-symlink file and the value is sanitized.
+- **Wrapper dies after restart (LOW).** The update stays `staged` until the next
+  service start (which resumes or rolls back) or `gotham update reset`. This is
+  deliberate fail-closed behaviour.

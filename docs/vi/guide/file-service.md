@@ -170,8 +170,7 @@ Một body dạng luồng được dàn dựng trên control plane (header ghi c
 khai báo kích thước chính xác, thứ mà một phần multipart không mang). Spool được
 quét lúc khởi động và mỗi giờ, và dung lượng trống của nó được kiểm tra với mức
 trần trước mọi lần ghi. API tệp do control plane phục vụ trực tiếp, nên nó
-**không** đi qua Traefik của node; xem `deploy/README.md` → "File-manager uploads
-(staging)" để biết các nút điều chỉnh việc dàn dựng.
+**không** đi qua Traefik của node.
 
 ## Quyền (chmod)
 

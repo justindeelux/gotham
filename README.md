@@ -151,7 +151,7 @@ A release that fails to activate is rolled back and its version is backed off
 (the agent seeds the backoff from the durable status at startup, so a wrapper
 restart does not re-apply a broken release and crash-loop). A newer release is
 applied automatically; to retry the *same* version after a fix, run
-`sudo gotham-agent update reset` (documented in `deploy/README.md`).
+`sudo gotham-agent update reset` (see [`docs/guide/updates.md`](docs/guide/updates.md)).
 
 ## Two-factor authentication (TOTP)
 

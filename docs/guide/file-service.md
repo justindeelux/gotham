@@ -173,8 +173,7 @@ A streamed body is staged on the control plane (the agent's write header must
 declare an exact size, which a multipart part does not carry). The spool is
 swept at startup and hourly, and its free space is checked against the ceiling
 before any write. The file API is served by the control plane directly, so it
-does **not** traverse the node's Traefik; see `deploy/README.md` → "File-manager
-uploads (staging)" for the staging knobs.
+does **not** traverse the node's Traefik.
 
 ## Permissions (chmod)
 

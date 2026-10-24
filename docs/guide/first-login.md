@@ -48,9 +48,10 @@ prompt.
   `an account already exists (created by someone else?)`.
 - **`--dry-run`** prompts nothing and changes nothing.
 
-Self-registration stays closed once that account exists. For test or
-development instances only, `GOTHAM_AUTH_ALLOW_REGISTRATION=true` in the
-service environment reopens it; never leave it on for a real instance.
+Self-registration stays closed once that account exists. The default is off;
+for test or development instances only, `GOTHAM_AUTH_ALLOW_REGISTRATION=true` in
+the service environment reopens self-registration even after the first account
+exists. Never leave it on for a real instance.
 
 The password is never passed as a command-line argument, never put in the
 environment, and never written to disk, the env file, logs or shell history: it

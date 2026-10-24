@@ -16,7 +16,7 @@ working panel; pick the one that fits you.
 - An Ubuntu 22.04 or Debian server (64-bit Intel/AMD or ARM) where you can run
   commands as root, for example over SSH with `sudo`.
 - `curl` and `openssl` 3. Both are already installed on a standard image.
-- At least 1 GB of RAM and 1 CPU; 2 GB is comfortable.
+- At least 1 GB of RAM and 1 CPU.
 - Outbound HTTPS to `github.com`, where the signed releases are downloaded.
 - Optional: a domain name for the panel. If you use one, ports 80 and 443 must
   be free on this server.
@@ -97,7 +97,16 @@ confirm it in **General settings** within 2 minutes. If the domain does not
 resolve yet, the install continues on the server address and you can set it
 later in the panel. See [Domain and HTTPS](/guide/domain-and-https).
 
-### Unattended install
+### Scripted install (cloud-init, CI)
+
+This recipe is fully unattended only when there is **no terminal**: cloud-init, a
+CI job, or an `ssh` command run without a pty. In an ordinary interactive SSH
+session the installer still asks three questions — the admin email (prefilled
+from `GOTHAM_ADMIN_EMAIL`), the panel domain, and the file-manager question.
+Answer them up front by appending `-s -- --domain panel.example.com
+--no-file-manager` after `sh` in the command below; `--domain` sets the domain,
+Enter (or omitting it) skips it, and `-` at the email prompt skips account
+creation.
 
 Inside a `curl | sudo sh` run, the variables must go **after** `sudo` and before
 `sh`; setting them on `curl` only configures `curl`, and `sudo` starts the
@@ -112,6 +121,14 @@ sudo nano /root/gotham-admin-password   # type the password on one line and save
 Then run:
 
 <<< @/snippets/install-command.sh#unattended{sh}
+
+If your sudoers policy refuses command-line variables, put them in `env`
+instead (replace the right side of the pipe with this):
+
+```sh
+sudo env GOTHAM_ADMIN_EMAIL=ops@example.com \
+  GOTHAM_ADMIN_PASSWORD_FILE=/root/gotham-admin-password sh
+```
 
 The installer creates the admin account without prompting and prints the login
 at the end. The password travels from the file on stdin, so it never appears in
@@ -178,7 +195,7 @@ explains the matching runtime settings.
 | `GOTHAM_DATABASE_DSN` | Managed PostgreSQL DSN; skips local provisioning. |
 | `GOTHAM_REDIS_ADDR` | Redis `host:port` (default `localhost:6379`). |
 | `GOTHAM_SKIP_DEPS=1` | Do not install or configure PostgreSQL/Redis. |
-| `GOTHAM_ADMIN_EMAIL` | Email of the first admin account for an unattended install. |
+| `GOTHAM_ADMIN_EMAIL` | Email of the first admin account for a scripted install. |
 | `GOTHAM_ADMIN_PASSWORD_FILE` | File holding the first admin password (single line, root-readable). |
 | `--dry-run` | Print every step without changing the host. |
 | `--cp-host <name-or-ip>` | Add a name or IP to the agent gateway certificate; see [Add nodes](/guide/nodes). |

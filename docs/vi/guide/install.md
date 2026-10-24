@@ -16,7 +16,7 @@ khiển đang chạy; hãy chọn cách phù hợp với bạn.
 - Một máy chủ Ubuntu 22.04 hoặc Debian (64-bit Intel/AMD hoặc ARM) mà bạn có thể
   chạy lệnh với quyền root, ví dụ qua SSH với `sudo`.
 - `curl` và `openssl` 3. Cả hai đều có sẵn trên một image tiêu chuẩn.
-- Ít nhất 1 GB RAM và 1 CPU; 2 GB là thoải mái.
+- Ít nhất 1 GB RAM và 1 CPU.
 - HTTPS ra ngoài tới `github.com`, nơi tải các bản phát hành đã ký.
 - Tùy chọn: một tên miền cho bảng điều khiển. Nếu dùng, cổng 80 và 443 phải còn
   trống trên máy chủ này.
@@ -95,7 +95,15 @@ vòng 2 phút. Nếu tên miền chưa phân giải được, quá trình cài t
 chỉ máy chủ và bạn có thể đặt tên miền sau trong bảng điều khiển. Xem
 [Tên miền và HTTPS](/vi/guide/domain-and-https).
 
-### Cài không tương tác
+### Cài theo script (cloud-init, CI)
+
+Công thức này chỉ thực sự không cần tương tác khi **không có terminal**:
+cloud-init, một job CI, hoặc một lệnh `ssh` chạy không có pty. Trong một phiên
+SSH tương tác bình thường, trình cài đặt vẫn hỏi ba câu — email quản trị (điền sẵn
+từ `GOTHAM_ADMIN_EMAIL`), tên miền bảng điều khiển, và câu hỏi trình quản lý tệp.
+Hãy trả lời trước bằng cách thêm `-s -- --domain panel.example.com
+--no-file-manager` sau `sh` trong lệnh bên dưới; `--domain` đặt tên miền, Enter
+(hoặc bỏ qua nó) để bỏ qua, và `-` ở câu hỏi email để bỏ qua việc tạo tài khoản.
 
 Trong một lần chạy `curl | sudo sh`, các biến phải nằm **sau** `sudo` và trước
 `sh`; đặt chúng trên `curl` chỉ cấu hình `curl`, còn `sudo` khởi động trình cài
@@ -109,6 +117,14 @@ sudo nano /root/gotham-admin-password   # nhập mật khẩu trên một dòng 
 Rồi chạy:
 
 <<< @/snippets/install-command.sh#unattended{sh}
+
+Nếu chính sách sudoers của bạn từ chối biến trên dòng lệnh, hãy đặt chúng trong
+`env` (thay phần bên phải của pipe bằng lệnh này):
+
+```sh
+sudo env GOTHAM_ADMIN_EMAIL=ops@example.com \
+  GOTHAM_ADMIN_PASSWORD_FILE=/root/gotham-admin-password sh
+```
 
 Trình cài đặt tạo tài khoản quản trị mà không hỏi và in thông tin đăng nhập ở
 cuối. Mật khẩu đi từ tệp qua stdin, nên nó không bao giờ xuất hiện trong danh
@@ -174,7 +190,7 @@ thích các thiết lập lúc chạy tương ứng.
 | `GOTHAM_DATABASE_DSN` | DSN PostgreSQL được quản lý; bỏ qua việc cấp phát cục bộ. |
 | `GOTHAM_REDIS_ADDR` | Redis `host:port` (mặc định `localhost:6379`). |
 | `GOTHAM_SKIP_DEPS=1` | Không cài hay cấu hình PostgreSQL/Redis. |
-| `GOTHAM_ADMIN_EMAIL` | Email của tài khoản quản trị đầu tiên cho lần cài không tương tác. |
+| `GOTHAM_ADMIN_EMAIL` | Email của tài khoản quản trị đầu tiên cho lần cài theo script. |
 | `GOTHAM_ADMIN_PASSWORD_FILE` | Tệp chứa mật khẩu quản trị đầu tiên (một dòng, chỉ root đọc được). |
 | `--dry-run` | In mọi bước mà không thay đổi máy chủ. |
 | `--cp-host <name-or-ip>` | Thêm một tên hoặc IP vào chứng chỉ gateway của agent; xem [Thêm node](/vi/guide/nodes). |

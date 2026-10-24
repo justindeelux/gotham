@@ -955,6 +955,17 @@ mkdir -p "${R3_SHIM}"
 cat >"${R3_SHIM}/systemctl" <<'SHIM'
 #!/bin/sh
 echo "systemctl $*" >>"${SYSTEMCTL_LOG:?}"
+if [ "$1" = restart ] && [ "$2" = gotham.service ]; then
+    token="${GOTHAM_INSTALL_ROOT}/var/lib/gotham/ca/enrollment-token"
+    mkdir -p "$(dirname "${token}")"
+    if [ ! -s "${token}" ]; then
+        if [ "${ENROLLMENT_TEST_DELAY:-0}" = 1 ]; then
+            (sleep 1; umask 077; printf '%s\n' enrollment-fixture-secret >"${token}") &
+        else
+            (umask 077; printf '%s\n' enrollment-fixture-secret >"${token}")
+        fi
+    fi
+fi
 exit 0
 SHIM
 chmod +x "${R3_SHIM}/systemctl"
@@ -1388,6 +1399,8 @@ SHIM
     chmod +x "${SCRATCH}/rr-admin.sh"
     rm -f "${SCRATCH}/rr-agent-ran" "${SCRATCH}/rr-admin-ran"
     : >"${SCRATCH}/rr-systemctl.log"
+    mkdir -p "${RR_BOX}/var/lib/gotham/ca"
+    (umask 077; printf '%s\n' enrollment-fixture-secret >"${RR_BOX}/var/lib/gotham/ca/enrollment-token")
     RR_RC=0
     # GOTHAM_ADMIN_EMAIL="" pins the phase-1 collection to the non-interactive
     # no-email path: this is a genuine TEST_MODE=0 run, so on a developer
@@ -2184,6 +2197,42 @@ fi
 grep -q '^+' "${SCRATCH}/x-err.log" \
     || { echo "FAIL: xtrace produced no trace lines at all (JUS-22/x)" >&2; exit 1; }
 echo "PASS: sh -x never prints the password (JUS-22/x)"
+
+# The real agent requires the bootstrap token even though it trusts the CA.
+# Validate the root-only file handoff at agent invocation, after CP startup.
+cp "${SCRATCH}/ok-agent.sh" "${SCRATCH}/old-ok-agent.sh"
+cat >"${SCRATCH}/ok-agent.sh" <<'SHIM'
+#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --enrollment-token-file) token=$2; shift ;;
+    esac
+    shift
+done
+[ -n "${token:-}" ] || { echo "missing enrollment token file" >&2; exit 1; }
+[ "${token}" != "${GOTHAM_INSTALL_ROOT:?}/var/lib/gotham/ca/enrollment-token" ]
+[ "$(stat -c %a "${token}")" = 600 ]
+[ "$(stat -c %u "${token}")" = "$(id -u)" ]
+cmp -s "${token}" "${GOTHAM_INSTALL_ROOT:?}/var/lib/gotham/ca/enrollment-token"
+# The bootstrap token must not be inherited as an environment value.
+[ -z "${GOTHAM_AGENT_ENROLLMENT_TOKEN:-}" ]
+printf '%s\n' "$token" >"${ENROLLMENT_HANDOFF_LOG:?}"
+SHIM
+export ENROLLMENT_HANDOFF_LOG="${SCRATCH}/enrollment-handoff.log"
+export ENROLLMENT_TEST_DELAY=1
+mkdir "${SCRATCH}/enrollment-admin"
+ADMIN_EMAIL=enroll@example.com ADMIN_TTY="" ADMIN_PWFILE="" ADMIN_XTRACE=1 \
+    run_admin_install "${SCRATCH}/enrollment-root" "${SCRATCH}/enrollment-admin" \
+    "${SCRATCH}/enrollment-out.log" "${SCRATCH}/enrollment-err.log" \
+    || { cat "${SCRATCH}/enrollment-err.log" >&2; exit 1; }
+[ -s "${ENROLLMENT_HANDOFF_LOG}" ]
+if grep -qF -- enrollment-fixture-secret "${SCRATCH}/enrollment-out.log" "${SCRATCH}/enrollment-err.log"; then
+    echo "FAIL: enrollment token leaked to installer logs" >&2; exit 1
+fi
+unset ENROLLMENT_HANDOFF_LOG ENROLLMENT_TEST_DELAY
+mv "${SCRATCH}/old-ok-agent.sh" "${SCRATCH}/ok-agent.sh"
+echo "PASS: localhost enrollment uses a private token file after CP startup without logging the token"
 
 # Run the standalone tail with the existing command-binary seam. Domain
 # failures must leave the successful install and its host HTTP login intact.

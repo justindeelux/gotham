@@ -1330,6 +1330,27 @@ run systemctl enable "${BINARY_NAME}.service"
 # onto the just-installed binary.
 run systemctl restart "${BINARY_NAME}.service"
 
+# The control plane creates its bootstrap credential during startup, after
+# systemctl restart returns. The agent installer requires a root-owned copy.
+LOCAL_AGENT_TOKEN_FILE="${ETC_DIR}/localhost-enrollment-token"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] wait for ${CA_DIR}/enrollment-token and install a root-owned 0600 copy at ${LOCAL_AGENT_TOKEN_FILE}"
+else
+    token_wait=0
+    while [ ! -s "${CA_DIR}/enrollment-token" ]; do
+        token_wait=$((token_wait + 1))
+        [ "${token_wait}" -le 30 ] || die "control plane did not create ${CA_DIR}/enrollment-token within 30 seconds; control-plane files were kept, check journalctl -u gotham"
+        sleep 1
+    done
+    [ -f "${CA_DIR}/enrollment-token" ] && [ ! -L "${CA_DIR}/enrollment-token" ] \
+        || die "control-plane enrollment token must be a regular file"
+    if [ "${TEST_MODE}" -eq 1 ]; then
+        install -m 0600 "${CA_DIR}/enrollment-token" "${LOCAL_AGENT_TOKEN_FILE}"
+    else
+        install -m 0600 -o root -g root "${CA_DIR}/enrollment-token" "${LOCAL_AGENT_TOKEN_FILE}"
+    fi
+fi
+
 # ---- Localhost agent (the control plane's first node) -----------------------
 # Install over the CA-protected loopback channel. Platform/config checks above
 # already passed; an agent failure below must make this install fail.
@@ -1356,7 +1377,7 @@ run systemctl restart "${BINARY_NAME}.service"
             || LOCAL_AGENT_ENV="GOTHAM_AGENT_CP_ADDR=$(sh_quote "${LOCAL_AGENT_CP_ADDR}") ${LOCAL_AGENT_ENV}"
         [ -z "${LOCAL_AGENT_NODE_ID}" ] \
             || LOCAL_AGENT_ENV="GOTHAM_AGENT_NODE_ID=$(sh_quote "${LOCAL_AGENT_NODE_ID}") ${LOCAL_AGENT_ENV}"
-        LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh $(sh_quote "${SCRIPT_DIR}/install-agent.sh") --full --ca $(sh_quote "${CA_DIR}/ca.crt")"
+        LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh $(sh_quote "${SCRIPT_DIR}/install-agent.sh") --full --ca $(sh_quote "${CA_DIR}/ca.crt") --enrollment-token-file $(sh_quote "${LOCAL_AGENT_TOKEN_FILE}")"
         LOCAL_AGENT_FAILED=0
         _agent_script="${SCRIPT_DIR}/install-agent.sh"
         if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" = "1" ]; then
@@ -1400,7 +1421,7 @@ run systemctl restart "${BINARY_NAME}.service"
                     -u GOTHAM_INSTALL_TEST_ADMIN_BIN \
                     -u GOTHAM_INSTALL_TEST_ADMIN_TTY \
                     -u GOTHAM_AGENT_FILE_MANAGER_TTY \
-                    "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
+                    "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt" --enrollment-token-file "${LOCAL_AGENT_TOKEN_FILE}"
             ) || LOCAL_AGENT_FAILED=1
         fi
 }

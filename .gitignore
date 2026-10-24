@@ -66,3 +66,6 @@ web/src/features/__i18n_probe__/
 
 /internal/server/webdist/*
 !/internal/server/webdist/index.html
+
+# Generated standalone installer release bundle
+/release-assets/

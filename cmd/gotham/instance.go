@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +33,7 @@ func runInstance(args []string) int {
 }
 
 func instanceSetURL(raw string) error {
+	raw = strings.ToLower(strings.TrimRight(strings.TrimSpace(raw), "/"))
 	loadEnvFile(adminEnvFile)
 	cfg, err := config.Load()
 	if err != nil {
@@ -124,26 +126,10 @@ func checkPanelURL(ctx context.Context, raw string) error {
 	if err != nil {
 		return fmt.Errorf("resolve panel domain: %w", err)
 	}
-	local, err := net.InterfaceAddrs()
-	if err != nil {
-		return err
-	}
 	if len(ips) == 0 {
 		return fmt.Errorf("panel domain has no DNS addresses")
 	}
-	for _, remote := range ips {
-		matched := false
-		for _, addr := range local {
-			ip, _, err := net.ParseCIDR(addr.String())
-			if err == nil && ip.Equal(remote.IP) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("DNS address %s does not belong to this host; Cloudflare must be DNS-only", remote.IP)
-		}
-	}
+	fmt.Fprintln(os.Stderr, "Ensure the domain's DNS addresses route to this host; public addresses behind NAT need not appear on a local interface.")
 	for _, port := range []string{"80", "443"} {
 		listener, err := net.Listen("tcp", ":"+port)
 		if err != nil {

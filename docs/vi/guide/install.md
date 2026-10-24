@@ -30,11 +30,11 @@ curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/ins
 
 Trình cài đặt hỏi email quản trị (mặc định `admin@example.com`), mật khẩu (Enter để tạo tự động), và tên miền tùy chọn (Enter để bỏ qua). Mật khẩu tự tạo chỉ được in một lần. Docker được cài tự động cho agent localhost.
 
-Tên miền phải trỏ DNS về máy này và các cổng 80/443 phải còn trống; Cloudflare phải ở chế độ **DNS-only**. Mở URL HTTP của tên miền và xác nhận trong General settings để bắt đầu cấp chứng chỉ HTTPS; nếu không xác nhận kịp, URL tự khôi phục. Nếu DNS hoặc tên miền không hợp lệ, cài đặt vẫn tiếp tục qua HTTP trên địa chỉ máy chủ.
+Tên miền phải trỏ DNS về máy này và các cổng 80/443 phải còn trống; Cloudflare phải ở chế độ **DNS-only**. Mở URL HTTP của tên miền và xác nhận trong General settings trong vòng **2 phút** để bắt đầu cấp chứng chỉ HTTPS; nếu không xác nhận kịp, URL tự khôi phục. Nếu DNS hoặc tên miền không hợp lệ, cài đặt vẫn tiếp tục qua HTTP trên địa chỉ máy chủ.
 
 ```sh
 # Tùy chọn tên miền khi chạy không tương tác
-sudo sh install.sh --domain panel.example.com
+curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/install.sh | sudo sh -s -- --domain panel.example.com
 ```
 
 Trình cài đặt:

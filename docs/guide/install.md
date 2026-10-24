@@ -30,11 +30,11 @@ curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/ins
 
 The installer asks for the admin email (default `admin@example.com`), password (Enter generates one), and an optional panel domain (Enter skips). A generated password is printed once. Docker is installed automatically for the localhost agent.
 
-The domain must resolve to this host and ports 80/443 must be free. Cloudflare records must be **DNS-only**. Open the domain over HTTP and confirm it in General settings to start HTTPS issuance; an unconfirmed trial reverts automatically. Invalid domains or DNS failures warn and leave the host HTTP address available.
+The domain must resolve to this host and ports 80/443 must be free. Cloudflare records must be **DNS-only**. Open the domain over HTTP and confirm it in General settings within **2 minutes** to start HTTPS issuance; an unconfirmed trial reverts automatically. Invalid domains or DNS failures warn and leave the host HTTP address available.
 
 ```sh
 # Optional domain for unattended installation
-sudo sh install.sh --domain panel.example.com
+curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/install.sh | sudo sh -s -- --domain panel.example.com
 ```
 
 The installer:

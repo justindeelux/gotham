@@ -165,12 +165,31 @@ CP_HOSTS="${GOTHAM_GRPC_HOSTS:-}"
 CP_HOSTS="${CP_HOSTS}${CP_HOSTS_OPT}"
 CP_HOSTS="$(printf '%s' "${CP_HOSTS}" | tr ',' ' ')"
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-# Bootstrap only when downloaded alone. Never source code from the download
+# A piped shell's $0 is sh (or /bin/sh), not the downloaded installer.
+# Only an explicit script file can opt into using its own sibling files.
+SCRIPT_DIR=""
+case "$0" in
+    *.sh)
+        if [ -f "$0" ]; then
+            SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+        fi
+        ;;
+esac
+# Bootstrap when piped or downloaded alone. Never source code from the download
 # channel until its archive is bound to the signed control-plane manifest.
-if [ ! -f "${SCRIPT_DIR}/release-verify.sh" ]; then
+if [ -z "${SCRIPT_DIR}" ] || [ ! -f "${SCRIPT_DIR}/release-verify.sh" ]; then
     (
         set -eu
+        for tool in curl openssl base64 mktemp tar; do
+            command -v "${tool}" >/dev/null 2>&1 || {
+                echo "gotham-install: required tool '${tool}' is missing (install curl, openssl 3+, coreutils and tar)" >&2
+                exit 1
+            }
+        done
+        openssl pkeyutl -help 2>&1 | grep -q rawin || {
+            echo "gotham-install: OpenSSL 3+ is required for Ed25519 verification" >&2
+            exit 1
+        }
         bootstrap="$(mktemp -d "${TMPDIR:-/tmp}/gotham-bootstrap.XXXXXX")"
         trap 'rm -rf "${bootstrap}"' EXIT
         trap 'exit 1' INT TERM HUP
@@ -236,11 +255,17 @@ if [ ! -f "${SCRIPT_DIR}/release-verify.sh" ]; then
         set --
         [ "${DRY_RUN}" -eq 0 ] || set -- "$@" --dry-run
         [ "${DOMAIN_GIVEN}" -eq 0 ] || set -- "$@" --domain "${DOMAIN}"
-        for cp_host in ${CP_HOSTS}; do set -- "$@" --cp-host "${cp_host}"; done
-        GOTHAM_VERSION="${version}" sh "${bootstrap}/deploy/install.sh" "$@"
+        for cp_host in ${CP_HOSTS_OPT}; do set -- "$@" --cp-host "${cp_host}"; done
+        GOTHAM_VERSION="${version}" sh "${bootstrap}/deploy/install.sh" "$@" </dev/null
     )
     exit $?
 fi
+for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh gotham-toolctl.sh gotham-signing-key.pub install-agent.sh gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service install-toolctl-sudoers.sh; do
+    [ -f "${SCRIPT_DIR}/${sibling}" ] || {
+        echo "gotham-install: missing deploy file ${sibling}; download a fresh standalone install.sh" >&2
+        exit 2
+    }
+done
 # shellcheck source=deploy/release-verify.sh
 . "${SCRIPT_DIR}/release-verify.sh"
 # shellcheck source=deploy/install-agent-lib.sh
@@ -1068,6 +1093,11 @@ if [ "${DOMAIN_GIVEN}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ] && _admin_interactive; 
     IFS= read -r DOMAIN <"${_domain_tty}" || DOMAIN=""
 fi
 
+# Accept pasted URLs as well as bare hostnames.
+DOMAIN="$(printf '%s' "${DOMAIN}" | tr '[:upper:]' '[:lower:]' | sed \
+    -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    -e 's#^http://##' -e 's#^https://##' -e 's#/*$##')"
+
 # ---- Service user and directories -------------------------------------------
 if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
     if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
@@ -1377,6 +1407,7 @@ run systemctl restart "${BINARY_NAME}.service"
 
 # ---- Optional panel domain -------------------------------------------------
 PANEL_URL=""
+DOMAIN_CONFIRM_NOTE=""
 DOMAIN_BIN="${INSTALL_PATH}"
 if [ "${TEST_MODE}" -eq 1 ]; then
     DOMAIN_BIN="${GOTHAM_INSTALL_TEST_ADMIN_BIN:-${INSTALL_PATH}}"
@@ -1392,7 +1423,8 @@ if [ -n "${DOMAIN}" ]; then
         # Re-arm the persisted trial timer in the long-running service.
         run systemctl restart "${BINARY_NAME}.service"
         PANEL_URL="http://${DOMAIN}"
-        log "Open ${PANEL_URL} and confirm the domain in General settings to start HTTPS."
+        DOMAIN_CONFIRM_NOTE="  Confirm the domain in General settings within 2 minutes to start HTTPS."
+        log "Open ${PANEL_URL} and confirm the domain in General settings within 2 minutes to start HTTPS."
     else
         log "WARNING: domain setup failed; continuing on the host HTTP address. Set the domain in General settings later."
     fi
@@ -1463,6 +1495,7 @@ cat <<EOF
 Gotham ${VERSION} is installed.
 
   Web UI:   ${PANEL_URL}
+${DOMAIN_CONFIRM_NOTE}
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
 

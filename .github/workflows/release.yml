@@ -223,8 +223,12 @@ jobs:
               -out "signed/${prefix}-${arch}.txt"
             if [ "$base" = "gotham" ]; then
               bundle="gotham-deploy-${tag}.tar.gz"
-              printf 'deploy_file=%s\ndeploy_sha256=%s\n' "$bundle" \
-                "$(sha256sum "release-assets/$bundle" | awk '{print $1}')" \
+              deploy_sha="$(sha256sum "release-assets/$bundle" | awk '{print $1}')"
+              printf '%s' "$deploy_sha" | grep -Eq '^[0-9a-f]{64}$' || {
+                echo "::error::could not hash deploy bundle $bundle"
+                exit 1
+              }
+              printf 'deploy_file=%s\ndeploy_sha256=%s\n' "$bundle" "$deploy_sha" \
                 >>"signed/${prefix}-${arch}.txt"
               "$RUNNER_TEMP/gotham-signer" sign -key "$key" \
                 -in "signed/${prefix}-${arch}.txt" >/dev/null

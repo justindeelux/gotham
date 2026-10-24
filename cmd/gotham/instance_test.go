@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/instance"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 type instanceCLIRepo struct{ rec instance.Stored }
@@ -73,5 +77,50 @@ func TestPanelURLRejectsMalformedDomains(t *testing.T) {
 		if err := checkPanelURL(context.Background(), raw); err == nil {
 			t.Fatalf("accepted %q", raw)
 		}
+	}
+}
+
+func TestPanelURLAllowsNATPublicDNS(t *testing.T) {
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	go func() {
+		packet := make([]byte, 512)
+		for {
+			n, addr, err := conn.ReadFrom(packet)
+			if err != nil {
+				return
+			}
+			var request dnsmessage.Message
+			if err := request.Unpack(packet[:n]); err != nil {
+				continue
+			}
+			response := dnsmessage.Message{Header: dnsmessage.Header{ID: request.ID, Response: true}, Questions: request.Questions}
+			for _, q := range request.Questions {
+				if q.Type == dnsmessage.TypeA {
+					response.Answers = append(response.Answers, dnsmessage.Resource{
+						Header: dnsmessage.ResourceHeader{Name: q.Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET},
+						Body:   &dnsmessage.AResource{A: [4]byte{203, 0, 113, 42}},
+					})
+				}
+			}
+			data, err := response.Pack()
+			if err == nil {
+				_, _ = conn.WriteTo(data, addr)
+			}
+		}
+	}()
+	previous := net.DefaultResolver
+	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "udp", conn.LocalAddr().String())
+	}}
+	defer func() { net.DefaultResolver = previous }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	// A port conflict/permission failure is valid here; a public IP mismatch is not.
+	if err := checkPanelURL(ctx, "https://nat.example.com"); err != nil && !strings.HasPrefix(err.Error(), "port ") {
+		t.Fatalf("NAT DNS must reach port checks: %v", err)
 	}
 }

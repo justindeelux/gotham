@@ -162,7 +162,7 @@ migration đã chạy — hãy sửa schema bằng một migration mới. Trình
 
 ## Vẫn chưa giải quyết được
 
-- [Cài đặt](/vi/guide/install) — bố cục thư mục, CA, cài agent và tệp môi trường
+- [Thêm node](/vi/guide/nodes) — bố cục thư mục, CA, cài agent và tệp môi trường
   của dịch vụ.
 - [Cập nhật](/vi/guide/updates) — quay lui, đặt lại và thời gian chờ của bản phát
   hành lỗi.

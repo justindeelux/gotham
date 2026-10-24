@@ -110,6 +110,52 @@ sudo gotham-agent update reset
 Reinstalling a specific version is a normal install with
 `GOTHAM_VERSION=vX.Y.Z`; see [Install](/guide/install).
 
+## Reinstalling on an existing host
+
+Run the installer again on a host that is already installed to upgrade it in
+place. Before it changes any file it refuses an unsupported platform and a host
+that already has a remote `agent.env` (a node installed from another control
+plane): move that remote agent, or repoint it explicitly, before retrying. It
+keeps `/etc/gotham/gotham.env`: the managed keys
+(`GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`,
+`GOTHAM_SECRET_KEY`, the JWT key paths) are refreshed — a DSN given on the
+command line wins, otherwise the existing value is kept — and any operator-added
+keys (`AUTO_UPDATE`, `PLATFORM_ADMINS`, ...) are left untouched. A managed DSN
+is never replaced by the local default, and local PostgreSQL/Redis are only
+provisioned when the resolved DSN is the built-in local default. The installer
+restarts `gotham.service` after a reinstall, so the just-installed binary is the
+one that runs (without the restart an upgraded host would keep serving the
+previous version).
+
+A host installed before the mTLS change now gets a CA, so the gRPC gateway
+switches from plaintext to TLS. Previously installed agents connect in
+plaintext and have no CA, so they **go offline** (Register/Heartbeat fail
+closed at the handshake) until each is reinstalled with the CA:
+
+```sh
+scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .           # on each node
+sudo gotham/deploy/install-agent.sh --ca ./ca.crt
+```
+
+The agent binary does not need updating; only `/etc/gotham/agent.env` gains
+`GOTHAM_AGENT_CA=/etc/gotham/ca.crt`. If you cannot reach the control plane by
+a name in the listener SANs yet, add it first (`--cp-host`; see
+[Add nodes](/guide/nodes)).
+
+Releases without `admin exists` (`v0.2.0`) skip automatic account creation and
+print the manual `admin create` command instead of failing with a database
+warning; releases without any admin commands (`v0.1.0` and earlier) print
+upgrade guidance instead, since that binary cannot create an account either.
+
+When upgrading from an older installer, the quote rejection also applies to
+values preserved from an existing `agent.env`, so a node id containing a quote
+written by an older installer now blocks the upgrade with a clear error naming
+the key — remove the quote from `agent.env` and re-run. The same holds for
+`gotham.env`: a preserved DSN or Redis value with quotes or a trailing
+backslash now blocks the upgrade naming the key — fix the value in
+`gotham.env` (keyword DSNs with quoted values must use the URL form) and
+re-run.
+
 ## What verification covers
 
 For both binaries, the manifest is signed with the release key embedded in the

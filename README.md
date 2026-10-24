@@ -11,10 +11,12 @@ Design priorities (in order):
 
 ## Install
 
-Control-plane and node-agent install, first login, updates and the
-release/signing flow live in [`docs/guide/install.md`](docs/guide/install.md). Releases are
-signed with Ed25519; the installer and the built-in updater verify the signed
-manifest and the artifact digest before installing anything. The installer
+Control-plane and node-agent install live in
+[`docs/guide/install.md`](docs/guide/install.md); first login, HTTPS, nodes,
+updates and the release/signing flow have their own pages under
+[`docs/guide/`](docs/guide/). Releases are signed with Ed25519; the installer
+and the built-in updater verify the signed manifest and the artifact digest
+before installing anything. The installer
 collects the first admin credentials up front and creates the account before
 the service starts (interactive prompt with `GOTHAM_ADMIN_EMAIL` as the
 default, or `GOTHAM_ADMIN_EMAIL` non-interactively), and is idempotent on
@@ -149,7 +151,7 @@ A release that fails to activate is rolled back and its version is backed off
 (the agent seeds the backoff from the durable status at startup, so a wrapper
 restart does not re-apply a broken release and crash-loop). A newer release is
 applied automatically; to retry the *same* version after a fix, run
-`sudo gotham-agent update reset` (documented in `deploy/README.md`).
+`sudo gotham-agent update reset` (see [`docs/guide/updates.md`](docs/guide/updates.md)).
 
 ## Two-factor authentication (TOTP)
 

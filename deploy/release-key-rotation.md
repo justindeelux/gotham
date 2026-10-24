@@ -5,9 +5,9 @@ binary. This runbook covers the embedded current + next key ring, planned
 rotations, and what is (and is not) recoverable when the signing key is lost or
 compromised.
 
-Related: `docs/guide/install.md` (Keypair), `deploy/README.md` (release pipeline and
-known residuals), `.goreleaser.yaml`, `.github/workflows/release.yml`,
-`updatecore/sign.go`.
+Related: `docs/guide/release-signing.md` (keypair and release pipeline),
+`deploy/README.md` (installer/updater files and known residuals), `.goreleaser.yaml`,
+`.github/workflows/release.yml`, `updatecore/sign.go`.
 
 ## The key ring
 

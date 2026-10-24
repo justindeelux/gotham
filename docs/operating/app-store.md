@@ -12,7 +12,7 @@ are optional.
 Installs and removals run on the node through a fixed, root-owned host helper.
 The control plane and the agent only pass a catalog id; the helper owns the
 command it runs and re-validates the id against its own allow-list. See
-[Install](/guide/install) for how the helper is placed on a node.
+[Add nodes](/guide/nodes) for how the helper is placed on a node.
 
 ## Select a node
 
@@ -125,7 +125,7 @@ Buildpacks needs `pack`. A missing tool is reported on the deployment. See
 - **The host helper is missing or refuses the verb** — a node that was updated
   only through the agent's self-update can keep an old host install. Re-run the
   node installer, which is idempotent, then retry; see
-  [Install](/guide/install).
+  [Add nodes](/guide/nodes).
 - **A tool is in use** — an uninstall is refused while a build runs, or while
   another installed tool depends on it. Remove the dependent tool first
   (Railpack before BuildKit).

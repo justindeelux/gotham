@@ -158,6 +158,6 @@ started with a different DSN or the installer was interrupted.
 
 ## Still stuck
 
-- [Install](/guide/install) — layout, CA, agent install and the service env file.
+- [Add nodes](/guide/nodes) — layout, CA, agent install and the service env file.
 - [Updates](/guide/updates) — rollback, reset and the failed-release backoff.
 - [Reference: configuration](/reference/configuration) — environment keys.

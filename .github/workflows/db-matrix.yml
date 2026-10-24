@@ -1,0 +1,91 @@
+name: DB version matrix
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"
+  push:
+    paths:
+      - "internal/store/migrations/**"
+      - "deploy/**"
+      - ".github/workflows/db-matrix.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  db-matrix:
+    name: DB tests (pg ${{ matrix.postgres }} / redis ${{ matrix.redis }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres:
+          - "14"
+          - "15"
+          - "16"
+          - "17"
+        redis:
+          # "6.2-alpine" is the oldest published Redis 6.x tag (Redis 6.0 has
+          # no current image); it resolves to the last 6.2 release, 6.2.24.
+          - "6.2-alpine"
+          - "7.0-alpine"
+          - "7.2-alpine"
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: gotham
+          POSTGRES_PASSWORD: gotham
+          POSTGRES_DB: gotham_test
+        ports:
+          - "5433:5432"
+        options: >-
+          --health-cmd "pg_isready -U gotham -d gotham_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:${{ matrix.redis }}
+        ports:
+          - "6380:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      GOTHAM_DATABASE_DSN: postgres://gotham:gotham@localhost:5433/gotham_test?sslmode=disable
+      GOTHAM_TEST_DSN: postgres://gotham:gotham@localhost:5433/gotham_test?sslmode=disable
+      GOTHAM_TEST_REDIS: 127.0.0.1:6380
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.27.x"
+          cache: true
+
+      - name: Report service versions
+        run: |
+          docker exec ${{ job.services.postgres.id }} postgres --version
+          docker exec ${{ job.services.redis.id }} redis-server --version
+
+      - name: Download modules
+        if: ${{ hashFiles('go.sum') != '' }}
+        run: go mod download
+
+      - name: Apply migrations
+        run: go run ./cmd/gotham migrate up
+
+      - name: Run DB-backed tests
+        run: go test ./internal/... -count=1

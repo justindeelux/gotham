@@ -2,7 +2,7 @@
 #
 # install-agent-sudoers.sh grants the gotham-agent service user permission to
 # run ONLY the fixed, root-owned agent update wrapper as root, with no
-# arguments. Run as root after installing the agent (see deploy/README.md).
+# arguments. Run as root after installing the agent (see deploy/install-agent.sh).
 #
 #   sudo deploy/install-agent-sudoers.sh [service-user]
 #

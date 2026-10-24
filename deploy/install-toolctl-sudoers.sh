@@ -2,7 +2,7 @@
 #
 # install-toolctl-sudoers.sh grants the gotham-agent service user permission to
 # run ONLY the fixed, root-owned host-tool helper, one rule per verb and tool id
-# (no wildcards). Run as root after installing the helper (see deploy/README.md):
+# (no wildcards). Run as root after installing the helper (see deploy/install-agent.sh):
 #
 #   sudo deploy/install-toolctl-sudoers.sh [service-user]
 #

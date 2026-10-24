@@ -2,7 +2,7 @@
 #
 # install-sudoers.sh grants the gotham service user permission to run ONLY the
 # fixed, root-owned update wrapper as root, with no arguments. Run as root after
-# installing the control plane (see deploy/gotham.service and deploy/README.md).
+# installing the control plane (see deploy/install.sh and deploy/gotham.service).
 #
 #   sudo deploy/install-sudoers.sh [service-user]
 #

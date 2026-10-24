@@ -341,7 +341,7 @@ derive_agent_defaults() {
     _derived_cp_addr="127.0.0.1:9442"
 }
 
-# Install prefix. Empty = the production layout from deploy/README.md. A
+# Install prefix. Empty = the production paths assigned below. A
 # non-empty prefix is the test-only redirect used by the dry run so no host
 # path is touched.
 PREFIX="${GOTHAM_INSTALL_ROOT:-}"
@@ -1229,7 +1229,7 @@ else
     runuser -u "${SERVICE_USER}" -- env GOTHAM_CA_DIR="${CA_DIR}" "${INSTALL_PATH}" ca init ${ca_init_args}
 fi
 
-# ---- Self-update chain (mirror of deploy/README.md) -------------------------
+# ---- Self-update chain (same wrapper the node agent installs) ---------------
 log "installing the update wrapper ${WRAPPER_PATH}"
 run mkdir -p "$(dirname "${WRAPPER_PATH}")"
 run chmod 0755 "$(dirname "${WRAPPER_PATH}")"

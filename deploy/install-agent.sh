@@ -460,7 +460,7 @@ fi
 
 # Self-update chain: the shared wrapper installed under the agent name, its
 # root-owned configuration, the root-owned status directory and the sudoers
-# rule. Mirror of the control-plane install in deploy/README.md.
+# rule. Mirror of the control-plane install in deploy/install.sh.
 log "installing the update wrapper ${WRAPPER_PATH}"
 run mkdir -p /usr/libexec/gotham
 run chmod 0755 /usr/libexec/gotham

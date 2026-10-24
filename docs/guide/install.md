@@ -9,7 +9,7 @@ updates and rollback, and the release/signing flow.
 
 ## Requirements
 
-- **Control plane host:** Ubuntu 22.04 (or any systemd Linux) with `curl`,
+- **Control plane host:** Ubuntu 22.04 / Debian with systemd with `curl`,
   `openssl` 3, `sudo` (with `visudo`) and `coreutils`. The installer provisions
   PostgreSQL and Redis from the distribution packages unless you point it at
   managed services with `GOTHAM_DATABASE_DSN` / `GOTHAM_REDIS_ADDR` (or set
@@ -22,12 +22,19 @@ updates and rollback, and the release/signing flow.
 
 ## Control plane
 
-Run the installer from a checkout, so it can use its sibling files (the
-root-owned update wrapper, its config, the sudoers rule and the systemd unit):
+Run one command on your Ubuntu/Debian host; no repository checkout is needed:
 
 ```sh
-git clone https://github.com/justindeelux/gotham.git
-sudo gotham/deploy/install.sh
+curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/install.sh | sudo sh
+```
+
+The installer asks for the admin email (default `admin@example.com`), password (Enter generates one), and an optional panel domain (Enter skips). A generated password is printed once. Docker is installed automatically for the localhost agent.
+
+The domain must resolve to this host and ports 80/443 must be free. Cloudflare records must be **DNS-only**. Open the domain over HTTP and confirm it in General settings to start HTTPS issuance; an unconfirmed trial reverts automatically. Invalid domains or DNS failures warn and leave the host HTTP address available.
+
+```sh
+# Optional domain for unattended installation
+sudo sh install.sh --domain panel.example.com
 ```
 
 The installer:

@@ -98,6 +98,7 @@ release:
     # The release public key is a public artifact: installers and reviewers can
     # compare it against the key embedded in the binaries and in install.sh.
     - glob: ./deploy/gotham-signing-key.pub
+    - glob: ./release-assets/gotham-deploy-*.tar.gz
 
 changelog:
   use: github

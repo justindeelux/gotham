@@ -18,11 +18,9 @@
 # missing email skips with the manual command). A generated password is
 # printed once in the final summary. The password travels on stdin only.
 #
-# Run it from a repository checkout (it uses its sibling files: the wrapper,
-# the updater config, the sudoers installer and the unit). Example:
+# Download this script and run it directly; no checkout is needed:
 #
-#   git clone https://github.com/justindeelux/gotham.git
-#   sudo gotham/deploy/install.sh
+#   curl -fsSL https://raw.githubusercontent.com/justindeelux/gotham/main/deploy/install.sh | sudo sh
 #
 # Verification environment overrides (testing only; see
 # deploy/test-release-install.sh):
@@ -57,7 +55,7 @@
 #   GOTHAM_INSTALL_TEST_ADMIN_BIN=<fake> + GOTHAM_INSTALL_TEST_ADMIN_TTY=<path>
 #                               test-only: with GOTHAM_INSTALL_ROOT, use <fake>
 #                               instead of the installed binary for the first-
-#                               admin step (`admin exists` / `admin create`),
+#                               admin/domain steps (`admin` / `instance`),
 #                               and drive interactive prompts from <path>
 #                               instead of /dev/tty. Without the BIN seam test
 #                               mode skips admin creation; /dev/tty is never
@@ -105,7 +103,7 @@
 #
 # Usage:
 #   sudo ./install.sh [--cp-host <name-or-ip>]... [--dry-run]
-#                     [--file-manager | --no-file-manager]
+#                     [--file-manager | --no-file-manager] [--domain <host>]
 
 set -eu
 # A permissive base umask: shared directories (/etc/gotham, /usr/libexec/gotham,
@@ -128,11 +126,19 @@ GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
 
 DRY_RUN=0
 CP_HOSTS_OPT=""
+DOMAIN="${GOTHAM_DOMAIN:-}"
+DOMAIN_GIVEN=0
+[ "${GOTHAM_DOMAIN+x}" != x ] || DOMAIN_GIVEN=1
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --file-manager) GOTHAM_AGENT_FILE_MANAGER=yes; export GOTHAM_AGENT_FILE_MANAGER ;;
         --no-file-manager) GOTHAM_AGENT_FILE_MANAGER=no; export GOTHAM_AGENT_FILE_MANAGER ;;
+        --domain)
+            [ "$#" -ge 2 ] || { echo "--domain requires a hostname" >&2; exit 2; }
+            DOMAIN=$2; DOMAIN_GIVEN=1; shift
+            ;;
+        --domain=*) DOMAIN=${1#--domain=}; DOMAIN_GIVEN=1 ;;
         --cp-host)
             [ "$#" -ge 2 ] || { echo "--cp-host requires a hostname or IP" >&2; exit 2; }
             CP_HOSTS_OPT="${CP_HOSTS_OPT} $2"
@@ -160,12 +166,81 @@ CP_HOSTS="${CP_HOSTS}${CP_HOSTS_OPT}"
 CP_HOSTS="$(printf '%s' "${CP_HOSTS}" | tr ',' ' ')"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh gotham-toolctl.sh gotham-signing-key.pub; do
-    if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
-        echo "install.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
-        exit 2
-    fi
-done
+# Bootstrap only when downloaded alone. Never source code from the download
+# channel until its archive is bound to the signed control-plane manifest.
+if [ ! -f "${SCRIPT_DIR}/release-verify.sh" ]; then
+    (
+        set -eu
+        bootstrap="$(mktemp -d "${TMPDIR:-/tmp}/gotham-bootstrap.XXXXXX")"
+        trap 'rm -rf "${bootstrap}"' EXIT
+        trap 'exit 1' INT TERM HUP
+        fail() { echo "gotham-install: $*" >&2; exit 1; }
+        key="${GOTHAM_RELEASE_PUBLIC_KEY_B64}"
+        if [ -n "${GOTHAM_INSTALL_TEST_PUBLIC_KEY:-}" ] && [ -n "${GOTHAM_INSTALL_ROOT:-}" ]; then
+            case "${GOTHAM_INSTALL_ROOT}" in
+                /*) ;;
+                *) fail "GOTHAM_INSTALL_ROOT must be an absolute sandbox path" ;;
+            esac
+            [ -n "$(printf '%s' "${GOTHAM_INSTALL_ROOT}" | tr -d '/')" ] \
+                || fail "GOTHAM_INSTALL_ROOT must be a non-/ sandbox path"
+            key="${GOTHAM_INSTALL_TEST_PUBLIC_KEY}"
+        fi
+        case "${key}" in
+            *"BEGIN PUBLIC KEY"*) printf '%s\n' "${key}" >"${bootstrap}/key.pub" ;;
+            *)
+                printf '%s' "${key}" | base64 -d >"${bootstrap}/key.raw"
+                [ "$(wc -c <"${bootstrap}/key.raw" | tr -d ' ')" = 32 ] || fail "invalid public key"
+                { printf '\060\052\060\005\006\003\053\145\160\003\041\000'; cat "${bootstrap}/key.raw"; } >"${bootstrap}/key.der"
+                openssl pkey -pubin -inform DER -in "${bootstrap}/key.der" -out "${bootstrap}/key.pub"
+                ;;
+        esac
+        case "$(uname -m)" in
+            x86_64 | amd64) arch=amd64 ;;
+            aarch64 | arm64) arch=arm64 ;;
+            *) fail "unsupported architecture" ;;
+        esac
+        releases="${GOTHAM_RELEASES_URL:-https://github.com/${GOTHAM_REPO:-justindeelux/gotham}/releases}"
+        version="${GOTHAM_VERSION:-}"
+        if [ -z "${version}" ]; then
+            [ -z "${GOTHAM_BASE_URL:-}" ] || fail "GOTHAM_VERSION is required with GOTHAM_BASE_URL"
+            redirect="$(curl -fsS -o /dev/null -w '%{redirect_url}' "${releases%/}/latest")"
+            version="${redirect%/}"; version="${version##*/}"
+        fi
+        printf '%s' "${version}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || fail "invalid release version"
+        base="${GOTHAM_BASE_URL:-${releases%/}/download/${version}}"
+        manifest="gotham-manifest-${arch}.txt"
+        curl -fsSL --retry 3 -o "${bootstrap}/manifest" "${base%/}/${manifest}"
+        curl -fsSL --retry 3 -o "${bootstrap}/signature" "${base%/}/${manifest}.sig"
+        base64 -d <"${bootstrap}/signature" >"${bootstrap}/signature.raw"
+        openssl pkeyutl -verify -pubin -inkey "${bootstrap}/key.pub" -rawin \
+            -in "${bootstrap}/manifest" -sigfile "${bootstrap}/signature.raw" >/dev/null 2>&1 \
+            || fail "manifest signature verification FAILED (refusing to install)"
+        field() { sed -n "s/^$1=//p" "${bootstrap}/manifest"; }
+        [ "$(field version)" = "${version}" ] && [ "$(field arch)" = "${arch}" ] \
+            && [ "$(field file)" = "gotham-linux-${arch}" ] || fail "manifest release binding mismatch"
+        bundle="gotham-deploy-${version}.tar.gz"
+        [ "$(field deploy_file)" = "${bundle}" ] || fail "manifest has no matching deploy bundle"
+        digest="$(field deploy_sha256)"
+        printf '%s' "${digest}" | grep -Eq '^[0-9a-f]{64}$' || fail "invalid deploy digest"
+        curl -fsSL --retry 3 -o "${bootstrap}/bundle.tar.gz" "${base%/}/${bundle}"
+        if command -v sha256sum >/dev/null 2>&1; then
+            got="$(sha256sum "${bootstrap}/bundle.tar.gz" | awk '{print $1}')"
+        else
+            got="$(shasum -a 256 "${bootstrap}/bundle.tar.gz" | awk '{print $1}')"
+        fi
+        [ "${got}" = "${digest}" ] || fail "deploy bundle digest mismatch"
+        mkdir "${bootstrap}/deploy"
+        tar -xzf "${bootstrap}/bundle.tar.gz" -C "${bootstrap}/deploy"
+        # The verified bundle contains the installer too, so sibling lookups
+        # and the existing cleanup/test seams keep their original behavior.
+        set --
+        [ "${DRY_RUN}" -eq 0 ] || set -- "$@" --dry-run
+        [ "${DOMAIN_GIVEN}" -eq 0 ] || set -- "$@" --domain "${DOMAIN}"
+        for cp_host in ${CP_HOSTS}; do set -- "$@" --cp-host "${cp_host}"; done
+        GOTHAM_VERSION="${version}" sh "${bootstrap}/deploy/install.sh" "$@"
+    )
+    exit $?
+fi
 # shellcheck source=deploy/release-verify.sh
 . "${SCRIPT_DIR}/release-verify.sh"
 # shellcheck source=deploy/install-agent-lib.sh
@@ -792,7 +867,7 @@ admin_phase1_collect() {
     _admin_generated=""
     if _admin_interactive; then
         _admin_tty="$(_admin_tty_path)"
-        _admin_email_default="${GOTHAM_ADMIN_EMAIL:-}"
+        _admin_email_default="${GOTHAM_ADMIN_EMAIL:-admin@example.com}"
         _admin_prompt_traps
         while true; do
             if [ -n "${_admin_email_default}" ]; then
@@ -987,6 +1062,11 @@ admin_phase2_create() {
 # `systemctl start`. No prompts on --dry-run, in test mode without the BIN
 # seam, or when the instance already has an account.
 admin_phase1_collect
+if [ "${DOMAIN_GIVEN}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ] && _admin_interactive; then
+    _domain_tty="$(_admin_tty_path)"
+    printf 'Panel domain (optional, Enter skips): ' >"${_domain_tty}"
+    IFS= read -r DOMAIN <"${_domain_tty}" || DOMAIN=""
+fi
 
 # ---- Service user and directories -------------------------------------------
 if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
@@ -1295,6 +1375,29 @@ run systemctl restart "${BINARY_NAME}.service"
         fi
 }
 
+# ---- Optional panel domain -------------------------------------------------
+PANEL_URL=""
+DOMAIN_BIN="${INSTALL_PATH}"
+if [ "${TEST_MODE}" -eq 1 ]; then
+    DOMAIN_BIN="${GOTHAM_INSTALL_TEST_ADMIN_BIN:-${INSTALL_PATH}}"
+fi
+if [ -n "${DOMAIN}" ]; then
+    log "Cloudflare users: set the panel record to DNS-only (grey cloud). Ports 80/443 must reach this host."
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        echo "[dry-run] ${INSTALL_PATH} instance set-url https://${DOMAIN}"
+    elif [ "${TEST_MODE}" -eq 1 ] && [ -z "${GOTHAM_INSTALL_TEST_ADMIN_BIN:-}" ]; then
+        log "test mode: skipping domain setup (no command binary seam)"
+    elif GOTHAM_DATABASE_DSN="${DSN}" GOTHAM_REDIS_ADDR="${REDIS_ADDR}" \
+        "${DOMAIN_BIN}" instance set-url "https://${DOMAIN}"; then
+        # Re-arm the persisted trial timer in the long-running service.
+        run systemctl restart "${BINARY_NAME}.service"
+        PANEL_URL="http://${DOMAIN}"
+        log "Open ${PANEL_URL} and confirm the domain in General settings to start HTTPS."
+    else
+        log "WARNING: domain setup failed; continuing on the host HTTP address. Set the domain in General settings later."
+    fi
+fi
+
 # ---- First admin account: summary -------------------------------------------
 # Credentials were collected in phase 1 (before the first mutation); the
 # account itself was created in phase 2 (before the service start), so
@@ -1304,7 +1407,8 @@ HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 [ -n "${HOST_IP}" ] || HOST_IP="127.0.0.1"
 
 _admin_xtrace_off
-ADMIN_LOGIN_LINE="Login:    http://${HOST_IP}:8000"
+PANEL_URL="${PANEL_URL:-http://${HOST_IP}:8000}"
+ADMIN_LOGIN_LINE="Login:    ${PANEL_URL}"
 case "${ADMIN_STATUS}" in
     created)
         if [ -n "${ADMIN_GENERATED}" ]; then
@@ -1358,7 +1462,7 @@ cat <<EOF
 
 Gotham ${VERSION} is installed.
 
-  Web UI:   http://${HOST_IP}:8000
+  Web UI:   ${PANEL_URL}
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
 

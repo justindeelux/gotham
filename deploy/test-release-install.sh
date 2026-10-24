@@ -16,7 +16,10 @@
 #   - control characters in GOTHAM_DATABASE_DSN / GOTHAM_REDIS_ADDR fail
 #     closed before gotham.env is written (C2);
 #   - a real run (no --dry-run, no GOTHAM_INSTALL_ROOT) ignores
-#     GOTHAM_INSTALL_TEST_AGENT_SCRIPT (R4).
+#     GOTHAM_INSTALL_TEST_AGENT_SCRIPT (R4);
+#   - pinned PostgreSQL/Redis selection, repository-key verification, the Redis
+#     pin, and the new-role password / legacy warning / stored-DSN handling
+#     (D1-D10).
 #
 # The installer's public key is the provisioned release key; the tests inject an
 # ephemeral key through GOTHAM_INSTALL_TEST_PUBLIC_KEY (test mode only), and the
@@ -863,7 +866,8 @@ echo "PASS: the agent.env lookup default matches the path install-agent.sh write
 # install-agent.sh --full dry path.
 unset GOTHAM_INSTALL_TEST GOTHAM_INSTALL_ROOT GOTHAM_OS_RELEASE_FILE \
     GOTHAM_TEST_UNAME_M GOTHAM_AGENT_ENV_FILE GOTHAM_APT_ROOT \
-    GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT
+    GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT \
+    GOTHAM_INSTALL_TEST_DEPS
 prod_dry() {
     GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
     GOTHAM_VERSION="${VERSION}" \
@@ -878,6 +882,7 @@ GOTHAM_AGENT_ENV_FILE="${R2_ENV}" \
 GOTHAM_APT_ROOT="${SCRATCH}/hostile-apt-root" \
 GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/hostile-agent.sh" \
 GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
+GOTHAM_INSTALL_TEST_DEPS=1 \
 GOTHAM_INSTALL_TEST_ADMIN_BIN="${SCRATCH}/hostile-admin.sh" \
 GOTHAM_INSTALL_TEST_ADMIN_TTY="${SCRATCH}/hostile-tty" \
 prod_dry >"${SCRATCH}/prod-hostile.log" 2>&1
@@ -896,7 +901,7 @@ fi
 echo "PASS: a production run ignores every test seam (H1/M1, hermetic)"
 unset GOTHAM_OS_RELEASE_FILE GOTHAM_TEST_UNAME_M GOTHAM_AGENT_ENV_FILE \
     GOTHAM_APT_ROOT GOTHAM_INSTALL_TEST_AGENT_SCRIPT GOTHAM_INSTALL_TEST_RUN_AGENT \
-    GOTHAM_INSTALL_TEST_ADMIN_BIN GOTHAM_INSTALL_TEST_ADMIN_TTY
+    GOTHAM_INSTALL_TEST_DEPS GOTHAM_INSTALL_TEST_ADMIN_BIN GOTHAM_INSTALL_TEST_ADMIN_TTY
 # Gating, proved behaviourally rather than by grepping the source: the
 # hermetic differential above shows every seam ignored outside test mode, and
 # the refusal / no-RUN_AGENT / scrub-dump runs show the script seam needs a
@@ -1438,7 +1443,10 @@ SHIM
         echo "FAIL: a hostile seam value leaked into the real run (R4)" >&2
         exit 1
     fi
-    grep -q 'GOTHAM_LEGACY_LOCAL_NODE_ID=.*gotham-migrate.*old-installed-host-agent' "${SCRATCH}/rr-systemctl.log" \
+    # The migration call passes the legacy node id after the install path; the
+    # DSN travels on stdin now, so collapse the sh -c newlines before matching.
+    tr '\n' ' ' <"${SCRATCH}/rr-systemctl.log" \
+        | grep -q 'gotham-migrate [^ ]* old-installed-host-agent' \
         || { echo "FAIL: migration did not receive the saved local agent identity" >&2; exit 1; }
     echo "PASS: a real run reaches the agent step on the real script and never runs the seam fake (R4)"
 
@@ -2272,5 +2280,706 @@ unset DOMAIN_WAIT_RC
 echo "PASS: agent readiness failure skips domain setup and preserves HTTP"
 unset DOMAIN_TEST_LOG DOMAIN_TEST_RC GOTHAM_DOMAIN
 echo "PASS: standalone domain success and failure preserve the install and login summary"
+
+# ---- D1-D10: pinned PostgreSQL/Redis versions and the database password ------
+# The dependency step normally runs only on a real host. GOTHAM_INSTALL_TEST_DEPS=1
+# (sandbox test mode) runs it against shims and exits right after it, so the
+# real selection, repository-key and role-provisioning code is exercised here.
+echo "==> pinned PostgreSQL/Redis selection and database password (D1-D10)"
+DEPS_SRC="${INSTALL_SH_OVERRIDE:-${SCRIPT_DIR}/install.sh}"
+DEPS_DIR="${SCRATCH}/deps"
+DEPS_SHIM="${DEPS_DIR}/shim"
+DEPS_IMPL="${DEPS_DIR}/impl"
+DEPS_STATE="${DEPS_DIR}/state"
+DEPS_APT="${DEPS_DIR}/apt"
+DEPS_PG_LIB="${DEPS_DIR}/pg-lib"
+DEPS_BIN="${DEPS_DIR}/bin"
+mkdir -p "${DEPS_SHIM}" "${DEPS_IMPL}" "${DEPS_STATE}" "${DEPS_PG_LIB}" "${DEPS_BIN}"
+export DEPS_STATE DEPS_IMPL DEPS_SHIM
+
+# Sandbox copy: bake the test paths into the fixed production variables (the
+# same pattern as bake_installer above).
+DEPS_INSTALL_SH="${DEPS_DIR}/install.sh"
+sed -e "s|^_DEPS_OS_RELEASE=/etc/os-release|_DEPS_OS_RELEASE=${DEPS_DIR}/os-release|" \
+    -e "s|^_DEPS_APT_ROOT=$|_DEPS_APT_ROOT=${DEPS_APT}|" \
+    -e "s|^_DEPS_PG_LIB_DIR=/usr/lib/postgresql|_DEPS_PG_LIB_DIR=${DEPS_PG_LIB}|" \
+    "${DEPS_SRC}" >"${DEPS_INSTALL_SH}"
+grep -qxF "_DEPS_OS_RELEASE=${DEPS_DIR}/os-release" "${DEPS_INSTALL_SH}" \
+    || { echo "FAIL: could not bake the dependency os-release path" >&2; exit 1; }
+grep -qxF "_DEPS_APT_ROOT=${DEPS_APT}" "${DEPS_INSTALL_SH}" \
+    || { echo "FAIL: could not bake the dependency apt root" >&2; exit 1; }
+grep -qxF "_DEPS_PG_LIB_DIR=${DEPS_PG_LIB}" "${DEPS_INSTALL_SH}" \
+    || { echo "FAIL: could not bake the PostgreSQL server directory" >&2; exit 1; }
+# A hermetic PATH: every real tool the installer needs, except the host's
+# PostgreSQL and Redis binaries, so the runner's own install cannot leak into
+# the version detection. The shims above still win.
+for _dbin in $(printf '%s' "${PATH}" | tr ':' ' '); do
+    [ -d "${_dbin}" ] || continue
+    for _dbf in "${_dbin}"/*; do
+        [ -f "${_dbf}" ] && [ -x "${_dbf}" ] || continue
+        _dbn="${_dbf##*/}"
+        case "${_dbn}" in
+            psql | postgres | pg_lsclusters | pg_ctl* | pg_config | pg_createcluster | \
+                pg_dropcluster | pg_upgradecluster | redis-server | redis-cli | redis-sentinel) continue ;;
+        esac
+        [ -e "${DEPS_BIN}/${_dbn}" ] && continue
+        ln -sf "${_dbf}" "${DEPS_BIN}/${_dbn}"
+    done
+done
+for _sib in release-verify.sh gotham-update.sh gotham-updater.conf \
+    install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
+    gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
+    gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh \
+    gotham-hostbootstrap-fetch.sh gotham-signing-key.pub gotham-hostctl.sh; do
+    ln -sf "${SCRIPT_DIR}/${_sib}" "${DEPS_DIR}/${_sib}"
+done
+
+REAL_CURL="$(command -v curl)"
+export REAL_CURL
+cat >"${DEPS_SHIM}/curl" <<'SHIM'
+#!/bin/sh
+case "$*" in
+    *postgresql.org* | *packages.redis.io*) ;;
+    *) exec "${REAL_CURL:?}" "$@" ;;
+esac
+out=""; prev=""
+for arg in "$@"; do
+    if [ "${prev}" = "-o" ]; then out="${arg}"; fi
+    prev="${arg}"
+done
+[ -n "${out}" ] || exit 22
+case "$*" in
+    *postgresql.org*) printf 'pgdg\n' >"${out}" ;;
+    *packages.redis.io*) printf 'redis\n' >"${out}" ;;
+    *) exit 22 ;;
+esac
+printf '%s\n' "$*" >>"${DEPS_STATE}/curl.log"
+exit 0
+SHIM
+cat >"${DEPS_SHIM}/gpg" <<'SHIM'
+#!/bin/sh
+case "$*" in
+    *--show-keys*)
+        last=""
+        for arg in "$@"; do last="${arg}"; done
+        case "$(cat "${last}" 2>/dev/null)" in
+            pgdg)
+                echo 'pub:u:4096:1:0000000000000000:0:0:::::'
+                printf 'fpr:::::::::%s:\n' "$(cat "${DEPS_STATE}/fp_pgdg")"
+                ;;
+            redis)
+                echo 'pub:u:4096:1:0000000000000000:0:0:::::'
+                printf 'fpr:::::::::%s:\n' "$(cat "${DEPS_STATE}/fp_redis")"
+                ;;
+            *) echo unreadable ;;
+        esac
+        exit 0
+        ;;
+    *--dearmor*)
+        out=""; prev=""
+        for arg in "$@"; do
+            if [ "${prev}" = "-o" ]; then out="${arg}"; fi
+            prev="${arg}"
+        done
+        [ -n "${out}" ] || exit 1
+        cat >"${out}"
+        exit 0
+        ;;
+    *--import*) exit 0 ;;
+    *--export*) printf 'dummy-verified-key\n'; exit 0 ;;
+esac
+exit 1
+SHIM
+cat >"${DEPS_SHIM}/apt-cache" <<'SHIM'
+#!/bin/sh
+case "$*" in
+    *"policy postgresql"*) name=pg ;;
+    *"policy redis-server"*) name=redis ;;
+    *) exit 0 ;;
+esac
+printf '%s package:\n' "${name}"
+if [ -f "${DEPS_STATE}/${name}_candidate" ]; then
+    printf '  Candidate: %s\n' "$(cat "${DEPS_STATE}/${name}_candidate")"
+else
+    printf '  Candidate: (none)\n'
+fi
+exit 0
+SHIM
+cat >"${DEPS_SHIM}/apt-get" <<'SHIM'
+#!/bin/sh
+printf 'apt-get %s\n' "$*" >>"${DEPS_STATE}/apt.log"
+case "$*" in
+    *update*)
+        if [ -f "${DEPS_STATE}/fail_second_update" ]; then
+            n="$(cat "${DEPS_STATE}/update_count" 2>/dev/null || echo 0)"
+            n=$((n + 1))
+            printf '%s\n' "${n}" >"${DEPS_STATE}/update_count"
+            if [ "${n}" -ge 2 ]; then
+                rm -f "${DEPS_STATE}/fail_second_update"
+                exit 100
+            fi
+        fi
+        ;;
+esac
+case "$*" in
+    *install*)
+        case "$*" in
+            *postgresql*)
+                printf '16.4\n' >"${DEPS_STATE}/pg_version"
+                printf '16 main 5432 online postgres /var/lib/postgresql/16/main\n' \
+                    >"${DEPS_STATE}/pg_cluster"
+                ln -sf "${DEPS_IMPL}/psql" "${DEPS_SHIM}/psql"
+                ;;
+        esac
+        case "$*" in
+            *=6:7.2*)
+                printf '7.2.16\n' >"${DEPS_STATE}/redis_version"
+                ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+                ;;
+            *redis*)
+                printf '7.0.15\n' >"${DEPS_STATE}/redis_version"
+                ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+                ;;
+        esac
+        ;;
+esac
+exit 0
+SHIM
+cat >"${DEPS_IMPL}/psql" <<'SHIM'
+#!/bin/sh
+printf '%s\n' "$*" >>"${DEPS_STATE}/psql-argv.log"
+case "$*" in
+    *--version*)
+        [ -f "${DEPS_STATE}/pg_version" ] || exit 127
+        printf 'psql (PostgreSQL) %s\n' "$(cat "${DEPS_STATE}/pg_version")"
+        exit 0
+        ;;
+esac
+[ -f "${DEPS_STATE}/pg_version" ] || exit 127
+case "$*" in
+    *"FROM pg_roles"*) [ -f "${DEPS_STATE}/role" ] && printf '1\n' ;;
+    *"FROM pg_database"*) [ -f "${DEPS_STATE}/db" ] && printf '1\n' ;;
+    *"DROP DATABASE"*) rm -f "${DEPS_STATE}/db" ;;
+    *"DROP ROLE"*) rm -f "${DEPS_STATE}/role" "${DEPS_STATE}/role_pw" ;;
+    *)
+        sql="$(cat)"
+        printf '%s\n' "${sql}" >>"${DEPS_STATE}/psql-stdin.log"
+        case "${sql}" in
+            *"CREATE ROLE gotham"*)
+                touch "${DEPS_STATE}/role"
+                sed -n "s/.*PASSWORD '\([^']*\)'.*/\1/p" <<EOF >"${DEPS_STATE}/role_pw"
+${sql}
+EOF
+                if [ -f "${DEPS_STATE}/term_after_create" ]; then
+                    rm -f "${DEPS_STATE}/term_after_create"
+                    kill -TERM "${PPID}" 2>/dev/null
+                fi
+                ;;
+        esac
+        ;;
+esac
+exit 0
+SHIM
+cat >"${DEPS_SHIM}/pg_lsclusters" <<'SHIM'
+#!/bin/sh
+[ -f "${DEPS_STATE}/pg_cluster" ] || exit 0
+cat "${DEPS_STATE}/pg_cluster"
+SHIM
+cat >"${DEPS_SHIM}/createdb" <<'SHIM'
+#!/bin/sh
+printf 'createdb %s\n' "$*" >>"${DEPS_STATE}/createdb.log"
+if [ -f "${DEPS_STATE}/fail_createdb" ]; then
+    rm -f "${DEPS_STATE}/fail_createdb"
+    exit 1
+fi
+touch "${DEPS_STATE}/db"
+exit 0
+SHIM
+cat >"${DEPS_IMPL}/redis-server" <<'SHIM'
+#!/bin/sh
+[ -f "${DEPS_STATE}/redis_version" ] || exit 127
+printf 'Redis server v=%s sha=00000000:0 malloc=jemalloc-5.1.0 bits=64 build=0\n' \
+    "$(cat "${DEPS_STATE}/redis_version")"
+exit 0
+SHIM
+cat >"${DEPS_SHIM}/runuser" <<'SHIM'
+#!/bin/sh
+[ "$1" = "-u" ] && shift 3
+exec "$@"
+SHIM
+cat >"${DEPS_SHIM}/systemctl" <<'SHIM'
+#!/bin/sh
+printf 'systemctl %s\n' "$*" >>"${DEPS_STATE}/systemctl.log"
+exit 0
+SHIM
+REAL_MV="$(command -v mv)"
+export REAL_MV
+cat >"${DEPS_SHIM}/mv" <<'SHIM'
+#!/bin/sh
+if [ -f "${DEPS_STATE}/fail_env_mv" ]; then
+    case "$*" in
+        *gotham.env.tmp*)
+            rm -f "${DEPS_STATE}/fail_env_mv"
+            exit 1
+            ;;
+    esac
+fi
+"${REAL_MV:?}" "$@" || exit $?
+if [ -f "${DEPS_STATE}/term_after_env_mv" ]; then
+    case "$*" in
+        *gotham.env.tmp*)
+            rm -f "${DEPS_STATE}/term_after_env_mv"
+            kill -TERM "${PPID}" 2>/dev/null
+            ;;
+    esac
+fi
+exit 0
+SHIM
+chmod +x "${DEPS_SHIM}/curl" "${DEPS_SHIM}/gpg" "${DEPS_SHIM}/apt-cache" \
+    "${DEPS_SHIM}/apt-get" "${DEPS_SHIM}/pg_lsclusters" "${DEPS_SHIM}/createdb" \
+    "${DEPS_SHIM}/runuser" "${DEPS_SHIM}/systemctl" "${DEPS_SHIM}/mv" \
+    "${DEPS_IMPL}/psql" "${DEPS_IMPL}/redis-server"
+
+# deps_reset starts each case from an empty package/host state, with the real
+# pinned fingerprints unless the case overrides one.
+deps_reset() {
+    rm -rf "${DEPS_STATE}" "${DEPS_APT}"
+    mkdir -p "${DEPS_STATE}"
+    rm -f "${DEPS_SHIM}/psql" "${DEPS_SHIM}/redis-server"
+    for _drs in apt curl psql-argv psql-stdin createdb systemctl; do
+        : >"${DEPS_STATE}/${_drs}.log"
+    done
+    rm -f "${DEPS_STATE}/pg_version" "${DEPS_STATE}/pg_cluster" \
+        "${DEPS_STATE}/redis_version" "${DEPS_STATE}/role" \
+        "${DEPS_STATE}/role_pw" "${DEPS_STATE}/db" \
+        "${DEPS_STATE}/fail_second_update" "${DEPS_STATE}/update_count" \
+        "${DEPS_STATE}/fail_createdb" "${DEPS_STATE}/term_after_create" \
+        "${DEPS_STATE}/fail_env_mv" "${DEPS_STATE}/term_after_env_mv"
+    printf 'B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8\n' >"${DEPS_STATE}/fp_pgdg"
+    printf '54318FA4052D1E61A6B6F7BB5F4349D6BF53AA0C\n' >"${DEPS_STATE}/fp_redis"
+}
+deps_fixture() {
+    printf 'ID=%s\nVERSION_CODENAME=%s\n' "$1" "$2" >"${DEPS_DIR}/os-release"
+}
+deps_env_dsn() {
+    sed -n 's/^GOTHAM_DATABASE_DSN=//p' "$1/etc/gotham/gotham.env" | head -n1
+}
+# deps_legacy_state prepares an installed legacy host (role and DB with the
+# fixed password) rooted at $1, with a complete gotham.env that a re-run
+# should leave byte-identical.
+deps_legacy_state() {
+    printf 'gotham\n' >"${DEPS_STATE}/role_pw"
+    touch "${DEPS_STATE}/role" "${DEPS_STATE}/db" "${DEPS_STATE}/pg_version" \
+        "${DEPS_STATE}/redis_version"
+    printf '16 main 5432 online postgres /var/lib/postgresql/16/main\n' >"${DEPS_STATE}/pg_cluster"
+    ln -sf "${DEPS_IMPL}/psql" "${DEPS_SHIM}/psql"
+    ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+    mkdir -p "$1/etc/gotham"
+    {
+        printf '%s\n' '# Gotham control-plane environment. Read by gotham.service (EnvironmentFile).'
+        printf '%s\n' 'GOTHAM_DATABASE_DSN=postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable'
+        printf '%s\n' 'GOTHAM_REDIS_ADDR=localhost:6379'
+        printf '%s\n' "GOTHAM_CA_DIR=$1/var/lib/gotham/ca"
+        printf '%s\n' 'GOTHAM_SECRET_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+        printf '%s\n' "GOTHAM_AUTH_JWT_PRIVATE_KEY_PATH=$1/etc/gotham/jwt_ed25519.key"
+        printf '%s\n' "GOTHAM_AUTH_JWT_PUBLIC_KEY_PATH=$1/etc/gotham/jwt_ed25519.pub"
+    } >"$1/etc/gotham/gotham.env"
+    chmod 0640 "$1/etc/gotham/gotham.env"
+}
+deps_run() { # $1 root, $2.. sh flags
+    _dr_root="$1"; shift
+    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
+    GOTHAM_VERSION="${VERSION}" \
+    GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
+    GOTHAM_INSTALL_ROOT="${_dr_root}" \
+    GOTHAM_INSTALL_TEST_DEPS=1 \
+    GOTHAM_INSTALL_TEST_RUN_AGENT=0 \
+    GOTHAM_SKIP_DEPS=0 \
+    DEPS_STATE="${DEPS_STATE}" \
+    PATH="${DEPS_SHIM}:${DEPS_BIN}" \
+        sh "$@" "${DEPS_INSTALL_SH}"
+}
+
+# D1: a modern distro installs its own PostgreSQL and Redis (no third-party
+# repository, no key download). A fresh install creates the role with a random
+# password that stays out of the logs and off every command line; a re-run
+# leaves the role and gotham.env byte-identical.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D1_ROOT="${SCRATCH}/deps-modern"
+deps_run "${D1_ROOT}" -x >"${DEPS_DIR}/d1.log" 2>&1 \
+    || { echo "FAIL: modern-distro dependency install failed (D1)" >&2; cat "${DEPS_DIR}/d1.log" >&2; exit 1; }
+grep -q 'installing PostgreSQL from the distribution packages' "${DEPS_DIR}/d1.log" \
+    || { echo "FAIL: a modern distro did not use its PostgreSQL package (D1)" >&2; exit 1; }
+grep -q 'installing Redis from the distribution packages' "${DEPS_DIR}/d1.log" \
+    || { echo "FAIL: a modern distro did not use its Redis package (D1)" >&2; exit 1; }
+grep -q '^apt-get install -y postgresql$' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: the distribution PostgreSQL package was not installed (D1)" >&2; exit 1; }
+grep -q '^apt-get install -y redis-server$' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: the distribution Redis package was not installed (D1)" >&2; exit 1; }
+if grep -qE 'postgresql-16|=6:7\.2' "${DEPS_STATE}/apt.log"; then
+    echo "FAIL: a modern distro used a pinned third-party package (D1)" >&2; exit 1
+fi
+[ ! -s "${DEPS_STATE}/curl.log" ] \
+    || { echo "FAIL: a modern distro downloaded a repository key (D1)" >&2; exit 1; }
+[ ! -e "${DEPS_APT}/etc/apt/preferences.d/gotham-redis.pref" ] \
+    || { echo "FAIL: a distro-Redis host got the 7.2 pin (D1)" >&2; exit 1; }
+grep -q 'PostgreSQL 16 and Redis 7.0 are ready' "${DEPS_DIR}/d1.log" \
+    || { echo "FAIL: the installed versions were not logged (D1)" >&2; exit 1; }
+D1_DSN="$(deps_env_dsn "${D1_ROOT}")"
+case "${D1_DSN}" in
+    postgres://gotham:*@localhost:5432/gotham\?sslmode=disable) ;;
+    *) echo "FAIL: gotham.env does not hold a local DSN (D1): ${D1_DSN}" >&2; exit 1 ;;
+esac
+D1_PW="${D1_DSN#postgres://gotham:}"
+D1_PW="${D1_PW%@localhost:5432/gotham?sslmode=disable}"
+[ "${D1_PW}" != "gotham" ] && [ "${#D1_PW}" -eq 32 ] \
+    || { echo "FAIL: the database password is not the generated shape (D1)" >&2; exit 1; }
+[ "$(cat "${DEPS_STATE}/role_pw")" = "${D1_PW}" ] \
+    || { echo "FAIL: the role password does not match the stored DSN (D1)" >&2; exit 1; }
+if grep -Fq "${D1_PW}" "${DEPS_DIR}/d1.log" "${DEPS_STATE}/psql-argv.log"; then
+    echo "FAIL: the database password appeared in a log or on a command line (D1)" >&2; exit 1
+fi
+grep -q "CREATE ROLE gotham LOGIN PASSWORD" "${DEPS_STATE}/psql-stdin.log" \
+    || { echo "FAIL: the role SQL did not travel on stdin (D1)" >&2; exit 1; }
+cp "${D1_ROOT}/etc/gotham/gotham.env" "${DEPS_DIR}/d1-env-before"
+: >"${DEPS_STATE}/psql-stdin.log"
+: >"${DEPS_STATE}/psql-argv.log"
+deps_run "${D1_ROOT}" -x >"${DEPS_DIR}/d1-second.log" 2>&1 \
+    || { echo "FAIL: re-running the dependency step failed (D1)" >&2; cat "${DEPS_DIR}/d1-second.log" >&2; exit 1; }
+cmp -s "${DEPS_DIR}/d1-env-before" "${D1_ROOT}/etc/gotham/gotham.env" \
+    || { echo "FAIL: a re-run changed gotham.env (D1)" >&2; exit 1; }
+[ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
+    || { echo "FAIL: a re-run touched the existing role (D1)" >&2; exit 1; }
+if grep -Fq "${D1_PW}" "${DEPS_DIR}/d1-second.log" "${DEPS_STATE}/psql-argv.log"; then
+    echo "FAIL: a re-run under sh -x leaked the stored database password (D1)" >&2; exit 1
+fi
+echo "PASS: modern distro, new-role random password, byte-identical idempotent re-run (D1)"
+
+# D2: an old distro (Ubuntu 22.04 packages) gets PostgreSQL 16 from PGDG and
+# Redis pinned to the 7.2 series from packages.redis.io, both keys verified.
+# The pin is re-applied on a re-run even when Redis is already installed.
+deps_reset
+deps_fixture ubuntu jammy
+printf '14.13-0ubuntu0.22.04.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:6.0.16-1ubuntu0.1\n' >"${DEPS_STATE}/redis_candidate"
+D2_ROOT="${SCRATCH}/deps-old-distro"
+deps_run "${D2_ROOT}" >"${DEPS_DIR}/d2.log" 2>&1 \
+    || { echo "FAIL: old-distro dependency install failed (D2)" >&2; cat "${DEPS_DIR}/d2.log" >&2; exit 1; }
+grep -q '^apt-get install -y postgresql-16$' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: PostgreSQL 16 was not installed from PGDG (D2)" >&2; exit 1; }
+grep -qF 'apt-get install -y redis-server=6:7.2.* redis-tools=6:7.2.*' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: Redis was not pinned to the 7.2 series (D2)" >&2; exit 1; }
+grep -q 'postgresql.org/media/keys/ACCC4CF8.asc' "${DEPS_STATE}/curl.log" \
+    || { echo "FAIL: the PGDG key was not fetched (D2)" >&2; exit 1; }
+grep -q 'packages.redis.io/gpg' "${DEPS_STATE}/curl.log" \
+    || { echo "FAIL: the Redis key was not fetched (D2)" >&2; exit 1; }
+for _f in "${DEPS_APT}/etc/apt/keyrings/pgdg.gpg" "${DEPS_APT}/etc/apt/keyrings/redis.gpg" \
+    "${DEPS_APT}/etc/apt/sources.list.d/pgdg.list" "${DEPS_APT}/etc/apt/sources.list.d/redis.list"; do
+    [ -f "${_f}" ] || { echo "FAIL: missing ${_f} (D2)" >&2; exit 1; }
+done
+grep -qF "signed-by=${DEPS_APT}/etc/apt/keyrings/pgdg.gpg" "${DEPS_APT}/etc/apt/sources.list.d/pgdg.list" \
+    || { echo "FAIL: the PGDG source is not signed-by its keyring (D2)" >&2; exit 1; }
+grep -qF "jammy-pgdg main" "${DEPS_APT}/etc/apt/sources.list.d/pgdg.list" \
+    || { echo "FAIL: the PGDG suite is wrong (D2)" >&2; exit 1; }
+grep -qF "signed-by=${DEPS_APT}/etc/apt/keyrings/redis.gpg" "${DEPS_APT}/etc/apt/sources.list.d/redis.list" \
+    || { echo "FAIL: the Redis source is not signed-by its keyring (D2)" >&2; exit 1; }
+grep -q 'packages.redis.io/deb jammy main' "${DEPS_APT}/etc/apt/sources.list.d/redis.list" \
+    || { echo "FAIL: the Redis suite is wrong (D2)" >&2; exit 1; }
+grep -q '^Pin: version 6:7\.2\.\*$' "${DEPS_APT}/etc/apt/preferences.d/gotham-redis.pref" \
+    || { echo "FAIL: the Redis 7.2 apt pin is missing (D2)" >&2; exit 1; }
+grep -q '^Pin-Priority: 990$' "${DEPS_APT}/etc/apt/preferences.d/gotham-redis.pref" \
+    || { echo "FAIL: the Redis pin has the wrong priority (D2)" >&2; exit 1; }
+# The coordinator's real-host case: the pin file goes missing on a re-run where
+# Redis is already installed, so the package action is "keep".
+rm -f "${DEPS_APT}/etc/apt/preferences.d/gotham-redis.pref"
+deps_run "${D2_ROOT}" >"${DEPS_DIR}/d2-second.log" 2>&1 \
+    || { echo "FAIL: the re-run without the Redis pin failed (D2)" >&2; cat "${DEPS_DIR}/d2-second.log" >&2; exit 1; }
+grep -q '^Pin: version 6:7\.2\.\*$' "${DEPS_APT}/etc/apt/preferences.d/gotham-redis.pref" \
+    || { echo "FAIL: a re-run did not restore the Redis 7.2 pin (D2)" >&2; exit 1; }
+[ "$(grep -c '^Pin: version' "${DEPS_APT}/etc/apt/preferences.d/gotham-redis.pref")" -eq 1 ] \
+    || { echo "FAIL: the Redis pin was duplicated (D2)" >&2; exit 1; }
+echo "PASS: old distro PGDG 16 + Redis 7.2, signed-by keyrings, persistent pin re-applied (D2)"
+
+# D3: existing older services are never upgraded; the installer warns with the
+# upgrade guide and continues (fresh role creation on that host).
+deps_reset
+deps_fixture ubuntu jammy
+printf '14.13\n' >"${DEPS_STATE}/pg_version"
+printf '14 main 5432 online postgres /var/lib/postgresql/14/main\n' >"${DEPS_STATE}/pg_cluster"
+printf '6.0.16\n' >"${DEPS_STATE}/redis_version"
+ln -sf "${DEPS_IMPL}/psql" "${DEPS_SHIM}/psql"
+ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+D3_ROOT="${SCRATCH}/deps-old-existing"
+deps_run "${D3_ROOT}" >"${DEPS_DIR}/d3.log" 2>&1 \
+    || { echo "FAIL: a host with older services did not continue (D3)" >&2; cat "${DEPS_DIR}/d3.log" >&2; exit 1; }
+grep -q 'WARNING: PostgreSQL 14 is older than 16' "${DEPS_DIR}/d3.log" \
+    || { echo "FAIL: no warning for an old existing PostgreSQL (D3)" >&2; exit 1; }
+grep -q 'WARNING: Redis 6.0 is older than 6.2' "${DEPS_DIR}/d3.log" \
+    || { echo "FAIL: no warning for an old existing Redis (D3)" >&2; exit 1; }
+[ "$(grep -c 'upgrade-databases' "${DEPS_DIR}/d3.log")" -eq 2 ] \
+    || { echo "FAIL: the warnings do not link the upgrade guide (D3)" >&2; exit 1; }
+[ ! -s "${DEPS_STATE}/apt.log" ] \
+    || { echo "FAIL: an older existing service triggered a package install (D3)" >&2; exit 1; }
+[ ! -e "${DEPS_APT}/etc/apt/keyrings" ] \
+    || { echo "FAIL: an older existing service added a repository (D3)" >&2; exit 1; }
+echo "PASS: existing older PostgreSQL/Redis warn without upgrade (D3)"
+
+# D4: a tampered repository key aborts before any package is installed.
+deps_reset
+deps_fixture ubuntu jammy
+printf '14.13\n' >"${DEPS_STATE}/pg_candidate"
+printf '6.0.16\n' >"${DEPS_STATE}/redis_candidate"
+printf 'DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF\n' >"${DEPS_STATE}/fp_redis"
+D4_ROOT="${SCRATCH}/deps-bad-key"
+if deps_run "${D4_ROOT}" >"${DEPS_DIR}/d4.log" 2>&1; then
+    echo "FAIL: a wrong Redis key fingerprint was accepted (D4)" >&2; exit 1
+fi
+grep -q 'Redis signing key fingerprint mismatch' "${DEPS_DIR}/d4.log" \
+    || { echo "FAIL: a wrong key did not abort with a fingerprint error (D4)" >&2; cat "${DEPS_DIR}/d4.log" >&2; exit 1; }
+if grep -q 'apt-get install' "${DEPS_STATE}/apt.log"; then
+    echo "FAIL: a package was installed before the bad key aborted (D4)" >&2
+    cat "${DEPS_STATE}/apt.log" >&2
+    exit 1
+fi
+[ ! -f "${DEPS_STATE}/pg_version" ] && [ ! -f "${DEPS_STATE}/redis_version" ] \
+    || { echo "FAIL: a service was installed despite the bad key (D4)" >&2; exit 1; }
+if [ -e "${DEPS_APT}" ] && [ -n "$(ls -A "${DEPS_APT}" 2>/dev/null)" ]; then
+    echo "FAIL: the Redis key mismatch still wrote apt repository files (D4)" >&2
+    find "${DEPS_APT}" >&2
+    exit 1
+fi
+echo "PASS: a wrong repository key aborts before writing any repository or installing anything (D4)"
+
+# D5: a stored legacy DSN is left untouched with one clear warning and the
+# manual change command (never an automatic rotation).
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D5_ROOT="${SCRATCH}/deps-legacy-warning"
+deps_legacy_state "${D5_ROOT}"
+cp "${D5_ROOT}/etc/gotham/gotham.env" "${DEPS_DIR}/d5-env-before"
+deps_run "${D5_ROOT}" >"${DEPS_DIR}/d5.log" 2>&1 \
+    || { echo "FAIL: a stored legacy DSN made the installer fail (D5)" >&2; cat "${DEPS_DIR}/d5.log" >&2; exit 1; }
+grep -q 'uses the old default database password' "${DEPS_DIR}/d5.log" \
+    || { echo "FAIL: no warning for the legacy default password (D5)" >&2; exit 1; }
+grep -q 'ALTER ROLE gotham WITH LOGIN PASSWORD' "${DEPS_DIR}/d5.log" \
+    || { echo "FAIL: the legacy warning has no manual command (D5)" >&2; exit 1; }
+grep -qx 'SQL' "${DEPS_DIR}/d5.log" \
+    || { echo "FAIL: the printed heredoc terminator is not copy-pasteable (D5)" >&2; exit 1; }
+grep -qx "ALTER ROLE gotham WITH LOGIN PASSWORD '<new-strong-password>';" "${DEPS_DIR}/d5.log" \
+    || { echo "FAIL: the printed ALTER statement is indented (D5)" >&2; exit 1; }
+[ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
+    || { echo "FAIL: the legacy password was rotated automatically (D5)" >&2; exit 1; }
+[ "$(cat "${DEPS_STATE}/role_pw")" = "gotham" ] \
+    || { echo "FAIL: the legacy role password changed (D5)" >&2; exit 1; }
+cmp -s "${DEPS_DIR}/d5-env-before" "${D5_ROOT}/etc/gotham/gotham.env" \
+    || { echo "FAIL: the legacy DSN was rewritten (D5)" >&2; exit 1; }
+grep -q 'LEGACY_DB_PASSWORD_NOTE' "${INSTALL_SH}" \
+    || { echo "FAIL: the legacy warning is missing from the final summary (D5)" >&2; exit 1; }
+echo "PASS: legacy default password warns with the manual command, untouched (D5)"
+
+# D6: an operator-set password or a custom database name in a stored DSN is
+# kept exactly as stored.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+printf '%s\n' 'p%40ss!' >"${DEPS_STATE}/role_pw"
+touch "${DEPS_STATE}/role" "${DEPS_STATE}/db" "${DEPS_STATE}/pg_version" \
+    "${DEPS_STATE}/redis_version"
+printf '16 main 5432 online postgres /var/lib/postgresql/16/main\n' >"${DEPS_STATE}/pg_cluster"
+ln -sf "${DEPS_IMPL}/psql" "${DEPS_SHIM}/psql"
+ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+D6_ROOT="${SCRATCH}/deps-custom-stored-dsn"
+mkdir -p "${D6_ROOT}/etc/gotham"
+printf 'GOTHAM_DATABASE_DSN=postgres://gotham:p%%40ss!@localhost:5432/mydb?sslmode=disable\n' \
+    >"${D6_ROOT}/etc/gotham/gotham.env"
+chmod 0640 "${D6_ROOT}/etc/gotham/gotham.env"
+deps_run "${D6_ROOT}" >"${DEPS_DIR}/d6.log" 2>&1 \
+    || { echo "FAIL: a stored custom DSN made the installer fail (D6)" >&2; cat "${DEPS_DIR}/d6.log" >&2; exit 1; }
+[ "$(deps_env_dsn "${D6_ROOT}")" = 'postgres://gotham:p%40ss!@localhost:5432/mydb?sslmode=disable' ] \
+    || { echo "FAIL: a stored custom DSN was rewritten (D6)" >&2; exit 1; }
+[ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
+    || { echo "FAIL: a stored custom role was touched (D6)" >&2; exit 1; }
+[ "$(cat "${DEPS_STATE}/role_pw")" = 'p%40ss!' ] \
+    || { echo "FAIL: the operator-set role password was changed (D6)" >&2; exit 1; }
+echo "PASS: operator-set password and custom database name are kept untouched (D6)"
+
+# D7: an existing role (or database) with no stored DSN fails early instead of
+# taking it over.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+printf 'gotham\n' >"${DEPS_STATE}/role_pw"
+touch "${DEPS_STATE}/role" "${DEPS_STATE}/pg_version" "${DEPS_STATE}/redis_version"
+printf '16 main 5432 online postgres /var/lib/postgresql/16/main\n' >"${DEPS_STATE}/pg_cluster"
+ln -sf "${DEPS_IMPL}/psql" "${DEPS_SHIM}/psql"
+ln -sf "${DEPS_IMPL}/redis-server" "${DEPS_SHIM}/redis-server"
+D7_ROOT="${SCRATCH}/deps-role-without-dsn"
+if deps_run "${D7_ROOT}" >"${DEPS_DIR}/d7.log" 2>&1; then
+    echo "FAIL: an existing role without a stored DSN was taken over (D7)" >&2; exit 1
+fi
+grep -q 'refusing to reset it' "${DEPS_DIR}/d7.log" \
+    || { echo "FAIL: the existing-role refusal message is missing (D7)" >&2; cat "${DEPS_DIR}/d7.log" >&2; exit 1; }
+grep -qx "  sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'" "${DEPS_DIR}/d7.log" \
+    || { echo "FAIL: the refusal has no copy-pasteable recovery command (D7)" >&2; exit 1; }
+grep -qx 'DROP DATABASE IF EXISTS gotham;' "${DEPS_DIR}/d7.log" \
+    || { echo "FAIL: the refusal recovery does not drop the database (D7)" >&2; exit 1; }
+grep -qx 'DROP ROLE IF EXISTS gotham;' "${DEPS_DIR}/d7.log" \
+    || { echo "FAIL: the refusal recovery does not drop the role (D7)" >&2; exit 1; }
+[ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
+    || { echo "FAIL: the installer touched the existing role (D7)" >&2; exit 1; }
+[ ! -e "${D7_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: a DSN was written despite the refusal (D7)" >&2; exit 1; }
+echo "PASS: an existing role without a stored DSN fails early, untouched (D7)"
+
+# D8: a psql client without a server must install the server (not be treated
+# as an installed PostgreSQL).
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+printf '16.4\n' >"${DEPS_STATE}/pg_version"
+ln -sf "${DEPS_IMPL}/psql" "${DEPS_SHIM}/psql"
+D8_ROOT="${SCRATCH}/deps-client-only"
+deps_run "${D8_ROOT}" >"${DEPS_DIR}/d8.log" 2>&1 \
+    || { echo "FAIL: a client-only PostgreSQL host did not install the server (D8)" >&2; cat "${DEPS_DIR}/d8.log" >&2; exit 1; }
+grep -q '^apt-get install -y postgresql$' "${DEPS_STATE}/apt.log" \
+    || { echo "FAIL: a psql client was treated as an installed server (D8)" >&2; cat "${DEPS_STATE}/apt.log" >&2; exit 1; }
+grep -q 'installing PostgreSQL from the distribution packages' "${DEPS_DIR}/d8.log" \
+    || { echo "FAIL: the client-only host did not take the distribution package path (D8)" >&2; exit 1; }
+[ -s "${DEPS_STATE}/pg_cluster" ] \
+    || { echo "FAIL: the server install did not produce a cluster (D8)" >&2; exit 1; }
+echo "PASS: a psql client alone is not treated as a server (D8)"
+
+# D9: when the newly added repositories make apt update fail, the files this
+# run wrote are removed again instead of breaking every later apt update.
+deps_reset
+deps_fixture ubuntu jammy
+printf '14.13\n' >"${DEPS_STATE}/pg_candidate"
+printf '6.0.16\n' >"${DEPS_STATE}/redis_candidate"
+touch "${DEPS_STATE}/fail_second_update"
+D9_ROOT="${SCRATCH}/deps-update-fail"
+if deps_run "${D9_ROOT}" >"${DEPS_DIR}/d9.log" 2>&1; then
+    echo "FAIL: a failing apt update with new repositories did not abort (D9)" >&2; exit 1
+fi
+grep -q 'removed the files this run added' "${DEPS_DIR}/d9.log" \
+    || { echo "FAIL: a failed apt update did not report removing the new sources (D9)" >&2; cat "${DEPS_DIR}/d9.log" >&2; exit 1; }
+if [ -n "$(find "${DEPS_APT}" -type f 2>/dev/null)" ]; then
+    echo "FAIL: a failed apt update left the new repository files in place (D9)" >&2
+    find "${DEPS_APT}" -type f >&2
+    exit 1
+fi
+echo "PASS: a failed apt update removes the repository files this run added (D9)"
+
+# D10: an interrupted FRESH install drops only what this run created, and a
+# re-run afterwards succeeds. Covers createdb failing and a signal after
+# CREATE ROLE.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D10_ROOT="${SCRATCH}/deps-fresh-createdb-fail"
+touch "${DEPS_STATE}/fail_createdb"
+if deps_run "${D10_ROOT}" >"${DEPS_DIR}/d10.log" 2>&1; then
+    echo "FAIL: a failing createdb did not abort the fresh install (D10)" >&2; exit 1
+fi
+grep -q 'removing the partially created gotham role/database' "${DEPS_DIR}/d10.log" \
+    || { echo "FAIL: the interrupted fresh install left its role behind (D10)" >&2; cat "${DEPS_DIR}/d10.log" >&2; exit 1; }
+[ ! -f "${DEPS_STATE}/role" ] && [ ! -f "${DEPS_STATE}/db" ] \
+    || { echo "FAIL: the partially created role/database survived (D10)" >&2; exit 1; }
+[ ! -e "${D10_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: a DSN was written despite the abort (D10)" >&2; exit 1; }
+if ls "${D10_ROOT}"/etc/gotham/gotham.env.tmp.* >/dev/null 2>&1; then
+    echo "FAIL: a stale gotham.env temp survived the abort (D10)" >&2; exit 1
+fi
+deps_run "${D10_ROOT}" >"${DEPS_DIR}/d10-retry.log" 2>&1 \
+    || { echo "FAIL: the re-run after a failed createdb did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10-retry.log" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ -f "${D10_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: the re-run did not create the role/database/env (D10)" >&2; exit 1; }
+# A signal after CREATE ROLE but before createdb: the trap must drop the role.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D10B_ROOT="${SCRATCH}/deps-fresh-term"
+touch "${DEPS_STATE}/term_after_create"
+if deps_run "${D10B_ROOT}" >"${DEPS_DIR}/d10b.log" 2>&1; then
+    echo "FAIL: a TERM after CREATE ROLE did not abort the fresh install (D10)" >&2; exit 1
+fi
+[ ! -f "${DEPS_STATE}/role" ] && [ ! -f "${DEPS_STATE}/db" ] \
+    || { echo "FAIL: a signal left the partially created role/database behind (D10)" >&2; exit 1; }
+deps_run "${D10B_ROOT}" >"${DEPS_DIR}/d10b-retry.log" 2>&1 \
+    || { echo "FAIL: the re-run after a signal did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10b-retry.log" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ -f "${D10B_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: the re-run after a signal did not create the role/database/env (D10)" >&2; exit 1; }
+# A signal right after the env mv: the env is live, so the trap must NOT drop
+# the role/database, and a re-run must succeed on the stored DSN.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D10C_ROOT="${SCRATCH}/deps-env-live-term"
+touch "${DEPS_STATE}/term_after_env_mv"
+if deps_run "${D10C_ROOT}" >"${DEPS_DIR}/d10c.log" 2>&1; then
+    echo "FAIL: a TERM right after the env mv did not abort (D10)" >&2; exit 1
+fi
+[ -f "${D10C_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: the env was not live when the signal arrived (D10)" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] \
+    || { echo "FAIL: a signal after a successful mv dropped the live role/database (D10)" >&2; exit 1; }
+if grep -q 'removing the partially created' "${DEPS_DIR}/d10c.log"; then
+    echo "FAIL: a signal after a successful mv tried to drop the role/database (D10)" >&2; exit 1
+fi
+: >"${DEPS_STATE}/psql-stdin.log"
+deps_run "${D10C_ROOT}" >"${DEPS_DIR}/d10c-retry.log" 2>&1 \
+    || { echo "FAIL: the re-run after an env-live signal did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10c-retry.log" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ ! -s "${DEPS_STATE}/psql-stdin.log" ] \
+    || { echo "FAIL: the re-run after an env-live signal did not use the stored DSN (D10)" >&2; exit 1; }
+# A failed mv (no signal) must still drop: the temp file remains, so the env
+# is not live.
+deps_reset
+deps_fixture ubuntu noble
+printf '16+257build1.1\n' >"${DEPS_STATE}/pg_candidate"
+printf '5:7.0.15-1ubuntu0.24.04.5\n' >"${DEPS_STATE}/redis_candidate"
+D10D_ROOT="${SCRATCH}/deps-env-mv-fail"
+touch "${DEPS_STATE}/fail_env_mv"
+if deps_run "${D10D_ROOT}" >"${DEPS_DIR}/d10d.log" 2>&1; then
+    echo "FAIL: a failing env mv did not abort (D10)" >&2; exit 1
+fi
+[ ! -f "${DEPS_STATE}/role" ] && [ ! -f "${DEPS_STATE}/db" ] \
+    || { echo "FAIL: a failed env mv left the fresh role/database behind (D10)" >&2; exit 1; }
+[ ! -e "${D10D_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: a failed env mv left a live DSN (D10)" >&2; exit 1; }
+deps_run "${D10D_ROOT}" >"${DEPS_DIR}/d10d-retry.log" 2>&1 \
+    || { echo "FAIL: the re-run after a failed env mv did not succeed (D10)" >&2; cat "${DEPS_DIR}/d10d-retry.log" >&2; exit 1; }
+[ -f "${DEPS_STATE}/role" ] && [ -f "${DEPS_STATE}/db" ] && [ -f "${D10D_ROOT}/etc/gotham/gotham.env" ] \
+    || { echo "FAIL: the re-run after a failed env mv did not create everything (D10)" >&2; exit 1; }
+echo "PASS: an interrupted fresh install cleans up its own role/database; re-runs succeed (D10)"
+unset DEPS_STATE
+
+# JUS-22/x2: a --domain run under sh -x must not print the stored DB password.
+# Reuse D1's root, whose gotham.env holds the generated password.
+export DOMAIN_TEST_LOG="${SCRATCH}/domain-xtrace.log"
+export GOTHAM_DOMAIN="panel.example.com"
+mkdir -p "${SCRATCH}/admin-state-domain-xtrace"
+ADMIN_EMAIL="" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_XTRACE=1 \
+    run_admin_install "${D1_ROOT}" "${SCRATCH}/admin-state-domain-xtrace" \
+    "${SCRATCH}/dx-out.log" "${SCRATCH}/dx-err.log" \
+    || { echo "FAIL: the --domain xtrace run failed (JUS-22/x2)" >&2; cat "${SCRATCH}/dx-err.log" >&2; exit 1; }
+[ "$(cat "${DOMAIN_TEST_LOG}")" = "$(printf 'instance\nset-url\nhttps://panel.example.com')" ] \
+    || { echo "FAIL: the --domain run did not reach set-url (JUS-22/x2)" >&2; exit 1; }
+if grep -Fq "${D1_PW}" "${SCRATCH}/dx-out.log" "${SCRATCH}/dx-err.log"; then
+    echo "FAIL: sh -x printed the database password during --domain setup (JUS-22/x2)" >&2; exit 1
+fi
+grep -q '^+' "${SCRATCH}/dx-err.log" \
+    || { echo "FAIL: the --domain xtrace run produced no trace lines (JUS-22/x2)" >&2; exit 1; }
+unset DOMAIN_TEST_LOG GOTHAM_DOMAIN
+echo "PASS: sh -x plus --domain never prints the database password (JUS-22/x2)"
 
 echo "ALL RELEASE-INSTALL TESTS PASSED"

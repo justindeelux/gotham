@@ -49,8 +49,11 @@ Trong khi chạy, trình cài đặt:
 1. chọn bản phát hành mới nhất cho CPU của bạn, xác minh chữ ký Ed25519, và kiểm
    tra SHA-256 của artifact với manifest đã ký (manifest được ràng buộc với phiên
    bản, kiến trúc và tên tệp);
-2. cài PostgreSQL và Redis từ gói của bản phân phối (trừ khi bạn trỏ tới dịch vụ
-   được quản lý);
+2. cài PostgreSQL 16 và Redis 6.2 trở lên (7.2 từ kho chính thức của Redis khi
+   bản phân phối của bạn cũ hơn) — bản cài mới tạo mật khẩu cơ sở dữ liệu cục
+   bộ — trừ khi bạn trỏ tới dịch vụ được quản lý;
+   [Phiên bản cơ sở dữ liệu và nâng cấp](/vi/guide/upgrade-databases) giải thích
+   những gì được cài và cách nâng cấp thủ công;
 3. cài control plane (tệp nhị phân trong `/var/lib/gotham/bin`, updater
    `/usr/libexec/gotham/gotham-update`, unit
    `/etc/systemd/system/gotham.service`), rồi Docker và node agent trên cùng máy

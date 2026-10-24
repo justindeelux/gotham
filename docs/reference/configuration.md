@@ -41,7 +41,7 @@ effect.
 
 | Key | Environment variable | Default | Required |
 |---|---|---|---|
-| `database.dsn` | `GOTHAM_DATABASE_DSN` | `postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable` | yes — reachable database |
+| `database.dsn` | `GOTHAM_DATABASE_DSN` | generated at install and stored in `/etc/gotham/gotham.env` | yes — reachable database |
 | `redis.addr` | `GOTHAM_REDIS_ADDR` | `localhost:6379` | yes — reachable instance |
 
 - `database.dsn` is the libpq/pgx connection string used by the store, the

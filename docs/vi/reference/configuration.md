@@ -41,7 +41,7 @@ giữ hiệu lực.
 
 | Khóa | Biến môi trường | Mặc định | Bắt buộc |
 |---|---|---|---|
-| `database.dsn` | `GOTHAM_DATABASE_DSN` | `postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable` | có — cơ sở dữ liệu kết nối được |
+| `database.dsn` | `GOTHAM_DATABASE_DSN` | được tạo lúc cài và lưu trong `/etc/gotham/gotham.env` | có — cơ sở dữ liệu kết nối được |
 | `redis.addr` | `GOTHAM_REDIS_ADDR` | `localhost:6379` | có — instance kết nối được |
 
 - `database.dsn` là chuỗi kết nối libpq/pgx mà store, phần kiểm tra sức khỏe và

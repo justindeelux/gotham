@@ -46,9 +46,6 @@ func hideResource(w http.ResponseWriter) {
 // A missing policy or unresolved relationship always denies member access.
 func (s *Server) projectAccess(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.realtime != nil && (r.Method == http.MethodPut || r.Method == http.MethodPatch) {
-			defer s.realtime.InvalidateAuthorization()
-		}
 		if s.isOwnerAccount(r) {
 			next.ServeHTTP(w, r)
 			return

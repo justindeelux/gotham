@@ -355,7 +355,7 @@ func (rt *Realtime) SetFrameFilter(filter func(context.Context, uuid.UUID, []byt
 	}
 }
 
-// InvalidateAuthorization wakes connections after local grant or resource changes.
+// InvalidateAuthorization wakes connections after successful local grant changes.
 func (rt *Realtime) InvalidateAuthorization() {
 	if rt == nil || rt.Hub == nil {
 		return

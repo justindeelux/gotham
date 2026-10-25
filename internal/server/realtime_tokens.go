@@ -25,6 +25,9 @@ func (v realtimeTokenVerifier) VerifyConnection(ctx context.Context, token strin
 	if err != nil {
 		return nil, "", err
 	}
+	if !strings.HasPrefix(token, auth.APITokenPrefix) {
+		return v.RevalidateConnection(ctx, token, claims)
+	}
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil {
 		return nil, "", auth.ErrUnauthorized
@@ -51,4 +54,32 @@ func (v realtimeTokenVerifier) verifyToken(ctx context.Context, token string) (*
 		return nil, auth.ErrUnauthorized
 	}
 	return &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: identity.UserID.String()}}, nil
+}
+
+// The JWT was verified at upgrade; its session, rather than access-token expiry,
+// determines the lifetime of an established connection.
+func (v realtimeTokenVerifier) RevalidateConnection(ctx context.Context, token string, claims *auth.Claims) (*auth.Claims, string, error) {
+	if strings.HasPrefix(token, auth.APITokenPrefix) {
+		return v.VerifyConnection(ctx, token)
+	}
+	if claims == nil || v.server.persistence == nil || v.server.persistence.DB == nil {
+		return nil, "", auth.ErrUnauthorized
+	}
+	userID, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		return nil, "", auth.ErrUnauthorized
+	}
+	sessionID, err := uuid.Parse(claims.SessionID)
+	if err != nil {
+		return nil, "", auth.ErrUnauthorized
+	}
+	var role string
+	err = v.server.persistence.DB.QueryRow(ctx, `SELECT u.role
+ FROM sessions s JOIN users u ON u.id=s.user_id
+ WHERE s.id=$1 AND u.id=$2 AND s.revoked_at IS NULL AND s.expires_at>now()
+ AND s.credential_version=u.credential_version`, sessionID, userID).Scan(&role)
+	if err != nil || (role != auth.RoleOwner && role != auth.RoleMember) {
+		return nil, "", auth.ErrUnauthorized
+	}
+	return claims, role, nil
 }

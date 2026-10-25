@@ -23,7 +23,12 @@ type connectionVerifier interface {
 	VerifyConnection(context.Context, string) (*auth.Claims, string, error)
 }
 
+type connectionRevalidator interface {
+	RevalidateConnection(context.Context, string, *auth.Claims) (*auth.Claims, string, error)
+}
+
 type connectionState struct {
+	claims  *auth.Claims
 	role    string
 	version uint64
 }
@@ -130,7 +135,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if userID, parseErr := uuid.Parse(claims.Subject); parseErr == nil {
 		r = r.WithContext(context.WithValue(r.Context(), userIDKey{}, userID))
 	}
-	r = r.WithContext(context.WithValue(r.Context(), connectionStateKey{}, &connectionState{role: role, version: 1}))
+	r = r.WithContext(context.WithValue(r.Context(), connectionStateKey{}, &connectionState{claims: claims, role: role, version: 1}))
 	websocket.Handler(h.serveConn).ServeHTTP(w, r)
 }
 
@@ -187,11 +192,19 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 	check := func() bool {
 		ctx, cancel := context.WithTimeout(request.Context(), AuthorizationTimeout)
 		defer cancel()
-		claims, role, err := h.verifyConnection(ctx, request.URL.Query().Get("token"))
+		state := request.Context().Value(connectionStateKey{}).(*connectionState)
+		token := request.URL.Query().Get("token")
+		var claims *auth.Claims
+		var role string
+		var err error
+		if verifier, ok := h.verify.(connectionRevalidator); ok {
+			claims, role, err = verifier.RevalidateConnection(ctx, token, state.claims)
+		} else {
+			claims, role, err = h.verifyConnection(ctx, token)
+		}
 		if err != nil || (userID != uuid.Nil && claims.Subject != userID.String()) {
 			return false
 		}
-		state := request.Context().Value(connectionStateKey{}).(*connectionState)
 		state.role = role
 		state.version++
 		return h.subscriptionsAllowed(ctx, userID, subs)

@@ -748,7 +748,7 @@ func TestProjectFreeFormMaps(t *testing.T) {
 }
 
 func TestProjectSocketRevalidationBound(t *testing.T) {
-	for _, change := range []string{"member-token-revoke", "owner-token-revoke", "member-role", "owner-role", "owner-session-role", "grant", "move"} {
+	for _, change := range []string{"member-token-revoke", "owner-token-revoke", "member-role", "owner-role", "owner-session-role", "session-revoke", "logout", "session-expire", "password", "credential-version", "session-user", "grant", "move"} {
 		t.Run(change, func(t *testing.T) {
 			f := newAccessFixture(t)
 			f.grant(t)
@@ -796,6 +796,22 @@ func TestProjectSocketRevalidationBound(t *testing.T) {
 				_, err = f.store.DB.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, identity.User.ID)
 			case "owner-role", "owner-session-role":
 				_, err = f.store.DB.Exec(context.Background(), `UPDATE users SET role='member' WHERE id=$1`, identity.User.ID)
+			case "session-revoke":
+				var claims *auth.Claims
+				claims, err = f.server.auth.VerifyAccessToken(credential)
+				if err == nil {
+					err = f.server.auth.RevokeSession(context.Background(), uuid.MustParse(identity.User.ID), uuid.MustParse(claims.SessionID))
+				}
+			case "logout":
+				err = f.server.auth.Logout(context.Background(), identity.RefreshToken)
+			case "session-expire":
+				_, err = f.store.DB.Exec(context.Background(), `UPDATE sessions SET expires_at=now()-interval '1 second' WHERE user_id=$1`, identity.User.ID)
+			case "password":
+				_, err = f.server.auth.ChangePassword(context.Background(), uuid.MustParse(identity.User.ID), "member-password", "changed-password", auth.SessionMeta{})
+			case "credential-version":
+				_, err = f.store.DB.Exec(context.Background(), `UPDATE users SET credential_version=credential_version+1 WHERE id=$1`, identity.User.ID)
+			case "session-user":
+				_, err = f.store.DB.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, identity.User.ID)
 			case "grant":
 				err = f.store.RevokeProject(context.Background(), f.projects[0], uuid.MustParse(identity.User.ID))
 			case "move":

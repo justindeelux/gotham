@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -249,6 +250,68 @@ func TestUploadReleasesSpoolSlotAfterPanic(t *testing.T) {
 	}
 	if len(envelope.Results) != 1 || envelope.Results[0].Error != "" || envelope.Results[0].Entry == nil {
 		t.Fatalf("upload after a panic did not reuse the released slot: %+v", envelope.Results)
+	}
+}
+
+func TestUploadBodyErrorMapsStageBusy(t *testing.T) {
+	for _, err := range []error{ErrBusy, ErrSpoolBusy, ErrTeamBusy} {
+		if got := uploadBodyError(err); got != "busy" {
+			t.Fatalf("uploadBodyError(%v) = %q, want busy", err, got)
+		}
+	}
+}
+
+func TestUploadReportsTeamShareAsBusy(t *testing.T) {
+	spool := newSpooler(t.TempDir(), 3, 1, nil)
+	teamB := uuid.New()
+	_, _, cleanupA, err := spool.stage("team:a", strings.NewReader("x"), 100)
+	if err != nil {
+		t.Fatalf("stage team A: %v", err)
+	}
+	_, _, cleanupB, err := spool.stage("team:"+teamB.String(), strings.NewReader("x"), 100)
+	if err != nil {
+		t.Fatalf("stage team B: %v", err)
+	}
+	t.Cleanup(func() { cleanupA(); cleanupB() })
+
+	r := chi.NewRouter()
+	h := &handler{svc: &fakeService{}, logger: slog.Default(), spool: spool}
+	r.Post("/v1/servers/{id}/files/upload", h.upload)
+
+	body, contentType := buildMultipart(t, []struct{ name, content string }{{"a.txt", "hello"}})
+	req := httptest.NewRequest(http.MethodPost,
+		"/v1/servers/"+uuid.New().String()+"/files/upload?root=volumes&path=d", strings.NewReader(body))
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(teams.WithScope(req.Context(), teams.Scope{
+		UserID: uuid.New(), TeamID: teamB, Role: teams.RoleOwner,
+	}))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var envelope uploadEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode upload: %v", err)
+	}
+	if len(envelope.Results) != 1 || envelope.Results[0].Error != "busy" {
+		t.Fatalf("results = %+v, want a busy part error", envelope.Results)
+	}
+}
+
+func TestSpoolOwnerBuckets(t *testing.T) {
+	if got := spoolOwner(context.Background()); got != "" {
+		t.Fatalf("unscoped owner = %q, want the shared empty bucket", got)
+	}
+	userID, teamID := uuid.New(), uuid.New()
+	teamCtx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID})
+	if got := spoolOwner(teamCtx); got != "team:"+teamID.String() {
+		t.Fatalf("team owner = %q", got)
+	}
+	personalCtx := teams.WithScope(context.Background(), teams.Scope{UserID: userID})
+	if got := spoolOwner(personalCtx); got != "user:"+userID.String() {
+		t.Fatalf("personal owner = %q", got)
 	}
 }
 

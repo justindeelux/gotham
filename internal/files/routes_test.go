@@ -370,6 +370,8 @@ func TestErrorStatusMapping(t *testing.T) {
 		{"too large", ErrTooLarge, http.StatusRequestEntityTooLarge},
 		{"not editable", ErrNotEditable, http.StatusUnsupportedMediaType},
 		{"busy", ErrBusy, http.StatusTooManyRequests},
+		{"spool busy", ErrSpoolBusy, http.StatusTooManyRequests},
+		{"team busy", ErrTeamBusy, http.StatusTooManyRequests},
 		{"outdated", ErrAgentOutdated, http.StatusNotImplemented},
 		{"unavailable", ErrAgentUnavailable, http.StatusBadGateway},
 		{"disabled", ErrDisabled, http.StatusServiceUnavailable},
@@ -401,7 +403,8 @@ func TestBusyAnswerNamesTheLimit(t *testing.T) {
 		want string
 	}{
 		{"team share", ErrTeamBusy, "team"},
-		{"global ceiling", ErrBusy, "uploads"},
+		{"global ceiling", ErrSpoolBusy, "uploads"},
+		{"agent busy", ErrBusy, "node is busy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newTestRouter(&fakeService{listErr: tc.err})

@@ -322,8 +322,8 @@ func uploadBodyError(err error) string {
 		return "too_large"
 	}
 	switch {
-	case errors.Is(err, ErrTooLarge), errors.Is(err, ErrBusy), errors.Is(err, ErrTeamBusy),
-		errors.Is(err, ErrInsufficientStorage), errors.Is(err, ErrValidation):
+	case errors.Is(err, ErrTooLarge), errors.Is(err, ErrBusy), errors.Is(err, ErrSpoolBusy),
+		errors.Is(err, ErrTeamBusy), errors.Is(err, ErrInsufficientStorage), errors.Is(err, ErrValidation):
 		return publicError(err)
 	default:
 		return "truncated"
@@ -368,6 +368,8 @@ func publicError(err error) string {
 	case errors.Is(err, ErrValidation):
 		return "invalid"
 	case errors.Is(err, ErrBusy):
+		return "busy"
+	case errors.Is(err, ErrSpoolBusy):
 		return "busy"
 	case errors.Is(err, ErrTeamBusy):
 		return "busy"

@@ -90,7 +90,13 @@ func newSpooler(dir string, concurrency, teamConcurrency int, logger *slog.Logge
 func (s *spooler) acquireTeam(owner string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.staged[owner] >= s.teamCap {
+	others := len(s.staged)
+	if s.staged[owner] > 0 {
+		others--
+	}
+	// The share only applies while another team is staging: a lone team may
+	// use the whole global ceiling.
+	if others > 0 && s.staged[owner] >= s.teamCap {
 		return false
 	}
 	s.staged[owner]++
@@ -111,15 +117,18 @@ func (s *spooler) stage(owner string, body io.Reader, limit int64) (*os.File, in
 	select {
 	case s.sem <- struct{}{}:
 	default:
-		return nil, 0, func() {}, fmt.Errorf("%w: too many uploads are being staged", ErrBusy)
+		return nil, 0, func() {}, ErrSpoolBusy
 	}
 	if !s.acquireTeam(owner) {
 		<-s.sem
-		return nil, 0, func() {}, fmt.Errorf("%w: the team's staged upload share is in use", ErrTeamBusy)
+		return nil, 0, func() {}, ErrTeamBusy
 	}
+	var once sync.Once
 	release := func() {
-		s.releaseTeam(owner)
-		<-s.sem
+		once.Do(func() {
+			s.releaseTeam(owner)
+			<-s.sem
+		})
 	}
 
 	if free := spoolFreeBytes(s.dir); free > 0 && uint64(limit) > free {

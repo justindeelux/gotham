@@ -44,8 +44,8 @@ func TestSpoolBoundsConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first stage: %v", err)
 	}
-	if _, _, _, err := s.stage("", strings.NewReader("de"), 100); !errors.Is(err, ErrBusy) {
-		t.Fatalf("second stage err = %v, want ErrBusy", err)
+	if _, _, _, err := s.stage("", strings.NewReader("de"), 100); !errors.Is(err, ErrSpoolBusy) {
+		t.Fatalf("second stage err = %v, want ErrSpoolBusy", err)
 	}
 
 	cleanup()
@@ -56,28 +56,78 @@ func TestSpoolBoundsConcurrency(t *testing.T) {
 	cleanup2()
 }
 
-func TestSpoolCapsEachTeam(t *testing.T) {
-	s := newSpooler(t.TempDir(), 3, 1, nil)
+func TestSpoolLoneTeamUsesGlobalCeiling(t *testing.T) {
+	s := newSpooler(t.TempDir(), 4, 0, nil)
+	cleanups := make([]func(), 0, 4)
+	for i := range 4 {
+		_, _, cleanup, err := s.stage("team:a", strings.NewReader("x"), 100)
+		if err != nil {
+			t.Fatalf("slot %d: %v", i, err)
+		}
+		cleanups = append(cleanups, cleanup)
+	}
+	if _, _, _, err := s.stage("team:a", strings.NewReader("x"), 100); !errors.Is(err, ErrSpoolBusy) {
+		t.Fatalf("stage beyond the global ceiling err = %v, want ErrSpoolBusy", err)
+	}
+	for _, cleanup := range cleanups {
+		cleanup()
+	}
+}
 
-	_, _, cleanupA, err := s.stage("team:a", strings.NewReader("abc"), 100)
-	if err != nil {
-		t.Fatalf("first team stage: %v", err)
-	}
-	if _, _, _, err := s.stage("team:a", strings.NewReader("de"), 100); !errors.Is(err, ErrTeamBusy) {
-		t.Fatalf("second team stage err = %v, want ErrTeamBusy", err)
-	}
-	_, _, cleanupB, err := s.stage("team:b", strings.NewReader("fg"), 100)
-	if err != nil {
-		t.Fatalf("a second team could not stage while the first held its share: %v", err)
+func TestSpoolShareOnlyWhileAnotherTeamIsActive(t *testing.T) {
+	s := newSpooler(t.TempDir(), 5, 2, nil)
+	take := func(owner string) func() {
+		t.Helper()
+		_, _, cleanup, err := s.stage(owner, strings.NewReader("x"), 100)
+		if err != nil {
+			t.Fatalf("stage %s: %v", owner, err)
+		}
+		return cleanup
 	}
 
-	cleanupA()
-	_, _, cleanupA2, err := s.stage("team:a", strings.NewReader("hi"), 100)
-	if err != nil {
-		t.Fatalf("stage after the team share was released: %v", err)
+	var heldA []func()
+	for range 5 {
+		heldA = append(heldA, take("team:a"))
 	}
-	cleanupA2()
-	cleanupB()
+	if _, _, _, err := s.stage("team:b", strings.NewReader("x"), 100); !errors.Is(err, ErrSpoolBusy) {
+		t.Fatalf("team B staged while A held every slot: %v", err)
+	}
+
+	// As A frees slots, B gets in.
+	heldA[0]()
+	heldA[1]()
+	heldA = heldA[2:]
+	heldB := []func(){take("team:b"), take("team:b")}
+
+	// A is above its share while B is active: freeing one A slot does not let
+	// A take it back, and B is already at its share.
+	heldA[0]()
+	heldA = heldA[1:]
+	if _, _, _, err := s.stage("team:a", strings.NewReader("x"), 100); !errors.Is(err, ErrTeamBusy) {
+		t.Fatalf("team A re-took a slot above its share: %v", err)
+	}
+	if _, _, _, err := s.stage("team:b", strings.NewReader("x"), 100); !errors.Is(err, ErrTeamBusy) {
+		t.Fatalf("team B exceeded its share: %v", err)
+	}
+
+	// Below its share, A can take a slot again.
+	heldA[0]()
+	heldA = heldA[1:]
+	heldA = append(heldA, take("team:a"))
+
+	// With B gone, A may once again use the whole global ceiling.
+	for _, cleanup := range heldB {
+		cleanup()
+	}
+	for range 3 {
+		heldA = append(heldA, take("team:a"))
+	}
+	if _, _, _, err := s.stage("team:a", strings.NewReader("x"), 100); !errors.Is(err, ErrSpoolBusy) {
+		t.Fatalf("a lone team again exceeded the global ceiling: %v", err)
+	}
+	for _, cleanup := range heldA {
+		cleanup()
+	}
 }
 
 func TestSpoolTeamShareDefaultsAndSetting(t *testing.T) {
@@ -115,6 +165,31 @@ func TestSpoolTeamShareReleasedByDeferredCleanup(t *testing.T) {
 		t.Fatalf("stage after a panic: %v", err)
 	}
 	cleanup()
+}
+
+func TestSpoolCleanupIsIdempotent(t *testing.T) {
+	s := newSpooler(t.TempDir(), 2, 1, nil)
+	_, _, cleanup, err := s.stage("team:a", strings.NewReader("x"), 100)
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	cleanup()
+	cleanup()
+
+	if got := len(s.sem); got != 0 {
+		t.Fatalf("semaphore slots held after a double cleanup = %d, want 0", got)
+	}
+	s.mu.Lock()
+	staged := len(s.staged)
+	s.mu.Unlock()
+	if staged != 0 {
+		t.Fatalf("owners still staged after a double cleanup = %d, want 0", staged)
+	}
+	_, _, cleanup2, err := s.stage("team:a", strings.NewReader("y"), 100)
+	if err != nil {
+		t.Fatalf("stage after a double cleanup: %v", err)
+	}
+	cleanup2()
 }
 
 func TestSpoolRefusesWhenVolumeFull(t *testing.T) {

@@ -232,8 +232,10 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnsupportedMediaType, errorBody{Message: "file is not editable text", Code: "not_editable"})
 	case errors.Is(err, ErrTeamBusy):
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "the team's upload staging share is in use", Code: "busy"})
-	case errors.Is(err, ErrBusy):
+	case errors.Is(err, ErrSpoolBusy):
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "too many uploads are being staged", Code: "busy"})
+	case errors.Is(err, ErrBusy):
+		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "node is busy", Code: "busy"})
 	case errors.Is(err, ErrInsufficientStorage):
 		writeJSON(w, http.StatusInsufficientStorage, errorBody{Message: "not enough free space", Code: "insufficient_storage"})
 	case errors.Is(err, ErrAgentOutdated):

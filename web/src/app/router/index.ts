@@ -204,6 +204,12 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.apiTokens", requiresAuth: true },
       },
       {
+        path: "settings/mcp",
+        name: "mcp",
+        component: () => import("@/features/mcp/pages/McpSetupPage.vue"),
+        meta: { titleKey: "titles.mcp", requiresAuth: true },
+      },
+      {
         path: "forbidden",
         name: "forbidden",
         component: () => import("@/app/pages/NoPermissionPage.vue"),

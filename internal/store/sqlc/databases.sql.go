@@ -321,7 +321,7 @@ func (q *Queries) ListDatabasesByServer(ctx context.Context, serverID pgtype.UUI
 
 const listDatabasesByUser = `-- name: ListDatabasesByUser :many
 SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id FROM databases
-WHERE user_id = $1 AND deleted_at IS NULL
+WHERE can_access_environment($1::uuid, environment_id) AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
 

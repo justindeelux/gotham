@@ -91,9 +91,9 @@ func TestResourceScopeContainment(t *testing.T) {
 		"owner deploy token mutates resources": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerDeployToken, http.StatusCreated, ""},
 		"owner admin token reads resources":    {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerAdminToken, http.StatusOK, ""},
 		"owner read token cannot mutate":       {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerReadToken, http.StatusForbidden, ""},
-		"member read token cannot read":        {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusForbidden, ""},
-		"member deploy token cannot mutate":    {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusForbidden, ""},
-		"member admin token cannot read":       {http.MethodGet, "/api/v1/servers", "", "Bearer " + memberAdminToken, http.StatusForbidden, ""},
+		"member read token cannot read":        {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusNotFound, ""},
+		"member deploy token cannot mutate":    {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusNotFound, ""},
+		"member admin token cannot read":       {http.MethodGet, "/api/v1/servers", "", "Bearer " + memberAdminToken, http.StatusNotFound, ""},
 	}
 
 	for label, tc := range tests {
@@ -279,7 +279,7 @@ func TestFilesContentScopeGate(t *testing.T) {
 	}
 
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
-	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "insufficient scope") {
+	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "insufficient scope") {
 		t.Fatalf("deploy token content = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
 	}
 
@@ -327,7 +327,7 @@ func TestFilesWriteScopeGate(t *testing.T) {
 				t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
 			}
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+deployToken)
-			if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "insufficient scope") {
+			if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "insufficient scope") {
 				t.Fatalf("deploy token = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
 			}
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+adminToken)

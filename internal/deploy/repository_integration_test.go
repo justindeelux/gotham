@@ -923,6 +923,15 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 
 	envA, serverA := seedProjectEnvironment(t, ctx, st)
 	envB, serverB := seedProjectEnvironment(t, ctx, st)
+	for _, grant := range []struct{ user, env uuid.UUID }{{userA, envA}, {userB, envB}} {
+		project, err := st.ResourceProject(ctx, "environment", grant.env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.GrantProject(ctx, project, grant.user, grant.user); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	newApp := func(user, env, server uuid.UUID, name string, preview bool) uuid.UUID {
 		t.Helper()
@@ -975,19 +984,19 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 		t.Fatalf("ListRecentDeployments: %v", err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("user A rows = %d, want 1 (its own non-preview app only)", len(rows))
+		t.Fatalf("user A rows = %d, want 1 (its granted non-preview app only)", len(rows))
 	}
 	if rows[0].ApplicationID != appA || rows[0].ApplicationName != "feed-a" {
-		t.Errorf("user A row = %s/%q, want feed-a only (no cross-user leak)",
+		t.Errorf("user A row = %s/%q, want feed-a only (no cross-project leak)",
 			rows[0].ApplicationID, rows[0].ApplicationName)
 	}
 
 	userFeed, err := repo.ListRecentDeployments(ctx, userA, 10)
 	if err != nil {
-		t.Fatalf("creator feed: %v", err)
+		t.Fatalf("granted feed: %v", err)
 	}
 	if len(userFeed) != 1 || userFeed[0].ApplicationID != appA {
-		t.Fatalf("creator rows = %d, want user A's non-preview app only", len(userFeed))
+		t.Fatalf("granted rows = %d, want user A's granted non-preview app only", len(userFeed))
 	}
 
 	limited, err := repo.ListRecentDeployments(ctx, userB, 0)

@@ -35,6 +35,7 @@ type Client struct {
 
 	mu       sync.Mutex
 	channels map[string]bool
+	userID   string
 }
 
 func (c *Client) kickClient() {

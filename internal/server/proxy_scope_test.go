@@ -41,16 +41,16 @@ func TestOwnerBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create %s token: %v", scope, err)
 		}
-		if recorder := do("Bearer " + token.Token); recorder.Code != http.StatusForbidden {
-			t.Fatalf("%s token status = %d, want 403", scope, recorder.Code)
+		if recorder := do("Bearer " + token.Token); recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s token status = %d, want 404", scope, recorder.Code)
 		}
 		if calls != 0 {
 			t.Fatalf("service called %d times for a %s-scoped token", calls, scope)
 		}
 	}
 
-	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusForbidden {
-		t.Fatalf("member session status = %d, want 403", recorder.Code)
+	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusNotFound {
+		t.Fatalf("member session status = %d, want 404", recorder.Code)
 	}
 	if calls != 0 {
 		t.Fatalf("service called %d times for a member session", calls)
@@ -67,8 +67,8 @@ func TestOwnerBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create member admin token: %v", err)
 	}
-	if recorder := do("Bearer " + adminToken.Token); recorder.Code != http.StatusForbidden {
-		t.Fatalf("member-owned admin token status = %d, want 403", recorder.Code)
+	if recorder := do("Bearer " + adminToken.Token); recorder.Code != http.StatusNotFound {
+		t.Fatalf("member-owned admin token status = %d, want 404", recorder.Code)
 	}
 	if calls != 1 {
 		t.Fatalf("service calls = %d, want 1 after the member-owned admin token", calls)
@@ -117,11 +117,11 @@ func TestDemotedOwnerLosesOperatorAccess(t *testing.T) {
 
 	s.auth.(*fakeAuthService).users[testOwnerID].Role = auth.RoleMember
 
-	if recorder := do("Bearer owner-token"); recorder.Code != http.StatusForbidden {
-		t.Fatalf("demoted owner session status = %d, want 403", recorder.Code)
+	if recorder := do("Bearer owner-token"); recorder.Code != http.StatusNotFound {
+		t.Fatalf("demoted owner session status = %d, want 404", recorder.Code)
 	}
-	if recorder := do("Bearer " + adminToken.Token); recorder.Code != http.StatusForbidden {
-		t.Fatalf("demoted owner admin token status = %d, want 403", recorder.Code)
+	if recorder := do("Bearer " + adminToken.Token); recorder.Code != http.StatusNotFound {
+		t.Fatalf("demoted owner admin token status = %d, want 404", recorder.Code)
 	}
 	if calls != 2 {
 		t.Fatalf("service calls = %d, want only the two pre-demotion requests", calls)
@@ -129,11 +129,11 @@ func TestDemotedOwnerLosesOperatorAccess(t *testing.T) {
 
 	delete(s.auth.(*fakeAuthService).users, testOwnerID)
 
-	if recorder := do("Bearer owner-token"); recorder.Code != http.StatusForbidden {
-		t.Fatalf("removed owner session status = %d, want 403", recorder.Code)
+	if recorder := do("Bearer owner-token"); recorder.Code != http.StatusNotFound {
+		t.Fatalf("removed owner session status = %d, want 404", recorder.Code)
 	}
-	if recorder := do("Bearer " + adminToken.Token); recorder.Code != http.StatusForbidden {
-		t.Fatalf("removed owner admin token status = %d, want 403", recorder.Code)
+	if recorder := do("Bearer " + adminToken.Token); recorder.Code != http.StatusNotFound {
+		t.Fatalf("removed owner admin token status = %d, want 404", recorder.Code)
 	}
 }
 
@@ -164,8 +164,8 @@ func TestOwnerRoleSessionPasses(t *testing.T) {
 		t.Fatalf("service calls = %d, want 1 after the owner-role session", calls)
 	}
 
-	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusForbidden {
-		t.Fatalf("member session status = %d, want 403", recorder.Code)
+	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusNotFound {
+		t.Fatalf("member session status = %d, want 404", recorder.Code)
 	}
 	if calls != 1 {
 		t.Fatalf("service calls = %d, want 1 after the refused member session", calls)

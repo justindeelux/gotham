@@ -111,16 +111,16 @@ func TestFilesRoutesRequireOwner(t *testing.T) {
 	s.redis = stubPinger{}
 
 	url := "/api/v1/servers/" + server.ID.String() + "/files/roots"
-	if rec := doRequest(t, s, http.MethodGet, url, "", "Bearer valid-token"); rec.Code != http.StatusForbidden {
-		t.Fatalf("plain session roots = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	if rec := doRequest(t, s, http.MethodGet, url, "", "Bearer valid-token"); rec.Code != http.StatusNotFound {
+		t.Fatalf("plain session roots = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 	}
 
 	memberToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{"admin"})
 	if err != nil {
 		t.Fatalf("create member admin token: %v", err)
 	}
-	if rec := doRequest(t, s, http.MethodGet, url, "", "Bearer "+memberToken.Token); rec.Code != http.StatusForbidden {
-		t.Fatalf("member-owned admin token roots = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	if rec := doRequest(t, s, http.MethodGet, url, "", "Bearer "+memberToken.Token); rec.Code != http.StatusNotFound {
+		t.Fatalf("member-owned admin token roots = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 	}
 
 	ownerToken, err := tokens.Create(context.Background(), testOwnerID, "admin", []string{"admin"})
@@ -128,7 +128,7 @@ func TestFilesRoutesRequireOwner(t *testing.T) {
 		t.Fatalf("create owner admin token: %v", err)
 	}
 	rec := doRequest(t, s, http.MethodGet, url, "", "Bearer "+ownerToken.Token)
-	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+	if rec.Code == http.StatusNotFound || rec.Code == http.StatusUnauthorized {
 		t.Fatalf("owner admin token roots = %d, want past the owner gate (body %s)", rec.Code, rec.Body.String())
 	}
 }

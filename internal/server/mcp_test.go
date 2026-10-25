@@ -57,7 +57,7 @@ func TestMCPStrictContextAndReads(t *testing.T) {
 		t.Fatalf("read mutation=%d", rec.Code)
 	}
 	memberRead := mustCreateToken(t, tokens, auth.ScopeRead)
-	if rec := request("GET", "/api/v1/servers", memberRead, "1"); rec.Code != 403 {
+	if rec := request("GET", "/api/v1/servers", memberRead, "1"); rec.Code != 404 {
 		t.Fatalf("member read=%d", rec.Code)
 	}
 }

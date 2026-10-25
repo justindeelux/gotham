@@ -11,7 +11,7 @@ WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListServicesByUser :many
 SELECT * FROM services
-WHERE user_id = $1 AND deleted_at IS NULL
+WHERE can_access_environment(sqlc.arg(user_id)::uuid, environment_id) AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC;
 
 -- name: ListServicesByEnvironment :many

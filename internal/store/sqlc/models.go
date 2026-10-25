@@ -387,6 +387,13 @@ type Project struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ProjectMember struct {
+	ProjectID pgtype.UUID        `json:"project_id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	GrantedBy pgtype.UUID        `json:"granted_by"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Provider struct {
 	ID             pgtype.UUID        `json:"id"`
 	UserID         pgtype.UUID        `json:"user_id"`

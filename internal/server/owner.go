@@ -9,6 +9,10 @@ import (
 
 func (s *Server) RequireOwner(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isOwnerAccount(r) {
+			hideResource(w)
+			return
+		}
 		if !s.isOwner(r) {
 			writeJSON(w, http.StatusForbidden, apiError{Message: "owner access is required"})
 			return
@@ -50,7 +54,7 @@ func (s *Server) isOwnerAccount(r *http.Request) bool {
 func (s *Server) requireOwnerAccount(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.isOwnerAccount(r) {
-			writeJSON(w, http.StatusForbidden, apiError{Message: "owner access is required"})
+			hideResource(w)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -59,10 +63,9 @@ func (s *Server) requireOwnerAccount(next http.Handler) http.Handler {
 
 const ownerScopeDenied = "requesting the admin scope requires owner access"
 
-// resourceAuth gates instance-level resource routes. Only the owner reaches
-// them until per-project grants land (GOTHAM-65).
+// resourceAuth combines token scopes with the central project access policy.
 func (s *Server) resourceAuth() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return s.RequireAuth(requireResourceScopes(s.requireOwnerAccount(next)))
+		return s.RequireAuth(requireResourceScopes(s.projectAccess(next)))
 	}
 }

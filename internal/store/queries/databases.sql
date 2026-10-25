@@ -11,7 +11,7 @@ WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListDatabasesByUser :many
 SELECT * FROM databases
-WHERE user_id = $1 AND deleted_at IS NULL
+WHERE can_access_environment(sqlc.arg(user_id)::uuid, environment_id) AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC;
 
 -- name: ListDatabasesByEnvironment :many

@@ -33,7 +33,7 @@ func (s *Server) handleStartLogStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
 	}
-	if err := s.authorizeLogSubscription(r.Context(), serverID, userID); err != nil {
+	if err := s.authorizeRealtimeChannel(r.Context(), ws.LogChannel(serverID.String(), containerID), userID); err != nil {
 		switch {
 		case errors.Is(err, servers.ErrNotFound), errors.Is(err, errAccessDenied):
 			writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})

@@ -42,8 +42,10 @@ type Handler struct {
 	authorize SubscriptionAuthorizer
 	logger    *slog.Logger
 
-	taskAuthorize TaskAuthorizer
-	taskSnapshot  func(projectID string) []string
+	frameFilter      func(context.Context, uuid.UUID, []byte) []byte
+	channelAuthorize func(context.Context, string, uuid.UUID) error
+	taskAuthorize    TaskAuthorizer
+	taskSnapshot     func(projectID string) []string
 
 	writeWait    time.Duration
 	pingPeriod   time.Duration
@@ -110,6 +112,9 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 	userID, _ := request.Context().Value(userIDKey{}).(uuid.UUID)
 
 	client := h.hub.newClient()
+	client.mu.Lock()
+	client.userID = userID.String()
+	client.mu.Unlock()
 	defer h.hub.remove(client)
 	select {
 	case <-h.hub.done:
@@ -134,6 +139,8 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 		}, incoming, connDone)
 	}()
 
+	revalidate := time.NewTicker(time.Second)
+	defer revalidate.Stop()
 	ticker := time.NewTicker(h.pingPeriod)
 	defer ticker.Stop()
 
@@ -142,6 +149,15 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 		case payload, ok := <-client.send:
 			if !ok {
 				return
+			}
+			if !h.subscriptionsAllowed(request.Context(), userID, subs) {
+				return
+			}
+			if h.frameFilter != nil {
+				payload = h.frameFilter(request.Context(), userID, payload)
+				if payload == nil {
+					return
+				}
 			}
 			if !h.writeRaw(conn, payload) {
 				return
@@ -163,6 +179,10 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 			h.logger.Warn("ws: disconnecting slow client",
 				"user_id", userID.String(), "subscriptions", len(subs))
 			return
+		case <-revalidate.C:
+			if !h.subscriptionsAllowed(request.Context(), userID, subs) {
+				return
+			}
 		case <-ticker.C:
 			if !h.writeRaw(conn, mustJSON(Message{Type: TypePing})) {
 				return
@@ -172,6 +192,10 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 }
 
 func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel string, ctx context.Context, userID uuid.UUID, subs map[string]bool, authorized map[uuid.UUID]authDecision) {
+	if !h.channelAllowed(ctx, channel, userID, authorized) {
+		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied})
+		return
+	}
 	if subs[channel] {
 		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
 		return
@@ -182,15 +206,23 @@ func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel
 		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied, Data: "subscription limit reached"})
 		return
 	}
-	if !h.channelAllowed(ctx, channel, userID, authorized) {
-		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied})
-		return
-	}
 	h.hub.subscribe(client, channel)
 	subs[channel] = true
 	if projectID, ok := taskChannelProjectID(channel); ok && h.taskSnapshot != nil {
 		for _, frame := range h.taskSnapshot(projectID) {
-			_ = h.writeFrame(conn, []byte(frame))
+			if !h.channelAllowed(ctx, channel, userID, authorized) {
+				client.kickClient()
+				return
+			}
+			payload := []byte(frame)
+			if h.frameFilter != nil {
+				payload = h.frameFilter(ctx, userID, payload)
+				if payload == nil {
+					client.kickClient()
+					return
+				}
+			}
+			_ = h.writeFrame(conn, payload)
 		}
 	}
 	_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
@@ -245,6 +277,9 @@ type authDecision struct {
 }
 
 func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uuid.UUID, authorized map[uuid.UUID]authDecision) bool {
+	if h.channelAuthorize != nil {
+		return h.channelAuthorize(ctx, channel, userID) == nil
+	}
 	if h.authorize == nil {
 		return true
 	}
@@ -316,4 +351,13 @@ func initialChannels(r *http.Request) []string {
 		return []string{LogChannel(serverID, containerID)}
 	}
 	return nil
+}
+
+func (h *Handler) subscriptionsAllowed(ctx context.Context, userID uuid.UUID, subs map[string]bool) bool {
+	for channel := range subs {
+		if !h.channelAllowed(ctx, channel, userID, make(map[uuid.UUID]authDecision)) {
+			return false
+		}
+	}
+	return true
 }

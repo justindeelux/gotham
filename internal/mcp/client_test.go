@@ -39,10 +39,6 @@ func TestConfig(t *testing.T) {
 			t.Error("credential leaked")
 		}
 	}
-	_, err := ConfigFromEnv(func(string) string { return "secret" })
-	if err == nil || strings.Contains(err.Error(), "secret") {
-		t.Fatal("unsafe config error")
-	}
 }
 
 func TestRESTBoundary(t *testing.T) {

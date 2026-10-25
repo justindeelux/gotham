@@ -84,11 +84,3 @@ func registerToolsForScopes(server *sdk.Server, client *Client, allowMutations b
 		registerCreateTools(server, client)
 	}
 }
-
-func Serve(ctx context.Context, cfg Config, version string, logger *slog.Logger) error {
-	server, err := NewServer(ctx, cfg, version, logger)
-	if err != nil {
-		return err
-	}
-	return server.Run(ctx, &sdk.StdioTransport{MaxLineLength: maxBody})
-}

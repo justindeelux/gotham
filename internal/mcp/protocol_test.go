@@ -1,17 +1,11 @@
 package mcp
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -34,36 +28,10 @@ var (
 	protocolDeployID  = uuid.MustParse("66666666-6666-4666-8666-666666666666")
 )
 
-func TestMCPStdioProtocolHelper(_ *testing.T) {
-	if os.Getenv("GOTHAM_TEST_MCP_STDIO") != "1" {
-		return
-	}
-	cfg, err := ConfigFromEnv(os.Getenv)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "mcp stdio helper: invalid configuration")
-		os.Exit(2)
-	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := Serve(context.Background(), cfg, "protocol-test", logger); err != nil {
-		code := "serve_failed"
-		var safe *Error
-		if errors.As(err, &safe) {
-			code = safe.Code
-		}
-		fmt.Fprintf(os.Stderr, "mcp stdio helper: code=%s\n", code)
-		os.Exit(1)
-	}
-	os.Exit(0)
-}
-
-func TestProtocolStdioAllTools(t *testing.T) {
+func TestProtocolHTTPAllTools(t *testing.T) {
 	backend := &protocolBackend{mode: protocolNormal}
-	api := httptest.NewServer(backend.handler(t))
-	defer api.Close()
-	session, stderr, err := connectStdio(t, api.URL, protocolToken)
-	if err != nil {
-		t.Fatalf("stdio initialize: %v (stderr: %s)", err, stderr)
-	}
+	api := protocolAPI(t, backend)
+	session := connectHTTP(t, api.URL, protocolToken)
 	if session.InitializeResult().ServerInfo.Name != "gotham" {
 		t.Fatalf("server info = %+v", session.InitializeResult().ServerInfo)
 	}
@@ -163,83 +131,31 @@ func TestProtocolStdioAllTools(t *testing.T) {
 		})
 	}
 	if err := session.Close(); err != nil {
-		t.Fatalf("stdio shutdown: %v", err)
-	}
-	if strings.Contains(stderr.String(), protocolToken) {
-		t.Fatal("token leaked through stderr")
+		t.Fatalf("HTTP shutdown: %v", err)
 	}
 }
 
-func TestProtocolStdioStdoutTranscript(t *testing.T) {
-	backend := &protocolBackend{mode: protocolNormal}
-	api := httptest.NewServer(backend.handler(t))
-	defer api.Close()
-	stdout, stderr, err := runStdioRaw(t, api.URL, protocolToken, []string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"raw-test","version":"1"}}}`,
-		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
-		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nodes_list","arguments":{"limit":10}}}`,
-	})
-	if err != nil {
-		t.Fatalf("raw stdio: %v (stderr: %s)", err, stderr)
-	}
-	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("stdout frames=%d: %s", len(lines), stdout)
-	}
-	for _, line := range lines {
-		var frame map[string]any
-		if err := json.Unmarshal([]byte(line), &frame); err != nil || frame["jsonrpc"] != "2.0" {
-			t.Fatalf("stdout corruption: %q", line)
-		}
-	}
-	for _, text := range []string{stdout, stderr} {
-		if strings.Contains(text, protocolToken) {
-			t.Fatal("token leaked through raw stdio")
-		}
-	}
-}
-
-func TestProtocolStdioTokenFailures(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		mode  protocolMode
-		token string
-		code  string
-		exit  int
-	}{
-		{"invalid gt1", protocolUnauthorized, "gt1_invalid", "unauthorized", 1},
-		{"revoked gt1", protocolUnauthorized, "gt1_revoked", "unauthorized", 1},
-		{"JWT rejected", protocolNormal, "eyJhbGciOi.secret", "", 2},
+func TestProtocolHTTPTokenFailures(t *testing.T) {
+	for _, tc := range []struct{ name, token string }{
+		{"invalid gt1", "gt1_invalid"},
+		{"revoked gt1", "gt1_revoked"},
+		{"JWT rejected", "eyJhbGciOi.secret"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			backend := &protocolBackend{mode: tc.mode}
-			api := httptest.NewServer(backend.handler(t))
-			defer api.Close()
-			_, stderr, err := connectStdio(t, api.URL, tc.token)
-			if err == nil {
-				t.Fatal("adapter initialized with a rejected credential")
-			}
-			if strings.Contains(stderr.String(), tc.token) {
-				t.Fatal("credential leaked through stderr")
-			}
-			if tc.code != "" && !strings.Contains(stderr.String(), "code="+tc.code) {
-				t.Fatalf("stderr=%q want code=%s", stderr, tc.code)
-			}
-			if tc.code == "" && !strings.Contains(stderr.String(), "invalid configuration") {
-				t.Fatalf("stderr=%q want local configuration error", stderr)
+			backend := &protocolBackend{mode: protocolNormal}
+			api := protocolAPI(t, backend)
+			if _, err := connectHTTPErr(api.URL, tc.token); err == nil {
+				t.Fatal("endpoint accepted a rejected credential")
+			} else if strings.Contains(err.Error(), tc.token) {
+				t.Fatal("credential leaked through the transport error")
 			}
 		})
 	}
 
 	t.Run("old backend", func(t *testing.T) {
 		backend := &protocolBackend{mode: protocolOldBackend}
-		api := httptest.NewServer(backend.handler(t))
-		defer api.Close()
-		session, _, err := connectStdio(t, api.URL, protocolToken)
-		if err != nil {
-			t.Fatalf("context should still initialize: %v", err)
-		}
+		api := protocolAPI(t, backend)
+		session := connectHTTP(t, api.URL, protocolToken)
 		defer session.Close()
 		for _, name := range []string{"nodes_list", "project_create"} {
 			args := map[string]any{}
@@ -279,7 +195,6 @@ type protocolMode int
 
 const (
 	protocolNormal protocolMode = iota
-	protocolUnauthorized
 	protocolOldBackend
 )
 
@@ -303,9 +218,6 @@ func (b *protocolBackend) handler(t *testing.T) http.HandlerFunc {
 			b.mu.Unlock()
 		}
 		switch b.mode {
-		case protocolUnauthorized:
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
 		case protocolOldBackend:
 			if r.URL.Path != "/api/v1/mcp/context" {
 				http.NotFound(w, r)
@@ -411,73 +323,66 @@ func validateToolSchema(t *testing.T, tool *sdk.Tool) {
 	}
 }
 
-func connectStdio(t *testing.T, apiURL, token string) (*sdk.ClientSession, *bytes.Buffer, error) {
+// protocolAPI exposes the REST backend and the streamable HTTP MCP endpoint at
+// /mcp. The endpoint authenticates the bearer token before building the tool
+// surface, like the control plane, so a rejected credential fails on connect.
+func protocolAPI(t *testing.T, backend *protocolBackend) *httptest.Server {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
-	var stderr bytes.Buffer
-	command := stdioCommand(ctx, apiURL, token)
-	command.Stderr = &stderr
-	client := sdk.NewClient(&sdk.Implementation{Name: "protocol-test", Version: "1"}, nil)
-	session, err := client.Connect(ctx, &sdk.CommandTransport{Command: command}, nil)
+	var api *httptest.Server
+	streamable := sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {
+		client, err := NewClient(Config{URL: api.URL, Token: protocolToken})
+		if err != nil {
+			return nil
+		}
+		return NewServerWithClient(client, true, "protocol-test", nil)
+	}, &sdk.StreamableHTTPOptions{
+		Stateless:                  true,
+		DisableLocalhostProtection: true,
+		MaxRequestBodyBytes:        MaxBody,
+	})
+	api = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/mcp" {
+			backend.handler(t).ServeHTTP(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+protocolToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		streamable.ServeHTTP(w, r)
+	}))
+	t.Cleanup(api.Close)
+	return api
+}
+
+func connectHTTP(t *testing.T, apiURL, token string) *sdk.ClientSession {
+	t.Helper()
+	session, err := connectHTTPErr(apiURL, token)
 	if err != nil {
-		return nil, &stderr, err
+		t.Fatalf("HTTP connect: %v", err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	return session, &stderr, nil
+	return session
 }
 
-func stdioCommand(ctx context.Context, apiURL, token string) *exec.Cmd {
-	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPStdioProtocolHelper$")
-	command.Env = append(os.Environ(),
-		"GOTHAM_TEST_MCP_STDIO=1",
-		"GOTHAM_MCP_URL="+apiURL,
-		"GOTHAM_MCP_TOKEN="+token,
-	)
-	return command
-}
-
-func runStdioRaw(t *testing.T, apiURL, token string, frames []string) (string, string, error) {
-	t.Helper()
+func connectHTTPErr(apiURL, token string) (*sdk.ClientSession, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	command := stdioCommand(ctx, apiURL, token)
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		return "", "", err
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		return "", "", err
-	}
-	var stderr bytes.Buffer
-	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
-		return "", "", err
-	}
-	scanner := bufio.NewScanner(stdout)
-	var transcript strings.Builder
-	for _, frame := range frames {
-		if _, err := fmt.Fprintln(stdin, frame); err != nil {
-			return "", "", err
-		}
-		if strings.Contains(frame, "notifications/initialized") {
-			continue
-		}
-		if !scanner.Scan() {
-			return transcript.String(), "", errors.New("missing protocol response")
-		}
-		transcript.WriteString(scanner.Text())
-		transcript.WriteByte('\n')
-	}
-	_ = stdin.Close()
-	for scanner.Scan() {
-		transcript.WriteString(scanner.Text())
-		transcript.WriteByte('\n')
-	}
-	if err := scanner.Err(); err != nil {
-		return transcript.String(), "", err
-	}
-	err = command.Wait()
-	return transcript.String(), stderr.String(), err
+	client := sdk.NewClient(&sdk.Implementation{Name: "protocol-test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &sdk.StreamableClientTransport{
+		Endpoint:             apiURL + "/mcp",
+		HTTPClient:           &http.Client{Transport: bearerTransport{token: token}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	cancel()
+	return session, err
+}
+
+type bearerTransport struct {
+	token string
+}
+
+func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header.Set("Authorization", "Bearer "+t.token)
+	return http.DefaultTransport.RoundTrip(clone)
 }

@@ -40,6 +40,8 @@ const (
 	envFileArchiveMaxBytes   = "GOTHAM_AGENT_ARCHIVE_MAX_BYTES"
 	envFileArchiveMaxEntries = "GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES"
 	envFileArchiveMaxInput   = "GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES"
+	envFileTrashMaxAgeDays   = "GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS"
+	envFileTrashMaxBytes     = "GOTHAM_AGENT_FILE_TRASH_MAX_BYTES"
 
 	envTerminalShell       = "GOTHAM_AGENT_TERMINAL_SHELL"
 	envTerminalMaxSessions = "GOTHAM_AGENT_TERMINAL_MAX_SESSIONS"
@@ -100,6 +102,8 @@ type Config struct {
 	FileArchiveMaxBytes      int64
 	FileArchiveMaxEntries    int64
 	FileArchiveMaxInputBytes int64
+	FileTrashMaxAgeDays      int
+	FileTrashMaxBytes        int64
 
 	TerminalShell       string
 	TerminalMaxSessions int
@@ -146,6 +150,8 @@ func Load() (Config, error) {
 		FileArchiveMaxBytes:      int64FromEnv(envFileArchiveMaxBytes, files.DefaultArchiveMaxBytes),
 		FileArchiveMaxEntries:    int64FromEnv(envFileArchiveMaxEntries, files.DefaultArchiveMaxEntries),
 		FileArchiveMaxInputBytes: int64FromEnv(envFileArchiveMaxInput, files.DefaultArchiveMaxInputBytes),
+		FileTrashMaxAgeDays:      int(int64FromEnvAllowingZero(envFileTrashMaxAgeDays, files.DefaultTrashMaxAgeDays)),
+		FileTrashMaxBytes:        int64FromEnvAllowingZero(envFileTrashMaxBytes, 0),
 
 		TerminalShell:       strings.TrimSpace(os.Getenv(envTerminalShell)),
 		TerminalMaxSessions: int(int64FromEnv(envTerminalMaxSessions, 0)),
@@ -186,6 +192,9 @@ func Load() (Config, error) {
 	}
 	if !strings.HasPrefix(cfg.ManagedVolumeRoot, "/") {
 		return Config{}, fmt.Errorf("%s must be an absolute path", envManagedVolumeRoot)
+	}
+	if cfg.FileTrashMaxAgeDays > files.MaxTrashMaxAgeDays {
+		cfg.FileTrashMaxAgeDays = files.MaxTrashMaxAgeDays
 	}
 	return cfg, nil
 }
@@ -252,6 +261,20 @@ func int64FromEnv(key string, fallback int64) int64 {
 	}
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+// int64FromEnvAllowingZero is int64FromEnv for a setting whose zero is
+// meaningful (retention off); a negative or unparseable value still falls back.
+func int64FromEnvAllowingZero(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
 		return fallback
 	}
 	return value

@@ -177,13 +177,17 @@ cannot be addressed by ordinary file operations. **Recycle bin** lists the
 deleted entries newest first, with name, deletion time, size and type.
 
 - **Restore** returns an entry to its recorded original path, or to a
-  destination you choose. An existing name is a `409` unless overwrite is
-  selected.
+  destination you choose. Missing parent directories are recreated, using the
+  mode recorded when the entry was trashed. An existing name is a `409` unless
+  overwrite is selected.
 - **Delete permanently** removes one entry; **Empty bin** removes every entry in
   that root's bin. Neither can be undone.
-- Entries stay in the bin until they are restored or removed. There is no
-  automatic expiry. A bin with more than 5,000 entries shows the newest ones and
-  says the oldest are omitted.
+- Entries stay in the bin until they are restored, removed, or expired by the
+  agent's retention sweep: items older than
+  `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` (default 30 days; `0` keeps them), and,
+  when `GOTHAM_AGENT_FILE_TRASH_MAX_BYTES` is set, the oldest entries above that
+  ceiling. A bin with more than 5,000 entries shows the newest ones and says the
+  oldest are omitted. See [Remote file service](/guide/file-service#recycle-bin-and-restore).
 
 ### Download
 

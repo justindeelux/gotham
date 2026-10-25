@@ -155,6 +155,60 @@ a long-lived response, or the request will be cut while the agent keeps working.
 The node's Traefik edge does not front the file API, so its timeouts do not
 apply to it.
 
+## Recycle bin and restore
+
+Deleting an entry moves it into the root's recycle bin (`.gotham-trash`) instead
+of erasing it. The bin is hidden from listings, search and folder sizes and
+cannot be addressed by ordinary file operations. A bin with more than 5,000
+entries lists the newest ones and reports `truncated=true`; the oldest are
+omitted, never silently.
+
+**Restore** returns an entry to its recorded original path, or to a destination
+the caller supplies. Missing parent directories are recreated, using the mode
+recorded when the entry was trashed and `0755` for a parent it never saw; a
+parent that exists as a file or special file still fails instead of being
+replaced. An existing destination is a `409` unless overwrite is set. **Delete
+permanently** removes one entry and **Empty bin** every entry in that root's
+bin; neither can be undone.
+
+### Retention
+
+The agent expires each writable root's bin on its own, at startup and then
+hourly. Both limits are per root, and zero disables a limit:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` | `30` | Purges entries deleted more than this many days ago. `0` keeps every entry, which was the behaviour before this setting. Values above 36500 (100 years) are capped so the cutoff cannot overflow. |
+| `GOTHAM_AGENT_FILE_TRASH_MAX_BYTES` | `0` | Caps the bytes one root's bin may hold. Once over it, the oldest entries are purged until the bin fits. `0` is unbounded. A size ceiling makes the sweep walk every trashed tree to size it, which costs more on a large bin. |
+
+**Upgrade warning.** Before this release a bin never expired. The 30-day
+default applies to entries that are already in a bin, so the first start after
+upgrading permanently purges anything deleted more than 30 days ago. Set
+`GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS=0` before upgrading to keep those entries.
+
+The size pass always leaves an entry deleted within the last hour, so a large
+delete stays restorable for a short while even when it alone exceeds the
+ceiling; it is purged on a later sweep.
+
+The sweep only removes valid item ids below `.gotham-trash`, and logs every
+purge with the root, id, original path, bytes and reason (`age` or `size`). It
+never touches anything else in the root, including the target of a trashed
+symlink. It locks one item at a time, so a long purge does not block the rest of
+the bin, but removing one very large tree (for example a subtree that was copied
+out of a cross-device bind mount) holds that item's path lock until the walk
+finishes and is retried on the next sweep if it fails part-way.
+
+### Rollout order
+
+Upgrade the control plane (or enable the file manager in the console) **before**
+the node agent:
+
+- A new agent behind an old control plane recycles deletes, but the old control
+  plane has no bin route, so the entries are invisible until it is upgraded.
+  Retention still expires them.
+- An old agent behind a new control plane answers **501** for the bin routes,
+  which the caller reports as an outdated node agent.
+
 ## Control-plane side
 
 The `/api/v1/servers/{id}/files` routes are mounted by default; set

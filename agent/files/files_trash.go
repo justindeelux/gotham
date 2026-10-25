@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -32,13 +33,29 @@ const (
 	fileTrashIDBytes   = 16
 )
 
+// fileTrashRestoreDirMode creates a missing restore parent that predates the
+// record's parent list (or was never recorded).
+const fileTrashRestoreDirMode = 0o755
+
+const fileTrashSweepInterval = time.Hour
+
+// fileTrashSizeGrace keeps a size-ceiling sweep from purging an entry just
+// after it was deleted, so a large delete stays restorable for a short while.
+const fileTrashSizeGrace = time.Hour
+
 var fileTrashMaxList = 5000
 
+type trashParent struct {
+	Path string `json:"path"`
+	Mode uint32 `json:"mode"`
+}
+
 type trashRecord struct {
-	OriginalPath string    `json:"original_path"`
-	DeletedAt    time.Time `json:"deleted_at"`
-	Size         int64     `json:"size"`
-	Kind         string    `json:"kind"`
+	OriginalPath string        `json:"original_path"`
+	DeletedAt    time.Time     `json:"deleted_at"`
+	Size         int64         `json:"size"`
+	Kind         string        `json:"kind"`
+	Parents      []trashParent `json:"parents,omitempty"`
 }
 
 var errDirStopWalk = errors.New("stop walk")
@@ -211,6 +228,31 @@ func dirHasEntries(root *fsroot.Root, rel string) (bool, error) {
 	return found, nil
 }
 
+// trashParentModes records the modes of rel's existing ancestor directories so
+// a later restore can recreate a parent that was deleted after rel.
+func trashParentModes(root *fsroot.Root, rel string) []trashParent {
+	dir := path.Dir(rel)
+	if dir == "." {
+		return nil
+	}
+	parts := strings.Split(dir, "/")
+	parents := make([]trashParent, 0, len(parts))
+	prefix := ""
+	for _, part := range parts {
+		if prefix == "" {
+			prefix = part
+		} else {
+			prefix += "/" + part
+		}
+		entry, err := root.Stat(prefix)
+		if err != nil || entry.Kind != fsroot.KindDirectory {
+			continue
+		}
+		parents = append(parents, trashParent{Path: prefix, Mode: uint32(entry.Mode.Perm())})
+	}
+	return parents
+}
+
 func (s *FileServer) trashEntry(ctx context.Context, root *fsroot.Root, rel string, recursive bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -240,6 +282,7 @@ func (s *FileServer) trashEntry(ctx context.Context, root *fsroot.Root, rel stri
 		DeletedAt:    time.Now().UTC(),
 		Size:         entry.Size,
 		Kind:         trashKindString(entry.Kind),
+		Parents:      trashParentModes(root, rel),
 	}
 	if err := s.writeTrashRecord(root, id, rec); err != nil {
 		_ = root.RemoveTree(context.Background(), trashItemDir(id), nil)
@@ -384,6 +427,65 @@ func trashEntryProto(id string, rec trashRecord) *agentv1.TrashEntry {
 	return out
 }
 
+// restoreParents recreates dst's missing ancestor directories, using the mode
+// recorded when the entry was trashed and a default for anything unrecorded.
+// Owner rwx is always added so the restore can write into the chain; a failed
+// restore removes whatever this call created.
+func restoreParents(root *fsroot.Root, dst string, recorded []trashParent) ([]string, error) {
+	dir := path.Dir(dst)
+	if dir == "." {
+		return nil, nil
+	}
+	modes := make(map[string]os.FileMode, len(recorded))
+	for _, parent := range recorded {
+		modes[parent.Path] = os.FileMode(parent.Mode).Perm()
+	}
+	parts := strings.Split(dir, "/")
+	prefix := ""
+	created := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if prefix == "" {
+			prefix = part
+		} else {
+			prefix += "/" + part
+		}
+		entry, err := root.Stat(prefix)
+		switch {
+		case err == nil:
+			if entry.Kind == fsroot.KindDirectory || entry.Kind == fsroot.KindSymlink {
+				continue
+			}
+			removeCreatedParents(root, created)
+			return nil, fmt.Errorf("%w: restore parent %s is not a directory", fsroot.ErrInvalid, prefix)
+		case !errors.Is(err, fsroot.ErrNotFound):
+			removeCreatedParents(root, created)
+			return nil, err
+		}
+		mode, ok := modes[prefix]
+		if !ok {
+			mode = fileTrashRestoreDirMode
+		}
+		mode |= 0o700
+		if _, err := root.Mkdir(prefix, mode); err != nil {
+			if errors.Is(err, fsroot.ErrExists) {
+				continue
+			}
+			removeCreatedParents(root, created)
+			return nil, err
+		}
+		created = append(created, prefix)
+	}
+	return created, nil
+}
+
+// removeCreatedParents removes only empty directories, in reverse order, so a
+// failed restore never deletes content that appeared underneath it.
+func removeCreatedParents(root *fsroot.Root, created []string) {
+	for i := len(created) - 1; i >= 0; i-- {
+		_ = root.Remove(created[i])
+	}
+}
+
 func (s *FileServer) Restore(ctx context.Context, req *agentv1.RestoreRequest) (*agentv1.RestoreResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -415,8 +517,14 @@ func (s *FileServer) Restore(ctx context.Context, req *agentv1.RestoreRequest) (
 		return nil, status.Error(codes.PermissionDenied, "restore: an application directory cannot be replaced")
 	}
 	unlock := s.lockPaths(root.Name(), dst, trashItemData(id))
+	createdParents, err := restoreParents(root, dst, rec.Parents)
+	if err != nil {
+		unlock()
+		return nil, fileError("restore", err)
+	}
 	moveErr := s.moveEntry(ctx, root, trashItemData(id), dst, req.GetOverwrite())
 	if moveErr != nil {
+		removeCreatedParents(root, createdParents)
 		unlock()
 		return nil, fileError("restore", moveErr)
 	}
@@ -478,4 +586,191 @@ func (s *FileServer) EmptyTrash(ctx context.Context, req *agentv1.EmptyTrashRequ
 		removed++
 	}
 	return &agentv1.EmptyTrashResponse{Removed: removed}, nil
+}
+
+func (s *FileServer) stopping() bool {
+	select {
+	case <-s.stop:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *FileServer) sweepTrashLoop() {
+	s.sweepTrash(time.Now())
+	ticker := time.NewTicker(fileTrashSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case now := <-ticker.C:
+			s.sweepTrash(now)
+		}
+	}
+}
+
+// sweepTrash expires each writable root's recycle bin independently, so a slow
+// root never delays or locks another.
+func (s *FileServer) sweepTrash(now time.Time) {
+	for _, name := range s.order {
+		if s.stopping() {
+			return
+		}
+		root := s.roots[name]
+		if !root.Writable() {
+			continue
+		}
+		removed, freed, err := s.expireTrash(root, now)
+		if err != nil {
+			s.log.Warn("file service trash retention", "root", name, "error", err)
+			continue
+		}
+		if removed > 0 {
+			s.log.Info("file service trash retention", "root", name, "removed", removed, "bytes", freed)
+		}
+	}
+}
+
+type trashExpiry struct {
+	id     string
+	rec    trashRecord
+	bytes  int64
+	reason string
+}
+
+// trashAgeCutoff is overflow-safe: AddDate normalises even absurd day counts,
+// and the clamp keeps a setting such as "100 years" from wrapping the clock.
+func trashAgeCutoff(now time.Time, days int) time.Time {
+	if days <= 0 {
+		return time.Time{}
+	}
+	if days > MaxTrashMaxAgeDays {
+		days = MaxTrashMaxAgeDays
+	}
+	return now.AddDate(0, 0, -days)
+}
+
+// expireTrash purges old or over-ceiling items oldest first. It only ever
+// removes valid trash ids below .gotham-trash, one item at a time, so the path
+// lock is released between items. The size pass leaves items deleted within
+// fileTrashSizeGrace alone. Unreadable metadata or data is left alone, and a
+// shutdown stops the sweep between items.
+func (s *FileServer) expireTrash(root *fsroot.Root, now time.Time) (int, int64, error) {
+	ids, err := s.trashIDs(root)
+	if err != nil {
+		return 0, 0, err
+	}
+	items := make([]trashExpiry, 0, len(ids))
+	for _, id := range ids {
+		if s.stopping() {
+			return 0, 0, nil
+		}
+		rec, err := s.readTrashRecord(root, id)
+		if err != nil {
+			continue
+		}
+		if _, err := root.Stat(trashItemData(id)); err != nil {
+			continue
+		}
+		size := rec.Size
+		if s.trashMaxBytes > 0 {
+			var stopped bool
+			size, stopped = trashDataBytes(root, trashItemData(id), s.stop)
+			if stopped {
+				return 0, 0, nil
+			}
+		}
+		items = append(items, trashExpiry{id: id, rec: rec, bytes: size})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].rec.DeletedAt.Before(items[j].rec.DeletedAt)
+	})
+
+	total := int64(0)
+	for _, item := range items {
+		total += item.bytes
+	}
+	if s.trashMaxAgeDays > 0 {
+		cutoff := trashAgeCutoff(now, s.trashMaxAgeDays)
+		for i := range items {
+			if items[i].rec.DeletedAt.IsZero() || !items[i].rec.DeletedAt.Before(cutoff) {
+				continue
+			}
+			items[i].reason = "age"
+			total -= items[i].bytes
+		}
+	}
+	if s.trashMaxBytes > 0 {
+		grace := now.Add(-fileTrashSizeGrace)
+		for i := range items {
+			if total <= s.trashMaxBytes {
+				break
+			}
+			if items[i].reason != "" {
+				continue
+			}
+			if deletedAt := items[i].rec.DeletedAt; !deletedAt.IsZero() && deletedAt.After(grace) {
+				continue
+			}
+			items[i].reason = "size"
+			total -= items[i].bytes
+		}
+	}
+
+	removed := 0
+	var freed int64
+	for _, item := range items {
+		if s.stopping() {
+			break
+		}
+		if item.reason == "" {
+			continue
+		}
+		unlock := s.lockPaths(root.Name(), trashItemData(item.id))
+		err := root.RemoveTree(context.Background(), trashItemDir(item.id), nil)
+		unlock()
+		if err != nil {
+			if errors.Is(err, fsroot.ErrNotFound) {
+				continue
+			}
+			s.log.Warn("file service trash retention: purge failed", "root", root.Name(), "id", item.id, "error", err)
+			continue
+		}
+		removed++
+		freed += item.bytes
+		s.log.Info("file service trash retention: purged", "root", root.Name(), "id", item.id, "path", item.rec.OriginalPath, "bytes", item.bytes, "reason", item.reason)
+	}
+	return removed, freed, nil
+}
+
+// trashDataBytes sums one trashed tree without following symlinks. A subtree
+// the agent cannot read contributes only its parent directory's own size. It
+// reports true when shutdown interrupted the walk.
+func trashDataBytes(root *fsroot.Root, rel string, stop <-chan struct{}) (int64, bool) {
+	select {
+	case <-stop:
+		return 0, true
+	default:
+	}
+	entry, err := root.Stat(rel)
+	if err != nil {
+		return 0, false
+	}
+	if entry.Kind != fsroot.KindDirectory {
+		return entry.Size, false
+	}
+	total := entry.Size
+	stopped := false
+	_ = root.Names(rel, func(name string) error {
+		size, stopWalk := trashDataBytes(root, path.Join(rel, name), stop)
+		total += size
+		if stopWalk {
+			stopped = true
+			return errDirStopWalk
+		}
+		return nil
+	})
+	return total, stopped
 }

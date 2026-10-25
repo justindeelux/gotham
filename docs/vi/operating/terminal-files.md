@@ -177,12 +177,16 @@ không thể truy cập bằng các thao tác tệp thông thường. **Thùng r
 mục đã xóa, mới nhất trước, kèm tên, thời điểm xóa, kích thước và loại.
 
 - **Khôi phục** đưa một mục về đường dẫn gốc đã ghi, hoặc tới một đích bạn chọn.
+  Các thư mục cha bị thiếu được tạo lại, dùng mode đã ghi lúc mục vào thùng rác.
   Tên đã tồn tại là `409` trừ khi chọn ghi đè.
 - **Xóa vĩnh viễn** xóa một mục; **Làm trống thùng rác** xóa mọi mục trong thùng
   rác của thư mục gốc đó. Không thể hoàn tác cả hai.
-- Các mục nằm trong thùng rác cho tới khi được khôi phục hoặc xóa. Không có hết
-  hạn tự động. Thùng rác có hơn 5.000 mục chỉ hiện các mục mới nhất và nói rõ các
-  mục cũ nhất bị lược bỏ.
+- Các mục nằm trong thùng rác cho tới khi được khôi phục, xóa, hoặc bị lần quét
+  hết hạn của agent dọn đi: các mục cũ hơn
+  `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` (mặc định 30 ngày; `0` giữ lại), và khi
+  đặt `GOTHAM_AGENT_FILE_TRASH_MAX_BYTES`, các mục cũ nhất vượt mức trần đó.
+  Thùng rác có hơn 5.000 mục chỉ hiện các mục mới nhất và nói rõ các mục cũ nhất
+  bị lược bỏ. Xem [Dịch vụ tệp từ xa](/vi/guide/file-service).
 
 ### Tải xuống
 

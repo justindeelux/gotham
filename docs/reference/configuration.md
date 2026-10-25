@@ -232,6 +232,8 @@ File service settings:
 | Variable | Default | Purpose |
 |---|---|---|
 | `GOTHAM_AGENT_FILE_MAX_UPLOAD` | `1073741824` (1 GiB) | Ceiling for one upload body; a larger body is refused with `ResourceExhausted` (413). Should match the control plane's `FILES_MAX_UPLOAD_BYTES`. |
+| `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` | `30` | Days an item may stay in one root's recycle bin before the agent purges it; `0` keeps entries forever. |
+| `GOTHAM_AGENT_FILE_TRASH_MAX_BYTES` | `0` (unbounded) | Ceiling in bytes for one root's recycle bin; the oldest entries are purged first until the bin fits. |
 
 ## Feature switches
 

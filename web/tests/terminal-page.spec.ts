@@ -30,7 +30,7 @@ const ADMIN = {
   created_at: "2026-03-04T12:00:00Z",
   display_name: "Ada",
   has_password: true,
-  is_platform_admin: true,
+  role: "owner",
 };
 
 const MEMBER = {
@@ -39,7 +39,7 @@ const MEMBER = {
   created_at: "2026-03-04T12:00:00Z",
   display_name: "Sam",
   has_password: true,
-  is_platform_admin: false,
+  role: "member",
 };
 
 const team = {

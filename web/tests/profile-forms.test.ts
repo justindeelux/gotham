@@ -51,7 +51,7 @@ function baseUser(): User {
     created_at: "2026-03-04T12:00:00Z",
     display_name: "Ada",
     has_password: true,
-    is_platform_admin: false,
+    role: "member",
   };
 }
 
@@ -475,7 +475,7 @@ describe("ProfileIdentityCard", () => {
   });
 
   it("labels a platform admin", async () => {
-    seedAuth({ ...baseUser(), role: "admin", is_platform_admin: true });
+    seedAuth({ ...baseUser(), role: "owner" });
     const wrapper = await mountChild(ProfileIdentityCard);
     expect(wrapper.text()).toContain("Platform admin");
     wrapper.unmount();

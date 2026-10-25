@@ -161,17 +161,38 @@ func TestUpdateRoutesGating(t *testing.T) {
 		}
 	}
 
-	adminToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{auth.ScopeAdmin})
+	memberToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{auth.ScopeAdmin})
 	if err != nil {
-		t.Fatalf("create admin token: %v", err)
+		t.Fatalf("create member admin token: %v", err)
 	}
-	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer "+adminToken.Token); rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("admin apply status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer "+memberToken.Token); rec.Code != http.StatusForbidden {
+		t.Fatalf("member-owned admin apply status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+	memberCheck := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", "Bearer "+memberToken.Token)
+	if memberCheck.Code != http.StatusOK {
+		t.Fatalf("member-owned admin check status = %d, want 200", memberCheck.Code)
+	}
+	var memberBody struct {
+		Notes string `json:"notes"`
+	}
+	if err := json.Unmarshal(memberCheck.Body.Bytes(), &memberBody); err != nil {
+		t.Fatalf("decode member check: %v", err)
+	}
+	if memberBody.Notes != "" {
+		t.Fatalf("member-owned admin token saw release notes %q", memberBody.Notes)
 	}
 
-	adminCheck := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", "Bearer "+adminToken.Token)
+	ownerToken, err := tokens.Create(context.Background(), testOwnerID, "admin", []string{auth.ScopeAdmin})
+	if err != nil {
+		t.Fatalf("create owner admin token: %v", err)
+	}
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer "+ownerToken.Token); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("owner admin apply status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	adminCheck := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", "Bearer "+ownerToken.Token)
 	if adminCheck.Code != http.StatusOK {
-		t.Fatalf("admin check status = %d, want 200", adminCheck.Code)
+		t.Fatalf("owner admin check status = %d, want 200", adminCheck.Code)
 	}
 	var adminBody struct {
 		Notes string `json:"notes"`

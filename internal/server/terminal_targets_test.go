@@ -389,7 +389,7 @@ func TestTerminalTargetsSourceTimeoutCollapses(t *testing.T) {
 func TestTerminalTargetsRouteRequiresInteractiveSession(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
-	adminToken := mustCreateAdminToken(t, tokens)
+	adminToken := mustCreateAdminToken(t, tokens, testUserID)
 
 	cases := map[string]struct {
 		bearer string
@@ -436,7 +436,6 @@ func TestTerminalTargetsSourceForCapturesOwner(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/terminal/targets", nil)
 	ctx := context.WithValue(request.Context(), userIDKey, testUserID)
-	ctx = context.WithValue(ctx, roleKey, auth.RoleOwner)
 	request = request.WithContext(ctx)
 	operator := s.terminalTargetsSourceFor(request)
 	targets, err := operator.ListTargets(request.Context(), testUserID)

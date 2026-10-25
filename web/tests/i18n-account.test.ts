@@ -67,7 +67,7 @@ function seedAuth(): void {
     created_at: "2026-03-04T12:00:00Z",
     display_name: "Ada",
     has_password: true,
-    is_platform_admin: false,
+    role: "member",
   } as User;
   auth.accessToken = "access";
   auth.refreshToken = "refresh";
@@ -376,7 +376,7 @@ describe("profile banners react to the locale", () => {
         created_at: "2026-03-04T12:00:00Z",
         display_name: "Ada",
         has_password: true,
-        is_platform_admin: false,
+        role: "member",
       },
       access_token: "new-access",
       token_type: "Bearer",

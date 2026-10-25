@@ -56,10 +56,10 @@ test.afterEach(async ({ request }) => {
 async function seedComposeApplication(request: APIRequestContext): Promise<ComposeSeed> {
   const me = await request.get("/api/v1/auth/me", { headers: authHeaders(account) });
   const body = me.ok()
-    ? ((await me.json()) as { user?: { role?: string; is_platform_admin?: boolean } })
+    ? ((await me.json()) as { user?: { role?: string } })
     : {};
   skipOrFail(
-    body.user?.role !== "owner" && body.user?.is_platform_admin !== true,
+    body.user?.role !== "owner",
     "the smoke account is not the instance owner",
     test.skip,
   );

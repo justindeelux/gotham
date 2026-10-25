@@ -15,8 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-const apiTokenRole = "member"
-
 type TokenService interface {
 	Create(ctx context.Context, userID uuid.UUID, name string, scopes []string) (*auth.CreatedToken, error)
 	Get(ctx context.Context, userID, id uuid.UUID) (*auth.APIToken, error)

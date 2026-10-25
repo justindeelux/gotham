@@ -248,7 +248,7 @@ function login(pinia: Pinia, isAdmin = true): void {
     email: "ada@gotham.dev",
     display_name: "Ada",
     created_at: "2026-01-01T00:00:00Z",
-    is_platform_admin: isAdmin,
+    role: isAdmin ? "owner" : "member",
   };
 }
 
@@ -810,7 +810,7 @@ describe("role demotion (JUS-246 fix round 1)", () => {
 
     useAuthStore().user = {
       ...useAuthStore().user!,
-      is_platform_admin: false,
+      role: "member",
     };
     await flushPromises();
     await nextTick();
@@ -848,7 +848,7 @@ describe("role demotion (JUS-246 fix round 1)", () => {
 
     useAuthStore().user = {
       ...useAuthStore().user!,
-      is_platform_admin: false,
+      role: "member",
     };
     await flushPromises();
     await nextTick();
@@ -926,7 +926,7 @@ describe("paused dock accessibility and demotion (JUS-246 fix round 1)", () => {
 
     useAuthStore().user = {
       ...useAuthStore().user!,
-      is_platform_admin: false,
+      role: "member",
     };
     await flushPromises();
     expect(wrapper.find(".term-dock").exists()).toBe(false);

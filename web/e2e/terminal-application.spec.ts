@@ -221,9 +221,9 @@ async function isOperator(request: APIRequestContext): Promise<boolean> {
     return false;
   }
   const body = (await response.json()) as {
-    user?: { role?: string; is_platform_admin?: boolean };
+    user?: { role?: string };
   };
-  return body.user?.role === "owner" || body.user?.is_platform_admin === true;
+  return body.user?.role === "owner";
 }
 
 function applicationURL(seed: SeededApplication, tab?: string): string {

@@ -44,9 +44,18 @@ func mustCreateToken(t *testing.T, tokens *fakeTokenService, scopes ...string) s
 	return created.Token
 }
 
-func mustCreateAdminToken(t *testing.T, tokens *fakeTokenService) *auth.CreatedToken {
+func mustCreateOwnerToken(t *testing.T, tokens *fakeTokenService, scopes ...string) string {
 	t.Helper()
-	created, err := tokens.Create(context.Background(), testUserID, "admin", []string{auth.ScopeAdmin})
+	created, err := tokens.Create(context.Background(), testOwnerID, "owner", scopes)
+	if err != nil {
+		t.Fatalf("create owner %v token: %v", scopes, err)
+	}
+	return created.Token
+}
+
+func mustCreateAdminToken(t *testing.T, tokens *fakeTokenService, userID uuid.UUID) *auth.CreatedToken {
+	t.Helper()
+	created, err := tokens.Create(context.Background(), userID, "admin", []string{auth.ScopeAdmin})
 	if err != nil {
 		t.Fatalf("create admin token: %v", err)
 	}
@@ -148,8 +157,9 @@ func TestRotateAdminTokenRequiresOwner(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	const session = "Bearer valid-token"
 
-	rotateTarget := mustCreateAdminToken(t, tokens)
-	revokeTarget := mustCreateAdminToken(t, tokens)
+	rotateTarget := mustCreateAdminToken(t, tokens, testUserID)
+	revokeTarget := mustCreateAdminToken(t, tokens, testUserID)
+	ownerTarget := mustCreateAdminToken(t, tokens, testOwnerID)
 
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", session)
 	if rec.Code != http.StatusForbidden {
@@ -168,7 +178,7 @@ func TestRotateAdminTokenRequiresOwner(t *testing.T) {
 		t.Fatalf("member revoking admin token = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", "Bearer owner-token"); rec.Code != http.StatusOK {
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+ownerTarget.ID.String()+"/rotate", "", "Bearer owner-token"); rec.Code != http.StatusOK {
 		t.Fatalf("owner rotating admin token = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
@@ -269,7 +279,7 @@ func TestFilesContentScopeGate(t *testing.T) {
 		t.Fatalf("deploy token content = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
 	}
 
-	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+mustCreateToken(t, tokens, auth.ScopeAdmin))
+	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+mustCreateOwnerToken(t, tokens, auth.ScopeAdmin))
 	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
 		t.Fatalf("admin token content = %d, want the gates to pass", rec.Code)
 	}
@@ -279,7 +289,7 @@ func TestFilesWriteScopeGate(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
 	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
-	adminToken := mustCreateToken(t, tokens, auth.ScopeAdmin)
+	adminToken := mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)
 	id := uuid.New()
 	base := "/api/v1/servers/" + id.String() + "/files/"
 

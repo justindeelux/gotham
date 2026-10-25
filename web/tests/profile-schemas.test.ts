@@ -186,7 +186,7 @@ describe("profile API envelopes", () => {
     created_at: "2026-01-01T00:00:00Z",
     display_name: "Ada",
     has_password: true,
-    is_platform_admin: false,
+    role: "member",
   };
 
   it("accepts the GET/PATCH /me envelope strictly", () => {

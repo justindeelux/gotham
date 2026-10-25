@@ -61,6 +61,7 @@ project GET /api/v1/environments/{id}/resources
 project GET /api/v1/environments/{id}/variables
 owner GET /api/v1/instance/settings
 owner GET /api/v1/invites
+personal GET /api/v1/mcp/connection
 personal GET /api/v1/mcp/context
 project GET /api/v1/notification-channels
 project GET /api/v1/notification-channels/{id}

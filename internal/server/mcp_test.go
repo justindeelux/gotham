@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/justindeelux/gotham/internal/auth"
@@ -59,6 +61,74 @@ func TestMCPStrictContextAndReads(t *testing.T) {
 	memberRead := mustCreateToken(t, tokens, auth.ScopeRead)
 	if rec := request("GET", "/api/v1/servers", memberRead, "1"); rec.Code != 404 {
 		t.Fatalf("member read=%d", rec.Code)
+	}
+}
+
+func TestMCPConnection(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	type connectionBody struct {
+		BaseURL      string   `json:"base_url"`
+		MCPURL       string   `json:"mcp_url"`
+		HTTPS        bool     `json:"https"`
+		Role         string   `json:"role"`
+		Capabilities []string `json:"capabilities"`
+	}
+	parse := func(rec *httptest.ResponseRecorder) connectionBody {
+		t.Helper()
+		var body connectionBody
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode %q: %v", rec.Body.String(), err)
+		}
+		return body
+	}
+
+	for _, tc := range []struct {
+		name, target, bearer, role string
+		secure                     bool
+	}{
+		{"member over http", "http://gotham.test/api/v1/mcp/connection", "Bearer valid-token", auth.RoleMember, false},
+		{"owner over https", "https://gotham.test/api/v1/mcp/connection", "Bearer owner-token", auth.RoleOwner, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doRequest(t, s, "GET", tc.target, "", tc.bearer)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+			}
+			body := parse(rec)
+			scheme := "http://"
+			if tc.secure {
+				scheme = "https://"
+			}
+			wantBase := scheme + "gotham.test"
+			if body.BaseURL != wantBase || body.MCPURL != wantBase+"/mcp" {
+				t.Fatalf("base=%q mcp=%q, want %q", body.BaseURL, body.MCPURL, wantBase+"/mcp")
+			}
+			if body.HTTPS != tc.secure || body.Role != tc.role {
+				t.Fatalf("https=%v role=%q", body.HTTPS, body.Role)
+			}
+			if len(body.Capabilities) != 2 {
+				t.Fatalf("capabilities = %v", body.Capabilities)
+			}
+			if strings.Contains(rec.Body.String(), "gt1_") || strings.Contains(rec.Body.String(), tc.bearer) {
+				t.Fatalf("response leaked a credential: %s", rec.Body.String())
+			}
+		})
+	}
+
+	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
+	for _, tc := range []struct {
+		name, bearer string
+		want         int
+	}{
+		{"anonymous", "", http.StatusUnauthorized},
+		{"api token", "Bearer " + readToken, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doRequest(t, s, "GET", "/api/v1/mcp/connection", "", tc.bearer)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+		})
 	}
 }
 

@@ -163,8 +163,17 @@ Cả hai giới hạn đều tính theo từng gốc, và giá trị 0 tắt gi�
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
-| `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` | `30` | Xóa các mục đã bị xóa quá số ngày này. `0` giữ mọi mục, đúng hành vi trước khi có thiết lập này. |
+| `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` | `30` | Xóa các mục đã bị xóa quá số ngày này. `0` giữ mọi mục, đúng hành vi trước khi có thiết lập này. Giá trị trên 36500 (100 năm) bị chặn để phép tính mốc thời gian không tràn. |
 | `GOTHAM_AGENT_FILE_TRASH_MAX_BYTES` | `0` | Giới hạn số byte thùng rác của một gốc được giữ. Khi vượt, các mục cũ nhất bị xóa cho tới khi thùng rác vừa giới hạn. `0` là không giới hạn. Có mức trần kích thước thì lần quét phải duyệt từng cây trong thùng rác để tính dung lượng, tốn hơn trên thùng rác lớn. |
+
+**Cảnh báo nâng cấp.** Trước bản phát hành này, thùng rác không bao giờ hết hạn.
+Mặc định 30 ngày áp dụng cho cả các mục đã có trong thùng rác, nên lần khởi động
+đầu tiên sau khi nâng cấp sẽ xóa vĩnh viễn mọi thứ đã bị xóa quá 30 ngày. Đặt
+`GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS=0` trước khi nâng cấp để giữ các mục đó.
+
+Lần quét theo kích thước luôn bỏ qua mục được xóa trong vòng một giờ qua, nên
+một lần xóa lớn vẫn khôi phục được trong thời gian ngắn kể cả khi riêng nó đã
+vượt mức trần; nó sẽ bị xóa ở lần quét sau.
 
 Lần quét chỉ xóa các id mục hợp lệ nằm dưới `.gotham-trash`, và ghi log mỗi lần
 xóa với gốc, id, đường dẫn gốc, số byte và lý do (`age` hoặc `size`). Nó không

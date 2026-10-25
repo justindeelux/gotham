@@ -39,6 +39,10 @@ const fileTrashRestoreDirMode = 0o755
 
 const fileTrashSweepInterval = time.Hour
 
+// fileTrashSizeGrace keeps a size-ceiling sweep from purging an entry just
+// after it was deleted, so a large delete stays restorable for a short while.
+const fileTrashSizeGrace = time.Hour
+
 var fileTrashMaxList = 5000
 
 type trashParent struct {
@@ -425,10 +429,12 @@ func trashEntryProto(id string, rec trashRecord) *agentv1.TrashEntry {
 
 // restoreParents recreates dst's missing ancestor directories, using the mode
 // recorded when the entry was trashed and a default for anything unrecorded.
-func restoreParents(root *fsroot.Root, dst string, recorded []trashParent) error {
+// Owner rwx is always added so the restore can write into the chain; a failed
+// restore removes whatever this call created.
+func restoreParents(root *fsroot.Root, dst string, recorded []trashParent) ([]string, error) {
 	dir := path.Dir(dst)
 	if dir == "." {
-		return nil
+		return nil, nil
 	}
 	modes := make(map[string]os.FileMode, len(recorded))
 	for _, parent := range recorded {
@@ -436,6 +442,7 @@ func restoreParents(root *fsroot.Root, dst string, recorded []trashParent) error
 	}
 	parts := strings.Split(dir, "/")
 	prefix := ""
+	created := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if prefix == "" {
 			prefix = part
@@ -448,19 +455,35 @@ func restoreParents(root *fsroot.Root, dst string, recorded []trashParent) error
 			if entry.Kind == fsroot.KindDirectory || entry.Kind == fsroot.KindSymlink {
 				continue
 			}
-			return fmt.Errorf("%w: restore parent %s is not a directory", fsroot.ErrInvalid, prefix)
+			removeCreatedParents(root, created)
+			return nil, fmt.Errorf("%w: restore parent %s is not a directory", fsroot.ErrInvalid, prefix)
 		case !errors.Is(err, fsroot.ErrNotFound):
-			return err
+			removeCreatedParents(root, created)
+			return nil, err
 		}
 		mode, ok := modes[prefix]
 		if !ok {
 			mode = fileTrashRestoreDirMode
 		}
-		if _, err := root.Mkdir(prefix, mode); err != nil && !errors.Is(err, fsroot.ErrExists) {
-			return err
+		mode |= 0o700
+		if _, err := root.Mkdir(prefix, mode); err != nil {
+			if errors.Is(err, fsroot.ErrExists) {
+				continue
+			}
+			removeCreatedParents(root, created)
+			return nil, err
 		}
+		created = append(created, prefix)
 	}
-	return nil
+	return created, nil
+}
+
+// removeCreatedParents removes only empty directories, in reverse order, so a
+// failed restore never deletes content that appeared underneath it.
+func removeCreatedParents(root *fsroot.Root, created []string) {
+	for i := len(created) - 1; i >= 0; i-- {
+		_ = root.Remove(created[i])
+	}
 }
 
 func (s *FileServer) Restore(ctx context.Context, req *agentv1.RestoreRequest) (*agentv1.RestoreResponse, error) {
@@ -494,12 +517,14 @@ func (s *FileServer) Restore(ctx context.Context, req *agentv1.RestoreRequest) (
 		return nil, status.Error(codes.PermissionDenied, "restore: an application directory cannot be replaced")
 	}
 	unlock := s.lockPaths(root.Name(), dst, trashItemData(id))
-	if err := restoreParents(root, dst, rec.Parents); err != nil {
+	createdParents, err := restoreParents(root, dst, rec.Parents)
+	if err != nil {
 		unlock()
 		return nil, fileError("restore", err)
 	}
 	moveErr := s.moveEntry(ctx, root, trashItemData(id), dst, req.GetOverwrite())
 	if moveErr != nil {
+		removeCreatedParents(root, createdParents)
 		unlock()
 		return nil, fileError("restore", moveErr)
 	}
@@ -563,6 +588,15 @@ func (s *FileServer) EmptyTrash(ctx context.Context, req *agentv1.EmptyTrashRequ
 	return &agentv1.EmptyTrashResponse{Removed: removed}, nil
 }
 
+func (s *FileServer) stopping() bool {
+	select {
+	case <-s.stop:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *FileServer) sweepTrashLoop() {
 	s.sweepTrash(time.Now())
 	ticker := time.NewTicker(fileTrashSweepInterval)
@@ -581,6 +615,9 @@ func (s *FileServer) sweepTrashLoop() {
 // root never delays or locks another.
 func (s *FileServer) sweepTrash(now time.Time) {
 	for _, name := range s.order {
+		if s.stopping() {
+			return
+		}
 		root := s.roots[name]
 		if !root.Writable() {
 			continue
@@ -603,9 +640,23 @@ type trashExpiry struct {
 	reason string
 }
 
+// trashAgeCutoff is overflow-safe: AddDate normalises even absurd day counts,
+// and the clamp keeps a setting such as "100 years" from wrapping the clock.
+func trashAgeCutoff(now time.Time, days int) time.Time {
+	if days <= 0 {
+		return time.Time{}
+	}
+	if days > MaxTrashMaxAgeDays {
+		days = MaxTrashMaxAgeDays
+	}
+	return now.AddDate(0, 0, -days)
+}
+
 // expireTrash purges old or over-ceiling items oldest first. It only ever
 // removes valid trash ids below .gotham-trash, one item at a time, so the path
-// lock is released between items. Unreadable metadata or data is left alone.
+// lock is released between items. The size pass leaves items deleted within
+// fileTrashSizeGrace alone. Unreadable metadata or data is left alone, and a
+// shutdown stops the sweep between items.
 func (s *FileServer) expireTrash(root *fsroot.Root, now time.Time) (int, int64, error) {
 	ids, err := s.trashIDs(root)
 	if err != nil {
@@ -613,6 +664,9 @@ func (s *FileServer) expireTrash(root *fsroot.Root, now time.Time) (int, int64, 
 	}
 	items := make([]trashExpiry, 0, len(ids))
 	for _, id := range ids {
+		if s.stopping() {
+			return 0, 0, nil
+		}
 		rec, err := s.readTrashRecord(root, id)
 		if err != nil {
 			continue
@@ -622,7 +676,11 @@ func (s *FileServer) expireTrash(root *fsroot.Root, now time.Time) (int, int64, 
 		}
 		size := rec.Size
 		if s.trashMaxBytes > 0 {
-			size = trashDataBytes(root, trashItemData(id))
+			var stopped bool
+			size, stopped = trashDataBytes(root, trashItemData(id), s.stop)
+			if stopped {
+				return 0, 0, nil
+			}
 		}
 		items = append(items, trashExpiry{id: id, rec: rec, bytes: size})
 	}
@@ -635,7 +693,7 @@ func (s *FileServer) expireTrash(root *fsroot.Root, now time.Time) (int, int64, 
 		total += item.bytes
 	}
 	if s.trashMaxAgeDays > 0 {
-		cutoff := now.Add(-time.Duration(s.trashMaxAgeDays) * 24 * time.Hour)
+		cutoff := trashAgeCutoff(now, s.trashMaxAgeDays)
 		for i := range items {
 			if items[i].rec.DeletedAt.IsZero() || !items[i].rec.DeletedAt.Before(cutoff) {
 				continue
@@ -645,11 +703,15 @@ func (s *FileServer) expireTrash(root *fsroot.Root, now time.Time) (int, int64, 
 		}
 	}
 	if s.trashMaxBytes > 0 {
+		grace := now.Add(-fileTrashSizeGrace)
 		for i := range items {
 			if total <= s.trashMaxBytes {
 				break
 			}
 			if items[i].reason != "" {
+				continue
+			}
+			if deletedAt := items[i].rec.DeletedAt; !deletedAt.IsZero() && deletedAt.After(grace) {
 				continue
 			}
 			items[i].reason = "size"
@@ -660,6 +722,9 @@ func (s *FileServer) expireTrash(root *fsroot.Root, now time.Time) (int, int64, 
 	removed := 0
 	var freed int64
 	for _, item := range items {
+		if s.stopping() {
+			break
+		}
 		if item.reason == "" {
 			continue
 		}
@@ -681,19 +746,31 @@ func (s *FileServer) expireTrash(root *fsroot.Root, now time.Time) (int, int64, 
 }
 
 // trashDataBytes sums one trashed tree without following symlinks. A subtree
-// the agent cannot read contributes only its parent directory's own size.
-func trashDataBytes(root *fsroot.Root, rel string) int64 {
+// the agent cannot read contributes only its parent directory's own size. It
+// reports true when shutdown interrupted the walk.
+func trashDataBytes(root *fsroot.Root, rel string, stop <-chan struct{}) (int64, bool) {
+	select {
+	case <-stop:
+		return 0, true
+	default:
+	}
 	entry, err := root.Stat(rel)
 	if err != nil {
-		return 0
+		return 0, false
 	}
 	if entry.Kind != fsroot.KindDirectory {
-		return entry.Size
+		return entry.Size, false
 	}
 	total := entry.Size
+	stopped := false
 	_ = root.Names(rel, func(name string) error {
-		total += trashDataBytes(root, path.Join(rel, name))
+		size, stopWalk := trashDataBytes(root, path.Join(rel, name), stop)
+		total += size
+		if stopWalk {
+			stopped = true
+			return errDirStopWalk
+		}
 		return nil
 	})
-	return total
+	return total, stopped
 }

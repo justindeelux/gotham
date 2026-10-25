@@ -199,6 +199,16 @@ func TestLoadTrashRetentionFromEnv(t *testing.T) {
 		t.Fatalf("trash retention = %d days / %d bytes, want 0 / 4096", cfg.FileTrashMaxAgeDays, cfg.FileTrashMaxBytes)
 	}
 
+	t.Setenv(envFileTrashMaxAgeDays, "106752")
+	t.Setenv(envFileTrashMaxBytes, "4096")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FileTrashMaxAgeDays != files.MaxTrashMaxAgeDays || cfg.FileTrashMaxBytes != 4096 {
+		t.Fatalf("trash retention = %d days / %d bytes, want %d / 4096", cfg.FileTrashMaxAgeDays, cfg.FileTrashMaxBytes, files.MaxTrashMaxAgeDays)
+	}
+
 	t.Setenv(envFileTrashMaxAgeDays, "-3")
 	t.Setenv(envFileTrashMaxBytes, "nope")
 	cfg, err = Load()

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/justindeelux/gotham/agent/fsroot"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -558,7 +559,7 @@ func TestFileServerTrashRetentionExpiresBySize(t *testing.T) {
 			t.Fatal(err)
 		}
 		entry := trashEntryByPath(t, server, name)
-		setTrashDeletedAt(t, root, entry.GetId(), now.Add(-time.Duration(3-i)*time.Hour))
+		setTrashDeletedAt(t, root, entry.GetId(), now.Add(-time.Duration(4-i)*time.Hour))
 	}
 
 	server.trashMaxBytes = 12
@@ -633,5 +634,152 @@ func TestFileServerTrashRestoreDestinationCreatesParents(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(root, "x", "y", "a.txt")); err != nil || string(got) != "payload" {
 		t.Fatalf("restored body = %q, %v", got, err)
+	}
+}
+
+func setTrashParents(t *testing.T, root, id string, parents []trashParent) {
+	t.Helper()
+	metaPath := filepath.Join(root, fileTrashDir, id, fileTrashMeta)
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read trash metadata: %v", err)
+	}
+	var rec trashRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatalf("decode trash metadata: %v", err)
+	}
+	rec.Parents = parents
+	data, err = json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("encode trash metadata: %v", err)
+	}
+	if err := os.WriteFile(metaPath, data, fileTrashMetaMode); err != nil {
+		t.Fatalf("write trash metadata: %v", err)
+	}
+}
+
+func TestTrashMaxAgeDaysClamped(t *testing.T) {
+	for _, days := range []int{106752, 1_000_000} {
+		cfg := Config{FileTrashMaxAgeDays: days}
+		cfg.applyDefaults()
+		if cfg.FileTrashMaxAgeDays != MaxTrashMaxAgeDays {
+			t.Errorf("FileTrashMaxAgeDays = %d for %d, want the %d cap", cfg.FileTrashMaxAgeDays, days, MaxTrashMaxAgeDays)
+		}
+	}
+}
+
+func TestFileServerTrashRetentionHugeAgeDoesNotPurge(t *testing.T) {
+	now := time.Now()
+	for _, days := range []int{106752, 1_000_000} {
+		days := days
+		t.Run(fmt.Sprint(days), func(t *testing.T) {
+			t.Parallel()
+			if cutoff := trashAgeCutoff(now, days); !cutoff.Before(now) {
+				t.Fatalf("cutoff for %d days = %s, want before %s", days, cutoff, now)
+			}
+			server, root := newTestFileServer(t)
+			if _, err := write(t, server, RootVolumes, "a.txt", "", false, []byte("x")); err != nil {
+				t.Fatal(err)
+			}
+			if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "a.txt"}, &collectProgressStream{}); err != nil {
+				t.Fatal(err)
+			}
+			id := listTrash(t, server)[0].GetId()
+			setTrashDeletedAt(t, root, id, now.AddDate(0, 0, -40))
+
+			server.trashMaxAgeDays = days
+			server.sweepTrash(now)
+			server.trashMaxAgeDays = 0
+
+			if got := listTrash(t, server); len(got) != 1 {
+				t.Fatalf("a %d-day setting purged a 40-day-old item: %+v", days, got)
+			}
+		})
+	}
+}
+
+func TestFileServerTrashRetentionSizeGrace(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, RootVolumes, "big.txt", "", false, []byte("01234567890123456789")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "big.txt"}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	id := listTrash(t, server)[0].GetId()
+	now := time.Now()
+
+	server.trashMaxBytes = 10
+	server.sweepTrash(now)
+	if got := listTrash(t, server); len(got) != 1 {
+		t.Fatalf("the size pass purged a just-deleted item: %+v", got)
+	}
+
+	setTrashDeletedAt(t, root, id, now.Add(-2*time.Hour))
+	server.sweepTrash(now)
+	server.trashMaxBytes = 0
+	if got := listTrash(t, server); len(got) != 0 {
+		t.Fatalf("the size pass kept an item past the grace period: %+v", got)
+	}
+}
+
+func TestFileServerTrashRestoreParentReadOnlyMode(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: RootVolumes, Path: "d"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, server, RootVolumes, "d/f.txt", "", false, []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "d/f.txt"}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "d", Recursive: true}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	id := trashEntryByPath(t, server, "d/f.txt").GetId()
+	setTrashParents(t, root, id, []trashParent{{Path: "d", Mode: 0o500}})
+
+	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{Root: RootVolumes, Id: id}); err != nil {
+		t.Fatalf("Restore into a recorded read-only parent: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "d"))
+	if err != nil {
+		t.Fatalf("restore did not recreate the parent: %v", err)
+	}
+	if got := info.Mode().Perm(); got&0o700 != 0o700 {
+		t.Fatalf("recreated parent mode = %o, want owner rwx", got)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "d", "f.txt")); err != nil || string(got) != "payload" {
+		t.Fatalf("restored body = %q, %v", got, err)
+	}
+}
+
+func TestFileServerTrashRestoreFailedMoveRemovesCreatedParents(t *testing.T) {
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, RootVolumes, "a.txt", "", false, []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "a.txt"}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	id := listTrash(t, server)[0].GetId()
+
+	old := renameWithin
+	renameWithin = func(*fsroot.Root, string, string, bool) error { return errors.New("move failed") }
+	defer func() { renameWithin = old }()
+
+	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{
+		Root: RootVolumes, Id: id, Destination: "x/y/a.txt",
+	}); err == nil {
+		t.Fatal("Restore with a failing move succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(root, "x")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a failed restore left created parents behind: %v", err)
+	}
+	if got := listTrash(t, server); len(got) != 1 {
+		t.Fatalf("a failed restore removed the trash entry: %+v", got)
 	}
 }

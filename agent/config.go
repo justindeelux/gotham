@@ -193,6 +193,9 @@ func Load() (Config, error) {
 	if !strings.HasPrefix(cfg.ManagedVolumeRoot, "/") {
 		return Config{}, fmt.Errorf("%s must be an absolute path", envManagedVolumeRoot)
 	}
+	if cfg.FileTrashMaxAgeDays > files.MaxTrashMaxAgeDays {
+		cfg.FileTrashMaxAgeDays = files.MaxTrashMaxAgeDays
+	}
 	return cfg, nil
 }
 

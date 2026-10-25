@@ -11,6 +11,10 @@ const (
 	DefaultArchiveMaxEntries    = 100_000
 	DefaultArchiveMaxInputBytes = 1 << 30
 	DefaultTrashMaxAgeDays      = 30
+	// MaxTrashMaxAgeDays caps the retention age (100 years) so an operator who
+	// types a huge number cannot overflow the cutoff arithmetic and purge
+	// everything.
+	MaxTrashMaxAgeDays = 36_500
 )
 
 const defaultStateRoot = "/var/lib/gotham-agent"
@@ -76,6 +80,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.FileTrashMaxAgeDays < 0 {
 		c.FileTrashMaxAgeDays = 0
+	}
+	if c.FileTrashMaxAgeDays > MaxTrashMaxAgeDays {
+		c.FileTrashMaxAgeDays = MaxTrashMaxAgeDays
 	}
 	if c.FileTrashMaxBytes < 0 {
 		c.FileTrashMaxBytes = 0

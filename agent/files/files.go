@@ -161,6 +161,10 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 	}
 	go server.sweepTempFilesLoop()
 	if server.trashMaxAgeDays > 0 || server.trashMaxBytes > 0 {
+		log.Info("file service trash retention enabled",
+			"max_age_days", server.trashMaxAgeDays,
+			"max_bytes", server.trashMaxBytes,
+			"first_sweep", "now")
 		go server.sweepTrashLoop()
 	}
 	return server, nil

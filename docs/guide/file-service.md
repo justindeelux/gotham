@@ -166,8 +166,17 @@ hourly. Both limits are per root, and zero disables a limit:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` | `30` | Purges entries deleted more than this many days ago. `0` keeps every entry, which was the behaviour before this setting. |
+| `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` | `30` | Purges entries deleted more than this many days ago. `0` keeps every entry, which was the behaviour before this setting. Values above 36500 (100 years) are capped so the cutoff cannot overflow. |
 | `GOTHAM_AGENT_FILE_TRASH_MAX_BYTES` | `0` | Caps the bytes one root's bin may hold. Once over it, the oldest entries are purged until the bin fits. `0` is unbounded. A size ceiling makes the sweep walk every trashed tree to size it, which costs more on a large bin. |
+
+**Upgrade warning.** Before this release a bin never expired. The 30-day
+default applies to entries that are already in a bin, so the first start after
+upgrading permanently purges anything deleted more than 30 days ago. Set
+`GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS=0` before upgrading to keep those entries.
+
+The size pass always leaves an entry deleted within the last hour, so a large
+delete stays restorable for a short while even when it alone exceeds the
+ceiling; it is purged on a later sweep.
 
 The sweep only removes valid item ids below `.gotham-trash`, and logs every
 purge with the root, id, original path, bytes and reason (`age` or `size`). It

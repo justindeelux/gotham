@@ -5,7 +5,6 @@ import { useAuthStore } from "@/features/auth/stores/auth";
 
 export function useRegisterInvite(): {
   inviteToken: Ref<string>;
-  inviteTeam: Ref<string>;
   inviteEmail: Ref<string>;
   inviteChecking: Ref<boolean>;
   holdToken: (_token: string) => void;
@@ -14,7 +13,6 @@ export function useRegisterInvite(): {
   const authStore = useAuthStore();
 
   const inviteToken = ref("");
-  const inviteTeam = ref("");
   const inviteEmail = ref("");
   const inviteChecking = ref(false);
 
@@ -26,7 +24,6 @@ export function useRegisterInvite(): {
   async function acceptInvite(): Promise<boolean> {
     try {
       const info = await authStore.validateInvite(inviteToken.value);
-      inviteTeam.value = info.team;
       inviteEmail.value = info.email;
       return true;
     } catch {
@@ -36,5 +33,5 @@ export function useRegisterInvite(): {
     }
   }
 
-  return { inviteToken, inviteTeam, inviteEmail, inviteChecking, holdToken, acceptInvite };
+  return { inviteToken, inviteEmail, inviteChecking, holdToken, acceptInvite };
 }

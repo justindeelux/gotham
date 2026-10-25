@@ -62,8 +62,8 @@ Ghi chú:
   `--password-stdin` (một dòng được đưa vào) và `--generate-password` (in
   `generated-password: <value>` một lần). Không dùng nguồn nào thì lệnh hỏi hai lần
   với đầu vào ẩn.
-- `admin reset-password` thu hồi các phiên làm mới và xóa TOTP. Các access token đã
-  cấp vẫn hợp lệ cho tới khi hết hạn (15 phút).
+- `admin reset-password` thu hồi mọi phiên đăng nhập và xóa TOTP. Các access token
+  đã cấp mất hiệu lực ngay.
 - `serve` thoát khi không kết nối được PostgreSQL, và từ chối khởi động kênh agent
   khi không có CA trừ khi đặt `grpc.insecure: true`. `update apply` và
   `update rollback` từ chối chạy khi tệp nhị phân đích thuộc người dùng khác; hãy

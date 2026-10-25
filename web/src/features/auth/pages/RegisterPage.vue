@@ -143,7 +143,7 @@ async function handleSubmit(): Promise<void> {
           <h2 class="auth-title">{{ t("auth.register.title") }}</h2>
           <NText v-if="invite.inviteToken.value" depth="3">
             {{ t("auth.register.invitedPrefix") }}
-            <span class="mono">{{ invite.inviteTeam.value || t("auth.register.invitedFallback") }}</span>.
+            <span class="mono">{{ invite.inviteEmail.value }}</span>.
             {{ t("auth.register.invitedSuffix") }}
           </NText>
           <NText v-else depth="3">

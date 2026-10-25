@@ -112,9 +112,6 @@ giữ hiệu lực.
 - Hãy đặt cả hai đường dẫn. Thiếu một trong hai thì máy chủ sinh một cặp khóa tạm
   lúc khởi động và các phiên không sống qua lần khởi động lại. Một đường dẫn đã cấu
   hình nhưng không đọc được làm khởi động thất bại.
-- `GOTHAM_AUTH_ALLOW_REGISTRATION=true` (không có khóa YAML) mở lại việc tự đăng ký
-  trên một instance đã có tài khoản. Mặc định `false`; chỉ dùng cho kiểm thử và
-  phát triển.
 
 ## OAuth (GitHub)
 

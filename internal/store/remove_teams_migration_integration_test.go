@@ -175,6 +175,13 @@ func TestRemoveTeamsMigrationEmptyDatabaseAndIrreversibleDown(t *testing.T) {
 		t.Fatalf("connect scratch database: %v", err)
 	}
 	assertRemoveTeamsSchema(t, ctx, conn)
+	var oldInvites bool
+	if err := conn.QueryRow(ctx, `SELECT to_regclass('invites') IS NOT NULL`).Scan(&oldInvites); err != nil {
+		t.Fatalf("check team invite table: %v", err)
+	}
+	if oldInvites {
+		t.Error("migration 64 kept the team invite table")
+	}
 	_ = conn.Close(ctx)
 
 	if _, err := provider.Down(ctx); err == nil {
@@ -191,7 +198,7 @@ func TestRemoveTeamsMigrationEmptyDatabaseAndIrreversibleDown(t *testing.T) {
 
 func assertRemoveTeamsSchema(t *testing.T, ctx context.Context, conn *pgx.Conn) {
 	t.Helper()
-	for _, table := range []string{"teams", "team_members", "invites"} {
+	for _, table := range []string{"teams", "team_members"} {
 		var exists bool
 		if err := conn.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)

@@ -1,6 +1,5 @@
 import { expect, test } from "./fixtures";
 import { loadAccount, storageStatePath, uniqueSuffix } from "./support";
-import type { E2EAccount } from "./support";
 import {
   authHeaders,
   installSession,
@@ -27,7 +26,6 @@ let fresh: Awaited<ReturnType<typeof loginFresh>>;
 const APP_IMAGE = process.env.GOTHAM_E2E_TERMINAL_IMAGE ?? "nginx:1.28.0-alpine";
 
 interface Seed {
-  teamId: string;
   projectId: string;
   environmentId: string;
   applicationId: string;
@@ -41,42 +39,26 @@ let seed: Seed | null = null;
 
 test.beforeAll(async ({ request }) => {
   fresh = await loginFresh(request, account);
-  seed = await seedTeamApplication(request);
+  seed = await seedApplication(request);
 });
 
 test.beforeEach(async ({ page }) => {
   await installSession(page, fresh);
-  if (seed !== null) {
-    await page.addInitScript((teamId) => {
-      window.localStorage.setItem("gotham.teams.active", teamId);
-    }, seed.teamId);
-  }
 });
 
 test.afterAll(async ({ request }) => {
   if (seed === null) {
     return;
   }
-  const headers = teamHeaders(seed.teamId, account);
+  const headers = authHeaders(account);
   await request
     .delete(`/api/v1/applications/${seed.applicationId}`, { headers })
     .catch(() => undefined);
   await request
     .delete(`/api/v1/projects/${seed.projectId}`, { headers })
     .catch(() => undefined);
-  await request
-    .delete(`/api/v1/teams/${seed.teamId}`, { headers: authHeaders(account) })
-    .catch(() => undefined);
   seed = null;
 });
-
-function teamHeaders(teamId: string, who: E2EAccount): Record<string, string> {
-  const headers = authHeaders(who);
-  if (teamId !== "") {
-    headers["X-Team-Id"] = teamId;
-  }
-  return headers;
-}
 
 async function expectOK(
   response: { ok(): boolean; status(): number; text(): Promise<string> },
@@ -97,17 +79,9 @@ async function requireTerminalNode(request: APIRequestContext) {
   return server!;
 }
 
-async function seedTeamApplication(request: APIRequestContext): Promise<Seed> {
+async function seedApplication(request: APIRequestContext): Promise<Seed> {
   const server = await requireTerminalNode(request);
-  const owner = authHeaders(account);
-
-  const teamResponse = await request.post("/api/v1/teams", {
-    headers: owner,
-    data: { name: `ui-e2e-tab-${uniqueSuffix()}` },
-  });
-  await expectOK(teamResponse, "seed team");
-  const teamId = ((await teamResponse.json()) as { team: { id: string } }).team.id;
-  const headers = teamHeaders(teamId, account);
+  const headers = authHeaders(account);
 
   const projectResponse = await request.post("/api/v1/projects", {
     headers,
@@ -182,7 +156,6 @@ async function seedTeamApplication(request: APIRequestContext): Promise<Seed> {
     throw new Error("deployment never reached running");
   }
   return {
-    teamId,
     projectId: project.project.id,
     environmentId,
     applicationId,
@@ -263,7 +236,7 @@ test.describe.serial("add-tab picker on the real stack", () => {
     expect(traffic.createCount()).toBe(1);
 
     await openPicker(page, "window");
-    expect(reads).toEqual([seed.teamId]);
+    expect(reads).toHaveLength(1);
     await expect(page.locator(".term-targets-group-title")).toContainText([
       "Servers",
       seed.applicationName,
@@ -341,7 +314,7 @@ test.describe.serial("add-tab picker on the real stack", () => {
       .toBe(true);
     expect(await screenText(page, ".term-page")).not.toContain("server: ");
     expect(reads).toHaveLength(3);
-    expect(reads).toEqual([seed.teamId, seed.teamId, seed.teamId]);
+    expect(reads).toHaveLength(3);
     expect(traffic.createCount()).toBe(4);
     expect(traffic.deletes).toHaveLength(0);
   });
@@ -386,41 +359,13 @@ test.describe.serial("add-tab picker on the real stack", () => {
     await expect(page.locator(".term-targets")).toHaveCount(0);
     await expect(trigger).toBeFocused();
     expect(traffic.createCount()).toBe(2);
-    expect(reads).toEqual([seed!.teamId, seed!.teamId]);
+    expect(reads).toHaveLength(2);
   });
 
-  test("permission matrix: a member gets no hosts and a read-only viewer no containers", async ({
-    request,
-  }) => {
+  test("a member has no terminal targets", async ({ request }) => {
     test.setTimeout(120_000);
-    skipOrFail(
-      process.env.GOTHAM_AUTH_ALLOW_REGISTRATION !== "true",
-      "registration is closed, so the permission accounts cannot be created",
-      test.skip,
-    );
-
-    const viewerEmail = `ui-e2e-tab-viewer-${uniqueSuffix()}@example.com`;
-    const viewerResponse = await request.post("/api/v1/auth/register", {
-      data: { email: viewerEmail, password: "Gotham-E2E-Password1" },
-    });
-    await expectOK(viewerResponse, "register viewer");
-    const viewer = (await viewerResponse.json()) as { access_token: string };
-
-    const memberTargets = await request.get("/api/v1/terminal/targets", {
-      headers: { Authorization: `Bearer ${viewer.access_token}` },
-    });
-    expect(memberTargets.status()).toBe(200);
-    const memberBody = (await memberTargets.json()) as {
-      servers: unknown[];
-      applications: unknown[];
-      errors: unknown[];
-    };
-    expect(memberBody.servers).toEqual([]);
-    expect(memberBody.applications).toEqual([]);
-    expect(memberBody.errors).toEqual([]);
-
     const ownerTargets = await request.get("/api/v1/terminal/targets", {
-      headers: teamHeaders(seed.teamId, account),
+      headers: authHeaders(account),
     });
     expect(ownerTargets.status()).toBe(200);
     const ownerBody = (await ownerTargets.json()) as {
@@ -430,37 +375,31 @@ test.describe.serial("add-tab picker on the real stack", () => {
     };
     expect(ownerBody.servers.length).toBeGreaterThan(0);
     expect(ownerBody.applications.map((group) => group.application_id)).toContain(
-      seed.applicationId,
+      seed!.applicationId,
     );
 
-    const invite = await request.post(`/api/v1/teams/${seed.teamId}/invites`, {
+    const memberEmail = `ui-e2e-tab-member-${uniqueSuffix()}@example.com`;
+    const inviteResponse = await request.post("/api/v1/invites", {
       headers: authHeaders(account),
-      data: { email: viewerEmail, role: "read_only" },
+      data: { email: memberEmail, project_ids: [seed!.projectId] },
     });
-    await expectOK(invite, "invite viewer");
-    const token = ((await invite.json()) as { invite: { token: string } }).invite
-      .token;
-    const accept = await request.post("/api/v1/invites/accept", {
-      headers: { Authorization: `Bearer ${viewer.access_token}` },
-      data: { token },
-    });
-    await expectOK(accept, "accept invite");
+    await expectOK(inviteResponse, "invite member");
+    const inviteToken = ((await inviteResponse.json()) as { token: string }).token;
 
-    const viewerTargets = await request.get("/api/v1/terminal/targets", {
-      headers: {
-        Authorization: `Bearer ${viewer.access_token}`,
-        "X-Team-Id": seed.teamId,
+    const register = await request.post("/api/v1/auth/register", {
+      data: {
+        email: memberEmail,
+        password: "Gotham-E2E-Password1",
+        invite_token: inviteToken,
       },
     });
-    expect(viewerTargets.status()).toBe(200);
-    const viewerBody = (await viewerTargets.json()) as {
-      servers: unknown[];
-      applications: unknown[];
-      errors: unknown[];
-    };
-    expect(viewerBody.servers).toEqual([]);
-    expect(viewerBody.applications).toEqual([]);
-    expect(viewerBody.errors).toEqual([]);
+    await expectOK(register, "register member");
+    const member = (await register.json()) as { access_token: string };
+
+    const memberTargets = await request.get("/api/v1/terminal/targets", {
+      headers: { Authorization: `Bearer ${member.access_token}` },
+    });
+    expect(memberTargets.status()).toBe(404);
   });
 
   test("the picker renders the real empty list and retries a failed read", async ({

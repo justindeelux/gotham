@@ -62,8 +62,8 @@ Notes:
   exclusive: `--password`, `--password-stdin` (one piped line) and
   `--generate-password` (prints `generated-password: <value>` once). With none
   of them the command prompts twice with hidden input.
-- `admin reset-password` revokes refresh sessions and clears TOTP. Access
-  tokens already issued stay valid until they expire (15 minutes).
+- `admin reset-password` revokes every session and clears TOTP. Access tokens
+  already issued stop working immediately.
 - `serve` exits when PostgreSQL is unreachable, and refuses to start the agent
   channel without a CA unless `grpc.insecure: true` is set. `update apply` and
   `update rollback` refuse to run when the target binary belongs to another

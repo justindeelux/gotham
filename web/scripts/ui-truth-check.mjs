@@ -757,10 +757,13 @@ async function main() {
     const allowlist = [...setBody.matchAll(/"([^"]+)"/g)].map(
       (match) => match[1],
     );
+    // The web teams feature lives until the member UI replaces it, so its
+    // error prefix stays accepted even though no Go package emits it.
+    const pendingRemoval = ["teams"];
+    const expected = [...grepped, ...pendingRemoval].sort();
     assert(
-      allowlist.length === grepped.length &&
-        allowlist.every((prefix) => grepped.includes(prefix)) &&
-        grepped.every((prefix) => allowlist.includes(prefix)),
+      allowlist.length === expected.length &&
+        [...allowlist].sort().every((prefix, index) => prefix === expected[index]),
       `allowlist [${allowlist}] equals the Go sources [${grepped}]`,
     );
     const { stripErrorPrefix } = servers.module;

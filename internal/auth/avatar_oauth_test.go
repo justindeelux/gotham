@@ -39,8 +39,7 @@ func TestSanitizeAvatarURL(t *testing.T) {
 func TestOAuthCallbackPersistsAvatarOnCreate(t *testing.T) {
 	const avatar = "https://avatars.githubusercontent.com/u/123456?v=4"
 	provider := &fakeOAuthProvider{name: "github"}
-	oauth, st := newTestOAuthWithStore(t, provider)
-	oauth.auth.AllowOpenRegistration = true
+	oauth, st := newScratchOAuthWithStore(t, provider)
 	ctx := context.Background()
 
 	email := uniqueEmail("oauth-avatar-new")
@@ -120,11 +119,13 @@ func TestOAuthCallbackInvalidAvatarStoresNothing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			provider := &fakeOAuthProvider{name: "github"}
 			oauth, st := newTestOAuthWithStore(t, provider)
-			oauth.auth.AllowOpenRegistration = true
 			ctx := context.Background()
 
 			email := uniqueEmail("oauth-avatar-bad")
 			cleanupUser(t, st, email)
+			if _, err := st.CreateUser(ctx, email, nil); err != nil {
+				t.Fatalf("CreateUser: %v", err)
+			}
 			provider.identity = &OAuthIdentity{Email: email, AvatarURL: avatar}
 
 			_, state, err := oauth.Begin(ctx, "github", "")

@@ -112,11 +112,6 @@ func runServe() int {
 
 	authStore := store.New(pool)
 	authService := auth.New(authStore, signer, logger)
-	if snap.Auth.AllowRegistration {
-		authService.AllowOpenRegistration = true
-		logger.Warn("registration is open to everyone (GOTHAM_AUTH_ALLOW_REGISTRATION); " +
-			"members should join through admin invites instead")
-	}
 	oauthService := buildOAuthService(snap.OAuth, authService, logger)
 	tokenService := auth.NewAPITokenService(authStore, logger)
 

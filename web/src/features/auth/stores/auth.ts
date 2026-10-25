@@ -235,8 +235,8 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  async function validateInvite(token: string): Promise<{ team: string; email: string }> {
-    const response = await http.get<{ team: string; email: string }>(
+  async function validateInvite(token: string): Promise<{ email: string }> {
+    const response = await http.get<{ email: string }>(
       "/auth/invites/validate",
       { params: { token } },
     );
@@ -251,7 +251,7 @@ export const useAuthStore = defineStore("auth", () => {
     const response = await http.post<AuthResult>("/auth/register", {
       email,
       password,
-      ...(inviteToken ? { inviteToken } : {}),
+      ...(inviteToken ? { invite_token: inviteToken } : {}),
     });
     setSession(response.data);
     configLoaded = false;

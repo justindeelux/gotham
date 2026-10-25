@@ -160,31 +160,20 @@ func (s *OAuthService) createOAuthUser(ctx context.Context, email string) (sqlc.
 	if err != nil {
 		return sqlc.User{}, fmt.Errorf("auth: oauth count users: %w", err)
 	}
-	if count > 0 && !s.auth.AllowOpenRegistration {
+	if count > 0 {
 		return sqlc.User{}, ErrRegistrationClosed
 	}
 
-	var user sqlc.User
-	if count == 0 {
-		user, err = s.auth.store.CreateFirstUser(ctx, email, nil)
-	} else {
-		user, err = s.auth.store.CreateUser(ctx, email, nil)
-	}
+	user, err := s.auth.store.CreateFirstUser(ctx, email, nil)
 	if err == nil {
 		return user, nil
 	}
 	if errors.Is(err, store.ErrInstanceHasAccount) {
-		if s.auth.AllowOpenRegistration {
-			user, err = s.auth.store.CreateUser(ctx, email, nil)
-			if err == nil {
-				return user, nil
-			}
-		} else {
-			if existing, readErr := s.auth.store.GetUserByEmail(ctx, email); readErr == nil {
-				return existing, nil
-			}
-			return sqlc.User{}, ErrRegistrationClosed
+		// A concurrent callback may have created this very account.
+		if existing, readErr := s.auth.store.GetUserByEmail(ctx, email); readErr == nil {
+			return existing, nil
 		}
+		return sqlc.User{}, ErrRegistrationClosed
 	}
 	if !isUniqueViolation(err) {
 		return sqlc.User{}, fmt.Errorf("auth: oauth create user: %w", err)

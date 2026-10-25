@@ -152,11 +152,7 @@ func TestServiceListSessionsExcludesDeadRows(t *testing.T) {
 		t.Error("live session not marked current")
 	}
 
-	svc.AllowOpenRegistration = true
-	foreign, err := svc.Register(ctx, uniqueEmail("sessions-foreign"), "s3cret-password", SessionMeta{})
-	if err != nil {
-		t.Fatalf("Register foreign: %v", err)
-	}
+	foreign := registerTestMember(t, svc, uniqueEmail("sessions-foreign"))
 	foreignID, _ := uuid.Parse(foreign.User.ID)
 	foreignSessions, err := svc.ListSessions(ctx, foreignID, sidOf(t, svc, foreign.AccessToken))
 	if err != nil {
@@ -218,11 +214,7 @@ func TestServiceSessionSignInAtResolvesRotatedRow(t *testing.T) {
 		t.Fatalf("SessionSignInAt(deleted row) = (%v, %v), want (false, nil)", found, err)
 	}
 
-	svc.AllowOpenRegistration = true
-	foreign, err := svc.Register(ctx, uniqueEmail("sessions-lineage-foreign"), "s3cret-password", SessionMeta{})
-	if err != nil {
-		t.Fatalf("Register foreign: %v", err)
-	}
+	foreign := registerTestMember(t, svc, uniqueEmail("sessions-lineage-foreign"))
 	foreignID, _ := uuid.Parse(foreign.User.ID)
 	if _, found, err := svc.SessionSignInAt(ctx, foreignID, oldSID); err != nil || found {
 		t.Fatalf("SessionSignInAt(foreign user) = (%v, %v), want (false, nil)", found, err)
@@ -504,11 +496,7 @@ func TestServiceRevokeSessionForeignIsNotFound(t *testing.T) {
 	}
 	ownID, _ := uuid.Parse(own.User.ID)
 
-	svc.AllowOpenRegistration = true
-	foreign, err := svc.Register(ctx, uniqueEmail("sessions-revoke-foreign"), "s3cret-password", SessionMeta{})
-	if err != nil {
-		t.Fatalf("Register foreign: %v", err)
-	}
+	foreign := registerTestMember(t, svc, uniqueEmail("sessions-revoke-foreign"))
 	foreignSessions, err := svc.ListSessions(ctx, uuid.MustParse(foreign.User.ID), sidOf(t, svc, foreign.AccessToken))
 	if err != nil {
 		t.Fatalf("ListSessions foreign: %v", err)
@@ -625,11 +613,7 @@ func TestServiceRevokeOtherSessionsStaleSid(t *testing.T) {
 		t.Fatalf("list = %v, want only the fresh session", liveIDs(sessions))
 	}
 
-	svc.AllowOpenRegistration = true
-	foreign, err := svc.Register(ctx, uniqueEmail("sessions-stale-foreign"), "s3cret-password", SessionMeta{})
-	if err != nil {
-		t.Fatalf("Register foreign: %v", err)
-	}
+	foreign := registerTestMember(t, svc, uniqueEmail("sessions-stale-foreign"))
 	foreignID, _ := uuid.Parse(foreign.User.ID)
 	foreignSid := sidOf(t, svc, foreign.AccessToken)
 	if err := svc.RevokeOtherSessions(ctx, userID, foreignSid); !errors.Is(err, ErrSessionUnknown) {

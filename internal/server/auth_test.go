@@ -19,6 +19,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 var (
@@ -250,6 +251,48 @@ func (f *fakeAuthService) CompleteMFALogin(_ context.Context, mfaToken, code str
 		return nil, auth.ErrInvalidCode
 	}
 	return f.result(), nil
+}
+
+func (f *fakeAuthService) RegisterInvited(_ context.Context, email, _, inviteToken string, _ auth.SessionMeta) (*auth.AuthResult, error) {
+	if inviteToken == "" {
+		return nil, auth.ErrRegistrationClosed
+	}
+	return f.Register(context.Background(), email, "", auth.SessionMeta{})
+}
+
+func (f *fakeAuthService) CreateInvite(_ context.Context, _ uuid.UUID, email string, _ []uuid.UUID) (*auth.Invite, string, error) {
+	if email == "invalid@example.com" {
+		return nil, "", auth.ErrValidation
+	}
+	if email == "taken@example.com" {
+		return nil, "", auth.ErrEmailTaken
+	}
+	return &auth.Invite{Email: email, Projects: []auth.ProjectRef{}}, "invite-token", nil
+}
+
+func (f *fakeAuthService) ListInvites(context.Context) ([]auth.Invite, error) {
+	return []auth.Invite{}, nil
+}
+
+func (f *fakeAuthService) RevokeInvite(context.Context, uuid.UUID) error { return nil }
+
+func (f *fakeAuthService) PeekInvite(_ context.Context, token string) (*auth.InvitePreview, error) {
+	if token == "" {
+		return nil, store.ErrInviteUnavailable
+	}
+	return &auth.InvitePreview{Email: "invited@example.com"}, nil
+}
+
+func (f *fakeAuthService) ListUsers(context.Context) ([]auth.Account, error) {
+	return []auth.Account{{User: *f.user, Projects: []auth.ProjectRef{}}}, nil
+}
+
+func (f *fakeAuthService) RemoveMember(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+
+func (f *fakeAuthService) ResetMember(context.Context, uuid.UUID) error { return nil }
+
+func (f *fakeAuthService) SetMemberProjects(_ context.Context, _, _ uuid.UUID, projectIDs []uuid.UUID) (*auth.Account, error) {
+	return &auth.Account{User: *f.user, Projects: []auth.ProjectRef{}}, nil
 }
 
 func newTestAuthServer(t *testing.T) *Server {

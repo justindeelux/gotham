@@ -48,10 +48,11 @@ prompt.
   `an account already exists (created by someone else?)`.
 - **`--dry-run`** prompts nothing and changes nothing.
 
-Self-registration stays closed once that account exists. The default is off;
-for test or development instances only, `GOTHAM_AUTH_ALLOW_REGISTRATION=true` in
-the service environment reopens self-registration even after the first account
-exists. Never leave it on for a real instance.
+Self-registration stays closed once that account exists: only the owner's
+invites create members. An invite is tied to one email address and to the
+projects the new member may open, is valid for seven days and can be used once.
+The owner manages members, their project access, and the reset of a member's
+sessions and two-factor authentication from the panel.
 
 The password is never passed as a command-line argument, never put in the
 environment, and never written to disk, the env file, logs or shell history: it
@@ -80,11 +81,16 @@ The password prompt is hidden. Useful flags:
 
 ## Invite other people
 
-1. Open **Teams** and create an invite, then send the shown link.
+1. Open **Members**, pick the projects the person may use and create an
+   invite, then send the shown link.
 2. The member opens `/register?invite=<token>` and chooses their credentials.
-   The link is shown once and expires.
-3. Add servers from **Servers**; see [Add nodes](/guide/nodes). Each node
-   reports heartbeats and appears in the panel once it is ready.
+   The link is shown once, works once and expires after seven days.
+3. Change a member's projects, or reset their sessions and two-factor
+   authentication, from the same member list. Removing a member ends their
+   sessions and API tokens immediately.
+
+Add servers from **Servers**; see [Add nodes](/guide/nodes). Each node reports
+heartbeats and appears in the panel once it is ready.
 
 ## Lost the admin password
 
@@ -94,9 +100,9 @@ Replace it on the control-plane server:
 sudo -u gotham -- /var/lib/gotham/bin/gotham admin reset-password --email ops@example.com
 ```
 
-This revokes the account's refresh sessions. Bearer access tokens are stateless
-JWTs, so a token already minted stays valid until it expires (15 minutes);
-resetting is not an instant, fleet-wide logout.
+This revokes every session of the account. Bearer access tokens are checked
+against their live session on every request, so a token minted before the reset
+stops working immediately; resetting is an instant logout on every device.
 
 ## The first account is the platform administrator
 

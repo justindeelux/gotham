@@ -76,7 +76,6 @@ type Server struct {
 	ephemeralSecret bool
 
 	instanceSvc       *instance.Service
-	allowRegistration bool
 	deploy            deploy.DeployService
 	proxy             proxy.ProxyService
 	backups           databases.BackupService
@@ -135,23 +134,22 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	}
 
 	s := &Server{
-		cfg:               cfg,
-		logger:            logger,
-		secretKey:         secretKey,
-		ephemeralSecret:   generatedSecret,
-		db:                db,
-		allowRegistration: snap.Auth.AllowRegistration,
-		redis:             redisClient,
-		auth:              authService,
-		oauth:             oauthService,
-		oauthCodes:        newOAuthCodeStore(),
-		tokens:            tokenService,
-		servers:           serverService,
-		persistence:       st,
-		authLimiter:       limiter,
-		refreshLimiter:    refreshLimiter,
-		trustedProxies:    trustedProxies,
-		jobLeases:         databases.NewJobLeases(),
+		cfg:             cfg,
+		logger:          logger,
+		secretKey:       secretKey,
+		ephemeralSecret: generatedSecret,
+		db:              db,
+		redis:           redisClient,
+		auth:            authService,
+		oauth:           oauthService,
+		oauthCodes:      newOAuthCodeStore(),
+		tokens:          tokenService,
+		servers:         serverService,
+		persistence:     st,
+		authLimiter:     limiter,
+		refreshLimiter:  refreshLimiter,
+		trustedProxies:  trustedProxies,
+		jobLeases:       databases.NewJobLeases(),
 	}
 	s.closer = func() {
 		if s.realtime != nil {
@@ -420,6 +418,7 @@ func (s *Server) routes() (http.Handler, error) {
 		services.Mount(api, s.resourceAuth(), UserIDFromContext, composeSvc)
 
 		s.mountProjectMembers(api)
+		s.mountMemberRoutes(api)
 		projects.Mount(api, s.resourceAuth(), UserIDFromContext, s.projectService(s.deploy, composeSvc, databaseSvc))
 
 		templates.Mount(api, s.resourceScopeAuth, templates.NewDefaultService(s.logger))

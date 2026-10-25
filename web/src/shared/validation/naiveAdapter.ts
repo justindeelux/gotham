@@ -11,7 +11,7 @@ export interface RuleFromOptions {
 }
 
 export function ruleFrom<T>(
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema: z.ZodType<T>,
   opts?: RuleFromOptions,
 ): FormItemRule {
   return {
@@ -29,7 +29,7 @@ export function ruleFrom<T>(
   };
 }
 
-export function rulesFor<T extends Record<string, z.ZodType<unknown, z.ZodTypeDef, unknown>>>(
+export function rulesFor<T extends Record<string, z.ZodType>>(
   shape: T,
   opts?: Partial<Record<keyof T, RuleFromOptions>>,
 ): Record<keyof T, FormItemRule> {
@@ -41,7 +41,7 @@ export function rulesFor<T extends Record<string, z.ZodType<unknown, z.ZodTypeDe
 }
 
 export function fieldErrors<T>(
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema: z.ZodType<T>,
   value: unknown,
   params?: ValidationMessageParams,
 ): string[] {

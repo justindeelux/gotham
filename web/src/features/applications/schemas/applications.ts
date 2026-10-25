@@ -457,8 +457,7 @@ export const serverSchema = z.string().min(1);
 
 export const domainPortSchema = z
   .number({
-    required_error: "applications.validation.domainPort",
-    invalid_type_error: "applications.validation.domainPort",
+    error: "applications.validation.domainPort",
   })
   .int("applications.validation.domainPort")
   .min(1, "applications.validation.domainPort")

@@ -23,7 +23,7 @@ function matchesPattern(pattern: string, value: string): boolean {
   }
 }
 
-export function templateFieldSchema(field: TemplateField): z.ZodType<string, z.ZodTypeDef, string> {
+export function templateFieldSchema(field: TemplateField): z.ZodType<string, string> {
   switch (field.type) {
     case "text":
     case "secret":
@@ -73,7 +73,7 @@ export function templateFieldSchema(field: TemplateField): z.ZodType<string, z.Z
       });
     case "bool":
       return z.enum(["true", "false"], {
-        errorMap: () => ({ message: templateMessages.bool }),
+        error: templateMessages.bool,
       });
     case "select":
       return z.string().superRefine((value, ctx) => {

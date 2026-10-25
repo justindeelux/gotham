@@ -296,13 +296,31 @@ func resolveFileRoot(dir string, _ []protectedPath) (string, os.FileInfo, error)
 	if !filepath.IsAbs(dir) {
 		return "", nil, fmt.Errorf("file root %q must be an absolute path", dir)
 	}
-	real, err := filepath.EvalSymlinks(filepath.Clean(dir))
+	real, identity, err := openRootIdentity(dir, filepath.EvalSymlinks)
 	if err != nil {
 		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
 	}
-	identity, err := os.Stat(real)
+	return real, identity, nil
+}
+
+// openRootIdentity opens dir and fstats that descriptor, so the identity is the
+// opened inode rather than a later stat of the resolved path. fsroot.Open
+// re-checks the same identity against its own descriptor, so a component
+// swapped during or after validation refuses startup instead of registering the
+// swapped directory under the validated path.
+func openRootIdentity(dir string, resolve func(string) (string, error)) (string, os.FileInfo, error) {
+	opened, err := os.OpenRoot(filepath.Clean(dir))
 	if err != nil {
-		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
+		return "", nil, err
+	}
+	defer func() { _ = opened.Close() }()
+	identity, err := opened.Stat(".")
+	if err != nil {
+		return "", nil, err
+	}
+	real, err := resolve(filepath.Clean(dir))
+	if err != nil {
+		return "", nil, err
 	}
 	return real, identity, nil
 }
@@ -311,16 +329,12 @@ func validateFileRoot(dir string, protected []protectedPath) (string, os.FileInf
 	if !filepath.IsAbs(dir) {
 		return "", nil, fmt.Errorf("file root %q must be an absolute path", dir)
 	}
-	real, err := filepath.EvalSymlinks(filepath.Clean(dir))
+	real, identity, err := openRootIdentity(dir, filepath.EvalSymlinks)
 	if err != nil {
 		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
 	}
 	if real == string(filepath.Separator) {
 		return "", nil, fmt.Errorf("file root %q is the filesystem root", dir)
-	}
-	identity, err := os.Stat(real)
-	if err != nil {
-		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
 	}
 	trees := append(dangerousFileTrees[:len(dangerousFileTrees):len(dangerousFileTrees)], dockerDataRoot())
 	for _, tree := range trees {

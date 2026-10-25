@@ -559,6 +559,48 @@ func TestNewFileServerRejectsOverlappingRoots(t *testing.T) {
 	}
 }
 
+func TestFileRootIdentityIsTheOpenedDescriptor(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	decoy := filepath.Join(base, "decoy")
+	for _, dir := range []string{root, decoy} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	validated, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve the root and swap the component immediately after, the window in
+	// which the old code stat-ed the resolved path.
+	swap := func(string) (string, error) {
+		if err := os.Remove(root); err != nil {
+			return "", err
+		}
+		return root, os.Symlink(decoy, root)
+	}
+	real, identity, err := openRootIdentity(root, swap)
+	if err != nil {
+		t.Fatalf("openRootIdentity: %v", err)
+	}
+	if !os.SameFile(validated, identity) {
+		t.Fatal("identity is not the opened descriptor's inode")
+	}
+	swapped, err := os.Stat(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(identity, swapped) {
+		t.Fatal("the returned identity is the swapped path's inode")
+	}
+	if _, err := fsroot.Open("t", real, identity, true); err == nil {
+		t.Fatal("fsroot.Open registered the swapped path under the validated identity")
+	}
+}
+
 func TestValidateFileRootRejectsDockerDataRoot(t *testing.T) {
 	base := t.TempDir()
 	dataRoot := filepath.Join(base, "docker-data")

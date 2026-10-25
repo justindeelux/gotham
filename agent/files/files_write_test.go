@@ -255,6 +255,12 @@ func TestFileServerWriteInPlaceKeepsInode(t *testing.T) {
 	if err := os.Link(path, filepath.Join(root, "hard.link")); err != nil {
 		t.Skipf("hardlinks unsupported: %v", err)
 	}
+	// The accepted hard-link risk: a second name outside the root shares the
+	// inode, so the in-place rewrite reaches it too (see the file service docs).
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.Link(path, outside); err != nil {
+		t.Skipf("hardlinks unsupported: %v", err)
+	}
 	before, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -282,6 +288,10 @@ func TestFileServerWriteInPlaceKeepsInode(t *testing.T) {
 	linked, _ := os.ReadFile(filepath.Join(root, "hard.link"))
 	if string(linked) != "replaced-in-place" {
 		t.Fatalf("hardlink content = %q; in-place should update every link", linked)
+	}
+	outsideContent, _ := os.ReadFile(outside)
+	if string(outsideContent) != "replaced-in-place" {
+		t.Fatalf("outside link content = %q; in-place should rewrite the shared inode", outsideContent)
 	}
 }
 

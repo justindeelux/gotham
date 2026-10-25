@@ -80,11 +80,9 @@ func lockMember(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
 
 // memberResourceTables lists the tables whose rows survive the member but move
 // to the owner: workloads, their history and backup destinations belong to the
-// instance, not to the person who created them. GitHub App connections that a
-// surviving application references are handled separately below; every other
-// user_id reference is personal (sessions, API tokens, TOTP, grants,
-// unreferenced GitHub App connections, source providers) and is removed by the
-// users cascade.
+// instance, not to the person who created them. Every other user_id reference
+// is personal (sessions, API tokens, TOTP, grants, source providers, GitHub App
+// connections) and is removed by the users cascade.
 var memberResourceTables = []string{"applications", "databases", "services", "backup_targets"}
 
 // DeleteMember removes a member account while keeping every resource they
@@ -98,25 +96,6 @@ func (s *Store) DeleteMember(ctx context.Context, ownerID, userID uuid.UUID) err
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := lockMember(ctx, tx, userID); err != nil {
-		return err
-	}
-	// A member's GitHub App connection must survive when a kept application
-	// deploys through it; otherwise the app would silently lose its installation
-	// token on the next private-repo clone. When the owner already connected the
-	// same GitHub App, repoint the applications to the owner's row instead.
-	if _, err := tx.Exec(ctx, `UPDATE applications a SET github_app_id = owner_app.id
-FROM github_apps member_app
-JOIN github_apps owner_app ON owner_app.user_id=$1 AND owner_app.app_id=member_app.app_id
-WHERE member_app.user_id=$2 AND a.github_app_id=member_app.id`, ownerID, userID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM github_apps member_app
-USING github_apps owner_app
-WHERE member_app.user_id=$2 AND owner_app.user_id=$1 AND owner_app.app_id=member_app.app_id`, ownerID, userID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE github_apps g SET user_id=$1
-WHERE g.user_id=$2 AND EXISTS (SELECT 1 FROM applications a WHERE a.github_app_id=g.id)`, ownerID, userID); err != nil {
 		return err
 	}
 	// backup_targets are owner-level destinations, but a legacy row may still
@@ -139,11 +118,6 @@ WHERE user_id=$2 AND EXISTS (SELECT 1 FROM backup_targets o WHERE o.user_id=$1 A
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM project_members WHERE user_id=$1`, userID); err != nil {
-		return err
-	}
-	// Receipts are replay bookkeeping keyed by principal, not a foreign key, so
-	// they would outlive the account as unreachable dead rows.
-	if _, err := tx.Exec(ctx, `DELETE FROM request_receipts WHERE principal_id=$1`, userID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, userID); err != nil {

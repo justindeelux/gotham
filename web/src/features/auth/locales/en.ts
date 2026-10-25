@@ -37,7 +37,7 @@ const en = {
     firstAccount: "The first account on a new instance becomes the",
     ownerWord: "owner",
     ownerSuffix: "of the instance.",
-    invitedPrefix: "Invitation for",
+    invitedPrefix: "You were invited to join",
     invitedSuffix: "Choose your credentials to accept.",
     emailLabel: "Email",
     emailPlaceholder: "you{'@'}gotham.dev",

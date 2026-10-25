@@ -39,7 +39,7 @@ const vi: AuthMessages = {
     firstAccount: "Tài khoản đầu tiên trên một instance mới sẽ trở thành",
     ownerWord: "owner",
     ownerSuffix: "của instance này.",
-    invitedPrefix: "Lời mời dành cho",
+    invitedPrefix: "Bạn được mời tham gia",
     invitedSuffix: "Chọn thông tin đăng nhập để chấp nhận.",
     emailLabel: "Email",
     emailPlaceholder: "you{'@'}gotham.dev",

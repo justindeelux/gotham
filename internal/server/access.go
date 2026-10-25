@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -42,6 +43,12 @@ func (s *Server) authorizeTaskSubscription(ctx context.Context, projectID string
 }
 
 func (s *Server) requireOwnerContext(ctx context.Context, userID uuid.UUID) error {
+	if role, ok := ws.ConnectionRole(ctx); ok {
+		if role == auth.RoleOwner {
+			return nil
+		}
+		return errAccessDenied
+	}
 	if s.auth == nil {
 		return errAccessDenied
 	}
@@ -108,6 +115,11 @@ func (s *Server) requireRealtimeGrant(ctx context.Context, userID uuid.UUID, res
 func (s *Server) newRealtimeChannelAuthorizer() func(context.Context, string, uuid.UUID) error {
 	resources := make(map[string]realtimeResource)
 	ownerChannels := make(map[string]bool)
+	type decision struct {
+		version uint64
+		until   time.Time
+	}
+	decisions := make(map[string]decision)
 	return func(ctx context.Context, channel string, userID uuid.UUID) error {
 		if s.requireOwnerContext(ctx, userID) == nil {
 			if !ownerChannels[channel] {
@@ -116,6 +128,10 @@ func (s *Server) newRealtimeChannelAuthorizer() func(context.Context, string, uu
 				}
 				ownerChannels[channel] = true
 			}
+			return nil
+		}
+		version := ws.AuthorizationVersion(ctx)
+		if cached := decisions[channel]; version != 0 && cached.version == version && time.Now().Before(cached.until) {
 			return nil
 		}
 		resource, resolved := resources[channel]
@@ -130,6 +146,7 @@ func (s *Server) newRealtimeChannelAuthorizer() func(context.Context, string, uu
 			return err
 		}
 		resources[channel] = resource
+		decisions[channel] = decision{version: version, until: time.Now().Add(ws.AuthorizationInterval)}
 		return nil
 	}
 }

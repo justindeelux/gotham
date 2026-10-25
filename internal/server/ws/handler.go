@@ -19,6 +19,42 @@ type TokenVerifier interface {
 	VerifyAccessToken(token string) (*auth.Claims, error)
 }
 
+type connectionVerifier interface {
+	VerifyConnection(context.Context, string) (*auth.Claims, string, error)
+}
+
+type connectionState struct {
+	role    string
+	version uint64
+}
+type connectionStateKey struct{}
+
+func ConnectionRole(ctx context.Context) (string, bool) {
+	state, ok := ctx.Value(connectionStateKey{}).(*connectionState)
+	if !ok || state.role == "" {
+		return "", false
+	}
+	return state.role, true
+}
+
+func AuthorizationVersion(ctx context.Context) uint64 {
+	if state, ok := ctx.Value(connectionStateKey{}).(*connectionState); ok {
+		return state.version
+	}
+	return 0
+}
+
+const AuthorizationInterval = time.Second
+const AuthorizationTimeout = time.Second
+
+func (h *Handler) verifyConnection(ctx context.Context, token string) (*auth.Claims, string, error) {
+	if verifier, ok := h.verify.(connectionVerifier); ok {
+		return verifier.VerifyConnection(ctx, token)
+	}
+	claims, err := h.verify.VerifyAccessToken(token)
+	return claims, "", err
+}
+
 const RealtimeEnv = "REALTIME_ENABLED"
 
 func RealtimeEnabled() bool {
@@ -83,7 +119,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeUnauth(w)
 		return
 	}
-	claims, err := h.verify.VerifyAccessToken(token)
+	ctx, cancel := context.WithTimeout(r.Context(), AuthorizationTimeout)
+	defer cancel()
+	claims, role, err := h.verifyConnection(ctx, token)
 	if err != nil {
 		writeUnauth(w)
 		return
@@ -92,6 +130,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if userID, parseErr := uuid.Parse(claims.Subject); parseErr == nil {
 		r = r.WithContext(context.WithValue(r.Context(), userIDKey{}, userID))
 	}
+	r = r.WithContext(context.WithValue(r.Context(), connectionStateKey{}, &connectionState{role: role, version: 1}))
 	websocket.Handler(h.serveConn).ServeHTTP(w, r)
 }
 
@@ -145,7 +184,19 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 		}, incoming, connDone)
 	}()
 
-	revalidate := time.NewTicker(time.Second)
+	check := func() bool {
+		ctx, cancel := context.WithTimeout(request.Context(), AuthorizationTimeout)
+		defer cancel()
+		claims, role, err := h.verifyConnection(ctx, request.URL.Query().Get("token"))
+		if err != nil || (userID != uuid.Nil && claims.Subject != userID.String()) {
+			return false
+		}
+		state := request.Context().Value(connectionStateKey{}).(*connectionState)
+		state.role = role
+		state.version++
+		return h.subscriptionsAllowed(ctx, userID, subs)
+	}
+	revalidate := time.NewTicker(AuthorizationInterval)
 	defer revalidate.Stop()
 	ticker := time.NewTicker(h.pingPeriod)
 	defer ticker.Stop()
@@ -154,9 +205,6 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 		select {
 		case payload, ok := <-client.send:
 			if !ok {
-				return
-			}
-			if !h.subscriptionsAllowed(request.Context(), userID, subs) {
 				return
 			}
 			if h.frameFilter != nil {
@@ -185,8 +233,12 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 			h.logger.Warn("ws: disconnecting slow client",
 				"user_id", userID.String(), "subscriptions", len(subs))
 			return
+		case <-client.revalidate:
+			if !check() {
+				return
+			}
 		case <-revalidate.C:
-			if !h.subscriptionsAllowed(request.Context(), userID, subs) {
+			if !check() {
 				return
 			}
 		case <-ticker.C:
@@ -198,6 +250,8 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 }
 
 func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel string, ctx context.Context, userID uuid.UUID, subs map[string]bool, authorized map[uuid.UUID]authDecision) {
+	ctx, cancel := context.WithTimeout(ctx, AuthorizationTimeout)
+	defer cancel()
 	if !h.channelAllowed(ctx, channel, userID, authorized) {
 		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied})
 		return

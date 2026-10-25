@@ -83,6 +83,7 @@ func (s *Server) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.realtime != nil {
+		s.realtime.InvalidateAuthorization()
 		for _, old := range before {
 			retained := false
 			for _, current := range after {

@@ -4,76 +4,53 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"strings"
-	"unicode"
 )
 
-var errProjectJSONKeys = errors.New("non-canonical or duplicate JSON keys")
+var errProjectJSONKeys = errors.New("non-canonical or duplicate reference keys")
 
-// Check keys with encoding/json before decoding into maps can discard duplicates.
-// ASCII keys make the authorizer's case folding agree with Go's struct decoder;
-// string values may still contain Unicode.
+func projectReferenceKey(key string) string {
+	for _, canonical := range []string{"project_id", "environment_id", "application_id", "database_id", "service_id", "deployment_id", "backup_id", "schedule_id", "resource_type", "resource_id", "server_id", "target_id", "private_key_id", "ssh_key_id", "github_app_id", "provider_connection_id"} {
+		if strings.EqualFold(key, canonical) {
+			return canonical
+		}
+	}
+	return ""
+}
+
+// Only top-level references are decoded by the authorizer; nested maps are user data.
 func validateProjectJSONKeys(data []byte) error {
-	// Token does not enforce the nesting limit that Valid and Decode enforce.
+	// Valid also enforces encoding/json's nesting limit.
 	if !json.Valid(data) {
 		return errProjectJSONKeys
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := validateProjectJSONValue(decoder); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
 		return errProjectJSONKeys
 	}
-	return nil
-}
-
-func validateProjectJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, composite := token.(json.Delim)
-	if !composite {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]bool)
-		for decoder.More() {
-			token, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := token.(string)
-			if !ok {
-				return errProjectJSONKeys
-			}
+	seen := make(map[string]bool)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key := token.(string)
+		if canonical := projectReferenceKey(key); canonical != "" {
 			for _, r := range key {
-				if r > unicode.MaxASCII {
+				if r > 127 {
 					return errProjectJSONKeys
 				}
 			}
-			folded := strings.ToLower(key)
-			if seen[folded] {
+			if seen[canonical] {
 				return errProjectJSONKeys
 			}
-			seen[folded] = true
-			if err := validateProjectJSONValue(decoder); err != nil {
-				return err
-			}
+			seen[canonical] = true
 		}
-	case '[':
-		for decoder.More() {
-			if err := validateProjectJSONValue(decoder); err != nil {
-				return err
-			}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
 		}
-	default:
-		return errProjectJSONKeys
 	}
-	_, err = decoder.Token()
-	return err
+	return nil
 }

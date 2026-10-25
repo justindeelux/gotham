@@ -332,7 +332,7 @@ func (rt *Realtime) SetChannelAuthorizer(authorize func() func(context.Context, 
 }
 
 // RevokeUserSubscriptions disconnects the member when a grant is revoked.
-// Delivery also revalidates grants, covering changes made by another process.
+// Periodic checks also revalidate grants, covering changes made by another process.
 func (rt *Realtime) RevokeUserSubscriptions(userID uuid.UUID) {
 	if rt == nil || rt.Hub == nil {
 		return
@@ -352,5 +352,20 @@ func (rt *Realtime) RevokeUserSubscriptions(userID uuid.UUID) {
 func (rt *Realtime) SetFrameFilter(filter func(context.Context, uuid.UUID, []byte) []byte) {
 	if rt != nil && rt.handler != nil {
 		rt.handler.frameFilter = filter
+	}
+}
+
+// InvalidateAuthorization wakes connections after local grant or resource changes.
+func (rt *Realtime) InvalidateAuthorization() {
+	if rt == nil || rt.Hub == nil {
+		return
+	}
+	rt.Hub.mu.RLock()
+	defer rt.Hub.mu.RUnlock()
+	for client := range rt.Hub.clients {
+		select {
+		case client.revalidate <- struct{}{}:
+		default:
+		}
 	}
 }

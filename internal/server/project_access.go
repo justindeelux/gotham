@@ -46,6 +46,9 @@ func hideResource(w http.ResponseWriter) {
 // A missing policy or unresolved relationship always denies member access.
 func (s *Server) projectAccess(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.realtime != nil && (r.Method == http.MethodPut || r.Method == http.MethodPatch) {
+			defer s.realtime.InvalidateAuthorization()
+		}
 		if s.isOwnerAccount(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -211,9 +214,9 @@ func (s *Server) authorizeProjectReferences(r *http.Request, userID uuid.UUID, p
 	}
 	normalized := make(map[string]json.RawMessage, len(body))
 	for key, value := range body {
-		key = strings.ToLower(key)
-		if _, duplicate := normalized[key]; duplicate {
-			return false
+		key = projectReferenceKey(key)
+		if key == "" {
+			continue
 		}
 		normalized[key] = value
 		if kind, ok := refs[key]; ok {
@@ -236,8 +239,13 @@ func (s *Server) authorizeProjectReferences(r *http.Request, userID uuid.UUID, p
 		if s.persistence.DB.QueryRow(r.Context(), `SELECT id FROM servers WHERE status='ready' ORDER BY created_at,id LIMIT 1`).Scan(&serverID) != nil {
 			return false
 		}
-		normalized["server_id"], _ = json.Marshal(serverID.String())
-		encoded, err := json.Marshal(normalized)
+		for key := range body {
+			if projectReferenceKey(key) == "server_id" {
+				delete(body, key)
+			}
+		}
+		body["server_id"], _ = json.Marshal(serverID.String())
+		encoded, err := json.Marshal(body)
 		if err != nil {
 			return false
 		}

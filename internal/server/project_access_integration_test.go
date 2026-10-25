@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
@@ -560,8 +561,8 @@ func (f *accessFixture) assertProjectReferenceKeys(t *testing.T, method, path st
 		bodies := []string{
 			fmt.Sprintf(`{%s,"%s":"%s"}`, base, folded, f.apps[1]),
 			fmt.Sprintf(`{%s,"%s":null,"%s":"%s"}`, base, reference, reference, f.apps[1]),
-			fmt.Sprintf(`{%s,"config":{"nested":[{"ſerver_id":"%s"}]}}`, base, f.apps[1]),
-			fmt.Sprintf(`{%s,"config":{"%s":null,"%s":"%s"}}`, base, reference, reference, f.apps[1]),
+			fmt.Sprintf(`{%s,"%s":"%s","config":{"nested":[{"ſerver_id":"literal"}]}}`, base, reference, f.apps[1]),
+			fmt.Sprintf(`{%s,"%s":"%s","config":{"env":{"http_proxy":"a","HTTP_PROXY":"b"}}}`, base, reference, f.apps[1]),
 		}
 		for _, body := range bodies {
 			for _, bearer := range bearers {
@@ -720,5 +721,100 @@ func TestProjectDomainConflictsAreIndistinguishable(t *testing.T) {
 	free := doRequest(t, f.server, "POST", path, `{"domain":"free.example.test","port":3000,"protocol":"http"}`, "Bearer "+f.member.AccessToken)
 	if free.Code != http.StatusCreated {
 		t.Fatalf("member hostname claim disabled: %d %s", free.Code, free.Body.String())
+	}
+}
+
+func TestProjectFreeFormMaps(t *testing.T) {
+	f := newAccessFixture(t)
+	f.grant(t)
+	if _, err := f.store.DB.Exec(context.Background(), `UPDATE applications SET source_type='dockerfile',dockerfile_content='FROM alpine:3.21' WHERE id=$1`, f.apps[0]); err != nil {
+		t.Fatal(err)
+	}
+	bearer := "Bearer " + f.member.AccessToken
+	for _, request := range []struct{ method, path, body string }{
+		{"PUT", "/applications/" + f.apps[0].String() + "/env", `{"env":[{"key":"http_proxy","value":"lower"},{"key":"HTTP_PROXY","value":"upper"}]}`},
+		{"PUT", "/applications/" + f.apps[0].String(), `{"build_args":{"http_proxy":"lower","HTTP_PROXY":"upper"}}`},
+		{"PATCH", "/services/" + f.services[0].String(), `{"compose_yaml":"services:\n  app:\n    image: nginx:alpine\n","env":{"http_proxy":"lower","HTTP_PROXY":"upper"}}`},
+	} {
+		response := doRequest(t, f.server, request.method, "/api/v1"+request.path, request.body, bearer)
+		if response.Code != 200 {
+			t.Fatalf("%s %s=%d %s", request.method, request.path, response.Code, response.Body.String())
+		}
+	}
+	response := doRequest(t, f.server, "GET", "/api/v1/applications/"+f.apps[0].String()+"/env", "", bearer)
+	if response.Code != 200 || !strings.Contains(response.Body.String(), "http_proxy") || !strings.Contains(response.Body.String(), "HTTP_PROXY") {
+		t.Fatalf("env keys lost: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestProjectSocketRevalidationBound(t *testing.T) {
+	for _, change := range []string{"member-token-revoke", "owner-token-revoke", "member-role", "owner-role", "owner-session-role", "grant", "move"} {
+		t.Run(change, func(t *testing.T) {
+			f := newAccessFixture(t)
+			f.grant(t)
+			identity := f.member
+			if strings.HasPrefix(change, "owner-") {
+				identity = f.owner
+			}
+			credential := identity.AccessToken
+			token, err := f.server.tokens.Create(context.Background(), uuid.MustParse(identity.User.ID), "revalidate", []string{auth.ScopeRead})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(change, "token") || change == "member-role" || change == "owner-role" {
+				credential = token.Token
+			}
+			live := httptest.NewServer(f.server.Handler())
+			t.Cleanup(live.Close)
+			channel := "tasks:" + f.projects[0].String()
+			if change == "move" {
+				var serverID uuid.UUID
+				if err := f.store.DB.QueryRow(context.Background(), `SELECT server_id FROM applications WHERE id=$1`, f.apps[0]).Scan(&serverID); err != nil {
+					t.Fatal(err)
+				}
+				channel = "logs:" + serverID.String() + ":" + f.deployments[0].String()
+			}
+			connection, err := websocket.Dial("ws"+strings.TrimPrefix(live.URL, "http")+"/api/v1/ws?token="+credential+"&channel="+channel, "", live.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = connection.Close() }()
+			var frame ws.Message
+			for {
+				if err := websocket.JSON.Receive(connection, &frame); err != nil {
+					t.Fatal(err)
+				}
+				if frame.Type == ws.TypeSubscribed {
+					break
+				}
+			}
+			started := time.Now()
+			switch change {
+			case "member-token-revoke", "owner-token-revoke":
+				err = f.server.tokens.Revoke(context.Background(), uuid.MustParse(identity.User.ID), token.ID)
+			case "member-role":
+				_, err = f.store.DB.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, identity.User.ID)
+			case "owner-role", "owner-session-role":
+				_, err = f.store.DB.Exec(context.Background(), `UPDATE users SET role='member' WHERE id=$1`, identity.User.ID)
+			case "grant":
+				err = f.store.RevokeProject(context.Background(), f.projects[0], uuid.MustParse(identity.User.ID))
+			case "move":
+				_, err = f.store.DB.Exec(context.Background(), `UPDATE applications SET environment_id=$1 WHERE id=$2`, f.environments[1], f.apps[0])
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			// External changes close idle sockets within 1s interval + 1s query timeout;
+			// allow 250ms scheduler tolerance for the test's read deadline.
+			bound := ws.AuthorizationInterval + ws.AuthorizationTimeout + 250*time.Millisecond
+			_ = connection.SetReadDeadline(started.Add(bound))
+			err = websocket.JSON.Receive(connection, &frame)
+			if err == nil {
+				t.Fatalf("revoked socket delivered %+v", frame)
+			}
+			if timeout, ok := err.(interface{ Timeout() bool }); ok && timeout.Timeout() {
+				t.Fatalf("socket exceeded %s revocation bound: %v", bound, err)
+			}
+		})
 	}
 }

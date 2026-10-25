@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,10 +28,10 @@ import (
 )
 
 type accessFixture struct {
-	server                                                                            *Server
-	store                                                                             *store.Store
-	owner, member                                                                     *auth.AuthResult
-	projects, environments, apps, databases, services, deployments, backups, channels [2]uuid.UUID
+	server                                                                                       *Server
+	store                                                                                        *store.Store
+	owner, member                                                                                *auth.AuthResult
+	projects, environments, apps, databases, services, deployments, backups, channels, schedules [2]uuid.UUID
 }
 
 func newAccessFixture(t *testing.T) *accessFixture {
@@ -64,7 +65,7 @@ func newAccessFixture(t *testing.T) *accessFixture {
 		}
 		f.projects[i] = uuid.MustParse(project.Project.ID)
 		f.environments[i] = uuid.MustParse(project.Environments[0].ID)
-		f.apps[i], f.databases[i], f.services[i], f.deployments[i], f.backups[i] = uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+		f.apps[i], f.databases[i], f.services[i], f.deployments[i], f.backups[i], f.schedules[i] = uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 		statements := []struct {
 			query string
 			args  []any
@@ -74,6 +75,7 @@ func newAccessFixture(t *testing.T) *accessFixture {
 			{`INSERT INTO services(id,user_id,server_id,environment_id,name,compose_yaml) VALUES($1,$2,$3,$4,$5,'services: {}')`, []any{f.services[i], owner.User.ID, nodeID, f.environments[i], fmt.Sprintf("service-%d", i)}},
 			{`INSERT INTO deployments(id,application_id,state,container_id) VALUES($1,$2,'running',$3)`, []any{f.deployments[i], f.apps[i], fmt.Sprintf("container-%d", i)}},
 			{`INSERT INTO backups(id,database_id,status) VALUES($1,$2,'completed')`, []any{f.backups[i], f.databases[i]}},
+			{`INSERT INTO backup_schedules(id,database_id,cron,enabled) VALUES($1,$2,'0 0 * * *',false)`, []any{f.schedules[i], f.databases[i]}},
 		}
 		for _, stmt := range statements {
 			if _, err := st.DB.Exec(ctx, stmt.query, stmt.args...); err != nil {
@@ -214,6 +216,10 @@ func TestProjectAccessRouteMatrix(t *testing.T) {
 		if class == "public" || class == "personal" {
 			return nil
 		}
+
+		if project {
+			f.assertProjectReferenceKeys(t, method, path, member, "Bearer "+token.Token)
+		}
 		url := params.ReplaceAllStringFunc(path, func(param string) string {
 			switch param {
 			case "{id}":
@@ -264,6 +270,11 @@ func TestProjectAccessRouteMatrix(t *testing.T) {
 	for key := range projectPolicies {
 		if !seen[key] {
 			t.Errorf("unmounted project policy: %s", key)
+		}
+	}
+	for key := range projectBodyReferences {
+		if !seen[key] {
+			t.Errorf("unmounted body-reference case: %s", key)
 		}
 	}
 	for key := range matrix {
@@ -448,9 +459,17 @@ func TestProjectServiceStreamRevocation(t *testing.T) {
 type accessContainerRegistry struct {
 	ServerService
 	containers []*agentv1.ContainerInfo
+	dials      *atomic.Int32
+	offline    *atomic.Bool
 }
 
 func (r accessContainerRegistry) DialDockerClient(context.Context, uuid.UUID, ...servers.DockerDialOption) (*servers.DockerClient, error) {
+	if r.dials != nil {
+		r.dials.Add(1)
+	}
+	if r.offline != nil && r.offline.Load() {
+		return nil, errAccessDenied
+	}
 	return &servers.DockerClient{DockerServiceClient: accessInventory{containers: r.containers}}, nil
 }
 
@@ -494,5 +513,203 @@ func TestProjectRuntimeContainerResolution(t *testing.T) {
 		if (err == nil) != tc.allowed {
 			t.Errorf("runtime %s allowed=%v err=%v", tc.id, tc.allowed, err)
 		}
+	}
+}
+
+// This table is exercised while walking the real router, with granted path IDs.
+// It covers every member mutation whose body selects another resource or node.
+var projectBodyReferences = map[string][]string{
+	"POST /api/v1/applications":                           {"environment_id", "server_id", "github_app_id"},
+	"POST /api/v1/mcp/applications":                       {"environment_id", "server_id", "github_app_id"},
+	"PUT /api/v1/applications/{id}":                       {"environment_id", "server_id", "github_app_id"},
+	"POST /api/v1/applications/{id}/rollback":             {"deployment_id"},
+	"POST /api/v1/databases":                              {"environment_id", "server_id"},
+	"PATCH /api/v1/databases/{id}":                        {"environment_id", "server_id"},
+	"POST /api/v1/databases/{id}/backup":                  {"target_id"},
+	"POST /api/v1/databases/{id}/restore":                 {"backup_id"},
+	"POST /api/v1/databases/{id}/schedules":               {"target_id"},
+	"PATCH /api/v1/databases/{id}/schedules/{scheduleId}": {"target_id"},
+	"POST /api/v1/services":                               {"environment_id", "server_id"},
+	"PATCH /api/v1/services/{id}":                         {"environment_id", "server_id"},
+	"POST /api/v1/notification-channels":                  {"resource_id"},
+	"PATCH /api/v1/notification-channels/{id}":            {"resource_id"},
+}
+
+func (f *accessFixture) assertProjectReferenceKeys(t *testing.T, method, path string, bearers ...string) {
+	t.Helper()
+	key := method + " " + path
+	references := projectBodyReferences[key]
+	if len(references) == 0 {
+		return
+	}
+	policy := projectPolicies[key]
+	target := map[string]uuid.UUID{"application": f.apps[0], "database": f.databases[0], "service": f.services[0], "channel": f.channels[0]}[policy.kind]
+	url := strings.ReplaceAll(strings.ReplaceAll(path, "{id}", target.String()), "{scheduleId}", f.schedules[0].String())
+	base := fmt.Sprintf(`"environment_id":"%s"`, f.environments[0])
+	if policy.kind == "channel" {
+		base = fmt.Sprintf(`"resource_type":"application","resource_id":"%s"`, f.apps[0])
+	}
+	for _, reference := range references {
+		folded := strings.Replace(reference, "s", "ſ", 1)
+		if folded == reference {
+			folded = strings.Replace(reference, "k", "K", 1)
+		}
+		if folded == reference {
+			folded = strings.ToUpper(reference)
+		}
+		bodies := []string{
+			fmt.Sprintf(`{%s,"%s":"%s"}`, base, folded, f.apps[1]),
+			fmt.Sprintf(`{%s,"%s":null,"%s":"%s"}`, base, reference, reference, f.apps[1]),
+			fmt.Sprintf(`{%s,"config":{"nested":[{"ſerver_id":"%s"}]}}`, base, f.apps[1]),
+			fmt.Sprintf(`{%s,"config":{"%s":null,"%s":"%s"}}`, base, reference, reference, f.apps[1]),
+		}
+		for _, body := range bodies {
+			for _, bearer := range bearers {
+				rec := doRequest(t, f.server, method, url, body, bearer)
+				if rec.Code != 404 {
+					t.Errorf("ambiguous reference %s %s=%d: %s", key, reference, rec.Code, rec.Body.String())
+				}
+			}
+		}
+	}
+}
+
+func TestProjectMemberResponseHeaders(t *testing.T) {
+	f := newAccessFixture(t)
+	f.grant(t)
+	for _, status := range []int{http.StatusOK, http.StatusNoContent, http.StatusConflict} {
+		router := chi.NewRouter()
+		router.With(f.server.resourceAuth()).Get("/api/v1/projects/{id}", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", "/project-result")
+			w.Header().Set("Retry-After", "2")
+			w.Header().Set("X-Gotham-MCP-Contract", "1")
+			w.Header().Set("Content-Length", "999")
+			w.WriteHeader(status)
+			if status != http.StatusNoContent {
+				_, _ = w.Write([]byte(`{"project":{}}`))
+			}
+		})
+		req := httptest.NewRequest("GET", "/api/v1/projects/"+f.projects[0].String(), nil)
+		req.Header.Set("Authorization", "Bearer "+f.member.AccessToken)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != status {
+			t.Fatalf("status=%d want %d", rec.Code, status)
+		}
+		if rec.Header().Get("Location") != "/project-result" || rec.Header().Get("Retry-After") != "2" || rec.Header().Get("X-Gotham-MCP-Contract") != "1" || rec.Header().Get("Content-Length") != "" {
+			t.Fatalf("headers=%v", rec.Header())
+		}
+	}
+}
+
+func TestProjectStreamCachesResolutionButNotGrants(t *testing.T) {
+	f := newAccessFixture(t)
+	f.grant(t)
+	ctx := context.Background()
+	var nodeID uuid.UUID
+	if err := f.store.DB.QueryRow(ctx, `SELECT server_id FROM applications WHERE id=$1`, f.apps[0]).Scan(&nodeID); err != nil {
+		t.Fatal(err)
+	}
+	var dials atomic.Int32
+	var offline atomic.Bool
+	registry := accessContainerRegistry{ServerService: f.server.servers, dials: &dials, offline: &offline, containers: []*agentv1.ContainerInfo{
+		{Id: "compose-stream", Labels: map[string]string{"com.docker.compose.project": services.ProjectName(f.services[0])}},
+	}}
+	resolver := &Server{auth: f.server.auth, persistence: f.store, servers: registry}
+	authorize := resolver.newRealtimeChannelAuthorizer()
+	channel := "logs:" + nodeID.String() + ":compose-stream"
+	member := uuid.MustParse(f.member.User.ID)
+	if err := authorize(ctx, channel, member); err != nil {
+		t.Fatal(err)
+	}
+	offline.Store(true)
+	for range 10 {
+		if err := authorize(ctx, channel, member); err != nil {
+			t.Fatalf("cached resolution needs offline agent: %v", err)
+		}
+	}
+	if dials.Load() != 1 {
+		t.Fatalf("agent dials=%d want 1", dials.Load())
+	}
+	// The cached identity must follow moves instead of retaining the old project.
+	if _, err := f.store.DB.Exec(ctx, `UPDATE services SET environment_id=$1 WHERE id=$2`, f.environments[1], f.services[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := authorize(ctx, channel, member); err == nil {
+		t.Fatal("move retained the old project grant")
+	}
+	if _, err := f.store.DB.Exec(ctx, `UPDATE services SET environment_id=$1 WHERE id=$2`, f.environments[0], f.services[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.RevokeProject(ctx, f.projects[0], member); err != nil {
+		t.Fatal(err)
+	}
+	if err := authorize(ctx, channel, member); err == nil {
+		t.Fatal("grant decision was cached")
+	}
+	if dials.Load() != 1 {
+		t.Fatalf("revocation redialed agent: %d", dials.Load())
+	}
+	fresh := resolver.newRealtimeChannelAuthorizer()
+	if err := fresh(ctx, channel, member); err == nil {
+		t.Fatal("resolution escaped its connection")
+	}
+	if dials.Load() != 2 {
+		t.Fatalf("new connection dials=%d want 2", dials.Load())
+	}
+}
+
+func TestProjectGrantSurvivesGrantorDeletion(t *testing.T) {
+	f := newAccessFixture(t)
+	f.grant(t)
+	if _, err := f.store.DB.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, f.owner.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	members, err := f.store.ListProjectMembers(context.Background(), f.projects[0])
+	if err != nil || len(members) != 1 || members[0].GrantedBy != nil {
+		t.Fatalf("grant after grantor deletion=%+v %v", members, err)
+	}
+	allowed, err := f.store.HasProjectGrant(context.Background(), uuid.MustParse(f.member.User.ID), f.projects[0])
+	if err != nil || !allowed {
+		t.Fatalf("grant lost with grantor=%v %v", allowed, err)
+	}
+}
+
+func TestProjectDomainConflictsAreIndistinguishable(t *testing.T) {
+	f := newAccessFixture(t)
+	f.grant(t)
+	ctx := context.Background()
+	for i, host := range []string{"granted.example.test", "private.example.test"} {
+		if _, err := f.store.DB.Exec(ctx, `INSERT INTO application_domains(application_id,domain) VALUES($1,$2)`, f.apps[i], host); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.store.DB.Exec(ctx, `INSERT INTO domain_redirects(application_id,source_domain,target_domain) VALUES($1,'redirect.example.test','target.example.test')`, f.apps[1]); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/applications/" + f.apps[0].String() + "/domains"
+	for _, host := range []string{"granted.example.test", "private.example.test", "redirect.example.test"} {
+		rec := doRequest(t, f.server, "POST", path, fmt.Sprintf(`{"domain":"%s","port":3000,"protocol":"http"}`, host), "Bearer "+f.member.AccessToken)
+		if rec.Code != http.StatusConflict || rec.Body.String() != "{\"message\":\"domain unavailable\"}\n" {
+			t.Fatalf("%s conflict=%d %s", host, rec.Code, rec.Body.String())
+		}
+	}
+	// The panel guard reports validation rather than an application conflict;
+	// that response must have the same public contract, including the timing floor.
+	router := chi.NewRouter()
+	router.With(f.server.resourceAuth()).Post("/api/v1/applications/{id}/domains", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "reserved panel hostname"})
+	})
+	req := httptest.NewRequest("POST", path, strings.NewReader(`{"domain":"panel.example.test"}`))
+	req.Header.Set("Authorization", "Bearer "+f.member.AccessToken)
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || rec.Body.String() != "{\"message\":\"domain unavailable\"}\n" || time.Since(started) < 50*time.Millisecond {
+		t.Fatalf("panel conflict=%d %s elapsed=%s", rec.Code, rec.Body.String(), time.Since(started))
+	}
+	free := doRequest(t, f.server, "POST", path, `{"domain":"free.example.test","port":3000,"protocol":"http"}`, "Bearer "+f.member.AccessToken)
+	if free.Code != http.StatusCreated {
+		t.Fatalf("member hostname claim disabled: %d %s", free.Code, free.Body.String())
 	}
 }

@@ -42,10 +42,11 @@ type Handler struct {
 	authorize SubscriptionAuthorizer
 	logger    *slog.Logger
 
-	frameFilter      func(context.Context, uuid.UUID, []byte) []byte
-	channelAuthorize func(context.Context, string, uuid.UUID) error
-	taskAuthorize    TaskAuthorizer
-	taskSnapshot     func(projectID string) []string
+	channelAuthorizeFactory func() func(context.Context, string, uuid.UUID) error
+	frameFilter             func(context.Context, uuid.UUID, []byte) []byte
+	channelAuthorize        func(context.Context, string, uuid.UUID) error
+	taskAuthorize           TaskAuthorizer
+	taskSnapshot            func(projectID string) []string
 
 	writeWait    time.Duration
 	pingPeriod   time.Duration
@@ -108,6 +109,11 @@ type clientRequest struct {
 func (h *Handler) serveConn(conn *websocket.Conn) {
 	defer func() { _ = conn.Close() }()
 
+	if h.channelAuthorizeFactory != nil {
+		connectionHandler := *h
+		connectionHandler.channelAuthorize = h.channelAuthorizeFactory()
+		h = &connectionHandler
+	}
 	request := conn.Request()
 	userID, _ := request.Context().Value(userIDKey{}).(uuid.UUID)
 

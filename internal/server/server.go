@@ -402,7 +402,7 @@ func (s *Server) routes() (http.Handler, error) {
 
 		if s.realtime != nil {
 			s.realtime.SetTaskFeed(s.authorizeTaskSubscription, s.taskSnapshot)
-			s.realtime.SetChannelAuthorizer(s.authorizeRealtimeChannel)
+			s.realtime.SetChannelAuthorizer(s.newRealtimeChannelAuthorizer)
 			s.realtime.SetFrameFilter(s.filterProjectFrame)
 		}
 

@@ -79,34 +79,90 @@ func (s *Server) authorizeRealtimeChannel(ctx context.Context, channel string, u
 		}
 		return nil
 	}
+
+	resource, err := s.realtimeChannelResource(ctx, channel)
+	if err != nil {
+		return errAccessDenied
+	}
+	return s.requireRealtimeGrant(ctx, userID, resource)
+}
+
+type realtimeResource struct {
+	kind string
+	id   uuid.UUID
+}
+
+func (s *Server) requireRealtimeGrant(ctx context.Context, userID uuid.UUID, resource realtimeResource) error {
+	if s.persistence == nil || s.persistence.DB == nil {
+		return errAccessDenied
+	}
+	allowed, err := s.persistence.GrantedResourceIDs(ctx, userID, resource.kind, []uuid.UUID{resource.id})
+	if err != nil || !allowed[resource.id] {
+		return errAccessDenied
+	}
+	return nil
+}
+
+// Resolve immutable container labels once per socket; join grants to the live
+// workload relationship so moving a workload cannot preserve its old access.
+func (s *Server) newRealtimeChannelAuthorizer() func(context.Context, string, uuid.UUID) error {
+	resources := make(map[string]realtimeResource)
+	ownerChannels := make(map[string]bool)
+	return func(ctx context.Context, channel string, userID uuid.UUID) error {
+		if s.requireOwnerContext(ctx, userID) == nil {
+			if !ownerChannels[channel] {
+				if err := s.authorizeRealtimeChannel(ctx, channel, userID); err != nil {
+					return err
+				}
+				ownerChannels[channel] = true
+			}
+			return nil
+		}
+		resource, resolved := resources[channel]
+		if !resolved {
+			var err error
+			resource, err = s.realtimeChannelResource(ctx, channel)
+			if err != nil {
+				return errAccessDenied
+			}
+		}
+		if err := s.requireRealtimeGrant(ctx, userID, resource); err != nil {
+			return err
+		}
+		resources[channel] = resource
+		return nil
+	}
+}
+
+func (s *Server) realtimeChannelResource(ctx context.Context, channel string) (realtimeResource, error) {
+	if s.persistence == nil || s.persistence.DB == nil {
+		return realtimeResource{}, errAccessDenied
+	}
 	if strings.HasPrefix(channel, "tasks:") {
-		return s.authorizeTaskSubscription(ctx, strings.TrimPrefix(channel, "tasks:"), userID)
+		projectID, err := uuid.Parse(strings.TrimPrefix(channel, "tasks:"))
+		if err != nil {
+			return realtimeResource{}, errAccessDenied
+		}
+		return realtimeResource{kind: "project", id: projectID}, nil
 	}
 	parts := strings.Split(channel, ":")
-	if len(parts) != 3 || parts[0] != "logs" || s.persistence == nil || s.persistence.DB == nil {
-		return errAccessDenied
+	if len(parts) != 3 || parts[0] != "logs" {
+		return realtimeResource{}, errAccessDenied
 	}
 	serverID, err := uuid.Parse(parts[1])
 	if err != nil {
-		return errAccessDenied
+		return realtimeResource{}, errAccessDenied
 	}
-	var projectID uuid.UUID
-	err = s.persistence.DB.QueryRow(ctx, `SELECT e.project_id
- FROM deployments d
- JOIN applications a ON a.id=d.application_id
- JOIN environments e ON e.id=a.environment_id
+	var resource realtimeResource
+	err = s.persistence.DB.QueryRow(ctx, `SELECT 'application',a.id
+ FROM deployments d JOIN applications a ON a.id=d.application_id
  WHERE a.server_id=$1 AND (d.id::text=$2 OR (d.container_id=$2 AND d.container_id<>''))
- UNION SELECT e.project_id
- FROM databases d
- JOIN environments e ON e.id=d.environment_id
- WHERE d.server_id=$1 AND d.container_id=$2 AND d.deleted_at IS NULL AND d.container_id<>''`, serverID, parts[2]).Scan(&projectID)
+ UNION SELECT 'database',d.id FROM databases d
+ WHERE d.server_id=$1 AND d.container_id=$2 AND d.deleted_at IS NULL AND d.container_id<>''`, serverID, parts[2]).Scan(&resource.kind, &resource.id)
 	if err != nil {
-		return s.authorizeRuntimeContainer(ctx, serverID, parts[2], userID)
+		return s.runtimeContainerResource(ctx, serverID, parts[2])
 	}
-	if s.canAccessResource(ctx, userID, "project", projectID.String()) {
-		return nil
-	}
-	return errAccessDenied
+	return resource, nil
 }
 
 func (s *Server) filterProjectFrame(ctx context.Context, userID uuid.UUID, payload []byte) []byte {
@@ -140,18 +196,26 @@ func (s *Server) filterProjectFrame(ctx context.Context, userID uuid.UUID, paylo
 // Compose container IDs live on the agent. Resolve their immutable labels and
 // check the persisted workload and node before accepting a subscription.
 func (s *Server) authorizeRuntimeContainer(ctx context.Context, serverID uuid.UUID, containerID string, userID uuid.UUID) error {
+	resource, err := s.runtimeContainerResource(ctx, serverID, containerID)
+	if err != nil {
+		return errAccessDenied
+	}
+	return s.requireRealtimeGrant(ctx, userID, resource)
+}
+
+func (s *Server) runtimeContainerResource(ctx context.Context, serverID uuid.UUID, containerID string) (realtimeResource, error) {
 	dialer, ok := s.servers.(containerDialer)
 	if !ok {
-		return errAccessDenied
+		return realtimeResource{}, errAccessDenied
 	}
 	client, err := dialer.DialDockerClient(ctx, serverID)
 	if err != nil {
-		return errAccessDenied
+		return realtimeResource{}, errAccessDenied
 	}
 	defer func() { _ = client.Close() }()
 	inventory, err := client.ListContainers(ctx, &agentv1.ListContainersRequest{All: true})
 	if err != nil {
-		return errAccessDenied
+		return realtimeResource{}, errAccessDenied
 	}
 	for _, container := range inventory.GetContainers() {
 		if container.GetId() != containerID {
@@ -162,26 +226,24 @@ func (s *Server) authorizeRuntimeContainer(ctx context.Context, serverID uuid.UU
 		if err != nil {
 			project := labels["com.docker.compose.project"]
 			if !strings.HasPrefix(project, services.ProjectPrefix) {
-				return errAccessDenied
+				return realtimeResource{}, errAccessDenied
 			}
 			id, err = uuid.Parse(strings.TrimPrefix(project, services.ProjectPrefix))
 			if err != nil {
-				return errAccessDenied
+				return realtimeResource{}, errAccessDenied
 			}
 		}
-		var projectID uuid.UUID
-		err = s.persistence.DB.QueryRow(ctx, `SELECT e.project_id
+		var resource realtimeResource
+		err = s.persistence.DB.QueryRow(ctx, `SELECT 'application',a.id
  FROM applications a
- JOIN environments e ON e.id=a.environment_id
  WHERE a.id=$1 AND a.server_id=$2
- UNION SELECT e.project_id
+ UNION SELECT 'service',s.id
  FROM services s
- JOIN environments e ON e.id=s.environment_id
- WHERE s.id=$1 AND s.server_id=$2 AND s.deleted_at IS NULL`, id, serverID).Scan(&projectID)
-		if err == nil && s.canAccessResource(ctx, userID, "project", projectID.String()) {
-			return nil
+ WHERE s.id=$1 AND s.server_id=$2 AND s.deleted_at IS NULL`, id, serverID).Scan(&resource.kind, &resource.id)
+		if err == nil {
+			return resource, nil
 		}
-		return errAccessDenied
+		return realtimeResource{}, errAccessDenied
 	}
-	return errAccessDenied
+	return realtimeResource{}, errAccessDenied
 }

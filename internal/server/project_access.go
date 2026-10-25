@@ -80,9 +80,29 @@ func (s *Server) projectAccess(next http.Handler) http.Handler {
 			s.serveProjectStream(w, r, next, userID, policy)
 			return
 		}
+		responseStarted := time.Now()
 		response := &projectResponseBuffer{header: make(http.Header)}
 		next.ServeHTTP(response, r)
+		for key, values := range response.header {
+			if !strings.EqualFold(key, "Content-Length") {
+				w.Header()[key] = append([]string(nil), values...)
+			}
+		}
+		w.Header().Del("Content-Length")
 		if response.status >= 400 {
+			if policy.kind == "application" && strings.Contains(projectRouteKey(r), "/domains") &&
+				(response.status == http.StatusBadRequest || response.status == http.StatusConflict) {
+				// Private applications, redirects and panel reservations share one error class.
+				timer := time.NewTimer(max(0, 50*time.Millisecond-time.Since(responseStarted)))
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-r.Context().Done():
+					return
+				}
+				writeJSON(w, http.StatusConflict, apiError{Message: "domain unavailable"})
+				return
+			}
 			writeJSON(w, response.status, apiError{Message: http.StatusText(response.status)})
 			return
 		}
@@ -108,14 +128,36 @@ func (s *Server) projectAccess(next http.Handler) http.Handler {
 				hideResource(w)
 				return
 			}
+
+			ids := make([]uuid.UUID, 0, len(rows))
+			for _, row := range rows {
+				item, ok := row.(map[string]any)
+				if !ok {
+					continue
+				}
+				raw, _ := item["id"].(string)
+				if id, err := uuid.Parse(raw); err == nil {
+					ids = append(ids, id)
+				}
+			}
+			if s.persistence == nil || s.persistence.DB == nil {
+				hideResource(w)
+				return
+			}
+			allowed, err := s.persistence.GrantedResourceIDs(r.Context(), userID, policy.kind, ids)
+			if err != nil {
+				hideResource(w)
+				return
+			}
 			filtered := make([]any, 0, len(rows))
 			for _, row := range rows {
 				item, ok := row.(map[string]any)
 				if !ok {
 					continue
 				}
-				id, _ := item["id"].(string)
-				if s.canAccessResource(r.Context(), userID, policy.kind, id) {
+				raw, _ := item["id"].(string)
+				id, err := uuid.Parse(raw)
+				if err == nil && allowed[id] {
 					filtered = append(filtered, row)
 				}
 			}
@@ -159,6 +201,9 @@ func (s *Server) authorizeProjectReferences(r *http.Request, userID uuid.UUID, p
 	r.Body = io.NopCloser(bytes.NewReader(data))
 	if len(bytes.TrimSpace(data)) == 0 {
 		return !policy.create
+	}
+	if err := validateProjectJSONKeys(data); err != nil {
+		return false
 	}
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(data, &body); err != nil {

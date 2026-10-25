@@ -47,9 +47,9 @@ func (s *Store) HasProjectGrant(ctx context.Context, userID, projectID uuid.UUID
 }
 
 type ProjectMember struct {
-	UserID    uuid.UUID `json:"user_id"`
-	GrantedBy uuid.UUID `json:"granted_by"`
-	CreatedAt time.Time `json:"created_at"`
+	UserID    uuid.UUID  `json:"user_id"`
+	GrantedBy *uuid.UUID `json:"granted_by"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 func (s *Store) ListProjectMembers(ctx context.Context, projectID uuid.UUID) ([]ProjectMember, error) {
@@ -121,4 +121,38 @@ func (s *Store) ReplaceProjectMembers(ctx context.Context, projectID, ownerID uu
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// GrantedResourceIDs filters a whole collection in one query before serialization.
+func (s *Store) GrantedResourceIDs(ctx context.Context, userID uuid.UUID, kind string, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	allowed := make(map[uuid.UUID]bool)
+	if len(ids) == 0 {
+		return allowed, nil
+	}
+	relations := map[string]string{
+		"project":     `projects r JOIN project_members m ON m.project_id=r.id`,
+		"application": `applications r JOIN environments e ON e.id=r.environment_id JOIN project_members m ON m.project_id=e.project_id`,
+		"database":    `databases r JOIN environments e ON e.id=r.environment_id JOIN project_members m ON m.project_id=e.project_id`,
+		"service":     `services r JOIN environments e ON e.id=r.environment_id JOIN project_members m ON m.project_id=e.project_id`,
+		"deployment":  `deployments r JOIN applications a ON a.id=r.application_id JOIN environments e ON e.id=a.environment_id JOIN project_members m ON m.project_id=e.project_id`,
+		"channel":     `notification_channels r LEFT JOIN applications a ON r.resource_type='application' AND a.id=r.resource_id LEFT JOIN databases d ON r.resource_type='database' AND d.id=r.resource_id JOIN environments e ON e.id=COALESCE(a.environment_id,d.environment_id) JOIN project_members m ON m.project_id=e.project_id`,
+	}
+	relation, ok := relations[kind]
+	if !ok {
+		return nil, pgx.ErrNoRows
+	}
+	// The relation comes exclusively from the fixed allowlist above.
+	rows, err := s.DB.Query(ctx, "SELECT r.id FROM "+relation+" WHERE m.user_id=$1 AND r.id=ANY($2::uuid[])", userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		allowed[id] = true
+	}
+	return allowed, rows.Err()
 }

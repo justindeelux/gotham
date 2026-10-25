@@ -325,9 +325,9 @@ func (r *replayBuffer) snapshot() []Message {
 }
 
 // SetChannelAuthorizer validates the full channel before subscribing or delivery.
-func (rt *Realtime) SetChannelAuthorizer(authorize func(context.Context, string, uuid.UUID) error) {
+func (rt *Realtime) SetChannelAuthorizer(authorize func() func(context.Context, string, uuid.UUID) error) {
 	if rt != nil && rt.handler != nil {
-		rt.handler.channelAuthorize = authorize
+		rt.handler.channelAuthorizeFactory = authorize
 	}
 }
 

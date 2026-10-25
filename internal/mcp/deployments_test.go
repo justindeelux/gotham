@@ -38,7 +38,7 @@ func deploymentSessionWithClient(t *testing.T, handler http.HandlerFunc) (*sdk.C
 	if err != nil {
 		t.Fatal(err)
 	}
-	registerDeploymentTools(server, client)
+	registerDeploymentTools(server, client, true)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 	a, b := sdk.NewInMemoryTransports()

@@ -126,6 +126,9 @@ owner GET /api/v1/updates/schedule
 personal GET /api/v1/version
 public GET /api/v1/ws
 public GET /healthz
+personal POST /mcp
+personal GET /mcp
+personal DELETE /mcp
 personal PATCH /api/v1/auth/me
 owner PATCH /api/v1/databases/backup-targets/{targetId}
 project PATCH /api/v1/databases/{id}

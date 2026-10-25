@@ -66,6 +66,46 @@ type testOutput struct {
 	Capabilities []string `json:"capabilities"`
 }
 
+func TestNewServerWithClientReadOnlySurface(t *testing.T) {
+	client, err := NewClient(testConfig("https://example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithClient(client, false, "test", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	a, b := sdk.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, a, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "test"}, nil).Connect(ctx, b, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	list, err := cs.ListTools(ctx, &sdk.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, tool := range list.Tools {
+		seen[tool.Name] = true
+	}
+	for _, name := range []string{"project_create", "environment_create", "application_create", "application_deploy"} {
+		if seen[name] {
+			t.Errorf("read-only surface exposed %s", name)
+		}
+	}
+	if len(list.Tools) != 14 {
+		t.Fatalf("read-only tools=%d want 14", len(list.Tools))
+	}
+	if !seen["deployments_list"] || !seen["application_logs"] {
+		t.Fatalf("read-only surface missing reads: %v", seen)
+	}
+}
+
 func TestStartupRequiresStrictAuthorization(t *testing.T) {
 	for _, status := range []int{401, 403, 503} {
 		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))

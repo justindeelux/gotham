@@ -91,6 +91,7 @@ type Server struct {
 	realtime          *ws.Realtime
 	authLimiter       *ipRateLimiter
 	refreshLimiter    *ipRateLimiter
+	mcpBaseURL        string
 	router            http.Handler
 	closer            func()
 
@@ -150,6 +151,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		refreshLimiter:  refreshLimiter,
 		trustedProxies:  trustedProxies,
 		jobLeases:       databases.NewJobLeases(),
+	}
+	if snap.Server.Port > 0 {
+		s.mcpBaseURL = "http://127.0.0.1:" + strconv.Itoa(snap.Server.Port)
 	}
 	s.closer = func() {
 		if s.realtime != nil {
@@ -246,6 +250,10 @@ func (s *Server) routes() (http.Handler, error) {
 	s.baseMiddleware(r)
 
 	r.Get("/healthz", s.handleHealthz)
+
+	if s.tokens != nil {
+		s.mountMCPHTTP(r)
+	}
 
 	r.Route("/api", func(api chi.Router) {
 		api.NotFound(s.handleAPINotFound)
@@ -438,6 +446,7 @@ func (s *Server) baseMiddleware(r chi.Router) {
 	r.Use(middleware.RequestID)
 	r.Use(s.requestLogger())
 	r.Use(middleware.Recoverer)
+	r.Use(acknowledgeMCPContract)
 }
 
 func (s *Server) defaultDomainTLS(ctx context.Context) bool {

@@ -43,7 +43,7 @@ func (d *deploymentMetadata) setTerminal() {
 	d.Terminal = d.State == "running" || d.State == "failed"
 }
 
-func registerDeploymentTools(server *sdk.Server, client *Client) {
+func registerDeploymentTools(server *sdk.Server, client *Client, allowMutations bool) {
 	sdk.AddTool(server, readTool("deployments_list", "Read newest pipeline releases, bounded to 100. This window is not full history; use deployment_status for an exact older ID. Pipeline running does not establish live health or public URL readiness."), func(ctx context.Context, _ *sdk.CallToolRequest, in deploymentsListInput) (*sdk.CallToolResult, deploymentsListResult, error) {
 		var out deploymentsListResult
 		app, err := discoveryID(in.ApplicationID)
@@ -94,5 +94,7 @@ func registerDeploymentTools(server *sdk.Server, client *Client) {
 		body.Deployment.setTerminal()
 		return nil, body.Deployment, nil
 	})
-	registerApplicationDeployTool(server, client)
+	if allowMutations {
+		registerApplicationDeployTool(server, client)
+	}
 }

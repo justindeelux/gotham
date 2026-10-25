@@ -297,7 +297,7 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 		}
 
 		if strings.HasPrefix(token, auth.APITokenPrefix) {
-			s.authenticateAPIToken(w, r, next, token)
+			authenticateAPIToken(s.tokens, w, r, next, token)
 			return
 		}
 
@@ -342,13 +342,13 @@ func (s *Server) liveSessionRole(ctx context.Context, userID, sessionID uuid.UUI
 	return svc.LiveSessionRole(ctx, userID, sessionID)
 }
 
-func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request, next http.Handler, token string) {
-	if s.tokens == nil {
+func authenticateAPIToken(tokens TokenService, w http.ResponseWriter, r *http.Request, next http.Handler, token string) {
+	if tokens == nil {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
 	}
 
-	identity, err := s.tokens.Authenticate(r.Context(), token)
+	identity, err := tokens.Authenticate(r.Context(), token)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return

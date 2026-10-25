@@ -23,12 +23,30 @@ func NewServer(ctx context.Context, cfg Config, version string, logger *slog.Log
 	return server, nil
 }
 
+// NewServerWithClient builds the tool surface for an authenticated caller.
+// Mutation tools are registered only when the token holds the deploy scope, so
+// a read token cannot even list them; the REST layer still authorizes each call.
+func NewServerWithClient(client *Client, allowMutations bool, version string, logger *slog.Logger) *sdk.Server {
+	server := sdk.NewServer(&sdk.Implementation{Name: "gotham", Version: version}, &sdk.ServerOptions{
+		Logger:       logger,
+		Capabilities: &sdk.ServerCapabilities{Tools: &sdk.ToolCapabilities{}},
+	})
+	registerToolsForScopes(server, client, allowMutations)
+	return server
+}
+
 func registerTools(server *sdk.Server, client *Client) {
+	registerToolsForScopes(server, client, true)
+}
+
+func registerToolsForScopes(server *sdk.Server, client *Client, allowMutations bool) {
 	registerObservationTools(server, client)
 	registerDiscoveryTools(server, client)
 	registerLogTools(server, client)
-	registerCreateTools(server, client)
-	registerDeploymentTools(server, client)
+	registerDeploymentTools(server, client, allowMutations)
+	if allowMutations {
+		registerCreateTools(server, client)
+	}
 }
 
 func Serve(ctx context.Context, cfg Config, version string, logger *slog.Logger) error {

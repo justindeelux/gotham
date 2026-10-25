@@ -209,7 +209,7 @@ Cài đặt cập nhật:
 
 | Biến | Mặc định | Mục đích |
 |---|---|---|
-| `GOTHAM_AGENT_AUTO_UPDATE` | `false` | Áp dụng một đề nghị thường từ control plane mà không cần người trực. Một đợt triển khai do quản trị viên kích hoạt luôn được áp dụng. |
+| `GOTHAM_AGENT_AUTO_UPDATE` | `false` | Áp dụng một đề nghị thường từ control plane mà không cần người trực. Một đợt triển khai do chủ sở hữu kích hoạt luôn được áp dụng. |
 | `GOTHAM_AGENT_UPDATE_INTERVAL` | `5m` | Tần suất agent hỏi đề nghị cập nhật. |
 | `GOTHAM_AGENT_UPDATE_CHANNEL` | `stable` | Kênh node chấp nhận: `stable` hoặc `beta`. Node kênh stable từ chối đề nghị beta. |
 | `GOTHAM_AGENT_BINARY` | `/var/lib/gotham-agent/bin/gotham-agent` | Tệp nhị phân agent cố định. |
@@ -241,7 +241,6 @@ trình khởi động, và một module bị tắt sẽ ghi log cờ của nó l
 | `FEATURE_APPLICATIONS` | bật | Ứng dụng và triển khai |
 | `FEATURE_DATABASES` | bật | Cơ sở dữ liệu được quản lý và sao lưu |
 | `FEATURE_SERVICES` | bật | Dịch vụ compose |
-| `FEATURE_TEAMS` | bật | Nhóm và lời mời |
 | `FEATURE_FILES` | bật | Trình quản lý tệp trên node |
 | `FEATURE_NOTIFICATIONS` | bật | Kênh thông báo |
 | `FEATURE_PROXY` | bật | Proxy, DNS và quản lý chứng chỉ |
@@ -252,7 +251,7 @@ trình khởi động, và một module bị tắt sẽ ghi log cờ của nó l
 Tắt một module sẽ gỡ các tuyến của nó khỏi tiến trình đó (các tuyến của trình quản
 lý tệp vẫn được gắn nhưng trả lời 503), nên các lệnh gọi API của nó thất bại thay vì
 chạy ở trạng thái suy giảm. Cờ tính năng không phải quyền theo từng người dùng — hãy
-dùng vai trò nhóm cho việc đó.
+dùng tài khoản chủ sở hữu và quyền dự án cho việc đó.
 
 Tách khỏi các công tắc, trình quản lý tệp đọc thêm một giới hạn từ môi trường:
 

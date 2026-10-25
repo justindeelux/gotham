@@ -4,14 +4,14 @@ title: Tham chiếu
 
 # Tham chiếu
 
-Tài liệu tra cứu cho quản trị viên đã biết mình muốn đổi gì: các lệnh trên control
+Tài liệu tra cứu cho chủ sở hữu đã biết mình muốn đổi gì: các lệnh trên control
 plane và trên máy chủ node, mọi khóa cấu hình và biến môi trường, và mô hình API
 token.
 
 - [CLI](/vi/reference/cli) — `gotham`, `gotham-agent` và `signer` của bản phát hành:
   lệnh, cờ, mặc định và ví dụ cho hai tệp nhị phân dịch vụ.
 - [Cấu hình](/vi/reference/configuration) — các khóa `gotham.yaml`, biến môi trường
-  `GOTHAM_*` ghi đè chúng, môi trường của agent, và mười công tắc `FEATURE_*`.
+  `GOTHAM_*` ghi đè chúng, môi trường của agent, và chín công tắc `FEATURE_*`.
 - [API token](/vi/reference/api-tokens) — token `gt1_`, các phạm vi `read`, `deploy`
   và `admin`, và cách tạo, xoay vòng và thu hồi chúng.
 
@@ -24,5 +24,5 @@ bề mặt lệnh của bản build đang có trước mặt bạn.
 
 - Cài control plane và đăng ký node đầu tiên: [Cài đặt](/vi/guide/install).
 - Cập nhật và hoàn tác: [Cập nhật](/vi/guide/updates).
-- Mô hình quyền đằng sau token và quản trị viên nền tảng:
+- Mô hình quyền đằng sau token, chủ sở hữu và thành viên:
   [Bảo mật](/vi/operating/security).

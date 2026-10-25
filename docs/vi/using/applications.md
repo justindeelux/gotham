@@ -169,15 +169,15 @@ Tab **Nhật ký** có hai khung:
 | **Đợt triển khai** | Toàn bộ lịch sử triển khai cùng các thao tác xem log và quay lui. |
 | **Nhật ký** | Log build của một lần triển khai và log runtime trực tiếp. |
 | **Biến môi trường** | Biến riêng của ứng dụng, với biến dùng chung được kế thừa hiển thị chỉ đọc. |
-| **Terminal** | Một shell bên trong container dịch vụ đang chạy. Chỉ `owner` và `admin` thấy; chọn container dịch vụ khi ứng dụng chạy nhiều hơn một. |
+| **Terminal** | Một shell bên trong container dịch vụ đang chạy. Chỉ chủ sở hữu; chọn container dịch vụ khi ứng dụng chạy nhiều hơn một. |
 | **Lưu trữ** | Các volume và điểm gắn của chúng trong container. Dữ liệu nằm trên node và tồn tại qua các lần triển khai lại và quay lui. |
 | **Tên miền** | Hostname, cổng đích và cấu hình chứng chỉ. Xem [Tên miền và bản xem trước](/vi/using/domains-previews). |
 | **Bản xem trước** | Các bản triển khai xem trước theo pull request. Xem [Tên miền và bản xem trước](/vi/using/domains-previews). |
-| **Cài đặt** | Chuyển ứng dụng sang môi trường hoặc node khác, và vùng nguy hiểm để xóa. Chỉ người có quyền ghi thấy. |
+| **Cài đặt** | Chuyển ứng dụng sang môi trường hoặc node khác, và vùng nguy hiểm để xóa. |
 
 Các tab Đợt triển khai và Bản xem trước hiển thị số lượng của chúng. Lưu trữ xuất
 hiện khi ứng dụng đã tải xong, Bản xem trước khi bản xem trước được bật trên
-instance, còn Terminal và Cài đặt chỉ dành cho người có quyền ghi.
+instance. Tab Terminal chỉ dành cho chủ sở hữu.
 
 ## Biến môi trường
 
@@ -210,10 +210,11 @@ nhận. Nó gỡ các container và cấu hình đã lưu và dừng các tuyế
 và thư mục bind vẫn nằm trên node, nên hãy gỡ chúng riêng nếu dữ liệu không còn cần
 nữa. Việc xóa bị từ chối khi một lần triển khai đang diễn ra.
 
-## Quyền
+## Quyền truy cập
 
-`owner` và `admin` có thể tạo, triển khai, quay lui, khởi động, dừng, đổi cài đặt
-và xóa. `read_only` đọc được ứng dụng và lịch sử của nó nhưng không bao giờ ghi.
+Bạn thấy ứng dụng này vì chủ sở hữu đã cấp dự án của nó cho bạn. Bên trong dự án
+được cấp, bạn có thể tạo, triển khai, quay lui, khởi động, dừng, đổi cài đặt và xóa.
+Dự án không được cấp sẽ bị ẩn.
 
-API là điểm thực thi: một thao tác ghi từ tài khoản `read_only` bị từ chối phía máy
-chủ, ngay cả khi một điều khiển vẫn hiện. Không có vai trò `member`.
+Chủ sở hữu quản lý node và các bề mặt máy chủ quanh ứng dụng. Xem
+[Thành viên và quyền truy cập](/vi/using/members-access).

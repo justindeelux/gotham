@@ -12,8 +12,8 @@ một hàm thuần của trạng thái cơ sở dữ liệu, nên cùng một tr
 cùng những tệp.
 
 Bề mặt trong bảng điều khiển là **Tên miền & SSL**. Danh sách bộ định tuyến, nhà
-cung cấp DNS và lần đồng bộ thủ công là thao tác của quản trị viên nền tảng; cấu
-hình chứng chỉ và chuyển hướng thuộc nhóm của ứng dụng.
+cung cấp DNS, chuyển hướng và lần đồng bộ thủ công cần tài khoản chủ sở hữu; cấu
+hình chứng chỉ gắn với một ứng dụng theo quyền dự án của ứng dụng đó.
 
 ## Các bộ định tuyến được sinh
 
@@ -57,7 +57,7 @@ Hầu hết thay đổi tự đồng bộ:
   đó đã trở lại;
 - một node được thêm hoặc đăng ký lại và cấu hình của nó chưa từng được đẩy.
 
-Bảng điều khiển không có nút đồng bộ. Đồng bộ là thao tác của API nền tảng:
+Bảng điều khiển không có nút đồng bộ. Đồng bộ là thao tác API của chủ sở hữu:
 `POST /api/v1/proxy/sync`, với `server_id` tùy chọn để đồng bộ một node. Không có
 body thì nó đồng bộ mọi node đã đăng ký và mọi node đang chạy một ứng dụng được
 proxy. Phản hồi liệt kê kết quả của từng node và các chẩn đoán nếu có. Một yêu cầu

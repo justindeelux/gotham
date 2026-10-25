@@ -36,11 +36,11 @@ recommendation:
 
 | Prompt | What to answer |
 |---|---|
-| `Admin email [admin@example.com] (empty keeps it, - to skip)` | The address of the first account. Press Enter to use `admin@example.com`, type your own, or type `-` to create no account now. |
-| `Admin password (empty to generate)` | The password for that account, 8 to 128 characters. Type nothing and press Enter to have a strong password generated and printed once at the end. |
+| `Owner email [admin@example.com] (empty keeps it, - to skip)` | The address of the first account, which becomes the owner. Press Enter to use `admin@example.com`, type your own, or type `-` to create no account now. |
+| `Owner password (empty to generate)` | The password for that account, 8 to 128 characters. Type nothing and press Enter to have a strong password generated and printed once at the end. |
 | `Confirm password` | The same password again. A mismatch or a password outside the length limits asks again. |
 | `Panel domain (optional, Enter skips)` | A domain such as `panel.example.com`, if it already points at this server. Press Enter to skip and use the server address for now. |
-| `Enable the file manager on this node? [y/N]` | **No**, unless you want platform operators to browse and edit every file on this host. Yes runs the agent as root without systemd sandboxing (see [Remote file service](/guide/file-service)). You can change the answer later by re-running `deploy/install-agent.sh`. |
+| `Enable the file manager on this node? [y/N]` | **No**, unless you want the owner to browse and edit every file on this host. Yes runs the agent as root without systemd sandboxing (see [Remote file service](/guide/file-service)). You can change the answer later by re-running `deploy/install-agent.sh`. |
 
 The file-manager question appears while the host agent is installed, after the
 first four. `--no-file-manager` answers it without a prompt, and a run without
@@ -60,7 +60,7 @@ While it runs, the installer:
    `/usr/libexec/gotham/gotham-update`, unit
    `/etc/systemd/system/gotham.service`), then Docker and the node agent on the
    same host (`install-agent.sh --full --ca`, pinned to the same release tag);
-4. applies the database migrations and creates the admin account before the
+4. applies the database migrations and creates the owner account before the
    panel accepts connections, so nobody can register first;
 5. prints the panel URL, the login, and a generated password if you asked for
    one.
@@ -104,7 +104,7 @@ later in the panel. See [Domain and HTTPS](/guide/domain-and-https).
 
 This recipe is fully unattended only when there is **no terminal**: cloud-init, a
 CI job, or an `ssh` command run without a pty. In an ordinary interactive SSH
-session the installer still asks three questions — the admin email (prefilled
+session the installer still asks three questions — the owner email (prefilled
 from `GOTHAM_ADMIN_EMAIL`), the panel domain, and the file-manager question.
 Answer them up front by appending `-s -- --domain panel.example.com
 --no-file-manager` after `sh` in the command below; `--domain` sets the domain,
@@ -133,7 +133,7 @@ sudo env GOTHAM_ADMIN_EMAIL=ops@example.com \
   GOTHAM_ADMIN_PASSWORD_FILE=/root/gotham-admin-password sh
 ```
 
-The installer creates the admin account without prompting and prints the login
+The installer creates the owner account without prompting and prints the login
 at the end. The password travels from the file on stdin, so it never appears in
 the process list or shell history. Leave out `GOTHAM_ADMIN_PASSWORD_FILE` and a
 random password is generated and printed once; leave out `GOTHAM_ADMIN_EMAIL`
@@ -198,8 +198,8 @@ explains the matching runtime settings.
 | `GOTHAM_DATABASE_DSN` | Managed PostgreSQL DSN; skips local provisioning. |
 | `GOTHAM_REDIS_ADDR` | Redis `host:port` (default `localhost:6379`). |
 | `GOTHAM_SKIP_DEPS=1` | Do not install or configure PostgreSQL/Redis. |
-| `GOTHAM_ADMIN_EMAIL` | Email of the first admin account for a scripted install. |
-| `GOTHAM_ADMIN_PASSWORD_FILE` | File holding the first admin password (single line, root-readable). |
+| `GOTHAM_ADMIN_EMAIL` | Email of the first account (the owner) for a scripted install. |
+| `GOTHAM_ADMIN_PASSWORD_FILE` | File holding the first account's password (single line, root-readable). |
 | `--dry-run` | Print every step without changing the host. |
 | `--cp-host <name-or-ip>` | Add a name or IP to the agent gateway certificate; see [Add nodes](/guide/nodes). |
 

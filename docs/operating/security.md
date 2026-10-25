@@ -4,47 +4,45 @@ title: Security
 
 # Security
 
-Gotham separates three things that are easy to confuse: a person's role inside
-a team, platform-operator access to the instance itself, and the scopes of an
-API token. Node agents authenticate on a separate channel, and stored
-credentials are encrypted at rest.
+Gotham separates two things that are easy to confuse: a person's account role —
+the single owner or a member — and the scopes of an API token. Node agents
+authenticate on a separate channel, and stored credentials are encrypted at
+rest.
 
-## Team roles
+## Owner and members
 
-Every account acts inside one active team. A team member has exactly one of
-three roles; there is no `member` role.
+There are exactly two account roles.
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| `owner` | Everything in the team, including deleting the team and managing owners. | — |
-| `admin` | Manage resources and members. | Remove or demote an owner. |
-| `read_only` | Read resources and members. | Create, update or delete anything. |
+| `owner` | Everything on the instance: people and invites, project grants, servers and keys, Git connections, instance and network settings, global Domain & SSL, updates, the host terminal and file manager, the App store. | — |
+| `member` | Read and write everything inside the projects the owner granted. | See or change a project that is not granted, or any instance-wide surface. |
 
-`read_only` is enforced by the server on every mutation, not only by hiding
-buttons. Some console controls stay visible for a read-only member and are
-rejected with a permission error when used; that is expected, and the API is
-the authority.
+Exactly one account holds the owner role. The account created on an empty
+instance is the owner, and the role is not transferred from the console.
 
-Roles are per team. A team owner is not a platform operator, and being a
-platform operator does not grant team access to a team the account does not
-belong to. Node-scoped resources (containers, files, the App store queue) also
-check the node's team and the caller's role.
+A member with no grant sees no projects and no resources. A request for a
+resource outside the grant answers `404`, the same as a missing resource, so the
+API does not reveal what exists. Every resource route re-checks the grant, so
+revoking a project removes access on the next request.
 
-## Platform operators
+The owner-only surfaces are: users and invites, project access, servers and SSH
+keys, Git providers and GitHub Apps, instance settings and network, global proxy
+routes/redirects/DNS/panel certificates, updates and agent rollout, the host
+terminal and file manager, the App store, and application container terminals.
+Members do not enumerate or choose nodes; a resource they create is placed on a
+ready node by the control plane.
 
-Platform-operator access gates the instance-wide surfaces: instance settings,
-the global proxy sync and DNS providers, update apply, the host file manager,
-the host terminal, and the agent fleet rollout. A request passes when it is:
+## Owner access
 
-- an API token holding the `admin` scope,
-- a session whose role claim is `admin`, or
-- a session whose account email is listed in `PLATFORM_ADMINS`.
+The owner account gates the instance-wide surfaces. A request passes when the
+account role is `owner`; an API token additionally needs the `admin` scope. A
+member account cannot pass, even with an `admin`-scoped token, and minting an
+`admin`-scoped token is itself restricted to the owner.
 
-This is secure by default: listing nobody grants nobody operator access by
-email address, and the other two paths still apply. The first account on a
-fresh instance is the platform admin; later accounts are not unless their role
-claim is `admin`, they hold an `admin`-scoped token, or their email is listed.
-Minting an `admin`-scoped token is itself restricted to platform operators.
+Because there is exactly one owner, protect that account: give it a strong
+password and enable two-factor authentication. If its password is lost, recover
+it on the host with `gotham admin reset-password`.
 
 ## API tokens
 
@@ -55,12 +53,12 @@ API tokens are opaque credentials with a fixed prefix, managed through the API
 |---|---|
 | `read` | Read requests (`GET`, `HEAD`) on the resource API. The default when no scope is requested. |
 | `deploy` | Every write, plus secret-bearing reads such as database credentials and file content. |
-| `admin` | Platform-global operations, including proxy sync, DNS providers and operator settings. |
+| `admin` | Owner-only instance operations, including member management, proxy/DNS, files and updates. |
 
 Scopes are hierarchical: `admin` covers `deploy`, and `deploy` covers `read`.
 A token can only mint or rotate a token with scopes at or below its own, so a
 `deploy` token cannot create an `admin` one. A token never widens its owner's
-team role — the team check still runs.
+project access — the project check still runs.
 
 The secret is shown once, at creation or rotation. Only a hash is stored;
 listing tokens returns metadata (scopes, last use, revocation) and never the
@@ -140,7 +138,7 @@ is convenient for development and unsuitable for production.
 
 ## Feature switches
 
-Ten environment switches disable optional surfaces. All default to **on**: an
+Nine environment switches disable optional surfaces. All default to **on**: an
 unset or empty value keeps the module, and only an explicit `false`
 (case-insensitive) turns it off. They are read when the control plane starts,
 so a change needs a restart, and each disabled module writes one warning line
@@ -152,7 +150,6 @@ to the startup log naming its flag.
 | `FEATURE_PREVIEWS` | on | Pull-request preview deployments, their listing, and the orphan sweep. Push webhooks keep working. |
 | `FEATURE_DATABASES` | on | Managed database lifecycle, credentials, backup and restore routes, and the backup scheduler. |
 | `FEATURE_SERVICES` | on | Compose services and the one-click template catalog. |
-| `FEATURE_TEAMS` | on | Team and invite routes. Resource routes resolve through each account's personal team instead. |
 | `FEATURE_FILES` | on | The remote file-manager API, which answers 503 while off. |
 | `FEATURE_NOTIFICATIONS` | on | Notification channels, test sends, the delivery log, and the deploy/backup notification hooks. |
 | `FEATURE_PROXY` | on | Proxy sync, the router list, certificate configurations, redirects, DNS providers, panel-certificate reconciliation, and the deploy hook. Nodes keep the last configuration they were pushed. |
@@ -162,14 +159,14 @@ to the startup log naming its flag.
 Disabling a module removes its routes rather than leaving a half-working
 surface; the exception is the file API, whose mounted routes answer 503.
 
-## Operator responsibilities
+## Owner responsibilities
 
 - Configure `GOTHAM_SECRET_KEY` and the session signing keypair, and keep their
   backups with the database backup.
 - Keep the certificate authority material private and backed up; without it,
   agents cannot be re-enrolled or the listener restarted safely.
-- Restrict `PLATFORM_ADMINS` to the accounts that genuinely operate the
-  instance, and hand out scoped tokens instead of admin ones.
+- Keep the owner account safe: strong password, two-factor authentication, and
+  no shared admin-scoped token. Grant members only the projects they need.
 - Retire legacy node leaves before the sunset date.
 - Keep the control plane behind TLS and serve the panel over HTTPS, so the
   panel certificate and application TLS are both active.

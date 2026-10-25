@@ -4,47 +4,44 @@ title: Bảo mật
 
 # Bảo mật
 
-Gotham tách ba thứ dễ bị nhầm lẫn: vai trò của một người trong nhóm, quyền quản trị
-viên nền tảng với chính instance, và các phạm vi của một API token. Agent trên node
-xác thực qua một kênh riêng, và thông tin xác thực đã lưu được mã hóa khi lưu trữ.
+Gotham tách hai thứ dễ bị nhầm lẫn: vai trò tài khoản của một người — chủ sở hữu
+duy nhất hoặc thành viên — và các phạm vi của một API token. Agent trên node xác
+thực qua một kênh riêng, và thông tin xác thực đã lưu được mã hóa khi lưu trữ.
 
-## Vai trò trong nhóm
+## Chủ sở hữu và thành viên
 
-Mọi tài khoản đều hoạt động trong một nhóm đang hoạt động. Thành viên nhóm có đúng
-một trong ba vai trò; không có vai trò `member`.
+Có đúng hai vai trò tài khoản.
 
 | Vai trò | Có thể làm | Không thể làm |
 |---|---|---|
-| `owner` | Mọi thứ trong nhóm, kể cả xóa nhóm và quản lý các chủ sở hữu. | — |
-| `admin` | Quản lý tài nguyên và thành viên. | Gỡ hoặc giáng cấp một chủ sở hữu. |
-| `read_only` | Đọc tài nguyên và thành viên. | Tạo, cập nhật hoặc xóa bất cứ thứ gì. |
+| `owner` | Mọi thứ trên instance: người dùng và lời mời, quyền dự án, máy chủ và khoá, kết nối Git, cài đặt instance và mạng, Tên miền & SSL toàn cục, cập nhật, terminal và trình quản lý tệp trên máy chủ, Kho ứng dụng. | — |
+| `member` | Đọc và ghi mọi thứ bên trong những dự án chủ sở hữu đã cấp. | Thấy hoặc đổi một dự án không được cấp, hay bất kỳ bề mặt toàn instance nào. |
 
-`read_only` được máy chủ áp đặt trên mọi thao tác thay đổi, không chỉ bằng cách ẩn
-nút. Một số nút trong bảng điều khiển vẫn hiện với thành viên chỉ đọc và bị từ chối
-kèm lỗi quyền khi dùng; đó là dự kiến, và API mới là nơi có thẩm quyền.
+Đúng một tài khoản giữ vai trò chủ sở hữu. Tài khoản được tạo trên một instance
+trống là chủ sở hữu, và vai trò không chuyển được từ bảng điều khiển.
 
-Vai trò tính theo từng nhóm. Chủ sở hữu nhóm không phải quản trị viên nền tảng, và
-là quản trị viên nền tảng cũng không cấp quyền vào một nhóm mà tài khoản không
-thuộc về. Các tài nguyên gắn với node (container, tệp, hàng đợi của Kho ứng dụng)
-cũng kiểm tra nhóm của node và vai trò của người gọi.
+Thành viên không có quyền được cấp sẽ không thấy dự án hay tài nguyên nào. Yêu cầu
+tới tài nguyên ngoài quyền được cấp trả `404`, giống như tài nguyên không tồn tại,
+nên API không tiết lộ thứ gì đang có. Mọi tuyến tài nguyên đều kiểm tra lại quyền,
+nên thu hồi một dự án sẽ gỡ quyền truy cập ở yêu cầu tiếp theo.
 
-## Quản trị viên nền tảng
+Các bề mặt chỉ dành cho chủ sở hữu: người dùng và lời mời, quyền dự án, máy chủ và
+khoá SSH, nhà cung cấp Git và GitHub App, cài đặt instance và mạng, tuyến proxy/
+chuyển hướng/DNS/chứng chỉ bảng điều khiển toàn cục, cập nhật và triển khai agent,
+terminal và trình quản lý tệp trên máy chủ, Kho ứng dụng, và terminal trong container
+ứng dụng. Thành viên không liệt kê hay chọn node; tài nguyên họ tạo được control
+plane đặt trên một node sẵn sàng.
 
-Quyền quản trị viên nền tảng gác các bề mặt toàn instance: cài đặt instance, đồng
-bộ proxy toàn cục và nhà cung cấp DNS, áp dụng bản cập nhật, trình quản lý tệp trên
-máy chủ, terminal trên máy chủ, và đợt triển khai agent ra toàn cụm. Một yêu cầu
-được chấp nhận khi nó là:
+## Quyền của chủ sở hữu
 
-- một API token mang phạm vi `admin`,
-- một phiên có claim vai trò là `admin`, hoặc
-- một phiên có email tài khoản nằm trong `PLATFORM_ADMINS`.
+Tài khoản chủ sở hữu gác các bề mặt toàn instance. Một yêu cầu được chấp nhận khi
+vai trò tài khoản là `owner`; API token còn cần phạm vi `admin`. Tài khoản thành
+viên không vượt qua được, kể cả với token mang phạm vi `admin`, và việc tạo token
+phạm vi `admin` cũng chỉ chủ sở hữu làm được.
 
-Điều này an toàn theo mặc định: không liệt kê ai thì không ai có quyền quản trị
-viên nhờ địa chỉ email, và hai đường còn lại vẫn áp dụng. Tài khoản đầu tiên trên
-một instance mới là quản trị viên nền tảng; các tài khoản sau không có quyền đó trừ
-khi claim vai trò của họ là `admin`, họ giữ một token phạm vi `admin`, hoặc email
-của họ được liệt kê. Việc tạo một token phạm vi `admin` cũng chỉ quản trị viên nền
-tảng làm được.
+Vì chỉ có một chủ sở hữu, hãy bảo vệ tài khoản đó: dùng mật khẩu mạnh và bật xác
+thực hai lớp. Nếu mất mật khẩu, khôi phục trên máy chủ bằng
+`gotham admin reset-password`.
 
 ## API token
 
@@ -55,12 +52,12 @@ API (xem [API token](/vi/reference/api-tokens)). Chúng mang một hoặc nhiề
 |---|---|
 | `read` | Các yêu cầu đọc (`GET`, `HEAD`) trên API tài nguyên. Mặc định khi không yêu cầu phạm vi nào. |
 | `deploy` | Mọi thao tác ghi, cộng các lần đọc chứa bí mật như thông tin xác thực cơ sở dữ liệu và nội dung tệp. |
-| `admin` | Các thao tác toàn nền tảng, gồm đồng bộ proxy, nhà cung cấp DNS và cài đặt của quản trị viên. |
+| `admin` | Các thao tác chỉ chủ sở hữu, gồm quản lý thành viên, proxy/DNS, tệp và cập nhật. |
 
 Các phạm vi có thứ bậc: `admin` bao `deploy`, và `deploy` bao `read`. Một token chỉ
 tạo hoặc xoay vòng được token có phạm vi ngang hoặc thấp hơn phạm vi của chính nó,
-nên token `deploy` không tạo được token `admin`. Token không bao giờ mở rộng vai
-trò nhóm của người sở hữu — việc kiểm tra nhóm vẫn chạy.
+nên token `deploy` không tạo được token `admin`. Token không bao giờ mở rộng quyền
+dự án của người sở hữu — việc kiểm tra dự án vẫn chạy.
 
 Bí mật chỉ hiện một lần, khi tạo hoặc xoay vòng. Chỉ một hash được lưu; việc liệt
 kê token trả về siêu dữ liệu (phạm vi, lần dùng cuối, thu hồi) và không bao giờ trả
@@ -137,7 +134,7 @@ tiện cho phát triển và không phù hợp cho production.
 
 ## Cờ tính năng
 
-Mười công tắc môi trường tắt các bề mặt tùy chọn. Tất cả mặc định **bật**: giá trị
+Chín công tắc môi trường tắt các bề mặt tùy chọn. Tất cả mặc định **bật**: giá trị
 chưa đặt hoặc rỗng giữ module, và chỉ giá trị `false` rõ ràng (không phân biệt hoa
 thường) mới tắt nó. Chúng được đọc khi control plane khởi động, nên đổi giá trị cần
 khởi động lại, và mỗi module bị tắt ghi một dòng cảnh báo vào log khởi động kèm tên
@@ -149,7 +146,6 @@ cờ của nó.
 | `FEATURE_PREVIEWS` | bật | Các đợt triển khai xem trước cho pull request, danh sách của chúng, và tiến trình dọn bản mồ côi. Webhook push vẫn hoạt động. |
 | `FEATURE_DATABASES` | bật | Vòng đời cơ sở dữ liệu được quản lý, thông tin xác thực, các tuyến sao lưu và khôi phục, và bộ lập lịch sao lưu. |
 | `FEATURE_SERVICES` | bật | Dịch vụ compose và danh mục template một chạm. |
-| `FEATURE_TEAMS` | bật | Các tuyến nhóm và lời mời. Các tuyến tài nguyên thay vào đó phân giải qua nhóm cá nhân của từng tài khoản. |
 | `FEATURE_FILES` | bật | API quản lý tệp từ xa, trả lời 503 khi tắt. |
 | `FEATURE_NOTIFICATIONS` | bật | Kênh thông báo, gửi thử, log gửi đi, và các móc thông báo triển khai/sao lưu. |
 | `FEATURE_PROXY` | bật | Đồng bộ proxy, danh sách bộ định tuyến, cấu hình chứng chỉ, chuyển hướng, nhà cung cấp DNS, đồng bộ lại chứng chỉ bảng điều khiển, và móc triển khai. Các node giữ cấu hình cuối cùng đã được đẩy. |
@@ -159,15 +155,15 @@ cờ của nó.
 Tắt một module sẽ gỡ các tuyến của nó thay vì để lại một bề mặt hoạt động nửa vời;
 ngoại lệ là API tệp, với các tuyến vẫn được gắn nhưng trả lời 503.
 
-## Trách nhiệm của quản trị viên
+## Trách nhiệm của chủ sở hữu
 
 - Cấu hình `GOTHAM_SECRET_KEY` và cặp khóa ký phiên, và giữ bản sao lưu của chúng
   cùng bản sao lưu cơ sở dữ liệu.
 - Giữ tài liệu của tổ chức phát hành chứng chỉ ở chế độ riêng tư và có sao lưu;
   không có nó thì không thể đăng ký lại agent hay khởi động lại listener một cách an
   toàn.
-- Giới hạn `PLATFORM_ADMINS` cho những tài khoản thực sự vận hành instance, và cấp
-  token có phạm vi thay vì token admin.
+- Giữ tài khoản chủ sở hữu an toàn: mật khẩu mạnh, xác thực hai lớp, và không chia
+  sẻ token phạm vi admin. Chỉ cấp cho thành viên những dự án họ cần.
 - Loại bỏ chứng chỉ lá cũ của node trước ngày kết thúc.
 - Giữ control plane sau TLS và phục vụ bảng điều khiển qua HTTPS, để chứng chỉ bảng
   điều khiển và TLS của ứng dụng cùng hoạt động.

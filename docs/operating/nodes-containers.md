@@ -10,10 +10,10 @@ through the agent on that node. Register nodes on **Servers**
 (`/servers`); open one to see its overview, metrics and settings, and use its
 **Containers** tab for the Docker inventory.
 
-Node management is team-scoped. Members of the node's team can read it, and
-`owner` or `admin` can change it. See
-[Security](/operating/security) for the platform-operator boundary used by the
-file manager and host shell.
+Node management is owner-only. Only the owner account can register a node, read
+or change it, or open its containers and host tools. See
+[Security](/operating/security) for the owner boundary used by the file manager
+and host shell.
 
 ## Add a node
 
@@ -93,8 +93,8 @@ Opening a node shows tabs:
 |---|---|
 | **Overview** | Name, address, SSH user, node ID, OS, architecture, Docker version, credential type, CPU/memory/disk usage, container count, last seen, registration time, and the danger zone with **Delete node**. |
 | **Containers** | A shortcut to the node's container page. |
-| **Files** | Platform operators only: a shortcut to the file manager for this node. |
-| **Terminal** | Platform operators only: a host shell tab for this node. |
+| **Files** | Owner only: a shortcut to the file manager for this node. |
+| **Terminal** | Owner only: a host shell tab for this node. |
 | **Metrics** | The node's time-series charts. |
 | **Proxy & Traefik** | The Traefik routers on the node. |
 | **Node settings** | A read-only summary of the node's identity. |
@@ -136,8 +136,8 @@ RAM, so those two columns show a dash rather than a guess.
   **Start**.
 - The list is served from a short cache (10 seconds). **Refresh** fetches the
   current list from the node.
-- Reading the list is open to the node's team; start, stop and restart require
-  the `owner` or `admin` team role.
+- Reading the list, starting, stopping and restarting a container all require the
+  owner account.
 
 ### Pull an image and run a container
 

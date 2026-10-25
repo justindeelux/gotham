@@ -5,7 +5,7 @@ title: Dịch vụ tệp từ xa
 # Dịch vụ tệp từ xa
 
 Agent của node có thể mở một trình duyệt và trình sửa tệp cho bảng điều khiển, để
-người vận hành nền tảng đọc, tải lên, sửa, nén và giải nén tệp trên một node mà
+chủ sở hữu đọc, tải lên, sửa, nén và giải nén tệp trên một node mà
 không cần SSH.
 
 ## Bạn cần gì
@@ -13,8 +13,7 @@ không cần SSH.
 - Agent của node đang chạy trên node (xem [Thêm node](/vi/guide/nodes)).
 - API tệp của control plane đang bật, đây là mặc định (`FEATURE_FILES=false` sẽ
   tắt nó).
-- Một tài khoản người vận hành nền tảng: API token có phạm vi admin, một phiên
-  mang claim vai trò `admin`, hoặc một email trong `PLATFORM_ADMINS`.
+- Tài khoản chủ sở hữu, hoặc API token của chủ sở hữu có phạm vi `admin`.
 
 Dịch vụ **bật mặc định** và, ở chế độ mặc định, phơi toàn bộ hệ thống tệp. Hãy
 đọc phần đầu trước khi triển khai rộng.
@@ -24,14 +23,14 @@ Dịch vụ **bật mặc định** và, ở chế độ mặc định, phơi to
 Dịch vụ tệp bật trừ khi `GOTHAM_AGENT_FILES=false`, và mặc định nó phơi một gốc
 ghi được tên `system` chính là `/`: mọi tệp mà tiến trình agent với tới được,
 không loại trừ đường dẫn nguy hiểm hay được bảo vệ nào (kể cả khóa và chứng chỉ
-của chính agent). Chủ sở hữu đã chấp nhận rủi ro này; chỉ người vận hành nền tảng
+của chính agent). Chủ sở hữu đã chấp nhận rủi ro này; chỉ chủ sở hữu
 mới dùng được nó.
 
 Những gì agent thực sự đọc hay thay đổi được bị giới hạn bởi người dùng Unix của
 nó. Vì vậy trình cài đặt hỏi bạn có muốn trình quản lý tệp không (mặc định
 **không**) và, nếu có, chạy agent dưới root qua drop-in `file-manager.conf`. Khi
 chạy dưới người dùng `gotham-agent` không đặc quyền, cùng gốc đó gần như chỉ đọc.
-Các node hiện có tự cập nhật lên phiên bản này sẽ phơi `/` cho người vận hành với
+Các node hiện có tự cập nhật lên phiên bản này sẽ phơi `/` cho chủ sở hữu với
 quyền của người dùng hiện tại cho đến khi `GOTHAM_AGENT_FILES=false` được đặt.
 
 Trong chế độ này, rào chắn thư mục ứng dụng vẫn bảo vệ các thư mục ứng dụng cấp
@@ -208,20 +207,16 @@ agent:
 ## Phía control plane
 
 Các tuyến `/api/v1/servers/{id}/files` được gắn mặc định; đặt `FEATURE_FILES=false`
-để tắt chúng (khi đó chúng trả **503**). Toàn bộ bề mặt bị giới hạn cho **người
-vận hành nền tảng** (một API token có phạm vi admin, một phiên mang claim vai trò
-`admin`, hoặc một email trong `PLATFORM_ADMINS`): mọi tuyến tệp, trừ bản tải có
-cổng vé, đều nằm sau cổng đó, nên một API token có phạm vi read hay deploy nhận
-**403**, vì API phơi hệ thống tệp của node.
+để tắt chúng (khi đó chúng trả **503**). Toàn bộ bề mặt bị giới hạn cho tài khoản
+chủ sở hữu (API token của chủ sở hữu cần phạm vi `admin`): mọi tuyến tệp, trừ bản
+tải có cổng vé, đều nằm sau cổng đó, nên token của thành viên, hoặc token chỉ có
+phạm vi read hay deploy, nhận **404** hoặc **403**, vì API phơi hệ thống tệp của
+node.
 
-Bên trong cổng, vai trò nhóm áp dụng cho máy chủ thuộc một nhóm: một node thuộc
-nhóm khác trả 404, `roots`/`list`/`stat` cần bất kỳ thành viên nào, còn `content`,
-`download-ticket`, các lần tải lên và mọi thao tác thay đổi cần vai trò chủ sở
-hữu/quản trị. Một node cũ không có nhóm thì không có cổng vai trò nhóm — mọi
-người vận hành nền tảng đều dùng được, kể cả ghi. Body của tệp có thể chứa bí mật
-(một `.env` compose `0600`), nên `GET /content` và `POST /download-ticket` vẫn chỉ
-dành cho chủ sở hữu/quản trị. `GET /files/download` có cổng vé nằm ngoài nhóm xác
-thực, nên vé dùng một lần chính là thông tin đăng nhập của nó.
+Bên trong cổng chỉ chủ sở hữu dùng được API tệp, kể cả đọc và mọi thao tác thay
+đổi. Body của tệp có thể chứa bí mật (một `.env` compose `0600`).
+`GET /files/download` có cổng vé nằm ngoài nhóm xác thực, nên vé dùng một lần chính
+là thông tin đăng nhập của nó.
 
 | Biến | Mặc định | Mục đích |
 |---|---|---|
@@ -241,7 +236,7 @@ mọi slot đang bị giữ sẽ trả 429.
 
 ## Quyền (chmod)
 
-`POST /files/chmod` (vai trò owner/admin; API token cần scope admin) đổi bit quyền
+`POST /files/chmod` (chỉ chủ sở hữu; API token cần scope admin) đổi bit quyền
 của một mục. Body là `{root, path, mode}` và **`mode` là bắt buộc**: trường bị
 thiếu bị từ chối **400** thay vì lặng lẽ áp dụng `000`. Chỉ các bit thấp `0o777`
 được chấp nhận: một yêu cầu mang setuid (`0o4000`), setgid (`0o2000`), sticky

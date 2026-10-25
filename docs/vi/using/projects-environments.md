@@ -10,18 +10,18 @@ nguyên trong một môi trường đều gắn với một node.
 
 ## Tạo dự án
 
-Mở **Dự án** và chọn **Dự án mới**. Đặt tên (1–64 ký tự, duy nhất trong nhóm) và
-mô tả tùy chọn.
+Mở **Dự án** và chọn **Dự án mới**. Đặt tên (1–64 ký tự, duy nhất trên instance)
+và mô tả tùy chọn.
 
 Một môi trường **production** được tạo cùng với dự án, nên dự án mới dùng được
 ngay. Mở nó để xem các môi trường và số tài nguyên của từng môi trường.
 
 ## Đổi tên hoặc xóa dự án
 
-Trên trang dự án, **Đổi tên** thay đổi tên và **Xóa dự án** gỡ nó. Dự án còn chứa
-tài nguyên thì không thể xóa: hãy di chuyển hoặc xóa mọi tài nguyên trong mọi môi
-trường trước. Xóa sẽ gỡ dự án, toàn bộ môi trường và biến dùng chung của nó, và
-không thể hoàn tác.
+Trên trang dự án, **Đổi tên** thay đổi tên. **Xóa dự án** chỉ dành cho chủ sở hữu
+và gỡ nó. Dự án còn chứa tài nguyên thì không thể xóa: hãy di chuyển hoặc xóa mọi
+tài nguyên trong mọi môi trường trước. Xóa sẽ gỡ dự án, toàn bộ môi trường và biến
+dùng chung của nó, và không thể hoàn tác.
 
 ## Môi trường
 
@@ -74,8 +74,7 @@ trường và trên cùng node với ứng dụng gốc.
 - **Cơ sở dữ liệu** — chọn một engine để cấp phát.
 
 Bộ chọn đã biết dự án và môi trường mà bạn mở nó từ đó, và phần còn lại của wizard
-giữ nguyên phạm vi đó. **Thêm tài nguyên** là thao tác ghi: nó không hiện với tài
-khoản `read_only`.
+giữ nguyên phạm vi đó.
 
 Xem [Ứng dụng](/vi/using/applications),
 [Dịch vụ và template](/vi/using/services-templates) và
@@ -101,11 +100,11 @@ niêm phong, API không bao giờ trả về, và lưu một dòng bí mật kh�
 nguyên giá trị đã lưu. **Lưu** thay thế toàn bộ tập hợp, nên gỡ một dòng là gỡ biến
 đó khỏi phạm vi.
 
-## Vai trò và quyền
+## Quyền truy cập
 
-`owner` và `admin` có thể tạo, đổi tên, xóa và sửa dự án, môi trường, tài nguyên và
-biến dùng chung. `read_only` mở và đọc được mọi thứ nhưng không bao giờ ghi.
+Bạn thấy dự án này vì chủ sở hữu đã cấp cho bạn. Bên trong dự án được cấp, bạn có
+thể tạo, đổi tên, xóa và sửa môi trường, tài nguyên và biến dùng chung. Dự án không
+được cấp sẽ bị ẩn.
 
-API là điểm thực thi: một thao tác ghi từ tài khoản `read_only` bị từ chối phía máy
-chủ ngay cả khi điều khiển đó vẫn hiện trên bảng điều khiển. Không có vai trò
-`member`.
+Chủ sở hữu quản lý dự án, thành viên và node chạy tài nguyên. Xem
+[Thành viên và quyền truy cập](/vi/using/members-access).

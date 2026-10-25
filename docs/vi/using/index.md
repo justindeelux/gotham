@@ -4,10 +4,10 @@ title: Sử dụng Gotham
 
 # Sử dụng Gotham
 
-Lộ trình này dành cho thành viên nhóm triển khai và vận hành khối lượng công việc
+Lộ trình này dành cho thành viên triển khai và vận hành khối lượng công việc
 trong bảng điều khiển web Gotham. Mọi thứ bạn tạo đều thuộc về một dự án và một
-môi trường của dự án đó, và mọi tài nguyên đều chạy trên một node mà người vận
-hành đã đăng ký.
+môi trường của dự án đó, và mọi tài nguyên đều chạy trên một node mà chủ sở hữu
+đã đăng ký.
 
 Không có danh sách Ứng dụng, Cơ sở dữ liệu hay Dịch vụ ở cấp cao nhất: tài nguyên
 luôn được mở qua dự án và môi trường của nó, ví dụ
@@ -25,15 +25,15 @@ luôn được mở qua dự án và môi trường của nó, ví dụ
   compose, và danh mục template.
 - [Tên miền và bản xem trước](/vi/using/domains-previews) — gắn hostname và chứng
   chỉ, và xem các bản xem trước theo pull request.
-- [Nhóm và thông báo](/vi/using/teams-notifications) — thành viên, lời mời, vai trò
-  và kênh cảnh báo.
+- [Thành viên và quyền truy cập](/vi/using/members-access) — vai trò chủ sở hữu và
+  thành viên, quyền dự án và lời mời.
+- [Thông báo](/vi/using/notifications) — kênh cảnh báo cho một ứng dụng hoặc cơ sở
+  dữ liệu.
 
 ## Vai trò
 
-Thành viên nhóm giữ một trong ba vai trò: `owner`, `admin` hoặc `read_only`.
-Không có vai trò `member` riêng.
-
-`owner` và `admin` ghi được. `read_only` đọc được mọi thứ nhưng không bao giờ ghi:
-API từ chối mọi thao tác thay đổi từ tài khoản `read_only`. Bảng điều khiển ẩn phần
-lớn điều khiển ghi, và một vài điều khiển vẫn hiện và dựa vào việc bị từ chối đó —
-một nút hiện ra không có nghĩa là có quyền.
+Thành viên làm việc trong những dự án chủ sở hữu đã cấp. Không có vai trò riêng
+trong từng dự án: bên trong dự án được cấp, thành viên đọc và ghi được mọi thứ; mọi
+thứ ngoài quyền được cấp đều bị ẩn. Chủ sở hữu quản lý chính instance — người dùng,
+máy chủ, kết nối Git, Tên miền & SSL toàn cục, cập nhật và công cụ máy chủ. Xem
+[Thành viên và quyền truy cập](/vi/using/members-access).

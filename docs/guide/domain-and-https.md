@@ -64,7 +64,7 @@ HTTP-01 is the default: the domain's A/AAAA records must point directly at this
 server, and Cloudflare records must be **DNS only** (proxy disabled).
 
 To keep Cloudflare's proxy enabled, configure a DNS provider and select DNS-01
-for the panel intent through the platform-admin
+for the panel intent through the owner-only
 `PATCH /api/v1/proxy/panel-certificates/{id}` API, using the existing
 `challenge` and `dns_provider_id` fields. DNS-01 needs a token allowed to
 update the configured zone; use Full (strict) once the origin certificate is
@@ -74,12 +74,13 @@ issued.
 
 The routers API reports the proposed host during a trial and adds
 `certificate.status` (`issued`, `pending`, or `failed`) and
-`certificate.not_after` for panel rows. The platform-only
+`certificate.not_after` for panel rows. The owner-only
 `GET /api/v1/proxy/panel-certificates` API lists panel intents with the existing
 storage `status` plus additive `panel_state` and `owner_kind` fields.
 `pending` means no usable certificate has been observed yet; `failed` includes
 unusable configuration or unavailable storage, since the agent does not report
-ACME order errors. Application certificate APIs retain their team scope.
+ACME order errors. Application certificate APIs follow the application's project
+access.
 
 If HTTPS or DNS still fails, see
 [Troubleshooting](/guide/troubleshooting#panel-https-or-dns-fails).

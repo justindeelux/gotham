@@ -25,21 +25,21 @@ vòng và thu hồi qua chính API, dùng một phiên đã đăng nhập hoặc
 |---|---|
 | `read` | Truy cập chỉ đọc: `GET` và `HEAD` trên API tài nguyên. |
 | `deploy` | Mọi thứ `read` cấp, cộng các thao tác ghi (mọi phương thức không phải `GET`/`HEAD`) và các lần đọc chứa bí mật. |
-| `admin` | Mọi thứ `deploy` cấp, cộng các thao tác toàn nền tảng: quản lý nhóm, trình quản lý tệp trên node, quản lý proxy/DNS toàn cục, và áp dụng bản cập nhật. |
+| `admin` | Mọi thứ `deploy` cấp, cộng các thao tác chỉ chủ sở hữu: quản lý người dùng và quyền dự án, trình quản lý tệp trên node, proxy/DNS, và áp dụng bản cập nhật. |
 
 Các phạm vi có thứ bậc: `admin` bao `deploy`, và `deploy` bao `read`. Một token được
 tạo mà không có `scopes` (bỏ trống trường hoặc danh sách rỗng) nhận `read`; bản thân
 body JSON vẫn là bắt buộc.
 
-Việc áp phạm vi theo quy tắc phương thức read/deploy trên các tài nguyên gắn với
-nhóm: `GET`/`HEAD` cần `read`, mọi phương thức khác cần `deploy`. Các lần đọc trả về
+Việc áp phạm vi theo quy tắc phương thức read/deploy trên các tài nguyên thuộc dự
+án: `GET`/`HEAD` cần `read`, mọi phương thức khác cần `deploy`. Các lần đọc trả về
 bí mật vẫn bị gác theo `deploy` dù là yêu cầu `GET`:
 
 - `GET /api/v1/databases/{id}/credentials` — mật khẩu cơ sở dữ liệu và root đã giải
   mã.
 - `GET /api/v1/servers/{id}/files/content` — nội dung tệp, có thể gồm các tệp môi
-  trường `0600`. Toàn bộ trình quản lý tệp còn cần phạm vi `admin` và quyền quản trị
-  viên nền tảng.
+  trường `0600`. Toàn bộ trình quản lý tệp còn cần phạm vi `admin` và tài khoản chủ
+  sở hữu.
 
 ## Điểm cuối API
 
@@ -80,8 +80,8 @@ Các quy tắc được áp khi tạo:
 - `name` là bắt buộc và dài tối đa 64 ký tự.
 - Một token chỉ cấp được những phạm vi nó đã có: token `read` không tạo được token
   `deploy`, và token `deploy` không tạo được token `admin`.
-- Chỉ quản trị viên nền tảng mới tạo được (hoặc xoay vòng) token phạm vi `admin`.
-  Một phiên giữ mọi phạm vi, nhưng việc kiểm tra quản trị viên vẫn áp cho `admin`.
+- Chỉ chủ sở hữu mới tạo được (hoặc xoay vòng) token phạm vi `admin`.
+  Một phiên giữ mọi phạm vi, nhưng việc kiểm tra chủ sở hữu vẫn áp cho `admin`.
 
 ## Xoay vòng và thu hồi
 

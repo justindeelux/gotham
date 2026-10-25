@@ -15,7 +15,7 @@ tiên của bạn.
 
 ## Lần đăng nhập đầu tiên
 
-Trên một instance mới, tài khoản đầu tiên trở thành quản trị viên nền tảng. Tài
+Trên một instance mới, tài khoản đầu tiên trở thành chủ sở hữu. Tài
 khoản đó do trình cài đặt tạo, hoặc tạo bằng tay trên máy chủ control plane khi
 lần cài đặt chạy phi tương tác mà không có email:
 
@@ -30,7 +30,7 @@ lần, và `--force` cố ý thêm tài khoản thứ hai — nếu không có n
 trong script.
 
 Khi đã có tài khoản, việc tự đăng ký bị đóng; người khác tham gia qua liên kết
-mời dùng một lần tạo trong **Thành viên** (xem
+mời dùng một lần tạo trong **Người dùng** (xem
 [Đăng nhập lần đầu](/vi/guide/first-login)).
 
 Mở URL mà trình cài đặt in ra (bảng điều khiển mặc định lắng nghe trên cổng 8000)
@@ -48,10 +48,11 @@ và đăng nhập bằng email và mật khẩu. Có thêm hai cách đăng nh�
   mọi phiên đăng nhập và xóa xác thực hai lớp. Các access token đã cấp mất hiệu
   lực ngay.
 
-Tài khoản đầu tiên giữ vai trò quản trị viên nền tảng, vai trò mà các bề mặt toàn
-nền tảng (cài đặt instance, cập nhật, nhà cung cấp DNS, đồng bộ proxy toàn node)
-kiểm tra. Thành viên tham gia nhóm với vai trò `owner`, `admin` hoặc `read_only`;
-`read_only` đọc được mọi thứ và mọi thao tác ghi đều bị từ chối phía máy chủ.
+Tài khoản đầu tiên giữ vai trò chủ sở hữu, vai trò mà các bề mặt toàn instance
+(cài đặt instance, cập nhật, nhà cung cấp DNS, đồng bộ proxy toàn node, máy chủ,
+kết nối Git và công cụ máy chủ) kiểm tra. Thành viên chỉ thấy những dự án chủ sở
+hữu cấp; họ làm việc bên trong đó, không có vai trò riêng trong dự án. Xem
+[Thành viên và quyền truy cập](/vi/using/members-access).
 
 ## Thêm node
 

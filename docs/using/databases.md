@@ -6,7 +6,8 @@ title: Databases
 
 A database is one container running a single engine on one node, with its own
 named volume. Gotham generates the login credentials at creation, stores them
-encrypted, and keeps them available on the database page for the project's team.
+encrypted, and keeps them available on the database page for the members of the
+project.
 
 Databases live inside a project environment, next to applications and services.
 See [Projects and environments](/using/projects-environments) for how resources
@@ -72,8 +73,8 @@ Start, stop and restart are available on the database page.
 The **Credentials** card shows the generated user, password and database name,
 with reveal/copy actions, and a connection string using the engine's URL scheme
 (`postgresql://`, `mysql://`, `mariadb://`, `mongodb://`, `redis://`). The
-values are stored encrypted and readable by team members with write access to
-the project; they are not included in the database list responses.
+values are stored encrypted and readable to members with access to the project;
+they are not included in the database list responses.
 
 The connection string depends on how the database is exposed:
 
@@ -123,15 +124,16 @@ S3-compatible storage is supported against AWS S3, Cloudflare R2, MinIO and
 similar services: configure an endpoint, region, bucket, optional key prefix,
 access key and secret key.
 
-Targets are configured under **Backups → Backup targets**, once per account
-rather than per database — any member with deploy access can add them. The keys
+Targets are configured under **Backups → Backup targets**, once for the owner
+account rather than per database. Only the owner configures them; a backup a
+member starts uses the local destination. The keys
 are sealed on the server and never shown back, so an
 edit form leaves stored keys in place when the key fields are blank. **Test**
 checks the endpoint and credentials against the bucket and reports the result.
 
 Deleting a target does not delete past backups, but they can no longer be read
 back from that target, so restores from them will fail. The local destination
-directory is set by the control plane operator.
+directory is a control-plane setting on the host.
 
 > [!TIP]
 > Backups stop the database. For a busy database, schedule dumps for a quiet

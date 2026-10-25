@@ -6,10 +6,8 @@ title: Terminal and files
 
 Two host-level tools sit on top of the node registry: a **host shell** that
 opens a PTY on the node, and a **file manager** that browses the node through
-the agent's file service. Both are platform-operator surfaces. They are not the
-same permission as an application container terminal, which only needs write
-access to the application's team — see
-[Applications](/using/applications#detail-tabs).
+the agent's file service. Both are owner-only, like the application container
+terminal — see [Applications](/using/applications#detail-tabs).
 
 ## Host shell
 
@@ -24,11 +22,11 @@ from:
 - the floating terminal window, opened from the terminal rail or a page tab.
 
 The console only starts a session on a **Ready** node. The target picker behind
-the `+` tab lists what the signed-in operator may open: host shells for ready
-nodes, and running containers of applications the operator can write to. The
-lists are bounded (50 nodes, 50 applications, 50 containers per application); a
-source that fails is reported as a bounded error instead of emptying the picker,
-and a truncated list says so.
+the `+` tab lists what the signed-in owner may open: host shells for ready
+nodes, and running containers of any application. The lists are bounded (50
+nodes, 50 applications, 50 containers per application); a source that fails is
+reported as a bounded error instead of emptying the picker, and a truncated list
+says so.
 
 ### Session rules
 
@@ -38,10 +36,10 @@ and a truncated list says so.
   without a PTY.
 - A session is single-use. Reconnecting always means starting a new shell; a
   second attach to the same session is refused.
-- One operator may hold **4** sessions; the control plane holds **64** overall.
+- The owner may hold **4** sessions; the control plane holds **64** overall.
 - An attached shell lives at most **8 hours**.
 - Authorization is re-checked every **30 seconds**. Logging out, revoking the
-  session, changing the account or losing the operator role closes the shell
+  session, changing the account or losing the owner role closes the shell
   within that window. A temporary lookup failure keeps the shell and retries;
   repeated failures close it.
 - Closing a tab ends the shell and its running process.
@@ -56,10 +54,8 @@ With a single managed node the chooser forwards straight to it. The node
 switcher at the bottom of the browser lists every managed node; only **Ready**
 nodes are selectable.
 
-The file manager is platform-operator-only at both ends: the console route is
-guarded and every API call needs a platform operator, on top of belonging to the
-node's team and holding the `owner` or `admin` team role for content and writes.
-A team owner without platform-operator access gets `403`.
+The file manager is owner-only at both ends: the console route is guarded and
+every API call needs the owner account.
 
 ### Roots
 
@@ -194,23 +190,23 @@ deleted entries newest first, with name, deletion time, size and type.
 **Download** mints a single-use, **60-second** ticket through the authenticated
 API, then hands the ticket URL to the browser as a native download. The download
 route is unauthenticated by design — a native browser download cannot send the
-bearer token — so the ticket is the credential, is bound to the user, team,
-server, root and path it was issued for, and is consumed on first use. The
-response is `no-store`; the ticket rides the query string and is never written
-to the access log. An expired or reused ticket is a `404`.
+bearer token — so the ticket is the credential, is bound to the server, root and
+path it was issued for, and is consumed on first use. The response is
+`no-store`; the ticket rides the query string and is never written to the access
+log. An expired or reused ticket is a `404`.
 
 ### Open terminal here
 
 For a folder, **Open terminal here** opens a host shell with that root-relative
 directory as its working directory. The shell is a floating terminal window, not
-part of the file browser, and it is subject to the same platform-operator rule
+part of the file browser, and it is subject to the same owner rule
 as any host shell. A symlink whose target is outside the browsable root cannot
 be used as the directory. This action never opens a container shell.
 
 ## Feature flags
 
 The console states these as product switches; the environment variables are what
-an administrator actually sets.
+the owner actually sets.
 
 | Flag | Scope | Default | When off |
 |---|---|---|---|

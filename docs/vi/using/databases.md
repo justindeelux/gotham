@@ -6,7 +6,7 @@ title: Cơ sở dữ liệu
 
 Một cơ sở dữ liệu là một container chạy một engine duy nhất trên một node, với
 volume có tên riêng. Gotham tạo thông tin đăng nhập lúc tạo, lưu chúng ở dạng mã
-hóa, và giữ chúng sẵn trên trang cơ sở dữ liệu cho nhóm của dự án.
+hóa, và giữ chúng sẵn trên trang cơ sở dữ liệu cho thành viên của dự án.
 
 Cơ sở dữ liệu nằm trong một môi trường của dự án, bên cạnh ứng dụng và dịch vụ. Xem
 [Dự án và môi trường](/vi/using/projects-environments) để biết cách tài nguyên được
@@ -69,7 +69,7 @@ Khởi động, dừng và khởi động lại có sẵn trên trang cơ sở d
 Thẻ **Thông tin đăng nhập** hiển thị người dùng, mật khẩu và tên cơ sở dữ liệu được
 tạo, với các thao tác hiện/sao chép, cùng một chuỗi kết nối dùng scheme URL của
 engine (`postgresql://`, `mysql://`, `mariadb://`, `mongodb://`, `redis://`). Các
-giá trị được lưu mã hóa và đọc được bởi thành viên nhóm có quyền ghi vào dự án;
+giá trị được lưu mã hóa và đọc được bởi thành viên có quyền truy cập dự án;
 chúng không nằm trong phản hồi danh sách cơ sở dữ liệu.
 
 Chuỗi kết nối phụ thuộc vào cách cơ sở dữ liệu được phơi ra:
@@ -121,15 +121,16 @@ tương thích S3 được hỗ trợ với AWS S3, Cloudflare R2, MinIO và cá
 tự: cấu hình endpoint, region, bucket, tiền tố khóa tùy chọn, access key và secret
 key.
 
-Các đích được cấu hình trong **Sao lưu → Đích sao lưu**, một lần cho mỗi tài khoản
-chứ không phải cho mỗi cơ sở dữ liệu — bất kỳ thành viên nào có quyền triển khai
-đều thêm được. Các khóa được niêm phong trên máy chủ và không bao giờ hiển thị lại,
+Các đích được cấu hình trong **Sao lưu → Đích sao lưu**, một lần cho tài khoản chủ
+sở hữu chứ không phải cho mỗi cơ sở dữ liệu. Chỉ chủ sở hữu cấu hình chúng; bản sao
+lưu do thành viên bắt đầu dùng đích cục bộ. Các khóa được niêm phong trên máy chủ
+và không bao giờ hiển thị lại,
 nên biểu mẫu chỉnh sửa giữ nguyên các khóa đã lưu khi các trường khóa để trống.
 **Kiểm tra** kiểm tra endpoint và thông tin đăng nhập với bucket rồi báo kết quả.
 
 Xóa một đích không xóa các bản sao lưu trước đó, nhưng chúng không còn đọc lại được
-từ đích đó, nên việc khôi phục từ chúng sẽ thất bại. Thư mục đích cục bộ do người
-vận hành control plane đặt.
+từ đích đó, nên việc khôi phục từ chúng sẽ thất bại. Thư mục đích cục bộ là một cài
+đặt control plane trên máy chủ.
 
 > [!TIP]
 > Sao lưu sẽ dừng cơ sở dữ liệu. Với một cơ sở dữ liệu đang bận rộn, hãy lên lịch

@@ -6,7 +6,7 @@ title: Instance and network
 
 **Settings → Instance** configures the control-plane host itself: its public
 address and identity, its network stack, and a few Linux system options. It is
-visible to platform operators only and applies to the control-plane host, not
+visible to the owner only and applies to the control-plane host, not
 to the nodes.
 
 The page has three tabs: **General**, **Network** and **System**.

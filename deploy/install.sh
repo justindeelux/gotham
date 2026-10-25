@@ -6,10 +6,10 @@
 # the architecture, downloads the release binary, verifies the Ed25519-signed
 # manifest and the artifact digest (see deploy/release-verify.sh), installs the
 # binary into the BE-9.1 layout, installs the root-owned update wrapper, its
-# config, the sudoers rule and the systemd unit, creates the first admin
+# config, the sudoers rule and the systemd unit, creates the first owner
 # account, and prints the web UI URL and the first-login steps.
 #
-# The first admin account is collected before the first mutation (a tty
+# The first account is collected before the first mutation (a tty
 # prompt, or GOTHAM_ADMIN_EMAIL non-interactively) and created right after
 # the migrations and before the service starts, so nobody can register first
 # through the open web form. On a terminal, GOTHAM_ADMIN_EMAIL is the email
@@ -82,14 +82,14 @@
 #   GOTHAM_DATABASE_DSN       managed PostgreSQL DSN; skips local provisioning
 #   GOTHAM_REDIS_ADDR         Redis host:port (default localhost:6379)
 #   GOTHAM_SKIP_DEPS=1        do not install/configure PostgreSQL + Redis
-#   GOTHAM_ADMIN_EMAIL        email of the first admin account. Without a
+#   GOTHAM_ADMIN_EMAIL        email of the first account (the owner). Without a
 #                             terminal it drives creation non-interactively
 #                             (password from GOTHAM_ADMIN_PASSWORD_FILE,
 #                             else generated and printed once in the final
 #                             summary); without an email creation is skipped
 #                             with the manual command. On a terminal it is
 #                             the email prompt default (empty keeps it).
-#   GOTHAM_ADMIN_PASSWORD_FILE  path to a file holding the first admin
+#   GOTHAM_ADMIN_PASSWORD_FILE  path to a file holding the first account's
 #                             password (single line, root-readable; a warning
 #                             is printed when group/world readable). On a
 #                             terminal it is used without prompting. Never
@@ -767,7 +767,7 @@ else
     verify_release "${RELEASE_BASE}" "${VERSION}" "${ARCH}" "${FAMILY}" "${PUBKEY_FILE}" "${TMP_BINARY}"
 fi
 
-# ---- First admin account ----------------------------------------------------
+# ---- First owner account ----------------------------------------------------
 # Credentials are collected in phase 1 (before the first mutation, while the
 # service cannot serve registration yet) and the account is created in phase
 # 2 (right after the migrations, before `systemctl start`). The password only
@@ -934,7 +934,7 @@ _admin_read_pwfile() {
 # and prompt traps installed.
 _admin_prompt_password() {
     while true; do
-        _admin_prompt_secret 'Admin password (empty to generate): ' "$1"
+        _admin_prompt_secret 'Owner password (empty to generate): ' "$1"
         _admin_pw1="${_ADMIN_SECRET}"
         _admin_prompt_secret 'Confirm password: ' "$1"
         if [ "${_admin_pw1}" != "${_ADMIN_SECRET}" ]; then
@@ -944,7 +944,7 @@ _admin_prompt_password() {
         _admin_pw="${_admin_pw1}"
         if [ -z "${_admin_pw}" ]; then
             _admin_generated="$(_admin_generate_password)" || _admin_generated=""
-            [ -n "${_admin_generated}" ] || die "could not generate an admin password"
+            [ -n "${_admin_generated}" ] || die "could not generate an owner password"
             _admin_pw="${_admin_generated}"
             break
         fi
@@ -1010,9 +1010,9 @@ admin_phase1_collect() {
         _admin_prompt_traps
         while true; do
             if [ -n "${_admin_email_default}" ]; then
-                printf 'Admin email [%s] (empty keeps it, - to skip): ' "${_admin_email_default}" >"${_admin_tty}"
+                printf 'Owner email [%s] (empty keeps it, - to skip): ' "${_admin_email_default}" >"${_admin_tty}"
             else
-                printf 'Admin email (empty to skip): ' >"${_admin_tty}"
+                printf 'Owner email (empty to skip): ' >"${_admin_tty}"
             fi
             IFS= read -r _admin_email <"${_admin_tty}" || _admin_email=""
             # The seam file carries scripted input without newlines trimmed
@@ -1066,7 +1066,7 @@ admin_phase1_collect() {
             _admin_read_pwfile "${GOTHAM_ADMIN_PASSWORD_FILE}"
         else
             _admin_generated="$(_admin_generate_password)" || _admin_generated=""
-            [ -n "${_admin_generated}" ] || die "could not generate an admin password"
+            [ -n "${_admin_generated}" ] || die "could not generate an owner password"
             _admin_pw="${_admin_generated}"
         fi
         ADMIN_GENERATED="${_admin_generated}"
@@ -1124,7 +1124,7 @@ admin_phase2_create() {
             return 0
         fi
         cat "${WORK_DIR}/admin-exists.err" >&2 || true
-        ADMIN_FAIL_REASON="could not check for an existing admin account (is the database up?)"
+        ADMIN_FAIL_REASON="could not check for an existing account (is the database up?)"
         ADMIN_FAILED=1
         ADMIN_STATUS="failed"
         _admin_wipe
@@ -1184,20 +1184,20 @@ admin_phase2_create() {
                 ADMIN_FAIL_REASON="an account already exists (created by someone else?): check the instance"
                 ;;
             *)
-                ADMIN_FAIL_REASON="could not create the admin account for '${_admin_email}'"
+                ADMIN_FAIL_REASON="could not create the owner account for '${_admin_email}'"
                 ;;
         esac
     else
-        ADMIN_FAIL_REASON="could not create the admin account for '${_admin_email}'"
+        ADMIN_FAIL_REASON="could not create the owner account for '${_admin_email}'"
     fi
     ADMIN_FAILED=1
     ADMIN_STATUS="failed"
     return 0
 }
-# ---- First admin account: collection (phase 1) -----------------------------
+# ---- First owner account: collection (phase 1) -----------------------------
 # After every pre-check and the verified download, before the first mutation
 # (and while the service cannot serve registration yet): prompt for (or read)
-# the first-admin credentials, so creation in phase 2 runs before
+# the first-owner credentials, so creation in phase 2 runs before
 # `systemctl start`. No prompts on --dry-run, in test mode without the BIN
 # seam, or when the instance already has an account.
 admin_phase1_collect
@@ -1861,7 +1861,7 @@ if [ "${DRY_RUN}" -eq 0 ] && [ "${TEST_MODE}" -eq 0 ]; then
     _admin_xtrace_on
 fi
 
-# ---- First admin account: creation (phase 2) --------------------------------
+# ---- First owner account: creation (phase 2) --------------------------------
 # Right after the migrations and before the service starts, so the first
 # account exists before registration opens (no first-account window).
 admin_phase2_create
@@ -2012,7 +2012,7 @@ if [ -n "${DOMAIN}" ]; then
     fi
 fi
 
-# ---- First admin account: summary -------------------------------------------
+# ---- First owner account: summary -------------------------------------------
 # Credentials were collected in phase 1 (before the first mutation); the
 # account itself was created in phase 2 (before the service start), so
 # registration was never open before the first account existed.
@@ -2036,18 +2036,18 @@ case "${ADMIN_STATUS}" in
         fi
         ;;
     exists)
-        ADMIN_FIRST_LOGIN="  The admin account already exists, skipping.
+        ADMIN_FIRST_LOGIN="  The owner account already exists, skipping.
   ${ADMIN_LOGIN_LINE}"
         ;;
     no-email)
-        ADMIN_FIRST_LOGIN="  No admin account was created (no email given).
+        ADMIN_FIRST_LOGIN="  No owner account was created (no email given).
   Create it with:
     sudo -u gotham -- ${INSTALL_PATH} admin create --email ops@example.com
   Then open:
   ${ADMIN_LOGIN_LINE}"
         ;;
     failed)
-        ADMIN_FIRST_LOGIN="  The admin account could not be created automatically.
+        ADMIN_FIRST_LOGIN="  The owner account could not be created automatically.
   Create it with:
     sudo -u gotham -- ${INSTALL_PATH} admin create --email ${ADMIN_EMAIL:-ops@example.com}
   Then open:
@@ -2063,11 +2063,11 @@ case "${ADMIN_STATUS}" in
     legacy-upgrade)
         ADMIN_FIRST_LOGIN="  The installed release has no admin commands at all, so no account was created.
   Re-run this installer once a newer release is available (it bootstraps the
-  first admin automatically), then open:
+  first owner automatically), then open:
   ${ADMIN_LOGIN_LINE}"
         ;;
     *)
-        ADMIN_FIRST_LOGIN="  Open the Web UI and sign in with the admin account.
+        ADMIN_FIRST_LOGIN="  Open the Web UI and sign in with the owner account.
   ${ADMIN_LOGIN_LINE}"
         ;;
 esac
@@ -2086,8 +2086,8 @@ First login:
 ${ADMIN_FIRST_LOGIN}
   The Servers page already lists this host's agent node (ready once its
   first heartbeat lands). Add more nodes with deploy/install-agent.sh.
-  Platform-global operations (node-wide proxy sync, DNS providers) are
-  available to the instance owner (the first account). Lost the password?
+  Instance-wide operations (node-wide proxy sync, DNS providers) are
+  available to the owner account. Lost the password?
   sudo -u gotham -- ${INSTALL_PATH} admin reset-password --email <email>.
 
 Self-update checking is enabled by default. To apply new releases unattended,

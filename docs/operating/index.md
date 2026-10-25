@@ -5,29 +5,26 @@ title: Operating Gotham
 # Operating Gotham
 
 This track covers the infrastructure side of the platform: the hosts Gotham
-manages, the containers running on them, and the host-level tools an operator
-uses to look inside a node. It is not about deploying applications or databases;
+manages, the containers running on them, and the host-level tools the owner uses
+to look inside a node. It is not about deploying applications or databases;
 those live under [Using Gotham](/using/).
 
-Every workload runs on a node an operator registered, so start here.
+Every workload runs on a node the owner registered, so start here.
 
 ## Access
 
-Two permission levels apply on this track:
+The owner account runs the instance. It registers servers, connects Git
+providers, changes instance and network settings, manages the global Domain &
+SSL surface, applies updates, and opens the host terminal and file manager. An
+owner API token also needs the `admin` scope for these routes.
 
-- **Node and container management** is team-scoped. A member of the node's team
-  can read the node and its containers; starting, stopping, editing or deleting
-  requires the `owner` or `admin` team role. See
-  [Security](/operating/security).
-- **Platform operators only**: the host shell and the file manager. A platform
-  operator is a session with the `admin` role claim, an account whose email is
-  listed in `PLATFORM_ADMINS`, or an API token holding the `admin` scope. A team
-  owner without that access gets `403` from these routes.
+Members work inside the projects the owner granted. They deploy and run their
+applications, services and databases there; they do not see servers, server
+keys, Git connections, instance settings, global proxy/DNS, updates or the host
+tools. Application container terminals are owner-only as well. A member who
+loses access to a project loses its resources on the next request.
 
-Application container terminals are a separate, team-level surface: a shell
-inside a running application container needs write access to that application's
-team, not platform-operator access. See
-[Applications](/using/applications#detail-tabs).
+See [Security](/operating/security) for the trust model behind these routes.
 
 ## Pages
 
@@ -41,5 +38,5 @@ team, not platform-operator access. See
   hostname, DNS and time settings.
 - [Proxy and DNS](/operating/proxy-dns) — Traefik routers, certificates and DNS
   providers.
-- [Security](/operating/security) — operators, teams and the trust model behind
-  host-level access.
+- [Security](/operating/security) — the owner and member accounts, project access,
+  API tokens and the trust model behind host-level access.

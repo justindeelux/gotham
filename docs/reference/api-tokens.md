@@ -27,13 +27,13 @@ token.
 |---|---|
 | `read` | Read-only access: `GET` and `HEAD` on the resource API. |
 | `deploy` | Everything `read` grants, plus writes (every non-`GET`/`HEAD` method) and secret-bearing reads. |
-| `admin` | Everything `deploy` grants, plus platform-global operations: team management, the node file manager, global proxy/DNS management, and applying updates. |
+| `admin` | Everything `deploy` grants, plus the owner-only instance operations: managing users and project access, the node file manager, proxy/DNS, and applying updates. |
 
 The scopes are hierarchical: `admin` covers `deploy`, and `deploy` covers
 `read`. A token created without `scopes` (an omitted field or an empty list) gets
 `read`; the JSON body itself is still required.
 
-Scope enforcement is the read/deploy method rule on team-scoped resources:
+Scope enforcement is the read/deploy method rule on project-scoped resources:
 `GET`/`HEAD` needs `read`, every other method needs `deploy`. Reads that return
 secrets are deploy-gated even though they are `GET` requests:
 
@@ -41,7 +41,7 @@ secrets are deploy-gated even though they are `GET` requests:
   passwords.
 - `GET /api/v1/servers/{id}/files/content` — file bodies, which can include
   `0600` environment files. The whole file manager additionally requires the
-  `admin` scope and platform-operator access.
+  `admin` scope and the owner account.
 
 ## Endpoints
 
@@ -83,8 +83,8 @@ Rules enforced on create:
 - `name` is required and at most 64 characters.
 - A token can only grant scopes it already holds: a `read` token cannot mint a
   `deploy` token, and a `deploy` token cannot mint an `admin` token.
-- Only a platform operator can create (or rotate) an `admin`-scoped token. A
-  session holds every scope, but the operator check still applies to `admin`.
+- Only the owner can create (or rotate) an `admin`-scoped token. A session holds
+  every scope, but the owner check still applies to `admin`.
 
 ## Rotate and revoke
 

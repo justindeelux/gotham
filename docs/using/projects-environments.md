@@ -11,7 +11,7 @@ and so on — and every resource in an environment is pinned to one node.
 ## Create a project
 
 Open **Projects** and choose **New project**. Give it a name (1–64 characters,
-unique within the team) and an optional description.
+unique on the instance) and an optional description.
 
 A **production** environment is created together with the project, so the new
 project is immediately usable. Open it to see its environments and their
@@ -19,10 +19,11 @@ resource counts.
 
 ## Rename or delete a project
 
-On the project page, **Rename** changes the name and **Delete project** removes
-it. A project that still holds resources cannot be deleted: move or delete every
-resource in every environment first. Deleting removes the project, all of its
-environments and its shared variables, and cannot be undone.
+On the project page, **Rename** changes the name. **Delete project** is
+owner-only and removes it. A project that still holds resources cannot be
+deleted: move or delete every resource in every environment first. Deleting
+removes the project, all of its environments and its shared variables, and
+cannot be undone.
 
 ## Environments
 
@@ -78,8 +79,7 @@ on the same node as their base application.
 - **Database** — choose an engine to provision.
 
 The picker already knows the project and environment you opened it from, and
-the rest of the wizard keeps that scope. **Add resource** is a write action: it
-is not shown to `read_only` accounts.
+the rest of the wizard keeps that scope.
 
 See [Applications](/using/applications),
 [Services and templates](/using/services-templates) and
@@ -104,12 +104,11 @@ sealed, the API never returns it, and saving an unchanged secret row keeps the
 stored value. **Save** replaces the whole collection, so removing a row removes
 that variable from the scope.
 
-## Roles and permissions
+## Access
 
-`owner` and `admin` can create, rename, delete and edit projects, environments,
-resources and shared variables. `read_only` can open and read all of it but
-never writes.
+You see this project because the owner granted it to you. Inside a granted
+project you can create, rename, delete and edit environments, resources and
+shared variables. A project that is not granted is hidden.
 
-The API is the enforcement point: a write from a `read_only` account is rejected
-server-side even when a control is still visible in the console. There is no
-`member` role.
+The owner manages projects, members and the node a resource runs on. See
+[Members and access](/using/members-access).

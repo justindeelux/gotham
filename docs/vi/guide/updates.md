@@ -46,7 +46,7 @@ thất bại với thông báo rõ ràng thay vì làm hỏng lần cập nhật
 
 ## Lịch trên bảng điều khiển
 
-**Cài đặt → Cập nhật** chỉ dành cho quản trị viên nền tảng. Trang này hiển thị
+**Cài đặt → Cập nhật** chỉ dành cho chủ sở hữu. Trang này hiển thị
 phiên bản hiện tại, phiên bản mới nhất, lần kiểm tra gần nhất, nhật ký thay đổi và
 kết quả của lần cập nhật gần nhất, đồng thời có **Kiểm tra cập nhật** và
 **Cập nhật ngay**.
@@ -88,7 +88,7 @@ plane qua kênh đã xác minh bằng CA mỗi 5 phút. Với mỗi kiến trúc
 manifest đã ký của nó, và chỉ đề nghị khi nó mới hơn phiên bản agent báo trong nhịp
 tim gần nhất.
 
-Kích hoạt một đợt triển khai bằng API của quản trị viên nền tảng:
+Kích hoạt một đợt triển khai bằng API của chủ sở hữu:
 
 ```sh
 curl -X POST -H "Authorization: Bearer <admin-token>" \
@@ -121,7 +121,7 @@ từ xa đó, hoặc trỏ lại nó một cách tường minh, trước khi th�
 `/etc/gotham/gotham.env`: các khóa được quản lý (`GOTHAM_DATABASE_DSN`,
 `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`, `GOTHAM_SECRET_KEY`, các đường dẫn khóa JWT)
 được làm mới — DSN đưa trên dòng lệnh thắng, nếu không thì giữ giá trị hiện có — và
-mọi khóa người vận hành thêm (`AUTO_UPDATE`, `PLATFORM_ADMINS`, ...) được để
+mọi khóa người vận hành thêm (`AUTO_UPDATE`, `AUTO_UPDATE_INTERVAL`, ...) được để
 nguyên. Một DSN được quản lý không bao giờ bị thay bằng mặc định cục bộ, và
 PostgreSQL/Redis cục bộ chỉ được cấp phát khi DSN phân giải được là mặc định cục bộ
 dựng sẵn. Trình cài đặt khởi động lại `gotham.service` sau khi cài lại, nên tệp
@@ -155,6 +155,26 @@ dấu nháy khỏi `agent.env` và chạy lại. Điều tương tự cũng đú
 một DSN hoặc giá trị Redis được giữ nguyên có dấu nháy hoặc dấu gạch chéo ngược ở
 cuối sẽ chặn việc nâng cấp và nêu đúng khóa — sửa giá trị trong `gotham.env` (DSN
 dạng keyword có giá trị đặt trong dấu nháy phải dùng dạng URL) rồi chạy lại.
+
+## Ghi chú phát hành: tài khoản chủ sở hữu và thành viên
+
+Bản phát hành này thay mô hình nhóm bằng một chủ sở hữu và nhiều thành viên.
+
+- Tài khoản hiện có sớm nhất trở thành **chủ sở hữu**; mọi tài khoản khác trở
+  thành **thành viên**. Có đúng một chủ sở hữu.
+- Nhóm và các vai trò của chúng không còn. Dự án giờ ở cấp instance; tên dự án
+  phải duy nhất trên toàn instance.
+- Thành viên khởi đầu **không có quyền dự án**. Sau khi nâng cấp, hãy đăng nhập
+  bằng chủ sở hữu, mở **Người dùng → Quyền dự án**, và cấp cho từng thành viên
+  những dự án họ cần. Trước đó họ thấy bảng điều khiển trống.
+- Thành viên chỉ truy cập được dự án đã cấp và tài nguyên của nó. Máy chủ, khoá
+  SSH, kết nối Git, cài đặt instance, Tên miền & SSL toàn cục, cập nhật, terminal/
+  trình quản lý tệp trên máy chủ và Kho ứng dụng chỉ dành cho chủ sở hữu.
+- Cài đặt danh sách email được phép cũ không còn được đọc. Hãy gỡ dòng đó khỏi
+  `/etc/gotham/gotham.env`; quyền chủ sở hữu giờ đến từ vai trò tài khoản, và API
+  token của chủ sở hữu cần phạm vi `admin`.
+
+Xem [Thành viên và quyền truy cập](/vi/using/members-access) để biết mô hình mới.
 
 ## Phạm vi xác minh
 

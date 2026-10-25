@@ -5,8 +5,8 @@ title: Mạng của instance
 # Mạng của instance
 
 **Cài đặt → Hệ thống Gotham** cấu hình chính máy chủ control plane: địa chỉ công khai và
-định danh, ngăn xếp mạng, và vài tùy chọn hệ thống Linux. Mục này chỉ quản trị viên
-nền tảng thấy được và áp dụng cho máy chủ control plane, không áp dụng cho các node.
+định danh, ngăn xếp mạng, và vài tùy chọn hệ thống Linux. Mục này chỉ chủ sở hữu
+thấy được và áp dụng cho máy chủ control plane, không áp dụng cho các node.
 
 Trang có ba tab: **Chung**, **Mạng** và **Hệ thống**.
 

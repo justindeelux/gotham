@@ -4,44 +4,41 @@ title: Vận hành Gotham
 
 # Vận hành Gotham
 
-Phần này nói về phía hạ tầng của nền tảng: các máy chủ Gotham quản lý, các
-container chạy trên đó, và những công cụ cấp máy chủ mà quản trị viên dùng để
-xem bên trong một node. Đây không phải phần triển khai ứng dụng hay cơ sở dữ
-liệu; những nội dung đó nằm trong [Sử dụng Gotham](/vi/using/).
+Lộ trình này trình bày phần hạ tầng của nền tảng: các máy chủ Gotham quản lý,
+các container chạy trên đó, và các công cụ cấp máy chủ mà chủ sở hữu dùng để xem
+bên trong một node. Trang này không nói về triển khai ứng dụng hay cơ sở dữ liệu;
+những phần đó nằm trong [Sử dụng Gotham](/vi/using/).
 
-Mọi khối lượng công việc đều chạy trên một node do quản trị viên đăng ký, nên
-hãy bắt đầu tại đây.
+Mọi khối lượng công việc chạy trên một node do chủ sở hữu đăng ký, nên hãy bắt
+đầu từ đây.
 
-## Truy cập
+## Quyền truy cập
 
-Phần này áp dụng hai mức quyền:
+Tài khoản chủ sở hữu vận hành instance. Chủ sở hữu đăng ký máy chủ, kết nối nhà
+cung cấp Git, đổi cài đặt instance và mạng, quản lý bề mặt Tên miền & SSL toàn cục,
+áp dụng cập nhật, và mở terminal cùng trình quản lý tệp trên máy chủ. API token của
+chủ sở hữu còn cần phạm vi `admin` cho các tuyến này.
 
-- **Quản lý node và container** theo phạm vi nhóm. Thành viên của nhóm sở hữu
-  node có thể đọc node và các container của nó; để khởi động, dừng, sửa hoặc
-  xóa cần vai trò nhóm `owner` hoặc `admin`. Xem
-  [Bảo mật](/vi/operating/security).
-- **Chỉ quản trị viên nền tảng**: shell trên máy chủ và trình quản lý tệp. Quản
-  trị viên nền tảng là một phiên có claim vai trò `admin`, một tài khoản có email
-  nằm trong `PLATFORM_ADMINS`, hoặc một API token mang phạm vi `admin`. Chủ sở
-  hữu nhóm không có quyền này sẽ nhận `403` từ các tuyến đó.
+Thành viên làm việc trong những dự án chủ sở hữu đã cấp. Họ triển khai và vận hành
+ứng dụng, dịch vụ, cơ sở dữ liệu ở đó; họ không thấy máy chủ, khoá máy chủ, kết nối
+Git, cài đặt instance, proxy/DNS toàn cục, cập nhật hay công cụ máy chủ. Terminal
+trong container ứng dụng cũng chỉ dành cho chủ sở hữu. Thành viên mất quyền vào một
+dự án sẽ mất tài nguyên của dự án đó ở yêu cầu tiếp theo.
 
-Terminal của container ứng dụng là một bề mặt riêng ở cấp nhóm: shell bên trong
-container ứng dụng đang chạy cần quyền ghi vào nhóm của ứng dụng đó, không phải
-quyền quản trị viên nền tảng. Xem
-[Ứng dụng](/vi/using/applications#cac-tab-chi-tiet).
+Xem [Bảo mật](/vi/operating/security) để biết mô hình tin cậy phía sau các tuyến
+này.
 
 ## Các trang
 
-- [Node và container](/vi/operating/nodes-containers) — đăng ký và sửa node,
-  kiểm tra lại SSH, đặt lại khóa máy chủ đã ghim, xem tổng quan và chỉ số của
-  node, và quản lý container cùng nhật ký của node.
-- [Terminal và tệp](/vi/operating/terminal-files) — shell trên máy chủ của một
-  node và trình quản lý tệp từ xa, kèm các cờ tính năng điều khiển cả hai.
-- [Cửa hàng ứng dụng](/vi/operating/app-store) — cài đặt và gỡ bỏ công cụ máy
-  chủ trên một node.
-- [Mạng của instance](/vi/operating/instance-network) — địa chỉ của control
-  plane, hostname, DNS và cài đặt thời gian.
-- [Proxy và DNS](/vi/operating/proxy-dns) — bộ định tuyến Traefik, chứng chỉ và
-  nhà cung cấp DNS.
-- [Bảo mật](/vi/operating/security) — quản trị viên, nhóm và mô hình tin cậy
-  đằng sau quyền truy cập cấp máy chủ.
+- [Node và container](/vi/operating/nodes-containers) — đăng ký và sửa node, xác
+  thực lại SSH, đặt lại host key đã ghim, xem tổng quan và chỉ số node, và quản lý
+  container cùng log của node.
+- [Terminal và tệp](/vi/operating/terminal-files) — shell trên máy chủ và trình
+  quản lý tệp từ xa, cùng các cờ tính năng gác cả hai.
+- [Kho ứng dụng](/vi/operating/app-store) — cài và gỡ công cụ máy chủ trên một node.
+- [Mạng của instance](/vi/operating/instance-network) — địa chỉ control plane, tên
+  máy, DNS và cài đặt thời gian.
+- [Proxy và DNS](/vi/operating/proxy-dns) — bộ định tuyến Traefik, chứng chỉ và nhà
+  cung cấp DNS.
+- [Bảo mật](/vi/operating/security) — tài khoản chủ sở hữu và thành viên, quyền dự
+  án, API token và mô hình tin cậy phía sau quyền truy cập máy chủ.

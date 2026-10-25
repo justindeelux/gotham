@@ -67,7 +67,19 @@ Confinement itself is `os.OpenRoot`: every access is resolved relative to a
 held directory descriptor, so a `..` component, an absolute path or a symlink
 that leaves the tree is refused by the descriptor walk. The service must not be
 exposed without the agent's CA configured, since confinement is not
-authentication.
+authentication. Each root's identity is taken from the opened descriptor, so a
+path component swapped while the roots are validated refuses startup instead of
+registering the swapped directory.
+
+A write keeps the inode when the agent user does not own the file or the file
+has more than one hard link: rewriting it in place preserves its owner, mode and
+mount instead of replacing it with a new inode. A hard link whose other name
+lies outside the root therefore shares that rewrite, so editing the file through
+the root changes the outside name too. This is an accepted risk: creating the
+link already needs write access to the target, roots are operator-controlled,
+and a single-link file owned by the agent user is still replaced atomically by
+rename. Rename or delete the entry to break the link if the outside name must
+not change.
 
 `List` returns at most 5,000 entries per page, sorted by name. A page that has
 more entries than one response can carry reports `truncated=true` and an opaque

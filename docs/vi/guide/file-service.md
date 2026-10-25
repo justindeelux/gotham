@@ -68,7 +68,18 @@ Bản thân việc giới hạn là `os.OpenRoot`: mọi truy cập được ph�
 một descriptor thư mục đang giữ, nên một thành phần `..`, một đường dẫn tuyệt đối
 hoặc một symlink rời khỏi cây đều bị từ chối bởi bước duyệt descriptor. Dịch vụ
 không được phơi ra khi chưa cấu hình CA của agent, vì việc giới hạn không phải xác
-thực.
+thực. Danh tính của mỗi gốc được lấy từ descriptor đã mở, nên một thành phần đường
+dẫn bị hoán đổi trong lúc xác thực các gốc sẽ khiến khởi động bị từ chối thay vì
+đăng ký thư mục bị hoán đổi.
+
+Một lần ghi giữ nguyên inode khi người dùng agent không sở hữu tệp hoặc tệp có
+nhiều hơn một hard link: ghi đè tại chỗ giữ được chủ sở hữu, mode và mount thay vì
+thay bằng inode mới. Vì vậy một hard link có tên khác nằm ngoài gốc cũng chia sẻ
+lần ghi đó, nên sửa tệp qua gốc cũng đổi tên bên ngoài. Đây là rủi ro được chấp
+nhận: tạo liên kết đó vốn đã cần quyền ghi vào đích, các gốc do người vận hành
+kiểm soát, và một tệp một liên kết thuộc người dùng agent vẫn được thay thế nguyên
+tử bằng rename. Hãy đổi tên hoặc xóa mục để phá liên kết nếu tên bên ngoài không
+được đổi.
 
 `List` trả về tối đa 5.000 mục mỗi trang, sắp theo tên. Một trang có nhiều mục hơn
 một phản hồi mang được sẽ báo `truncated=true` và một `cursor` base64 không trong

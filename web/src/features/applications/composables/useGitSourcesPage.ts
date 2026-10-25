@@ -20,7 +20,6 @@ import type { SourceProvider } from "@/features/applications/api/providers";
 import { describeGitHubAppError } from "@/features/applications/api/githubApp";
 import { useGitHubAppStore } from "@/features/applications/stores/githubApp";
 import { useProvidersStore } from "@/features/applications/stores/providers";
-import { useTeamsStore } from "@/features/teams";
 import { isApiError } from "@/features/servers";
 
 export interface GitSourceRow {
@@ -116,11 +115,10 @@ export interface DisconnectResult {
 export function useGitSourcesPage() {
   const githubAppStore = useGitHubAppStore();
   const providersStore = useProvidersStore();
-  const teamsStore = useTeamsStore();
 
   const loading = ref(false);
   const error = ref<string | null>(null);
-  const teamApps = ref<Application[]>([]);
+  const appsUsingSource = ref<Application[]>([]);
   const usageState = ref<"loading" | "known" | "unknown">("loading");
   const disconnectError = ref<string | null>(null);
   const disconnectNames = ref<string[]>([]);
@@ -132,7 +130,7 @@ export function useGitSourcesPage() {
     const github = githubAppStore.apps.map((app) =>
       rowForGitHubApp(
         app,
-        teamApps.value,
+        appsUsingSource.value,
         githubAppStore.reposByApp[app.id] === undefined
           ? null
           : githubAppStore.reposByApp[app.id].length,
@@ -141,7 +139,7 @@ export function useGitSourcesPage() {
     const providers = providersStore.providers.map((provider) =>
       rowForProvider(
         provider,
-        teamApps.value,
+        appsUsingSource.value,
         providersStore.reposByProvider[provider.id] === undefined
           ? null
           : providersStore.reposByProvider[provider.id].length,
@@ -163,10 +161,10 @@ export function useGitSourcesPage() {
     }
     usageState.value = "loading";
     try {
-      teamApps.value = await listApplications(teamsStore.activeTeamId);
+      appsUsingSource.value = await listApplications();
       usageState.value = "known";
     } catch {
-      teamApps.value = [];
+      appsUsingSource.value = [];
       usageState.value = "unknown";
     }
     const repos: Array<Promise<unknown>> = [];
@@ -260,10 +258,10 @@ export function useGitSourcesPage() {
       await deleteProvider(row.id);
       await providersStore.fetchProviders().catch(() => undefined);
       try {
-        teamApps.value = await listApplications(teamsStore.activeTeamId);
+        appsUsingSource.value = await listApplications();
         usageState.value = "known";
       } catch {
-        teamApps.value = [];
+        appsUsingSource.value = [];
         usageState.value = "unknown";
       }
       return { applicationsUsing: 0 };

@@ -36,15 +36,6 @@ const session = {
   refreshToken: "test-refresh",
 };
 
-const team = {
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-};
-
 const server1 = "11111111-1111-4111-8111-111111111111";
 
 const row1 = {
@@ -114,13 +105,11 @@ test.afterAll(async () => {
 
 interface OpenOptions {
   entries?: ReturnType<typeof listing>;
-  role?: string;
   locale?: string;
 }
 
 async function openFiles(page: Page, options: OpenOptions = {}): Promise<void> {
   const entries = options.entries ?? listing();
-  const role = options.role ?? "owner";
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(
     ({ sessionValue, storedLocale }) => {
@@ -135,10 +124,7 @@ async function openFiles(page: Page, options: OpenOptions = {}): Promise<void> {
     await route.fulfill({ json: {} });
   });
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: session.user });
-  });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [{ ...team, role }] } });
+    await route.fulfill({ json: { user: session.user } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -359,33 +345,7 @@ test.describe("icon-only controls are accessible", () => {
     ).toHaveCount(0);
   });
 
-  test("a disabled row action stays dimmed when the row is revealed", async ({
-    page,
-  }) => {
-    await openFiles(page, { role: "member" });
-    const row = rowFor(page, "app.yaml");
-    const download = row.getByRole("button", {
-      name: "Download app.yaml",
-      exact: true,
-    });
-    await expect(download).toBeDisabled();
-
-    const dim = await download.evaluate((element) =>
-      window
-        .getComputedStyle(element)
-        .getPropertyValue("--n-opacity-disabled")
-        .trim(),
-    );
-    expect(dim).not.toBe("");
-    expect(Number(dim)).toBeLessThan(1);
-
-    await expect(download).toHaveCSS("opacity", "0");
-
-    await row.hover();
-    await expect(download).toHaveCSS("opacity", dim);
-  });
-
-  test("row and toolbar labels are localized (vi)", async ({ page }) => {
+    test("row and toolbar labels are localized (vi)", async ({ page }) => {
     await openFiles(page, { locale: "vi" });
 
     const fileRow = rowFor(page, "app.yaml");
@@ -495,22 +455,7 @@ test.describe("no-tooltip behaviour (JUS-210)", () => {
     expect(await scan()).toEqual([]);
   });
 
-  test("a blocked row action keeps its action name and stays reachable", async ({
-    page,
-  }) => {
-    await openFiles(page, { role: "member" });
-    const download = rowFor(page, "app.yaml").getByRole("button", {
-      name: "Download app.yaml",
-    });
-    await expect(download).toHaveAttribute("aria-disabled", "true");
-    await expect(download).toHaveAttribute("aria-label", "Download app.yaml");
-    await expectNoTooltipOnHover(page, download, "blocked row Download");
-    await expect(download).not.toHaveAttribute("aria-describedby", /.+/);
-    await expectNoTooltipOnFocus(page, download, "blocked row Download");
-    await expect(download).toBeFocused();
-  });
-
-  test("a blocked bulk action keeps its action name and still looks disabled", async ({
+    test("a blocked bulk action keeps its action name and still looks disabled", async ({
     page,
   }) => {
     await openFiles(page);
@@ -552,23 +497,7 @@ test.describe("no-tooltip behaviour (JUS-210)", () => {
     await expectNoTooltipOnHover(page, download, "row Download");
   });
 
-  test("a blocked control exposes no reason node and is not double-announced", async ({
-    page,
-  }) => {
-    await openFiles(page, { role: "member" });
-    const download = rowFor(page, "app.yaml").getByRole("button", {
-      name: "Download app.yaml",
-    });
-    await expect(download).toHaveAttribute("aria-disabled", "true");
-    await expect(download).not.toHaveAttribute("aria-describedby", /.+/);
-
-    await expect(moreFor(page, "app.yaml")).not.toHaveAttribute(
-      "aria-describedby",
-      /.+/,
-    );
-  });
-
-  test("closing a dialog with Escape leaves no tooltip on focus return", async ({
+    test("closing a dialog with Escape leaves no tooltip on focus return", async ({
     page,
   }) => {
     await openFiles(page);
@@ -1111,20 +1040,4 @@ test.describe("touch devices", () => {
     await expect(page.locator(".n-tooltip:visible")).toHaveCount(0);
   });
 
-  test("a disabled row action stays dimmed under hover:none", async ({ page }) => {
-    await openFiles(page, { role: "member" });
-    const download = rowFor(page, "app.yaml").getByRole("button", {
-      name: "Download app.yaml",
-      exact: true,
-    });
-    const dim = await download.evaluate((element) =>
-      window
-        .getComputedStyle(element)
-        .getPropertyValue("--n-opacity-disabled")
-        .trim(),
-    );
-    expect(Number(dim)).toBeGreaterThan(0);
-    expect(Number(dim)).toBeLessThan(1);
-    await expect(download).toHaveCSS("opacity", dim);
   });
-});

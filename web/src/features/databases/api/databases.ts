@@ -1,4 +1,4 @@
-import { http, teamHeaders } from "@/shared/api/http";
+import { http } from "@/shared/api/http";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 import { i18n } from "@/shared/i18n";
 
@@ -86,7 +86,6 @@ export interface CreatedDatabase {
 }
 
 export async function listDatabases(
-  teamId = "",
   filter: { environment_id?: string; project_id?: string } = {},
 ): Promise<Database[]> {
   const params: Record<string, string> = {};
@@ -97,7 +96,6 @@ export async function listDatabases(
     params.project_id = filter.project_id;
   }
   const response = await http.get<DatabaseListEnvelope>("/databases", {
-    headers: teamHeaders(teamId),
     params,
   });
   return response.data.databases ?? [];

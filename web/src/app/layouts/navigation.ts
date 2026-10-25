@@ -6,7 +6,7 @@ export interface NavItem {
   labelKey: string;
   icon: IconName;
   to: string;
-  adminOnly?: boolean;
+  ownerOnly?: boolean;
 }
 
 export interface NavSection {
@@ -22,18 +22,18 @@ export const navSections: NavSection[] = [
     items: [
       { key: "dashboard", label: "Dashboard", labelKey: "nav.items.dashboard", icon: "grid", to: "dashboard" },
       { key: "projects", label: "Projects", labelKey: "nav.items.projects", icon: "layers", to: "projects" },
-      { key: "files", label: "File manager", labelKey: "nav.items.files", icon: "folder", to: "files", adminOnly: true },
-      { key: "terminal", label: "Terminal", labelKey: "terminal.page.navLabel", icon: "terminal", to: "terminal", adminOnly: true },
+      { key: "files", label: "File manager", labelKey: "nav.items.files", icon: "folder", to: "files", ownerOnly: true },
+      { key: "terminal", label: "Terminal", labelKey: "terminal.page.navLabel", icon: "terminal", to: "terminal", ownerOnly: true },
       { key: "toolchain", label: "App Store", labelKey: "nav.items.toolchain", icon: "box", to: "toolchain" },
-      { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers" },
-      { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains", adminOnly: true },
+      { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers", ownerOnly: true },
+      { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains", ownerOnly: true },
     ],
   },
   {
-    label: "Team",
-    labelKey: "nav.sections.team",
+    label: "Access",
+    labelKey: "nav.sections.access",
     items: [
-      { key: "teams", label: "Members & roles", labelKey: "nav.items.teams", icon: "users", to: "teams" },
+      { key: "users", label: "Users", labelKey: "nav.items.users", icon: "users", to: "users", ownerOnly: true },
       {
         key: "notifications",
         label: "Notification channels",
@@ -54,26 +54,26 @@ export const navSections: NavSection[] = [
     label: "System",
     labelKey: "nav.sections.system",
     items: [
-      { key: "instance", label: "Instance", labelKey: "nav.items.instance", icon: "gear", to: "instance", adminOnly: true },
-      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear", to: "updates", adminOnly: true },
+      { key: "instance", label: "Instance", labelKey: "nav.items.instance", icon: "gear", to: "instance", ownerOnly: true },
+      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear", to: "updates", ownerOnly: true },
     ],
   },
 ];
 
 export const sectionAliases: Record<string, string> = { settings: "notifications" };
 
-export function visibleNavItems(items: NavItem[], isPlatformAdmin: boolean): NavItem[] {
-  return items.filter((item) => !item.adminOnly || isPlatformAdmin);
+export function visibleNavItems(items: NavItem[], isOwner: boolean): NavItem[] {
+  return items.filter((item) => !item.ownerOnly || isOwner);
 }
 
 export function visibleNavSections(
   sections: NavSection[],
-  isPlatformAdmin: boolean,
+  isOwner: boolean,
 ): NavSection[] {
   return sections
     .map((section) => ({
       ...section,
-      items: visibleNavItems(section.items, isPlatformAdmin),
+      items: visibleNavItems(section.items, isOwner),
     }))
     .filter((section) => section.items.length > 0);
 }

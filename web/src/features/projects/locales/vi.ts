@@ -23,7 +23,7 @@ const vi = {
     nameLabel: "Tên",
     nameAria: "Tên dự án",
     namePlaceholder: "storefront",
-    nameHint: "Duy nhất trong nhóm. 1-64 ký tự.",
+    nameHint: "Duy nhất trong instance. 1-64 ký tự.",
     descriptionLabel: "Mô tả (không bắt buộc)",
     descriptionAria: "Mô tả dự án",
     descriptionPlaceholder: "Sản phẩm này là gì",
@@ -52,7 +52,7 @@ const vi = {
     title: "Đổi tên dự án",
     nameLabel: "Tên",
     nameAria: "Tên dự án",
-    nameHint: "Duy nhất trong nhóm. 1-64 ký tự.",
+    nameHint: "Duy nhất trong instance. 1-64 ký tự.",
     submit: "Lưu",
   },
   delete: {
@@ -78,7 +78,7 @@ const vi = {
   },
   environment: {
     loading: "Đang tải môi trường…",
-    notFound: "Môi trường này không tồn tại (hoặc thuộc nhóm khác).",
+    notFound: "Môi trường này không tồn tại (hoặc nằm ngoài quyền truy cập của bạn).",
     backToProjects: "Về danh sách dự án",
     description:
       "Mọi thứ đang chạy cho {project} trong {environment}. Mỗi tài nguyên gắn với một máy chủ.",
@@ -244,7 +244,7 @@ const vi = {
   },
   errors: {
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
-    forbiddenFallback: "Vai trò trong nhóm của bạn không cho phép thao tác này.",
+    forbiddenFallback: "Bạn không có quyền thực hiện thao tác này.",
     notFoundFallback: "Không tìm thấy. Mục này có thể đã bị xóa.",
     conflictFallback: "Dự án đã thay đổi trong lúc bạn chỉnh sửa. Tải lại rồi thử lại.",
     badRequestFallback: "Yêu cầu không hợp lệ.",

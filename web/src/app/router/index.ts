@@ -46,19 +46,19 @@ const routes: RouteRecordRaw[] = [
         path: "servers",
         name: "servers",
         component: () => import("@/features/servers/pages/ServersPage.vue"),
-        meta: { titleKey: "titles.servers", requiresAuth: true },
+        meta: { titleKey: "titles.servers", requiresAuth: true, requiresOwner: true },
       },
       {
         path: "servers/:id",
         name: "server-detail",
         component: () => import("@/features/servers/pages/ServerDetailPage.vue"),
-        meta: { titleKey: "titles.serverDetail", requiresAuth: true },
+        meta: { titleKey: "titles.serverDetail", requiresAuth: true, requiresOwner: true },
       },
       {
         path: "servers/:id/containers",
         name: "server-containers",
         component: () => import("@/features/servers/pages/ContainersPage.vue"),
-        meta: { titleKey: "titles.serverContainers", requiresAuth: true },
+        meta: { titleKey: "titles.serverContainers", requiresAuth: true, requiresOwner: true },
       },
       {
         path: "files",
@@ -67,7 +67,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           titleKey: "titles.files",
           requiresAuth: true,
-          requiresPlatformAdmin: true,
+          requiresOwner: true,
           wide: true,
         },
       },
@@ -78,7 +78,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           titleKey: "titles.serverFiles",
           requiresAuth: true,
-          requiresPlatformAdmin: true,
+          requiresOwner: true,
           fillViewport: true,
           wide: true,
         },
@@ -90,7 +90,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           titleKey: "terminal.page.title",
           requiresAuth: true,
-          requiresPlatformAdmin: true,
+          requiresOwner: true,
           fillViewport: true,
         },
       },
@@ -140,7 +140,7 @@ const routes: RouteRecordRaw[] = [
         path: "domains",
         name: "domains",
         component: () => import("@/features/domains/pages/DomainsPage.vue"),
-        meta: { titleKey: "titles.domains", requiresAuth: true, requiresPlatformAdmin: true },
+        meta: { titleKey: "titles.domains", requiresAuth: true, requiresOwner: true },
       },
       {
         path: "projects/:projectId/environments/:environmentId/services/:id",
@@ -161,10 +161,10 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.providerCallback", requiresAuth: true },
       },
       {
-        path: "teams",
-        name: "teams",
-        component: () => import("@/features/teams/pages/TeamsPage.vue"),
-        meta: { titleKey: "titles.teams", requiresAuth: true },
+        path: "users",
+        name: "users",
+        component: () => import("@/features/users/pages/UsersPage.vue"),
+        meta: { titleKey: "titles.users", requiresAuth: true, requiresOwner: true },
       },
       {
         path: "settings/notifications",
@@ -182,13 +182,13 @@ const routes: RouteRecordRaw[] = [
         path: "settings/instance",
         name: "instance",
         component: () => import("@/features/instance-settings/pages/InstanceSettingsPage.vue"),
-        meta: { titleKey: "titles.instance", requiresAuth: true, requiresPlatformAdmin: true },
+        meta: { titleKey: "titles.instance", requiresAuth: true, requiresOwner: true },
       },
       {
         path: "settings/updates",
         name: "updates",
         component: () => import("@/features/updates/pages/UpdatesPage.vue"),
-        meta: { titleKey: "titles.updates", requiresAuth: true, requiresPlatformAdmin: true },
+        meta: { titleKey: "titles.updates", requiresAuth: true, requiresOwner: true },
       },
       { path: "settings", redirect: { name: "notifications" } },
       {
@@ -196,12 +196,6 @@ const routes: RouteRecordRaw[] = [
         name: "profile",
         component: () => import("@/features/profile/pages/ProfilePage.vue"),
         meta: { titleKey: "titles.profile", requiresAuth: true },
-      },
-      {
-        path: "invite/accept",
-        name: "invite-accept",
-        component: () => import("@/features/auth/pages/InviteAcceptPage.vue"),
-        meta: { titleKey: "titles.inviteAccept", requiresAuth: true },
       },
       {
         path: "forbidden",
@@ -231,9 +225,9 @@ router.beforeEach(async (to) => {
     return { name: "login", query: { redirect: to.fullPath } };
   }
 
-  if (to.meta.requiresPlatformAdmin && !authStore.isPlatformAdmin) {
+  if (to.meta.requiresOwner && !authStore.isOwner) {
     await authStore.fetchMe().catch(() => undefined);
-    if (!authStore.isPlatformAdmin) {
+    if (!authStore.isOwner) {
       return { name: "forbidden" };
     }
   }

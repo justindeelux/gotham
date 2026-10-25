@@ -2,19 +2,19 @@ import type en from "./en";
 
 const vi: typeof en = {
   page: {
-    eyebrow: "Cài đặt · Quản trị nền tảng",
+    eyebrow: "Cài đặt · Chủ sở hữu",
     title: "Hệ thống Gotham",
     description:
-      "Cấu hình chính instance Gotham: địa chỉ công khai, tên và múi giờ, mạng của máy chủ và một số tùy chọn Linux. Chỉ dành cho quản trị viên nền tảng.",
+      "Cấu hình chính instance Gotham: địa chỉ công khai, tên và múi giờ, mạng của máy chủ và một số tùy chọn Linux. Chỉ dành cho chủ sở hữu.",
   },
   tabs: { general: "Chung", network: "Mạng", system: "Hệ thống" },
-  forbidden: "Chỉ quản trị viên nền tảng mới xem hoặc thay đổi được cài đặt instance.",
+  forbidden: "Chỉ chủ sở hữu mới xem hoặc thay đổi được cài đặt instance.",
   locked: "Bị khóa bởi biến môi trường {name}.",
   helper: {
     missing:
       "Helper máy chủ chưa được cài, nên các giá trị chỉ hiển thị. Hãy cài để quản lý cài đặt máy chủ từ Gotham.",
     restart:
-      "Thay đổi máy chủ do trình cài đặt control plane thiết lập, nên quản trị viên nền tảng phải chạy lại trình cài đặt (hoặc nâng cấp) để bật chúng.",
+      "Thay đổi máy chủ do trình cài đặt control plane thiết lập, nên chủ sở hữu phải chạy lại trình cài đặt (hoặc nâng cấp) để bật chúng.",
     install: "Cài helper máy chủ",
     installed: "Đã cài helper máy chủ. Các cài đặt này giờ có thể chỉnh sửa.",
     installFailed: "Không cài được helper máy chủ.",

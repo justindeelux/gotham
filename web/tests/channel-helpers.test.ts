@@ -104,8 +104,8 @@ describe("channelHelpers", () => {
   });
 
   it("labels scopes with resolved names and falls back to ids", () => {
-    const teamWide = { resource_type: "", resource_id: "" } as NotificationChannel;
-    expect(scopeLabel(teamWide, () => undefined)).toBe("Team-wide");
+    const globalScope = { resource_type: "", resource_id: "" } as NotificationChannel;
+    expect(scopeLabel(globalScope, () => undefined)).toBe("All resources");
     const scoped = {
       resource_type: "application",
       resource_id: "app-1",

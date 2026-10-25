@@ -33,15 +33,6 @@ const user = {
   role: "owner",
 };
 
-const team = {
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-};
-
 const serverId = "44444444-4444-4444-8444-444444444444";
 
 const serverRow = {
@@ -249,10 +240,7 @@ async function mockApi(page: Page, state: State): Promise<void> {
     await route.fulfill({ json: {} });
   });
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: session.user });
-  });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team] } });
+    await route.fulfill({ json: { user: session.user } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -654,7 +642,7 @@ test("surfaces a server-side permission denial", async ({ page }) => {
   const state = newState();
   state.createError = {
     status: 403,
-    message: "platform operator required",
+    message: "owner required",
   };
   await openFiles(page, state);
 
@@ -662,7 +650,7 @@ test("surfaces a server-side permission denial", async ({ page }) => {
 
   await expect(terminalWindow(page)).toBeVisible();
   await expect(
-    terminalWindow(page).getByText("Only a platform operator can open a host terminal."),
+    terminalWindow(page).getByText("Only the owner can open a host terminal."),
   ).toBeVisible();
   expect(state.sessions).toHaveLength(0);
 });
@@ -810,7 +798,7 @@ test("never renders raw backend text or host paths in the error overlay", async 
     {
       status: 403,
       body: "forbidden: /var/lib/gotham/volumes/secret",
-      text: "Only a platform operator can open a host terminal.",
+      text: "Only the owner can open a host terminal.",
     },
     {
       status: 429,

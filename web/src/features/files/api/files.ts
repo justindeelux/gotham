@@ -1,7 +1,7 @@
 import { isApiError } from "@/features/servers";
 import type { EditorEncoding } from "@/features/files/utils/editor";
 import { i18n } from "@/shared/i18n";
-import { http, teamHeaders } from "@/shared/api/http";
+import { http } from "@/shared/api/http";
 import { parseWith } from "@/shared/validation/parse";
 
 import type {
@@ -36,10 +36,8 @@ export const fileTransferTimeoutMs = 0;
 
 export async function listRoots(
   serverId: string,
-  teamId = "",
 ): Promise<FilesRoot[]> {
   const response = await http.get(`/servers/${serverId}/files/roots`, {
-    headers: teamHeaders(teamId),
   });
   const data = parseWith(filesRootListSchema, response.data, {
     context: "FilesRootList",
@@ -55,7 +53,6 @@ export interface ListEntriesOptions {
 
 export async function listEntries(
   serverId: string,
-  teamId: string,
   options: ListEntriesOptions,
 ): Promise<FilesListing> {
   const response = await http.get(`/servers/${serverId}/files/list`, {
@@ -64,7 +61,6 @@ export async function listEntries(
       path: options.path ?? "",
       cursor: options.cursor ?? "",
     },
-    headers: teamHeaders(teamId),
   });
   const data = parseWith(filesListingSchema, response.data, {
     context: "FilesListing",
@@ -78,13 +74,11 @@ export async function listEntries(
 
 export async function statEntry(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
 ): Promise<FilesEntry | null> {
   const response = await http.get(`/servers/${serverId}/files/stat`, {
     params: { root, path },
-    headers: teamHeaders(teamId),
   });
   const data = parseWith(filesStatSchema, response.data, {
     context: "FilesStat",
@@ -94,14 +88,12 @@ export async function statEntry(
 
 export async function calculateFolderSize(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
   signal?: AbortSignal,
 ): Promise<FilesFolderSize> {
   const response = await http.get(`/servers/${serverId}/files/size`, {
     params: { root, path },
-    headers: teamHeaders(teamId),
     timeout: fileTransferTimeoutMs,
     signal,
   });
@@ -120,7 +112,6 @@ export interface SearchEntriesOptions {
 
 export async function searchEntries(
   serverId: string,
-  teamId: string,
   options: SearchEntriesOptions,
 ): Promise<FilesSearchListing> {
   const response = await http.get(`/servers/${serverId}/files/search`, {
@@ -130,7 +121,6 @@ export async function searchEntries(
       query: options.query,
       recursive: options.recursive === true ? "true" : "false",
     },
-    headers: teamHeaders(teamId),
     signal: options.signal,
   });
   const data = parseWith(filesSearchListingSchema, response.data, {
@@ -144,13 +134,11 @@ export async function searchEntries(
 
 export async function getContent(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
 ): Promise<FilesContent> {
   const response = await http.get(`/servers/${serverId}/files/content`, {
     params: { root, path },
-    headers: teamHeaders(teamId),
   });
   return parseWith(filesContentSchema, response.data, {
     context: "FilesContent",
@@ -168,7 +156,6 @@ export interface SaveContentOptions {
 
 export async function putContent(
   serverId: string,
-  teamId: string,
   options: SaveContentOptions,
 ): Promise<FilesEntry> {
   const overwrite = options.overwrite === true;
@@ -183,7 +170,6 @@ export async function putContent(
         encoding: options.encoding ?? "utf-8",
       },
       headers: {
-        ...teamHeaders(teamId),
         "Content-Type": "text/plain; charset=utf-8",
         "If-Match": overwrite ? "*" : (options.etag ?? ""),
       },
@@ -198,13 +184,11 @@ export async function putContent(
 
 export async function listFileVersions(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
 ): Promise<FilesVersion[]> {
   const response = await http.get(`/servers/${serverId}/files/history`, {
     params: { root, path },
-    headers: teamHeaders(teamId),
   });
   const data = parseWith(filesVersionListSchema, response.data, {
     context: "FilesVersionList",
@@ -214,14 +198,13 @@ export async function listFileVersions(
 
 export async function getFileVersion(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
   versionId: string,
 ): Promise<FilesVersionContent> {
   const response = await http.get(
     `/servers/${serverId}/files/history/${encodeURIComponent(versionId)}`,
-    { params: { root, path }, headers: teamHeaders(teamId) },
+    { params: { root, path } },
   );
   return parseWith(filesVersionContentSchema, response.data, {
     context: "FilesVersionContent",
@@ -230,7 +213,6 @@ export async function getFileVersion(
 
 export async function restoreFileVersion(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
   versionId: string,
@@ -240,8 +222,7 @@ export async function restoreFileVersion(
     null,
     {
       params: { root, path },
-      headers: teamHeaders(teamId),
-      timeout: fileTransferTimeoutMs,
+        timeout: fileTransferTimeoutMs,
     },
   );
   const data = parseWith(filesWriteEnvelopeSchema, response.data, {
@@ -252,27 +233,25 @@ export async function restoreFileVersion(
 
 export async function deleteFileVersion(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
   versionId: string,
 ): Promise<void> {
   await http.delete(
     `/servers/${serverId}/files/history/${encodeURIComponent(versionId)}`,
-    { params: { root, path }, headers: teamHeaders(teamId) },
+    { params: { root, path } },
   );
 }
 
 export async function issueDownloadTicket(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
 ): Promise<string> {
   const response = await http.post(
     `/servers/${serverId}/files/download-ticket`,
     null,
-    { params: { root, path }, headers: teamHeaders(teamId) },
+    { params: { root, path } },
   );
   const data = parseWith(downloadTicketSchema, response.data, {
     context: "DownloadTicket",
@@ -353,26 +332,24 @@ function parseEntry(data: unknown, context: string): FilesEntry {
 
 export async function createFolder(
   serverId: string,
-  teamId: string,
   options: CreateEntryOptions,
 ): Promise<FilesEntry> {
   const response = await http.post(
     `/servers/${serverId}/files/mkdir`,
     { root: options.root, path: options.path, mode: options.mode ?? 0o755 },
-    { headers: teamHeaders(teamId) },
+
   );
   return parseEntry(response.data, "FilesMkdir");
 }
 
 export async function createFile(
   serverId: string,
-  teamId: string,
   options: CreateEntryOptions,
 ): Promise<FilesEntry> {
   const response = await http.post(
     `/servers/${serverId}/files/create`,
     { root: options.root, path: options.path, mode: options.mode ?? 0o644 },
-    { headers: teamHeaders(teamId) },
+
   );
   return parseEntry(response.data, "FilesCreate");
 }
@@ -388,7 +365,6 @@ async function postLocation(
   route: "rename" | "move" | "copy",
   context: string,
   serverId: string,
-  teamId: string,
   options: LocationOptions,
 ): Promise<FilesEntry> {
   const response = await http.post(
@@ -399,56 +375,49 @@ async function postLocation(
       destination: options.destination,
       overwrite: options.overwrite === true,
     },
-    { headers: teamHeaders(teamId) },
+
   );
   return parseEntry(response.data, context);
 }
 
 export async function renameEntry(
   serverId: string,
-  teamId: string,
   options: LocationOptions,
 ): Promise<FilesEntry> {
-  return postLocation("rename", "FilesRename", serverId, teamId, options);
+  return postLocation("rename", "FilesRename", serverId, options);
 }
 
 export async function moveEntry(
   serverId: string,
-  teamId: string,
   options: LocationOptions,
 ): Promise<FilesEntry> {
-  return postLocation("move", "FilesMove", serverId, teamId, options);
+  return postLocation("move", "FilesMove", serverId, options);
 }
 
 export async function copyEntry(
   serverId: string,
-  teamId: string,
   options: LocationOptions,
 ): Promise<FilesEntry> {
-  return postLocation("copy", "FilesCopy", serverId, teamId, options);
+  return postLocation("copy", "FilesCopy", serverId, options);
 }
 
 export async function deleteEntry(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
   recursive: boolean,
 ): Promise<void> {
   await http.delete(`/servers/${serverId}/files/entry`, {
     params: { root, path, recursive: recursive ? "true" : "false" },
-    headers: teamHeaders(teamId),
   });
 }
 
 export async function listTrash(
   serverId: string,
-  teamId: string,
   root: string,
 ): Promise<TrashListing> {
   const response = await http.get(`/servers/${serverId}/files/trash`, {
     params: { root },
-    headers: teamHeaders(teamId),
   });
   const data = parseWith(trashListingSchema, response.data, {
     context: "TrashListing",
@@ -468,7 +437,6 @@ export interface RestoreTrashOptions {
 
 export async function restoreTrash(
   serverId: string,
-  teamId: string,
   options: RestoreTrashOptions,
 ): Promise<FilesEntry> {
   const response = await http.post(
@@ -479,33 +447,31 @@ export async function restoreTrash(
       destination: options.destination ?? "",
       overwrite: options.overwrite === true,
     },
-    { headers: teamHeaders(teamId) },
+
   );
   return parseEntry(response.data, "TrashRestore");
 }
 
 export async function purgeTrash(
   serverId: string,
-  teamId: string,
   root: string,
   id: string,
 ): Promise<void> {
   await http.post(
     `/servers/${serverId}/files/trash/purge`,
     { root, id },
-    { headers: teamHeaders(teamId) },
+
   );
 }
 
 export async function emptyTrash(
   serverId: string,
-  teamId: string,
   root: string,
 ): Promise<number> {
   const response = await http.post(
     `/servers/${serverId}/files/trash/empty`,
     { root },
-    { headers: teamHeaders(teamId) },
+
   );
   const data = parseWith(emptyTrashEnvelopeSchema, response.data, {
     context: "TrashEmpty",
@@ -521,13 +487,12 @@ export interface ChmodOptions {
 
 export async function chmodEntry(
   serverId: string,
-  teamId: string,
   options: ChmodOptions,
 ): Promise<FilesEntry> {
   const response = await http.post(
     `/servers/${serverId}/files/chmod`,
     { root: options.root, path: options.path, mode: options.mode },
-    { headers: teamHeaders(teamId) },
+
   );
   return parseEntry(response.data, "FilesChmod");
 }
@@ -544,7 +509,6 @@ export interface CompressOptions {
 
 export async function compressEntries(
   serverId: string,
-  teamId: string,
   options: CompressOptions,
 ): Promise<FilesEntry> {
   const response = await http.post(
@@ -556,7 +520,7 @@ export async function compressEntries(
       format: options.format,
       overwrite: options.overwrite === true,
     },
-    { headers: teamHeaders(teamId), timeout: fileTransferTimeoutMs },
+    { timeout: fileTransferTimeoutMs },
   );
   return parseEntry(response.data, "FilesCompress");
 }
@@ -570,7 +534,6 @@ export interface ExtractOptions {
 
 export async function extractEntry(
   serverId: string,
-  teamId: string,
   options: ExtractOptions,
 ): Promise<void> {
   await http.post(
@@ -581,7 +544,7 @@ export async function extractEntry(
       destination: options.destination,
       overwrite: options.overwrite === true,
     },
-    { headers: teamHeaders(teamId), timeout: fileTransferTimeoutMs },
+    { timeout: fileTransferTimeoutMs },
   );
 }
 
@@ -600,7 +563,6 @@ export interface UploadFilesOptions {
 
 export async function uploadFiles(
   serverId: string,
-  teamId: string,
   files: File[],
   options: UploadFilesOptions,
 ): Promise<FilesUploadResult[]> {
@@ -617,8 +579,7 @@ export async function uploadFiles(
         path: options.path ?? "",
         overwrite: options.overwrite === true ? "true" : "false",
       },
-      headers: teamHeaders(teamId),
-      timeout: fileTransferTimeoutMs,
+        timeout: fileTransferTimeoutMs,
       signal: options.signal,
       onUploadProgress: options.onProgress
         ? (event) => {

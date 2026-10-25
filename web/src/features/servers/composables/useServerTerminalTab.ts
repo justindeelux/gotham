@@ -23,7 +23,7 @@ export function useServerTerminalTab(options: ServerTerminalTabOptions) {
   const closed = ref(false);
 
   const canUse = computed<boolean>(
-    () => authStore.isAuthenticated && authStore.isPlatformAdmin,
+    () => authStore.isAuthenticated && authStore.isOwner,
   );
   const tab = computed(() =>
     tabId.value === "" ? null : terminal.findTab(tabId.value),

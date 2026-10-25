@@ -10,9 +10,7 @@ import type {
   Environment,
   Project,
 } from "@/features/projects/api/projects";
-import { useTeamsStore } from "@/features/teams";
 export function useEnvironmentOptions() {
-  const teamsStore = useTeamsStore();
 
   const projectsLoading = ref(false);
   const projectsFailure: Ref<unknown> = ref(null);
@@ -38,10 +36,7 @@ export function useEnvironmentOptions() {
     })),
   );
 
-  const canWrite = computed<boolean>(() => {
-    const role = teamsStore.activeTeam?.role ?? null;
-    return role === null || role !== "read_only";
-  });
+  const canWrite = computed<boolean>(() => true);
 
   function environmentOptions(projectId: string): Array<{ label: string; value: string }> {
     return (environmentsByProject.value[projectId] ?? []).map((environment) => ({
@@ -66,7 +61,7 @@ export function useEnvironmentOptions() {
     projectsLoading.value = true;
     projectsFailure.value = null;
     try {
-      projects.value = await listProjectsRequest(teamsStore.activeTeamId);
+      projects.value = await listProjectsRequest();
     } catch (error) {
       projectsFailure.value = error;
     } finally {
@@ -81,7 +76,7 @@ export function useEnvironmentOptions() {
     environmentsLoading.value = true;
     environmentsFailure.value = null;
     try {
-      const detail = await getProjectRequest(teamsStore.activeTeamId, projectId);
+      const detail = await getProjectRequest(projectId);
       environmentsByProject.value[projectId] = detail.environments;
     } catch (error) {
       environmentsFailure.value = error;

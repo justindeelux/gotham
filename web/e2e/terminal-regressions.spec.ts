@@ -5,7 +5,7 @@ import {
   authHeaders,
   fileManagerURL,
   focusTerminal,
-  isPlatformAdmin,
+  isOwner,
   pickServer,
   processRunning,
   ptmxCount,
@@ -37,7 +37,7 @@ test.beforeEach(async ({ page }) => {
 
 async function requireTerminalNode(request: Parameters<typeof terminalServer>[0]) {
   skipOrFail(
-    !(await isPlatformAdmin(request, account)),
+    !(await isOwner(request, account)),
     "the smoke account is not the instance owner",
     test.skip,
   );

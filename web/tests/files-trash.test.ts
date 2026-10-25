@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/shared/api/http", () => ({
   http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
-  teamHeaders: (teamId: string) => (teamId ? { "X-Team-Id": teamId } : {}),
 }));
 
 import { http } from "@/shared/api/http";
@@ -22,7 +21,6 @@ import {
 import type { TrashEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { useTrashStore } from "@/features/files/stores/trash";
-import { useTeamsStore } from "@/features/teams";
 
 const root = {
   name: "volumes",
@@ -89,9 +87,6 @@ function routeGet(
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "owner" }];
 });
 
 describe("trash schemas", () => {
@@ -121,16 +116,15 @@ describe("trash schemas", () => {
 });
 
 describe("trash api", () => {
-  it("lists the bin with the team header", async () => {
+  it("lists the bin for a root", async () => {
     vi.mocked(http.get).mockResolvedValue({
       data: { entries: [binEntry({ id: "t1" })], truncated: true },
     });
 
-    const listing = await listTrash("server-1", "team-1", "volumes");
+    const listing = await listTrash("server-1", "volumes");
 
     expect(http.get).toHaveBeenCalledWith("/servers/server-1/files/trash", {
       params: { root: "volumes" },
-      headers: { "X-Team-Id": "team-1" },
     });
     expect(listing.entries).toHaveLength(1);
     expect(listing.truncated).toBe(true);
@@ -139,18 +133,17 @@ describe("trash api", () => {
   it("restores to the recorded path, and to an explicit destination with overwrite", async () => {
     vi.mocked(http.post).mockResolvedValue({ data: { entry: restoredEntry } });
 
-    const restored = await restoreTrash("server-1", "team-1", {
+    const restored = await restoreTrash("server-1", {
       root: "volumes",
       id: "t1",
     });
     expect(http.post).toHaveBeenCalledWith(
       "/servers/server-1/files/trash/restore",
       { root: "volumes", id: "t1", destination: "", overwrite: false },
-      { headers: { "X-Team-Id": "team-1" } },
     );
     expect(restored.name).toBe("app.yaml");
 
-    await restoreTrash("server-1", "team-1", {
+    await restoreTrash("server-1", {
       root: "volumes",
       id: "t1",
       destination: "moved/app.yaml",
@@ -159,36 +152,32 @@ describe("trash api", () => {
     expect(http.post).toHaveBeenLastCalledWith(
       "/servers/server-1/files/trash/restore",
       { root: "volumes", id: "t1", destination: "moved/app.yaml", overwrite: true },
-      { headers: { "X-Team-Id": "team-1" } },
     );
   });
 
   it("purges one entry and empties the bin", async () => {
     vi.mocked(http.post).mockResolvedValue({ data: {} });
 
-    await purgeTrash("server-1", "team-1", "volumes", "t1");
+    await purgeTrash("server-1", "volumes", "t1");
     expect(http.post).toHaveBeenCalledWith(
       "/servers/server-1/files/trash/purge",
       { root: "volumes", id: "t1" },
-      { headers: { "X-Team-Id": "team-1" } },
     );
 
     vi.mocked(http.post).mockResolvedValue({ data: { removed: 2 } });
-    await expect(emptyTrash("server-1", "team-1", "volumes")).resolves.toBe(2);
+    await expect(emptyTrash("server-1", "volumes")).resolves.toBe(2);
     expect(http.post).toHaveBeenLastCalledWith(
       "/servers/server-1/files/trash/empty",
       { root: "volumes" },
-      { headers: { "X-Team-Id": "team-1" } },
     );
   });
 
   it("deletes through the bin (the normal delete sends no permanent flag)", async () => {
     vi.mocked(http.delete).mockResolvedValue({ data: {} });
 
-    await deleteEntry("server-1", "team-1", "volumes", "config", true);
+    await deleteEntry("server-1", "volumes", "config", true);
     expect(http.delete).toHaveBeenCalledWith("/servers/server-1/files/entry", {
       params: { root: "volumes", path: "config", recursive: "true" },
-      headers: { "X-Team-Id": "team-1" },
     });
   });
 });
@@ -208,7 +197,6 @@ describe("trash store", () => {
     expect(trash.error).toBeNull();
     expect(http.get).toHaveBeenCalledWith("/servers/server-1/files/trash", {
       params: { root: "volumes" },
-      headers: { "X-Team-Id": "team-1" },
     });
   });
 
@@ -239,7 +227,6 @@ describe("trash store", () => {
     expect(http.post).toHaveBeenCalledWith(
       "/servers/server-1/files/trash/restore",
       { root: "volumes", id: "t1", destination: "", overwrite: false },
-      { headers: { "X-Team-Id": "team-1" } },
     );
     expect(trash.entries).toEqual([]);
     expect(trash.acting).toBe(false);
@@ -277,7 +264,6 @@ describe("trash store", () => {
     expect(http.post).toHaveBeenCalledWith(
       "/servers/server-1/files/trash/purge",
       { root: "volumes", id: "t1" },
-      { headers: { "X-Team-Id": "team-1" } },
     );
     expect(trash.entries).toEqual([]);
   });
@@ -297,7 +283,6 @@ describe("trash store", () => {
     expect(http.post).toHaveBeenCalledWith(
       "/servers/server-1/files/trash/empty",
       { root: "volumes" },
-      { headers: { "X-Team-Id": "team-1" } },
     );
   });
 

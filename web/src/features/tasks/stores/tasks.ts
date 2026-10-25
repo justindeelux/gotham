@@ -8,7 +8,7 @@ import {
   taskChannel,
 } from "@/features/tasks/api/tasks";
 import type { TaskEvent } from "@/features/tasks/api/tasks";
-import { useTeamsStore } from "@/features/teams";
+import { useProjectsStore } from "@/features/projects";
 import { getAccessToken } from "@/shared/api/token";
 import { useWebSocket } from "@/shared/composables/useWebSocket";
 
@@ -25,7 +25,7 @@ export const useTasksStore = defineStore("tasks", () => {
   const visible = computed<TaskCard[]>(() => Object.values(cards.value));
 
   let socket: ReturnType<typeof useWebSocket> | null = null;
-  let subscribedTeam = "";
+  const subscribedChannels = new Set<string>();
   const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const appliedSeq = new Map<string, number>();
   const snapshotBatch = new Set<string>();
@@ -88,17 +88,24 @@ export const useTasksStore = defineStore("tasks", () => {
     return appliedSeq.size;
   }
 
-  function subscribeTeam(teamId: string): void {
-    if (!socket || teamId === subscribedTeam) {
+  function syncSubscriptions(): void {
+    if (!socket) {
       return;
     }
-    if (subscribedTeam !== "") {
-      socket.unsubscribe(taskChannel(subscribedTeam));
+    const next = new Set(
+      useProjectsStore().projects.map((project) => taskChannel(project.id)),
+    );
+    for (const channel of subscribedChannels) {
+      if (!next.has(channel)) {
+        socket.unsubscribe(channel);
+        subscribedChannels.delete(channel);
+      }
     }
-    subscribedTeam = teamId;
-    snapshotBatch.clear();
-    if (teamId !== "") {
-      socket.subscribe(taskChannel(teamId));
+    for (const channel of next) {
+      if (!subscribedChannels.has(channel)) {
+        socket.subscribe(channel);
+        subscribedChannels.add(channel);
+      }
     }
   }
 
@@ -111,7 +118,7 @@ export const useTasksStore = defineStore("tasks", () => {
       token: getAccessToken,
       autoConnect: true,
       onMessage: (message) => {
-        if (message.channel === taskChannel(subscribedTeam) && isTaskSnapshotMarker(message.raw)) {
+        if (message.channel?.startsWith("tasks:") && isTaskSnapshotMarker(message.raw)) {
           reconcileSnapshot();
           return;
         }
@@ -123,13 +130,16 @@ export const useTasksStore = defineStore("tasks", () => {
       onStatusChange: (status) => {
         if (status === "open") {
           snapshotBatch.clear();
+          syncSubscriptions();
         }
       },
     });
-    subscribeTeam(useTeamsStore().activeTeamId);
+    if (!useProjectsStore().loaded) {
+      void useProjectsStore().fetchProjects().catch(() => undefined);
+    }
     watch(
-      () => useTeamsStore().activeTeamId,
-      (teamId) => subscribeTeam(teamId),
+      () => useProjectsStore().projects.map((project) => project.id).join(","),
+      () => syncSubscriptions(),
     );
   }
 

@@ -64,7 +64,7 @@ const en = {
     permissionTitle: "Permission denied",
     permissionHint: "The node agent cannot read this folder — container-created volumes are commonly root-owned.",
     disabledTitle: "Files are disabled",
-    disabledHint: "The file manager is turned off on this control plane. The platform administrator must enable it.",
+    disabledHint: "The file manager is turned off on this control plane. Ask the owner to enable it.",
     readOnlyTitle: "This root is read-only",
     readOnlyHint: "ComposeGuard validates this root at deploy time and the next ComposeUp overwrites local edits. Open and download stay available; write actions are disabled.",
     selectionCount: "{count} selected",
@@ -301,7 +301,7 @@ const en = {
     insufficientStorage: "Not enough free space on the node for this file.",
     agentOutdated: "Update the node agent — it predates the file manager.",
     agentUnavailable: "The node agent is unreachable. Check the node status and retry.",
-    disabled: "The file manager is turned off on this control plane. The platform administrator must enable it.",
+    disabled: "The file manager is turned off on this control plane. Ask the owner to enable it.",
   },
 };
 

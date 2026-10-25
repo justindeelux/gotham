@@ -4,7 +4,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import type { Pinia } from "pinia";
-import { defineComponent, h, nextTick } from "vue";
+import { nextTick } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -128,15 +128,6 @@ const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const ENV_ID = "22222222-2222-4222-8222-222222222222";
 const SERVER_ID = "33333333-3333-4333-8333-333333333333";
 
-const team = (role: "owner" | "admin" | "read_only") => ({
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role,
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-});
-
 const application = {
   id: APP_ID,
   name: "shop",
@@ -248,14 +239,6 @@ vi.mock("@/features/applications/api/previews", async (importOriginal) => {
   return { ...actual, listPreviews: applicationApiFakes.listPreviews };
 });
 
-const teamsApiFakes = vi.hoisted(() => ({ listTeams: vi.fn() }));
-
-vi.mock("@/features/teams/api/teams", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/features/teams/api/teams")>();
-  return { ...actual, listTeams: teamsApiFakes.listTeams };
-});
-
 vi.mock("@/features/projects/api/variables", () => ({
   getEnvironmentVariables: vi.fn().mockResolvedValue([]),
   getProjectVariables: vi.fn().mockResolvedValue([]),
@@ -285,12 +268,8 @@ const { useTerminalWindowStore } = await import(
   "@/features/terminal/stores/terminalWindow"
 );
 const { useAuthStore } = await import("@/features/auth");
-const { useTeamsStore } = await import("@/features/teams");
 const { useApplicationsStore } = await import(
   "@/features/applications/stores/applications"
-);
-const { useTerminalAccessBoundary } = await import(
-  "../src/app/layouts/useTerminalAccessBoundary"
 );
 const { default: ApplicationDetailPage } = await import(
   "../src/features/applications/pages/ApplicationDetailPage.vue"
@@ -391,8 +370,6 @@ beforeEach(() => {
   applicationApiFakes.getStorages.mockResolvedValue([]);
   applicationApiFakes.listPreviews.mockReset();
   applicationApiFakes.listPreviews.mockResolvedValue([]);
-  teamsApiFakes.listTeams.mockReset();
-  teamsApiFakes.listTeams.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -417,28 +394,12 @@ function login(pinia: Pinia, isAdmin = false): void {
 
 async function mountDetail(
   path = `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_ID}?tab=terminal`,
-  role: "owner" | "admin" | "read_only" | null = "owner",
+  role: "owner" | "member" = "owner",
   existingPinia?: Pinia,
-  teamsFailure: "error" | "hang" | null = null,
 ) {
   const pinia = existingPinia ?? createPinia();
   setActivePinia(pinia);
-  login(pinia);
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = role === null || teamsFailure !== null ? [] : [team(role)];
-  if (teamsFailure === "error") {
-    teamsApiFakes.listTeams.mockRejectedValueOnce({
-      status: 500,
-      message: "teams unavailable",
-    });
-    await teams.fetchTeams().catch(() => undefined);
-  } else if (teamsFailure === "hang") {
-    teamsApiFakes.listTeams.mockImplementationOnce(
-      () => new Promise(() => undefined),
-    );
-    void teams.fetchTeams();
-  }
+  login(pinia, role === "owner");
   const router = pageRouter();
   await router.push(path);
   await router.isReady();
@@ -465,7 +426,7 @@ async function mountDetail(
   });
   await flushPromises();
   await nextTick();
-  return { wrapper, router, pinia, terminal: useTerminalStore(), teams };
+  return { wrapper, router, pinia, terminal: useTerminalStore() };
 }
 
 function tabButton(wrapper: VueWrapper, label: string) {
@@ -691,7 +652,7 @@ describe("multi-service discovery and explicit selection (JUS-247)", () => {
     await flushPromises();
     await nextTick();
     expect(apiFakes.close).toHaveBeenCalledTimes(1);
-    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, first.sessionId, "team-1"]);
+    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, first.sessionId]);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
       service: "db",
@@ -724,7 +685,7 @@ describe("application terminal failure states (JUS-247)", () => {
     {
       status: 403,
       message: "application write access is required",
-      copy: "You need write access to this application's team",
+      copy: "Only the owner can open a container shell.",
       code: "applicationForbidden",
     },
     {
@@ -868,7 +829,7 @@ describe("application terminal failure states (JUS-247)", () => {
     await flushPromises();
 
     expect(apiFakes.close).toHaveBeenCalledTimes(1);
-    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, "session-1", "team-1"]);
+    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, "session-1"]);
     expect(apiFakes.listTargets).toHaveBeenCalledTimes(2);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
@@ -1121,92 +1082,13 @@ describe("application terminal failure states (JUS-247)", () => {
   });
 });
 
-describe("application terminal permissions (JUS-247)", () => {
-  it("waits for a known role before any request (read_only cold load)", async () => {
-    const { wrapper, teams } = await mountDetail(undefined, null);
-    expect(wrapper.text()).toContain("Checking terminal access");
-    expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
-    expect(apiFakes.create).toHaveBeenCalledTimes(0);
-
-    teams.teams = [team("read_only")];
-    await flushPromises();
-    await nextTick();
-    expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
-    expect(apiFakes.create).toHaveBeenCalledTimes(0);
-    expect(apiFakes.hostCreate).toHaveBeenCalledTimes(0);
-    expect(wrapper.text()).toContain("Terminal not available");
-    wrapper.unmount();
-  });
-
-  it("discovers only after a write role resolves on a cold load", async () => {
-    const { wrapper, teams } = await mountDetail(undefined, null);
-    expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
-    expect(apiFakes.create).toHaveBeenCalledTimes(0);
-
-    teams.teams = [team("owner")];
-    await flushPromises();
-    await nextTick();
-    await flushPromises();
-    expect(apiFakes.listTargets).toHaveBeenCalledTimes(1);
-    expect(apiFakes.create).toHaveBeenCalledTimes(1);
-    expect(wrapper.find(".term-surface").exists()).toBe(true);
-    wrapper.unmount();
-  });
-
-  it("shows a bounded access error with retry when the teams read fails", async () => {
-    const { wrapper, teams } = await mountDetail(
-      undefined,
-      null,
-      undefined,
-      "error",
-    );
-    expect(wrapper.text()).toContain("Terminal access could not be checked");
-    expect(wrapper.find(".app-term-access-retry").exists()).toBe(true);
-    expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
-    expect(apiFakes.create).toHaveBeenCalledTimes(0);
-
-    teamsApiFakes.listTeams.mockResolvedValueOnce([team("owner")]);
-    await wrapper.find(".app-term-access-retry").trigger("click");
-    await flushPromises();
-    await nextTick();
-    await flushPromises();
-    expect(teams.activeTeam?.role).toBe("owner");
-    expect(apiFakes.listTargets).toHaveBeenCalledTimes(1);
-    expect(apiFakes.create).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
-  });
-
-  it("bounds a hanging teams read and never requests a terminal meanwhile", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      const { wrapper } = await mountDetail(
-        undefined,
-        null,
-        undefined,
-        "hang",
-      );
-      expect(wrapper.text()).toContain("Checking terminal access");
-      expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
-      expect(apiFakes.create).toHaveBeenCalledTimes(0);
-
-      await vi.advanceTimersByTimeAsync(8_000);
-      await flushPromises();
-      await nextTick();
-      expect(wrapper.text()).toContain("Terminal access could not be checked");
-      expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
-      expect(apiFakes.create).toHaveBeenCalledTimes(0);
-      wrapper.unmount();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("hides the tab and issues zero requests for a read_only team role", async () => {
-    const { wrapper, terminal } = await mountDetail(undefined, "read_only");
+describe("application terminal permissions", () => {
+  it("hides the tab and issues zero requests for a member", async () => {
+    const { wrapper, terminal } = await mountDetail(undefined, "member");
     const labels = wrapper.findAll(".n-tabs-tab").map((node) => node.text());
     expect(labels).not.toContain("Terminal");
     expect(wrapper.text()).toContain("Terminal not available");
-    expect(wrapper.text()).toContain("write access");
+    expect(wrapper.text()).toContain("owner");
     expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
     expect(apiFakes.create).toHaveBeenCalledTimes(0);
     expect(apiFakes.hostCreate).toHaveBeenCalledTimes(0);
@@ -1214,44 +1096,17 @@ describe("application terminal permissions (JUS-247)", () => {
     wrapper.unmount();
   });
 
-  it("leaves the pane on demotion without closing the shell itself", async () => {
-    const { wrapper, terminal, teams } = await mountDetail();
+  it("keeps the terminal pane for the owner without closing the shell", async () => {
+    const { wrapper, terminal } = await mountDetail();
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    teams.teams = [team("read_only")];
     await flushPromises();
     await nextTick();
 
     expect(apiFakes.close).toHaveBeenCalledTimes(0);
     expect(terminal.pageTabs).toHaveLength(1);
-    expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
+    expect(wrapper.findComponent(NTabs).props("value")).toBe("terminal");
     wrapper.unmount();
-  });
-
-  it("the app-shell boundary disposes container tabs once on demotion", async () => {
-    const { terminal, teams } = await mountDetail();
-    expect(apiFakes.create).toHaveBeenCalledTimes(1);
-    const tab = terminal.pageTabs[0]!;
-    const Boundary = defineComponent({
-      setup() {
-        useTerminalAccessBoundary();
-        return () => h("div");
-      },
-    });
-    const boundary = mount(Boundary, {
-      global: { plugins: [useAuthStore().$pinia] },
-    });
-    await flushPromises();
-
-    teams.teams = [team("read_only")];
-    await flushPromises();
-    await nextTick();
-
-    expect(apiFakes.close).toHaveBeenCalledTimes(1);
-    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, tab.sessionId, "team-1"]);
-    expect(terminal.pageTabs).toHaveLength(0);
-    expect(apiFakes.hostClose).toHaveBeenCalledTimes(0);
-    boundary.unmount();
   });
 
   it("never closes a live shell during a transient application refetch gap", async () => {

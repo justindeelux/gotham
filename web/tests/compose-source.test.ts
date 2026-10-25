@@ -2,6 +2,8 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
+
+import { useAuthStore } from "@/features/auth";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, nextTick, ref } from "vue";
 
@@ -106,6 +108,9 @@ describe("extractComposeServiceNames", () => {
 
 function mountWizard() {
   setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
   let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
   const Harness = defineComponent({
     setup() {
@@ -119,6 +124,9 @@ function mountWizard() {
 
 function mountSourceStep(sourceType: string) {
   setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
   let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
   const Harness = defineComponent({
     setup() {
@@ -367,6 +375,9 @@ describe("wizard compose source", () => {
 describe("detail compose editor", () => {
   it("seeds from the row and saves content plus service", async () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     const store = useApplicationsStore();
     const seen: Array<Record<string, unknown>> = [];
     store.update = vi.fn(async (_id: string, input: Record<string, unknown>) => {
@@ -413,6 +424,9 @@ describe("detail compose editor", () => {
 
   it("follows the locale switch and exposes the invalid state accessibly", async () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     const app = {
       id: "app-1",
       source_type: "compose",
@@ -458,6 +472,9 @@ describe("detail compose editor", () => {
 
   it("saves file plus service for repo-backed rows", async () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     const store = useApplicationsStore();
     const seen: Array<Record<string, unknown>> = [];
     store.update = vi.fn(async (_id: string, input: Record<string, unknown>) => {
@@ -488,6 +505,9 @@ describe("detail compose editor", () => {
 describe("detail compose save feedback", () => {
   it("toasts a successful save and disables Save until the next edit", async () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     const store = useApplicationsStore();
     const app = {
       id: "app-1",

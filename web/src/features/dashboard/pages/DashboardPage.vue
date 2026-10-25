@@ -17,6 +17,7 @@ import {
   listApplications,
 } from "@/features/applications";
 import type { Server, ServerStatus } from "@/features/servers";
+import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers";
 import { applicationTileView, buildApplicationTileInput } from "@/features/dashboard/utils/dashboard";
 import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode";
@@ -29,6 +30,7 @@ import ServerHealthSection from "@/features/dashboard/components/ServerHealthSec
 import ServersReadyKpi from "@/features/dashboard/components/ServersReadyKpi.vue";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
+const authStore = useAuthStore();
 const serversStore = useServersStore();
 const { locale, t } = useI18n();
 
@@ -118,9 +120,11 @@ const nodeCards = computed<ServerNodeCardModel[]>(() =>
 );
 
 onMounted(() => {
-  void serversStore.fetchServers().catch(() => {
-  });
-  serversStore.pollServers();
+  if (authStore.isOwner) {
+    void serversStore.fetchServers().catch(() => {
+    });
+    serversStore.pollServers();
+  }
   void fetchApplicationCounts();
 });
 </script>
@@ -129,7 +133,7 @@ onMounted(() => {
   <div class="dash">
     <DashboardHeader />
 
-    <div v-if="serversStore.error" class="dash-alert">
+    <div v-if="authStore.isOwner && serversStore.error" class="dash-alert">
       <NAlert type="error" :show-icon="true">
         {{ serversStore.error }}
       </NAlert>
@@ -137,6 +141,7 @@ onMounted(() => {
 
     <div class="kpi-row">
       <ServersReadyKpi
+        v-if="authStore.isOwner"
         :loading="serversStore.loading"
         :ready-count="readyCount"
         :total-count="totalCount"
@@ -195,6 +200,7 @@ onMounted(() => {
         <RecentDeploysPanel />
 
         <ServerHealthSection
+          v-if="authStore.isOwner"
           :cards="nodeCards"
           :loading="serversStore.loading"
           :total-count="totalCount"
@@ -202,7 +208,7 @@ onMounted(() => {
         />
       </div>
 
-      <aside class="dash-aside">
+      <aside v-if="authStore.isOwner" class="dash-aside">
         <DashboardAside />
       </aside>
     </div>

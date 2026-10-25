@@ -25,7 +25,6 @@ import { useGitSourcesPage } from "@/features/applications/composables/useGitSou
 import type { GitSourceRow } from "@/features/applications/composables/useGitSourcesPage";
 import applicationsEn from "@/features/applications/locales/en";
 import applicationsVi from "@/features/applications/locales/vi";
-import { useTeamsStore } from "@/features/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const mockedPage = vi.mocked(useGitSourcesPage);
@@ -99,12 +98,6 @@ function shell(child: object) {
   });
 }
 
-function seedTeams(): void {
-  const teams = useTeamsStore();
-  teams.teams = [{ id: "team-1", name: "Acme", is_personal: false, role: "owner" }] as never;
-  teams.activeTeamId = "team-1";
-}
-
 function mountPage(fx: PageFixture) {
   mockedPage.mockReturnValue(fx as never);
   return mount(shell(GitSourcesPage), {
@@ -119,7 +112,6 @@ beforeEach(() => {
   i18n.global.mergeLocaleMessage("vi", { applications: applicationsVi });
   syncComposerLocale("en");
   vi.clearAllMocks();
-  seedTeams();
 });
 
 function dialogConfirm(wrapper: VueWrapper) {
@@ -165,7 +157,7 @@ describe("GitSourcesPage states", () => {
     const wrapper = mountPage(fixture({ usageKnown: ref(false), usageLoading: ref(false) }));
     await flushPromises();
     expect(wrapper.text()).toContain("Unknown");
-    expect(wrapper.text()).not.toContain("No application in this team");
+    expect(wrapper.text()).not.toContain("No application deploys through it.");
   });
 
   it("submits Connect GitHub with the typed name", async () => {

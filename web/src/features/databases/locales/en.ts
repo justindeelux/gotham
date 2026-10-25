@@ -23,7 +23,7 @@ const en = {
     databaseAgentUnreachable:
       "The node agent is unreachable or the healthcheck failed. Check the node status and retry.",
     featureDisabled:
-      "Databases are turned off on this control plane. The platform administrator must enable them.",
+      "Databases are turned off on this control plane. Ask the owner to enable them.",
     backupInvalidRequest:
       "Invalid request. Check the cron expression and target fields.",
     sessionExpired: "Session expired. Please sign in again.",
@@ -238,6 +238,7 @@ const en = {
       version: "Version",
       defaultVersion: "Default: {version}",
       node: "Node",
+      nodeByOwner: "The owner chooses the node for this database.",
       engineMeta: "· {repo}:{version} · port {port}",
     },
     configure: {

@@ -18,7 +18,7 @@ const RouterLinkStub = defineComponent({
   template: `<a href="#" @click.prevent="() => undefined"><slot :navigate="() => undefined" /></a>`,
 });
 
-function signInAsPlatformAdmin(isAdmin: boolean): void {
+function signInAsOwner(isAdmin: boolean): void {
   const auth = useAuthStore();
   auth.accessToken = "test-access";
   auth.refreshToken = "test-refresh";
@@ -42,13 +42,13 @@ afterEach(() => {
   globalThis.document.body.innerHTML = "";
 });
 
-describe("platform-admin route guard (JUS-197)", () => {
+describe("owner route guard", () => {
   it("flags the admin-only routes and the permission page wiring", () => {
     const byName = new Map(router.getRoutes().map((route) => [route.name, route]));
-    for (const name of ["files", "server-files", "domains", "instance", "updates"]) {
-      expect(byName.get(name)?.meta.requiresPlatformAdmin).toBe(true);
+    for (const name of ["files", "server-files", "servers", "domains", "users", "instance", "updates"]) {
+      expect(byName.get(name)?.meta.requiresOwner).toBe(true);
     }
-    expect(byName.get("dashboard")?.meta.requiresPlatformAdmin).toBeFalsy();
+    expect(byName.get("dashboard")?.meta.requiresOwner).toBeFalsy();
     const forbidden = byName.get("forbidden");
     expect(forbidden?.path).toBe("/forbidden");
     expect(forbidden?.meta.titleKey).toBe("titles.forbidden");
@@ -57,7 +57,7 @@ describe("platform-admin route guard (JUS-197)", () => {
   });
 
   it("sends a non-admin to the permission page on direct navigation", async () => {
-    signInAsPlatformAdmin(false);
+    signInAsOwner(false);
     await router.push("/domains");
     expect(router.currentRoute.value.name).toBe("forbidden");
     await router.push("/settings/updates");
@@ -66,8 +66,8 @@ describe("platform-admin route guard (JUS-197)", () => {
     expect(router.currentRoute.value.name).toBe("forbidden");
   });
 
-  it("lets a platform admin through to the admin routes", async () => {
-    signInAsPlatformAdmin(true);
+  it("lets the owner through to the owner routes", async () => {
+    signInAsOwner(true);
     await router.push("/domains");
     expect(router.currentRoute.value.name).toBe("domains");
     await router.push("/settings/updates");
@@ -87,7 +87,7 @@ describe("permission page", () => {
       },
     });
     expect(wrapper.text()).toContain("You don't have permission to view this");
-    expect(wrapper.text()).toContain("Platform admin");
+    expect(wrapper.text()).toContain("owner");
     expect(wrapper.text()).toContain("Back to dashboard");
     syncComposerLocale("vi");
     await flushPromises();

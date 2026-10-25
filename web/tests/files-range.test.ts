@@ -20,7 +20,6 @@ import {
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { rangeNames } from "@/features/files/utils/files";
-import { useTeamsStore } from "@/features/teams";
 
 const root: FilesRoot = {
   name: "volumes",
@@ -61,9 +60,6 @@ beforeEach(() => {
   vi.mocked(listRoots).mockReset();
   vi.mocked(listEntries).mockReset();
   vi.mocked(renameEntry).mockReset();
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [];
 });
 
 describe("rangeNames", () => {

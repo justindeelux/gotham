@@ -41,7 +41,7 @@ describe("image reference validation", () => {
     { name: "empty", ref: "", valid: false },
     { name: "whitespace", ref: "ng inx:1", valid: false },
     { name: "empty tag", ref: "nginx:", valid: false },
-    { name: "uppercase path", ref: "Team/App:1", valid: false },
+    { name: "uppercase path", ref: "Apps/App:1", valid: false },
     { name: "bad digest", ref: "nginx@sha256:zzz", valid: false },
     { name: "localhost refused", ref: "localhost:5000/app:1", valid: false },
     { name: "localhost bare refused", ref: "localhost/app:1", valid: false },

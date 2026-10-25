@@ -34,7 +34,6 @@ import "@/features/files/locales/editorMessages";
 import { ExplorerDirtyError, useExplorerStore } from "@/features/files/stores/explorer";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 import type {
   ExplorerDialogMode,
   ExplorerEntryRow,
@@ -64,7 +63,6 @@ const message = useMessage();
 const explorer = useExplorerStore();
 const editor = useEditorStore();
 const files = useFilesStore();
-const teams = useTeamsStore();
 
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
@@ -200,7 +198,7 @@ async function activateRow(row: ExplorerEntryRow): Promise<void> {
     await explorer.toggle(row.path);
     return;
   }
-  await editor.openFile(props.serverId, teams.activeTeamId, explorer.rootName, row.path);
+  await editor.openFile(props.serverId, explorer.rootName, row.path);
 }
 
 function onRowClick(row: ExplorerRow, index: number): void {

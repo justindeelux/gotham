@@ -22,7 +22,7 @@ const vi: ApplicationsMessages = {
     checkingAccess: "Đang kiểm tra quyền terminal…",
     accessErrorTitle: "Không kiểm tra được quyền terminal",
     accessErrorBody:
-      "Không đọc được vai trò trong nhóm. Chưa có phiên terminal nào được yêu cầu. Hãy thử lại khi bản điều khiển truy cập được.",
+      "Không đọc được vai trò của bạn. Chưa có phiên terminal nào được yêu cầu. Hãy thử lại khi bản điều khiển truy cập được.",
     loading: "Đang tìm các service container đang chạy…",
     serviceLabel: "Service container",
     chooseService: "Chọn một service container",
@@ -36,7 +36,7 @@ const vi: ApplicationsMessages = {
     retry: "Thử lại",
     notAllowedTitle: "Không dùng được terminal",
     notAllowedBody:
-      "Mở shell trong container cần quyền ghi vào nhóm của ứng dụng (chủ sở hữu hoặc quản trị viên). Hãy đề nghị quản trị viên nhóm cấp quyền rồi tải lại trang.",
+      "Chỉ chủ sở hữu mới mở được shell trong container. Hãy đề nghị chủ sở hữu cấp quyền rồi tải lại trang.",
   },
   header: {
     fallbackName: "Ứng dụng",
@@ -455,6 +455,7 @@ const vi: ApplicationsMessages = {
     packInstallNamed: "Cài đặt {pack}",
     node: "Node",
     routingHint: "Tên miền và cổng được gắn sau khi tạo trong tab Tên miền, nên lần triển khai đầu không có route.",
+    nodeByOwner: "Chủ sở hữu chọn nút cho lần triển khai này.",
     envTitle: "Biến môi trường",
     volumesTitle: "Volume",
     envConvention:
@@ -479,10 +480,9 @@ const vi: ApplicationsMessages = {
   },
   gitSources: {
     eyebrow: "Cài đặt",
-    eyebrowTeam: "Cài đặt · {team}",
     title: "Nguồn Git",
     description:
-      "Các GitHub App và kết nối GitLab đã kết nối mà wizard ứng dụng dùng để triển khai. Kết nối là tự động — không sao chép client ID, secret hay webhook. Secret không bao giờ hiển thị ở đây. Kết nối thuộc về tài khoản của bạn; việc bảo vệ chúng do phạm vi API token thực thi, không phải vai trò nhóm.",
+      "Các GitHub App và kết nối GitLab đã kết nối mà wizard ứng dụng dùng để triển khai. Kết nối là tự động — không sao chép client ID, secret hay webhook. Secret không bao giờ hiển thị ở đây. Kết nối thuộc về tài khoản của bạn; việc bảo vệ chúng do phạm vi API token thực thi.",
     connectGitHub: "Kết nối GitHub",
     connectGitLab: "Kết nối GitLab",
     connectHint: "Hãy kết nối nguồn trước, rồi chọn kho của nó trong wizard ứng dụng.",
@@ -516,9 +516,9 @@ const vi: ApplicationsMessages = {
     disconnectTitle: "Ngắt kết nối nguồn này?",
     disconnectLead: "Ngắt kết nối {name}? Thông tin đăng nhập đã lưu sẽ bị quên.",
     disconnectApps: "Vẫn còn {count} ứng dụng triển khai qua nó: | Vẫn còn {count} ứng dụng triển khai qua nó: | Vẫn còn {count} ứng dụng triển khai qua nó:",
-    disconnectNoApps: "Không có ứng dụng nào trong nhóm này triển khai qua nó.",
+    disconnectNoApps: "Không có ứng dụng nào triển khai qua nó.",
     disconnectUnknown:
-      "Không kiểm tra được ứng dụng nào đang dùng kết nối này. Nó có thể vẫn đang được dùng, kể cả bởi ứng dụng ở nhóm khác.",
+      "Không kiểm tra được ứng dụng nào đang dùng kết nối này. Nó có thể vẫn đang được một ứng dụng khác dùng.",
     disconnectAcknowledge: "Tôi đã hiểu, vẫn ngắt kết nối",
     disconnectGithubNote:
       "Ngắt kết nối GitHub App luôn thành công và chỉ báo có bao nhiêu ứng dụng từng ghi nó — danh sách này là cảnh báo duy nhất.",
@@ -583,7 +583,7 @@ const vi: ApplicationsMessages = {
     saved: "Đã lưu nguồn image. Triển khai lại để pull tham chiếu mới.",
     clear: "Xóa credential",
     cleared: "Đã xóa credential.",
-    refInvalid: "Nhập tham chiếu image hợp lệ, ví dụ registry.example.com/team/app:1.2.",
+    refInvalid: "Nhập tham chiếu image hợp lệ, ví dụ registry.example.com/apps/app:1.2.",
   },
   privateGit: {
     title: "Nguồn git riêng tư",
@@ -663,8 +663,8 @@ const vi: ApplicationsMessages = {
     nameConflict: "Đã tồn tại ứng dụng cùng tên trong môi trường đích.",
     conflict: "Yêu cầu xung đột với trạng thái hiện tại của ứng dụng.",
     agentUnreachable: "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại.",
-    appsDisabled: "Ứng dụng đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
-    previewsDisabled: "Triển khai xem trước đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
+    appsDisabled: "Ứng dụng đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
+    previewsDisabled: "Triển khai xem trước đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
   },
   validation: {
     domain:

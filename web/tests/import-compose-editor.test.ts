@@ -7,6 +7,7 @@ import { defineComponent, h, nextTick } from "vue";
 import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import ImportComposeDialog from "@/features/services/components/ImportComposeDialog.vue";
 import { useServicesStore } from "@/features/services/stores/services";
+import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers/stores/servers";
 import {
   i18n,
@@ -26,6 +27,9 @@ const ServerPickerStub = defineComponent({
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
   registerDiscoveredCatalogs();
   resetLocaleState();
   syncComposerLocale("en");

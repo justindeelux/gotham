@@ -18,7 +18,6 @@ import { joinPath } from "@/features/files/utils/files";
 interface Props {
   show: boolean;
   serverId: string;
-  teamId: string;
   root: string;
   directory: string;
   entry: FilesEntry | null;
@@ -82,7 +81,6 @@ async function load(): Promise<void> {
   try {
     const ticket = await issueDownloadTicket(
       props.serverId,
-      props.teamId,
       props.root,
       joinPath(props.directory, target.name),
     );

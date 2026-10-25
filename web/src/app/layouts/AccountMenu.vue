@@ -1,23 +1,19 @@
 <script setup lang="ts">
 import { NAvatar, NButton, NDropdown, NSpace, NText } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
-import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, h, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
 import { useEditorStore } from "@/features/files/stores/editor";
-import { useTeamsStore } from "@/features/teams";
 import { useTerminalStore } from "@/features/terminal";
-import { roleReadRetryMs, shouldRetryRoleRead } from "@/features/teams";
-import type { TeamRole } from "@/features/teams";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
 defineProps<{ compact?: boolean }>();
 
 const { t } = useI18n();
 const authStore = useAuthStore();
-const teamsStore = useTeamsStore();
 const router = useRouter();
 const accountTrigger = ref<InstanceType<typeof NButton> | null>(null);
 
@@ -47,68 +43,8 @@ const hasDisplayName = computed<boolean>(() => {
   return name !== undefined && name !== "";
 });
 
-const roleText = computed<string>(() => {
-  const role: TeamRole | null = teamsStore.activeTeam?.role ?? null;
-  let base: string;
-  if (role === null) {
-    base = t("common.roles.member");
-  } else if (role === "owner") {
-    base = t("common.roles.owner");
-  } else if (role === "admin") {
-    base = t("common.roles.admin");
-  } else if (role === "read_only") {
-    base = t("common.roles.readOnly");
-  } else {
-    base = role;
-  }
-  if (authStore.isPlatformAdmin) {
-    return `${base} · ${t("common.roles.platformAdmin")}`;
-  }
-  return base;
-});
-
-let roleRetries = 0;
-let roleRetryTimer: ReturnType<typeof setTimeout> | null = null;
-
-function loadRole(): void {
-  roleRetries = 0;
-  void readRole();
-}
-
-async function readRole(): Promise<void> {
-  cancelRoleRetry();
-  await teamsStore.ensureTeams();
-  if (
-    !shouldRetryRoleRead({
-      loaded: teamsStore.loaded,
-      loading: teamsStore.loading,
-      retries: roleRetries,
-    })
-  ) {
-    if (teamsStore.loaded || teamsStore.loading) {
-      roleRetries = 0;
-    }
-    return;
-  }
-  roleRetries += 1;
-  roleRetryTimer = setTimeout(() => void readRole(), roleReadRetryMs);
-}
-
-function cancelRoleRetry(): void {
-  if (roleRetryTimer !== null) {
-    clearTimeout(roleRetryTimer);
-    roleRetryTimer = null;
-  }
-}
-
-onMounted(loadRole);
-onUnmounted(cancelRoleRetry);
-
-watch(
-  () => authStore.user?.email,
-  () => {
-    loadRole();
-  },
+const roleText = computed<string>(() =>
+  authStore.isOwner ? t("common.roles.owner") : t("common.roles.member"),
 );
 
 const accountOptions = computed<DropdownOption[]>(() => [

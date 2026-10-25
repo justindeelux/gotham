@@ -19,6 +19,7 @@ import type {
 import { useApplicationsStore } from "@/features/applications/stores/applications";
 import { useGitHubAppStore } from "@/features/applications/stores/githubApp";
 import { useProvidersStore } from "@/features/applications/stores/providers";
+import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers";
 import { describeToolchainError, useToolchainStore } from "@/features/toolchain";
 import type { ToolchainTool } from "@/features/toolchain";
@@ -176,6 +177,7 @@ export function useCreateAppWizard(
 ) {
   const providersStore = useProvidersStore();
   const githubAppStore = useGitHubAppStore();
+  const authStore = useAuthStore();
   const serversStore = useServersStore();
   const appsStore = useApplicationsStore();
   const toolchainStore = useToolchainStore();
@@ -606,8 +608,8 @@ export function useCreateAppWizard(
     return branchOk && appNameSchema.safeParse(form.name).success;
   });
 
-  const runtimeValid = computed<boolean>(() =>
-    serverSchema.safeParse(form.serverId).success,
+  const runtimeValid = computed<boolean>(
+    () => !authStore.isOwner || serverSchema.safeParse(form.serverId).success,
   );
 
   const scopeValid = computed<boolean>(() => form.environmentId !== "");
@@ -710,7 +712,9 @@ export function useCreateAppWizard(
         if (form.sourceType === "github_app") {
           void githubAppStore.fetchApps().catch(() => undefined);
         }
-        void serversStore.fetchServers().catch(() => undefined);
+        if (authStore.isOwner) {
+          void serversStore.fetchServers().catch(() => undefined);
+        }
       } else {
         resetWizard();
       }

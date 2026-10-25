@@ -33,14 +33,7 @@ vi.mock("@/features/projects/api/projects", async (importOriginal) => {
     await importOriginal<typeof import("@/features/projects/api/projects")>();
   return { ...actual, listProjects: vi.fn(), createProject: vi.fn() };
 });
-vi.mock("@/features/teams/api/teams", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/features/teams/api/teams")>();
-  return { ...actual, listTeams: vi.fn() };
-});
-
 import { listProjects } from "@/features/projects/api/projects";
-import { listTeams } from "@/features/teams/api/teams";
-import { useTeamsStore } from "@/features/teams";
 
 beforeEach(() => {
   i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
@@ -185,18 +178,6 @@ describe("counts, kinds and variable copy switch", () => {
 
 describe("drafts survive a language switch", () => {
   it("keeps the typed create draft while labels switch", async () => {
-    const teams = useTeamsStore();
-    const team = {
-      id: "team-1",
-      name: "Acme",
-      is_personal: false,
-      role: "owner",
-      created_at: "2026-10-01T00:00:00Z",
-      updated_at: "2026-10-01T00:00:00Z",
-    };
-    vi.mocked(listTeams).mockResolvedValue([team] as never);
-    teams.teams = [team] as never;
-    teams.activeTeamId = "team-1";
     vi.mocked(listProjects).mockResolvedValue([]);
 
     const router = createRouter({
@@ -239,23 +220,11 @@ describe("drafts survive a language switch", () => {
     );
     expect(wrapper.find(".n-modal").exists()).toBe(true);
     expect(wrapper.text()).toContain("Dự án mới");
-    expect(wrapper.text()).toContain("Duy nhất trong nhóm");
+    expect(wrapper.text()).toContain("Duy nhất trong instance");
     wrapper.unmount();
   });
 
   it("refreshes a visible create-form error on locale switch", async () => {
-    const teams = useTeamsStore();
-    const team = {
-      id: "team-1",
-      name: "Acme",
-      is_personal: false,
-      role: "owner",
-      created_at: "2026-10-01T00:00:00Z",
-      updated_at: "2026-10-01T00:00:00Z",
-    };
-    vi.mocked(listTeams).mockResolvedValue([team] as never);
-    teams.teams = [team] as never;
-    teams.activeTeamId = "team-1";
     vi.mocked(listProjects).mockResolvedValue([]);
 
     const router = createRouter({

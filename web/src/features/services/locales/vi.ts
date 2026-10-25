@@ -29,7 +29,7 @@ const vi: typeof en = {
     unknownWithDetail: "Yêu cầu thất bại: {detail}",
     nodeAgentError: "Lỗi node agent: {detail}",
     nodeUnreachable: "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại.",
-    disabled: "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
+    disabled: "Dịch vụ đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
   },
   import: {
     title: "Nhập compose",
@@ -38,6 +38,7 @@ const vi: typeof en = {
     nameLabel: "Tên dịch vụ",
     namePlaceholder: "blog-staging",
     nodeLabel: "Node",
+    nodeByOwner: "Chủ sở hữu chọn nút cho dịch vụ này.",
     yamlLabel: "Tệp compose.yaml",
     yamlExample: "services:\n  web:\n    image: nginx:1.27-alpine",
     yamlPlaceholder: "# Dán tài liệu compose tại đây\nservices:\n  web:\n    image: nginx:1.27-alpine",

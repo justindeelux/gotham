@@ -474,10 +474,10 @@ describe("ProfileIdentityCard", () => {
     wrapper.unmount();
   });
 
-  it("labels a platform admin", async () => {
+  it("labels the owner", async () => {
     seedAuth({ ...baseUser(), role: "owner" });
     const wrapper = await mountChild(ProfileIdentityCard);
-    expect(wrapper.text()).toContain("Platform admin");
+    expect(wrapper.text()).toContain("Owner");
     wrapper.unmount();
   });
 

@@ -19,18 +19,6 @@ vi.mock("@/features/notifications/api/notifications", async (importOriginal) => 
   return { ...actual, testChannel: vi.fn() };
 });
 
-vi.mock("@/features/teams/api/teams", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/features/teams/api/teams")>();
-  return {
-    ...actual,
-    listTeams: vi.fn(),
-    listMembers: vi.fn(),
-    listInvites: vi.fn(),
-    renameTeam: vi.fn(),
-  };
-});
-
 import {
   certificateStatusLabel,
   describeProxyError,
@@ -55,21 +43,6 @@ import {
   scopeLabel,
 } from "@/features/notifications/utils/channelHelpers";
 import type { NotificationChannel } from "@/features/notifications/api/notifications";
-import {
-  canManageMembers,
-  describeTeamError,
-  isFeatureDisabled,
-  listInvites,
-  listMembers,
-  listTeams,
-  meRoleLabel,
-  renameTeam,
-  roleLabel,
-} from "@/features/teams/api/teams";
-import { useTeamsPage } from "@/features/teams/composables/useTeamsPage";
-import teamsEn from "@/features/teams/locales/en";
-import teamsVi from "@/features/teams/locales/vi";
-import { useTeamsStore } from "@/features/teams";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 import {
   i18n,
@@ -81,12 +54,10 @@ import {
 function registerAll(): void {
   i18n.global.mergeLocaleMessage("en", {
     domains: domainsEn,
-    teams: teamsEn,
     notifications: notificationsEn,
   });
   i18n.global.mergeLocaleMessage("vi", {
     domains: domainsVi,
-    teams: teamsVi,
     notifications: notificationsVi,
   });
 }
@@ -100,7 +71,6 @@ beforeEach(() => {
 describe("I18N-8 catalog parity", () => {
   it("matches en/vi keys, params and message syntax for all three features", () => {
     expect(checkCatalogParity(domainsEn, domainsVi)).toEqual([]);
-    expect(checkCatalogParity(teamsEn, teamsVi)).toEqual([]);
     expect(checkCatalogParity(notificationsEn, notificationsVi)).toEqual([]);
   });
 });
@@ -153,65 +123,6 @@ describe("I18N-8 domain labels", () => {
   });
 });
 
-describe("I18N-8 team roles and invite classification", () => {
-  it("reads role wording from the shared catalog in the current locale", () => {
-    expect(roleLabel("owner")).toBe("owner");
-    expect(roleLabel("read_only")).toBe("read-only");
-    expect(meRoleLabel(null)).toBe("Team member");
-    setLocale("vi", null);
-    expect(roleLabel("owner")).toBe("chủ sở hữu");
-    expect(roleLabel("admin")).toBe("quản trị viên");
-    expect(roleLabel("read_only")).toBe("chỉ đọc");
-    expect(meRoleLabel(null)).toBe("Thành viên nhóm");
-    expect(meRoleLabel("admin")).toBe("quản trị viên");
-  });
-
-  it("renders unknown future roles verbatim and null roles neutral", () => {
-    const billing = "billing" as unknown as "owner";
-    expect(roleLabel(billing)).toBe("billing");
-    expect(meRoleLabel(billing)).toBe("billing");
-    expect(roleLabel(null as unknown as "owner")).toBe("Team member");
-    expect(roleLabel(undefined as unknown as "owner")).toBe("Team member");
-    setLocale("vi", null);
-    expect(roleLabel(billing)).toBe("billing");
-    expect(meRoleLabel(billing)).toBe("billing");
-    expect(roleLabel(null as unknown as "owner")).toBe("Thành viên nhóm");
-    expect(roleLabel(undefined as unknown as "owner")).toBe("Thành viên nhóm");
-  });
-
-  it("keeps permission gates identical across locales", () => {
-    for (const locale of ["en", "vi"] as const) {
-      setLocale(locale, null);
-      expect(canManageMembers("owner")).toBe(true);
-      expect(canManageMembers("admin")).toBe(true);
-      expect(canManageMembers("read_only")).toBe(false);
-      expect(canManageMembers(null)).toBe(false);
-    }
-  });
-
-  it("classifies invites on raw status and localizes the summary", () => {
-    const expired = { message: "teams: invite expired", status: 410 };
-    expect(describeTeamError(expired)).toBe("invite expired");
-    const forbidden = { message: "teams: need owner", status: 403 };
-    expect(describeTeamError(forbidden)).toBe("need owner");
-    expect(describeTeamError({ message: "teams: boom", status: 500 })).toBe(
-      "Request failed: boom",
-    );
-    setLocale("vi", null);
-    expect(describeTeamError({ message: "", status: 403 })).toBe(
-      "Vai trò nhóm của bạn không cho phép hành động này.",
-    );
-    expect(describeTeamError({ message: "", status: 410 })).toBe(
-      "Lời mời này đã hết hạn. Hãy tạo lời mời mới.",
-    );
-    expect(describeTeamError({ message: "teams: boom", status: 500 })).toBe(
-      "Yêu cầu thất bại: boom",
-    );
-    expect(isFeatureDisabled({ message: "x", status: 404 })).toBe(true);
-    expect(isFeatureDisabled({ message: "x", status: 403 })).toBe(false);
-  });
-});
-
 describe("I18N-8 notification labels", () => {
   it("localizes kind and event words, never the wire keys", () => {
     expect(kindLabel("discord")).toBe("Discord webhook");
@@ -232,7 +143,7 @@ describe("I18N-8 notification labels", () => {
     expect(configSummary(email)).toBe("smtp.example.com:587 → a@x.io");
     const missing = { kind: "discord", config: {} } as NotificationChannel;
     expect(configSummary(missing)).toBe("chưa cấu hình webhook");
-    expect(scopeLabel(missing, () => undefined)).toBe("Toàn nhóm");
+    expect(scopeLabel(missing, () => undefined)).toBe("Mọi tài nguyên");
     const scoped = {
       kind: "slack",
       resource_type: "application",
@@ -345,7 +256,6 @@ describe("I18N-8 live switch preserves drafts", () => {
 describe("I18N-8 retained channel test failure", () => {
   const channel = {
     id: "ch-1",
-    team_id: "team-1",
     name: "Deploy alerts",
     kind: "discord",
     enabled: true,
@@ -356,20 +266,8 @@ describe("I18N-8 retained channel test failure", () => {
     updated_at: "",
   } as NotificationChannel;
 
-  const ownerTeam = {
-    id: "team-1",
-    name: "Acme",
-    is_personal: false,
-    role: "owner",
-    created_at: "",
-    updated_at: "",
-  };
-
   async function cardHarness() {
     setActivePinia(createPinia());
-    const teams = useTeamsStore();
-    teams.teams = [ownerTeam] as never;
-    teams.activeTeamId = "team-1";
     const Inner = defineComponent({
       setup() {
         provideChannelDialog();
@@ -406,19 +304,19 @@ describe("I18N-8 retained channel test failure", () => {
     await clickSend(wrapper);
     expect(vi.mocked(testChannel)).toHaveBeenCalledTimes(1);
     expect(resultText(wrapper)).toBe(
-      "Test failed: Your team role does not allow this action.",
+      "Test failed: You do not have permission for this action.",
     );
 
     setLocale("vi", null);
     await nextTick();
     expect(resultText(wrapper)).toBe(
-      "Gửi thử thất bại: Vai trò nhóm của bạn không cho phép hành động này.",
+      "Gửi thử thất bại: Bạn không có quyền thực hiện thao tác này.",
     );
     expect(vi.mocked(testChannel)).toHaveBeenCalledTimes(1);
     setLocale("en", null);
     await nextTick();
     expect(resultText(wrapper)).toBe(
-      "Test failed: Your team role does not allow this action.",
+      "Test failed: You do not have permission for this action.",
     );
     expect(vi.mocked(testChannel)).toHaveBeenCalledTimes(1);
 
@@ -427,13 +325,13 @@ describe("I18N-8 retained channel test failure", () => {
     expect(vi.mocked(testChannel)).toHaveBeenCalledTimes(2);
     expect(resultText(wrapper)).toBe(
       "Test failed: Notification channels are turned off on this control " +
-        "plane. The platform administrator must enable them.",
+        "plane. Ask the owner to enable them.",
     );
     setLocale("vi", null);
     await nextTick();
     expect(resultText(wrapper)).toBe(
       "Gửi thử thất bại: Kênh thông báo đang tắt trên control plane này. " +
-        "Quản trị viên nền tảng phải bật.",
+        "Hãy đề nghị chủ sở hữu bật.",
     );
     expect(vi.mocked(testChannel)).toHaveBeenCalledTimes(2);
     wrapper.unmount();
@@ -480,55 +378,6 @@ describe("I18N-8 channel draft preservation", () => {
   });
 });
 
-describe("I18N-8 retained team 409", () => {
-  it("keeps the distinct raw refusal verbatim in both locales", async () => {
-    setActivePinia(createPinia());
-    const teams = useTeamsStore();
-    const ownerTeam = {
-      id: "team-1",
-      name: "Acme",
-      is_personal: false,
-      role: "owner",
-      created_at: "",
-      updated_at: "",
-    };
-    vi.mocked(listTeams).mockResolvedValue([ownerTeam] as never);
-    vi.mocked(listMembers).mockResolvedValue([]);
-    vi.mocked(listInvites).mockResolvedValue([]);
-    let state!: ReturnType<typeof useTeamsPage>;
-    const Inner = defineComponent({
-      setup() {
-        state = useTeamsPage();
-        return () => h("div");
-      },
-    });
-    const wrapper = mount(
-      defineComponent({
-        render: () => h(NMessageProvider, null, { default: () => h(Inner) }),
-      }),
-      { global: { plugins: [i18n] } },
-    );
-    await flushPromises();
-    expect(teams.activeTeamId).toBe("team-1");
-
-    state.openRename();
-    state.renameName.value = "Taken";
-    vi.mocked(renameTeam).mockRejectedValueOnce({
-      message: "teams: name taken",
-      status: 409,
-    });
-    await state.handleRename();
-    expect(vi.mocked(renameTeam)).toHaveBeenCalledTimes(1);
-    expect(state.renameError.value).toBe("name taken");
-    setLocale("vi", null);
-    await nextTick();
-    expect(state.renameError.value).toBe("name taken");
-    expect(state.renameName.value).toBe("Taken");
-    expect(state.renameOpen.value).toBe(true);
-    wrapper.unmount();
-  });
-});
-
 describe("I18N-8 library plural counts", () => {
   const enRuleOne =
     "1 rule · 1 enabled. GET answers the stored code; other methods " +
@@ -542,21 +391,6 @@ describe("I18N-8 library plural counts", () => {
   const viRuleMany =
     "3 quy tắc · 2 đang bật. GET trả lời mã đã lưu; các phương thức khác " +
     "trả lời 308/307 để giữ phương thức.";
-
-  it("renders 0/1/many team counts exactly in English", () => {
-    const t = i18n.global.t;
-    expect(t("teams.list.count", { count: 0 }, { plural: 0 })).toBe("0 teams");
-    expect(t("teams.list.count", { count: 1 }, { plural: 1 })).toBe("1 team");
-    expect(t("teams.list.count", { count: 5 }, { plural: 5 })).toBe("5 teams");
-  });
-
-  it("renders meaningful Vietnamese team counts", () => {
-    setLocale("vi", null);
-    const t = i18n.global.t;
-    expect(t("teams.list.count", { count: 0 }, { plural: 0 })).toBe("0 nhóm");
-    expect(t("teams.list.count", { count: 1 }, { plural: 1 })).toBe("1 nhóm");
-    expect(t("teams.list.count", { count: 5 }, { plural: 5 })).toBe("5 nhóm");
-  });
 
   it("renders redirect summaries with named total/enabled in both locales", () => {
     const t = i18n.global.t;

@@ -7,7 +7,7 @@ const testsDir = dirname(fileURLToPath(import.meta.url));
 const fixture = `file://${resolve(testsDir, "i18n-settings-layout.fixture.html")}`;
 
 const widths = [390, 900, 1280] as const;
-const probes = ["en-head", "en-actions", "en-stats", "en-row", "en-team", "vi-head", "vi-actions", "vi-stats", "vi-row", "vi-team"];
+const probes = ["en-head", "en-actions", "en-stats", "en-row", "en-users", "vi-head", "vi-actions", "vi-stats", "vi-row", "vi-users"];
 
 test.beforeEach(async ({ page }) => {
   await page.goto(fixture);

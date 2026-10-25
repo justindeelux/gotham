@@ -38,15 +38,6 @@ const session = {
   refreshToken: "test-refresh",
 };
 
-const team = {
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-};
-
 const application = {
   id: "app-1",
   name: "Shop",
@@ -183,10 +174,6 @@ async function mockApi(page: Page): Promise<void> {
     }
     if (method === "GET" && path === "/auth/config") {
       await route.fulfill(json(200, { registrationOpen: false }));
-      return;
-    }
-    if (method === "GET" && path === "/teams") {
-      await route.fulfill(json(200, { teams: [team] }));
       return;
     }
     if (method === "GET" && path === "/version") {

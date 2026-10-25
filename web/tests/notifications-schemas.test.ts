@@ -17,11 +17,11 @@ describe("canSubmitChannel matches canSubmit", () => {
     ["empty name blocks", { name: "", events: ["deploy_success"], resourceType: "", resourceId: "" }, false],
     ["padded name passes", { name: "  Ops  ", events: ["deploy_success"], resourceType: "", resourceId: "" }, true],
     ["no events blocks", { name: "n", events: [], resourceType: "", resourceId: "" }, false],
-    ["team-wide needs no resource", { name: "n", events: ["deploy_success"], resourceType: "", resourceId: "" }, true],
+    ["global scope needs no resource", { name: "n", events: ["deploy_success"], resourceType: "", resourceId: "" }, true],
     ["scoped needs a resource", { name: "n", events: ["deploy_success"], resourceType: "application", resourceId: "" }, false],
     ["scoped with resource passes", { name: "n", events: ["deploy_success"], resourceType: "application", resourceId: "app-1" }, true],
     ["database scope same rule", { name: "n", events: ["backup_success"], resourceType: "database", resourceId: "" }, false],
-    ["team-wide ignores stale id", { name: "n", events: ["backup_success"], resourceType: "", resourceId: "db-1" }, true],
+    ["global scope ignores stale id", { name: "n", events: ["backup_success"], resourceType: "", resourceId: "db-1" }, true],
   ];
   it("gates exactly like the old computed", () => {
     for (const [label, form, valid] of rows) {

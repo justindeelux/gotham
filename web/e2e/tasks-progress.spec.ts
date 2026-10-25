@@ -8,7 +8,7 @@ test.describe("background task progress card", () => {
     page,
   }) => {
     const running = JSON.stringify({
-      channel: "tasks:team-1",
+      channel: "tasks:project-1",
       type: "task",
       data: JSON.stringify({
         task_id: "dep-1",
@@ -22,11 +22,10 @@ test.describe("background task progress card", () => {
         server_id: "srv-1",
         project_id: "proj-1",
         environment_id: "env-1",
-        team_id: "team-1",
       }),
     });
     const snapshotEnd = JSON.stringify({
-      channel: "tasks:team-1",
+      channel: "tasks:project-1",
       type: "task_snapshot",
     });
     await page.routeWebSocket(/\/api\/v1\/ws/, (ws) => {
@@ -34,8 +33,8 @@ test.describe("background task progress card", () => {
         const text = typeof message === "string" ? message : "";
         const channel = text.includes("tasks:") ? text.split('"').find((part) => part.startsWith("tasks:")) : undefined;
         if (channel) {
-          ws.send(running.replaceAll("tasks:team-1", channel));
-          ws.send(snapshotEnd.replaceAll("tasks:team-1", channel));
+          ws.send(running.replaceAll("tasks:project-1", channel));
+          ws.send(snapshotEnd.replaceAll("tasks:project-1", channel));
         }
       });
     });
@@ -57,7 +56,7 @@ test.describe("background task progress card", () => {
   }) => {
     const frame = (status: string, error = ""): string =>
       JSON.stringify({
-        channel: "tasks:team-1",
+        channel: "tasks:project-1",
         type: "task",
         data: JSON.stringify({
           task_id: `dep-${status}`,
@@ -68,8 +67,7 @@ test.describe("background task progress card", () => {
           progress: status === "succeeded" ? 100 : 0,
           app_id: "app-1",
           deployment_id: `dep-${status}`,
-          team_id: "team-1",
-          error,
+            error,
         }),
       });
     await page.routeWebSocket(/\/api\/v1\/ws/, (ws) => {
@@ -77,8 +75,8 @@ test.describe("background task progress card", () => {
         const text = typeof message === "string" ? message : "";
         const channel = text.includes("tasks:") ? text.split('"').find((part) => part.startsWith("tasks:")) : undefined;
         if (channel) {
-          ws.send(frame("succeeded").replaceAll("tasks:team-1", channel));
-          ws.send(frame("failed", " Boom").replaceAll("tasks:team-1", channel));
+          ws.send(frame("succeeded").replaceAll("tasks:project-1", channel));
+          ws.send(frame("failed", " Boom").replaceAll("tasks:project-1", channel));
         }
       });
     });

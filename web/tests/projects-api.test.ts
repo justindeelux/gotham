@@ -3,9 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 /* global console: readonly */
 
 vi.mock("@/shared/api/http", () => ({
-  http: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
-  teamHeaders: (teamId: string) =>
-    teamId ? { "X-Team-Id": teamId } : {},
+  http: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() }
 }));
 
 import { http } from "@/shared/api/http";
@@ -49,12 +47,10 @@ function environment(overrides = {}) {
 }
 
 describe("projects api paths, bodies and headers", () => {
-  it("lists with the team header", async () => {
+  it("lists projects", async () => {
     vi.mocked(http.get).mockResolvedValue({ data: { projects: [project()] } });
-    const projects = await listProjects("team-1");
-    expect(http.get).toHaveBeenCalledWith("/projects", {
-      headers: { "X-Team-Id": "team-1" },
-    });
+    const projects = await listProjects();
+    expect(http.get).toHaveBeenCalledWith("/projects");
     expect(projects).toHaveLength(1);
     expect(projects[0]!.name).toBe("storefront");
   });
@@ -62,14 +58,13 @@ describe("projects api paths, bodies and headers", () => {
   it("creates with name and description, returning project and environments", async () => {
     const payload = { project: project(), environments: [environment()] };
     vi.mocked(http.post).mockResolvedValue({ data: payload });
-    const created = await createProject("team-1", {
+    const created = await createProject({
       name: "storefront",
       description: "Online shop",
     });
     expect(http.post).toHaveBeenCalledWith(
       "/projects",
       { name: "storefront", description: "Online shop" },
-      { headers: { "X-Team-Id": "team-1" } },
     );
     expect(created.project.name).toBe("storefront");
     expect(created.environments).toHaveLength(1);
@@ -79,65 +74,57 @@ describe("projects api paths, bodies and headers", () => {
     vi.mocked(http.get).mockResolvedValue({
       data: { project: project(), environments: [environment()] },
     });
-    const detail = await getProject("team-1", project().id);
-    expect(http.get).toHaveBeenCalledWith(`/projects/${project().id}`, {
-      headers: { "X-Team-Id": "team-1" },
-    });
+    const detail = await getProject(project().id);
+    expect(http.get).toHaveBeenCalledWith(`/projects/${project().id}`);
     expect(detail.environments).toHaveLength(1);
 
     vi.mocked(http.patch).mockResolvedValue({
       data: { project: project({ name: "renamed" }) },
     });
-    const renamed = await renameProject("team-1", project().id, {
+    const renamed = await renameProject(project().id, {
       name: "renamed",
     });
     expect(http.patch).toHaveBeenCalledWith(
       `/projects/${project().id}`,
       { name: "renamed" },
-      { headers: { "X-Team-Id": "team-1" } },
     );
     expect(renamed.name).toBe("renamed");
   });
 
   it("deletes a project by id", async () => {
     vi.mocked(http.delete).mockResolvedValue({ data: {} });
-    await deleteProject("team-1", project().id);
-    expect(http.delete).toHaveBeenCalledWith(`/projects/${project().id}`, {
-      headers: { "X-Team-Id": "team-1" },
-    });
+    await deleteProject(project().id);
+    expect(http.delete).toHaveBeenCalledWith(`/projects/${project().id}`);
   });
 
   it("writes environments under the nested routes", async () => {
     vi.mocked(http.post).mockResolvedValue({
       data: { environment: environment({ name: "staging" }) },
     });
-    const created = await createEnvironment("team-1", project().id, {
+    const created = await createEnvironment(project().id, {
       name: "staging",
     });
     expect(http.post).toHaveBeenCalledWith(
       `/projects/${project().id}/environments`,
       { name: "staging" },
-      { headers: { "X-Team-Id": "team-1" } },
     );
     expect(created.name).toBe("staging");
 
     vi.mocked(http.patch).mockResolvedValue({
       data: { environment: environment({ name: "stage" }) },
     });
-    const renamed = await renameEnvironment("team-1", environment().id, {
+    const renamed = await renameEnvironment(environment().id, {
       name: "stage",
     });
     expect(http.patch).toHaveBeenCalledWith(
       `/environments/${environment().id}`,
       { name: "stage" },
-      { headers: { "X-Team-Id": "team-1" } },
     );
     expect(renamed.name).toBe("stage");
 
-    await deleteEnvironment("team-1", environment().id);
+    await deleteEnvironment(environment().id);
     expect(http.delete).toHaveBeenCalledWith(
       `/environments/${environment().id}`,
-      { headers: { "X-Team-Id": "team-1" } },
     );
   });
 });
@@ -149,7 +136,7 @@ describe("mutation envelopes parse warn-only", () => {
       vi.mocked(http.patch).mockResolvedValue({
         data: { project: { ...project(), future_field: "kept" } },
       });
-      const renamed = await renameProject("team-1", project().id, {
+      const renamed = await renameProject(project().id, {
         name: "renamed",
       });
       expect((renamed as unknown as Record<string, unknown>).future_field).toBe(
@@ -165,7 +152,7 @@ describe("mutation envelopes parse warn-only", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       vi.mocked(http.post).mockResolvedValue({ data: { bogus: true } });
-      const created = await createProject("team-1", { name: "x" });
+      const created = await createProject({ name: "x" });
       expect(warn).toHaveBeenCalled();
       expect(created).toEqual({ bogus: true });
     } finally {

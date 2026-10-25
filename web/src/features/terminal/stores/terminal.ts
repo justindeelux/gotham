@@ -33,7 +33,6 @@ import {
   knownGothamVersion,
   runningGothamVersion,
 } from "@/features/terminal/utils/terminalBanner";
-import { useTeamsStore } from "@/features/teams/stores/teams";
 import { i18n } from "@/shared/i18n";
 import type { PromptPhase } from "@/features/terminal/transport/promptScanner";
 import type {
@@ -310,7 +309,6 @@ export const useTerminalStore = defineStore("terminal", () => {
           rows: tab.rows,
         },
         signal,
-        useTeamsStore().activeTeamId,
       );
     }
     return createTerminalSession(
@@ -331,7 +329,6 @@ export const useTerminalStore = defineStore("terminal", () => {
       return closeApplicationTerminalSession(
         tab.applicationId,
         sessionId,
-        useTeamsStore().activeTeamId,
       );
     }
     return closeTerminalSession(tab.serverId, sessionId);

@@ -66,7 +66,6 @@ async function loadModule(relativePath) {
             contents: [
               "export const http = { get: async () => ({}), post: async () => ({}),",
               "  patch: async () => ({}), put: async () => ({}), delete: async () => ({}) };",
-              "export function teamHeaders() { return {}; }",
             ].join("\n"),
             loader: "js",
           }));
@@ -119,7 +118,6 @@ async function loadApiWithCatalogs(apiImport, namespace, catalogImport) {
             contents: [
               "export const http = { get: async () => ({}), post: async () => ({}),",
               "  patch: async () => ({}), put: async () => ({}), delete: async () => ({}) };",
-              "export function teamHeaders() { return {}; }",
             ].join("\n"),
             loader: "js",
           }));
@@ -168,7 +166,6 @@ async function loadApplicationsWithHttp() {
               "  put: (...a) => globalThis.__gothamHttp.put(...a),",
               "  delete: (...a) => globalThis.__gothamHttp.delete(...a),",
               "};",
-              "export function teamHeaders() { return {}; }",
             ].join("\n"),
             loader: "js",
           }));
@@ -241,7 +238,6 @@ async function loadAuthHarness() {
       "  put: async () => { throw new Error('unused'); },",
       "  delete: async () => { throw new Error('unused'); },",
       "};",
-      "export function teamHeaders() { return {}; }",
     ].join("\n"),
     "@/shared/api/token": [
       "export const getSession = () => ({",
@@ -255,9 +251,6 @@ async function loadAuthHarness() {
       "export function stripErrorPrefix(m) { return m; }",
       "export function isApiError() { return false; }",
       "export const useServersStore = () => globalThis.__userStores.servers;",
-    ].join("\n"),
-    "@/features/teams": [
-      "export const useTeamsStore = () => globalThis.__userStores.teams;",
     ].join("\n"),
     "@/features/applications": [
       "export const useApplicationsStore = () => globalThis.__userStores.applications;",
@@ -361,7 +354,6 @@ async function loadHttpReal() {
 async function main() {
   const format = await loadModule("../src/shared/utils/format.ts");
   const servers = await loadModule("../src/features/servers/api/servers.ts");
-  const teams = await loadModule("../src/features/teams/api/teams.ts");
   const databases = await loadModule("../src/features/databases/api/databases.ts");
   const applications = await loadModule("../src/features/applications/api/applications.ts");
   const dashboard = await loadModule("../src/features/dashboard/utils/dashboard.ts");
@@ -447,15 +439,6 @@ async function main() {
       describeServerError(new Error("proxy: bad gateway")) === "bad gateway",
       "Error path strips the prefix",
     );
-  });
-
-  console.log("sidebar role label (JUS-10)");
-  await check("role wording matches the Teams page, neutral while loading", () => {
-    const { meRoleLabel } = teams.module;
-    assert(meRoleLabel(null) === "Team member", "loading fallback is neutral");
-    assert(meRoleLabel("owner") === "owner", "owner label");
-    assert(meRoleLabel("admin") === "admin", "admin label");
-    assert(meRoleLabel("read_only") === "read-only", "read-only label");
   });
 
   console.log("databases empty states (JUS-9)");
@@ -652,52 +635,6 @@ async function main() {
     }
   });
 
-  await check("sidebar role retry is bounded (JUS-10 fix round 3)", async () => {
-    const { shouldRetryRoleRead, roleReadMaxRetries, roleReadRetryMs } =
-      teams.module;
-    assert(roleReadMaxRetries === 2, "two retries after the initial read");
-    assert(roleReadRetryMs === 5_000, "retries are 5s apart");
-    assert(
-      shouldRetryRoleRead({ loaded: false, loading: false, retries: 0 }) === true,
-      "first failure schedules a retry",
-    );
-    assert(
-      shouldRetryRoleRead({ loaded: false, loading: false, retries: 1 }) === true,
-      "second failure schedules the last retry",
-    );
-    assert(
-      shouldRetryRoleRead({ loaded: false, loading: false, retries: 2 }) === false,
-      "exhausted attempts stop",
-    );
-    assert(
-      shouldRetryRoleRead({ loaded: true, loading: false, retries: 0 }) === false,
-      "loaded stops (even an empty list: disabled feature stays neutral)",
-    );
-    assert(
-      shouldRetryRoleRead({ loaded: false, loading: true, retries: 0 }) === false,
-      "an in-flight fetch stops (the label follows the store)",
-    );
-    const { readFile } = await import("node:fs/promises");
-    const card = await readFile(
-      new URL("../src/app/layouts/AccountMenu.vue", import.meta.url),
-      "utf8",
-    );
-    assert(card.includes("shouldRetryRoleRead("), "AccountMenu decides via the helper");
-    assert(
-      card.includes("roleReadRetryMs") && !card.includes("5_000"),
-      "AccountMenu takes the delay from the policy, not a local literal",
-    );
-    assert(
-      !card.includes("maxRoleRetries") && !card.includes("roleRetryMs"),
-      "AccountMenu keeps no local retry constants",
-    );
-    assert(
-      card.includes("onUnmounted(cancelRoleRetry)"),
-      "unmount drops a pending retry",
-    );
-  });
-
-  console.log("tightened error prefix allowlist (fix round 1)");
   await check("only real Go prefixes strip; ordinary words pass through", () => {
     const { stripErrorPrefix } = servers.module;
     assert(
@@ -757,10 +694,7 @@ async function main() {
     const allowlist = [...setBody.matchAll(/"([^"]+)"/g)].map(
       (match) => match[1],
     );
-    // The web teams feature lives until the member UI replaces it, so its
-    // error prefix stays accepted even though no Go package emits it.
-    const pendingRemoval = ["teams"];
-    const expected = [...grepped, ...pendingRemoval].sort();
+    const expected = [...grepped].sort();
     assert(
       allowlist.length === expected.length &&
         [...allowlist].sort().every((prefix, index) => prefix === expected[index]),
@@ -785,7 +719,7 @@ async function main() {
   });
 
   console.log("every describe path strips backend prefixes (fix round 1)");
-  await check("database, team, proxy, service and generic paths strip", async () => {
+  await check("database, proxy, service and generic paths strip", async () => {
     const backups = await loadModule("../src/features/databases/api/backups.ts");
     const databasesI18n = await loadApiWithCatalogs(
       "@/features/databases/api/databases",
@@ -816,16 +750,6 @@ async function main() {
         databasesI18n.module.describeDatabaseError(new Error("databases: gone")) ===
           "Something went wrong. Please try again. (gone)",
         "database Error path strips then summarizes",
-      );
-      assert(
-        teams.module.describeTeamError({ message: "teams: gone", status: 400 }) ===
-          "gone",
-        "team 400 strips through the shared helper",
-      );
-      assert(
-        teams.module.describeTeamError(prefixed("teams")) ===
-          "Request failed: boom",
-        "team generic pairs the summary with the raw diagnostic",
       );
       assert(
         proxy.module.describeProxyError({ message: "proxy: bad", status: 400 }) ===
@@ -958,45 +882,6 @@ async function main() {
     }
   });
 
-  await check("sign-out resets the teams cache (A owner, B read-only)", async () => {
-    const harness = await loadStoreHarness("../src/features/teams/stores", "teams", "useTeamsStore", {
-      "@/features/teams/api/teams": [
-        "export const listTeams = () => globalThis.__teamsApi.listTeams();",
-        "export const createTeam = async () => { throw new Error('unused'); };",
-        "export const deleteTeam = async () => {};",
-        "export const renameTeam = async () => { throw new Error('unused'); };",
-        "export const describeTeamError = (e) => String((e && e.message) || e);",
-        "export const isFeatureDisabled = () => false;",
-      ].join("\n"),
-    });
-    try {
-      const { useTeamsStore, createPinia, setActivePinia } = harness.module;
-      setActivePinia(createPinia());
-      const store = useTeamsStore();
-      globalThis.__teamsApi = {
-        listTeams: async () => [
-          { id: "t1", name: "A", is_personal: true, role: "owner" },
-        ],
-      };
-      await store.fetchTeams();
-      assert(store.activeTeam?.role === "owner", "A signs in as owner");
-      store.reset();
-      assert(store.teams.length === 0, "reset drops the list");
-      assert(store.loaded === false, "reset clears the loaded flag");
-      assert(store.activeTeamId === "", "reset clears the selection");
-      globalThis.__teamsApi = {
-        listTeams: async () => [
-          { id: "t2", name: "B", is_personal: true, role: "read_only" },
-        ],
-      };
-      await store.fetchTeams();
-      assert(store.activeTeam?.role === "read_only", "B signs in as read-only");
-    } finally {
-      delete globalThis.__teamsApi;
-      await harness.cleanup();
-    }
-  });
-
   await check("user-scoped stores reset on sign-out", async () => {
     const serversHarness = await loadStoreHarness("../src/features/servers/stores", "servers", "useServersStore", {
       "@/features/servers/api/servers": [
@@ -1060,9 +945,6 @@ async function main() {
           "export const listDeliveries = async () => [];",
           "export const testChannel = async () => { throw new Error('unused'); };",
           "export const updateChannel = async () => { throw new Error('unused'); };",
-        ].join("\n"),
-        "@/features/teams": [
-          "export const useTeamsStore = () => ({ activeTeamId: '' });",
         ].join("\n"),
       },
     );
@@ -1128,7 +1010,7 @@ async function main() {
       const postCalls = [];
       globalThis.__userStores = Object.fromEntries(
         [
-          "teams", "servers", "applications", "databases", "notifications",
+          "servers", "applications", "databases", "notifications",
           "services", "backups", "providers", "templates", "proxy",
           "projects", "github-app", "toolchain", "dashboard-deployments",
           "terminal", "terminal-window",
@@ -1152,7 +1034,7 @@ async function main() {
       });
       await store.logout();
       assert(postCalls.length === 1, "logout revokes the refresh token");
-      assert(seen.length === 16, `all sixteen stores reset (saw ${seen.length})`);
+      assert(seen.length === 15, `all fifteen stores reset (saw ${seen.length})`);
       assert(store.accessToken === null, "session cleared");
       store.setSession({
         user: { email: "b@example.com" },
@@ -1160,7 +1042,7 @@ async function main() {
         refresh_token: "refresh",
       });
       store.clearSession();
-      assert(seen.length === 32, "clearSession resets too (401 path)");
+      assert(seen.length === 30, "clearSession resets too (401 path)");
     } finally {
       delete globalThis.__userStores;
       delete globalThis.__authHttp;
@@ -1195,17 +1077,12 @@ async function main() {
         "gotham.auth.session",
         JSON.stringify({ user: { id: "u" }, accessToken: "a", refreshToken: "r" }),
       );
-      store.set("gotham.teams.active", "team-1");
       store.set(
         "gotham-refresh-lock",
         JSON.stringify({ id: "x", expiresAt: Date.now() + 99999 }),
       );
       expireSession();
       assert(!store.has("gotham.auth.session"), "session cleared");
-      assert(
-        !store.has("gotham.teams.active"),
-        "previous user's active team does not survive a 401",
-      );
       assert(
         store.has("gotham-refresh-lock"),
         "cross-tab refresh lease is not user-scoped and survives",
@@ -1272,7 +1149,6 @@ async function main() {
 
   await format.cleanup();
   await servers.cleanup();
-  await teams.cleanup();
   await databases.cleanup();
   await applications.cleanup();
   await dashboard.cleanup();

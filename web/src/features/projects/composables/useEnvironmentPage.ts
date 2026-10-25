@@ -25,7 +25,6 @@ import { serviceStatusTagType } from "@/features/services/api/services";
 import type { Service } from "@/features/services/api/services";
 import { isApiError } from "@/features/servers";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { useTeamsStore } from "@/features/teams";
 import { createRequestGeneration } from "@/shared/utils/requestGeneration";
 
 export type EnvironmentResourceKind = "application" | "service" | "database";
@@ -218,7 +217,6 @@ export function filterEnvironmentRows(
 export function useEnvironmentPage() {
   const route = useRoute();
   const router = useRouter();
-  const teamsStore = useTeamsStore();
   const projectsStore = useProjectsStore();
 
   const projectId = computed<string>(() => String(route.params.projectId ?? ""));
@@ -282,7 +280,6 @@ export function useEnvironmentPage() {
     notFound.value = false;
     try {
       const next = await getEnvironmentResources(
-        teamsStore.activeTeamId,
         environmentId.value,
         showPreviews.value,
       );
@@ -346,7 +343,7 @@ export function useEnvironmentPage() {
 
   async function loadSiblings(forProjectId: string): Promise<void> {
     try {
-      const detail = await getProject(teamsStore.activeTeamId, forProjectId);
+      const detail = await getProject(forProjectId);
       siblings.value = detail.environments;
     } catch {
       siblings.value = [];

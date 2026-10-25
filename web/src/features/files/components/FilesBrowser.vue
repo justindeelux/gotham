@@ -103,7 +103,6 @@ import {
   windowRange,
 } from "@/features/files/utils/virtual";
 import { useServersStore } from "@/features/servers";
-import { useTeamsStore } from "@/features/teams";
 import { useTerminalStore } from "@/features/terminal";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
@@ -119,7 +118,6 @@ const message = useMessage();
 const files = useFilesStore();
 const trash = useTrashStore();
 const editor = useEditorStore();
-const teams = useTeamsStore();
 const auth = useAuthStore();
 const serversStore = useServersStore();
 const terminal = useTerminalStore();
@@ -136,13 +134,6 @@ watch(
 );
 const coarseNow = useCoarseNow();
 
-watch(
-  () => teams.activeTeamId,
-  () => {
-    trash.reset();
-    void files.reload();
-  },
-);
 watch(
   () => files.rootName,
   () => {
@@ -445,7 +436,6 @@ function openInEditor(entry: FilesEntry): void {
   }
   void editor.openFile(
     props.serverId,
-    teams.activeTeamId,
     files.rootName,
     joinPath(files.path, entry.name),
   );
@@ -1291,7 +1281,6 @@ async function startDownload(entry: FilesEntry): Promise<void> {
   }
   await download(
     props.serverId,
-    teams.activeTeamId,
     files.rootName,
     files.path,
     entry,
@@ -1305,7 +1294,6 @@ async function downloadSelected(): Promise<void> {
     }
     await download(
       props.serverId,
-      teams.activeTeamId,
       files.rootName,
       files.path,
       entry,
@@ -1663,7 +1651,7 @@ const terminalRequesting = ref(false);
 
 const terminalTarget = computed<string | null>(() => {
   if (
-    !auth.isPlatformAdmin ||
+    !auth.isOwner ||
     props.serverId === "" ||
     files.currentRoot === null
   ) {
@@ -2760,8 +2748,7 @@ function onFolderMenu(key: string): void {
     <ImageViewerDialog
       v-model:show="viewerOpen"
       :server-id="props.serverId"
-      :team-id="teams.activeTeamId"
-      :root="files.rootName"
+        :root="files.rootName"
       :directory="files.path"
       :entry="viewerEntry"
     />

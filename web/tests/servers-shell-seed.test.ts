@@ -6,6 +6,7 @@ import { NMessageProvider } from "naive-ui";
 import { defineComponent, h } from "vue";
 
 import type { Server } from "../src/features/servers";
+import { useAuthStore } from "../src/features/auth";
 import { useServersStore } from "../src/features/servers/stores/servers";
 import { listServers } from "../src/features/servers/api/servers";
 import {
@@ -77,7 +78,9 @@ function shellRouter(): ReturnType<typeof createRouter> {
           { path: "projects", name: "projects", component: stub },
           { path: "toolchain", name: "toolchain", component: stub },
           { path: "domains", name: "domains", component: stub },
-          { path: "teams", name: "teams", component: stub },
+          { path: "terminal", name: "terminal", component: stub },
+          { path: "users", name: "users", component: stub },
+          { path: "terminal", name: "terminal", component: stub },
           { path: "notifications", name: "notifications", component: stub },
           { path: "git-sources", name: "git-sources", component: stub },
           { path: "files", name: "files", component: stub },
@@ -120,6 +123,9 @@ beforeEach(() => {
   syncComposerLocale("en");
   globalThis.document.body.innerHTML = "";
   vi.clearAllMocks();
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "a@x.y", role: "owner", created_at: "2026-01-01T00:00:00Z" };
 });
 
 describe("shell server seed (JUS-143)", () => {

@@ -19,7 +19,6 @@ import type {
   Project,
   UpdateProjectInput,
 } from "@/features/projects/api/projects";
-import { useTeamsStore } from "@/features/teams";
 export const useProjectsStore = defineStore("projects", () => {
   const projects = ref<Project[]>([]);
   const loading = ref(false);
@@ -40,20 +39,10 @@ export const useProjectsStore = defineStore("projects", () => {
   );
   const detailProjectId = ref("");
 
-  const loadedTeamId = ref("");
-
   let listReadToken = 0;
   let detailReadToken = 0;
-  const detailTeamId = ref("");
 
-  function activeTeamId(): string {
-    return useTeamsStore().activeTeamId;
-  }
-
-  const canWrite = computed<boolean>(() => {
-    const role = useTeamsStore().activeTeam?.role ?? null;
-    return role === null || role !== "read_only";
-  });
+  const canWrite = computed<boolean>(() => true);
 
   const totalResources = computed<number>(() =>
     projects.value.reduce(
@@ -80,19 +69,13 @@ export const useProjectsStore = defineStore("projects", () => {
   }
 
   async function fetchProjects(): Promise<void> {
-    const teamId = activeTeamId();
     const token = ++listReadToken;
-    const isCurrent = (): boolean =>
-      token === listReadToken && activeTeamId() === teamId;
+    const isCurrent = (): boolean => token === listReadToken;
 
-    if (loadedTeamId.value !== teamId) {
-      clearList();
-      loadedTeamId.value = teamId;
-    }
     loading.value = true;
     listFailure.value = null;
     try {
-      const next = await listProjectsRequest(teamId);
+      const next = await listProjectsRequest();
       if (!isCurrent()) {
         return;
       }
@@ -112,22 +95,18 @@ export const useProjectsStore = defineStore("projects", () => {
   }
 
   async function fetchDetail(projectId: string): Promise<void> {
-    const teamId = activeTeamId();
     const token = ++detailReadToken;
     const isCurrent = (): boolean =>
-      token === detailReadToken &&
-      activeTeamId() === teamId &&
-      detailProjectId.value === projectId;
+      token === detailReadToken && detailProjectId.value === projectId;
 
-    if (detailProjectId.value !== projectId || detailTeamId.value !== teamId) {
+    if (detailProjectId.value !== projectId) {
       clearDetail();
       detailProjectId.value = projectId;
-      detailTeamId.value = teamId;
     }
     detailLoading.value = true;
     detailFailure.value = null;
     try {
-      const next = await getProjectRequest(teamId, projectId);
+      const next = await getProjectRequest(projectId);
       if (!isCurrent()) {
         return;
       }
@@ -147,23 +126,19 @@ export const useProjectsStore = defineStore("projects", () => {
   }
 
   async function create(input: CreateProjectInput): Promise<Project> {
-    const teamId = activeTeamId();
-    const created = await createProjectRequest(teamId, {
+    const created = await createProjectRequest({
       name: input.name.trim(),
       ...(input.description?.trim()
         ? { description: input.description.trim() }
         : {}),
     });
-    if (activeTeamId() !== teamId) {
-      return created.project;
-    }
     projects.value = [created.project, ...projects.value];
     loaded.value = true;
     return created.project;
   }
 
   async function rename(id: string, input: UpdateProjectInput): Promise<Project> {
-    const project = await renameProjectRequest(activeTeamId(), id, input);
+    const project = await renameProjectRequest(id, input);
     projects.value = projects.value.map((item) =>
       item.id === id ? project : item,
     );
@@ -174,7 +149,7 @@ export const useProjectsStore = defineStore("projects", () => {
   }
 
   async function remove(id: string): Promise<void> {
-    await deleteProjectRequest(activeTeamId(), id);
+    await deleteProjectRequest(id);
     projects.value = projects.value.filter((item) => item.id !== id);
     if (detail.value?.id === id) {
       clearDetail();
@@ -185,11 +160,10 @@ export const useProjectsStore = defineStore("projects", () => {
     projectId: string,
     name: string,
   ): Promise<Environment> {
-    const teamId = activeTeamId();
-    const environment = await createEnvironmentRequest(teamId, projectId, {
+    const environment = await createEnvironmentRequest(projectId, {
       name: name.trim(),
     });
-    if (detailProjectId.value === projectId && activeTeamId() === teamId) {
+    if (detailProjectId.value === projectId) {
       environments.value = [...environments.value, environment];
     }
     return environment;
@@ -199,7 +173,7 @@ export const useProjectsStore = defineStore("projects", () => {
     id: string,
     name: string,
   ): Promise<Environment> {
-    const environment = await renameEnvironmentRequest(activeTeamId(), id, {
+    const environment = await renameEnvironmentRequest(id, {
       name: name.trim(),
     });
     environments.value = environments.value.map((item) =>
@@ -209,7 +183,7 @@ export const useProjectsStore = defineStore("projects", () => {
   }
 
   async function removeEnvironment(id: string): Promise<void> {
-    await deleteEnvironmentRequest(activeTeamId(), id);
+    await deleteEnvironmentRequest(id);
     environments.value = environments.value.filter((item) => item.id !== id);
   }
 
@@ -218,8 +192,6 @@ export const useProjectsStore = defineStore("projects", () => {
     detailReadToken += 1;
     clearList();
     clearDetail();
-    loadedTeamId.value = "";
-    detailTeamId.value = "";
     loading.value = false;
     detailLoading.value = false;
   }

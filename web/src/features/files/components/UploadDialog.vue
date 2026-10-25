@@ -8,7 +8,6 @@ import type { UploadItem } from "@/features/files/composables/useFileUpload";
 import { useFileUpload } from "@/features/files/composables/useFileUpload";
 import { useFilesStore } from "@/features/files/stores/files";
 import { filesFromDrop, isFileDrag } from "@/features/files/utils/files";
-import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
 
 interface Props {
@@ -24,7 +23,6 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const message = useMessage();
 const files = useFilesStore();
-const teams = useTeamsStore();
 const upload = useFileUpload();
 
 const dragging = ref(false);
@@ -32,7 +30,6 @@ const fileInput = ref<HTMLInputElement | null>(null);
 
 const target = ref({
   serverId: "",
-  teamId: "",
   root: "",
   path: "",
 });
@@ -43,7 +40,6 @@ watch(
     if (open) {
       target.value = {
         serverId: files.serverId,
-        teamId: teams.activeTeamId,
         root: files.rootName,
         path: files.path,
       };

@@ -274,7 +274,7 @@ describe("folderMenuOptions", () => {
     ]);
   });
 
-  it("adds Open terminal here only for a platform operator", () => {
+  it("adds Open terminal here only for the owner", () => {
     const operator = folderMenuOptions(ctx({ canOpenTerminal: true }));
     expect(keys(operator)).toContain("open-terminal");
     expect(byKey(operator, "open-terminal")?.disabled).toBe(false);

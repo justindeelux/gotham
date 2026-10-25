@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AccountMenu from "@/app/layouts/AccountMenu.vue";
 import { useAuthStore } from "@/features/auth";
-import { useTeamsStore } from "@/features/teams";
 import { useTerminalStore } from "@/features/terminal";
 import {
   i18n,
@@ -35,19 +34,9 @@ async function mountMenu(compact: boolean, displayName = "Ada Lovelace") {
     id: "u-1",
     email: "ada@gotham.dev",
     display_name: displayName,
+    role: "member",
     created_at: "2026-01-01T00:00:00Z",
   };
-  const teams = useTeamsStore();
-  teams.loaded = true;
-  teams.activeTeamId = "t-1";
-  teams.teams = [{
-    id: "t-1",
-    name: "Core",
-    role: "admin",
-    member_count: 1,
-    created_at: "2026-01-01T00:00:00Z",
-  }];
-  vi.spyOn(teams, "ensureTeams").mockResolvedValue(undefined);
   const page = { template: "<div />" };
   const router = createRouter({
     history: createMemoryHistory(),
@@ -74,7 +63,7 @@ describe("shared account menu", () => {
     const header = globalThis.document.querySelector(".account-menu-header")!;
     expect(header.textContent).toContain("Ada Lovelace");
     expect(header.textContent).toContain("ada@gotham.dev");
-    expect(header.textContent).toContain("admin");
+    expect(header.textContent).toContain("Member");
     expect(header.querySelector(".account-menu-name")!.textContent).toBe("Ada Lovelace");
     expect(header.querySelector(".account-menu-email")!.textContent).toBe("ada@gotham.dev");
     expect(header.querySelector("button, a, [tabindex]")).toBeNull();
@@ -98,25 +87,23 @@ describe("shared account menu", () => {
     await nextTick();
     await flushPromises();
     expect(header.querySelector(".account-menu-role")!.textContent)
-      .toBe(i18n.global.t("common.roles.admin"));
+      .toBe(i18n.global.t("common.roles.member"));
     const labels = [...globalThis.document.querySelectorAll(".n-dropdown-option")]
       .map((node) => node.textContent?.trim());
     expect(labels).toEqual([i18n.global.t("shell.profile"), i18n.global.t("shell.signOut")]);
     wrapper.unmount();
   });
 
-  it("appends the instance Platform admin flag to the team role (JUS-197)", async () => {
+  it("shows the owner role from the account", async () => {
     const { wrapper, auth } = await mountMenu(false);
     auth.user = { ...auth.user!, role: "owner" };
     await flushPromises();
     const header = globalThis.document.querySelector(".account-menu-header")!;
-    expect(header.querySelector(".account-menu-role")!.textContent)
-      .toBe("admin · Platform admin");
+    expect(header.querySelector(".account-menu-role")!.textContent).toBe("Owner");
     syncComposerLocale("vi");
     await nextTick();
     await flushPromises();
-    expect(header.querySelector(".account-menu-role")!.textContent)
-      .toBe("quản trị viên · Quản trị nền tảng");
+    expect(header.querySelector(".account-menu-role")!.textContent).toBe("Chủ sở hữu");
     wrapper.unmount();
   });
 

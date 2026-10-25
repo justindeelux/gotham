@@ -1,4 +1,4 @@
-import { http, teamHeaders } from "@/shared/api/http";
+import { http } from "@/shared/api/http";
 import type { SourceType } from "@/features/applications/schemas/applications";
 import type { VolumeListing } from "@/features/applications/schemas/volumes";
 import { volumeListingSchema } from "@/features/applications/schemas/volumes";
@@ -354,7 +354,6 @@ export async function rollbackDeployment(
 }
 
 export async function listApplications(
-  teamId = "",
   filter: { environment_id?: string; project_id?: string } = {},
 ): Promise<Application[]> {
   const params: Record<string, string> = {};
@@ -365,7 +364,6 @@ export async function listApplications(
     params.project_id = filter.project_id;
   }
   const response = await http.get<ApplicationListEnvelope>("/applications", {
-    headers: teamHeaders(teamId),
     params,
   });
   return response.data.applications ?? [];

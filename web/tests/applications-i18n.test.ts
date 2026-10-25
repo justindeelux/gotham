@@ -85,7 +85,7 @@ describe("describe*Error localization", () => {
       "Application not found. It may have been deleted or belong to another account.",
     );
     expect(describePreviewError(apiError(404))).toBe(
-      "Preview deployments are turned off on this control plane. The platform administrator must enable them.",
+      "Preview deployments are turned off on this control plane. Ask the owner to enable them.",
     );
     setLocale("vi", null);
     expect(describeApplicationError(apiError(401))).toBe(
@@ -95,7 +95,7 @@ describe("describe*Error localization", () => {
       "Không tìm thấy ứng dụng. Nó có thể đã bị xóa hoặc thuộc tài khoản khác.",
     );
     expect(describePreviewError(apiError(404))).toBe(
-      "Triển khai xem trước đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
+      "Triển khai xem trước đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
     );
     expect(describeProviderError(new Error("boom"))).toBe(
       "Đã xảy ra lỗi. Vui lòng thử lại. boom",
@@ -185,7 +185,7 @@ describe("describe*Error localization", () => {
   it("classifies on raw status, not on translated text", () => {
     setLocale("vi", null);
     expect(describeApplicationError(apiError(503))).toBe(
-      "Ứng dụng đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
+      "Ứng dụng đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
     );
     expect(describeApplicationError(apiError(502))).toContain("node agent");
   });

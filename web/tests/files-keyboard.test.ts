@@ -15,7 +15,6 @@ import { listEntries, listRoots } from "@/features/files/api/files";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { typeaheadIndex } from "@/features/files/utils/files";
-import { useTeamsStore } from "@/features/teams";
 
 const root: FilesRoot = {
   name: "volumes",
@@ -88,9 +87,6 @@ describe("files store anchor on keyboard focus", () => {
       truncated: false,
       cursor: "",
     });
-    const teams = useTeamsStore();
-    teams.activeTeamId = "team-1";
-    teams.teams = [];
   });
 
   it("moves the anchor without changing the selection", async () => {

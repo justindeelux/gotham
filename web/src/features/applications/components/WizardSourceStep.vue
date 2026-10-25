@@ -82,7 +82,7 @@ const latestTagWarn = computed<boolean>(
           <NInput
             v-model:value="form.imageRef"
             class="mono"
-            placeholder="registry.example.com/team/app:1.2"
+            placeholder="registry.example.com/apps/app:1.2"
           />
           <span class="field-hint">{{ t("applications.wizard.imageRefHint") }}</span>
           <NAlert v-if="latestTagWarn" class="field-alert" type="warning" :show-icon="false" :bordered="false">

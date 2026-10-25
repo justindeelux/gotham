@@ -1,27 +1,19 @@
 const vi = {
   page: {
-    eyebrow: "Nhóm · Thông báo",
+    eyebrow: "Truy cập · Thông báo",
     title: "Kênh thông báo",
     description:
-      "Sự kiện triển khai và sao lưu được gửi tới các kênh của nhóm: " +
+      "Sự kiện triển khai và sao lưu được gửi tới các kênh của bạn: " +
       "webhook Discord và Slack, bot Telegram, hoặc email SMTP. Kênh thuộc " +
-      "phạm vi nhóm, và thông tin bí mật chỉ ghi — đọc chỉ thấy giá trị " +
-      "đã che.",
+      "phạm vi tài nguyên, và thông tin bí mật chỉ ghi — đọc chỉ thấy giá " +
+      "trị đã che.",
     newChannel: "Kênh mới",
     unavailableTitle: "Thông báo không khả dụng",
     unavailableDesc:
       "Kênh thông báo đang tắt trên control plane này. " +
-      "Quản trị viên nền tảng phải bật.",
-    empty: "Nhóm này chưa có kênh nào.",
+      "Hãy đề nghị chủ sở hữu bật.",
+    empty: "Chưa có kênh nào.",
     createFirst: "Tạo kênh đầu tiên",
-  },
-  scope: {
-    title: "Phạm vi nhóm",
-    teamAria: "Nhóm thông báo",
-    yourRole: "vai trò của bạn: {role}",
-    readOnlyNote:
-      "Các kênh bên dưới thuộc về nhóm này. Vai trò chỉ đọc được xem " +
-      "nhưng không được thay đổi.",
   },
   card: {
     enabledLabel: "Đang bật",
@@ -60,7 +52,7 @@ const vi = {
     backup_failure: "Sao lưu thất bại",
   },
   scopeLabel: {
-    teamWide: "Toàn nhóm",
+    allResources: "Mọi tài nguyên",
     app: "Ứng dụng: {name}",
     database: "Cơ sở dữ liệu: {name}",
   },
@@ -116,7 +108,7 @@ const vi = {
     outOfScope:
       "Kênh này đã đăng ký {names}, mà phạm vi tài nguyên không thể gửi. " +
       "Đăng ký đã lưu được giữ nguyên trừ khi bạn sửa sự kiện hoặc phạm vi.",
-    eventsHintTeam: "Kênh toàn nhóm nhận mọi sự kiện đã chọn.",
+    eventsHintAll: "Kênh toàn cục nhận mọi sự kiện đã chọn.",
     eventsHintApp:
       "Ứng dụng gửi sự kiện triển khai; sự kiện sao lưu không tới được " +
       "kênh này.",
@@ -125,7 +117,7 @@ const vi = {
       "được kênh này.",
     resourceScope: "Phạm vi tài nguyên",
     resourceScopeAria: "Phạm vi tài nguyên",
-    scopeTeamWide: "Toàn nhóm (mọi tài nguyên)",
+    scopeAll: "Mọi tài nguyên",
     scopeApp: "Ứng dụng",
     scopeAppUnavailable: "Ứng dụng (không khả dụng)",
     scopeDb: "Cơ sở dữ liệu",
@@ -136,18 +128,18 @@ const vi = {
     missingResource: "{id} (thiếu)",
     unavailableBoth:
       "Ứng dụng và cơ sở dữ liệu không khả dụng trên control plane này; " +
-      "kênh có thể giữ phạm vi toàn nhóm.",
+      "kênh có thể giữ phạm vi toàn cục.",
     unavailableApps:
       "Ứng dụng đang tắt trên control plane này; " +
-      "vẫn dùng được phạm vi cơ sở dữ liệu. Quản trị viên nền tảng phải bật.",
+      "vẫn dùng được phạm vi cơ sở dữ liệu. Hãy đề nghị chủ sở hữu bật.",
     unavailableDbs:
       "Cơ sở dữ liệu đang tắt trên control plane này; " +
-      "vẫn dùng được phạm vi ứng dụng. Quản trị viên nền tảng phải bật.",
+      "vẫn dùng được phạm vi ứng dụng. Hãy đề nghị chủ sở hữu bật.",
     enabled: "Đang bật",
     enabledAria: "Kênh đang bật",
     secretsNote:
       "Bí mật chỉ gửi một lần, niêm phong phía máy chủ và không bao giờ " +
-      "hiển thị lại — đọc chỉ trả về mặt nạ. Kênh toàn nhóm nhận mọi sự " +
+      "hiển thị lại — đọc chỉ trả về mặt nạ. Kênh toàn cục nhận mọi sự " +
       "kiện đã chọn; kênh theo phạm vi chỉ nhận sự kiện của tài nguyên " +
       "đã chọn.",
     cancel: "Hủy",
@@ -161,10 +153,10 @@ const vi = {
   },
   errors: {
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
-    forbiddenRole: "Vai trò nhóm của bạn không cho phép hành động này.",
+    forbiddenRole: "Bạn không có quyền thực hiện thao tác này.",
     featureDisabled:
       "Kênh thông báo đang tắt trên control plane này. " +
-      "Quản trị viên nền tảng phải bật.",
+      "Hãy đề nghị chủ sở hữu bật.",
     invalidConfig: "Cấu hình kênh không hợp lệ.",
     requestFailed: "Yêu cầu thất bại",
     unexpected: "Đã xảy ra lỗi. Vui lòng thử lại.",

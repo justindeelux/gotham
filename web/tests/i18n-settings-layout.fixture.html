@@ -22,14 +22,14 @@
     border: 1px solid var(--border); min-width: 0;
   }
   .redirect-route, .redirect-actions { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
-  .team-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; min-width: 0; flex-wrap: wrap; }
+  .settings-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; min-width: 0; flex-wrap: wrap; }
   .btn { border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; white-space: nowrap; }
   .mono { font-family: var(--font-mono); }
   @media (max-width: 1024px) { .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 860px) {
     .page-actions { margin-left: 0; width: 100%; }
     .domain-row { grid-template-columns: minmax(0, 1fr); }
-    .team-row { flex-wrap: wrap; }
+    .settings-row { flex-wrap: wrap; }
   }
   @media (max-width: 640px) { .cols-4 { grid-template-columns: minmax(0, 1fr); } }
 </style>
@@ -40,7 +40,7 @@
     <div class="page-head" id="en-head">
       <div>
         <h1>Notification channels</h1>
-        <p>Deploy and backup events are delivered to the team's channels: Discord and Slack webhooks, a Telegram bot, or SMTP email. Channels are team-scoped, and secrets are write-only — reads only ever show a masked value.</p>
+        <p>Deploy and backup events are delivered to your channels: Discord and Slack webhooks, a Telegram bot, or SMTP email. Channels are resource-scoped, and secrets are write-only — reads only ever show a masked value.</p>
       </div>
       <div class="page-actions" id="en-actions">
         <button class="btn" type="button">Add DNS provider</button>
@@ -59,8 +59,8 @@
       <div><span>enabled</span> <span>· keeps the path</span></div>
       <div class="redirect-actions"><button class="btn" type="button">Edit</button><button class="btn" type="button">Delete</button></div>
     </div>
-    <div class="team-row" id="en-team">
-      <button class="btn" type="button">Production team name</button>
+    <div class="settings-row" id="en-users">
+      <button class="btn" type="button">Production user name</button>
       <span>personal</span><span>your role: read-only</span>
       <span><button class="btn" type="button">Rename</button> <button class="btn" type="button">Delete</button></span>
     </div>
@@ -90,8 +90,8 @@
       <div><span>đang bật</span> <span>· giữ đường dẫn</span></div>
       <div class="redirect-actions"><button class="btn" type="button">Sửa</button><button class="btn" type="button">Xóa</button></div>
     </div>
-    <div class="team-row" id="vi-team">
-      <button class="btn" type="button">Production team name</button>
+    <div class="settings-row" id="vi-users">
+      <button class="btn" type="button">Production user name</button>
       <span>cá nhân</span><span>vai trò của bạn: chỉ đọc</span>
       <span><button class="btn" type="button">Đổi tên</button> <button class="btn" type="button">Xóa</button></span>
     </div>

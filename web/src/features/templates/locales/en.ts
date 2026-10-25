@@ -15,7 +15,7 @@ const en = {
     invalidValuesWithDetail: "{detail}",
     notFound: "Template not found. The catalog may have changed — reload the page.",
     notFoundWithDetail: "{detail}",
-    disabled: "Services are turned off on this control plane. The platform administrator must enable them.",
+    disabled: "Services are turned off on this control plane. Ask the owner to enable them.",
   },
   wizard: {
     title: "Deploy template {name}",

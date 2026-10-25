@@ -37,7 +37,6 @@ import type { ExplorerDirState, ExplorerRow } from "@/features/files/utils/explo
 import { flattenTree } from "@/features/files/utils/explorer";
 import editorEn from "@/features/files/locales/editorEn";
 import editorVi from "@/features/files/locales/editorVi";
-import { useTeamsStore } from "@/features/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const root: FilesRoot = {
@@ -110,9 +109,6 @@ function setupStores(): {
   files: ReturnType<typeof useFilesStore>;
 } {
   setActivePinia(createPinia());
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "owner" }];
   const files = useFilesStore();
   files.roots = [root];
   files.rootName = "volumes";
@@ -206,7 +202,7 @@ describe("flattenTree", () => {
 
 describe("explorer store", () => {
   it("loads the root once and caches nested folders after first expand", async () => {
-    vi.mocked(listEntries).mockImplementation(async (_server, _team, options) => ({
+    vi.mocked(listEntries).mockImplementation(async (_server, options) => ({
       entries:
         (options.path ?? "") === "www"
           ? [dir("src"), entry({ name: "index.ts" })]
@@ -220,7 +216,7 @@ describe("explorer store", () => {
 
     expect(vi.mocked(listEntries)).toHaveBeenCalledTimes(1);
     await explorer.toggle("www/src");
-    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "www/src",
     });
@@ -266,8 +262,7 @@ describe("explorer store", () => {
 
     expect(vi.mocked(searchEntries)).toHaveBeenCalledWith(
       "server-1",
-      "team-1",
-      expect.objectContaining({
+        expect.objectContaining({
         root: "volumes",
         path: "www",
         query: "app",
@@ -292,7 +287,7 @@ describe("explorer store", () => {
 
     await explorer.rename("www/a.ts", "b.ts");
 
-    expect(vi.mocked(renameEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(renameEntry)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       source: "www/a.ts",
       destination: "www/b.ts",
@@ -330,8 +325,7 @@ describe("explorer store", () => {
 
     expect(vi.mocked(deleteEntry)).toHaveBeenCalledWith(
       "server-1",
-      "team-1",
-      "volumes",
+        "volumes",
       "www/src",
       true,
     );
@@ -347,7 +341,7 @@ describe("explorer store", () => {
     const target = await explorer.create("directory", "  assets  ", "www");
 
     expect(target).toBe("www/assets");
-    expect(vi.mocked(createFolder)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(createFolder)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "www/assets",
     });
@@ -439,8 +433,7 @@ describe("explorer store", () => {
 
     expect(vi.mocked(deleteEntry)).toHaveBeenCalledWith(
       "server-1",
-      "team-1",
-      "volumes",
+        "volumes",
       "www/deep/folder",
       true,
     );
@@ -494,7 +487,7 @@ describe("EditorExplorer panel", () => {
   });
 
   it("expands with ArrowRight, walks into the child and opens it with Enter", async () => {
-    vi.mocked(listEntries).mockImplementation(async (_server, _team, options) => ({
+    vi.mocked(listEntries).mockImplementation(async (_server, options) => ({
       entries:
         (options.path ?? "") === "www"
           ? [dir("src"), entry({ name: "index.ts" })]
@@ -510,7 +503,7 @@ describe("EditorExplorer panel", () => {
     await tree.trigger("keydown", { key: "ArrowRight" });
     await flushPromises();
     await nextTick();
-    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "www/src",
     });
@@ -520,7 +513,7 @@ describe("EditorExplorer panel", () => {
     expect(tree.attributes("aria-activedescendant")).toBe("ex-row-1");
     await tree.trigger("keydown", { key: "Enter" });
     await flushPromises();
-    expect(openFile).toHaveBeenCalledWith("server-1", "team-1", "volumes", "www/src/main.ts");
+    expect(openFile).toHaveBeenCalledWith("server-1", "volumes", "www/src/main.ts");
     wrapper.unmount();
   });
 
@@ -563,7 +556,7 @@ describe("EditorExplorer panel", () => {
   });
 
   it("navigates parents with ArrowLeft and jumps with Home/End", async () => {
-    vi.mocked(listEntries).mockImplementation(async (_server, _team, options) => ({
+    vi.mocked(listEntries).mockImplementation(async (_server, options) => ({
       entries:
         (options.path ?? "") === "www"
           ? [dir("src"), entry({ name: "z.ts" })]
@@ -652,7 +645,7 @@ describe("EditorExplorer panel", () => {
   });
 
   it("refreshes a never-expanded parent before opening the rename dialog", async () => {
-    vi.mocked(listEntries).mockImplementation(async (_server, _team, options) => ({
+    vi.mocked(listEntries).mockImplementation(async (_server, options) => ({
       entries:
         (options.path ?? "") === "www"
           ? [dir("deep")]
@@ -674,7 +667,7 @@ describe("EditorExplorer panel", () => {
     await wrapper.find('[role="tree"]').trigger("keydown", { key: "F2" });
     await flushPromises();
 
-    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "www/deep",
     });

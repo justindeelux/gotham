@@ -10,8 +10,8 @@ const en = {
     avatarNote:
       "Your avatar comes from GitHub when you sign in with GitHub, otherwise your initials are shown.",
     email: "Email",
-    platformRole: "Platform role",
-    admin: "Platform admin",
+    role: "Role",
+    owner: "Owner",
     member: "Member",
     memberSince: "Member since",
     signedIn: "Signed in",

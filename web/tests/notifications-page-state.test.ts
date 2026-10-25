@@ -27,7 +27,6 @@ import { provideChannelDialog } from "@/features/notifications/composables/useCh
 import type { ChannelDialogState } from "@/features/notifications/composables/useChannelDialog";
 import { listApplications } from "@/features/applications";
 import { listDatabases } from "@/features/databases";
-import { useTeamsStore } from "@/features/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 beforeEach(() => {
@@ -43,18 +42,6 @@ function shell(child: object) {
       return h(NMessageProvider, null, { default: () => h(child as never) });
     },
   });
-}
-
-function seedTeams(): void {
-  const teams = useTeamsStore();
-  (teams as unknown as Record<string, unknown>).ensureTeams = vi
-    .fn()
-    .mockResolvedValue(undefined);
-  teams.teams = [
-    { id: "team-1", name: "Acme", is_personal: false, role: "owner" },
-  ] as never;
-  teams.activeTeamId = "team-1";
-  (teams as unknown as Record<string, unknown>).featureDisabled = false;
 }
 
 async function mountPage() {
@@ -104,7 +91,6 @@ function deferred<T>() {
 describe("notifications page instance state", () => {
   it("drops typed secrets and closes the dialog on remount", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(listChannels).mockResolvedValue([]);
     vi.mocked(listApplications).mockResolvedValue([]);
     vi.mocked(listDatabases).mockResolvedValue([]);
@@ -139,32 +125,13 @@ describe("useChannelDialog.loadResources", () => {
       .mockReturnValueOnce(second.promise);
     vi.mocked(listDatabases).mockResolvedValue([]);
 
-    const firstRead = state.loadResources("team-1");
-    const secondRead = state.loadResources("team-1");
+    const firstRead = state.loadResources();
+    const secondRead = state.loadResources();
     second.resolve([{ id: "app-new", name: "New" }]);
     await secondRead;
     first.resolve([{ id: "app-stale", name: "Stale" }]);
     await firstRead;
     expect(state.resourceApplications.value).toEqual([{ id: "app-new", name: "New" }]);
-    wrapper.unmount();
-  });
-
-  it("drops the previous team list on a team switch", async () => {
-    setActivePinia(createPinia());
-    const { wrapper, state } = await dialogHarness();
-    vi.mocked(listApplications).mockResolvedValue([{ id: "app-a", name: "A" }]);
-    vi.mocked(listDatabases).mockResolvedValue([]);
-
-    await state.loadResources("team-a");
-    expect(state.resourceApplications.value).toEqual([{ id: "app-a", name: "A" }]);
-
-    const pending = deferred<Array<{ id: string; name: string }>>();
-    vi.mocked(listApplications).mockReturnValue(pending.promise);
-    const read = state.loadResources("team-b");
-    expect(state.resourceApplications.value).toEqual([]);
-    pending.resolve([{ id: "app-b", name: "B" }]);
-    await read;
-    expect(state.resourceApplications.value).toEqual([{ id: "app-b", name: "B" }]);
     wrapper.unmount();
   });
 
@@ -174,7 +141,7 @@ describe("useChannelDialog.loadResources", () => {
     vi.mocked(listApplications).mockRejectedValue(new Error("FEATURE_APPLICATIONS=false"));
     vi.mocked(listDatabases).mockResolvedValue([{ id: "db-1", name: "Main" }]);
 
-    await state.loadResources("team-1");
+    await state.loadResources();
     expect(state.resourceApplications.value).toEqual([]);
     expect(state.resourceDatabases.value).toEqual([{ id: "db-1", name: "Main" }]);
     const labels = state.scopeOptions.value.map((option) => option.label);

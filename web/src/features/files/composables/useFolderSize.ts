@@ -53,7 +53,6 @@ export function isFolderSizeLoading(
 
 export async function requestFolderSize(
   serverId: string,
-  teamId: string,
   root: string,
   path: string,
 ): Promise<void> {
@@ -70,7 +69,7 @@ export async function requestFolderSize(
   state.status = "loading";
   state.error = null;
   try {
-    const size = await fetchFolderSize(serverId, teamId, root, path, controller.signal);
+    const size = await fetchFolderSize(serverId, root, path, controller.signal);
     state.bytes = size.bytes;
     state.truncated = size.truncated;
     state.status = "done";

@@ -34,7 +34,7 @@ export function useServerDetailTab(serverId: ComputedRef<string>) {
     }
     if (
       (value === "files" || value === "terminal") &&
-      !authStore.isPlatformAdmin
+      !authStore.isOwner
     ) {
       return "overview";
     }
@@ -43,7 +43,7 @@ export function useServerDetailTab(serverId: ComputedRef<string>) {
 
   const activeTab = ref<DetailTab>(tabFromQuery());
   const blockedTerminal = computed<boolean>(
-    () => route.query.tab === "terminal" && !authStore.isPlatformAdmin,
+    () => route.query.tab === "terminal" && !authStore.isOwner,
   );
 
   let syncingTabQuery = false;
@@ -80,7 +80,7 @@ export function useServerDetailTab(serverId: ComputedRef<string>) {
       const next = isDetailTab(value) ? value : "overview";
       const visible =
         (next === "files" || next === "terminal") &&
-        !authStore.isPlatformAdmin
+        !authStore.isOwner
           ? "overview"
           : next;
       if (visible !== activeTab.value) {

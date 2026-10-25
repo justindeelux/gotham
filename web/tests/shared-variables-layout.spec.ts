@@ -36,15 +36,6 @@ const session = {
   refreshToken: "test-refresh",
 };
 
-const team = {
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-};
-
 const projectId = "11111111-1111-4111-8111-111111111111";
 const environmentId = "22222222-2222-4222-8222-222222222222";
 const appId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -142,15 +133,12 @@ test.afterAll(async () => {
   });
 });
 
-async function mockApi(page: Page, role = "owner"): Promise<void> {
+async function mockApi(page: Page): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: session.user });
-  });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [{ ...team, role }] } });
+    await route.fulfill({ json: { user: session.user } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -377,25 +365,6 @@ test("secret-to-plain toggle warns and requires a value", async ({ page }) => {
     .getByRole("textbox", { name: "Value for SENTRY_DSN" })
     .fill("rotated");
   await expect(save).toBeEnabled();
-});
-
-test("viewers see no write footer or editor controls", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await mockApi(page, "read_only");
-  await page.goto(`${baseURL}/projects/${projectId}`);
-  await page.locator(".project-page .title").waitFor();
-  await page.locator(".n-tabs-tab", { hasText: "Shared variables" }).click();
-  const editor = page.locator(".variables-card");
-  await expect(editor).toContainText("SENTRY_DSN");
-  await expect(editor).toContainText("••••••••");
-  await expect(
-    editor.getByRole("button", { name: "Save" }),
-  ).toHaveCount(0);
-  await expect(
-    editor.getByRole("button", { name: "Add variable" }),
-  ).toHaveCount(0);
-  await expect(editor.locator("input")).toHaveCount(0);
-  await expect(editor).not.toContainText("Saving replaces the whole set");
 });
 
 test("a secret refusal maps to its row and drops the keep path", async ({

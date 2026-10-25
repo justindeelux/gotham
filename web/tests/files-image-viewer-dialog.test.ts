@@ -48,8 +48,7 @@ function props(overrides: Record<string, unknown> = {}) {
   return {
     show: false,
     serverId: "server-1",
-    teamId: "team-1",
-    root: "srv",
+      root: "srv",
     directory: "",
     entry: entry("logo.png"),
     ...overrides,
@@ -108,8 +107,7 @@ describe("image viewer dialog", () => {
 
     expect(ticketMock).toHaveBeenCalledWith(
       "server-1",
-      "team-1",
-      "srv",
+        "srv",
       "logo.png",
     );
     expect(blobMock).toHaveBeenCalledWith(
@@ -217,8 +215,7 @@ describe("image viewer dialog", () => {
     expect(ticketMock).toHaveBeenCalledTimes(2);
     expect(ticketMock).toHaveBeenLastCalledWith(
       "server-1",
-      "team-1",
-      "srv",
+        "srv",
       "shot.webp",
     );
     wrapper.unmount();

@@ -9,7 +9,6 @@ import type {
 import {
   clearSession,
   getAccessToken,
-  getActiveTeamId,
   getRefreshToken,
   getSession,
   setSession,
@@ -60,33 +59,12 @@ export const http: AxiosInstance = axios.create({
   headers: { Accept: "application/json" },
 });
 
-const teamScopedPathPrefixes = ["/applications", "/deployments"];
-
-function isTeamScopedPath(url: string | undefined): boolean {
-  if (!url) {
-    return false;
-  }
-  const path = url.startsWith("/") ? url : `/${url}`;
-  return teamScopedPathPrefixes.some(
-    (prefix) =>
-      path === prefix ||
-      path.startsWith(`${prefix}/`) ||
-      path.startsWith(`${prefix}?`),
-  );
-}
-
 http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const accessToken = getAccessToken();
   if (accessToken) {
     config.headers.set("Authorization", `Bearer ${accessToken}`);
   } else {
     config.headers.delete("Authorization");
-  }
-  if (!config.headers.has("X-Team-Id") && isTeamScopedPath(config.url)) {
-    const teamId = getActiveTeamId();
-    if (teamId) {
-      config.headers.set("X-Team-Id", teamId);
-    }
   }
   return config;
 });
@@ -350,10 +328,6 @@ function redirectToLogin(): void {
   } catch {
   }
   window.location.assign("/login");
-}
-
-export function teamHeaders(teamId: string): Record<string, string> {
-  return teamId ? { "X-Team-Id": teamId } : {};
 }
 
 function toApiError(error: AxiosError<ApiErrorBody>): ApiError {

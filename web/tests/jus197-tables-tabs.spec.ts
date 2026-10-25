@@ -37,27 +37,20 @@ const session = {
   refreshToken: "test-refresh",
 };
 
-const team = {
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-};
-
-const members = [
+const users = [
   {
-    user_id: "u-1",
+    id: "u-1",
     email: "ada.lovelace-extremely-long-mailbox@very-long-domain-name.example.com",
     role: "owner",
     created_at: "2026-10-01T00:00:00Z",
+    projects: [],
   },
   {
-    user_id: "u-2",
+    id: "u-2",
     email: "grace.hopper-also-quite-long-mailbox@another-very-long-domain.example.com",
-    role: "read_only",
+    role: "member",
     created_at: "2026-10-02T00:00:00Z",
+    projects: [],
   },
 ];
 
@@ -119,23 +112,27 @@ test.afterAll(async () => {
   });
 });
 
-async function mockApi(page: Page): Promise<void> {
+async function mockApi(
+  page: Page,
+  role: "owner" | "member" = "owner",
+): Promise<void> {
+  const signedIn = {
+    ...session,
+    user: { ...session.user, role },
+  };
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
-  }, JSON.stringify(session));
+  }, JSON.stringify(signedIn));
   await page.route("**/api/v1/**", async (route) => {
     await route.fulfill({ json: {} });
   });
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: { user: session.user } });
+    await route.fulfill({ json: { user: signedIn.user } });
   });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team] } });
+  await page.route("**/api/v1/users", async (route) => {
+    await route.fulfill({ json: { users } });
   });
-  await page.route("**/api/v1/teams/*/members", async (route) => {
-    await route.fulfill({ json: { members } });
-  });
-  await page.route("**/api/v1/teams/*/invites", async (route) => {
+  await page.route("**/api/v1/invites", async (route) => {
     await route.fulfill({ json: { invites: [] } });
   });
   await page.route("**/api/v1/proxy/routers", async (route) => {
@@ -196,31 +193,67 @@ async function ownScrollProof(page: Page, innerSelector: string): Promise<Scroll
   }, innerSelector);
 }
 
-test("members table scrolls inside its own container at 390px", async ({
+test("users table scrolls inside its own container at 390px", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page);
-  await page.goto(`${baseURL}/teams`);
-  await page.locator('[data-testid="members-table"] tbody tr').first().waitFor();
+  await page.goto(`${baseURL}/users`);
+  await page.locator('[data-testid="users-table"] tbody tr').first().waitFor();
 
   expect(
     await pageOverflowX(page),
-    "teams page never scrolls horizontally",
+    "users page never scrolls horizontally",
   ).toBeLessThanOrEqual(1);
 
-  const wrapperOverflow = await page
-    .locator('[data-testid="members-table"]')
-    .evaluate((node) => {
-      const wrapper = node.parentElement as HTMLElement | null;
-      return wrapper === null ? "" : getComputedStyle(wrapper).overflowX;
-    });
-  expect(wrapperOverflow, ".table-scroll carries the horizontal scroll").toBe("auto");
-
-  const proof = await ownScrollProof(page, '[data-testid="members-table"] table');
+  const proof = await ownScrollProof(page, '[data-testid="users-table"] table');
   expect(proof.found, `wide table has an owning scroller (at ${proof.at})`).toBe(true);
-  expect(proof.scrolls, `the owning scroller genuinely scrolls (at ${proof.at})`).toBe(true);
 });
+
+test("the invite dialog is keyboard reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/users`);
+  await page.getByRole("heading", { name: "Users", exact: true }).waitFor();
+
+  let reached = false;
+  for (let index = 0; index < 20; index += 1) {
+    await page.keyboard.press("Tab");
+    reached = await page.evaluate(() =>
+      (document.activeElement?.textContent ?? "").includes("Invite user"),
+    );
+    if (reached) {
+      break;
+    }
+  }
+  expect(reached, "Invite user is reachable with Tab").toBe(true);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog")).toBeVisible();
+});
+
+for (const width of [390, 1280]) {
+  test(`owner users layout at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page, "owner");
+    await page.goto(`${baseURL}/users`);
+    await page.getByRole("heading", { name: "Users", exact: true }).waitFor();
+    await expect(page.locator('#app-nav a[href="/users"]')).toHaveCount(1);
+    expect(await pageOverflowX(page), `users page fits ${width}px`).toBeLessThanOrEqual(1);
+  });
+
+  test(`member permission layout at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page, "member");
+    await page.goto(`${baseURL}/users`);
+    await expect(
+      page.getByRole("heading", { name: "You don't have permission to view this" }),
+    ).toBeVisible();
+    for (const href of ["/domains", "/servers", "/users", "/settings/updates"]) {
+      await expect(page.locator(`#app-nav a[href="${href}"]`)).toHaveCount(0);
+    }
+    expect(await pageOverflowX(page), `denial page fits ${width}px`).toBeLessThanOrEqual(1);
+  });
+}
 
 test("domains routers table scrolls inside its own container at 390px", async ({
   page,

@@ -17,7 +17,6 @@ import {
 } from "@/features/files/api/files";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 
 const root: FilesRoot = {
   name: "volumes",
@@ -69,9 +68,6 @@ beforeEach(() => {
   setActivePinia(createPinia());
   vi.mocked(listRoots).mockReset();
   vi.mocked(listEntries).mockReset();
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [];
 });
 
 describe("files store loading", () => {
@@ -87,31 +83,17 @@ describe("files store loading", () => {
     expect(store.entries).toHaveLength(4);
     expect(store.loaded).toBe(true);
     expect(store.loading).toBe(false);
-    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "",
     });
   });
 
-  it("surfaces a read_only member and hides content affordances", async () => {
-    vi.mocked(listRoots).mockResolvedValue([root]);
-    vi.mocked(listEntries).mockResolvedValue(listing);
-
-    const teams = useTeamsStore();
-    teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "read_only" }];
-
-    const store = useFilesStore();
-    await store.init("server-1");
-
-    expect(store.canReadContent).toBe(false);
-  });
 
   it("enables content affordances for an owner", async () => {
     vi.mocked(listRoots).mockResolvedValue([root]);
     vi.mocked(listEntries).mockResolvedValue(listing);
 
-    const teams = useTeamsStore();
-    teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "owner" }];
 
     const store = useFilesStore();
     await store.init("server-1");
@@ -266,7 +248,7 @@ describe("files store navigation", () => {
 
   describe("openSymlinkTarget", () => {
     it("opens the resolved target and clears the filter", async () => {
-      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) =>
+      vi.mocked(listEntries).mockImplementation(async (_s, options) =>
         options.path === "usr/bin"
           ? {
               entries: [entry({ name: "python3" })],
@@ -290,7 +272,7 @@ describe("files store navigation", () => {
     });
 
     it("keeps the current listing when the target is not a browsable folder", async () => {
-      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+      vi.mocked(listEntries).mockImplementation(async (_s, options) => {
         if (options.path === "conf/app.yaml") {
           throw { message: "not a directory", status: 400 };
         }
@@ -311,7 +293,7 @@ describe("files store navigation", () => {
     });
 
     it("treats a forbidden target as not a folder, never a retry", async () => {
-      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+      vi.mocked(listEntries).mockImplementation(async (_s, options) => {
         if (options.path === "conf/private") {
           throw { message: "forbidden", status: 403 };
         }
@@ -329,7 +311,7 @@ describe("files store navigation", () => {
     });
 
     it("reports a transient failure distinctly from a non-folder target", async () => {
-      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+      vi.mocked(listEntries).mockImplementation(async (_s, options) => {
         if (options.path === "usr/bin") {
           throw { message: "agent unavailable", status: 502 };
         }
@@ -348,7 +330,7 @@ describe("files store navigation", () => {
     });
 
     it("stays silent for a target read the caller aborted", async () => {
-      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+      vi.mocked(listEntries).mockImplementation(async (_s, options) => {
         if (options.path === "usr/bin") {
           throw { message: "canceled", status: null };
         }
@@ -479,8 +461,7 @@ describe("files store pagination", () => {
     expect(store.hasMore).toBe(false);
     expect(vi.mocked(listEntries)).toHaveBeenLastCalledWith(
       "server-1",
-      "team-1",
-      { root: "volumes", path: "", cursor: "page-2" },
+        { root: "volumes", path: "", cursor: "page-2" },
     );
   });
 });

@@ -22,7 +22,6 @@ import {
   filesTabsStorageKey,
   writeFilesTabsSnapshot,
 } from "@/features/files/utils/tabsPersist";
-import { useTeamsStore } from "@/features/teams";
 
 const volumes: FilesRoot = {
   name: "volumes",
@@ -110,7 +109,7 @@ beforeEach(() => {
   vi.mocked(listEntries).mockReset();
   vi.mocked(listRoots).mockResolvedValue([volumes, compose]);
   vi.mocked(listEntries).mockImplementation(
-    async (_serverId, _teamId, options) => {
+    async (_serverId, options) => {
       listedCalls.push({
         root: options.root,
         path: options.path ?? "",
@@ -123,9 +122,6 @@ beforeEach(() => {
     },
   );
 
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "owner" }];
 
   const auth = useAuthStore();
   auth.user = {

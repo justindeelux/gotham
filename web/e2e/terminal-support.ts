@@ -434,7 +434,7 @@ export async function terminalServer(
   return ready[0] ?? null;
 }
 
-export async function isPlatformAdmin(
+export async function isOwner(
   request: APIRequestContext,
   account: E2EAccount,
 ): Promise<boolean> {

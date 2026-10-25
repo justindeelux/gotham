@@ -120,7 +120,7 @@ describe("ProfilePage account refresh", () => {
     mockGet.mockResolvedValue({ data: { user: freshUser() } } as never);
     const wrapper = await mountPage();
     expect(useAuthStore().user?.role).toBe("owner");
-    expect(wrapper.text()).toContain("Platform rolePlatform admin");
+    expect(wrapper.text()).toContain("RoleOwner");
     wrapper.unmount();
   });
 
@@ -173,7 +173,7 @@ describe("ProfilePage account refresh", () => {
     await flushPromises();
     await nextTick();
     expect(useAuthStore().user?.role).toBe("owner");
-    expect(wrapper.text()).toContain("Platform rolePlatform admin");
+    expect(wrapper.text()).toContain("RoleOwner");
     wrapper.unmount();
   });
 
@@ -238,7 +238,7 @@ describe("ProfilePage account refresh", () => {
     mockGet.mockResolvedValue({ data: { user: freshUser() } } as never);
     const wrapper = await mountPage();
     expect(useAuthStore().user).toEqual(freshUser());
-    expect(wrapper.text()).toContain("Platform rolePlatform admin");
+    expect(wrapper.text()).toContain("RoleOwner");
     wrapper.unmount();
   });
 

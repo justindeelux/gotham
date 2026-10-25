@@ -1,27 +1,19 @@
 const en = {
   page: {
-    eyebrow: "Team · Notifications",
+    eyebrow: "Access · Notifications",
     title: "Notification channels",
     description:
-      "Deploy and backup events are delivered to the team's channels: " +
+      "Deploy and backup events are delivered to your channels: " +
       "Discord and Slack webhooks, a Telegram bot, or SMTP email. Channels " +
-      "are team-scoped, and secrets are write-only — reads only ever show a " +
-      "masked value.",
+      "are resource-scoped, and secrets are write-only — reads only ever show " +
+      "a masked value.",
     newChannel: "New channel",
     unavailableTitle: "Notifications unavailable",
     unavailableDesc:
-      "Notification channels are turned off on this control plane. The " +
-      "platform administrator must enable them.",
-    empty: "No channels for this team yet.",
+      "Notification channels are turned off on this control plane. " +
+      "Ask the owner to enable them.",
+    empty: "No channels yet.",
     createFirst: "Create the first channel",
-  },
-  scope: {
-    title: "Team scope",
-    teamAria: "Notification team",
-    yourRole: "your role: {role}",
-    readOnlyNote:
-      "Channels below belong to this team. A read-only role can look but " +
-      "not change anything.",
   },
   card: {
     enabledLabel: "Enabled",
@@ -61,7 +53,7 @@ const en = {
     backup_failure: "Backup failed",
   },
   scopeLabel: {
-    teamWide: "Team-wide",
+    allResources: "All resources",
     app: "App: {name}",
     database: "Database: {name}",
   },
@@ -120,7 +112,7 @@ const en = {
       "This channel is subscribed to {names}, which its resource scope " +
       "cannot deliver. The stored subscription is kept unchanged unless " +
       "you edit the events or the scope.",
-    eventsHintTeam: "A team-wide channel receives every selected event.",
+    eventsHintAll: "A global channel receives every selected event.",
     eventsHintApp:
       "Applications deliver deploy events; backup events cannot reach " +
       "this channel.",
@@ -129,7 +121,7 @@ const en = {
       "channel.",
     resourceScope: "Resource scope",
     resourceScopeAria: "Resource scope",
-    scopeTeamWide: "Team-wide (all resources)",
+    scopeAll: "All resources",
     scopeApp: "Application",
     scopeAppUnavailable: "Application (unavailable)",
     scopeDb: "Database",
@@ -140,20 +132,20 @@ const en = {
     missingResource: "{id} (missing)",
     unavailableBoth:
       "Applications and databases are unavailable on this control plane; " +
-      "the channel can stay team-wide.",
+      "the channel can stay global.",
     unavailableApps:
       "Applications are turned off on this control plane; " +
-      "a database scope is still available. The platform administrator must " +
+      "a database scope is still available. Ask the owner to " +
       "enable them.",
     unavailableDbs:
       "Databases are turned off on this control plane; " +
-      "an application scope is still available. The platform administrator " +
+      "an application scope is still available. The owner " +
       "must enable them.",
     enabled: "Enabled",
     enabledAria: "Channel enabled",
     secretsNote:
       "Secrets travel once, are sealed server-side and are never " +
-      "displayed again — a read only returns the mask. A team-wide channel " +
+      "displayed again — a read only returns the mask. A global channel " +
       "receives every selected event; a scoped channel only receives events " +
       "of the selected resource.",
     cancel: "Cancel",
@@ -167,10 +159,10 @@ const en = {
   },
   errors: {
     sessionExpired: "Your session expired. Please sign in again.",
-    forbiddenRole: "Your team role does not allow this action.",
+    forbiddenRole: "You do not have permission for this action.",
     featureDisabled:
-      "Notification channels are turned off on this control plane. The " +
-      "platform administrator must enable them.",
+      "Notification channels are turned off on this control plane. " +
+      "Ask the owner to enable them.",
     invalidConfig: "Invalid channel configuration.",
     requestFailed: "Request failed",
     unexpected: "Something went wrong. Please try again.",

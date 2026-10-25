@@ -32,7 +32,6 @@ export interface UploadItem {
 
 export interface UploadTarget {
   serverId: string;
-  teamId: string;
   root: string;
   path: string;
 }
@@ -145,7 +144,6 @@ export function useFileUpload() {
       };
       const results = await uploadFiles(
         target.serverId,
-        target.teamId,
         [item.file],
         options,
       );

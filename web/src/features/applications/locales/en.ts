@@ -20,7 +20,7 @@ const en = {
     checkingAccess: "Checking terminal access…",
     accessErrorTitle: "Terminal access could not be checked",
     accessErrorBody:
-      "The team role could not be read. No terminal session was requested. Retry once the control plane is reachable.",
+      "Your role could not be read. No terminal session was requested. Retry once the control plane is reachable.",
     loading: "Looking for running service containers…",
     serviceLabel: "Service container",
     chooseService: "Choose a service container",
@@ -34,7 +34,7 @@ const en = {
     retry: "Try again",
     notAllowedTitle: "Terminal not available",
     notAllowedBody:
-      "Opening a container shell needs write access to this application's team (owner or admin). Ask a team admin for access, then reload this page.",
+      "Only the owner can open a container shell. Ask the owner for access, then reload this page.",
   },
   header: {
     fallbackName: "Application",
@@ -454,6 +454,7 @@ const en = {
     packInstallNamed: "Install {pack}",
     node: "Node",
     routingHint: "Domains and ports are attached after creation on the Domains tab, so the first deploy starts with no route.",
+    nodeByOwner: "The owner chooses the node for this deployment.",
     envTitle: "Environment variables",
     volumesTitle: "Volumes",
     envConvention:
@@ -478,10 +479,9 @@ const en = {
   },
   gitSources: {
     eyebrow: "Settings",
-    eyebrowTeam: "Settings · {team}",
     title: "Git sources",
     description:
-      "Connected GitHub Apps and GitLab connections the application wizard deploys from. Connecting is automatic — no hand-copied client IDs, secrets or webhooks. Secrets are never shown here. Connections belong to your account; protecting them is enforced by API-token scopes, not team roles.",
+      "Connected GitHub Apps and GitLab connections the application wizard deploys from. Connecting is automatic — no hand-copied client IDs, secrets or webhooks. Secrets are never shown here. Connections belong to your account; protecting them is enforced by API-token scopes.",
     connectGitHub: "Connect GitHub",
     connectGitLab: "Connect GitLab",
     connectHint: "Connect the source first, then pick its repositories in the application wizard.",
@@ -515,9 +515,9 @@ const en = {
     disconnectTitle: "Disconnect this source?",
     disconnectLead: "Disconnect {name}? The stored credentials are forgotten.",
     disconnectApps: "{count} applications still deploy through it: | {count} application still deploys through it: | {count} applications still deploy through it:",
-    disconnectNoApps: "No application in this team deploys through it.",
+    disconnectNoApps: "No application deploys through it.",
     disconnectUnknown:
-      "Could not check which applications use this connection. It may still be in use, including by applications in other teams.",
+      "Could not check which applications use this connection. It may still be in use by another application.",
     disconnectAcknowledge: "I understand, disconnect anyway",
     disconnectGithubNote:
       "Disconnecting a GitHub App always succeeds and only reports how many applications named it — this list is the only warning.",
@@ -582,7 +582,7 @@ const en = {
     saved: "Image source saved. Redeploy to pull the new reference.",
     clear: "Clear credential",
     cleared: "Credential cleared.",
-    refInvalid: "Enter a valid image reference such as registry.example.com/team/app:1.2.",
+    refInvalid: "Enter a valid image reference such as registry.example.com/apps/app:1.2.",
   },
   privateGit: {
     title: "Private git source",
@@ -662,8 +662,8 @@ const en = {
     nameConflict: "An application with this name already exists in the target environment.",
     conflict: "The request conflicts with the current state of the application.",
     agentUnreachable: "The node agent is unreachable. Check the node status and retry.",
-    appsDisabled: "Applications are turned off on this control plane. The platform administrator must enable them.",
-    previewsDisabled: "Preview deployments are turned off on this control plane. The platform administrator must enable them.",
+    appsDisabled: "Applications are turned off on this control plane. Ask the owner to enable them.",
+    previewsDisabled: "Preview deployments are turned off on this control plane. Ask the owner to enable them.",
   },
   validation: {
     domain:

@@ -25,7 +25,6 @@ import type {
   FilesSearchListing,
 } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 
 const root: FilesRoot = {
   name: "volumes",
@@ -78,9 +77,6 @@ beforeEach(() => {
   vi.mocked(listRoots).mockReset();
   vi.mocked(listEntries).mockReset();
   vi.mocked(searchEntries).mockReset();
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [];
 });
 
 describe("files search", () => {
@@ -113,7 +109,7 @@ describe("files search", () => {
 
     await store.runSearch();
 
-    expect(searchEntries).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(searchEntries).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "",
       query: "conf",
@@ -277,12 +273,12 @@ describe("files search", () => {
     store.setRecursive(true);
     store.setQuery("conf");
     const pending = deferred<FilesSearchListing>();
-    vi.mocked(searchEntries).mockImplementation((_server, _team, _options) => {
+    vi.mocked(searchEntries).mockImplementation((_server, _options) => {
       return pending.promise;
     });
 
     const search = store.runSearch();
-    const signal = vi.mocked(searchEntries).mock.calls[0][2]?.signal;
+    const signal = vi.mocked(searchEntries).mock.calls[0][1]?.signal;
     expect(signal).toBeInstanceOf(globalThis.AbortSignal);
     expect(signal?.aborted).toBe(false);
 

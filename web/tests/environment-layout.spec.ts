@@ -30,19 +30,10 @@ const session = {
     created_at: "2026-03-04T12:00:00Z",
     display_name: "Ada",
     has_password: true,
-    role: "member",
+    role: "owner",
   },
   accessToken: "test-access",
   refreshToken: "test-refresh",
-};
-
-const team = {
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
 };
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -250,10 +241,7 @@ async function mockApi(page: Page): Promise<void> {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: session.user });
-  });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team] } });
+    await route.fulfill({ json: { user: session.user } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -454,7 +442,7 @@ test("unknown environment renders the 404 state, not a retry loop", async ({
   await mockApi(page);
   await page.goto(`${baseURL}/projects/${projectId}/environments/${unknownId}`);
   await expect(
-    page.getByText("This environment does not exist (or belongs to another team)."),
+    page.getByText("This environment does not exist (or is outside your access)."),
   ).toBeVisible();
   await expect(page.locator(".environment-page")).not.toContainText("Retry");
 });

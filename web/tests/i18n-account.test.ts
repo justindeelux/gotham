@@ -18,12 +18,6 @@ vi.mock("@/features/profile/api/sessions", () => ({
   revokeOtherSessions: vi.fn(),
 }));
 
-vi.mock("@/features/teams", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/features/teams")>();
-  return { ...actual, acceptInvite: vi.fn() };
-});
-
 import { changePassword, patchDisplayName } from "@/features/profile/api/profile";
 import {
   listSessions,
@@ -34,16 +28,13 @@ import DisplayNameForm from "@/features/profile/components/DisplayNameForm.vue";
 import SessionsPanel from "@/features/profile/components/SessionsPanel.vue";
 import SessionRow from "@/features/profile/components/SessionRow.vue";
 import LoginPage from "@/features/auth/pages/LoginPage.vue";
-import InviteAcceptPage from "@/features/auth/pages/InviteAcceptPage.vue";
 import AuthLayout from "@/app/layouts/AuthLayout.vue";
 import AppTopbar from "@/app/layouts/AppTopbar.vue";
 import { provideMobileNav } from "@/app/layouts/useMobileNav";
 import MeCard from "@/app/layouts/MeCard.vue";
 import LanguageSelect from "@/shared/ui/LanguageSelect.vue";
 import { applyRouteTitle, router } from "@/app/router/index";
-import { acceptInvite } from "@/features/teams";
 import { useAuthStore } from "@/features/auth";
-import { useTeamsStore } from "@/features/teams";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -220,7 +211,6 @@ describe("route titles", () => {
     expect(titleOf("login")).toBe("titles.login");
     expect(titleOf("register")).toBe("titles.register");
     expect(titleOf("profile")).toBe("titles.profile");
-    expect(titleOf("invite-accept")).toBe("titles.inviteAccept");
     expect(titleOf("oauth-callback")).toBe("titles.oauthCallback");
   });
 
@@ -263,29 +253,18 @@ describe("shell selector and account menu", () => {
     top.unmount();
   });
 
-  it("renders the team role and menu through the common catalog", async () => {
+  it("renders the member role through the common catalog", async () => {
     seedAuth();
-    const teams = useTeamsStore();
-    vi.spyOn(teams, "ensureTeams").mockResolvedValue(undefined);
-    teams.loaded = true;
-    teams.activeTeamId = "t-1";
-    teams.teams = [
-      {
-        id: "t-1",
-        name: "core",
-        role: "admin",
-        member_count: 1,
-        created_at: "2026-01-01T00:00:00Z",
-      } as never,
-    ];
+    const auth = useAuthStore();
+    auth.user = { ...auth.user!, role: "member" };
     const { wrapper } = await mountWith(MeCard);
     await nextTick();
     await flushPromises();
-    expect(wrapper.find(".me-role").text()).toBe("admin");
+    expect(wrapper.find(".me-role").text()).toBe("Member");
     setLocale("vi", null);
     await nextTick();
     await flushPromises();
-    expect(wrapper.find(".me-role").text()).toBe("quản trị viên");
+    expect(wrapper.find(".me-role").text()).toBe("Thành viên");
     wrapper.unmount();
   });
 });
@@ -504,145 +483,6 @@ describe("unknown diagnostics carry a localized summary", () => {
     wrapper.unmount();
   });
 
-  it("pairs the common summary with the raw team diagnostic on invite failure", async () => {
-    seedAuth();
-    vi.mocked(acceptInvite).mockRejectedValue({
-      status: 410,
-      message: "teams: invite consumed",
-    });
-    const InviteAcceptPageView = InviteAcceptPage;
-    const test = testRouter();
-    test.addRoute({
-      path: "/invite/accept",
-      name: "invite-accept",
-      component: { template: "<div />" },
-    });
-    await test.push({ path: "/invite/accept", query: { token: "abc" } });
-    await test.isReady();
-    const wrapper = mount(shell(InviteAcceptPageView), {
-      attachTo: globalThis.document.body,
-      global: { plugins: [test, i18n], stubs: { transition: false } },
-    });
-    await flushPromises();
-    await nextTick();
-    await nextTick();
-    expect(wrapper.find(".n-alert").text()).toContain(
-      "Request failed: invite consumed",
-    );
-    setLocale("vi", null);
-    await nextTick();
-    await flushPromises();
-    expect(wrapper.find(".n-alert").text()).toContain(
-      "Yêu cầu thất bại: invite consumed",
-    );
-    expect(vi.mocked(acceptInvite)).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
-    globalThis.document.body.innerHTML = "";
-  });
-
-  it("renders a single localized fallback for a diagnostic-free invite failure", async () => {
-    seedAuth();
-    const accept = vi.mocked(acceptInvite);
-    accept.mockClear();
-    accept.mockRejectedValue({ status: 500, message: "" });
-    const test = testRouter();
-    test.addRoute({
-      path: "/invite/accept",
-      name: "invite-accept",
-      component: { template: "<div />" },
-    });
-    await test.push({ path: "/invite/accept", query: { token: "abc" } });
-    await test.isReady();
-    const wrapper = mount(shell(InviteAcceptPage), {
-      attachTo: globalThis.document.body,
-      global: { plugins: [test, i18n], stubs: { transition: false } },
-    });
-    await flushPromises();
-    await nextTick();
-    await nextTick();
-    expect(wrapper.find(".n-alert").text()).toBe(
-      "Something went wrong. Please try again.",
-    );
-    setLocale("vi", null);
-    await nextTick();
-    await flushPromises();
-    expect(wrapper.find(".n-alert").text()).toBe(
-      "Đã xảy ra lỗi. Vui lòng thử lại.",
-    );
-    expect(accept).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
-  });
-
-  it("keeps distinct guidance for blank-message known invite statuses", async () => {
-    const cases: Array<{ status: number; en: string; expectedVi: string }> = [
-      {
-        status: 400,
-        en: "Request failed: Invalid request.",
-        expectedVi: "Yêu cầu thất bại: Yêu cầu không hợp lệ.",
-      },
-      {
-        status: 401,
-        en: "Request failed: Your session expired. Please sign in again.",
-        expectedVi: "Yêu cầu thất bại: Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
-      },
-      {
-        status: 403,
-        en: "Request failed: Your team role does not allow this action.",
-        expectedVi: "Yêu cầu thất bại: Vai trò nhóm của bạn không cho phép hành động này.",
-      },
-      {
-        status: 404,
-        en: "Request failed: Not found. It may have been removed already.",
-        expectedVi: "Yêu cầu thất bại: Không tìm thấy. Có thể nó đã bị gỡ.",
-      },
-      {
-        status: 409,
-        en: "Request failed: The team changed while you were editing it. Reload and retry.",
-        expectedVi: "Yêu cầu thất bại: Nhóm đã thay đổi trong lúc bạn chỉnh sửa. Tải lại rồi thử lại.",
-      },
-      {
-        status: 410,
-        en: "Request failed: This invite expired. Issue a new one.",
-        expectedVi: "Yêu cầu thất bại: Lời mời này đã hết hạn. Hãy tạo lời mời mới.",
-      },
-      {
-        status: 500,
-        en: "Something went wrong. Please try again.",
-        expectedVi: "Đã xảy ra lỗi. Vui lòng thử lại.",
-      },
-    ];
-    for (const { status, en, expectedVi } of cases) {
-      seedAuth();
-      setLocale("en", null);
-      await nextTick();
-      vi.mocked(acceptInvite).mockRejectedValue({ status, message: "" });
-      const test = testRouter();
-      test.addRoute({
-        path: "/invite/accept",
-        name: "invite-accept",
-        component: { template: "<div />" },
-      });
-      await test.push({ path: "/invite/accept", query: { token: "abc" } });
-      await test.isReady();
-      const wrapper = mount(shell(InviteAcceptPage), {
-        attachTo: globalThis.document.body,
-        global: { plugins: [test, i18n], stubs: { transition: false } },
-      });
-      await flushPromises();
-      await nextTick();
-      await nextTick();
-      expect(wrapper.find(".n-alert").text()).toBe(en);
-      setLocale("vi", null);
-      await nextTick();
-      await flushPromises();
-      const viText = wrapper.find(".n-alert").text();
-      expect(viText).toBe(expectedVi);
-      wrapper.unmount();
-      globalThis.document.body.innerHTML = "";
-    }
-    resetLocaleState();
-    syncComposerLocale("en");
-  });
 });
 
 describe("session row invalid timestamps", () => {

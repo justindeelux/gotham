@@ -23,7 +23,6 @@ export function useFileDownload() {
 
   async function download(
     serverId: string,
-    teamId: string,
     root: string,
     directory: string,
     entry: { name: string },
@@ -35,7 +34,6 @@ export function useFileDownload() {
     try {
       const ticket = await issueDownloadTicket(
         serverId,
-        teamId,
         root,
         joinPath(directory, entry.name),
       );

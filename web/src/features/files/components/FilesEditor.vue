@@ -73,7 +73,6 @@ import type {
   TabCloseScope,
 } from "@/features/files/utils/editor";
 import { editorResizeLimits } from "@/features/files/utils/editorResize";
-import { useTeamsStore } from "@/features/teams";
 import { useCopyText } from "@/shared/composables/useCopyText";
 import FloatingWindow from "@/shared/ui/FloatingWindow.vue";
 import type { WindowBox } from "@/shared/window/geometry";
@@ -93,7 +92,6 @@ const editor = useEditorStore();
 const editorWindow = useEditorWindowStore();
 const editorSettings = useEditorSettingsStore();
 const files = useFilesStore();
-const teams = useTeamsStore();
 const { download } = useFileDownload();
 const activeServerId = computed<string>(() =>
   props.serverId !== "" ? props.serverId : editor.serverId,
@@ -289,28 +287,7 @@ watch(
   },
 );
 
-let teamRevertTarget: string | null = null;
-watch(
-  () => teams.activeTeamId,
-  async (next, prev) => {
-    if (next === teamRevertTarget) {
-      teamRevertTarget = null;
-      return;
-    }
-    if (prev === undefined || next === prev) {
-      return;
-    }
-    const outcome = await editor.confirmDiscard();
-    if (outcome === "stay") {
-      teamRevertTarget = prev;
-      teams.selectTeam(prev);
-      return;
-    }
-    if (outcome === "leave") {
-      editor.reset();
-    }
-  },
-);
+
 
 watch(
   () => [editor.activeId, editor.activeTab?.status] as const,
@@ -499,7 +476,6 @@ async function refreshHistoryCount(tab: EditorTab | null = activeTab.value): Pro
   try {
     const versions = await listFileVersions(
       activeServerId.value,
-      teams.activeTeamId,
       tab.root,
       tab.path,
     );
@@ -522,7 +498,6 @@ async function openDiff(version: FilesVersion): Promise<void> {
   }
   await editor.openDiff(
     activeServerId.value,
-    teams.activeTeamId,
     tab.root,
     tab.path,
     version.id,
@@ -544,7 +519,6 @@ async function restoreVersion(version: FilesVersion): Promise<void> {
   try {
     await restoreFileVersion(
       activeServerId.value,
-      teams.activeTeamId,
       tab.root,
       tab.path,
       version.id,
@@ -554,7 +528,7 @@ async function restoreVersion(version: FilesVersion): Promise<void> {
         editor.close(item.id);
       }
     }
-    await editor.reload(tab.id, teams.activeTeamId);
+    await editor.reload(tab.id);
     message.success(String(t("files.editor.historyRestored", { name: tab.name })));
     void files.refresh();
     await refreshHistoryCount(editor.tabs.find((item) => item.id === tab.id) ?? null);
@@ -661,7 +635,7 @@ async function saveTab(id: string): Promise<void> {
   ) {
     return;
   }
-  const outcome = await editor.save(id, teams.activeTeamId);
+  const outcome = await editor.save(id);
   if (outcome === "saved") {
     message.success(String(t("files.editor.saved", { name: tab.name })));
     void refreshHistoryCount(tab);
@@ -688,7 +662,7 @@ async function saveAllTabs(): Promise<void> {
   if (editor.dirtyTabs.some((tab) => tab.saving)) {
     return;
   }
-  const reports = await editor.saveAll(teams.activeTeamId);
+  const reports = await editor.saveAll();
   let saved = 0;
   for (const report of reports) {
     if (report.outcome === "saved") {
@@ -717,7 +691,7 @@ async function downloadActive(): Promise<void> {
   if (!tab) {
     return;
   }
-  await download(activeServerId.value, teams.activeTeamId, tab.root, directoryOf(tab.path), {
+  await download(activeServerId.value, tab.root, directoryOf(tab.path), {
     name: tab.name,
   });
 }
@@ -790,7 +764,6 @@ async function pickEncoding(encoding: EditorEncoding): Promise<void> {
   }
   const outcome = await editor.changeEncoding(
     tab.id,
-    teams.activeTeamId,
     encoding,
   );
   if (outcome === "saved") {
@@ -818,7 +791,7 @@ async function useUtf8AndSave(): Promise<void> {
     editor.dismissEncodingWarning();
     return;
   }
-  const outcome = await editor.saveAsUtf8(warning.tabId, teams.activeTeamId);
+  const outcome = await editor.saveAsUtf8(warning.tabId);
   if (outcome === "saved") {
     message.success(String(t("files.editor.saved", { name: tab.name })));
     void refreshHistoryCount(tab);
@@ -1031,7 +1004,7 @@ async function saveAndClose(): Promise<void> {
   }
   closeSaving.value = true;
   try {
-    const reports = await editor.saveAll(teams.activeTeamId, ids);
+    const reports = await editor.saveAll(ids);
     const failed = new Set<string>();
     for (const report of reports) {
       if (report.outcome === "saved") {
@@ -1697,7 +1670,6 @@ onBeforeUnmount(() => {
     ref="historyDialog"
     v-model:show="historyOpen"
     :server-id="activeServerId"
-    :team-id="teams.activeTeamId"
     :root="historyTarget?.root ?? ''"
     :path="historyTarget?.path ?? ''"
     :file-name="historyTarget?.name ?? ''"

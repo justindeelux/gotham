@@ -77,13 +77,13 @@ describe("navSections", () => {
     }
   });
 
-  it("marks exactly the platform-admin entries adminOnly (JUS-197)", () => {
+  it("marks exactly the owner-only entries", () => {
     const items = navSections.flatMap((section) => section.items);
     const flagged = new Set(
-      items.filter((item) => item.adminOnly).map((item) => item.key),
+      items.filter((item) => item.ownerOnly).map((item) => item.key),
     );
     expect(flagged).toEqual(
-      new Set(["files", "terminal", "domains", "instance", "updates"]),
+      new Set(["files", "terminal", "servers", "domains", "users", "instance", "updates"]),
     );
   });
 
@@ -92,21 +92,21 @@ describe("navSections", () => {
     expect(keys.indexOf("terminal")).toBe(keys.indexOf("files") + 1);
   });
 
-  it("drops groups whose items are all hidden from non-admins (JUS-197)", () => {
+  it("drops groups whose items are all hidden from members", () => {
     const mixed: NavSection[] = [
       {
         label: "Open",
         labelKey: "nav.sections.open",
         items: [
           { key: "a", label: "A", labelKey: "nav.items.a", icon: "grid", to: "a" },
-          { key: "b", label: "B", labelKey: "nav.items.b", icon: "grid", to: "b", adminOnly: true },
+          { key: "b", label: "B", labelKey: "nav.items.b", icon: "grid", to: "b", ownerOnly: true },
         ],
       },
       {
         label: "Locked",
         labelKey: "nav.sections.locked",
         items: [
-          { key: "c", label: "C", labelKey: "nav.items.c", icon: "gear", to: "c", adminOnly: true },
+          { key: "c", label: "C", labelKey: "nav.items.c", icon: "gear", to: "c", ownerOnly: true },
         ],
       },
     ];

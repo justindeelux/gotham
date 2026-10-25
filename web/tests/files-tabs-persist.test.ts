@@ -21,7 +21,6 @@ import {
   writeFilesTabsSnapshot,
 } from "@/features/files/utils/tabsPersist";
 import type { FilesTabsStorage } from "@/features/files/utils/tabsPersist";
-import { useTeamsStore } from "@/features/teams";
 
 function memoryStorage(): FilesTabsStorage & { dump: Map<string, string> } {
   const dump = new Map<string, string>();
@@ -91,16 +90,13 @@ beforeEach(() => {
   vi.mocked(listEntries).mockReset();
   vi.mocked(listRoots).mockResolvedValue([volumes, compose]);
   vi.mocked(listEntries).mockImplementation(
-    async (_serverId, _teamId, options) => ({
+    async (_serverId, options) => ({
       entries: [entry({ name: `${options.root}:${options.path ?? ""}` })],
       truncated: false,
       cursor: "",
     }),
   );
 
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "owner" }];
 });
 
 describe("files tabs storage key", () => {
@@ -239,7 +235,7 @@ describe("files store tab restore", () => {
 
   it("falls back to the nearest existing parent for a missing path", async () => {
     vi.mocked(listEntries).mockImplementation(
-      async (_serverId, _teamId, options) => {
+      async (_serverId, options) => {
         if (options.path === "data/nested/gone") {
           throw { message: "not found", status: 404 };
         }
@@ -270,7 +266,7 @@ describe("files store tab restore", () => {
 
   it("validates a background tab silently on its first switch", async () => {
     vi.mocked(listEntries).mockImplementation(
-      async (_serverId, _teamId, options) => {
+      async (_serverId, options) => {
         if (options.path === "renamed-away") {
           throw { message: "not found", status: 404 };
         }

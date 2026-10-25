@@ -27,23 +27,7 @@ export interface Session {
 
 const storageKey = "gotham.auth.session";
 
-export const activeTeamStorageKey = "gotham.teams.active";
-
-export function getActiveTeamId(): string {
-  const storage = getStorage();
-  if (!storage) {
-    return "";
-  }
-  try {
-    return storage.getItem(activeTeamStorageKey) ?? "";
-  } catch {
-    return "";
-  }
-}
-
 export const editorDraftStorageKeyPrefix = "gotham.files.draft.v1.";
-
-const userScopedStorageKeys = [activeTeamStorageKey];
 
 const listeners = new Set<(_session: Session) => void>();
 
@@ -139,9 +123,6 @@ function clearStoragePrefix(storage: Storage, prefix: string): void {
 export function clearSession(): void {
   const storage = getStorage();
   storage?.removeItem(storageKey);
-  for (const key of userScopedStorageKeys) {
-    storage?.removeItem(key);
-  }
   if (storage) {
     clearStoragePrefix(storage, editorDraftStorageKeyPrefix);
   }

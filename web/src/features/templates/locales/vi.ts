@@ -17,7 +17,7 @@ const vi: typeof en = {
     invalidValuesWithDetail: "Giá trị không hợp lệ: {detail}",
     notFound: "Không tìm thấy mẫu. Danh mục có thể đã đổi — tải lại trang.",
     notFoundWithDetail: "Không tìm thấy: {detail}",
-    disabled: "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
+    disabled: "Dịch vụ đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
   },
   wizard: {
     title: "Triển khai mẫu {name}",

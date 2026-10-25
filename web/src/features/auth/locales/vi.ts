@@ -23,14 +23,14 @@ const vi: AuthMessages = {
     switchLabel: "Đăng nhập hoặc tạo tài khoản",
     title: "Đăng nhập",
     subtitle:
-      "Dùng tài khoản nhóm Gotham của bạn để đăng nhập.",
+      "Dùng tài khoản Gotham của bạn để đăng nhập.",
     emailLabel: "Email",
     emailPlaceholder: "you{'@'}gotham.dev",
     passwordLabel: "Mật khẩu",
     passwordPlaceholder: "Mật khẩu của bạn",
     submit: "Đăng nhập",
     createAccount: "Tạo tài khoản",
-    contactAdmin: "Quên mật khẩu? Hãy liên hệ quản trị viên để đặt lại.",
+    contactAdmin: "Quên mật khẩu? Hãy liên hệ chủ sở hữu để đặt lại.",
     divider: "hoặc",
     oauthFailed: "Đăng nhập GitHub thất bại. Vui lòng thử lại.",
   },
@@ -62,15 +62,6 @@ const vi: AuthMessages = {
     noSession: "GitHub không trả về phiên dùng được.",
     back: "Quay lại đăng nhập",
   },
-  invite: {
-    title: "Lời mời vào nhóm",
-    joined: "Bạn đã tham gia {name}.",
-    openTeams: "Mở nhóm",
-    backToTeams: "Quay lại nhóm",
-    noToken:
-      "Liên kết này không mang token mời. Hãy mở đúng liên kết trong thư mời như đã chia sẻ.",
-    hint: "Việc chấp nhận dùng phiên bạn đang đăng nhập — hãy đăng nhập bằng địa chỉ được mời. Mỗi lời mời chỉ dùng một lần.",
-  },
   mfa: {
     title: "Xác thực hai lớp",
     subtitle: "Mật khẩu đã được chấp nhận. Nhập mã từ ứng dụng xác thực để hoàn tất đăng nhập.",
@@ -87,7 +78,7 @@ const vi: AuthMessages = {
     sessionExpired: "Thời gian xác minh đã hết. Vui lòng đăng nhập lại.",
   },
   footnote: {
-    text: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng GitHub hoặc email nhóm của bạn.",
+    text: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng GitHub hoặc email của bạn.",
   },
   strength: {
     level0: "Chưa nhập",

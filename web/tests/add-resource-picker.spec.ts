@@ -36,15 +36,6 @@ const session = {
   refreshToken: "test-refresh",
 };
 
-const team = {
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-};
-
 const projectId = "11111111-1111-4111-8111-111111111111";
 const environmentId = "22222222-2222-4222-8222-222222222222";
 const serverId = "33333333-3333-4333-8333-333333333333";
@@ -166,10 +157,7 @@ async function mockApi(page: Page): Promise<void> {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: session.user });
-  });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team] } });
+    await route.fulfill({ json: { user: session.user } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });

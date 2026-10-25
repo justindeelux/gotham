@@ -31,7 +31,6 @@ import {
 } from "@/features/files/api/files";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 
 const root: FilesRoot = {
   name: "volumes",
@@ -67,9 +66,6 @@ beforeEach(() => {
   for (const fn of [listRoots, listEntries, createFolder, createFile, copyEntry, moveEntry, deleteEntry, renameEntry, chmodEntry]) {
     vi.mocked(fn).mockReset();
   }
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "owner" }];
   vi.mocked(listRoots).mockResolvedValue([root]);
   vi.mocked(listEntries).mockResolvedValue({
     entries: [
@@ -94,7 +90,7 @@ describe("files store create", () => {
       status: 409,
     });
 
-    expect(vi.mocked(createFolder)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(createFolder)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "config",
     });
@@ -111,7 +107,7 @@ describe("files store create", () => {
     await store.init("server-1");
     await store.createEntry("  uploads  ", "directory");
 
-    expect(vi.mocked(createFolder)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(createFolder)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "uploads",
     });
@@ -138,8 +134,7 @@ describe("files store delete", () => {
     expect(vi.mocked(deleteEntry)).toHaveBeenNthCalledWith(
       2,
       "server-1",
-      "team-1",
-      "volumes",
+        "volumes",
       "config",
       true,
     );
@@ -163,7 +158,7 @@ describe("files store clipboard", () => {
     const summary = await store.paste();
     expect(summary.conflicts).toEqual(["config"]);
     expect(store.conflictPrompt?.names).toEqual(["config"]);
-    expect(vi.mocked(copyEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(copyEntry)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       source: "config",
       destination: "data/config",
@@ -173,7 +168,7 @@ describe("files store clipboard", () => {
     const resolved = await store.resolveConflictPrompt(true);
     expect(resolved.done).toEqual(["config"]);
     expect(store.conflictPrompt).toBeNull();
-    expect(vi.mocked(copyEntry)).toHaveBeenLastCalledWith("server-1", "team-1", {
+    expect(vi.mocked(copyEntry)).toHaveBeenLastCalledWith("server-1", {
       root: "volumes",
       source: "config",
       destination: "data/config",
@@ -210,7 +205,7 @@ describe("files store clipboard", () => {
 
     await store.paste();
     expect(store.hasClipboard).toBe(false);
-    expect(vi.mocked(moveEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(moveEntry)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       source: "app.yaml",
       destination: "data/app.yaml",
@@ -229,7 +224,7 @@ describe("files store clipboard", () => {
     const summary = await store.pasteInto("config");
 
     expect(summary.done).toEqual(["app.yaml"]);
-    expect(vi.mocked(copyEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(copyEntry)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       source: "app.yaml",
       destination: "config/app.yaml",
@@ -360,8 +355,7 @@ describe("files store selection hygiene", () => {
     expect(summary.done).toEqual(["current"]);
     expect(vi.mocked(deleteEntry)).toHaveBeenCalledWith(
       "server-1",
-      "team-1",
-      "volumes",
+        "volumes",
       "current",
       false,
     );
@@ -482,7 +476,7 @@ describe("files store chmod", () => {
 
     await store.chmod(entry({ name: "app.yaml" }), 0o600);
 
-    expect(vi.mocked(chmodEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(chmodEntry)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       path: "app.yaml",
       mode: 0o600,

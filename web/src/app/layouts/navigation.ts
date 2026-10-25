@@ -48,6 +48,7 @@ export const navSections: NavSection[] = [
         icon: "refresh",
         to: "git-sources",
       },
+      { key: "mcp", label: "MCP setup", labelKey: "nav.items.mcp", icon: "shield", to: "mcp" },
     ],
   },
   {

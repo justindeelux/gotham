@@ -83,6 +83,7 @@ function shellRouter(): ReturnType<typeof createRouter> {
           { path: "terminal", name: "terminal", component: stub },
           { path: "notifications", name: "notifications", component: stub },
           { path: "git-sources", name: "git-sources", component: stub },
+          { path: "mcp", name: "mcp", component: stub },
           { path: "files", name: "files", component: stub },
           { path: "instance", name: "instance", component: stub },
           { path: "updates", name: "updates", component: stub },

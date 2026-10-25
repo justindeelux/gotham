@@ -114,9 +114,6 @@ effect.
 - Set both paths. With either missing, the server generates an ephemeral
   keypair at startup and sessions do not survive a restart. A configured path
   that cannot be read fails startup.
-- `GOTHAM_AUTH_ALLOW_REGISTRATION=true` (no YAML key) reopens self-registration
-  on an instance that already has an account. Default `false`; test and
-  development only.
 
 ## OAuth (GitHub)
 

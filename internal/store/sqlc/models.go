@@ -323,6 +323,21 @@ type InstanceSettingsAudit struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type Invite struct {
+	ID         pgtype.UUID        `json:"id"`
+	Email      string             `json:"email"`
+	TokenHash  string             `json:"token_hash"`
+	InvitedBy  pgtype.UUID        `json:"invited_by"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	AcceptedAt pgtype.Timestamptz `json:"accepted_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type InviteProject struct {
+	InviteID  pgtype.UUID `json:"invite_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
 type NotificationChannel struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`

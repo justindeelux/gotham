@@ -50,11 +50,7 @@ func TestServiceUpdateProfile(t *testing.T) {
 		t.Errorf("Me role = %q, want %q for the bootstrap account", me.Role, RoleOwner)
 	}
 
-	svc.AllowOpenRegistration = true
-	second, err := svc.Register(ctx, uniqueEmail("profile-plain"), "s3cret-password", SessionMeta{})
-	if err != nil {
-		t.Fatalf("Register second: %v", err)
-	}
+	second := registerTestMember(t, svc, uniqueEmail("profile-plain"))
 	raw, err := json.Marshal(second.User)
 	if err != nil {
 		t.Fatalf("marshal user: %v", err)

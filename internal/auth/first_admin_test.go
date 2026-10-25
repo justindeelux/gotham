@@ -72,7 +72,9 @@ func scratchService(t *testing.T) (*Service, *store.Store) {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(store.New(pool), signer, logger), store.New(pool)
+	svc := New(store.New(pool), signer, logger)
+	svc.SetSecretKey("test-credential-encryption-key")
+	return svc, store.New(pool)
 }
 
 func claimRole(t *testing.T, svc *Service, accessToken string) string {
@@ -104,11 +106,7 @@ func TestServiceFirstRegistrationBecomesOwner(t *testing.T) {
 		t.Fatalf("second Register error = %v, want ErrRegistrationClosed", err)
 	}
 
-	svc.AllowOpenRegistration = true
-	second, err := svc.Register(ctx, "second@example.com", "s3cret-password", SessionMeta{})
-	if err != nil {
-		t.Fatalf("override Register: %v", err)
-	}
+	second := registerTestMember(t, svc, "second@example.com")
 	if second.User.Role != RoleMember {
 		t.Fatalf("second user role = %q, want %q", second.User.Role, RoleMember)
 	}
@@ -163,58 +161,36 @@ func TestServiceConcurrentFirstRegistrations(t *testing.T) {
 	}
 }
 
-func TestOAuthBootstrapIsOwnerWithOverrideOnAndOff(t *testing.T) {
-	for _, override := range []bool{false, true} {
-		t.Run(fmt.Sprintf("override=%v", override), func(t *testing.T) {
-			svc, _ := scratchService(t)
-			svc.AllowOpenRegistration = override
-			provider := &fakeOAuthProvider{name: "github"}
-			oauth := NewOAuthService(svc, testLogger(), provider)
-			t.Cleanup(oauth.Close)
-			ctx := context.Background()
+func TestOAuthBootstrapIsOwnerAndStaysClosed(t *testing.T) {
+	svc, _ := scratchService(t)
+	provider := &fakeOAuthProvider{name: "github"}
+	oauth := NewOAuthService(svc, testLogger(), provider)
+	t.Cleanup(oauth.Close)
+	ctx := context.Background()
 
-			bootstrap := func(email string) *AuthResult {
-				t.Helper()
-				provider.identity = &OAuthIdentity{Email: email}
-				_, state, err := oauth.Begin(ctx, "github", "")
-				if err != nil {
-					t.Fatalf("Begin: %v", err)
-				}
-				result, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
-				if err != nil {
-					t.Fatalf("Callback: %v", err)
-				}
-				return result
-			}
+	bootstrap := func(email string) (*AuthResult, error) {
+		t.Helper()
+		provider.identity = &OAuthIdentity{Email: email}
+		_, state, err := oauth.Begin(ctx, "github", "")
+		if err != nil {
+			t.Fatalf("Begin: %v", err)
+		}
+		return oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{})
+	}
 
-			first := bootstrap("oauth-first@example.com")
-			if first.User.Role != RoleOwner {
-				t.Fatalf("bootstrap OAuth role = %q, want %q", first.User.Role, RoleOwner)
-			}
-			if got := claimRole(t, svc, first.AccessToken); got != RoleOwner {
-				t.Fatalf("bootstrap OAuth access-token role = %q, want %q", got, RoleOwner)
-			}
+	first, err := bootstrap("oauth-first@example.com")
+	if err != nil {
+		t.Fatalf("bootstrap Callback: %v", err)
+	}
+	if first.User.Role != RoleOwner {
+		t.Fatalf("bootstrap OAuth role = %q, want %q", first.User.Role, RoleOwner)
+	}
+	if got := claimRole(t, svc, first.AccessToken); got != RoleOwner {
+		t.Fatalf("bootstrap OAuth access-token role = %q, want %q", got, RoleOwner)
+	}
 
-			if !override {
-				provider.identity = &OAuthIdentity{Email: "oauth-uninvited@example.com"}
-				_, state, err := oauth.Begin(ctx, "github", "")
-				if err != nil {
-					t.Fatalf("Begin: %v", err)
-				}
-				if _, err := oauth.Callback(ctx, "github", "auth-code", state, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
-					t.Fatalf("Callback(closed) error = %v, want ErrRegistrationClosed", err)
-				}
-				return
-			}
-
-			second := bootstrap("oauth-second@example.com")
-			if second.User.Role != RoleMember {
-				t.Fatalf("second OAuth role = %q, want %q", second.User.Role, RoleMember)
-			}
-			if got := claimRole(t, svc, second.AccessToken); got != RoleMember {
-				t.Fatalf("second OAuth access-token role = %q, want %q", got, RoleMember)
-			}
-		})
+	if _, err := bootstrap("oauth-second@example.com"); !errors.Is(err, ErrRegistrationClosed) {
+		t.Fatalf("Callback(closed) error = %v, want ErrRegistrationClosed", err)
 	}
 }
 

@@ -46,10 +46,11 @@ khoản ngay sau các migration cơ sở dữ liệu, trước khi dịch vụ k
   `an account already exists (created by someone else?)`.
 - **`--dry-run`** không hỏi gì và không thay đổi gì.
 
-Việc tự đăng ký vẫn đóng khi tài khoản đó đã tồn tại. Mặc định là tắt; chỉ cho
-các instance test hoặc phát triển, `GOTHAM_AUTH_ALLOW_REGISTRATION=true` trong môi
-trường của dịch vụ mở lại việc tự đăng ký kể cả khi đã có tài khoản đầu tiên.
-Không bao giờ để nó bật trên một instance thật.
+Việc tự đăng ký vẫn đóng khi tài khoản đó đã tồn tại: chỉ lời mời của chủ sở hữu
+mới tạo được thành viên. Một lời mời gắn với một địa chỉ email và với các dự án mà
+thành viên mới được mở, có hiệu lực bảy ngày và chỉ dùng được một lần. Chủ sở hữu
+quản lý thành viên, quyền truy cập dự án của họ, và việc đặt lại phiên đăng nhập
+cùng xác thực hai lớp của một thành viên ngay trong bảng điều khiển.
 
 Mật khẩu không bao giờ được truyền làm đối số dòng lệnh, không bao giờ được đặt
 trong biến môi trường, và không bao giờ được ghi ra đĩa, tệp môi trường, log hay
@@ -78,11 +79,16 @@ Câu hỏi mật khẩu được ẩn. Các cờ hữu ích:
 
 ## Mời người khác
 
-1. Mở **Nhóm** và tạo một lời mời, rồi gửi liên kết được hiển thị.
+1. Mở **Thành viên**, chọn các dự án người đó được dùng và tạo một lời mời, rồi
+   gửi liên kết được hiển thị.
 2. Thành viên mở `/register?invite=<token>` và chọn thông tin đăng nhập của họ.
-   Liên kết chỉ hiện một lần và sẽ hết hạn.
-3. Thêm máy chủ từ **Máy chủ**; xem [Thêm node](/vi/guide/nodes). Mỗi node báo
-   nhịp tim và hiện trong bảng điều khiển khi sẵn sàng.
+   Liên kết chỉ hiện một lần, dùng được một lần và hết hạn sau bảy ngày.
+3. Đổi dự án của một thành viên, hoặc đặt lại phiên đăng nhập và xác thực hai lớp
+   của họ, ngay trong danh sách thành viên đó. Xoá một thành viên sẽ kết thúc
+   ngay các phiên và API token của họ.
+
+Thêm máy chủ từ **Máy chủ**; xem [Thêm node](/vi/guide/nodes). Mỗi node báo nhịp
+tim và hiện trong bảng điều khiển khi sẵn sàng.
 
 ## Mất mật khẩu quản trị
 

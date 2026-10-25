@@ -86,9 +86,7 @@ func newTerminalRealAuthService(t *testing.T) *auth.Service {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := auth.New(store.New(pool), signer, logger)
-	svc.AllowOpenRegistration = true
-	return svc
+	return auth.New(store.New(pool), signer, logger)
 }
 
 func TestTerminalAttachRealStackSessionLineage(t *testing.T) {

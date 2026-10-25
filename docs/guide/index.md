@@ -29,8 +29,8 @@ refuses once an account exists. `gotham admin exists` prints
 `admin-exists: true|false` for scripting.
 
 Once an account exists, self-registration is closed; additional people join
-through single-use invite links created in **Teams**
-(see [Teams and notifications](/using/teams-notifications)).
+through single-use invite links created in **Members**
+(see [First login](/guide/first-login)).
 
 Open the URL the installer printed (the panel listens on port 8000 by default)
 and sign in with email and password. Two more sign-in paths exist:

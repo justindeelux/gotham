@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -44,34 +42,7 @@ func requirePostgres(t *testing.T, dsn string) {
 
 func newTestService(t *testing.T) (*Service, *store.Store) {
 	t.Helper()
-
-	dsn := testDSN()
-	requirePostgres(t, dsn)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-
-	pool, err := store.Open(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	signer, err := NewSigner(nil, nil)
-	if err != nil {
-		t.Fatalf("NewSigner: %v", err)
-	}
-
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	st := store.New(pool)
-	svc := New(st, signer, logger)
-	svc.SetSecretKey("test-credential-encryption-key")
-	svc.AllowOpenRegistration = true
-	return svc, st
+	return scratchService(t)
 }
 
 func requireClosedInstance(t *testing.T, svc *Service) {
@@ -147,17 +118,32 @@ func TestServiceRegisterDuplicateEmail(t *testing.T) {
 	svc, st := newTestService(t)
 	ctx := context.Background()
 
+	owner, err := svc.Register(ctx, uniqueEmail("duplicate-owner"), "s3cret-password", SessionMeta{})
+	if err != nil {
+		t.Fatalf("Register owner: %v", err)
+	}
+	ownerID, err := uuid.Parse(owner.User.ID)
+	if err != nil {
+		t.Fatalf("parse owner id: %v", err)
+	}
 	email := uniqueEmail("duplicate")
 	cleanupUser(t, st, email)
-	const password = "s3cret-password"
-
-	if _, err := svc.Register(ctx, email, password, SessionMeta{}); err != nil {
-		t.Fatalf("first Register: %v", err)
+	_, token, err := svc.CreateInvite(ctx, ownerID, email, nil)
+	if err != nil {
+		t.Fatalf("CreateInvite: %v", err)
 	}
 
-	_, err := svc.Register(ctx, strings.ToUpper(email), password, SessionMeta{})
-	if !errors.Is(err, ErrEmailTaken) {
-		t.Fatalf("second Register error = %v, want ErrEmailTaken", err)
+	// The account appears after the invite was issued, so registration itself
+	// hits the unique address instead of the invite check.
+	hash, err := HashPassword("s3cret-password")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if _, err := st.CreateUser(ctx, email, &hash); err != nil {
+		t.Fatalf("seed duplicate account: %v", err)
+	}
+	if _, err := svc.RegisterInvited(ctx, strings.ToUpper(email), "s3cret-password", token, SessionMeta{}); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("RegisterInvited(duplicate) error = %v, want ErrEmailTaken", err)
 	}
 }
 
@@ -196,6 +182,9 @@ func TestServiceLoginMissStillVerifies(t *testing.T) {
 		return VerifyPassword(encoded, password)
 	}
 
+	if _, err := svc.Register(ctx, uniqueEmail("miss-owner"), "s3cret-password", SessionMeta{}); err != nil {
+		t.Fatalf("bootstrap Register: %v", err)
+	}
 	if _, err := svc.Login(ctx, uniqueEmail("missing"), "s3cret-password", SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(unknown email) error = %v, want ErrInvalidCredentials", err)
 	}
@@ -223,8 +212,12 @@ func TestServiceLoginMissStillVerifies(t *testing.T) {
 
 	known := uniqueEmail("known")
 	cleanupUser(t, st, known)
-	if _, err := svc.Register(ctx, known, "right-password", SessionMeta{}); err != nil {
-		t.Fatalf("Register: %v", err)
+	hash, err := HashPassword("right-password")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if _, err := st.CreateUser(ctx, known, &hash); err != nil {
+		t.Fatalf("CreateUser: %v", err)
 	}
 	if _, err := svc.Login(ctx, known, "wrong-password", SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("Login(wrong password) error = %v, want ErrInvalidCredentials", err)
@@ -432,22 +425,22 @@ func TestServiceMeUnknownUser(t *testing.T) {
 	}
 }
 
-func TestServiceRegisterOpenOverride(t *testing.T) {
+func TestServiceRegisterRequiresInviteAfterOwner(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
-	if _, err := svc.Register(ctx, uniqueEmail("open-seed"), "s3cret-password", SessionMeta{}); err != nil {
+	if _, err := svc.Register(ctx, uniqueEmail("closed-seed"), "s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("seed first account: %v", err)
 	}
-	svc.AllowOpenRegistration = true
 
-	email := uniqueEmail("open-override")
+	email := uniqueEmail("closed-second")
 	cleanupUser(t, st, email)
 
-	second, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
-	if err != nil {
-		t.Fatalf("Register with the open override: %v", err)
+	if _, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
+		t.Fatalf("Register without invite error = %v, want ErrRegistrationClosed", err)
 	}
+
+	second := registerTestMember(t, svc, email)
 	if second.User.Role != RoleMember {
-		t.Fatalf("override user role = %q, want %q (must take the plain-insert path, not the bootstrap)", second.User.Role, RoleMember)
+		t.Fatalf("invited user role = %q, want %q", second.User.Role, RoleMember)
 	}
 }

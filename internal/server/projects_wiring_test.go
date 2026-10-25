@@ -81,7 +81,6 @@ func scratchProjectsStack(t *testing.T) (*Server, *store.Store, *auth.AuthResult
 		t.Fatalf("NewSigner: %v", err)
 	}
 	authSvc := auth.New(st, signer, logger)
-	authSvc.AllowOpenRegistration = true
 
 	email := fmt.Sprintf("pe1-srv-%d@example.com", time.Now().UnixNano())
 	owner, err := authSvc.Register(ctx, email, "s3cret-password", auth.SessionMeta{})
@@ -101,6 +100,25 @@ func scratchProjectsStack(t *testing.T) (*Server, *store.Store, *auth.AuthResult
 	s.db = stubPinger{}
 	s.redis = stubPinger{}
 	return s, st, owner
+}
+
+// registerMember creates a second account through an owner invite: the only
+// path open once the instance has an owner.
+func registerMember(t *testing.T, s *Server, owner *auth.AuthResult, email string) *auth.AuthResult {
+	t.Helper()
+	ownerID, err := uuid.Parse(owner.User.ID)
+	if err != nil {
+		t.Fatalf("parse owner id: %v", err)
+	}
+	_, token, err := s.auth.CreateInvite(context.Background(), ownerID, email, nil)
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	member, err := s.auth.RegisterInvited(context.Background(), email, "member-password", token, auth.SessionMeta{})
+	if err != nil {
+		t.Fatalf("register invited member: %v", err)
+	}
+	return member
 }
 
 type wiringProjectEnvelope struct {
@@ -161,10 +179,7 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 	ownerBearer := "Bearer " + owner.AccessToken
 
 	viewerEmail := fmt.Sprintf("pe1-viewer-%d@example.com", time.Now().UnixNano())
-	viewer, err := s.auth.Register(ctx, viewerEmail, "s3cret-password", auth.SessionMeta{})
-	if err != nil {
-		t.Fatalf("register viewer: %v", err)
-	}
+	viewer := registerMember(t, s, owner, viewerEmail)
 	viewerBearer := "Bearer " + viewer.AccessToken
 
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/projects", `{"name":"Shop"}`, ownerBearer)

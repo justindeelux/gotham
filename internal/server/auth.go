@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 const maxAuthBodyBytes = 1 << 20
@@ -21,6 +22,7 @@ const tokenTypeBearer = "Bearer"
 
 type AuthService interface {
 	Register(ctx context.Context, email, password string, meta auth.SessionMeta) (*auth.AuthResult, error)
+	RegisterInvited(ctx context.Context, email, password, inviteToken string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Login(ctx context.Context, email, password string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Refresh(ctx context.Context, refreshToken string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Logout(ctx context.Context, refreshToken string) error
@@ -38,6 +40,14 @@ type AuthService interface {
 	DisableTOTP(ctx context.Context, userID uuid.UUID, password, code string, currentSessionID uuid.UUID) error
 	RegenerateTOTPRecoveryCodes(ctx context.Context, userID uuid.UUID, password, code string, currentSessionID uuid.UUID) ([]string, error)
 	CompleteMFALogin(ctx context.Context, mfaToken, code string, meta auth.SessionMeta) (*auth.AuthResult, error)
+	CreateInvite(ctx context.Context, ownerID uuid.UUID, email string, projectIDs []uuid.UUID) (*auth.Invite, string, error)
+	ListInvites(ctx context.Context) ([]auth.Invite, error)
+	RevokeInvite(ctx context.Context, inviteID uuid.UUID) error
+	PeekInvite(ctx context.Context, token string) (*auth.InvitePreview, error)
+	ListUsers(ctx context.Context) ([]auth.Account, error)
+	RemoveMember(ctx context.Context, userID uuid.UUID) error
+	ResetMember(ctx context.Context, userID uuid.UUID) error
+	SetMemberProjects(ctx context.Context, ownerID, userID uuid.UUID, projectIDs []uuid.UUID) (*auth.Account, error)
 }
 
 type contextKey int
@@ -80,8 +90,9 @@ func (s *Server) requireInteractiveSession(next http.Handler) http.Handler {
 }
 
 type credentialsRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	InviteToken string `json:"invite_token,omitempty"`
 }
 
 type refreshTokenRequest struct {
@@ -109,6 +120,7 @@ type authConfigResponse struct {
 func (s *Server) mountAuthRoutes(api chi.Router) {
 	api.Route("/v1/auth", func(r chi.Router) {
 		r.Get("/config", s.handleAuthConfig)
+		r.With(s.rateLimit).Get("/invites/validate", s.handleInviteValidate)
 		r.With(s.rateLimit).Post("/register", s.handleRegister)
 		r.With(s.rateLimit).Post("/login", s.handleLogin)
 		r.With(s.rateLimit).Post("/login/totp", s.handleLoginTOTP)
@@ -137,7 +149,7 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 }
 
 func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
-	open := s.allowRegistration
+	open := false
 	if s.persistence != nil {
 		count, err := s.persistence.CountUsers(r.Context())
 		if err != nil {
@@ -145,9 +157,21 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
 			return
 		}
-		open = count == 0 || s.allowRegistration
+		open = count == 0
 	}
 	writeJSON(w, http.StatusOK, authConfigResponse{RegistrationOpen: open})
+}
+
+func (s *Server) handleInviteValidate(w http.ResponseWriter, r *http.Request) {
+	preview, err := s.auth.PeekInvite(r.Context(), r.URL.Query().Get("token"))
+	if err != nil {
+		if !errors.Is(err, auth.ErrNotFound) && !errors.Is(err, store.ErrInviteUnavailable) {
+			s.logger.Error("auth: peek invite", "error", err)
+		}
+		writeJSON(w, http.StatusNotFound, apiError{Message: "invite not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +180,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.auth.Register(r.Context(), req.Email, req.Password, s.sessionMeta(r))
+	var result *auth.AuthResult
+	var err error
+	if req.InviteToken != "" {
+		result, err = s.auth.RegisterInvited(r.Context(), req.Email, req.Password, req.InviteToken, s.sessionMeta(r))
+	} else {
+		result, err = s.auth.Register(r.Context(), req.Email, req.Password, s.sessionMeta(r))
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrEmailTaken):

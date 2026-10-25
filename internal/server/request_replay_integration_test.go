@@ -135,10 +135,7 @@ func TestMCPCreationBackedAndScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := s.auth.Register(ctx, "mcp-member@example.com", "s3cret-password", auth.SessionMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	member := registerMember(t, s, owner, "mcp-member@example.com")
 	memberID, err := uuid.Parse(member.User.ID)
 	if err != nil {
 		t.Fatal(err)

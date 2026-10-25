@@ -46,10 +46,7 @@ func newAccessFixture(t *testing.T) *accessFixture {
 	}
 	t.Cleanup(s.closer)
 	ctx := context.Background()
-	member, err := s.auth.Register(ctx, uuid.NewString()+"@example.test", "member-password", auth.SessionMeta{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	member := registerMember(t, s, owner, uuid.NewString()+"@example.test")
 	f := &accessFixture{server: s, store: st, owner: owner, member: member}
 	nodeID := uuid.New()
 	if _, err := st.DB.Exec(ctx, `INSERT INTO servers(id,name,ip,ssh_user,status) VALUES($1,'hidden-node','127.0.0.1','root','ready')`, nodeID); err != nil {

@@ -6,6 +6,7 @@ owner DELETE /api/v1/applications/{id}/terminal/sessions/{sessionID}
 project DELETE /api/v1/applications/{id}/webhooks
 personal DELETE /api/v1/auth/me/sessions/{id}
 owner DELETE /api/v1/databases/backup-targets/{targetId}
+owner DELETE /api/v1/invites/{id}
 project DELETE /api/v1/databases/{id}
 project DELETE /api/v1/databases/{id}/backups/{backupId}
 project DELETE /api/v1/databases/{id}/schedules/{scheduleId}
@@ -15,6 +16,7 @@ owner DELETE /api/v1/projects/{id}
 owner DELETE /api/v1/projects/{id}/members
 owner DELETE /api/v1/providers/github-app/{id}
 owner DELETE /api/v1/providers/{id}
+owner DELETE /api/v1/users/{id}
 owner DELETE /api/v1/proxy/certificates/{id}
 owner DELETE /api/v1/proxy/dns-providers/{id}
 owner DELETE /api/v1/proxy/redirects/{id}
@@ -42,6 +44,7 @@ public GET /api/v1/applications/{id}/terminal/sessions/{sessionID}/ws
 owner GET /api/v1/applications/{id}/terminal/targets
 project GET /api/v1/applications/{id}/volumes
 personal GET /api/v1/auth/config
+public GET /api/v1/auth/invites/validate
 personal GET /api/v1/auth/me
 personal GET /api/v1/auth/me/sessions
 personal GET /api/v1/auth/me/totp
@@ -57,6 +60,7 @@ project GET /api/v1/deployments
 project GET /api/v1/environments/{id}/resources
 project GET /api/v1/environments/{id}/variables
 owner GET /api/v1/instance/settings
+owner GET /api/v1/invites
 personal GET /api/v1/mcp/context
 project GET /api/v1/notification-channels
 project GET /api/v1/notification-channels/{id}
@@ -113,6 +117,7 @@ project GET /api/v1/services/{id}/deploys
 project GET /api/v1/services/{id}/logs
 personal GET /api/v1/templates
 personal GET /api/v1/templates/{slug}
+owner GET /api/v1/users
 owner GET /api/v1/terminal/targets
 personal GET /api/v1/tokens
 owner GET /api/v1/updates/changelog
@@ -168,6 +173,7 @@ project POST /api/v1/databases/{id}/stop
 owner POST /api/v1/instance/settings/control-plane-url/confirm
 owner POST /api/v1/instance/settings/control-plane-url/revert
 owner POST /api/v1/instance/settings/host-helper
+owner POST /api/v1/invites
 owner POST /api/v1/instance/settings/network/confirm
 owner POST /api/v1/instance/settings/network/revert
 project POST /api/v1/mcp/applications
@@ -224,6 +230,7 @@ personal POST /api/v1/templates/{slug}/render
 personal POST /api/v1/tokens
 personal POST /api/v1/tokens/{id}/rotate
 owner POST /api/v1/updates/apply
+owner POST /api/v1/users/{id}/reset
 public POST /api/v1/webhooks/{provider}
 project PUT /api/v1/applications/{id}
 project PUT /api/v1/applications/{id}/domains/{domainId}
@@ -235,6 +242,7 @@ owner PUT /api/v1/instance/settings/general
 owner PUT /api/v1/instance/settings/network
 owner PUT /api/v1/instance/settings/system
 owner PUT /api/v1/projects/{id}/members
+owner PUT /api/v1/users/{id}/projects
 project PUT /api/v1/projects/{id}/variables
 owner PUT /api/v1/servers/{id}/files/content
 owner PUT /api/v1/updates/schedule

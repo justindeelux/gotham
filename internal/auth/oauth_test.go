@@ -63,6 +63,17 @@ func newTestOAuthWithStore(t *testing.T, providers ...OAuthProvider) (*OAuthServ
 	return oauth, st
 }
 
+// newScratchOAuthWithStore runs against an empty database, so the OAuth
+// callback takes the account-creation path.
+func newScratchOAuthWithStore(t *testing.T, providers ...OAuthProvider) (*OAuthService, *store.Store) {
+	t.Helper()
+
+	svc, st := scratchService(t)
+	oauth := NewOAuthService(svc, testLogger(), providers...)
+	t.Cleanup(oauth.Close)
+	return oauth, st
+}
+
 func TestStateStoreRoundtripAndDeleteOnRead(t *testing.T) {
 	states := newStateStore()
 	t.Cleanup(states.Close)
@@ -247,8 +258,7 @@ func TestOAuthCallbackRefusesNewUserWhenClosed(t *testing.T) {
 
 func TestOAuthCallbackCreatesUser(t *testing.T) {
 	provider := &fakeOAuthProvider{name: "github"}
-	oauth, st := newTestOAuthWithStore(t, provider)
-	oauth.auth.AllowOpenRegistration = true
+	oauth, st := newScratchOAuthWithStore(t, provider)
 	ctx := context.Background()
 
 	email := uniqueEmail("oauth-new")
@@ -282,8 +292,7 @@ func TestOAuthCallbackCreatesUser(t *testing.T) {
 
 func TestOAuthCallbackRecordsSessionMeta(t *testing.T) {
 	provider := &fakeOAuthProvider{name: "github"}
-	oauth, st := newTestOAuthWithStore(t, provider)
-	oauth.auth.AllowOpenRegistration = true
+	oauth, st := newScratchOAuthWithStore(t, provider)
 	ctx := context.Background()
 
 	email := uniqueEmail("oauth-meta")

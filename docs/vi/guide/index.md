@@ -30,8 +30,8 @@ lần, và `--force` cố ý thêm tài khoản thứ hai — nếu không có n
 trong script.
 
 Khi đã có tài khoản, việc tự đăng ký bị đóng; người khác tham gia qua liên kết
-mời dùng một lần tạo trong **Nhóm** (xem
-[Nhóm và thông báo](/vi/using/teams-notifications)).
+mời dùng một lần tạo trong **Thành viên** (xem
+[Đăng nhập lần đầu](/vi/guide/first-login)).
 
 Mở URL mà trình cài đặt in ra (bảng điều khiển mặc định lắng nghe trên cổng 8000)
 và đăng nhập bằng email và mật khẩu. Có thêm hai cách đăng nhập:

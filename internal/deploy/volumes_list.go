@@ -368,7 +368,7 @@ func (s *Service) fileRoots(ctx context.Context, app Application, node Node) ([]
 	}
 	roots, err := node.FileRoots(ctx)
 	if err != nil {
-		if status.Code(err) == codes.Unimplemented {
+		if status.Code(err) == codes.Unimplemented || files.IsDisabledOnNode(err) {
 			return nil, VolumeOpenFilesDisabled
 		}
 		s.logger.Debug("deploy: volume listing could not read the node file roots",

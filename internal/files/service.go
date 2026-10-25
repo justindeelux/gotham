@@ -735,6 +735,17 @@ func kindString(kind agentv1.FileKind) string {
 	}
 }
 
+// DisabledReason is the agent's stable detail for a switched-off file manager.
+// The agent package keeps its own copy because it must not import internal/.
+const DisabledReason = "file_manager_disabled"
+
+// IsDisabledOnNode reports the typed FailedPrecondition an agent returns when
+// its file manager is switched off.
+func IsDisabledOnNode(err error) bool {
+	return status.Code(err) == codes.FailedPrecondition &&
+		strings.Contains(status.Convert(err).Message(), DisabledReason)
+}
+
 func mapRPCError(err error) error {
 	if err == nil {
 		return nil
@@ -751,7 +762,7 @@ func mapRPCError(err error) error {
 		return fmt.Errorf("%w: %v", ErrForbidden, err)
 	case codes.FailedPrecondition:
 		message := status.Convert(err).Message()
-		if strings.Contains(message, "file_manager_disabled") {
+		if strings.Contains(message, DisabledReason) {
 			return fmt.Errorf("%w: %v", ErrDisabledOnNode, err)
 		}
 		if strings.Contains(message, "archive entry") {

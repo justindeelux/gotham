@@ -37,8 +37,9 @@
 #                               (PEM or base64); honoured ONLY with
 #                               GOTHAM_INSTALL_ROOT, otherwise warned and ignored
 #   GOTHAM_INSTALL_TEST=1       test-only: honour the GOTHAM_OS_RELEASE_FILE /
-#                               GOTHAM_TEST_UNAME_M / GOTHAM_AGENT_ENV_FILE
-#                               seams in a run without GOTHAM_INSTALL_ROOT, but
+#                               GOTHAM_TEST_UNAME_M / GOTHAM_AGENT_ENV_FILE /
+#                               GOTHAM_AGENT_FILE_MANAGER_DROPIN seams in a run
+#                               without GOTHAM_INSTALL_ROOT, but
 #                               ONLY together with --dry-run (a dry run changes
 #                               nothing, so the flag alone is safe there). With
 #                               a real run it changes nothing, so a stray
@@ -558,12 +559,16 @@ _admin_xtrace_on
     LOCAL_AGENT_SKIP=""
     _la_os_release="/etc/os-release"
     _la_agent_env="/etc/gotham/agent.env"
+    _la_agent_fm_dropin="/etc/systemd/system/gotham-agent.service.d/file-manager.conf"
     if [ "${IN_TEST}" -eq 1 ] && [ "${DRY_RUN}" -eq 1 ]; then
         if [ -n "${GOTHAM_OS_RELEASE_FILE:-}" ]; then
             _la_os_release="${GOTHAM_OS_RELEASE_FILE}"
         fi
         if [ -n "${GOTHAM_AGENT_ENV_FILE:-}" ]; then
             _la_agent_env="${GOTHAM_AGENT_ENV_FILE}"
+        fi
+        if [ -n "${GOTHAM_AGENT_FILE_MANAGER_DROPIN:-}" ]; then
+            _la_agent_fm_dropin="${GOTHAM_AGENT_FILE_MANAGER_DROPIN}"
         fi
     fi
     _la_distro=""
@@ -627,26 +632,40 @@ _admin_xtrace_on
 
 # The local node gets the file manager on by default, with no prompt.
 # --file-manager / --no-file-manager (or GOTHAM_AGENT_FILE_MANAGER) win; a
-# re-run keeps an explicit answer already stored in agent.env.
+# re-run keeps an explicit answer already stored in agent.env. A hand-enabled
+# unprivileged agent (GOTHAM_AGENT_FILES=true and no root drop-in) keeps that
+# setting instead of being widened by the new default.
 LOCAL_AGENT_FILE_MANAGER="${GOTHAM_AGENT_FILE_MANAGER:-}"
 case "$(printf '%s' "${LOCAL_AGENT_FILE_MANAGER}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
     yes | y | true | 1) LOCAL_AGENT_FILE_MANAGER=yes ;;
     no | n | false | 0) LOCAL_AGENT_FILE_MANAGER=no ;;
     "")
         case "${_la_prior_files:-}" in
-            true) LOCAL_AGENT_FILE_MANAGER=yes ;;
+            true)
+                if [ -f "${_la_agent_fm_dropin}" ]; then
+                    LOCAL_AGENT_FILE_MANAGER=yes
+                else
+                    LOCAL_AGENT_FILE_MANAGER=keep
+                fi
+                ;;
             false) LOCAL_AGENT_FILE_MANAGER=no ;;
             *) LOCAL_AGENT_FILE_MANAGER=yes ;;
         esac
         ;;
     *) die "GOTHAM_AGENT_FILE_MANAGER must be yes or no (got '${GOTHAM_AGENT_FILE_MANAGER}')" ;;
 esac
-LOCAL_AGENT_FILE_MANAGER_FLAG="--file-manager"
-LOCAL_AGENT_FILE_MANAGER_SUMMARY="on (--no-file-manager turns it off)"
-if [ "${LOCAL_AGENT_FILE_MANAGER}" = "no" ]; then
-    LOCAL_AGENT_FILE_MANAGER_FLAG="--no-file-manager"
-    LOCAL_AGENT_FILE_MANAGER_SUMMARY="off (--file-manager turns it on)"
-fi
+LOCAL_AGENT_FILE_MANAGER_FLAG=""
+LOCAL_AGENT_FILE_MANAGER_SUMMARY="on (kept unprivileged from agent.env; --no-file-manager turns it off)"
+case "${LOCAL_AGENT_FILE_MANAGER}" in
+    yes)
+        LOCAL_AGENT_FILE_MANAGER_FLAG="--file-manager"
+        LOCAL_AGENT_FILE_MANAGER_SUMMARY="on (--no-file-manager turns it off)"
+        ;;
+    no)
+        LOCAL_AGENT_FILE_MANAGER_FLAG="--no-file-manager"
+        LOCAL_AGENT_FILE_MANAGER_SUMMARY="off (--file-manager turns it on)"
+        ;;
+esac
 
 # render_file installs a root-owned config/unit file, rewriting the production
 # absolute roots onto GOTHAM_INSTALL_ROOT when one is set (test mode only).
@@ -1950,7 +1969,9 @@ fi
             || LOCAL_AGENT_ENV="GOTHAM_AGENT_CP_ADDR=$(sh_quote "${LOCAL_AGENT_CP_ADDR}") ${LOCAL_AGENT_ENV}"
         [ -z "${LOCAL_AGENT_NODE_ID}" ] \
             || LOCAL_AGENT_ENV="GOTHAM_AGENT_NODE_ID=$(sh_quote "${LOCAL_AGENT_NODE_ID}") ${LOCAL_AGENT_ENV}"
-        LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh $(sh_quote "${SCRIPT_DIR}/install-agent.sh") --full --ca $(sh_quote "${CA_DIR}/ca.crt") --enrollment-token-file $(sh_quote "${LOCAL_AGENT_TOKEN_FILE}") ${LOCAL_AGENT_FILE_MANAGER_FLAG}"
+        LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh $(sh_quote "${SCRIPT_DIR}/install-agent.sh") --full --ca $(sh_quote "${CA_DIR}/ca.crt") --enrollment-token-file $(sh_quote "${LOCAL_AGENT_TOKEN_FILE}")"
+        [ -z "${LOCAL_AGENT_FILE_MANAGER_FLAG}" ] \
+            || LOCAL_AGENT_RETRY="${LOCAL_AGENT_RETRY} ${LOCAL_AGENT_FILE_MANAGER_FLAG}"
         LOCAL_AGENT_FAILED=0
         _agent_script="${SCRIPT_DIR}/install-agent.sh"
         if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" = "1" ]; then
@@ -1986,6 +2007,10 @@ fi
                 if [ -n "${LOCAL_AGENT_NODE_ID}" ]; then
                     set -- "$@" "GOTHAM_AGENT_NODE_ID=${LOCAL_AGENT_NODE_ID}"
                 fi
+                set -- "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt" --enrollment-token-file "${LOCAL_AGENT_TOKEN_FILE}"
+                if [ -n "${LOCAL_AGENT_FILE_MANAGER_FLAG}" ]; then
+                    set -- "$@" "${LOCAL_AGENT_FILE_MANAGER_FLAG}"
+                fi
                 env -u GOTHAM_OS_RELEASE_FILE -u GOTHAM_APT_ROOT \
                     -u GOTHAM_AGENT_ENV_FILE -u GOTHAM_TEST_UNAME_M \
                     -u GOTHAM_INSTALL_TEST -u GOTHAM_INSTALL_TEST_RUN_AGENT \
@@ -1995,7 +2020,8 @@ fi
                     -u GOTHAM_INSTALL_TEST_ADMIN_BIN \
                     -u GOTHAM_INSTALL_TEST_ADMIN_TTY \
                     -u GOTHAM_AGENT_FILE_MANAGER_TTY \
-                    "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt" --enrollment-token-file "${LOCAL_AGENT_TOKEN_FILE}" "${LOCAL_AGENT_FILE_MANAGER_FLAG}"
+                    -u GOTHAM_AGENT_FILE_MANAGER_DROPIN \
+                    "$@"
             ) || LOCAL_AGENT_FAILED=1
         fi
 }

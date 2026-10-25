@@ -1650,6 +1650,43 @@ fi
 rm -rf "${FM_DIR}"
 pass "FM1: file manager answer defaults to no on a direct run and both flags drive the drop-in and agent.env"
 
+echo "==> FM2 install.sh re-run keeps a hand-enabled unprivileged file manager"
+FM2_DIR="${SCRATCH}/fm2"
+mkdir -p "${FM2_DIR}/shim"
+printf 'ID=ubuntu\nVERSION_CODENAME=jammy\n' >"${FM2_DIR}/ubuntu-release"
+printf '#!/bin/sh\nexit 0\n' >"${FM2_DIR}/shim/systemctl"
+chmod 755 "${FM2_DIR}/shim/systemctl"
+printf 'GOTHAM_AGENT_FILES=true\n' >"${FM2_DIR}/agent.env"
+_fm2_run() {
+    GOTHAM_INSTALL_TEST=1 \
+    GOTHAM_OS_RELEASE_FILE="${FM2_DIR}/ubuntu-release" \
+    GOTHAM_AGENT_ENV_FILE="${FM2_DIR}/agent.env" \
+    GOTHAM_AGENT_FILE_MANAGER_DROPIN="${FM2_DIR}/file-manager.conf" \
+    GOTHAM_SKIP_DEPS=1 \
+    GOTHAM_BASE_URL=http://127.0.0.1:9 \
+    GOTHAM_VERSION=v9.9.9-test \
+    PATH="${FM2_DIR}/shim:${PATH}" \
+        sh "${SCRIPT_DIR}/install.sh" --dry-run "$@" 2>&1
+}
+_fm2_agent_line() { grep 'install-agent.sh --full' "$1"; }
+_fm2_run >"${FM2_DIR}/keep.log" || fail "FM2: install.sh dry-run failed"
+_fm2_agent_line "${FM2_DIR}/keep.log" | grep -q -- '--file-manager' \
+    && fail "FM2: a re-run widened a hand-enabled unprivileged agent"
+_fm2_agent_line "${FM2_DIR}/keep.log" | grep -q -- '--no-file-manager' \
+    && fail "FM2: a re-run turned off a hand-enabled agent"
+grep -q 'File manager on this node: on (kept unprivileged' "${FM2_DIR}/keep.log" \
+    || fail "FM2: the summary does not report the kept setting"
+: >"${FM2_DIR}/file-manager.conf"
+_fm2_run >"${FM2_DIR}/dropin.log" || fail "FM2: install.sh dry-run with a drop-in failed"
+_fm2_agent_line "${FM2_DIR}/dropin.log" | grep -q -- '--file-manager' \
+    || fail "FM2: an existing root drop-in must keep the file manager on"
+printf 'GOTHAM_AGENT_FILES=false\n' >"${FM2_DIR}/agent.env"
+_fm2_run >"${FM2_DIR}/off.log" || fail "FM2: install.sh dry-run with a disabled agent failed"
+_fm2_agent_line "${FM2_DIR}/off.log" | grep -q -- '--no-file-manager' \
+    || fail "FM2: an explicit GOTHAM_AGENT_FILES=false must be kept"
+rm -rf "${FM2_DIR}"
+pass "FM2: install.sh keeps a hand-enabled unprivileged setting and an explicit off answer"
+
 # --- G1: the docker group is ensured before the unit is enabled ---------------
 echo "==> G1 the docker group is ensured before enabling the unit"
 G1_DIR="${SCRATCH}/g1"

@@ -441,6 +441,31 @@ func TestListVolumesNoRootsRPC(t *testing.T) {
 	}
 }
 
+func TestListVolumesDisabledAgent(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	app.SourceType = SourceDockerfile
+	root := managedVolumeTestRoot(t)
+	bindPath := filepath.Join(root, app.ID.String(), "data")
+	repo := &fakeRepository{app: app, storages: []Storage{
+		{ApplicationID: app.ID, Name: "data", HostPath: bindPath, ContainerPath: "/data"},
+	}}
+	node := newMockNode()
+	node.fileRootsErr = status.Error(codes.FailedPrecondition, filespkg.DisabledReason)
+	svc := volumeTestService(t, repo, node)
+
+	listing, err := svc.ListVolumes(context.Background(), userID, app.ID)
+	if err != nil {
+		t.Fatalf("ListVolumes: %v", err)
+	}
+	if len(listing.Volumes) != 1 {
+		t.Fatalf("volumes = %+v, want the configured row", listing.Volumes)
+	}
+	if listing.Volumes[0].FileManager != nil || listing.Volumes[0].OpenReason != VolumeOpenFilesDisabled {
+		t.Errorf("entry = %+v, want files_disabled and no target", listing.Volumes[0])
+	}
+}
+
 func TestListVolumesUnverifiedDevice(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)

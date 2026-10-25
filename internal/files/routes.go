@@ -47,7 +47,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 	if logger == nil {
 		logger = slog.Default()
 	}
-	h := &handler{svc: svc, logger: logger, spool: newSpooler("", 0, logger)}
+	h := &handler{svc: svc, logger: logger, spool: newSpooler("", 0, 0, logger)}
 	r.Get("/v1/servers/{id}/files/download", h.download)
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
@@ -230,6 +230,10 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "archive exceeds the node's archive limits", Code: "archive_limit"})
 	case errors.Is(err, ErrNotEditable):
 		writeJSON(w, http.StatusUnsupportedMediaType, errorBody{Message: "file is not editable text", Code: "not_editable"})
+	case errors.Is(err, ErrTeamBusy):
+		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "the team's upload staging share is in use", Code: "busy"})
+	case errors.Is(err, ErrSpoolBusy):
+		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "too many uploads are being staged", Code: "busy"})
 	case errors.Is(err, ErrBusy):
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "node is busy", Code: "busy"})
 	case errors.Is(err, ErrInsufficientStorage):

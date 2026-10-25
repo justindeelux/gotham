@@ -370,6 +370,8 @@ func TestErrorStatusMapping(t *testing.T) {
 		{"too large", ErrTooLarge, http.StatusRequestEntityTooLarge},
 		{"not editable", ErrNotEditable, http.StatusUnsupportedMediaType},
 		{"busy", ErrBusy, http.StatusTooManyRequests},
+		{"spool busy", ErrSpoolBusy, http.StatusTooManyRequests},
+		{"team busy", ErrTeamBusy, http.StatusTooManyRequests},
 		{"outdated", ErrAgentOutdated, http.StatusNotImplemented},
 		{"unavailable", ErrAgentUnavailable, http.StatusBadGateway},
 		{"disabled", ErrDisabled, http.StatusServiceUnavailable},
@@ -388,6 +390,34 @@ func TestErrorStatusMapping(t *testing.T) {
 			}
 			if body.Message == "" {
 				t.Fatalf("empty error message")
+			}
+		})
+	}
+}
+
+func TestBusyAnswerNamesTheLimit(t *testing.T) {
+	id := uuid.New()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"team share", ErrTeamBusy, "team"},
+		{"global ceiling", ErrSpoolBusy, "uploads"},
+		{"agent busy", ErrBusy, "node is busy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestRouter(&fakeService{listErr: tc.err})
+			rec := doRequest(t, h, http.MethodGet, "/v1/servers/"+id.String()+"/files/list?root=volumes")
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("status = %d, want 429", rec.Code)
+			}
+			var body errorBody
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v", err)
+			}
+			if !strings.Contains(body.Message, tc.want) || body.Code != "busy" {
+				t.Fatalf("body = %+v, want a message mentioning %q", body, tc.want)
 			}
 		})
 	}

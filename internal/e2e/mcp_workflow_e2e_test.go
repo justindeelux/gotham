@@ -99,15 +99,17 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	var workflowApps []string
+	suffix := uuid.NewString()[:8]
+	var projectID string
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cleanupCancel()
-		for _, query := range []string{
-			"DELETE FROM applications WHERE user_id=$1",
-			"DELETE FROM projects WHERE name LIKE 'mcp-%'",
-		} {
-			if _, err := pool.Exec(cleanupCtx, query, userID); err != nil {
-				t.Logf("cleanup %q: %v", query, err)
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE user_id=$1", userID); err != nil {
+			t.Logf("cleanup applications: %v", err)
+		}
+		if projectID != "" {
+			if _, err := pool.Exec(cleanupCtx, "DELETE FROM projects WHERE id=$1", projectID); err != nil {
+				t.Logf("cleanup project: %v", err)
 			}
 		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id=$1 OR id=$2", nodeID, legacyID); err != nil {
@@ -119,7 +121,7 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id=$1", userID); err != nil {
 			t.Logf("cleanup user: %v", err)
 		}
-		assertMCPWorkflowClean(t, cleanupCtx, pool, userID, nodeID, legacyID, workflowApps)
+		assertMCPWorkflowClean(t, cleanupCtx, pool, userID, projectID, nodeID, legacyID, workflowApps)
 	})
 
 	agentCtx, agentCancel := context.WithCancel(context.Background())
@@ -219,9 +221,9 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	project := h.call(t, owner, "project_create", map[string]any{"request_id": "mcp-project", "name": "mcp-shop"})
+	project := h.call(t, owner, "project_create", map[string]any{"request_id": "mcp-project", "name": "mcp-shop-" + suffix})
 	projectReceipt := project["receipt"].(map[string]any)
-	projectID := projectReceipt["resource_id"].(string)
+	projectID = projectReceipt["resource_id"].(string)
 	production := project["environments"].([]any)[0].(map[string]any)
 	productionID := production["id"].(string)
 	if production["name"] != "production" || projectReceipt["related_id"] != productionID {
@@ -230,7 +232,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	staging := h.call(t, owner, "environment_create", map[string]any{"request_id": "mcp-staging", "project_id": projectID, "name": "staging"})
 	stagingID := staging["environment"].(map[string]any)["id"].(string)
 
-	suffix := uuid.NewString()[:8]
 	marker := "gotham-mcp-v1-" + suffix
 	fixture := initFixture(t, "e2e/mcp-app-"+suffix)
 	fixture.commit(t, marker, `FROM busybox:1.36
@@ -560,7 +561,7 @@ func (h *mcpWorkflowHarness) putEnv(t *testing.T, token, appID, key, value strin
 	}
 }
 
-func assertMCPWorkflowClean(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, nodeID, legacyID uuid.UUID, appIDs []string) {
+func assertMCPWorkflowClean(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, projectID string, nodeID, legacyID uuid.UUID, appIDs []string) {
 	t.Helper()
 	checks := []struct {
 		name  string
@@ -568,7 +569,7 @@ func assertMCPWorkflowClean(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		args  []any
 	}{
 		{"applications", "SELECT count(*) FROM applications WHERE user_id=$1", []any{userID}},
-		{"projects", "SELECT count(*) FROM projects WHERE name LIKE 'mcp-%'", []any{}},
+		{"projects", "SELECT count(*) FROM projects WHERE id=$1", []any{projectID}},
 		{"servers", "SELECT count(*) FROM servers WHERE id IN ($1,$2)", []any{nodeID, legacyID}},
 		{"users", "SELECT count(*) FROM users WHERE id=$1", []any{userID}},
 		{"request_receipts", "SELECT count(*) FROM request_receipts WHERE principal_id=$1", []any{userID}},

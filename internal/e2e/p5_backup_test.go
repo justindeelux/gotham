@@ -290,7 +290,7 @@ func newP5Harness(t *testing.T) *p5Harness {
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "p5-backup-smoke",
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "p5-backup-smoke-" + suffix,
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -305,6 +305,15 @@ func newP5Harness(t *testing.T) *p5Harness {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM databases WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup databases: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup applications: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM projects WHERE id = $1", project.ID); err != nil {
+			t.Logf("cleanup project: %v", err)
+		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
 			t.Logf("cleanup server row: %v", err)
 		}

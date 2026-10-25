@@ -59,6 +59,6 @@ func migrateLocalhostNode(ctx context.Context, tx *sql.Tx) error {
 		return fmt.Errorf("both legacy node %q and localhost exist; reconcile their workloads before retrying migration 49", candidates[0])
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE servers SET node_id='localhost', name='localhost',
- ip='127.0.0.1', updated_at=now() WHERE node_id=$1`, candidates[0])
+ ip='127.0.0.1', team_id=NULL, updated_at=now() WHERE node_id=$1`, candidates[0])
 	return err
 }

@@ -112,6 +112,15 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM services WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup services: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup applications: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM projects WHERE id = $1", project.ID); err != nil {
+			t.Logf("cleanup project: %v", err)
+		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
 			t.Logf("cleanup server: %v", err)
 		}

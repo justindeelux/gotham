@@ -417,6 +417,9 @@ func p6SeedEnvironment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
 			t.Logf("cleanup applications: %v", err)
 		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM projects WHERE id = $1", project.ID); err != nil {
+			t.Logf("cleanup project: %v", err)
+		}
 	})
 	return environment.ID
 }
@@ -427,7 +430,7 @@ func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	var id pgtype.UUID
 	err := pool.QueryRow(ctx,
 		`INSERT INTO applications (user_id, server_id, environment_id, name, clone_url, branch, build_pack)
-		 VALUES ($1, $1, $2, $3, $4, 'https://github.com/acme/demo.git', 'main', 'dockerfile')
+		 VALUES ($1, $2, $3, $4, 'https://github.com/acme/demo.git', 'main', 'dockerfile')
 		 RETURNING id`,
 		userID, serverID, envID, name).Scan(&id)
 	if err != nil {

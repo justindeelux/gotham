@@ -17,9 +17,9 @@ only its SHA-256 hash is stored. Send it in the standard header:
 Authorization: Bearer gt1_<token>
 ```
 
-There is no console page for tokens yet. They are created, listed, rotated and
-revoked through the API itself, using either a signed-in session or an existing
-token.
+In the console, open **Settings → API tokens** from the account menu to create,
+list, rotate and revoke your own tokens. They can also be managed through the
+API itself, using either a signed-in session or an existing token.
 
 ## Scopes
 
@@ -118,5 +118,5 @@ after rotating.
 - A token is not a session. Account settings, password changes, session
   management and two-factor authentication are interactive-session only; use a
   token solely for the automation that needs it.
-- The console has no token screen yet, so the API is the only management
-  surface; this page is the reference for it.
+- The console page and the API manage the same tokens; the console is the
+  everyday surface, and this page is the reference for automation.

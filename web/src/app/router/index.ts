@@ -198,6 +198,12 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.profile", requiresAuth: true },
       },
       {
+        path: "settings/api-tokens",
+        name: "api-tokens",
+        component: () => import("@/features/api-tokens/pages/ApiTokensPage.vue"),
+        meta: { titleKey: "titles.apiTokens", requiresAuth: true },
+      },
+      {
         path: "forbidden",
         name: "forbidden",
         component: () => import("@/app/pages/NoPermissionPage.vue"),

@@ -71,9 +71,13 @@ beforeEach(() => {
 });
 
 describe("MeCard account menu", () => {
-  it("lists Profile before Sign out", async () => {
+  it("lists Profile and API tokens before Sign out", async () => {
     const { wrapper } = await mountCard({});
-    expect(await openMenu(wrapper)).toEqual(["Profile", "Sign out"]);
+    expect(await openMenu(wrapper)).toEqual([
+      "Profile",
+      "API tokens",
+      "Sign out",
+    ]);
     wrapper.unmount();
   });
 

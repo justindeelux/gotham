@@ -101,6 +101,6 @@ liệt kê hay thu hồi được phiên.
 ## API token
 
 API token (`gt1_` với phạm vi read, deploy hoặc admin) có thể được tạo, xoay vòng và
-thu hồi qua API, nhưng chưa có trang nào trên bảng điều khiển cho chúng. Xem
+thu hồi từ **Cài đặt → API token** hoặc qua API. Xem
 [API token](/vi/reference/api-tokens). Token của thành viên không bao giờ mang phạm
 vi `admin` và chỉ hoạt động trong các dự án được cấp.

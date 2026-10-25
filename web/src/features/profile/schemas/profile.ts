@@ -79,7 +79,6 @@ const userEnvelopeShape = z.object({
   created_at: z.string(),
   display_name: z.string().nullable().optional(),
   has_password: z.boolean().optional(),
-  is_platform_admin: z.boolean().optional(),
 });
 
 export const meEnvelopeSchema = z.object({ user: userEnvelopeShape });

@@ -19,7 +19,7 @@ const userInitial = computed<string>(() =>
 );
 
 const platformRoleLabel = computed<string>(() => {
-  const isAdmin = authStore.user?.is_platform_admin ?? authStore.user?.role === "admin";
+  const isAdmin = authStore.user?.role === "owner";
   return isAdmin ? t("profile.identity.admin") : t("profile.identity.member");
 });
 

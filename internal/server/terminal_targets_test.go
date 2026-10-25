@@ -95,7 +95,7 @@ func TestTerminalTargetsSourceAuthorization(t *testing.T) {
 	t.Run("non-operator sees no hosts", func(t *testing.T) {
 		source := terminalTargetsSource{
 			servers: registry, apps: fakeTargetDeployService{applications: []deploy.Application{app}},
-			resolver: resolver, isOperator: false,
+			resolver: resolver, isOwner: false,
 		}
 		targets, err := source.ListTargets(context.Background(), userID)
 		if err != nil {
@@ -110,7 +110,7 @@ func TestTerminalTargetsSourceAuthorization(t *testing.T) {
 	})
 
 	t.Run("operator sees only ready hosts", func(t *testing.T) {
-		source := terminalTargetsSource{servers: registry, isOperator: true}
+		source := terminalTargetsSource{servers: registry, isOwner: true}
 		targets, err := source.ListTargets(context.Background(), userID)
 		if err != nil {
 			t.Fatalf("ListTargets: %v", err)
@@ -291,7 +291,7 @@ func TestTerminalTargetsSourceCapsAfterFiltering(t *testing.T) {
 			id := uuid.New()
 			registry.items[id] = servers.Server{ID: id, Name: "node", Status: "ready"}
 		}
-		source := terminalTargetsSource{servers: registry, isOperator: true}
+		source := terminalTargetsSource{servers: registry, isOwner: true}
 		targets, err := source.ListTargets(context.Background(), userID)
 		if err != nil {
 			t.Fatalf("ListTargets: %v", err)
@@ -389,7 +389,7 @@ func TestTerminalTargetsSourceTimeoutCollapses(t *testing.T) {
 func TestTerminalTargetsRouteRequiresInteractiveSession(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
-	adminToken := mustCreateAdminToken(t, tokens)
+	adminToken := mustCreateAdminToken(t, tokens, testUserID)
 
 	cases := map[string]struct {
 		bearer string
@@ -423,12 +423,12 @@ func TestTerminalTargetsRouteRequiresInteractiveSession(t *testing.T) {
 	}
 }
 
-func TestTerminalTargetsSourceForCapturesOperator(t *testing.T) {
+func TestTerminalTargetsSourceForCapturesOwner(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := &Server{
 		logger:  logger,
 		servers: newFakeServerService(),
-		auth:    &fakeAuthService{user: &auth.User{ID: testUserID.String(), Email: "op@example.com", Role: "admin"}},
+		auth:    &fakeAuthService{user: &auth.User{ID: testUserID.String(), Email: "op@example.com", Role: auth.RoleOwner}},
 	}
 	registry := s.servers.(*fakeServerService)
 	id := uuid.New()
@@ -436,7 +436,6 @@ func TestTerminalTargetsSourceForCapturesOperator(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/terminal/targets", nil)
 	ctx := context.WithValue(request.Context(), userIDKey, testUserID)
-	ctx = context.WithValue(ctx, roleKey, "admin")
 	request = request.WithContext(ctx)
 	operator := s.terminalTargetsSourceFor(request)
 	targets, err := operator.ListTargets(request.Context(), testUserID)

@@ -40,12 +40,12 @@ function staleUser(): User {
     created_at: "2026-03-04T12:00:00Z",
     display_name: "Ada",
     has_password: true,
-    is_platform_admin: false,
+    role: "member",
   };
 }
 
 function freshUser(): User {
-  return { ...staleUser(), is_platform_admin: true };
+  return { ...staleUser(), role: "owner" };
 }
 
 function seedAuth(): void {
@@ -119,7 +119,7 @@ describe("ProfilePage account refresh", () => {
     seedAuth();
     mockGet.mockResolvedValue({ data: { user: freshUser() } } as never);
     const wrapper = await mountPage();
-    expect(useAuthStore().user?.is_platform_admin).toBe(true);
+    expect(useAuthStore().user?.role).toBe("owner");
     expect(wrapper.text()).toContain("Platform rolePlatform admin");
     wrapper.unmount();
   });
@@ -172,7 +172,7 @@ describe("ProfilePage account refresh", () => {
     gate.resolve({ data: { user: freshUser() } });
     await flushPromises();
     await nextTick();
-    expect(useAuthStore().user?.is_platform_admin).toBe(true);
+    expect(useAuthStore().user?.role).toBe("owner");
     expect(wrapper.text()).toContain("Platform rolePlatform admin");
     wrapper.unmount();
   });

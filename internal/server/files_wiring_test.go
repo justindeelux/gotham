@@ -95,9 +95,8 @@ func TestFilesServiceNilWithoutRegistry(t *testing.T) {
 	}
 }
 
-func TestFilesRoutesRequirePlatformAdmin(t *testing.T) {
+func TestFilesRoutesRequireOwner(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "true")
-	t.Setenv(PlatformAdminsEnv, "")
 
 	server := &servers.Server{ID: uuid.New(), Name: "node-1", TeamID: uuid.New()}
 	cfg := &config.Config{Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}}}
@@ -116,12 +115,20 @@ func TestFilesRoutesRequirePlatformAdmin(t *testing.T) {
 		t.Fatalf("plain session roots = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	adminToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{"admin"})
+	memberToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{"admin"})
 	if err != nil {
-		t.Fatalf("create admin token: %v", err)
+		t.Fatalf("create member admin token: %v", err)
 	}
-	rec := doRequest(t, s, http.MethodGet, url, "", "Bearer "+adminToken.Token)
+	if rec := doRequest(t, s, http.MethodGet, url, "", "Bearer "+memberToken.Token); rec.Code != http.StatusForbidden {
+		t.Fatalf("member-owned admin token roots = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	ownerToken, err := tokens.Create(context.Background(), testOwnerID, "admin", []string{"admin"})
+	if err != nil {
+		t.Fatalf("create owner admin token: %v", err)
+	}
+	rec := doRequest(t, s, http.MethodGet, url, "", "Bearer "+ownerToken.Token)
 	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
-		t.Fatalf("admin token roots = %d, want past the platform gate (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("owner admin token roots = %d, want past the owner gate (body %s)", rec.Code, rec.Body.String())
 	}
 }

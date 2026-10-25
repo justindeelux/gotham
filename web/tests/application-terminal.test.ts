@@ -411,7 +411,7 @@ function login(pinia: Pinia, isAdmin = false): void {
     email: "ada@gotham.dev",
     display_name: "Ada",
     created_at: "2026-01-01T00:00:00Z",
-    is_platform_admin: isAdmin,
+    role: isAdmin ? "owner" : "member",
   };
 }
 

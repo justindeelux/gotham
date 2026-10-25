@@ -30,7 +30,7 @@ const user = {
   created_at: "2026-03-04T12:00:00Z",
   display_name: "Ada",
   has_password: true,
-  is_platform_admin: true,
+  role: "owner",
 };
 
 const team = {
@@ -621,7 +621,7 @@ test("non-operators never see the action (file read access is not a shell)", asy
     const auth = app.config.globalProperties.$pinia._s.get("auth") as {
       user: Record<string, unknown> | null;
     };
-    auth.user = { ...(auth.user ?? {}), is_platform_admin: false };
+    auth.user = { ...(auth.user ?? {}), role: "member" };
   });
 
   await expect(

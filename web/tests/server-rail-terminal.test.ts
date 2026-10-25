@@ -97,7 +97,7 @@ beforeEach(() => {
     email: "ada@gotham.dev",
     display_name: "Ada",
     created_at: "2026-01-01T00:00:00Z",
-    is_platform_admin: true,
+    role: "owner",
   };
 });
 
@@ -189,7 +189,7 @@ describe("ServerRail terminal icon (JUS-245)", () => {
     expect(wrapper.find(".rail-btn--terminal").exists()).toBe(true);
     useAuthStore().user = {
       ...useAuthStore().user!,
-      is_platform_admin: false,
+      role: "member",
     };
     await flushPromises();
     expect(wrapper.find(".rail-btn--terminal").exists()).toBe(false);

@@ -21,10 +21,14 @@ import (
 	"github.com/justindeelux/gotham/internal/config"
 )
 
-var testUserID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
+var (
+	testUserID  = uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	testOwnerID = uuid.MustParse("66666666-7777-8888-9999-aaaaaaaaaaaa")
+)
 
 type fakeAuthService struct {
 	user              *auth.User
+	users             map[uuid.UUID]*auth.User
 	logoutErr         error
 	totpEnabled       bool
 	recoveryCodesLeft int
@@ -32,8 +36,10 @@ type fakeAuthService struct {
 }
 
 func newFakeAuthService() *fakeAuthService {
+	owner := &auth.User{ID: testOwnerID.String(), Email: "owner@example.com", Role: auth.RoleOwner}
 	return &fakeAuthService{
-		user: &auth.User{ID: testUserID.String(), Email: "user@example.com", Role: "user"},
+		user:  &auth.User{ID: testUserID.String(), Email: "user@example.com", Role: auth.RoleMember},
+		users: map[uuid.UUID]*auth.User{testOwnerID: owner},
 	}
 }
 
@@ -81,10 +87,13 @@ func (f *fakeAuthService) Logout(_ context.Context, _ string) error {
 }
 
 func (f *fakeAuthService) Me(_ context.Context, userID uuid.UUID) (*auth.User, error) {
-	if userID != testUserID {
-		return nil, auth.ErrUnauthorized
+	if f.user != nil && f.user.ID == userID.String() {
+		return f.user, nil
 	}
-	return f.user, nil
+	if user, ok := f.users[userID]; ok {
+		return user, nil
+	}
+	return nil, auth.ErrUnauthorized
 }
 
 func (f *fakeAuthService) UpdateProfile(_ context.Context, userID uuid.UUID, displayName *string) (*auth.User, error) {
@@ -164,19 +173,19 @@ func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) 
 	switch token {
 	case "valid-token":
 		return &auth.Claims{
-			Role:             "user",
+			Role:             auth.RoleMember,
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 		}, nil
 	case "sid-token":
 		return &auth.Claims{
-			Role:             "user",
+			Role:             auth.RoleMember,
 			SessionID:        fakeSessions[0].ID.String(),
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 		}, nil
-	case "admin-token":
+	case "owner-token":
 		return &auth.Claims{
-			Role:             "admin",
-			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
+			Role:             auth.RoleOwner,
+			RegisteredClaims: jwt.RegisteredClaims{Subject: testOwnerID.String()},
 		}, nil
 	default:
 		return nil, auth.ErrInvalidToken

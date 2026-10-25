@@ -591,15 +591,13 @@ echo "PASS: a signal during the env write aborts without wiping gotham.env (F1)"
 ENV_FILE="${ROOT}/etc/gotham/gotham.env"
 SECRET_BEFORE="$(sed -n 's/^GOTHAM_SECRET_KEY=//p' "${ENV_FILE}" | head -n1)"
 sed 's#^GOTHAM_DATABASE_DSN=.*#GOTHAM_DATABASE_DSN=postgres://managed/db#' "${ENV_FILE}" >"${ENV_FILE}.edit"
-printf '\nAUTO_UPDATE=true\nPLATFORM_ADMINS=ops@example.com\n' >>"${ENV_FILE}.edit"
+printf '\nAUTO_UPDATE=true\n' >>"${ENV_FILE}.edit"
 mv "${ENV_FILE}.edit" "${ENV_FILE}"
 run_install >/dev/null
 grep -qx 'GOTHAM_DATABASE_DSN=postgres://managed/db' "${ENV_FILE}" \
     || { echo "FAIL: re-install overwrote the managed DSN with the local default" >&2; exit 1; }
 grep -qx 'AUTO_UPDATE=true' "${ENV_FILE}" \
     || { echo "FAIL: re-install dropped the operator AUTO_UPDATE key" >&2; exit 1; }
-grep -qx 'PLATFORM_ADMINS=ops@example.com' "${ENV_FILE}" \
-    || { echo "FAIL: re-install dropped the operator PLATFORM_ADMINS key" >&2; exit 1; }
 SECRET_AFTER="$(sed -n 's/^GOTHAM_SECRET_KEY=//p' "${ENV_FILE}" | head -n1)"
 [ "${SECRET_BEFORE}" = "${SECRET_AFTER}" ] \
     || { echo "FAIL: re-install rotated GOTHAM_SECRET_KEY" >&2; exit 1; }

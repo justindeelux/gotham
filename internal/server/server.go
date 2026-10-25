@@ -308,7 +308,7 @@ func (s *Server) routes() (http.Handler, error) {
 		containers.Mount(api, s.withTeam(), containerService)
 
 		filesAuth := func(next http.Handler) http.Handler {
-			return s.withTeam()(s.RequirePlatformAdmin(next))
+			return s.withTeam()(s.RequireOwner(next))
 		}
 		files.Mount(api, filesAuth, s.fileService(), s.logger)
 
@@ -336,7 +336,7 @@ func (s *Server) routes() (http.Handler, error) {
 			}
 		}
 		platformOnly := func(next http.Handler) http.Handler {
-			return s.RequireAuth(s.RequirePlatformAdmin(next))
+			return s.RequireAuth(s.RequireOwner(next))
 		}
 		if s.auth != nil && s.servers != nil {
 			s.terminal = s.terminalService()
@@ -382,7 +382,7 @@ func (s *Server) routes() (http.Handler, error) {
 		MountProxyRouters(api, platformOnly, proxy.AsRouterService(s.proxy))
 
 		s.updates = s.updatesService()
-		updates.Mount(api, s.readScopeAuth, platformOnly, s.isPlatformOperator, s.updates)
+		updates.Mount(api, s.readScopeAuth, platformOnly, s.isOwner, s.updates)
 
 		s.realtime = ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger, s.authorizeLogSubscription)
 

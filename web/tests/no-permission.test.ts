@@ -27,7 +27,7 @@ function signInAsPlatformAdmin(isAdmin: boolean): void {
     email: "ada@gotham.dev",
     display_name: "Ada",
     created_at: "2026-01-01T00:00:00Z",
-    ...(isAdmin ? { is_platform_admin: true } : {}),
+    ...(isAdmin ? { role: "owner" } : {}),
   };
 }
 

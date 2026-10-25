@@ -385,7 +385,7 @@ func TestRequireScopes(t *testing.T) {
 	}
 }
 
-func TestAdminScopeIssuanceIsPlatformGated(t *testing.T) {
+func TestAdminScopeIssuanceIsOwnerGated(t *testing.T) {
 	s, _ := newTestTokenServer(t)
 	const bearer = "Bearer valid-token"
 
@@ -403,11 +403,10 @@ func TestAdminScopeIssuanceIsPlatformGated(t *testing.T) {
 		t.Fatalf("plain session mixed token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	operatorToken := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
-		`{"name":"operator","scopes":["admin"]}`, bearer)
+		`{"name":"operator","scopes":["admin"]}`, "Bearer owner-token")
 	if operatorToken.Code != http.StatusCreated {
-		t.Fatalf("operator session admin token = %d, want 201 (body %s)", operatorToken.Code, operatorToken.Body.String())
+		t.Fatalf("owner session admin token = %d, want 201 (body %s)", operatorToken.Code, operatorToken.Body.String())
 	}
 }
 
@@ -442,18 +441,17 @@ func TestAdminScopeIssuanceCannotBePadded(t *testing.T) {
 		t.Fatalf("scoped token padded admin request = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens",
 		`{"name":"sneaky","scopes":[" admin "]}`,
 		"Bearer "+scoped.Token); rec.Code != http.StatusForbidden {
-		t.Fatalf("allowlisted owner's read token padded admin request = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("owner's read token padded admin request = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 
 	rec = doRequest(t, s, http.MethodPost, "/api/v1/tokens",
 		`{"name":"operator","scopes":[" admin "]}`,
-		bearer)
+		"Bearer owner-token")
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("scoped token padded admin request as operator = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("scoped token padded admin request as owner = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
 	body := decodeCreatedToken(t, rec)
 	if len(body.Scopes) != 1 || body.Scopes[0] != auth.ScopeAdmin {

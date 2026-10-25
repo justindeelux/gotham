@@ -187,7 +187,7 @@ async function seedSingleApplication(
 ): Promise<SeededApplication> {
   skipOrFail(
     !(await isOperator(request)),
-    "the smoke account is not a platform operator (PLATFORM_ADMINS)",
+    "the smoke account is not the instance owner",
     test.skip,
   );
   const server = await terminalServer(request, account);
@@ -221,9 +221,9 @@ async function isOperator(request: APIRequestContext): Promise<boolean> {
     return false;
   }
   const body = (await response.json()) as {
-    user?: { is_platform_admin?: boolean };
+    user?: { role?: string };
   };
-  return body.user?.is_platform_admin === true;
+  return body.user?.role === "owner";
 }
 
 function applicationURL(seed: SeededApplication, tab?: string): string {
@@ -528,7 +528,7 @@ async function seedReadOnlyApplication(
 ): Promise<SeededApplication> {
   skipOrFail(
     !(await isOperator(request)),
-    "the smoke account is not a platform operator (PLATFORM_ADMINS)",
+    "the smoke account is not the instance owner",
     test.skip,
   );
   skipOrFail(

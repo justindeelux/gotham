@@ -7,7 +7,6 @@ export interface User {
   created_at: string;
   display_name?: string;
   has_password?: boolean;
-  is_platform_admin?: boolean;
 }
 
 export interface AuthResult {

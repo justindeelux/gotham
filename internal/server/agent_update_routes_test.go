@@ -12,6 +12,8 @@ import (
 	"github.com/justindeelux/gotham/internal/updates"
 )
 
+const ownerHeader = "Bearer owner-token"
+
 type fakeAgentUpdateRegistry struct {
 	*fakeServerService
 	versions  []servers.AgentVersion
@@ -49,8 +51,6 @@ func (f *fakeUpdatesService) LastStatus() (*updates.Status, error) { return nil,
 func (f *fakeUpdatesService) StartAuto(context.Context)            {}
 
 func TestAgentUpdateRoutes(t *testing.T) {
-	t.Setenv(PlatformAdminsEnv, "user@example.com")
-
 	fake := &fakeAgentUpdateRegistry{
 		fakeServerService: newFakeServerService(),
 		versions: []servers.AgentVersion{
@@ -62,7 +62,7 @@ func TestAgentUpdateRoutes(t *testing.T) {
 	s := newServerRoutesTestServer(t, fake)
 	s.updates = &fakeUpdatesService{release: nil}
 
-	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", authHeader)
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", ownerHeader)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -74,7 +74,7 @@ func TestAgentUpdateRoutes(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 
-	rec = doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
+	rec = doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", ownerHeader)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("update-all status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -91,7 +91,6 @@ func TestAgentUpdateRoutes(t *testing.T) {
 }
 
 func TestAgentUpdateRoutesUpToDate(t *testing.T) {
-	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	fake := &fakeAgentUpdateRegistry{
 		fakeServerService: newFakeServerService(),
 		versions:          []servers.AgentVersion{{NodeID: "node-a", Version: "v1.2.0", At: time.Now().UTC()}},
@@ -99,7 +98,7 @@ func TestAgentUpdateRoutesUpToDate(t *testing.T) {
 	}
 	s := newServerRoutesTestServer(t, fake)
 
-	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", ownerHeader)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -113,29 +112,26 @@ func TestAgentUpdateRoutesUpToDate(t *testing.T) {
 }
 
 func TestAgentUpdateRoutesNoAgentRelease(t *testing.T) {
-	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), target: ""}
 	s := newServerRoutesTestServer(t, fake)
 
-	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", ownerHeader)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
 func TestAgentUpdateRoutesTargetError(t *testing.T) {
-	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), targetErr: errors.New("releases API down")}
 	s := newServerRoutesTestServer(t, fake)
 
-	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", ownerHeader)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 
 func TestAgentUpdateRoutesNormalizesVersions(t *testing.T) {
-	t.Setenv(PlatformAdminsEnv, "user@example.com")
 	fake := &fakeAgentUpdateRegistry{
 		fakeServerService: newFakeServerService(),
 		versions:          []servers.AgentVersion{{NodeID: "node-a", Version: "1.2.0", At: time.Now().UTC()}},
@@ -143,7 +139,7 @@ func TestAgentUpdateRoutesNormalizesVersions(t *testing.T) {
 	}
 	s := newServerRoutesTestServer(t, fake)
 
-	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader)
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", ownerHeader)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -157,7 +153,6 @@ func TestAgentUpdateRoutesNormalizesVersions(t *testing.T) {
 }
 
 func TestAgentUpdateRoutesRequireOperator(t *testing.T) {
-	t.Setenv(PlatformAdminsEnv, "")
 	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), target: "v1.2.0"}
 	s := newServerRoutesTestServer(t, fake)
 

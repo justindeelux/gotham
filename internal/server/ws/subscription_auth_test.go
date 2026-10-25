@@ -24,7 +24,7 @@ func (s subjectVerifier) VerifyAccessToken(token string) (*auth.Claims, error) {
 		return nil, errors.New("unauthorized")
 	}
 	return &auth.Claims{
-		Role:             "user",
+		Role:             "member",
 		RegisteredClaims: jwt.RegisteredClaims{Subject: s.userID.String()},
 	}, nil
 }

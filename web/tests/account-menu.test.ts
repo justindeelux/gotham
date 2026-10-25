@@ -107,7 +107,7 @@ describe("shared account menu", () => {
 
   it("appends the instance Platform admin flag to the team role (JUS-197)", async () => {
     const { wrapper, auth } = await mountMenu(false);
-    auth.user = { ...auth.user!, is_platform_admin: true };
+    auth.user = { ...auth.user!, role: "owner" };
     await flushPromises();
     const header = globalThis.document.querySelector(".account-menu-header")!;
     expect(header.querySelector(".account-menu-role")!.textContent)

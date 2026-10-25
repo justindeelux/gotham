@@ -72,7 +72,7 @@ func scratchStore(t *testing.T) *store.Store {
 	return store.New(pool)
 }
 
-func TestStoreFirstUserIsPlatformAdmin(t *testing.T) {
+func TestStoreFirstUserIsOwner(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -82,16 +82,16 @@ func TestStoreFirstUserIsPlatformAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFirstUser: %v", err)
 	}
-	if !first.IsPlatformAdmin {
-		t.Fatal("bootstrap account IsPlatformAdmin = false, want true")
+	if first.Role != "owner" {
+		t.Fatalf("bootstrap account role = %q, want owner", first.Role)
 	}
 
 	second, err := st.CreateUser(ctx, "second@example.com", nil)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if second.IsPlatformAdmin {
-		t.Fatal("plain CreateUser IsPlatformAdmin = true, want false")
+	if second.Role != "member" {
+		t.Fatalf("plain CreateUser role = %q, want member", second.Role)
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -103,18 +103,47 @@ func TestStoreFirstUserIsPlatformAdmin(t *testing.T) {
 		}
 	})
 
-	var legacy bool
+	var legacyRole string
 	if err := st.DB.QueryRow(ctx,
-		`INSERT INTO users (email) VALUES ($1) RETURNING is_platform_admin`,
-		fmt.Sprintf("legacy-%d@example.com", time.Now().UnixNano())).Scan(&legacy); err != nil {
+		`INSERT INTO users (email) VALUES ($1) RETURNING role`,
+		fmt.Sprintf("legacy-%d@example.com", time.Now().UnixNano())).Scan(&legacyRole); err != nil {
 		t.Fatalf("legacy-style insert: %v", err)
 	}
-	if legacy {
-		t.Fatal("column default IsPlatformAdmin = true, want false (existing rows must stay non-admin)")
+	if legacyRole != "member" {
+		t.Fatalf("column default role = %q, want member", legacyRole)
 	}
 }
 
-func TestStoreConcurrentFirstRegistrationsYieldOneAdmin(t *testing.T) {
+func TestStoreRejectsSecondOwner(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	st := scratchStore(t)
+
+	first, err := st.CreateFirstUser(ctx, "owner@example.com", nil)
+	if err != nil {
+		t.Fatalf("CreateFirstUser: %v", err)
+	}
+	second, err := st.CreateUser(ctx, "member@example.com", nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		for _, id := range []any{first.ID, second.ID} {
+			if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", id); err != nil {
+				t.Logf("cleanup user: %v", err)
+			}
+		}
+	})
+
+	if _, err := st.DB.Exec(ctx, "UPDATE users SET role = 'owner' WHERE id = $1", second.ID); err == nil {
+		t.Fatal("a second owner was accepted, want the unique index to reject it")
+	}
+}
+
+func TestStoreConcurrentFirstRegistrationsYieldOneOwner(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -154,8 +183,8 @@ func TestStoreConcurrentFirstRegistrationsYieldOneAdmin(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("concurrent bootstraps succeeded %d times, want exactly 1", wins)
 	}
-	if !winner.IsPlatformAdmin {
-		t.Fatal("bootstrap race winner IsPlatformAdmin = false, want true")
+	if winner.Role != "owner" {
+		t.Fatalf("bootstrap race winner role = %q, want owner", winner.Role)
 	}
 
 	if err := st.DeleteUserAndPersonalTeam(ctx, winner.ID); err != nil {

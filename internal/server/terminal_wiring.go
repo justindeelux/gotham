@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,12 +31,11 @@ func (s *Server) terminalService() *terminal.Service {
 }
 
 type terminalAuthorizer struct {
-	auth                 AuthService
-	isPlatformAdminEmail func(string) bool
+	auth AuthService
 }
 
 func (s *Server) terminalAuthorizer() terminal.Authorizer {
-	return terminalAuthorizer{auth: s.auth, isPlatformAdminEmail: s.isPlatformAdminEmail}
+	return terminalAuthorizer{auth: s.auth}
 }
 
 func (a terminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims, target terminal.Target) (terminal.Marker, error) {
@@ -133,11 +131,5 @@ func liveSignIn(sessions []auth.SessionInfo, signInAt time.Time) bool {
 }
 
 func (a terminalAuthorizer) operator(user *auth.User) bool {
-	if user == nil {
-		return false
-	}
-	if strings.EqualFold(user.Role, "admin") {
-		return true
-	}
-	return a.isPlatformAdminEmail != nil && a.isPlatformAdminEmail(user.Email)
+	return user != nil && user.Role == auth.RoleOwner
 }

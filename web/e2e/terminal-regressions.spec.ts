@@ -38,7 +38,7 @@ test.beforeEach(async ({ page }) => {
 async function requireTerminalNode(request: Parameters<typeof terminalServer>[0]) {
   skipOrFail(
     !(await isPlatformAdmin(request, account)),
-    "the smoke account is not a platform operator (PLATFORM_ADMINS in the UI E2E workflow)",
+    "the smoke account is not the instance owner",
     test.skip,
   );
   const server = await terminalServer(request, account);

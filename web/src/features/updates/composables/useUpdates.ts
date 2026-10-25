@@ -21,9 +21,7 @@ function errorText(error: unknown): string {
 
 export function useUpdates() {
   const authStore = useAuthStore();
-  const isAdmin = computed(
-    () => authStore.user?.is_platform_admin ?? authStore.user?.role === "admin",
-  );
+  const isAdmin = computed(() => authStore.user?.role === "owner");
 
   const check = ref<UpdateCheck | null>(null);
   const changelog = ref<UpdateChangelog | null>(null);

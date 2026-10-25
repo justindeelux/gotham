@@ -99,8 +99,7 @@
 #
 # Re-running the installer preserves /etc/gotham/gotham.env: managed keys are
 # refreshed (a DSN given on the command line wins; otherwise the existing value
-# is kept) and any operator-added keys (AUTO_UPDATE, PLATFORM_ADMINS, ...) are
-# left intact.
+# is kept) and any operator-added keys (AUTO_UPDATE, ...) are left intact.
 #
 # The installer provisions the mTLS certificate authority (`gotham ca init`) at
 # GOTHAM_CA_DIR and the gRPC gateway then runs TLS. Copy ca.crt from there to
@@ -2088,9 +2087,9 @@ ${ADMIN_FIRST_LOGIN}
   The Servers page already lists this host's agent node (ready once its
   first heartbeat lands). Add more nodes with deploy/install-agent.sh.
   To add members, create an invite in Teams and send the shown link.
-  Platform-global operations (node-wide proxy sync, DNS providers) also require
-  the account email in PLATFORM_ADMINS in /etc/gotham/gotham.env. Lost the
-  password? sudo -u gotham -- ${INSTALL_PATH} admin reset-password --email <email>.
+  Platform-global operations (node-wide proxy sync, DNS providers) are
+  available to the instance owner (the first account). Lost the password?
+  sudo -u gotham -- ${INSTALL_PATH} admin reset-password --email <email>.
 
 Self-update checking is enabled by default. To apply new releases unattended,
 add AUTO_UPDATE=true to /etc/gotham/gotham.env (operator edits there are kept

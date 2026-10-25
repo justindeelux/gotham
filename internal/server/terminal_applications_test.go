@@ -101,7 +101,7 @@ func TestApplicationAuthorizerRequiresWriteAccess(t *testing.T) {
 			terminal.Target{Kind: terminal.TargetHost, ServerID: access.ServerID}); err == nil {
 			t.Fatal("the application authorizer accepted a host target")
 		}
-		host := terminalAuthorizer{auth: &rotatingAuth{user: &auth.User{Role: "admin"}}}
+		host := terminalAuthorizer{auth: &rotatingAuth{user: &auth.User{Role: auth.RoleOwner}}}
 		if _, err := host.Authorize(context.Background(), authorizerClaims(userID, sessionID), targetFor(access)); err == nil {
 			t.Fatal("the host authorizer accepted a container target")
 		}

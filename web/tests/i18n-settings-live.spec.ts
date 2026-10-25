@@ -19,7 +19,7 @@ const user = {
   id: "u1",
   email: "owner@example.com",
   created_at: "2026-01-01T00:00:00Z",
-  is_platform_admin: true,
+  role: "owner",
 };
 
 const personalTeam = {

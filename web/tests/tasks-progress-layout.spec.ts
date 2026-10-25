@@ -31,7 +31,7 @@ const session = {
     created_at: "2026-03-04T12:00:00Z",
     display_name: "Ada",
     has_password: true,
-    is_platform_admin: false,
+    role: "member",
   },
   accessToken: "test-access",
   refreshToken: "test-refresh",

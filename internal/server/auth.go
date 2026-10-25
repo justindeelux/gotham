@@ -44,7 +44,6 @@ type contextKey int
 
 const (
 	userIDKey contextKey = iota
-	roleKey
 	scopesKey
 	apiTokenKey
 	sessionIDKey
@@ -53,11 +52,6 @@ const (
 func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
 	userID, ok := ctx.Value(userIDKey).(uuid.UUID)
 	return userID, ok
-}
-
-func RoleFromContext(ctx context.Context) (string, bool) {
-	role, ok := ctx.Value(roleKey).(string)
-	return role, ok
 }
 
 func ScopesFromContext(ctx context.Context) ([]string, bool) {
@@ -283,7 +277,6 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
 		return
 	}
-	user.IsPlatformAdmin = user.IsPlatformAdmin || s.isPlatformAdminEmail(user.Email)
 
 	writeJSON(w, http.StatusOK, meResponse{User: user})
 }
@@ -314,7 +307,6 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 		}
 
 		ctx := context.WithValue(r.Context(), userIDKey, userID)
-		ctx = context.WithValue(ctx, roleKey, claims.Role)
 		ctx = context.WithValue(ctx, sessionIDKey, parseSessionClaim(claims.SessionID))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -333,7 +325,6 @@ func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request, ne
 	}
 
 	ctx := context.WithValue(r.Context(), userIDKey, identity.UserID)
-	ctx = context.WithValue(ctx, roleKey, apiTokenRole)
 	ctx = context.WithValue(ctx, scopesKey, identity.Scopes)
 	ctx = context.WithValue(ctx, apiTokenKey, true)
 	next.ServeHTTP(w, r.WithContext(ctx))

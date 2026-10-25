@@ -94,7 +94,6 @@ const (
 type Event struct {
 	Kind         EventKind
 	Outcome      Outcome
-	TeamID       uuid.UUID
 	ResourceType string
 	ResourceID   uuid.UUID
 	Name         string
@@ -386,7 +385,6 @@ func openConfig(secret, sealed string) (ChannelConfig, error) {
 
 type Channel struct {
 	ID           uuid.UUID
-	TeamID       uuid.UUID
 	Name         string
 	Kind         Kind
 	Enabled      bool
@@ -413,7 +411,6 @@ func (c Channel) Wants(event Event) bool {
 
 type ChannelView struct {
 	ID                uuid.UUID     `json:"id"`
-	TeamID            uuid.UUID     `json:"team_id"`
 	Name              string        `json:"name"`
 	Kind              Kind          `json:"kind"`
 	Enabled           bool          `json:"enabled"`

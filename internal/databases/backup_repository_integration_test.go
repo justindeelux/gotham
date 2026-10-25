@@ -17,14 +17,13 @@ func TestBackupRepositoryRoundTrip(t *testing.T) {
 	repo := newStoreBackupRepository(st)
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
-	teamID, _, envID := seedProjectEnvironment(t, st)
+	_, envID := seedProjectEnvironment(t, st)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	databaseRepo := newStoreRepository(st)
 	database, err := databaseRepo.CreateDatabase(ctx, Database{
 		ID:            uuid.New(),
 		UserID:        ownerID,
-		TeamID:        teamID,
 		ServerID:      serverID,
 		EnvironmentID: envID,
 		Name:          "backup-target",
@@ -240,7 +239,7 @@ func TestBackupTargetWriteIsAtomic(t *testing.T) {
 	repo := newStoreBackupRepository(st)
 	ctx := context.Background()
 	ownerID, _ := seedUserAndServer(t, st)
-	_, _, _ = seedProjectEnvironment(t, st)
+	_, _ = seedProjectEnvironment(t, st)
 
 	suffix := uuid.New().String()[:8]
 	firstName := "atomic-a-" + suffix
@@ -316,12 +315,11 @@ func TestListBackupsByDatabaseRespectsLimit(t *testing.T) {
 	repo := newStoreBackupRepository(st)
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
-	teamID, _, envID := seedProjectEnvironment(t, st)
+	_, envID := seedProjectEnvironment(t, st)
 
 	database, err := newStoreRepository(st).CreateDatabase(ctx, Database{
 		ID:            uuid.New(),
 		UserID:        ownerID,
-		TeamID:        teamID,
 		ServerID:      serverID,
 		EnvironmentID: envID,
 		Name:          "backup-limit",
@@ -364,14 +362,13 @@ func TestListRestoresByDatabaseRespectsLimit(t *testing.T) {
 	repo := newStoreBackupRepository(st)
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
-	teamID, _, envID := seedProjectEnvironment(t, st)
+	_, envID := seedProjectEnvironment(t, st)
 	databaseRepo := newStoreRepository(st)
 
 	newDatabase := func(name string) Database {
 		database, err := databaseRepo.CreateDatabase(ctx, Database{
 			ID:            uuid.New(),
 			UserID:        ownerID,
-			TeamID:        teamID,
 			ServerID:      serverID,
 			EnvironmentID: envID,
 			Name:          name,
@@ -445,7 +442,7 @@ func TestHasBackupsForTargetCountsLiveRuns(t *testing.T) {
 	repo := newStoreBackupRepository(st)
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
-	teamID, _, envID := seedProjectEnvironment(t, st)
+	_, envID := seedProjectEnvironment(t, st)
 
 	targetID := uuid.New()
 	if _, err := repo.CreateBackupTargetWithSecrets(ctx, BackupTarget{
@@ -460,7 +457,6 @@ func TestHasBackupsForTargetCountsLiveRuns(t *testing.T) {
 	database, err := newStoreRepository(st).CreateDatabase(ctx, Database{
 		ID:            uuid.New(),
 		UserID:        ownerID,
-		TeamID:        teamID,
 		ServerID:      serverID,
 		EnvironmentID: envID,
 		Name:          "backup-lock",
@@ -497,7 +493,7 @@ func TestHasBackupsForTargetCountsLiveRuns(t *testing.T) {
 func seedRaceTarget(t *testing.T, st *store.Store, repo *storeBackupRepository, ownerID, serverID uuid.UUID) (BackupTarget, Database) {
 	t.Helper()
 	ctx := context.Background()
-	teamID, _, envID := seedProjectEnvironment(t, st)
+	_, envID := seedProjectEnvironment(t, st)
 	targetID := uuid.New()
 	target, err := repo.CreateBackupTargetWithSecrets(ctx, BackupTarget{
 		ID: targetID, UserID: ownerID, Name: "race-" + uuid.New().String()[:8],
@@ -509,7 +505,6 @@ func seedRaceTarget(t *testing.T, st *store.Store, repo *storeBackupRepository, 
 	database, err := newStoreRepository(st).CreateDatabase(ctx, Database{
 		ID:            uuid.New(),
 		UserID:        ownerID,
-		TeamID:        teamID,
 		ServerID:      serverID,
 		EnvironmentID: envID,
 		Name:          "race-db-" + uuid.New().String()[:8],

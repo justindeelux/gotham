@@ -21,7 +21,6 @@ import (
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const maxBodyBytes = 1 << 20
@@ -276,19 +275,13 @@ func (s *Service) RemoveHook(ctx context.Context, userID, appID uuid.UUID) error
 
 var _ deploy.HookLifecycle = (*Service)(nil)
 
-func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, write bool) (Application, error) {
+func (s *Service) application(ctx context.Context, _ uuid.UUID, appID uuid.UUID, _ bool) (Application, error) {
 	if appID == uuid.Nil {
 		return Application{}, fmt.Errorf("%w: application id is required", ErrValidation)
 	}
 	app, err := s.repo.GetApplication(ctx, appID)
 	if err != nil {
 		return Application{}, err
-	}
-	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(app.TeamID, app.UserID, write); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return Application{}, ErrForbidden
-		}
-		return Application{}, ErrNotFound
 	}
 	return app, nil
 }

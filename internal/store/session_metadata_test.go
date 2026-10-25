@@ -112,8 +112,8 @@ func TestSessionMetadataMigrationUpDownBackfill(t *testing.T) {
 	}
 	_ = conn.Close(ctx)
 
-	if err := Migrate(ctx, dsn, MigrateUp); err != nil {
-		t.Fatalf("migrate up: %v", err)
+	if _, err := provider.UpTo(ctx, 33); err != nil {
+		t.Fatalf("migrate up to 33: %v", err)
 	}
 
 	conn, err = pgx.Connect(ctx, dsn)
@@ -152,7 +152,7 @@ func TestSessionMetadataMigrationUpDownBackfill(t *testing.T) {
 		t.Errorf("columns after down = %v, want none", cols)
 	}
 
-	if err := Migrate(ctx, dsn, MigrateUp); err != nil {
+	if _, err := provider.UpTo(ctx, 33); err != nil {
 		t.Fatalf("migrate up again: %v", err)
 	}
 	if cols := sessionMetadataColumns(t, ctx, conn); len(cols) != 3 {

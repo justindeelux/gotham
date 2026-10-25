@@ -16,7 +16,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const FeatureEnv = "FEATURE_SERVICES"
@@ -180,11 +179,10 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 		return Service{}, fmt.Errorf(
 			"%w: name must be 1-63 characters of letters, digits, \".\", \"_\" or \"-\"", ErrValidation)
 	}
-	teamID := teamIDFor(ctx, userID)
 	if req.EnvironmentID == uuid.Nil {
 		return Service{}, fmt.Errorf("%w: environment is required", ErrValidation)
 	}
-	if _, err := s.repo.ResolveEnvironment(ctx, req.EnvironmentID, teamID); err != nil {
+	if _, err := s.repo.ResolveEnvironment(ctx, req.EnvironmentID); err != nil {
 		return Service{}, err
 	}
 	if req.ServerID == uuid.Nil {
@@ -201,7 +199,7 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 		return Service{}, err
 	}
 	defer releaseDomain()
-	exists, err := s.repo.ServerExists(ctx, req.ServerID, teams.ScopeFor(ctx, userID))
+	exists, err := s.repo.ServerExists(ctx, req.ServerID)
 	if err != nil {
 		return Service{}, err
 	}
@@ -212,7 +210,6 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	service := Service{
 		ID:            uuid.New(),
 		UserID:        userID,
-		TeamID:        teamID,
 		ServerID:      req.ServerID,
 		EnvironmentID: req.EnvironmentID,
 		Name:          name,
@@ -233,18 +230,18 @@ func (s *service) List(ctx context.Context, userID uuid.UUID, filter ServiceFilt
 		return nil, fmt.Errorf("%w: environment_id and project_id are mutually exclusive", ErrValidation)
 	}
 	if filter.EnvironmentID != uuid.Nil {
-		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID, teamIDFor(ctx, userID)); err != nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID); err != nil {
 			return nil, err
 		}
 		return s.repo.ListServicesByEnvironment(ctx, filter.EnvironmentID)
 	}
 	if filter.ProjectID != uuid.Nil {
-		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID, teamIDFor(ctx, userID)); err != nil {
+		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID); err != nil {
 			return nil, err
 		}
 		return s.repo.ListServicesByProject(ctx, filter.ProjectID)
 	}
-	services, err := s.repo.ListServices(ctx, teams.ScopeFor(ctx, userID))
+	services, err := s.repo.ListServices(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +276,7 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 		service.Env = normalizeEnv(req.Env)
 	}
 	if req.EnvironmentID != nil && *req.EnvironmentID != service.EnvironmentID {
-		if _, err := s.repo.ResolveEnvironment(ctx, *req.EnvironmentID, service.TeamID); err != nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, *req.EnvironmentID); err != nil {
 			return Service{}, err
 		}
 		collision, err := s.repo.NameInEnvironment(ctx, *req.EnvironmentID, service.Name, service.ID)
@@ -295,7 +292,7 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 		if *req.ServerID == uuid.Nil {
 			return Service{}, fmt.Errorf("%w: server_id is required", ErrValidation)
 		}
-		exists, err := s.repo.ServerExists(ctx, *req.ServerID, teams.ScopeFor(ctx, userID))
+		exists, err := s.repo.ServerExists(ctx, *req.ServerID)
 		if err != nil {
 			return Service{}, err
 		}
@@ -658,15 +655,7 @@ func (s *service) ready() error {
 	return nil
 }
 
-func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
-	scope := teams.ScopeFor(ctx, userID)
-	if scope.Active() {
-		return scope.TeamID
-	}
-	return teams.PersonalTeamID(userID)
-}
-
-func (s *service) service(ctx context.Context, userID, serviceID uuid.UUID, write bool) (Service, error) {
+func (s *service) service(ctx context.Context, _ uuid.UUID, serviceID uuid.UUID, _ bool) (Service, error) {
 	if err := s.ready(); err != nil {
 		return Service{}, err
 	}
@@ -676,12 +665,6 @@ func (s *service) service(ctx context.Context, userID, serviceID uuid.UUID, writ
 	service, err := s.repo.GetService(ctx, serviceID)
 	if err != nil {
 		return Service{}, err
-	}
-	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(service.TeamID, service.UserID, write); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return Service{}, err
-		}
-		return Service{}, ErrNotFound
 	}
 	return service, nil
 }

@@ -14,7 +14,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const FeatureEnv = "FEATURE_DATABASES"
@@ -140,11 +139,10 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 		return Database{}, Credentials{}, fmt.Errorf(
 			"%w: name must be 1-63 characters of letters, digits, \".\", \"_\" or \"-\"", ErrValidation)
 	}
-	teamID := teamIDFor(ctx, userID)
 	if req.EnvironmentID == uuid.Nil {
 		return Database{}, Credentials{}, fmt.Errorf("%w: environment is required", ErrValidation)
 	}
-	if _, err := s.repo.ResolveEnvironment(ctx, req.EnvironmentID, teamID); err != nil {
+	if _, err := s.repo.ResolveEnvironment(ctx, req.EnvironmentID); err != nil {
 		return Database{}, Credentials{}, err
 	}
 	if err := ValidateVersion(req.Version); err != nil {
@@ -156,7 +154,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if req.PublicPort < 0 || req.PublicPort > 65535 {
 		return Database{}, Credentials{}, fmt.Errorf("%w: public_port must be between 0 and 65535", ErrValidation)
 	}
-	exists, err := s.repo.ServerExists(ctx, req.ServerID, teams.ScopeFor(ctx, userID))
+	exists, err := s.repo.ServerExists(ctx, req.ServerID)
 	if err != nil {
 		return Database{}, Credentials{}, err
 	}
@@ -182,7 +180,6 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	database := Database{
 		ID:            uuid.New(),
 		UserID:        userID,
-		TeamID:        teamID,
 		ServerID:      req.ServerID,
 		EnvironmentID: req.EnvironmentID,
 		Name:          name,
@@ -252,18 +249,18 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, filter DatabaseFil
 		return nil, fmt.Errorf("%w: environment_id and project_id are mutually exclusive", ErrValidation)
 	}
 	if filter.EnvironmentID != uuid.Nil {
-		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID, teamIDFor(ctx, userID)); err != nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID); err != nil {
 			return nil, err
 		}
 		return s.repo.ListDatabasesByEnvironment(ctx, filter.EnvironmentID)
 	}
 	if filter.ProjectID != uuid.Nil {
-		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID, teamIDFor(ctx, userID)); err != nil {
+		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID); err != nil {
 			return nil, err
 		}
 		return s.repo.ListDatabasesByProject(ctx, filter.ProjectID)
 	}
-	databases, err := s.repo.ListDatabases(ctx, teams.ScopeFor(ctx, userID))
+	databases, err := s.repo.ListDatabases(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +320,7 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 		database.Name = name
 	}
 	if req.EnvironmentID != nil && *req.EnvironmentID != database.EnvironmentID {
-		if _, err := s.repo.ResolveEnvironment(ctx, *req.EnvironmentID, database.TeamID); err != nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, *req.EnvironmentID); err != nil {
 			return Database{}, err
 		}
 		collision, err := s.repo.NameInEnvironment(ctx, *req.EnvironmentID, database.Name, database.ID)
@@ -344,7 +341,7 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 		if database.ContainerID != "" || database.Status != StatusError {
 			return Database{}, ErrServerPinned
 		}
-		exists, err := s.repo.ServerExists(ctx, *req.ServerID, teams.ScopeFor(ctx, userID))
+		exists, err := s.repo.ServerExists(ctx, *req.ServerID)
 		if err != nil {
 			return Database{}, err
 		}
@@ -479,15 +476,7 @@ func (s *Service) ready() error {
 	return nil
 }
 
-func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
-	scope := teams.ScopeFor(ctx, userID)
-	if scope.Active() {
-		return scope.TeamID
-	}
-	return teams.PersonalTeamID(userID)
-}
-
-func (s *Service) database(ctx context.Context, userID, databaseID uuid.UUID, write bool) (Database, error) {
+func (s *Service) database(ctx context.Context, _ uuid.UUID, databaseID uuid.UUID, _ bool) (Database, error) {
 	if err := s.ready(); err != nil {
 		return Database{}, err
 	}
@@ -497,12 +486,6 @@ func (s *Service) database(ctx context.Context, userID, databaseID uuid.UUID, wr
 	database, err := s.repo.GetDatabase(ctx, databaseID)
 	if err != nil {
 		return Database{}, err
-	}
-	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(database.TeamID, database.UserID, write); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return Database{}, err
-		}
-		return Database{}, ErrNotFound
 	}
 	return database, nil
 }

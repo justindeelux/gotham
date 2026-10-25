@@ -67,9 +67,12 @@ func TestResourceScopeContainment(t *testing.T) {
 
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
 	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	ownerReadToken := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
+	ownerDeployToken := mustCreateOwnerToken(t, tokens, auth.ScopeDeploy)
+	ownerAdminToken := mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)
+	memberAdminToken := mustCreateToken(t, tokens, auth.ScopeAdmin)
 	const session = "Bearer valid-token"
-
-	createBody := `{"name":"web-1","ip":"10.0.0.5","port":22,"ssh_user":"root"}`
+	const createBody = `{"name":"web-1","ip":"10.0.0.5","port":22,"ssh_user":"root"}`
 
 	tests := map[string]struct {
 		method  string
@@ -79,17 +82,18 @@ func TestResourceScopeContainment(t *testing.T) {
 		want    int
 		wantMsg string
 	}{
-		"read token reads":         {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusOK, ""},
-		"read token cannot mutate": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + readToken, http.StatusForbidden, ""},
-		"deploy token mutates":     {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusCreated, ""},
-		"jwt session reads":        {http.MethodGet, "/api/v1/servers", "", session, http.StatusOK, ""},
-		"jwt session mutates":      {http.MethodPost, "/api/v1/servers", createBody, session, http.StatusCreated, ""},
-		"no token is unauthorized": {http.MethodGet, "/api/v1/servers", "", "", http.StatusUnauthorized, ""},
-		"read token cannot mint":   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
-		"deploy cannot mint admin": {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
-		"deploy can mint read":     {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
-		"read can mint read":       {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
-		"jwt can mint deploy":      {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
+		"read token cannot mint":               {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
+		"deploy cannot mint admin":             {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
+		"deploy can mint read":                 {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
+		"read can mint read":                   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
+		"jwt can mint deploy":                  {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
+		"owner read token reads resources":     {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerReadToken, http.StatusOK, ""},
+		"owner deploy token mutates resources": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerDeployToken, http.StatusCreated, ""},
+		"owner admin token reads resources":    {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerAdminToken, http.StatusOK, ""},
+		"owner read token cannot mutate":       {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"member read token cannot read":        {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusForbidden, ""},
+		"member deploy token cannot mutate":    {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusForbidden, ""},
+		"member admin token cannot read":       {http.MethodGet, "/api/v1/servers", "", "Bearer " + memberAdminToken, http.StatusForbidden, ""},
 	}
 
 	for label, tc := range tests {
@@ -345,7 +349,6 @@ func TestAuthScopeWrappers(t *testing.T) {
 		"readScopeAuth":           s.readScopeAuth,
 		"adminScopeAuth":          s.adminScopeAuth,
 		"resourceScopeAuth":       s.resourceScopeAuth,
-		"withTeam":                s.withTeam(),
 		"applicationTerminalAuth": s.applicationTerminalAuth(),
 	}
 
@@ -355,31 +358,21 @@ func TestAuthScopeWrappers(t *testing.T) {
 		bearer  string
 		want    int
 	}{
-		"read accepts read":                   {"readScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusOK},
-		"read accepts deploy":                 {"readScopeAuth", http.MethodGet, "Bearer " + deployToken, http.StatusOK},
-		"read accepts admin":                  {"readScopeAuth", http.MethodGet, "Bearer " + adminToken, http.StatusOK},
-		"read accepts jwt":                    {"readScopeAuth", http.MethodGet, session, http.StatusOK},
-		"read rejects none":                   {"readScopeAuth", http.MethodGet, "", http.StatusUnauthorized},
-		"admin rejects read":                  {"adminScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusForbidden},
-		"admin rejects deploy":                {"adminScopeAuth", http.MethodGet, "Bearer " + deployToken, http.StatusForbidden},
-		"admin accepts admin":                 {"adminScopeAuth", http.MethodGet, "Bearer " + adminToken, http.StatusOK},
-		"admin accepts jwt":                   {"adminScopeAuth", http.MethodGet, session, http.StatusOK},
-		"admin rejects none":                  {"adminScopeAuth", http.MethodGet, "", http.StatusUnauthorized},
-		"resource read reads":                 {"resourceScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusOK},
-		"resource read cannot mutate":         {"resourceScopeAuth", http.MethodPost, "Bearer " + readToken, http.StatusForbidden},
-		"resource deploy mutates":             {"resourceScopeAuth", http.MethodPost, "Bearer " + deployToken, http.StatusOK},
-		"resource jwt mutates":                {"resourceScopeAuth", http.MethodPost, session, http.StatusOK},
-		"resource rejects none":               {"resourceScopeAuth", http.MethodPost, "", http.StatusUnauthorized},
-		"team read reads":                     {"withTeam", http.MethodGet, "Bearer " + readToken, http.StatusOK},
-		"team read cannot mutate":             {"withTeam", http.MethodPost, "Bearer " + readToken, http.StatusForbidden},
-		"team deploy mutates":                 {"withTeam", http.MethodPost, "Bearer " + deployToken, http.StatusOK},
-		"team rejects none":                   {"withTeam", http.MethodPost, "", http.StatusUnauthorized},
-		"terminal read token cannot list":     {"applicationTerminalAuth", http.MethodGet, "Bearer " + readToken, http.StatusForbidden},
-		"terminal deploy token cannot create": {"applicationTerminalAuth", http.MethodPost, "Bearer " + deployToken, http.StatusForbidden},
-		"terminal admin token refused":        {"applicationTerminalAuth", http.MethodPost, "Bearer " + adminToken, http.StatusForbidden},
-		"terminal jwt lists":                  {"applicationTerminalAuth", http.MethodGet, session, http.StatusOK},
-		"terminal jwt creates":                {"applicationTerminalAuth", http.MethodPost, session, http.StatusOK},
-		"terminal rejects none":               {"applicationTerminalAuth", http.MethodPost, "", http.StatusUnauthorized},
+		"read accepts read":           {"readScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusOK},
+		"read accepts deploy":         {"readScopeAuth", http.MethodGet, "Bearer " + deployToken, http.StatusOK},
+		"read accepts admin":          {"readScopeAuth", http.MethodGet, "Bearer " + adminToken, http.StatusOK},
+		"read accepts jwt":            {"readScopeAuth", http.MethodGet, session, http.StatusOK},
+		"read rejects none":           {"readScopeAuth", http.MethodGet, "", http.StatusUnauthorized},
+		"admin rejects read":          {"adminScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusForbidden},
+		"admin rejects deploy":        {"adminScopeAuth", http.MethodGet, "Bearer " + deployToken, http.StatusForbidden},
+		"admin accepts admin":         {"adminScopeAuth", http.MethodGet, "Bearer " + adminToken, http.StatusOK},
+		"admin accepts jwt":           {"adminScopeAuth", http.MethodGet, session, http.StatusOK},
+		"admin rejects none":          {"adminScopeAuth", http.MethodGet, "", http.StatusUnauthorized},
+		"resource read reads":         {"resourceScopeAuth", http.MethodGet, "Bearer " + readToken, http.StatusOK},
+		"resource read cannot mutate": {"resourceScopeAuth", http.MethodPost, "Bearer " + readToken, http.StatusForbidden},
+		"resource deploy mutates":     {"resourceScopeAuth", http.MethodPost, "Bearer " + deployToken, http.StatusOK},
+		"resource jwt mutates":        {"resourceScopeAuth", http.MethodPost, session, http.StatusOK},
+		"resource rejects none":       {"resourceScopeAuth", http.MethodPost, "", http.StatusUnauthorized},
 	}
 
 	for label, tc := range tests {
@@ -397,27 +390,5 @@ func TestAuthScopeWrappers(t *testing.T) {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
 			}
 		})
-	}
-}
-
-func TestTeamsMountRequiresAdminScope(t *testing.T) {
-	s, tokens := newScopeTestServer(t)
-	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
-	adminToken := mustCreateToken(t, tokens, auth.ScopeAdmin)
-
-	s.teamService = newFakeTeamService()
-	router, err := s.routes()
-	if err != nil {
-		t.Fatalf("routes: %v", err)
-	}
-	s.router = router
-
-	rec := doRequest(t, s, http.MethodGet, "/api/v1/teams", "", "Bearer "+readToken)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("read token GET /api/v1/teams = %d, want 403 (body %s)", rec.Code, rec.Body.String())
-	}
-
-	if rec := doRequest(t, s, http.MethodGet, "/api/v1/teams", "", "Bearer "+adminToken); rec.Code == http.StatusForbidden {
-		t.Fatalf("admin token GET /api/v1/teams = 403, want the scope gate to pass")
 	}
 }

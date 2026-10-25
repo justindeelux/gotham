@@ -26,7 +26,7 @@ func deploymentSession(t *testing.T, handler http.HandlerFunc) *sdk.ClientSessio
 func deploymentSessionWithClient(t *testing.T, handler http.HandlerFunc) (*sdk.ClientSession, *Client) {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get("X-Team-Id") != testConfig("").TeamID.String() {
+		if r.Header.Get("Authorization") != "Bearer gt1_test-secret" {
 			t.Error("fixed credentials missing")
 		}
 		acknowledge(w, r)
@@ -129,7 +129,7 @@ func TestDeploymentToolsRejectInvalidInputs(t *testing.T) {
 	}{
 		{"deployment_status", map[string]any{"application_id": app, "deployment_id": "../foreign"}},
 		{"deployment_status", map[string]any{"application_id": app, "deployment_id": uuid.Nil.String()}},
-		{"deployment_status", map[string]any{"application_id": app, "deployment_id": uuid.NewString(), "team_id": uuid.NewString()}},
+		{"deployment_status", map[string]any{"application_id": app, "deployment_id": uuid.NewString(), "owner_id": uuid.NewString()}},
 		{"deployments_list", map[string]any{"application_id": app, "limit": 101}},
 		{"deployments_list", map[string]any{"application_id": app, "limit": -1}},
 	} {
@@ -322,7 +322,7 @@ func TestApplicationDeployFailClosed(t *testing.T) {
 		{"application_id": app, "request_id": ""},
 		{"application_id": app, "request_id": "invalid key"},
 		{"application_id": app, "request_id": strings.Repeat("x", 129)},
-		{"application_id": app, "request_id": "stable", "team_id": uuid.NewString()},
+		{"application_id": app, "request_id": "stable", "owner_id": uuid.NewString()},
 	} {
 		out, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "application_deploy", Arguments: args})
 		if err == nil && !out.IsError {

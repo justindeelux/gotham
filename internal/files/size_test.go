@@ -9,21 +9,20 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
 func TestDirectorySizeServiceReadScope(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{
 		sizeResp: &agentv1.DirectorySizeResponse{Bytes: 4096, Entries: 12, Skipped: 2, Truncated: true},
 	}
 	svc := newTestService(t, registry, client)
 
-	size, err := svc.DirectorySize(scopeCtx(teams.RoleReadOnly, teamID), server.ID, "volumes", "apps")
+	size, err := svc.DirectorySize(scopeCtx("", projectID), server.ID, "volumes", "apps")
 	if err != nil {
 		t.Fatalf("DirectorySize: %v", err)
 	}
@@ -32,18 +31,6 @@ func TestDirectorySizeServiceReadScope(t *testing.T) {
 	}
 	if client.seenSize.GetRoot() != "volumes" || client.seenSize.GetPath() != "apps" {
 		t.Fatalf("agent request = %+v", client.seenSize)
-	}
-}
-
-func TestDirectorySizeServiceForeignTeamNotFound(t *testing.T) {
-	t.Setenv(FeatureEnv, "true")
-	registry := newFakeRegistry()
-	server := registry.seed(uuid.New())
-	svc := newTestService(t, registry, &fakeFileClient{})
-
-	_, err := svc.DirectorySize(scopeCtx(teams.RoleOwner, uuid.New()), server.ID, "volumes", "")
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
 

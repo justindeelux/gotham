@@ -13,20 +13,12 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-func seedProjectEnvironment(t *testing.T, ctx context.Context, st *store.Store) (teamID, envID, serverID uuid.UUID) {
+func seedProjectEnvironment(t *testing.T, ctx context.Context, st *store.Store) (envID, serverID uuid.UUID) {
 	t.Helper()
 
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
-		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		Name: fmt.Sprintf("p13-%d", time.Now().UnixNano()),
-	})
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID: team.ID,
-		Name:   fmt.Sprintf("shop-%d", time.Now().UnixNano()),
+		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name: fmt.Sprintf("shop-%d", time.Now().UnixNano()),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -60,12 +52,9 @@ func seedProjectEnvironment(t *testing.T, ctx context.Context, st *store.Store) 
 				t.Logf("cleanup resources: %v", err)
 			}
 		}
-		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
 		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
 			t.Logf("cleanup server: %v", err)
 		}
 	})
-	return uuidFromPG(team.ID), uuidFromPG(environment.ID), uuidFromPG(serverRow.ID)
+	return uuidFromPG(environment.ID), uuidFromPG(serverRow.ID)
 }

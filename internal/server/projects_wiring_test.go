@@ -8,10 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -86,7 +84,7 @@ func scratchProjectsStack(t *testing.T) (*Server, *store.Store, *auth.AuthResult
 	authSvc.AllowOpenRegistration = true
 
 	email := fmt.Sprintf("pe1-srv-%d@example.com", time.Now().UnixNano())
-	owner, err := authSvc.Register(ctx, email, "s3cret-password", "", nil, auth.SessionMeta{})
+	owner, err := authSvc.Register(ctx, email, "s3cret-password", auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -163,33 +161,13 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 	ownerBearer := "Bearer " + owner.AccessToken
 
 	viewerEmail := fmt.Sprintf("pe1-viewer-%d@example.com", time.Now().UnixNano())
-	viewer, err := s.auth.Register(ctx, viewerEmail, "s3cret-password", "", nil, auth.SessionMeta{})
+	viewer, err := s.auth.Register(ctx, viewerEmail, "s3cret-password", auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("register viewer: %v", err)
 	}
-	viewerID, err := uuid.Parse(viewer.User.ID)
-	if err != nil {
-		t.Fatalf("parse viewer id: %v", err)
-	}
-	teamID := uuid.New()
-	if _, err := st.DB.Exec(ctx,
-		`INSERT INTO teams (id, name) VALUES ($1, 'scope-probe')`, teamID); err != nil {
-		t.Fatalf("insert team: %v", err)
-	}
-	if _, err := st.DB.Exec(ctx,
-		`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'read_only')`,
-		teamID, ownerID, viewerID); err != nil {
-		t.Fatalf("insert memberships: %v", err)
-	}
-	teamHeader := teamID.String()
-
 	viewerBearer := "Bearer " + viewer.AccessToken
-	doWithTeam := func(method, path, body, authorization string) *httptest.ResponseRecorder {
-		t.Helper()
-		return doTeamRequest(t, s, method, path, body, authorization, teamHeader)
-	}
 
-	rec := doTeamRequest(t, s, http.MethodPost, "/api/v1/projects", `{"name":"Shop"}`, ownerBearer, teamHeader)
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/projects", `{"name":"Shop"}`, ownerBearer)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("owner create = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -197,18 +175,18 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
-	if code := doWithTeam(http.MethodGet, "/api/v1/projects", "", viewerBearer).Code; code != http.StatusOK {
-		t.Fatalf("viewer list = %d, want 200", code)
+	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects", "", viewerBearer).Code; code != http.StatusForbidden {
+		t.Fatalf("viewer list = %d, want 403", code)
 	}
-	if code := doWithTeam(http.MethodGet, "/api/v1/projects/"+created.Project.ID, "", viewerBearer).Code; code != http.StatusOK {
-		t.Fatalf("viewer get = %d, want 200", code)
+	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects/"+created.Project.ID, "", viewerBearer).Code; code != http.StatusForbidden {
+		t.Fatalf("viewer get = %d, want 403", code)
 	}
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/v1/projects", `{"name":"Other"}`},
 		{http.MethodPatch, "/api/v1/projects/" + created.Project.ID, `{"name":"x"}`},
 		{http.MethodDelete, "/api/v1/projects/" + created.Project.ID, ""},
 	} {
-		if code := doWithTeam(tc.method, tc.path, tc.body, viewerBearer).Code; code != http.StatusForbidden {
+		if code := doRequest(t, s, tc.method, tc.path, tc.body, viewerBearer).Code; code != http.StatusForbidden {
 			t.Errorf("viewer %s %s = %d, want 403", tc.method, tc.path, code)
 		}
 	}
@@ -219,39 +197,10 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 		t.Fatalf("mint read token: %v", err)
 	}
 	tokenBearer := "Bearer " + minted.Token
-	if code := doWithTeam(http.MethodGet, "/api/v1/projects", "", tokenBearer).Code; code != http.StatusOK {
+	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects", "", tokenBearer).Code; code != http.StatusOK {
 		t.Errorf("read token list = %d, want 200", code)
 	}
-	rec = doTeamRequest(t, s, http.MethodPost, "/api/v1/projects", `{"name":"Token"}`, tokenBearer, teamHeader)
-	if rec.Code != http.StatusForbidden {
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/projects", `{"name":"Token"}`, tokenBearer); rec.Code != http.StatusForbidden {
 		t.Errorf("read token create = %d, want 403", rec.Code)
 	}
-	var body apiError
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode token 403 body: %v", err)
-	}
-	if body.Message != "insufficient scope" {
-		t.Errorf("token 403 body = %q, want insufficient scope", body.Message)
-	}
-}
-
-func doTeamRequest(t *testing.T, s *Server, method, path, body, authorization, teamID string) *httptest.ResponseRecorder {
-	t.Helper()
-
-	var reader io.Reader
-	if body != "" {
-		reader = strings.NewReader(body)
-	}
-	req := httptest.NewRequest(method, path, reader)
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if authorization != "" {
-		req.Header.Set("Authorization", authorization)
-	}
-	req.Header.Set(TeamHeader, teamID)
-
-	rec := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rec, req)
-	return rec
 }

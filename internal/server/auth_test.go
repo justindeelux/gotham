@@ -43,6 +43,12 @@ func newFakeAuthService() *fakeAuthService {
 	}
 }
 
+func ownerAuthService() *fakeAuthService {
+	svc := newFakeAuthService()
+	svc.user.Role = auth.RoleOwner
+	return svc
+}
+
 func (f *fakeAuthService) result() *auth.AuthResult {
 	return &auth.AuthResult{
 		User:         f.user,
@@ -52,7 +58,7 @@ func (f *fakeAuthService) result() *auth.AuthResult {
 	}
 }
 
-func (f *fakeAuthService) Register(_ context.Context, email string, _ string, _ string, _ auth.InviteAcceptor, _ auth.SessionMeta) (*auth.AuthResult, error) {
+func (f *fakeAuthService) Register(_ context.Context, email string, _ string, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	switch email {
 	case "taken@example.com":
 		return nil, auth.ErrEmailTaken
@@ -246,20 +252,6 @@ func (f *fakeAuthService) CompleteMFALogin(_ context.Context, mfaToken, code str
 	return f.result(), nil
 }
 
-type fakeInvites struct {
-	team  string
-	email string
-	err   error
-}
-
-func (f fakeInvites) PeekInvite(_ context.Context, _ string) (string, string, error) {
-	return f.team, f.email, f.err
-}
-
-func (fakeInvites) AcceptInvite(_ context.Context, _ uuid.UUID, _ string) error {
-	return nil
-}
-
 func newTestAuthServer(t *testing.T) *Server {
 	t.Helper()
 
@@ -372,35 +364,6 @@ func TestAuthConfig(t *testing.T) {
 	}
 	if config.RegistrationOpen {
 		t.Error("registrationOpen = true without a store, want false")
-	}
-}
-
-func TestAuthInviteValidate(t *testing.T) {
-	s := newTestAuthServer(t)
-
-	missing := doRequest(t, s, http.MethodGet, "/api/v1/auth/invites/validate?token=unknown", "", "")
-	if missing.Code != http.StatusNotFound {
-		t.Errorf("validate without a teams service status = %d, want 404", missing.Code)
-	}
-
-	s.invites = fakeInvites{team: "acme", email: "member@example.com"}
-	found := doRequest(t, s, http.MethodGet, "/api/v1/auth/invites/validate?token=pending", "", "")
-	if found.Code != http.StatusOK {
-		t.Fatalf("validate status = %d, want 200 (body %s)", found.Code, found.Body.String())
-	}
-	var invite inviteValidateResponse
-	if err := json.Unmarshal(found.Body.Bytes(), &invite); err != nil {
-		t.Fatalf("validate body: %v", err)
-	}
-	if invite.Team != "acme" || invite.Email != "member@example.com" {
-		t.Errorf("validate body = %+v, want team acme + member@example.com", invite)
-	}
-
-	broken := fakeInvites{err: errors.New("expired")}
-	s.invites = broken
-	failed := doRequest(t, s, http.MethodGet, "/api/v1/auth/invites/validate?token=pending", "", "")
-	if failed.Code != http.StatusNotFound {
-		t.Errorf("validate failure status = %d, want 404", failed.Code)
 	}
 }
 

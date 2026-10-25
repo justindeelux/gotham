@@ -29,7 +29,7 @@ type syncResult struct {
 	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
 
-func Mount(r chi.Router, teamAuth func(http.Handler) http.Handler, platformAuth func(http.Handler) http.Handler, svc ProxyService, dns DNSProviderService, certs CertificateService, redirects RedirectService, status CertificateStatusService) {
+func Mount(r chi.Router, resourceAuth func(http.Handler) http.Handler, platformAuth func(http.Handler) http.Handler, svc ProxyService, dns DNSProviderService, certs CertificateService, redirects RedirectService, status CertificateStatusService) {
 	if svc == nil || !Enabled() {
 		return
 	}
@@ -54,7 +54,7 @@ func Mount(r chi.Router, teamAuth func(http.Handler) http.Handler, platformAuth 
 		}
 	})
 	r.Group(func(protected chi.Router) {
-		protected.Use(teamAuth)
+		protected.Use(resourceAuth)
 		if certs != nil {
 			protected.Post("/v1/proxy/certificates", h.createCertificate)
 			protected.Get("/v1/proxy/certificates", h.listCertificates)

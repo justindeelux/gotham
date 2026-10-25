@@ -155,6 +155,7 @@ func TestAgentUpdateRoutesNormalizesVersions(t *testing.T) {
 func TestAgentUpdateRoutesRequireOperator(t *testing.T) {
 	fake := &fakeAgentUpdateRegistry{fakeServerService: newFakeServerService(), target: "v1.2.0"}
 	s := newServerRoutesTestServer(t, fake)
+	s.auth.(*fakeAuthService).user.Role = "member"
 
 	if rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", authHeader); rec.Code != http.StatusForbidden {
 		t.Errorf("list status = %d, want 403", rec.Code)

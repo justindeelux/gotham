@@ -48,7 +48,7 @@ func expectNoMessage(t *testing.T, conn *websocket.Conn) {
 	}
 }
 
-func TestLogSubscriptionRequiresTeamMembership(t *testing.T) {
+func TestLogSubscriptionRequiresProjectAuthorization(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
 	t.Cleanup(hub.Close)
@@ -60,7 +60,7 @@ func TestLogSubscriptionRequiresTeamMembership(t *testing.T) {
 			return errors.New("unknown server")
 		}
 		if userID != member {
-			return errors.New("not a member of this team")
+			return errors.New("not authorized")
 		}
 		return nil
 	}

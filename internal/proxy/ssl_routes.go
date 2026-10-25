@@ -297,7 +297,7 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
 	case errors.Is(err, ErrForbidden):
-		writeJSON(w, http.StatusForbidden, apiError{Message: "insufficient team role"})
+		writeJSON(w, http.StatusForbidden, apiError{Message: "forbidden"})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, apiError{Message: err.Error()})
 	case errors.Is(err, ErrSecret):

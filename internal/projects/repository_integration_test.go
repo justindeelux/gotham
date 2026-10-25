@@ -82,7 +82,7 @@ func uuidOf(v pgtype.UUID) uuid.UUID {
 	return uuid.UUID(v.Bytes)
 }
 
-func seedUser(t *testing.T, ctx context.Context, st *store.Store, email string) (teamID uuid.UUID) {
+func seedUser(t *testing.T, ctx context.Context, st *store.Store, email string) (userID uuid.UUID) {
 	t.Helper()
 	user, err := st.CreateUser(ctx, email, nil)
 	if err != nil {
@@ -97,9 +97,9 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 
 	st := newScratchStore(t)
 	repo := newStoreRepository(st)
-	teamID := seedUser(t, ctx, st, fmt.Sprintf("repo-%d@example.com", time.Now().UnixNano()))
+	seedUser(t, ctx, st, fmt.Sprintf("repo-%d@example.com", time.Now().UnixNano()))
 
-	project, production, err := repo.CreateProject(ctx, teamID, "Shop", "storefront")
+	project, production, err := repo.CreateProject(ctx, "Shop", "storefront")
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -107,20 +107,20 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Fatalf("environment = %+v, want production of the project", production)
 	}
 
-	projects, err := repo.ListProjects(ctx, teamID)
+	projects, err := repo.ListProjects(ctx)
 	if err != nil || len(projects) != 1 {
 		t.Fatalf("ListProjects = %+v, %v; want one", projects, err)
 	}
-	fetched, err := repo.GetProject(ctx, teamID, project.ID)
+	fetched, err := repo.GetProject(ctx, project.ID)
 	if err != nil || fetched.Name != "Shop" || fetched.Description != "storefront" {
 		t.Fatalf("GetProject = %+v, %v", fetched, err)
 	}
 
-	staging, err := repo.CreateEnvironment(ctx, teamID, project.ID, "staging")
+	staging, err := repo.CreateEnvironment(ctx, project.ID, "staging")
 	if err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
-	environments, err := repo.ListEnvironments(ctx, teamID, project.ID)
+	environments, err := repo.ListEnvironments(ctx, project.ID)
 	if err != nil || len(environments) != 2 {
 		t.Fatalf("ListEnvironments = %+v, %v; want two", environments, err)
 	}
@@ -128,25 +128,25 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 		t.Fatalf("CountEnvironments = %d, %v; want 2", count, err)
 	}
 
-	renamed, err := repo.UpdateProject(ctx, teamID, project.ID, "Store", "new blurb")
+	renamed, err := repo.UpdateProject(ctx, project.ID, "Store", "new blurb")
 	if err != nil || renamed.Name != "Store" || renamed.Description != "new blurb" {
 		t.Fatalf("UpdateProject = %+v, %v", renamed, err)
 	}
-	renamedEnv, err := repo.UpdateEnvironment(ctx, teamID, staging.ID, "qa")
+	renamedEnv, err := repo.UpdateEnvironment(ctx, staging.ID, "qa")
 	if err != nil || renamedEnv.Name != "qa" {
 		t.Fatalf("UpdateEnvironment = %+v, %v", renamedEnv, err)
 	}
 
-	if _, err := repo.DeleteEnvironmentIfNotLast(ctx, teamID, staging.ID); err != nil {
+	if _, err := repo.DeleteEnvironmentIfNotLast(ctx, staging.ID); err != nil {
 		t.Fatalf("DeleteEnvironmentIfNotLast: %v", err)
 	}
-	if _, err := repo.DeleteProject(ctx, teamID, project.ID); err != nil {
+	if _, err := repo.DeleteProject(ctx, project.ID); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
-	if _, err := repo.GetProject(ctx, teamID, project.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.GetProject(ctx, project.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetProject after delete = %v, want ErrNotFound", err)
 	}
-	if _, err := repo.GetEnvironment(ctx, teamID, production.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.GetEnvironment(ctx, production.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("production survived its project delete: %v", err)
 	}
 }
@@ -157,10 +157,9 @@ func TestStoreRepositoryPreviewBaseIDs(t *testing.T) {
 
 	st := newScratchStore(t)
 	repo := newStoreRepository(st)
-	teamID := seedUser(t, ctx, st, fmt.Sprintf("bases-%d@example.com", time.Now().UnixNano()))
-	otherID := seedUser(t, ctx, st, fmt.Sprintf("bases-other-%d@example.com", time.Now().UnixNano()))
+	userID := seedUser(t, ctx, st, fmt.Sprintf("bases-%d@example.com", time.Now().UnixNano()))
 
-	_, production, err := repo.CreateProject(ctx, teamID, "Shop", "")
+	_, production, err := repo.CreateProject(ctx, "Shop", "")
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -178,23 +177,23 @@ func TestStoreRepositoryPreviewBaseIDs(t *testing.T) {
 	}{baseID: {"web", false}, previewID: {"web-pr-7", true}}
 	for id, seed := range seeds {
 		if _, err := st.DB.Exec(ctx,
-			`INSERT INTO applications (id, user_id, team_id, environment_id, server_id, name, is_preview)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			id, teamID, teamID, production.ID, serverID, seed.name, seed.isPreview,
+			`INSERT INTO applications (id, user_id, environment_id, server_id, name, is_preview)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			id, userID, production.ID, serverID, seed.name, seed.isPreview,
 		); err != nil {
 			t.Fatalf("seed application %s: %v", seed.name, err)
 		}
 	}
 	if _, err := st.DB.Exec(ctx,
-		`INSERT INTO preview_deploys (application_id, team_id, provider, repo, pr_number, preview_application_id)
-		 VALUES ($1, $2, 'github', 'o/r', 7, $3)`,
-		baseID, teamID, previewID,
+		`INSERT INTO preview_deploys (application_id, provider, repo, pr_number, preview_application_id)
+		 VALUES ($1, 'github', 'o/r', 7, $2)`,
+		baseID, previewID,
 	); err != nil {
 		t.Fatalf("seed preview binding: %v", err)
 	}
 
 	unknown := uuid.New()
-	bases, err := repo.PreviewBaseIDs(ctx, teamID, []uuid.UUID{previewID, unknown})
+	bases, err := repo.PreviewBaseIDs(ctx, []uuid.UUID{previewID, unknown})
 	if err != nil {
 		t.Fatalf("PreviewBaseIDs: %v", err)
 	}
@@ -202,21 +201,16 @@ func TestStoreRepositoryPreviewBaseIDs(t *testing.T) {
 		t.Fatalf("bases = %v, want only %v -> %v", bases, previewID, baseID)
 	}
 
-	empty, err := repo.PreviewBaseIDs(ctx, teamID, nil)
+	empty, err := repo.PreviewBaseIDs(ctx, nil)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty input = %v, %v; want empty", empty, err)
 	}
-	foreign, err := repo.PreviewBaseIDs(ctx, otherID, []uuid.UUID{previewID})
-	if err != nil || len(foreign) != 0 {
-		t.Fatalf("foreign team = %v, %v; want empty", foreign, err)
-	}
-
 	if _, err := st.DB.Exec(ctx,
 		`UPDATE preview_deploys SET deleted_at = now() WHERE preview_application_id = $1`, previewID,
 	); err != nil {
 		t.Fatalf("delete preview binding: %v", err)
 	}
-	gone, err := repo.PreviewBaseIDs(ctx, teamID, []uuid.UUID{previewID})
+	gone, err := repo.PreviewBaseIDs(ctx, []uuid.UUID{previewID})
 	if err != nil || len(gone) != 0 {
 		t.Fatalf("deleted binding = %v, %v; want empty", gone, err)
 	}
@@ -228,24 +222,23 @@ func TestStoreRepositoryUniquenessIsCaseInsensitive(t *testing.T) {
 
 	st := newScratchStore(t)
 	repo := newStoreRepository(st)
-	teamA := seedUser(t, ctx, st, fmt.Sprintf("uniq-a-%d@example.com", time.Now().UnixNano()))
-	teamB := seedUser(t, ctx, st, fmt.Sprintf("uniq-b-%d@example.com", time.Now().UnixNano()))
+	seedUser(t, ctx, st, fmt.Sprintf("uniq-a-%d@example.com", time.Now().UnixNano()))
 
-	project, _, err := repo.CreateProject(ctx, teamA, "Shop", "")
+	project, _, err := repo.CreateProject(ctx, "Shop", "")
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, _, err := repo.CreateProject(ctx, teamA, "SHOP", ""); !errors.Is(err, ErrProjectExists) {
+	if _, _, err := repo.CreateProject(ctx, "SHOP", ""); !errors.Is(err, ErrProjectExists) {
 		t.Fatalf("duplicate project = %v, want ErrProjectExists", err)
 	}
-	if _, err := repo.UpdateProject(ctx, teamA, project.ID, "sHoP", ""); err != nil {
+	if _, err := repo.UpdateProject(ctx, project.ID, "sHoP", ""); err != nil {
 		t.Fatalf("rename onto itself with different case = %v, want success", err)
 	}
-	if _, _, err := repo.CreateProject(ctx, teamB, "SHOP", ""); err != nil {
-		t.Fatalf("same name in another team = %v, want success", err)
+	if _, _, err := repo.CreateProject(ctx, "SHOP!", ""); err != nil {
+		t.Fatalf("distinct project name = %v, want success", err)
 	}
 
-	if _, err := repo.CreateEnvironment(ctx, teamA, project.ID, "PRODUCTION"); !errors.Is(err, ErrEnvironmentExists) {
+	if _, err := repo.CreateEnvironment(ctx, project.ID, "PRODUCTION"); !errors.Is(err, ErrEnvironmentExists) {
 		t.Fatalf("duplicate environment = %v, want ErrEnvironmentExists", err)
 	}
 }
@@ -256,15 +249,15 @@ func TestStoreRepositoryFailedCreateLeavesNoRows(t *testing.T) {
 
 	st := newScratchStore(t)
 	repo := newStoreRepository(st)
-	teamID := seedUser(t, ctx, st, fmt.Sprintf("atomic-%d@example.com", time.Now().UnixNano()))
+	seedUser(t, ctx, st, fmt.Sprintf("atomic-%d@example.com", time.Now().UnixNano()))
 
-	if _, _, err := repo.CreateProject(ctx, teamID, "Shop", ""); err != nil {
+	if _, _, err := repo.CreateProject(ctx, "Shop", ""); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, _, err := repo.CreateProject(ctx, teamID, "SHOP", ""); !errors.Is(err, ErrProjectExists) {
+	if _, _, err := repo.CreateProject(ctx, "SHOP", ""); !errors.Is(err, ErrProjectExists) {
 		t.Fatalf("duplicate = %v, want ErrProjectExists", err)
 	}
-	projects, err := repo.ListProjects(ctx, teamID)
+	projects, err := repo.ListProjects(ctx)
 	if err != nil || len(projects) != 1 {
 		t.Fatalf("ListProjects = %+v, %v; want exactly the first project", projects, err)
 	}
@@ -340,11 +333,11 @@ func TestStoreRepositoryCreateRacesDeleteProject(t *testing.T) {
 
 	st := newScratchStore(t)
 	repo := newStoreRepository(st)
-	teamID := seedUser(t, ctx, st, fmt.Sprintf("f3race-%d@example.com", time.Now().UnixNano()))
+	seedUser(t, ctx, st, fmt.Sprintf("f3race-%d@example.com", time.Now().UnixNano()))
 
 	const iterations = 60
 	for i := 0; i < iterations; i++ {
-		project, _, err := repo.CreateProject(ctx, teamID, fmt.Sprintf("f3-%d", i), "")
+		project, _, err := repo.CreateProject(ctx, fmt.Sprintf("f3-%d", i), "")
 		if err != nil {
 			t.Fatalf("iter %d: CreateProject: %v", i, err)
 		}
@@ -357,13 +350,13 @@ func TestStoreRepositoryCreateRacesDeleteProject(t *testing.T) {
 		deleted := make(chan error, 1)
 		go func() {
 			<-start
-			env, err := repo.CreateEnvironment(ctx, teamID, project.ID, "staging")
+			env, err := repo.CreateEnvironment(ctx, project.ID, "staging")
 			created <- outcome{env, err}
 		}()
 		go func() {
 			<-start
 			deleted <- func() error {
-				_, err := repo.DeleteProject(ctx, teamID, project.ID)
+				_, err := repo.DeleteProject(ctx, project.ID)
 				return err
 			}()
 		}()
@@ -377,37 +370,3 @@ func TestStoreRepositoryCreateRacesDeleteProject(t *testing.T) {
 		}
 	}
 }
-
-func TestStoreRepositoryCrossTeamIsNotFound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	st := newScratchStore(t)
-	repo := newStoreRepository(st)
-	teamA := seedUser(t, ctx, st, fmt.Sprintf("xteam-a-%d@example.com", time.Now().UnixNano()))
-	teamB := seedUser(t, ctx, st, fmt.Sprintf("xteam-b-%d@example.com", time.Now().UnixNano()))
-
-	project, production, err := repo.CreateProject(ctx, teamA, "Shop", "")
-	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	for name, err := range map[string]error{
-		"get project":    mustErr(repo.GetProject(ctx, teamB, project.ID)),
-		"update project": mustErr(repo.UpdateProject(ctx, teamB, project.ID, "x", "")),
-		"delete project": mustErr(repo.DeleteProject(ctx, teamB, project.ID)),
-		"get env":        mustErr(repo.GetEnvironment(ctx, teamB, production.ID)),
-		"update env":     mustErr(repo.UpdateEnvironment(ctx, teamB, production.ID, "x")),
-		"delete env":     mustErr(repo.DeleteEnvironmentIfNotLast(ctx, teamB, production.ID)),
-		"create env":     mustErr(repo.CreateEnvironment(ctx, teamB, project.ID, "staging")),
-		"list envs":      mustErr(repo.ListEnvironments(ctx, teamB, project.ID)),
-	} {
-		if !errors.Is(err, ErrNotFound) {
-			t.Errorf("cross-team %s = %v, want ErrNotFound", name, err)
-		}
-	}
-	if _, err := repo.GetProject(ctx, teamA, project.ID); err != nil {
-		t.Errorf("own project unreadable after cross-team attempts: %v", err)
-	}
-}
-
-func mustErr[T any](_ T, err error) error { return err }

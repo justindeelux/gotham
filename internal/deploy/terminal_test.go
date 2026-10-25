@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/services"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -28,9 +27,9 @@ func terminalFixture(t *testing.T, app Application, dep Deployment) (*Service, *
 func TestTerminalContainersSingleContainer(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
-		ID:         uuid.New(),
-		UserID:     userID,
-		TeamID:     teams.PersonalTeamID(userID),
+		ID:     uuid.New(),
+		UserID: userID,
+
 		ServerID:   uuid.New(),
 		Name:       "demo",
 		SourceType: SourceImage,
@@ -66,9 +65,9 @@ func TestTerminalContainersSingleContainer(t *testing.T) {
 func TestTerminalContainersComposeServicesAreDeterministic(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
-		ID:             uuid.New(),
-		UserID:         userID,
-		TeamID:         teams.PersonalTeamID(userID),
+		ID:     uuid.New(),
+		UserID: userID,
+
 		ServerID:       uuid.New(),
 		Name:           "shop",
 		SourceType:     SourceCompose,
@@ -175,9 +174,9 @@ func TestTerminalComposeTargetsUseFullIDsFromCapturedPs(t *testing.T) {
 
 	userID := uuid.New()
 	app := Application{
-		ID:             uuid.MustParse("8e6ba4a6-dd2d-4eab-89ab-4bd813e68986"),
-		UserID:         userID,
-		TeamID:         teams.PersonalTeamID(userID),
+		ID:     uuid.MustParse("8e6ba4a6-dd2d-4eab-89ab-4bd813e68986"),
+		UserID: userID,
+
 		ServerID:       uuid.New(),
 		Name:           "web-demo",
 		SourceType:     SourceCompose,
@@ -250,7 +249,7 @@ func testFullContainerID(short string) string {
 func TestResolveComposeTargetIDsNeverSelectsForeignContainers(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
-		ID: uuid.New(), UserID: userID, TeamID: teams.PersonalTeamID(userID),
+		ID: uuid.New(), UserID: userID,
 		ServerID: uuid.New(), Name: "shop", SourceType: SourceCompose, ComposeService: "web",
 	}
 	project := services.ProjectName(app.ID)
@@ -279,7 +278,7 @@ func TestResolveComposeTargetIDsNeverSelectsForeignContainers(t *testing.T) {
 func TestTerminalComposeTargetsResolveByPrefix(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
-		ID: uuid.New(), UserID: userID, TeamID: teams.PersonalTeamID(userID),
+		ID: uuid.New(), UserID: userID,
 		ServerID: uuid.New(), Name: "shop", SourceType: SourceCompose, ComposeService: "web",
 	}
 	project := services.ProjectName(app.ID)
@@ -402,7 +401,7 @@ func TestResolveComposeTargetIDNameAndPrefix(t *testing.T) {
 func TestTerminalComposeTargetsOmitUnresolvableReplica(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
-		ID: uuid.New(), UserID: userID, TeamID: teams.PersonalTeamID(userID),
+		ID: uuid.New(), UserID: userID,
 		ServerID: uuid.New(), Name: "shop", SourceType: SourceCompose, ComposeService: "web",
 	}
 	project := services.ProjectName(app.ID)
@@ -476,7 +475,7 @@ func (h *recordHandler) snapshot() []capturedLog {
 func TestTerminalContainersExplicitFailures(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
-		ID: uuid.New(), UserID: userID, TeamID: teams.PersonalTeamID(userID),
+		ID: uuid.New(), UserID: userID,
 		ServerID: uuid.New(), Name: "demo", SourceType: SourceImage,
 	}
 	t.Run("no running deployment", func(t *testing.T) {
@@ -518,50 +517,10 @@ func TestTerminalContainersExplicitFailures(t *testing.T) {
 	})
 }
 
-func TestTerminalContainersRequireApplicationWriteAccess(t *testing.T) {
-	ownerID := uuid.New()
-	teamID := uuid.New()
-	app := Application{
-		ID: uuid.New(), UserID: ownerID, TeamID: teamID,
-		ServerID: uuid.New(), Name: "demo", SourceType: SourceImage,
-	}
-	svc, node := terminalFixture(t, app, Deployment{State: StateRunning, ContainerID: "cid"})
-	node.listed = []*agentv1.ContainerInfo{{Id: "cid", State: "running"}}
-
-	cases := []struct {
-		name    string
-		teamID  uuid.UUID
-		role    teams.Role
-		wantErr error
-	}{
-		{"another team", uuid.New(), teams.RoleOwner, ErrNotFound},
-		{"read-only member", teamID, teams.RoleReadOnly, teams.ErrForbidden},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			userID := uuid.New()
-			ctx := teams.WithScope(context.Background(), teams.Scope{
-				UserID: userID, TeamID: testCase.teamID, Role: testCase.role,
-			})
-			if _, err := svc.ListTerminalContainers(ctx, userID, app.ID); !errors.Is(err, testCase.wantErr) {
-				t.Fatalf("err = %v, want %v", err, testCase.wantErr)
-			}
-		})
-	}
-
-	adminID := uuid.New()
-	adminCtx := teams.WithScope(context.Background(), teams.Scope{
-		UserID: adminID, TeamID: teamID, Role: teams.RoleAdmin,
-	})
-	if _, err := svc.ListTerminalContainers(adminCtx, adminID, app.ID); err != nil {
-		t.Fatalf("admin within the team: %v", err)
-	}
-}
-
 func TestComposeResolutionIgnoresNonComposeAndForeignProjects(t *testing.T) {
 	userID := uuid.New()
 	app := Application{
-		ID: uuid.New(), UserID: userID, TeamID: teams.PersonalTeamID(userID),
+		ID: uuid.New(), UserID: userID,
 		ServerID: uuid.New(), Name: "shop", SourceType: SourceCompose, ComposeService: "web",
 	}
 	project := services.ProjectName(app.ID)

@@ -10,13 +10,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const maxBody = 2 << 20
 const contractHeader = "X-Gotham-MCP-Contract"
-const teamHeader = "X-Gotham-MCP-Team-Id"
 
 type Error struct {
 	Code   string `json:"code"`
@@ -41,16 +38,12 @@ func NewClient(cfg Config) (*Client, error) {
 }
 
 type Context struct {
-	TeamID       uuid.UUID `json:"team_id"`
-	Capabilities []string  `json:"capabilities"`
+	Capabilities []string `json:"capabilities"`
 }
 
 func (c *Client) Context(ctx context.Context) (Context, error) {
 	var result Context
 	err := c.get(ctx, "/api/v1/mcp/context", &result, true, false)
-	if err == nil && result.TeamID != c.config.TeamID {
-		err = &Error{Code: "contract_mismatch"}
-	}
 	if err != nil {
 		return Context{}, err
 	}
@@ -99,7 +92,6 @@ func (c *Client) get(ctx context.Context, path string, out any, strict, health b
 	req.Header.Set("Accept", "application/json")
 	if strict {
 		req.Header.Set("Authorization", "Bearer "+c.config.Token)
-		req.Header.Set("X-Team-Id", c.config.TeamID.String())
 		req.Header.Set(contractHeader, "1")
 	}
 	resp, err := c.http.Do(req)
@@ -132,7 +124,7 @@ func (c *Client) get(ctx context.Context, path string, out any, strict, health b
 			return &Error{Code: code, Status: resp.StatusCode}
 		}
 	}
-	if strict && (resp.Header.Get(contractHeader) != "1" || resp.Header.Get(teamHeader) != c.config.TeamID.String()) {
+	if strict && resp.Header.Get(contractHeader) != "1" {
 		return &Error{Code: "contract_mismatch"}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))

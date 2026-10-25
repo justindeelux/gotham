@@ -63,7 +63,7 @@ func (s *Server) mountToolchainRoutes(api chi.Router) {
 		return
 	}
 	api.Group(func(protected chi.Router) {
-		protected.Use(s.withTeam())
+		protected.Use(s.resourceAuth())
 		protected.Get("/v1/servers/{id}/tools", s.handleListTools)
 		protected.Get("/v1/servers/{id}/toolchain/jobs", s.handleListToolchainJobs)
 		protected.Post("/v1/servers/{id}/toolchain/jobs", s.handleEnqueueToolchainJobs)
@@ -179,7 +179,7 @@ func (s *Server) writeToolchainError(w http.ResponseWriter, op string, err error
 	case errors.Is(err, toolchain.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
 	case errors.Is(err, toolchain.ErrForbidden):
-		writeJSON(w, http.StatusForbidden, apiError{Message: "insufficient team role"})
+		writeJSON(w, http.StatusForbidden, apiError{Message: "forbidden"})
 	case errors.Is(err, toolchain.ErrValidation):
 		writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})
 	case errors.Is(err, toolchain.ErrConflict):

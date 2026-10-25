@@ -39,7 +39,6 @@ func seedBaseForPreview(t *testing.T, app Application) *fakeRepository {
 func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 	userID := uuid.New()
 	base := testApplication(userID)
-	base.TeamID = uuid.New()
 	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
 	repo := seedBaseForPreview(t, base)
 	repo.envVars = []EnvVar{{ApplicationID: base.ID, Key: "FOO", Value: "bar"}}
@@ -56,7 +55,7 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 		t.Fatalf("CreatePreviewApplication: %v", err)
 	}
 
-	if created.UserID != base.UserID || created.TeamID != base.TeamID ||
+	if created.UserID != base.UserID ||
 		created.ServerID != base.ServerID || created.Provider != base.Provider ||
 		created.Repo != base.Repo || created.CloneURL != base.CloneURL ||
 		created.BuildPack != base.BuildPack {

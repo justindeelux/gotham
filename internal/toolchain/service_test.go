@@ -20,7 +20,6 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -389,7 +388,6 @@ func (s *blockingStream) SendMsg(any) error            { return nil }
 func (s *blockingStream) RecvMsg(any) error            { return nil }
 
 type fakeRegistry struct {
-	teamID  uuid.UUID
 	missing bool
 }
 
@@ -397,7 +395,7 @@ func (r *fakeRegistry) Get(_ context.Context, id uuid.UUID) (*servers.Server, er
 	if r.missing {
 		return nil, servers.ErrNotFound
 	}
-	return &servers.Server{ID: id, TeamID: r.teamID}, nil
+	return &servers.Server{ID: id}, nil
 }
 
 type memPublisher struct {
@@ -543,26 +541,6 @@ func TestEnqueueDedupesWithinRequestAndAgainstActiveJobs(t *testing.T) {
 	}
 	if len(second.Jobs) != 0 || len(second.Skipped) != 1 || second.Skipped[0] != "docker" {
 		t.Fatalf("second enqueue = %+v, want 0 jobs, 1 skipped docker", second)
-	}
-}
-
-func TestEnqueueRequiresTeamMembership(t *testing.T) {
-	agent := &fakeAgent{catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)}}
-	team := uuid.New()
-	st := newFakeStore()
-	svc := testService(st, agent, &fakeRegistry{teamID: team}, nil)
-
-	foreign := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: uuid.New(), Role: teams.RoleOwner})
-	if _, err := svc.Enqueue(foreign, uuid.New(), ActionInstall, []string{"docker"}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("foreign team err = %v, want ErrNotFound", err)
-	}
-	readOnly := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: team, Role: teams.RoleReadOnly})
-	if _, err := svc.Enqueue(readOnly, uuid.New(), ActionInstall, []string{"docker"}); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("read-only err = %v, want ErrForbidden", err)
-	}
-	owner := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: team, Role: teams.RoleOwner})
-	if _, err := svc.Enqueue(owner, uuid.New(), ActionInstall, []string{"docker"}); err != nil {
-		t.Fatalf("owner enqueue: %v", err)
 	}
 }
 

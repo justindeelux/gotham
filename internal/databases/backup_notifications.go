@@ -13,7 +13,6 @@ type BackupResult struct {
 	BackupID   uuid.UUID
 	DatabaseID uuid.UUID
 	Database   string
-	TeamID     uuid.UUID
 	Status     BackupStatus
 	Error      string
 	FinishedAt time.Time
@@ -33,7 +32,6 @@ func (m *BackupManager) notifyBackup(ctx context.Context, finished Backup, datab
 		BackupID:   finished.ID,
 		DatabaseID: database.ID,
 		Database:   database.Name,
-		TeamID:     database.TeamID,
 		Status:     finished.Status,
 		Error:      finished.Error,
 		FinishedAt: finished.FinishedAt,

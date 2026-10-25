@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -19,37 +18,35 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
-func newRouterWithService(t *testing.T, svc FileService, teamID uuid.UUID) http.Handler {
+func newRouterWithService(t *testing.T, svc FileService, projectID uuid.UUID) http.Handler {
 	t.Helper()
 	t.Setenv(FeatureEnv, "true")
 	r := chi.NewRouter()
-	Mount(r, scopeAuth(teams.RoleOwner, teamID), svc, nil)
+	Mount(r, scopeAuth("", projectID), svc, nil)
 	return r
 }
 
-func scopeAuth(role teams.Role, teamID uuid.UUID) func(http.Handler) http.Handler {
+func scopeAuth(_ any, _ uuid.UUID) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			scope := teams.Scope{UserID: uuid.New(), TeamID: teamID, Role: role}
-			next.ServeHTTP(w, r.WithContext(teams.WithScope(r.Context(), scope)))
+			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-func newRealRouter(t *testing.T, role teams.Role, teamID uuid.UUID, client FileClient) (http.Handler, *servers.Server) {
+func newRealRouter(t *testing.T, _ any, _ uuid.UUID, client FileClient) (http.Handler, *servers.Server) {
 	t.Helper()
 	t.Setenv(FeatureEnv, "true")
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(uuid.New())
 	svc := NewService(Config{
 		Registry: registry,
 		Dial:     func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
 	})
 	r := chi.NewRouter()
-	Mount(r, scopeAuth(role, teamID), svc, nil)
+	Mount(r, scopeAuth("", uuid.New()), svc, nil)
 	return r, server
 }
 
@@ -156,7 +153,7 @@ func TestPutContentAuthorizesBeforeBody(t *testing.T) {
 		want int
 	}{
 		{"feature off", ErrDisabled, http.StatusServiceUnavailable},
-		{"foreign team", ErrNotFound, http.StatusNotFound},
+		{"missing node", ErrNotFound, http.StatusNotFound},
 		{"read-only caller", ErrForbidden, http.StatusForbidden},
 	}
 	for _, tc := range cases {
@@ -215,7 +212,6 @@ func TestUploadPartialFailure(t *testing.T) {
 
 func TestUploadReleasesSpoolSlotAfterPanic(t *testing.T) {
 	t.Setenv(SpoolConcurrencyEnv, "1")
-	t.Setenv(SpoolTeamConcurrencyEnv, "1")
 	id := uuid.New()
 	calls := 0
 	svc := &fakeService{
@@ -254,78 +250,24 @@ func TestUploadReleasesSpoolSlotAfterPanic(t *testing.T) {
 }
 
 func TestUploadBodyErrorMapsStageBusy(t *testing.T) {
-	for _, err := range []error{ErrBusy, ErrSpoolBusy, ErrTeamBusy} {
+	for _, err := range []error{ErrBusy, ErrSpoolBusy} {
 		if got := uploadBodyError(err); got != "busy" {
 			t.Fatalf("uploadBodyError(%v) = %q, want busy", err, got)
 		}
 	}
 }
 
-func TestUploadReportsTeamShareAsBusy(t *testing.T) {
-	spool := newSpooler(t.TempDir(), 3, 1, nil)
-	teamB := uuid.New()
-	_, _, cleanupA, err := spool.stage("team:a", strings.NewReader("x"), 100)
-	if err != nil {
-		t.Fatalf("stage team A: %v", err)
-	}
-	_, _, cleanupB, err := spool.stage("team:"+teamB.String(), strings.NewReader("x"), 100)
-	if err != nil {
-		t.Fatalf("stage team B: %v", err)
-	}
-	t.Cleanup(func() { cleanupA(); cleanupB() })
-
-	r := chi.NewRouter()
-	h := &handler{svc: &fakeService{}, logger: slog.Default(), spool: spool}
-	r.Post("/v1/servers/{id}/files/upload", h.upload)
-
-	body, contentType := buildMultipart(t, []struct{ name, content string }{{"a.txt", "hello"}})
-	req := httptest.NewRequest(http.MethodPost,
-		"/v1/servers/"+uuid.New().String()+"/files/upload?root=volumes&path=d", strings.NewReader(body))
-	req.Header.Set("Content-Type", contentType)
-	req = req.WithContext(teams.WithScope(req.Context(), teams.Scope{
-		UserID: uuid.New(), TeamID: teamB, Role: teams.RoleOwner,
-	}))
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
-	}
-	var envelope uploadEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("decode upload: %v", err)
-	}
-	if len(envelope.Results) != 1 || envelope.Results[0].Error != "busy" {
-		t.Fatalf("results = %+v, want a busy part error", envelope.Results)
-	}
-}
-
-func TestSpoolOwnerBuckets(t *testing.T) {
-	if got := spoolOwner(context.Background()); got != "" {
-		t.Fatalf("unscoped owner = %q, want the shared empty bucket", got)
-	}
-	userID, teamID := uuid.New(), uuid.New()
-	teamCtx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID})
-	if got := spoolOwner(teamCtx); got != "team:"+teamID.String() {
-		t.Fatalf("team owner = %q", got)
-	}
-	personalCtx := teams.WithScope(context.Background(), teams.Scope{UserID: userID})
-	if got := spoolOwner(personalCtx); got != "user:"+userID.String() {
-		t.Fatalf("personal owner = %q", got)
-	}
-}
-
 func TestUploadBoundsTotalRequestBody(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(uuid.New())
 	client := &fakeFileClient{writeResp: writeEntry()}
 	svc := NewService(Config{
 		Registry:       registry,
 		Dial:           func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
 		MaxUploadBytes: 200,
 	})
-	h := newRouterWithService(t, svc, teamID)
+	h := newRouterWithService(t, svc, projectID)
 
 	body, contentType := buildMultipart(t, []struct{ name, content string }{
 		{"big.txt", strings.Repeat("x", 400)},
@@ -363,15 +305,15 @@ func TestUploadSpoolErrorReportsEveryPart(t *testing.T) {
 	}
 	t.Setenv(SpoolDirEnv, filepath.Join(blocker, "spool"))
 
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(uuid.New())
 	client := &fakeFileClient{writeResp: writeEntry()}
 	svc := NewService(Config{
 		Registry: registry,
 		Dial:     func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
 	})
-	h := newRouterWithService(t, svc, teamID)
+	h := newRouterWithService(t, svc, projectID)
 
 	body, contentType := buildMultipart(t, []struct{ name, content string }{
 		{"a.txt", "hello"},
@@ -504,49 +446,6 @@ func TestMkdirCreateRenameMoveCopyDeleteRoutes(t *testing.T) {
 	rec := doWrite(t, h, http.MethodDelete, base+"entry?root=volumes&path=a&recursive=true", "", nil)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d (body %s)", rec.Code, rec.Body.String())
-	}
-}
-
-func TestWriteRoutesRBAC(t *testing.T) {
-	teamID := uuid.New()
-	client := &fakeFileClient{}
-	h, server := newRealRouter(t, teams.RoleReadOnly, teamID, client)
-	base := "/v1/servers/" + server.ID.String() + "/files/"
-
-	uploadBody, uploadType := buildMultipart(t, []struct{ name, content string }{{"a.txt", "x"}})
-
-	cases := []struct {
-		name    string
-		method  string
-		path    string
-		body    string
-		headers map[string]string
-	}{
-		{"put content", http.MethodPut, base + "content?root=volumes&path=a", "x", map[string]string{"If-Match": `"v1"`}},
-		{"upload", http.MethodPost, base + "upload?root=volumes&path=", uploadBody, map[string]string{"Content-Type": uploadType}},
-		{"mkdir", http.MethodPost, base + "mkdir", `{"root":"volumes","path":"d"}`, nil},
-		{"create", http.MethodPost, base + "create", `{"root":"volumes","path":"a"}`, nil},
-		{"rename", http.MethodPost, base + "rename", `{"root":"volumes","source":"a","destination":"b"}`, nil},
-		{"move", http.MethodPost, base + "move", `{"root":"volumes","source":"a","destination":"b"}`, nil},
-		{"copy", http.MethodPost, base + "copy", `{"root":"volumes","source":"a","destination":"b"}`, nil},
-		{"chmod", http.MethodPost, base + "chmod", `{"root":"volumes","path":"a","mode":384}`, nil},
-		{"delete", http.MethodDelete, base + "entry?root=volumes&path=a", "", nil},
-		{"trash restore", http.MethodPost, base + "trash/restore", `{"root":"volumes","id":"0123456789abcdef0123456789abcdef"}`, nil},
-		{"trash purge", http.MethodPost, base + "trash/purge", `{"root":"volumes","id":"0123456789abcdef0123456789abcdef"}`, nil},
-		{"trash empty", http.MethodPost, base + "trash/empty", `{"root":"volumes"}`, nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := doWrite(t, h, tc.method, tc.path, tc.body, tc.headers)
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
-			}
-		})
-	}
-
-	rec := doWrite(t, h, http.MethodGet, base+"trash?root=volumes", "", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET trash as read_only = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

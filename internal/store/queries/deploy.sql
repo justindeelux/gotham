@@ -5,7 +5,7 @@
 -- caller.
 INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
-    branch, build_pack, team_id, is_preview,
+    branch, build_pack, is_preview,
     source_type, github_app_id, dockerfile_content, build_args,
     image_ref, registry_username, registry_password_ciphertext,
     compose_content, compose_file, compose_service
@@ -14,7 +14,6 @@ VALUES (
     COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
     sqlc.arg(user_id), sqlc.arg(server_id), sqlc.arg(environment_id), sqlc.arg(name), sqlc.arg(provider),
     sqlc.arg(repo), sqlc.arg(clone_url), sqlc.arg(branch), sqlc.arg(build_pack),
-    sqlc.arg(team_id),
     -- Direct sqlc callers (fixtures, previews) may pass an empty source
     -- type; COALESCE maps it onto the default so the CHECK never sees it.
     -- The deploy repository normalizes the same way in Go.
@@ -37,11 +36,6 @@ SELECT * FROM applications WHERE id = $1;
 -- name: ListApplicationsByUser :many
 SELECT * FROM applications
 WHERE user_id = $1 AND is_preview = false
-ORDER BY created_at DESC, id DESC;
-
--- name: ListApplicationsByTeam :many
-SELECT * FROM applications
-WHERE team_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC;
 
 -- name: ListApplicationsByEnvironment :many
@@ -158,24 +152,11 @@ WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2;
 
--- name: ListRecentDeploymentsByTeam :many
--- The newest deployments across one team's applications (dashboard feed,
--- JUS-193), newest first. Previews stay out, matching the applications list.
--- The heavy columns the feed never returns (build_log, compose_document) are
--- left out on purpose.
-SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
-       d.digest, d.error, d.attempt, d.container_id, d.rollback_from,
-       d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_commit,
-       d.commit_sha, d.commit_message, d.commit_author, d.committed_at,
-       a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
-FROM deployments d
-JOIN applications a ON a.id = d.application_id
-WHERE a.team_id = $1 AND a.is_preview = false
-ORDER BY d.created_at DESC, d.id DESC
-LIMIT $2;
-
 -- name: ListRecentDeploymentsByUser :many
--- The creator-scoped fallback of ListRecentDeploymentsByTeam (no team context).
+-- The newest deployments across the caller's applications (dashboard feed),
+-- newest first. Previews stay out, matching the applications list. The heavy
+-- columns the feed never returns (build_log, compose_document) are left out
+-- on purpose.
 SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
        d.digest, d.error, d.attempt, d.container_id, d.rollback_from,
        d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_commit,

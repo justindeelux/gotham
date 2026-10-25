@@ -43,19 +43,19 @@ func (s *Store) CreateProject(ctx context.Context, params sqlc.CreateProjectPara
 	return s.queries.CreateProject(ctx, params)
 }
 
-func (s *Store) GetProject(ctx context.Context, params sqlc.GetProjectParams) (sqlc.Project, error) {
-	return s.queries.GetProject(ctx, params)
+func (s *Store) GetProject(ctx context.Context, id pgtype.UUID) (sqlc.Project, error) {
+	return s.queries.GetProject(ctx, id)
 }
 
-func (s *Store) ListProjectsByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Project, error) {
-	return s.queries.ListProjectsByTeam(ctx, teamID)
+func (s *Store) ListProjects(ctx context.Context) ([]sqlc.Project, error) {
+	return s.queries.ListProjects(ctx)
 }
 
 func (s *Store) UpdateProject(ctx context.Context, params sqlc.UpdateProjectParams) (sqlc.Project, error) {
 	return s.queries.UpdateProject(ctx, params)
 }
 
-func (s *Store) DeleteProject(ctx context.Context, params sqlc.DeleteProjectParams) (int64, []string, error) {
+func (s *Store) DeleteProject(ctx context.Context, id pgtype.UUID) (int64, []string, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return 0, nil, err
@@ -65,21 +65,21 @@ func (s *Store) DeleteProject(ctx context.Context, params sqlc.DeleteProjectPara
 	queries := s.queries.WithTx(tx)
 	var exists bool
 	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND team_id = $2)`,
-		params.ID, params.TeamID).Scan(&exists); err != nil {
+		`SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1)`,
+		id).Scan(&exists); err != nil {
 		return 0, nil, err
 	}
 	if !exists {
 		return 0, nil, nil
 	}
-	if _, err := queries.PurgeTombstonedServicesByProject(ctx, params.ID); err != nil {
+	if _, err := queries.PurgeTombstonedServicesByProject(ctx, id); err != nil {
 		return 0, nil, err
 	}
-	volumes, err := queries.PurgeTombstonedDatabasesByProject(ctx, params.ID)
+	volumes, err := queries.PurgeTombstonedDatabasesByProject(ctx, id)
 	if err != nil {
 		return 0, nil, err
 	}
-	affected, err := queries.DeleteProject(ctx, params)
+	affected, err := queries.DeleteProject(ctx, id)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -96,8 +96,8 @@ func (s *Store) CreateEnvironment(ctx context.Context, params sqlc.CreateEnviron
 	return s.queries.CreateEnvironment(ctx, params)
 }
 
-func (s *Store) GetEnvironment(ctx context.Context, params sqlc.GetEnvironmentParams) (sqlc.Environment, error) {
-	return s.queries.GetEnvironment(ctx, params)
+func (s *Store) GetEnvironment(ctx context.Context, id pgtype.UUID) (sqlc.Environment, error) {
+	return s.queries.GetEnvironment(ctx, id)
 }
 
 func (s *Store) ListEnvironmentsByProject(ctx context.Context, projectID pgtype.UUID) ([]sqlc.Environment, error) {
@@ -108,7 +108,7 @@ func (s *Store) UpdateEnvironment(ctx context.Context, params sqlc.UpdateEnviron
 	return s.queries.UpdateEnvironment(ctx, params)
 }
 
-func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, teamID, environmentID pgtype.UUID) (removed bool, orphanVolumes []string, err error) {
+func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, environmentID pgtype.UUID) (removed bool, orphanVolumes []string, err error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return false, nil, err
@@ -116,10 +116,7 @@ func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, teamID, environmen
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	queries := s.queries.WithTx(tx)
-	env, err := queries.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
-		ID:     environmentID,
-		TeamID: teamID,
-	})
+	env, err := queries.GetEnvironment(ctx, environmentID)
 	if err != nil {
 		return false, nil, err
 	}
@@ -140,10 +137,7 @@ func (s *Store) DeleteEnvironmentGuarded(ctx context.Context, teamID, environmen
 	if err != nil {
 		return false, nil, err
 	}
-	affected, err := queries.DeleteEnvironment(ctx, sqlc.DeleteEnvironmentParams{
-		ID:     environmentID,
-		TeamID: teamID,
-	})
+	affected, err := queries.DeleteEnvironment(ctx, environmentID)
 	if err != nil {
 		return false, nil, err
 	}
@@ -223,6 +217,6 @@ func (s *Store) ReplaceSharedVariablesLocked(ctx context.Context, projectID, env
 	return tx.Commit(ctx)
 }
 
-func (s *Store) ListPreviewBases(ctx context.Context, params sqlc.ListPreviewBasesParams) ([]sqlc.ListPreviewBasesRow, error) {
-	return s.queries.ListPreviewBases(ctx, params)
+func (s *Store) ListPreviewBases(ctx context.Context, previewAppIDs []pgtype.UUID) ([]sqlc.ListPreviewBasesRow, error) {
+	return s.queries.ListPreviewBases(ctx, previewAppIDs)
 }

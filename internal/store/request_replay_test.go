@@ -59,9 +59,9 @@ func replayTestStore(t *testing.T) (*Store, *Store) {
 	return New(first), New(second)
 }
 
-func replayContext(t *testing.T, principal, team uuid.UUID, op string, target uuid.UUID, key string, input any) context.Context {
+func replayContext(t *testing.T, principal uuid.UUID, op string, target uuid.UUID, key string, input any) context.Context {
 	t.Helper()
-	ctx := requestreplay.With(context.Background(), &requestreplay.Request{Principal: principal, Team: team, Operation: op, Target: target, Key: key})
+	ctx := requestreplay.With(context.Background(), &requestreplay.Request{Principal: principal, Operation: op, Target: target, Key: key})
 	if err := requestreplay.Fingerprint(ctx, "stable-server-key", input); err != nil {
 		t.Fatal(err)
 	}
@@ -75,23 +75,23 @@ func seedReplayResources(t *testing.T, st *Store) (uuid.UUID, sqlc.Project, sqlc
 	if err != nil {
 		t.Fatal(err)
 	}
-	team := uuid.UUID(user.ID.Bytes)
-	project, env, err := st.CreateProjectWithEnvironment(ctx, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), TeamID: replayUUID(team), Name: "base"}, replayUUID(uuid.New()), "production")
+	userID := uuid.UUID(user.ID.Bytes)
+	project, env, err := st.CreateProjectWithEnvironment(ctx, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), Name: "base"}, replayUUID(uuid.New()), "production")
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "node", Ip: "127.0.0.1", Port: 22, SshUser: "root", TeamID: replayUUID(team)})
+	server, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "node", Ip: "127.0.0.1", Port: 22, SshUser: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return team, project, env, server
+	return userID, project, env, server
 }
 
 func TestRequestReplayConcurrentAllBoundaries(t *testing.T) {
 	st, other := replayTestStore(t)
-	team, project, env, server := seedReplayResources(t, st)
+	user, project, env, server := seedReplayResources(t, st)
 	appParams := func() sqlc.CreateApplicationParams {
-		return sqlc.CreateApplicationParams{ID: replayUUID(uuid.New()), UserID: replayUUID(team), TeamID: replayUUID(team), EnvironmentID: env.ID, ServerID: server.ID, Name: "image", SourceType: "image", ImageRef: "busybox:latest"}
+		return sqlc.CreateApplicationParams{ID: replayUUID(uuid.New()), UserID: replayUUID(user), EnvironmentID: env.ID, ServerID: server.ID, Name: "image", SourceType: "image", ImageRef: "busybox:latest"}
 	}
 	app, err := st.CreateApplicationWithConfig(context.Background(), appParams(), nil, nil, nil)
 	if err != nil {
@@ -103,7 +103,7 @@ func TestRequestReplayConcurrentAllBoundaries(t *testing.T) {
 		create      func(context.Context, *Store) (uuid.UUID, error)
 	}{
 		{"create_project", "projects", uuid.Nil, func(ctx context.Context, s *Store) (uuid.UUID, error) {
-			p, _, e := s.CreateProjectWithEnvironment(ctx, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), TeamID: replayUUID(team), Name: "accepted"}, replayUUID(uuid.New()), "production")
+			p, _, e := s.CreateProjectWithEnvironment(ctx, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), Name: "accepted"}, replayUUID(uuid.New()), "production")
 			return uuid.UUID(p.ID.Bytes), e
 		}},
 		{"create_environment", "environments", uuid.UUID(project.ID.Bytes), func(ctx context.Context, s *Store) (uuid.UUID, error) {
@@ -140,7 +140,7 @@ func TestRequestReplayConcurrentAllBoundaries(t *testing.T) {
 				go func(i int) {
 					defer wg.Done()
 					<-start
-					ctx := replayContext(t, team, team, tc.name, tc.target, "same-key", "canonical-input")
+					ctx := replayContext(t, user, tc.name, tc.target, "same-key", "canonical-input")
 					s := st
 					if i%2 == 1 {
 						s = other
@@ -176,12 +176,12 @@ func TestRequestReplayConcurrentAllBoundaries(t *testing.T) {
 			if after != before+1 {
 				t.Fatalf("rows %d -> %d", before, after)
 			}
-			ctx := replayContext(t, team, team, tc.name, tc.target, "same-key", "canonical-input")
+			ctx := replayContext(t, user, tc.name, tc.target, "same-key", "canonical-input")
 			id, e := tc.create(ctx, other)
 			if e != nil || id != accepted || !requestreplay.Replayed(ctx) {
 				t.Fatalf("response loss recovery: %v %v", id, e)
 			}
-			changed := replayContext(t, team, team, tc.name, tc.target, "same-key", "changed-input")
+			changed := replayContext(t, user, tc.name, tc.target, "same-key", "changed-input")
 			if _, e := tc.create(changed, st); !errors.Is(e, requestreplay.ErrConflict) {
 				t.Fatalf("changed payload: %v", e)
 			}
@@ -200,14 +200,14 @@ func TestRequestReplayConcurrentAllBoundaries(t *testing.T) {
 
 func TestRequestReplayRollbackExpiryIsolationAndDeletion(t *testing.T) {
 	st, _ := replayTestStore(t)
-	team, _, _, _ := seedReplayResources(t, st)
+	user, _, _, _ := seedReplayResources(t, st)
 	ctx := context.Background()
 	create := func(c context.Context, name string) (sqlc.Project, error) {
-		p, _, err := st.CreateProjectWithEnvironment(c, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), TeamID: replayUUID(team), Name: name}, replayUUID(uuid.New()), "production")
+		p, _, err := st.CreateProjectWithEnvironment(c, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), Name: name}, replayUUID(uuid.New()), "production")
 		return p, err
 	}
 	request := func(key string) context.Context {
-		return replayContext(t, team, team, "create_project", uuid.Nil, key, "body")
+		return replayContext(t, user, "create_project", uuid.Nil, key, "body")
 	}
 	for _, deferred := range []bool{false, true} {
 		trigger := `CREATE TRIGGER fail_receipt BEFORE INSERT ON request_receipts FOR EACH ROW EXECUTE FUNCTION reject_receipt()`
@@ -243,18 +243,8 @@ func TestRequestReplayRollbackExpiryIsolationAndDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherPrincipal := replayContext(t, uuid.New(), team, "create_project", uuid.Nil, "isolation", "body")
+	otherPrincipal := replayContext(t, uuid.New(), "create_project", uuid.Nil, "isolation", "body")
 	if _, err := create(otherPrincipal, "second"); err != nil {
-		t.Fatal(err)
-	}
-	user, err := st.CreateUser(ctx, uuid.NewString()+"@example.com", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherTeam := uuid.UUID(user.ID.Bytes)
-	c = replayContext(t, team, otherTeam, "create_project", uuid.Nil, "isolation", "body")
-	_, _, err = st.CreateProjectWithEnvironment(c, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), TeamID: replayUUID(otherTeam), Name: "first"}, replayUUID(uuid.New()), "production")
-	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.DB.Exec(ctx, "DELETE FROM projects WHERE id=$1", first.ID); err != nil {
@@ -275,7 +265,7 @@ func TestRequestReplayRollbackExpiryIsolationAndDeletion(t *testing.T) {
 	if _, err := st.DB.Exec(ctx, "UPDATE request_receipts SET accepted_at=clock_timestamp()-interval '8 days'"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := st.CleanupRequestReceipts(ctx); err != nil || n != 3 {
+	if n, err := st.CleanupRequestReceipts(ctx); err != nil || n != 2 {
 		t.Fatalf("cleanup %d %v", n, err)
 	}
 	if _, err := create(request("isolation"), "after-cleanup"); err != nil {
@@ -285,8 +275,8 @@ func TestRequestReplayRollbackExpiryIsolationAndDeletion(t *testing.T) {
 
 func TestRequestReplayBoundedPending(t *testing.T) {
 	st, _ := replayTestStore(t)
-	team, _, _, _ := seedReplayResources(t, st)
-	c := replayContext(t, team, team, "create_project", uuid.Nil, "locked", "body")
+	user, _, _, _ := seedReplayResources(t, st)
+	c := replayContext(t, user, "create_project", uuid.Nil, "locked", "body")
 	r := requestreplay.From(c)
 	tx, err := st.DB.Begin(c)
 	if err != nil {
@@ -297,7 +287,7 @@ func TestRequestReplayBoundedPending(t *testing.T) {
 	if _, err := tx.Exec(c, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", string(identity)); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = st.CreateProjectWithEnvironment(c, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), TeamID: replayUUID(team), Name: "pending"}, pgtype.UUID{Bytes: uuid.New(), Valid: true}, "production")
+	_, _, err = st.CreateProjectWithEnvironment(c, sqlc.CreateProjectParams{ID: replayUUID(uuid.New()), Name: "pending"}, pgtype.UUID{Bytes: uuid.New(), Valid: true}, "production")
 	if !errors.Is(err, requestreplay.ErrProgress) {
 		t.Fatalf("pending: %v", err)
 	}
@@ -312,8 +302,8 @@ func TestRequestReplayCleanupBound(t *testing.T) {
 	st, _ := replayTestStore(t)
 	ctx := context.Background()
 	principal := uuid.New()
-	_, err := st.DB.Exec(ctx, `INSERT INTO request_receipts(principal_id,team_id,operation,target_id,request_key,fingerprint,resource_id,related_id,accepted_at)
- SELECT $1,$1,'create_project',$1,'old-'||i,'safe',$1,$1,clock_timestamp()-interval '8 days' FROM generate_series(1,205) i`, principal)
+	_, err := st.DB.Exec(ctx, `INSERT INTO request_receipts(principal_id,operation,target_id,request_key,fingerprint,resource_id,related_id,accepted_at)
+ SELECT $1,'create_project',$1,'old-'||i,'safe',$1,$1,clock_timestamp()-interval '8 days' FROM generate_series(1,205) i`, principal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +317,7 @@ func TestRequestReplayCleanupBound(t *testing.T) {
 
 func TestRequestReplayResourceLockTimeout(t *testing.T) {
 	st, _ := replayTestStore(t)
-	team, project, _, _ := seedReplayResources(t, st)
+	user, project, _, _ := seedReplayResources(t, st)
 	ctx := context.Background()
 	holder, err := st.DB.Begin(ctx)
 	if err != nil {
@@ -338,7 +328,7 @@ func TestRequestReplayResourceLockTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := func() context.Context {
-		return replayContext(t, team, team, "create_environment", uuid.UUID(project.ID.Bytes), "resource-lock", "body")
+		return replayContext(t, user, "create_environment", uuid.UUID(project.ID.Bytes), "resource-lock", "body")
 	}
 	params := sqlc.CreateEnvironmentParams{ID: replayUUID(uuid.New()), ProjectID: project.ID, Name: "blocked"}
 	c := request()

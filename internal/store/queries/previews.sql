@@ -1,10 +1,9 @@
 -- name: UpsertPreviewDeploy :one
 INSERT INTO preview_deploys (
-    application_id, team_id, provider, repo, pr_number, branch, head_sha,
+    application_id, provider, repo, pr_number, branch, head_sha,
     preview_application_id, host, state
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (application_id, pr_number) DO UPDATE SET
-    team_id = EXCLUDED.team_id,
     provider = EXCLUDED.provider,
     repo = EXCLUDED.repo,
     branch = EXCLUDED.branch,

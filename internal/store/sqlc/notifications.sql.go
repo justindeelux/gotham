@@ -13,14 +13,13 @@ import (
 
 const createNotificationChannel = `-- name: CreateNotificationChannel :one
 INSERT INTO notification_channels (
-    id, team_id, name, kind, config, enabled, resource_type, resource_id, events
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, team_id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at
+    id, name, kind, config, enabled, resource_type, resource_id, events
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at
 `
 
 type CreateNotificationChannelParams struct {
 	ID           pgtype.UUID `json:"id"`
-	TeamID       pgtype.UUID `json:"team_id"`
 	Name         string      `json:"name"`
 	Kind         string      `json:"kind"`
 	Config       string      `json:"config"`
@@ -33,7 +32,6 @@ type CreateNotificationChannelParams struct {
 func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotificationChannelParams) (NotificationChannel, error) {
 	row := q.db.QueryRow(ctx, createNotificationChannel,
 		arg.ID,
-		arg.TeamID,
 		arg.Name,
 		arg.Kind,
 		arg.Config,
@@ -45,7 +43,6 @@ func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotif
 	var i NotificationChannel
 	err := row.Scan(
 		&i.ID,
-		&i.TeamID,
 		&i.Name,
 		&i.Kind,
 		&i.Config,
@@ -96,16 +93,11 @@ func (q *Queries) CreateNotificationDelivery(ctx context.Context, arg CreateNoti
 }
 
 const deleteNotificationChannel = `-- name: DeleteNotificationChannel :execrows
-DELETE FROM notification_channels WHERE id = $1 AND team_id = $2
+DELETE FROM notification_channels WHERE id = $1
 `
 
-type DeleteNotificationChannelParams struct {
-	ID     pgtype.UUID `json:"id"`
-	TeamID pgtype.UUID `json:"team_id"`
-}
-
-func (q *Queries) DeleteNotificationChannel(ctx context.Context, arg DeleteNotificationChannelParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteNotificationChannel, arg.ID, arg.TeamID)
+func (q *Queries) DeleteNotificationChannel(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteNotificationChannel, id)
 	if err != nil {
 		return 0, err
 	}
@@ -113,22 +105,14 @@ func (q *Queries) DeleteNotificationChannel(ctx context.Context, arg DeleteNotif
 }
 
 const getNotificationChannel = `-- name: GetNotificationChannel :one
-SELECT id, team_id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels WHERE id = $1 AND team_id = $2
+SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels WHERE id = $1
 `
 
-type GetNotificationChannelParams struct {
-	ID     pgtype.UUID `json:"id"`
-	TeamID pgtype.UUID `json:"team_id"`
-}
-
-// The team filter is what makes a foreign channel ID indistinguishable from a
-// missing one (404).
-func (q *Queries) GetNotificationChannel(ctx context.Context, arg GetNotificationChannelParams) (NotificationChannel, error) {
-	row := q.db.QueryRow(ctx, getNotificationChannel, arg.ID, arg.TeamID)
+func (q *Queries) GetNotificationChannel(ctx context.Context, id pgtype.UUID) (NotificationChannel, error) {
+	row := q.db.QueryRow(ctx, getNotificationChannel, id)
 	var i NotificationChannel
 	err := row.Scan(
 		&i.ID,
-		&i.TeamID,
 		&i.Name,
 		&i.Kind,
 		&i.Config,
@@ -143,13 +127,12 @@ func (q *Queries) GetNotificationChannel(ctx context.Context, arg GetNotificatio
 }
 
 const listNotificationChannels = `-- name: ListNotificationChannels :many
-SELECT id, team_id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels
-WHERE team_id = $1
+SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels
 ORDER BY created_at ASC, id ASC
 `
 
-func (q *Queries) ListNotificationChannels(ctx context.Context, teamID pgtype.UUID) ([]NotificationChannel, error) {
-	rows, err := q.db.Query(ctx, listNotificationChannels, teamID)
+func (q *Queries) ListNotificationChannels(ctx context.Context) ([]NotificationChannel, error) {
+	rows, err := q.db.Query(ctx, listNotificationChannels)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +142,6 @@ func (q *Queries) ListNotificationChannels(ctx context.Context, teamID pgtype.UU
 		var i NotificationChannel
 		if err := rows.Scan(
 			&i.ID,
-			&i.TeamID,
 			&i.Name,
 			&i.Kind,
 			&i.Config,
@@ -181,24 +163,22 @@ func (q *Queries) ListNotificationChannels(ctx context.Context, teamID pgtype.UU
 }
 
 const listNotificationChannelsForEvent = `-- name: ListNotificationChannelsForEvent :many
-SELECT id, team_id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels
-WHERE team_id = $1
-  AND enabled
-  AND (resource_type IS NULL OR (resource_type = $2 AND resource_id = $3))
+SELECT id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at FROM notification_channels
+WHERE enabled
+  AND (resource_type IS NULL OR (resource_type = $1 AND resource_id = $2))
 ORDER BY created_at ASC, id ASC
 `
 
 type ListNotificationChannelsForEventParams struct {
-	TeamID       pgtype.UUID `json:"team_id"`
 	ResourceType *string     `json:"resource_type"`
 	ResourceID   pgtype.UUID `json:"resource_id"`
 }
 
-// The dispatcher read: enabled channels of the event's team that cover the
-// event's resource — team-wide rows (resource_type IS NULL) plus the overrides
-// scoped to that exact resource. Event-list filtering stays in Go.
+// The dispatcher read: enabled channels that cover the event's resource —
+// instance-wide rows (resource_type IS NULL) plus the overrides scoped to that
+// exact resource. Event-list filtering stays in Go.
 func (q *Queries) ListNotificationChannelsForEvent(ctx context.Context, arg ListNotificationChannelsForEventParams) ([]NotificationChannel, error) {
-	rows, err := q.db.Query(ctx, listNotificationChannelsForEvent, arg.TeamID, arg.ResourceType, arg.ResourceID)
+	rows, err := q.db.Query(ctx, listNotificationChannelsForEvent, arg.ResourceType, arg.ResourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +188,6 @@ func (q *Queries) ListNotificationChannelsForEvent(ctx context.Context, arg List
 		var i NotificationChannel
 		if err := rows.Scan(
 			&i.ID,
-			&i.TeamID,
 			&i.Name,
 			&i.Kind,
 			&i.Config,
@@ -231,23 +210,20 @@ func (q *Queries) ListNotificationChannelsForEvent(ctx context.Context, arg List
 
 const listNotificationDeliveries = `-- name: ListNotificationDeliveries :many
 SELECT d.id, d.channel_id, d.event_type, d.status, d.error_summary, d.created_at FROM notification_deliveries d
-JOIN notification_channels c ON c.id = d.channel_id
-WHERE d.channel_id = $1 AND c.team_id = $2
+WHERE d.channel_id = $1
 ORDER BY d.created_at DESC, d.id DESC
-LIMIT $3
+LIMIT $2
 `
 
 type ListNotificationDeliveriesParams struct {
 	ChannelID pgtype.UUID `json:"channel_id"`
-	TeamID    pgtype.UUID `json:"team_id"`
 	Limit     int32       `json:"limit"`
 }
 
-// The history panel read: the newest attempts of one channel, joined to its
-// channel so a foreign team's channel can never be read (the join matches no
-// row). created_at DESC, id DESC is the retention order too.
+// The history panel read: the newest attempts of one channel.
+// created_at DESC, id DESC is the retention order too.
 func (q *Queries) ListNotificationDeliveries(ctx context.Context, arg ListNotificationDeliveriesParams) ([]NotificationDelivery, error) {
-	rows, err := q.db.Query(ctx, listNotificationDeliveries, arg.ChannelID, arg.TeamID, arg.Limit)
+	rows, err := q.db.Query(ctx, listNotificationDeliveries, arg.ChannelID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -316,21 +292,20 @@ func (q *Queries) PruneNotificationDeliveries(ctx context.Context, arg PruneNoti
 
 const updateNotificationChannel = `-- name: UpdateNotificationChannel :one
 UPDATE notification_channels
-SET name = $3,
-    kind = $4,
-    config = $5,
-    enabled = $6,
-    resource_type = $7,
-    resource_id = $8,
-    events = $9,
+SET name = $2,
+    kind = $3,
+    config = $4,
+    enabled = $5,
+    resource_type = $6,
+    resource_id = $7,
+    events = $8,
     updated_at = now()
-WHERE id = $1 AND team_id = $2
-RETURNING id, team_id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at
+WHERE id = $1
+RETURNING id, name, kind, config, enabled, resource_type, resource_id, events, created_at, updated_at
 `
 
 type UpdateNotificationChannelParams struct {
 	ID           pgtype.UUID `json:"id"`
-	TeamID       pgtype.UUID `json:"team_id"`
 	Name         string      `json:"name"`
 	Kind         string      `json:"kind"`
 	Config       string      `json:"config"`
@@ -343,7 +318,6 @@ type UpdateNotificationChannelParams struct {
 func (q *Queries) UpdateNotificationChannel(ctx context.Context, arg UpdateNotificationChannelParams) (NotificationChannel, error) {
 	row := q.db.QueryRow(ctx, updateNotificationChannel,
 		arg.ID,
-		arg.TeamID,
 		arg.Name,
 		arg.Kind,
 		arg.Config,
@@ -355,7 +329,6 @@ func (q *Queries) UpdateNotificationChannel(ctx context.Context, arg UpdateNotif
 	var i NotificationChannel
 	err := row.Scan(
 		&i.ID,
-		&i.TeamID,
 		&i.Name,
 		&i.Kind,
 		&i.Config,

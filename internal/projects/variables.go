@@ -49,8 +49,7 @@ func (s *Service) GetProjectVariables(ctx context.Context, userID, projectID uui
 	if userID == uuid.Nil || projectID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	teamID := teamIDFor(ctx, userID)
-	if _, err := s.repo.GetProject(ctx, teamID, projectID); err != nil {
+	if _, err := s.repo.GetProject(ctx, projectID); err != nil {
 		return nil, err
 	}
 	return s.listVariables(ctx, projectID, uuid.Nil)
@@ -63,11 +62,7 @@ func (s *Service) ReplaceProjectVariables(ctx context.Context, userID, projectID
 	if userID == uuid.Nil || projectID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return nil, err
-	}
-	teamID := teamIDFor(ctx, userID)
-	if _, err := s.repo.GetProject(ctx, teamID, projectID); err != nil {
+	if _, err := s.repo.GetProject(ctx, projectID); err != nil {
 		return nil, err
 	}
 	return s.replaceVariables(ctx, projectID, uuid.Nil, inputs)
@@ -80,7 +75,7 @@ func (s *Service) GetEnvironmentVariables(ctx context.Context, userID, environme
 	if userID == uuid.Nil || environmentID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	environment, err := s.repo.GetEnvironment(ctx, teamIDFor(ctx, userID), environmentID)
+	environment, err := s.repo.GetEnvironment(ctx, environmentID)
 	if err != nil {
 		return nil, err
 	}
@@ -94,10 +89,7 @@ func (s *Service) ReplaceEnvironmentVariables(ctx context.Context, userID, envir
 	if userID == uuid.Nil || environmentID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return nil, err
-	}
-	environment, err := s.repo.GetEnvironment(ctx, teamIDFor(ctx, userID), environmentID)
+	environment, err := s.repo.GetEnvironment(ctx, environmentID)
 	if err != nil {
 		return nil, err
 	}

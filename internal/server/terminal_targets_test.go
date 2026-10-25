@@ -19,7 +19,6 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
@@ -121,7 +120,7 @@ func TestTerminalTargetsSourceAuthorization(t *testing.T) {
 	})
 
 	t.Run("read-only member sees no containers and no error", func(t *testing.T) {
-		readOnly := fakeTargetResolver{errs: map[uuid.UUID]error{app.ID: teams.ErrForbidden}}
+		readOnly := fakeTargetResolver{errs: map[uuid.UUID]error{app.ID: terminal.ErrForbidden}}
 		source := terminalTargetsSource{
 			apps:     fakeTargetDeployService{applications: []deploy.Application{app}},
 			resolver: readOnly,
@@ -150,7 +149,7 @@ func TestTerminalTargetsSourcePerApplicationFailures(t *testing.T) {
 		},
 		errs: map[uuid.UUID]error{
 			downApp.ID:     deploy.ErrAgentUnavailable,
-			readOnlyApp.ID: teams.ErrForbidden,
+			readOnlyApp.ID: terminal.ErrForbidden,
 		},
 	}
 	source := terminalTargetsSource{
@@ -388,6 +387,7 @@ func TestTerminalTargetsSourceTimeoutCollapses(t *testing.T) {
 
 func TestTerminalTargetsRouteRequiresInteractiveSession(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
+	s.auth.(*fakeAuthService).user.Role = "owner"
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
 	adminToken := mustCreateAdminToken(t, tokens, testUserID)
 
@@ -444,38 +444,5 @@ func TestTerminalTargetsSourceForCapturesOwner(t *testing.T) {
 	}
 	if len(targets.Servers) != 1 {
 		t.Fatalf("servers = %+v, want the ready node for the operator", targets.Servers)
-	}
-}
-
-func TestTerminalTargetsRouteTeamScope(t *testing.T) {
-	s, _ := newScopeTestServer(t)
-	teamA, teamB := uuid.New(), uuid.New()
-	teamService := newFakeTeamService()
-	teamService.allow(teamA, testUserID, teams.RoleOwner)
-	s.teamService = teamService
-
-	cases := []struct {
-		name   string
-		teamID string
-		want   int
-	}{
-		{"personal fallback", "", http.StatusOK},
-		{"member team", teamA.String(), http.StatusOK},
-		{"foreign team", teamB.String(), http.StatusForbidden},
-		{"invalid header", "not-a-uuid", http.StatusBadRequest},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "/api/v1/terminal/targets", nil)
-			request.Header.Set("Authorization", "Bearer valid-token")
-			if tc.teamID != "" {
-				request.Header.Set("X-Team-Id", tc.teamID)
-			}
-			recorder := httptest.NewRecorder()
-			s.Handler().ServeHTTP(recorder, request)
-			if recorder.Code != tc.want {
-				t.Fatalf("status = %d, want %d (body %s)", recorder.Code, tc.want, recorder.Body.String())
-			}
-		})
 	}
 }

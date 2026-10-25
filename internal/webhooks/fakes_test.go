@@ -72,9 +72,9 @@ func newFakeRepository() *fakeRepository {
 func newFakeRepositoryFor(provider string) *fakeRepository {
 	return &fakeRepository{
 		app: Application{
-			ID:         uuid.New(),
-			UserID:     uuid.New(),
-			TeamID:     uuid.New(),
+			ID:     uuid.New(),
+			UserID: uuid.New(),
+
 			Provider:   provider,
 			Repo:       "octo/gotham",
 			Branch:     "main",
@@ -107,16 +107,16 @@ func (r *fakeRepository) withTarget() *fakeRepository {
 	r.target = &Target{
 		ApplicationID: r.app.ID,
 		UserID:        r.app.UserID,
-		TeamID:        r.app.TeamID,
-		Provider:      r.app.Provider,
-		Repo:          r.app.Repo,
-		Branch:        r.app.Branch,
-		CloneURL:      r.app.CloneURL,
-		Name:          r.app.Name,
-		BaseDomain:    r.app.BaseDomain,
-		HookID:        r.hook.HookID,
-		Secret:        secret,
-		URL:           r.hook.URL,
+
+		Provider:   r.app.Provider,
+		Repo:       r.app.Repo,
+		Branch:     r.app.Branch,
+		CloneURL:   r.app.CloneURL,
+		Name:       r.app.Name,
+		BaseDomain: r.app.BaseDomain,
+		HookID:     r.hook.HookID,
+		Secret:     secret,
+		URL:        r.hook.URL,
 	}
 	return r
 }
@@ -160,16 +160,16 @@ func (r *fakeRepository) CreateWebhook(_ context.Context, hook Hook, secret stri
 	r.target = &Target{
 		ApplicationID: hook.ApplicationID,
 		UserID:        r.app.UserID,
-		TeamID:        r.app.TeamID,
-		Provider:      hook.Provider,
-		Repo:          hook.Repo,
-		Branch:        r.app.Branch,
-		CloneURL:      r.app.CloneURL,
-		Name:          r.app.Name,
-		BaseDomain:    r.app.BaseDomain,
-		HookID:        hook.HookID,
-		Secret:        secret,
-		URL:           hook.URL,
+
+		Provider:   hook.Provider,
+		Repo:       hook.Repo,
+		Branch:     r.app.Branch,
+		CloneURL:   r.app.CloneURL,
+		Name:       r.app.Name,
+		BaseDomain: r.app.BaseDomain,
+		HookID:     hook.HookID,
+		Secret:     secret,
+		URL:        hook.URL,
 	}
 	return hook, nil
 }
@@ -547,9 +547,9 @@ func (r *fakeRepository) WritePreviewBinding(_ context.Context, write PreviewBin
 	}
 
 	stored := Preview{
-		ID:                   uuid.New(),
-		ApplicationID:        write.ApplicationID,
-		TeamID:               write.TeamID,
+		ID:            uuid.New(),
+		ApplicationID: write.ApplicationID,
+
 		Provider:             write.Provider,
 		Repo:                 write.Repo,
 		PRNumber:             write.PRNumber,

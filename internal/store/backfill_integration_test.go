@@ -45,12 +45,12 @@ func TestBackfillApplicationCertificates(t *testing.T) {
 		defer cleanupCancel()
 		_, _ = pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID)
 	})
-	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
+	envID, serverID := seedEnvColumns(t, ctx, st, pool)
 
 	newApp := func(name string) sqlc.Application {
 		t.Helper()
 		app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-			UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+			UserID: user.ID, ServerID: serverID, EnvironmentID: envID,
 			Name:      name,
 			CloneUrl:  "https://github.com/acme/demo.git",
 			Branch:    "main",

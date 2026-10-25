@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -493,14 +492,10 @@ func (s *Service) IssueDownloadTicket(ctx context.Context, serverID uuid.UUID, r
 	if err := validatePathArg("path", path); err != nil {
 		return "", err
 	}
-	server, err := s.resolve(ctx, serverID, true)
-	if err != nil {
+	if _, err := s.resolve(ctx, serverID, true); err != nil {
 		return "", err
 	}
-	scope := teams.ScopeFor(ctx, uuid.Nil)
 	return s.tickets.issue(ticket{
-		UserID:   scope.UserID,
-		TeamID:   server.TeamID,
 		ServerID: serverID,
 		Root:     root,
 		Path:     path,
@@ -515,7 +510,7 @@ func (s *Service) Download(ctx context.Context, serverID uuid.UUID, ticketID str
 	if !ok {
 		return nil, ErrNotFound
 	}
-	defer func() { s.auditActor(t.UserID, t.TeamID, serverID, "download", t.Root, t.Path, err) }()
+	defer func() { s.audit(ctx, serverID, "download", t.Root, t.Path, err) }()
 	server, err := s.server(ctx, serverID)
 	if err != nil {
 		return nil, err
@@ -585,16 +580,10 @@ func (s *Service) Download(ctx context.Context, serverID uuid.UUID, ticketID str
 	}, nil
 }
 
-func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) (*servers.Server, error) {
+func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, _ bool) (*servers.Server, error) {
 	server, err := s.server(ctx, serverID)
 	if err != nil {
 		return nil, err
-	}
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, write); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return nil, ErrForbidden
-		}
-		return nil, ErrNotFound
 	}
 	return server, nil
 }
@@ -858,37 +847,18 @@ func auditResult(err error) string {
 	}
 }
 
-func (s *Service) audit(ctx context.Context, serverID uuid.UUID, op, root, relpath string, err error, extra ...any) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	scope := teams.ScopeFor(ctx, uuid.Nil)
-	s.auditActor(scope.UserID, scope.TeamID, serverID, op, root, relpath, err, extra...)
-}
-
-func (s *Service) auditActor(userID, teamID, serverID uuid.UUID, op, root, relpath string, err error, extra ...any) {
-	args := []any{
-		"op", op,
-		"result", auditResult(err),
-		"actor_user_id", scopeID(userID),
-		"actor_team_id", scopeID(teamID),
-		"server_id", serverID.String(),
-		"root", root,
-		"relpath", relpath,
-	}
-	s.logger.Info("files: audit", append(args, extra...)...)
-}
-
-func scopeID(id uuid.UUID) string {
-	if id == uuid.Nil {
-		return ""
-	}
-	return id.String()
+func (s *Service) audit(_ context.Context, serverID uuid.UUID, op, root, relpath string, err error, extra ...any) {
+	s.logger.Info("files: audit",
+		append([]any{
+			"op", op,
+			"result", auditResult(err),
+			"server_id", serverID.String(),
+			"root", root,
+			"relpath", relpath,
+		}, extra...)...)
 }
 
 type ticket struct {
-	UserID   uuid.UUID
-	TeamID   uuid.UUID
 	ServerID uuid.UUID
 	Root     string
 	Path     string

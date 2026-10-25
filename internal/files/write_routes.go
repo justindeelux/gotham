@@ -1,7 +1,6 @@
 package files
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,10 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const maxJSONBodyBytes int64 = 1 << 20
@@ -66,22 +61,6 @@ func (h *handler) requestLimits() (int64, time.Duration) {
 	return DefaultMaxUploadBytes, defaultTransferTimeout
 }
 
-// spoolOwner identifies the caller holding the staged-upload share: a team,
-// else the user, else a shared bucket for callers without a scope.
-func spoolOwner(ctx context.Context) string {
-	scope, ok := teams.FromContext(ctx)
-	if !ok {
-		return ""
-	}
-	if scope.TeamID != uuid.Nil {
-		return "team:" + scope.TeamID.String()
-	}
-	if scope.UserID != uuid.Nil {
-		return "user:" + scope.UserID.String()
-	}
-	return ""
-}
-
 func (h *handler) putContent(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -112,7 +91,7 @@ func (h *handler) putContent(w http.ResponseWriter, r *http.Request) {
 	size := r.ContentLength
 	var cleanup func()
 	if size < 0 {
-		file, written, done, err := h.spool.stage(spoolOwner(r.Context()), body, maxUpload)
+		file, written, done, err := h.spool.stage(body, maxUpload)
 		if err != nil {
 			h.writeError(w, err)
 			return
@@ -182,7 +161,7 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		func() {
-			file, size, cleanup, err := h.spool.stage(spoolOwner(r.Context()), part, maxUpload)
+			file, size, cleanup, err := h.spool.stage(part, maxUpload)
 			if err != nil {
 				result.Error = uploadBodyError(err)
 				return
@@ -323,7 +302,7 @@ func uploadBodyError(err error) string {
 	}
 	switch {
 	case errors.Is(err, ErrTooLarge), errors.Is(err, ErrBusy), errors.Is(err, ErrSpoolBusy),
-		errors.Is(err, ErrTeamBusy), errors.Is(err, ErrInsufficientStorage), errors.Is(err, ErrValidation):
+		errors.Is(err, ErrInsufficientStorage), errors.Is(err, ErrValidation):
 		return publicError(err)
 	default:
 		return "truncated"
@@ -370,8 +349,6 @@ func publicError(err error) string {
 	case errors.Is(err, ErrBusy):
 		return "busy"
 	case errors.Is(err, ErrSpoolBusy):
-		return "busy"
-	case errors.Is(err, ErrTeamBusy):
 		return "busy"
 	case errors.Is(err, ErrInsufficientStorage):
 		return "insufficient_storage"

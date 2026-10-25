@@ -8,5 +8,5 @@ var (
 	ErrAgentUnavailable  = errors.New("containers: agent unavailable")
 	ErrValidation        = errors.New("containers: invalid request")
 	ErrPortConflict      = errors.New("containers: host port already in use")
-	ErrForbidden         = errors.New("containers: insufficient team role")
+	ErrForbidden         = errors.New("containers: forbidden")
 )

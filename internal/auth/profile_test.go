@@ -19,7 +19,7 @@ func TestServiceUpdateProfile(t *testing.T) {
 
 	email := uniqueEmail("profile")
 	cleanupUser(t, st, email)
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestServiceUpdateProfile(t *testing.T) {
 	}
 
 	svc.AllowOpenRegistration = true
-	second, err := svc.Register(ctx, uniqueEmail("profile-plain"), "s3cret-password", "", nil, SessionMeta{})
+	second, err := svc.Register(ctx, uniqueEmail("profile-plain"), "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register second: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestServiceUpdateProfileTrimBoundsClear(t *testing.T) {
 
 	email := uniqueEmail("profile-bounds")
 	cleanupUser(t, st, email)
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestServiceUpdateProfileRejectsUnstorableText(t *testing.T) {
 
 	email := uniqueEmail("profile-text")
 	cleanupUser(t, st, email)
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestServiceUpdateProfileFormatChars(t *testing.T) {
 
 	email := uniqueEmail("profile-format")
 	cleanupUser(t, st, email)
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestServiceChangePassword(t *testing.T) {
 	email := uniqueEmail("change")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, oldPassword, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestServiceChangePasswordRacesLogin(t *testing.T) {
 	email := uniqueEmail("change-race-login")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, oldPassword, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestServiceChangePasswordRacesRefresh(t *testing.T) {
 	email := uniqueEmail("change-race-refresh")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, oldPassword, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestServiceChangePasswordConcurrent(t *testing.T) {
 	email := uniqueEmail("change-concurrent")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, oldPassword, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

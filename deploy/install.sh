@@ -2086,7 +2086,6 @@ First login:
 ${ADMIN_FIRST_LOGIN}
   The Servers page already lists this host's agent node (ready once its
   first heartbeat lands). Add more nodes with deploy/install-agent.sh.
-  To add members, create an invite in Teams and send the shown link.
   Platform-global operations (node-wide proxy sync, DNS providers) are
   available to the instance owner (the first account). Lost the password?
   sudo -u gotham -- ${INSTALL_PATH} admin reset-password --email <email>.

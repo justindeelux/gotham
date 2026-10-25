@@ -45,7 +45,7 @@ func TestBeginAndSafeErrors(t *testing.T) {
 		req := httptest.NewRequest("POST", "/", nil)
 		req.Header["Idempotency-Key"] = values
 		w := httptest.NewRecorder()
-		if _, ok := Begin(w, req, uuid.New(), uuid.New(), "create", uuid.Nil); ok || w.Code != 400 {
+		if _, ok := Begin(w, req, uuid.New(), "create", uuid.Nil); ok || w.Code != 400 {
 			t.Fatalf("header %v accepted", values)
 		}
 	}

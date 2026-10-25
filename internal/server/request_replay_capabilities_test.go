@@ -8,12 +8,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func TestMCPMutationCapabilitiesRequireMountedAliasesAndStableKey(t *testing.T) {
@@ -29,7 +27,6 @@ func TestMCPMutationCapabilitiesRequireMountedAliasesAndStableKey(t *testing.T) 
 		{name: "missing persistence", secret: "configured", service: true, enabled: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(teams.FeatureEnv, "true")
 			if tc.enabled {
 				t.Setenv(deploy.FeatureEnv, "true")
 			} else {
@@ -54,14 +51,9 @@ func TestMCPMutationCapabilitiesRequireMountedAliasesAndStableKey(t *testing.T) 
 			if tc.service {
 				s.deploy = fakeTargetDeployService{}
 			}
-			team := uuid.New()
-			membership := newFakeTeamService()
-			membership.allow(team, testUserID, teams.RoleAdmin)
-			s.teamService = membership
 			token := mustCreateToken(t, tokens, auth.ScopeRead)
 			req := httptest.NewRequest("GET", "/api/v1/mcp/context", nil)
 			req.Header.Set("Authorization", "Bearer "+token)
-			req.Header.Set(TeamHeader, team.String())
 			req.Header.Set(mcpContractHeader, "1")
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, req)

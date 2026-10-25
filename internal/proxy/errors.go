@@ -12,6 +12,6 @@ var (
 	ErrHistory          = errors.New("proxy: configuration history degraded")
 	ErrConflict         = errors.New("proxy: conflict")
 	ErrNotFound         = errors.New("proxy: not found")
-	ErrForbidden        = errors.New("proxy: insufficient team role")
+	ErrForbidden        = errors.New("proxy: forbidden")
 	ErrSecret           = errors.New("proxy: the deployment secret is not configured")
 )

@@ -48,11 +48,11 @@ func framesOfTask(t *testing.T, pub *recordPublisher, taskID string) []taskevent
 	return out
 }
 
-func waitForTrackerDrained(t *testing.T, tracker *taskevents.Tracker, teamID string) {
+func waitForTrackerDrained(t *testing.T, tracker *taskevents.Tracker, projectID string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(tracker.Snapshot(teamID)) == 0 {
+		if len(tracker.Snapshot(projectID)) == 0 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -86,7 +86,7 @@ func TestTaskEventsPublishedOnRun(t *testing.T) {
 		t.Fatal("no task frames published")
 	}
 	for _, ev := range frames {
-		if ev.TaskID != dep.ID.String() || ev.TeamID != app.TeamID.String() || ev.Name != app.Name {
+		if ev.TaskID != dep.ID.String() || ev.ProjectID != app.ProjectID.String() || ev.Name != app.Name {
 			t.Errorf("unexpected task identity %+v", ev)
 		}
 	}
@@ -103,7 +103,7 @@ func TestTaskEventsPublishedOnRun(t *testing.T) {
 	if !sawBuilding {
 		t.Errorf("no running frame for the building step in %v", got)
 	}
-	if running := tracker.Snapshot(app.TeamID.String()); len(running) != 0 {
+	if running := tracker.Snapshot(app.ProjectID.String()); len(running) != 0 {
 		t.Errorf("tracker still holds %d tasks after a terminal run", len(running))
 	}
 }
@@ -128,7 +128,7 @@ func TestFailPublishesDespitePersistError(t *testing.T) {
 	if len(frames) == 0 || frames[len(frames)-1].Status != taskevents.StatusFailed {
 		t.Fatalf("no terminal failed frame despite persist error: %v", statusesOf(frames))
 	}
-	if running := tracker.Snapshot(app.TeamID.String()); len(running) != 0 {
+	if running := tracker.Snapshot(app.ProjectID.String()); len(running) != 0 {
 		t.Errorf("tracker still holds %d tasks after an unpersisted failure", len(running))
 	}
 }
@@ -200,7 +200,7 @@ func TestRunPanicStillFailsClosed(t *testing.T) {
 	if len(frames) == 0 || frames[len(frames)-1].Status != taskevents.StatusFailed {
 		t.Fatalf("no terminal failed frame after panic: %v", statusesOf(frames))
 	}
-	if running := tracker.Snapshot(app.TeamID.String()); len(running) != 0 {
+	if running := tracker.Snapshot(app.ProjectID.String()); len(running) != 0 {
 		t.Errorf("tracker still holds %d tasks after a panic", len(running))
 	}
 }
@@ -255,7 +255,7 @@ func TestCancelledRunStillPublishesTerminal(t *testing.T) {
 	if live == 0 {
 		t.Errorf("no task publish ran on a live context (live=%d cancelled=%d)", live, cancelledCount)
 	}
-	if running := tracker.Snapshot(app.TeamID.String()); len(running) != 0 {
+	if running := tracker.Snapshot(app.ProjectID.String()); len(running) != 0 {
 		t.Errorf("tracker still holds %d tasks after a cancelled run", len(running))
 	}
 }
@@ -285,7 +285,7 @@ func TestSubmitOrderingStaysMonotonic(t *testing.T) {
 		}
 		ids = append(ids, queued.ID.String())
 	}
-	waitForTrackerDrained(t, tracker, app.TeamID.String())
+	waitForTrackerDrained(t, tracker, app.ProjectID.String())
 
 	for _, id := range ids {
 		frames := framesOfTask(t, pub, id)
@@ -350,7 +350,7 @@ func TestSubmitPublishesQueued(t *testing.T) {
 		if found.Name != app.Name {
 			t.Errorf("viaSystem=%v: name = %q, want %q", viaSystem, found.Name, app.Name)
 		}
-		if running := tracker.Snapshot(app.TeamID.String()); len(running) != 1 {
+		if running := tracker.Snapshot(app.ProjectID.String()); len(running) != 1 {
 			t.Errorf("viaSystem=%v: tracker holds %d tasks, want 1", viaSystem, len(running))
 		}
 	}
@@ -383,7 +383,7 @@ func TestTaskEventsPublishedOnFailure(t *testing.T) {
 	if strings.TrimSpace(last.Error) == "" {
 		t.Error("failed frame carries no error text")
 	}
-	if running := tracker.Snapshot(app.TeamID.String()); len(running) != 0 {
+	if running := tracker.Snapshot(app.ProjectID.String()); len(running) != 0 {
 		t.Errorf("tracker still holds %d tasks after a failed run", len(running))
 	}
 }

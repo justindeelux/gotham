@@ -138,24 +138,6 @@ func TestBackupRejectsSecondJobWhileRunning(t *testing.T) {
 	}
 }
 
-func TestBackupEnforcesOwnership(t *testing.T) {
-	fixture := newBackupFixture(t)
-	stranger := uuid.New()
-
-	if _, err := fixture.manager.CreateBackup(context.Background(), stranger, fixture.database.ID, CreateBackupRequest{}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("CreateBackup err = %v, want ErrNotFound", err)
-	}
-	if _, err := fixture.manager.ListBackups(context.Background(), stranger, fixture.database.ID, 0); !errors.Is(err, ErrNotFound) {
-		t.Errorf("ListBackups err = %v, want ErrNotFound", err)
-	}
-	if _, err := fixture.manager.GetBackup(context.Background(), stranger, fixture.database.ID, uuid.New()); !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetBackup err = %v, want ErrNotFound", err)
-	}
-	if _, err := fixture.manager.ListRestores(context.Background(), stranger, fixture.database.ID, 0); !errors.Is(err, ErrNotFound) {
-		t.Errorf("ListRestores err = %v, want ErrNotFound", err)
-	}
-}
-
 func TestListRestoresReturnsDurableHistory(t *testing.T) {
 	fixture := newBackupFixture(t)
 	older := fixture.backups.seedRestore(Restore{
@@ -423,27 +405,6 @@ func TestRestoreRejectsIncompleteBackup(t *testing.T) {
 	}
 }
 
-func TestRestoreEnforcesOwnership(t *testing.T) {
-	fixture := newBackupFixture(t)
-	other := fixture.backups.seedBackup(Backup{DatabaseID: fixture.database.ID, Status: BackupCompleted})
-	stranger := uuid.New()
-
-	if _, err := fixture.manager.RestoreBackup(context.Background(), stranger, fixture.database.ID,
-		RestoreRequest{BackupID: other.ID}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("foreign caller err = %v, want ErrNotFound", err)
-	}
-	if _, err := fixture.manager.RestoreBackup(context.Background(), fixture.userID, fixture.database.ID,
-		RestoreRequest{}); !errors.Is(err, ErrValidation) {
-		t.Errorf("missing backup id err = %v, want ErrValidation", err)
-	}
-
-	foreign := fixture.backups.seedBackup(Backup{DatabaseID: uuid.New(), Status: BackupCompleted})
-	if _, err := fixture.manager.RestoreBackup(context.Background(), fixture.userID, fixture.database.ID,
-		RestoreRequest{BackupID: foreign.ID}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("cross-database err = %v, want ErrNotFound", err)
-	}
-}
-
 func TestDeleteBackupRemovesArtifactAndRow(t *testing.T) {
 	fixture := newBackupFixture(t)
 	backup := fixture.queueBackup(t)
@@ -611,10 +572,6 @@ func TestSchedulesLifecycle(t *testing.T) {
 		t.Fatalf("listed %d schedules, want 1", len(list))
 	}
 
-	stranger := uuid.New()
-	if err := fixture.manager.DeleteSchedule(ctx, stranger, fixture.database.ID, schedule.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("foreign delete err = %v, want ErrNotFound", err)
-	}
 	if err := fixture.manager.DeleteSchedule(ctx, fixture.userID, fixture.database.ID, schedule.ID); err != nil {
 		t.Fatalf("DeleteSchedule: %v", err)
 	}

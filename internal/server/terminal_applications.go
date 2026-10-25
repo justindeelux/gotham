@@ -10,7 +10,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/deploy"
-	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
@@ -72,8 +71,6 @@ func mapTerminalTargetError(err error) error {
 		return nil
 	case errors.Is(err, deploy.ErrDisabled):
 		return terminal.ErrApplicationsDisabled
-	case errors.Is(err, teams.ErrForbidden):
-		return terminal.ErrForbidden
 	case errors.Is(err, deploy.ErrNoRunningDeployment):
 		return terminal.ErrNoRunningDeployment
 	case errors.Is(err, deploy.ErrContainerNotFound):
@@ -95,14 +92,13 @@ func mapTerminalTargetError(err error) error {
 
 func (s *Server) applicationTerminalAuth() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return s.withTeam()(s.requireInteractiveSession(next))
+		return s.resourceAuth()(s.requireInteractiveSession(next))
 	}
 }
 
 type applicationTerminalAuthorizer struct {
 	resolver deploy.TerminalResolver
 	auth     AuthService
-	teams    teams.TeamService
 }
 
 var _ terminal.Authorizer = applicationTerminalAuthorizer{}
@@ -132,7 +128,7 @@ func (a applicationTerminalAuthorizer) Authorize(ctx context.Context, claims *au
 	if target.ServerID != uuid.Nil && access.ServerID != target.ServerID {
 		return terminal.Marker{}, errors.New("terminal: the application moved to another node")
 	}
-	if err := a.authorizeWrite(ctx, userID, access); err != nil {
+	if err := a.authorizeWrite(userID, access); err != nil {
 		return terminal.Marker{}, err
 	}
 	sessions, err := a.auth.ListSessions(ctx, userID, sessionID)
@@ -168,7 +164,7 @@ func (a applicationTerminalAuthorizer) Revalidate(ctx context.Context, claims *a
 	if target.ServerID != uuid.Nil && access.ServerID != target.ServerID {
 		return false, nil
 	}
-	if err := a.authorizeWrite(ctx, userID, access); err != nil {
+	if err := a.authorizeWrite(userID, access); err != nil {
 		if isDefinitiveRefusal(err) {
 			return false, nil
 		}
@@ -184,29 +180,13 @@ func (a applicationTerminalAuthorizer) Revalidate(ctx context.Context, claims *a
 	return liveSignIn(sessions, marker.SignInAt), nil
 }
 
-func (a applicationTerminalAuthorizer) authorizeWrite(ctx context.Context, userID uuid.UUID, access deploy.TerminalApplicationAccess) error {
-	if access.TeamID == uuid.Nil {
-		if userID != access.OwnerID {
-			return teams.ErrForbidden
-		}
-		return nil
-	}
-	if a.teams == nil {
-		if userID != access.OwnerID {
-			return teams.ErrForbidden
-		}
-		return nil
-	}
-	role, err := a.teams.Membership(ctx, access.TeamID, userID)
-	if err != nil {
-		return err
-	}
-	if !role.CanWrite() {
-		return teams.ErrForbidden
+func (a applicationTerminalAuthorizer) authorizeWrite(userID uuid.UUID, access deploy.TerminalApplicationAccess) error {
+	if userID != access.OwnerID {
+		return terminal.ErrForbidden
 	}
 	return nil
 }
 
 func isDefinitiveRefusal(err error) bool {
-	return errors.Is(err, teams.ErrForbidden) || errors.Is(err, teams.ErrNotFound)
+	return errors.Is(err, terminal.ErrForbidden)
 }

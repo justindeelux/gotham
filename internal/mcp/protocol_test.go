@@ -23,7 +23,6 @@ import (
 )
 
 const (
-	protocolTeam  = "11111111-1111-4111-8111-111111111111"
 	protocolToken = "gt1_protocol-private-token"
 )
 
@@ -313,7 +312,7 @@ func (b *protocolBackend) handler(t *testing.T) http.HandlerFunc {
 				return
 			}
 		default:
-			if r.URL.Path != "/healthz" && (r.Header.Get("Authorization") != "Bearer "+protocolToken || r.Header.Get("X-Team-Id") != protocolTeam) {
+			if r.URL.Path != "/healthz" && (r.Header.Get("Authorization") != "Bearer "+protocolToken) {
 				t.Errorf("unexpected authority headers on %s", r.URL.Path)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -321,7 +320,6 @@ func (b *protocolBackend) handler(t *testing.T) http.HandlerFunc {
 		}
 		if r.URL.Path != "/healthz" {
 			w.Header().Set(contractHeader, "1")
-			w.Header().Set(teamHeader, protocolTeam)
 		}
 		protocolRoute(t, w, r)
 	}
@@ -348,7 +346,7 @@ func protocolRoute(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	case path == "/healthz":
 		writeJSON(http.StatusOK, `{"status":"ok","db":"ok","redis":"ok"}`)
 	case path == "/api/v1/mcp/context":
-		writeJSON(http.StatusOK, fmt.Sprintf(`{"team_id":%q,"capabilities":["context","strict_reads","strict_mutations","request_replay"]}`, protocolTeam))
+		writeJSON(http.StatusOK, `{"capabilities":["context","strict_reads","strict_mutations","request_replay"]}`)
 	case path == "/api/v1/version":
 		writeJSON(http.StatusOK, `{"version":"0.3.0"}`)
 	case path == "/api/v1/servers":
@@ -435,7 +433,6 @@ func stdioCommand(ctx context.Context, apiURL, token string) *exec.Cmd {
 		"GOTHAM_TEST_MCP_STDIO=1",
 		"GOTHAM_MCP_URL="+apiURL,
 		"GOTHAM_MCP_TOKEN="+token,
-		"GOTHAM_MCP_TEAM_ID="+protocolTeam,
 	)
 	return command
 }

@@ -15,32 +15,30 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 type Repository interface {
 	GetBoundedBuildLog(context.Context, uuid.UUID, uuid.UUID, LogOptions) (string, State, bool, error)
 	GetApplication(ctx context.Context, appID uuid.UUID) (Application, error)
-	ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error)
+	ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error)
 	ListApplicationsByEnvironment(ctx context.Context, environmentID uuid.UUID, includePreviews bool) ([]Application, error)
 	ListApplicationsByProject(ctx context.Context, projectID uuid.UUID, includePreviews bool) ([]Application, error)
 	NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error)
-	ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error)
-	ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error)
+	ResolveEnvironment(ctx context.Context, environmentID uuid.UUID) (EnvironmentRef, error)
+	ResolveProject(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error)
 	HasLivePreviews(ctx context.Context, appID uuid.UUID) (bool, error)
 	CreateApplication(ctx context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error)
 	UpdateApplication(ctx context.Context, app Application) (Application, error)
 	DeleteApplication(ctx context.Context, appID uuid.UUID) error
 	ReplaceEnvVars(ctx context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error
 	ReplaceStorages(ctx context.Context, appID uuid.UUID, storages []Storage) error
-	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
-	ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error)
+	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
 	GitHubAppOwnedBy(ctx context.Context, id, userID uuid.UUID) (bool, error)
 	CreateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
 	GetDeployment(ctx context.Context, appID, deploymentID uuid.UUID) (Deployment, error)
 	ListDeployments(ctx context.Context, appID uuid.UUID) ([]Deployment, error)
 	ListDeploymentsLimit(ctx context.Context, appID uuid.UUID, limit int) ([]Deployment, error)
-	ListRecentDeployments(ctx context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error)
+	ListRecentDeployments(ctx context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error)
 	FailStaleDeployments(ctx context.Context) (int64, error)
 	UpdateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
 	UpdateDeploymentBuildLog(ctx context.Context, id uuid.UUID, log string) error
@@ -113,16 +111,8 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 	return enriched[0], nil
 }
 
-func (r *storeRepository) ListApplications(ctx context.Context, scope teams.Scope) ([]Application, error) {
-	var (
-		rows []sqlc.Application
-		err  error
-	)
-	if scope.Active() {
-		rows, err = r.store.ListApplicationsByTeam(ctx, pgUUID(scope.TeamID))
-	} else {
-		rows, err = r.store.ListApplicationsByUser(ctx, pgUUID(scope.UserID))
-	}
+func (r *storeRepository) ListApplications(ctx context.Context, userID uuid.UUID) ([]Application, error) {
+	rows, err := r.store.ListApplicationsByUser(ctx, pgUUID(userID))
 	if err != nil {
 		return nil, fmt.Errorf("deploy: list applications: %w", err)
 	}
@@ -163,11 +153,8 @@ func (r *storeRepository) NameInEnvironment(ctx context.Context, environmentID u
 	return collision, nil
 }
 
-func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error) {
-	row, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
-		ID:     pgUUID(environmentID),
-		TeamID: pgUUID(teamID),
-	})
+func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID uuid.UUID) (EnvironmentRef, error) {
+	row, err := r.store.GetEnvironment(ctx, pgUUID(environmentID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return EnvironmentRef{}, ErrNotFound
@@ -181,11 +168,8 @@ func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID,
 	}, nil
 }
 
-func (r *storeRepository) ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error) {
-	if _, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
-		ID:     pgUUID(projectID),
-		TeamID: pgUUID(teamID),
-	}); err != nil {
+func (r *storeRepository) ResolveProject(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error) {
+	if _, err := r.store.GetProject(ctx, pgUUID(projectID)); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, ErrNotFound
 		}
@@ -237,10 +221,7 @@ func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Application) (
 		if envID != uuid.Nil {
 			env, ok := envs[envID]
 			if !ok {
-				fetched, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
-					ID:     pgUUID(envID),
-					TeamID: pgUUID(app.TeamID),
-				})
+				fetched, err := r.store.GetEnvironment(ctx, pgUUID(envID))
 				if err != nil {
 					return nil, fmt.Errorf("deploy: get environment: %w", err)
 				}
@@ -252,10 +233,7 @@ func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Application) (
 			if projectID != uuid.Nil {
 				project, ok := projects[projectID]
 				if !ok {
-					fetched, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
-						ID:     pgUUID(projectID),
-						TeamID: pgUUID(app.TeamID),
-					})
+					fetched, err := r.store.GetProject(ctx, pgUUID(projectID))
 					if err != nil {
 						return nil, fmt.Errorf("deploy: get project: %w", err)
 					}
@@ -290,7 +268,6 @@ func (r *storeRepository) CreateApplication(
 	appParams := sqlc.CreateApplicationParams{
 		ID:                         pgUUID(app.ID),
 		UserID:                     pgUUID(app.UserID),
-		TeamID:                     pgUUID(app.TeamID),
 		ServerID:                   pgUUID(app.ServerID),
 		EnvironmentID:              pgUUID(app.EnvironmentID),
 		Name:                       app.Name,
@@ -379,35 +356,17 @@ func (r *storeRepository) ReplaceStorages(ctx context.Context, appID uuid.UUID, 
 	return nil
 }
 
-func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
-	if err != nil {
+	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
 		return false, fmt.Errorf("deploy: get server: %w", err)
 	}
-	if err := scope.AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
-		return false, nil
-	}
 	return true, nil
-}
-
-func (r *storeRepository) ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error) {
-	if serverID == uuid.Nil {
-		return uuid.Nil, false, nil
-	}
-	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return uuid.Nil, false, nil
-		}
-		return uuid.Nil, false, fmt.Errorf("deploy: get server team: %w", err)
-	}
-	return uuidFromPG(row.TeamID), true, nil
 }
 
 func (r *storeRepository) GitHubAppOwnedBy(ctx context.Context, id, userID uuid.UUID) (bool, error) {
@@ -490,25 +449,14 @@ func (r *storeRepository) ListDeploymentsLimit(ctx context.Context, appID uuid.U
 	return deployments, nil
 }
 
-func (r *storeRepository) ListRecentDeployments(ctx context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error) {
+func (r *storeRepository) ListRecentDeployments(ctx context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error) {
 	if limit <= 0 {
 		limit = 1
 	}
 	if limit > maxDeploymentListLimit {
 		limit = maxDeploymentListLimit
 	}
-	if scope.Active() {
-		rows, err := r.store.ListRecentDeploymentsByTeam(ctx, pgUUID(scope.TeamID), int32(limit))
-		if err != nil {
-			return nil, fmt.Errorf("deploy: list recent deployments: %w", err)
-		}
-		out := make([]ApplicationDeployment, 0, len(rows))
-		for _, row := range rows {
-			out = append(out, applicationDeploymentFromTeamRow(row))
-		}
-		return out, nil
-	}
-	rows, err := r.store.ListRecentDeploymentsByUser(ctx, pgUUID(scope.UserID), int32(limit))
+	rows, err := r.store.ListRecentDeploymentsByUser(ctx, pgUUID(userID), int32(limit))
 	if err != nil {
 		return nil, fmt.Errorf("deploy: list recent deployments: %w", err)
 	}
@@ -1065,7 +1013,6 @@ func applicationFromRow(row sqlc.Application) Application {
 	return Application{
 		ID:                         uuidFromPG(row.ID),
 		UserID:                     uuidFromPG(row.UserID),
-		TeamID:                     uuidFromPG(row.TeamID),
 		ServerID:                   uuidFromPG(row.ServerID),
 		EnvironmentID:              uuidFromPG(row.EnvironmentID),
 		Name:                       row.Name,
@@ -1181,36 +1128,6 @@ func deploymentFromRow(row sqlc.Deployment) Deployment {
 		CommitAuthor:    row.CommitAuthor,
 		CommittedAt:     row.CommittedAt,
 		BuildLog:        row.BuildLog,
-	}
-}
-
-func applicationDeploymentFromTeamRow(row sqlc.ListRecentDeploymentsByTeamRow) ApplicationDeployment {
-	return ApplicationDeployment{
-		Deployment: deploymentFromRow(sqlc.Deployment{
-			ID:            row.ID,
-			ApplicationID: row.ApplicationID,
-			Kind:          row.Kind,
-			State:         row.State,
-			ImageTag:      row.ImageTag,
-			RegistryImage: row.RegistryImage,
-			Digest:        row.Digest,
-			Error:         row.Error,
-			Attempt:       row.Attempt,
-			ContainerID:   row.ContainerID,
-			RollbackFrom:  row.RollbackFrom,
-			StartedAt:     row.StartedAt,
-			FinishedAt:    row.FinishedAt,
-			CreatedAt:     row.CreatedAt,
-			UpdatedAt:     row.UpdatedAt,
-			ComposeCommit: row.ComposeCommit,
-			CommitSha:     row.CommitSha,
-			CommitMessage: row.CommitMessage,
-			CommitAuthor:  row.CommitAuthor,
-			CommittedAt:   row.CommittedAt,
-		}),
-		ApplicationName:   row.ApplicationName,
-		ApplicationRepo:   row.ApplicationRepo,
-		ApplicationBranch: row.ApplicationBranch,
 	}
 }
 

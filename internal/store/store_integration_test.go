@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"sync"
@@ -20,6 +21,15 @@ import (
 )
 
 const defaultTestDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
+
+func dsnForDatabase(dsn, database string) string {
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return dsn
+	}
+	parsed.Path = "/" + database
+	return parsed.String()
+}
 
 func testDSN() string {
 	if dsn := os.Getenv("GOTHAM_TEST_DSN"); dsn != "" {
@@ -121,10 +131,10 @@ func TestStoreReplaceApplicationEnvIsAtomic(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
+	envID, serverID := seedEnvColumns(t, ctx, st, pool)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+		UserID: user.ID, ServerID: serverID, EnvironmentID: envID,
 		Name:     "replace-race-app",
 		Provider: "github",
 		Repo:     "acme/demo",
@@ -220,10 +230,10 @@ func TestStoreReplaceApplicationStoragesIsAtomic(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
+	envID, serverID := seedEnvColumns(t, ctx, st, pool)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+		UserID: user.ID, ServerID: serverID, EnvironmentID: envID,
 		Name:     "storage-race-app",
 		Provider: "github",
 		Repo:     "acme/demo",
@@ -318,10 +328,10 @@ func TestStoreListEnvConfigIsOneSnapshot(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
+	envID, serverID := seedEnvColumns(t, ctx, st, pool)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+		UserID: user.ID, ServerID: serverID, EnvironmentID: envID,
 		Name: "snapshot-app", Provider: "github",
 		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git", Branch: "main",
 	})
@@ -377,20 +387,12 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-func seedEnvColumns(t *testing.T, ctx context.Context, st *store.Store, pool *pgxpool.Pool) (teamID, envID, serverID pgtype.UUID) {
+func seedEnvColumns(t *testing.T, ctx context.Context, st *store.Store, pool *pgxpool.Pool) (envID, serverID pgtype.UUID) {
 	t.Helper()
 	suffix := time.Now().UnixNano()
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
 		ID:   pgUUID(uuid.New()),
 		Name: fmt.Sprintf("store-seed-%d", suffix),
-	})
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgUUID(uuid.New()),
-		TeamID: team.ID,
-		Name:   fmt.Sprintf("store-seed-%d", suffix),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -420,14 +422,11 @@ func seedEnvColumns(t *testing.T, ctx context.Context, st *store.Store, pool *pg
 				t.Logf("cleanup resources: %v", err)
 			}
 		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverID); err != nil {
 			t.Logf("cleanup server: %v", err)
 		}
 	})
-	return team.ID, environment.ID, serverID
+	return environment.ID, serverID
 }
 
 func keysOf(rows []sqlc.EnvVar) []string {
@@ -492,7 +491,7 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 		t.Fatalf("bootstrap race winner role = %q, want owner (GOTHAM-63)", winner.Role)
 	}
 
-	if err := st.DeleteUserAndPersonalTeam(ctx, winner.ID); err != nil {
+	if err := st.DeleteUser(ctx, winner.ID); err != nil {
 		t.Fatalf("cleanup winner: %v", err)
 	}
 }
@@ -522,7 +521,7 @@ func TestStoreRevokeSessionIfLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	defer func() { _ = st.DeleteUserAndPersonalTeam(context.WithoutCancel(ctx), user.ID) }()
+	defer func() { _ = st.DeleteUser(context.WithoutCancel(ctx), user.ID) }()
 
 	session, err := st.CreateSession(ctx, sqlc.CreateSessionParams{
 		UserID:            user.ID,

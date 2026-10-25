@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -21,14 +20,9 @@ func (s *Store) CreateApplicationDeployKey(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	queries := s.queries.WithTx(tx)
-	app, err := queries.GetApplication(ctx, params.ApplicationID)
-	if err != nil {
-		return sqlc.ApplicationDeployKey{}, fmt.Errorf("store: get deploy-key application: %w", err)
-	}
 	keyRow, err := queries.CreatePrivateKey(ctx, sqlc.CreatePrivateKeyParams{
 		Name:         privateKeyName,
 		EncryptedKey: encryptedKey,
-		TeamID:       app.TeamID,
 	})
 	if err != nil {
 		return sqlc.ApplicationDeployKey{}, err

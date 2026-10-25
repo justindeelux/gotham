@@ -117,7 +117,7 @@ func (q *Queries) CountPreviewApplicationsByProject(ctx context.Context, project
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
-    branch, build_pack, team_id, is_preview,
+    branch, build_pack, is_preview,
     source_type, github_app_id, dockerfile_content, build_args,
     image_ref, registry_username, registry_password_ciphertext,
     compose_content, compose_file, compose_service
@@ -126,22 +126,21 @@ VALUES (
     COALESCE($1::uuid, gen_random_uuid()),
     $2, $3, $4, $5, $6,
     $7, $8, $9, $10,
-    $11,
     -- Direct sqlc callers (fixtures, previews) may pass an empty source
     -- type; COALESCE maps it onto the default so the CHECK never sees it.
     -- The deploy repository normalizes the same way in Go.
-    $12, COALESCE(NULLIF($13::text, ''), 'git_public'),
-    $14::uuid,
+    $11, COALESCE(NULLIF($12::text, ''), 'git_public'),
+    $13::uuid,
     -- Direct sqlc callers (fixtures, previews) predate the GS-7/GS-8 columns;
     -- COALESCE maps their zero values onto the column defaults.
-    COALESCE($15::text, ''),
-    COALESCE($16::jsonb, '{}'),
-    $17, $18, $19,
+    COALESCE($14::text, ''),
+    COALESCE($15::jsonb, '{}'),
+    $16, $17, $18,
+    COALESCE($19::text, ''),
     COALESCE($20::text, ''),
-    COALESCE($21::text, ''),
-    COALESCE($22::text, '')
+    COALESCE($21::text, '')
 )
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service
 `
 
 type CreateApplicationParams struct {
@@ -155,7 +154,6 @@ type CreateApplicationParams struct {
 	CloneUrl                   string      `json:"clone_url"`
 	Branch                     string      `json:"branch"`
 	BuildPack                  string      `json:"build_pack"`
-	TeamID                     pgtype.UUID `json:"team_id"`
 	IsPreview                  bool        `json:"is_preview"`
 	SourceType                 string      `json:"source_type"`
 	GithubAppID                pgtype.UUID `json:"github_app_id"`
@@ -185,7 +183,6 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.CloneUrl,
 		arg.Branch,
 		arg.BuildPack,
-		arg.TeamID,
 		arg.IsPreview,
 		arg.SourceType,
 		arg.GithubAppID,
@@ -211,7 +208,6 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.BuildPack,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TeamID,
 		&i.IsPreview,
 		&i.EnvironmentID,
 		&i.SourceType,
@@ -377,7 +373,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -395,7 +391,6 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.BuildPack,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TeamID,
 		&i.IsPreview,
 		&i.EnvironmentID,
 		&i.SourceType,
@@ -543,7 +538,7 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 }
 
 const listApplicationsByEnvironment = `-- name: ListApplicationsByEnvironment :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
 WHERE environment_id = $1 AND (is_preview = false OR $2::bool = true)
 ORDER BY created_at DESC, id DESC
 `
@@ -576,7 +571,6 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 			&i.BuildPack,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.TeamID,
 			&i.IsPreview,
 			&i.EnvironmentID,
 			&i.SourceType,
@@ -601,7 +595,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 }
 
 const listApplicationsByProject = `-- name: ListApplicationsByProject :many
-SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.created_at, a.updated_at, a.team_id, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext, a.compose_content, a.compose_file, a.compose_service FROM applications a
+SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.created_at, a.updated_at, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext, a.compose_content, a.compose_file, a.compose_service FROM applications a
 JOIN environments e ON e.id = a.environment_id
 WHERE e.project_id = $1 AND (a.is_preview = false OR $2::bool = true)
 ORDER BY a.created_at DESC, a.id DESC
@@ -635,7 +629,6 @@ func (q *Queries) ListApplicationsByProject(ctx context.Context, arg ListApplica
 			&i.BuildPack,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.TeamID,
 			&i.IsPreview,
 			&i.EnvironmentID,
 			&i.SourceType,
@@ -692,59 +685,8 @@ func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.
 	return items, nil
 }
 
-const listApplicationsByTeam = `-- name: ListApplicationsByTeam :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
-WHERE team_id = $1 AND is_preview = false
-ORDER BY created_at DESC, id DESC
-`
-
-func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID) ([]Application, error) {
-	rows, err := q.db.Query(ctx, listApplicationsByTeam, teamID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Application{}
-	for rows.Next() {
-		var i Application
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.ServerID,
-			&i.Name,
-			&i.Provider,
-			&i.Repo,
-			&i.CloneUrl,
-			&i.Branch,
-			&i.BuildPack,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.TeamID,
-			&i.IsPreview,
-			&i.EnvironmentID,
-			&i.SourceType,
-			&i.GithubAppID,
-			&i.DockerfileContent,
-			&i.BuildArgs,
-			&i.ImageRef,
-			&i.RegistryUsername,
-			&i.RegistryPasswordCiphertext,
-			&i.ComposeContent,
-			&i.ComposeFile,
-			&i.ComposeService,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
 WHERE user_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -770,7 +712,6 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.BuildPack,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.TeamID,
 			&i.IsPreview,
 			&i.EnvironmentID,
 			&i.SourceType,
@@ -930,98 +871,6 @@ func (q *Queries) ListEnvVarsByApp(ctx context.Context, applicationID pgtype.UUI
 	return items, nil
 }
 
-const listRecentDeploymentsByTeam = `-- name: ListRecentDeploymentsByTeam :many
-SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
-       d.digest, d.error, d.attempt, d.container_id, d.rollback_from,
-       d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_commit,
-       d.commit_sha, d.commit_message, d.commit_author, d.committed_at,
-       a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
-FROM deployments d
-JOIN applications a ON a.id = d.application_id
-WHERE a.team_id = $1 AND a.is_preview = false
-ORDER BY d.created_at DESC, d.id DESC
-LIMIT $2
-`
-
-type ListRecentDeploymentsByTeamParams struct {
-	TeamID pgtype.UUID `json:"team_id"`
-	Limit  int32       `json:"limit"`
-}
-
-type ListRecentDeploymentsByTeamRow struct {
-	ID                pgtype.UUID        `json:"id"`
-	ApplicationID     pgtype.UUID        `json:"application_id"`
-	Kind              string             `json:"kind"`
-	State             string             `json:"state"`
-	ImageTag          string             `json:"image_tag"`
-	RegistryImage     string             `json:"registry_image"`
-	Digest            string             `json:"digest"`
-	Error             string             `json:"error"`
-	Attempt           int32              `json:"attempt"`
-	ContainerID       string             `json:"container_id"`
-	RollbackFrom      pgtype.UUID        `json:"rollback_from"`
-	StartedAt         pgtype.Timestamptz `json:"started_at"`
-	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	ComposeCommit     string             `json:"compose_commit"`
-	CommitSha         string             `json:"commit_sha"`
-	CommitMessage     string             `json:"commit_message"`
-	CommitAuthor      string             `json:"commit_author"`
-	CommittedAt       string             `json:"committed_at"`
-	ApplicationName   string             `json:"application_name"`
-	ApplicationRepo   string             `json:"application_repo"`
-	ApplicationBranch string             `json:"application_branch"`
-}
-
-// The newest deployments across one team's applications (dashboard feed,
-// JUS-193), newest first. Previews stay out, matching the applications list.
-// The heavy columns the feed never returns (build_log, compose_document) are
-// left out on purpose.
-func (q *Queries) ListRecentDeploymentsByTeam(ctx context.Context, arg ListRecentDeploymentsByTeamParams) ([]ListRecentDeploymentsByTeamRow, error) {
-	rows, err := q.db.Query(ctx, listRecentDeploymentsByTeam, arg.TeamID, arg.Limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListRecentDeploymentsByTeamRow{}
-	for rows.Next() {
-		var i ListRecentDeploymentsByTeamRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.ApplicationID,
-			&i.Kind,
-			&i.State,
-			&i.ImageTag,
-			&i.RegistryImage,
-			&i.Digest,
-			&i.Error,
-			&i.Attempt,
-			&i.ContainerID,
-			&i.RollbackFrom,
-			&i.StartedAt,
-			&i.FinishedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ComposeCommit,
-			&i.CommitSha,
-			&i.CommitMessage,
-			&i.CommitAuthor,
-			&i.CommittedAt,
-			&i.ApplicationName,
-			&i.ApplicationRepo,
-			&i.ApplicationBranch,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listRecentDeploymentsByUser = `-- name: ListRecentDeploymentsByUser :many
 SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
        d.digest, d.error, d.attempt, d.container_id, d.rollback_from,
@@ -1066,7 +915,10 @@ type ListRecentDeploymentsByUserRow struct {
 	ApplicationBranch string             `json:"application_branch"`
 }
 
-// The creator-scoped fallback of ListRecentDeploymentsByTeam (no team context).
+// The newest deployments across the caller's applications (dashboard feed),
+// newest first. Previews stay out, matching the applications list. The heavy
+// columns the feed never returns (build_log, compose_document) are left out
+// on purpose.
 func (q *Queries) ListRecentDeploymentsByUser(ctx context.Context, arg ListRecentDeploymentsByUserParams) ([]ListRecentDeploymentsByUserRow, error) {
 	rows, err := q.db.Query(ctx, listRecentDeploymentsByUser, arg.UserID, arg.Limit)
 	if err != nil {
@@ -1208,7 +1060,7 @@ SET name = $2,
     compose_service = $15,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service
 `
 
 type UpdateApplicationParams struct {
@@ -1260,7 +1112,6 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.BuildPack,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TeamID,
 		&i.IsPreview,
 		&i.EnvironmentID,
 		&i.SourceType,

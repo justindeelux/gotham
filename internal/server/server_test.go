@@ -20,7 +20,6 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/services"
-	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/updates"
 	"github.com/justindeelux/gotham/internal/webhooks"
 )
@@ -192,7 +191,7 @@ func TestNewWarnsOnMissingTrustedProxyForOAuth(t *testing.T) {
 func TestLogDisabledFeatures(t *testing.T) {
 	flags := []string{
 		deploy.FeatureEnv, webhooks.FeatureEnv, databases.FeatureEnv,
-		services.FeatureEnv, teams.FeatureEnv, files.FeatureEnv,
+		services.FeatureEnv, files.FeatureEnv,
 		notifications.FeatureEnv, proxy.FeatureEnv, servers.FeatureEnv,
 		updates.FeatureEnv,
 	}
@@ -212,9 +211,6 @@ func TestLogDisabledFeatures(t *testing.T) {
 	}
 	if !strings.Contains(out, "module=Databases") || !strings.Contains(out, databases.FeatureEnv+"=false") {
 		t.Errorf("missing the Databases diagnostic line:\n%s", out)
-	}
-	if strings.Contains(out, teams.FeatureEnv) {
-		t.Errorf("an enabled feature was logged as disabled:\n%s", out)
 	}
 	if got := strings.Count(out, "feature disabled on this control plane"); got != 2 {
 		t.Errorf("disabled-feature lines = %d, want 2:\n%s", got, out)

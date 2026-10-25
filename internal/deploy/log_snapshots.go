@@ -271,7 +271,7 @@ func (s *Service) GetApplicationLogs(ctx context.Context, userID, appID uuid.UUI
 	if err != nil {
 		return ApplicationLogs{}, err
 	}
-	if current.ServerID != app.ServerID || current.EnvironmentID != app.EnvironmentID || current.TeamID != app.TeamID || isComposeApp(current) != isComposeApp(app) {
+	if current.ServerID != app.ServerID || current.EnvironmentID != app.EnvironmentID || isComposeApp(current) != isComposeApp(app) {
 		return ApplicationLogs{}, ErrConflict
 	}
 	env, err := s.loadComposeEnv(ctx, app, 0)

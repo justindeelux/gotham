@@ -39,7 +39,6 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 
 	app := Application{
 		UserID:            base.UserID,
-		TeamID:            base.TeamID,
 		ServerID:          base.ServerID,
 		EnvironmentID:     base.EnvironmentID,
 		Name:              strings.TrimSpace(in.Name),

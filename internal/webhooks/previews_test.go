@@ -16,7 +16,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func githubPRBody(action string, number int, head, base, sha string) string {
@@ -324,9 +323,6 @@ func TestReceivePullRequestCreatesPreviewAndDeploys(t *testing.T) {
 		preview.Host != "pr-7-gotham.apps.example.com" {
 		t.Errorf("preview = %+v", preview)
 	}
-	if preview.TeamID != repo.app.TeamID {
-		t.Errorf("preview team = %s, want the base application's team %s", preview.TeamID, repo.app.TeamID)
-	}
 	if got := repo.reservationCount(); got != 0 {
 		t.Errorf("reservations = %d, want the in-flight lease released after the queue", got)
 	}
@@ -619,8 +615,8 @@ func TestCapLimitsLivePreviews(t *testing.T) {
 	}
 	for pr := 2; pr <= maxLivePreviewsPerApplication; pr++ {
 		if _, err := repo.UpsertPreview(context.Background(), Preview{
-			ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-			Repo: repo.app.Repo, PRNumber: pr, Host: "pr-x.apps.example.com",
+			ApplicationID: repo.app.ID,
+			Repo:          repo.app.Repo, PRNumber: pr, Host: "pr-x.apps.example.com",
 			PreviewApplicationID: uuid.New(), State: PreviewActive,
 		}); err != nil {
 			t.Fatalf("UpsertPreview(PR %d): %v", pr, err)
@@ -998,8 +994,8 @@ func TestSweepIsOrphanOnly(t *testing.T) {
 	})
 
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
-		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-		Repo: repo.app.Repo, PRNumber: 7, Branch: "feat/x", Host: "pr-7-gotham.apps.example.com",
+		ApplicationID: repo.app.ID,
+		Repo:          repo.app.Repo, PRNumber: 7, Branch: "feat/x", Host: "pr-7-gotham.apps.example.com",
 		PreviewApplicationID: uuid.New(), State: PreviewActive,
 	}); err != nil {
 		t.Fatalf("UpsertPreview: %v", err)
@@ -1010,8 +1006,8 @@ func TestSweepIsOrphanOnly(t *testing.T) {
 	repo.previews[previewKey(repo.app.ID, 7)] = stale
 	repo.mu.Unlock()
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
-		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-		Repo: repo.app.Repo, PRNumber: 8, Host: "pr-8-gotham.apps.example.com", State: PreviewDeploying,
+		ApplicationID: repo.app.ID,
+		Repo:          repo.app.Repo, PRNumber: 8, Host: "pr-8-gotham.apps.example.com", State: PreviewDeploying,
 	}); err != nil {
 		t.Fatalf("UpsertPreview(orphan): %v", err)
 	}
@@ -1062,8 +1058,8 @@ func TestCleanupApplicationTearsDownBaseSiblings(t *testing.T) {
 
 	for _, number := range []int{7, 9} {
 		if _, err := repo.UpsertPreview(context.Background(), Preview{
-			ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-			Repo: repo.app.Repo, PRNumber: number, Host: "pr-x.apps.example.com",
+			ApplicationID: repo.app.ID,
+			Repo:          repo.app.Repo, PRNumber: number, Host: "pr-x.apps.example.com",
 			PreviewApplicationID: uuid.New(), State: PreviewActive,
 		}); err != nil {
 			t.Fatalf("UpsertPreview: %v", err)
@@ -1089,8 +1085,8 @@ func TestCleanupApplicationTearsDownBaseSiblings(t *testing.T) {
 	deployer2 := &fakeDeployer{deleteErr: errors.New("database down")}
 	svc2 := newPreviewService(t, repo2, deployer2, &fakeCommenter{})
 	if _, err := repo2.UpsertPreview(context.Background(), Preview{
-		ApplicationID: repo2.app.ID, TeamID: repo2.app.TeamID, Provider: repo2.app.Provider,
-		Repo: repo2.app.Repo, PRNumber: 7, Host: "pr-7.apps.example.com",
+		ApplicationID: repo2.app.ID,
+		Repo:          repo2.app.Repo, PRNumber: 7, Host: "pr-7.apps.example.com",
 		PreviewApplicationID: uuid.New(), State: PreviewActive,
 	}); err != nil {
 		t.Fatalf("UpsertPreview: %v", err)
@@ -1122,8 +1118,8 @@ func TestCleanupApplicationMarksSiblingBindingDeleted(t *testing.T) {
 
 	sibling := uuid.New()
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
-		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-		Repo: repo.app.Repo, PRNumber: 7, Host: "pr-7.apps.example.com",
+		ApplicationID: repo.app.ID,
+		Repo:          repo.app.Repo, PRNumber: 7, Host: "pr-7.apps.example.com",
 		PreviewApplicationID: sibling, State: PreviewActive,
 	}); err != nil {
 		t.Fatalf("UpsertPreview: %v", err)
@@ -1158,14 +1154,14 @@ func TestCleanupApplicationMarksSiblingBindingDeleted(t *testing.T) {
 	}
 }
 
-func TestListPreviewsEnforcesTeam(t *testing.T) {
+func TestListPreviewsEnforcesOwnership(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
 	repo := newFakeRepository().withTarget()
 	svc := newPreviewService(t, repo, &fakeDeployer{}, &fakeCommenter{})
 
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
-		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-		Repo: repo.app.Repo, PRNumber: 7, Host: "pr-7-gotham.apps.example.com",
+		ApplicationID: repo.app.ID,
+		Repo:          repo.app.Repo, PRNumber: 7, Host: "pr-7-gotham.apps.example.com",
 		PreviewApplicationID: uuid.New(), State: PreviewActive,
 	}); err != nil {
 		t.Fatalf("UpsertPreview: %v", err)
@@ -1174,18 +1170,6 @@ func TestListPreviewsEnforcesTeam(t *testing.T) {
 	if previews, err := svc.ListPreviews(context.Background(), repo.app.UserID, repo.app.ID); err != nil || len(previews) != 1 {
 		t.Fatalf("creator ListPreviews = (%d, %v), want one preview", len(previews), err)
 	}
-	stranger := teams.WithScope(context.Background(), teams.Scope{
-		UserID: uuid.New(), TeamID: uuid.New(), Role: teams.RoleOwner,
-	})
-	if _, err := svc.ListPreviews(stranger, uuid.New(), repo.app.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("foreign ListPreviews = %v, want ErrNotFound", err)
-	}
-	viewer := teams.WithScope(context.Background(), teams.Scope{
-		UserID: uuid.New(), TeamID: repo.app.TeamID, Role: teams.RoleReadOnly,
-	})
-	if previews, err := svc.ListPreviews(viewer, uuid.New(), repo.app.ID); err != nil || len(previews) != 1 {
-		t.Fatalf("read_only ListPreviews = (%d, %v), want one preview", len(previews), err)
-	}
 }
 
 func TestPreviewRoutesListAndFlag(t *testing.T) {
@@ -1193,8 +1177,8 @@ func TestPreviewRoutesListAndFlag(t *testing.T) {
 	repo := newFakeRepository().withTarget()
 	svc := newPreviewService(t, repo, &fakeDeployer{}, &fakeCommenter{})
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
-		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-		Repo: repo.app.Repo, PRNumber: 7, Branch: "feat/x", HeadSHA: "abc",
+		ApplicationID: repo.app.ID,
+		Repo:          repo.app.Repo, PRNumber: 7, Branch: "feat/x", HeadSHA: "abc",
 		Host: "pr-7-gotham.apps.example.com", PreviewApplicationID: uuid.New(), State: PreviewActive,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}); err != nil {
@@ -1673,8 +1657,8 @@ func TestOwnLeaseDoesNotDenyTheCap(t *testing.T) {
 	seedLive := func(pr int) {
 		t.Helper()
 		if _, err := repo.UpsertPreview(context.Background(), Preview{
-			ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-			Repo: repo.app.Repo, PRNumber: pr, Host: "pr-x.apps.example.com",
+			ApplicationID: repo.app.ID,
+			Repo:          repo.app.Repo, PRNumber: pr, Host: "pr-x.apps.example.com",
 			PreviewApplicationID: uuid.New(), State: PreviewActive,
 		}); err != nil {
 			t.Fatalf("UpsertPreview(PR %d): %v", pr, err)
@@ -1862,8 +1846,8 @@ func TestDeployFinishedUpdatesThePreviewComment(t *testing.T) {
 
 	sibling := uuid.New()
 	if _, err := repo.UpsertPreview(context.Background(), Preview{
-		ApplicationID: repo.app.ID, TeamID: repo.app.TeamID, Provider: repo.app.Provider,
-		Repo: repo.app.Repo, PRNumber: 7, Host: "pr-7-gotham.apps.example.com",
+		ApplicationID: repo.app.ID,
+		Repo:          repo.app.Repo, PRNumber: 7, Host: "pr-7-gotham.apps.example.com",
 		PreviewApplicationID: sibling, State: PreviewActive,
 	}); err != nil {
 		t.Fatalf("UpsertPreview: %v", err)

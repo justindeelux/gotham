@@ -9,7 +9,6 @@ import (
 )
 
 func (s *Store) CreateService(ctx context.Context, params sqlc.CreateServiceParams) (sqlc.Service, error) {
-	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	return s.queries.CreateService(ctx, params)
 }
 
@@ -19,10 +18,6 @@ func (s *Store) GetService(ctx context.Context, id pgtype.UUID) (sqlc.Service, e
 
 func (s *Store) ListServicesByUser(ctx context.Context, userID pgtype.UUID) ([]sqlc.Service, error) {
 	return s.queries.ListServicesByUser(ctx, userID)
-}
-
-func (s *Store) ListServicesByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Service, error) {
-	return s.queries.ListServicesByTeam(ctx, teamID)
 }
 
 func (s *Store) ListServicesByEnvironment(ctx context.Context, environmentID pgtype.UUID) ([]sqlc.Service, error) {

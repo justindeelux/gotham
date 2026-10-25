@@ -89,7 +89,7 @@ func (s *Service) GetApplicationRuntime(ctx context.Context, userID, appID uuid.
 	if err != nil {
 		return ApplicationRuntime{}, err
 	}
-	if current.ServerID != app.ServerID || current.EnvironmentID != app.EnvironmentID || current.TeamID != app.TeamID || isComposeApp(current) != isComposeApp(app) {
+	if current.ServerID != app.ServerID || current.EnvironmentID != app.EnvironmentID || isComposeApp(current) != isComposeApp(app) {
 		return ApplicationRuntime{}, ErrConflict
 	}
 	selected, limited := selectRuntimeContainers(app, inventory)

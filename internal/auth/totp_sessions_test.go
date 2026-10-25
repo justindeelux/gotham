@@ -32,7 +32,7 @@ func TestTOTPRevokesOtherSessions(t *testing.T) {
 	clock := time.Now()
 	svc.now = func() time.Time { return clock }
 
-	registered, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
@@ -10,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 type observedRegistry struct {
@@ -19,26 +17,6 @@ type observedRegistry struct {
 	lookedUp []string
 }
 
-func (f *observedRegistry) List(ctx context.Context) ([]servers.Server, error) {
-	items, err := f.fakeServerService.List(ctx)
-	visible := make([]servers.Server, 0)
-	for _, item := range items {
-		if teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(item.TeamID, false) == nil {
-			visible = append(visible, item)
-		}
-	}
-	return visible, err
-}
-func (f *observedRegistry) Get(ctx context.Context, id uuid.UUID) (*servers.Server, error) {
-	item, err := f.fakeServerService.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(item.TeamID, false) != nil {
-		return nil, servers.ErrNotFound
-	}
-	return item, nil
-}
 func (f *observedRegistry) AgentVersionForNode(id string) (servers.AgentVersion, bool) {
 	f.lookedUp = append(f.lookedUp, id)
 	entry, ok := f.versions[id]
@@ -47,46 +25,29 @@ func (f *observedRegistry) AgentVersionForNode(id string) (servers.AgentVersion,
 
 func TestAuthorizedNodeVersions(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
-	teamA, teamB := uuid.New(), uuid.New()
-	membership := newFakeTeamService()
-	membership.allow(teamA, testUserID, teams.RoleReadOnly)
-	s.teamService = membership
 	registry := &observedRegistry{fakeServerService: newFakeServerService(), versions: map[string]servers.AgentVersion{}}
 	s.servers = registry
-	nodeA, nodeB, shared, unreported := "agent-a", "agent-b", "agent-shared", "unreported"
+
 	now := time.Now().UTC()
-	var owned, foreign, legacy, noNode, noVersion uuid.UUID
-	for _, tc := range []struct {
-		id      *uuid.UUID
-		team    *uuid.UUID
-		node    *string
-		version string
-	}{
-		{&owned, &teamA, &nodeA, "v1.2.3"}, {&foreign, &teamB, &nodeB, "foreign-version"},
-		{&legacy, nil, &shared, "v2.3.4"}, {&noNode, &teamA, nil, ""}, {&noVersion, &teamA, &unreported, ""},
-	} {
-		*tc.id = uuid.New()
-		item := servers.Server{ID: *tc.id, NodeID: tc.node, Status: servers.StatusOffline}
-		if tc.team != nil {
-			item.TeamID = *tc.team
-		}
-		registry.items[*tc.id] = item
-		if tc.version != "" {
-			registry.versions[*tc.node] = servers.AgentVersion{NodeID: *tc.node, Version: tc.version, At: now}
-		}
-	}
+	versionedNode, unversionedNode := "agent-a", "agent-unreported"
+	versioned, unversioned, noNode := uuid.New(), uuid.New(), uuid.New()
+	registry.items[versioned] = servers.Server{ID: versioned, NodeID: &versionedNode, Status: servers.StatusOffline}
+	registry.items[unversioned] = servers.Server{ID: unversioned, NodeID: &unversionedNode, Status: servers.StatusOffline}
+	registry.items[noNode] = servers.Server{ID: noNode, Status: servers.StatusOffline}
+	registry.versions[versionedNode] = servers.AgentVersion{NodeID: versionedNode, Version: "v1.2.3", At: now}
 	deleted := uuid.New()
 	registry.versions[deleted.String()] = servers.AgentVersion{Version: "deleted-version", At: now}
-	token := mustCreateToken(t, tokens, auth.ScopeRead)
+
+	token := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
 	read := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set(TeamHeader, teamA.String())
 		req.Header.Set(mcpContractHeader, "1")
 		rec := httptest.NewRecorder()
 		s.Handler().ServeHTTP(rec, req)
 		return rec
 	}
+
 	rec := read("/api/v1/servers")
 	if rec.Code != 200 {
 		t.Fatalf("list=%d %s", rec.Code, rec.Body.String())
@@ -95,38 +56,34 @@ func TestAuthorizedNodeVersions(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Servers) != 4 {
-		t.Fatalf("visible=%+v", list)
+	if len(list.Servers) != 3 {
+		t.Fatalf("visible=%+v, want all three nodes", list)
 	}
 	for _, node := range list.Servers {
 		switch node.ID {
-		case owned.String(), legacy.String():
+		case versioned.String():
 			if node.AgentVersion == nil || node.AgentVersionReportedAt == nil || !node.AgentVersionReportedAt.Equal(now) {
 				t.Fatalf("missing heartbeat=%+v", node)
 			}
-		case noNode.String(), noVersion.String():
+		case unversioned.String(), noNode.String():
 			if node.AgentVersion != nil || node.AgentVersionReportedAt != nil {
 				t.Fatalf("invented version=%+v", node)
 			}
 		default:
-			t.Fatalf("foreign data=%+v", node)
+			t.Fatalf("unexpected node=%+v", node)
 		}
 	}
-	for _, id := range []uuid.UUID{foreign, deleted} {
-		if rec := read("/api/v1/servers/" + id.String()); rec.Code != 404 {
-			t.Fatalf("hidden node=%d %s", rec.Code, rec.Body.String())
-		}
+	if rec := read("/api/v1/servers/" + deleted.String()); rec.Code != 404 {
+		t.Fatalf("missing node=%d %s", rec.Code, rec.Body.String())
 	}
 	for _, id := range registry.lookedUp {
-		if id == nodeB || id == deleted.String() {
+		if id == deleted.String() {
 			t.Fatalf("unauthorized lookup=%s", id)
 		}
 	}
-	if rec := read("/api/v1/servers/agents"); rec.Code != 400 {
-		t.Fatalf("global route exposed=%d", rec.Code)
-	}
+
 	registry.versions = map[string]servers.AgentVersion{}
-	rec = read("/api/v1/servers/" + owned.String())
+	rec = read("/api/v1/servers/" + versioned.String())
 	var detail serverEnvelope
 	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
 		t.Fatal(err)

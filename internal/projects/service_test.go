@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func TestNewServiceRequiresCounter(t *testing.T) {
@@ -44,8 +42,8 @@ func TestFakeCounterScriptedCounts(t *testing.T) {
 func TestDeleteBlockedByPreviewsOnly(t *testing.T) {
 	repo := newFakeRepository()
 	counter := newFakeCounter()
-	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, counter, userID, teamID, teams.RoleAdmin)
+	userID := uuid.New()
+	svc, ctx := newTestService(repo, counter, userID)
 
 	project, environment, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -77,7 +75,7 @@ func TestDeleteBlockedByPreviewsOnly(t *testing.T) {
 
 func TestServiceCreateProjectStartsWithProduction(t *testing.T) {
 	repo := newFakeRepository()
-	svc, ctx := newTestService(repo, newFakeCounter(), uuid.New(), uuid.New(), teams.RoleAdmin)
+	svc, ctx := newTestService(repo, newFakeCounter(), uuid.New())
 
 	project, environment, err := svc.CreateProject(ctx, uuid.New(), "  Shop  ", "storefront")
 	if err != nil {
@@ -102,8 +100,8 @@ func TestServiceCreateProjectStartsWithProduction(t *testing.T) {
 
 func TestServiceNameValidation(t *testing.T) {
 	repo := newFakeRepository()
-	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, newFakeCounter(), userID, teamID, teams.RoleAdmin)
+	userID := uuid.New()
+	svc, ctx := newTestService(repo, newFakeCounter(), userID)
 
 	for _, name := range []string{"", "   ", strings.Repeat("x", 65)} {
 		if _, _, err := svc.CreateProject(ctx, userID, name, ""); !errors.Is(err, ErrValidation) {
@@ -131,8 +129,8 @@ func TestServiceNameValidation(t *testing.T) {
 
 func TestServiceNameCountsRunes(t *testing.T) {
 	repo := newFakeRepository()
-	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, newFakeCounter(), userID, teamID, teams.RoleAdmin)
+	userID := uuid.New()
+	svc, ctx := newTestService(repo, newFakeCounter(), userID)
 
 	fitting := strings.Repeat("ệ", 64)
 	if _, _, err := svc.CreateProject(ctx, userID, fitting, ""); err != nil {
@@ -152,8 +150,8 @@ func TestServiceNameCountsRunes(t *testing.T) {
 
 func TestServiceDescriptionIsCapped(t *testing.T) {
 	repo := newFakeRepository()
-	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, newFakeCounter(), userID, teamID, teams.RoleAdmin)
+	userID := uuid.New()
+	svc, ctx := newTestService(repo, newFakeCounter(), userID)
 
 	if _, _, err := svc.CreateProject(ctx, userID, "fits", strings.Repeat("ệ", 512)); err != nil {
 		t.Fatalf("CreateProject(512-rune description) = %v, want success", err)
@@ -172,8 +170,8 @@ func TestServiceDescriptionIsCapped(t *testing.T) {
 
 func TestServiceDuplicateNamesConflict(t *testing.T) {
 	repo := newFakeRepository()
-	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, newFakeCounter(), userID, teamID, teams.RoleAdmin)
+	userID := uuid.New()
+	svc, ctx := newTestService(repo, newFakeCounter(), userID)
 
 	first, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -209,75 +207,11 @@ func TestServiceDuplicateNamesConflict(t *testing.T) {
 	}
 }
 
-func TestServiceViewerCannotMutate(t *testing.T) {
-	repo := newFakeRepository()
-	owner, teamID := uuid.New(), uuid.New()
-	adminSvc, adminCtx := newTestService(repo, newFakeCounter(), owner, teamID, teams.RoleAdmin)
-	project, _, err := adminSvc.CreateProject(adminCtx, owner, "Shop", "")
-	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-
-	viewerID := uuid.New()
-	svc, ctx := newTestService(repo, newFakeCounter(), viewerID, teamID, teams.RoleReadOnly)
-	if _, _, err := svc.CreateProject(ctx, viewerID, "Other", ""); !errors.Is(err, ErrForbidden) {
-		t.Errorf("viewer create = %v, want ErrForbidden", err)
-	}
-	if _, err := svc.UpdateProject(ctx, viewerID, project.ID, ptr("x"), nil); !errors.Is(err, ErrForbidden) {
-		t.Errorf("viewer rename = %v, want ErrForbidden", err)
-	}
-	if err := svc.DeleteProject(ctx, viewerID, project.ID); !errors.Is(err, ErrForbidden) {
-		t.Errorf("viewer delete = %v, want ErrForbidden", err)
-	}
-	if _, err := svc.CreateEnvironment(ctx, viewerID, project.ID, "staging"); !errors.Is(err, ErrForbidden) {
-		t.Errorf("viewer env create = %v, want ErrForbidden", err)
-	}
-	if err := svc.DeleteEnvironment(ctx, viewerID, project.ID); !errors.Is(err, ErrForbidden) {
-		t.Errorf("viewer env delete = %v, want ErrForbidden", err)
-	}
-	if _, err := svc.ListProjects(ctx, viewerID); err != nil {
-		t.Errorf("viewer list = %v, want success", err)
-	}
-	if _, _, err := svc.GetProject(ctx, viewerID, project.ID); err != nil {
-		t.Errorf("viewer get = %v, want success", err)
-	}
-}
-
-func TestServiceCrossTeamIsNotFound(t *testing.T) {
-	repo := newFakeRepository()
-	owner, teamID := uuid.New(), uuid.New()
-	adminSvc, adminCtx := newTestService(repo, newFakeCounter(), owner, teamID, teams.RoleAdmin)
-	project, env, err := adminSvc.CreateProject(adminCtx, owner, "Shop", "")
-	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-
-	strangerSvc, strangerCtx := newTestService(repo, newFakeCounter(), uuid.New(), uuid.New(), teams.RoleAdmin)
-	if _, _, err := strangerSvc.GetProject(strangerCtx, uuid.New(), project.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("cross-team get = %v, want ErrNotFound", err)
-	}
-	if _, err := strangerSvc.UpdateProject(strangerCtx, uuid.New(), project.ID, ptr("x"), nil); !errors.Is(err, ErrNotFound) {
-		t.Errorf("cross-team rename = %v, want ErrNotFound", err)
-	}
-	if err := strangerSvc.DeleteProject(strangerCtx, uuid.New(), project.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("cross-team delete = %v, want ErrNotFound", err)
-	}
-	if _, err := strangerSvc.CreateEnvironment(strangerCtx, uuid.New(), project.ID, "staging"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("cross-team env create = %v, want ErrNotFound", err)
-	}
-	if _, err := strangerSvc.UpdateEnvironment(strangerCtx, uuid.New(), env.ID, "x"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("cross-team env rename = %v, want ErrNotFound", err)
-	}
-	if err := strangerSvc.DeleteEnvironment(strangerCtx, uuid.New(), env.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("cross-team env delete = %v, want ErrNotFound", err)
-	}
-}
-
 func TestServiceDeleteRules(t *testing.T) {
 	repo := newFakeRepository()
 	counter := newFakeCounter()
-	userID, teamID := uuid.New(), uuid.New()
-	svc, ctx := newTestService(repo, counter, userID, teamID, teams.RoleAdmin)
+	userID := uuid.New()
+	svc, ctx := newTestService(repo, counter, userID)
 
 	project, production, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {

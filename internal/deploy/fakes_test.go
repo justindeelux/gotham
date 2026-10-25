@@ -21,7 +21,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/proxy"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -63,7 +62,6 @@ type fakeRepository struct {
 	domains      []ApplicationDomain
 
 	unknownServers  map[uuid.UUID]bool
-	serverTeams     map[uuid.UUID]uuid.UUID
 	ownedGitHubApps map[uuid.UUID]bool
 
 	getErr       error
@@ -158,7 +156,7 @@ func (r *fakeRepository) primaryDomainLocked(appID uuid.UUID) *ApplicationDomain
 	return fallback
 }
 
-func (r *fakeRepository) ListRecentDeployments(_ context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error) {
+func (r *fakeRepository) ListRecentDeployments(_ context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getErr != nil {
@@ -178,10 +176,7 @@ func (r *fakeRepository) ListRecentDeployments(_ context.Context, scope teams.Sc
 		if app.IsPreview {
 			return false
 		}
-		if scope.Active() {
-			return app.TeamID == scope.TeamID
-		}
-		return app.UserID == scope.UserID
+		return app.UserID == userID
 	}
 	out := make([]ApplicationDeployment, 0, len(r.deployments))
 	for _, d := range r.deployments {
@@ -208,17 +203,14 @@ func (r *fakeRepository) ListRecentDeployments(_ context.Context, scope teams.Sc
 	return out, nil
 }
 
-func (r *fakeRepository) ListApplications(_ context.Context, scope teams.Scope) ([]Application, error) {
+func (r *fakeRepository) ListApplications(_ context.Context, userID uuid.UUID) ([]Application, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getErr != nil {
 		return nil, r.getErr
 	}
 	matches := func(app Application) bool {
-		if scope.Active() {
-			return app.TeamID == scope.TeamID
-		}
-		return app.UserID == scope.UserID
+		return app.UserID == userID
 	}
 	var out []Application
 	if r.app.ID != uuid.Nil && matches(r.app) {
@@ -420,7 +412,7 @@ func (r *fakeRepository) ReplaceStorages(_ context.Context, appID uuid.UUID, sto
 	return nil
 }
 
-func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if serverID == uuid.Nil {
@@ -429,19 +421,7 @@ func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, sco
 	if r.unknownServers[serverID] {
 		return false, nil
 	}
-	if err := scope.AuthorizeOptionalTeam(r.serverTeams[serverID], true); err != nil {
-		return false, nil
-	}
 	return true, nil
-}
-
-func (r *fakeRepository) ServerTeam(_ context.Context, serverID uuid.UUID) (uuid.UUID, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if serverID == uuid.Nil || r.unknownServers[serverID] {
-		return uuid.Nil, false, nil
-	}
-	return r.serverTeams[serverID], true, nil
 }
 
 func (r *fakeRepository) GitHubAppOwnedBy(_ context.Context, id, _ uuid.UUID) (bool, error) {
@@ -509,7 +489,7 @@ func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid
 	return false, nil
 }
 
-func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (EnvironmentRef, error) {
+func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID uuid.UUID) (EnvironmentRef, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.resolveErr != nil {
@@ -527,7 +507,7 @@ func (r *fakeRepository) HasLivePreviews(_ context.Context, appID uuid.UUID) (bo
 	return r.livePreviews[appID], nil
 }
 
-func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
+func (r *fakeRepository) ResolveProject(_ context.Context, projectID uuid.UUID) (uuid.UUID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.resolveErr != nil {
@@ -541,17 +521,6 @@ func (r *fakeRepository) environmentProject(environmentID uuid.UUID) uuid.UUID {
 		return ref.ProjectID
 	}
 	return uuid.Nil
-}
-
-func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.serverTeams == nil {
-		r.serverTeams = map[uuid.UUID]uuid.UUID{}
-	}
-	id := uuid.New()
-	r.serverTeams[id] = teamID
-	return id
 }
 
 func (r *fakeRepository) ownedApplications() []Application {

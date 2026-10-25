@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -14,15 +12,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	adapter "github.com/justindeelux/gotham/internal/mcp"
-	"github.com/justindeelux/gotham/internal/teams"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
-	st, user, team, env, node := replayDeployFixture(t)
+	st, user, env, node := replayDeployFixture(t)
 	ctx := context.Background()
 	repo := newStoreRepository(st, testSecretKey)
-	app, err := repo.CreateApplication(ctx, Application{ID: uuid.New(), UserID: user, TeamID: team, EnvironmentID: env, ServerID: node, Name: uuid.NewString(), SourceType: SourceImage, ImageRef: "busybox:latest"}, nil, nil, nil)
+	app, err := repo.CreateApplication(ctx, Application{ID: uuid.New(), UserID: user, EnvironmentID: env, ServerID: node, Name: uuid.NewString(), SourceType: SourceImage, ImageRef: "busybox:latest"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,18 +31,16 @@ func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
 	router := chi.NewRouter()
 	auth := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("X-Team-Id") != team.String() || r.Header.Get("Authorization") != "Bearer gt1_test" || r.Header.Get("X-Gotham-MCP-Contract") != "1" {
+			if r.Header.Get("Authorization") != "Bearer gt1_test" || r.Header.Get("X-Gotham-MCP-Contract") != "1" {
 				t.Error("adapter omitted strict credentials")
 			}
 			w.Header().Set("X-Gotham-MCP-Contract", "1")
-			w.Header().Set("X-Gotham-MCP-Team-Id", team.String())
-			scope := teams.Scope{UserID: user, TeamID: team, Role: teams.RoleAdmin}
-			next.ServeHTTP(w, r.WithContext(teams.WithScope(r.Context(), scope)))
+			next.ServeHTTP(w, r)
 		})
 	}
 	router.Route("/api", func(api chi.Router) {
 		api.With(auth).Get("/v1/mcp/context", func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = fmt.Fprintf(w, `{"team_id":%q,"capabilities":["context","strict_reads","strict_mutations","request_replay"]}`, team.String())
+			_, _ = fmt.Fprintf(w, `{"capabilities":["context","strict_reads","strict_mutations","request_replay"]}`)
 		})
 		api.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			routes := chi.NewRouter()
@@ -72,7 +67,7 @@ func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
 		_ = connection.Close()
 	}))
 	t.Cleanup(api.Close)
-	server, err := adapter.NewServer(ctx, adapter.Config{URL: api.URL, Token: "gt1_test", TeamID: team}, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server, err := adapter.NewServer(ctx, adapter.Config{URL: api.URL, Token: "gt1_test"}, "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,31 +138,12 @@ func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
 	if err := st.DB.QueryRow(ctx, "SELECT count(*) FROM deployments WHERE application_id=$1", app.ID).Scan(&count); err != nil || count != 102 {
 		t.Fatalf("re-enqueued replay: count=%d err=%v", count, err)
 	}
-	otherApp, err := repo.CreateApplication(ctx, Application{ID: uuid.New(), UserID: user, TeamID: team, EnvironmentID: env, ServerID: node, Name: uuid.NewString(), SourceType: SourceImage, ImageRef: "busybox:latest"}, nil, nil, nil)
+	otherApp, err := repo.CreateApplication(ctx, Application{ID: uuid.New(), UserID: user, EnvironmentID: env, ServerID: node, Name: uuid.NewString(), SourceType: SourceImage, ImageRef: "busybox:latest"}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mismatched, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "deployment_status", Arguments: map[string]any{"application_id": otherApp.ID.String(), "deployment_id": id.String()}})
 	if err != nil || !mismatched.IsError {
 		t.Fatalf("mismatched app/release visible: %+v %v", mismatched, err)
-	}
-	otherTeam, otherEnv, _ := seedProjectEnvironment(t, ctx, st)
-	if otherTeam == team {
-		t.Fatal("fixture teams not distinct")
-	}
-	if _, err := st.DB.Exec(ctx, "UPDATE applications SET team_id=$1,environment_id=$2 WHERE id=$3", otherTeam, otherEnv, app.ID); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name string
-		args map[string]any
-	}{
-		{"application_deploy", args},
-		{"deployment_status", map[string]any{"application_id": app.ID.String(), "deployment_id": id.String()}},
-	} {
-		result, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: tc.name, Arguments: tc.args})
-		if err != nil || !result.IsError {
-			t.Fatalf("moved app accessible: %+v %v", result, err)
-		}
 	}
 }

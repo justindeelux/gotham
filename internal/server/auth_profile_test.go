@@ -294,7 +294,7 @@ func scratchProfileStack(t *testing.T) (*Server, *auth.AuthResult, *auth.AuthRes
 	svc := auth.New(store.New(pool), signer, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	email := fmt.Sprintf("pf1-srv-%d@example.com", time.Now().UnixNano())
-	registered, err := svc.Register(ctx, email, "s3cret-password", "", nil, auth.SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

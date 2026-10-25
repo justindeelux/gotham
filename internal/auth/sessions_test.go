@@ -43,7 +43,7 @@ func TestServiceListSessionsMarksCurrent(t *testing.T) {
 
 	email := uniqueEmail("sessions-list")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{UserAgent: "first-agent/1.0", IP: "10.0.0.1"})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{UserAgent: "first-agent/1.0", IP: "10.0.0.1"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestServiceListSessionsSidLessMarksNone(t *testing.T) {
 
 	email := uniqueEmail("sessions-sidless")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestServiceListSessionsExcludesDeadRows(t *testing.T) {
 
 	email := uniqueEmail("sessions-dead")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestServiceListSessionsExcludesDeadRows(t *testing.T) {
 	}
 
 	svc.AllowOpenRegistration = true
-	foreign, err := svc.Register(ctx, uniqueEmail("sessions-foreign"), "s3cret-password", "", nil, SessionMeta{})
+	foreign, err := svc.Register(ctx, uniqueEmail("sessions-foreign"), "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register foreign: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestServiceSessionSignInAtResolvesRotatedRow(t *testing.T) {
 
 	email := uniqueEmail("sessions-lineage")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestServiceSessionSignInAtResolvesRotatedRow(t *testing.T) {
 	}
 
 	svc.AllowOpenRegistration = true
-	foreign, err := svc.Register(ctx, uniqueEmail("sessions-lineage-foreign"), "s3cret-password", "", nil, SessionMeta{})
+	foreign, err := svc.Register(ctx, uniqueEmail("sessions-lineage-foreign"), "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register foreign: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestServiceRotateUpdatesMeta(t *testing.T) {
 
 	email := uniqueEmail("sessions-rotate")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{UserAgent: "old-agent", IP: "10.0.0.1"})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{UserAgent: "old-agent", IP: "10.0.0.1"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestServiceSessionMetaTruncation(t *testing.T) {
 	email := uniqueEmail("sessions-truncate")
 	cleanupUser(t, st, email)
 	long := strings.Repeat("û", 300) + "\xff\xfe"
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{UserAgent: long, IP: "not-an-ip"})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{UserAgent: long, IP: "not-an-ip"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestServiceSessionMetaStripsControlCharacters(t *testing.T) {
 
 	email := uniqueEmail("sessions-controls")
 	agent := "ab\x00cd\x01\x02\t\x7fé"
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{UserAgent: agent, IP: "10.0.0.1"})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{UserAgent: agent, IP: "10.0.0.1"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestServiceRevokeSession(t *testing.T) {
 
 	email := uniqueEmail("sessions-revoke")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -498,14 +498,14 @@ func TestServiceRevokeSessionForeignIsNotFound(t *testing.T) {
 
 	email := uniqueEmail("sessions-revoke-own")
 	cleanupUser(t, st, email)
-	own, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	own, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	ownID, _ := uuid.Parse(own.User.ID)
 
 	svc.AllowOpenRegistration = true
-	foreign, err := svc.Register(ctx, uniqueEmail("sessions-revoke-foreign"), "s3cret-password", "", nil, SessionMeta{})
+	foreign, err := svc.Register(ctx, uniqueEmail("sessions-revoke-foreign"), "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register foreign: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestServiceRevokeOtherSessions(t *testing.T) {
 
 	email := uniqueEmail("sessions-revoke-others")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestServiceRevokeOtherSessionsStaleSid(t *testing.T) {
 
 	email := uniqueEmail("sessions-stale-sid")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -626,7 +626,7 @@ func TestServiceRevokeOtherSessionsStaleSid(t *testing.T) {
 	}
 
 	svc.AllowOpenRegistration = true
-	foreign, err := svc.Register(ctx, uniqueEmail("sessions-stale-foreign"), "s3cret-password", "", nil, SessionMeta{})
+	foreign, err := svc.Register(ctx, uniqueEmail("sessions-stale-foreign"), "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register foreign: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestServiceRevokeOtherSessionsSidLess(t *testing.T) {
 
 	email := uniqueEmail("sessions-409")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -682,7 +682,7 @@ func TestServiceChangePasswordCapturesMeta(t *testing.T) {
 	email := uniqueEmail("sessions-pwmeta")
 	cleanupUser(t, st, email)
 	const oldPassword = "s3cret-password"
-	first, err := svc.Register(ctx, email, oldPassword, "", nil, SessionMeta{UserAgent: "old-agent", IP: "10.0.0.9"})
+	first, err := svc.Register(ctx, email, oldPassword, SessionMeta{UserAgent: "old-agent", IP: "10.0.0.9"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -714,7 +714,7 @@ func TestServiceSessionMetadataMigrationBackfill(t *testing.T) {
 
 	email := uniqueEmail("sessions-backfill")
 	cleanupUser(t, st, email)
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

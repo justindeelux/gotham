@@ -13,7 +13,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
@@ -86,21 +85,13 @@ func seedUserAndServer(t *testing.T, st *store.Store) (uuid.UUID, uuid.UUID) {
 	return uuidFromPG(user.ID), uuidFromPG(server.ID)
 }
 
-func seedProjectEnvironment(t *testing.T, st *store.Store) (teamID, projectID, envID uuid.UUID) {
+func seedProjectEnvironment(t *testing.T, st *store.Store) (projectID, envID uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
 
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
-		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		Name: fmt.Sprintf("p13-%d", time.Now().UnixNano()),
-	})
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID: team.ID,
-		Name:   fmt.Sprintf("shop-%d", time.Now().UnixNano()),
+		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name: fmt.Sprintf("shop-%d", time.Now().UnixNano()),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -125,11 +116,8 @@ func seedProjectEnvironment(t *testing.T, st *store.Store) (teamID, projectID, e
 				t.Logf("cleanup resources: %v", err)
 			}
 		}
-		if err := poolExec(st, cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
 	})
-	return uuidFromPG(team.ID), uuidFromPG(project.ID), uuidFromPG(environment.ID)
+	return uuidFromPG(project.ID), uuidFromPG(environment.ID)
 }
 
 func poolExec(st *store.Store, ctx context.Context, query string, args ...any) error {
@@ -141,12 +129,11 @@ func TestUpdateDatabaseTargetKeepsUnsetPlacement(t *testing.T) {
 	repo, st := integrationEnv(t)
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
-	teamID, _, envID := seedProjectEnvironment(t, st)
+	_, envID := seedProjectEnvironment(t, st)
 
 	created, err := repo.CreateDatabase(ctx, Database{
 		ID:            uuid.New(),
 		UserID:        ownerID,
-		TeamID:        teamID,
 		ServerID:      serverID,
 		EnvironmentID: envID,
 		Name:          "orders",
@@ -180,7 +167,7 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	ownerID, serverID := seedUserAndServer(t, st)
 	otherUserID, _ := seedUserAndServer(t, st)
 
-	teamID, projectID, envID := seedProjectEnvironment(t, st)
+	projectID, envID := seedProjectEnvironment(t, st)
 	otherEnvID := func() uuid.UUID {
 		environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
 			ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
@@ -197,7 +184,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	created, err := repo.CreateDatabase(ctx, Database{
 		ID:            uuid.New(),
 		UserID:        ownerID,
-		TeamID:        teamID,
 		ServerID:      serverID,
 		EnvironmentID: envID,
 		Name:          "orders",
@@ -330,14 +316,14 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("PublicPortInUse(free) = %v, %v, want false", inUse, err)
 	}
 
-	list, err := repo.ListDatabases(ctx, teams.Scope{UserID: ownerID})
+	list, err := repo.ListDatabases(ctx, ownerID)
 	if err != nil {
 		t.Fatalf("ListDatabasesByUser: %v", err)
 	}
 	if len(list) != 3 {
 		t.Fatalf("owner list = %+v, want the three live rows", list)
 	}
-	otherList, err := repo.ListDatabases(ctx, teams.Scope{UserID: otherUserID})
+	otherList, err := repo.ListDatabases(ctx, otherUserID)
 	if err != nil {
 		t.Fatalf("ListDatabasesByUser (other): %v", err)
 	}
@@ -348,7 +334,6 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	portRow, err := repo.CreateDatabase(ctx, Database{
 		ID:            uuid.New(),
 		UserID:        ownerID,
-		TeamID:        teamID,
 		ServerID:      serverID,
 		EnvironmentID: envID,
 		Name:          "port-check",
@@ -407,13 +392,13 @@ func TestRepositoryRoundTrip(t *testing.T) {
 		t.Errorf("GetDatabase(nil) = %v, want ErrNotFound", err)
 	}
 
-	if exists, err := repo.ServerExists(ctx, serverID, teams.Scope{UserID: ownerID}); err != nil || !exists {
+	if exists, err := repo.ServerExists(ctx, serverID); err != nil || !exists {
 		t.Errorf("ServerExists(seeded) = %v, %v, want true", exists, err)
 	}
-	if exists, err := repo.ServerExists(ctx, uuid.New(), teams.Scope{UserID: ownerID}); err != nil || exists {
+	if exists, err := repo.ServerExists(ctx, uuid.New()); err != nil || exists {
 		t.Errorf("ServerExists(unknown) = %v, %v, want false", exists, err)
 	}
-	if exists, err := repo.ServerExists(ctx, uuid.Nil, teams.Scope{UserID: ownerID}); err != nil || exists {
+	if exists, err := repo.ServerExists(ctx, uuid.Nil); err != nil || exists {
 		t.Errorf("ServerExists(nil) = %v, %v, want false", exists, err)
 	}
 }
@@ -423,13 +408,12 @@ func TestRepositoryRetentionQueries(t *testing.T) {
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
 
-	teamID, _, envID := seedProjectEnvironment(t, st)
+	_, envID := seedProjectEnvironment(t, st)
 	makeDB := func(name string) Database {
 		now := time.Now().UTC()
 		created, err := repo.CreateDatabase(ctx, Database{
 			ID:            uuid.New(),
 			UserID:        ownerID,
-			TeamID:        teamID,
 			ServerID:      serverID,
 			EnvironmentID: envID,
 			Name:          name,

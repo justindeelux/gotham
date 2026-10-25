@@ -17,9 +17,9 @@ func TestParseImageReference(t *testing.T) {
 	}{
 		{name: "docker hub library", ref: "nginx:1.25.3", wantName: "nginx", wantTag: "1.25.3"},
 		{name: "namespaced", ref: "library/nginx", wantName: "library/nginx"},
-		{name: "registry with port", ref: "registry.example.com:5000/team/app:1.2", wantName: "registry.example.com:5000/team/app", wantTag: "1.2"},
+		{name: "registry with port", ref: "registry.example.com:5000/acme/app:1.2", wantName: "registry.example.com:5000/acme/app", wantTag: "1.2"},
 		{name: "digest pinned", ref: "nginx@" + digest, wantName: "nginx", wantPin: digest},
-		{name: "tag and digest", ref: "registry.example.com/team/app:1.2@" + digest, wantName: "registry.example.com/team/app", wantTag: "1.2", wantPin: digest},
+		{name: "tag and digest", ref: "registry.example.com/acme/app:1.2@" + digest, wantName: "registry.example.com/acme/app", wantTag: "1.2", wantPin: digest},
 		{name: "latest is valid (wizard warns, API accepts)", ref: "nginx:latest", wantName: "nginx", wantTag: "latest"},
 		{name: "implicit latest", ref: "nginx", wantName: "nginx"},
 		{name: "separators", ref: "my-registry.io/a.b_c-d/e:1.0-beta.2", wantName: "my-registry.io/a.b_c-d/e", wantTag: "1.0-beta.2"},
@@ -57,8 +57,8 @@ func TestParseImageReference(t *testing.T) {
 		{name: "newline smuggling", ref: "nginx:1\nEVIL=1", wantError: "whitespace"},
 		{name: "empty tag", ref: "nginx:", wantError: "tag"},
 		{name: "bad tag chars", ref: "nginx:a/b", wantError: "port"},
-		{name: "uppercase path", ref: "Team/App:1", wantError: "lowercase"},
-		{name: "empty component", ref: "team//app:1", wantError: "component"},
+		{name: "uppercase path", ref: "Acme/App:1", wantError: "lowercase"},
+		{name: "empty component", ref: "acme//app:1", wantError: "component"},
 		{name: "bad digest", ref: "nginx@sha256:zzz", wantError: "digest"},
 		{name: "short digest", ref: "nginx@sha256:abc", wantError: "digest"},
 		{name: "non-sha256 digest", ref: "nginx@sha512:" + strings.Repeat("a", 128), wantError: "digest"},
@@ -90,11 +90,11 @@ func TestParseImageReference(t *testing.T) {
 
 func TestPinnedImageReference(t *testing.T) {
 	digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	got, err := PinnedImageReference("registry.example.com/team/app:1.2", digest)
+	got, err := PinnedImageReference("registry.example.com/acme/app:1.2", digest)
 	if err != nil {
 		t.Fatalf("PinnedImageReference: %v", err)
 	}
-	if want := "registry.example.com/team/app@" + digest; got != want {
+	if want := "registry.example.com/acme/app@" + digest; got != want {
 		t.Errorf("got %q; want %q", got, want)
 	}
 	got, err = PinnedImageReference("nginx:1.25", "")

@@ -385,7 +385,7 @@ func TestSSLRoutesAreBehindAuthentication(t *testing.T) {
 	}
 }
 
-func TestPerApplicationRoutesMapTeamErrors(t *testing.T) {
+func TestPerApplicationRoutesMapAuthorizationErrors(t *testing.T) {
 	certs := &fakeCertificateService{certificate: sampleCertificate(), err: ErrForbidden}
 	redirects := &fakeRedirectService{redirect: sampleRedirect(), err: ErrNotFound}
 	r := chi.NewRouter()

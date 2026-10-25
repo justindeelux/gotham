@@ -41,11 +41,11 @@ func TestListPrimaryApplicationDomainsScoped(t *testing.T) {
 		defer cleanupCancel()
 		_, _ = pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID)
 	})
-	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
+	envID, serverID := seedEnvColumns(t, ctx, st, pool)
 
 	create := func(name, domain string) sqlc.Application {
 		app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-			UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
+			UserID: user.ID, ServerID: serverID, EnvironmentID: envID,
 			Name: name, Provider: "github", Repo: "acme/demo",
 			CloneUrl: "https://github.com/acme/demo.git", Branch: "main", BuildPack: "dockerfile",
 		})

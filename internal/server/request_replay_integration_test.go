@@ -3,91 +3,45 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
+	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/justindeelux/gotham/internal/auth"
-	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/projects"
-	"github.com/justindeelux/gotham/internal/requestreplay"
-	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func TestReplayBackedMutationAuthorization(t *testing.T) {
-	dsn := os.Getenv("GOTHAM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("isolated GOTHAM_TEST_DSN required")
-	}
-	t.Setenv("FEATURE_TEAMS", "true")
-	t.Setenv("FEATURE_APPLICATIONS", "true")
+	s, st, owner := scratchProjectsStack(t)
 	ctx := context.Background()
-	pool, err := store.Open(ctx, dsn)
+	ownerID, err := uuid.Parse(owner.User.ID)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("parse owner id: %v", err)
 	}
-	defer pool.Close()
-	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
-		t.Fatal(err)
-	}
-	st := store.New(pool)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	user, err := st.CreateUser(ctx, uuid.NewString()+"@example.com", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	principal := uuid.UUID(user.ID.Bytes)
-	defer func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM request_receipts WHERE principal_id=$1", principal)
-		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id=$1", principal)
-	}()
-	tokenSvc := auth.NewAPITokenService(st, logger)
-	token, err := tokenSvc.Create(ctx, principal, "replay", []string{auth.ScopeDeploy})
-	if err != nil {
-		t.Fatal(err)
-	}
-	readToken, err := tokenSvc.Create(ctx, principal, "read", []string{auth.ScopeRead})
-	if err != nil {
-		t.Fatal(err)
-	}
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "replay"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	teamID := uuid.UUID(team.ID.Bytes)
-	defer func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM applications WHERE team_id=$1", teamID)
-		_, _ = pool.Exec(ctx, "DELETE FROM teams WHERE id=$1", teamID)
-	}()
-	if _, err := st.CreateTeamMember(ctx, sqlc.CreateTeamMemberParams{TeamID: team.ID, UserID: user.ID, Role: "admin"}); err != nil {
-		t.Fatal(err)
-	}
-	s, _ := newScopeTestServer(t)
-	s.tokens = tokenSvc
-	s.teamService = teams.NewService(teams.Config{Store: st, Logger: logger})
-	svc := deploy.NewService(deploy.Config{Store: st, Secret: "stable-replay-secret", Logger: logger})
-	defer svc.Close()
-	projectSvc := projects.NewService(projects.Config{Store: st, Counter: projects.StoreCounter{Store: st}, Logger: logger})
+
+	projectSvc := projects.NewService(projects.Config{Store: st, Counter: projects.StoreCounter{Store: st}, Logger: s.logger})
 	router := chi.NewRouter()
 	router.Route("/api", func(api chi.Router) {
-		projects.Mount(api, s.withTeam(), UserIDFromContext, projectSvc)
-		deploy.Mount(api, s.withTeam(), UserIDFromContext, svc)
+		projects.Mount(api, s.resourceAuth(), UserIDFromContext, projectSvc)
 	})
-	send := func(path, key, body, bearer, team, contract string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("POST", path, strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+bearer)
-		req.Header.Set(TeamHeader, team)
-		if contract != "" {
-			req.Header.Set(mcpContractHeader, contract)
-		}
+
+	deployToken, err := s.tokens.Create(ctx, ownerID, "replay-deploy", []string{auth.ScopeDeploy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readToken, err := s.tokens.Create(ctx, ownerID, "replay-read", []string{auth.ScopeRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.tokens.Revoke(ctx, ownerID, deployToken.ID) })
+
+	send := func(token, key, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/v1/projects", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
 		if key != "" {
 			req.Header.Set("Idempotency-Key", key)
 		}
@@ -95,117 +49,156 @@ func TestReplayBackedMutationAuthorization(t *testing.T) {
 		router.ServeHTTP(rec, req)
 		return rec
 	}
-	create := func(path, key, body string) *httptest.ResponseRecorder {
-		return send(path, key, body, token.Token, teamID.String(), "1")
+
+	if rec := send(readToken.Token, "read-create", `{"name":"read"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("read token create=%d %s", rec.Code, rec.Body.String())
 	}
-	decode := func(rec *httptest.ResponseRecorder, status int) map[string]json.RawMessage {
-		t.Helper()
-		if rec.Code != status {
-			t.Fatalf("status %d want %d: %s", rec.Code, status, rec.Body.String())
-		}
-		var body map[string]json.RawMessage
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
-		}
-		return body
+	if rec := send(deployToken.Token, "project", `{"name":"shop"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("deploy token create=%d %s", rec.Code, rec.Body.String())
 	}
-	path := "/api/v1/mcp/projects"
-	for _, tc := range []struct {
-		name, key, token, team, contract string
-		status                           int
-	}{
-		{"read", "k", readToken.Token, teamID.String(), "1", 403},
-		{"jwt", "k", "valid-token", teamID.String(), "1", 403},
-		{"missing-key", "", token.Token, teamID.String(), "1", 400},
-		{"bad-key", "bad key", token.Token, teamID.String(), "1", 400},
-		{"missing-team", "k", token.Token, "", "1", 400},
-		{"foreign-team", "k", token.Token, uuid.NewString(), "1", 403},
-		{"missing-contract", "k", token.Token, teamID.String(), "", 400},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			decode(send(path, tc.key, `{"name":"blocked"}`, tc.token, tc.team, tc.contract), tc.status)
-		})
+	var first struct {
+		Receipt struct {
+			ResourceID string `json:"resource_id"`
+			Replayed   bool   `json:"replayed"`
+		} `json:"receipt"`
 	}
-	body := decode(create(path, "project", `{"name":" shop ","description":""}`), 201)
-	var receipt requestreplay.Result
-	if err := json.Unmarshal(body["receipt"], &receipt); err != nil || receipt.Replayed {
-		t.Fatalf("first receipt %+v %v", receipt, err)
+	if err := json.Unmarshal(send(deployToken.Token, "project", `{"name":"shop"}`).Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
 	}
-	var project struct {
-		ID string `json:"id"`
+	if first.Receipt.ResourceID == "" || !first.Receipt.Replayed {
+		t.Fatalf("first replay=%+v", first)
 	}
-	_ = json.Unmarshal(body["project"], &project)
-	var envs []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+
+	if _, err := st.DB.Exec(ctx, `UPDATE users SET role='member' WHERE id=$1`, ownerID); err != nil {
+		t.Fatal(err)
 	}
-	_ = json.Unmarshal(body["environments"], &envs)
-	if len(envs) != 1 || envs[0].Name != "production" {
-		t.Fatalf("production %s", body["environments"])
+	denied := send(deployToken.Token, "project", `{"name":"shop"}`)
+	if denied.Code != http.StatusForbidden || strings.Contains(denied.Body.String(), first.Receipt.ResourceID) {
+		t.Fatalf("demoted replay=%d %s", denied.Code, denied.Body.String())
 	}
-	again := decode(create(path, "project", `{"name":"shop"}`), 201)
-	var replay requestreplay.Result
-	_ = json.Unmarshal(again["receipt"], &replay)
-	if !replay.Replayed || receipt.ResourceID != replay.ResourceID || receipt.RelatedID != replay.RelatedID {
-		t.Fatal("project replay identity changed")
+	if _, err := st.DB.Exec(ctx, `UPDATE users SET role='owner' WHERE id=$1`, ownerID); err != nil {
+		t.Fatal(err)
 	}
-	decode(create(path, "project", `{"name":"different"}`), 409)
-	envPath := path + "/" + project.ID + "/environments"
-	decode(create(envPath, "staging", `{"name":"staging"}`), 201)
-	decode(create(envPath, "staging", `{"name":" staging "}`), 201)
-	node, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "replay-node", Ip: "127.0.0.1", Port: 22, SshUser: "root", TeamID: team.ID})
+
+	replay := send(deployToken.Token, "project", `{"name":"shop"}`)
+	if replay.Code != http.StatusCreated {
+		t.Fatalf("owner replay=%d %s", replay.Code, replay.Body.String())
+	}
+	var second struct {
+		Receipt struct {
+			ResourceID string `json:"resource_id"`
+			Replayed   bool   `json:"replayed"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal(replay.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if !second.Receipt.Replayed || second.Receipt.ResourceID != first.Receipt.ResourceID {
+		t.Fatalf("replay identity=%+v want %s", second, first.Receipt.ResourceID)
+	}
+
+	read := httptest.NewRequest("GET", "/api/v1/projects", nil)
+	read.Header.Set("Authorization", "Bearer "+readToken.Token)
+	readRec := httptest.NewRecorder()
+	router.ServeHTTP(readRec, read)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("read token list=%d %s", readRec.Code, readRec.Body.String())
+	}
+
+	if err := s.tokens.Revoke(ctx, ownerID, deployToken.ID); err != nil {
+		t.Fatal(err)
+	}
+	if rec := send(deployToken.Token, "project", `{"name":"shop"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token=%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMCPCreationBackedAndScoped(t *testing.T) {
+	s, st, owner := scratchProjectsStack(t)
+	ctx := context.Background()
+	ownerID, err := uuid.Parse(owner.User.ID)
+	if err != nil {
+		t.Fatalf("parse owner id: %v", err)
+	}
+
+	projectSvc := projects.NewService(projects.Config{Store: st, Counter: projects.StoreCounter{Store: st}, Logger: s.logger})
+	router := chi.NewRouter()
+	router.Route("/api", func(api chi.Router) {
+		projects.Mount(api, s.resourceAuth(), UserIDFromContext, projectSvc)
+	})
+
+	deployToken, err := s.tokens.Create(ctx, ownerID, "mcp-deploy", []string{auth.ScopeDeploy})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM applications WHERE server_id=$1", node.ID)
-		_, _ = pool.Exec(ctx, "DELETE FROM servers WHERE id=$1", node.ID)
-	}()
-	appPath := "/api/v1/mcp/applications"
-	appBody := `{"name":"image","source_type":"image","image_ref":"busybox:latest","server_id":"` + uuid.UUID(node.ID.Bytes).String() + `","environment_id":"` + envs[0].ID + `","env":[{"key":"PASSWORD","value":"secret:private-password"}]}`
-	a := decode(create(appPath, "app", appBody), 201)
-	var app struct {
-		ID string `json:"id"`
-	}
-	_ = json.Unmarshal(a["application"], &app)
-	a = decode(create(appPath, "app", appBody), 201)
-	_ = json.Unmarshal(a["receipt"], &replay)
-	if !replay.Replayed {
-		t.Fatal("app was not replayed")
-	}
-	decode(create(appPath, "app", strings.Replace(appBody, "private-password", "changed-secret", 1)), 409)
-	deployPath := appPath + "/" + app.ID + "/deploy"
-	d := decode(create(deployPath, "deploy", ``), 202)
-	_ = json.Unmarshal(d["receipt"], &receipt)
-	d = decode(create(deployPath, "deploy", `{}`), 202)
-	_ = json.Unmarshal(d["receipt"], &replay)
-	if !replay.Replayed || receipt.ResourceID != replay.ResourceID {
-		t.Fatal("deploy identity changed")
-	}
-	decode(create(deployPath, "invalid", `{"force":true}`), 400)
-	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='read_only' WHERE team_id=$1 AND user_id=$2", teamID, principal); err != nil {
-		t.Fatal(err)
-	}
-	decode(create(path, "project", `{"name":"shop"}`), 403)
-	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='admin' WHERE team_id=$1 AND user_id=$2", teamID, principal); err != nil {
-		t.Fatal(err)
-	}
-	decode(create(path, "project", `{"name":"shop"}`), 201)
-	if err := tokenSvc.Revoke(ctx, principal, token.ID); err != nil {
-		t.Fatal(err)
-	}
-	decode(create(path, "project", `{"name":"shop"}`), 401)
-	decode(send("/api/v1/projects", "", `{"name":"legacy"}`, readToken.Token, teamID.String(), ""), 403)
-	legacy, err := tokenSvc.Create(ctx, principal, "legacy", []string{auth.ScopeDeploy})
+	readToken, err := s.tokens.Create(ctx, ownerID, "mcp-read", []string{auth.ScopeRead})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := decode(send("/api/v1/projects", "", `{"name":"legacy"}`, legacy.Token, teamID.String(), ""), 201)
-	if _, ok := response["receipt"]; ok {
-		t.Fatal("legacy response changed")
-	}
-	if _, err := pool.Exec(ctx, "DELETE FROM team_members WHERE team_id=$1 AND user_id=$2", teamID, principal); err != nil {
+	member, err := s.auth.Register(ctx, "mcp-member@example.com", "s3cret-password", auth.SessionMeta{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	decode(send(path, "project", `{"name":"shop"}`, legacy.Token, teamID.String(), "1"), 403)
+	memberID, err := uuid.Parse(member.User.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberToken, err := s.tokens.Create(ctx, memberID, "mcp-member", []string{auth.ScopeDeploy})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	send := func(token, key, body, contract string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/v1/mcp/projects", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		if key != "" {
+			req.Header.Set("Idempotency-Key", key)
+		}
+		if contract != "" {
+			req.Header.Set(mcpContractHeader, contract)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := send(deployToken.Token, "mcp-project", `{"name":"mcp"}`+"\n", "1")
+	if first.Code != http.StatusCreated {
+		t.Fatalf("owner deploy create=%d %s", first.Code, first.Body.String())
+	}
+	var created struct {
+		Receipt struct {
+			ResourceID string `json:"resource_id"`
+			Replayed   bool   `json:"replayed"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	replay := send(deployToken.Token, "mcp-project", `{"name":"mcp"}`+"\n", "1")
+	if replay.Code != http.StatusCreated {
+		t.Fatalf("owner deploy replay=%d %s", replay.Code, replay.Body.String())
+	}
+	var replayed struct {
+		Receipt struct {
+			ResourceID string `json:"resource_id"`
+			Replayed   bool   `json:"replayed"`
+		} `json:"receipt"`
+	}
+	if err := json.Unmarshal(replay.Body.Bytes(), &replayed); err != nil {
+		t.Fatal(err)
+	}
+	if !replayed.Receipt.Replayed || replayed.Receipt.ResourceID != created.Receipt.ResourceID {
+		t.Fatalf("mcp replay=%+v want %s", replayed, created.Receipt.ResourceID)
+	}
+
+	if rec := send(readToken.Token, "mcp-read", `{"name":"read"}`+"\n", "1"); rec.Code != http.StatusForbidden {
+		t.Fatalf("owner read create=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := send(memberToken.Token, "mcp-member", `{"name":"member"}`+"\n", "1"); rec.Code != http.StatusForbidden {
+		t.Fatalf("member deploy create=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := send(deployToken.Token, "mcp-contract", `{"name":"contract"}`+"\n", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing contract=%d %s", rec.Code, rec.Body.String())
+	}
 }

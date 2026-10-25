@@ -16,7 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func setFactory(t *testing.T, service *Service, notifiers map[uuid.UUID]*fakeNotifier) {
@@ -31,7 +30,7 @@ func setFactory(t *testing.T, service *Service, notifiers map[uuid.UUID]*fakeNot
 }
 
 func TestDeployFailureDeliversFormattedDiscordMessage(t *testing.T) {
-	teamID, appID := uuid.New(), uuid.New()
+	appID := uuid.New()
 	server, call := newWebhookServer(t, http.StatusOK)
 	repo := newFakeRepository()
 	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook"})
@@ -39,7 +38,7 @@ func TestDeployFailureDeliversFormattedDiscordMessage(t *testing.T) {
 		t.Fatalf("seal config: %v", err)
 	}
 	repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		ID: uuid.New(), Name: "discord", Kind: KindDiscord,
 		Enabled: true, Events: AllEvents, SealedConfig: sealed,
 	})
 	service := newTestService(t, repo)
@@ -47,11 +46,11 @@ func TestDeployFailureDeliversFormattedDiscordMessage(t *testing.T) {
 	service.DeployFinished(context.Background(), deploy.DeployResult{
 		ApplicationID: appID,
 		Application:   "shop-web",
-		TeamID:        teamID,
-		State:         deploy.StateFailed,
-		Error:         "build step failed: exit status 1",
-		Host:          "shop.example.com",
-		FinishedAt:    time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC),
+
+		State:      deploy.StateFailed,
+		Error:      "build step failed: exit status 1",
+		Host:       "shop.example.com",
+		FinishedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC),
 	})
 
 	waitFor(t, "the Discord delivery", func() bool {
@@ -77,49 +76,49 @@ func TestDeployFailureDeliversFormattedDiscordMessage(t *testing.T) {
 	}
 }
 
-func TestDispatchSelectsTeamWideAndResourceOverride(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+func TestDispatchSelectsInstanceWideAndResourceOverride(t *testing.T) {
+	userID := uuid.New()
 	appID := uuid.New()
 	repo := newFakeRepository()
 
-	teamWide := repo.seed(sampleChannel(t, teamID))
+	instanceWide := repo.seed(sampleChannel(t))
 	override := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "app override", Kind: KindSlack,
+		ID: uuid.New(), Name: "app override", Kind: KindSlack,
 		Enabled: true, ResourceType: ResourceApplication, ResourceID: appID,
-		Events: AllEvents, SealedConfig: teamWide.SealedConfig,
+		Events: AllEvents, SealedConfig: instanceWide.SealedConfig,
 	})
 	otherResource := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "other app", Kind: KindSlack,
+		ID: uuid.New(), Name: "other app", Kind: KindSlack,
 		Enabled: true, ResourceType: ResourceApplication, ResourceID: uuid.New(),
-		Events: AllEvents, SealedConfig: teamWide.SealedConfig,
+		Events: AllEvents, SealedConfig: instanceWide.SealedConfig,
 	})
 	disabled := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "disabled", Kind: KindSlack,
-		Enabled: false, Events: AllEvents, SealedConfig: teamWide.SealedConfig,
+		ID: uuid.New(), Name: "disabled", Kind: KindSlack,
+		Enabled: false, Events: AllEvents, SealedConfig: instanceWide.SealedConfig,
 	})
 	unsubscribed := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "backup only", Kind: KindSlack,
+		ID: uuid.New(), Name: "backup only", Kind: KindSlack,
 		Enabled: true, Events: []EventKey{EventBackupFailure},
-		SealedConfig: teamWide.SealedConfig,
+		SealedConfig: instanceWide.SealedConfig,
 	})
 
 	service := newTestService(t, repo)
 	notifiers := map[uuid.UUID]*fakeNotifier{}
-	for _, channel := range []Channel{teamWide, override, otherResource, disabled, unsubscribed} {
+	for _, channel := range []Channel{instanceWide, override, otherResource, disabled, unsubscribed} {
 		notifiers[channel.ID] = newFakeNotifier()
 	}
 	setFactory(t, service, notifiers)
 
-	event := sampleEvent(teamID)
+	event := sampleEvent()
 	event.ResourceID = appID
 	service.Dispatch(event)
 
-	waitFor(t, "the team-wide and override deliveries", func() bool {
-		return len(notifiers[teamWide.ID].delivered()) == 1 && len(notifiers[override.ID].delivered()) == 1
+	waitFor(t, "the instance-wide and override deliveries", func() bool {
+		return len(notifiers[instanceWide.ID].delivered()) == 1 && len(notifiers[override.ID].delivered()) == 1
 	})
 	for id, notifier := range notifiers {
 		want := 0
-		if id == teamWide.ID || id == override.ID {
+		if id == instanceWide.ID || id == override.ID {
 			want = 1
 		}
 		if got := len(notifier.delivered()); got != want {
@@ -139,8 +138,8 @@ type duplicateListRepository struct {
 	*fakeRepository
 }
 
-func (r *duplicateListRepository) ListChannelsForEvent(ctx context.Context, teamID uuid.UUID, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
-	channels, err := r.fakeRepository.ListChannelsForEvent(ctx, teamID, resourceType, resourceID)
+func (r *duplicateListRepository) ListChannelsForEvent(ctx context.Context, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
+	channels, err := r.fakeRepository.ListChannelsForEvent(ctx, resourceType, resourceID)
 	if err != nil || len(channels) == 0 {
 		return channels, err
 	}
@@ -148,14 +147,13 @@ func (r *duplicateListRepository) ListChannelsForEvent(ctx context.Context, team
 }
 
 func TestDispatchDeduplicatesChannels(t *testing.T) {
-	teamID := uuid.New()
 	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamID))
+	channel := repo.seed(sampleChannel(t))
 	service := newTestService(t, &duplicateListRepository{fakeRepository: repo})
 	notifier := newFakeNotifier()
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
 
-	service.Dispatch(sampleEvent(teamID))
+	service.Dispatch(sampleEvent())
 
 	waitFor(t, "the deduplicated delivery", func() bool { return len(notifier.delivered()) == 1 })
 	time.Sleep(20 * time.Millisecond)
@@ -165,9 +163,8 @@ func TestDispatchDeduplicatesChannels(t *testing.T) {
 }
 
 func TestDispatchIsNonBlocking(t *testing.T) {
-	teamID := uuid.New()
 	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamID))
+	channel := repo.seed(sampleChannel(t))
 	service := NewService(Config{
 		Repository:  repo,
 		Secret:      testSecret,
@@ -184,7 +181,7 @@ func TestDispatchIsNonBlocking(t *testing.T) {
 	blocked.entered = make(chan struct{}, 1)
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: blocked})
 
-	service.Dispatch(sampleEvent(teamID))
+	service.Dispatch(sampleEvent())
 	select {
 	case <-blocked.entered:
 	case <-time.After(2 * time.Second):
@@ -193,9 +190,9 @@ func TestDispatchIsNonBlocking(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		service.Dispatch(sampleEvent(teamID))
-		service.Dispatch(sampleEvent(teamID))
-		service.Dispatch(sampleEvent(teamID))
+		service.Dispatch(sampleEvent())
+		service.Dispatch(sampleEvent())
+		service.Dispatch(sampleEvent())
 		close(done)
 	}()
 	select {
@@ -207,17 +204,16 @@ func TestDispatchIsNonBlocking(t *testing.T) {
 }
 
 func TestFailingChannelDoesNotStopOthers(t *testing.T) {
-	teamID := uuid.New()
 	repo := newFakeRepository()
-	first := repo.seed(sampleChannel(t, teamID))
-	second := repo.seed(sampleChannel(t, teamID))
+	first := repo.seed(sampleChannel(t))
+	second := repo.seed(sampleChannel(t))
 	service := newTestService(t, repo)
 	failing := newFakeNotifier()
 	failing.err = errors.New("endpoint is down")
 	healthy := newFakeNotifier()
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{first.ID: failing, second.ID: healthy})
 
-	service.Dispatch(sampleEvent(teamID))
+	service.Dispatch(sampleEvent())
 
 	waitFor(t, "both deliveries", func() bool {
 		return len(failing.delivered()) == 1 && len(healthy.delivered()) == 1
@@ -225,9 +221,9 @@ func TestFailingChannelDoesNotStopOthers(t *testing.T) {
 }
 
 func TestDeployFinishedMapsTerminalOutcome(t *testing.T) {
-	teamID, appID := uuid.New(), uuid.New()
+	appID := uuid.New()
 	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamID))
+	channel := repo.seed(sampleChannel(t))
 	service := newTestService(t, repo)
 	notifier := newFakeNotifier()
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
@@ -235,10 +231,10 @@ func TestDeployFinishedMapsTerminalOutcome(t *testing.T) {
 	service.DeployFinished(context.Background(), deploy.DeployResult{
 		ApplicationID: appID,
 		Application:   "shop-web",
-		TeamID:        teamID,
-		State:         deploy.StateFailed,
-		Error:         "build failed",
-		FinishedAt:    time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC),
+
+		State:      deploy.StateFailed,
+		Error:      "build failed",
+		FinishedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC),
 	})
 	waitFor(t, "the failure event", func() bool { return len(notifier.delivered()) == 1 })
 	failure := notifier.delivered()[0]
@@ -252,9 +248,9 @@ func TestDeployFinishedMapsTerminalOutcome(t *testing.T) {
 	service.DeployFinished(context.Background(), deploy.DeployResult{
 		ApplicationID: appID,
 		Application:   "shop-web",
-		TeamID:        teamID,
-		State:         deploy.StateRunning,
-		FinishedAt:    time.Date(2026, 9, 29, 12, 1, 0, 0, time.UTC),
+
+		State:      deploy.StateRunning,
+		FinishedAt: time.Date(2026, 9, 29, 12, 1, 0, 0, time.UTC),
 	})
 	waitFor(t, "the success event", func() bool { return len(notifier.delivered()) == 2 })
 	success := notifier.delivered()[1]
@@ -264,9 +260,9 @@ func TestDeployFinishedMapsTerminalOutcome(t *testing.T) {
 }
 
 func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
-	teamID, databaseID := uuid.New(), uuid.New()
+	databaseID := uuid.New()
 	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamID))
+	channel := repo.seed(sampleChannel(t))
 	service := NewService(Config{
 		Repository:  repo,
 		Secret:      testSecret,
@@ -283,7 +279,7 @@ func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
 	service.BackupFinished(context.Background(), databases.BackupResult{
 		DatabaseID: databaseID,
 		Database:   "orders-db",
-		TeamID:     teamID,
+
 		Status:     databases.BackupFailed,
 		Error:      "dump exited 1",
 		FinishedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC),
@@ -291,7 +287,7 @@ func TestBackupFinishedMapsTerminalOutcome(t *testing.T) {
 	service.BackupFinished(context.Background(), databases.BackupResult{
 		DatabaseID: databaseID,
 		Database:   "orders-db",
-		TeamID:     teamID,
+
 		Status:     databases.BackupCompleted,
 		FinishedAt: time.Date(2026, 9, 29, 12, 1, 0, 0, time.UTC),
 	})
@@ -320,16 +316,16 @@ func TestDeployFinishedWithoutNotifierIsSafe(t *testing.T) {
 	var nilService *Service
 	nilService.DeployFinished(context.Background(), deploy.DeployResult{State: deploy.StateFailed})
 	nilService.BackupFinished(context.Background(), databases.BackupResult{Status: databases.BackupFailed})
-	nilService.Dispatch(sampleEvent(uuid.New()))
+	nilService.Dispatch(sampleEvent())
 
 	t.Setenv(FeatureEnv, "false")
 	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, uuid.New()))
+	channel := repo.seed(sampleChannel(t))
 	service := newTestService(t, repo)
 	notifier := newFakeNotifier()
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
 
-	service.Dispatch(sampleEvent(channel.TeamID))
+	service.Dispatch(sampleEvent())
 	time.Sleep(30 * time.Millisecond)
 	if got := len(notifier.delivered()); got != 0 {
 		t.Errorf("deliveries = %d with the flag off, want 0", got)
@@ -352,13 +348,13 @@ func TestEnabledFlag(t *testing.T) {
 }
 
 func TestCreateChannelSealsAndRedacts(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
 	service := newTestService(t, repo)
 
 	const webhook = "https://discord.com/api/webhooks/1184/8f2c-secret-value"
-	view, err := service.CreateChannel(scopedCtx(userID, teamID, teams.RoleOwner), userID, ChannelRequest{
-		Name: "team alerts",
+	view, err := service.CreateChannel(scopedCtx(), userID, ChannelRequest{
+		Name: "alerts",
 		Kind: KindDiscord,
 		Config: ChannelConfig{
 			WebhookURL: webhook,
@@ -383,9 +379,6 @@ func TestCreateChannelSealsAndRedacts(t *testing.T) {
 	stored, ok := repo.get(view.ID)
 	if !ok {
 		t.Fatal("the channel was not stored")
-	}
-	if stored.TeamID != teamID {
-		t.Errorf("team = %s, want %s", stored.TeamID, teamID)
 	}
 	if stored.SealedConfig == webhook || strings.Contains(stored.SealedConfig, "8f2c-secret") {
 		t.Errorf("stored config is not sealed: %q", stored.SealedConfig)
@@ -419,7 +412,7 @@ func TestCreateChannelValidation(t *testing.T) {
 	for name, req := range cases {
 		t.Run(name, func(t *testing.T) {
 			service := newTestService(t, newFakeRepository())
-			_, err := service.CreateChannel(scopedCtx(uuid.New(), uuid.New(), teams.RoleOwner), uuid.New(), req)
+			_, err := service.CreateChannel(scopedCtx(), uuid.New(), req)
 			if !errors.Is(err, ErrValidation) {
 				t.Errorf("err = %v, want ErrValidation", err)
 			}
@@ -429,77 +422,19 @@ func TestCreateChannelValidation(t *testing.T) {
 
 func ptr[T any](value T) *T { return &value }
 
-func TestChannelMutationsRequireWriteRole(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
-	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamID))
-	service := newTestService(t, repo)
-	ctx := scopedCtx(userID, teamID, teams.RoleReadOnly)
-
-	if _, err := service.ListChannels(ctx, userID); err != nil {
-		t.Errorf("ListChannels err = %v, want a read to pass", err)
-	}
-	if _, err := service.CreateChannel(ctx, userID, ChannelRequest{
-		Name: "x", Kind: KindDiscord, Config: ChannelConfig{WebhookURL: "https://discord.com/api/webhooks/1/abc"},
-	}); !errors.Is(err, ErrForbidden) {
-		t.Errorf("CreateChannel err = %v, want ErrForbidden", err)
-	}
-	if _, err := service.UpdateChannel(ctx, userID, channel.ID, ChannelRequest{Name: "renamed"}); !errors.Is(err, ErrForbidden) {
-		t.Errorf("UpdateChannel err = %v, want ErrForbidden", err)
-	}
-	if err := service.DeleteChannel(ctx, userID, channel.ID); !errors.Is(err, ErrForbidden) {
-		t.Errorf("DeleteChannel err = %v, want ErrForbidden", err)
-	}
-	if _, err := service.TestChannel(ctx, userID, channel.ID); !errors.Is(err, ErrForbidden) {
-		t.Errorf("TestChannel err = %v, want ErrForbidden", err)
-	}
-}
-
-func TestChannelTeamIsolation(t *testing.T) {
-	ownerID, teamA := uuid.New(), uuid.New()
-	strangerID, teamB := uuid.New(), uuid.New()
-	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamA))
-	service := newTestService(t, repo)
-	ctx := scopedCtx(strangerID, teamB, teams.RoleOwner)
-
-	if _, err := service.GetChannel(ctx, strangerID, channel.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetChannel err = %v, want ErrNotFound", err)
-	}
-	channels, err := service.ListChannels(ctx, strangerID)
-	if err != nil {
-		t.Fatalf("ListChannels: %v", err)
-	}
-	if len(channels) != 0 {
-		t.Errorf("channels = %d, want none from another team", len(channels))
-	}
-	if _, err := service.UpdateChannel(ctx, strangerID, channel.ID, ChannelRequest{Name: "stolen"}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("UpdateChannel err = %v, want ErrNotFound", err)
-	}
-	if err := service.DeleteChannel(ctx, strangerID, channel.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("DeleteChannel err = %v, want ErrNotFound", err)
-	}
-
-	ownerCtx := scopedCtx(ownerID, teamA, teams.RoleOwner)
-	ownerChannels, err := service.ListChannels(ownerCtx, ownerID)
-	if err != nil || len(ownerChannels) != 1 {
-		t.Fatalf("owner list = %v (%v), want one channel", ownerChannels, err)
-	}
-}
-
 func TestUpdateChannelPartialAndKindImmutable(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
 	sealed, err := sealConfig(testSecret, ChannelConfig{BotToken: "7184:AAH-old-token", ChatID: "-1001"})
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	channel := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "telegram", Kind: KindTelegram,
+		ID: uuid.New(), Name: "telegram", Kind: KindTelegram,
 		Enabled: true, Events: []EventKey{EventDeployFailure}, SealedConfig: sealed,
 	})
 	service := newTestService(t, repo)
-	ctx := scopedCtx(userID, teamID, teams.RoleAdmin)
+	ctx := scopedCtx()
 
 	view, err := service.UpdateChannel(ctx, userID, channel.ID, ChannelRequest{
 		Name:    "renamed",
@@ -544,7 +479,7 @@ func eventsToStrings(events []EventKey) []string {
 }
 
 func TestTestChannelDelivers(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
 	mailer := &fakeMailer{}
 	sealed, err := sealConfig(testSecret, ChannelConfig{
@@ -554,7 +489,7 @@ func TestTestChannelDelivers(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 	channel := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "email", Kind: KindEmail,
+		ID: uuid.New(), Name: "email", Kind: KindEmail,
 		Enabled: true, Events: AllEvents, SealedConfig: sealed,
 	})
 	service := NewService(Config{
@@ -562,7 +497,7 @@ func TestTestChannelDelivers(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = service.Close() })
 
-	result, err := service.TestChannel(scopedCtx(userID, teamID, teams.RoleOwner), userID, channel.ID)
+	result, err := service.TestChannel(scopedCtx(), userID, channel.ID)
 	if err != nil {
 		t.Fatalf("TestChannel: %v", err)
 	}
@@ -578,7 +513,7 @@ func TestTestChannelDelivers(t *testing.T) {
 	}
 
 	mailer.err = errors.New("connection refused")
-	result, err = service.TestChannel(scopedCtx(userID, teamID, teams.RoleOwner), userID, channel.ID)
+	result, err = service.TestChannel(scopedCtx(), userID, channel.ID)
 	if err != nil {
 		t.Fatalf("TestChannel (failing mailer): %v", err)
 	}
@@ -599,8 +534,8 @@ func TestServiceWithoutRepositoryFailsClearly(t *testing.T) {
 }
 
 func TestMaskedResendKeepsStoredSecrets(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
-	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
+	userID := uuid.New()
+	ctx := scopedCtx()
 	repo := newFakeRepository()
 	service := newTestService(t, repo)
 
@@ -698,7 +633,6 @@ func TestMaskedResendKeepsStoredSecrets(t *testing.T) {
 }
 
 func TestDispatcherLogHidesTransportSecret(t *testing.T) {
-	teamID := uuid.New()
 	server, _ := newWebhookServer(t, http.StatusOK)
 	endpoint := server.URL + "/webhook/log-secret-token"
 	server.Close()
@@ -709,7 +643,7 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 	repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		ID: uuid.New(), Name: "discord", Kind: KindDiscord,
 		Enabled: true, Events: AllEvents, SealedConfig: sealed,
 	})
 
@@ -721,7 +655,7 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = service.Close() })
 
-	service.Dispatch(sampleEvent(teamID))
+	service.Dispatch(sampleEvent())
 	waitFor(t, "the delivery failure log", func() bool { return strings.Contains(logs.String(), "delivery failed") })
 	if strings.Contains(logs.String(), "log-secret-token") {
 		t.Fatalf("log leaks the webhook URL: %s", logs.String())
@@ -732,7 +666,6 @@ func TestDispatcherLogHidesTransportSecret(t *testing.T) {
 }
 
 func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
-	teamID := uuid.New()
 	server := newReflectingStatusServer(t, http.StatusInternalServerError)
 	repo := newFakeRepository()
 	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/log-reason-secret"})
@@ -740,7 +673,7 @@ func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 	repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		ID: uuid.New(), Name: "discord", Kind: KindDiscord,
 		Enabled: true, Events: AllEvents, SealedConfig: sealed,
 	})
 
@@ -752,7 +685,7 @@ func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = service.Close() })
 
-	service.Dispatch(sampleEvent(teamID))
+	service.Dispatch(sampleEvent())
 	waitFor(t, "the delivery failure log", func() bool { return strings.Contains(logs.String(), "delivery failed") })
 	if strings.Contains(logs.String(), "log-reason-secret") {
 		t.Fatalf("log leaks the webhook URL: %s", logs.String())
@@ -763,8 +696,8 @@ func TestDispatcherLogHidesStatusReasonPhrase(t *testing.T) {
 }
 
 func TestTelegramTokenNormalized(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
-	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
+	userID := uuid.New()
+	ctx := scopedCtx()
 	repo := newFakeRepository()
 	service := newTestService(t, repo)
 
@@ -851,17 +784,16 @@ func TestEmptySecretKeyUsesEphemeralSecret(t *testing.T) {
 }
 
 func TestDispatchRecordsDeliveryHistory(t *testing.T) {
-	teamID := uuid.New()
 	repo := newFakeRepository()
-	healthyChannel := repo.seed(sampleChannel(t, teamID))
-	brokenChannel := repo.seed(sampleChannel(t, teamID))
+	healthyChannel := repo.seed(sampleChannel(t))
+	brokenChannel := repo.seed(sampleChannel(t))
 	service := newTestService(t, repo)
 	healthy := newFakeNotifier()
 	broken := newFakeNotifier()
 	broken.err = errors.New("endpoint is down")
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{healthyChannel.ID: healthy, brokenChannel.ID: broken})
 
-	service.Dispatch(sampleEvent(teamID))
+	service.Dispatch(sampleEvent())
 
 	waitFor(t, "both history rows", func() bool {
 		return len(repo.deliveriesFor(healthyChannel.ID)) == 1 && len(repo.deliveriesFor(brokenChannel.ID)) == 1
@@ -877,10 +809,10 @@ func TestDispatchRecordsDeliveryHistory(t *testing.T) {
 }
 
 func TestTestChannelRecordsDelivery(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
-	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
+	userID := uuid.New()
+	ctx := scopedCtx()
 	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamID))
+	channel := repo.seed(sampleChannel(t))
 	service := newTestService(t, repo)
 	notifier := newFakeNotifier()
 	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
@@ -913,45 +845,6 @@ func TestTestChannelRecordsDelivery(t *testing.T) {
 	}
 	if utf8.RuneCountInString(failed.ErrorSummary) > maxDeliveryError {
 		t.Errorf("summary = %d runes, want it bounded at %d", utf8.RuneCountInString(failed.ErrorSummary), maxDeliveryError)
-	}
-}
-
-func TestListDeliveriesIsTeamScoped(t *testing.T) {
-	ownerID, teamA := uuid.New(), uuid.New()
-	strangerID, teamB := uuid.New(), uuid.New()
-	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamA))
-	service := newTestService(t, repo)
-
-	for i := 0; i < 3; i++ {
-		if err := repo.CreateDelivery(context.Background(), Delivery{
-			ID:        uuid.New(),
-			ChannelID: channel.ID,
-			EventType: string(EventDeploySuccess),
-			Status:    DeliverySucceeded,
-			CreatedAt: time.Date(2026, 9, 29, 12, 0, i, 0, time.UTC),
-		}); err != nil {
-			t.Fatalf("CreateDelivery: %v", err)
-		}
-	}
-
-	views, err := service.ListDeliveries(scopedCtx(ownerID, teamA, teams.RoleReadOnly), ownerID, channel.ID)
-	if err != nil {
-		t.Fatalf("ListDeliveries (read_only): %v", err)
-	}
-	if len(views) != 3 {
-		t.Fatalf("views = %d, want 3", len(views))
-	}
-	newest := time.Date(2026, 9, 29, 12, 0, 2, 0, time.UTC)
-	if !views[0].CreatedAt.Equal(newest) {
-		t.Errorf("first view = %s, want the newest at %s", views[0].CreatedAt, newest)
-	}
-
-	if _, err := service.ListDeliveries(scopedCtx(strangerID, teamB, teams.RoleOwner), strangerID, channel.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("foreign history err = %v, want ErrNotFound", err)
-	}
-	if _, err := service.ListDeliveries(context.Background(), ownerID, uuid.New()); !errors.Is(err, ErrNotFound) {
-		t.Errorf("unknown channel err = %v, want ErrNotFound", err)
 	}
 }
 

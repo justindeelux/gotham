@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/services"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -139,13 +138,12 @@ func TestSnapshotComposeSelectorsAndReadAuthorization(t *testing.T) {
 	user := uuid.New()
 	app := testApplication(user)
 	app.SourceType = SourceCompose
-	app.TeamID = uuid.New()
 	owned := runtimeFixture(app, strings.Repeat("a", 64), "exited", "unhealthy")
 	owned.Labels = map[string]string{composeProjectLabel: services.ProjectName(app.ID), composeServiceLabel: "web", "com.docker.compose.container-number": "2"}
 	foreign := runtimeFixture(testApplication(user), strings.Repeat("b", 64), "running", "healthy")
 	node := &snapshotNode{runtimeTestNode: &runtimeTestNode{inventory: []*agentv1.ContainerInfo{foreign, owned}}, streams: []*snapshotStream{{chunks: [][]byte{[]byte("ok\n")}}}}
 	svc := snapshotService(t, &fakeRepository{app: app, deployments: []Deployment{{ID: uuid.New(), ApplicationID: app.ID, State: StateQueued}}}, node)
-	ctx := teams.WithScope(context.Background(), teams.Scope{UserID: user, TeamID: app.TeamID, Role: teams.RoleReadOnly})
+	ctx := context.Background()
 	out, err := svc.GetApplicationLogs(ctx, user, app.ID, LogOptions{Service: "web", Replica: "2"})
 	if err != nil || len(out.Containers) != 1 || out.Containers[0].ID != owned.Id || out.Containers[0].DeploymentID != nil || out.Containers[0].Log != "ok\n" {
 		t.Fatalf("read-only stopped compose=%+v %v", out, err)
@@ -154,10 +152,6 @@ func TestSnapshotComposeSelectorsAndReadAuthorization(t *testing.T) {
 		if _, err = svc.GetApplicationLogs(ctx, user, app.ID, options); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("foreign selector: %v", err)
 		}
-	}
-	foreignCtx := teams.WithScope(context.Background(), teams.Scope{UserID: user, TeamID: uuid.New(), Role: teams.RoleOwner})
-	if _, err = svc.GetApplicationLogs(foreignCtx, user, app.ID, LogOptions{}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("foreign team: %v", err)
 	}
 	if _, err = svc.GetApplicationLogs(ctx, user, uuid.New(), LogOptions{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("foreign app: %v", err)

@@ -13,7 +13,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -147,7 +146,7 @@ func TestTrashRoutes(t *testing.T) {
 		restoreResp:    &agentv1.RestoreResponse{Entry: &agentv1.FileEntry{Name: "a.txt"}},
 		emptyTrashResp: &agentv1.EmptyTrashResponse{Removed: 2},
 	}
-	h, server := newRealRouter(t, teams.RoleOwner, uuid.New(), client)
+	h, server := newRealRouter(t, "", uuid.New(), client)
 	base := "/v1/servers/" + server.ID.String() + "/files/trash"
 
 	rec := doWrite(t, h, http.MethodGet, base+"?root=volumes", "", nil)
@@ -176,7 +175,7 @@ func TestTrashRoutes(t *testing.T) {
 
 func TestRestoreConflictRoute(t *testing.T) {
 	client := &fakeFileClient{restoreErr: status.Error(codes.AlreadyExists, "restore: exists")}
-	h, server := newRealRouter(t, teams.RoleOwner, uuid.New(), client)
+	h, server := newRealRouter(t, "", uuid.New(), client)
 	rec := doWrite(t, h, http.MethodPost, "/v1/servers/"+server.ID.String()+"/files/trash/restore",
 		`{"root":"volumes","id":"0123456789abcdef0123456789abcdef"}`, nil)
 	if rec.Code != http.StatusConflict {
@@ -189,7 +188,7 @@ func TestRestoreConflictRoute(t *testing.T) {
 
 func TestDeleteRoutePermanentFlag(t *testing.T) {
 	client := &fakeFileClient{}
-	h, server := newRealRouter(t, teams.RoleOwner, uuid.New(), client)
+	h, server := newRealRouter(t, "", uuid.New(), client)
 	rec := doWrite(t, h, http.MethodDelete, "/v1/servers/"+server.ID.String()+"/files/entry?root=volumes&path=a&permanent=true", "", nil)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())

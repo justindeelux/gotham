@@ -226,8 +226,9 @@ func newP4HarnessWithAgentOptions(t *testing.T, options ...agent.ServerOption) *
 		t.Fatalf("create server: %v", err)
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
+	projectSuffix := uuid.NewString()[:8]
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p4-e2e",
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "p4-e2e-" + projectSuffix,
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -242,6 +243,12 @@ func newP4HarnessWithAgentOptions(t *testing.T, options ...agent.ServerOption) *
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup applications: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM projects WHERE id = $1", project.ID); err != nil {
+			t.Logf("cleanup project: %v", err)
+		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
 			t.Logf("cleanup server row: %v", err)
 		}

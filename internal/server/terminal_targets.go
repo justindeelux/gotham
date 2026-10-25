@@ -12,7 +12,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
@@ -215,9 +214,7 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 
 func targetErrorForApplication(application deploy.Application, err error) *terminal.TargetError {
 	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, teams.ErrForbidden):
+	case err == nil, errors.Is(err, terminal.ErrForbidden):
 		return nil
 	case errors.Is(err, deploy.ErrNoRunningDeployment),
 		errors.Is(err, deploy.ErrConflict),
@@ -236,6 +233,6 @@ func targetErrorForApplication(application deploy.Application, err error) *termi
 
 func (s *Server) terminalTargetsAuth() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return s.RequireAuth(s.requireInteractiveSession(s.RequireTeam(next)))
+		return s.RequireAuth(s.requireInteractiveSession(s.requireOwnerAccount(next)))
 	}
 }

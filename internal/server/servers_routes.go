@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/updatecore"
 )
 
@@ -157,7 +156,7 @@ type agentUpdateController interface {
 
 func (s *Server) mountServerRoutes(api chi.Router) {
 	api.Group(func(protected chi.Router) {
-		protected.Use(s.RequireAuth, requireResourceScopes, s.RequireTeam, s.teamWriteGate)
+		protected.Use(s.RequireAuth, requireResourceScopes, s.requireOwnerAccount)
 		protected.Get("/v1/servers", s.handleListServers)
 		protected.Post("/v1/servers", s.handleCreateServer)
 		protected.Get("/v1/servers/{id}", s.handleGetServer)
@@ -628,8 +627,6 @@ func (s *Server) writeServerError(w http.ResponseWriter, op string, err error) {
 	switch {
 	case errors.Is(err, servers.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
-	case errors.Is(err, teams.ErrForbidden):
-		writeJSON(w, http.StatusForbidden, apiError{Message: "insufficient team role"})
 	case errors.Is(err, servers.ErrValidation), errors.Is(err, servers.ErrNoCredentials):
 		writeJSON(w, http.StatusBadRequest, apiError{Message: err.Error()})
 	case errors.Is(err, servers.ErrConflict):

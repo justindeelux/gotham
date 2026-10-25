@@ -58,20 +58,20 @@ func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 	t.Cleanup(pool.Close)
 	st := store.New(pool)
 
-	userID, teamID, envID, serverID := seedImageScope(t, ctx, st)
+	userID, envID, serverID := seedImageScope(t, ctx, st)
 
 	created, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: userID, TeamID: teamID,
+		UserID:   userID,
 		ServerID: serverID, EnvironmentID: envID,
 		Name: "image-app", SourceType: "image",
-		ImageRef:                   "registry.example.com/team/app:1.2",
+		ImageRef:                   "registry.example.com/acme/app:1.2",
 		RegistryUsername:           "robot",
 		RegistryPasswordCiphertext: "sealed-credential",
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
-	if created.ImageRef != "registry.example.com/team/app:1.2" ||
+	if created.ImageRef != "registry.example.com/acme/app:1.2" ||
 		created.RegistryUsername != "robot" ||
 		created.RegistryPasswordCiphertext != "sealed-credential" {
 		t.Errorf("created row = %+v; want the image columns stored", created)
@@ -91,7 +91,7 @@ func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 		ID: created.ID, Name: read.Name, Branch: read.Branch,
 		BuildPack: read.BuildPack, ServerID: read.ServerID,
 		EnvironmentID:              read.EnvironmentID,
-		ImageRef:                   "registry.example.com/team/app:2.0",
+		ImageRef:                   "registry.example.com/acme/app:2.0",
 		RegistryUsername:           "robot",
 		RegistryPasswordCiphertext: "rotated-credential",
 		BuildArgs:                  []byte("{}"),
@@ -99,29 +99,21 @@ func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateApplication: %v", err)
 	}
-	if updated.ImageRef != "registry.example.com/team/app:2.0" ||
+	if updated.ImageRef != "registry.example.com/acme/app:2.0" ||
 		updated.RegistryPasswordCiphertext != "rotated-credential" {
 		t.Errorf("updated row = %+v; want the rotated image columns", updated)
 	}
 }
 
-func seedImageScope(t *testing.T, ctx context.Context, st *store.Store) (userID, teamID, envID, serverID pgtype.UUID) {
+func seedImageScope(t *testing.T, ctx context.Context, st *store.Store) (userID, envID, serverID pgtype.UUID) {
 	t.Helper()
 	user, err := st.CreateUser(ctx, fmt.Sprintf("gs9-%d@example.com", time.Now().UnixNano()), nil)
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
 		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
 		Name: fmt.Sprintf("gs9-%d", time.Now().UnixNano()),
-	})
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID: team.ID,
-		Name:   fmt.Sprintf("gs9-%d", time.Now().UnixNano()),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -143,5 +135,5 @@ func seedImageScope(t *testing.T, ctx context.Context, st *store.Store) (userID,
 	if err != nil {
 		t.Fatalf("CreateServer: %v", err)
 	}
-	return user.ID, team.ID, environment.ID, server.ID
+	return user.ID, environment.ID, server.ID
 }

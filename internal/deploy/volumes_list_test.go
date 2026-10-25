@@ -536,16 +536,6 @@ func TestListVolumesIgnoresOtherApplications(t *testing.T) {
 	}
 }
 
-func TestListVolumesRejectsForeignCaller(t *testing.T) {
-	userID := uuid.New()
-	app := testApplication(userID)
-	svc := volumeTestService(t, &fakeRepository{app: app}, newMockNode())
-
-	if _, err := svc.ListVolumes(context.Background(), uuid.New(), app.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("ListVolumes(foreign) = %v, want ErrNotFound", err)
-	}
-}
-
 func TestFileManagerTargetRejectsEscapingPaths(t *testing.T) {
 	app := testApplication(uuid.New())
 	root := managedVolumeTestRoot(t)

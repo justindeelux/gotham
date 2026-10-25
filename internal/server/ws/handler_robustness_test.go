@@ -89,7 +89,7 @@ func TestAuthorizationCachedPerConnection(t *testing.T) {
 	authorize := func(_ context.Context, serverID, user uuid.UUID) error {
 		calls.Add(1)
 		if serverID != nodeID || user != userID {
-			return errors.New("not a member of this team")
+			return errors.New("not authorized")
 		}
 		return nil
 	}
@@ -126,7 +126,7 @@ func TestAuthorizationRevocationAfterTTL(t *testing.T) {
 	allow.Store(true)
 	authorize := func(_ context.Context, serverID, user uuid.UUID) error {
 		if serverID != nodeID || user != userID || !allow.Load() {
-			return errors.New("not a member of this team")
+			return errors.New("not authorized")
 		}
 		return nil
 	}
@@ -168,7 +168,7 @@ func TestAuthorizationGrantAfterDenial(t *testing.T) {
 	var allow atomic.Bool
 	authorize := func(_ context.Context, serverID, user uuid.UUID) error {
 		if serverID != nodeID || user != userID || !allow.Load() {
-			return errors.New("not a member of this team")
+			return errors.New("not authorized")
 		}
 		return nil
 	}

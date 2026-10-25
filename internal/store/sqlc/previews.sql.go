@@ -77,7 +77,7 @@ func (q *Queries) DeletePreviewCloseReservation(ctx context.Context, arg DeleteP
 }
 
 const getLivePreviewDeployBySibling = `-- name: GetLivePreviewDeployBySibling :one
-SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
+SELECT id, application_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
 WHERE preview_application_id = $1 AND state <> 'deleted'
 LIMIT 1
 `
@@ -91,7 +91,6 @@ func (q *Queries) GetLivePreviewDeployBySibling(ctx context.Context, previewAppl
 	err := row.Scan(
 		&i.ID,
 		&i.ApplicationID,
-		&i.TeamID,
 		&i.Provider,
 		&i.Repo,
 		&i.PrNumber,
@@ -131,7 +130,7 @@ func (q *Queries) GetPreviewDelivery(ctx context.Context, id pgtype.UUID) (Previ
 }
 
 const getPreviewDeploy = `-- name: GetPreviewDeploy :one
-SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
+SELECT id, application_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
 WHERE application_id = $1 AND pr_number = $2
 `
 
@@ -146,7 +145,6 @@ func (q *Queries) GetPreviewDeploy(ctx context.Context, arg GetPreviewDeployPara
 	err := row.Scan(
 		&i.ID,
 		&i.ApplicationID,
-		&i.TeamID,
 		&i.Provider,
 		&i.Repo,
 		&i.PrNumber,
@@ -207,7 +205,7 @@ func (q *Queries) HasLivePreviewClose(ctx context.Context, arg HasLivePreviewClo
 }
 
 const listClosingPreviewDeploys = `-- name: ListClosingPreviewDeploys :many
-SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
+SELECT id, application_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
 WHERE state = 'closing' AND updated_at < $1
 ORDER BY updated_at ASC
 `
@@ -226,7 +224,6 @@ func (q *Queries) ListClosingPreviewDeploys(ctx context.Context, updatedAt pgtyp
 		if err := rows.Scan(
 			&i.ID,
 			&i.ApplicationID,
-			&i.TeamID,
 			&i.Provider,
 			&i.Repo,
 			&i.PrNumber,
@@ -322,7 +319,7 @@ func (q *Queries) ListOrphanedPreviewApplications(ctx context.Context, createdAt
 }
 
 const listOrphanedPreviewDeploys = `-- name: ListOrphanedPreviewDeploys :many
-SELECT p.id, p.application_id, p.team_id, p.provider, p.repo, p.pr_number, p.branch, p.head_sha, p.preview_application_id, p.host, p.state, p.created_at, p.updated_at, p.deleted_at FROM preview_deploys p
+SELECT p.id, p.application_id, p.provider, p.repo, p.pr_number, p.branch, p.head_sha, p.preview_application_id, p.host, p.state, p.created_at, p.updated_at, p.deleted_at FROM preview_deploys p
 LEFT JOIN applications a ON a.id = p.preview_application_id
 WHERE p.state <> 'deleted'
   AND (p.preview_application_id IS NULL OR a.id IS NULL)
@@ -343,7 +340,6 @@ func (q *Queries) ListOrphanedPreviewDeploys(ctx context.Context) ([]PreviewDepl
 		if err := rows.Scan(
 			&i.ID,
 			&i.ApplicationID,
-			&i.TeamID,
 			&i.Provider,
 			&i.Repo,
 			&i.PrNumber,
@@ -367,7 +363,7 @@ func (q *Queries) ListOrphanedPreviewDeploys(ctx context.Context) ([]PreviewDepl
 }
 
 const listPreviewDeploysByApplication = `-- name: ListPreviewDeploysByApplication :many
-SELECT id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
+SELECT id, application_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at FROM preview_deploys
 WHERE application_id = $1
 ORDER BY created_at DESC
 `
@@ -384,7 +380,6 @@ func (q *Queries) ListPreviewDeploysByApplication(ctx context.Context, applicati
 		if err := rows.Scan(
 			&i.ID,
 			&i.ApplicationID,
-			&i.TeamID,
 			&i.Provider,
 			&i.Repo,
 			&i.PrNumber,
@@ -411,7 +406,7 @@ const markPreviewDeployClosed = `-- name: MarkPreviewDeployClosed :one
 UPDATE preview_deploys
 SET state = 'deleted', deleted_at = now(), updated_at = now()
 WHERE application_id = $1 AND pr_number = $2
-RETURNING id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at
+RETURNING id, application_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at
 `
 
 type MarkPreviewDeployClosedParams struct {
@@ -429,7 +424,6 @@ func (q *Queries) MarkPreviewDeployClosed(ctx context.Context, arg MarkPreviewDe
 	err := row.Scan(
 		&i.ID,
 		&i.ApplicationID,
-		&i.TeamID,
 		&i.Provider,
 		&i.Repo,
 		&i.PrNumber,
@@ -449,7 +443,7 @@ const markPreviewDeployClosing = `-- name: MarkPreviewDeployClosing :one
 UPDATE preview_deploys
 SET state = 'closing', updated_at = now()
 WHERE id = $1
-RETURNING id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at
+RETURNING id, application_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at
 `
 
 // Persists a close intent before the sibling is torn down, so a failed (or
@@ -460,7 +454,6 @@ func (q *Queries) MarkPreviewDeployClosing(ctx context.Context, id pgtype.UUID) 
 	err := row.Scan(
 		&i.ID,
 		&i.ApplicationID,
-		&i.TeamID,
 		&i.Provider,
 		&i.Repo,
 		&i.PrNumber,
@@ -561,11 +554,10 @@ func (q *Queries) ReservePreviewDelivery(ctx context.Context, arg ReservePreview
 
 const upsertPreviewDeploy = `-- name: UpsertPreviewDeploy :one
 INSERT INTO preview_deploys (
-    application_id, team_id, provider, repo, pr_number, branch, head_sha,
+    application_id, provider, repo, pr_number, branch, head_sha,
     preview_application_id, host, state
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (application_id, pr_number) DO UPDATE SET
-    team_id = EXCLUDED.team_id,
     provider = EXCLUDED.provider,
     repo = EXCLUDED.repo,
     branch = EXCLUDED.branch,
@@ -575,12 +567,11 @@ ON CONFLICT (application_id, pr_number) DO UPDATE SET
     state = EXCLUDED.state,
     deleted_at = NULL,
     updated_at = now()
-RETURNING id, application_id, team_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at
+RETURNING id, application_id, provider, repo, pr_number, branch, head_sha, preview_application_id, host, state, created_at, updated_at, deleted_at
 `
 
 type UpsertPreviewDeployParams struct {
 	ApplicationID        pgtype.UUID `json:"application_id"`
-	TeamID               pgtype.UUID `json:"team_id"`
 	Provider             string      `json:"provider"`
 	Repo                 string      `json:"repo"`
 	PrNumber             int32       `json:"pr_number"`
@@ -594,7 +585,6 @@ type UpsertPreviewDeployParams struct {
 func (q *Queries) UpsertPreviewDeploy(ctx context.Context, arg UpsertPreviewDeployParams) (PreviewDeploy, error) {
 	row := q.db.QueryRow(ctx, upsertPreviewDeploy,
 		arg.ApplicationID,
-		arg.TeamID,
 		arg.Provider,
 		arg.Repo,
 		arg.PrNumber,
@@ -608,7 +598,6 @@ func (q *Queries) UpsertPreviewDeploy(ctx context.Context, arg UpsertPreviewDepl
 	err := row.Scan(
 		&i.ID,
 		&i.ApplicationID,
-		&i.TeamID,
 		&i.Provider,
 		&i.Repo,
 		&i.PrNumber,

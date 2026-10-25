@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -59,10 +58,10 @@ func TestTailBytesNeverSplitsMultiByte(t *testing.T) {
 }
 
 func TestContentTailBoundary(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	server := registry.seed(projectID)
+	ctx := scopeCtx("", projectID)
 
 	tests := []struct {
 		name      string
@@ -107,9 +106,9 @@ func TestContentTailBoundary(t *testing.T) {
 }
 
 func TestContentTailDecodesLegacyEncoding(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	line := gbkFixture(t, "配置已保存\n")
 	body := bytes.Repeat(line, 4)
 	client := &fakeFileClient{
@@ -121,7 +120,7 @@ func TestContentTailDecodesLegacyEncoding(t *testing.T) {
 	svc := newTestService(t, registry, client)
 	svc.maxContentBytes = 17
 
-	content, err := svc.Content(scopeCtx(teams.RoleOwner, teamID), server.ID, "root", "app.conf")
+	content, err := svc.Content(scopeCtx("", projectID), server.ID, "root", "app.conf")
 	if err != nil {
 		t.Fatalf("content: %v", err)
 	}
@@ -137,9 +136,9 @@ func TestContentTailDecodesLegacyEncoding(t *testing.T) {
 }
 
 func TestContentTailRefusesShrunkFile(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{
 		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{
 			Name: "f", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 9,
@@ -147,16 +146,16 @@ func TestContentTailRefusesShrunkFile(t *testing.T) {
 	}
 	svc := newTestService(t, registry, client)
 
-	if _, err := svc.Content(scopeCtx(teams.RoleOwner, teamID), server.ID, "root", "f"); !errors.Is(err, ErrConflict) {
+	if _, err := svc.Content(scopeCtx("", projectID), server.ID, "root", "f"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("err = %v, want ErrConflict", err)
 	}
 }
 
 func TestEditorWriteToOversizeFileRefused(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	server := registry.seed(projectID)
+	ctx := scopeCtx("", projectID)
 	client := &fakeFileClient{
 		statResp:  &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "f", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 9, Etag: `"v1"`}},
 		writeResp: writeEntry(),
@@ -181,16 +180,16 @@ func TestEditorWriteToOversizeFileRefused(t *testing.T) {
 }
 
 func TestEditorWriteAtCeilingAllowed(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{
 		statResp:  &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "f", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 8, Etag: `"v1"`}},
 		writeResp: writeEntry(),
 	}
 	svc := newTestService(t, registry, client)
 
-	if _, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), server.ID, WriteRequest{
+	if _, err := svc.Write(scopeCtx("", projectID), server.ID, WriteRequest{
 		Root: "volumes", Path: "f", ExpectEtag: `"v1"`, Size: 2, FromEditor: true,
 	}, strings.NewReader("hi")); err != nil {
 		t.Fatalf("write at the ceiling: %v", err)
@@ -214,12 +213,12 @@ func TestTruncatedContentIsNeverSnapshotted(t *testing.T) {
 }
 
 func TestPutContentRejectsOversizeFile(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	client := &fakeFileClient{
 		statResp:  &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "f", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: MaxContentBytes + 1, Etag: `"v1"`}},
 		writeResp: writeEntry(),
 	}
-	router, server := newRealRouter(t, teams.RoleOwner, teamID, client)
+	router, server := newRealRouter(t, "", projectID, client)
 
 	rec := doWrite(t, router, http.MethodPut,
 		"/v1/servers/"+server.ID.String()+"/files/content?root=volumes&path=f",

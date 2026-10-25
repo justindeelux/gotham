@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -188,9 +187,9 @@ func TestNormalizeEncoding(t *testing.T) {
 }
 
 func TestContentReportsEncoding(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	body := gbkFixture(t, "配置已保存")
 	client := &fakeFileClient{
 		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{
@@ -200,7 +199,7 @@ func TestContentReportsEncoding(t *testing.T) {
 	}
 	svc := newEncodingTestService(t, registry, client)
 
-	content, err := svc.Content(scopeCtx(teams.RoleOwner, teamID), server.ID, "root", "app.conf")
+	content, err := svc.Content(scopeCtx("", projectID), server.ID, "root", "app.conf")
 	if err != nil {
 		t.Fatalf("content: %v", err)
 	}
@@ -216,15 +215,15 @@ func TestContentReportsEncoding(t *testing.T) {
 }
 
 func TestWriteTranscodesLegacyEncoding(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{writeResp: writeEntry()}
 	svc := newEncodingTestService(t, registry, client)
 
 	text := "配置已保存"
 	utf8Body := strings.NewReader(text)
-	if _, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), server.ID, WriteRequest{
+	if _, err := svc.Write(scopeCtx("", projectID), server.ID, WriteRequest{
 		Root: "volumes", Path: "app.conf", ExpectEtag: `"v1"`, Size: int64(len(text)), Encoding: "gbk",
 	}, utf8Body); err != nil {
 		t.Fatalf("write: %v", err)
@@ -239,14 +238,14 @@ func TestWriteTranscodesLegacyEncoding(t *testing.T) {
 }
 
 func TestWriteRefusesUnrepresentableRune(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{writeResp: writeEntry()}
 	svc := newEncodingTestService(t, registry, client)
 
 	text := "配置😀"
-	_, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), server.ID, WriteRequest{
+	_, err := svc.Write(scopeCtx("", projectID), server.ID, WriteRequest{
 		Root: "volumes", Path: "app.conf", ExpectEtag: `"v1"`, Size: int64(len(text)), Encoding: "gb2312",
 	}, strings.NewReader(text))
 	if !errors.Is(err, ErrUnrepresentable) {
@@ -258,9 +257,9 @@ func TestWriteRefusesUnrepresentableRune(t *testing.T) {
 }
 
 func TestPutContentTranscodesEncodingQuery(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	client := &fakeFileClient{writeResp: writeEntry()}
-	handler, server := newRealRouter(t, teams.RoleOwner, teamID, client)
+	handler, server := newRealRouter(t, "", projectID, client)
 
 	text := "配置已保存"
 	rec := doWrite(t, handler, http.MethodPut,
@@ -276,9 +275,9 @@ func TestPutContentTranscodesEncodingQuery(t *testing.T) {
 }
 
 func TestPutContentRefusesUnrepresentableEncoding(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	client := &fakeFileClient{writeResp: writeEntry()}
-	handler, server := newRealRouter(t, teams.RoleOwner, teamID, client)
+	handler, server := newRealRouter(t, "", projectID, client)
 
 	rec := doWrite(t, handler, http.MethodPut,
 		"/v1/servers/"+server.ID.String()+"/files/content?root=volumes&path=a.txt&encoding=gb2312",
@@ -289,9 +288,9 @@ func TestPutContentRefusesUnrepresentableEncoding(t *testing.T) {
 }
 
 func TestHistorySnapshotsRawLegacyBytes(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	old := gbkFixture(t, "旧配置")
 	client := &fakeFileClient{
 		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{
@@ -305,7 +304,7 @@ func TestHistorySnapshotsRawLegacyBytes(t *testing.T) {
 	svc.SetHistoryStore(history)
 
 	text := "新配置"
-	if _, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), server.ID, WriteRequest{
+	if _, err := svc.Write(scopeCtx("", projectID), server.ID, WriteRequest{
 		Root: "volumes", Path: "app.conf", ExpectEtag: `"v1"`, Size: int64(len(text)), Encoding: "gbk",
 	}, strings.NewReader(text)); err != nil {
 		t.Fatalf("write: %v", err)

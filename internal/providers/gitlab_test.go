@@ -19,14 +19,14 @@ func TestGitLabSourceListRepos(t *testing.T) {
 		}
 		writeJSONTest(t, w, []map[string]any{
 			{
-				"id": 10, "name": "gotham", "path_with_namespace": "team/sub/gotham",
+				"id": 10, "name": "gotham", "path_with_namespace": "acme/sub/gotham",
 				"visibility": "private", "default_branch": "main",
-				"http_url_to_repo": "https://gitlab.com/team/sub/gotham.git",
-				"ssh_url_to_repo":  "git@gitlab.com:team/sub/gotham.git",
-				"web_url":          "https://gitlab.com/team/sub/gotham",
+				"http_url_to_repo": "https://gitlab.com/acme/sub/gotham.git",
+				"ssh_url_to_repo":  "git@gitlab.com:acme/sub/gotham.git",
+				"web_url":          "https://gitlab.com/acme/sub/gotham",
 			},
 			{
-				"id": 11, "name": "site", "path_with_namespace": "team/site",
+				"id": 11, "name": "site", "path_with_namespace": "acme/site",
 				"visibility": "public", "default_branch": nil,
 			},
 		})
@@ -40,7 +40,7 @@ func TestGitLabSourceListRepos(t *testing.T) {
 	if len(repos) != 2 {
 		t.Fatalf("len(repos) = %d, want 2", len(repos))
 	}
-	if repos[0].ExternalID != "10" || repos[0].FullName != "team/sub/gotham" || !repos[0].Private {
+	if repos[0].ExternalID != "10" || repos[0].FullName != "acme/sub/gotham" || !repos[0].Private {
 		t.Errorf("repos[0] = %+v", repos[0])
 	}
 	if repos[1].Private || repos[1].DefaultBranch != "" {
@@ -136,7 +136,7 @@ func TestGitLabSourceListBranches(t *testing.T) {
 	})
 
 	source := newGitLabSource(Provider{BaseURL: srv.URL}, true)
-	branches, err := source.ListBranches(context.Background(), staticToken, "team/sub/gotham")
+	branches, err := source.ListBranches(context.Background(), staticToken, "acme/sub/gotham")
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
 	}

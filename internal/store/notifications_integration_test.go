@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -39,6 +38,9 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("migration failed: %v", err)
 	}
 	st := store.New(pool)
+	if _, err := pool.Exec(ctx, "DELETE FROM notification_channels"); err != nil {
+		t.Fatalf("reset notification channels: %v", err)
+	}
 
 	email := fmt.Sprintf("be-8.3-notify-%d@example.com", time.Now().UnixNano())
 	user, err := st.CreateUser(ctx, email, nil)
@@ -51,17 +53,12 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
 			t.Logf("cleanup user: %v", err)
 		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", user.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
 	})
-	teamID := user.ID
 
 	channelID := uuid.New()
 	created, err := st.CreateNotificationChannel(ctx, sqlc.CreateNotificationChannelParams{
 		ID:           pgtype.UUID{Bytes: channelID, Valid: true},
-		TeamID:       teamID,
-		Name:         "team alerts",
+		Name:         "alerts",
 		Kind:         "discord",
 		Config:       "sealed-config",
 		Enabled:      true,
@@ -76,27 +73,16 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("events = %v, want the stored subscription", created.Events)
 	}
 	if created.ResourceType != nil {
-		t.Errorf("resource_type = %v, want NULL for a team-wide channel", *created.ResourceType)
+		t.Errorf("resource_type = %v, want NULL for a instance-wide channel", *created.ResourceType)
 	}
 	if created.CreatedAt.Time.IsZero() {
 		t.Error("created_at is not set")
-	}
-
-	if _, err := st.GetNotificationChannel(ctx, sqlc.GetNotificationChannelParams{
-		ID:     created.ID,
-		TeamID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
-	}); !errors.Is(err, pgx.ErrNoRows) {
-		t.Errorf("foreign get err = %v, want pgx.ErrNoRows", err)
-	}
-	if _, err := st.ListNotificationChannels(ctx, pgtype.UUID{Bytes: uuid.New(), Valid: true}); err != nil {
-		t.Errorf("foreign list err = %v, want an empty page", err)
 	}
 
 	appID := uuid.New()
 	resourceType := "application"
 	override, err := st.CreateNotificationChannel(ctx, sqlc.CreateNotificationChannelParams{
 		ID:           pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID:       teamID,
 		Name:         "app override",
 		Kind:         "slack",
 		Config:       "sealed-override",
@@ -113,7 +99,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 	}
 
 	forEvent, err := st.ListNotificationChannelsForEvent(ctx, sqlc.ListNotificationChannelsForEventParams{
-		TeamID:       teamID,
 		ResourceType: &resourceType,
 		ResourceID:   pgtype.UUID{Bytes: appID, Valid: true},
 	})
@@ -121,12 +106,11 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("ListNotificationChannelsForEvent: %v", err)
 	}
 	if len(forEvent) != 2 {
-		t.Fatalf("channels for the app event = %d, want the team-wide and the override", len(forEvent))
+		t.Fatalf("channels for the app event = %d, want the instance-wide and the override", len(forEvent))
 	}
 
 	otherApp := uuid.New()
 	forEvent, err = st.ListNotificationChannelsForEvent(ctx, sqlc.ListNotificationChannelsForEventParams{
-		TeamID:       teamID,
 		ResourceType: &resourceType,
 		ResourceID:   pgtype.UUID{Bytes: otherApp, Valid: true},
 	})
@@ -134,14 +118,13 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("ListNotificationChannelsForEvent (other app): %v", err)
 	}
 	if len(forEvent) != 1 || forEvent[0].ID.Bytes != channelID {
-		t.Fatalf("channels for another app = %d, want only the team-wide row", len(forEvent))
+		t.Fatalf("channels for another app = %d, want only the instance-wide row", len(forEvent))
 	}
 
 	disabled := false
 	if _, err := st.UpdateNotificationChannel(ctx, sqlc.UpdateNotificationChannelParams{
 		ID:           created.ID,
-		TeamID:       teamID,
-		Name:         "team alerts",
+		Name:         "alerts",
 		Kind:         "discord",
 		Config:       "sealed-config",
 		Enabled:      disabled,
@@ -152,7 +135,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("UpdateNotificationChannel: %v", err)
 	}
 	forEvent, err = st.ListNotificationChannelsForEvent(ctx, sqlc.ListNotificationChannelsForEventParams{
-		TeamID:       teamID,
 		ResourceType: &resourceType,
 		ResourceID:   pgtype.UUID{Bytes: otherApp, Valid: true},
 	})
@@ -160,10 +142,10 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Fatalf("ListNotificationChannelsForEvent (disabled): %v", err)
 	}
 	if len(forEvent) != 0 {
-		t.Fatalf("channels = %d, want none: the only team-wide row is disabled", len(forEvent))
+		t.Fatalf("channels = %d, want none: the only instance-wide row is disabled", len(forEvent))
 	}
 
-	all, err := st.ListNotificationChannels(ctx, teamID)
+	all, err := st.ListNotificationChannels(ctx)
 	if err != nil {
 		t.Fatalf("ListNotificationChannels: %v", err)
 	}
@@ -191,7 +173,6 @@ func TestNotificationChannelPersistence(t *testing.T) {
 	}
 	history, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
 		ChannelID: created.ID,
-		TeamID:    teamID,
 		Limit:     100,
 	})
 	if err != nil {
@@ -203,32 +184,7 @@ func TestNotificationChannelPersistence(t *testing.T) {
 	if !history[0].CreatedAt.Time.After(history[len(history)-1].CreatedAt.Time) {
 		t.Error("history is not newest-first")
 	}
-	foreignHistory, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
-		ChannelID: created.ID,
-		TeamID:    pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		Limit:     100,
-	})
-	if err != nil {
-		t.Fatalf("foreign ListNotificationDeliveries: %v", err)
-	}
-	if len(foreignHistory) != 0 {
-		t.Errorf("foreign history = %d rows, want 0", len(foreignHistory))
-	}
-
-	affected, err := st.DeleteNotificationChannel(ctx, sqlc.DeleteNotificationChannelParams{
-		ID:     override.ID,
-		TeamID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
-	})
-	if err != nil {
-		t.Fatalf("DeleteNotificationChannel (foreign): %v", err)
-	}
-	if affected != 0 {
-		t.Errorf("foreign delete affected = %d, want 0", affected)
-	}
-	affected, err = st.DeleteNotificationChannel(ctx, sqlc.DeleteNotificationChannelParams{
-		ID:     override.ID,
-		TeamID: teamID,
-	})
+	affected, err := st.DeleteNotificationChannel(ctx, override.ID)
 	if err != nil {
 		t.Fatalf("DeleteNotificationChannel: %v", err)
 	}
@@ -236,26 +192,25 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("delete affected = %d, want 1", affected)
 	}
 
-	if err := st.DeleteTeam(ctx, teamID); err != nil {
-		t.Fatalf("DeleteTeam: %v", err)
+	if _, err := st.DeleteNotificationChannel(ctx, created.ID); err != nil {
+		t.Fatalf("DeleteNotificationChannel: %v", err)
 	}
-	remaining, err := st.ListNotificationChannels(ctx, teamID)
+	remaining, err := st.ListNotificationChannels(ctx)
 	if err != nil {
-		t.Fatalf("ListNotificationChannels after team delete: %v", err)
+		t.Fatalf("ListNotificationChannels after channel delete: %v", err)
 	}
 	if len(remaining) != 0 {
-		t.Errorf("channels after team delete = %d, want 0 (ON DELETE CASCADE)", len(remaining))
+		t.Errorf("channels after channel delete = %d, want 0", len(remaining))
 	}
 	remainingHistory, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
 		ChannelID: created.ID,
-		TeamID:    teamID,
 		Limit:     100,
 	})
 	if err != nil {
-		t.Fatalf("ListNotificationDeliveries after team delete: %v", err)
+		t.Fatalf("ListNotificationDeliveries after channel delete: %v", err)
 	}
 	if len(remainingHistory) != 0 {
-		t.Errorf("deliveries after team delete = %d, want 0 (ON DELETE CASCADE)", len(remainingHistory))
+		t.Errorf("deliveries after channel delete = %d, want 0 (ON DELETE CASCADE)", len(remainingHistory))
 	}
 }
 
@@ -301,16 +256,11 @@ func TestNotificationChannelResourceConstraint(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	var teamID pgtype.UUID
-	if err := pool.QueryRow(ctx, `INSERT INTO teams (name) VALUES ('be-8.3 constraint') RETURNING id`).Scan(&teamID); err != nil {
-		t.Fatalf("insert team: %v", err)
-	}
-
 	insert := func(name string, resourceType any, resourceID any) error {
 		t.Helper()
 		_, err := pool.Exec(ctx, `
-			INSERT INTO notification_channels (team_id, name, kind, config, resource_type, resource_id)
-			VALUES ($1, $2, 'discord', 'sealed', $3, $4)`, teamID, name, resourceType, resourceID)
+			INSERT INTO notification_channels (name, kind, config, resource_type, resource_id)
+			VALUES ($1, 'discord', 'sealed', $2, $3)`, name, resourceType, resourceID)
 		return err
 	}
 	assertCheckViolation := func(label string, err error) {
@@ -325,15 +275,15 @@ func TestNotificationChannelResourceConstraint(t *testing.T) {
 	assertCheckViolation("type set with id NULL", insert("null id", "application", nil))
 	assertCheckViolation("unknown type with id", insert("unknown type", "service", pgtype.UUID{Bytes: uuid.New(), Valid: true}))
 
-	if err := insert("team wide", nil, nil); err != nil {
-		t.Fatalf("team-wide insert: %v", err)
+	if err := insert("instance wide", nil, nil); err != nil {
+		t.Fatalf("instance-wide insert: %v", err)
 	}
 	if err := insert("override", "database", pgtype.UUID{Bytes: uuid.New(), Valid: true}); err != nil {
 		t.Fatalf("override insert: %v", err)
 	}
 }
 
-func newDeliveryTestChannel(t *testing.T) (*store.Store, pgtype.UUID, uuid.UUID) {
+func newDeliveryTestChannel(t *testing.T) (*store.Store, uuid.UUID) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -366,15 +316,11 @@ func newDeliveryTestChannel(t *testing.T) (*store.Store, pgtype.UUID, uuid.UUID)
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
 			t.Logf("cleanup user: %v", err)
 		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", user.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
 	})
 
 	channelID := uuid.New()
 	if _, err := st.CreateNotificationChannel(ctx, sqlc.CreateNotificationChannelParams{
 		ID:           pgtype.UUID{Bytes: channelID, Valid: true},
-		TeamID:       user.ID,
 		Name:         "history",
 		Kind:         "discord",
 		Config:       "sealed",
@@ -385,11 +331,11 @@ func newDeliveryTestChannel(t *testing.T) (*store.Store, pgtype.UUID, uuid.UUID)
 	}); err != nil {
 		t.Fatalf("CreateNotificationChannel: %v", err)
 	}
-	return st, user.ID, channelID
+	return st, channelID
 }
 
 func TestNotificationDeliveryRetentionUnderConcurrency(t *testing.T) {
-	st, teamID, channelID := newDeliveryTestChannel(t)
+	st, channelID := newDeliveryTestChannel(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
@@ -440,7 +386,6 @@ func TestNotificationDeliveryRetentionUnderConcurrency(t *testing.T) {
 
 	history, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
 		ChannelID: channelKey,
-		TeamID:    teamID,
 		Limit:     1000,
 	})
 	if err != nil {

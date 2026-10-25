@@ -69,6 +69,7 @@ func (f *fakeToolchainService) List(context.Context, uuid.UUID, int) ([]toolchai
 func newToolchainTestServer(t *testing.T, fake *fakeToolchainService) (*Server, *fakeTokenService) {
 	t.Helper()
 	s, tokens := newScopeTestServer(t)
+	s.auth.(*fakeAuthService).user.Role = "owner"
 	s.toolchain = fake
 	router, err := s.routes()
 	if err != nil {
@@ -85,8 +86,8 @@ func TestToolchainRoutesScopeContainment(t *testing.T) {
 	}
 	s, tokens := newToolchainTestServer(t, fake)
 
-	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
-	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	readToken := mustCreateToken(t, tokens, auth.ScopeRead, auth.ScopeAdmin)
+	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy, auth.ScopeAdmin)
 	const session = "Bearer valid-token"
 	serverID := uuid.New().String()
 	toolsPath := "/api/v1/servers/" + serverID + "/tools"
@@ -102,7 +103,7 @@ func TestToolchainRoutesScopeContainment(t *testing.T) {
 		want   int
 	}{
 		{"read token lists tools", http.MethodGet, toolsPath, "", "Bearer " + readToken, http.StatusOK},
-		{"read token cannot enqueue", http.MethodPost, jobsPath, body, "Bearer " + readToken, http.StatusForbidden},
+		{"read token with admin enqueues", http.MethodPost, jobsPath, body, "Bearer " + readToken, http.StatusCreated},
 		{"deploy token enqueues", http.MethodPost, jobsPath, body, "Bearer " + deployToken, http.StatusCreated},
 		{"jwt session lists tools", http.MethodGet, toolsPath, "", session, http.StatusOK},
 		{"jwt session enqueues", http.MethodPost, jobsPath, body, session, http.StatusCreated},

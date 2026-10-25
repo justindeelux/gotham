@@ -29,7 +29,6 @@ type contextKey struct{}
 
 type Request struct {
 	Principal   uuid.UUID
-	Team        uuid.UUID
 	Operation   string
 	Target      uuid.UUID
 	Key         string
@@ -61,7 +60,7 @@ func Replayed(ctx context.Context) bool {
 	return result != nil && result.Replayed
 }
 
-func Begin(w http.ResponseWriter, r *http.Request, principal, team uuid.UUID, operation string, target uuid.UUID) (*http.Request, bool) {
+func Begin(w http.ResponseWriter, r *http.Request, principal uuid.UUID, operation string, target uuid.UUID) (*http.Request, bool) {
 	values, present := r.Header[http.CanonicalHeaderKey("Idempotency-Key")]
 	if !present {
 		return r, true
@@ -70,7 +69,7 @@ func Begin(w http.ResponseWriter, r *http.Request, principal, team uuid.UUID, op
 		WriteError(w, ErrKey)
 		return r, false
 	}
-	return r.WithContext(With(r.Context(), &Request{Principal: principal, Team: team, Operation: operation, Target: target, Key: values[0]})), true
+	return r.WithContext(With(r.Context(), &Request{Principal: principal, Operation: operation, Target: target, Key: values[0]})), true
 }
 
 func Fingerprint(ctx context.Context, secret string, input any) error {

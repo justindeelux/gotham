@@ -23,11 +23,11 @@ func (s *Store) createProjectReplay(ctx context.Context, params sqlc.CreateProje
 	err = s.withRequestReceipt(ctx, func(q *sqlc.Queries, result *requestreplay.Result) (uuid.UUID, uuid.UUID, error) {
 		var e error
 		if result != nil {
-			project, e = q.GetProject(ctx, sqlc.GetProjectParams{ID: replayUUID(result.ResourceID), TeamID: replayUUID(requestreplay.From(ctx).Team)})
+			project, e = q.GetProject(ctx, replayUUID(result.ResourceID))
 			if e != nil {
 				return uuid.Nil, uuid.Nil, receiptResourceError(e)
 			}
-			env, e = q.GetEnvironment(ctx, sqlc.GetEnvironmentParams{ID: replayUUID(result.RelatedID), TeamID: project.TeamID})
+			env, e = q.GetEnvironment(ctx, replayUUID(result.RelatedID))
 			if e == nil && env.ProjectID != project.ID {
 				e = requestreplay.ErrMissing
 			}
@@ -44,14 +44,13 @@ func (s *Store) createProjectReplay(ctx context.Context, params sqlc.CreateProje
 }
 
 func (s *Store) createEnvironmentReplay(ctx context.Context, params sqlc.CreateEnvironmentParams) (env sqlc.Environment, err error) {
-	r := requestreplay.From(ctx)
 	err = s.withRequestReceipt(ctx, func(q *sqlc.Queries, result *requestreplay.Result) (uuid.UUID, uuid.UUID, error) {
-		if _, e := q.GetProject(ctx, sqlc.GetProjectParams{ID: params.ProjectID, TeamID: replayUUID(r.Team)}); e != nil {
+		if _, e := q.GetProject(ctx, params.ProjectID); e != nil {
 			return uuid.Nil, uuid.Nil, receiptResourceError(e)
 		}
 		var e error
 		if result != nil {
-			env, e = q.GetEnvironment(ctx, sqlc.GetEnvironmentParams{ID: replayUUID(result.ResourceID), TeamID: replayUUID(r.Team)})
+			env, e = q.GetEnvironment(ctx, replayUUID(result.ResourceID))
 			if e == nil && env.ProjectID != params.ProjectID {
 				e = requestreplay.ErrMissing
 			}
@@ -64,15 +63,14 @@ func (s *Store) createEnvironmentReplay(ctx context.Context, params sqlc.CreateE
 }
 
 func (s *Store) createApplicationReplay(ctx context.Context, params sqlc.CreateApplicationParams, env []sqlc.InsertEnvVarParams, secrets []sqlc.InsertSecretParams, storages []sqlc.InsertStorageParams) (app sqlc.Application, err error) {
-	r := requestreplay.From(ctx)
 	err = s.withRequestReceipt(ctx, func(q *sqlc.Queries, result *requestreplay.Result) (uuid.UUID, uuid.UUID, error) {
-		if _, e := q.GetEnvironment(ctx, sqlc.GetEnvironmentParams{ID: params.EnvironmentID, TeamID: replayUUID(r.Team)}); e != nil {
+		if _, e := q.GetEnvironment(ctx, params.EnvironmentID); e != nil {
 			return uuid.Nil, uuid.Nil, receiptResourceError(e)
 		}
 		var e error
 		if result != nil {
 			app, e = q.GetApplication(ctx, replayUUID(result.ResourceID))
-			if e == nil && (app.TeamID != replayUUID(r.Team) || app.EnvironmentID != params.EnvironmentID) {
+			if e == nil && app.EnvironmentID != params.EnvironmentID {
 				e = requestreplay.ErrMissing
 			}
 		} else {
@@ -84,14 +82,10 @@ func (s *Store) createApplicationReplay(ctx context.Context, params sqlc.CreateA
 }
 
 func (s *Store) createDeploymentReplay(ctx context.Context, params sqlc.CreateDeploymentParams) (dep sqlc.Deployment, err error) {
-	r := requestreplay.From(ctx)
 	err = s.withRequestReceipt(ctx, func(q *sqlc.Queries, result *requestreplay.Result) (uuid.UUID, uuid.UUID, error) {
 		app, e := q.GetApplication(ctx, params.ApplicationID)
 		if e != nil {
 			return uuid.Nil, uuid.Nil, receiptResourceError(e)
-		}
-		if app.TeamID != replayUUID(r.Team) {
-			return uuid.Nil, uuid.Nil, requestreplay.ErrMissing
 		}
 		if result != nil {
 			if app.EnvironmentID != replayUUID(result.RelatedID) {

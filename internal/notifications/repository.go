@@ -15,13 +15,13 @@ import (
 
 type Repository interface {
 	CreateChannel(ctx context.Context, channel Channel) (Channel, error)
-	GetChannel(ctx context.Context, teamID, channelID uuid.UUID) (Channel, error)
-	ListChannels(ctx context.Context, teamID uuid.UUID) ([]Channel, error)
-	ListChannelsForEvent(ctx context.Context, teamID uuid.UUID, resourceType string, resourceID uuid.UUID) ([]Channel, error)
+	GetChannel(ctx context.Context, channelID uuid.UUID) (Channel, error)
+	ListChannels(ctx context.Context) ([]Channel, error)
+	ListChannelsForEvent(ctx context.Context, resourceType string, resourceID uuid.UUID) ([]Channel, error)
 	UpdateChannel(ctx context.Context, channel Channel) (Channel, error)
-	DeleteChannel(ctx context.Context, teamID, channelID uuid.UUID) error
+	DeleteChannel(ctx context.Context, channelID uuid.UUID) error
 	CreateDelivery(ctx context.Context, delivery Delivery) error
-	ListDeliveries(ctx context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error)
+	ListDeliveries(ctx context.Context, channelID uuid.UUID, limit int) ([]Delivery, error)
 }
 
 type storeRepository struct {
@@ -37,7 +37,6 @@ func newStoreRepository(st *store.Store) *storeRepository {
 func (r *storeRepository) CreateChannel(ctx context.Context, channel Channel) (Channel, error) {
 	row, err := r.store.CreateNotificationChannel(ctx, sqlc.CreateNotificationChannelParams{
 		ID:           pgUUID(channel.ID),
-		TeamID:       pgUUID(channel.TeamID),
 		Name:         channel.Name,
 		Kind:         string(channel.Kind),
 		Config:       channel.SealedConfig,
@@ -52,11 +51,8 @@ func (r *storeRepository) CreateChannel(ctx context.Context, channel Channel) (C
 	return channelFromRow(row), nil
 }
 
-func (r *storeRepository) GetChannel(ctx context.Context, teamID, channelID uuid.UUID) (Channel, error) {
-	row, err := r.store.GetNotificationChannel(ctx, sqlc.GetNotificationChannelParams{
-		ID:     pgUUID(channelID),
-		TeamID: pgUUID(teamID),
-	})
+func (r *storeRepository) GetChannel(ctx context.Context, channelID uuid.UUID) (Channel, error) {
+	row, err := r.store.GetNotificationChannel(ctx, pgUUID(channelID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Channel{}, ErrNotFound
@@ -66,17 +62,16 @@ func (r *storeRepository) GetChannel(ctx context.Context, teamID, channelID uuid
 	return channelFromRow(row), nil
 }
 
-func (r *storeRepository) ListChannels(ctx context.Context, teamID uuid.UUID) ([]Channel, error) {
-	rows, err := r.store.ListNotificationChannels(ctx, pgUUID(teamID))
+func (r *storeRepository) ListChannels(ctx context.Context) ([]Channel, error) {
+	rows, err := r.store.ListNotificationChannels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("notifications: list channels: %w", err)
 	}
 	return channelsFromRows(rows), nil
 }
 
-func (r *storeRepository) ListChannelsForEvent(ctx context.Context, teamID uuid.UUID, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
+func (r *storeRepository) ListChannelsForEvent(ctx context.Context, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
 	rows, err := r.store.ListNotificationChannelsForEvent(ctx, sqlc.ListNotificationChannelsForEventParams{
-		TeamID:       pgUUID(teamID),
 		ResourceType: nullableText(resourceType),
 		ResourceID:   pgUUID(resourceID),
 	})
@@ -89,7 +84,6 @@ func (r *storeRepository) ListChannelsForEvent(ctx context.Context, teamID uuid.
 func (r *storeRepository) UpdateChannel(ctx context.Context, channel Channel) (Channel, error) {
 	row, err := r.store.UpdateNotificationChannel(ctx, sqlc.UpdateNotificationChannelParams{
 		ID:           pgUUID(channel.ID),
-		TeamID:       pgUUID(channel.TeamID),
 		Name:         channel.Name,
 		Kind:         string(channel.Kind),
 		Config:       channel.SealedConfig,
@@ -107,11 +101,8 @@ func (r *storeRepository) UpdateChannel(ctx context.Context, channel Channel) (C
 	return channelFromRow(row), nil
 }
 
-func (r *storeRepository) DeleteChannel(ctx context.Context, teamID, channelID uuid.UUID) error {
-	affected, err := r.store.DeleteNotificationChannel(ctx, sqlc.DeleteNotificationChannelParams{
-		ID:     pgUUID(channelID),
-		TeamID: pgUUID(teamID),
-	})
+func (r *storeRepository) DeleteChannel(ctx context.Context, channelID uuid.UUID) error {
+	affected, err := r.store.DeleteNotificationChannel(ctx, pgUUID(channelID))
 	if err != nil {
 		return fmt.Errorf("notifications: delete channel: %w", err)
 	}
@@ -146,10 +137,9 @@ func (r *storeRepository) CreateDelivery(ctx context.Context, delivery Delivery)
 	})
 }
 
-func (r *storeRepository) ListDeliveries(ctx context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error) {
+func (r *storeRepository) ListDeliveries(ctx context.Context, channelID uuid.UUID, limit int) ([]Delivery, error) {
 	rows, err := r.store.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
 		ChannelID: pgUUID(channelID),
-		TeamID:    pgUUID(teamID),
 		Limit:     int32(limit),
 	})
 	if err != nil {
@@ -180,7 +170,6 @@ func channelFromRow(row sqlc.NotificationChannel) Channel {
 	}
 	channel := Channel{
 		ID:           uuidFromPG(row.ID),
-		TeamID:       uuidFromPG(row.TeamID),
 		Name:         row.Name,
 		Kind:         Kind(row.Kind),
 		Enabled:      row.Enabled,

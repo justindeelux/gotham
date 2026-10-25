@@ -18,7 +18,6 @@ import (
 	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/taskevents"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const FeatureEnv = "FEATURE_APPLICATIONS"
@@ -313,14 +312,11 @@ func (s *Service) checkStoredTarget(ctx context.Context, app Application) error 
 	if app.ServerID == uuid.Nil {
 		return nil
 	}
-	teamID, found, err := s.repo.ServerTeam(ctx, app.ServerID)
+	known, err := s.repo.ServerExists(ctx, app.ServerID)
 	if err != nil {
 		return err
 	}
-	if !found {
-		return ErrServerNotFound
-	}
-	if teamID != uuid.Nil && teamID != app.TeamID {
+	if !known {
 		return ErrServerNotFound
 	}
 	return nil
@@ -435,7 +431,7 @@ func (s *Service) ListRecentDeployments(ctx context.Context, userID uuid.UUID, l
 	if limit > maxDeploymentListLimit {
 		limit = maxDeploymentListLimit
 	}
-	deployments, err := s.repo.ListRecentDeployments(ctx, teams.ScopeFor(ctx, userID), limit)
+	deployments, err := s.repo.ListRecentDeployments(ctx, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -459,7 +455,7 @@ func (s *Service) GetDeploymentBuildLog(ctx context.Context, userID, appID, depl
 	return deployment.BuildLog, nil
 }
 
-func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, write bool) (Application, error) {
+func (s *Service) application(ctx context.Context, _ uuid.UUID, appID uuid.UUID, _ bool) (Application, error) {
 	if s == nil || s.repo == nil {
 		return Application{}, errors.New("deploy: repository is not configured")
 	}
@@ -469,12 +465,6 @@ func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, writ
 	app, err := s.repo.GetApplication(ctx, appID)
 	if err != nil {
 		return Application{}, err
-	}
-	if err := teams.ScopeFor(ctx, userID).AuthorizeResource(app.TeamID, app.UserID, write); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return Application{}, err
-		}
-		return Application{}, ErrNotFound
 	}
 	return app, nil
 }

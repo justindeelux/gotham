@@ -45,11 +45,10 @@ func TestStoreRepositoryBuildLogRoundtrip(t *testing.T) {
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuid.UUID(user.ID.Bytes)
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID:        pgUUID(userID),
-		TeamID:        pgUUID(teamID),
 		ServerID:      pgUUID(serverID),
 		EnvironmentID: pgUUID(envID),
 		Name:          "buildlog-app",

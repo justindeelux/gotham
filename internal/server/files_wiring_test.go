@@ -39,7 +39,7 @@ func (f fakeFileServer) DialFileClient(context.Context, uuid.UUID, ...servers.Do
 func TestFilesServiceWiring(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "true")
 
-	server := &servers.Server{ID: uuid.New(), Name: "node-1", IP: "10.0.0.5", TeamID: uuid.New()}
+	server := &servers.Server{ID: uuid.New(), Name: "node-1", IP: "10.0.0.5"}
 	registry := fakeFileServer{server: server}
 
 	cfg := &config.Config{Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}}}
@@ -73,7 +73,7 @@ func TestFilesServiceWiring(t *testing.T) {
 func TestFilesServiceWiringDisabled(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "false")
 
-	server := &servers.Server{ID: uuid.New(), TeamID: uuid.New()}
+	server := &servers.Server{ID: uuid.New()}
 	cfg := &config.Config{Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s, err := New(cfg, logger, nil, nil, nil, fakeFileServer{server: server}, nil)
@@ -98,7 +98,7 @@ func TestFilesServiceNilWithoutRegistry(t *testing.T) {
 func TestFilesRoutesRequireOwner(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "true")
 
-	server := &servers.Server{ID: uuid.New(), Name: "node-1", TeamID: uuid.New()}
+	server := &servers.Server{ID: uuid.New(), Name: "node-1"}
 	cfg := &config.Config{Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tokens := newFakeTokenService()

@@ -20,7 +20,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -44,7 +43,6 @@ type Server struct {
 	SSHUser            string
 	SSHKeyID           *uuid.UUID
 	HasPassword        bool
-	TeamID             uuid.UUID
 	Status             string
 	NodeID             *string
 	OS                 *string
@@ -162,7 +160,7 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 		if s.store == nil {
 			return nil, errors.New("servers: store is not configured")
 		}
-		key, err := s.keyForTeam(ctx, sshKeyID)
+		key, err := s.keyByID(ctx, sshKeyID)
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +182,6 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 		Port:              int32(port),
 		SshUser:           sshUser,
 		SshKeyID:          keyID,
-		TeamID:            pgUUID(teams.ScopeFor(ctx, userID).TeamID),
 		EncryptedPassword: encryptedPassword,
 	})
 	if err != nil {
@@ -197,16 +194,7 @@ func (s *ServerService) Add(ctx context.Context, userID uuid.UUID, name, ip stri
 
 func (s *ServerService) List(ctx context.Context) ([]Server, error) {
 	s.sweepOffline(ctx)
-	scope := teams.ScopeFor(ctx, uuid.Nil)
-	var (
-		rows []sqlc.Server
-		err  error
-	)
-	if scope.Active() {
-		rows, err = s.store.ListServersByTeam(ctx, pgUUID(scope.TeamID))
-	} else {
-		rows, err = s.store.ListServers(ctx)
-	}
+	rows, err := s.store.ListServers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list servers: %w", err)
 	}
@@ -227,11 +215,7 @@ func (s *ServerService) Get(ctx context.Context, id uuid.UUID) (*Server, error) 
 		}
 		return nil, fmt.Errorf("get server: %w", err)
 	}
-	server := serverFromRow(row)
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, false); err != nil {
-		return nil, ErrNotFound
-	}
-	return server, nil
+	return serverFromRow(row), nil
 }
 
 func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
@@ -241,12 +225,6 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 			return ErrNotFound
 		}
 		return fmt.Errorf("get server: %w", err)
-	}
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return err
-		}
-		return ErrNotFound
 	}
 	if row.NodeID != nil && *row.NodeID == "localhost" {
 		return fmt.Errorf("%w: the localhost node cannot be deleted", ErrConflict)
@@ -363,13 +341,6 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 		}
 		return nil, fmt.Errorf("get server: %w", err)
 	}
-	server := serverFromRow(row)
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return nil, err
-		}
-		return nil, ErrNotFound
-	}
 
 	if row.NodeID != nil && *row.NodeID == "localhost" {
 		return nil, fmt.Errorf("%w: the localhost node cannot be edited", ErrConflict)
@@ -414,7 +385,7 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 	wantKeySet := params.SSHKeyID != nil
 	if params.SSHKeyID != nil {
 		if *params.SSHKeyID != uuid.Nil {
-			key, err := s.keyForTeam(ctx, *params.SSHKeyID)
+			key, err := s.keyByID(ctx, *params.SSHKeyID)
 			if err != nil {
 				return nil, err
 			}
@@ -539,39 +510,19 @@ func (s *ServerService) storedPasswordEquals(stored *string, plain string) bool 
 }
 
 func (s *ServerService) ResetHostKey(ctx context.Context, id uuid.UUID) (*Server, error) {
-	row, err := s.store.GetServerByID(ctx, pgUUID(id))
-	if err != nil {
+	if _, err := s.store.GetServerByID(ctx, pgUUID(id)); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get server: %w", err)
-	}
-	server := serverFromRow(row)
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return nil, err
-		}
-		return nil, ErrNotFound
 	}
 
 	updated, err := s.store.ClearServerHostKey(ctx, pgUUID(id))
 	if err != nil {
 		return nil, fmt.Errorf("clear host key: %w", err)
 	}
-	scope := teams.ScopeFor(ctx, uuid.Nil)
-	s.logger.Info("servers: host key pin reset",
-		"server_id", id.String(),
-		"actor_team_id", scopeID(scope.TeamID),
-		"actor_user_id", scopeID(scope.UserID),
-	)
+	s.logger.Info("servers: host key pin reset", "server_id", id.String())
 	return serverFromRow(updated), nil
-}
-
-func scopeID(id uuid.UUID) string {
-	if id == uuid.Nil {
-		return ""
-	}
-	return id.String()
 }
 
 func (s *ServerService) pinHostKey(ctx context.Context, id uuid.UUID, row sqlc.Server, fingerprint string) error {
@@ -665,7 +616,6 @@ func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM s
 	row, err := s.store.CreatePrivateKey(ctx, sqlc.CreatePrivateKeyParams{
 		Name:         name,
 		EncryptedKey: encrypted,
-		TeamID:       pgUUID(teams.ScopeFor(ctx, uuid.Nil).TeamID),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create private key: %w", err)
@@ -679,33 +629,13 @@ func (s *ServerService) AddPrivateKey(ctx context.Context, name, privateKeyPEM s
 	}, nil
 }
 
-func (s *ServerService) keyForTeam(ctx context.Context, id uuid.UUID) (sqlc.PrivateKey, error) {
+func (s *ServerService) keyByID(ctx context.Context, id uuid.UUID) (sqlc.PrivateKey, error) {
 	key, err := s.store.GetPrivateKeyByID(ctx, pgUUID(id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return sqlc.PrivateKey{}, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
 		}
 		return sqlc.PrivateKey{}, fmt.Errorf("lookup ssh key: %w", err)
-	}
-	scope := teams.ScopeFor(ctx, uuid.Nil)
-	if !scope.Active() {
-		return key, nil
-	}
-	if key.TeamID.Valid {
-		if uuidFromPG(key.TeamID) != scope.TeamID {
-			return sqlc.PrivateKey{}, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
-		}
-		return key, nil
-	}
-	referenced, err := s.store.TeamReferencesPrivateKey(ctx, sqlc.TeamReferencesPrivateKeyParams{
-		PrivateKeyID: key.ID,
-		TeamID:       pgUUID(scope.TeamID),
-	})
-	if err != nil {
-		return sqlc.PrivateKey{}, fmt.Errorf("lookup ssh key: %w", err)
-	}
-	if !referenced {
-		return sqlc.PrivateKey{}, fmt.Errorf("%w: unknown ssh_key_id", ErrValidation)
 	}
 	return key, nil
 }
@@ -719,12 +649,6 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 		return nil, fmt.Errorf("get server: %w", err)
 	}
 	server := serverFromRow(row)
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return nil, err
-		}
-		return nil, ErrNotFound
-	}
 
 	credentials, err := s.credentials(ctx, row, auth)
 	if err != nil {
@@ -851,12 +775,6 @@ func (s *ServerService) InstallDocker(ctx context.Context, id uuid.UUID, auth Va
 		return fmt.Errorf("get server: %w", err)
 	}
 	server := serverFromRow(row)
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return err
-		}
-		return ErrNotFound
-	}
 
 	if !s.lockInstall(id) {
 		return fmt.Errorf("%w: a Docker install is already running for this server", ErrConflict)
@@ -898,7 +816,7 @@ func (s *ServerService) NodeKeyFingerprint(ctx context.Context, nodeID string) (
 		if nodeID == "localhost" && row.Status == StatusPending && !row.LastSeen.Valid &&
 			row.Os == nil && row.DockerVersion == nil && row.Arch == nil &&
 			row.TotalMem == nil && row.TotalDisk == nil && row.AgentLegacyLeaf == nil &&
-			row.SshUser == "" && !row.TeamID.Valid {
+			row.SshUser == "" {
 			return "", false, nil
 		}
 		return "", true, nil
@@ -1114,7 +1032,7 @@ func (s *ServerService) credentials(ctx context.Context, row sqlc.Server, auth V
 
 func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, passphrase string, explicit bool) (SSHAuth, error) {
 	if explicit {
-		key, err := s.keyForTeam(ctx, uuidFromPG(id))
+		key, err := s.keyByID(ctx, uuidFromPG(id))
 		if err != nil {
 			return SSHAuth{}, err
 		}
@@ -1128,12 +1046,6 @@ func (s *ServerService) loadKeyAuth(ctx context.Context, id pgtype.UUID, passphr
 		}
 		return SSHAuth{}, fmt.Errorf("load ssh key: %w", err)
 	}
-	if key.TeamID.Valid {
-		if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(uuidFromPG(key.TeamID), false); err != nil {
-			return SSHAuth{}, fmt.Errorf("%w: attached SSH key no longer exists", ErrNoCredentials)
-		}
-	}
-
 	return s.decryptKeyAuth(key.EncryptedKey, passphrase)
 }
 
@@ -1152,7 +1064,6 @@ func serverFromRow(row sqlc.Server) *Server {
 		IP:                 row.Ip,
 		Port:               int(row.Port),
 		SSHUser:            row.SshUser,
-		TeamID:             uuidFromPG(row.TeamID),
 		Status:             row.Status,
 		NodeID:             row.NodeID,
 		OS:                 row.Os,

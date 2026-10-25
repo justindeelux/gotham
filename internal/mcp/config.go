@@ -6,29 +6,19 @@ import (
 	"net/url"
 	"strings"
 	"unicode"
-
-	"github.com/google/uuid"
 )
 
 type Config struct {
-	URL    string
-	Token  string
-	TeamID uuid.UUID
+	URL   string
+	Token string
 }
 
 func ConfigFromEnv(getenv func(string) string) (Config, error) {
-	team, err := uuid.Parse(getenv("GOTHAM_MCP_TEAM_ID"))
-	if err != nil || team == uuid.Nil {
-		return Config{}, errors.New("MCP requires a nonzero team UUID")
-	}
-	cfg := Config{URL: getenv("GOTHAM_MCP_URL"), Token: getenv("GOTHAM_MCP_TOKEN"), TeamID: team}
+	cfg := Config{URL: getenv("GOTHAM_MCP_URL"), Token: getenv("GOTHAM_MCP_TOKEN")}
 	return cfg, cfg.validate()
 }
 
 func (c Config) validate() error {
-	if c.TeamID == uuid.Nil {
-		return errors.New("MCP requires a nonzero team UUID")
-	}
 	if len(c.Token) <= 4 || len(c.Token) > 4096 || !strings.HasPrefix(c.Token, "gt1_") || strings.ContainsFunc(c.Token, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 		return errors.New("MCP requires a gt1_ API token")
 	}

@@ -37,10 +37,10 @@ func (q *Queries) CountDatabasesByProject(ctx context.Context, projectID pgtype.
 
 const createDatabase = `-- name: CreateDatabase :one
 INSERT INTO databases (
-    id, user_id, server_id, environment_id, name, engine, version, status, public_port, storage_path, team_id
+    id, user_id, server_id, environment_id, name, engine, version, status, public_port, storage_path
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id
 `
 
 type CreateDatabaseParams struct {
@@ -54,7 +54,6 @@ type CreateDatabaseParams struct {
 	Status        string      `json:"status"`
 	PublicPort    int32       `json:"public_port"`
 	StoragePath   string      `json:"storage_path"`
-	TeamID        pgtype.UUID `json:"team_id"`
 }
 
 func (q *Queries) CreateDatabase(ctx context.Context, arg CreateDatabaseParams) (Database, error) {
@@ -69,7 +68,6 @@ func (q *Queries) CreateDatabase(ctx context.Context, arg CreateDatabaseParams) 
 		arg.Status,
 		arg.PublicPort,
 		arg.StoragePath,
-		arg.TeamID,
 	)
 	var i Database
 	err := row.Scan(
@@ -86,7 +84,6 @@ func (q *Queries) CreateDatabase(ctx context.Context, arg CreateDatabaseParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
-		&i.TeamID,
 		&i.EnvironmentID,
 	)
 	return i, err
@@ -150,7 +147,7 @@ func (q *Queries) DeleteDatabaseSecrets(ctx context.Context, databaseID pgtype.U
 }
 
 const getDatabase = `-- name: GetDatabase :one
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id FROM databases
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -171,7 +168,6 @@ func (q *Queries) GetDatabase(ctx context.Context, id pgtype.UUID) (Database, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
-		&i.TeamID,
 		&i.EnvironmentID,
 	)
 	return i, err
@@ -210,7 +206,7 @@ func (q *Queries) ListDatabaseSecrets(ctx context.Context, databaseID pgtype.UUI
 }
 
 const listDatabasesByEnvironment = `-- name: ListDatabasesByEnvironment :many
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id FROM databases
 WHERE environment_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -238,7 +234,6 @@ func (q *Queries) ListDatabasesByEnvironment(ctx context.Context, environmentID 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
-			&i.TeamID,
 			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
@@ -252,7 +247,7 @@ func (q *Queries) ListDatabasesByEnvironment(ctx context.Context, environmentID 
 }
 
 const listDatabasesByProject = `-- name: ListDatabasesByProject :many
-SELECT d.id, d.user_id, d.server_id, d.name, d.engine, d.version, d.status, d.container_id, d.public_port, d.storage_path, d.created_at, d.updated_at, d.deleted_at, d.team_id, d.environment_id FROM databases d
+SELECT d.id, d.user_id, d.server_id, d.name, d.engine, d.version, d.status, d.container_id, d.public_port, d.storage_path, d.created_at, d.updated_at, d.deleted_at, d.environment_id FROM databases d
 JOIN environments e ON e.id = d.environment_id
 WHERE e.project_id = $1 AND d.deleted_at IS NULL
 ORDER BY d.created_at DESC, d.id DESC
@@ -281,7 +276,6 @@ func (q *Queries) ListDatabasesByProject(ctx context.Context, projectID pgtype.U
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
-			&i.TeamID,
 			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
@@ -325,50 +319,8 @@ func (q *Queries) ListDatabasesByServer(ctx context.Context, serverID pgtype.UUI
 	return items, nil
 }
 
-const listDatabasesByTeam = `-- name: ListDatabasesByTeam :many
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
-WHERE team_id = $1 AND deleted_at IS NULL
-ORDER BY created_at DESC, id DESC
-`
-
-func (q *Queries) ListDatabasesByTeam(ctx context.Context, teamID pgtype.UUID) ([]Database, error) {
-	rows, err := q.db.Query(ctx, listDatabasesByTeam, teamID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Database{}
-	for rows.Next() {
-		var i Database
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.ServerID,
-			&i.Name,
-			&i.Engine,
-			&i.Version,
-			&i.Status,
-			&i.ContainerID,
-			&i.PublicPort,
-			&i.StoragePath,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.DeletedAt,
-			&i.TeamID,
-			&i.EnvironmentID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listDatabasesByUser = `-- name: ListDatabasesByUser :many
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id FROM databases
 WHERE user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -396,7 +348,6 @@ func (q *Queries) ListDatabasesByUser(ctx context.Context, userID pgtype.UUID) (
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
-			&i.TeamID,
 			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
@@ -410,7 +361,7 @@ func (q *Queries) ListDatabasesByUser(ctx context.Context, userID pgtype.UUID) (
 }
 
 const listExpiredDatabases = `-- name: ListExpiredDatabases :many
-SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id FROM databases
+SELECT id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id FROM databases
 WHERE deleted_at IS NOT NULL AND deleted_at <= $1
 ORDER BY deleted_at ASC, id ASC
 `
@@ -440,7 +391,6 @@ func (q *Queries) ListExpiredDatabases(ctx context.Context, deletedAt pgtype.Tim
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
-			&i.TeamID,
 			&i.EnvironmentID,
 		); err != nil {
 			return nil, err
@@ -579,7 +529,7 @@ SET status = 'deleting',
     deleted_at = now(),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id
 `
 
 func (q *Queries) SoftDeleteDatabase(ctx context.Context, id pgtype.UUID) (Database, error) {
@@ -599,7 +549,6 @@ func (q *Queries) SoftDeleteDatabase(ctx context.Context, id pgtype.UUID) (Datab
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
-		&i.TeamID,
 		&i.EnvironmentID,
 	)
 	return i, err
@@ -610,7 +559,7 @@ UPDATE databases
 SET container_id = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id
 `
 
 type UpdateDatabaseContainerParams struct {
@@ -635,7 +584,6 @@ func (q *Queries) UpdateDatabaseContainer(ctx context.Context, arg UpdateDatabas
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
-		&i.TeamID,
 		&i.EnvironmentID,
 	)
 	return i, err
@@ -646,7 +594,7 @@ UPDATE databases
 SET name = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id
 `
 
 type UpdateDatabaseNameParams struct {
@@ -671,7 +619,6 @@ func (q *Queries) UpdateDatabaseName(ctx context.Context, arg UpdateDatabaseName
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
-		&i.TeamID,
 		&i.EnvironmentID,
 	)
 	return i, err
@@ -682,7 +629,7 @@ UPDATE databases
 SET status = $2,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id
 `
 
 type UpdateDatabaseStatusParams struct {
@@ -707,7 +654,6 @@ func (q *Queries) UpdateDatabaseStatus(ctx context.Context, arg UpdateDatabaseSt
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
-		&i.TeamID,
 		&i.EnvironmentID,
 	)
 	return i, err
@@ -720,7 +666,7 @@ SET name = $2,
     server_id = COALESCE($4, server_id),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, team_id, environment_id
+RETURNING id, user_id, server_id, name, engine, version, status, container_id, public_port, storage_path, created_at, updated_at, deleted_at, environment_id
 `
 
 type UpdateDatabaseTargetParams struct {
@@ -758,7 +704,6 @@ func (q *Queries) UpdateDatabaseTarget(ctx context.Context, arg UpdateDatabaseTa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
-		&i.TeamID,
 		&i.EnvironmentID,
 	)
 	return i, err

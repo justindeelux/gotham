@@ -1,6 +1,6 @@
 -- name: CreateServer :one
-INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id, encrypted_password)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, encrypted_password)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
 -- name: UpdateServer :one
@@ -37,13 +37,6 @@ SELECT * FROM servers WHERE node_id = $1;
 
 -- name: ListServers :many
 SELECT * FROM servers ORDER BY created_at DESC, id DESC;
-
--- name: ListServersByTeam :many
--- A legacy node (team_id NULL) predates teams and stays visible to every
--- authenticated caller; a team node belongs to its team only.
-SELECT * FROM servers
-WHERE team_id = $1 OR team_id IS NULL
-ORDER BY created_at DESC, id DESC;
 
 -- name: DeleteServer :exec
 DELETE FROM servers WHERE id = $1;

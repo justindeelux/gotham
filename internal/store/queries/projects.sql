@@ -1,6 +1,6 @@
 -- name: CreateProject :one
-INSERT INTO projects (id, team_id, name, description)
-VALUES ($1, $2, $3, $4)
+INSERT INTO projects (id, name, description)
+VALUES ($1, $2, $3)
 RETURNING *;
 
 -- name: CreateEnvironment :one
@@ -9,25 +9,22 @@ VALUES ($1, $2, $3)
 RETURNING *;
 
 -- name: GetProject :one
--- The team filter is what makes a foreign project ID indistinguishable from a
--- missing one (404).
-SELECT * FROM projects WHERE id = $1 AND team_id = $2;
+SELECT * FROM projects WHERE id = $1;
 
--- name: ListProjectsByTeam :many
+-- name: ListProjects :many
 SELECT * FROM projects
-WHERE team_id = $1
 ORDER BY created_at DESC, id DESC;
 
 -- name: UpdateProject :one
 UPDATE projects
-SET name = $3,
-    description = $4,
+SET name = $2,
+    description = $3,
     updated_at = now()
-WHERE id = $1 AND team_id = $2
+WHERE id = $1
 RETURNING *;
 
 -- name: DeleteProject :execrows
-DELETE FROM projects WHERE id = $1 AND team_id = $2;
+DELETE FROM projects WHERE id = $1;
 
 -- name: ListEnvironmentsByProject :many
 SELECT * FROM environments
@@ -35,21 +32,14 @@ WHERE project_id = $1
 ORDER BY created_at ASC, id ASC;
 
 -- name: GetEnvironment :one
--- GetEnvironment returns one environment of a team, joining the parent
--- project so a foreign environment ID is indistinguishable from a missing one
--- (404). PE-2 uses the same read for the environment resources surface.
-SELECT e.*
-FROM environments e
-JOIN projects p ON p.id = e.project_id
-WHERE e.id = $1 AND p.team_id = $2;
+SELECT * FROM environments WHERE id = $1;
 
 -- name: UpdateEnvironment :one
-UPDATE environments e
+UPDATE environments
 SET name = $2,
     updated_at = now()
-FROM projects p
-WHERE e.id = $1 AND e.project_id = p.id AND p.team_id = $3
-RETURNING e.*;
+WHERE id = $1
+RETURNING *;
 
 -- name: GetProjectForUpdate :one
 -- GetProjectForUpdate locks the project row for the duration of a guarded
@@ -58,9 +48,7 @@ RETURNING e.*;
 SELECT * FROM projects WHERE id = $1 FOR UPDATE;
 
 -- name: DeleteEnvironment :execrows
-DELETE FROM environments e
-USING projects p
-WHERE e.id = $1 AND e.project_id = p.id AND p.team_id = $2;
+DELETE FROM environments WHERE id = $1;
 
 -- name: CountEnvironmentsByProject :one
 SELECT count(*) FROM environments WHERE project_id = $1;
@@ -96,9 +84,7 @@ RETURNING *;
 -- ListPreviewBases maps preview application rows to their base application
 -- for the environment resources surface (PE-5 M1): the preview marker rides
 -- the applications row itself, but the base id lives in preview_deploys.
--- Team-scoped, so a foreign preview id simply resolves to no row.
 SELECT application_id, preview_application_id
 FROM preview_deploys
 WHERE preview_application_id = ANY(sqlc.slice('preview_app_ids'))
-  AND team_id = sqlc.arg('team_id')
   AND deleted_at IS NULL;

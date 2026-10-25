@@ -13,20 +13,19 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 type Repository interface {
 	CreateDatabase(ctx context.Context, database Database) (Database, error)
 	GetDatabase(ctx context.Context, databaseID uuid.UUID) (Database, error)
-	ListDatabases(ctx context.Context, scope teams.Scope) ([]Database, error)
+	ListDatabases(ctx context.Context, userID uuid.UUID) ([]Database, error)
 	UpdateDatabaseName(ctx context.Context, databaseID uuid.UUID, name string) (Database, error)
 	UpdateDatabaseTarget(ctx context.Context, database Database) (Database, error)
 	ListDatabasesByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]Database, error)
 	ListDatabasesByProject(ctx context.Context, projectID uuid.UUID) ([]Database, error)
 	NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error)
-	ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error)
-	ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error)
+	ResolveEnvironment(ctx context.Context, environmentID uuid.UUID) (EnvironmentRef, error)
+	ResolveProject(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error)
 	UpdateDatabaseContainer(ctx context.Context, databaseID uuid.UUID, containerID string) (Database, error)
 	UpdateDatabaseStatus(ctx context.Context, databaseID uuid.UUID, status Status) (Database, error)
 	PublicPortInUse(ctx context.Context, serverID uuid.UUID, publicPort int32) (bool, error)
@@ -36,7 +35,7 @@ type Repository interface {
 	CreateSecret(ctx context.Context, secret Secret) (Secret, error)
 	ListSecrets(ctx context.Context, databaseID uuid.UUID) ([]Secret, error)
 	DeleteDatabaseSecrets(ctx context.Context, databaseID uuid.UUID) error
-	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
+	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
 }
 
 type storeRepository struct {
@@ -53,7 +52,6 @@ func (r *storeRepository) CreateDatabase(ctx context.Context, database Database)
 	row, err := r.store.CreateDatabase(ctx, sqlc.CreateDatabaseParams{
 		ID:            pgUUID(database.ID),
 		UserID:        pgUUID(database.UserID),
-		TeamID:        pgUUID(database.TeamID),
 		ServerID:      pgUUID(database.ServerID),
 		EnvironmentID: pgUUID(database.EnvironmentID),
 		Name:          database.Name,
@@ -94,16 +92,8 @@ func (r *storeRepository) GetDatabase(ctx context.Context, databaseID uuid.UUID)
 	return enriched[0], nil
 }
 
-func (r *storeRepository) ListDatabases(ctx context.Context, scope teams.Scope) ([]Database, error) {
-	var (
-		rows []sqlc.Database
-		err  error
-	)
-	if scope.Active() {
-		rows, err = r.store.ListDatabasesByTeam(ctx, pgUUID(scope.TeamID))
-	} else {
-		rows, err = r.store.ListDatabasesByUser(ctx, pgUUID(scope.UserID))
-	}
+func (r *storeRepository) ListDatabases(ctx context.Context, userID uuid.UUID) ([]Database, error) {
+	rows, err := r.store.ListDatabasesByUser(ctx, pgUUID(userID))
 	if err != nil {
 		return nil, fmt.Errorf("databases: list databases: %w", err)
 	}
@@ -138,11 +128,8 @@ func (r *storeRepository) NameInEnvironment(ctx context.Context, environmentID u
 	return collision, nil
 }
 
-func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error) {
-	row, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
-		ID:     pgUUID(environmentID),
-		TeamID: pgUUID(teamID),
-	})
+func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID uuid.UUID) (EnvironmentRef, error) {
+	row, err := r.store.GetEnvironment(ctx, pgUUID(environmentID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return EnvironmentRef{}, ErrNotFound
@@ -156,11 +143,8 @@ func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID,
 	}, nil
 }
 
-func (r *storeRepository) ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error) {
-	if _, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
-		ID:     pgUUID(projectID),
-		TeamID: pgUUID(teamID),
-	}); err != nil {
+func (r *storeRepository) ResolveProject(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error) {
+	if _, err := r.store.GetProject(ctx, pgUUID(projectID)); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, ErrNotFound
 		}
@@ -179,10 +163,7 @@ func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Database) ([]D
 		if database.EnvironmentID != uuid.Nil {
 			env, ok := envs[database.EnvironmentID]
 			if !ok {
-				fetched, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
-					ID:     pgUUID(database.EnvironmentID),
-					TeamID: pgUUID(database.TeamID),
-				})
+				fetched, err := r.store.GetEnvironment(ctx, pgUUID(database.EnvironmentID))
 				if err != nil {
 					return nil, fmt.Errorf("databases: get environment: %w", err)
 				}
@@ -193,10 +174,7 @@ func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Database) ([]D
 			if database.ProjectID != uuid.Nil {
 				project, ok := projects[database.ProjectID]
 				if !ok {
-					fetched, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
-						ID:     pgUUID(database.ProjectID),
-						TeamID: pgUUID(database.TeamID),
-					})
+					fetched, err := r.store.GetProject(ctx, pgUUID(database.ProjectID))
 					if err != nil {
 						return nil, fmt.Errorf("databases: get project: %w", err)
 					}
@@ -372,19 +350,15 @@ func (r *storeRepository) DeleteDatabaseSecrets(ctx context.Context, databaseID 
 	return nil
 }
 
-func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
-	if err != nil {
+	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
 		return false, fmt.Errorf("databases: resolve server: %w", err)
-	}
-	if err := scope.AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
-		return false, nil
 	}
 	return true, nil
 }
@@ -393,7 +367,6 @@ func databaseFromRow(row sqlc.Database) Database {
 	return Database{
 		ID:            uuidFromPG(row.ID),
 		UserID:        uuidFromPG(row.UserID),
-		TeamID:        uuidFromPG(row.TeamID),
 		ServerID:      uuidFromPG(row.ServerID),
 		EnvironmentID: uuidFromPG(row.EnvironmentID),
 		Name:          row.Name,

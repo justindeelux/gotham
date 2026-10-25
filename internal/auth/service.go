@@ -76,12 +76,7 @@ func New(st *store.Store, signer *Signer, logger *slog.Logger) *Service {
 	return &Service{store: st, signer: signer, logger: logger, now: time.Now, verifyPassword: VerifyPassword}
 }
 
-type InviteAcceptor interface {
-	PeekInvite(ctx context.Context, token string) (teamName, email string, err error)
-	AcceptInvite(ctx context.Context, userID uuid.UUID, token string) error
-}
-
-func (s *Service) Register(ctx context.Context, email, password, inviteToken string, invites InviteAcceptor, meta SessionMeta) (*AuthResult, error) {
+func (s *Service) Register(ctx context.Context, email, password string, meta SessionMeta) (*AuthResult, error) {
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
 		return nil, err
@@ -99,26 +94,17 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 	if err != nil {
 		return nil, fmt.Errorf("auth: count users: %w", err)
 	}
-	consumeInvite := inviteToken != ""
-	if !consumeInvite && count > 0 && !s.AllowOpenRegistration {
+	if count > 0 && !s.AllowOpenRegistration {
 		return nil, ErrRegistrationClosed
-	}
-	if consumeInvite {
-		if err := checkInvite(ctx, normalized, inviteToken, invites); err != nil {
-			return nil, err
-		}
 	}
 
 	var user sqlc.User
-	switch {
-	case consumeInvite:
-		user, err = s.store.CreateUser(ctx, normalized, &hash)
-	case count == 0:
+	if count == 0 {
 		user, err = s.store.CreateFirstUser(ctx, normalized, &hash)
 		if errors.Is(err, store.ErrInstanceHasAccount) {
 			return nil, ErrRegistrationClosed
 		}
-	default:
+	} else {
 		user, err = s.store.CreateUser(ctx, normalized, &hash)
 	}
 	if err != nil {
@@ -128,32 +114,7 @@ func (s *Service) Register(ctx context.Context, email, password, inviteToken str
 		return nil, fmt.Errorf("auth: create user: %w", err)
 	}
 
-	if consumeInvite {
-		if err := invites.AcceptInvite(ctx, uuid.UUID(user.ID.Bytes), inviteToken); err != nil {
-			cleanup := context.WithoutCancel(ctx)
-			if delErr := s.store.DeleteUserAndPersonalTeam(cleanup, user.ID); delErr != nil {
-				s.logger.Error("auth: invite rollback failed", "error", delErr, "user_id", uuid.UUID(user.ID.Bytes))
-			}
-			s.logger.Warn("auth: invite accept failed at registration", "error", err)
-			return nil, ErrRegistrationClosed
-		}
-	}
-
 	return s.issue(ctx, user, meta)
-}
-
-func checkInvite(ctx context.Context, email, token string, invites InviteAcceptor) error {
-	if token == "" || invites == nil {
-		return ErrRegistrationClosed
-	}
-	_, inviteEmail, err := invites.PeekInvite(ctx, token)
-	if err != nil {
-		return ErrRegistrationClosed
-	}
-	if !strings.EqualFold(inviteEmail, email) {
-		return ErrRegistrationClosed
-	}
-	return nil
 }
 
 func (s *Service) Login(ctx context.Context, email, password string, meta SessionMeta) (*AuthResult, error) {

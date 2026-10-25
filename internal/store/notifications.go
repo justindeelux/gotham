@@ -12,12 +12,12 @@ func (s *Store) CreateNotificationChannel(ctx context.Context, params sqlc.Creat
 	return s.queries.CreateNotificationChannel(ctx, params)
 }
 
-func (s *Store) GetNotificationChannel(ctx context.Context, params sqlc.GetNotificationChannelParams) (sqlc.NotificationChannel, error) {
-	return s.queries.GetNotificationChannel(ctx, params)
+func (s *Store) GetNotificationChannel(ctx context.Context, id pgtype.UUID) (sqlc.NotificationChannel, error) {
+	return s.queries.GetNotificationChannel(ctx, id)
 }
 
-func (s *Store) ListNotificationChannels(ctx context.Context, teamID pgtype.UUID) ([]sqlc.NotificationChannel, error) {
-	return s.queries.ListNotificationChannels(ctx, teamID)
+func (s *Store) ListNotificationChannels(ctx context.Context) ([]sqlc.NotificationChannel, error) {
+	return s.queries.ListNotificationChannels(ctx)
 }
 
 func (s *Store) ListNotificationChannelsForEvent(ctx context.Context, params sqlc.ListNotificationChannelsForEventParams) ([]sqlc.NotificationChannel, error) {
@@ -28,8 +28,8 @@ func (s *Store) UpdateNotificationChannel(ctx context.Context, params sqlc.Updat
 	return s.queries.UpdateNotificationChannel(ctx, params)
 }
 
-func (s *Store) DeleteNotificationChannel(ctx context.Context, params sqlc.DeleteNotificationChannelParams) (int64, error) {
-	return s.queries.DeleteNotificationChannel(ctx, params)
+func (s *Store) DeleteNotificationChannel(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.queries.DeleteNotificationChannel(ctx, id)
 }
 
 func (s *Store) CreateNotificationDelivery(ctx context.Context, params sqlc.CreateNotificationDeliveryParams) (sqlc.NotificationDelivery, error) {

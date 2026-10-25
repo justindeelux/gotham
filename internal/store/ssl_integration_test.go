@@ -63,10 +63,10 @@ func TestSSLCertificateStorage(t *testing.T) {
 		_, _ = pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", server.ID)
 	})
 
-	teamID, envID, _ := seedEnvColumns(t, ctx, st, pool)
+	envID, _ := seedEnvColumns(t, ctx, st, pool)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: user.ID, TeamID: teamID, ServerID: server.ID, EnvironmentID: envID,
+		UserID: user.ID, ServerID: server.ID, EnvironmentID: envID,
 		Name:      "ssl-app",
 		CloneUrl:  "https://github.com/acme/demo.git",
 		Branch:    "main",
@@ -141,7 +141,7 @@ func TestSSLCertificateStorage(t *testing.T) {
 		t.Fatal("second certificate config for the same application was accepted")
 	}
 	app2, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: user.ID, TeamID: teamID, ServerID: server.ID, EnvironmentID: envID,
+		UserID: user.ID, ServerID: server.ID, EnvironmentID: envID,
 		Name:      "ssl-app-wild",
 		CloneUrl:  "https://github.com/acme/demo.git",
 		Branch:    "main",

@@ -18,7 +18,7 @@ func TestServiceRefreshRejectsStaleCredentialVersion(t *testing.T) {
 	email := uniqueEmail("stale-version")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestServiceRefreshConflictAfterResetDoesNotRevokeFreshSession(t *testing.T)
 	email := uniqueEmail("refresh-reset-race")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestServiceRefreshStaleTokenReplayDoesNotRevokeFreshSession(t *testing.T) {
 	email := uniqueEmail("stale-replay")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestServiceLoginRefusesVersionBumpDuringVerify(t *testing.T) {
 	email := uniqueEmail("login-racer")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestServiceIssuedSessionsCarryAccountVersion(t *testing.T) {
 	email := uniqueEmail("mint-version")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestServiceRefreshAcceptsPreMigrationSession(t *testing.T) {
 	email := uniqueEmail("pre-migration")
 	cleanupUser(t, st, email)
 
-	registered, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

@@ -48,29 +48,22 @@ func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentPa
 }
 
 const createProject = `-- name: CreateProject :one
-INSERT INTO projects (id, team_id, name, description)
-VALUES ($1, $2, $3, $4)
-RETURNING id, team_id, name, description, created_at, updated_at
+INSERT INTO projects (id, name, description)
+VALUES ($1, $2, $3)
+RETURNING id, name, description, created_at, updated_at
 `
 
 type CreateProjectParams struct {
 	ID          pgtype.UUID `json:"id"`
-	TeamID      pgtype.UUID `json:"team_id"`
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 }
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, createProject,
-		arg.ID,
-		arg.TeamID,
-		arg.Name,
-		arg.Description,
-	)
+	row := q.db.QueryRow(ctx, createProject, arg.ID, arg.Name, arg.Description)
 	var i Project
 	err := row.Scan(
 		&i.ID,
-		&i.TeamID,
 		&i.Name,
 		&i.Description,
 		&i.CreatedAt,
@@ -80,18 +73,11 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 }
 
 const deleteEnvironment = `-- name: DeleteEnvironment :execrows
-DELETE FROM environments e
-USING projects p
-WHERE e.id = $1 AND e.project_id = p.id AND p.team_id = $2
+DELETE FROM environments WHERE id = $1
 `
 
-type DeleteEnvironmentParams struct {
-	ID     pgtype.UUID `json:"id"`
-	TeamID pgtype.UUID `json:"team_id"`
-}
-
-func (q *Queries) DeleteEnvironment(ctx context.Context, arg DeleteEnvironmentParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteEnvironment, arg.ID, arg.TeamID)
+func (q *Queries) DeleteEnvironment(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteEnvironment, id)
 	if err != nil {
 		return 0, err
 	}
@@ -99,16 +85,11 @@ func (q *Queries) DeleteEnvironment(ctx context.Context, arg DeleteEnvironmentPa
 }
 
 const deleteProject = `-- name: DeleteProject :execrows
-DELETE FROM projects WHERE id = $1 AND team_id = $2
+DELETE FROM projects WHERE id = $1
 `
 
-type DeleteProjectParams struct {
-	ID     pgtype.UUID `json:"id"`
-	TeamID pgtype.UUID `json:"team_id"`
-}
-
-func (q *Queries) DeleteProject(ctx context.Context, arg DeleteProjectParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteProject, arg.ID, arg.TeamID)
+func (q *Queries) DeleteProject(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProject, id)
 	if err != nil {
 		return 0, err
 	}
@@ -133,22 +114,11 @@ func (q *Queries) DeleteSharedVariables(ctx context.Context, arg DeleteSharedVar
 }
 
 const getEnvironment = `-- name: GetEnvironment :one
-SELECT e.id, e.project_id, e.name, e.created_at, e.updated_at
-FROM environments e
-JOIN projects p ON p.id = e.project_id
-WHERE e.id = $1 AND p.team_id = $2
+SELECT id, project_id, name, created_at, updated_at FROM environments WHERE id = $1
 `
 
-type GetEnvironmentParams struct {
-	ID     pgtype.UUID `json:"id"`
-	TeamID pgtype.UUID `json:"team_id"`
-}
-
-// GetEnvironment returns one environment of a team, joining the parent
-// project so a foreign environment ID is indistinguishable from a missing one
-// (404). PE-2 uses the same read for the environment resources surface.
-func (q *Queries) GetEnvironment(ctx context.Context, arg GetEnvironmentParams) (Environment, error) {
-	row := q.db.QueryRow(ctx, getEnvironment, arg.ID, arg.TeamID)
+func (q *Queries) GetEnvironment(ctx context.Context, id pgtype.UUID) (Environment, error) {
+	row := q.db.QueryRow(ctx, getEnvironment, id)
 	var i Environment
 	err := row.Scan(
 		&i.ID,
@@ -161,22 +131,14 @@ func (q *Queries) GetEnvironment(ctx context.Context, arg GetEnvironmentParams) 
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, team_id, name, description, created_at, updated_at FROM projects WHERE id = $1 AND team_id = $2
+SELECT id, name, description, created_at, updated_at FROM projects WHERE id = $1
 `
 
-type GetProjectParams struct {
-	ID     pgtype.UUID `json:"id"`
-	TeamID pgtype.UUID `json:"team_id"`
-}
-
-// The team filter is what makes a foreign project ID indistinguishable from a
-// missing one (404).
-func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, getProject, arg.ID, arg.TeamID)
+func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, error) {
+	row := q.db.QueryRow(ctx, getProject, id)
 	var i Project
 	err := row.Scan(
 		&i.ID,
-		&i.TeamID,
 		&i.Name,
 		&i.Description,
 		&i.CreatedAt,
@@ -186,7 +148,7 @@ func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project
 }
 
 const getProjectForUpdate = `-- name: GetProjectForUpdate :one
-SELECT id, team_id, name, description, created_at, updated_at FROM projects WHERE id = $1 FOR UPDATE
+SELECT id, name, description, created_at, updated_at FROM projects WHERE id = $1 FOR UPDATE
 `
 
 // GetProjectForUpdate locks the project row for the duration of a guarded
@@ -197,7 +159,6 @@ func (q *Queries) GetProjectForUpdate(ctx context.Context, id pgtype.UUID) (Proj
 	var i Project
 	err := row.Scan(
 		&i.ID,
-		&i.TeamID,
 		&i.Name,
 		&i.Description,
 		&i.CreatedAt,
@@ -283,14 +244,8 @@ const listPreviewBases = `-- name: ListPreviewBases :many
 SELECT application_id, preview_application_id
 FROM preview_deploys
 WHERE preview_application_id = ANY($1)
-  AND team_id = $2
   AND deleted_at IS NULL
 `
-
-type ListPreviewBasesParams struct {
-	PreviewAppIds []pgtype.UUID `json:"preview_app_ids"`
-	TeamID        pgtype.UUID   `json:"team_id"`
-}
 
 type ListPreviewBasesRow struct {
 	ApplicationID        pgtype.UUID `json:"application_id"`
@@ -300,9 +255,8 @@ type ListPreviewBasesRow struct {
 // ListPreviewBases maps preview application rows to their base application
 // for the environment resources surface (PE-5 M1): the preview marker rides
 // the applications row itself, but the base id lives in preview_deploys.
-// Team-scoped, so a foreign preview id simply resolves to no row.
-func (q *Queries) ListPreviewBases(ctx context.Context, arg ListPreviewBasesParams) ([]ListPreviewBasesRow, error) {
-	rows, err := q.db.Query(ctx, listPreviewBases, arg.PreviewAppIds, arg.TeamID)
+func (q *Queries) ListPreviewBases(ctx context.Context, previewAppIds []pgtype.UUID) ([]ListPreviewBasesRow, error) {
+	rows, err := q.db.Query(ctx, listPreviewBases, previewAppIds)
 	if err != nil {
 		return nil, err
 	}
@@ -321,14 +275,13 @@ func (q *Queries) ListPreviewBases(ctx context.Context, arg ListPreviewBasesPara
 	return items, nil
 }
 
-const listProjectsByTeam = `-- name: ListProjectsByTeam :many
-SELECT id, team_id, name, description, created_at, updated_at FROM projects
-WHERE team_id = $1
+const listProjects = `-- name: ListProjects :many
+SELECT id, name, description, created_at, updated_at FROM projects
 ORDER BY created_at DESC, id DESC
 `
 
-func (q *Queries) ListProjectsByTeam(ctx context.Context, teamID pgtype.UUID) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listProjectsByTeam, teamID)
+func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjects)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +291,6 @@ func (q *Queries) ListProjectsByTeam(ctx context.Context, teamID pgtype.UUID) ([
 		var i Project
 		if err := rows.Scan(
 			&i.ID,
-			&i.TeamID,
 			&i.Name,
 			&i.Description,
 			&i.CreatedAt,
@@ -443,22 +395,20 @@ func (q *Queries) ListSharedVariablesForEnvironment(ctx context.Context, arg Lis
 }
 
 const updateEnvironment = `-- name: UpdateEnvironment :one
-UPDATE environments e
+UPDATE environments
 SET name = $2,
     updated_at = now()
-FROM projects p
-WHERE e.id = $1 AND e.project_id = p.id AND p.team_id = $3
-RETURNING e.id, e.project_id, e.name, e.created_at, e.updated_at
+WHERE id = $1
+RETURNING id, project_id, name, created_at, updated_at
 `
 
 type UpdateEnvironmentParams struct {
-	ID     pgtype.UUID `json:"id"`
-	Name   string      `json:"name"`
-	TeamID pgtype.UUID `json:"team_id"`
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
 }
 
 func (q *Queries) UpdateEnvironment(ctx context.Context, arg UpdateEnvironmentParams) (Environment, error) {
-	row := q.db.QueryRow(ctx, updateEnvironment, arg.ID, arg.Name, arg.TeamID)
+	row := q.db.QueryRow(ctx, updateEnvironment, arg.ID, arg.Name)
 	var i Environment
 	err := row.Scan(
 		&i.ID,
@@ -472,31 +422,24 @@ func (q *Queries) UpdateEnvironment(ctx context.Context, arg UpdateEnvironmentPa
 
 const updateProject = `-- name: UpdateProject :one
 UPDATE projects
-SET name = $3,
-    description = $4,
+SET name = $2,
+    description = $3,
     updated_at = now()
-WHERE id = $1 AND team_id = $2
-RETURNING id, team_id, name, description, created_at, updated_at
+WHERE id = $1
+RETURNING id, name, description, created_at, updated_at
 `
 
 type UpdateProjectParams struct {
 	ID          pgtype.UUID `json:"id"`
-	TeamID      pgtype.UUID `json:"team_id"`
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 }
 
 func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, updateProject,
-		arg.ID,
-		arg.TeamID,
-		arg.Name,
-		arg.Description,
-	)
+	row := q.db.QueryRow(ctx, updateProject, arg.ID, arg.Name, arg.Description)
 	var i Project
 	err := row.Scan(
 		&i.ID,
-		&i.TeamID,
 		&i.Name,
 		&i.Description,
 		&i.CreatedAt,

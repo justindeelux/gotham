@@ -4,7 +4,7 @@ import "errors"
 
 var (
 	ErrNotFound       = errors.New("webhooks: not found")
-	ErrForbidden      = errors.New("webhooks: insufficient team role")
+	ErrForbidden      = errors.New("webhooks: forbidden")
 	ErrValidation     = errors.New("webhooks: validation failed")
 	ErrBadRequest     = errors.New("webhooks: malformed delivery")
 	ErrUnauthorized   = errors.New("webhooks: signature verification failed")

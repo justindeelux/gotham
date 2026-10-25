@@ -97,7 +97,7 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	}
 	h.serverID = uuid.UUID(serverRow.ID.Bytes)
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: userRow.ID, Name: "p7-e2e-" + suffix,
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "p7-e2e-" + suffix,
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -112,6 +112,15 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM services WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup services: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
+			t.Logf("cleanup applications: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM projects WHERE id = $1", project.ID); err != nil {
+			t.Logf("cleanup project: %v", err)
+		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverRow.ID); err != nil {
 			t.Logf("cleanup server: %v", err)
 		}

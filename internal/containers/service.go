@@ -15,7 +15,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -345,7 +344,7 @@ func (s *Service) Logs(ctx context.Context, serverID uuid.UUID, containerID stri
 	return out, streamErr, nil
 }
 
-func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) (*servers.Server, error) {
+func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, _ bool) (*servers.Server, error) {
 	if s.registry == nil {
 		return nil, errors.New("containers: server registry is not configured")
 	}
@@ -355,12 +354,6 @@ func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) (
 			return nil, ErrServerNotFound
 		}
 		return nil, fmt.Errorf("containers: resolve server: %w", err)
-	}
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, write); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return nil, ErrForbidden
-		}
-		return nil, ErrServerNotFound
 	}
 	return server, nil
 }

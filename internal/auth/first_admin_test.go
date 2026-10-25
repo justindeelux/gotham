@@ -89,7 +89,7 @@ func TestServiceFirstRegistrationBecomesOwner(t *testing.T) {
 	svc, _ := scratchService(t)
 	ctx := context.Background()
 
-	first, err := svc.Register(ctx, "first@example.com", "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, "first@example.com", "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
@@ -100,12 +100,12 @@ func TestServiceFirstRegistrationBecomesOwner(t *testing.T) {
 		t.Fatalf("first access-token role = %q, want %q", got, RoleOwner)
 	}
 
-	if _, err := svc.Register(ctx, "second@example.com", "s3cret-password", "", nil, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
+	if _, err := svc.Register(ctx, "second@example.com", "s3cret-password", SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("second Register error = %v, want ErrRegistrationClosed", err)
 	}
 
 	svc.AllowOpenRegistration = true
-	second, err := svc.Register(ctx, "second@example.com", "s3cret-password", "", nil, SessionMeta{})
+	second, err := svc.Register(ctx, "second@example.com", "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("override Register: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestServiceConcurrentFirstRegistrations(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			email := fmt.Sprintf("race-%d-%d@example.com", time.Now().UnixNano(), i)
-			res, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+			res, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 			results <- result{res: res, err: err}
 		}(i)
 	}
@@ -223,7 +223,7 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 	ctx := context.Background()
 
 	email := "role-follow@example.com"
-	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

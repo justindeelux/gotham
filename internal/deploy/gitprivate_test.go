@@ -1112,9 +1112,6 @@ func TestDeleteGitCredential(t *testing.T) {
 	if state, err := svc.GetGitCredential(context.Background(), userID, app.ID); err != nil || state.HasCredential {
 		t.Fatalf("state = %+v, %v; want no credential", state, err)
 	}
-	if _, err := svc.DeleteGitCredential(context.Background(), uuid.New(), app.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("foreign delete = %v, want ErrNotFound", err)
-	}
 }
 
 func TestGetGitCredentialDisabled(t *testing.T) {
@@ -1129,7 +1126,6 @@ func TestGetGitCredentialDisabled(t *testing.T) {
 func TestPreviewOfHTTPSAppCopiesCredential(t *testing.T) {
 	userID := uuid.New()
 	base := privateTestApp(userID, "https://git.internal/acme/demo.git")
-	base.TeamID = uuid.New()
 	repo := seedBaseForPreview(t, base)
 	svc := newTestService(t, repo)
 
@@ -1149,7 +1145,6 @@ func TestPreviewOfHTTPSAppCopiesCredential(t *testing.T) {
 
 	t.Run("base without a token", func(t *testing.T) {
 		plain := privateTestApp(userID, "git@git.internal:acme/other.git")
-		plain.TeamID = base.TeamID
 		plainRepo := seedBaseForPreview(t, plain)
 		plainSvc := newTestService(t, plainRepo)
 		sibling, err := plainSvc.CreatePreviewApplication(context.Background(), plain.ID, PreviewApplicationInput{
@@ -1168,7 +1163,6 @@ func TestPreviewOfHTTPSAppCopiesCredential(t *testing.T) {
 func TestPreviewOfPrivateAppCopiesLocalKey(t *testing.T) {
 	userID := uuid.New()
 	base := privateTestApp(userID, "git@git.internal:acme/demo.git")
-	base.TeamID = uuid.New()
 	repo := seedBaseForPreview(t, base)
 	svc := newTestService(t, repo)
 

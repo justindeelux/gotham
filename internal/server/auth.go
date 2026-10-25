@@ -20,7 +20,7 @@ const maxAuthBodyBytes = 1 << 20
 const tokenTypeBearer = "Bearer"
 
 type AuthService interface {
-	Register(ctx context.Context, email, password, inviteToken string, invites auth.InviteAcceptor, meta auth.SessionMeta) (*auth.AuthResult, error)
+	Register(ctx context.Context, email, password string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Login(ctx context.Context, email, password string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Refresh(ctx context.Context, refreshToken string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	Logout(ctx context.Context, refreshToken string) error
@@ -80,9 +80,8 @@ func (s *Server) requireInteractiveSession(next http.Handler) http.Handler {
 }
 
 type credentialsRequest struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	InviteToken string `json:"inviteToken,omitempty"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type refreshTokenRequest struct {
@@ -107,16 +106,9 @@ type authConfigResponse struct {
 	RegistrationOpen bool `json:"registrationOpen"`
 }
 
-type inviteValidateResponse struct {
-	Team  string `json:"team"`
-	Email string `json:"email"`
-}
-
 func (s *Server) mountAuthRoutes(api chi.Router) {
 	api.Route("/v1/auth", func(r chi.Router) {
 		r.Get("/config", s.handleAuthConfig)
-		r.With(s.rateLimit).Get("/invites/validate", s.handleInviteValidate)
-
 		r.With(s.rateLimit).Post("/register", s.handleRegister)
 		r.With(s.rateLimit).Post("/login", s.handleLogin)
 		r.With(s.rateLimit).Post("/login/totp", s.handleLoginTOTP)
@@ -158,28 +150,13 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, authConfigResponse{RegistrationOpen: open})
 }
 
-func (s *Server) handleInviteValidate(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if s.invites == nil || strings.TrimSpace(token) == "" {
-		writeJSON(w, http.StatusNotFound, apiError{Message: "invite not found"})
-		return
-	}
-
-	team, email, err := s.invites.PeekInvite(r.Context(), token)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, apiError{Message: "invite not found"})
-		return
-	}
-	writeJSON(w, http.StatusOK, inviteValidateResponse{Team: team, Email: email})
-}
-
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if !s.decodeJSON(w, r, &req) {
 		return
 	}
 
-	result, err := s.auth.Register(r.Context(), req.Email, req.Password, req.InviteToken, s.invites, s.sessionMeta(r))
+	result, err := s.auth.Register(r.Context(), req.Email, req.Password, s.sessionMeta(r))
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrEmailTaken):

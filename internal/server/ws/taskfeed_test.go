@@ -22,10 +22,10 @@ func TestTaskSubscriptionReplaysSnapshot(t *testing.T) {
 	running := `{"channel":"tasks:t1","type":"task","data":"{}"}`
 	end := `{"channel":"tasks:t1","type":"task_snapshot"}`
 	handler.SetTaskFeed(
-		func(_ context.Context, teamID string, userID uuid.UUID) error { return nil },
-		func(teamID string) []string {
-			if teamID != "t1" {
-				t.Errorf("snapshot team = %q, want t1", teamID)
+		func(_ context.Context, projectID string, userID uuid.UUID) error { return nil },
+		func(projectID string) []string {
+			if projectID != "t1" {
+				t.Errorf("snapshot project = %q, want t1", projectID)
 			}
 			return []string{running, end}
 		},
@@ -49,15 +49,15 @@ func TestTaskSubscriptionReplaysSnapshot(t *testing.T) {
 	}
 }
 
-func TestTaskSubscriptionRequiresTeamMembership(t *testing.T) {
+func TestTaskSubscriptionRequiresProjectAuthorization(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
 	t.Cleanup(hub.Close)
 
 	member, outsider := uuid.New(), uuid.New()
-	authorize := func(_ context.Context, teamID string, userID uuid.UUID) error {
-		if teamID != "t1" || userID != member {
-			return errors.New("not a member of this team")
+	authorize := func(_ context.Context, projectID string, userID uuid.UUID) error {
+		if projectID != "t1" || userID != member {
+			return errors.New("not authorized")
 		}
 		return nil
 	}
@@ -65,8 +65,8 @@ func TestTaskSubscriptionRequiresTeamMembership(t *testing.T) {
 		t.Helper()
 		handler := NewHandler(hub, subjectVerifier{token: testToken, userID: userID}, nil,
 			func(context.Context, uuid.UUID, uuid.UUID) error { return nil })
-		handler.SetTaskFeed(authorize, func(teamID string) []string {
-			end, _ := json.Marshal(Message{Channel: "tasks:" + teamID, Type: "task_snapshot"})
+		handler.SetTaskFeed(authorize, func(projectID string) []string {
+			end, _ := json.Marshal(Message{Channel: "tasks:" + projectID, Type: "task_snapshot"})
 			return []string{string(end)}
 		})
 		server := httptest.NewServer(handler)

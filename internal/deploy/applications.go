@@ -16,7 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/services"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const secretRefPrefix = "secret:"
@@ -84,17 +83,15 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if !Enabled() {
 		return Application{}, ErrDisabled
 	}
-	teamID := teamIDFor(ctx, userID)
 	if in.EnvironmentID == uuid.Nil {
 		return Application{}, fmt.Errorf("%w: environment is required", ErrValidation)
 	}
-	if _, err := s.repo.ResolveEnvironment(ctx, in.EnvironmentID, teamID); err != nil {
+	if _, err := s.repo.ResolveEnvironment(ctx, in.EnvironmentID); err != nil {
 		return Application{}, err
 	}
 	app := Application{
 		ID:                uuid.Nil,
 		UserID:            userID,
-		TeamID:            teamID,
 		EnvironmentID:     in.EnvironmentID,
 		Name:              strings.TrimSpace(in.Name),
 		Provider:          strings.TrimSpace(in.Provider),
@@ -143,9 +140,6 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		return Application{}, err
 	}
 	if requestreplay.From(ctx) != nil {
-		if !teams.ScopeFor(ctx, userID).CanWrite() {
-			return Application{}, teams.ErrForbidden
-		}
 		if err := fingerprintApplication(ctx, s.secret, app, registryPassword, in); err != nil {
 			return Application{}, err
 		}
@@ -221,18 +215,18 @@ func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID, filter
 		return nil, fmt.Errorf("%w: environment_id and project_id are mutually exclusive", ErrValidation)
 	}
 	if filter.EnvironmentID != uuid.Nil {
-		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID, teamIDFor(ctx, userID)); err != nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID); err != nil {
 			return nil, err
 		}
 		return s.repo.ListApplicationsByEnvironment(ctx, filter.EnvironmentID, filter.IncludePreviews)
 	}
 	if filter.ProjectID != uuid.Nil {
-		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID, teamIDFor(ctx, userID)); err != nil {
+		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID); err != nil {
 			return nil, err
 		}
 		return s.repo.ListApplicationsByProject(ctx, filter.ProjectID, filter.IncludePreviews)
 	}
-	applications, err := s.repo.ListApplications(ctx, teams.ScopeFor(ctx, userID))
+	applications, err := s.repo.ListApplications(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +277,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		} else if open {
 			return Application{}, ErrPreviewsOpen
 		}
-		if _, err := s.repo.ResolveEnvironment(ctx, *in.EnvironmentID, app.TeamID); err != nil {
+		if _, err := s.repo.ResolveEnvironment(ctx, *in.EnvironmentID); err != nil {
 			return Application{}, err
 		}
 		name := app.Name
@@ -822,19 +816,11 @@ func (s *Service) removeApplicationContainers(ctx context.Context, app Applicati
 	}
 }
 
-func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
-	scope := teams.ScopeFor(ctx, userID)
-	if scope.Active() {
-		return scope.TeamID
-	}
-	return teams.PersonalTeamID(userID)
-}
-
-func (s *Service) validateServer(ctx context.Context, userID, serverID uuid.UUID) error {
+func (s *Service) validateServer(ctx context.Context, _ uuid.UUID, serverID uuid.UUID) error {
 	if serverID == uuid.Nil {
 		return fmt.Errorf("%w: server is required", ErrValidation)
 	}
-	known, err := s.repo.ServerExists(ctx, serverID, teams.ScopeFor(ctx, userID))
+	known, err := s.repo.ServerExists(ctx, serverID)
 	if err != nil {
 		return err
 	}

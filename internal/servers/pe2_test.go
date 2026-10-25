@@ -33,22 +33,9 @@ func TestDeleteRefusesServerWithResources(t *testing.T) {
 		_ = st.DeleteServer(cleanupCtx, pgUUID(server.ID))
 	})
 
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
-		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		Name: fmt.Sprintf("guard-%d", suffix),
-	})
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		_, _ = st.DB.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID)
-	})
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID: team.ID,
-		Name:   "shop",
+		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name: fmt.Sprintf("shop-%d", suffix),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -71,21 +58,19 @@ func TestDeleteRefusesServerWithResources(t *testing.T) {
 		_, _ = st.DB.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID)
 	})
 	if _, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: user.ID, TeamID: team.ID, ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
+		UserID: user.ID, ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
 		Name: "web", CloneUrl: "https://github.com/acme/demo.git", Branch: "main", BuildPack: "dockerfile",
 	}); err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
 	if _, err := st.CreateService(ctx, sqlc.CreateServiceParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, UserID: user.ID, TeamID: team.ID,
-		ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, UserID: user.ID, ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
 		Name: "worker", Status: "creating", ComposeYaml: "services: {}", Env: []byte("{}"),
 	}); err != nil {
 		t.Fatalf("CreateService: %v", err)
 	}
 	if _, err := st.CreateDatabase(ctx, sqlc.CreateDatabaseParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, UserID: user.ID, TeamID: team.ID,
-		ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, UserID: user.ID, ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
 		Name: "db", Engine: "postgres", Status: "creating", StoragePath: "gotham-db-guard",
 	}); err != nil {
 		t.Fatalf("CreateDatabase: %v", err)
@@ -139,22 +124,9 @@ func TestDeletePurgesTombstones(t *testing.T) {
 		_ = st.DeleteServer(cleanupCtx, pgUUID(server.ID))
 	})
 
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
-		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		Name: fmt.Sprintf("tomb-%d", suffix),
-	})
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		_, _ = st.DB.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID)
-	})
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID: team.ID,
-		Name:   "shop",
+		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name: fmt.Sprintf("shop-%d", suffix),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -177,16 +149,14 @@ func TestDeletePurgesTombstones(t *testing.T) {
 		_, _ = st.DB.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID)
 	})
 	tombService, err := st.CreateService(ctx, sqlc.CreateServiceParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, UserID: user.ID, TeamID: team.ID,
-		ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, UserID: user.ID, ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
 		Name: "tomb", Status: "creating", ComposeYaml: "services: {}", Env: []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("CreateService: %v", err)
 	}
 	tombDatabase, err := st.CreateDatabase(ctx, sqlc.CreateDatabaseParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, UserID: user.ID, TeamID: team.ID,
-		ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, UserID: user.ID, ServerID: pgUUID(server.ID), EnvironmentID: environment.ID,
 		Name: "tomb", Engine: "postgres", Status: "creating", StoragePath: "gotham-db-tomb",
 	})
 	if err != nil {

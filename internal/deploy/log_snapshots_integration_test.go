@@ -35,8 +35,8 @@ func TestBoundedBuildLogHistoricalRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id=$1", user.ID) })
-	team, env, server := seedProjectEnvironment(t, ctx, st)
-	row, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{UserID: user.ID, TeamID: pgUUID(team), EnvironmentID: pgUUID(env), ServerID: pgUUID(server), Name: "snapshot", Provider: "github", Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git", BuildPack: "dockerfile"})
+	env, server := seedProjectEnvironment(t, ctx, st)
+	row, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{UserID: user.ID, EnvironmentID: pgUUID(env), ServerID: pgUUID(server), Name: "log-app", BuildPack: "dockerfile"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func (f *fakeDeployService) GetDeployment(_ context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error) {
@@ -19,11 +18,10 @@ func (f *fakeDeployService) GetDeployment(_ context.Context, userID, appID, depl
 
 func TestExactDeploymentRead(t *testing.T) {
 	app := testApplication(uuid.New())
-	app.TeamID = uuid.New()
 	old := Deployment{ID: uuid.New(), ApplicationID: app.ID, State: StateFailed, BuildLog: "secret-log", ComposeDocument: "secret-compose"}
 	repo := &fakeRepository{app: app, deployments: []Deployment{old}}
 	svc := newTestService(t, repo)
-	ctx := teams.WithScope(context.Background(), teams.Scope{UserID: app.UserID, TeamID: app.TeamID, Role: teams.RoleReadOnly})
+	ctx := context.Background()
 	for i := 0; i < 101; i++ {
 		if _, err := repo.CreateDeployment(ctx, Deployment{ApplicationID: app.ID, State: StateRunning}); err != nil {
 			t.Fatal(err)
@@ -41,7 +39,6 @@ func TestExactDeploymentRead(t *testing.T) {
 		{ctx, uuid.New(), old.ID, ErrNotFound},
 		{ctx, app.ID, uuid.New(), ErrNotFound},
 		{ctx, app.ID, uuid.Nil, ErrValidation},
-		{teams.WithScope(ctx, teams.Scope{UserID: app.UserID, TeamID: uuid.New(), Role: teams.RoleAdmin}), app.ID, old.ID, ErrNotFound},
 	} {
 		if _, err := svc.GetDeployment(tc.ctx, app.UserID, tc.app, tc.dep); !errors.Is(err, tc.want) {
 			t.Fatalf("err=%v want=%v", err, tc.want)

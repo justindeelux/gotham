@@ -1,9 +1,8 @@
 # MCP adapter
 
-Run `gotham mcp serve` with `GOTHAM_MCP_URL`, `GOTHAM_MCP_TOKEN`, and
-`GOTHAM_MCP_TEAM_ID`. The URL is an HTTPS origin, or HTTP with a literal loopback
-address for development. The token must be a nonempty `gt1_` API token; the team
-must be an explicit nonzero UUID. Configuration errors never echo these values.
+Run `gotham mcp serve` with `GOTHAM_MCP_URL` and `GOTHAM_MCP_TOKEN`. The URL is an HTTPS origin, or HTTP
+with a literal loopback address for development. The token must be a nonempty
+`gt1_` API token. Configuration errors never echo these values.
 The adapter does not load control-plane configuration or start its services.
 
 The official `github.com/modelcontextprotocol/go-sdk` is pinned at **v1.8.0**.
@@ -19,18 +18,15 @@ for every registered tool schema and annotation; operator documentation lives in
 
 Observation and discovery tools register through `registerTools` using typed SDK
 handlers and safe DTOs; there is no generic HTTP request tool. `Client.readJSON`
-enforces the team contract on every resource
-read. `Client.Health` first authenticates strict context, then decodes dependency
+enforces the strict contract on every resource read. `Client.Health` first authenticates strict context, then decodes dependency
 health, including degraded HTTP 503 responses. All requests revalidate the token
 at the backend; the adapter never retries or follows redirects.
 
-Strict requests send `X-Gotham-MCP-Contract: 1` and `X-Team-Id`.
-`GET /api/v1/mcp/context` requires read scope, enabled/wired teams, and current
-membership. Strict resource reads require the same membership checks, preserving
-legacy behavior for requests without the opt-in header. Successful strict
-responses acknowledge `X-Gotham-MCP-Contract: 1` and
-`X-Gotham-MCP-Team-Id: <configured UUID>` before data can be projected. A backend
-without this contract fails closed. Context advertises `context` and `strict_reads`, plus `strict_mutations` and
+Strict requests send `X-Gotham-MCP-Contract: 1`.
+`GET /api/v1/mcp/context` requires read scope and the wired services. Strict
+resource reads require the same checks. Successful strict responses acknowledge
+`X-Gotham-MCP-Contract: 1` before data can be projected. A backend without this
+contract fails closed. Context advertises `context` and `strict_reads`, plus `strict_mutations` and
 `request_replay` when the backend has the required services and stable secret.
 Mutation tools always use strict aliases; no mutation fallback exists.
 
@@ -43,7 +39,7 @@ returned. Later tools must preserve these bounds and project only safe fields.
 Callers composing REST paths must apply `url.PathEscape` to each dynamic segment.
 The adapter rejects decoded `.` and `..` segments (including encoded dots), while
 allowing ordinary names containing embedded dots such as `a..b`. Public health
-requests carry no token or team headers after the strict context check.
+requests carry no token or contract headers after the strict context check.
 
 
 ## Observation tools
@@ -56,8 +52,7 @@ establish application readiness or routing health.
 `nodes_list` accepts optional `limit` (default/max 100) and `offset`. Results are
 sorted by server UUID with total, truncation and next offset. Pagination is over a
 current in-memory snapshot, not a stable cursor, and does not reduce upstream work;
-the existing 2 MiB REST response ceiling still applies. Visible nodes include both
-the active team's nodes and legacy shared nodes, not necessarily team-owned nodes.
+the existing 2 MiB REST response ceiling still applies. Visible nodes are all configured nodes.
 
 `node_overview` takes `node_id`, the managed server UUID returned by `nodes_list`,
 not the internal agent node ID. Both tools omit SSH metadata and credential flags.
@@ -94,7 +89,7 @@ consistency across calls.
 registry credentials, mounts, or build arguments. Each workload collection is
 capped at 100 and reports its total/truncation. `project_overview` includes counts,
 environments (first 20), inventory for at most four environments, and at most 20
-project deployments found in the latest 100 team deployments, with the window size
+project deployments found in the latest 100 deployments, with the window size
 reported as `activity_window_limit`. This activity window
 is not complete project history. Inventory calls run sequentially (fan-out one);
 failed sections are explicitly unavailable. Counts and inventory do not establish
@@ -193,7 +188,7 @@ fields; content, URL, build-pack and ownership validation stay in the native API
 
 Public Git leaves an empty branch to the remote default; public images require
 no provider. Private provider connections must already exist. A `github_app_id`
-must belong to the token principal, even when another owner shares the team.
+must belong to the token principal, even when another account shares the instance.
 Providerless private Git credential/key setup happens outside MCP after creation
 and before deploy. Creation does not prove clone readiness, deploy anything,
 select a node/environment, create domains, or establish public URL readiness.
@@ -241,7 +236,7 @@ re-enqueues it.
 through the additive read-authorized GET. Old IDs remain addressable outside the
 history window; mismatched, foreign and moved application targets return 404.
 Read-scoped tokens and read-only members can poll; deploy requires deploy scope
-and a write-authorized team role.
+and a write-authorized caller.
 
 Status preserves wire state and original created/updated/started/finished timestamps.
 `terminal` is true only for `running` or `failed`; queued, cloning, building, pushing

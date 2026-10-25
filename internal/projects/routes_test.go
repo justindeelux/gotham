@@ -10,20 +10,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func alwaysUser(id uuid.UUID) UserIDFunc {
 	return func(context.Context) (uuid.UUID, bool) { return id, true }
 }
 
-func newRouteServer(userID, teamID uuid.UUID, role teams.Role, svc ProjectService) http.Handler {
+func newRouteServer(userID uuid.UUID, svc ProjectService) http.Handler {
 	auth := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			scope := teams.Scope{UserID: userID, TeamID: teamID, Role: role}
-			next.ServeHTTP(w, r.WithContext(teams.WithScope(r.Context(), scope)))
-		})
+		return next
 	}
 	router := chi.NewRouter()
 	Mount(router, auth, alwaysUser(userID), svc)
@@ -50,9 +45,9 @@ func errorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func TestProjectRoutesLifecycle(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
-	handler := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
+	handler := newRouteServer(userID, svc)
 
 	rec := doRequest(handler, http.MethodPost, "/v1/projects", `{"name":"Shop","description":"storefront"}`)
 	if rec.Code != http.StatusCreated {
@@ -154,9 +149,9 @@ func TestProjectRoutesLifecycle(t *testing.T) {
 }
 
 func TestProjectRoutesConflicts(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
-	handler := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
+	handler := newRouteServer(userID, svc)
 
 	rec := doRequest(handler, http.MethodPost, "/v1/projects", `{"name":"Shop"}`)
 	if rec.Code != http.StatusCreated {
@@ -189,70 +184,10 @@ func TestProjectRoutesConflicts(t *testing.T) {
 	}
 }
 
-func TestProjectRoutesAuthorization(t *testing.T) {
-	owner, teamID := uuid.New(), uuid.New()
-	repo := newFakeRepository()
-	svc := NewService(Config{Repository: repo, Counter: newFakeCounter(), Logger: discardLogger()})
-	admin := newRouteServer(owner, teamID, teams.RoleAdmin, svc)
-
-	rec := doRequest(admin, http.MethodPost, "/v1/projects", `{"name":"Shop"}`)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create = %d", rec.Code)
-	}
-	var created projectCreateEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode create: %v", err)
-	}
-
-	viewerID := uuid.New()
-	viewer := newRouteServer(viewerID, teamID, teams.RoleReadOnly, svc)
-	for _, tc := range []struct{ method, path, body string }{
-		{http.MethodPost, "/v1/projects", `{"name":"Other"}`},
-		{http.MethodPatch, "/v1/projects/" + created.Project.ID, `{"name":"x"}`},
-		{http.MethodDelete, "/v1/projects/" + created.Project.ID, ""},
-		{http.MethodPost, "/v1/projects/" + created.Project.ID + "/environments", `{"name":"staging"}`},
-		{http.MethodPatch, "/v1/environments/" + created.Environments[0].ID, `{"name":"x"}`},
-		{http.MethodDelete, "/v1/environments/" + created.Environments[0].ID, ""},
-	} {
-		rec := doRequest(viewer, tc.method, tc.path, tc.body)
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("%s %s as viewer = %d, want 403", tc.method, tc.path, rec.Code)
-		}
-	}
-	if rec := doRequest(viewer, http.MethodGet, "/v1/projects", ""); rec.Code != http.StatusOK {
-		t.Errorf("viewer list = %d, want 200", rec.Code)
-	}
-	if rec := doRequest(viewer, http.MethodGet, "/v1/projects/"+created.Project.ID, ""); rec.Code != http.StatusOK {
-		t.Errorf("viewer get = %d, want 200", rec.Code)
-	}
-
-	stranger := newRouteServer(uuid.New(), uuid.New(), teams.RoleAdmin, svc)
-	for _, tc := range []struct{ method, path, body string }{
-		{http.MethodGet, "/v1/projects/" + created.Project.ID, ""},
-		{http.MethodPatch, "/v1/projects/" + created.Project.ID, `{"name":"x"}`},
-		{http.MethodDelete, "/v1/projects/" + created.Project.ID, ""},
-		{http.MethodGet, "/v1/projects/" + created.Project.ID + "/environments", ""},
-		{http.MethodPost, "/v1/projects/" + created.Project.ID + "/environments", `{"name":"staging"}`},
-		{http.MethodPatch, "/v1/environments/" + created.Environments[0].ID, `{"name":"x"}`},
-		{http.MethodDelete, "/v1/environments/" + created.Environments[0].ID, ""},
-	} {
-		rec := doRequest(stranger, tc.method, tc.path, tc.body)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("%s %s cross-team = %d, want 404", tc.method, tc.path, rec.Code)
-		}
-		if message := errorMessage(t, rec); message != "not found" {
-			t.Errorf("%s %s cross-team body = %q, want not found", tc.method, tc.path, message)
-		}
-	}
-	if rec := doRequest(stranger, http.MethodGet, "/v1/projects", ""); rec.Code != http.StatusOK {
-		t.Errorf("stranger list = %d, want 200", rec.Code)
-	}
-}
-
 func TestProjectRoutesBadInput(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Logger: discardLogger()})
-	handler := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
+	handler := newRouteServer(userID, svc)
 
 	if rec := doRequest(handler, http.MethodGet, "/v1/projects/nope", ""); rec.Code != http.StatusBadRequest {
 		t.Errorf("bad project id = %d, want 400", rec.Code)

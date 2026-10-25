@@ -92,7 +92,6 @@ func newTerminalRealAuthService(t *testing.T) *auth.Service {
 }
 
 func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
 	svc := newTerminalRealAuthService(t)
 	ctx := context.Background()
 
@@ -105,7 +104,7 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyAccessToken(old): %v", err)
 	}
-	authorizer := terminalAuthorizer{auth: svc, isPlatformAdminEmail: func(string) bool { return false }}
+	authorizer := terminalAuthorizer{auth: svc}
 
 	rotated, err := svc.Refresh(ctx, register.RefreshToken, auth.SessionMeta{})
 	if err != nil {

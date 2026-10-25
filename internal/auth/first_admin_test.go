@@ -85,7 +85,7 @@ func claimRole(t *testing.T, svc *Service, accessToken string) string {
 	return claims.Role
 }
 
-func TestServiceFirstRegistrationBecomesAdmin(t *testing.T) {
+func TestServiceFirstRegistrationBecomesOwner(t *testing.T) {
 	svc, _ := scratchService(t)
 	ctx := context.Background()
 
@@ -93,11 +93,11 @@ func TestServiceFirstRegistrationBecomesAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
-	if first.User.Role != adminRole {
-		t.Fatalf("first user role = %q, want %q", first.User.Role, adminRole)
+	if first.User.Role != RoleOwner {
+		t.Fatalf("first user role = %q, want %q", first.User.Role, RoleOwner)
 	}
-	if got := claimRole(t, svc, first.AccessToken); got != adminRole {
-		t.Fatalf("first access-token role = %q, want %q", got, adminRole)
+	if got := claimRole(t, svc, first.AccessToken); got != RoleOwner {
+		t.Fatalf("first access-token role = %q, want %q", got, RoleOwner)
 	}
 
 	if _, err := svc.Register(ctx, "second@example.com", "s3cret-password", "", nil, SessionMeta{}); !errors.Is(err, ErrRegistrationClosed) {
@@ -109,11 +109,11 @@ func TestServiceFirstRegistrationBecomesAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("override Register: %v", err)
 	}
-	if second.User.Role != defaultRole {
-		t.Fatalf("second user role = %q, want %q", second.User.Role, defaultRole)
+	if second.User.Role != RoleMember {
+		t.Fatalf("second user role = %q, want %q", second.User.Role, RoleMember)
 	}
-	if got := claimRole(t, svc, second.AccessToken); got != defaultRole {
-		t.Fatalf("second access-token role = %q, want %q", got, defaultRole)
+	if got := claimRole(t, svc, second.AccessToken); got != RoleMember {
+		t.Fatalf("second access-token role = %q, want %q", got, RoleMember)
 	}
 }
 
@@ -155,15 +155,15 @@ func TestServiceConcurrentFirstRegistrations(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("concurrent first registrations succeeded %d times, want exactly 1", wins)
 	}
-	if winner.User.Role != adminRole {
-		t.Fatalf("race winner role = %q, want %q", winner.User.Role, adminRole)
+	if winner.User.Role != RoleOwner {
+		t.Fatalf("race winner role = %q, want %q", winner.User.Role, RoleOwner)
 	}
-	if got := claimRole(t, svc, winner.AccessToken); got != adminRole {
-		t.Fatalf("race winner access-token role = %q, want %q", got, adminRole)
+	if got := claimRole(t, svc, winner.AccessToken); got != RoleOwner {
+		t.Fatalf("race winner access-token role = %q, want %q", got, RoleOwner)
 	}
 }
 
-func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
+func TestOAuthBootstrapIsOwnerWithOverrideOnAndOff(t *testing.T) {
 	for _, override := range []bool{false, true} {
 		t.Run(fmt.Sprintf("override=%v", override), func(t *testing.T) {
 			svc, _ := scratchService(t)
@@ -188,11 +188,11 @@ func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
 			}
 
 			first := bootstrap("oauth-first@example.com")
-			if first.User.Role != adminRole {
-				t.Fatalf("bootstrap OAuth role = %q, want %q", first.User.Role, adminRole)
+			if first.User.Role != RoleOwner {
+				t.Fatalf("bootstrap OAuth role = %q, want %q", first.User.Role, RoleOwner)
 			}
-			if got := claimRole(t, svc, first.AccessToken); got != adminRole {
-				t.Fatalf("bootstrap OAuth access-token role = %q, want %q", got, adminRole)
+			if got := claimRole(t, svc, first.AccessToken); got != RoleOwner {
+				t.Fatalf("bootstrap OAuth access-token role = %q, want %q", got, RoleOwner)
 			}
 
 			if !override {
@@ -208,11 +208,11 @@ func TestOAuthBootstrapIsAdminWithOverrideOnAndOff(t *testing.T) {
 			}
 
 			second := bootstrap("oauth-second@example.com")
-			if second.User.Role != defaultRole {
-				t.Fatalf("second OAuth role = %q, want %q", second.User.Role, defaultRole)
+			if second.User.Role != RoleMember {
+				t.Fatalf("second OAuth role = %q, want %q", second.User.Role, RoleMember)
 			}
-			if got := claimRole(t, svc, second.AccessToken); got != defaultRole {
-				t.Fatalf("second OAuth access-token role = %q, want %q", got, defaultRole)
+			if got := claimRole(t, svc, second.AccessToken); got != RoleMember {
+				t.Fatalf("second OAuth access-token role = %q, want %q", got, RoleMember)
 			}
 		})
 	}
@@ -227,28 +227,28 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if first.User.Role != adminRole {
-		t.Fatalf("bootstrap role = %q, want %q", first.User.Role, adminRole)
+	if first.User.Role != RoleOwner {
+		t.Fatalf("bootstrap role = %q, want %q", first.User.Role, RoleOwner)
 	}
 
-	setAdmin := func(admin bool) {
+	setRole := func(role string) {
 		t.Helper()
 		if _, err := st.DB.Exec(ctx,
-			"UPDATE users SET is_platform_admin = $1 WHERE lower(email) = lower($2)", admin, email); err != nil {
-			t.Fatalf("set is_platform_admin=%v: %v", admin, err)
+			"UPDATE users SET role = $1 WHERE lower(email) = lower($2)", role, email); err != nil {
+			t.Fatalf("set role=%v: %v", role, err)
 		}
 	}
 
-	setAdmin(false)
+	setRole(RoleMember)
 	loggedIn, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if loggedIn.User.Role != defaultRole {
-		t.Fatalf("login role = %q, want %q", loggedIn.User.Role, defaultRole)
+	if loggedIn.User.Role != RoleMember {
+		t.Fatalf("login role = %q, want %q", loggedIn.User.Role, RoleMember)
 	}
-	if got := claimRole(t, svc, loggedIn.AccessToken); got != defaultRole {
-		t.Fatalf("login access-token role = %q, want %q", got, defaultRole)
+	if got := claimRole(t, svc, loggedIn.AccessToken); got != RoleMember {
+		t.Fatalf("login access-token role = %q, want %q", got, RoleMember)
 	}
 
 	userID, err := uuid.Parse(loggedIn.User.ID)
@@ -259,36 +259,36 @@ func TestServiceTokenRoleFollowsDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Me: %v", err)
 	}
-	if me.Role != defaultRole {
-		t.Fatalf("Me role = %q, want %q", me.Role, defaultRole)
+	if me.Role != RoleMember {
+		t.Fatalf("Me role = %q, want %q", me.Role, RoleMember)
 	}
 
-	setAdmin(true)
+	setRole(RoleOwner)
 	promoted, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Login after promote: %v", err)
 	}
-	if got := claimRole(t, svc, promoted.AccessToken); got != adminRole {
-		t.Fatalf("promoted access-token role = %q, want %q", got, adminRole)
+	if got := claimRole(t, svc, promoted.AccessToken); got != RoleOwner {
+		t.Fatalf("promoted access-token role = %q, want %q", got, RoleOwner)
 	}
 
 	refreshed, err := svc.Refresh(ctx, promoted.RefreshToken, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if got := claimRole(t, svc, refreshed.AccessToken); got != adminRole {
-		t.Fatalf("refreshed access-token role = %q, want %q (refresh must keep the role)", got, adminRole)
+	if got := claimRole(t, svc, refreshed.AccessToken); got != RoleOwner {
+		t.Fatalf("refreshed access-token role = %q, want %q (refresh must keep the role)", got, RoleOwner)
 	}
 
-	setAdmin(false)
+	setRole(RoleMember)
 	afterDemote, err := svc.Refresh(ctx, refreshed.RefreshToken, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Refresh after demote: %v", err)
 	}
-	if got := claimRole(t, svc, afterDemote.AccessToken); got != defaultRole {
-		t.Fatalf("post-demotion access-token role = %q, want %q", got, defaultRole)
+	if got := claimRole(t, svc, afterDemote.AccessToken); got != RoleMember {
+		t.Fatalf("post-demotion access-token role = %q, want %q", got, RoleMember)
 	}
-	if afterDemote.User.Role != defaultRole {
-		t.Fatalf("post-demotion user role = %q, want %q", afterDemote.User.Role, defaultRole)
+	if afterDemote.User.Role != RoleMember {
+		t.Fatalf("post-demotion user role = %q, want %q", afterDemote.User.Role, RoleMember)
 	}
 }

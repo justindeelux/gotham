@@ -22,7 +22,7 @@ function errorText(error: unknown): string {
 export function useUpdates() {
   const authStore = useAuthStore();
   const isAdmin = computed(
-    () => authStore.user?.is_platform_admin ?? authStore.user?.role === "admin",
+    () => authStore.user?.role === "owner" || authStore.user?.is_platform_admin === true,
   );
 
   const check = ref<UpdateCheck | null>(null);

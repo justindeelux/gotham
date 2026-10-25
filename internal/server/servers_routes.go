@@ -174,7 +174,7 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 
 	if _, ok := s.servers.(agentUpdateController); ok {
 		api.Group(func(platform chi.Router) {
-			platform.Use(s.RequireAuth, s.RequirePlatformAdmin)
+			platform.Use(s.RequireAuth, s.RequireOwner)
 			platform.Get("/v1/servers/agents", s.handleListAgentVersions)
 			platform.Post("/v1/servers/agents/update-all", s.handleUpdateAllAgents)
 		})

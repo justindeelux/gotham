@@ -444,8 +444,10 @@ export async function isPlatformAdmin(
   if (!response.ok()) {
     return false;
   }
-  const body = (await response.json()) as { user?: { is_platform_admin?: boolean } };
-  return body.user?.is_platform_admin === true;
+  const body = (await response.json()) as {
+    user?: { role?: string; is_platform_admin?: boolean };
+  };
+  return body.user?.role === "owner" || body.user?.is_platform_admin === true;
 }
 
 export function requireTerminal(): boolean {

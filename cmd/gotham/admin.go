@@ -51,8 +51,9 @@ func adminUsage(w io.Writer) {
 
 Usage:
   gotham admin create --email <email> [--password <pw> | --password-stdin | --generate-password] [--force]
-                            Create the first account (P-A2: one account per
-                            instance; refuses with --force not set otherwise).
+                            Create the first account (the instance owner;
+                            one account per instance; refuses with --force not
+                            set otherwise).
   gotham admin exists        Print "admin-exists: true|false" and exit 0
                             (exit 1 on error). Lets the installer detect a
                             re-run without parsing the database.

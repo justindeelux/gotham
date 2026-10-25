@@ -165,28 +165,27 @@ func newRotatingAuthorizer(t *testing.T, user *auth.User, signIn time.Time) (*ro
 		sessions: []auth.SessionInfo{{ID: sessionID, CreatedAt: signIn}},
 		lineages: map[uuid.UUID]time.Time{sessionID: signIn},
 	}
-	return store, terminalAuthorizer{auth: store, isPlatformAdminEmail: func(string) bool { return false }}, sessionID
+	return store, terminalAuthorizer{auth: store}, sessionID
 }
 
 func authorizerClaims(userID, sessionID uuid.UUID) *auth.Claims {
 	return &auth.Claims{
 		SessionID:        sessionID.String(),
-		Role:             "admin",
+		Role:             auth.RoleOwner,
 		RegisteredClaims: jwt.RegisteredClaims{Subject: userID.String()},
 	}
 }
 
 func TestTerminalAuthorizerSurvivesSessionRotation(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()
 	signIn := time.Now().UTC().Truncate(time.Microsecond)
 	sessionID := uuid.New()
 	replacementID := uuid.New()
 	store := &rotatingAuth{
-		user:     &auth.User{Email: "op@example.com", Role: "admin"},
+		user:     &auth.User{Email: "op@example.com", Role: auth.RoleOwner},
 		sessions: []auth.SessionInfo{{ID: sessionID, CreatedAt: signIn}},
 	}
-	authorizer := terminalAuthorizer{auth: store, isPlatformAdminEmail: func(string) bool { return false }}
+	authorizer := terminalAuthorizer{auth: store}
 	claims := authorizerClaims(userID, sessionID)
 
 	marker, err := authorizer.Authorize(context.Background(), claims, hostTarget())
@@ -215,11 +214,10 @@ func TestTerminalAuthorizerSurvivesSessionRotation(t *testing.T) {
 }
 
 func TestTerminalAuthorizerAcceptsPreRotationToken(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()
 	signIn := time.Now().UTC().Truncate(time.Microsecond)
 	store, authorizer, oldSessionID := newRotatingAuthorizer(t,
-		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
+		&auth.User{Email: "op@example.com", Role: auth.RoleOwner}, signIn)
 	claims := authorizerClaims(userID, oldSessionID)
 
 	replacementID := uuid.New()
@@ -238,11 +236,10 @@ func TestTerminalAuthorizerAcceptsPreRotationToken(t *testing.T) {
 }
 
 func TestTerminalAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()
 	signIn := time.Now().UTC().Truncate(time.Microsecond)
 	store, authorizer, oldSessionID := newRotatingAuthorizer(t,
-		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
+		&auth.User{Email: "op@example.com", Role: auth.RoleOwner}, signIn)
 	claims := authorizerClaims(userID, oldSessionID)
 	store.rotate(oldSessionID, uuid.New())
 	store.revokeAll()
@@ -253,11 +250,10 @@ func TestTerminalAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.T) 
 }
 
 func TestTerminalAuthorizerRefusesPreRotationTokenOfDeletedRow(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()
 	signIn := time.Now().UTC().Truncate(time.Microsecond)
 	store, authorizer, sessionID := newRotatingAuthorizer(t,
-		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
+		&auth.User{Email: "op@example.com", Role: auth.RoleOwner}, signIn)
 	claims := authorizerClaims(userID, sessionID)
 	store.logout(sessionID)
 
@@ -267,11 +263,10 @@ func TestTerminalAuthorizerRefusesPreRotationTokenOfDeletedRow(t *testing.T) {
 }
 
 func TestTerminalAuthorizerLineageLookupFailure(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
 	userID := uuid.New()
 	signIn := time.Now().UTC().Truncate(time.Microsecond)
 	store, authorizer, sessionID := newRotatingAuthorizer(t,
-		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
+		&auth.User{Email: "op@example.com", Role: auth.RoleOwner}, signIn)
 	claims := authorizerClaims(userID, sessionID)
 	store.rotate(sessionID, uuid.New())
 	store.setLineageErr(errors.New("database is down"))
@@ -282,8 +277,7 @@ func TestTerminalAuthorizerLineageLookupFailure(t *testing.T) {
 }
 
 func TestTerminalAuthorizerTransientErrors(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
-	user := &auth.User{Email: "op@example.com", Role: "admin"}
+	user := &auth.User{Email: "op@example.com", Role: auth.RoleOwner}
 	store, authorizer, sessionID := newRotatingAuthorizer(t, user, time.Now().UTC())
 	claims := authorizerClaims(uuid.New(), sessionID)
 	marker, err := authorizer.Authorize(context.Background(), claims, hostTarget())
@@ -308,11 +302,10 @@ func TestTerminalAuthorizerTransientErrors(t *testing.T) {
 }
 
 func TestTerminalAuthorizerRefusesTokenWithoutSID(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
-	store, authorizer, _ := newRotatingAuthorizer(t, &auth.User{Email: "op@example.com", Role: "admin"}, time.Now().UTC())
+	store, authorizer, _ := newRotatingAuthorizer(t, &auth.User{Email: "op@example.com", Role: auth.RoleOwner}, time.Now().UTC())
 	_ = store
 	claims := &auth.Claims{
-		Role:             "admin",
+		Role:             auth.RoleOwner,
 		RegisteredClaims: jwt.RegisteredClaims{Subject: uuid.NewString()},
 	}
 	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err == nil {
@@ -321,8 +314,7 @@ func TestTerminalAuthorizerRefusesTokenWithoutSID(t *testing.T) {
 }
 
 func TestTerminalAuthorizerRejectsRevokedOrUnknownSession(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
-	store, authorizer, sessionID := newRotatingAuthorizer(t, &auth.User{Email: "op@example.com", Role: "admin"}, time.Now().UTC())
+	store, authorizer, sessionID := newRotatingAuthorizer(t, &auth.User{Email: "op@example.com", Role: auth.RoleOwner}, time.Now().UTC())
 	claims := authorizerClaims(uuid.New(), sessionID)
 	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err != nil {
 		t.Fatalf("Authorize: %v", err)
@@ -334,12 +326,11 @@ func TestTerminalAuthorizerRejectsRevokedOrUnknownSession(t *testing.T) {
 }
 
 func TestTerminalAuthorizerUsesCurrentAccountRole(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "")
 	now := time.Now().UTC()
 
 	demotedClaims := authorizerClaims(uuid.New(), uuid.New())
 	demoted, err := (&Server{auth: &rotatingAuth{
-		user:     &auth.User{Email: "user@example.com", Role: "member"},
+		user:     &auth.User{Email: "user@example.com", Role: auth.RoleMember},
 		sessions: []auth.SessionInfo{{ID: mustUUID(demotedClaims.SessionID), CreatedAt: now}},
 	}}).terminalAuthorizer().Authorize(context.Background(), demotedClaims, hostTarget())
 	if err == nil {
@@ -349,7 +340,7 @@ func TestTerminalAuthorizerUsesCurrentAccountRole(t *testing.T) {
 	promotedClaims := authorizerClaims(uuid.New(), uuid.New())
 	promotedClaims.Role = "member"
 	if _, err := (&Server{auth: &rotatingAuth{
-		user:     &auth.User{Email: "user@example.com", Role: "admin"},
+		user:     &auth.User{Email: "user@example.com", Role: auth.RoleOwner},
 		sessions: []auth.SessionInfo{{ID: mustUUID(promotedClaims.SessionID), CreatedAt: now}},
 	}}).terminalAuthorizer().Authorize(context.Background(), promotedClaims, hostTarget()); err != nil {
 		t.Fatalf("promoted account refused: %v", err)
@@ -366,17 +357,13 @@ func mustUUID(value string) uuid.UUID {
 	return id
 }
 
-func TestTerminalAuthorizerPlatformAdminsEmail(t *testing.T) {
-	t.Setenv("PLATFORM_ADMINS", "ops@example.com")
+func TestTerminalAuthorizerRejectsBadClaims(t *testing.T) {
 	now := time.Now().UTC()
 	claims := authorizerClaims(uuid.New(), uuid.New())
 	server := &Server{auth: &rotatingAuth{
-		user:     &auth.User{Email: "ops@example.com", Role: "member"},
+		user:     &auth.User{Email: "ops@example.com", Role: auth.RoleOwner},
 		sessions: []auth.SessionInfo{{ID: mustUUID(claims.SessionID), CreatedAt: now}},
 	}}
-	if _, err := server.terminalAuthorizer().Authorize(context.Background(), claims, hostTarget()); err != nil {
-		t.Fatalf("PLATFORM_ADMINS email refused: %v", err)
-	}
 	if _, err := server.terminalAuthorizer().Authorize(context.Background(), nil, hostTarget()); err == nil {
 		t.Fatal("nil claims authorized")
 	}

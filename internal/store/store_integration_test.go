@@ -488,8 +488,8 @@ func TestStoreCreateFirstUserSerializes(t *testing.T) {
 	if wins != 1 {
 		t.Fatalf("concurrent bootstraps succeeded %d times, want exactly 1", wins)
 	}
-	if !winner.IsPlatformAdmin {
-		t.Fatal("bootstrap race winner IsPlatformAdmin = false, want true (JUS-21)")
+	if winner.Role != "owner" {
+		t.Fatalf("bootstrap race winner role = %q, want owner (GOTHAM-63)", winner.Role)
 	}
 
 	if err := st.DeleteUserAndPersonalTeam(ctx, winner.ID); err != nil {

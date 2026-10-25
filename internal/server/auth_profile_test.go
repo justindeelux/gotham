@@ -74,17 +74,19 @@ func TestProfileMeCarriesNewFields(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("me status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
-	for _, want := range []string{`"has_password"`, `"is_platform_admin"`} {
+	for _, want := range []string{`"has_password"`, `"role"`} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("me body %s missing %s", rec.Body.String(), want)
 		}
 	}
+	if strings.Contains(rec.Body.String(), "is_platform_admin") {
+		t.Errorf("me body %s still carries is_platform_admin", rec.Body.String())
+	}
 }
 
-func TestMePlatformAdminSources(t *testing.T) {
+func TestMeExposesRole(t *testing.T) {
 	s, _ := newTestProfileServer(t)
 
-	t.Setenv(PlatformAdminsEnv, "")
 	plain := doRequest(t, s, http.MethodGet, "/api/v1/auth/me", "", "Bearer valid-token")
 	if plain.Code != http.StatusOK {
 		t.Fatalf("me status = %d, want 200", plain.Code)
@@ -93,29 +95,18 @@ func TestMePlatformAdminSources(t *testing.T) {
 	if err := json.Unmarshal(plain.Body.Bytes(), &plainBody); err != nil {
 		t.Fatalf("decode me body: %v", err)
 	}
-	if plainBody.User.IsPlatformAdmin {
-		t.Error("is_platform_admin = true, want false with no flag and no allowlist")
+	if plainBody.User.Role != auth.RoleMember {
+		t.Errorf("role = %q, want %q", plainBody.User.Role, auth.RoleMember)
 	}
 
-	t.Setenv(PlatformAdminsEnv, "USER@example.com")
-	listed := doRequest(t, s, http.MethodGet, "/api/v1/auth/me", "", "Bearer valid-token")
-	var listedBody meResponse
-	if err := json.Unmarshal(listed.Body.Bytes(), &listedBody); err != nil {
-		t.Fatalf("decode me body: %v", err)
-	}
-	if !listedBody.User.IsPlatformAdmin {
-		t.Errorf("is_platform_admin = false for an allowlisted email, want true (body %s)", listed.Body.String())
-	}
-
-	t.Setenv(PlatformAdminsEnv, "")
 	stack, _, pair := scratchProfileStack(t)
 	stored := doRequest(t, stack, http.MethodGet, "/api/v1/auth/me", "", "Bearer "+pair.AccessToken)
 	var storedBody meResponse
 	if err := json.Unmarshal(stored.Body.Bytes(), &storedBody); err != nil {
 		t.Fatalf("decode me body: %v", err)
 	}
-	if !storedBody.User.IsPlatformAdmin {
-		t.Errorf("is_platform_admin = false for the bootstrap account, want true (body %s)", stored.Body.String())
+	if storedBody.User.Role != auth.RoleOwner {
+		t.Errorf("role = %q for the bootstrap account, want %q (body %s)", storedBody.User.Role, auth.RoleOwner, stored.Body.String())
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-const apiTokenRole = "user"
+const apiTokenRole = "member"
 
 type TokenService interface {
 	Create(ctx context.Context, userID uuid.UUID, name string, scopes []string) (*auth.CreatedToken, error)
@@ -108,8 +108,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if slices.Contains(scopes, auth.ScopeAdmin) && !s.isPlatformOperator(r) {
-		writeJSON(w, http.StatusForbidden, apiError{Message: platformAdminScopeDenied})
+	if slices.Contains(scopes, auth.ScopeAdmin) && !s.isOwner(r) {
+		writeJSON(w, http.StatusForbidden, apiError{Message: ownerScopeDenied})
 		return
 	}
 
@@ -183,8 +183,8 @@ func (s *Server) authorizeTokenOperation(w http.ResponseWriter, r *http.Request,
 		s.writeTokenError(w, op, err)
 		return false
 	}
-	if requireOperatorForAdmin && slices.Contains(existing.Scopes, auth.ScopeAdmin) && !s.isPlatformOperator(r) {
-		writeJSON(w, http.StatusForbidden, apiError{Message: platformAdminScopeDenied})
+	if requireOperatorForAdmin && slices.Contains(existing.Scopes, auth.ScopeAdmin) && !s.isOwner(r) {
+		writeJSON(w, http.StatusForbidden, apiError{Message: ownerScopeDenied})
 		return false
 	}
 	if callerScopes, isAPIToken := ScopesFromContext(r.Context()); isAPIToken {

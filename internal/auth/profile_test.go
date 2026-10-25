@@ -46,8 +46,8 @@ func TestServiceUpdateProfile(t *testing.T) {
 	if !me.HasPassword {
 		t.Error("Me has_password = false, want true")
 	}
-	if !me.IsPlatformAdmin {
-		t.Error("Me is_platform_admin = false, want true for the bootstrap account")
+	if me.Role != RoleOwner {
+		t.Errorf("Me role = %q, want %q for the bootstrap account", me.Role, RoleOwner)
 	}
 
 	svc.AllowOpenRegistration = true
@@ -59,7 +59,7 @@ func TestServiceUpdateProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal user: %v", err)
 	}
-	for _, want := range []string{`"has_password":true`, `"is_platform_admin":false`} {
+	for _, want := range []string{`"has_password":true`, `"role":"member"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("user body %s missing %s", raw, want)
 		}

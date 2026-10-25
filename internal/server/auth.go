@@ -283,7 +283,6 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
 		return
 	}
-	user.IsPlatformAdmin = user.IsPlatformAdmin || s.isPlatformAdminEmail(user.Email)
 
 	writeJSON(w, http.StatusOK, meResponse{User: user})
 }

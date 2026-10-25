@@ -28,19 +28,23 @@ const (
 	refreshTokenTTL   = 30 * 24 * time.Hour
 	minPasswordLength = 8
 	maxPasswordLength = 128
-	defaultRole       = "user"
-	adminRole         = "admin"
+)
+
+// Account roles. The owner operates the instance; every other account is a
+// member.
+const (
+	RoleOwner  = "owner"
+	RoleMember = "member"
 )
 
 type User struct {
-	ID              string    `json:"id"`
-	Email           string    `json:"email"`
-	Avatar          *string   `json:"avatar,omitempty"`
-	Role            string    `json:"role"`
-	CreatedAt       time.Time `json:"created_at"`
-	DisplayName     *string   `json:"display_name,omitempty"`
-	HasPassword     bool      `json:"has_password"`
-	IsPlatformAdmin bool      `json:"is_platform_admin"`
+	ID          string    `json:"id"`
+	Email       string    `json:"email"`
+	Avatar      *string   `json:"avatar,omitempty"`
+	Role        string    `json:"role"`
+	CreatedAt   time.Time `json:"created_at"`
+	DisplayName *string   `json:"display_name,omitempty"`
+	HasPassword bool      `json:"has_password"`
 }
 
 type AuthResult struct {
@@ -367,15 +371,8 @@ func (s *Service) issueWith(ctx context.Context, st *store.Store, user sqlc.User
 }
 
 func (s *Service) signAccessToken(user sqlc.User, sessionID uuid.UUID) (string, error) {
-	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), roleFor(user), sessionID)
+	accessToken, _, err := s.signer.IssueAccessToken(uuid.UUID(user.ID.Bytes), user.Role, sessionID)
 	return accessToken, err
-}
-
-func roleFor(user sqlc.User) string {
-	if user.IsPlatformAdmin {
-		return adminRole
-	}
-	return defaultRole
 }
 
 func newRefreshToken() (token string, hash string, err error) {
@@ -420,14 +417,13 @@ func isUniqueViolation(err error) bool {
 
 func toUser(user sqlc.User) *User {
 	return &User{
-		ID:              uuid.UUID(user.ID.Bytes).String(),
-		Email:           user.Email,
-		Avatar:          user.Avatar,
-		Role:            roleFor(user),
-		CreatedAt:       user.CreatedAt.Time,
-		DisplayName:     user.DisplayName,
-		HasPassword:     user.PasswordHash != nil,
-		IsPlatformAdmin: user.IsPlatformAdmin,
+		ID:          uuid.UUID(user.ID.Bytes).String(),
+		Email:       user.Email,
+		Avatar:      user.Avatar,
+		Role:        user.Role,
+		CreatedAt:   user.CreatedAt.Time,
+		DisplayName: user.DisplayName,
+		HasPassword: user.PasswordHash != nil,
 	}
 }
 

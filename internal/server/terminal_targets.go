@@ -25,14 +25,14 @@ const (
 )
 
 type terminalTargetsSource struct {
-	servers    ServerService
-	apps       deploy.DeployService
-	resolver   deploy.TerminalResolver
-	isOperator bool
+	servers  ServerService
+	apps     deploy.DeployService
+	resolver deploy.TerminalResolver
+	isOwner  bool
 }
 
 func (s *Server) terminalTargetsSourceFor(r *http.Request) terminal.TargetsSource {
-	source := terminalTargetsSource{isOperator: s.isPlatformOperator(r)}
+	source := terminalTargetsSource{isOwner: s.isOwner(r)}
 	if s.servers != nil {
 		source.servers = s.servers
 	}
@@ -51,7 +51,7 @@ func (s terminalTargetsSource) ListTargets(ctx context.Context, userID uuid.UUID
 		Applications: make([]terminal.ContainerTargetGroup, 0),
 		Errors:       make([]terminal.TargetError, 0),
 	}
-	if s.isOperator && s.servers != nil {
+	if s.isOwner && s.servers != nil {
 		hosts, err := s.servers.List(ctx)
 		if err != nil {
 			targets.Errors = append(targets.Errors, terminal.TargetError{

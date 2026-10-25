@@ -144,7 +144,7 @@ func TestRotateRevokeRespectScopeGrant(t *testing.T) {
 	}
 }
 
-func TestRotateAdminTokenRequiresPlatformOperator(t *testing.T) {
+func TestRotateAdminTokenRequiresOwner(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	const session = "Bearer valid-token"
 
@@ -153,24 +153,23 @@ func TestRotateAdminTokenRequiresPlatformOperator(t *testing.T) {
 
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", session)
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("non-operator rotating admin token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("member rotating admin token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 	}
 	var body apiError
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode error body: %v", err)
 	}
-	if body.Message != platformAdminScopeDenied {
-		t.Fatalf("message = %q, want %q", body.Message, platformAdminScopeDenied)
+	if body.Message != ownerScopeDenied {
+		t.Fatalf("message = %q, want %q", body.Message, ownerScopeDenied)
 	}
 
 	rec = doRequest(t, s, http.MethodDelete, "/api/v1/tokens/"+revokeTarget.ID.String(), "", session)
 	if rec.Code != http.StatusNoContent {
-		t.Fatalf("non-operator revoking admin token = %d, want 204 (body %s)", rec.Code, rec.Body.String())
+		t.Fatalf("member revoking admin token = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
 
-	t.Setenv(PlatformAdminsEnv, "user@example.com")
-	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", session); rec.Code != http.StatusOK {
-		t.Fatalf("operator rotating admin token = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/tokens/"+rotateTarget.ID.String()+"/rotate", "", "Bearer owner-token"); rec.Code != http.StatusOK {
+		t.Fatalf("owner rotating admin token = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

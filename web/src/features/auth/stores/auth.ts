@@ -62,7 +62,7 @@ export const useAuthStore = defineStore("auth", () => {
 
   const isAuthenticated = computed<boolean>(() => accessToken.value !== null);
   const isPlatformAdmin = computed<boolean>(
-    () => user.value?.is_platform_admin ?? user.value?.role === "admin",
+    () => user.value?.role === "owner" || user.value?.is_platform_admin === true,
   );
 
   function applySession(session: Session): void {

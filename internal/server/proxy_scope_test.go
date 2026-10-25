@@ -4,29 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/justindeelux/gotham/internal/auth"
 )
 
-func unsetPlatformAdmins(t *testing.T) error {
-	t.Helper()
-	previous, had := os.LookupEnv(PlatformAdminsEnv)
-	if err := os.Unsetenv(PlatformAdminsEnv); err != nil {
-		return err
-	}
-	t.Cleanup(func() {
-		if had {
-			_ = os.Setenv(PlatformAdminsEnv, previous)
-			return
-		}
-		_ = os.Unsetenv(PlatformAdminsEnv)
-	})
-	return nil
-}
-
-func TestPlatformAdminBoundary(t *testing.T) {
+func TestOwnerBoundary(t *testing.T) {
 	s, tokens := newTestTokenServer(t)
 
 	calls := 0
@@ -34,7 +17,7 @@ func TestPlatformAdminBoundary(t *testing.T) {
 		calls++
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := s.RequireAuth(s.RequirePlatformAdmin(next))
+	handler := s.RequireAuth(s.RequireOwner(next))
 
 	do := func(authorization string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/sync", nil)
@@ -67,23 +50,19 @@ func TestPlatformAdminBoundary(t *testing.T) {
 	}
 
 	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusForbidden {
-		t.Fatalf("plain session status = %d, want 403", recorder.Code)
+		t.Fatalf("member session status = %d, want 403", recorder.Code)
 	}
 	if calls != 0 {
-		t.Fatalf("service called %d times for a plain session", calls)
+		t.Fatalf("service called %d times for a member session", calls)
 	}
 
-	t.Setenv(PlatformAdminsEnv, "someone@example.com, User@Example.com ")
-	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusOK {
-		t.Fatalf("listed session status = %d, want 200", recorder.Code)
+	if recorder := do("Bearer owner-token"); recorder.Code != http.StatusOK {
+		t.Fatalf("owner session status = %d, want 200", recorder.Code)
 	}
 	if calls != 1 {
-		t.Fatalf("service calls = %d, want 1 after the listed session", calls)
+		t.Fatalf("service calls = %d, want 1 after the owner session", calls)
 	}
 
-	if err := unsetPlatformAdmins(t); err != nil {
-		t.Fatalf("unset %s: %v", PlatformAdminsEnv, err)
-	}
 	adminToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{auth.ScopeAdmin})
 	if err != nil {
 		t.Fatalf("create admin token: %v", err)
@@ -96,19 +75,15 @@ func TestPlatformAdminBoundary(t *testing.T) {
 	}
 }
 
-func TestPlatformAdminRoleSessionPasses(t *testing.T) {
+func TestOwnerRoleSessionPasses(t *testing.T) {
 	s, _ := newTestTokenServer(t)
-
-	if err := unsetPlatformAdmins(t); err != nil {
-		t.Fatalf("unset %s: %v", PlatformAdminsEnv, err)
-	}
 
 	calls := 0
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := s.RequireAuth(s.RequirePlatformAdmin(next))
+	handler := s.RequireAuth(s.RequireOwner(next))
 
 	do := func(authorization string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/sync", nil)
@@ -120,17 +95,17 @@ func TestPlatformAdminRoleSessionPasses(t *testing.T) {
 		return recorder
 	}
 
-	if recorder := do("Bearer admin-token"); recorder.Code != http.StatusOK {
-		t.Fatalf("admin-role session status = %d, want 200", recorder.Code)
+	if recorder := do("Bearer owner-token"); recorder.Code != http.StatusOK {
+		t.Fatalf("owner-role session status = %d, want 200", recorder.Code)
 	}
 	if calls != 1 {
-		t.Fatalf("service calls = %d, want 1 after the admin-role session", calls)
+		t.Fatalf("service calls = %d, want 1 after the owner-role session", calls)
 	}
 
 	if recorder := do("Bearer valid-token"); recorder.Code != http.StatusForbidden {
-		t.Fatalf("plain session status = %d, want 403", recorder.Code)
+		t.Fatalf("member session status = %d, want 403", recorder.Code)
 	}
 	if calls != 1 {
-		t.Fatalf("service calls = %d, want 1 after the refused plain session", calls)
+		t.Fatalf("service calls = %d, want 1 after the refused member session", calls)
 	}
 }

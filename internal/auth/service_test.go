@@ -446,7 +446,7 @@ func TestServiceRegisterOpenOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register with the open override: %v", err)
 	}
-	if second.User.Role != defaultRole {
-		t.Fatalf("override user role = %q, want %q (must take the plain-insert path, not the bootstrap)", second.User.Role, defaultRole)
+	if second.User.Role != RoleMember {
+		t.Fatalf("override user role = %q, want %q (must take the plain-insert path, not the bootstrap)", second.User.Role, RoleMember)
 	}
 }

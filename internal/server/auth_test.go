@@ -33,7 +33,7 @@ type fakeAuthService struct {
 
 func newFakeAuthService() *fakeAuthService {
 	return &fakeAuthService{
-		user: &auth.User{ID: testUserID.String(), Email: "user@example.com", Role: "user"},
+		user: &auth.User{ID: testUserID.String(), Email: "user@example.com", Role: auth.RoleMember},
 	}
 }
 
@@ -164,18 +164,18 @@ func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) 
 	switch token {
 	case "valid-token":
 		return &auth.Claims{
-			Role:             "user",
+			Role:             auth.RoleMember,
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 		}, nil
 	case "sid-token":
 		return &auth.Claims{
-			Role:             "user",
+			Role:             auth.RoleMember,
 			SessionID:        fakeSessions[0].ID.String(),
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 		}, nil
-	case "admin-token":
+	case "owner-token":
 		return &auth.Claims{
-			Role:             "admin",
+			Role:             auth.RoleOwner,
 			RegisteredClaims: jwt.RegisteredClaims{Subject: testUserID.String()},
 		}, nil
 	default:

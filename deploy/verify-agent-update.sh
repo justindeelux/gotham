@@ -345,7 +345,6 @@ mkdir -p "${SCRATCH}/cp"
     GOTHAM_UPDATE_PENDING="${SCRATCH}/cp/update.pending" \
     GOTHAM_UPDATE_LOCK="${SCRATCH}/cp/update.lock" \
     GOTHAM_UPDATE_SCRIPT="${SCRATCH}/cp/gotham-update" \
-    PLATFORM_ADMINS="verify@example.com" \
     exec "${SCRATCH}/bin/gotham" serve
 ) >"${SCRATCH}/cp.log" 2>&1 &
 CP_PID=$!
@@ -371,7 +370,7 @@ if [ "${CP_UP}" -ne 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Operator session (supported means: register, then PLATFORM_ADMINS)
+# Operator session (the first registered account is the instance owner)
 # ---------------------------------------------------------------------------
 log "registering the operator session"
 

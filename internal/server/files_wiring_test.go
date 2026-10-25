@@ -95,9 +95,8 @@ func TestFilesServiceNilWithoutRegistry(t *testing.T) {
 	}
 }
 
-func TestFilesRoutesRequirePlatformAdmin(t *testing.T) {
+func TestFilesRoutesRequireOwner(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "true")
-	t.Setenv(PlatformAdminsEnv, "")
 
 	server := &servers.Server{ID: uuid.New(), Name: "node-1", TeamID: uuid.New()}
 	cfg := &config.Config{Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}}}

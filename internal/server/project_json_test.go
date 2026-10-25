@@ -21,6 +21,7 @@ func TestProjectJSONKeys(t *testing.T) {
 		`{"env":{"SERVER_ID":"a","server_id":"b"}}`,
 		`{"build_args":{"nested":[{"ſerver_id":"hidden"}]}}`,
 		`{"resource_id":"a"} {"resource_id":"b"}`,
+		`{"config":` + strings.Repeat("[", 10001) + "0" + strings.Repeat("]", 10001) + "}",
 	} {
 		t.Run(body, func(t *testing.T) {
 			if err := validateProjectJSONKeys([]byte(body)); err == nil {

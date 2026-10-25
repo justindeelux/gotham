@@ -15,6 +15,10 @@ var errProjectJSONKeys = errors.New("non-canonical or duplicate JSON keys")
 // ASCII keys make the authorizer's case folding agree with Go's struct decoder;
 // string values may still contain Unicode.
 func validateProjectJSONKeys(data []byte) error {
+	// Token does not enforce the nesting limit that Valid and Decode enforce.
+	if !json.Valid(data) {
+		return errProjectJSONKeys
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := validateProjectJSONValue(decoder); err != nil {

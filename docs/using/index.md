@@ -25,6 +25,8 @@ always reached through its project and environment, for example
   certificates, and review pull-request previews.
 - [Members and access](/using/members-access) — the owner and member roles,
   project access and invites.
+- [MCP setup](/using/mcp) — connect an AI assistant with a read-only or deploy
+  token.
 - [Notifications](/using/notifications) — alert channels for one application or
   database.
 

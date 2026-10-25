@@ -82,6 +82,9 @@ cảnh báo trước khi ứng dụng gửi thông tin xác thực. `role` là `
 `member`, và `capabilities` liệt kê những gì điểm cuối MCP hỗ trợ trên instance
 này. Phản hồi không chứa token hay bí mật.
 
+Trang **Thiết lập MCP** trong bảng điều khiển dùng tuyến này và biến nó thành cấu
+hình sẵn cho ứng dụng; xem [Thiết lập MCP](/vi/using/mcp).
+
 ## Tạo
 
 ```sh

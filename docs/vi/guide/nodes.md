@@ -197,7 +197,7 @@ không chặn được việc khởi động lại. Việc phát hiện dùng IP
 không bao giờ chỉ dùng node ID; các IP được sao chép trực tiếp từ node ID dạng IP
 do agent chọn bị loại trừ. Ứng viên phải có dữ liệu đăng ký agent và không có
 người dùng, khóa hay mật khẩu SSH; các node loopback/tunnel do SSH quản lý giữ
-nguyên định danh và nhóm của chúng. Với một node cũ có IP công khai hoặc thiếu
+nguyên định danh và tham chiếu khối lượng công việc của chúng. Với một node cũ có IP công khai hoặc thiếu
 IP, hãy cung cấp định danh đã lưu cho migration 49 như mô tả ở trên; migration 51
 không diễn giải lại gợi ý môi trường đó.
 

@@ -134,7 +134,7 @@ phụ thuộc vào DNS và vào việc cổng 80/443 có tới được node đ�
   đơn ACME.
 
 Giữ proxy Cloudflare bật đòi hỏi đã cấu hình một nhà cung cấp DNS và dùng DNS-01
-cho chứng chỉ bảng điều khiển, được đặt qua API nền tảng chứ không phải bảng điều
+cho chứng chỉ bảng điều khiển, được đặt qua API của chủ sở hữu chứ không phải bảng điều
 khiển. Xem [Proxy và DNS](/vi/operating/proxy-dns) và
 [Mạng của instance](/vi/operating/instance-network).
 

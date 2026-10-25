@@ -199,7 +199,7 @@ registrations cannot block a restart. Detection uses the recorded IP/agent
 address, never a bare node ID; IPs copied directly from an agent-chosen IP node
 ID are excluded. Candidates must have agent registration data and no SSH user,
 key, or password; SSH-managed loopback/tunnel nodes retain their identity and
-team. For a legacy node with a public or missing IP, supply the saved identity
+workload references. For a legacy node with a public or missing IP, supply the saved identity
 to migration 49 as described above; migration 51 does not reinterpret that
 environment hint.
 

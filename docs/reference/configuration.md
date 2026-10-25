@@ -244,7 +244,6 @@ starts, and a disabled module logs its flag at startup.
 | `FEATURE_APPLICATIONS` | on | Applications and deploys |
 | `FEATURE_DATABASES` | on | Managed databases and backups |
 | `FEATURE_SERVICES` | on | Compose services |
-| `FEATURE_TEAMS` | on | Teams and invites |
 | `FEATURE_FILES` | on | Node file manager |
 | `FEATURE_NOTIFICATIONS` | on | Notification channels |
 | `FEATURE_PROXY` | on | Proxy, DNS and certificate management |
@@ -254,7 +253,8 @@ starts, and a disabled module logs its flag at startup.
 
 Turning a module off unmounts its routes for that process (the file manager's
 routes stay mounted but answer 503), so its API calls fail instead of running
-degraded. Feature flags are not a per-user permission — use team roles for that.
+degraded. Feature flags are not a per-user permission — use the owner account and
+project grants for that.
 
 Separate from the switches, the file manager reads one more environment limit:
 

@@ -171,15 +171,15 @@ The **Logs** tab has two panes:
 | **Deployments** | Full deployment history and its log and rollback actions. |
 | **Logs** | Build log for one deployment and the live runtime log. |
 | **Environment** | The application's own variables, with inherited shared variables shown read-only. |
-| **Terminal** | A shell inside a running service container. Visible to `owner` and `admin` only; choose the service container when the application runs more than one. |
+| **Terminal** | A shell inside a running service container. The owner only; choose the service container when the application runs more than one. |
 | **Storage** | Volumes and their container mounts. Data lives on the node and survives redeploys and rollbacks. |
 | **Domains** | Hostnames, target ports and certificate configuration. See [Domains and previews](/using/domains-previews). |
 | **Previews** | Pull-request preview deployments. See [Domains and previews](/using/domains-previews). |
-| **Settings** | Move the application to another environment or node, and the danger zone for deletion. Visible to writers only. |
+| **Settings** | Move the application to another environment or node, and the danger zone for deletion. |
 
 The Deployments and Previews tabs show their counts. Storage appears once the
-application has loaded, Previews when preview deployments are enabled on the
-instance, and Terminal and Settings only for writers.
+application has loaded, and Previews when preview deployments are enabled on
+the instance. The Terminal tab is owner-only.
 
 ## Environment variables
 
@@ -214,11 +214,11 @@ stops its routes; volumes and bind directories stay on the node, so remove them
 separately if the data is no longer needed. A delete is refused while a deploy
 is in flight.
 
-## Permissions
+## Access
 
-`owner` and `admin` can create, deploy, roll back, start, stop, change settings
-and delete. `read_only` can read the application and its history but never
-writes.
+You see this application because the owner granted its project to you. Inside a
+granted project you can create, deploy, roll back, start, stop, change settings
+and delete. A project that is not granted is hidden.
 
-The API is the enforcement point: a write from a `read_only` account is rejected
-server-side, even if a control is still visible. There is no `member` role.
+The owner manages nodes and the host surfaces around the application. See
+[Members and access](/using/members-access).

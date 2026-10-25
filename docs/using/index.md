@@ -4,9 +4,9 @@ title: Using Gotham
 
 # Using Gotham
 
-This track is for team members who deploy and run workloads in the Gotham web
+This track is for members who deploy and run workloads in the Gotham web
 console. Everything you create belongs to a project and one of its environments,
-and every resource runs on a node an operator has registered.
+and every resource runs on a node the owner has registered.
 
 There is no top-level Applications, Databases or Services list: a resource is
 always reached through its project and environment, for example
@@ -23,15 +23,15 @@ always reached through its project and environment, for example
   service, and the template catalog.
 - [Domains and previews](/using/domains-previews) — attach hostnames and
   certificates, and review pull-request previews.
-- [Teams and notifications](/using/teams-notifications) — members, invites,
-  roles and alert channels.
+- [Members and access](/using/members-access) — the owner and member roles,
+  project access and invites.
+- [Notifications](/using/notifications) — alert channels for one application or
+  database.
 
 ## Roles
 
-A team member holds one of three roles: `owner`, `admin` or `read_only`. There
-is no separate `member` role.
-
-`owner` and `admin` can write. `read_only` can read everything but never writes:
-the API rejects every mutation from a `read_only` account. The console hides most
-write controls, and a few remain visible and rely on that rejection — a visible
-button is not a permission.
+A member works inside the projects the owner granted. There is no per-project
+role: inside a granted project a member can read and write everything, while
+everything outside the grant is hidden. The owner manages the instance itself —
+people, servers, Git connections, global Domain & SSL, updates and the host
+tools. See [Members and access](/using/members-access).

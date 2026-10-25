@@ -21,7 +21,7 @@ a usage error.
 | Command | Flags | Purpose |
 |---|---|---|
 | `serve` | none | Start the control plane: HTTP listener, gRPC gateway, background services. |
-| `admin create` | `--email <address>` (required), `--password <pw>`, `--password-stdin`, `--generate-password`, `--force` | Create the first account. Refuses when the instance already has an account unless `--force` is given. |
+| `admin create` | `--email <address>` (required), `--password <pw>`, `--password-stdin`, `--generate-password`, `--force` | Create the first account, which becomes the owner. Refuses when the instance already has an account unless `--force` is given; with `--force` the new account is a member. |
 | `admin exists` | none | Print `admin-exists: true` or `admin-exists: false` and exit `0`; exit `1` on error. |
 | `admin reset-password` | `--email <address>` (required), `--password <pw>` | Replace a password, revoke the account's refresh sessions and clear its two-factor authentication. |
 | `ca init` | `--host <name-or-ip>` (repeatable, comma-separated values accepted) | Create the gRPC mTLS certificate authority under `ca.dir` and record extra listener SAN hosts. Idempotent: an existing CA is loaded, never replaced. |

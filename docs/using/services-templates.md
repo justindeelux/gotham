@@ -130,7 +130,7 @@ until the next successful deploy.
 
 The **Server and environment** card changes the service's environment and node.
 
-- Moving to another environment stays inside the team. The name must be free
+- Moving to another environment stays inside the project. The name must be free
   there, or the move is refused as a conflict.
 - The node can only be changed before the first deploy. Once the project has
   run on a node it is pinned, and moving it to another environment keeps the
@@ -195,5 +195,4 @@ entered in the form.
 
 > [!NOTE]
 > The database and service surfaces can be turned off instance-wide by the
-> platform operator. When they are, the corresponding routes and console
-> entries are absent.
+> owner. When they are, the corresponding routes and console entries are absent.

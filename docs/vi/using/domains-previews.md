@@ -55,8 +55,8 @@ tên một nhà cung cấp, và nhà cung cấp đó phải giữ một vùng ba
 phần gốc của wildcard, khi yêu cầu wildcard). Nameserver của vùng phải thực sự được
 ủy quyền cho nhà cung cấp đó, nếu không đơn sẽ thất bại.
 
-**Thông tin đăng nhập của nhà cung cấp DNS chỉ dành cho người vận hành.** Chúng được
-thêm, xoay vòng và xóa trên trang Tên miền & SSL của người vận hành, và API không
+**Thông tin đăng nhập của nhà cung cấp DNS chỉ dành cho chủ sở hữu.** Chúng được
+thêm, xoay vòng và xóa trên trang Tên miền & SSL của chủ sở hữu, và API không
 bao giờ trả về thông tin đăng nhập đã lưu. Xem
 [Proxy và DNS](/vi/operating/proxy-dns).
 
@@ -70,14 +70,14 @@ nó nghĩa là control plane không có quan sát nào để báo.
 
 Các quy tắc chuyển hướng (một host nguồn chính xác tới một host đích chính xác, với
 mã vĩnh viễn hoặc tạm thời và tùy chọn giữ đường dẫn) được quản lý trên trang Tên
-miền & SSL của người vận hành; xem [Proxy và DNS](/vi/operating/proxy-dns).
+miền & SSL của chủ sở hữu; xem [Proxy và DNS](/vi/operating/proxy-dns).
 
 ## Nguồn Git
 
-Mở **Cài đặt → Nguồn Git** (`/settings/git-sources`). Một kết nối thuộc về tài
-khoản của bạn, không thuộc về một nhóm: vai trò trong nhóm không bảo vệ nó, phạm vi
-của API token mới bảo vệ. Bí mật — client secret, admin token và webhook secret —
-là chỉ ghi và không bao giờ hiển thị sau khi lưu.
+Mở **Cài đặt → Nguồn Git** (`/settings/git-sources`). Chỉ chủ sở hữu quản lý kết
+nối Git và GitHub App. Phạm vi của API token vẫn áp dụng cho các lệnh gọi API. Bí
+mật — client secret, admin token và webhook secret — là chỉ ghi và không bao giờ
+hiển thị sau khi lưu.
 
 - **GitHub App** — **Kết nối GitHub** gửi một manifest ứng dụng tới GitHub dưới tên
   bạn đặt (chữ cái, chữ số và dấu gạch ngang) và chuyển bạn trở lại đây. Sau đó cài
@@ -93,12 +93,12 @@ là chỉ ghi và không bao giờ hiển thị sau khi lưu.
   qua nó vẫn tiếp tục hoạt động.
 
 Danh sách hiển thị trạng thái, tài khoản hoặc instance, số bản cài đặt và số kho của
-mỗi kết nối, và có bao nhiêu ứng dụng trong nhóm đang hoạt động nêu tên nó. Wizard
+mỗi kết nối, và có bao nhiêu ứng dụng trên instance nêu tên nó. Wizard
 ứng dụng liệt kê các kho mà một kết nối thấy được và, sau khi chọn một kho, các
 nhánh của nó; nhánh bạn chọn là nhánh mà các lần push sẽ triển khai từ đó.
 
-Việc ngắt kết nối một kết nối GitLab bị từ chối khi các ứng dụng trong nhóm hiện
-tại vẫn triển khai qua nó, và lỗi sẽ nêu tên chúng. Một GitHub App luôn ngắt kết nối
+Việc ngắt kết nối một kết nối GitLab bị từ chối khi các ứng dụng vẫn triển khai qua
+nó, và lỗi sẽ nêu tên chúng. Một GitHub App luôn ngắt kết nối
 được: Gotham báo có bao nhiêu ứng dụng đã nêu tên nó, và các ứng dụng đó phải được
 trỏ sang nguồn khác trước lần triển khai tiếp theo.
 

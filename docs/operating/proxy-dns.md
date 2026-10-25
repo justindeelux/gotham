@@ -11,9 +11,10 @@ file provider loads it. Two documents are generated: the static configuration
 services, middlewares). Generation is a pure function of database state, so the
 same state always produces the same files.
 
-The console surface is **Domains & SSL**. The router list, DNS providers and
-the manual sync are platform-operator operations; certificate configurations
-and redirects belong to the application's team.
+The console surface is **Domains & SSL**. The router list, DNS providers,
+redirects and the manual sync need the owner account; a certificate
+configuration attached to an application follows that application's project
+access.
 
 ## Generated routers
 
@@ -56,7 +57,7 @@ A manual sync is the repair path, not the normal one. Use it when:
   come back;
 - a node was added or re-registered and its configuration was never pushed.
 
-The console has no sync button. Sync is a platform-API operation:
+The console has no sync button. Sync is an owner API operation:
 `POST /api/v1/proxy/sync`, with an optional `server_id` to sync one node.
 Without a body it syncs every registered node and every node hosting a proxied
 application. The response lists each node's outcome and any diagnostics. A

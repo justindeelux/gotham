@@ -45,7 +45,7 @@ message instead of breaking the next update.
 
 ## The console schedule
 
-**Settings → Updates** is platform-admin only. It shows the current version, the
+**Settings → Updates** is owner-only. It shows the current version, the
 latest available version, the last check, the changelog and the outcome of the
 last update attempt, and offers **Check for updates** and **Update now**.
 
@@ -87,7 +87,7 @@ each supported architecture (`amd64`, `arm64`) the control plane resolves the
 newest agent release, verifies its signed manifest, and offers it only when it is
 newer than the version the agent reported on its last heartbeat.
 
-Trigger a rollout with the platform-operator API:
+Trigger a rollout with the owner API:
 
 ```sh
 curl -X POST -H "Authorization: Bearer <admin-token>" \
@@ -120,7 +120,7 @@ keeps `/etc/gotham/gotham.env`: the managed keys
 (`GOTHAM_DATABASE_DSN`, `GOTHAM_REDIS_ADDR`, `GOTHAM_CA_DIR`,
 `GOTHAM_SECRET_KEY`, the JWT key paths) are refreshed — a DSN given on the
 command line wins, otherwise the existing value is kept — and any operator-added
-keys (`AUTO_UPDATE`, `PLATFORM_ADMINS`, ...) are left untouched. A managed DSN
+keys (`AUTO_UPDATE`, `AUTO_UPDATE_INTERVAL`, ...) are left untouched. A managed DSN
 is never replaced by the local default, and local PostgreSQL/Redis are only
 provisioned when the resolved DSN is the built-in local default. The installer
 restarts `gotham.service` after a reinstall, so the just-installed binary is the
@@ -155,6 +155,26 @@ the key — remove the quote from `agent.env` and re-run. The same holds for
 backslash now blocks the upgrade naming the key — fix the value in
 `gotham.env` (keyword DSNs with quoted values must use the URL form) and
 re-run.
+
+## Release note: owner and member accounts
+
+This release replaces the team model with one owner and any number of members.
+
+- The earliest existing account becomes the **owner**; every other account
+  becomes a **member**. There is exactly one owner.
+- Teams and their roles are gone. Projects are now instance-level; a project
+  name must be unique across the instance.
+- Members start with **no project access**. After upgrading, sign in as the
+  owner, open **Users → Project access**, and grant each member the projects they
+  need. Until then they see an empty console.
+- Members can only reach granted projects and their resources. Servers, SSH
+  keys, Git connections, instance settings, global Domain & SSL, updates, the
+  host terminal/file manager and the App store are owner-only.
+- The previous email-allowlist setting is no longer read. Remove that line from
+  `/etc/gotham/gotham.env`; owner access now comes from the account role, and an
+  owner API token needs the `admin` scope.
+
+See [Members and access](/using/members-access) for the new model.
 
 ## What verification covers
 

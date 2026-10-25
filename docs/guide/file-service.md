@@ -4,17 +4,15 @@ title: Remote file service
 
 # Remote file service
 
-The node agent can expose a file browser and editor to the panel, so platform
-operators can read, upload, edit, compress and extract files on a node without
-SSH.
+The node agent can expose a file browser and editor to the panel, so the owner
+can read, upload, edit, compress and extract files on a node without SSH.
 
 ## What you need
 
 - The node agent running on the node (see [Add nodes](/guide/nodes)).
 - The control-plane file API on, which is the default (`FEATURE_FILES=false`
   turns it off).
-- A platform-operator account: an admin-scoped API token, a session with the
-  `admin` role claim, or an email in `PLATFORM_ADMINS`.
+- The owner account, or an owner's API token with the `admin` scope.
 
 The service is **on by default** and, in its default mode, exposes the whole
 filesystem. Read the first section before rolling it out.
@@ -24,14 +22,14 @@ filesystem. Read the first section before rolling it out.
 The file service is on unless `GOTHAM_AGENT_FILES=false`, and by default it
 exposes one writable root named `system` that is `/`: every file the agent
 process can reach, with no dangerous or protected path excluded (including the
-agent's own key and certificates). The owner accepted this risk; only platform
-operators can use it.
+agent's own key and certificates). The owner accepted this risk; only the owner
+can use it.
 
 What the agent can really read or change is bounded by its Unix user. The
 installer therefore asks whether you want the file manager (default **no**) and,
 on yes, runs the agent as root via the `file-manager.conf` drop-in. Run as the
 unprivileged `gotham-agent` user, the same root is mostly read-only. Existing
-nodes that auto-update to this version expose `/` to operators with the
+nodes that auto-update to this version expose `/` to the owner with the
 permissions of their current user until `GOTHAM_AGENT_FILES=false` is set.
 
 In this mode the application-directory guard still protects top-level app
@@ -213,13 +211,12 @@ the node agent:
 
 The `/api/v1/servers/{id}/files` routes are mounted by default; set
 `FEATURE_FILES=false` to switch them off (they then answer **503**). The whole
-surface is limited to **platform operators** (an admin-scoped API token, a
-session with the `admin` role claim, or an email in `PLATFORM_ADMINS`): every
-file route except the ticket-gated download sits behind that gate, so a read- or
-deploy-scoped API token gets **403**, because the API exposes the node's
-filesystem.
+surface is limited to the owner account (an owner API token needs the `admin`
+scope): every file route except the ticket-gated download sits behind that gate,
+so a member token, or a read- or deploy-scoped token, gets **404** or **403**,
+because the API exposes the node's filesystem.
 
-Inside the gate only the instance owner may use the file API, including reads
+Inside the gate only the owner may use the file API, including reads
 and every mutation. File bodies can hold secrets (a `0600` compose `.env`). The
 ticket-gated `GET /files/download` sits outside the auth group, so the
 single-use ticket is its credential.

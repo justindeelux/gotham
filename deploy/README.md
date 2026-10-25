@@ -20,7 +20,7 @@ Run by the operator as root, on a fresh Ubuntu 22.04 / Debian host or to
 reinstall an existing one. It picks the newest release, verifies the signed
 manifest and artifact digest, installs PostgreSQL/Redis (unless pointed at
 managed services), the binary, updater and unit, applies migrations, creates the
-first admin, and installs the localhost agent. A re-run preserves
+first owner account, and installs the localhost agent. A re-run preserves
 `/etc/gotham/gotham.env` and restarts the service.
 
 Two ways to run the same file:

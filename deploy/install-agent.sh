@@ -79,7 +79,7 @@
 #
 # File manager (remote file browser/editor in the web UI): the installer asks
 # whether you really want it (default: no). Answering yes lets the control
-# plane's platform operators browse, read, edit, upload and delete ANY file on
+# plane's owner browse, read, edit, upload and delete ANY file on
 # this node, because the agent then runs as root (systemd drop-in
 # file-manager.conf). Answer without a prompt with --file-manager /
 # --no-file-manager or GOTHAM_AGENT_FILE_MANAGER=yes|no; without a terminal the
@@ -269,7 +269,7 @@ if [ "${GOTHAM_AGENT_FULL:-0}" = "1" ]; then
 fi
 
 # ---- File manager: ask before enabling it ----------------------------------
-# The file manager gives the control plane's platform operators read/write
+# The file manager gives the owner read/write
 # access to every file on this node, which needs the agent to run as root.
 # It is opt-in: the default answer is no, and so is any run without a terminal.
 resolve_file_manager() {
@@ -313,7 +313,7 @@ resolve_file_manager() {
     {
         echo ""
         echo "File manager"
-        echo "  Lets the control plane's platform operators browse, read, edit, upload and"
+        echo "  Lets the owner browse, read, edit, upload and"
         echo "  delete ANY file on this node. To do that the agent runs as root (instead of"
         echo "  the unprivileged gotham-agent user) without systemd sandboxing."
         printf '  Enable the file manager on this node? [y/N] '

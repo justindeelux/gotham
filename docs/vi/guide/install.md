@@ -34,11 +34,11 @@ Trình cài đặt hỏi những câu này, theo thứ tự. Nhấn Enter để 
 
 | Câu hỏi | Bạn trả lời gì |
 |---|---|
-| `Admin email [admin@example.com] (empty keeps it, - to skip)` | Địa chỉ của tài khoản đầu tiên. Nhấn Enter để dùng `admin@example.com`, nhập địa chỉ của bạn, hoặc nhập `-` để chưa tạo tài khoản. |
-| `Admin password (empty to generate)` | Mật khẩu cho tài khoản đó, 8 đến 128 ký tự. Không nhập gì và nhấn Enter để trình cài đặt tạo một mật khẩu mạnh và in một lần ở cuối. |
+| `Owner email [admin@example.com] (empty keeps it, - to skip)` | Địa chỉ của tài khoản đầu tiên, tài khoản này trở thành chủ sở hữu. Nhấn Enter để dùng `admin@example.com`, nhập địa chỉ của bạn, hoặc nhập `-` để chưa tạo tài khoản. |
+| `Owner password (empty to generate)` | Mật khẩu cho tài khoản đó, 8 đến 128 ký tự. Không nhập gì và nhấn Enter để trình cài đặt tạo một mật khẩu mạnh và in một lần ở cuối. |
 | `Confirm password` | Nhập lại mật khẩu. Nếu không khớp hoặc ngoài giới hạn độ dài, trình cài đặt hỏi lại. |
 | `Panel domain (optional, Enter skips)` | Một tên miền như `panel.example.com`, nếu nó đã trỏ về máy chủ này. Nhấn Enter để bỏ qua và dùng địa chỉ máy chủ trước. |
-| `Enable the file manager on this node? [y/N]` | **Không**, trừ khi bạn muốn người vận hành nền tảng duyệt và sửa mọi tệp trên máy này. Chọn có sẽ chạy agent dưới root mà không có sandbox của systemd (xem [Dịch vụ tệp từ xa](/vi/guide/file-service)). Bạn có thể đổi câu trả lời sau bằng cách chạy lại `deploy/install-agent.sh`. |
+| `Enable the file manager on this node? [y/N]` | **Không**, trừ khi bạn muốn chủ sở hữu duyệt và sửa mọi tệp trên máy này. Chọn có sẽ chạy agent dưới root mà không có sandbox của systemd (xem [Dịch vụ tệp từ xa](/vi/guide/file-service)). Bạn có thể đổi câu trả lời sau bằng cách chạy lại `deploy/install-agent.sh`. |
 
 Câu hỏi về trình quản lý tệp xuất hiện trong lúc cài agent của máy chủ, sau bốn
 câu đầu. `--no-file-manager` trả lời câu đó mà không hỏi, và một lần chạy không
@@ -58,7 +58,7 @@ Trong khi chạy, trình cài đặt:
    `/usr/libexec/gotham/gotham-update`, unit
    `/etc/systemd/system/gotham.service`), rồi Docker và node agent trên cùng máy
    chủ (`install-agent.sh --full --ca`, ghim cùng thẻ phát hành);
-4. áp dụng các migration cơ sở dữ liệu và tạo tài khoản quản trị trước khi
+4. áp dụng các migration cơ sở dữ liệu và tạo tài khoản chủ sở hữu trước khi
    bảng điều khiển nhận kết nối, nên không ai đăng ký trước được;
 5. in URL bảng điều khiển, thông tin đăng nhập, và mật khẩu tự tạo nếu bạn đã
    chọn cách đó.
@@ -102,7 +102,7 @@ chỉ máy chủ và bạn có thể đặt tên miền sau trong bảng điều
 
 Công thức này chỉ thực sự không cần tương tác khi **không có terminal**:
 cloud-init, một job CI, hoặc một lệnh `ssh` chạy không có pty. Trong một phiên
-SSH tương tác bình thường, trình cài đặt vẫn hỏi ba câu — email quản trị (điền sẵn
+SSH tương tác bình thường, trình cài đặt vẫn hỏi ba câu — email chủ sở hữu (điền sẵn
 từ `GOTHAM_ADMIN_EMAIL`), tên miền bảng điều khiển, và câu hỏi trình quản lý tệp.
 Hãy trả lời trước bằng cách thêm `-s -- --domain panel.example.com
 --no-file-manager` sau `sh` trong lệnh bên dưới; `--domain` đặt tên miền, Enter
@@ -129,7 +129,7 @@ sudo env GOTHAM_ADMIN_EMAIL=ops@example.com \
   GOTHAM_ADMIN_PASSWORD_FILE=/root/gotham-admin-password sh
 ```
 
-Trình cài đặt tạo tài khoản quản trị mà không hỏi và in thông tin đăng nhập ở
+Trình cài đặt tạo tài khoản chủ sở hữu mà không hỏi và in thông tin đăng nhập ở
 cuối. Mật khẩu đi từ tệp qua stdin, nên nó không bao giờ xuất hiện trong danh
 sách tiến trình hay lịch sử shell. Bỏ `GOTHAM_ADMIN_PASSWORD_FILE` thì một mật
 khẩu ngẫu nhiên được tạo và in một lần; bỏ cả `GOTHAM_ADMIN_EMAIL` thì chưa tài
@@ -193,8 +193,8 @@ thích các thiết lập lúc chạy tương ứng.
 | `GOTHAM_DATABASE_DSN` | DSN PostgreSQL được quản lý; bỏ qua việc cấp phát cục bộ. |
 | `GOTHAM_REDIS_ADDR` | Redis `host:port` (mặc định `localhost:6379`). |
 | `GOTHAM_SKIP_DEPS=1` | Không cài hay cấu hình PostgreSQL/Redis. |
-| `GOTHAM_ADMIN_EMAIL` | Email của tài khoản quản trị đầu tiên cho lần cài theo script. |
-| `GOTHAM_ADMIN_PASSWORD_FILE` | Tệp chứa mật khẩu quản trị đầu tiên (một dòng, chỉ root đọc được). |
+| `GOTHAM_ADMIN_EMAIL` | Email của tài khoản đầu tiên (chủ sở hữu) cho lần cài theo script. |
+| `GOTHAM_ADMIN_PASSWORD_FILE` | Tệp chứa mật khẩu của tài khoản đầu tiên (một dòng, chỉ root đọc được). |
 | `--dry-run` | In mọi bước mà không thay đổi máy chủ. |
 | `--cp-host <name-or-ip>` | Thêm một tên hoặc IP vào chứng chỉ gateway của agent; xem [Thêm node](/vi/guide/nodes). |
 

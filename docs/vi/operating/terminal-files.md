@@ -6,8 +6,7 @@ title: Terminal và tệp
 
 Có hai công cụ cấp máy chủ nằm trên registry node: **shell trên máy chủ** mở một
 PTY trên node, và **trình quản lý tệp** duyệt node qua dịch vụ tệp của agent. Cả
-hai đều là bề mặt của quản trị viên nền tảng. Chúng không cùng quyền với terminal
-của container ứng dụng — loại này chỉ cần quyền ghi vào nhóm của ứng dụng, xem
+hai đều chỉ dành cho chủ sở hữu, giống terminal trong container ứng dụng — xem
 [Ứng dụng](/vi/using/applications#cac-tab-chi-tiet).
 
 ## Shell trên máy chủ
@@ -21,11 +20,11 @@ Shell trên máy chủ chạy dưới tài khoản dịch vụ của agent với
 - cửa sổ terminal nổi, mở từ thanh terminal hoặc từ một tab trên trang.
 
 Bảng điều khiển chỉ khởi động phiên trên node **Sẵn sàng**. Bộ chọn đích sau tab
-`+` liệt kê những gì quản trị viên đang đăng nhập có thể mở: shell trên máy chủ
-cho các node sẵn sàng, và container đang chạy của những ứng dụng mà quản trị viên
-có quyền ghi. Các danh sách đều có giới hạn (50 node, 50 ứng dụng, 50 container
-mỗi ứng dụng); một nguồn bị lỗi được báo thành lỗi có giới hạn thay vì làm rỗng
-bộ chọn, và danh sách bị cắt sẽ nói rõ.
+`+` liệt kê những gì chủ sở hữu đang đăng nhập có thể mở: shell trên máy chủ
+cho các node sẵn sàng, và container đang chạy của mọi ứng dụng. Các danh sách đều
+có giới hạn (50 node, 50 ứng dụng, 50 container mỗi ứng dụng); một nguồn bị lỗi
+được báo thành lỗi có giới hạn thay vì làm rỗng bộ chọn, và danh sách bị cắt sẽ
+nói rõ.
 
 ### Quy tắc phiên
 
@@ -35,11 +34,11 @@ bộ chọn, và danh sách bị cắt sẽ nói rõ.
   không có PTY.
 - Phiên chỉ dùng một lần. Kết nối lại luôn có nghĩa là bắt đầu shell mới; lần gắn
   thứ hai vào cùng phiên bị từ chối.
-- Một quản trị viên có thể giữ **4** phiên; control plane giữ **64** phiên tổng
+- Một chủ sở hữu có thể giữ **4** phiên; control plane giữ **64** phiên tổng
   cộng.
 - Một shell đã gắn sống tối đa **8 giờ**.
 - Quyền được kiểm tra lại mỗi **30 giây**. Đăng xuất, thu hồi phiên, đổi tài khoản
-  hoặc mất vai trò quản trị viên sẽ đóng shell trong khoảng thời gian đó. Một lần
+  hoặc mất vai trò chủ sở hữu sẽ đóng shell trong khoảng thời gian đó. Một lần
   tra cứu lỗi tạm thời giữ shell và thử lại; lỗi lặp lại sẽ đóng shell.
 - Đóng tab sẽ kết thúc shell và tiến trình đang chạy của nó.
 
@@ -53,11 +52,8 @@ node. Khi chỉ có một node được quản lý, bộ chọn chuyển thẳng
 node ở cuối trình duyệt liệt kê mọi node được quản lý; chỉ node **Sẵn sàng** chọn
 được.
 
-Trình quản lý tệp chỉ dành cho quản trị viên nền tảng ở cả hai đầu: tuyến của
-bảng điều khiển được bảo vệ và mọi lệnh gọi API đều cần quản trị viên nền tảng,
-bên cạnh việc thuộc nhóm của node và có vai trò nhóm `owner` hoặc `admin` để xem
-nội dung và ghi. Chủ sở hữu nhóm không có quyền quản trị viên nền tảng sẽ nhận
-`403`.
+Trình quản lý tệp chỉ dành cho chủ sở hữu ở cả hai đầu: tuyến của
+bảng điều khiển được bảo vệ và mọi lệnh gọi API đều cần tài khoản chủ sở hữu.
 
 ### Thư mục gốc
 
@@ -193,8 +189,8 @@ mục đã xóa, mới nhất trước, kèm tên, thời điểm xóa, kích th
 **Tải xuống** tạo một ticket dùng một lần, **60 giây**, qua API đã xác thực, rồi
 đưa URL của ticket cho trình duyệt như một lượt tải gốc. Tuyến tải xuống cố ý
 không yêu cầu xác thực — một lượt tải gốc của trình duyệt không thể gửi bearer
-token — nên ticket chính là thông tin xác thực, được gắn với người dùng, nhóm, máy
-chủ, thư mục gốc và đường dẫn đã cấp, và bị dùng hết ở lần đầu. Phản hồi là
+token — nên ticket chính là thông tin xác thực, được gắn với máy chủ, thư mục gốc
+và đường dẫn đã cấp, và bị dùng hết ở lần đầu. Phản hồi là
 `no-store`; ticket nằm trong query string và không bao giờ được ghi vào access
 log. Ticket hết hạn hoặc dùng lại trả `404`.
 
@@ -202,14 +198,14 @@ log. Ticket hết hạn hoặc dùng lại trả `404`.
 
 Với một thư mục, **Mở terminal tại đây** mở shell trên máy chủ với thư mục tương
 đối so với gốc đó làm thư mục làm việc. Shell này là một cửa sổ terminal nổi,
-không thuộc trình duyệt tệp, và chịu cùng quy tắc quản trị viên nền tảng như mọi
+không thuộc trình duyệt tệp, và chịu cùng quy tắc chủ sở hữu như mọi
 shell trên máy chủ. Một liên kết tượng trưng có đích ngoài thư mục gốc duyệt được
 không dùng làm thư mục được. Hành động này không bao giờ mở shell container.
 
 ## Cờ tính năng
 
 Bảng điều khiển gọi đây là các công tắc sản phẩm; còn biến môi trường mới là thứ
-quản trị viên thực sự đặt.
+chủ sở hữu thực sự đặt.
 
 | Cờ | Phạm vi | Mặc định | Khi tắt |
 |---|---|---|---|

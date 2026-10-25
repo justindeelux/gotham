@@ -57,8 +57,8 @@ that covers the domain (and the wildcard base, when a wildcard is requested).
 The zone's nameservers must actually be delegated to that provider, or the
 order fails.
 
-**DNS provider credentials are operator-only.** They are added, rotated and
-deleted on the operator Domains & SSL page, and the API never returns a stored
+**DNS provider credentials are owner-only.** They are added, rotated and
+deleted on the owner's Domains & SSL page, and the API never returns a stored
 credential. See [Proxy and DNS](/operating/proxy-dns).
 
 The status shown next to a configuration is observed live from the node, never
@@ -71,13 +71,13 @@ it means the control plane has no observation to report.
 
 Redirect rules (one exact source host to one exact target host, with a
 permanent or temporary code and optional path preservation) are managed on the
-operator Domains & SSL page; see [Proxy and DNS](/operating/proxy-dns).
+owner's Domains & SSL page; see [Proxy and DNS](/operating/proxy-dns).
 
 ## Git sources
 
-Open **Settings → Git sources** (`/settings/git-sources`). A connection belongs
-to your account, not to a team: team roles do not protect it, API-token scopes
-do. Secrets — client secrets, admin tokens and webhook secrets — are write-only
+Open **Settings → Git sources** (`/settings/git-sources`). Only the owner manages
+Git connections and GitHub Apps. API-token scopes still apply to API calls.
+Secrets — client secrets, admin tokens and webhook secrets — are write-only
 and never displayed after they are stored.
 
 - **GitHub App** — **Connect GitHub** posts an app manifest to GitHub under the
@@ -94,13 +94,13 @@ and never displayed after they are stored.
   Applications that already deploy through it keep working.
 
 The list shows each connection's status, account or instance, installation and
-repository counts, and how many applications in the active team name it. The
+repository counts, and how many applications on the instance name it. The
 application wizard lists the repositories a connection can see and, once a
 repository is chosen, its branches; the branch you pick is the branch pushes
 deploy from.
 
-Disconnecting a GitLab connection is refused while applications in the current
-team still deploy through it, and the error names them. A GitHub App can always
+Disconnecting a GitLab connection is refused while applications still deploy
+through it, and the error names them. A GitHub App can always
 be disconnected: Gotham reports how many applications named it, and those
 applications must be pointed at another source before their next deploy.
 

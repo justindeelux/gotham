@@ -8,7 +8,7 @@ Gotham phát hành hai tệp nhị phân dịch vụ và một công cụ phát 
 
 | Tệp nhị phân | Chạy trên | Vai trò |
 |---|---|---|
-| `gotham` | máy chủ control plane | Bảng điều khiển/API HTTP, gateway gRPC, di trú, khôi phục tài khoản quản trị viên |
+| `gotham` | máy chủ control plane | Bảng điều khiển/API HTTP, gateway gRPC, di trú, khôi phục tài khoản chủ sở hữu |
 | `gotham-agent` | mọi node | Các dịch vụ Docker/build/tệp/terminal mà control plane gọi tới |
 | `signer` | máy trạm phát hành | Ký các tệp phát hành trước khi chúng được công bố |
 
@@ -21,7 +21,7 @@ cách dùng.
 | Lệnh | Cờ | Mục đích |
 |---|---|---|
 | `serve` | không | Khởi động control plane: listener HTTP, gateway gRPC, các dịch vụ nền. |
-| `admin create` | `--email <address>` (bắt buộc), `--password <pw>`, `--password-stdin`, `--generate-password`, `--force` | Tạo tài khoản đầu tiên. Từ chối khi instance đã có tài khoản, trừ khi có `--force`. |
+| `admin create` | `--email <address>` (bắt buộc), `--password <pw>`, `--password-stdin`, `--generate-password`, `--force` | Tạo tài khoản đầu tiên, tài khoản này trở thành chủ sở hữu. Từ chối khi instance đã có tài khoản, trừ khi có `--force`; với `--force`, tài khoản mới là thành viên. |
 | `admin exists` | không | In `admin-exists: true` hoặc `admin-exists: false` rồi thoát với `0`; thoát với `1` khi có lỗi. |
 | `admin reset-password` | `--email <address>` (bắt buộc), `--password <pw>` | Thay mật khẩu, thu hồi các phiên làm mới của tài khoản và xóa xác thực hai yếu tố của tài khoản đó. |
 | `ca init` | `--host <name-or-ip>` (lặp lại được, nhận giá trị cách nhau bằng dấu phẩy) | Tạo tổ chức phát hành chứng chỉ mTLS cho gRPC dưới `ca.dir` và ghi thêm các máy chủ SAN cho listener. Có tính lũy đẳng: CA đã có được nạp, không bao giờ bị thay thế. |
@@ -96,7 +96,7 @@ Ghi chú:
   `/etc/gotham/agent.env` (ghi đè đường dẫn bằng `GOTHAM_AGENT_ENV_FILE`), rồi tới
   các giá trị mặc định tích hợp. Chạy nó dưới quyền root để cũng gỡ được tệp trạng
   thái thuộc sở hữu root.
-- Một bản phát hành mới hơn được cài trong một đợt triển khai do quản trị viên kích
+- Một bản phát hành mới hơn được cài trong một đợt triển khai do chủ sở hữu kích
   hoạt; `reset` chỉ cần để thử lại cùng phiên bản sau khi hoàn tác.
 
 ## signer

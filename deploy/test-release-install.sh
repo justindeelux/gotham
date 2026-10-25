@@ -1448,14 +1448,14 @@ SHIM
         || { echo "FAIL: migration did not receive the saved local agent identity" >&2; exit 1; }
     echo "PASS: a real run reaches the agent step on the real script and never runs the seam fake (R4)"
 
-# ---- JUS-22: the installer creates the first admin account ---------------
+# ---- JUS-22: the installer creates the first owner account ---------------
 # The admin step runs after the control plane is up, through the installed
 # binary (a fake here, via the test-only GOTHAM_INSTALL_TEST_ADMIN_BIN
 # seam): non-interactive env vars, generated passwords, rerun idempotency,
 # invalid/missing emails, and the interactive tty prompt under a pty. The
 # password must only travel on stdin: it is absent from argv, the
 # environment, the env file and the logs.
-echo "==> first admin account creation (JUS-22)"
+echo "==> first owner account creation (JUS-22)"
 cat >"${SCRATCH}/fake-admin.sh" <<'SHIM'
 #!/bin/sh
 # Fake `gotham admin` for the JUS-22 tests. State lives in $ADMIN_STATE_DIR:
@@ -1644,7 +1644,7 @@ ADMIN_EMAIL="ops@example.com" ADMIN_PWFILE="${SCRATCH}/admin-pw.txt" ADMIN_TTY="
 [ "$(cat "${A_STATE}/password")" = "Sup3r \$ecret!" ] \
     || { echo "FAIL: the password file did not arrive verbatim on stdin (JUS-22/a)" >&2; exit 1; }
 grep -q 'Account:  ops@example.com' "${SCRATCH}/a-out.log" \
-    || { echo "FAIL: the summary does not show the admin email (JUS-22/a)" >&2; exit 1; }
+    || { echo "FAIL: the summary does not show the owner email (JUS-22/a)" >&2; exit 1; }
 if grep -qF -- "Sup3r \$ecret!" "${SCRATCH}/a-out.log" "${SCRATCH}/a-err.log"; then
     echo "FAIL: the password leaked into the install logs (JUS-22/a)" >&2
     exit 1
@@ -1762,11 +1762,11 @@ ADMIN_EMAIL="ops@example.com" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_EXISTS_FAIL=1 \
     run_admin_install "${SCRATCH}/root-admin-fail" "${I_STATE}" "${SCRATCH}/i-out.log" "${SCRATCH}/i-err.log" || I_RC=$?
 [ "${I_RC}" -ne 0 ] \
     || { echo "FAIL: an exists-check failure exited 0 (JUS-22/i)" >&2; exit 1; }
-grep -q 'could not check for an existing admin account' "${SCRATCH}/i-err.log" \
+grep -q 'could not check for an existing account' "${SCRATCH}/i-err.log" \
     || { echo "FAIL: the exists-check failure names no reason (JUS-22/i)" >&2; cat "${SCRATCH}/i-err.log" >&2; exit 1; }
 grep -q 'Nothing was rolled back' "${SCRATCH}/i-err.log" \
     || { echo "FAIL: the admin warning does not say the control plane was kept (JUS-22/i)" >&2; exit 1; }
-grep -q 'The admin account could not be created automatically' "${SCRATCH}/i-out.log" \
+grep -q 'The owner account could not be created automatically' "${SCRATCH}/i-out.log" \
     || { echo "FAIL: the summary shows no manual fallback (JUS-22/i)" >&2; exit 1; }
 grep -q 'admin create --email ops@example.com' "${SCRATCH}/i-out.log" \
     || { echo "FAIL: the fallback names no manual command (JUS-22/i)" >&2; exit 1; }
@@ -1788,7 +1788,7 @@ grep -q 'predates automated admin bootstrap' "${SCRATCH}/j-out.log" \
     || { echo "FAIL: the legacy skip names no reason (JUS-38/j)" >&2; cat "${SCRATCH}/j-out.log" >&2; exit 1; }
 grep -q 'admin create --email legacy@example.com' "${SCRATCH}/j-out.log" \
     || { echo "FAIL: the legacy skip shows no manual command (JUS-38/j)" >&2; exit 1; }
-if grep -q 'could not check for an existing admin account' "${SCRATCH}/j-out.log" "${SCRATCH}/j-err.log"; then
+if grep -q 'could not check for an existing account' "${SCRATCH}/j-out.log" "${SCRATCH}/j-err.log"; then
     echo "FAIL: the legacy skip raised the database warning (JUS-38/j)" >&2
     exit 1
 fi
@@ -1828,7 +1828,7 @@ if grep -q 'admin create --email' "${SCRATCH}/m-out.log"; then
     echo "FAIL: the no-admin skip prints a create command that binary cannot run (JUS-38/m)" >&2
     exit 1
 fi
-if grep -q 'could not check for an existing admin account' "${SCRATCH}/m-out.log" "${SCRATCH}/m-err.log"; then
+if grep -q 'could not check for an existing account' "${SCRATCH}/m-out.log" "${SCRATCH}/m-err.log"; then
     echo "FAIL: the no-admin skip raised the database warning (JUS-38/m)" >&2
     exit 1
 fi
@@ -1845,7 +1845,7 @@ ADMIN_EMAIL="ops@example.com" ADMIN_PWFILE="" ADMIN_TTY="" ADMIN_DB_COLLISION=1 
     run_admin_install "${SCRATCH}/root-admin-collision" "${DC_STATE}" "${SCRATCH}/dc-out.log" "${SCRATCH}/dc-err.log" || DC_RC=$?
 [ "${DC_RC}" -ne 0 ] \
     || { echo "FAIL: a colliding database error exited 0 (JUS-38/d)" >&2; exit 1; }
-grep -q 'could not check for an existing admin account' "${SCRATCH}/dc-err.log" \
+grep -q 'could not check for an existing account' "${SCRATCH}/dc-err.log" \
     || { echo "FAIL: the colliding failure names no reason (JUS-38/d)" >&2; cat "${SCRATCH}/dc-err.log" >&2; exit 1; }
 if grep -q 'predates automated admin bootstrap\|has no admin commands' "${SCRATCH}/dc-out.log"; then
     echo "FAIL: a genuine database error took a legacy skip (JUS-38/d)" >&2
@@ -1892,9 +1892,9 @@ G_STATE="${SCRATCH}/admin-state-tty"
 mkdir -p "${G_STATE}"
 G_ROOT="${SCRATCH}/root-admin-tty"
 cat >"${SCRATCH}/pty-g.txt" <<'SCRIPT'
-EXPECT Admin email
+EXPECT Owner email
 SEND pty@example.com
-EXPECT Admin password
+EXPECT Owner password
 SEND PtY-s3cret!
 EXPECT Confirm password
 SEND PtY-s3cret!
@@ -1903,12 +1903,12 @@ SEND
 EXPECT-EOF
 SCRIPT
 cat >"${SCRATCH}/pty-h.txt" <<'SCRIPT'
-EXPECT Admin email
+EXPECT Owner email
 SEND bogus
 EXPECT Invalid email address
-EXPECT Admin email
+EXPECT Owner email
 SEND pty2@example.com
-EXPECT Admin password
+EXPECT Owner password
 SEND
 EXPECT Confirm password
 SEND
@@ -2008,7 +2008,7 @@ else
     unset GOTHAM_ADMIN_EMAIL
     [ -f "${J_STATE}/users" ] \
         || { echo "FAIL: the no-ctty run created no account (JUS-22/j)" >&2; exit 1; }
-    if grep -q 'Admin email' "${SCRATCH}/j-out.log"; then
+    if grep -q 'Owner email' "${SCRATCH}/j-out.log"; then
         echo "FAIL: the no-ctty run prompted although /dev/tty is unusable (JUS-22/j)" >&2
         exit 1
     fi
@@ -2020,14 +2020,14 @@ fi
 # JUS-22/k: a policy-rejected interactive password re-prompts (mirrored
 # 8..128 bounds) instead of failing the install.
 cat >"${SCRATCH}/pty-k.txt" <<'SCRIPT'
-EXPECT Admin email
+EXPECT Owner email
 SEND policy@example.com
-EXPECT Admin password
+EXPECT Owner password
 SEND short
 EXPECT Confirm password
 SEND short
 EXPECT Password must be between
-EXPECT Admin password
+EXPECT Owner password
 SEND long-enough-PW1
 EXPECT Confirm password
 SEND long-enough-PW1
@@ -2053,16 +2053,16 @@ echo "PASS: a policy-rejected password re-prompts (JUS-22/k)"
 # JUS-22/l: a binary rejection retries interactively (bounded): the first
 # create fails, the operator retries once, the second succeeds.
 cat >"${SCRATCH}/pty-l.txt" <<'SCRIPT'
-EXPECT Admin email
+EXPECT Owner email
 SEND retry@example.com
-EXPECT Admin password
+EXPECT Owner password
 SEND Retry-pw123
 EXPECT Confirm password
 SEND Retry-pw123
 EXPECT Panel domain
 SEND
 EXPECT Could not create the account
-EXPECT Admin password
+EXPECT Owner password
 SEND Retry-pw123
 EXPECT Confirm password
 SEND Retry-pw123
@@ -2087,19 +2087,19 @@ echo "PASS: a rejected create retries interactively (JUS-22/l)"
 
 # JUS-22/l2: the retry is bounded at 3 attempts, then warns and exits nonzero.
 cat >"${SCRATCH}/pty-l2.txt" <<'SCRIPT'
-EXPECT Admin email
+EXPECT Owner email
 SEND bound@example.com
-EXPECT Admin password
+EXPECT Owner password
 SEND Bound-pw123
 EXPECT Confirm password
 SEND Bound-pw123
 EXPECT Panel domain
 SEND
-EXPECT Admin password
+EXPECT Owner password
 SEND Bound-pw123
 EXPECT Confirm password
 SEND Bound-pw123
-EXPECT Admin password
+EXPECT Owner password
 SEND Bound-pw123
 EXPECT Confirm password
 SEND Bound-pw123
@@ -2116,7 +2116,7 @@ unset ADMIN_CREATE_FAIL
 [ "${L2_RC}" -ne 0 ] \
     || { echo "FAIL: triple rejection exited 0 (JUS-22/l2)" >&2; exit 1; }
 tr -d '\r' <"${SCRATCH}/l2-out.log" >"${SCRATCH}/l2-out.clean"
-[ "$(grep -c 'Admin password' "${SCRATCH}/l2-out.clean")" -eq 3 ] \
+[ "$(grep -c 'Owner password' "${SCRATCH}/l2-out.clean")" -eq 3 ] \
     || { echo "FAIL: the retry was not bounded at 3 prompts (JUS-22/l2)" >&2; exit 1; }
 [ ! -e "${L2_STATE}/users" ] \
     || { echo "FAIL: an account was created although every create failed (JUS-22/l2)" >&2; exit 1; }
@@ -2127,7 +2127,7 @@ echo "PASS: the interactive retry is bounded at 3 attempts (JUS-22/l2)"
 printf '%s' "File \$ecret2!" >"${SCRATCH}/admin-default-pw.txt"
 chmod 600 "${SCRATCH}/admin-default-pw.txt"
 cat >"${SCRATCH}/pty-m.txt" <<'SCRIPT'
-EXPECT Admin email \[default@example.com\]
+EXPECT Owner email \[default@example.com\]
 SEND
 EXPECT Panel domain
 SEND  HTTPS://PANEL.EXAMPLE.COM/
@@ -2150,7 +2150,7 @@ tr -d '\r' <"${SCRATCH}/m-out.log" >"${SCRATCH}/m-out.clean"
     || { echo "FAIL: the default password file was not used (JUS-22/m)" >&2; exit 1; }
 grep -q 'Account:  default@example.com' "${SCRATCH}/m-out.clean" \
     || { echo "FAIL: the default email was not kept (JUS-22/m)" >&2; exit 1; }
-if grep -q 'Admin password' "${SCRATCH}/m-out.clean"; then
+if grep -q 'Owner password' "${SCRATCH}/m-out.clean"; then
     echo "FAIL: the password file did not suppress the prompt (JUS-22/m)" >&2
     exit 1
 fi

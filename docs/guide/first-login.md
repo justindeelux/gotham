@@ -11,15 +11,15 @@ account was not created.
 ## What you need
 
 - The panel URL printed by the installer, usually `http://<server-ip>:8000`.
-- The admin email and password from that summary. If you let the installer
+- The owner email and password from that summary. If you let the installer
   generate the password, it was printed once at the end.
 - A terminal on the control-plane server for the `admin` commands below.
 
 ## Sign in
 
-Open the panel URL and sign in with the admin email and password. Registration
+Open the panel URL and sign in with the owner email and password. Registration
 is closed: exactly one account bootstraps the instance, and everyone else joins
-through an invite from an admin.
+through an invite from the owner.
 
 The installer collects the credentials before anything is installed and creates
 the account right after the database migrations, before the service starts.
@@ -27,7 +27,7 @@ Nobody can register through the open web form while the installer waits at a
 prompt.
 
 - **Interactive install** (a terminal is present, `curl | sh` included): the
-  installer asks for the admin email, then for the password with hidden input
+  installer asks for the owner email, then for the password with hidden input
   and confirmation. A mismatch or a password outside 8–128 characters asks
   again, up to 3 creation attempts. Leaving the password empty generates a
   strong random one, printed once in the final summary. Store it immediately;
@@ -74,25 +74,29 @@ The password prompt is hidden. Useful flags:
   scripts). Pipe it in; never use `--password`, which is visible in `ps`.
 - `--generate-password` creates a random password and prints it once as
   `generated-password: <value>`.
-- `--force` adds a second account deliberately. Without it the CLI refuses once
-  an account exists.
+- `--force` adds an account even though the instance already has an owner. The
+  new account is a member, not a second owner.
 - `gotham admin exists` prints `admin-exists: true|false` for scripting (that
   is how the installer detects a re-run).
 
 ## Invite other people
 
-1. Open **Members**, pick the projects the person may use and create an
-   invite, then send the shown link.
-2. The member opens `/register?invite=<token>` and chooses their credentials.
-   The link is shown once, works once and expires after seven days.
-3. Change a member's projects, or reset their sessions and two-factor
-   authentication, from the same member list. Removing a member ends their
-   sessions and API tokens immediately.
+1. Open **Users**, choose **Invite user**, pick the projects the person may use
+   and create the invite, then send the shown link.
+2. The member opens `/register?invite=<token>` and chooses their credentials
+   with the invited email. The link is shown once, works once and expires after
+   seven days.
+3. Change a member's project access, or reset their sessions and two-factor
+   authentication, from the same page. Removing a member ends their sessions
+   and API tokens immediately.
+
+An invite only creates a new account. To give an existing member more projects,
+edit **Project access** for that account instead.
 
 Add servers from **Servers**; see [Add nodes](/guide/nodes). Each node reports
 heartbeats and appears in the panel once it is ready.
 
-## Lost the admin password
+## Lost the owner password
 
 Replace it on the control-plane server:
 
@@ -104,27 +108,27 @@ This revokes every session of the account. Bearer access tokens are checked
 against their live session on every request, so a token minted before the reset
 stops working immediately; resetting is an instant logout on every device.
 
-## The first account is the platform administrator
+## The first account is the owner
 
 On a fresh instance the account created while the users table is empty (first
-registration, first OAuth sign-in, or `gotham admin create` without `--force`)
-gets the platform-admin flag, and its sessions carry the `admin` role claim.
-Platform-global operations (node-wide proxy sync, DNS providers) then work
-without further configuration.
+registration, first OAuth sign-in, or `gotham admin create`) becomes the owner.
+Exactly one account holds that role.
 
-Upgraded instances are unchanged: the migration leaves every existing row
-non-admin, so keep listing the operator account email in `PLATFORM_ADMINS` in
-`/etc/gotham/gotham.env` (or mint an admin-scoped API token).
+The owner is the only account that can manage people and invites, change project
+access, add servers and keys, connect Git providers, change instance and network
+settings, manage the global Domain & SSL surface, apply updates, and use the host
+terminal and file manager.
+
+Upgraded instances follow the same rule: the earliest existing account becomes
+the owner and every other account becomes a member. Members start with no
+project grants, so the owner must grant each project they need from **Users →
+Project access**.
 
 **Takeover risk.** On a fresh instance registration is open until the first
-account exists, so whoever registers first becomes the admin. On a public,
-unconfigured instance, create that account (or set `PLATFORM_ADMINS`) before
-exposing the control plane. Emptying the users table by hand re-opens first-run
-registration, and the next registrant becomes platform admin again.
-
-An admin-scoped API token minted by an admin session outlives a later demotion
-of that account: no session or token revoke is tied to role changes, so rotate
-the token if the grant must end.
+account exists, so whoever registers first becomes the owner. On a public,
+unconfigured instance, create that account before exposing the control plane.
+Emptying the users table by hand re-opens first-run registration, and the next
+registrant becomes the owner.
 
 ## Next
 

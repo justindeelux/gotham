@@ -14,7 +14,7 @@ remote node.
 
 ## First login
 
-On a fresh instance the first account becomes the platform administrator. That
+On a fresh instance the first account becomes the owner. That
 account is created by the installer, or by hand on the control plane host when
 the install ran non-interactively without an email:
 
@@ -29,7 +29,7 @@ refuses once an account exists. `gotham admin exists` prints
 `admin-exists: true|false` for scripting.
 
 Once an account exists, self-registration is closed; additional people join
-through single-use invite links created in **Members**
+through single-use invite links created on **Users**
 (see [First login](/guide/first-login)).
 
 Open the URL the installer printed (the panel listens on port 8000 by default)
@@ -47,10 +47,11 @@ and sign in with email and password. Two more sign-in paths exist:
   replaces the password, revokes every session and clears two-factor
   authentication. Access tokens stop working immediately.
 
-The first account holds the platform-admin role, which the platform-wide
-surfaces (instance settings, updates, DNS providers, node-wide proxy sync) check.
-Members join a team with the `owner`, `admin` or `read_only` role; `read_only`
-can read everything and every write is rejected server-side.
+The first account holds the owner role, which the instance-wide surfaces
+(instance settings, updates, DNS providers, node-wide proxy sync, servers, Git
+connections and the host tools) check. Members only see the projects the owner
+grants; they work inside them, with no per-project role. See
+[Members and access](/using/members-access).
 
 ## Add a node
 

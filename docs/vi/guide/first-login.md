@@ -12,22 +12,22 @@ không được tạo.
 
 - URL bảng điều khiển mà trình cài đặt in ra, thường là
   `http://<server-ip>:8000`.
-- Email quản trị và mật khẩu trong phần tóm tắt đó. Nếu bạn để trình cài đặt tạo
+- Email chủ sở hữu và mật khẩu trong phần tóm tắt đó. Nếu bạn để trình cài đặt tạo
   mật khẩu, nó đã được in một lần ở cuối.
 - Một terminal trên máy chủ control plane cho các lệnh `admin` bên dưới.
 
 ## Đăng nhập
 
-Mở URL bảng điều khiển và đăng nhập bằng email quản trị và mật khẩu. Việc đăng ký
+Mở URL bảng điều khiển và đăng nhập bằng email chủ sở hữu và mật khẩu. Việc đăng ký
 bị đóng: đúng một tài khoản khởi tạo instance, và mọi người khác tham gia qua lời
-mời của quản trị viên.
+mời của chủ sở hữu.
 
 Trình cài đặt thu thập thông tin đăng nhập trước khi cài bất cứ thứ gì và tạo tài
 khoản ngay sau các migration cơ sở dữ liệu, trước khi dịch vụ khởi động. Không ai
 đăng ký được qua biểu mẫu web đang mở trong lúc trình cài đặt chờ ở câu hỏi.
 
-- **Cài tương tác** (có terminal, kể cả `curl | sh`): trình cài đặt hỏi email quản
-  trị, rồi mật khẩu với đầu vào ẩn và xác nhận. Không khớp hoặc mật khẩu ngoài
+- **Cài tương tác** (có terminal, kể cả `curl | sh`): trình cài đặt hỏi email chủ
+  sở hữu, rồi mật khẩu với đầu vào ẩn và xác nhận. Không khớp hoặc mật khẩu ngoài
   8–128 ký tự sẽ hỏi lại, tối đa 3 lần tạo. Để trống mật khẩu sẽ tạo một mật khẩu
   ngẫu nhiên mạnh, in một lần trong phần tóm tắt cuối. Hãy lưu ngay; nó không hiện
   lại.
@@ -72,25 +72,28 @@ Câu hỏi mật khẩu được ẩn. Các cờ hữu ích:
   vào; đừng bao giờ dùng `--password`, vốn hiện trong `ps`.
 - `--generate-password` tạo một mật khẩu ngẫu nhiên và in một lần dưới dạng
   `generated-password: <value>`.
-- `--force` cố ý thêm tài khoản thứ hai. Không có nó, CLI từ chối khi đã có một
-  tài khoản.
+- `--force` thêm một tài khoản dù instance đã có chủ sở hữu. Tài khoản mới là
+  thành viên, không phải chủ sở hữu thứ hai.
 - `gotham admin exists` in `admin-exists: true|false` để dùng trong script (đó là
   cách trình cài đặt phát hiện một lần chạy lại).
 
 ## Mời người khác
 
-1. Mở **Thành viên**, chọn các dự án người đó được dùng và tạo một lời mời, rồi
-   gửi liên kết được hiển thị.
-2. Thành viên mở `/register?invite=<token>` và chọn thông tin đăng nhập của họ.
-   Liên kết chỉ hiện một lần, dùng được một lần và hết hạn sau bảy ngày.
-3. Đổi dự án của một thành viên, hoặc đặt lại phiên đăng nhập và xác thực hai lớp
-   của họ, ngay trong danh sách thành viên đó. Xoá một thành viên sẽ kết thúc
-   ngay các phiên và API token của họ.
+1. Mở **Người dùng**, chọn **Mời người dùng**, chọn các dự án người đó được dùng
+   và tạo lời mời, rồi gửi liên kết được hiển thị.
+2. Thành viên mở `/register?invite=<token>` và chọn thông tin đăng nhập bằng email
+   được mời. Liên kết chỉ hiện một lần, dùng được một lần và hết hạn sau bảy ngày.
+3. Đổi quyền dự án của một thành viên, hoặc đặt lại phiên đăng nhập và xác thực
+   hai lớp của họ, ngay trên trang đó. Xoá một thành viên sẽ kết thúc ngay các
+   phiên và API token của họ.
+
+Lời mời chỉ tạo tài khoản mới. Để cấp thêm dự án cho một thành viên đã có tài
+khoản, hãy sửa **Quyền dự án** của tài khoản đó.
 
 Thêm máy chủ từ **Máy chủ**; xem [Thêm node](/vi/guide/nodes). Mỗi node báo nhịp
 tim và hiện trong bảng điều khiển khi sẵn sàng.
 
-## Mất mật khẩu quản trị
+## Mất mật khẩu chủ sở hữu
 
 Đặt lại trên máy chủ control plane:
 
@@ -102,29 +105,27 @@ Việc này thu hồi mọi phiên của tài khoản. Bearer access token đư�
 phiên còn sống ở mỗi yêu cầu, nên token đã cấp trước lần đặt lại mất hiệu lực
 ngay; việc đặt lại là một lần đăng xuất tức thời trên mọi thiết bị.
 
-## Tài khoản đầu tiên là quản trị viên nền tảng
+## Tài khoản đầu tiên là chủ sở hữu
 
 Trên một instance mới, tài khoản được tạo khi bảng người dùng còn trống (lần đăng
-ký đầu tiên, lần đăng nhập OAuth đầu tiên, hoặc `gotham admin create` không có
-`--force`) nhận cờ quản trị viên nền tảng, và các phiên của nó mang claim vai trò
-`admin`. Các thao tác toàn nền tảng (đồng bộ proxy toàn node, nhà cung cấp DNS)
-sau đó hoạt động mà không cần cấu hình thêm.
+ký đầu tiên, lần đăng nhập OAuth đầu tiên, hoặc `gotham admin create`) trở thành
+chủ sở hữu. Đúng một tài khoản giữ vai trò đó.
 
-Các instance đã nâng cấp không thay đổi: migration để mọi dòng hiện có ở trạng
-thái không phải quản trị, nên hãy tiếp tục liệt kê email tài khoản vận hành trong
-`PLATFORM_ADMINS` ở `/etc/gotham/gotham.env` (hoặc cấp một API token có phạm vi
-admin).
+Chỉ chủ sở hữu mới quản lý được người dùng và lời mời, đổi quyền dự án, thêm máy
+chủ và khoá, kết nối nhà cung cấp Git, đổi cài đặt instance và mạng, quản lý bề
+mặt Tên miền & SSL toàn cục, áp dụng cập nhật, và dùng terminal cùng trình quản lý
+tệp trên máy chủ.
+
+Các instance đã nâng cấp theo cùng quy tắc: tài khoản hiện có sớm nhất trở thành
+chủ sở hữu và mọi tài khoản khác trở thành thành viên. Thành viên khởi đầu không có
+quyền dự án, nên chủ sở hữu phải cấp từng dự án họ cần từ **Người dùng → Quyền dự
+án**.
 
 **Rủi ro bị chiếm quyền.** Trên một instance mới, việc đăng ký mở cho đến khi tài
-khoản đầu tiên tồn tại, nên ai đăng ký trước sẽ trở thành quản trị viên. Trên một
-instance công khai chưa cấu hình, hãy tạo tài khoản đó (hoặc đặt
-`PLATFORM_ADMINS`) trước khi phơi control plane ra. Xóa trống bảng người dùng
-bằng tay sẽ mở lại việc đăng ký lần đầu, và người đăng ký tiếp theo lại trở thành
-quản trị viên nền tảng.
-
-Một API token có phạm vi admin được cấp bởi một phiên quản trị vẫn sống sót sau
-khi tài khoản đó bị hạ cấp: không có việc thu hồi phiên hay token nào gắn với thay
-đổi vai trò, nên hãy xoay vòng token nếu quyền đó phải kết thúc.
+khoản đầu tiên tồn tại, nên ai đăng ký trước sẽ trở thành chủ sở hữu. Trên một
+instance công khai chưa cấu hình, hãy tạo tài khoản đó trước khi phơi control plane
+ra. Xóa trống bảng người dùng bằng tay sẽ mở lại việc đăng ký lần đầu, và người
+đăng ký tiếp theo lại trở thành chủ sở hữu.
 
 ## Tiếp theo
 

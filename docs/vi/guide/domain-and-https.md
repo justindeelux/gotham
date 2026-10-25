@@ -64,7 +64,7 @@ này, và các bản ghi Cloudflare phải là **DNS only** (tắt proxy).
 
 Để giữ proxy của Cloudflare bật, hãy cấu hình một nhà cung cấp DNS và chọn DNS-01
 cho ý định chứng chỉ của bảng điều khiển qua API
-`PATCH /api/v1/proxy/panel-certificates/{id}` dành cho quản trị viên nền tảng,
+`PATCH /api/v1/proxy/panel-certificates/{id}` chỉ dành cho chủ sở hữu,
 dùng các trường `challenge` và `dns_provider_id` sẵn có. DNS-01 cần một token
 được phép cập nhật vùng đã cấu hình; dùng Full (strict) khi chứng chỉ origin đã
 được cấp.
@@ -73,13 +73,13 @@ dùng các trường `challenge` và `dns_provider_id` sẵn có. DNS-01 cần m
 
 API routers báo host được đề xuất trong một phiên thử và thêm
 `certificate.status` (`issued`, `pending` hoặc `failed`) cùng
-`certificate.not_after` cho các dòng bảng điều khiển. API chỉ dành cho nền tảng
+`certificate.not_after` cho các dòng bảng điều khiển. API chỉ dành cho chủ sở hữu
 `GET /api/v1/proxy/panel-certificates` liệt kê các ý định chứng chỉ của bảng điều
 khiển với `status` sẵn có của kho lưu trữ cùng các trường bổ sung `panel_state`
 và `owner_kind`. `pending` nghĩa là chưa quan sát được chứng chỉ dùng được nào;
 `failed` bao gồm cấu hình không dùng được hoặc kho lưu trữ không khả dụng, vì
-agent không báo lỗi đơn ACME. Các API chứng chỉ ứng dụng vẫn giữ phạm vi nhóm của
-chúng.
+agent không báo lỗi đơn ACME. Các API chứng chỉ ứng dụng theo quyền dự án của ứng
+dụng.
 
 Nếu HTTPS hoặc DNS vẫn thất bại, xem
 [Xử lý sự cố](/vi/guide/troubleshooting#https-hoac-dns-cua-bang-đieu-khien-that-bai).

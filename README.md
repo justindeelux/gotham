@@ -17,7 +17,7 @@ updates and the release/signing flow have their own pages under
 [`docs/guide/`](docs/guide/). Releases are signed with Ed25519; the installer
 and the built-in updater verify the signed manifest and the artifact digest
 before installing anything. The installer
-collects the first admin credentials up front and creates the account before
+collects the first owner credentials up front and creates the account before
 the service starts (interactive prompt with `GOTHAM_ADMIN_EMAIL` as the
 default, or `GOTHAM_ADMIN_EMAIL` non-interactively), and is idempotent on
 re-runs.
@@ -228,7 +228,6 @@ a few operational knobs directly from the environment:
 | `FEATURE_SERVICES` | on | Mount the compose-services and template surface. |
 | `FEATURE_PREVIEWS` | on | Handle `pull_request` deliveries: deploy each PR as a sibling application under the base domain and remove it when the PR closes. Previews copy plain env vars only — sealed secrets and storages stay with the base application — and fork pull requests are never previewed. Off: PR deliveries are acknowledged without action, the preview listing route is unmounted and the orphan sweep does not run; push deliveries are unaffected. Hooks installed before the feature (or with it off) subscribe to `push` only and must be deleted and re-installed to receive `pull_request` events. |
 | `FEATURE_PROXY` | on | Mount the Traefik/SSL/redirect surface. |
-| `FEATURE_TEAMS` | on | Mount the teams and invites routes. Off: every request resolves to the caller's personal team and the team-management routes are unmounted. |
 | `GOTHAM_KNOWN_HOSTS` | unset | Extra `known_hosts` file merged over the embedded github.com/gitlab.com/bitbucket.org/`[ssh.github.com]:443` keys when cloning an application over SSH. Point it at a self-hosted Git host's pinned host key (e.g. GitHub Enterprise); the clone still checks host keys strictly (`StrictHostKeyChecking=yes`). This file is a trust anchor: keep it `0600` and operator/root-owned — the control plane never writes to it, and warns when it is group/world-writable. |
 | `GOTHAM_DEV_ACCEPT_NEW_HOST_KEYS` | unset | Test/dev only: `true` changes the keyed clone to `StrictHostKeyChecking=accept-new`, trusting an unseen host key. Never enable it in production — it reopens the MITM gap. |
 

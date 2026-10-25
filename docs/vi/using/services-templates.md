@@ -129,7 +129,7 @@ lần triển khai thành công tiếp theo.
 
 Thẻ **Máy chủ và môi trường** đổi môi trường và node của dịch vụ.
 
-- Chuyển sang môi trường khác vẫn ở trong nhóm. Tên phải còn trống ở đó, nếu không
+- Chuyển sang môi trường khác vẫn ở trong dự án. Tên phải còn trống ở đó, nếu không
   việc di chuyển bị từ chối như một xung đột.
 - Node chỉ có thể đổi trước lần triển khai đầu tiên. Khi dự án đã chạy trên một
   node thì node bị ghim, và chuyển sang môi trường khác vẫn giữ nguyên node.
@@ -193,5 +193,5 @@ template mang theo là một compose service bình thường trong cùng dự á
 bạn đã nhập trong biểu mẫu.
 
 > [!NOTE]
-> Người vận hành nền tảng có thể tắt toàn bộ các bề mặt cơ sở dữ liệu và dịch vụ cho
+> Chủ sở hữu có thể tắt toàn bộ các bề mặt cơ sở dữ liệu và dịch vụ cho
 > cả instance. Khi đó, các tuyến và mục tương ứng trên bảng điều khiển sẽ không còn.

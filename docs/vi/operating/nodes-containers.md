@@ -9,9 +9,9 @@ Docker trực tiếp: mọi lệnh container, lần đọc chỉ số và luồn
 agent trên node đó. Đăng ký node tại **Máy chủ** (`/servers`); mở một node để
 xem tổng quan, chỉ số và cài đặt, và dùng tab **Container** cho danh mục Docker.
 
-Quản lý node theo phạm vi nhóm. Thành viên của nhóm sở hữu node có thể đọc, còn
-`owner` hoặc `admin` có thể thay đổi. Xem
-[Bảo mật](/vi/operating/security) để biết ranh giới quản trị viên nền tảng mà
+Quản lý node chỉ dành cho chủ sở hữu. Chỉ tài khoản chủ sở hữu mới đăng ký được
+node, đọc hoặc sửa node, hay mở container và công cụ máy chủ của node. Xem
+[Bảo mật](/vi/operating/security) để biết ranh giới chủ sở hữu mà
 trình quản lý tệp và shell trên máy chủ dùng.
 
 ## Thêm node
@@ -67,7 +67,7 @@ có agent đã biến mất sẽ thành `Offline`, không phải `Ready`.
 
 **Đặt lại khóa máy chủ đã ghim.** Sau khi xoay vòng khóa hợp lệ trên máy chủ,
 lần kiểm tra tiếp theo sẽ thất bại cho tới khi bản ghim cũ bị quên đi. Không có
-nút điều khiển nào trong bảng điều khiển cho việc này; quản trị viên gọi:
+nút điều khiển nào trong bảng điều khiển cho việc này; chủ sở hữu gọi:
 
 ```http
 DELETE /api/v1/servers/{id}/host-key
@@ -89,8 +89,8 @@ Mở một node sẽ thấy các tab:
 |---|---|
 | **Tổng quan** | Tên, địa chỉ, người dùng SSH, ID node, hệ điều hành, kiến trúc, phiên bản Docker, loại thông tin xác thực, mức dùng CPU/bộ nhớ/đĩa, số container, thấy lần cuối, thời điểm đăng ký, và vùng nguy hiểm với **Xóa nút**. |
 | **Container** | Lối tắt tới trang container của node. |
-| **Tệp** | Chỉ quản trị viên nền tảng: lối tắt tới trình quản lý tệp cho node này. |
-| **Terminal** | Chỉ quản trị viên nền tảng: tab shell trên máy chủ cho node này. |
+| **Tệp** | Chỉ chủ sở hữu: lối tắt tới trình quản lý tệp cho node này. |
+| **Terminal** | Chỉ chủ sở hữu: tab shell trên máy chủ cho node này. |
 | **Chỉ số** | Biểu đồ chuỗi thời gian của node. |
 | **Proxy và Traefik** | Các bộ định tuyến Traefik trên node. |
 | **Cài đặt nút** | Bản tóm tắt chỉ đọc về định danh của node. |
@@ -132,8 +132,7 @@ từng container, nên hai cột đó hiển thị dấu gạch thay vì một c
   **Chạy**.
 - Danh sách được phục vụ từ cache ngắn (10 giây). **Tải lại** lấy danh sách hiện
   tại từ node.
-- Đọc danh sách mở cho nhóm của node; chạy, dừng và khởi động lại cần vai trò
-  nhóm `owner` hoặc `admin`.
+- Đọc danh sách, chạy, dừng và khởi động lại container đều cần tài khoản chủ sở hữu.
 
 ### Kéo image và chạy container
 

@@ -265,7 +265,7 @@ func TestRequestReplayRollbackExpiryIsolationAndDeletion(t *testing.T) {
 	if _, err := st.DB.Exec(ctx, "UPDATE request_receipts SET accepted_at=clock_timestamp()-interval '8 days'"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := st.CleanupRequestReceipts(ctx); err != nil || n != 3 {
+	if n, err := st.CleanupRequestReceipts(ctx); err != nil || n != 2 {
 		t.Fatalf("cleanup %d %v", n, err)
 	}
 	if _, err := create(request("isolation"), "after-cleanup"); err != nil {

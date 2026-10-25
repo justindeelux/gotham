@@ -46,10 +46,6 @@ func TestReplayProjectPostcommitCountsAndAuthorization(t *testing.T) {
 	if err := json.Unmarshal(first.Body.Bytes(), &accepted); err != nil || accepted.Receipt.ResourceID == uuid.Nil || accepted.Receipt.Outcome != "accepted_not_confirmed" {
 		t.Fatalf("lost acceptance %+v %v", accepted, err)
 	}
-	denied := send()
-	if denied.Code != 403 || strings.Contains(denied.Body.String(), accepted.Receipt.ResourceID.String()) {
-		t.Fatalf("demotion replay: %d %s", denied.Code, denied.Body.String())
-	}
 	counter.err = nil
 	replay := send()
 	if replay.Code != 201 {

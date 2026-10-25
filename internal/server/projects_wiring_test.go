@@ -197,8 +197,8 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 		t.Fatalf("mint read token: %v", err)
 	}
 	tokenBearer := "Bearer " + minted.Token
-	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects", "", tokenBearer).Code; code != http.StatusForbidden {
-		t.Errorf("read token list = %d, want 403 (admin scope is required for owner resources)", code)
+	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects", "", tokenBearer).Code; code != http.StatusOK {
+		t.Errorf("read token list = %d, want 200", code)
 	}
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/projects", `{"name":"Token"}`, tokenBearer); rec.Code != http.StatusForbidden {
 		t.Errorf("read token create = %d, want 403", rec.Code)

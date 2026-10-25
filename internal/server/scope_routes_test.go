@@ -67,7 +67,12 @@ func TestResourceScopeContainment(t *testing.T) {
 
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
 	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	ownerReadToken := mustCreateOwnerToken(t, tokens, auth.ScopeRead)
+	ownerDeployToken := mustCreateOwnerToken(t, tokens, auth.ScopeDeploy)
+	ownerAdminToken := mustCreateOwnerToken(t, tokens, auth.ScopeAdmin)
+	memberAdminToken := mustCreateToken(t, tokens, auth.ScopeAdmin)
 	const session = "Bearer valid-token"
+	const createBody = `{"name":"web-1","ip":"10.0.0.5","port":22,"ssh_user":"root"}`
 
 	tests := map[string]struct {
 		method  string
@@ -77,11 +82,18 @@ func TestResourceScopeContainment(t *testing.T) {
 		want    int
 		wantMsg string
 	}{
-		"read token cannot mint":   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
-		"deploy cannot mint admin": {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
-		"deploy can mint read":     {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
-		"read can mint read":       {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
-		"jwt can mint deploy":      {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
+		"read token cannot mint":               {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, "Bearer " + readToken, http.StatusForbidden, tokenScopeGrantDenied},
+		"deploy cannot mint admin":             {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["admin"]}`, "Bearer " + deployToken, http.StatusForbidden, tokenScopeGrantDenied},
+		"deploy can mint read":                 {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + deployToken, http.StatusCreated, ""},
+		"read can mint read":                   {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["read"]}`, "Bearer " + readToken, http.StatusCreated, ""},
+		"jwt can mint deploy":                  {http.MethodPost, "/api/v1/tokens", `{"name":"x","scopes":["deploy"]}`, session, http.StatusCreated, ""},
+		"owner read token reads resources":     {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerReadToken, http.StatusOK, ""},
+		"owner deploy token mutates resources": {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerDeployToken, http.StatusCreated, ""},
+		"owner admin token reads resources":    {http.MethodGet, "/api/v1/servers", "", "Bearer " + ownerAdminToken, http.StatusOK, ""},
+		"owner read token cannot mutate":       {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + ownerReadToken, http.StatusForbidden, ""},
+		"member read token cannot read":        {http.MethodGet, "/api/v1/servers", "", "Bearer " + readToken, http.StatusForbidden, ""},
+		"member deploy token cannot mutate":    {http.MethodPost, "/api/v1/servers", createBody, "Bearer " + deployToken, http.StatusForbidden, ""},
+		"member admin token cannot read":       {http.MethodGet, "/api/v1/servers", "", "Bearer " + memberAdminToken, http.StatusForbidden, ""},
 	}
 
 	for label, tc := range tests {

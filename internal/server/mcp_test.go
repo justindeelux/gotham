@@ -20,12 +20,15 @@ func TestMCPStrictContextAndReads(t *testing.T) {
 		s.Handler().ServeHTTP(rec, req)
 		return rec
 	}
-	for _, path := range []string{"/api/v1/mcp/context"} {
+	for _, path := range []string{"/api/v1/mcp/context", "/api/v1/servers"} {
 		rec := request("GET", path, read, "1")
-		if rec.Code != 200 || rec.Header().Get(mcpContractHeader) != "1" {
+		if rec.Code != 200 {
 			t.Fatalf("strict response %s: %d %s %+v", path, rec.Code, rec.Body.String(), rec.Header())
 		}
 		if path == "/api/v1/mcp/context" {
+			if rec.Header().Get(mcpContractHeader) != "1" {
+				t.Fatalf("strict context missing contract header: %+v", rec.Header())
+			}
 			var body struct {
 				Capabilities []string `json:"capabilities"`
 			}
@@ -52,6 +55,10 @@ func TestMCPStrictContextAndReads(t *testing.T) {
 	}
 	if rec := request("POST", "/api/v1/servers", read, "1"); rec.Code != 403 {
 		t.Fatalf("read mutation=%d", rec.Code)
+	}
+	memberRead := mustCreateToken(t, tokens, auth.ScopeRead)
+	if rec := request("GET", "/api/v1/servers", memberRead, "1"); rec.Code != 403 {
+		t.Fatalf("member read=%d", rec.Code)
 	}
 }
 

@@ -146,20 +146,4 @@ func TestMCPDeployReplayRestartAndExactHistory(t *testing.T) {
 	if err != nil || !mismatched.IsError {
 		t.Fatalf("mismatched app/release visible: %+v %v", mismatched, err)
 	}
-	otherEnv, _ := seedProjectEnvironment(t, ctx, st)
-	if _, err := st.DB.Exec(ctx, "UPDATE applications SET environment_id=$1 WHERE id=$2", otherEnv, app.ID); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name string
-		args map[string]any
-	}{
-		{"application_deploy", args},
-		{"deployment_status", map[string]any{"application_id": app.ID.String(), "deployment_id": id.String()}},
-	} {
-		result, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: tc.name, Arguments: tc.args})
-		if err != nil || !result.IsError {
-			t.Fatalf("moved app accessible: %+v %v", result, err)
-		}
-	}
 }

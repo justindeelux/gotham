@@ -76,8 +76,8 @@ func TestProfileDisplayNameMigration(t *testing.T) {
 		t.Fatalf("insert user: %v", err)
 	}
 
-	if _, err := provider.Up(ctx); err != nil {
-		t.Fatalf("migrate to latest: %v", err)
+	if _, err := provider.UpTo(ctx, 32); err != nil {
+		t.Fatalf("migrate to 32: %v", err)
 	}
 
 	var name *string

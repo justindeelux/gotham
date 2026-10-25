@@ -217,7 +217,7 @@ test("the invite dialog is keyboard reachable", async ({ page }) => {
   await page.getByRole("heading", { name: "Users", exact: true }).waitFor();
 
   let reached = false;
-  for (let index = 0; index < 30; index += 1) {
+  for (let index = 0; index < 21; index += 1) {
     await page.keyboard.press("Tab");
     reached = await page.evaluate(() =>
       (document.activeElement?.textContent ?? "").includes("Invite user"),

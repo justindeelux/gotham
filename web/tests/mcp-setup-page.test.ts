@@ -91,7 +91,7 @@ describe("mcp snippets", () => {
     const preview = buildMcpSnippets("https://gotham.example.com/mcp", null);
     expect(preview.map((snippet) => snippet.id)).toEqual([
       "claude-code",
-      "claude-desktop",
+      "url-headers",
       "url-token",
     ]);
     for (const snippet of preview) {

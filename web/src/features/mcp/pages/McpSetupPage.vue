@@ -22,7 +22,7 @@ import { useCopyText } from "@/shared/composables/useCopyText";
 
 const clientLabelKeys: Record<McpSnippetId, string> = {
   "claude-code": "mcp.clients.claudeCode",
-  "claude-desktop": "mcp.clients.claudeDesktop",
+  "url-headers": "mcp.clients.urlHeaders",
   "url-token": "mcp.clients.urlToken",
 };
 
@@ -185,12 +185,14 @@ onMounted(() => {
           :snippet="snippet"
           :label="clientLabel(snippet.id)"
         />
+      </NSpace>
+      <template #footer>
         <NSpace justify="end">
           <NButton type="primary" data-testid="mcp-reveal-done" @click="page.closeReveal">
             {{ t("mcp.reveal.done") }}
           </NButton>
         </NSpace>
-      </NSpace>
+      </template>
     </NModal>
   </div>
 </template>

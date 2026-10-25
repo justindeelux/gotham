@@ -1,6 +1,6 @@
 export const mcpTokenPlaceholder = "<YOUR_TOKEN>";
 
-export type McpSnippetId = "claude-code" | "claude-desktop" | "url-token";
+export type McpSnippetId = "claude-code" | "url-headers" | "url-token";
 
 export interface McpSnippet {
   id: McpSnippetId;
@@ -14,7 +14,7 @@ export function buildMcpSnippets(
   token: string | null,
 ): McpSnippet[] {
   const secret = token ?? mcpTokenPlaceholder;
-  const desktopConfig = JSON.stringify(
+  const urlHeadersConfig = JSON.stringify(
     {
       mcpServers: {
         gotham: {
@@ -31,7 +31,7 @@ export function buildMcpSnippets(
       id: "claude-code",
       text: `claude mcp add --transport http gotham ${mcpUrl} --header "Authorization: Bearer ${secret}"`,
     },
-    { id: "claude-desktop", text: desktopConfig },
+    { id: "url-headers", text: urlHeadersConfig },
     { id: "url-token", text: `URL: ${mcpUrl}\nToken: ${secret}` },
   ];
 }

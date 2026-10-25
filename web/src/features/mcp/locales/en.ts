@@ -3,7 +3,7 @@ const en = {
     eyebrow: "Settings · Connect",
     title: "MCP setup",
     description:
-      "Connect Claude Code, Claude Desktop, Cursor or another MCP client to this control plane. Pick an access level, create a token and paste a ready-made configuration into the client.",
+      "Connect Claude Code, Cursor or another MCP client to this control plane. Pick an access level, create a token and paste a ready-made configuration into the client.",
   },
   access: {
     title: "1. Choose what the client may do",
@@ -27,7 +27,7 @@ const en = {
     hint: "Create a token to fill these in with the real value. Nothing is stored in the browser; copy it before you leave the page.",
     copy: "Copy",
     claudeCode: "Claude Code (terminal)",
-    claudeDesktop: "Claude Desktop / Cursor",
+    urlHeaders: "Cursor and other clients (url + headers)",
     urlToken: "Other clients (URL and token)",
   },
   https: {

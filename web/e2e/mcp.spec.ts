@@ -135,13 +135,13 @@ test("sets up an MCP client as the owner", async ({ page, request, guardrails })
     warning.getByRole("button", { name: "Open instance settings" }),
   ).toBeVisible();
 
-  const preview = pageSnippet(page, "claude-desktop");
+  const preview = pageSnippet(page, "url-headers");
   await expect(preview).toContainText("<YOUR_TOKEN>");
   await expect(preview).toContainText("/mcp");
 
   const secret = await createToken(page, "deploy");
   await expect(dialogSnippet(page, "claude-code")).toContainText(secret);
-  await expect(dialogSnippet(page, "claude-desktop")).toContainText(
+  await expect(dialogSnippet(page, "url-headers")).toContainText(
     `"Authorization": "Bearer ${secret}"`,
   );
   await expect(dialogSnippet(page, "url-token")).toContainText(`Token: ${secret}`);

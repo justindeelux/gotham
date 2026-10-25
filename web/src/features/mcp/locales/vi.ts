@@ -5,7 +5,7 @@ const vi: McpMessages = {
     eyebrow: "Cài đặt · Kết nối",
     title: "Thiết lập MCP",
     description:
-      "Kết nối Claude Code, Claude Desktop, Cursor hoặc ứng dụng MCP khác với bảng điều khiển này. Chọn mức truy cập, tạo token và dán cấu hình có sẵn vào ứng dụng.",
+      "Kết nối Claude Code, Cursor hoặc ứng dụng MCP khác với bảng điều khiển này. Chọn mức truy cập, tạo token và dán cấu hình có sẵn vào ứng dụng.",
   },
   access: {
     title: "1. Chọn quyền cho ứng dụng",
@@ -29,7 +29,7 @@ const vi: McpMessages = {
     hint: "Tạo token để điền giá trị thật vào đây. Không có gì được lưu trong trình duyệt; hãy sao chép trước khi rời trang.",
     copy: "Sao chép",
     claudeCode: "Claude Code (dòng lệnh)",
-    claudeDesktop: "Claude Desktop / Cursor",
+    urlHeaders: "Cursor và ứng dụng khác (url + headers)",
     urlToken: "Ứng dụng khác (URL và token)",
   },
   https: {

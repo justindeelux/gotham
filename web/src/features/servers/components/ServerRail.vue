@@ -50,7 +50,7 @@ function toggleEditor(): void {
 
 const terminalTabs = computed(() =>
   terminal.tabs.filter((tab) =>
-    isContainerTerminalTarget(tab.target) ? true : authStore.isPlatformAdmin,
+    isContainerTerminalTarget(tab.target) ? true : authStore.isOwner,
   ),
 );
 

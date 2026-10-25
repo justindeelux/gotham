@@ -35,8 +35,6 @@ import {
   writeEditorDraft,
 } from "@/features/files/utils/editorDrafts";
 import type { EditorDraftStorage } from "@/features/files/utils/editorDrafts";
-import { useTeamsStore } from "@/features/teams";
-import type { Team } from "@/features/teams/api/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 import { clearSession as clearStoredSession } from "@/shared/api/token";
 
@@ -111,25 +109,11 @@ function draftKeys(): string[] {
   return keys;
 }
 
-function team(role: Team["role"]): Team {
-  return {
-    id: "team-1",
-    name: "A",
-    is_personal: false,
-    role,
-    created_at: "2026-10-01T00:00:00Z",
-    updated_at: "2026-10-01T00:00:00Z",
-  };
-}
-
 let scope: EffectScope | null = null;
 
 beforeEach(() => {
   window.localStorage.clear();
   setActivePinia(createPinia());
-  const teams = useTeamsStore();
-  teams.teams = [team("owner")];
-  teams.activeTeamId = "team-1";
   const files = useFilesStore();
   files.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
   files.rootName = "volumes";
@@ -228,7 +212,7 @@ describe("editor drafts composable", () => {
     const editor = useEditorStore();
     scope = effectScope();
     const drafts = scope.run(() => useEditorDrafts(() => server))!;
-    await editor.openFile(server, "team-1", "volumes", "app.yaml");
+    await editor.openFile(server, "volumes", "app.yaml");
     await nextTick();
     return { editor, drafts };
   }
@@ -252,7 +236,7 @@ describe("editor drafts composable", () => {
       modified_at: "2026-10-18T10:00:00Z",
       etag: '"v2"',
     });
-    expect(await editor.save(tab.id, "team-1")).toBe("saved");
+    expect(await editor.save(tab.id)).toBe("saved");
     await nextTick();
     expect(readEditorDraft(window.localStorage, key)).toBeNull();
     expect(drafts.prompt.value).toBeNull();
@@ -310,12 +294,11 @@ describe("editor drafts composable", () => {
     expect(readEditorDraft(window.localStorage, key)?.etag).toBe('"v0"');
 
     putContentMock.mockRejectedValueOnce({ message: "conflict", status: 409 });
-    expect(await editor.save(tab.id, "team-1")).toBe("conflict");
+    expect(await editor.save(tab.id)).toBe("conflict");
     expect(editor.conflictId).toBe(tab.id);
     expect(putContentMock).toHaveBeenCalledWith(
       server,
-      "team-1",
-      expect.objectContaining({ etag: '"v0"', overwrite: false }),
+        expect.objectContaining({ etag: '"v0"', overwrite: false }),
     );
   });
 
@@ -330,7 +313,7 @@ describe("editor drafts composable", () => {
     expect(drafts.prompt.value).not.toBeNull();
 
     getContentMock.mockResolvedValue(content("server moved\n", '"v2"'));
-    await editor.reload(tab.id, "team-1");
+    await editor.reload(tab.id);
     await nextTick();
 
     drafts.restore();
@@ -360,7 +343,7 @@ describe("editor drafts composable", () => {
     const editor = useEditorStore();
     scope = effectScope();
     scope.run(() => useEditorDrafts(() => server));
-    await editor.openFile(server, "team-1", "compose", "docker-compose.yaml");
+    await editor.openFile(server, "compose", "docker-compose.yaml");
     editor.setDoc(editor.activeTab!.id, "edited\n");
     await nextTick();
 

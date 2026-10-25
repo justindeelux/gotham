@@ -36,17 +36,10 @@ const USER = {
   created_at: "2026-03-04T12:00:00Z",
   display_name: "Ada",
   has_password: true,
-  role: "member",
+  role: "owner",
 };
 
-const team = (role: string) => ({
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role,
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-});
+let currentRole: "owner" | "member" = "owner";
 
 const application = {
   id: APP_ID,
@@ -186,24 +179,19 @@ async function mockApi(
   page: Page,
   ledger: Ledger,
   options: {
-    role?: string;
+    role?: "owner" | "member";
     containers?: ReturnType<typeof target>[];
-    teams?: ReturnType<typeof team>[];
   } = {},
 ): Promise<void> {
-  const role = options.role ?? "owner";
+  currentRole = options.role ?? "owner";
   const containers = options.containers ?? SINGLE;
-  const teams = options.teams ?? [team(role)];
   const sockets = new Map<string, WebSocketRoute>();
 
   await page.route("**/api/v1/**", async (route) => {
     await route.fulfill({ json: {} });
   });
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: USER });
-  });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams } });
+    await route.fulfill({ json: { ...USER, role: currentRole } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -325,7 +313,7 @@ async function seedApp(page: Page, path: string): Promise<void> {
       window.localStorage.setItem("gotham.auth.session", value);
     },
     JSON.stringify({
-      user: USER,
+      user: { ...USER, role: currentRole },
       accessToken: "test-access",
       refreshToken: "test-refresh",
     }),
@@ -377,19 +365,6 @@ async function navigate(page: Page, path: string): Promise<void> {
   }, path);
 }
 
-async function selectTeam(page: Page, id: string): Promise<void> {
-  await page.evaluate((teamId: string) => {
-    const app = (document.querySelector("#app") as unknown as {
-      __vue_app__: {
-        config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
-      };
-    }).__vue_app__;
-    const store = app.config.globalProperties.$pinia._s.get("teams") as {
-      selectTeam: (_teamId: string) => void;
-    };
-    store.selectTeam(teamId);
-  }, id);
-}
 
 const detailPath = `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_ID}`;
 const detailBPath = `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_B_ID}`;
@@ -581,12 +556,12 @@ test("multiple services and replicas need an explicit pick and switch only after
   });
 });
 
-test("a read_only team member sees no enabled tab and issues zero requests", async ({
+test("a member sees no enabled terminal tab and issues zero requests", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const ledger = freshLedger();
-  await mockApi(page, ledger, { role: "read_only" });
+  await mockApi(page, ledger, { role: "member" });
   await seedApp(page, `${detailPath}?tab=terminal`);
 
   await expect(page.locator(".app-blocked-terminal")).toBeVisible();
@@ -923,24 +898,6 @@ test("switching application keeps both container sessions isolated", async ({
   expect(ledger.creates).toHaveLength(2);
 });
 
-test("switching team disposes the application container tab", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
-  const ledger = freshLedger();
-  const teams = [
-    team("owner"),
-    { ...team("read_only"), id: "team-2", name: "Other" },
-  ];
-  await mockApi(page, ledger, { teams });
-  await seedApp(page, `${detailPath}?tab=terminal`);
-  await expect.poll(() => ledger.creates.length).toBe(1);
-  await expect(page.locator(".rail-btn--terminal .rail-badge")).toHaveText("1");
-
-  await selectTeam(page, "team-2");
-  await expect.poll(() => ledger.deletes).toBe(1);
-  await expect.poll(async () => (await terminalTabs(page)).length).toBe(0);
-  await expect(page.locator(".rail-btn--terminal")).toHaveCount(0);
-});
-
 test("detaching keeps the session, label and window tab without a new POST", async ({
   page,
 }) => {
@@ -1057,25 +1014,3 @@ test("the theme menu on a container session sends no PTY input and shows no host
   expect(ledger.creates).toHaveLength(1);
 });
 
-test("a failed teams read shows a bounded access error with zero terminal requests", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
-  const ledger = freshLedger();
-  await mockApi(page, ledger);
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({
-      status: 500,
-      json: { message: "teams unavailable" },
-    });
-  });
-  await seedApp(page, `${detailPath}?tab=terminal`);
-
-  await expect(page.locator(".app-term-access-error")).toBeVisible();
-  await expect(page.locator(".app-term-access-error")).toContainText(
-    "Terminal access could not be checked",
-  );
-  await expect(page.locator(".app-term-access-retry")).toBeVisible();
-  expect(ledger.targets).toBe(0);
-  expect(ledger.creates).toHaveLength(0);
-});

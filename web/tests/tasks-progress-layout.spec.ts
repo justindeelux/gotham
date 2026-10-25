@@ -37,15 +37,6 @@ const session = {
   refreshToken: "test-refresh",
 };
 
-const team = {
-  id: "team-1",
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-};
-
 function taskFrame(event: Record<string, unknown>, channel: string): string {
   return JSON.stringify({ channel, type: "task", data: JSON.stringify(event) });
 }
@@ -64,7 +55,6 @@ function seedEvent(taskId: string, status: string, extra: Record<string, unknown
     server_id: "srv-1",
     project_id: "proj-1",
     environment_id: "env-1",
-    team_id: "team-1",
     error: status === "failed" ? "container reported unhealthy" : "",
     ...extra,
   };
@@ -115,10 +105,7 @@ async function mockApi(page: Page): Promise<void> {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: session.user });
-  });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team] } });
+    await route.fulfill({ json: { user: session.user } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -127,7 +114,21 @@ async function mockApi(page: Page): Promise<void> {
     await route.fulfill({ json: { servers: [] } });
   });
   await page.route("**/api/v1/projects", async (route) => {
-    await route.fulfill({ json: { projects: [] } });
+    await route.fulfill({
+      json: {
+        projects: [
+          {
+            id: "11111111-1111-4111-8111-111111111111",
+            name: "shop",
+            description: "",
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+            environment_count: 1,
+            resource_counts: { applications: 0, services: 0, databases: 0 },
+          },
+        ],
+      },
+    });
   });
   await page.routeWebSocket(/\/api\/v1\/ws/, (ws) => {
     ws.onMessage((message) => {

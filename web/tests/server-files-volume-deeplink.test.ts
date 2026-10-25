@@ -37,7 +37,6 @@ import {
   writeFilesTabsSnapshot,
 } from "@/features/files/utils/tabsPersist";
 import { useServersStore } from "@/features/servers";
-import { useTeamsStore } from "@/features/teams";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -103,15 +102,10 @@ beforeEach(() => {
     } as never,
   ];
   servers.loading = false;
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [
-    { id: "team-1", name: "A", is_personal: true, role: "owner" },
-  ];
 
   vi.mocked(listRoots).mockResolvedValue([volumes, compose]);
   vi.mocked(listEntries).mockImplementation(
-    async (_serverId, _teamId, options) => ({
+    async (_serverId, options) => ({
       entries: [entry(`${options.root}:${options.path ?? ""}`)],
       truncated: false,
       cursor: "",

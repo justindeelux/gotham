@@ -229,7 +229,6 @@ const errorPrefixPackages = new Set([
   "spa",
   "ssh",
   "store",
-  "teams",
   "templates",
   "terminal",
   "toolchain",

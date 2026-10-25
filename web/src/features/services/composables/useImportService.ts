@@ -7,6 +7,7 @@ import { activeLocale, i18n } from "@/shared/i18n";
 import type { Service } from "@/features/services/api/services";
 import { serviceNameSchema, serviceNodeSchema } from "@/shared/validation/primitives";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
+import { useAuthStore } from "@/features/auth";
 import { useServicesStore } from "@/features/services/stores/services";
 
 export function useImportService(
@@ -18,6 +19,7 @@ export function useImportService(
   onCreated: (_service: Service) => void = () => undefined,
 ) {
   const message = useMessage();
+  const authStore = useAuthStore();
   const servicesStore = useServicesStore();
 
   const name = ref("");
@@ -43,7 +45,9 @@ export function useImportService(
   );
 
   const nodeError = computed<string>(() =>
-    !attempted.value ? "" : (fieldErrors(serviceNodeSchema, serverId.value)[0] ?? ""),
+    !attempted.value || !authStore.isOwner
+      ? ""
+      : (fieldErrors(serviceNodeSchema, serverId.value)[0] ?? ""),
   );
 
   const scopeError = computed<string>(() => {
@@ -76,7 +80,7 @@ export function useImportService(
     }
     if (
       !serviceNameSchema.safeParse(name.value).success ||
-      !serviceNodeSchema.safeParse(serverId.value).success ||
+      (authStore.isOwner && !serviceNodeSchema.safeParse(serverId.value).success) ||
       scopeEnvironmentId.value === ""
     ) {
       return;
@@ -87,7 +91,7 @@ export function useImportService(
       const created = await servicesStore.create({
         name: name.value.trim(),
         environment_id: scopeEnvironmentId.value,
-        server_id: serverId.value,
+        server_id: authStore.isOwner ? serverId.value : "",
         compose_yaml: yaml.value,
       });
       message.success(String(i18n.global.t("services.toast.created", { name: created.name })));

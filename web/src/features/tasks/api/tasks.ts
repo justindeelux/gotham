@@ -14,12 +14,11 @@ export interface TaskEvent {
   serverId: string;
   projectId: string;
   environmentId: string;
-  teamId: string;
   error: string;
 }
 
-export function taskChannel(teamId: string): string {
-  return `tasks:${teamId}`;
+export function taskChannel(projectId: string): string {
+  return `tasks:${projectId}`;
 }
 
 export function isTerminalStatus(status: TaskStatus): boolean {
@@ -111,7 +110,6 @@ export function parseTaskFrame(raw: string): TaskEvent | null {
     serverId: asString(event.server_id),
     projectId: asString(event.project_id),
     environmentId: asString(event.environment_id),
-    teamId: asString(event.team_id),
     error: asString(event.error),
   };
 }

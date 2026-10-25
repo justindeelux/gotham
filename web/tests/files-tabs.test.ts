@@ -16,7 +16,6 @@ import { listEntries, listRoots, moveEntry } from "@/features/files/api/files";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { disambiguatedTabLabels } from "@/features/files/utils/files";
-import { useTeamsStore } from "@/features/teams";
 
 const volumes: FilesRoot = {
   name: "volumes",
@@ -69,16 +68,10 @@ beforeEach(() => {
 
   vi.mocked(listRoots).mockResolvedValue([volumes, compose]);
   vi.mocked(listEntries).mockImplementation(
-    async (_serverId, _teamId, options) =>
+    async (_serverId, options) =>
       listingFor(options.root, options.path ?? ""),
   );
   vi.mocked(moveEntry).mockResolvedValue(entry({ name: "moved" }));
-
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [
-    { id: "team-1", name: "A", is_personal: true, role: "owner" },
-  ];
 });
 
 describe("files browser deep links", () => {
@@ -226,7 +219,7 @@ describe("files browser tabs", () => {
     expect(store.pasteProblem).toBeNull();
     await store.paste();
 
-    expect(vi.mocked(moveEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(moveEntry)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       source: `data/${name}`,
       destination: name,
@@ -275,7 +268,7 @@ describe("files browser tab races", () => {
     expect(store.roots.map((root) => root.name)).toEqual(["compose"]);
   });
 
-  it("drops a stale listing when the team switched while it was loading", async () => {
+  it("drops a stale listing when another tab switched while it was loading", async () => {
     const store = useFilesStore();
     await store.init("server-1");
 
@@ -379,7 +372,7 @@ describe("files browser tab races", () => {
 
   it("resolves a conflict prompt against the tab that started the transfer", async () => {
     const store = useFilesStore();
-    vi.mocked(listEntries).mockImplementation(async (_serverId, _teamId, options) =>
+    vi.mocked(listEntries).mockImplementation(async (_serverId, options) =>
       options.path === "data"
         ? {
             entries: [
@@ -415,7 +408,7 @@ describe("files browser tab races", () => {
     const summary = await store.resolveConflictPrompt(true);
 
     expect(summary.done).toEqual(["a.txt"]);
-    expect(vi.mocked(moveEntry)).toHaveBeenLastCalledWith("server-1", "team-1", {
+    expect(vi.mocked(moveEntry)).toHaveBeenLastCalledWith("server-1", {
       root: "volumes",
       source: "data/a.txt",
       destination: "data/dest/a.txt",
@@ -443,7 +436,7 @@ describe("files browser tab races", () => {
 
     const paths = vi
       .mocked(listEntries)
-      .mock.calls.map(([, , options]) => options.path);
+      .mock.calls.map(([, options]) => options.path);
     expect(paths).toContain("");
     expect(paths).toContain("data");
   });

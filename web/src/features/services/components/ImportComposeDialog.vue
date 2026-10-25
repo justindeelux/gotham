@@ -17,6 +17,7 @@ import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import { activeLocale, i18n } from "@/shared/i18n";
 import type { Service } from "@/features/services/api/services";
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
+import { useAuthStore } from "@/features/auth";
 import ServerPicker from "@/features/projects/components/ServerPicker.vue";
 
 interface Props {
@@ -31,6 +32,8 @@ const emit = defineEmits<{
   "update:show": [value: boolean];
   created: [service: Service];
 }>();
+
+const authStore = useAuthStore();
 
 function t(key: string, params?: Record<string, string | number>): string {
   void activeLocale.value;
@@ -84,10 +87,12 @@ const dialog = useImportService(
             />
           </NFormItem>
           <ServerPicker
+            v-if="authStore.isOwner"
             v-model="dialog.serverId.value"
             :label="t('services.import.nodeLabel')"
             :feedback="dialog.nodeError.value"
           />
+          <p v-else class="muted small">{{ t("services.import.nodeByOwner") }}</p>
         </div>
         <NFormItem :label="t('services.import.yamlLabel')" class="field-import-yaml">
           <CodeEditor

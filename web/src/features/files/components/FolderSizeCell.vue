@@ -20,14 +20,12 @@ import {
 } from "@/features/files/composables/useFolderSize";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
 
 const props = defineProps<{ entry: FilesEntry; path: string }>();
 
 const { t } = useI18n();
 const files = useFilesStore();
-const teams = useTeamsStore();
 const errorId = `fm-size-error-${nextFolderSizeErrorId()}`;
 
 const state = computed(() =>
@@ -68,7 +66,6 @@ const announcement = computed<string>(() => {
 function calculate(): void {
   void requestFolderSize(
     files.serverId,
-    teams.activeTeamId,
     files.rootName,
     props.path,
   );

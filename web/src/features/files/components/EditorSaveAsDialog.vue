@@ -7,13 +7,11 @@ import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
 import { normalizeEntryName, validateEntryName } from "@/features/files/utils/files";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
-import { useTeamsStore } from "@/features/teams";
 
 const { t } = useI18n();
 const message = useMessage();
 const editor = useEditorStore();
 const files = useFilesStore();
-const teams = useTeamsStore();
 
 const name = ref("");
 const touched = ref(false);
@@ -68,7 +66,7 @@ async function submit(): Promise<void> {
     return;
   }
   const target = normalizeEntryName(name.value);
-  const outcome = await editor.saveAsCopy(tab.id, teams.activeTeamId, target);
+  const outcome = await editor.saveAsCopy(tab.id, target);
   if (outcome === "saved") {
     message.success(String(t("files.editor.saveAsSaved", { name: target })));
     void files.refresh();

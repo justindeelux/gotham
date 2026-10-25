@@ -24,6 +24,7 @@ import {
 } from "@/features/databases/utils/databaseEngines";
 import { isWizardConfigureValid } from "@/features/databases/schemas/databases";
 import { useDatabasesStore } from "@/features/databases/stores/databases";
+import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers";
 
 export interface WizardForm {
@@ -59,6 +60,7 @@ interface WizardOptions {
 
 export function useCreateDatabaseWizard(options: WizardOptions) {
   const databasesStore = useDatabasesStore();
+  const authStore = useAuthStore();
   const serversStore = useServersStore();
   const message = useMessage();
   const { copyText } = useCopyText();
@@ -120,7 +122,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   );
 
   const engineValid = computed<boolean>(
-    () => form.environmentId !== "" && form.serverId !== "",
+    () => form.environmentId !== "" && (!authStore.isOwner || form.serverId !== ""),
   );
 
   const configureValid = computed<boolean>(() =>
@@ -254,7 +256,9 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
       if (visible) {
         seedScope();
         seedEngine();
-        void serversStore.fetchServers().catch(() => undefined);
+        if (authStore.isOwner) {
+          void serversStore.fetchServers().catch(() => undefined);
+        }
       } else {
         resetWizard();
       }

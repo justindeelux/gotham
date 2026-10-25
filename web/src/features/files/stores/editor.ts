@@ -166,8 +166,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   async function openFile(
     nextServerId: string,
-    teamId: string,
-    root: string,
+      root: string,
     path: string,
   ): Promise<void> {
     if (serverId.value !== nextServerId) {
@@ -204,22 +203,21 @@ export const useEditorStore = defineStore("filesEditor", () => {
     activeId.value = tab.id;
     const live = tabs.value.find((item) => item.id === tab.id);
     if (live) {
-      await load(live, teamId);
+      await load(live);
     }
   }
 
   async function loadDiff(
     tab: EditorTab,
-    teamId: string,
-    versionId: string,
+      versionId: string,
     title: string,
   ): Promise<void> {
     tab.status = "loading";
     tab.error = "";
     try {
       const [version, current] = await Promise.all([
-        getFileVersion(serverId.value, teamId, tab.root, tab.path, versionId),
-        getContent(serverId.value, teamId, tab.root, tab.path),
+        getFileVersion(serverId.value, tab.root, tab.path, versionId),
+        getContent(serverId.value, tab.root, tab.path),
       ]);
       if (current.truncated === true) {
         tab.diff = undefined;
@@ -241,8 +239,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   async function openDiff(
     nextServerId: string,
-    teamId: string,
-    root: string,
+      root: string,
     path: string,
     versionId: string,
     title: string,
@@ -260,7 +257,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     );
     if (existing) {
       activeId.value = existing.id;
-      await loadDiff(existing, teamId, versionId, title);
+      await loadDiff(existing, versionId, title);
       return;
     }
     const tab: EditorTab = {
@@ -290,12 +287,12 @@ export const useEditorStore = defineStore("filesEditor", () => {
     if (!live) {
       return;
     }
-    await loadDiff(live, teamId, versionId, title);
+    await loadDiff(live, versionId, title);
   }
 
-  async function load(tab: EditorTab, teamId: string): Promise<void> {
+  async function load(tab: EditorTab): Promise<void> {
     try {
-      const content = await getContent(serverId.value, teamId, tab.root, tab.path);
+      const content = await getContent(serverId.value, tab.root, tab.path);
       const shape = splitDoc(content.content);
       const encoding = normalizeEditorEncoding(content.encoding);
       Object.assign(tab, {
@@ -391,8 +388,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   async function changeEncoding(
     id: string,
-    teamId: string,
-    encoding: EditorEncoding,
+      encoding: EditorEncoding,
   ): Promise<ChangeEncodingOutcome> {
     const tab = tabs.value.find((item) => item.id === id);
     if (!tab || tab.kind !== "file" || tab.status !== "ready" || tab.truncated) {
@@ -407,22 +403,21 @@ export const useEditorStore = defineStore("filesEditor", () => {
     if (!wasClean) {
       return "pending";
     }
-    const outcome = await save(id, teamId);
+    const outcome = await save(id);
     if (outcome !== "saved") {
       tab.encoding = previous;
     }
     return outcome;
   }
 
-  async function saveAsUtf8(id: string, teamId: string): Promise<SaveOutcome> {
+  async function saveAsUtf8(id: string): Promise<SaveOutcome> {
     setEncoding(id, "utf-8");
-    return save(id, teamId);
+    return save(id);
   }
 
   async function save(
     id: string,
-    teamId: string,
-    overwrite = false,
+      overwrite = false,
   ): Promise<SaveOutcome> {
     const tab = tabs.value.find((item) => item.id === id);
     if (!tab || tab.kind !== "file" || tab.status !== "ready" || tab.truncated) {
@@ -437,7 +432,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
     tab.saving = true;
     try {
-      const entry = await putContent(serverId.value, teamId, {
+      const entry = await putContent(serverId.value, {
         root: tab.root,
         path: tab.path,
         content: serializeDoc({
@@ -475,27 +470,27 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
   }
 
-  async function saveAll(teamId: string, ids?: string[]): Promise<SaveReport[]> {
+  async function saveAll(ids?: string[]): Promise<SaveReport[]> {
     const targets = dirtyTabs.value.filter(
       (tab) => !tab.saving && (!ids || ids.includes(tab.id)),
     );
     return Promise.all(
-      targets.map(async (tab) => ({ tab, outcome: await save(tab.id, teamId) })),
+      targets.map(async (tab) => ({ tab, outcome: await save(tab.id) })),
     );
   }
 
-  async function reload(id: string, teamId: string): Promise<void> {
+  async function reload(id: string): Promise<void> {
     const tab = tabs.value.find((item) => item.id === id);
     if (!tab || tab.kind !== "file") {
       return;
     }
     clearConflict(id);
     tab.status = "loading";
-    await load(tab, teamId);
+    await load(tab);
   }
 
-  async function overwrite(id: string, teamId: string): Promise<SaveOutcome> {
-    return save(id, teamId, true);
+  async function overwrite(id: string): Promise<SaveOutcome> {
+    return save(id, true);
   }
 
   function dismissConflict(): void {
@@ -513,8 +508,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   async function saveAsCopy(
     id: string,
-    teamId: string,
-    name: string,
+      name: string,
   ): Promise<SaveOutcome> {
     const tab = tabs.value.find((item) => item.id === id);
     if (!tab || tab.kind !== "file" || tab.status !== "ready" || tab.truncated) {
@@ -528,7 +522,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     try {
       let etag = "";
       try {
-        const created = await createFile(serverId.value, teamId, {
+        const created = await createFile(serverId.value, {
           root: tab.root,
           path: target,
         });
@@ -540,7 +534,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
         }
         throw err;
       }
-      const entry = await putContent(serverId.value, teamId, {
+      const entry = await putContent(serverId.value, {
         root: tab.root,
         path: target,
         content: serializeDoc({
@@ -570,7 +564,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     } catch (err) {
       tab.error = describeFilesError(err);
       if (reserved) {
-        await deleteEntry(serverId.value, teamId, tab.root, target, false).catch(
+        await deleteEntry(serverId.value, tab.root, target, false).catch(
           () => undefined,
         );
       }

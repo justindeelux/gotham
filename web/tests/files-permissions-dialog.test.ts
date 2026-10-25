@@ -20,7 +20,6 @@ import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue
 import viCatalog from "@/features/files/locales/vi";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -72,9 +71,6 @@ beforeEach(() => {
   registerDiscoveredCatalogs();
   syncComposerLocale("en");
   vi.clearAllMocks();
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "owner" }];
   vi.mocked(listRoots).mockResolvedValue([root]);
   vi.mocked(listEntries).mockResolvedValue({
     entries: [],

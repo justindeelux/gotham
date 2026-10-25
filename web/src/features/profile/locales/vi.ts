@@ -12,8 +12,8 @@ const vi: ProfileMessages = {
     avatarNote:
       "Ảnh đại diện lấy từ GitHub khi bạn đăng nhập bằng GitHub, nếu không sẽ hiện chữ cái đầu.",
     email: "Email",
-    platformRole: "Vai trò nền tảng",
-    admin: "Quản trị nền tảng",
+    role: "Vai trò",
+    owner: "Chủ sở hữu",
     member: "Thành viên",
     memberSince: "Tham gia từ",
     signedIn: "Đã đăng nhập",

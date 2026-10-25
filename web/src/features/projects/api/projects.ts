@@ -1,4 +1,4 @@
-import { http, teamHeaders } from "@/shared/api/http";
+import { http } from "@/shared/api/http";
 import { activeLocale, i18n } from "@/shared/i18n";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import type { Service } from "@/features/services/api/services";
@@ -107,90 +107,63 @@ export interface EnvironmentResources {
   databases: EnvironmentResourceDatabase[];
 }
 
-export async function listProjects(teamId: string): Promise<Project[]> {
-  const response = await http.get<unknown>("/projects", {
-    headers: teamHeaders(teamId),
-  });
+export async function listProjects(): Promise<Project[]> {
+  const response = await http.get<unknown>("/projects");
   return parseProjectList(response.data).projects;
 }
 
 export async function createProject(
-  teamId: string,
   input: CreateProjectInput,
 ): Promise<CreatedProjectEnvelope> {
-  const response = await http.post<unknown>("/projects", input, {
-    headers: teamHeaders(teamId),
-  });
+  const response = await http.post<unknown>("/projects", input);
   return parseCreatedProject(response.data);
 }
 
-export async function getProject(
-  teamId: string,
-  id: string,
-): Promise<ProjectDetailEnvelope> {
-  const response = await http.get<unknown>(`/projects/${id}`, {
-    headers: teamHeaders(teamId),
-  });
+export async function getProject(id: string): Promise<ProjectDetailEnvelope> {
+  const response = await http.get<unknown>(`/projects/${id}`);
   return parseProjectDetail(response.data);
 }
 
 export async function renameProject(
-  teamId: string,
   id: string,
   input: UpdateProjectInput,
 ): Promise<Project> {
-  const response = await http.patch<unknown>(
-    `/projects/${id}`,
-    input,
-    { headers: teamHeaders(teamId) },
-  );
+  const response = await http.patch<unknown>(`/projects/${id}`, input);
   return parseProject(response.data).project;
 }
 
-export async function deleteProject(teamId: string, id: string): Promise<void> {
-  await http.delete(`/projects/${id}`, { headers: teamHeaders(teamId) });
+export async function deleteProject(id: string): Promise<void> {
+  await http.delete(`/projects/${id}`);
 }
 
 export async function createEnvironment(
-  teamId: string,
   projectId: string,
   input: EnvironmentNameInput,
 ): Promise<Environment> {
   const response = await http.post<unknown>(
     `/projects/${projectId}/environments`,
     input,
-    { headers: teamHeaders(teamId) },
   );
   return parseEnvironment(response.data).environment;
 }
 
 export async function renameEnvironment(
-  teamId: string,
   id: string,
   input: EnvironmentNameInput,
 ): Promise<Environment> {
-  const response = await http.patch<unknown>(
-    `/environments/${id}`,
-    input,
-    { headers: teamHeaders(teamId) },
-  );
+  const response = await http.patch<unknown>(`/environments/${id}`, input);
   return parseEnvironment(response.data).environment;
 }
 
-export async function deleteEnvironment(
-  teamId: string,
-  id: string,
-): Promise<void> {
-  await http.delete(`/environments/${id}`, { headers: teamHeaders(teamId) });
+export async function deleteEnvironment(id: string): Promise<void> {
+  await http.delete(`/environments/${id}`);
 }
 
 export async function getEnvironmentResources(
-  teamId: string,
   id: string,
   includePreviews = false,
 ): Promise<EnvironmentResources> {
   const response = await http.get<unknown>(`/environments/${id}/resources`, {
-    headers: teamHeaders(teamId),
     params: includePreviews ? { previews: "1" } : {},
   });
   return parseEnvironmentResources(response.data) as unknown as EnvironmentResources;

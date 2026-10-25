@@ -26,7 +26,6 @@ import ChannelCard from "@/features/notifications/components/ChannelCard.vue";
 import { provideChannelDialog } from "@/features/notifications/composables/useChannelDialog";
 import notificationsEn from "@/features/notifications/locales/en";
 import notificationsVi from "@/features/notifications/locales/vi";
-import { useTeamsStore } from "@/features/teams";
 import {
   i18n,
   resetLocaleState,
@@ -45,8 +44,7 @@ beforeEach(() => {
 
 const channel = {
   id: "ch1",
-  team_id: "team-1",
-  name: "Deploy alerts",
+    name: "Deploy alerts",
   kind: "discord",
   enabled: true,
   events: ["deploy_failure"],
@@ -95,11 +93,6 @@ describe("JUS-195 delivery labels", () => {
 describe("JUS-195 channel history panel", () => {
   async function cardHarness() {
     setActivePinia(createPinia());
-    const teams = useTeamsStore();
-    teams.teams = [
-      { id: "team-1", name: "Acme", is_personal: false, role: "owner", created_at: "", updated_at: "" },
-    ] as never;
-    teams.activeTeamId = "team-1";
     const Inner = defineComponent({
       setup() {
         provideChannelDialog();
@@ -139,7 +132,7 @@ describe("JUS-195 channel history panel", () => {
     await openHistory(wrapper);
 
     expect(vi.mocked(listDeliveries)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(listDeliveries)).toHaveBeenCalledWith("team-1", "ch1");
+    expect(vi.mocked(listDeliveries)).toHaveBeenCalledWith("ch1");
     const rows = wrapper.findAll("[data-test-channel-history-row]");
     expect(rows).toHaveLength(2);
     expect(rows[0].text()).toContain("Failed");
@@ -160,7 +153,7 @@ describe("JUS-195 channel history panel", () => {
     await openHistory(wrapper);
     await openHistory(wrapper);
     expect(wrapper.find("[data-test-channel-history-error]").text()).toBe(
-      "Your team role does not allow this action.",
+      "You do not have permission for this action.",
     );
     wrapper.unmount();
   });

@@ -15,7 +15,6 @@ import { formatBytes, formatDate, relativeTime } from "@/shared/utils/format";
 interface Props {
   show: boolean;
   serverId: string;
-  teamId: string;
   root: string;
   path: string;
   fileName: string;
@@ -44,7 +43,6 @@ async function reload(): Promise<void> {
   try {
     versions.value = await listFileVersions(
       props.serverId,
-      props.teamId,
       props.root,
       props.path,
     );
@@ -76,7 +74,6 @@ async function remove(version: FilesVersion): Promise<void> {
   try {
     await deleteFileVersion(
       props.serverId,
-      props.teamId,
       props.root,
       props.path,
       version.id,

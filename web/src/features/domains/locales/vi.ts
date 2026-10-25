@@ -255,7 +255,7 @@ const vi = {
       "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại.",
     secretNotConfigured:
       "Chưa cấu hình khóa bí mật triển khai nên không thể lưu thông tin " +
-      "xác thực. Quản trị viên nền tảng phải cấu hình.",
+      "xác thực. Hãy đề nghị chủ sở hữu cấu hình.",
     requestFailed: "Yêu cầu thất bại",
     unexpected: "Đã xảy ra lỗi. Vui lòng thử lại.",
   },

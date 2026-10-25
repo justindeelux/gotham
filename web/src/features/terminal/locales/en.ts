@@ -57,7 +57,7 @@ const en = {
   errors: {
     title: "Terminal unavailable",
     auth: "Your session has ended. Sign in again to open a terminal.",
-    forbidden: "Only a platform operator can open a host terminal.",
+    forbidden: "Only the owner can open a host terminal.",
     node: "The node was not found or is no longer managed.",
     quota: "The terminal session quota is reached. Close a session and try again.",
     unsupported: "This node agent does not support terminal sessions.",
@@ -77,7 +77,7 @@ const en = {
     sessionExpired:
       "The terminal closed before the shell started. The session may have expired; start a new session.",
     applicationForbidden:
-      "You need write access to this application's team to open a container shell.",
+      "Only the owner can open a container shell.",
     applicationNotFound: "This application is no longer available.",
     noDeployment:
       "This application has no running deployment. Deploy it, then try again.",
@@ -89,7 +89,7 @@ const en = {
       "The selected container is no longer available. Refresh the service list and choose a running container.",
     containerNoShell: "This container has no supported shell.",
     terminalDisabled:
-      "Container terminals are disabled on this control plane. Ask a platform administrator to enable them.",
+      "Container terminals are disabled on this control plane. Ask a owneristrator to enable them.",
   },
   actions: {
     retry: "Start new session",
@@ -127,7 +127,7 @@ const en = {
     title: "Terminal",
     eyebrow: "Operations",
     description:
-      "Open a host shell on a managed server or a shell inside a running application container. Terminal access is full host administration and is limited to platform operators.",
+      "Open a host shell on a managed server or a shell inside a running application container. Terminal access is full host administration and is limited to owner.",
     tabLabel: "Terminal",
     tabs: "Terminal tabs",
     closeTab: "Close {title}",
@@ -143,7 +143,7 @@ const en = {
       "This page no longer has a live terminal. Nothing starts automatically; use the button below when you are ready.",
     notAvailableTitle: "Terminal not available",
     notAvailableBody:
-      "The terminal is reserved for platform operators. Ask an operator for access, then reload this page.",
+      "The terminal is reserved for owner. Ask an operator for access, then reload this page.",
     notReadyTitle: "Terminal unavailable",
     notReadyBody:
       "This server is {status}. A terminal can only start on a ready node.",
@@ -174,7 +174,7 @@ const en = {
       unavailable:
         "The target list is unavailable right now. Retry once the node or control plane is reachable.",
       disabled:
-        "Container terminals are disabled on this control plane. Ask a platform administrator to enable them.",
+        "Container terminals are disabled on this control plane. Ask a owneristrator to enable them.",
       internal:
         "The control plane sent an unexpected response. Retry, or reload the page.",
       timeout:

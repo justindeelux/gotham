@@ -17,7 +17,6 @@ import type {
   NotificationDelivery,
   TestResult,
 } from "@/features/notifications/api/notifications";
-import { useTeamsStore } from "@/features/teams";
 
 export const useNotificationsStore = defineStore("notifications", () => {
   const channels = ref<NotificationChannel[]>([]);
@@ -29,13 +28,7 @@ export const useNotificationsStore = defineStore("notifications", () => {
   );
   const featureDisabled = ref(false);
 
-  const loadedTeamId = ref("");
-
   let listReadToken = 0;
-
-  function activeTeamId(): string {
-    return useTeamsStore().activeTeamId;
-  }
 
   function clearList(): void {
     channels.value = [];
@@ -45,9 +38,6 @@ export const useNotificationsStore = defineStore("notifications", () => {
   }
 
   function applyChannel(updated: NotificationChannel): void {
-    if (updated.team_id !== loadedTeamId.value) {
-      return;
-    }
     const index = channels.value.findIndex((item) => item.id === updated.id);
     if (index === -1) {
       channels.value = [...channels.value, updated];
@@ -57,19 +47,13 @@ export const useNotificationsStore = defineStore("notifications", () => {
   }
 
   async function fetchChannels(): Promise<void> {
-    const teamId = activeTeamId();
     const token = ++listReadToken;
-    const isCurrent = (): boolean =>
-      token === listReadToken && activeTeamId() === teamId;
+    const isCurrent = (): boolean => token === listReadToken;
 
-    if (loadedTeamId.value !== teamId) {
-      clearList();
-      loadedTeamId.value = teamId;
-    }
     loading.value = true;
     errorRaw.value = null;
     try {
-      const next = await listChannels(teamId);
+      const next = await listChannels();
       if (!isCurrent()) {
         return;
       }
@@ -96,7 +80,7 @@ export const useNotificationsStore = defineStore("notifications", () => {
   }
 
   async function create(input: ChannelInput): Promise<NotificationChannel> {
-    const channel = await createChannel(activeTeamId(), input);
+    const channel = await createChannel(input);
     applyChannel(channel);
     return channel;
   }
@@ -105,32 +89,27 @@ export const useNotificationsStore = defineStore("notifications", () => {
     id: string,
     input: ChannelInput,
   ): Promise<NotificationChannel> {
-    const channel = await updateChannel(activeTeamId(), id, input);
+    const channel = await updateChannel(id, input);
     applyChannel(channel);
     return channel;
   }
 
   async function remove(id: string): Promise<void> {
-    const teamId = activeTeamId();
-    await deleteChannel(teamId, id);
-    if (loadedTeamId.value !== teamId) {
-      return;
-    }
+    await deleteChannel(id);
     channels.value = channels.value.filter((item) => item.id !== id);
   }
 
   function test(id: string): Promise<TestResult> {
-    return testChannel(activeTeamId(), id);
+    return testChannel(id);
   }
 
   function history(id: string): Promise<NotificationDelivery[]> {
-    return listDeliveries(activeTeamId(), id);
+    return listDeliveries(id);
   }
 
   function reset(): void {
     listReadToken += 1;
     clearList();
-    loadedTeamId.value = "";
     loading.value = false;
   }
 

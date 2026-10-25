@@ -11,9 +11,7 @@ import {
 } from "@/shared/i18n";
 
 vi.mock("@/shared/api/http", () => ({
-  http: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn(), put: vi.fn() },
-  teamHeaders: (teamId: string) =>
-    teamId ? { "X-Team-Id": teamId } : {},
+  http: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn(), put: vi.fn() }
 }));
 
 import { http } from "@/shared/api/http";
@@ -246,14 +244,14 @@ describe("server error key extraction", () => {
     expect(
       rowKeyFromServerError('variable key "1A" must match ^[A-Za-z_][A-Za-z0-9_]*$'),
     ).toBe("1A");
-    expect(rowKeyFromServerError("insufficient team role")).toBeNull();
+    expect(rowKeyFromServerError("insufficient role")).toBeNull();
     expect(rowKeyFromServerError("")).toBeNull();
   });
 
   it("spots only the missing-secret refusal for the stored-set drop", () => {
     expect(secretWithoutValueKey('secret "ESEC" has no value')).toBe("ESEC");
     expect(secretWithoutValueKey('duplicate variable key "A"')).toBeNull();
-    expect(secretWithoutValueKey("insufficient team role")).toBeNull();
+    expect(secretWithoutValueKey("insufficient role")).toBeNull();
   });
 });
 
@@ -271,14 +269,12 @@ describe("variables envelope", () => {
 });
 
 describe("variables api paths", () => {
-  it("reads the project scope with the team header", async () => {
+  it("reads the project scope", async () => {
     vi.mocked(http.get).mockResolvedValue({
       data: { variables: [{ key: "A", value: "1", secret: false }] },
     });
-    const variables = await getProjectVariables("team-1", projectId);
-    expect(http.get).toHaveBeenCalledWith(`/projects/${projectId}/variables`, {
-      headers: { "X-Team-Id": "team-1" },
-    });
+    const variables = await getProjectVariables(projectId);
+    expect(http.get).toHaveBeenCalledWith(`/projects/${projectId}/variables`);
     expect(variables).toHaveLength(1);
   });
 
@@ -286,7 +282,7 @@ describe("variables api paths", () => {
     vi.mocked(http.put).mockResolvedValue({
       data: { variables: [{ key: "A", value: "1", secret: false }] },
     });
-    await replaceProjectVariables("team-1", projectId, [
+    await replaceProjectVariables(projectId, [
       { key: "A", value: "1", secret: false },
       { key: "S", secret: true },
     ]);
@@ -298,23 +294,20 @@ describe("variables api paths", () => {
           { key: "S", secret: true },
         ],
       },
-      { headers: { "X-Team-Id": "team-1" } },
     );
   });
 
   it("reads and replaces the environment scope", async () => {
     vi.mocked(http.get).mockResolvedValue({ data: { variables: [] } });
-    await getEnvironmentVariables("team-1", environmentId);
+    await getEnvironmentVariables(environmentId);
     expect(http.get).toHaveBeenCalledWith(
       `/environments/${environmentId}/variables`,
-      { headers: { "X-Team-Id": "team-1" } },
     );
     vi.mocked(http.put).mockResolvedValue({ data: { variables: [] } });
-    await replaceEnvironmentVariables("team-1", environmentId, []);
+    await replaceEnvironmentVariables(environmentId, []);
     expect(http.put).toHaveBeenCalledWith(
       `/environments/${environmentId}/variables`,
       { variables: [] },
-      { headers: { "X-Team-Id": "team-1" } },
     );
   });
 });

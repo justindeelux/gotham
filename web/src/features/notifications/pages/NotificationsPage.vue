@@ -7,36 +7,21 @@ import {
   NSpace,
   NSpin,
 } from "naive-ui";
-import { onMounted, watch } from "vue";
+import { onMounted } from "vue";
 
 import ChannelCard from "@/features/notifications/components/ChannelCard.vue";
 import ChannelFormDialog from "@/features/notifications/components/ChannelFormDialog.vue";
-import TeamScopeCard from "@/features/notifications/components/TeamScopeCard.vue";
 import { provideChannelDialog } from "@/features/notifications/composables/useChannelDialog";
 import { useNotificationsStore } from "@/features/notifications/stores/notifications";
-import { useTeamsStore } from "@/features/teams";
 
 const channelsStore = useNotificationsStore();
-const teamsStore = useTeamsStore();
 const { canMutate, loadResources, openCreate } = provideChannelDialog();
 
-watch(
-  () => teamsStore.activeTeamId,
-  () => {
-    void channelsStore.fetchChannels().catch(() => undefined);
-    void loadResources(teamsStore.activeTeamId);
-  },
-);
-
 onMounted(async () => {
-  const selectionBeforeLoad = teamsStore.activeTeamId;
-  await teamsStore.ensureTeams();
-  if (teamsStore.activeTeamId === selectionBeforeLoad) {
-    await Promise.all([
-      channelsStore.fetchChannels().catch(() => undefined),
-      loadResources(teamsStore.activeTeamId),
-    ]);
-  }
+  await Promise.all([
+    channelsStore.fetchChannels().catch(() => undefined),
+    loadResources(),
+  ]);
 });
 </script>
 
@@ -69,8 +54,6 @@ onMounted(async () => {
     </NCard>
 
     <template v-else>
-      <TeamScopeCard v-if="!teamsStore.featureDisabled" />
-
       <NAlert
         v-if="channelsStore.error"
         type="error"

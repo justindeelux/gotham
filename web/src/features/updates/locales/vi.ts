@@ -63,7 +63,7 @@ const vi = {
     title: "Lịch cập nhật",
     hint: "Thay đổi đã lưu có hiệu lực ngay — không cần khởi động lại.",
     timezone: "Giờ tính theo {timezone}.",
-    adminOnly: "Chỉ quản trị viên nền tảng mới có thể kiểm tra, cập nhật hoặc đổi lịch.",
+    adminOnly: "Chỉ chủ sở hữu mới có thể kiểm tra, cập nhật hoặc đổi lịch.",
     checkEnabled: "Tự động kiểm tra cập nhật",
     checkHint: "Gotham tìm bản phát hành mới theo lịch bên dưới.",
     autoApply: "Tự động áp dụng cập nhật",

@@ -135,7 +135,7 @@ describe("JUS-75 notices are small inline alerts under their field", () => {
     expect(wrapper.find(".n-alert.field-alert").exists()).toBe(true);
     expect(alerts[0].text()).toContain("latest");
     const html = wrapper.html();
-    expect(html.indexOf("registry.example.com/team/app:1.2")).toBeLessThan(html.indexOf("latest"));
+    expect(html.indexOf("registry.example.com/apps/app:1.2")).toBeLessThan(html.indexOf("latest"));
     wrapper.unmount();
   });
 

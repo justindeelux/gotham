@@ -4,12 +4,10 @@ import { computed, nextTick, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useEditorStore } from "@/features/files/stores/editor";
-import { useTeamsStore } from "@/features/teams";
 
 const { t } = useI18n();
 const message = useMessage();
 const editor = useEditorStore();
-const teams = useTeamsStore();
 
 const show = computed<boolean>(() => editor.conflictTab !== null);
 const tab = computed(() => editor.conflictTab);
@@ -35,7 +33,7 @@ async function reload(): Promise<void> {
   if (!current) {
     return;
   }
-  await editor.reload(current.id, teams.activeTeamId);
+  await editor.reload(current.id);
 }
 
 async function overwrite(): Promise<void> {
@@ -43,7 +41,7 @@ async function overwrite(): Promise<void> {
   if (!current) {
     return;
   }
-  const outcome = await editor.overwrite(current.id, teams.activeTeamId);
+  const outcome = await editor.overwrite(current.id);
   if (outcome === "saved") {
     message.success(String(t("files.editor.saved", { name: current.name })));
   } else if (outcome === "error") {

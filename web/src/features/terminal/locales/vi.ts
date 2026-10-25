@@ -57,7 +57,7 @@ const vi = {
   errors: {
     title: "Không thể mở terminal",
     auth: "Phiên đăng nhập đã kết thúc. Hãy đăng nhập lại để mở terminal.",
-    forbidden: "Chỉ quản trị viên nền tảng mới có thể mở terminal máy chủ.",
+    forbidden: "Chỉ chủ sở hữu mới có thể mở terminal máy chủ.",
     node: "Không tìm thấy máy chủ hoặc máy chủ không còn được quản lý.",
     quota: "Đã đạt giới hạn phiên terminal. Hãy đóng một phiên và thử lại.",
     unsupported: "Agent trên máy chủ này không hỗ trợ phiên terminal.",
@@ -77,7 +77,7 @@ const vi = {
     sessionExpired:
       "Terminal đã đóng trước khi shell khởi động. Phiên có thể đã hết hạn; hãy bắt đầu phiên mới.",
     applicationForbidden:
-      "Bạn cần quyền ghi vào nhóm của ứng dụng này để mở shell trong container.",
+      "Chỉ chủ sở hữu mới mở được shell trong container.",
     applicationNotFound: "Ứng dụng này không còn tồn tại.",
     noDeployment:
       "Ứng dụng này chưa có đợt triển khai nào đang chạy. Hãy triển khai rồi thử lại.",
@@ -89,7 +89,7 @@ const vi = {
       "Container đã chọn không còn khả dụng. Hãy làm mới danh sách service và chọn một container đang chạy.",
     containerNoShell: "Container này không có shell được hỗ trợ.",
     terminalDisabled:
-      "Terminal container đang bị tắt trên bản điều khiển này. Hãy đề nghị quản trị viên nền tảng bật lại.",
+      "Terminal container đang bị tắt trên bản điều khiển này. Hãy đề nghị chủ sở hữu bật lại.",
   },
   actions: {
     retry: "Bắt đầu phiên mới",
@@ -128,7 +128,7 @@ const vi = {
     title: "Terminal",
     eyebrow: "Vận hành",
     description:
-      "Mở shell trên máy chủ được quản lý hoặc shell bên trong container ứng dụng đang chạy. Quyền terminal là quản trị toàn bộ máy chủ và chỉ dành cho quản trị viên nền tảng.",
+      "Mở shell trên máy chủ được quản lý hoặc shell bên trong container ứng dụng đang chạy. Quyền terminal là quản trị toàn bộ máy chủ và chỉ dành cho chủ sở hữu.",
     tabLabel: "Terminal",
     tabs: "Các tab terminal",
     closeTab: "Đóng {title}",
@@ -144,7 +144,7 @@ const vi = {
       "Trang này không còn terminal đang hoạt động. Hệ thống sẽ không tự khởi động; hãy dùng nút bên dưới khi bạn sẵn sàng.",
     notAvailableTitle: "Không thể dùng terminal",
     notAvailableBody:
-      "Terminal chỉ dành cho quản trị viên nền tảng. Hãy đề nghị quyền truy cập rồi tải lại trang này.",
+      "Terminal chỉ dành cho chủ sở hữu. Hãy đề nghị quyền truy cập rồi tải lại trang này.",
     notReadyTitle: "Không thể mở terminal",
     notReadyBody:
       "Máy chủ này đang ở trạng thái {status}. Terminal chỉ có thể bắt đầu trên node sẵn sàng.",
@@ -175,7 +175,7 @@ const vi = {
       unavailable:
         "Danh sách đích hiện không khả dụng. Hãy thử lại khi máy chủ hoặc bảng điều khiển kết nối được.",
       disabled:
-        "Terminal container bị tắt trên bảng điều khiển này. Hãy nhờ quản trị viên nền tảng bật lại.",
+        "Terminal container bị tắt trên bảng điều khiển này. Hãy nhờ chủ sở hữu bật lại.",
       internal:
         "Bảng điều khiển đã trả về phản hồi không mong đợi. Hãy thử lại hoặc tải lại trang.",
       timeout:

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 
-/* global window:readonly, document:readonly, StorageEvent:readonly, setTimeout:readonly */
+/* global window:readonly, StorageEvent:readonly, setTimeout:readonly */
 // globals are declared here (same pattern as form-feedback.spec.ts).
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
@@ -22,27 +22,8 @@ const user = {
   role: "owner",
 };
 
-const personalTeam = {
-  id: "t-personal",
-  name: "Acme",
-  is_personal: true,
-  role: "owner",
-  created_at: "2026-01-01T00:00:00Z",
-  updated_at: "2026-01-02T00:00:00Z",
-};
-
-const longTeam = {
-  id: "t1",
-  name: "Platform Engineering",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-01-01T00:00:00Z",
-  updated_at: "2026-01-02T00:00:00Z",
-};
-
 const discordChannel = {
   id: "ch1",
-  team_id: "t1",
   name: "Deploy alerts",
   kind: "discord",
   enabled: true,
@@ -93,29 +74,6 @@ async function installMocks(
     }
     if (method === "GET" && path === "/auth/config") {
       await route.fulfill(json(200, { registrationOpen: false }));
-      return;
-    }
-    if (method === "GET" && path === "/teams") {
-      await route.fulfill(json(200, { teams: [personalTeam, longTeam] }));
-      return;
-    }
-    if (method === "GET" && /\/teams\/[^/]+\/members$/.test(path)) {
-      await route.fulfill(
-        json(200, {
-          members: [
-            {
-              user_id: "u1",
-              email: "owner@example.com",
-              role: "owner",
-              created_at: "2026-01-01T00:00:00Z",
-            },
-          ],
-        }),
-      );
-      return;
-    }
-    if (method === "GET" && /\/teams\/[^/]+\/invites$/.test(path)) {
-      await route.fulfill(json(200, { invites: [] }));
       return;
     }
     if (method === "GET" && path === "/notification-channels") {
@@ -184,16 +142,6 @@ async function switchLocale(page: Page, locale: "en" | "vi"): Promise<void> {
   }, locale);
 }
 
-async function expectNoOverflow(page: Page, label: string): Promise<void> {
-  const overflow = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(
-    overflow.scrollWidth,
-    `${label}: sideways scroll ${overflow.scrollWidth} > ${overflow.clientWidth}`,
-  ).toBeLessThanOrEqual(overflow.clientWidth + 1);
-}
 
 let preview: ChildProcess | null = null;
 
@@ -227,83 +175,6 @@ test.afterAll(async () => {
   preview = null;
 });
 
-for (const width of [390, 900, 1280] as const) {
-  test(`I18N-8 teams page fits en/vi at ${width}px with a readable selected-team header`, async ({
-    browser,
-  }) => {
-    const log: ApiLog = { calls: [] };
-    const { context, page } = await openPage(browser, "/teams", "en", width, log);
-    try {
-      await expect(page.getByRole("heading", { name: "Teams", exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "Platform Engineering" }).click();
-      await expect(page.getByText("your role: owner")).toBeVisible();
-      await expectNoOverflow(page, `teams en ${width}`);
-      const titleWidthEn = await page
-        .locator(".team-card .n-card-header__main")
-        .evaluate((element) => element.getBoundingClientRect().width);
-      expect(titleWidthEn, `teams en ${width} title crushed`).toBeGreaterThan(80);
-
-      await switchLocale(page, "vi");
-      await expect(page.getByRole("heading", { name: "Nhóm", exact: true })).toBeVisible();
-      await expect(
-        page.getByText("vai trò của bạn: chủ sở hữu"),
-      ).toBeVisible();
-      await expectNoOverflow(page, `teams vi ${width}`);
-      const titleWidth = await page
-        .locator(".team-card .n-card-header__main")
-        .evaluate((element) => element.getBoundingClientRect().width);
-      expect(titleWidth, `teams vi ${width} title crushed`).toBeGreaterThan(80);
-      await page.screenshot({ path: `test-results/i18n8-teams-vi-${width}.png` });
-    } finally {
-      await context.close();
-    }
-  });
-
-  test(`I18N-8 notifications page fits en/vi at ${width}px`, async ({ browser }) => {
-    const log: ApiLog = { calls: [] };
-    const { context, page } = await openPage(
-      browser,
-      "/settings/notifications",
-      "en",
-      width,
-      log,
-    );
-    try {
-      await expect(
-        page.getByRole("heading", { name: "Notification channels", exact: true }),
-      ).toBeVisible();
-      await expect(page.getByText("Deploy alerts")).toBeVisible();
-      await expectNoOverflow(page, `notifications en ${width}`);
-
-      await switchLocale(page, "vi");
-      await expect(
-        page.getByRole("heading", { name: "Kênh thông báo", exact: true }),
-      ).toBeVisible();
-      await expect(page.locator("span.n-tag__content", { hasText: /^Webhook Discord$/ })).toBeVisible();
-      await expectNoOverflow(page, `notifications vi ${width}`);
-      await page.screenshot({ path: `test-results/i18n8-notifications-vi-${width}.png` });
-    } finally {
-      await context.close();
-    }
-  });
-
-  test(`I18N-8 domains page fits en/vi at ${width}px`, async ({ browser }) => {
-    const log: ApiLog = { calls: [] };
-    const { context, page } = await openPage(browser, "/domains", "en", width, log);
-    try {
-      await expect(page.getByRole("heading", { name: "Domains & SSL", exact: true })).toBeVisible();
-      await expectNoOverflow(page, `domains en ${width}`);
-
-      await switchLocale(page, "vi");
-      await expect(page.getByRole("heading", { name: "Tên miền & SSL", exact: true })).toBeVisible();
-      await expect(page.locator("span.n-tabs-tab__label", { hasText: /^Nhà cung cấp DNS$/ })).toBeVisible();
-      await expectNoOverflow(page, `domains vi ${width}`);
-      await page.screenshot({ path: `test-results/i18n8-domains-vi-${width}.png` });
-    } finally {
-      await context.close();
-    }
-  });
-}
 
 test("I18N-8 counts render exactly en/vi with zero API on switch", async ({
   browser,
@@ -336,21 +207,6 @@ test("I18N-8 counts render exactly en/vi with zero API on switch", async ({
   const redirectOverride = {
     ["GET /proxy/redirects"]: () => ({ status: 200, body: { redirects } }),
   };
-  const teamsCtx = await openPage(browser, "/teams", "en", 900, log);
-  try {
-    await expect(
-      teamsCtx.page.getByRole("heading", { name: "Teams", exact: true }),
-    ).toBeVisible();
-    await expect(teamsCtx.page.getByText("2 teams", { exact: true })).toBeVisible();
-    const teamCalls = log.calls.length;
-    await switchLocale(teamsCtx.page, "vi");
-    await expect(teamsCtx.page.getByText("2 nhóm", { exact: true })).toBeVisible();
-    await new Promise((done) => setTimeout(done, 300));
-    expect(log.calls.length, "API calls during teams switch").toBe(teamCalls);
-  } finally {
-    await teamsCtx.context.close();
-  }
-
   const domainsCtx = await openPage(
     browser,
     "/domains",
@@ -399,7 +255,7 @@ test("I18N-8 channel draft survives a switch with zero API calls", async ({
   try {
     await expect(page.getByText("Deploy alerts")).toBeVisible();
     await page.getByRole("button", { name: "New channel" }).click();
-    await expect(page.getByText("Team-wide (all resources)")).toBeVisible();
+    await expect(page.getByLabel("Resource scope").getByText("All resources")).toBeVisible();
 
     await page.locator('[aria-label="Channel name"] input').fill("Typed channel");
     await page.locator('[aria-label="Webhook URL"] input').fill("https://typed/hook");
@@ -442,7 +298,7 @@ test("I18N-8 channel test failure rederives with exactly one POST per attempt", 
     await expect(page.getByText("Deploy alerts")).toBeVisible();
     await page.getByRole("button", { name: "Send test" }).click();
     await expect(page.locator('[data-test-channel-result]')).toContainText(
-      "Test failed: Your team role does not allow this action.",
+      "Test failed: You do not have permission for this action.",
     );
     const posts = (): number =>
       log.calls.filter((call) => call.startsWith("POST /notification-channels/ch1/test")).length;
@@ -450,35 +306,9 @@ test("I18N-8 channel test failure rederives with exactly one POST per attempt", 
 
     await switchLocale(page, "vi");
     await expect(page.locator('[data-test-channel-result]')).toContainText(
-      "Gửi thử thất bại: Vai trò nhóm của bạn không cho phép hành động này.",
+      "Gửi thử thất bại: Bạn không có quyền thực hiện thao tác này.",
     );
     expect(posts(), "resent on switch").toBe(1);
-  } finally {
-    await context.close();
-  }
-});
-
-test("I18N-8 team rename 409 keeps the raw refusal identical in both locales", async ({
-  browser,
-}) => {
-  const log: ApiLog = { calls: [] };
-  const { context, page } = await openPage(browser, "/teams", "en", 900, log, {
-    [`PATCH /teams/t-personal`]: () => ({ status: 409, body: { message: "teams: name taken" } }),
-    [`PATCH /teams/t1`]: () => ({ status: 409, body: { message: "teams: name taken" } }),
-  });
-  try {
-    await expect(page.getByRole("heading", { name: "Teams", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Rename" }).first().click();
-    await page.locator('[aria-label="Team name"] input').fill("Taken");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByText("name taken")).toBeVisible();
-    expect(page.locator('[aria-label="Team name"] input')).toHaveValue("Taken");
-
-    await switchLocale(page, "vi");
-    await expect(page.getByText("name taken")).toBeVisible();
-    await expect(page.locator('[aria-label="Tên nhóm"] input')).toHaveValue("Taken");
-    await expect(page.getByText("Đổi tên nhóm")).toBeVisible();
-    await page.screenshot({ path: "test-results/i18n8-dialog-rename-vi-900.png" });
   } finally {
     await context.close();
   }

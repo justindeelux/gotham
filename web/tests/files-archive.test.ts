@@ -27,7 +27,6 @@ import {
   defaultArchiveName,
   isExtractableArchive,
 } from "@/features/files/utils/files";
-import { useTeamsStore } from "@/features/teams";
 
 const root: FilesRoot = {
   name: "volumes",
@@ -54,9 +53,6 @@ beforeEach(() => {
   for (const fn of [listRoots, listEntries, compressEntries, extractEntry]) {
     vi.mocked(fn).mockReset();
   }
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [{ id: "team-1", name: "A", is_personal: true, role: "owner" }];
   vi.mocked(listRoots).mockResolvedValue([root]);
   vi.mocked(listEntries).mockResolvedValue({
     entries: [
@@ -123,8 +119,7 @@ describe("files store compress", () => {
     expect(created.name).toBe("config.zip");
     expect(vi.mocked(compressEntries)).toHaveBeenCalledWith(
       "server-1",
-      "team-1",
-      {
+        {
         root: "volumes",
         sources: ["data/a", "data/b"],
         destination: "data/config.zip",
@@ -133,8 +128,7 @@ describe("files store compress", () => {
     );
     expect(vi.mocked(listEntries)).toHaveBeenLastCalledWith(
       "server-1",
-      "team-1",
-      { root: "volumes", path: "data" },
+        { root: "volumes", path: "data" },
     );
     expect(store.acting).toBe(false);
   });
@@ -162,7 +156,7 @@ describe("files store extract", () => {
 
     await store.extract(entry({ name: "backup.tar.gz" }), true);
 
-    expect(vi.mocked(extractEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(extractEntry)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       source: "data/backup.tar.gz",
       destination: "data",

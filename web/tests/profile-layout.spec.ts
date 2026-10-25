@@ -81,10 +81,7 @@ async function openProfile(page: Page): Promise<void> {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: session.user });
-  });
-  await page.route("**/api/v1/teams**", async (route) => {
-    await route.fulfill({ json: { teams: [] } });
+    await route.fulfill({ json: { user: session.user } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });

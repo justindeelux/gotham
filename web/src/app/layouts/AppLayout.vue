@@ -6,21 +6,23 @@ import { RouterView, useRoute } from "vue-router";
 import { TaskProgressCards } from "@/features/tasks";
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
+import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers";
 import { TerminalPageDock, TerminalWindow } from "@/features/terminal";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
 import { provideMobileNav } from "./useMobileNav";
-import { useTerminalAccessBoundary } from "./useTerminalAccessBoundary";
 
 const { mobileNavOpen, closeMobileNav } = provideMobileNav();
+const authStore = useAuthStore();
 const serversStore = useServersStore();
-
-useTerminalAccessBoundary();
 
 const isMobile = useMediaQuery("(max-width: 1024px)");
 
 onMounted(() => {
+  if (!authStore.isOwner) {
+    return;
+  }
   if (serversStore.servers.length === 0 && !serversStore.loading) {
     void serversStore.fetchServers().catch(() => {
     });
@@ -37,9 +39,9 @@ const widePage = computed(() => route.meta.wide === true);
 <template>
   <div
     class="app"
-    :class="{ 'is-open': mobileNavOpen }"
+    :class="{ 'is-open': mobileNavOpen, 'no-rail': !authStore.isOwner }"
   >
-    <ServerRail v-if="!isMobile" />
+    <ServerRail v-if="!isMobile && authStore.isOwner" />
 
     <AppSidebar />
 
@@ -78,6 +80,10 @@ const widePage = computed(() => route.meta.wide === true);
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+}
+
+.app.no-rail {
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
 }
 
 .main {
@@ -125,7 +131,8 @@ const widePage = computed(() => route.meta.wide === true);
 }
 
 @media (max-width: 1024px) {
-  .app {
+  .app,
+  .app.no-rail {
     grid-template-columns: minmax(0, 1fr);
   }
 

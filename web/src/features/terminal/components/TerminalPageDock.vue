@@ -31,7 +31,7 @@ function onMediaChange(event: MediaQueryListEvent): void {
 
 const visibleTabs = computed<TerminalTab[]>(() =>
   terminal.pageTabs.filter((tab) =>
-    isContainerTerminalTarget(tab.target) ? true : authStore.isPlatformAdmin,
+    isContainerTerminalTarget(tab.target) ? true : authStore.isOwner,
   ),
 );
 

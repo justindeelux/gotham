@@ -47,6 +47,7 @@ const envLabel = computed<string>(() => {
     <NButton
       quaternary
       circle
+      v-if="authStore.isOwner"
       class="rail-toggle"
       :aria-label="t('shell.serversToggle')"
       aria-haspopup="dialog"
@@ -85,6 +86,7 @@ const envLabel = computed<string>(() => {
   </header>
 
   <NDrawer
+    v-if="authStore.isOwner"
     v-model:show="railOpen"
     placement="left"
     :width="72"

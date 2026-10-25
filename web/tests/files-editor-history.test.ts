@@ -53,7 +53,6 @@ import type { FilesVersion } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const version = (id: string, createdAt: string, size = 12): FilesVersion => ({
@@ -76,8 +75,7 @@ function dialogShell(dirty = false) {
           h(EditorHistoryDialog as never, {
             show: true,
             serverId: "srv",
-            teamId: "team-1",
-            root: "volumes",
+                      root: "volumes",
             path: "a.txt",
             fileName: "a.txt",
             dirty,
@@ -115,7 +113,7 @@ describe("editor history diff tab", () => {
     });
     const editor = useEditorStore();
 
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "a.txt · now");
+    await editor.openDiff("srv", "volumes", "a.txt", "v1", "a.txt · now");
 
     expect(editor.tabs).toHaveLength(1);
     const tab = editor.tabs[0];
@@ -128,8 +126,8 @@ describe("editor history diff tab", () => {
       current: "current body",
     });
     expect(editor.isDirty(tab)).toBe(false);
-    expect(await editor.save(tab.id, "team-1")).toBe("blocked");
-    expect(await editor.saveAsCopy(tab.id, "team-1", "copy.txt")).toBe("blocked");
+    expect(await editor.save(tab.id)).toBe("blocked");
+    expect(await editor.saveAsCopy(tab.id, "copy.txt")).toBe("blocked");
   });
 
   it("reuses the diff tab of the same revision and opens another for a new one", async () => {
@@ -145,7 +143,7 @@ describe("editor history diff tab", () => {
       mode: 0o100644,
     });
     const editor = useEditorStore();
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "v1 · time");
+    await editor.openDiff("srv", "volumes", "a.txt", "v1", "v1 · time");
     const first = editor.tabs[0];
 
     vi.mocked(getFileVersion).mockResolvedValue({
@@ -159,12 +157,12 @@ describe("editor history diff tab", () => {
       size: 13,
       mode: 0o100644,
     });
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "v1 · time");
+    await editor.openDiff("srv", "volumes", "a.txt", "v1", "v1 · time");
     expect(editor.tabs).toHaveLength(1);
     expect(editor.activeId).toBe(first.id);
     expect(first.diff?.current).toBe("newer current");
 
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v2", "v2 · time");
+    await editor.openDiff("srv", "volumes", "a.txt", "v2", "v2 · time");
     expect(editor.tabs).toHaveLength(2);
     expect(editor.activeTab?.diff?.versionId).toBe("v2");
   });
@@ -177,7 +175,7 @@ describe("editor history diff tab", () => {
     vi.mocked(getContent).mockRejectedValue(new Error("gone"));
     const editor = useEditorStore();
 
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "v1 · time");
+    await editor.openDiff("srv", "volumes", "a.txt", "v1", "v1 · time");
 
     expect(editor.tabs[0].status).toBe("error");
     expect(editor.tabs[0].diff).toBeUndefined();
@@ -186,18 +184,6 @@ describe("editor history diff tab", () => {
 
 describe("history in the editor", () => {
   it("shows the revision count and opens the dialog from the toolbar", async () => {
-    const teams = useTeamsStore();
-    teams.teams = [
-      {
-        id: "team-1",
-        name: "A",
-        is_personal: false,
-        role: "owner",
-        created_at: "2026-10-01T00:00:00Z",
-        updated_at: "2026-10-01T00:00:00Z",
-      },
-    ];
-    teams.activeTeamId = "team-1";
     const files = useFilesStore();
     files.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
     files.rootName = "volumes";
@@ -249,8 +235,7 @@ describe("history in the editor", () => {
     expect(wrapper.text()).toContain("File history — a.txt");
     expect(vi.mocked(listFileVersions)).toHaveBeenCalledWith(
       "srv",
-      "team-1",
-      "volumes",
+        "volumes",
       "a.txt",
     );
 
@@ -344,8 +329,7 @@ describe("history dialog", () => {
 
     expect(vi.mocked(deleteFileVersion)).toHaveBeenCalledWith(
       "srv",
-      "team-1",
-      "volumes",
+        "volumes",
       "a.txt",
       "v2",
     );

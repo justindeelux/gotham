@@ -10,17 +10,11 @@ vi.mock("@/features/projects/api/projects", async (importOriginal) => {
     getProject: vi.fn(),
   };
 });
-vi.mock("@/features/teams/api/teams", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/features/teams/api/teams")>();
-  return { ...actual, listTeams: vi.fn() };
-});
-
 import {
   getProject,
   listProjects,
 } from "@/features/projects/api/projects";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { useTeamsStore } from "@/features/teams";
 
 const counts = { applications: 0, services: 0, databases: 0 };
 
@@ -51,10 +45,8 @@ beforeEach(() => {
 });
 
 describe("projects store races", () => {
-  it("drops a list read that lost to a team switch", async () => {
-    const teams = useTeamsStore();
+  it("drops a list read that lost the race", async () => {
     const store = useProjectsStore();
-    teams.activeTeamId = "team-a";
 
     const first = deferred<ReturnType<typeof listProjects>>();
     const second = deferred<ReturnType<typeof listProjects>>();
@@ -63,7 +55,6 @@ describe("projects store races", () => {
       .mockReturnValueOnce(second.promise);
 
     const readA = store.fetchProjects();
-    teams.activeTeamId = "team-b";
     const readB = store.fetchProjects();
 
     second.resolve([project("b-1", "bee")]);
@@ -77,9 +68,7 @@ describe("projects store races", () => {
   });
 
   it("drops a detail read that lost to a project switch", async () => {
-    const teams = useTeamsStore();
     const store = useProjectsStore();
-    teams.activeTeamId = "team-1";
     const idA = "11111111-1111-4111-8111-111111111111";
     const idB = "33333333-3333-4333-8333-333333333333";
 

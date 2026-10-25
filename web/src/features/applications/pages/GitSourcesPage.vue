@@ -14,7 +14,7 @@ import {
   NTag,
   useMessage,
 } from "naive-ui";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { describeGitHubAppError } from "@/features/applications/api/githubApp";
@@ -25,12 +25,10 @@ import {
   useGitSourcesPage,
 } from "@/features/applications/composables/useGitSourcesPage";
 import type { GitSourceRow } from "@/features/applications/composables/useGitSourcesPage";
-import { useTeamsStore } from "@/features/teams";
 import { formatDate } from "@/shared/utils/format";
 
 const { t } = useI18n();
 const message = useMessage();
-const teamsStore = useTeamsStore();
 const page = useGitSourcesPage();
 
 const showGitHub = ref(false);
@@ -43,12 +41,7 @@ const disconnectWorking = ref(false);
 
 const githubNameValid = computed<boolean>(() => githubName.value.trim() !== "");
 
-const eyebrow = computed<string>(() => {
-  const team = teamsStore.activeTeam?.name ?? "";
-  return team === ""
-    ? t("applications.gitSources.eyebrow")
-    : t("applications.gitSources.eyebrowTeam", { team });
-});
+const eyebrow = computed<string>(() => t("applications.gitSources.eyebrow"));
 
 const connectedCount = computed<number>(
   () => page.rows.value.filter((row) => row.connected).length,
@@ -76,13 +69,6 @@ function appsCell(row: GitSourceRow): string {
 onMounted(() => {
   void page.refresh().catch(() => undefined);
 });
-
-watch(
-  () => teamsStore.activeTeamId,
-  () => {
-    void page.refresh().catch(() => undefined);
-  },
-);
 
 function openGitHub(): void {
   githubName.value = "gotham";

@@ -69,7 +69,7 @@ function featureBoundaries() {
     "services",
     "templates",
     "domains",
-    "teams",
+    "users",
     "notifications",
     "version",
     "profile",

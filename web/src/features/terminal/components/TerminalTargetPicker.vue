@@ -7,7 +7,6 @@ import {
   onBeforeUnmount,
   onMounted,
   ref,
-  watch,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -22,7 +21,6 @@ import type {
 } from "@/features/terminal/schemas/terminal";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalOpenOptions } from "@/features/terminal/stores/terminal";
-import { useTeamsStore } from "@/features/teams/stores/teams";
 import { containerTabTitle } from "@/features/terminal/utils/containerRecovery";
 
 interface Props {
@@ -49,7 +47,6 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const terminal = useTerminalStore();
-const teams = useTeamsStore();
 
 const show = ref(false);
 const loading = ref(false);
@@ -278,7 +275,7 @@ async function load(): Promise<void> {
   loadError.value = "";
   pickError.value = false;
   try {
-    const result = await listTerminalTargets(teams.activeTeamId, abort.signal);
+    const result = await listTerminalTargets(abort.signal);
     if (token !== loadToken) {
       return;
     }
@@ -331,15 +328,6 @@ function onShow(value: boolean): void {
   }
   picked = false;
 }
-
-watch(
-  () => teams.activeTeamId,
-  () => {
-    if (show.value) {
-      void load();
-    }
-  },
-);
 
 async function select(row: TargetRow): Promise<void> {
   if (pendingKey.value === row.key) {

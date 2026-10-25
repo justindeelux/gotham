@@ -57,7 +57,7 @@ describe("editor tab store", () => {
   it("opens a file, decodes its shape and starts clean", async () => {
     getContentMock.mockResolvedValueOnce(content("services:\n  web:\n"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
 
     expect(store.tabs).toHaveLength(1);
     const tab = store.activeTab!;
@@ -75,7 +75,7 @@ describe("editor tab store", () => {
       size: 5_000_000,
     });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "server.log");
+    await store.openFile("srv", "volumes", "server.log");
 
     const tab = store.activeTab!;
     expect(tab.status).toBe("ready");
@@ -84,14 +84,14 @@ describe("editor tab store", () => {
     store.setDoc(tab.id, "changed");
     expect(tab.doc).toBe("tail\n");
     expect(store.isDirty(tab)).toBe(false);
-    expect(await store.save(tab.id, "team")).toBe("blocked");
+    expect(await store.save(tab.id)).toBe("blocked");
     expect(putContentMock).not.toHaveBeenCalled();
   });
 
   it("keeps a manual language override through a rename but re-detects otherwise", async () => {
     getContentMock.mockResolvedValue(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
     const tab = store.activeTab!;
     expect(tab.language).toBe("yaml");
     expect(tab.languageManual).toBe(false);
@@ -102,7 +102,7 @@ describe("editor tab store", () => {
     store.applyRename("volumes", "", "app.yaml", "app.json");
     expect(tab.language).toBe("php");
 
-    await store.openFile("srv", "team", "volumes", "other.yaml");
+    await store.openFile("srv", "volumes", "other.yaml");
     const auto = store.activeTab!;
     store.applyRename("volumes", "", "other.yaml", "other.php");
     expect(auto.language).toBe("php");
@@ -115,18 +115,17 @@ describe("editor tab store", () => {
     putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v2"' });
 
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
     const tab = store.activeTab!;
     expect(tab.doc).toBe("line1\nline2\nline3");
     expect(tab.eol).toBe("\r\n");
     expect(tab.bom).toBe(true);
     expect(serializeDoc({ doc: tab.doc, eol: tab.eol, bom: tab.bom })).toBe(original);
 
-    const outcome = await store.save(tab.id, "team");
+    const outcome = await store.save(tab.id);
     expect(outcome).toBe("saved");
     expect(putContentMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({ content: original, etag: '"v1"', overwrite: false }),
     );
   });
@@ -150,7 +149,7 @@ describe("editor tab store", () => {
   it("opens a mixed-EOL file read-only instead of normalising it", async () => {
     getContentMock.mockResolvedValueOnce(content("a\r\nb\nc", '"v1"'));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "mixed.txt");
+    await store.openFile("srv", "volumes", "mixed.txt");
 
     const tab = store.activeTab!;
     expect(tab.status).toBe("mixed");
@@ -158,7 +157,7 @@ describe("editor tab store", () => {
     store.setEol(tab.id, "\n");
     expect(tab.eol).toBe("\r\n");
     expect(store.isDirty(tab)).toBe(false);
-    expect(await store.save(tab.id, "team")).toBe("blocked");
+    expect(await store.save(tab.id)).toBe("blocked");
     expect(putContentMock).not.toHaveBeenCalled();
   });
 
@@ -166,7 +165,7 @@ describe("editor tab store", () => {
     getContentMock.mockResolvedValueOnce(content("a\nb\n", '"v1"'));
     putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v2"' });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.txt");
+    await store.openFile("srv", "volumes", "app.txt");
     const tab = store.activeTab!;
 
     store.setEol(tab.id, "\r\n");
@@ -174,10 +173,9 @@ describe("editor tab store", () => {
     expect(tab.doc).toBe("a\nb\n");
     expect(store.isDirty(tab)).toBe(true);
 
-    expect(await store.save(tab.id, "team")).toBe("saved");
+    expect(await store.save(tab.id)).toBe("saved");
     expect(putContentMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({ content: "a\r\nb\r\n" }),
     );
     expect(store.isDirty(tab)).toBe(false);
@@ -189,14 +187,13 @@ describe("editor tab store", () => {
     getContentMock.mockResolvedValueOnce(content(original, '"v1"'));
     putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v2"' });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.txt");
+    await store.openFile("srv", "volumes", "app.txt");
     const tab = store.activeTab!;
 
     expect(store.isDirty(tab)).toBe(false);
-    expect(await store.save(tab.id, "team")).toBe("saved");
+    expect(await store.save(tab.id)).toBe("saved");
     expect(putContentMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({ content: original }),
     );
   });
@@ -204,20 +201,20 @@ describe("editor tab store", () => {
   it("clears dirty on save only when the doc did not change in flight", async () => {
     getContentMock.mockResolvedValueOnce(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
     const tab = store.activeTab!;
 
     store.setDoc(tab.id, "edited");
     expect(store.isDirty(tab)).toBe(true);
     putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v2"' });
-    await store.save(tab.id, "team");
+    await store.save(tab.id);
     expect(store.isDirty(tab)).toBe(false);
     expect(tab.etag).toBe('"v2"');
 
     const pending = deferred<FilesEntry>();
     putContentMock.mockReturnValueOnce(pending.promise);
     store.setDoc(tab.id, "first");
-    const saving = store.save(tab.id, "team");
+    const saving = store.save(tab.id);
     store.setDoc(tab.id, "second");
     pending.resolve({ ...entry, etag: '"v3"' });
     expect(await saving).toBe("saved");
@@ -229,17 +226,17 @@ describe("editor tab store", () => {
   it("arms the conflict prompt on a 409 and clears it on reload", async () => {
     getContentMock.mockResolvedValueOnce(content("start", '"v1"'));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "mine");
 
     putContentMock.mockRejectedValueOnce({ message: "conflict", status: 409 });
-    const outcome = await store.save(tab.id, "team");
+    const outcome = await store.save(tab.id);
     expect(outcome).toBe("conflict");
     expect(store.conflictId).toBe(tab.id);
 
     getContentMock.mockResolvedValueOnce(content("theirs", '"v9"'));
-    await store.reload(tab.id, "team");
+    await store.reload(tab.id);
     expect(store.conflictId).toBeNull();
     expect(tab.doc).toBe("theirs");
     expect(tab.original).toBe("theirs");
@@ -249,14 +246,14 @@ describe("editor tab store", () => {
   it("queues every conflicting tab from Save All and advances the prompt", async () => {
     getContentMock.mockImplementation(async () => content("start", '"v1"'));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "a.yaml");
-    await store.openFile("srv", "team", "volumes", "b.yaml");
+    await store.openFile("srv", "volumes", "a.yaml");
+    await store.openFile("srv", "volumes", "b.yaml");
     const [first, second] = store.tabs;
     store.setDoc(first!.id, "mine-a");
     store.setDoc(second!.id, "mine-b");
 
     putContentMock.mockRejectedValue({ message: "conflict", status: 409 });
-    const reports = await store.saveAll("team");
+    const reports = await store.saveAll();
     expect(reports.map((report) => report.outcome)).toEqual(["conflict", "conflict"]);
 
     expect(store.conflictId).toBe(first!.id);
@@ -270,33 +267,33 @@ describe("editor tab store", () => {
   it("resolves one queued conflict without dropping the next", async () => {
     getContentMock.mockImplementation(async () => content("start", '"v1"'));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "a.yaml");
-    await store.openFile("srv", "team", "volumes", "b.yaml");
+    await store.openFile("srv", "volumes", "a.yaml");
+    await store.openFile("srv", "volumes", "b.yaml");
     const [first, second] = store.tabs;
     store.setDoc(first!.id, "mine-a");
     store.setDoc(second!.id, "mine-b");
 
     putContentMock.mockRejectedValue({ message: "conflict", status: 409 });
-    await store.saveAll("team");
+    await store.saveAll();
     expect(store.conflictId).toBe(first!.id);
 
     getContentMock.mockResolvedValueOnce(content("theirs", '"v9"'));
-    await store.reload(first!.id, "team");
+    await store.reload(first!.id);
     expect(store.conflictId).toBe(second!.id);
   });
 
   it("Save All skips a tab whose save is already in flight", async () => {
     getContentMock.mockImplementation(async () => content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "a.yaml");
-    await store.openFile("srv", "team", "volumes", "b.yaml");
+    await store.openFile("srv", "volumes", "a.yaml");
+    await store.openFile("srv", "volumes", "b.yaml");
     const [first, second] = store.tabs;
     store.setDoc(first!.id, "mine-a");
     store.setDoc(second!.id, "mine-b");
     first!.saving = true;
 
     putContentMock.mockResolvedValue({ ...entry, etag: '"v2"' });
-    const reports = await store.saveAll("team");
+    const reports = await store.saveAll();
     expect(reports.map((report) => report.tab.id)).toEqual([second!.id]);
     expect(putContentMock).toHaveBeenCalledTimes(1);
   });
@@ -304,16 +301,15 @@ describe("editor tab store", () => {
   it("overwrite force-saves with overwrite=true", async () => {
     getContentMock.mockResolvedValueOnce(content("start", '"v1"'));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "mine");
     putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v10"' });
 
-    const outcome = await store.overwrite(tab.id, "team");
+    const outcome = await store.overwrite(tab.id);
     expect(outcome).toBe("saved");
     expect(putContentMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({ overwrite: true }),
     );
     expect(store.isDirty(tab)).toBe(false);
@@ -322,7 +318,7 @@ describe("editor tab store", () => {
   it("save-as-copy reserves the name exclusively and never force-overwrites", async () => {
     getContentMock.mockResolvedValueOnce(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "config/app.yaml");
+    await store.openFile("srv", "volumes", "config/app.yaml");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "mine");
     createFileMock.mockResolvedValueOnce({
@@ -332,22 +328,20 @@ describe("editor tab store", () => {
     });
     putContentMock.mockResolvedValueOnce({ ...entry, name: "app.yaml.copy", etag: '"c1"' });
 
-    const outcome = await store.saveAsCopy(tab.id, "team", "app.yaml.copy");
+    const outcome = await store.saveAsCopy(tab.id, "app.yaml.copy");
     expect(outcome).toBe("saved");
     expect(createFileMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({ path: "config/app.yaml.copy" }),
     );
     expect(putContentMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({
         path: "config/app.yaml.copy",
         etag: '"new"',
       }),
     );
-    expect(putContentMock.mock.calls[0][2].overwrite).not.toBe(true);
+    expect(putContentMock.mock.calls[0][1].overwrite).not.toBe(true);
     expect(tab.path).toBe("config/app.yaml.copy");
     expect(tab.name).toBe("app.yaml.copy");
     expect(store.isDirty(tab)).toBe(false);
@@ -356,12 +350,12 @@ describe("editor tab store", () => {
   it("refuses a save-as copy when the name already exists (409 on create)", async () => {
     getContentMock.mockResolvedValueOnce(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "config/app.yaml");
+    await store.openFile("srv", "volumes", "config/app.yaml");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "mine");
     createFileMock.mockRejectedValueOnce({ message: "exists", status: 409 });
 
-    const outcome = await store.saveAsCopy(tab.id, "team", "taken.yaml");
+    const outcome = await store.saveAsCopy(tab.id, "taken.yaml");
     expect(outcome).toBe("conflict");
     expect(putContentMock).not.toHaveBeenCalled();
     expect(tab.path).toBe("config/app.yaml");
@@ -371,15 +365,15 @@ describe("editor tab store", () => {
   it("removes the reserved empty file when the copy write fails", async () => {
     getContentMock.mockResolvedValueOnce(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "mine");
     createFileMock.mockResolvedValueOnce({ ...entry, name: "copy.yaml", etag: '"new"' });
     putContentMock.mockRejectedValueOnce({ message: "nope", status: 500 });
 
-    const outcome = await store.saveAsCopy(tab.id, "team", "copy.yaml");
+    const outcome = await store.saveAsCopy(tab.id, "copy.yaml");
     expect(outcome).toBe("error");
-    expect(deleteEntryMock).toHaveBeenCalledWith("srv", "team", "volumes", "copy.yaml", false);
+    expect(deleteEntryMock).toHaveBeenCalledWith("srv", "volumes", "copy.yaml", false);
     expect(tab.path).toBe("app.yaml");
     expect(store.isDirty(tab)).toBe(true);
   });
@@ -387,14 +381,14 @@ describe("editor tab store", () => {
   it("keeps a save-as tab dirty when the buffer changes in flight", async () => {
     getContentMock.mockResolvedValueOnce(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "first");
     createFileMock.mockResolvedValueOnce({ ...entry, name: "copy.yaml", etag: '"new"' });
     const pending = deferred<FilesEntry>();
     putContentMock.mockReturnValueOnce(pending.promise);
 
-    const saving = store.saveAsCopy(tab.id, "team", "copy.yaml");
+    const saving = store.saveAsCopy(tab.id, "copy.yaml");
     store.setDoc(tab.id, "second");
     pending.resolve({ ...entry, name: "copy.yaml", etag: '"c2"' });
     expect(await saving).toBe("saved");
@@ -406,20 +400,20 @@ describe("editor tab store", () => {
   it("renders a download-only tab on a 413 or 415 read", async () => {
     getContentMock.mockRejectedValueOnce({ message: "too large", status: 413 });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "server.log");
+    await store.openFile("srv", "volumes", "server.log");
     expect(store.activeTab!.status).toBe("large");
 
     getContentMock.mockRejectedValueOnce({ message: "not editable", status: 415 });
-    await store.openFile("srv", "team", "volumes", "logo.png");
+    await store.openFile("srv", "volumes", "logo.png");
     expect(store.activeTab!.status).toBe("binary");
     expect(store.hasDirty).toBe(false);
-    expect(await store.save(store.activeTab!.id, "team")).toBe("blocked");
+    expect(await store.save(store.activeTab!.id)).toBe("blocked");
   });
 
   it("blocks a mutation while a target tab is dirty, and retargets a clean one", async () => {
     getContentMock.mockResolvedValue(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.yaml");
+    await store.openFile("srv", "volumes", "app.yaml");
     const tab = store.activeTab!;
 
     expect(store.blockingNames("volumes", "", ["app.yaml", "other.txt"])).toEqual([]);
@@ -434,7 +428,7 @@ describe("editor tab store", () => {
   it("rebases an open tab through a move and closes it on delete", async () => {
     getContentMock.mockResolvedValue(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "src/app.yaml");
+    await store.openFile("srv", "volumes", "src/app.yaml");
     const tab = store.activeTab!;
 
     store.applyMove("volumes", "src", "dst", ["app.yaml"]);
@@ -450,7 +444,7 @@ describe("editor tab store", () => {
   it("blocks and rebases a directory rename/delete across descendant tabs", async () => {
     getContentMock.mockResolvedValue(content("start"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "src/app.yaml");
+    await store.openFile("srv", "volumes", "src/app.yaml");
     const tab = store.activeTab!;
 
     store.setDoc(tab.id, "mine");

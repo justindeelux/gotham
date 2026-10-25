@@ -37,7 +37,6 @@ import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 import { i18n, registerDiscoveredCatalogs, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const root: FilesRoot = {
@@ -64,11 +63,6 @@ beforeEach(() => {
   resetLocaleState();
   syncComposerLocale("en");
   vi.clearAllMocks();
-  const teams = useTeamsStore();
-  teams.activeTeamId = "team-1";
-  teams.teams = [
-    { id: "team-1", name: "A", is_personal: true, role: "owner" },
-  ];
   vi.mocked(listRoots).mockResolvedValue([root]);
   vi.mocked(listEntries).mockResolvedValue({
     entries: [
@@ -115,7 +109,7 @@ describe("files browser paste feedback", () => {
     await pasteItem!.trigger("click");
     await flushPromises();
 
-    expect(vi.mocked(moveEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+    expect(vi.mocked(moveEntry)).toHaveBeenCalledWith("server-1", {
       root: "volumes",
       source: "app.yaml",
       destination: "data/app.yaml",

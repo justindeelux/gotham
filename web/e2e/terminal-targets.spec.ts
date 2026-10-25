@@ -198,7 +198,7 @@ function watchTargetReads(page: Page): string[] {
       request.method() === "GET" &&
       new URL(request.url()).pathname === "/api/v1/terminal/targets"
     ) {
-      reads.push(request.headers()["x-team-id"] ?? "");
+      reads.push(request.url());
     }
   });
   return reads;

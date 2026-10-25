@@ -20,7 +20,6 @@ import {
   normalizeEntryName,
   parentPath,
 } from "@/features/files/utils/files";
-import { useTeamsStore } from "@/features/teams";
 
 export class ExplorerDirtyError extends Error {
   readonly names: string[];
@@ -91,9 +90,6 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
   );
   const canWrite = computed<boolean>(() => files.canReadContent && writable.value);
 
-  function teamId(): string {
-    return useTeamsStore().activeTeamId;
-  }
 
   function isExpanded(path: string): boolean {
     return path === rootPath.value || expanded.value.includes(path);
@@ -160,7 +156,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     dirs.value[path] = loadingDir(path, current?.entries ?? []);
     const task = (async () => {
       try {
-        const listing = await listEntries(serverId.value, teamId(), {
+        const listing = await listEntries(serverId.value, {
           root: rootName.value,
           path,
         });
@@ -287,9 +283,9 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     const clean = normalizeEntryName(name);
     const target = joinPath(dir, clean);
     if (kind === "directory") {
-      await createFolder(serverId.value, teamId(), { root: rootName.value, path: target });
+      await createFolder(serverId.value, { root: rootName.value, path: target });
     } else {
-      await createFile(serverId.value, teamId(), { root: rootName.value, path: target });
+      await createFile(serverId.value, { root: rootName.value, path: target });
     }
     if (dir !== rootPath.value && !isExpanded(dir)) {
       expanded.value = [...expanded.value, dir];
@@ -306,7 +302,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     const name = basename(path);
     const target = joinPath(dir, clean);
     assertNotDirty(path);
-    await renameEntry(serverId.value, teamId(), {
+    await renameEntry(serverId.value, {
       root: rootName.value,
       source: path,
       destination: target,
@@ -327,7 +323,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     assertNotDirty(path);
     const isDirectory =
       kind === "directory" || entryAt(path)?.kind === "directory";
-    await deleteEntry(serverId.value, teamId(), rootName.value, path, isDirectory);
+    await deleteEntry(serverId.value, rootName.value, path, isDirectory);
     editor.applyDelete(rootName.value, dir, [name]);
     dropUnder(path, true);
     if (selectedPath.value !== "" && isUnder(selectedPath.value, path)) {
@@ -361,7 +357,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     searchLoading.value = true;
     searchRaw.value = null;
     try {
-      const listing = await searchEntries(serverId.value, teamId(), {
+      const listing = await searchEntries(serverId.value, {
         root: rootName.value,
         path: rootPath.value,
         query,

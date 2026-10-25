@@ -1,6 +1,8 @@
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
+
+import { useAuthStore } from "@/features/auth";
 import { beforeEach, describe, expect, it } from "vitest";
 import { defineComponent, h, nextTick, ref } from "vue";
 
@@ -92,6 +94,9 @@ describe("domain schema matches recorded outcomes", () => {
 describe("wizard gates match recorded outcomes", () => {
   it("sourceValid and runtimeValid agree row by row", () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
     const Harness = defineComponent({
       setup() {
@@ -160,6 +165,9 @@ describe("wizard gates match recorded outcomes", () => {
 describe("wizard create payload carries the source type", () => {
   it("maps each source type to its provider/repo/clone_url shape", () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
     const Harness = defineComponent({
       setup() {
@@ -224,6 +232,9 @@ describe("wizard create payload carries the source type", () => {
 
   it("clears the previous type's fields on source type switch", async () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
     const Harness = defineComponent({
       setup() {
@@ -261,6 +272,9 @@ describe("wizard create payload carries the source type", () => {
 
   it("leaves only implemented source types selectable", () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
     const Harness = defineComponent({
       setup() {
@@ -287,6 +301,9 @@ describe("wizard create payload carries the source type", () => {
 
   it("renders an empty public branch as the repository default", () => {
     setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
     let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
     const Harness = defineComponent({
       setup() {

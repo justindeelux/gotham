@@ -173,7 +173,7 @@ describe("HostHelperGate", () => {
       networkState(hostWith({ helper: "denied", repair: false, network_stack: true })),
       "network",
     );
-    expect(wrapper.text()).toContain("platform administrator must re-run");
+    expect(wrapper.text()).toContain("ask the owner to re-run");
     expect(installButton(wrapper)).toBeUndefined();
     wrapper.unmount();
   });
@@ -193,7 +193,7 @@ describe("HostHelperGate", () => {
       networkState(hostWith({ helper: "missing", repair: false, network_stack: true })),
       "network",
     );
-    expect(wrapper.text()).toContain("platform administrator must re-run");
+    expect(wrapper.text()).toContain("ask the owner to re-run");
     expect(installButton(wrapper)).toBeUndefined();
     wrapper.unmount();
   });
@@ -259,7 +259,7 @@ describe("SystemForm host states", () => {
       SystemForm,
       systemState(hostWith({ helper: "missing", repair: false, system_stack: true })),
     );
-    expect(wrapper.text()).toContain("platform administrator must re-run");
+    expect(wrapper.text()).toContain("ask the owner to re-run");
     expect(installButton(wrapper)).toBeUndefined();
     wrapper.unmount();
   });

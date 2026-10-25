@@ -11,9 +11,7 @@ import {
 } from "@/shared/i18n";
 
 vi.mock("@/shared/api/http", () => ({
-  http: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
-  teamHeaders: (teamId: string) =>
-    teamId ? { "X-Team-Id": teamId } : {},
+  http: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() }
 }));
 
 import { http } from "@/shared/api/http";
@@ -163,15 +161,14 @@ function server(overrides: Partial<Server> = {}): Server {
 }
 
 describe("environment resources api", () => {
-  it("reads the envelope with the team header, previews off by default", async () => {
+  it("reads the envelope, previews off by default", async () => {
     vi.mocked(http.get).mockResolvedValue({ data: envelope() });
     const resources = await getEnvironmentResources(
-      "team-1",
-      "22222222-2222-4222-8222-222222222222",
+        "22222222-2222-4222-8222-222222222222",
     );
     expect(http.get).toHaveBeenCalledWith(
       "/environments/22222222-2222-4222-8222-222222222222/resources",
-      { headers: { "X-Team-Id": "team-1" }, params: {} },
+      { params: {} },
     );
     expect(resources.environment.name).toBe("production");
     expect(resources.applications).toHaveLength(1);
@@ -181,13 +178,12 @@ describe("environment resources api", () => {
   it("passes previews=1 when the switch is on", async () => {
     vi.mocked(http.get).mockResolvedValue({ data: envelope() });
     await getEnvironmentResources(
-      "team-1",
-      "22222222-2222-4222-8222-222222222222",
+        "22222222-2222-4222-8222-222222222222",
       true,
     );
     expect(http.get).toHaveBeenCalledWith(
       "/environments/22222222-2222-4222-8222-222222222222/resources",
-      { headers: { "X-Team-Id": "team-1" }, params: { previews: "1" } },
+      { params: { previews: "1" } },
     );
   });
 

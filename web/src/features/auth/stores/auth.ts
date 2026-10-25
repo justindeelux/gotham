@@ -29,7 +29,6 @@ import { useProjectsStore } from "@/features/projects";
 import { useProxyStore } from "@/features/domains";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services";
-import { useTeamsStore } from "@/features/teams";
 import { useTemplatesStore } from "@/features/templates";
 import { useTerminalStore, useTerminalWindowStore } from "@/features/terminal";
 import { useToolchainStore } from "@/features/toolchain";
@@ -61,7 +60,7 @@ export const useAuthStore = defineStore("auth", () => {
   let configLoaded = false;
 
   const isAuthenticated = computed<boolean>(() => accessToken.value !== null);
-  const isPlatformAdmin = computed<boolean>(() => user.value?.role === "owner");
+  const isOwner = computed<boolean>(() => user.value?.role === "owner");
 
   function applySession(session: Session): void {
     user.value = session.user;
@@ -123,7 +122,6 @@ export const useAuthStore = defineStore("auth", () => {
 
   function resetUserStores(): void {
     const resetters: Array<() => void> = [
-      () => useTeamsStore().reset(),
       () => useServersStore().reset(),
       () => useApplicationsStore().reset(),
       () => useDatabasesStore().reset(),
@@ -273,7 +271,7 @@ export const useAuthStore = defineStore("auth", () => {
     accessToken,
     refreshToken,
     isAuthenticated,
-    isPlatformAdmin,
+    isOwner,
     registrationOpen,
     mfaPending,
     setSession,

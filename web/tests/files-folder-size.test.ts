@@ -5,7 +5,6 @@ import { mount } from "@vue/test-utils";
 
 vi.mock("@/shared/api/http", () => ({
   http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
-  teamHeaders: (teamId: string) => (teamId ? { "X-Team-Id": teamId } : {}),
 }));
 
 import { http } from "@/shared/api/http";
@@ -19,7 +18,6 @@ import {
 } from "@/features/files/composables/useFolderSize";
 import { filesFolderSizeSchema } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -41,18 +39,17 @@ beforeEach(() => {
 });
 
 describe("calculateFolderSize", () => {
-  it("GETs the size route with the root, path and team header", async () => {
+  it("GETs the size route with the root and path", async () => {
     get.mockResolvedValueOnce({
       data: { bytes: 2048, entries: 3, skipped: 1, truncated: false },
     });
 
-    const size = await calculateFolderSize("srv", "team-1", "volumes", "apps");
+    const size = await calculateFolderSize("srv", "volumes", "apps");
 
     expect(size).toEqual({ bytes: 2048, entries: 3, skipped: 1, truncated: false });
     const [url, config] = get.mock.calls[0];
     expect(url).toBe("/servers/srv/files/size");
     expect(config.params).toEqual({ root: "volumes", path: "apps" });
-    expect(config.headers).toEqual({ "X-Team-Id": "team-1" });
   });
 
   it("validates the response shape", () => {
@@ -75,7 +72,7 @@ describe("useFolderSize", () => {
     let resolve!: (_value: unknown) => void;
     get.mockImplementationOnce(() => new Promise((r) => (resolve = r)));
 
-    const promise = requestFolderSize("srv", "team", "volumes", "apps");
+    const promise = requestFolderSize("srv", "volumes", "apps");
     expect(folderSizeState("srv", "volumes", "apps").status).toBe("loading");
 
     resolve({ data: { bytes: 4096, entries: 5, skipped: 0, truncated: true } });
@@ -90,7 +87,7 @@ describe("useFolderSize", () => {
   it("records a localized error on failure", async () => {
     get.mockRejectedValueOnce({ status: 404, message: "not found" });
 
-    await requestFolderSize("srv", "team", "volumes", "gone");
+    await requestFolderSize("srv", "volumes", "gone");
 
     const state = folderSizeState("srv", "volumes", "gone");
     expect(state.status).toBe("error");
@@ -105,7 +102,7 @@ describe("useFolderSize", () => {
         }),
     );
 
-    const promise = requestFolderSize("srv", "team", "volumes", "apps");
+    const promise = requestFolderSize("srv", "volumes", "apps");
     expect(folderSizeState("srv", "volumes", "apps").status).toBe("loading");
 
     cancelFolderSize("srv", "volumes", "apps");
@@ -117,8 +114,8 @@ describe("useFolderSize", () => {
   it("ignores a second request while one is in flight", async () => {
     get.mockImplementationOnce(() => new Promise(() => {}));
 
-    void requestFolderSize("srv", "team", "volumes", "apps");
-    await requestFolderSize("srv", "team", "volumes", "apps");
+    void requestFolderSize("srv", "volumes", "apps");
+    await requestFolderSize("srv", "volumes", "apps");
 
     expect(get).toHaveBeenCalledTimes(1);
   });
@@ -131,11 +128,11 @@ describe("useFolderSize", () => {
         }),
     );
 
-    const first = requestFolderSize("srv", "team", "volumes", "apps");
+    const first = requestFolderSize("srv", "volumes", "apps");
     cancelFolderSize("srv", "volumes", "apps");
 
     get.mockImplementationOnce(() => new Promise(() => {}));
-    void requestFolderSize("srv", "team", "volumes", "apps");
+    void requestFolderSize("srv", "volumes", "apps");
 
     await first;
 
@@ -144,8 +141,6 @@ describe("useFolderSize", () => {
 
   it("clears cached sizes when the listing reloads", async () => {
     setActivePinia(createPinia());
-    const teams = useTeamsStore();
-    teams.activeTeamId = "team";
     const store = useFilesStore();
 
     get.mockResolvedValueOnce({
@@ -157,7 +152,7 @@ describe("useFolderSize", () => {
     get.mockResolvedValueOnce({
       data: { bytes: 42, entries: 1, skipped: 0, truncated: false },
     });
-    await requestFolderSize("server-1", "team", "volumes", "apps");
+    await requestFolderSize("server-1", "volumes", "apps");
     expect(folderSizeState("server-1", "volumes", "apps").status).toBe("done");
 
     get.mockResolvedValueOnce({ data: { entries: [], truncated: false, cursor: "" } });
@@ -172,7 +167,6 @@ describe("FolderSizeCell idle Calculate", () => {
     registerDiscoveredCatalogs();
     resetLocaleState();
     syncComposerLocale("en");
-    useTeamsStore().activeTeamId = "team";
     const wrapper = mount(FolderSizeCell, {
       props: {
         entry: {

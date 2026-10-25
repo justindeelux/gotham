@@ -20,7 +20,6 @@ import GitSourcesPage from "@/features/applications/pages/GitSourcesPage.vue";
 import { useGitSourcesPage } from "@/features/applications/composables/useGitSourcesPage";
 import applicationsEn from "@/features/applications/locales/en";
 import applicationsVi from "@/features/applications/locales/vi";
-import { useTeamsStore } from "@/features/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const mockedPage = vi.mocked(useGitSourcesPage);
@@ -48,12 +47,6 @@ function shell(child: object) {
   });
 }
 
-function seedTeams(): void {
-  const teams = useTeamsStore();
-  teams.teams = [{ id: "team-1", name: "Acme", is_personal: false, role: "owner" }] as never;
-  teams.activeTeamId = "team-1";
-}
-
 beforeEach(() => {
   setActivePinia(createPinia());
   resetLocaleState();
@@ -61,7 +54,6 @@ beforeEach(() => {
   i18n.global.mergeLocaleMessage("vi", { applications: applicationsVi });
   syncComposerLocale("en");
   vi.clearAllMocks();
-  seedTeams();
   mockedPage.mockReturnValue({
     rows: ref([]),
     loading: ref(false),

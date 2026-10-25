@@ -25,6 +25,7 @@ import {
 } from "@/features/databases/composables/useCreateDatabaseWizard";
 import { ENGINES } from "@/features/databases/utils/databaseEngines";
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
+import { useAuthStore } from "@/features/auth";
 import ServerPicker from "@/features/projects/components/ServerPicker.vue";
 
 interface Props {
@@ -41,6 +42,7 @@ interface Emits {
 
 const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "", engine: "" });
 const emit = defineEmits<Emits>();
+const authStore = useAuthStore();
 
 const wizard = useCreateDatabaseWizard({
   show: toRef(props, "show"),
@@ -130,7 +132,12 @@ provide(wizardFormKey, wizard.form);
               clearable
             />
           </NFormItem>
-          <ServerPicker v-model="wizard.form.serverId" :label="t('databases.wizard.engineStep.node')" />
+          <ServerPicker
+            v-if="authStore.isOwner"
+            v-model="wizard.form.serverId"
+            :label="t('databases.wizard.engineStep.node')"
+          />
+          <NText v-else depth="3">{{ t("databases.wizard.engineStep.nodeByOwner") }}</NText>
         </div>
       </template>
 

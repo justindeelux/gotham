@@ -49,7 +49,6 @@ import type {
   FilesViewMode,
   TransferProblem,
 } from "@/features/files/utils/files";
-import { useTeamsStore } from "@/features/teams";
 import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
 
 export interface FilesClipboard {
@@ -359,12 +358,9 @@ export const useFilesStore = defineStore("files", () => {
       selectableVisible.value.some((entry) => selected.value.has(entry.name)),
   );
 
-  const canReadContent = computed<boolean>(() => {
-    const role = useTeamsStore().activeTeam?.role;
-    return role === "owner" || role === "admin";
-  });
+  const canReadContent = computed<boolean>(() => true);
 
-  const canWrite = computed<boolean>(() => canReadContent.value && writable.value);
+  const canWrite = computed<boolean>(() => writable.value);
 
   const hasClipboard = computed<boolean>(
     () => (clipboard.value?.names.length ?? 0) > 0,
@@ -395,9 +391,6 @@ export const useFilesStore = defineStore("files", () => {
     pasteProblemAt(path.value),
   );
 
-  function teamId(): string {
-    return useTeamsStore().activeTeamId;
-  }
 
   function applyErrorTo(tab: FilesTab, err: unknown): void {
     if (isFilesDisabled(err)) {
@@ -513,7 +506,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.disabled = false;
     resetFolderSizes();
     try {
-      const list = await listRoots(server, teamId());
+      const list = await listRoots(server);
       if (gen !== tab.generation || server !== serverId.value) {
         return;
       }
@@ -524,7 +517,7 @@ export const useFilesStore = defineStore("files", () => {
         applyListingTo(tab, [], "", false);
         return;
       }
-      const listing = await listEntries(server, teamId(), {
+      const listing = await listEntries(server, {
         root: tab.rootName,
         path: tab.path,
       });
@@ -556,7 +549,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.errorRaw = null;
     resetFolderSizes();
     try {
-      const listing = await listEntries(serverId.value, teamId(), {
+      const listing = await listEntries(serverId.value, {
         root: tab.rootName,
         path: tab.path,
       });
@@ -690,7 +683,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.disabled = false;
     resetFolderSizes();
     try {
-      const list = await listRoots(server, teamId());
+      const list = await listRoots(server);
       if (gen !== tab.generation || server !== serverId.value) {
         return;
       }
@@ -761,7 +754,7 @@ export const useFilesStore = defineStore("files", () => {
     const gen = tab.generation;
     tab.loadingMore = true;
     try {
-      const listing = await listEntries(serverId.value, teamId(), {
+      const listing = await listEntries(serverId.value, {
         root: tab.rootName,
         path: tab.path,
         cursor: tab.cursor,
@@ -876,7 +869,7 @@ export const useFilesStore = defineStore("files", () => {
       }
       tab.loading = true;
       try {
-        const listing = await listEntries(serverId.value, teamId(), {
+        const listing = await listEntries(serverId.value, {
           root: tab.rootName,
           path: target,
         });
@@ -966,11 +959,11 @@ export const useFilesStore = defineStore("files", () => {
     return runMutation(async () => {
       const created =
         kind === "directory"
-          ? await createFolder(serverId.value, teamId(), {
+          ? await createFolder(serverId.value, {
               root,
               path: target,
             })
-          : await createFile(serverId.value, teamId(), {
+          : await createFile(serverId.value, {
               root,
               path: target,
             });
@@ -986,7 +979,7 @@ export const useFilesStore = defineStore("files", () => {
     const dir = tab.path;
     const next = normalizeEntryName(nextName);
     await runMutation(async () => {
-      await renameEntry(serverId.value, teamId(), {
+      await renameEntry(serverId.value, {
         root,
         source: joinPath(dir, entry.name),
         destination: joinPath(dir, next),
@@ -1024,7 +1017,7 @@ export const useFilesStore = defineStore("files", () => {
     const root = tab.rootName;
     const dir = tab.path;
     await runMutation(async () => {
-      await chmodEntry(serverId.value, teamId(), {
+      await chmodEntry(serverId.value, {
         root,
         path: joinPath(dir, entry.name),
         mode,
@@ -1044,7 +1037,7 @@ export const useFilesStore = defineStore("files", () => {
     const dir = tab.path;
     const destination = joinPath(dir, normalizeEntryName(name));
     return runMutation(async () => {
-      const created = await compressEntries(serverId.value, teamId(), {
+      const created = await compressEntries(serverId.value, {
         root,
         sources: entries.map((entry) => joinPath(dir, entry.name)),
         destination,
@@ -1061,7 +1054,7 @@ export const useFilesStore = defineStore("files", () => {
     const root = tab.rootName;
     const dir = tab.path;
     await runMutation(async () => {
-      await extractEntry(serverId.value, teamId(), {
+      await extractEntry(serverId.value, {
         root,
         source: joinPath(dir, entry.name),
         destination: dir,
@@ -1082,7 +1075,6 @@ export const useFilesStore = defineStore("files", () => {
         try {
           await deleteEntry(
             serverId.value,
-            teamId(),
             root,
             joinPath(dir, entry.name),
             isDirectory(entry),
@@ -1113,7 +1105,7 @@ export const useFilesStore = defineStore("files", () => {
     const call = op === "copy" ? copyEntry : moveEntry;
     for (const name of names) {
       try {
-        await call(serverId.value, teamId(), {
+        await call(serverId.value, {
           root,
           source: joinPath(source, name),
           destination: joinPath(destination, name),
@@ -1312,7 +1304,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.loading = true;
     resetFolderSizes();
     try {
-      const listing = await listEntries(serverId.value, teamId(), {
+      const listing = await listEntries(serverId.value, {
         root: tab.rootName,
         path: target,
       });
@@ -1414,7 +1406,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.searchTruncated = false;
     tab.errorRaw = null;
     try {
-      const listing = await searchEntries(serverId.value, teamId(), {
+      const listing = await searchEntries(serverId.value, {
         root: tab.rootName,
         path: tab.path,
         query: submitted,

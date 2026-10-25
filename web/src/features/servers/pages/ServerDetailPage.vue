@@ -145,7 +145,7 @@ watch(serverId, () => {
 });
 
 watch(
-  [() => authStore.isAuthenticated, () => authStore.isPlatformAdmin],
+  [() => authStore.isAuthenticated, () => authStore.isOwner],
   ([authenticated, admin]) => {
     if (authenticated && !admin) {
       showOverview();
@@ -228,7 +228,7 @@ onMounted(() => {
           </NTabPane>
 
           <NTabPane
-            v-if="authStore.isPlatformAdmin"
+            v-if="authStore.isOwner"
             name="files"
             :tab="$t('servers.detail.tabFiles')"
           >
@@ -254,7 +254,7 @@ onMounted(() => {
           </NTabPane>
 
           <NTabPane
-            v-if="authStore.isPlatformAdmin"
+            v-if="authStore.isOwner"
             name="terminal"
             :tab="$t('terminal.page.tabLabel')"
             display-directive="show"

@@ -24,7 +24,6 @@ import { useFileUpload } from "@/features/files/composables/useFileUpload";
 
 const target = {
   serverId: "server-1",
-  teamId: "team-1",
   root: "volumes",
   path: "",
 };
@@ -65,7 +64,7 @@ function deferred<T>() {
 
 describe("useFileUpload", () => {
   it("uploads a file, reports progress and lands in done", async () => {
-    vi.mocked(uploadFiles).mockImplementation(async (_s, _t, _files, options) => {
+    vi.mocked(uploadFiles).mockImplementation(async (_s, _files, options) => {
       options.onProgress?.({ loaded: 3, total: 8 });
       options.onProgress?.({ loaded: 8, total: 8 });
       return [ok("app.yaml")];
@@ -82,8 +81,7 @@ describe("useFileUpload", () => {
     expect(upload.summary.value.done).toBe(1);
     expect(vi.mocked(uploadFiles)).toHaveBeenCalledWith(
       "server-1",
-      "team-1",
-      [expect.any(globalThis.File)],
+        [expect.any(globalThis.File)],
       expect.objectContaining({ root: "volumes", path: "", overwrite: false }),
     );
   });
@@ -156,8 +154,7 @@ describe("useFileUpload", () => {
     expect(upload.items.value[0]?.status).toBe("done");
     expect(vi.mocked(uploadFiles)).toHaveBeenLastCalledWith(
       "server-1",
-      "team-1",
-      [expect.any(globalThis.File)],
+        [expect.any(globalThis.File)],
       expect.objectContaining({ overwrite: true }),
     );
   });
@@ -279,7 +276,7 @@ describe("useFileUpload", () => {
     upload.addFiles([file("  a.txt  ")]);
     await upload.start(target);
 
-    const sent = vi.mocked(uploadFiles).mock.calls[0]?.[2]?.[0];
+    const sent = vi.mocked(uploadFiles).mock.calls[0]?.[1]?.[0];
     expect(sent?.name).toBe("a.txt");
   });
 });

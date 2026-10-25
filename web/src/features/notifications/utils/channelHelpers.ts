@@ -181,7 +181,7 @@ export function scopeLabel(
   resolveName: (_resourceType: string, _resourceId: string) => string | undefined,
 ): string {
   if (!channel.resource_type || !channel.resource_id) {
-    return channelText("notifications.scopeLabel.teamWide", "Team-wide");
+    return channelText("notifications.scopeLabel.allResources", "All resources");
   }
   const name =
     resolveName(channel.resource_type, channel.resource_id) ?? channel.resource_id;

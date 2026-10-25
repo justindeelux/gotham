@@ -822,33 +822,19 @@ plainTest.describe("files disabled", () => {
     await expect(page.getByText("Files are disabled")).toBeVisible();
     await expect(
       page.getByText(
-        "The file manager is turned off on this control plane. The platform administrator must enable it.",
+        "The file manager is turned off on this control plane. Ask the owner to enable it.",
       ),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 });
 
-test.describe("files read-only role", () => {
-  test("a read-only member sees no write controls and a read-only root banner", async ({
+test.describe("files read-only root", () => {
+  test("a read-only root hides write controls and shows the banner", async ({
     page,
     request,
   }) => {
     const server = await seedServer(request, uniqueSuffix());
-    await page.route("**/api/v1/teams", (route) =>
-      json(route, 200, {
-        teams: [
-          {
-            id: "team-read-only",
-            name: "Personal",
-            is_personal: true,
-            role: "read_only",
-            created_at: "2026-01-01T00:00:00Z",
-            updated_at: "2026-01-01T00:00:00Z",
-          },
-        ],
-      }),
-    );
     await routeFiles(page, {
       roots: (route) => json(route, 200, { roots: [readOnlyRoot] }),
       list: (route) =>
@@ -869,7 +855,9 @@ test.describe("files read-only role", () => {
     await expect(page.getByRole("button", { name: "Upload" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Rename" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Editor" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Download app.yaml" })).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Download app.yaml" }),
+    ).toBeEnabled();
 
     await expect(
       page.getByRole("heading", { name: "This root is read-only" }),

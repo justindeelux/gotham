@@ -10,7 +10,6 @@ import {
 } from "@/features/files/api/files";
 import type { TrashEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
 
 export const useTrashStore = defineStore("files-trash", () => {
   const entries = ref<TrashEntry[]>([]);
@@ -27,9 +26,6 @@ export const useTrashStore = defineStore("files-trash", () => {
     return useFilesStore();
   }
 
-  function teamId(): string {
-    return useTeamsStore().activeTeamId;
-  }
 
   function currentScope(): string {
     const files = browser();
@@ -82,7 +78,7 @@ export const useTrashStore = defineStore("files-trash", () => {
     loading.value = true;
     errorRaw.value = null;
     try {
-      const listing = await listTrash(serverId, teamId(), root);
+      const listing = await listTrash(serverId, root);
       if (gen !== generation) {
         return;
       }
@@ -112,7 +108,7 @@ export const useTrashStore = defineStore("files-trash", () => {
     }
     const files = browser();
     await runActing(async () => {
-      await restoreTrash(files.serverId, teamId(), {
+      await restoreTrash(files.serverId, {
         root: files.rootName,
         id: entry.id,
         overwrite,
@@ -128,7 +124,7 @@ export const useTrashStore = defineStore("files-trash", () => {
     }
     const files = browser();
     await runActing(async () => {
-      await purgeTrash(files.serverId, teamId(), files.rootName, entry.id);
+      await purgeTrash(files.serverId, files.rootName, entry.id);
       await load();
     });
   }
@@ -139,7 +135,7 @@ export const useTrashStore = defineStore("files-trash", () => {
     }
     const files = browser();
     return runActing(async () => {
-      const removed = await emptyTrash(files.serverId, teamId(), files.rootName);
+      const removed = await emptyTrash(files.serverId, files.rootName);
       await load();
       return removed;
     });

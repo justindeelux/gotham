@@ -867,7 +867,7 @@ describe("non-operator terminal deep link (JUS-246 fix round 1)", () => {
       false,
     );
     expect(wrapper.text()).toContain("Terminal not available");
-    expect(wrapper.text()).toContain("platform operators");
+    expect(wrapper.text()).toContain("owner");
     const labels = wrapper.findAll(".n-tabs-tab").map((node) => node.text());
     expect(labels).not.toContain("Terminal");
     expect(apiFakes.create).toHaveBeenCalledTimes(0);

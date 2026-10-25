@@ -21,7 +21,7 @@ const en = {
     switchLabel: "Sign in or create an account",
     title: "Sign in",
     subtitle:
-      "Use your Gotham team account to sign in.",
+      "Use your Gotham account to sign in.",
     emailLabel: "Email",
     emailPlaceholder: "you{'@'}gotham.dev",
     passwordLabel: "Password",
@@ -60,15 +60,6 @@ const en = {
     noSession: "GitHub did not return a usable session.",
     back: "Back to sign in",
   },
-  invite: {
-    title: "Team invite",
-    joined: "You joined {name}.",
-    openTeams: "Open teams",
-    backToTeams: "Back to teams",
-    noToken:
-      "This link carries no invite token. Open the link from the invite exactly as it was shared.",
-    hint: "Accepting uses the session you are signed in with — sign in with the invited address. Invites are single-use.",
-  },
   mfa: {
     title: "Two-factor authentication",
     subtitle: "Your password was accepted. Enter the code from your authenticator app to finish signing in.",
@@ -85,7 +76,7 @@ const en = {
     sessionExpired: "Your verification window expired. Sign in again.",
   },
   footnote: {
-    text: "Your password is stored securely. Sign in with GitHub or your team email.",
+    text: "Your password is stored securely. Sign in with GitHub or your email.",
   },
   strength: {
     level0: "Not entered",

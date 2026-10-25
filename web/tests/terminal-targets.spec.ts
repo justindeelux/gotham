@@ -24,7 +24,6 @@ const mimeTypes: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-const TEAM_ID = "team-1";
 const SERVER_ID = "11111111-1111-4111-8111-111111111111";
 const SERVER_B_ID = "22222222-2222-4222-8222-222222222222";
 const APPLICATION_ID = "33333333-3333-4333-8333-333333333333";
@@ -42,15 +41,6 @@ const session = {
   },
   accessToken: "test-access",
   refreshToken: "test-refresh",
-};
-
-const team = {
-  id: TEAM_ID,
-  name: "Acme",
-  is_personal: false,
-  role: "owner",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
 };
 
 function serverRow(id: string, name: string) {
@@ -114,10 +104,9 @@ interface ApiState {
     kind: "host" | "container";
     body: Record<string, unknown>;
     url: string;
-    teamId: string;
   }>;
   deletes: number;
-  targetsCalls: Array<{ teamId: string }>;
+  targetsCalls: number;
   sessions: FakeSession[];
   seq: number;
   targetsFailures: number;
@@ -192,17 +181,13 @@ function newState(): ApiState {
   return {
     creates: [],
     deletes: 0,
-    targetsCalls: [],
+    targetsCalls: 0,
     sessions: [],
     seq: 0,
     targetsFailures: 0,
     createDelayMs: 0,
     payload: () => targetPayload(),
   };
-}
-
-function teamOf(request: Request): string {
-  return request.headers()["x-team-id"] ?? "";
 }
 
 function validateBody(
@@ -264,10 +249,7 @@ async function mockApi(page: Page, state: ApiState): Promise<void> {
     await route.fulfill({ json: {} });
   });
   await page.route("**/api/v1/auth/me", async (route) => {
-    await route.fulfill({ json: session.user });
-  });
-  await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team] } });
+    await route.fulfill({ json: { user: session.user } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -280,7 +262,7 @@ async function mockApi(page: Page, state: ApiState): Promise<void> {
     });
   });
   await page.route("**/api/v1/terminal/targets", async (route) => {
-    state.targetsCalls.push({ teamId: teamOf(route.request()) });
+    state.targetsCalls += 1;
     if (state.targetsFailures > 0) {
       state.targetsFailures -= 1;
       await route.fulfill({ status: 503, json: { message: "node down" } });
@@ -308,7 +290,6 @@ async function mockApi(page: Page, state: ApiState): Promise<void> {
       kind: "host",
       body: request.postDataJSON() as Record<string, unknown>,
       url: request.url(),
-      teamId: teamOf(request),
     });
     state.seq += 1;
     if (state.createDelayMs > 0) {
@@ -354,7 +335,6 @@ async function mockApi(page: Page, state: ApiState): Promise<void> {
       kind: "container",
       body: body as unknown as Record<string, unknown>,
       url: request.url(),
-      teamId: teamOf(request),
     });
     state.seq += 1;
     if (state.createDelayMs > 0) {
@@ -403,7 +383,6 @@ async function seedApp(page: Page, path: string): Promise<void> {
   await page.addInitScript(
     (value) => {
       window.localStorage.setItem("gotham.auth.session", value);
-      window.localStorage.setItem("gotham.teams.active", "team-1");
     },
     JSON.stringify(session),
   );
@@ -458,7 +437,7 @@ test.describe("add-tab target picker", () => {
     expect(state.creates).toHaveLength(1);
 
     await openPicker(page, "window");
-    expect(state.targetsCalls).toEqual([{ teamId: TEAM_ID }]);
+    expect(state.targetsCalls).toBe(1);
     await expect(page.locator(".term-targets-group-title")).toHaveText([
       "Servers",
       "shop",
@@ -485,7 +464,6 @@ test.describe("add-tab target picker", () => {
 
     const created = state.creates[1]!;
     expect(created.kind).toBe("container");
-    expect(created.teamId).toBe(TEAM_ID);
     expect(created.url).toContain(`/api/v1/applications/${APPLICATION_ID}/terminal/sessions`);
     expect(created.body).toMatchObject({
       service: "web",
@@ -522,7 +500,7 @@ test.describe("add-tab target picker", () => {
     expect(state.creates[0]!.body).not.toHaveProperty("cwd");
 
     await openPicker(page, "page");
-    expect(state.targetsCalls).toHaveLength(2);
+    expect(state.targetsCalls).toBe(2);
     await page
       .locator(".term-target-option")
       .filter({ hasText: "shop-web-1" })
@@ -595,7 +573,7 @@ test.describe("add-tab target picker", () => {
       "Servers",
       "shop",
     ]);
-    expect(state.targetsCalls).toHaveLength(3);
+    expect(state.targetsCalls).toBe(3);
     expect(state.creates).toHaveLength(1);
   });
 
@@ -626,7 +604,7 @@ test.describe("add-tab target picker", () => {
       .getByRole("button", { name: "Retry" })
       .click();
     await expect(page.locator(".term-targets-error")).toHaveCount(1);
-    expect(state.targetsCalls).toHaveLength(2);
+    expect(state.targetsCalls).toBe(2);
   });
 
   test("page single-flight: a double click opens one page tab", async ({ page }) => {

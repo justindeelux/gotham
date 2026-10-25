@@ -60,7 +60,7 @@ function server(): Server {
 async function mountShell(): Promise<ReturnType<typeof mount>> {
   setActivePinia(createPinia());
   const auth = useAuthStore();
-  auth.user = { email: "a@x.y" } as never;
+  auth.user = { email: "a@x.y", role: "owner" } as never;
   auth.accessToken = "tok";
   const servers = useServersStore();
   servers.servers = [server()];
@@ -79,7 +79,9 @@ async function mountShell(): Promise<ReturnType<typeof mount>> {
           { path: "projects", name: "projects", component: stub },
           { path: "toolchain", name: "toolchain", component: stub },
           { path: "domains", name: "domains", component: stub },
-          { path: "teams", name: "teams", component: stub },
+          { path: "terminal", name: "terminal", component: stub },
+          { path: "users", name: "users", component: stub },
+          { path: "terminal", name: "terminal", component: stub },
           { path: "notifications", name: "notifications", component: stub },
           { path: "git-sources", name: "git-sources", component: stub },
           { path: "files", name: "files", component: stub },

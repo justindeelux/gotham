@@ -69,8 +69,6 @@ import { useAuthStore } from "@/features/auth/stores/auth";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
-import type { Team } from "@/features/teams/api/teams";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -102,23 +100,8 @@ function makeTab(id: string, dirty: boolean): EditorTab {
   };
 }
 
-function team(id: string, role: Team["role"]): Team {
-  return {
-    id,
-    name: id,
-    is_personal: false,
-    role,
-    created_at: "2026-10-01T00:00:00Z",
-    updated_at: "2026-10-01T00:00:00Z",
-  };
-}
-
 async function mountShell() {
   setActivePinia(createPinia());
-  const teams = useTeamsStore();
-  teams.teams = [team("team-a", "owner")];
-  teams.activeTeamId = "team-a";
-  teams.loaded = true;
 
   const files = useFilesStore();
   files.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];

@@ -28,7 +28,6 @@ import {
 import type { InheritedVariable } from "@/features/projects/schemas/variables";
 import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { useTeamsStore } from "@/features/teams";
 import { useServersStore } from "@/features/servers";
 import { activeLocale, i18n } from "@/shared/i18n";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
@@ -41,7 +40,6 @@ export function useApplicationDetail() {
   const message = useMessage();
   const appsStore = useApplicationsStore();
   const projectsStore = useProjectsStore();
-  const teamsStore = useTeamsStore();
   const serversStore = useServersStore();
 
   const appId = computed<string>(() => String(route.params.id ?? ""));
@@ -303,14 +301,13 @@ export function useApplicationDetail() {
     if (target === "" || !scope) {
       return;
     }
-    const teamId = teamsStore.activeTeamId;
     const projectId = scope.project_id;
     const environmentId = scope.environment_id;
     inheritedLoading.value = true;
     try {
       const [projectResult, environmentResult] = await Promise.allSettled([
-        getProjectVariables(teamId, projectId),
-        getEnvironmentVariables(teamId, environmentId),
+        getProjectVariables(projectId),
+        getEnvironmentVariables(environmentId),
       ]);
       if (target !== appId.value) {
         return;

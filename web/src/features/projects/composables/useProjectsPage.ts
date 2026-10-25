@@ -1,5 +1,5 @@
 import { useMessage } from "naive-ui";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref } from "vue";
 import type { ComputedRef, Ref } from "vue";
 import { useRouter } from "vue-router";
 
@@ -13,7 +13,6 @@ import {
   isProjectNameValid,
 } from "@/features/projects/schemas/projects";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { useTeamsStore } from "@/features/teams";
 
 export interface ProjectsPageState {
   query: Ref<string>;
@@ -34,7 +33,6 @@ export function useProjectsPage(): ProjectsPageState {
   const message = useMessage();
   const router = useRouter();
   const projectsStore = useProjectsStore();
-  const teamsStore = useTeamsStore();
 
   const query = ref("");
   const filtered = computed(() =>
@@ -102,19 +100,8 @@ export function useProjectsPage(): ProjectsPageState {
   }
 
   onMounted(async () => {
-    try {
-      await teamsStore.ensureTeams();
-    } catch {
-    }
     await reload();
   });
-
-  watch(
-    () => teamsStore.activeTeamId,
-    () => {
-      void reload();
-    },
-  );
 
   return {
     query,

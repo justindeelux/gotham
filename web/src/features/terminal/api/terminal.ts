@@ -1,7 +1,7 @@
 import { ZodError } from "zod";
 
 import type { ApiError } from "@/shared/api/http";
-import { http, teamHeaders } from "@/shared/api/http";
+import { http } from "@/shared/api/http";
 import { getAccessToken } from "@/shared/api/token";
 import {
   applicationTerminalTargetsSchema,
@@ -92,11 +92,9 @@ export async function listApplicationTerminalTargets(
 }
 
 export async function listTerminalTargets(
-  teamId: string,
   signal?: AbortSignal,
 ): Promise<TerminalTargets> {
   const response = await http.get<unknown>("/terminal/targets", {
-    headers: teamHeaders(teamId),
     ...(signal ? { signal } : {}),
   });
   return terminalTargetsSchema.parse(response.data);
@@ -106,7 +104,6 @@ export async function createApplicationTerminalSession(
   applicationId: string,
   input: CreateApplicationTerminalInput,
   signal?: AbortSignal,
-  teamId = "",
 ): Promise<TerminalSessionInfo> {
   const response = await http.post<unknown>(
     `/applications/${encodeURIComponent(applicationId)}/terminal/sessions`,
@@ -117,7 +114,6 @@ export async function createApplicationTerminalSession(
       rows: input.rows,
     },
     {
-      headers: teamHeaders(teamId),
       ...(signal ? { signal } : {}),
     },
   );
@@ -127,12 +123,10 @@ export async function createApplicationTerminalSession(
 export async function closeApplicationTerminalSession(
   applicationId: string,
   sessionId: string,
-  teamId = "",
 ): Promise<void> {
   try {
     await http.delete(
       `/applications/${encodeURIComponent(applicationId)}/terminal/sessions/${encodeURIComponent(sessionId)}`,
-      { headers: teamHeaders(teamId) },
     );
   } catch (error) {
     const status = (error as ApiError | null)?.status ?? null;

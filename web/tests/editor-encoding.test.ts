@@ -89,7 +89,7 @@ describe("editor store encoding", () => {
   it("records the detected encoding of an opened file", async () => {
     getContentMock.mockResolvedValueOnce(content("配置已保存", "gb2312"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
 
     expect(store.activeTab?.encoding).toBe("gb2312");
     expect(store.activeTab?.status).toBe("ready");
@@ -99,14 +99,13 @@ describe("editor store encoding", () => {
     getContentMock.mockResolvedValueOnce(content("配置已保存", "gbk"));
     putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v3"' });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
 
-    const outcome = await store.save(store.activeTab!.id, "team");
+    const outcome = await store.save(store.activeTab!.id);
 
     expect(outcome).toBe("saved");
     expect(putContentMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({ encoding: "gbk", content: "配置已保存" }),
     );
   });
@@ -114,11 +113,11 @@ describe("editor store encoding", () => {
   it("blocks a save with an unrepresentable character and keeps the tab dirty", async () => {
     getContentMock.mockResolvedValueOnce(content("配置", "gb2312"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "配置😀");
 
-    const outcome = await store.save(tab.id, "team");
+    const outcome = await store.save(tab.id);
 
     expect(outcome).toBe("unsupported");
     expect(putContentMock).not.toHaveBeenCalled();
@@ -134,19 +133,18 @@ describe("editor store encoding", () => {
     getContentMock.mockResolvedValueOnce(content("配置", "gb2312"));
     putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v4"' });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "配置😀");
-    await store.save(tab.id, "team");
+    await store.save(tab.id);
 
-    const outcome = await store.saveAsUtf8(tab.id, "team");
+    const outcome = await store.saveAsUtf8(tab.id);
 
     expect(outcome).toBe("saved");
     expect(tab.encoding).toBe("utf-8");
     expect(store.encodingWarning).toBeNull();
     expect(putContentMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({ encoding: "utf-8", content: "配置😀" }),
     );
   });
@@ -155,16 +153,15 @@ describe("editor store encoding", () => {
     getContentMock.mockResolvedValueOnce(content("plain", "utf-8"));
     putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v9"' });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
     const tab = store.activeTab!;
 
-    const outcome = await store.changeEncoding(tab.id, "team", "big5");
+    const outcome = await store.changeEncoding(tab.id, "big5");
 
     expect(outcome).toBe("saved");
     expect(tab.encoding).toBe("big5");
     expect(putContentMock).toHaveBeenCalledWith(
       "srv",
-      "team",
       expect.objectContaining({ encoding: "big5", content: "plain" }),
     );
   });
@@ -172,10 +169,10 @@ describe("editor store encoding", () => {
   it("reverts the label when the re-save is blocked client-side", async () => {
     getContentMock.mockResolvedValueOnce(content("café", "utf-8"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
     const tab = store.activeTab!;
 
-    const outcome = await store.changeEncoding(tab.id, "team", "ascii");
+    const outcome = await store.changeEncoding(tab.id, "ascii");
 
     expect(outcome).toBe("unsupported");
     expect(tab.encoding).toBe("utf-8");
@@ -190,10 +187,10 @@ describe("editor store encoding", () => {
     getContentMock.mockResolvedValueOnce(content("plain", "utf-8"));
     putContentMock.mockRejectedValueOnce({ status: 500, message: "boom" });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
     const tab = store.activeTab!;
 
-    const outcome = await store.changeEncoding(tab.id, "team", "gbk");
+    const outcome = await store.changeEncoding(tab.id, "gbk");
 
     expect(outcome).toBe("error");
     expect(tab.encoding).toBe("utf-8");
@@ -202,11 +199,11 @@ describe("editor store encoding", () => {
   it("defers a dirty tab's encoding change to its next save", async () => {
     getContentMock.mockResolvedValueOnce(content("plain", "utf-8"));
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "plain!");
 
-    const outcome = await store.changeEncoding(tab.id, "team", "gbk");
+    const outcome = await store.changeEncoding(tab.id, "gbk");
 
     expect(outcome).toBe("pending");
     expect(tab.encoding).toBe("gbk");
@@ -221,11 +218,11 @@ describe("editor store encoding", () => {
       message: "text cannot be represented in the save encoding",
     });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "app.conf");
+    await store.openFile("srv", "volumes", "app.conf");
     const tab = store.activeTab!;
     store.setDoc(tab.id, "配置中");
 
-    const outcome = await store.save(tab.id, "team");
+    const outcome = await store.save(tab.id);
 
     expect(outcome).toBe("unsupported");
     expect(store.encodingWarning).toEqual({
@@ -237,18 +234,18 @@ describe("editor store encoding", () => {
   });
 
   it("queues every unsupported tab so Save All never skips one", async () => {
-    getContentMock.mockImplementation(async (_server: string, _team: string, _root: string, path: string) =>
+    getContentMock.mockImplementation(async (_server: string, _root: string, path: string) =>
       content(`配置${path}`, "gb2312"),
     );
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "a.conf");
+    await store.openFile("srv", "volumes", "a.conf");
     const first = store.activeTab!;
-    await store.openFile("srv", "team", "volumes", "b.conf");
+    await store.openFile("srv", "volumes", "b.conf");
     const second = store.activeTab!;
     store.setDoc(first.id, "配置😀a");
     store.setDoc(second.id, "配置😀b");
 
-    const reports = await store.saveAll("team");
+    const reports = await store.saveAll();
 
     expect(reports.map((report) => report.outcome)).toEqual([
       "unsupported",
@@ -262,20 +259,20 @@ describe("editor store encoding", () => {
   });
 
   it("resolves only the warned tab when saving it as UTF-8", async () => {
-    getContentMock.mockImplementation(async (_server: string, _team: string, _root: string, path: string) =>
+    getContentMock.mockImplementation(async (_server: string, _root: string, path: string) =>
       content(`配置${path}`, "gb2312"),
     );
     putContentMock.mockResolvedValue({ ...entry, etag: '"v5"' });
     const store = useEditorStore();
-    await store.openFile("srv", "team", "volumes", "a.conf");
+    await store.openFile("srv", "volumes", "a.conf");
     const first = store.activeTab!;
-    await store.openFile("srv", "team", "volumes", "b.conf");
+    await store.openFile("srv", "volumes", "b.conf");
     const second = store.activeTab!;
     store.setDoc(first.id, "配置😀a");
     store.setDoc(second.id, "配置😀b");
-    await store.saveAll("team");
+    await store.saveAll();
 
-    const outcome = await store.saveAsUtf8(first.id, "team");
+    const outcome = await store.saveAsUtf8(first.id);
 
     expect(outcome).toBe("saved");
     expect(store.encodingWarningCount).toBe(1);

@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import MeCard from "../src/app/layouts/MeCard.vue";
 import { useAuthStore } from "../src/features/auth";
-import { useTeamsStore } from "../src/features/teams";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -39,9 +38,6 @@ async function mountCard(user: Record<string, unknown>) {
     ...user,
   } as never;
   auth.accessToken = "access";
-  const teams = useTeamsStore();
-  vi.spyOn(teams, "ensureTeams").mockResolvedValue(undefined);
-  teams.loaded = true;
   const router = testRouter();
   await router.push("/");
   await router.isReady();

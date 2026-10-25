@@ -91,14 +91,11 @@ import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import EditorShortcutsDialog from "@/features/files/components/EditorShortcutsDialog.vue";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import { createMergeSession } from "@/features/files/composables/useMergeView";
-import { useAuthStore } from "@/features/auth/stores/auth";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
-import { useTeamsStore } from "@/features/teams";
-import type { Team } from "@/features/teams/api/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 function makeTab(id: string, dirty: boolean): EditorTab {
@@ -132,16 +129,6 @@ function makeDiffTab(id: string): EditorTab {
   };
 }
 
-function team(id: string, role: Team["role"]): Team {  return {
-    id,
-    name: id,
-    is_personal: false,
-    role,
-    created_at: "2026-10-01T00:00:00Z",
-    updated_at: "2026-10-01T00:00:00Z",
-  };
-}
-
 function toolbarButton(
   wrapper: ReturnType<typeof mountEditor>["wrapper"],
   label: string,
@@ -167,9 +154,6 @@ function lastSessionOptions(): Record<string, unknown> {
 
 function mountEditor() {
   setActivePinia(createPinia());
-  const teams = useTeamsStore();
-  teams.teams = [team("team-a", "owner"), team("team-b", "owner")];
-  teams.activeTeamId = "team-a";
 
   const files = useFilesStore();
   files.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
@@ -186,14 +170,11 @@ function mountEditor() {
     attachTo: document.body,
     global: { plugins: [i18n], stubs: { teleport: true } },
   });
-  return { wrapper, teams, files, editor };
+  return { wrapper, files, editor };
 }
 
 async function mountEditorWithRouter(initialPath = "/servers/srv-a/files") {
   setActivePinia(createPinia());
-  const teams = useTeamsStore();
-  teams.teams = [team("team-a", "owner"), team("team-b", "owner")];
-  teams.activeTeamId = "team-a";
 
   const files = useFilesStore();
   files.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
@@ -221,7 +202,7 @@ async function mountEditorWithRouter(initialPath = "/servers/srv-a/files") {
     global: { plugins: [router, i18n], stubs: { teleport: true } },
   });
   await flushPromises();
-  return { wrapper, teams, files, editor, router };
+  return { wrapper, files, editor, router };
 }
 
 function setViewport(width: number, height: number): void {
@@ -313,27 +294,6 @@ describe("FilesEditor guards", () => {
     expect(codemirror.sessions).toHaveLength(1);
     expect(codemirror.sessions[0].setLanguage).toHaveBeenLastCalledWith("php");
     expect(wrapper.find(".ed-language").text()).toBe("PHP");
-    wrapper.unmount();
-  });
-
-  it("rejects a team switch once and never re-prompts", async () => {
-    const { wrapper, teams, editor } = mountEditor();
-    const tab = makeTab("t1", true);
-    editor.tabs = [tab];
-    editor.activeId = tab.id;
-    await flushPromises();
-
-    teams.activeTeamId = "team-b";
-    await flushPromises();
-    expect(wrapper.text()).toContain("Discard unsaved changes?");
-
-    const stay = wrapper.findAll("button").find((button) => button.text() === "Stay");
-    expect(stay).toBeTruthy();
-    await stay!.trigger("click");
-    await flushPromises();
-
-    expect(teams.activeTeamId).toBe("team-a");
-    expect(wrapper.text()).not.toContain("Discard unsaved changes?");
     wrapper.unmount();
   });
 
@@ -605,29 +565,6 @@ describe("FilesEditor guards", () => {
     wrapper.unmount();
   });
 
-  it("forced sign-out with an open prompt neither reverts nor navigates", async () => {
-    const { wrapper, teams, editor, router } = await mountEditorWithRouter("/dashboard");
-    const tab = makeTab("t1", true);
-    editor.tabs = [tab];
-    editor.activeId = tab.id;
-    await flushPromises();
-
-    teams.activeTeamId = "team-b";
-    await flushPromises();
-    expect(leaveDialog(wrapper)).toBeTruthy();
-
-    const selectSpy = vi.spyOn(teams, "selectTeam");
-    useAuthStore().clearSession();
-    await flushPromises();
-    await router.isReady();
-
-    expect(leaveDialog(wrapper)).toBeUndefined();
-    expect(editor.tabs).toHaveLength(0);
-    expect(selectSpy).not.toHaveBeenCalled();
-    expect(router.currentRoute.value.path).toBe("/dashboard");
-    wrapper.unmount();
-  });
-
   it("returns focus to the active tab on restore", async () => {    const { wrapper, editor } = mountEditor();
     const tab = makeTab("t1", true);
     editor.tabs = [tab];
@@ -685,44 +622,6 @@ describe("FilesEditor guards", () => {
     await flushPromises();
 
     expect(editor.tabs).toHaveLength(0);
-    expect(leaveDialog(wrapper)).toBeUndefined();
-    wrapper.unmount();
-  });
-
-  it("shares one confirmation across a team switch landing mid-prompt", async () => {
-    const { wrapper, teams, files, editor, router } = await mountEditorWithRouter(
-      "/dashboard",
-    );
-    files.serverId = "srv-a";
-    editor.serverId = "srv-a";
-    const tab = makeTab("t1", true);
-    editor.tabs = [tab];
-    editor.activeId = tab.id;
-    await flushPromises();
-
-    teams.activeTeamId = "team-b";
-    await flushPromises();
-    expect(leaveDialog(wrapper)).toBeTruthy();
-
-    files.serverId = "srv-b";
-    await flushPromises();
-    expect(
-      wrapper
-        .findAll(".app-modal")
-        .filter((node) => node.text().includes("Discard unsaved changes?")),
-    ).toHaveLength(1);
-
-    const stay = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Stay");
-    expect(stay).toBeTruthy();
-    await stay!.trigger("click");
-    await flushPromises();
-    await router.isReady();
-
-    expect(teams.activeTeamId).toBe("team-a");
-    expect(router.currentRoute.value.params.id).toBe("srv-a");
-    expect(editor.tabs).toHaveLength(1);
     expect(leaveDialog(wrapper)).toBeUndefined();
     wrapper.unmount();
   });

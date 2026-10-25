@@ -1,5 +1,7 @@
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
+
+import { useAuthStore } from "@/features/auth";
 import { defineComponent, h, ref } from "vue";
 import type { Ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -45,6 +47,9 @@ beforeEach(() => {
   resetLocaleState();
   syncComposerLocale("en");
   setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.accessToken = "tok";
+  auth.user = { id: "u-1", email: "owner@example.com", role: "owner", created_at: "2026-01-01T00:00:00Z" };
 });
 
 afterEach(() => {
@@ -86,18 +91,18 @@ describe("service errors keep raw diagnostics", () => {
     );
     expect(
       describeServiceError({ status: 503, message: "", cause: null }),
-    ).toBe("Services are turned off on this control plane. The platform administrator must enable them.");
+    ).toBe("Services are turned off on this control plane. Ask the owner to enable them.");
     setLocale("vi", null);
     expect(describeServiceError({ status: 401, message: "", cause: null })).toBe(
       "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     );
     expect(describeServiceError(null)).toBe("Đã xảy ra lỗi. Vui lòng thử lại.");
     expect(describeServiceError({ status: 503, message: "", cause: null })).toBe(
-      "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
+      "Dịch vụ đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
     );
     expect(
       describeTemplateError({ status: 503, message: "", cause: null }),
-    ).toBe("Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.");
+    ).toBe("Dịch vụ đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.");
   });
 
   it("frames status-classified raw refusals without touching the EN baseline", () => {

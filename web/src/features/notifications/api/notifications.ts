@@ -1,4 +1,4 @@
-import { http, teamHeaders } from "@/shared/api/http";
+import { http } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import { i18n } from "@/shared/i18n";
 
@@ -31,7 +31,6 @@ export interface ChannelConfig {
 
 export interface NotificationChannel {
   id: string;
-  team_id: string;
   name: string;
   kind: NotificationKind;
   enabled: boolean;
@@ -69,54 +68,40 @@ interface TestEnvelope {
   check: TestResult;
 }
 
-export async function listChannels(
-  teamId: string,
-): Promise<NotificationChannel[]> {
-  const response = await http.get<ChannelListEnvelope>("/notification-channels", {
-    headers: teamHeaders(teamId),
-  });
+export async function listChannels(): Promise<NotificationChannel[]> {
+  const response = await http.get<ChannelListEnvelope>("/notification-channels");
   return response.data.channels ?? [];
 }
 
 export async function createChannel(
-  teamId: string,
   input: ChannelInput,
 ): Promise<NotificationChannel> {
   const response = await http.post<ChannelEnvelope>(
     "/notification-channels",
     input,
-    { headers: teamHeaders(teamId) },
   );
   return response.data.channel;
 }
 
 export async function updateChannel(
-  teamId: string,
   id: string,
   input: ChannelInput,
 ): Promise<NotificationChannel> {
   const response = await http.patch<ChannelEnvelope>(
     `/notification-channels/${id}`,
     input,
-    { headers: teamHeaders(teamId) },
   );
   return response.data.channel;
 }
 
-export async function deleteChannel(teamId: string, id: string): Promise<void> {
-  await http.delete(`/notification-channels/${id}`, {
-    headers: teamHeaders(teamId),
-  });
+export async function deleteChannel(id: string): Promise<void> {
+  await http.delete(`/notification-channels/${id}`);
 }
 
-export async function testChannel(
-  teamId: string,
-  id: string,
-): Promise<TestResult> {
+export async function testChannel(id: string): Promise<TestResult> {
   const response = await http.post<TestEnvelope>(
     `/notification-channels/${id}/test`,
     {},
-    { headers: teamHeaders(teamId) },
   );
   return response.data.check;
 }
@@ -137,12 +122,10 @@ interface DeliveryListEnvelope {
 }
 
 export async function listDeliveries(
-  teamId: string,
   id: string,
 ): Promise<NotificationDelivery[]> {
   const response = await http.get<DeliveryListEnvelope>(
     `/notification-channels/${id}/deliveries`,
-    { headers: teamHeaders(teamId) },
   );
   return response.data.deliveries ?? [];
 }
@@ -241,14 +224,14 @@ export function describeChannelError(error: unknown): string {
     if (error.status === 403) {
       return channelText(
         "notifications.errors.forbiddenRole",
-        "Your team role does not allow this action.",
+        "You do not have permission for this action.",
       );
     }
     if (error.status === 404) {
       return channelText(
         "notifications.errors.featureDisabled",
         "Notification channels are turned off on this control plane. " +
-          "The platform administrator must enable them.",
+          "Ask the owner to enable them.",
       );
     }
     if (error.status === 400) {

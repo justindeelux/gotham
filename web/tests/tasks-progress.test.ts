@@ -33,13 +33,12 @@ function runningEvent(overrides: Record<string, unknown> = {}): Record<string, u
     server_id: "srv-1",
     project_id: "proj-1",
     environment_id: "env-1",
-    team_id: "t1",
     ...overrides,
   };
 }
 
 describe("taskChannel", () => {
-  it("scopes rooms per team", () => {
+  it("scopes rooms per project", () => {
     expect(taskChannel("t1")).toBe("tasks:t1");
     expect(taskChannel("t1")).not.toBe(taskChannel("t2"));
   });

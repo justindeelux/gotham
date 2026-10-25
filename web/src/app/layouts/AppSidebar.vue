@@ -22,7 +22,7 @@ const serversCount = computed<number>(() => serversStore.servers.length);
 
 const activeKey = computed<string>(() => activeNavKey(route.path));
 
-const sections = computed(() => visibleNavSections(navSections, authStore.isPlatformAdmin));
+const sections = computed(() => visibleNavSections(navSections, authStore.isOwner));
 </script>
 
 <template>

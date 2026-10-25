@@ -31,11 +31,6 @@ vi.mock("@/features/projects/api/projects", async (importOriginal) => {
     deleteEnvironment: vi.fn(),
   };
 });
-vi.mock("@/features/teams/api/teams", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/features/teams/api/teams")>();
-  return { ...actual, listTeams: vi.fn() };
-});
-
 import {
   createProject,
   getProject,
@@ -48,8 +43,6 @@ import type {
 import ProjectDetailPage from "@/features/projects/pages/ProjectDetailPage.vue";
 import ProjectsPage from "@/features/projects/pages/ProjectsPage.vue";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { listTeams } from "@/features/teams/api/teams";
-import { useTeamsStore } from "@/features/teams";
 
 const counts = { applications: 3, services: 1, databases: 2 };
 const emptyCounts = { applications: 0, services: 0, databases: 0 };
@@ -118,21 +111,6 @@ function testRouter(path: string) {
   return router;
 }
 
-function seedTeams(role: "owner" | "read_only" = "owner"): void {
-  const team = {
-    id: "team-1",
-    name: "Acme",
-    is_personal: false,
-    role,
-    created_at: "2026-10-01T00:00:00Z",
-    updated_at: "2026-10-01T00:00:00Z",
-  };
-  vi.mocked(listTeams).mockResolvedValue([team] as never);
-  const teams = useTeamsStore();
-  teams.teams = [team] as never;
-  teams.activeTeamId = "team-1";
-}
-
 async function mountList(path = "/projects") {
   const router = testRouter(path);
   await router.isReady();
@@ -173,7 +151,6 @@ function buttonLabels(wrapper: VueWrapper): string[] {
 describe("projects list page states", () => {
   it("renders cards, then drops the search query on remount", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(listProjects).mockResolvedValue([projectRow()]);
 
     let wrapper = await mountList();
@@ -195,7 +172,6 @@ describe("projects list page states", () => {
 
   it("filters by name and shows the no-match state", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(listProjects).mockResolvedValue([
       projectRow(),
       projectRow({
@@ -219,7 +195,6 @@ describe("projects list page states", () => {
 
   it("shows the empty state with a create button", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(listProjects).mockResolvedValue([]);
 
     const wrapper = await mountList();
@@ -230,7 +205,6 @@ describe("projects list page states", () => {
 
   it("shows the load error with a retry", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(listProjects).mockRejectedValue(
       Object.assign(new Error("boom"), { status: 500, cause: null }),
     );
@@ -241,20 +215,8 @@ describe("projects list page states", () => {
     wrapper.unmount();
   });
 
-  it("hides every create button from viewers", async () => {
-    setActivePinia(createPinia());
-    seedTeams("read_only");
-    vi.mocked(listProjects).mockResolvedValue([projectRow()]);
-
-    const wrapper = await mountList();
-    expect(wrapper.text()).toContain("storefront");
-    expect(buttonLabels(wrapper)).not.toContain("New project");
-    wrapper.unmount();
-  });
-
   it("creates a project only with a valid name and a free guard", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(listProjects).mockResolvedValue([]);
     vi.mocked(createProject).mockResolvedValue({
       project: projectRow(),
@@ -275,7 +237,6 @@ describe("projects list page states", () => {
 
   it("names every create input programmatically", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(listProjects).mockResolvedValue([]);
 
     const wrapper = await mountList();
@@ -291,7 +252,6 @@ describe("projects list page states", () => {
 
   it("renders a taken name inline on the field, not the dialog alert", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(listProjects).mockResolvedValue([]);
     vi.mocked(createProject).mockRejectedValue(
       Object.assign(new Error("project name already exists"), {
@@ -322,7 +282,6 @@ describe("project detail page states", () => {
 
   it("renders the breadcrumb, environments and the variables placeholder", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [environmentRow()],
@@ -346,7 +305,6 @@ describe("project detail page states", () => {
 
   it("links each environment name to the environment page (JUS-70)", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [environmentRow()],
@@ -363,7 +321,6 @@ describe("project detail page states", () => {
 
   it("explains the blocked project delete in an openable dialog", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [environmentRow()],
@@ -383,7 +340,6 @@ describe("project detail page states", () => {
 
   it("explains the blocked environment delete in an openable dialog", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [environmentRow()],
@@ -397,7 +353,6 @@ describe("project detail page states", () => {
 
   it("names every detail dialog input programmatically", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [environmentRow(emptyCounts)],
@@ -434,7 +389,6 @@ describe("project detail page states", () => {
 
   it("submits renames on keydown Enter, never on keyup", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [environmentRow(emptyCounts)],
@@ -458,7 +412,6 @@ describe("project detail page states", () => {
 
   it("shows the detail error with a retry", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(getProject).mockRejectedValue(
       Object.assign(new Error("gone"), { status: 404, cause: null }),
     );
@@ -469,25 +422,8 @@ describe("project detail page states", () => {
     wrapper.unmount();
   });
 
-  it("hides rename and delete from viewers", async () => {
-    setActivePinia(createPinia());
-    seedTeams("read_only");
-    vi.mocked(getProject).mockResolvedValue({
-      project: projectRow(),
-      environments: [environmentRow(emptyCounts)],
-    });
-
-    const { wrapper } = await mountDetail(id);
-    expect(wrapper.text()).toContain("storefront");
-    expect(buttonLabels(wrapper)).not.toContain("Rename");
-    expect(buttonLabels(wrapper)).not.toContain("Delete project");
-    expect(buttonLabels(wrapper)).not.toContain("Add environment");
-    wrapper.unmount();
-  });
-
   it("drops dialog drafts on remount", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     const store = useProjectsStore();
     store.detail = projectRow();
     store.environments = [environmentRow(emptyCounts)];
@@ -512,7 +448,6 @@ describe("project detail page states", () => {
 
   it("submits environment dialogs on keydown Enter, never on keyup", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     vi.mocked(getProject).mockResolvedValue({
       project: projectRow(),
       environments: [environmentRow(emptyCounts)],
@@ -554,9 +489,8 @@ describe("project detail page states", () => {
 
   it("keeps the busy guard across a route change mid-request", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     const otherId = "33333333-3333-4333-8333-333333333333";
-    vi.mocked(getProject).mockImplementation(async (_teamId: string, pid: string) => ({
+    vi.mocked(getProject).mockImplementation(async (pid: string) => ({
       project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
       environments: [],
     }));
@@ -592,9 +526,8 @@ describe("project detail page states", () => {
   });
 
   it("reloads when the route moves to another project", async () => {    setActivePinia(createPinia());
-    seedTeams();
     const otherId = "33333333-3333-4333-8333-333333333333";
-    vi.mocked(getProject).mockImplementation(async (_teamId: string, pid: string) => ({
+    vi.mocked(getProject).mockImplementation(async (pid: string) => ({
       project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
       environments: [],
     }));
@@ -605,15 +538,14 @@ describe("project detail page states", () => {
     await flushPromises();
     await nextTick();
     expect(wrapper.text()).toContain("other");
-    expect(vi.mocked(getProject)).toHaveBeenCalledWith("team-1", otherId);
+    expect(vi.mocked(getProject)).toHaveBeenCalledWith(otherId);
     wrapper.unmount();
   });
 
   it("late rename success does not close another project's dialog", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     const otherId = "33333333-3333-4333-8333-333333333333";
-    vi.mocked(getProject).mockImplementation(async (_teamId: string, pid: string) => ({
+    vi.mocked(getProject).mockImplementation(async (pid: string) => ({
       project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
       environments: [],
     }));
@@ -648,9 +580,8 @@ describe("project detail page states", () => {
 
   it("late delete success does not navigate away from another project", async () => {
     setActivePinia(createPinia());
-    seedTeams();
     const otherId = "33333333-3333-4333-8333-333333333333";
-    vi.mocked(getProject).mockImplementation(async (_teamId: string, pid: string) => ({
+    vi.mocked(getProject).mockImplementation(async (pid: string) => ({
       project: projectRow({ id: pid, name: pid === id ? "storefront" : "other" }),
       environments: [],
     }));

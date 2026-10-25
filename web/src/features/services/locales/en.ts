@@ -27,7 +27,7 @@ const en = {
     unknownWithDetail: "Request failed: {detail}",
     nodeAgentError: "Node agent error: {detail}",
     nodeUnreachable: "The node agent is unreachable. Check the node status and retry.",
-    disabled: "Services are turned off on this control plane. The platform administrator must enable them.",
+    disabled: "Services are turned off on this control plane. Ask the owner to enable them.",
   },
   import: {
     title: "Import compose",
@@ -36,6 +36,7 @@ const en = {
     nameLabel: "Service name",
     namePlaceholder: "blog-staging",
     nodeLabel: "Node",
+    nodeByOwner: "The owner chooses the node for this service.",
     yamlLabel: "compose.yaml",
     yamlExample: "services:\n  web:\n    image: nginx:1.27-alpine",
     yamlPlaceholder: "services:\n  web:\n    image: nginx:1.27-alpine",

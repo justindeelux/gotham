@@ -301,7 +301,7 @@ export function useTerminalPageSession() {
   );
 
   const demoted = computed<boolean>(
-    () => authStore.isAuthenticated && !authStore.isPlatformAdmin,
+    () => authStore.isAuthenticated && !authStore.isOwner,
   );
   watch(demoted, (isDemoted) => {
     if (isDemoted) {
@@ -313,7 +313,7 @@ export function useTerminalPageSession() {
     if (!authStore.isAuthenticated) {
       return;
     }
-    if (!authStore.isPlatformAdmin) {
+    if (!authStore.isOwner) {
       void router.replace({ name: "forbidden" });
       return;
     }

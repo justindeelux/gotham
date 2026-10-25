@@ -26,7 +26,7 @@ const vi: typeof en = {
     databaseAgentUnreachable:
       "Không kết nối được node agent hoặc kiểm tra trạng thái thất bại. Kiểm tra trạng thái node rồi thử lại.",
     featureDisabled:
-      "Databases đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
+      "Databases đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
     backupInvalidRequest:
       "Yêu cầu không hợp lệ. Kiểm tra biểu thức cron và các trường đích lưu trữ.",
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
@@ -241,6 +241,7 @@ const vi: typeof en = {
       version: "Phiên bản",
       defaultVersion: "Mặc định: {version}",
       node: "Node",
+      nodeByOwner: "Chủ sở hữu chọn nút cho cơ sở dữ liệu này.",
       engineMeta: "· {repo}:{version} · cổng {port}",
     },
     configure: {

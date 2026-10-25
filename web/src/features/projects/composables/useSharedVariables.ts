@@ -21,7 +21,6 @@ import type {
   VariableDraft,
 } from "@/features/projects/schemas/variables";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { useTeamsStore } from "@/features/teams";
 import { i18n } from "@/shared/i18n";
 import { createRequestGeneration } from "@/shared/utils/requestGeneration";
 
@@ -58,7 +57,6 @@ export function useSharedVariables(
 ): SharedVariablesState {
   const message = useMessage();
   const projectsStore = useProjectsStore();
-  const teamsStore = useTeamsStore();
 
   const currentScope = (): SharedVariablesScope => toValue(scopeSource);
 
@@ -95,11 +93,10 @@ export function useSharedVariables(
   );
 
   async function readScope(scope: SharedVariablesScope): Promise<SharedVariable[]> {
-    const teamId = teamsStore.activeTeamId;
     if (scope.kind === "project") {
-      return getProjectVariables(teamId, scope.projectId);
+      return getProjectVariables(scope.projectId);
     }
-    return getEnvironmentVariables(teamId, scope.environmentId);
+    return getEnvironmentVariables(scope.environmentId);
   }
 
   async function load(): Promise<void> {
@@ -141,15 +138,14 @@ export function useSharedVariables(
     if (problems.value.length > 0) {
       return;
     }
-    const teamId = teamsStore.activeTeamId;
     const payload = buildVariablesPayload(draft.value, storedSecrets.value);
     saving.value = true;
     saveFailure.value = null;
     try {
       const saved =
         scope.kind === "project"
-          ? await replaceProjectVariables(teamId, scope.projectId, payload)
-          : await replaceEnvironmentVariables(teamId, scope.environmentId, payload);
+          ? await replaceProjectVariables(scope.projectId, payload)
+          : await replaceEnvironmentVariables(scope.environmentId, payload);
       if (scopeKey(currentScope()) !== key) {
         return;
       }
@@ -203,18 +199,6 @@ export function useSharedVariables(
         saveFailure.value = null;
         void load();
       }
-    },
-  );
-
-  watch(
-    () => teamsStore.activeTeamId,
-    () => {
-      readGeneration.bump();
-      draft.value = [];
-      storedSecrets.value = new Set();
-      loadedFor.value = "";
-      saveFailure.value = null;
-      void load();
     },
   );
 

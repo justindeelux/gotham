@@ -18,10 +18,9 @@ const userInitial = computed<string>(() =>
   (displayName.value[0] ?? "?").toUpperCase(),
 );
 
-const platformRoleLabel = computed<string>(() => {
-  const isAdmin = authStore.user?.role === "owner";
-  return isAdmin ? t("profile.identity.admin") : t("profile.identity.member");
-});
+const roleLabel = computed<string>(() =>
+  authStore.isOwner ? t("profile.identity.owner") : t("profile.identity.member"),
+);
 
 const memberSince = computed<string>(() => {
   const raw = authStore.user?.created_at;
@@ -62,7 +61,7 @@ const memberSince = computed<string>(() => {
         class="identity-facts"
       >
         <NDescriptionsItem :label="t('profile.identity.email')">{{ authStore.user?.email }}</NDescriptionsItem>
-        <NDescriptionsItem :label="t('profile.identity.platformRole')">{{ platformRoleLabel }}</NDescriptionsItem>
+        <NDescriptionsItem :label="t('profile.identity.role')">{{ roleLabel }}</NDescriptionsItem>
         <NDescriptionsItem :label="t('profile.identity.memberSince')">{{ memberSince }}</NDescriptionsItem>
       </NDescriptions>
     </div>

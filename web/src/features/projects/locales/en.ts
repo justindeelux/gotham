@@ -23,7 +23,7 @@ const en = {
     nameLabel: "Name",
     nameAria: "Project name",
     namePlaceholder: "storefront",
-    nameHint: "Unique within the team. 1-64 characters.",
+    nameHint: "Unique within the instance. 1-64 characters.",
     descriptionLabel: "Description (optional)",
     descriptionAria: "Project description",
     descriptionPlaceholder: "What this product is",
@@ -52,7 +52,7 @@ const en = {
     title: "Rename project",
     nameLabel: "Name",
     nameAria: "Project name",
-    nameHint: "Unique within the team. 1-64 characters.",
+    nameHint: "Unique within the instance. 1-64 characters.",
     submit: "Save",
   },
   delete: {
@@ -78,7 +78,7 @@ const en = {
   },
   environment: {
     loading: "Loading environment…",
-    notFound: "This environment does not exist (or belongs to another team).",
+    notFound: "This environment does not exist (or is outside your access).",
     backToProjects: "Back to projects",
     description:
       "Everything that runs for {project} in {environment}. Each resource is pinned to one server.",
@@ -244,7 +244,7 @@ const en = {
   },
   errors: {
     sessionExpired: "Your session expired. Please sign in again.",
-    forbiddenFallback: "Your team role does not allow this action.",
+    forbiddenFallback: "You do not have permission for this action.",
     notFoundFallback: "Not found. It may have been removed already.",
     conflictFallback: "The project changed while you were editing it. Reload and retry.",
     badRequestFallback: "Invalid request.",

@@ -82,7 +82,7 @@ const moreNodesText = computed<string>(() =>
     </NEmpty>
   </NCard>
 
-  <NCard size="small" :title="$t('dashboard.aside.teamActivity')" class="aside-card">
+  <NCard size="small" :title="$t('dashboard.aside.activity')" class="aside-card">
     <NEmpty
       size="small"
       :description="$t('dashboard.aside.noActivity')"

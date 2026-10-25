@@ -16,7 +16,6 @@ import {
 import { useNameConflict } from "@/features/projects/composables/useNameConflict";
 import type { NameConflictState } from "@/features/projects/composables/useNameConflict";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { useTeamsStore } from "@/features/teams";
 
 export type ProjectTab = "environments" | "variables";
 
@@ -63,7 +62,6 @@ export function useProjectPage(
   const message = useMessage();
   const router = useRouter();
   const projectsStore = useProjectsStore();
-  const teamsStore = useTeamsStore();
 
   const currentId = (): string => toValue(projectIdSource);
 
@@ -311,13 +309,6 @@ export function useProjectPage(
     envDeleteFailure.value = null;
   }
 
-  watch(
-    () => teamsStore.activeTeamId,
-    () => {
-      void reload();
-    },
-  );
-
   watch(currentId, (next, previous) => {
     if (next !== previous) {
       resetDialogs();
@@ -326,10 +317,6 @@ export function useProjectPage(
   });
 
   onMounted(async () => {
-    try {
-      await teamsStore.ensureTeams();
-    } catch {
-    }
     await reload();
   });
 

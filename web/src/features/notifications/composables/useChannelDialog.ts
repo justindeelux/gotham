@@ -2,9 +2,6 @@ import { computed, inject, provide, ref } from "vue";
 import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
 
-import type { TeamRole } from "@/features/teams";
-import { canManageMembers } from "@/features/teams";
-import { useTeamsStore } from "@/features/teams";
 import { listApplications } from "@/features/applications";
 import { listDatabases } from "@/features/databases";
 import type { NotificationChannel } from "@/features/notifications/api/notifications";
@@ -32,7 +29,6 @@ import type {
 function createChannelDialogState() {
   const message = useMessage();
   const channelsStore = useNotificationsStore();
-  const teamsStore = useTeamsStore();
 
   const formOpen = ref(false);
   const editingId = ref("");
@@ -49,7 +45,6 @@ function createChannelDialogState() {
 
   const resourceApplications = ref<ResourceOption[]>([]);
   const resourceDatabases = ref<ResourceOption[]>([]);
-  const loadedResourcesTeamId = ref("");
   let resourcesReadToken = 0;
 
   const applicationsUnavailable = ref(false);
@@ -94,8 +89,8 @@ function createChannelDialogState() {
   >(() => [
     {
       label: channelText(
-        "notifications.dialog.scopeTeamWide",
-        "Team-wide (all resources)",
+        "notifications.dialog.scopeAll",
+        "All resources",
       ),
       value: "",
     },
@@ -126,14 +121,14 @@ function createChannelDialogState() {
       return channelText(
         "notifications.dialog.unavailableBoth",
         "Applications and databases are unavailable on this control plane; " +
-          "the channel can stay team-wide.",
+          "the channel can stay global.",
       );
     }
     if (applicationsUnavailable.value) {
       return channelText(
         "notifications.dialog.unavailableApps",
         "Applications are turned off on this control plane; " +
-          "a database scope is still available. The platform administrator " +
+          "a database scope is still available. Ask the owner to " +
           "must enable them.",
       );
     }
@@ -141,7 +136,7 @@ function createChannelDialogState() {
       return channelText(
         "notifications.dialog.unavailableDbs",
         "Databases are turned off on this control plane; " +
-          "an application scope is still available. The platform administrator " +
+          "an application scope is still available. Ask the owner to " +
           "must enable them.",
       );
     }
@@ -164,24 +159,13 @@ function createChannelDialogState() {
         );
       default:
         return channelText(
-          "notifications.dialog.eventsHintTeam",
-          "A team-wide channel receives every selected event.",
+          "notifications.dialog.eventsHintAll",
+          "A global channel receives every selected event.",
         );
     }
   });
 
-  const teamOptions = computed<Array<{ label: string; value: string }>>(() => {
-    const personal = channelText("teams.page.personal", "personal");
-    return teamsStore.teams.map((team) => ({
-      label: team.is_personal ? `${team.name} (${personal})` : team.name,
-      value: team.id,
-    }));
-  });
-
-  const activeRole = computed<TeamRole | null>(() => teamsStore.activeTeam?.role ?? null);
-  const canMutate = computed<boolean>(
-    () => teamsStore.featureDisabled || canManageMembers(activeRole.value),
-  );
+  const canMutate = computed<boolean>(() => true);
 
   const editing = computed<boolean>(() => editingId.value !== "");
 
@@ -215,17 +199,12 @@ function createChannelDialogState() {
     },
   );
 
-  async function loadResources(teamId: string): Promise<void> {
+  async function loadResources(): Promise<void> {
     const token = ++resourcesReadToken;
     const isCurrent = (): boolean => token === resourcesReadToken;
-    if (loadedResourcesTeamId.value !== teamId) {
-      resourceApplications.value = [];
-      resourceDatabases.value = [];
-      loadedResourcesTeamId.value = teamId;
-    }
     const [applications, databases] = await Promise.allSettled([
-      listApplications(teamId),
-      listDatabases(teamId),
+      listApplications(),
+      listDatabases(),
     ]);
     if (!isCurrent()) {
       return;
@@ -336,8 +315,6 @@ function createChannelDialogState() {
     unavailableScopeHint,
     resourcePickerOptions,
     canSubmit,
-    teamOptions,
-    activeRole,
     canMutate,
     resourceApplications,
     resourceDatabases,

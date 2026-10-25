@@ -63,7 +63,7 @@ const en = {
     title: "Update schedule",
     hint: "Saved changes apply immediately — no restart.",
     timezone: "Times use {timezone}.",
-    adminOnly: "Only platform administrators can check, update or change the schedule.",
+    adminOnly: "Only the owner can check, update or change the schedule.",
     checkEnabled: "Check for updates automatically",
     checkHint: "Gotham looks for a new release on the schedule below.",
     autoApply: "Apply updates automatically",

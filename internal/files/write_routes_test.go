@@ -467,6 +467,7 @@ func TestWriteErrorStatusMapping(t *testing.T) {
 		{"insufficient storage", ErrInsufficientStorage, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusInsufficientStorage},
 		{"disabled", ErrDisabled, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusServiceUnavailable},
 		{"agent outdated", ErrAgentOutdated, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusNotImplemented},
+		{"file manager disabled on node", ErrDisabledOnNode, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusConflict},
 		{"agent unavailable", ErrAgentUnavailable, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusBadGateway},
 	}
 	for _, tc := range cases {

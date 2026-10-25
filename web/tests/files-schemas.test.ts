@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { filesErrorKey } from "@/features/files/api/files";
+import { filesErrorKey, isFilesDisabledOnNode } from "@/features/files/api/files";
 import editorEn from "@/features/files/locales/editorEn";
 import editorVi from "@/features/files/locales/editorVi";
 import en from "@/features/files/locales/en";
@@ -132,6 +132,18 @@ describe("filesErrorKey maps every status to a curated key", () => {
     );
     expect(filesErrorKey({ message: "x", status: 409, code: "other" })).toBe(
       "files.errors.conflict",
+    );
+    expect(
+      filesErrorKey({ message: "x", status: 409, code: "file_manager_disabled" }),
+    ).toBe("files.errors.nodeDisabled");
+  });
+
+  it("separates a node switch from an outdated agent", () => {
+    expect(
+      isFilesDisabledOnNode({ message: "x", status: 409, code: "file_manager_disabled" }),
+    ).toBe(true);
+    expect(isFilesDisabledOnNode({ message: "x", status: 501, code: "agent_outdated" })).toBe(
+      false,
     );
   });
 });

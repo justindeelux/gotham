@@ -773,6 +773,28 @@ grep -q 'GOTHAM_AGENT_NODE_ID=localhost' "${SCRATCH}/env-no-agent.log" \
     || { echo "FAIL: legacy env skipped mandatory localhost agent" >&2; exit 1; }
 echo "PASS: localhost agent is mandatory"
 
+# ---- GOTHAM-70: local node file manager on by default, flags win ------------
+fm_agent_line() {
+    grep 'install-agent.sh --full' "$1"
+}
+fm_agent_line "${SCRATCH}/dry-agent.log" | grep -q -- '--file-manager' \
+    || { echo "FAIL: the local node does not enable the file manager by default" >&2; cat "${SCRATCH}/dry-agent.log" >&2; exit 1; }
+fm_agent_line "${SCRATCH}/dry-agent.log" | grep -q -- '--no-file-manager' \
+    && { echo "FAIL: the default local node command disables the file manager" >&2; exit 1; }
+dry_run --no-file-manager >"${SCRATCH}/dry-agent-no-fm.log" 2>&1
+fm_agent_line "${SCRATCH}/dry-agent-no-fm.log" | grep -q -- '--no-file-manager' \
+    || { echo "FAIL: --no-file-manager was not forwarded to the local agent" >&2; cat "${SCRATCH}/dry-agent-no-fm.log" >&2; exit 1; }
+printf 'GOTHAM_AGENT_FILES=false\n' >"${SCRATCH}/prior-fm-off.env"
+GOTHAM_AGENT_ENV_FILE="${SCRATCH}/prior-fm-off.env" dry_run >"${SCRATCH}/dry-agent-prior-off.log" 2>&1
+fm_agent_line "${SCRATCH}/dry-agent-prior-off.log" | grep -q -- '--no-file-manager' \
+    || { echo "FAIL: a re-run did not keep the prior file-manager answer" >&2; cat "${SCRATCH}/dry-agent-prior-off.log" >&2; exit 1; }
+GOTHAM_AGENT_ENV_FILE="${SCRATCH}/prior-fm-off.env" dry_run --file-manager >"${SCRATCH}/dry-agent-prior-on.log" 2>&1
+fm_agent_line "${SCRATCH}/dry-agent-prior-on.log" | grep -q -- '--file-manager' \
+    || { echo "FAIL: --file-manager did not override the prior answer" >&2; exit 1; }
+fm_agent_line "${SCRATCH}/dry-agent-prior-on.log" | grep -q -- '--no-file-manager' \
+    && { echo "FAIL: --file-manager forwarded --no-file-manager too" >&2; exit 1; }
+echo "PASS: local node file manager defaults on and both flags reach the agent"
+
 # ---- R1: unsupported platform skips the agent; a failed agent step keeps CP -
 # An unsupported platform (non-Ubuntu/Debian here) skips the localhost agent
 # with a notice instead of failing the install, and schedules no agent step.

@@ -25,6 +25,14 @@ Trình cài đặt đã thêm node `localhost` cho bạn. Bạn chỉ làm các 
 Bảng điều khiển cũng có wizard **Máy chủ → Thêm máy chủ** tạo sẵn khối cài đặt
 cho bạn, kèm token; trang này dành cho việc làm bằng tay.
 
+Wizard có hộp kiểm **Bật quản lý tệp trên nút này**. Nó tắt mặc định cho một nút
+được thêm, và lệnh được tạo mang `--no-file-manager` hoặc `--file-manager` để
+trình cài đặt không phải hỏi. Lựa chọn được cố định khi thêm nút: muốn đổi sau
+đó, đặt `GOTHAM_AGENT_FILES=true` (hoặc `false`) trong `/etc/gotham/agent.env`
+trên nút đó và chạy `systemctl restart gotham-agent`. Bảng điều khiển không có
+điều khiển cho việc này. Trình cài đặt control plane bật trình quản lý tệp trên
+node `localhost` của chính nó mặc định, không hỏi.
+
 ## Trước khi thêm node: địa chỉ control plane
 
 Agent từ xa kết nối tới control plane qua TLS và xác minh chứng chỉ của nó. Chứng
@@ -135,7 +143,7 @@ Các cờ và biến hữu ích của trình cài agent:
 | `GOTHAM_AGENT_CA` | Đường dẫn phía agent mà trình cài đặt ghi (`/etc/gotham/ca.crt`). Nó **không** được đọc từ môi trường xung quanh; khi cài lại, trình cài đặt giữ giá trị đã có trong `agent.env`. Dùng `--ca`/`GOTHAM_AGENT_CA_FILE` để đổi nó. |
 | `GOTHAM_AGENT_UPDATE_CHANNEL` | Kênh phát hành node này chấp nhận, `stable` (mặc định) hoặc `beta`. Node `beta` nhận cả đề nghị stable và beta; node `stable` từ chối đề nghị beta; một kênh rỗng hoặc không rõ bị từ chối. |
 | `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` | Thư mục cha của mọi bind mount ứng dụng mà node chấp nhận (mặc định `/var/lib/gotham/volumes`); quay về `GOTHAM_MANAGED_VOLUME_ROOT` dùng chung nếu không có. Phải khớp với control plane. |
-| `--file-manager` / `--no-file-manager` / `GOTHAM_AGENT_FILE_MANAGER=yes\|no` | Trả lời câu hỏi của trình cài đặt về trình quản lý tệp mà không cần hỏi. Trình cài đặt có hỏi (mặc định **no**; không có terminal cũng nghĩa là no). Yes ghi `GOTHAM_AGENT_FILES=true` và một drop-in `gotham-agent.service.d/file-manager.conf` chạy agent **dưới root** mà không có sandbox của systemd; no ghi `GOTHAM_AGENT_FILES=false` và gỡ drop-in. Chạy lại sẽ giữ câu trả lời trước đó (một `GOTHAM_AGENT_FILES=true` do bạn đặt tay được giữ nguyên, không kèm drop-in root); một `GOTHAM_AGENT_FILES` từ môi trường bị bỏ qua để dùng câu trả lời đó. |
+| `--file-manager` / `--no-file-manager` / `GOTHAM_AGENT_FILE_MANAGER=yes\|no` | Chọn trình quản lý tệp mà không cần hỏi. Một lần chạy trực tiếp sẽ hỏi (mặc định **no**; không có terminal cũng nghĩa là no); trình cài đặt control plane bật nó cho node `localhost` của chính nó mặc định, và trình hướng dẫn **Thêm máy chủ** truyền câu trả lời hộp kiểm cho một nút được thêm. Yes ghi `GOTHAM_AGENT_FILES=true` và một drop-in `gotham-agent.service.d/file-manager.conf` chạy agent **dưới root** mà không có sandbox của systemd; no ghi `GOTHAM_AGENT_FILES=false` và gỡ drop-in. Chạy lại sẽ giữ câu trả lời trước đó (một `GOTHAM_AGENT_FILES=true` do bạn đặt tay được giữ nguyên, không kèm drop-in root); một `GOTHAM_AGENT_FILES` từ môi trường bị bỏ qua để dùng câu trả lời đó. |
 | `GOTHAM_AGENT_FILES` | Dịch vụ tệp từ xa trên node. Bật trừ khi đặt là `false` (trình cài đặt ghi câu trả lời ở trên). |
 | `GOTHAM_AGENT_FILE_FULL_ACCESS` | Bật trừ khi đặt là `false`: dịch vụ phơi **toàn bộ hệ thống tệp** thành một gốc ghi được tên `system` (`/`), không có đường dẫn được bảo vệ — người vận hành đã chấp nhận rủi ro đó. `false` khôi phục các gốc bị giới hạn. Xem [Dịch vụ tệp từ xa](/vi/guide/file-service). |
 | `GOTHAM_AGENT_FILE_ROOTS` | Các gốc duyệt thêm, là đường dẫn tuyệt đối phân tách bằng dấu hai chấm (mặc định không có). Các gốc của người vận hành là **chỉ đọc** trong giai đoạn này; một gốc bị thiếu, không tuyệt đối, nằm trong cây nguy hiểm hoặc chồng lấn gốc khác sẽ bị từ chối lúc khởi động. |

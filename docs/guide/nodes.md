@@ -25,6 +25,15 @@ for **additional** nodes.
 The panel also has a **Servers → Add server** wizard that generates the same
 install block for you, including the token; this page is for doing it by hand.
 
+The wizard has an **Enable the file manager on this node** checkbox. It is off
+by default for an added node, and the generated command carries
+`--no-file-manager` or `--file-manager` so the installer never asks. The choice
+is fixed when the node is added: to change it later, set
+`GOTHAM_AGENT_FILES=true` (or `false`) in `/etc/gotham/agent.env` on that node
+and run `systemctl restart gotham-agent`. The panel has no control for it. The
+control-plane installer enables the file manager on its own `localhost` node by
+default, with no prompt.
+
 ## Before you add a node: the control plane address
 
 Remote agents connect to the control plane over TLS and verify its certificate.
@@ -137,7 +146,7 @@ Useful agent installer flags and variables:
 | `GOTHAM_AGENT_CA` | The agent-side path the installer writes (`/etc/gotham/ca.crt`). It is **not** read from the ambient environment; on a reinstall the installer keeps the value already in `agent.env`. Use `--ca`/`GOTHAM_AGENT_CA_FILE` to change it. |
 | `GOTHAM_AGENT_UPDATE_CHANNEL` | Release channel this node accepts, `stable` (default) or `beta`. A `beta` node accepts stable and beta offers; a `stable` node refuses a beta offer; an empty or unknown channel is refused. |
 | `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` | Parent of every application bind mount the node accepts (default `/var/lib/gotham/volumes`); falls back to the shared `GOTHAM_MANAGED_VOLUME_ROOT`. Must match the control plane. |
-| `--file-manager` / `--no-file-manager` / `GOTHAM_AGENT_FILE_MANAGER=yes\|no` | Answer the installer's file-manager question without a prompt. The installer asks (default **no**; no terminal also means no). Yes writes `GOTHAM_AGENT_FILES=true` and a `gotham-agent.service.d/file-manager.conf` drop-in that runs the agent **as root** without systemd sandboxing; no writes `GOTHAM_AGENT_FILES=false` and removes the drop-in. A re-run keeps the previous answer (a hand-set `GOTHAM_AGENT_FILES=true` is kept as is, without the root drop-in); an ambient `GOTHAM_AGENT_FILES` is ignored in favour of that answer. |
+| `--file-manager` / `--no-file-manager` / `GOTHAM_AGENT_FILE_MANAGER=yes\|no` | Choose the file manager without a prompt. A direct run asks (default **no**; no terminal also means no); the control-plane installer enables it on its own `localhost` node by default, and the **Add server** wizard passes the checkbox answer for an added node. Yes writes `GOTHAM_AGENT_FILES=true` and a `gotham-agent.service.d/file-manager.conf` drop-in that runs the agent **as root** without systemd sandboxing; no writes `GOTHAM_AGENT_FILES=false` and removes the drop-in. A re-run keeps the previous answer (a hand-set `GOTHAM_AGENT_FILES=true` is kept as is, without the root drop-in); an ambient `GOTHAM_AGENT_FILES` is ignored in favour of that answer. |
 | `GOTHAM_AGENT_FILES` | The remote file service on the node. On unless set to `false` (the installer writes the answer above). |
 | `GOTHAM_AGENT_FILE_FULL_ACCESS` | On unless set to `false`: the service exposes the **whole filesystem** as one writable root `system` (`/`), with no protected paths — the operator accepted that risk. `false` restores the confined roots. See [Remote file service](/guide/file-service). |
 | `GOTHAM_AGENT_FILE_ROOTS` | Extra browsable roots, colon-separated absolute paths (default none). Operator roots are **read-only** in this phase; a root that is missing, not absolute, in a dangerous tree or overlapping another root refuses startup. |

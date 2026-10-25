@@ -2283,7 +2283,9 @@ function onFolderMenu(key: string): void {
     <div v-if="files.disabled" class="empty fm-state" @contextmenu.prevent="openFolderContext">
       <Lock :size="26" :stroke-width="1.6" aria-hidden="true" />
       <h4>{{ $t("files.browser.disabledTitle") }}</h4>
-      <p class="small">{{ $t("files.browser.disabledHint") }}</p>
+      <p class="small">
+        {{ $t(files.disabledOnNode ? "files.browser.nodeDisabledHint" : "files.browser.disabledHint") }}
+      </p>
       <NButton size="small" secondary class="fm-state-action" @click="files.retry()">
         {{ $t("common.actions.retry") }}
       </NButton>

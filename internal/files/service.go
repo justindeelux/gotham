@@ -735,6 +735,17 @@ func kindString(kind agentv1.FileKind) string {
 	}
 }
 
+// DisabledReason is the agent's stable detail for a switched-off file manager.
+// The agent package keeps its own copy because it must not import internal/.
+const DisabledReason = "file_manager_disabled"
+
+// IsDisabledOnNode reports the typed FailedPrecondition an agent returns when
+// its file manager is switched off.
+func IsDisabledOnNode(err error) bool {
+	return status.Code(err) == codes.FailedPrecondition &&
+		strings.Contains(status.Convert(err).Message(), DisabledReason)
+}
+
 func mapRPCError(err error) error {
 	if err == nil {
 		return nil
@@ -750,7 +761,11 @@ func mapRPCError(err error) error {
 	case codes.PermissionDenied:
 		return fmt.Errorf("%w: %v", ErrForbidden, err)
 	case codes.FailedPrecondition:
-		if strings.Contains(status.Convert(err).Message(), "archive entry") {
+		message := status.Convert(err).Message()
+		if strings.Contains(message, DisabledReason) {
+			return fmt.Errorf("%w: %v", ErrDisabledOnNode, err)
+		}
+		if strings.Contains(message, "archive entry") {
 			return fmt.Errorf("%w: %v", ErrArchiveEntry, err)
 		}
 		return fmt.Errorf("%w: %v", ErrConflict, err)
@@ -838,6 +853,8 @@ func auditResult(err error) string {
 		return "insufficient_storage"
 	case errors.Is(err, ErrAgentOutdated):
 		return "agent_outdated"
+	case errors.Is(err, ErrDisabledOnNode):
+		return "file_manager_disabled"
 	case errors.Is(err, ErrAgentUnavailable):
 		return "agent_unavailable"
 	case errors.Is(err, ErrDisabled):

@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const wizard = readFileSync(join(root, "src/features/servers/components/AddServerWizard.vue"), "utf8");
+const installCommand = readFileSync(
+  join(root, "src/features/servers/utils/installCommand.ts"),
+  "utf8",
+);
 
 const results = [];
 
@@ -26,16 +30,18 @@ function assert(condition, message) {
 }
 
 function installLines(source) {
-  const start = source.indexOf("const installCommand = [");
-  assert(start !== -1, "installCommand array not found");
+  const start = source.indexOf("return [");
+  assert(start !== -1, "install command array not found");
   const end = source.indexOf('].join("\\n")', start);
   assert(end !== -1, "installCommand array end not found");
   const body = source.slice(start, end);
-  return [...body.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((match) => match[1]);
+  return [...body.matchAll(/"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)].map(
+    (match) => match[1] ?? match[2],
+  );
 }
 
 check("install command carries the --full flag and its comment", () => {
-  const lines = installLines(wizard);
+  const lines = installLines(installCommand);
   assert(
     lines.some((line) => line.includes("install-agent.sh --ca ./ca.crt --full")),
     "no --full on the install-agent.sh line",
@@ -47,7 +53,7 @@ check("install command carries the --full flag and its comment", () => {
 });
 
 check("install command notes the default localhost agent and ends with status", () => {
-  const text = installLines(wizard).join("\n");
+  const text = installLines(installCommand).join("\n");
   assert(text.includes("--no-local-agent"), "no localhost-agent opt-out note");
   assert(
     text.includes("systemctl status gotham-agent"),
@@ -57,15 +63,15 @@ check("install command notes the default localhost agent and ends with status", 
 
 check("copy button and textarea use the full install command", () => {
   assert(
-    wizard.includes("await navigator.clipboard.writeText(installCommand)"),
-    "copy handler does not write installCommand",
+    wizard.includes("await navigator.clipboard.writeText(installCommand.value)"),
+    "copy handler does not write installCommand.value",
   );
   assert(wizard.includes('@click="copyInstallCommand"'), "copy button not wired");
   assert(wizard.includes(':value="installCommand"'), "textarea not bound to installCommand");
 });
 
 check("textarea fits the longer text without clipping", () => {
-  const lineCount = installLines(wizard).length;
+  const lineCount = installLines(installCommand).length;
   const anchor = wizard.indexOf(':value="installCommand"');
   assert(anchor !== -1, "install textarea not found");
   const window = wizard.slice(anchor, anchor + 300);

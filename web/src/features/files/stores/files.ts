@@ -14,6 +14,7 @@ import {
   isCanceledError,
   isConflictError,
   isFilesDisabled,
+  isFilesDisabledOnNode,
   listEntries,
   listRoots,
   moveEntry,
@@ -88,6 +89,7 @@ export interface FilesTab {
   loadingMore: boolean;
   loaded: boolean;
   disabled: boolean;
+  disabledOnNode: boolean;
   permissionDenied: boolean;
   errorRaw: unknown;
   viewMode: FilesViewMode;
@@ -143,6 +145,7 @@ export const useFilesStore = defineStore("files", () => {
       loadingMore: false,
       loaded: false,
       disabled: false,
+      disabledOnNode: false,
       permissionDenied: false,
       errorRaw: null,
       viewMode: "list",
@@ -228,6 +231,12 @@ export const useFilesStore = defineStore("files", () => {
     get: () => activeTab.value.disabled,
     set: (value) => {
       activeTab.value.disabled = value;
+    },
+  });
+  const disabledOnNode = computed<boolean>({
+    get: () => activeTab.value.disabledOnNode,
+    set: (value) => {
+      activeTab.value.disabledOnNode = value;
     },
   });
   const permissionDenied = computed<boolean>({
@@ -393,8 +402,10 @@ export const useFilesStore = defineStore("files", () => {
 
 
   function applyErrorTo(tab: FilesTab, err: unknown): void {
-    if (isFilesDisabled(err)) {
+    const disabledOnNode = isFilesDisabledOnNode(err);
+    if (isFilesDisabled(err) || disabledOnNode) {
       tab.disabled = true;
+      tab.disabledOnNode = disabledOnNode;
       tab.errorRaw = null;
       tab.permissionDenied = false;
       return;
@@ -418,6 +429,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.truncated = isTruncated;
     tab.loaded = true;
     tab.disabled = false;
+    tab.disabledOnNode = false;
     tab.permissionDenied = false;
     tab.lastLoadedPath = tab.path;
     pruneSelectionToEntries(tab);
@@ -504,6 +516,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.loading = true;
     tab.errorRaw = null;
     tab.disabled = false;
+    tab.disabledOnNode = false;
     resetFolderSizes();
     try {
       const list = await listRoots(server);
@@ -681,6 +694,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.loading = true;
     tab.errorRaw = null;
     tab.disabled = false;
+    tab.disabledOnNode = false;
     resetFolderSizes();
     try {
       const list = await listRoots(server);
@@ -1559,6 +1573,7 @@ export const useFilesStore = defineStore("files", () => {
     loadingMore,
     loaded,
     disabled,
+    disabledOnNode,
     permissionDenied,
     acting,
     clipboard,

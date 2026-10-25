@@ -639,6 +639,9 @@ func TestMapRPCError(t *testing.T) {
 			t.Errorf("mapRPCError(%s) = %v, want %v", tc.code, got, tc.want)
 		}
 	}
+	if got := mapRPCError(status.Error(codes.FailedPrecondition, "file_manager_disabled")); !errors.Is(got, ErrDisabledOnNode) {
+		t.Errorf("mapRPCError(disabled on node) = %v, want %v", got, ErrDisabledOnNode)
+	}
 	if got := mapRPCError(errors.New("boom")); errors.Is(got, ErrNotFound) {
 		t.Errorf("unrecognised error should pass through, got %v", got)
 	}

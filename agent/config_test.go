@@ -14,7 +14,7 @@ func clearAgentEnv(t *testing.T) {
 	for _, key := range []string{
 		envCPAddr, envNodeID, envListenAddr, envCA, envCertDir,
 		envKey, envInsecure, envDockerSock, envComposeRoot, envLogLevel, envDockerHost,
-		envManagedVolumeRoot, envSharedManagedVolumeRoot,
+		envManagedVolumeRoot, envSharedManagedVolumeRoot, envFiles,
 		envFileArchiveMaxBytes, envFileArchiveMaxEntries, envFileArchiveMaxInput,
 		envFileTrashMaxAgeDays, envFileTrashMaxBytes,
 	} {
@@ -59,6 +59,28 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if !cfg.TerminalIntegration {
 		t.Error("TerminalIntegration = false; want the bash/zsh integration on by default")
+	}
+}
+
+func TestLoadFileServiceToggle(t *testing.T) {
+	clearAgentEnv(t)
+	t.Setenv(envCA, "/etc/gotham/ca.pem")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Files {
+		t.Error("Files = false; want the file service on by default")
+	}
+
+	t.Setenv(envFiles, "false")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Files {
+		t.Error("Files = true with GOTHAM_AGENT_FILES=false")
 	}
 }
 

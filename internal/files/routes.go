@@ -238,6 +238,8 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusInsufficientStorage, errorBody{Message: "not enough free space", Code: "insufficient_storage"})
 	case errors.Is(err, ErrAgentOutdated):
 		writeJSON(w, http.StatusNotImplemented, errorBody{Message: "update the node agent", Code: "agent_outdated"})
+	case errors.Is(err, ErrDisabledOnNode):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "file manager is turned off on this node", Code: "file_manager_disabled"})
 	case errors.Is(err, ErrAgentUnavailable):
 		writeJSON(w, http.StatusBadGateway, errorBody{Message: "agent unavailable", Code: "agent_unavailable"})
 	case errors.Is(err, ErrDisabled):

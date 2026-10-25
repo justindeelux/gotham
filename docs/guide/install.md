@@ -40,11 +40,12 @@ recommendation:
 | `Owner password (empty to generate)` | The password for that account, 8 to 128 characters. Type nothing and press Enter to have a strong password generated and printed once at the end. |
 | `Confirm password` | The same password again. A mismatch or a password outside the length limits asks again. |
 | `Panel domain (optional, Enter skips)` | A domain such as `panel.example.com`, if it already points at this server. Press Enter to skip and use the server address for now. |
-| `Enable the file manager on this node? [y/N]` | **No**, unless you want the owner to browse and edit every file on this host. Yes runs the agent as root without systemd sandboxing (see [Remote file service](/guide/file-service)). You can change the answer later by re-running `deploy/install-agent.sh`. |
 
-The file-manager question appears while the host agent is installed, after the
-first four. `--no-file-manager` answers it without a prompt, and a run without
-a terminal skips it (the answer is No).
+The local node's file manager is enabled by default, with no prompt: its agent
+runs as root without systemd sandboxing so the owner can browse and edit every
+file on this host (see [Remote file service](/guide/file-service)). Add
+`--no-file-manager` to turn it off; a re-run of the installer keeps an answer
+already stored in `/etc/gotham/agent.env`.
 
 While it runs, the installer:
 
@@ -73,6 +74,7 @@ Gotham v1.2.3 is installed.
   Web UI:   http://203.0.113.10:8000
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
+  File manager on this node: on (--no-file-manager turns it off)
 
 First login:
   Account:  ops@example.com
@@ -104,12 +106,12 @@ later in the panel. See [Domain and HTTPS](/guide/domain-and-https).
 
 This recipe is fully unattended only when there is **no terminal**: cloud-init, a
 CI job, or an `ssh` command run without a pty. In an ordinary interactive SSH
-session the installer still asks three questions — the owner email (prefilled
-from `GOTHAM_ADMIN_EMAIL`), the panel domain, and the file-manager question.
-Answer them up front by appending `-s -- --domain panel.example.com
---no-file-manager` after `sh` in the command below; `--domain` sets the domain,
-Enter (or omitting it) skips it, and `-` at the email prompt skips account
-creation.
+session the installer still asks two questions — the owner email (prefilled
+from `GOTHAM_ADMIN_EMAIL`) and the panel domain. Answer them up front by
+appending `-s -- --domain panel.example.com` after `sh` in the command below;
+`--domain` sets the domain, Enter (or omitting it) skips it, and `-` at the
+email prompt skips account creation. Add `--no-file-manager` only if this host
+must not expose its files.
 
 Inside a `curl | sudo sh` run, the variables must go **after** `sudo` and before
 `sh`; setting them on `curl` only configures `curl`, and `sudo` starts the

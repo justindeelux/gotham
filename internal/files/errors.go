@@ -16,6 +16,7 @@ var (
 	ErrSpoolBusy           = errors.New("files: too many uploads are being staged")
 	ErrInsufficientStorage = errors.New("files: insufficient storage")
 	ErrAgentOutdated       = errors.New("files: node agent is outdated")
+	ErrDisabledOnNode      = errors.New("files: file manager is disabled on the node")
 	ErrAgentUnavailable    = errors.New("files: agent unavailable")
 	ErrDisabled            = errors.New("files: feature disabled")
 	ErrHistoryUnavailable  = errors.New("files: file history is unavailable")

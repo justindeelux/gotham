@@ -2,13 +2,14 @@
 import {
   NAlert,
   NButton,
+  NCheckbox,
   NInput,
   NModal,
   NSpace,
   NText,
   useMessage,
 } from "naive-ui";
-import { provide } from "vue";
+import { computed, provide, ref } from "vue";
 
 import type { Server } from "@/features/servers/api/servers";
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
@@ -20,6 +21,7 @@ import {
   WizardKey,
   useAddServerWizard,
 } from "@/features/servers/composables/useAddServerWizard";
+import { buildInstallCommand } from "@/features/servers/utils/installCommand";
 import { formatBytes } from "@/shared/utils/format";
 import { useI18n } from "vue-i18n";
 
@@ -51,23 +53,12 @@ const {
 const message = useMessage();
 const { t } = useI18n();
 
-const installCommand = [
-  "scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .",
-  "git clone --depth 1 https://github.com/justindeelux/gotham /tmp/gotham",
-  "sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=<node> \\",
-  "  /tmp/gotham/deploy/install-agent.sh --ca ./ca.crt --full",
-  "",
-  "# --full installs Docker Engine + the compose plugin (Ubuntu/Debian).",
-  "# install.sh already adds a localhost agent by default (--no-local-agent",
-  "# opts out); use this snippet for every further node.",
-  "# The installer verifies the signed manifest + digest, writes",
-  "# /etc/gotham/ca.crt, then enables the systemd unit.",
-  "systemctl status gotham-agent",
-].join("\n");
+const enableFileManager = ref(false);
+const installCommand = computed(() => buildInstallCommand(enableFileManager.value));
 
 async function copyInstallCommand(): Promise<void> {
   try {
-    await navigator.clipboard.writeText(installCommand);
+    await navigator.clipboard.writeText(installCommand.value);
     message.success(t("servers.wizard.installCopied"));
   } catch {
     message.error(t("servers.wizard.copyFailed"));
@@ -151,6 +142,15 @@ async function copyInstallCommand(): Promise<void> {
             <NText depth="2">
               {{ $t("servers.wizard.installHowto") }}
             </NText>
+
+            <NSpace vertical :size="8">
+              <NCheckbox v-model:checked="enableFileManager">
+                {{ $t("servers.wizard.fileManagerLabel") }}
+              </NCheckbox>
+              <NAlert type="warning" :show-icon="true">
+                {{ $t("servers.wizard.fileManagerHint") }}
+              </NAlert>
+            </NSpace>
 
             <NSpace align="start" :size="8">
               <NInput

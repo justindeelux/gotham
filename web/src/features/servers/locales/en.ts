@@ -182,6 +182,9 @@ const en = {
     installReady: "The agent registered and the server is ready.",
     installHowto:
       "One-time manual step. SSH into the node and run the block below. It copies the control plane CA certificate, clones the installer sibling files, and registers the node. Replace the CP host and node placeholders; the installer fails closed without --ca, and the agent dials the loopback address unless GOTHAM_AGENT_CP_ADDR points at the control plane.",
+    fileManagerLabel: "Enable the file manager on this node",
+    fileManagerHint:
+      "The setting is chosen when the node is added; changing it later is manual, on that node: set GOTHAM_AGENT_FILES=true (or false) in /etc/gotham/agent.env and run systemctl restart gotham-agent. It cannot be changed from the panel.",
     copy: "Copy",
     installCopied: "Install command copied",
     copyFailed: "Could not copy to clipboard",

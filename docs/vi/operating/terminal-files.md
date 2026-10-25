@@ -64,7 +64,7 @@ của agent:
 
 | Thư mục gốc | Ghi được | Khi nào |
 |---|---|---|
-| `system` (`/`) | có | Chế độ toàn bộ hệ thống tệp, mặc định của agent. Trình cài đặt hỏi có bật trình quản lý tệp không và nếu có thì chạy agent dưới quyền root. |
+| `system` (`/`) | có | Chế độ toàn bộ hệ thống tệp, mặc định của agent. Trình cài đặt control plane bật trình quản lý tệp trên `localhost` mặc định; một nút được thêm chọn tham gia bằng hộp kiểm trong wizard, và cả hai đều chạy agent dưới quyền root khi bật. |
 | `volumes` | có | Chế độ giới hạn (`GOTHAM_AGENT_FILE_FULL_ACCESS=false`): thư mục volume được quản lý chứa các bind mount của ứng dụng. |
 | `compose` | không | Chế độ giới hạn: cây dịch vụ compose. Chỉnh sửa sẽ bị lần compose up tiếp theo ghi đè. |
 | Các thư mục gốc của quản trị viên từ `GOTHAM_AGENT_FILE_ROOTS` | không | Chế độ giới hạn: các thư mục bổ sung, phân tách bằng dấu hai chấm. |
@@ -210,16 +210,17 @@ chủ sở hữu thực sự đặt.
 | Cờ | Phạm vi | Mặc định | Khi tắt |
 |---|---|---|---|
 | `FEATURE_FILES` | Control plane | Bật | Các tuyến tệp vẫn được gắn nhưng mọi tuyến trả lời **503** với `{"message":"files are disabled","code":"disabled"}`, và bảng điều khiển hiện trạng thái “Quản lý tệp đang tắt”. Terminal trên máy chủ không bị ảnh hưởng. |
-| `GOTHAM_AGENT_FILES` | Agent của một node | Bật trong agent; trình cài đặt ghi `false` trừ khi được bật | Không có dịch vụ tệp nào được đăng ký. Mọi lệnh gọi tệp cho node đó trả **501**, mà bảng điều khiển báo là “Hãy cập nhật agent trên node” dù công tắc mới là nguyên nhân thật. |
+| `GOTHAM_AGENT_FILES` | Agent của một node | Bật trong agent; trình cài đặt control plane bật nó trên `localhost`, wizard Thêm máy chủ mặc định tắt cho nút được thêm | Dịch vụ vẫn được đăng ký và mọi lệnh gọi tệp trả **409** `file_manager_disabled`, mà bảng điều khiển báo là “đang tắt trên node này”. Một agent cũ hơn dịch vụ tệp trả **501** `agent_outdated`. |
 | `FEATURE_METRICS` | Control plane | Bật | Tuyến khoảng chỉ số không được gắn, nên bảng điều khiển nhận **404** và ẩn biểu đồ; mẫu từ nhịp tim không còn được lưu. Xem [Node và container](/vi/operating/nodes-containers#chi-so). |
 
 `GOTHAM_AGENT_FILES` nhận `false`, `0`, `no` hoặc `off` là tắt; mọi giá trị khác
-giữ dịch vụ bật. Câu trả lời của trình cài đặt là riêng: nó hỏi trước khi bật
-trình quản lý tệp, mặc định là **không**, ghi `GOTHAM_AGENT_FILES=false` nếu
-không, và nếu có thì ghi `true` kèm một drop-in dịch vụ chạy agent dưới quyền
-root. Vì vậy một node chưa từng được bật sẽ không phục vụ tệp, đây là mặc định an
-toàn cho cả cụm. Đặt biến trên node và khởi động lại agent là đủ để đổi câu trả
-lời về sau.
+giữ dịch vụ bật. Trình cài đặt control plane bật trình quản lý tệp trên node
+`localhost` của chính nó mặc định và ghi `GOTHAM_AGENT_FILES=true` kèm một
+drop-in dịch vụ chạy agent dưới quyền root. Với một nút được thêm sau, hộp kiểm
+của wizard **Thêm máy chủ** tắt mặc định và lệnh được tạo mang
+`--no-file-manager` hoặc `--file-manager`. Đặt biến trong `/etc/gotham/agent.env`
+trên node và khởi động lại agent là đủ để đổi câu trả lời về sau; bảng điều khiển
+không có điều khiển cho việc này.
 
 Trình quản lý tệp và shell trên máy chủ là hai công tắc riêng:
 `FEATURE_FILES=false` vẫn để terminal hoạt động, và `GOTHAM_AGENT_FILES=false`

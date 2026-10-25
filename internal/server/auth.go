@@ -326,18 +326,20 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// liveSessionAuthenticator is implemented by the real auth service. Test
-// doubles without a session store accept every verified token.
+// liveSessionAuthenticator is implemented by the real auth service. Any other
+// implementation fails closed, so the check can never be skipped silently.
 type liveSessionAuthenticator interface {
 	LiveSessionRole(ctx context.Context, userID, sessionID uuid.UUID) (string, error)
 }
+
+var _ liveSessionAuthenticator = (*auth.Service)(nil)
 
 // liveSessionRole refuses revoked, expired and unknown sessions. API tokens
 // authenticate against their own row and never reach this check.
 func (s *Server) liveSessionRole(ctx context.Context, userID, sessionID uuid.UUID) (string, error) {
 	svc, ok := s.auth.(liveSessionAuthenticator)
 	if !ok {
-		return auth.RoleMember, nil
+		return "", auth.ErrUnauthorized
 	}
 	return svc.LiveSessionRole(ctx, userID, sessionID)
 }

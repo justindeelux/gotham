@@ -16,6 +16,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
 func pgUUIDForTest(id uuid.UUID) pgtype.UUID {
@@ -127,6 +128,12 @@ func TestRemoveMemberRevokesSessionsTokensAndGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := f.store.DB.Exec(ctx, `INSERT INTO request_receipts
+ (principal_id, operation, target_id, request_key, fingerprint, resource_id, related_id)
+ VALUES ($1,'deploy',$2,'remove-receipt','fp',$3,$4)`,
+		memberID, uuid.New(), uuid.New(), uuid.New()); err != nil {
+		t.Fatal(err)
+	}
 
 	live := httptest.NewServer(f.server.Handler())
 	t.Cleanup(live.Close)
@@ -167,6 +174,10 @@ func TestRemoveMemberRevokesSessionsTokensAndGrants(t *testing.T) {
 	}
 	if allowed, err := f.store.HasProjectGrant(ctx, memberID, f.projects[0]); err != nil || allowed {
 		t.Fatalf("removed member grant = %v, %v", allowed, err)
+	}
+	var receipts int
+	if err := f.store.DB.QueryRow(ctx, `SELECT count(*) FROM request_receipts WHERE principal_id=$1`, memberID).Scan(&receipts); err != nil || receipts != 0 {
+		t.Fatalf("removed member receipts = %d, %v", receipts, err)
 	}
 	if _, err := f.server.tokens.Authenticate(ctx, token.Token); err == nil {
 		t.Fatal("removed member API token still authenticates")
@@ -351,12 +362,24 @@ func TestResetMemberDropsSessionsAndTOTP(t *testing.T) {
 	}
 }
 
-func TestOwnerMutationsWriteAuditLines(t *testing.T) {
+func TestOwnerMutationAuditCoversSuccessAndRefusal(t *testing.T) {
 	f := newAccessFixture(t)
 	var buf bytes.Buffer
 	f.server.logger = slog.New(slog.NewJSONHandler(&buf, nil))
 	ownerBearer := "Bearer " + f.owner.AccessToken
 	memberID := f.member.User.ID
+
+	// Refusals: the owner account, an unknown project and an unknown member.
+	if code := doRequest(t, f.server, http.MethodDelete, "/api/v1/users/"+f.owner.User.ID, "", ownerBearer).Code; code != http.StatusForbidden {
+		t.Fatalf("remove owner = %d, want 403", code)
+	}
+	if code := doRequest(t, f.server, http.MethodPut, "/api/v1/users/"+memberID+"/projects",
+		`{"project_ids":["`+uuid.NewString()+`"]}`, ownerBearer).Code; code != http.StatusBadRequest {
+		t.Fatalf("unknown project = %d, want 400", code)
+	}
+	if code := doRequest(t, f.server, http.MethodDelete, "/api/v1/users/"+uuid.NewString(), "", ownerBearer).Code; code != http.StatusNotFound {
+		t.Fatalf("unknown member = %d, want 404", code)
+	}
 
 	created := createInvite(t, f.server, ownerBearer, uuid.NewString()+"@example.test", f.projects[0])
 	if code := doRequest(t, f.server, http.MethodDelete, "/api/v1/invites/"+created.Invite.ID.String(), "", ownerBearer).Code; code != http.StatusNoContent {
@@ -374,19 +397,121 @@ func TestOwnerMutationsWriteAuditLines(t *testing.T) {
 	}
 
 	logged := buf.String()
-	for _, action := range []string{"invite.create", "invite.revoke", "member.reset", "member.projects", "member.remove"} {
-		if !strings.Contains(logged, `"action":"`+action+`"`) {
-			t.Errorf("audit log missing action %q: %s", action, logged)
+	has := func(action, outcome string) bool {
+		for _, line := range strings.Split(logged, "\n") {
+			if strings.Contains(line, `"action":"`+action+`"`) && strings.Contains(line, `"outcome":"`+outcome+`"`) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []struct{ action, outcome string }{
+		{"invite.create", "ok"},
+		{"invite.revoke", "ok"},
+		{"member.reset", "ok"},
+		{"member.projects", "ok"},
+		{"member.projects", "refused"},
+		{"member.remove", "ok"},
+		{"member.remove", "refused"},
+	} {
+		if !has(want.action, want.outcome) {
+			t.Errorf("audit log missing %s/%s: %s", want.action, want.outcome, logged)
 		}
 	}
 	if !strings.Contains(logged, `"actor_id":"`+f.owner.User.ID+`"`) {
 		t.Errorf("audit log missing actor %s: %s", f.owner.User.ID, logged)
+	}
+	if strings.Contains(logged, created.Invite.Email) {
+		t.Error("audit log leaked the invitee email")
 	}
 	if strings.Contains(logged, created.Token) {
 		t.Error("audit log leaked the invite token")
 	}
 	if strings.Contains(logged, "password") {
 		t.Error("audit log leaked a password field")
+	}
+}
+
+func TestRemoveMemberKeepsGitHubAppConnection(t *testing.T) {
+	f := newAccessFixture(t)
+	ctx := context.Background()
+	memberID := uuid.MustParse(f.member.User.ID)
+	ownerID := uuid.MustParse(f.owner.User.ID)
+
+	var connectionID uuid.UUID
+	if err := f.store.DB.QueryRow(ctx, `INSERT INTO github_apps (user_id, app_id, slug, name)
+ VALUES ($1, 4242, 'member-app', 'Member App') RETURNING id`, memberID).Scan(&connectionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.DB.Exec(ctx, `INSERT INTO github_installations (github_app_id, installation_id, account)
+ VALUES ($1, 777, 'acme')`, connectionID); err != nil {
+		t.Fatal(err)
+	}
+	applicationID := uuid.New()
+	if _, err := f.store.DB.Exec(ctx, `INSERT INTO applications (id, user_id, server_id, environment_id, name, github_app_id)
+ SELECT $1, $2, server_id, environment_id, 'member-gh-app', $3 FROM applications WHERE id=$4`,
+		applicationID, memberID, connectionID, f.apps[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := doRequest(t, f.server, http.MethodDelete, "/api/v1/users/"+memberID.String(), "", "Bearer "+f.owner.AccessToken).Code; code != http.StatusNoContent {
+		t.Fatalf("remove member = %d, want 204", code)
+	}
+
+	var creator, linked uuid.UUID
+	if err := f.store.DB.QueryRow(ctx, `SELECT user_id, github_app_id FROM applications WHERE id=$1`, applicationID).Scan(&creator, &linked); err != nil {
+		t.Fatalf("member application vanished: %v", err)
+	}
+	if creator != ownerID || linked != connectionID {
+		t.Fatalf("application creator/connection = %s/%s, want owner %s and connection %s", creator, linked, ownerID, connectionID)
+	}
+	var installations int
+	if err := f.store.DB.QueryRow(ctx, `SELECT count(*) FROM github_installations WHERE github_app_id=$1`, connectionID).Scan(&installations); err != nil || installations != 1 {
+		t.Fatalf("installation rows = %d, %v; want the connection intact", installations, err)
+	}
+	if _, err := f.store.GetGitHubAppByIDAndUser(ctx, sqlc.GetGitHubAppByIDAndUserParams{
+		ID:     pgUUIDForTest(connectionID),
+		UserID: pgUUIDForTest(ownerID),
+	}); err != nil {
+		t.Fatalf("owner cannot resolve the connection: %v", err)
+	}
+}
+
+func TestRemoveMemberRepointsCollidingGitHubApp(t *testing.T) {
+	f := newAccessFixture(t)
+	ctx := context.Background()
+	memberID := uuid.MustParse(f.member.User.ID)
+	ownerID := uuid.MustParse(f.owner.User.ID)
+
+	var memberConnection, ownerConnection uuid.UUID
+	if err := f.store.DB.QueryRow(ctx, `INSERT INTO github_apps (user_id, app_id, slug, name)
+ VALUES ($1, 4242, 'member-dup', 'Member Dup') RETURNING id`, memberID).Scan(&memberConnection); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.DB.QueryRow(ctx, `INSERT INTO github_apps (user_id, app_id, slug, name)
+ VALUES ($1, 4242, 'owner-dup', 'Owner Dup') RETURNING id`, ownerID).Scan(&ownerConnection); err != nil {
+		t.Fatal(err)
+	}
+	applicationID := uuid.New()
+	if _, err := f.store.DB.Exec(ctx, `INSERT INTO applications (id, user_id, server_id, environment_id, name, github_app_id)
+ SELECT $1, $2, server_id, environment_id, 'member-gh-dup', $3 FROM applications WHERE id=$4`,
+		applicationID, memberID, memberConnection, f.apps[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := doRequest(t, f.server, http.MethodDelete, "/api/v1/users/"+memberID.String(), "", "Bearer "+f.owner.AccessToken).Code; code != http.StatusNoContent {
+		t.Fatalf("remove member = %d, want 204", code)
+	}
+	var linked uuid.UUID
+	if err := f.store.DB.QueryRow(ctx, `SELECT github_app_id FROM applications WHERE id=$1`, applicationID).Scan(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if linked != ownerConnection {
+		t.Fatalf("application connection = %s, want the owner's %s", linked, ownerConnection)
+	}
+	var memberRows int
+	if err := f.store.DB.QueryRow(ctx, `SELECT count(*) FROM github_apps WHERE id=$1`, memberConnection).Scan(&memberRows); err != nil || memberRows != 0 {
+		t.Fatalf("duplicate member connection = %d, %v; want it removed", memberRows, err)
 	}
 }
 

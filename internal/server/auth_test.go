@@ -50,6 +50,10 @@ func ownerAuthService() *fakeAuthService {
 	return svc
 }
 
+// noLiveSessionAuthService satisfies AuthService but not
+// liveSessionAuthenticator, so the live-session check must fail closed.
+type noLiveSessionAuthService struct{ AuthService }
+
 func (f *fakeAuthService) result() *auth.AuthResult {
 	return &auth.AuthResult{
 		User:         f.user,
@@ -253,6 +257,10 @@ func (f *fakeAuthService) CompleteMFALogin(_ context.Context, mfaToken, code str
 	return f.result(), nil
 }
 
+func (f *fakeAuthService) LiveSessionRole(context.Context, uuid.UUID, uuid.UUID) (string, error) {
+	return f.user.Role, nil
+}
+
 func (f *fakeAuthService) RegisterInvited(_ context.Context, email, _, inviteToken string, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	if inviteToken == "" {
 		return nil, auth.ErrRegistrationClosed
@@ -293,6 +301,13 @@ func (f *fakeAuthService) ResetMember(context.Context, uuid.UUID) error { return
 
 func (f *fakeAuthService) SetMemberProjects(_ context.Context, _, _ uuid.UUID, projectIDs []uuid.UUID) (*auth.Account, error) {
 	return &auth.Account{User: *f.user, Projects: []auth.ProjectRef{}}, nil
+}
+
+func TestLiveSessionCheckFailsClosedWithoutImplementation(t *testing.T) {
+	s := &Server{auth: noLiveSessionAuthService{}}
+	if _, err := s.liveSessionRole(context.Background(), uuid.New(), uuid.New()); err == nil {
+		t.Fatal("liveSessionRole accepted an auth service without a live-session check")
+	}
 }
 
 func newTestAuthServer(t *testing.T) *Server {

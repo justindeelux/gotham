@@ -13,11 +13,6 @@ type Config struct {
 	Token string
 }
 
-func ConfigFromEnv(getenv func(string) string) (Config, error) {
-	cfg := Config{URL: getenv("GOTHAM_MCP_URL"), Token: getenv("GOTHAM_MCP_TOKEN")}
-	return cfg, cfg.validate()
-}
-
 func (c Config) validate() error {
 	if len(c.Token) <= 4 || len(c.Token) > 4096 || !strings.HasPrefix(c.Token, "gt1_") || strings.ContainsFunc(c.Token, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
 		return errors.New("MCP requires a gt1_ API token")

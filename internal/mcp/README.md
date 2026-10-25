@@ -1,20 +1,17 @@
 # MCP adapter
 
-Run `gotham mcp serve` with `GOTHAM_MCP_URL` and `GOTHAM_MCP_TOKEN`. The URL is an HTTPS origin, or HTTP
-with a literal loopback address for development. The token must be a nonempty
-`gt1_` API token. Configuration errors never echo these values.
+The control plane serves these tools over streamable HTTP at `/mcp`, authenticated
+with a `gt1_` API token. The client URL is an HTTPS origin, or HTTP with a literal
+loopback address for development. Configuration errors never echo these values.
 The adapter does not load control-plane configuration or start its services.
 
 The official `github.com/modelcontextprotocol/go-sdk` is pinned at **v1.8.0**.
 `TestSDKLifecycle` verifies each SDK-supported version over the SDK transport:
 `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`, and `2024-11-05`.
 The newest protocol uses SDK discovery; older protocols use initialize.
-The process test additionally verifies real stdio initialize/list traffic at
-`2025-11-25`. Protocol framing, negotiation, cancellation, and lifecycle are owned
-by the SDK. Diagnostics go to stderr; stdout is reserved for MCP JSON-RPC.
-`TestProtocolStdioAllTools` drives that real stdio process with the SDK client
-for every registered tool schema and annotation; operator documentation lives in
-[`docs/mcp.md`](../../docs/mcp.md).
+Protocol framing, negotiation, cancellation, and lifecycle are owned by the SDK.
+`TestProtocolHTTPAllTools` drives the streamable HTTP endpoint with the SDK client
+for every registered tool schema and annotation.
 
 Observation and discovery tools register through `registerTools` using typed SDK
 handlers and safe DTOs; there is no generic HTTP request tool. `Client.readJSON`

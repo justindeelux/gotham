@@ -142,7 +142,11 @@ func (s *Store) GrantedResourceIDs(ctx context.Context, userID uuid.UUID, kind s
 		return nil, pgx.ErrNoRows
 	}
 	// The relation comes exclusively from the fixed allowlist above.
-	rows, err := s.DB.Query(ctx, "SELECT r.id FROM "+relation+" WHERE m.user_id=$1 AND r.id=ANY($2::uuid[])", userID, ids)
+	query := "SELECT r.id FROM " + relation + " WHERE m.user_id=$1 AND r.id=ANY($2::uuid[])"
+	if kind == "database" || kind == "service" {
+		query += " AND r.deleted_at IS NULL"
+	}
+	rows, err := s.DB.Query(ctx, query, userID, ids)
 	if err != nil {
 		return nil, err
 	}

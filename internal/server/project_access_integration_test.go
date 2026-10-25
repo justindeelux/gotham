@@ -631,6 +631,15 @@ func TestProjectStreamCachesResolutionButNotGrants(t *testing.T) {
 	if dials.Load() != 1 {
 		t.Fatalf("agent dials=%d want 1", dials.Load())
 	}
+	if _, err := f.store.DB.Exec(ctx, `UPDATE services SET deleted_at=now() WHERE id=$1`, f.services[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := authorize(ctx, channel, member); err == nil {
+		t.Fatal("cached deleted workload remained accessible")
+	}
+	if _, err := f.store.DB.Exec(ctx, `UPDATE services SET deleted_at=NULL WHERE id=$1`, f.services[0]); err != nil {
+		t.Fatal(err)
+	}
 	// The cached identity must follow moves instead of retaining the old project.
 	if _, err := f.store.DB.Exec(ctx, `UPDATE services SET environment_id=$1 WHERE id=$2`, f.environments[1], f.services[0]); err != nil {
 		t.Fatal(err)

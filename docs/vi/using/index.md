@@ -27,6 +27,8 @@ luôn được mở qua dự án và môi trường của nó, ví dụ
   chỉ, và xem các bản xem trước theo pull request.
 - [Thành viên và quyền truy cập](/vi/using/members-access) — vai trò chủ sở hữu và
   thành viên, quyền dự án và lời mời.
+- [Thiết lập MCP](/vi/using/mcp) — kết nối trợ lý AI bằng token chỉ đọc hoặc triển
+  khai.
 - [Thông báo](/vi/using/notifications) — kênh cảnh báo cho một ứng dụng hoặc cơ sở
   dữ liệu.
 

@@ -83,6 +83,9 @@ so the console can warn before a client sends a credential. `role` is `owner` or
 `member`, and `capabilities` lists what the MCP endpoint supports on this
 instance. The response contains no token or secret.
 
+The console's **MCP setup** page uses this route and turns it into ready-made
+client configurations; see [MCP setup](/using/mcp).
+
 ## Create
 
 ```sh

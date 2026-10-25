@@ -139,7 +139,7 @@ const en = {
       "enable them.",
     unavailableDbs:
       "Databases are turned off on this control plane; " +
-      "an application scope is still available. The owneristrator " +
+      "an application scope is still available. The owner " +
       "must enable them.",
     enabled: "Enabled",
     enabledAria: "Channel enabled",

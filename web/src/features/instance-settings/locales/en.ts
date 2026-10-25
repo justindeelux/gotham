@@ -3,16 +3,16 @@ const en = {
     eyebrow: "Settings · Owner",
     title: "Instance",
     description:
-      "Configure the Gotham instance itself: its public address, name and timezone, the host network and a few Linux system options. Visible to owner only.",
+      "Configure the Gotham instance itself: its public address, name and timezone, the host network and a few Linux system options. Visible to the owner only.",
   },
   tabs: { general: "General", network: "Network", system: "System" },
-  forbidden: "Only owner can view or change instance settings.",
+  forbidden: "Only the owner can view or change instance settings.",
   locked: "Locked by the environment variable {name}.",
   helper: {
     missing:
       "The host helper is not installed, so these values are read-only. Install it to manage host settings from Gotham.",
     restart:
-      "Host changes are provisioned by the control-plane installer, so a ask the owner to re-run it (or upgrade) to enable them.",
+      "Host changes are provisioned by the control-plane installer, so the owner must re-run it (or upgrade) to enable them.",
     install: "Install host helper",
     installed: "Host helper installed. These settings are now editable.",
     installFailed: "The host helper could not be installed.",

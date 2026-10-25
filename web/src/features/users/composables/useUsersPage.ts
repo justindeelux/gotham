@@ -2,7 +2,6 @@ import { useMessage } from "naive-ui";
 import { computed, onMounted, ref } from "vue";
 import type { ComputedRef, Ref } from "vue";
 
-import { useAuthStore } from "@/features/auth";
 import { useProjectsStore } from "@/features/projects";
 import {
   describeUserError,
@@ -25,7 +24,6 @@ export interface UsersPageState {
   projects: ComputedRef<Array<{ label: string; value: string }>>;
   loading: Ref<boolean>;
   error: Ref<string | null>;
-  currentUserId: ComputedRef<string>;
   inviteOpen: Ref<boolean>;
   inviteEmail: Ref<string>;
   inviteProjects: Ref<string[]>;
@@ -51,7 +49,6 @@ export interface UsersPageState {
 
 export function useUsersPage(): UsersPageState {
   const message = useMessage();
-  const authStore = useAuthStore();
   const projectsStore = useProjectsStore();
 
   const users = ref<Account[]>([]);
@@ -61,7 +58,6 @@ export function useUsersPage(): UsersPageState {
   const error = computed<string | null>(() =>
     failure.value === null ? null : describeUserError(failure.value),
   );
-  const currentUserId = computed<string>(() => authStore.user?.id ?? "");
   const projects = computed<Array<{ label: string; value: string }>>(() =>
     projectsStore.projects.map((project) => ({
       label: project.name,
@@ -225,7 +221,6 @@ export function useUsersPage(): UsersPageState {
     projects,
     loading,
     error,
-    currentUserId,
     inviteOpen,
     inviteEmail,
     inviteProjects,

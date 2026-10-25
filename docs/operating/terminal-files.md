@@ -65,7 +65,7 @@ space. Roots come from the agent's configuration:
 
 | Root | Writable | When |
 |---|---|---|
-| `system` (`/`) | yes | Whole-filesystem mode, the agent default. The installer asks whether to enable the file manager and, on yes, runs the agent as root. |
+| `system` (`/`) | yes | Whole-filesystem mode, the agent default. The control-plane installer enables the file manager on `localhost` by default; an added node opts in with the wizard checkbox, and either way a yes runs the agent as root. |
 | `volumes` | yes | Confined mode (`GOTHAM_AGENT_FILE_FULL_ACCESS=false`): the managed-volumes directory holding application bind mounts. |
 | `compose` | no | Confined mode: the compose service tree. Edits would be overwritten by the next compose up. |
 | Operator roots from `GOTHAM_AGENT_FILE_ROOTS` | no | Confined mode: extra colon-separated directories. |
@@ -211,16 +211,17 @@ the owner actually sets.
 | Flag | Scope | Default | When off |
 |---|---|---|---|
 | `FEATURE_FILES` | Control plane | On | The file routes stay mounted but every one answers **503** with `{"message":"files are disabled","code":"disabled"}`, and the console shows its "Files are disabled" state. Host terminals are unaffected. |
-| `GOTHAM_AGENT_FILES` | One node's agent | On in the agent; the installer writes `false` unless enabled | No file service is registered. Every file call for that node answers **501**, which the console reports as “update the node agent” even though the switch is the real cause. |
+| `GOTHAM_AGENT_FILES` | One node's agent | On in the agent; the control-plane installer enables it on `localhost`, the Add server wizard defaults an added node to off | The service is still registered and every file call answers **409** `file_manager_disabled`, which the console reports as “turned off on this node”. An agent that predates the file service answers **501** `agent_outdated`. |
 | `FEATURE_METRICS` | Control plane | On | The metrics range route is not mounted, so the console gets **404** and hides the charts; heartbeat samples are no longer persisted. See [Nodes and containers](/operating/nodes-containers#metrics). |
 
 `GOTHAM_AGENT_FILES` accepts `false`, `0`, `no` or `off` as off; any other value
-keeps the service on. The installer's own answer is separate: it asks before
-enabling the file manager, defaults to **no**, writes `GOTHAM_AGENT_FILES=false`
-for no, and on yes writes `true` plus a service drop-in that runs the agent as
-root. A node that was never opted in therefore serves no files, which is the
-safe default for a fleet. Setting the variable on the node and restarting the
-agent is enough to change the answer later.
+keeps the service on. The control-plane installer enables the file manager on
+its own `localhost` node by default and writes `GOTHAM_AGENT_FILES=true` plus a
+service drop-in that runs the agent as root. For a node added later, the **Add
+server** wizard's checkbox is off by default and the generated command carries
+`--no-file-manager` or `--file-manager`. Setting the variable in
+`/etc/gotham/agent.env` on the node and restarting the agent is enough to change
+the answer later; the panel has no control for it.
 
 The file manager and host shell are separate switches: `FEATURE_FILES=false`
 leaves the terminal working, and `GOTHAM_AGENT_FILES=false` does not stop a host

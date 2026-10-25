@@ -38,11 +38,12 @@ Trình cài đặt hỏi những câu này, theo thứ tự. Nhấn Enter để 
 | `Owner password (empty to generate)` | Mật khẩu cho tài khoản đó, 8 đến 128 ký tự. Không nhập gì và nhấn Enter để trình cài đặt tạo một mật khẩu mạnh và in một lần ở cuối. |
 | `Confirm password` | Nhập lại mật khẩu. Nếu không khớp hoặc ngoài giới hạn độ dài, trình cài đặt hỏi lại. |
 | `Panel domain (optional, Enter skips)` | Một tên miền như `panel.example.com`, nếu nó đã trỏ về máy chủ này. Nhấn Enter để bỏ qua và dùng địa chỉ máy chủ trước. |
-| `Enable the file manager on this node? [y/N]` | **Không**, trừ khi bạn muốn chủ sở hữu duyệt và sửa mọi tệp trên máy này. Chọn có sẽ chạy agent dưới root mà không có sandbox của systemd (xem [Dịch vụ tệp từ xa](/vi/guide/file-service)). Bạn có thể đổi câu trả lời sau bằng cách chạy lại `deploy/install-agent.sh`. |
 
-Câu hỏi về trình quản lý tệp xuất hiện trong lúc cài agent của máy chủ, sau bốn
-câu đầu. `--no-file-manager` trả lời câu đó mà không hỏi, và một lần chạy không
-có terminal sẽ bỏ qua nó (câu trả lời là Không).
+Trình quản lý tệp của node cục bộ được bật mặc định, không hỏi: agent của nó chạy
+dưới root mà không có sandbox của systemd để chủ sở hữu có thể duyệt và sửa mọi
+tệp trên máy này (xem [Dịch vụ tệp từ xa](/vi/guide/file-service)). Thêm
+`--no-file-manager` để tắt; chạy lại trình cài đặt sẽ giữ câu trả lời đã lưu trong
+`/etc/gotham/agent.env`.
 
 Trong khi chạy, trình cài đặt:
 
@@ -71,6 +72,7 @@ Gotham v1.2.3 is installed.
   Web UI:   http://203.0.113.10:8000
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
+  File manager on this node: on (--no-file-manager turns it off)
 
 First login:
   Account:  ops@example.com
@@ -102,11 +104,12 @@ chỉ máy chủ và bạn có thể đặt tên miền sau trong bảng điều
 
 Công thức này chỉ thực sự không cần tương tác khi **không có terminal**:
 cloud-init, một job CI, hoặc một lệnh `ssh` chạy không có pty. Trong một phiên
-SSH tương tác bình thường, trình cài đặt vẫn hỏi ba câu — email chủ sở hữu (điền sẵn
-từ `GOTHAM_ADMIN_EMAIL`), tên miền bảng điều khiển, và câu hỏi trình quản lý tệp.
-Hãy trả lời trước bằng cách thêm `-s -- --domain panel.example.com
---no-file-manager` sau `sh` trong lệnh bên dưới; `--domain` đặt tên miền, Enter
-(hoặc bỏ qua nó) để bỏ qua, và `-` ở câu hỏi email để bỏ qua việc tạo tài khoản.
+SSH tương tác bình thường, trình cài đặt vẫn hỏi hai câu — email chủ sở hữu (điền
+sẵn từ `GOTHAM_ADMIN_EMAIL`) và tên miền bảng điều khiển. Hãy trả lời trước bằng
+cách thêm `-s -- --domain panel.example.com` sau `sh` trong lệnh bên dưới;
+`--domain` đặt tên miền, Enter (hoặc bỏ qua nó) để bỏ qua, và `-` ở câu hỏi email
+để bỏ qua việc tạo tài khoản. Chỉ thêm `--no-file-manager` nếu máy này không được
+phép phơi tệp.
 
 Trong một lần chạy `curl | sudo sh`, các biến phải nằm **sau** `sudo` và trước
 `sh`; đặt chúng trên `curl` chỉ cấu hình `curl`, còn `sudo` khởi động trình cài

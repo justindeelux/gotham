@@ -1629,6 +1629,10 @@ env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${FM_D
     sh "${AGENT_INSTALLER}" --ca "${FM_DIR}/ca.pem" --dry-run --file-manager >"${FM_DIR}/flag.log" 2>&1 \
     || fail "FM1: --file-manager dry-run failed"
 grep -q "file manager: yes" "${FM_DIR}/flag.log" || fail "FM1: --file-manager flag ignored"
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${FM_DIR}" \
+    sh "${AGENT_INSTALLER}" --ca "${FM_DIR}/ca.pem" --dry-run --no-file-manager >"${FM_DIR}/no-flag.log" 2>&1 \
+    || fail "FM1: --no-file-manager dry-run failed"
+grep -q "file manager: no" "${FM_DIR}/no-flag.log" || fail "FM1: --no-file-manager flag ignored"
 if _fm_run GOTHAM_AGENT_FILE_MANAGER=maybe >"${FM_DIR}/bad.log"; then
     fail "FM1: an invalid GOTHAM_AGENT_FILE_MANAGER must be refused"
 fi
@@ -1644,7 +1648,7 @@ if ( GOTHAM_AGENT_FILES=maybe; export GOTHAM_AGENT_FILES; agent_env_write "${FM_
     fail "FM1: an invalid GOTHAM_AGENT_FILES must be refused"
 fi
 rm -rf "${FM_DIR}"
-pass "FM1: file manager answer defaults to no and drives the drop-in and agent.env"
+pass "FM1: file manager answer defaults to no on a direct run and both flags drive the drop-in and agent.env"
 
 # --- G1: the docker group is ensured before the unit is enabled ---------------
 echo "==> G1 the docker group is ensured before enabling the unit"

@@ -101,6 +101,9 @@ func runServe() int {
 	runner := agent.NewAgent(cfg, log, docker)
 
 	var fileServer *agent.FileServer
+	// Register the file service even when it is off: the control plane then
+	// reports "turned off on this node" instead of mistaking it for an old agent.
+	var fileService agentv1.FileServiceServer = agent.NewDisabledFileServer()
 	if cfg.Files {
 		opened, err := agent.NewFileServer(cfg, log)
 		if err != nil {
@@ -108,6 +111,7 @@ func runServe() int {
 			return exitError
 		}
 		fileServer = opened
+		fileService = opened
 		defer func() { _ = fileServer.Close() }()
 	}
 
@@ -176,9 +180,7 @@ func runServe() int {
 					Logger:     log,
 				})),
 			}
-			if fileServer != nil {
-				serverOptions = append(serverOptions, agent.WithFileService(fileServer))
-			}
+			serverOptions = append(serverOptions, agent.WithFileService(fileService))
 			terminalConfig := newTerminalConfig(cfg, log, docker)
 			if fileServer != nil {
 				terminalConfig.Roots = fileServer

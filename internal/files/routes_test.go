@@ -372,6 +372,7 @@ func TestErrorStatusMapping(t *testing.T) {
 		{"busy", ErrBusy, http.StatusTooManyRequests},
 		{"spool busy", ErrSpoolBusy, http.StatusTooManyRequests},
 		{"outdated", ErrAgentOutdated, http.StatusNotImplemented},
+		{"disabled on node", ErrDisabledOnNode, http.StatusConflict},
 		{"unavailable", ErrAgentUnavailable, http.StatusBadGateway},
 		{"disabled", ErrDisabled, http.StatusServiceUnavailable},
 		{"other", errors.New("boom"), http.StatusInternalServerError},
@@ -391,6 +392,22 @@ func TestErrorStatusMapping(t *testing.T) {
 				t.Fatalf("empty error message")
 			}
 		})
+	}
+}
+
+func TestDisabledOnNodeAnswerDiffersFromOutdated(t *testing.T) {
+	id := uuid.New()
+	h := newTestRouter(&fakeService{listErr: ErrDisabledOnNode})
+	rec := doRequest(t, h, http.MethodGet, "/v1/servers/"+id.String()+"/files/list?root=volumes")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	var body errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body.Code != "file_manager_disabled" {
+		t.Fatalf("code = %q, want file_manager_disabled", body.Code)
 	}
 }
 

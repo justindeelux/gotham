@@ -615,6 +615,7 @@ const uploadErrorKeys: Record<string, string> = {
   agent_outdated: "files.errors.agentOutdated",
   agent_unavailable: "files.errors.agentUnavailable",
   disabled: "files.errors.disabled",
+  file_manager_disabled: "files.errors.nodeDisabled",
   truncated: "files.upload.truncated",
   error: "common.errors.unexpected",
 };
@@ -627,6 +628,10 @@ export function describeFilesError(error: unknown): string {
 
 export function isFilesDisabled(error: unknown): boolean {
   return isApiError(error) && error.status === 503;
+}
+
+export function isFilesDisabledOnNode(error: unknown): boolean {
+  return isApiError(error) && error.code === "file_manager_disabled";
 }
 
 const statusKeys: Record<number, string> = {
@@ -647,6 +652,7 @@ const statusKeys: Record<number, string> = {
 };
 
 const codeKeys: Record<string, string> = {
+  file_manager_disabled: "files.errors.nodeDisabled",
   archive_limit: "files.errors.archiveLimit",
   archive_entry: "files.errors.archiveEntry",
   invalid_archive: "files.errors.invalidArchive",

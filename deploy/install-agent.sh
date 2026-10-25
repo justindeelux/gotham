@@ -77,13 +77,14 @@
 #   GOTHAM_AGENT_ENROLLMENT_TOKEN  (from the environment or --enrollment-token-file; a secret)
 #   GOTHAM_AGENT_FILES         (true/false; written from the file-manager answer)
 #
-# File manager (remote file browser/editor in the web UI): the installer asks
-# whether you really want it (default: no). Answering yes lets the control
-# plane's owner browse, read, edit, upload and delete ANY file on
-# this node, because the agent then runs as root (systemd drop-in
-# file-manager.conf). Answer without a prompt with --file-manager /
-# --no-file-manager or GOTHAM_AGENT_FILE_MANAGER=yes|no; without a terminal the
-# answer is no. A re-run keeps the previous answer.
+# File manager (remote file browser/editor in the web UI): a direct run asks
+# whether you really want it (default: no; the control-plane installer enables
+# it for its local node without asking). Answering yes lets the control plane's
+# owner browse, read, edit, upload and delete ANY file on this node, because the
+# agent then runs as root (systemd drop-in file-manager.conf). Answer without a
+# prompt with --file-manager / --no-file-manager or
+# GOTHAM_AGENT_FILE_MANAGER=yes|no; without a terminal the answer is no. A re-run
+# keeps the previous answer.
 #
 # Read once at startup (never written to agent.env):
 #   GOTHAM_AGENT_FULL          (set to 1 for the --full Docker setup)

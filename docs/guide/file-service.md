@@ -26,10 +26,13 @@ agent's own key and certificates). The owner accepted this risk; only the owner
 can use it.
 
 What the agent can really read or change is bounded by its Unix user. The
-installer therefore asks whether you want the file manager (default **no**) and,
-on yes, runs the agent as root via the `file-manager.conf` drop-in. Run as the
-unprivileged `gotham-agent` user, the same root is mostly read-only. Existing
-nodes that auto-update to this version expose `/` to the owner with the
+control-plane installer enables the file manager on its own `localhost` node by
+default, with no prompt, and runs that agent as root via the
+`file-manager.conf` drop-in. For a node added later, the **Add server** wizard
+has an **Enable the file manager on this node** checkbox (off by default) and
+passes `--file-manager` or `--no-file-manager` in the generated install command.
+Run as the unprivileged `gotham-agent` user, the same root is mostly read-only.
+Existing nodes that auto-update to this version expose `/` to the owner with the
 permissions of their current user until `GOTHAM_AGENT_FILES=false` is set.
 
 In this mode the application-directory guard still protects top-level app
@@ -42,6 +45,15 @@ the root agent wrote belong to the service user again.
 
 `GOTHAM_AGENT_FILES` and `GOTHAM_AGENT_FILE_FULL_ACCESS` are switched off by
 `false`, `0`, `no` or `off`; any other value leaves them on.
+
+The choice is made when the node is installed. To change it later, edit
+`GOTHAM_AGENT_FILES` in `/etc/gotham/agent.env` on that node and run
+`systemctl restart gotham-agent`; the panel has no control for it. When the
+service is off, the agent still registers it and every call answers
+`FailedPrecondition` with `file_manager_disabled`; the API returns **409** with
+`{"code":"file_manager_disabled"}`, and the panel says the file manager is
+turned off on this node. A genuinely old agent that does not register the
+service still answers **501** (`agent_outdated`).
 
 ## Confined mode
 

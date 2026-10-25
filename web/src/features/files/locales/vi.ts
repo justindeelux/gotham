@@ -65,6 +65,8 @@ const vi = {
     permissionHint: "Agent trên node không đọc được thư mục này — volume do container tạo thường thuộc sở hữu root.",
     disabledTitle: "Quản lý tệp đang tắt",
     disabledHint: "Quản lý tệp đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
+    nodeDisabledHint:
+      "Quản lý tệp đang tắt trên node này. Hãy bật bằng cách đặt GOTHAM_AGENT_FILES=true trong /etc/gotham/agent.env trên node rồi khởi động lại gotham-agent.",
     readOnlyTitle: "Thư mục gốc này chỉ đọc",
     readOnlyHint: "ComposeGuard kiểm tra thư mục gốc này khi triển khai và lần ComposeUp kế tiếp sẽ ghi đè chỉnh sửa cục bộ. Mở và tải về vẫn dùng được; thao tác ghi bị tắt.",
     selectionCount: "Đã chọn {count}",
@@ -302,6 +304,8 @@ const vi = {
     agentOutdated: "Hãy cập nhật agent trên node — bản này chưa có quản lý tệp.",
     agentUnavailable: "Không kết nối được agent trên node. Kiểm tra trạng thái node rồi thử lại.",
     disabled: "Quản lý tệp đang tắt trên control plane này. Hãy đề nghị chủ sở hữu bật.",
+    nodeDisabled:
+      "Quản lý tệp đang tắt trên node này. Hãy bật bằng cách đặt GOTHAM_AGENT_FILES=true trong /etc/gotham/agent.env trên node rồi khởi động lại gotham-agent.",
   },
 };
 

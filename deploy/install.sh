@@ -114,6 +114,9 @@
 # The localhost agent is mandatory and uses node id localhost, dialing the
 # control plane at 127.0.0.1:9442. Upgrades replace the old local node identity;
 # the forward-only migration preserves its UUID and workload references.
+# The file manager is enabled on this local node by default, with no prompt;
+# --no-file-manager (or GOTHAM_AGENT_FILE_MANAGER=no) turns it off. A re-run
+# keeps an explicit answer already stored in /etc/gotham/agent.env.
 # Unsupported platforms or an existing remote agent fail before mutation.
 # An agent install failure leaves the control plane running and exits nonzero.
 #
@@ -600,8 +603,10 @@ _admin_xtrace_on
         || die "GOTHAM_AGENT_CP_ADDR must be 127.0.0.1:9442 for the control-plane installer"
     # Override the prior local identity before validating the effective config.
     LEGACY_LOCAL_NODE_ID=""
+    _la_prior_files=""
     if [ -f "${_la_agent_env}" ]; then
         LEGACY_LOCAL_NODE_ID="$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_NODE_ID=//p' "${_la_agent_env}" | tail -n1)"
+        _la_prior_files="$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_FILES=//p' "${_la_agent_env}" | tail -n1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
     fi
     GOTHAM_AGENT_NODE_ID=localhost
     GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442
@@ -619,6 +624,29 @@ _admin_xtrace_on
                 || die "invalid derived agent address (see above); refusing to install"
     fi
 }
+
+# The local node gets the file manager on by default, with no prompt.
+# --file-manager / --no-file-manager (or GOTHAM_AGENT_FILE_MANAGER) win; a
+# re-run keeps an explicit answer already stored in agent.env.
+LOCAL_AGENT_FILE_MANAGER="${GOTHAM_AGENT_FILE_MANAGER:-}"
+case "$(printf '%s' "${LOCAL_AGENT_FILE_MANAGER}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+    yes | y | true | 1) LOCAL_AGENT_FILE_MANAGER=yes ;;
+    no | n | false | 0) LOCAL_AGENT_FILE_MANAGER=no ;;
+    "")
+        case "${_la_prior_files:-}" in
+            true) LOCAL_AGENT_FILE_MANAGER=yes ;;
+            false) LOCAL_AGENT_FILE_MANAGER=no ;;
+            *) LOCAL_AGENT_FILE_MANAGER=yes ;;
+        esac
+        ;;
+    *) die "GOTHAM_AGENT_FILE_MANAGER must be yes or no (got '${GOTHAM_AGENT_FILE_MANAGER}')" ;;
+esac
+LOCAL_AGENT_FILE_MANAGER_FLAG="--file-manager"
+LOCAL_AGENT_FILE_MANAGER_SUMMARY="on (--no-file-manager turns it off)"
+if [ "${LOCAL_AGENT_FILE_MANAGER}" = "no" ]; then
+    LOCAL_AGENT_FILE_MANAGER_FLAG="--no-file-manager"
+    LOCAL_AGENT_FILE_MANAGER_SUMMARY="off (--file-manager turns it on)"
+fi
 
 # render_file installs a root-owned config/unit file, rewriting the production
 # absolute roots onto GOTHAM_INSTALL_ROOT when one is set (test mode only).
@@ -1922,7 +1950,7 @@ fi
             || LOCAL_AGENT_ENV="GOTHAM_AGENT_CP_ADDR=$(sh_quote "${LOCAL_AGENT_CP_ADDR}") ${LOCAL_AGENT_ENV}"
         [ -z "${LOCAL_AGENT_NODE_ID}" ] \
             || LOCAL_AGENT_ENV="GOTHAM_AGENT_NODE_ID=$(sh_quote "${LOCAL_AGENT_NODE_ID}") ${LOCAL_AGENT_ENV}"
-        LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh $(sh_quote "${SCRIPT_DIR}/install-agent.sh") --full --ca $(sh_quote "${CA_DIR}/ca.crt") --enrollment-token-file $(sh_quote "${LOCAL_AGENT_TOKEN_FILE}")"
+        LOCAL_AGENT_RETRY="${LOCAL_AGENT_ENV} sh $(sh_quote "${SCRIPT_DIR}/install-agent.sh") --full --ca $(sh_quote "${CA_DIR}/ca.crt") --enrollment-token-file $(sh_quote "${LOCAL_AGENT_TOKEN_FILE}") ${LOCAL_AGENT_FILE_MANAGER_FLAG}"
         LOCAL_AGENT_FAILED=0
         _agent_script="${SCRIPT_DIR}/install-agent.sh"
         if [ "${TEST_MODE}" -eq 1 ] && [ "${GOTHAM_INSTALL_TEST_RUN_AGENT:-0}" = "1" ]; then
@@ -1967,7 +1995,7 @@ fi
                     -u GOTHAM_INSTALL_TEST_ADMIN_BIN \
                     -u GOTHAM_INSTALL_TEST_ADMIN_TTY \
                     -u GOTHAM_AGENT_FILE_MANAGER_TTY \
-                    "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt" --enrollment-token-file "${LOCAL_AGENT_TOKEN_FILE}"
+                    "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt" --enrollment-token-file "${LOCAL_AGENT_TOKEN_FILE}" "${LOCAL_AGENT_FILE_MANAGER_FLAG}"
             ) || LOCAL_AGENT_FAILED=1
         fi
 }
@@ -2080,6 +2108,7 @@ Gotham ${VERSION} is installed.
 ${DOMAIN_CONFIRM_NOTE}
   Status:   systemctl status gotham
   Logs:     journalctl -u gotham -f
+  File manager on this node: ${LOCAL_AGENT_FILE_MANAGER_SUMMARY}
 ${DEPS_SUMMARY}${LEGACY_DB_PASSWORD_NOTE}
 
 First login:

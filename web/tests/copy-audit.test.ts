@@ -20,12 +20,18 @@ const DENYLIST: Array<{ label: string; pattern: RegExp }> = [
 const ALLOWLIST: Record<string, string> = {
   "servers.wizard.installHowto [gotham env var]":
     "The install wizard's one-time manual agent bootstrap, kept as the explicit alternative; it names the installer's own env var on purpose.",
-  "features/servers/components/AddServerWizard.vue [repo directory]":
+  "features/servers/utils/installCommand.ts [repo directory]":
     "The install wizard's one-time manual agent bootstrap command (the explicit alternative), which reaches the installer sibling files; it is shown verbatim in the copyable block.",
-  "features/servers/components/AddServerWizard.vue [sudo command]":
+  "features/servers/utils/installCommand.ts [sudo command]":
     "The install wizard's one-time manual agent bootstrap command (the explicit alternative); `sudo` is part of the command the operator copies.",
-  "features/servers/components/AddServerWizard.vue [gotham env var]":
+  "features/servers/utils/installCommand.ts [gotham env var]":
     "The install wizard's one-time manual agent bootstrap command (the explicit alternative); it sets the installer's own env vars on purpose.",
+  "servers.wizard.fileManagerHint [gotham env var]":
+    "The checkbox hint tells the operator the exact manual change, which is the only way to change the setting after the node exists.",
+  "files.errors.nodeDisabled [gotham env var]":
+    "The honest error message names the exact manual fix (the env var and restart), as required so it is not mistaken for an outdated agent.",
+  "files.browser.nodeDisabledHint [gotham env var]":
+    "The honest disabled-panel hint names the exact manual fix (the env var and restart), as required so it is not mistaken for an outdated agent.",
 };
 
 interface Finding {

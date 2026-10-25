@@ -184,6 +184,9 @@ const vi: ServersMessages = {
     installReady: "Agent đã đăng ký và máy chủ đã sẵn sàng.",
     installHowto:
       "Bước thủ công một lần. SSH vào nút và chạy khối lệnh bên dưới. Khối lệnh sao chép chứng chỉ CA của control plane, lấy các tệp phụ của trình cài đặt và đăng ký nút. Thay tên máy chủ CP và tên nút giữ chỗ; trình cài đặt từ chối khi thiếu --ca, và agent gọi địa chỉ loopback trừ khi GOTHAM_AGENT_CP_ADDR trỏ tới control plane.",
+    fileManagerLabel: "Bật quản lý tệp trên nút này",
+    fileManagerHint:
+      "Thiết lập được chọn khi thêm nút; thay đổi sau đó phải làm thủ công trên nút: đặt GOTHAM_AGENT_FILES=true (hoặc false) trong /etc/gotham/agent.env và chạy systemctl restart gotham-agent. Không thể thay đổi từ bảng điều khiển.",
     copy: "Sao chép",
     installCopied: "Đã sao chép lệnh cài đặt",
     copyFailed: "Không thể sao chép vào khay nhớ tạm",

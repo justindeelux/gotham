@@ -26,7 +26,8 @@ type (
 	ProxyServerConfig = proxy.Config
 	ProxyServer       = proxy.Server
 
-	FileServer = files.FileServer
+	FileServer         = files.FileServer
+	DisabledFileServer = files.DisabledFileServer
 
 	TerminalConfig = terminal.TerminalConfig
 	TerminalRoots  = terminal.TerminalRoots
@@ -113,6 +114,10 @@ func NewFileServer(cfg Config, log *slog.Logger) (*files.FileServer, error) {
 		FileTrashMaxAgeDays:      cfg.FileTrashMaxAgeDays,
 		FileTrashMaxBytes:        cfg.FileTrashMaxBytes,
 	}, log)
+}
+
+func NewDisabledFileServer() *DisabledFileServer {
+	return files.NewDisabledFileServer()
 }
 
 func NewTerminalServer(cfg TerminalConfig) *terminal.TerminalServer {

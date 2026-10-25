@@ -27,11 +27,14 @@ của chính agent). Chủ sở hữu đã chấp nhận rủi ro này; chỉ ch
 mới dùng được nó.
 
 Những gì agent thực sự đọc hay thay đổi được bị giới hạn bởi người dùng Unix của
-nó. Vì vậy trình cài đặt hỏi bạn có muốn trình quản lý tệp không (mặc định
-**không**) và, nếu có, chạy agent dưới root qua drop-in `file-manager.conf`. Khi
-chạy dưới người dùng `gotham-agent` không đặc quyền, cùng gốc đó gần như chỉ đọc.
-Các node hiện có tự cập nhật lên phiên bản này sẽ phơi `/` cho chủ sở hữu với
-quyền của người dùng hiện tại cho đến khi `GOTHAM_AGENT_FILES=false` được đặt.
+nó. Trình cài đặt control plane bật trình quản lý tệp trên node `localhost` của
+chính nó mặc định, không hỏi, và chạy agent đó dưới root qua drop-in
+`file-manager.conf`. Với một nút được thêm sau, wizard **Thêm máy chủ** có hộp
+kiểm **Bật quản lý tệp trên nút này** (tắt mặc định) và truyền `--file-manager`
+hoặc `--no-file-manager` trong lệnh cài đặt được tạo. Khi chạy dưới người dùng
+`gotham-agent` không đặc quyền, cùng gốc đó gần như chỉ đọc. Các node hiện có tự
+cập nhật lên phiên bản này sẽ phơi `/` cho chủ sở hữu với quyền của người dùng
+hiện tại cho đến khi `GOTHAM_AGENT_FILES=false` được đặt.
 
 Trong chế độ này, rào chắn thư mục ứng dụng vẫn bảo vệ các thư mục ứng dụng cấp
 cao nhất của gốc volume được quản lý (không đổi tên/xóa khi một container đang gắn
@@ -43,6 +46,15 @@ chạy dưới root đã ghi lại thuộc về người dùng dịch vụ.
 
 `GOTHAM_AGENT_FILES` và `GOTHAM_AGENT_FILE_FULL_ACCESS` bị tắt bởi `false`, `0`,
 `no` hoặc `off`; mọi giá trị khác đều để chúng bật.
+
+Lựa chọn được đưa ra khi cài nút. Muốn đổi sau đó, sửa `GOTHAM_AGENT_FILES` trong
+`/etc/gotham/agent.env` trên nút đó và chạy `systemctl restart gotham-agent`;
+bảng điều khiển không có điều khiển cho việc này. Khi dịch vụ tắt, agent vẫn
+đăng ký nó và mọi lệnh gọi trả lời `FailedPrecondition` với
+`file_manager_disabled`; API trả **409** với
+`{"code":"file_manager_disabled"}`, và bảng điều khiển báo trình quản lý tệp đang
+tắt trên node này. Một agent thực sự cũ không đăng ký dịch vụ vẫn trả **501**
+(`agent_outdated`).
 
 ## Chế độ bị giới hạn
 

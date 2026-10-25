@@ -15,7 +15,6 @@ import (
 
 	"github.com/justindeelux/gotham/agent"
 	"github.com/justindeelux/gotham/internal/services"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -87,7 +86,7 @@ func TestTerminalComposeReal(t *testing.T) {
 	compose := agent.NewComposeServer(agent.ComposeServerConfig{Root: root})
 	userID := uuid.New()
 	app := Application{
-		ID: uuid.New(), UserID: userID, TeamID: teams.PersonalTeamID(userID),
+		ID: uuid.New(), UserID: userID,
 		ServerID: uuid.New(), Name: "terminal-e2e", SourceType: SourceCompose,
 		ComposeService: "web",
 	}

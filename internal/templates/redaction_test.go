@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/services"
-	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/templates"
 )
 
@@ -39,7 +38,7 @@ func (f *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (ser
 	return f.service, nil
 }
 
-func (f *fakeRepository) ListServices(_ context.Context, _ teams.Scope) ([]services.Service, error) {
+func (f *fakeRepository) ListServices(_ context.Context, _ uuid.UUID) ([]services.Service, error) {
 	return []services.Service{f.service}, nil
 }
 
@@ -77,7 +76,7 @@ func (f *fakeRepository) ListServiceDeploys(_ context.Context, _ uuid.UUID, _ in
 	return f.deploys, nil
 }
 
-func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID, _ teams.Scope) (bool, error) {
+func (f *fakeRepository) ServerExists(_ context.Context, _ uuid.UUID) (bool, error) {
 	return true, nil
 }
 
@@ -93,11 +92,11 @@ func (f *fakeRepository) NameInEnvironment(_ context.Context, _ uuid.UUID, _ str
 	return false, nil
 }
 
-func (f *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (services.EnvironmentRef, error) {
+func (f *fakeRepository) ResolveEnvironment(_ context.Context, environmentID uuid.UUID) (services.EnvironmentRef, error) {
 	return services.EnvironmentRef{ID: environmentID}, nil
 }
 
-func (f *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
+func (f *fakeRepository) ResolveProject(_ context.Context, projectID uuid.UUID) (uuid.UUID, error) {
 	return projectID, nil
 }
 

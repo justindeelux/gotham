@@ -321,15 +321,13 @@ func TestCreateHealthcheckTimeout(t *testing.T) {
 	}
 }
 
-func TestOwnershipIsolation(t *testing.T) {
+func TestAccessByID(t *testing.T) {
 	repo := newFakeRepository()
 	serverID := repo.seedServer()
 	envID, _ := repo.seedEnvironment()
 	cs := &fakeContainers{runID: "container-1"}
 	svc := newTestService(repo, cs)
 	owner := uuid.New()
-	stranger := uuid.New()
-
 	created, _, err := svc.Create(context.Background(), owner, CreateRequest{
 		Name: "orders", Engine: EnginePostgres, EnvironmentID: envID, ServerID: serverID,
 	})
@@ -339,28 +337,7 @@ func TestOwnershipIsolation(t *testing.T) {
 	cs.setRunning(created.ContainerID)
 
 	unknown := uuid.New()
-	scenarios := map[string]error{
-		"get": errOf(func() error { _, err := svc.Get(context.Background(), stranger, created.ID); return err }),
-		"credentials": errOf(func() error {
-			_, err := svc.Credentials(context.Background(), stranger, created.ID)
-			return err
-		}),
-		"update": errOf(func() error {
-			_, err := svc.Update(context.Background(), stranger, created.ID, UpdateRequest{Name: ptr("stolen")})
-			return err
-		}),
-		"delete":  errOf(func() error { return svc.Delete(context.Background(), stranger, created.ID) }),
-		"start":   errOf(func() error { _, err := svc.Start(context.Background(), stranger, created.ID); return err }),
-		"stop":    errOf(func() error { _, err := svc.Stop(context.Background(), stranger, created.ID); return err }),
-		"restart": errOf(func() error { _, err := svc.Restart(context.Background(), stranger, created.ID); return err }),
-	}
-	for name, err := range scenarios {
-		if !errors.Is(err, ErrNotFound) {
-			t.Errorf("%s by another user: error = %v, want ErrNotFound", name, err)
-		}
-	}
-
-	if _, err := svc.Get(context.Background(), stranger, unknown); !errors.Is(err, ErrNotFound) {
+	if _, err := svc.Get(context.Background(), owner, unknown); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown id: error = %v, want ErrNotFound", err)
 	}
 	if _, err := svc.Get(context.Background(), owner, uuid.Nil); !errors.Is(err, ErrValidation) {
@@ -368,11 +345,6 @@ func TestOwnershipIsolation(t *testing.T) {
 	}
 	if _, err := svc.Get(context.Background(), owner, created.ID); err != nil {
 		t.Errorf("owner Get: %v", err)
-	}
-
-	still, err := svc.Get(context.Background(), owner, created.ID)
-	if err != nil || still.Status == StatusDeleting {
-		t.Errorf("row after failed deletes: %+v (err %v)", still, err)
 	}
 }
 
@@ -1188,8 +1160,6 @@ func TestDeleteRemovesContainerPersistedAfterRead(t *testing.T) {
 		t.Errorf("Get = %v, want the row to stay deleted", err)
 	}
 }
-
-func errOf(fn func() error) error { return fn() }
 
 func envContains(env []string, value string) bool {
 	for _, entry := range env {

@@ -84,8 +84,8 @@ func TestStoreRepositoryRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetApplication: %v", err)
 	}
-	if app.Repo != "Octo/Gotham" || app.Branch != "main" || app.TeamID != userID {
-		t.Errorf("application = %+v, want the creator's personal team", app)
+	if app.Repo != "Octo/Gotham" || app.Branch != "main" {
+		t.Errorf("application = %+v, want the application creator", app)
 	}
 
 	created, err := repo.CreateWebhook(ctx, Hook{
@@ -239,7 +239,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	}
 	baseID := uuid.UUID(base.ID.Bytes)
 	sibling, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
+		UserID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
 		Name: "wh-app-pr-7", Provider: "github",
 		Repo: base.Repo, CloneUrl: base.CloneUrl, Branch: "feat/x", BuildPack: "auto",
 	})
@@ -249,7 +249,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	siblingID := uuid.UUID(sibling.ID.Bytes)
 
 	created, err := repo.UpsertPreview(ctx, Preview{
-		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		ApplicationID: baseID, Provider: "github", Repo: base.Repo,
 		PRNumber: 7, Branch: "feat/x", HeadSHA: "abc123",
 		PreviewApplicationID: siblingID, Host: "pr-7-wh-app.example.com", State: PreviewActive,
 	})
@@ -312,7 +312,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatalf("second PR at the same head = %+v / %v, want approved", other, err)
 	}
 	if _, err := repo.UpsertPreview(ctx, Preview{
-		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		ApplicationID: baseID, Provider: "github", Repo: base.Repo,
 		PRNumber: 7, Branch: "feat/x", HeadSHA: "sha-b",
 		PreviewApplicationID: siblingID, Host: "pr-7-wh-app.example.com", State: PreviewActive,
 	}); err != nil {
@@ -378,7 +378,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	}
 
 	reopened, err := repo.UpsertPreview(ctx, Preview{
-		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		ApplicationID: baseID, Provider: "github", Repo: base.Repo,
 		PRNumber: 7, Branch: "feat/y", HeadSHA: "def456",
 		PreviewApplicationID: siblingID, Host: "pr-7-wh-app.example.com", State: PreviewActive,
 	})
@@ -411,7 +411,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	}
 
 	if _, err := repo.UpsertPreview(ctx, Preview{
-		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		ApplicationID: baseID, Provider: "github", Repo: base.Repo,
 		PRNumber: 12, Host: "pr-12-wh-app.example.com",
 		State:     PreviewClosing,
 		CreatedAt: time.Now().UTC().Add(-time.Hour), UpdatedAt: time.Now().UTC().Add(-time.Hour),
@@ -429,7 +429,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	}
 
 	previewApp, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
+		UserID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
 		Name: "wh-app-pr-11", Provider: "github",
 		Repo: base.Repo, CloneUrl: base.CloneUrl, Branch: "feat/w", BuildPack: "auto", IsPreview: true,
 	})
@@ -453,7 +453,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		t.Fatal("the unbound is_preview application is not in the sweep's work list")
 	}
 	preview11, err := repo.UpsertPreview(ctx, Preview{
-		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		ApplicationID: baseID, Provider: "github", Repo: base.Repo,
 		PRNumber: 11, Host: "pr-11-wh-app.example.com", State: PreviewActive,
 		PreviewApplicationID: previewAppID,
 	})
@@ -477,7 +477,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	}
 
 	if _, err := repo.UpsertPreview(ctx, Preview{
-		ApplicationID: baseID, TeamID: userID, Provider: "github", Repo: base.Repo,
+		ApplicationID: baseID, Provider: "github", Repo: base.Repo,
 		PRNumber: 9, Branch: "feat/z", HeadSHA: "fff",
 		Host: "pr-9-wh-app.example.com", State: PreviewActive,
 	}); err != nil {
@@ -557,8 +557,8 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 	}
 	target := targets[0]
 	if target.Name != "wh-app" || target.BaseDomain != "wh-app.example.com" ||
-		target.UserID != userID || target.TeamID != userID {
-		t.Errorf("target = %+v, want name/domain/user/team from the application", target)
+		target.UserID != userID {
+		t.Errorf("target = %+v, want name/domain/user from the application", target)
 	}
 }
 
@@ -609,11 +609,10 @@ func TestStoreClosingSameHeadClaimRetries(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID, _, _ := claimFixture(t, ctx, st)
+	_, baseID, _, _ := claimFixture(t, ctx, st)
 
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
-		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
-		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		ApplicationID: pgUUID(baseID), Provider: "github", Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
 		Host: "pr-7.example.com", State: "closing",
 	}); err != nil {
 		t.Fatalf("UpsertPreviewDeploy: %v", err)
@@ -665,7 +664,7 @@ func TestStoreExpiredWorkerCannotPromote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID, _, _ := claimFixture(t, ctx, st)
+	_, baseID, _, _ := claimFixture(t, ctx, st)
 
 	slow, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 1, Kind: store.PreviewClaimStart,
@@ -692,7 +691,7 @@ func TestStoreExpiredWorkerCannotPromote(t *testing.T) {
 		write, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
 			ApplicationID: pgUUID(baseID), PrNumber: int32(pr), ReservationID: claim.Reservation.ID,
 			LeaseHeadSHA: fmt.Sprintf("sha-%d", pr), HeadSHA: fmt.Sprintf("sha-%d", pr),
-			TeamID: pgUUID(userID), State: "active", ConsumeLease: true,
+			State: "active", ConsumeLease: true,
 		})
 		if err != nil || write.Refused != "" {
 			t.Fatalf("bind PR %d = %+v / %v, want written", pr, write, err)
@@ -725,7 +724,7 @@ func TestStoreClosedBindingCannotBeResurrected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID, _, _ := claimFixture(t, ctx, st)
+	_, baseID, _, _ := claimFixture(t, ctx, st)
 
 	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
@@ -735,8 +734,7 @@ func TestStoreClosedBindingCannotBeResurrected(t *testing.T) {
 		t.Fatalf("claim = %+v / %v, want approved", claim, err)
 	}
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
-		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
-		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		ApplicationID: pgUUID(baseID), Provider: "github", Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
 		Host: "pr-7.example.com", State: "active",
 	}); err != nil {
 		t.Fatalf("UpsertPreviewDeploy: %v", err)
@@ -768,11 +766,10 @@ func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID, _, _ := claimFixture(t, ctx, st)
+	_, baseID, _, _ := claimFixture(t, ctx, st)
 
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
-		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
-		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		ApplicationID: pgUUID(baseID), Provider: "github", Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
 		Host: "pr-7.example.com", State: "active",
 	}); err != nil {
 		t.Fatalf("UpsertPreviewDeploy: %v", err)
@@ -815,7 +812,7 @@ func TestStoreCloseSerializesWithPromotion(t *testing.T) {
 	go func() {
 		result, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
 			ApplicationID: pgUUID(baseID), PrNumber: 7, ReservationID: claim.Reservation.ID,
-			LeaseHeadSHA: "head-b", HeadSHA: "head-b", TeamID: pgUUID(userID),
+			LeaseHeadSHA: "head-b", HeadSHA: "head-b",
 			State: "active", ConsumeLease: true,
 		})
 		promoted <- result
@@ -882,7 +879,7 @@ func TestStoreLeaseExpiryDuringLockWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID, _, _ := claimFixture(t, ctx, st)
+	_, baseID, _, _ := claimFixture(t, ctx, st)
 
 	claim, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
 		ApplicationID: pgUUID(baseID), PrNumber: 7, Kind: store.PreviewClaimStart,
@@ -918,7 +915,7 @@ func TestStoreLeaseExpiryDuringLockWait(t *testing.T) {
 	go func() {
 		result, err := st.WritePreviewBinding(context.Background(), store.PreviewBindingWriteParams{
 			ApplicationID: pgUUID(baseID), PrNumber: 7, ReservationID: claim.Reservation.ID,
-			LeaseHeadSHA: "head-b", HeadSHA: "head-b", TeamID: pgUUID(userID),
+			LeaseHeadSHA: "head-b", HeadSHA: "head-b",
 			State: "active", ConsumeLease: true,
 		})
 		written <- result
@@ -948,7 +945,7 @@ func TestStoreSiblingDeleteClearsLedger(t *testing.T) {
 	userID, baseID, envID, serverID := claimFixture(t, ctx, st)
 
 	sibling, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
+		UserID: pgUUID(userID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
 		Name: "octo-gotham-pr-7", Provider: "github",
 		Repo: "octo/gotham", CloneUrl: "https://github.com/octo/gotham.git",
 		Branch: "feat/x", BuildPack: "auto", IsPreview: true,
@@ -958,8 +955,7 @@ func TestStoreSiblingDeleteClearsLedger(t *testing.T) {
 	}
 	siblingID := uuid.UUID(sibling.ID.Bytes)
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
-		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
-		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		ApplicationID: pgUUID(baseID), Provider: "github", Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
 		Host: "pr-7.example.com", State: "active", PreviewApplicationID: pgUUID(siblingID),
 	}); err != nil {
 		t.Fatalf("UpsertPreviewDeploy: %v", err)
@@ -1089,8 +1085,7 @@ func TestStoreClaimConcurrencyRespectsTheCap(t *testing.T) {
 	}
 
 	if _, err := st.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
-		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
-		Repo: base.Repo, PrNumber: got[0], Branch: "main", HeadSha: "sha-orig",
+		ApplicationID: pgUUID(baseID), Provider: "github", Repo: base.Repo, PrNumber: got[0], Branch: "main", HeadSha: "sha-orig",
 		Host: "pr-x.example.com", State: "active",
 	}); err != nil {
 		t.Fatalf("UpsertPreviewDeploy: %v", err)
@@ -1114,7 +1109,7 @@ func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID, _, _ := claimFixture(t, ctx, st)
+	_, baseID, _, _ := claimFixture(t, ctx, st)
 
 	const pr = 7
 	open, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
@@ -1173,7 +1168,7 @@ func TestStoreNoBindingCloseRefusesTheRacingPromote(t *testing.T) {
 	}
 	written, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
 		ApplicationID: pgUUID(baseID), PrNumber: pr, ReservationID: reopen.Reservation.ID,
-		LeaseHeadSHA: "head-a", HeadSHA: "head-a", TeamID: pgUUID(userID), State: "active",
+		LeaseHeadSHA: "head-a", HeadSHA: "head-a", State: "active",
 		ConsumeLease: true, LiveLimit: 5,
 	})
 	if err != nil || written.Refused != "" {
@@ -1188,7 +1183,7 @@ func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID, _, _ := claimFixture(t, ctx, st)
+	_, baseID, _, _ := claimFixture(t, ctx, st)
 
 	const pr = 8
 	open, err := st.ClaimPreviewDelivery(ctx, store.PreviewClaimParams{
@@ -1237,7 +1232,7 @@ func TestStoreFailedNoBindingCloseRetryReclaims(t *testing.T) {
 	}
 	written, err := st.WritePreviewBinding(ctx, store.PreviewBindingWriteParams{
 		ApplicationID: pgUUID(baseID), PrNumber: pr, ReservationID: reopen.Reservation.ID,
-		LeaseHeadSHA: "head-a", HeadSHA: "head-a", TeamID: pgUUID(userID), State: "active",
+		LeaseHeadSHA: "head-a", HeadSHA: "head-a", State: "active",
 		ConsumeLease: true, LiveLimit: 5,
 	})
 	if err != nil || written.Refused != "" {
@@ -1249,11 +1244,10 @@ func TestStoreUpsertPreviewDeployTakesTheApplicationLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openClaimFixture(t, ctx)
-	userID, baseID, _, _ := claimFixture(t, ctx, st)
+	_, baseID, _, _ := claimFixture(t, ctx, st)
 
 	params := sqlc.UpsertPreviewDeployParams{
-		ApplicationID: pgUUID(baseID), TeamID: pgUUID(userID), Provider: "github",
-		Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
+		ApplicationID: pgUUID(baseID), Provider: "github", Repo: "octo/gotham", PrNumber: 7, Branch: "feat/x", HeadSha: "head-a",
 		Host: "pr-7.example.com", State: "active",
 	}
 	if _, err := st.UpsertPreviewDeploy(ctx, params); err != nil {
@@ -1380,12 +1374,12 @@ func createApplicationParams(userID, envID, serverID uuid.UUID) sqlc.CreateAppli
 	}
 }
 
-func seedAppColumns(t *testing.T, ctx context.Context, st *store.Store, userID uuid.UUID) (envID, serverID pgtype.UUID) {
+func seedAppColumns(t *testing.T, ctx context.Context, st *store.Store, _ uuid.UUID) (envID, serverID pgtype.UUID) {
 	pool := st.DB
 	t.Helper()
 	suffix := time.Now().UnixNano()
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID: pgUUID(uuid.New()), TeamID: pgUUID(userID), Name: fmt.Sprintf("wh-%d", suffix),
+		ID: pgUUID(uuid.New()), Name: fmt.Sprintf("wh-%d", suffix),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)

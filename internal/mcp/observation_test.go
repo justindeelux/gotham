@@ -20,7 +20,7 @@ func observationClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/healthz" {
-			if r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get("X-Team-Id") != testConfig("").TeamID.String() || r.Header.Get(contractHeader) != "1" {
+			if r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get(contractHeader) != "1" {
 				t.Error("fixed strict authority missing")
 			}
 			acknowledge(w, r)
@@ -91,7 +91,7 @@ func TestSystemOverviewDegradedAndPartial(t *testing.T) {
 			client := observationClient(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/v1/mcp/context":
-					_, _ = fmt.Fprintf(w, `{"team_id":%q}`, testConfig("").TeamID)
+					_, _ = fmt.Fprintf(w, `{}`)
 				case "/healthz":
 					w.WriteHeader(503)
 					_, _ = w.Write([]byte(`{"status":"degraded","db":"error","redis":"ok"}`))
@@ -219,13 +219,12 @@ func TestObservationProtocolAndAfterInitDisablement(t *testing.T) {
 	client := observationClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if disabled.Load() {
 			w.Header().Del(contractHeader)
-			w.Header().Del(teamHeader)
 			w.WriteHeader(503)
 			return
 		}
 		switch r.URL.Path {
 		case "/api/v1/mcp/context":
-			_, _ = fmt.Fprintf(w, `{"team_id":%q}`, testConfig("").TeamID)
+			_, _ = fmt.Fprintf(w, `{}`)
 		case "/api/v1/servers":
 			_, _ = fmt.Fprintf(w, `{"servers":[{"id":%q,"status":"offline"}]}`, observationNodeID)
 		case "/api/v1/servers/" + observationNodeID:
@@ -268,7 +267,7 @@ func TestObservationProtocolAndAfterInitDisablement(t *testing.T) {
 	if err != nil || result.IsError || result.StructuredContent == nil {
 		t.Fatalf("typed result=%+v %v", result, err)
 	}
-	for _, args := range []map[string]any{{"team_id": testConfig("").TeamID.String()}, {"limit": 101}, {"limit": "1"}} {
+	for _, args := range []map[string]any{{"owner_id": "x"}, {"limit": 101}, {"limit": "1"}} {
 		result, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "nodes_list", Arguments: args})
 		if err == nil && !result.IsError {
 			t.Fatalf("invalid schema accepted=%+v", args)
@@ -340,7 +339,7 @@ func TestSystemUnreachableHealthIsPartial(t *testing.T) {
 			}
 			_ = conn.Close()
 		case "/api/v1/mcp/context":
-			_, _ = fmt.Fprintf(w, `{"team_id":%q}`, testConfig("").TeamID)
+			_, _ = fmt.Fprintf(w, `{}`)
 		case "/api/v1/version":
 			_, _ = w.Write([]byte(`{"version":"v1.2.3"}`))
 		case "/api/v1/servers":

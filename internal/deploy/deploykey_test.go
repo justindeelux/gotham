@@ -238,14 +238,6 @@ func TestCreateDeployKeyRejectsUnsupportedProvider(t *testing.T) {
 	}
 }
 
-func TestCreateDeployKeyForeignApplicationIsNotFound(t *testing.T) {
-	_, _, svc, app := keyFixture(t)
-
-	if _, err := svc.CreateDeployKey(context.Background(), uuid.New(), app.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("error = %v, want ErrNotFound", err)
-	}
-}
-
 func TestDeleteDeployKeyRemovesHostKeyThenRow(t *testing.T) {
 	repo, registrar, svc, app := keyFixture(t)
 	created, err := svc.CreateDeployKey(context.Background(), app.UserID, app.ID)

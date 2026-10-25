@@ -289,9 +289,6 @@ func (s *redirectService) CreateRedirect(ctx context.Context, in CreateRedirectI
 	if err != nil {
 		return DomainRedirect{}, err
 	}
-	if err := authorizeApp(ctx, app.TeamID, true); err != nil {
-		return DomainRedirect{}, err
-	}
 	if err := validateRedirectApplication(app); err != nil {
 		return DomainRedirect{}, err
 	}
@@ -352,13 +349,7 @@ func (s *redirectService) ListRedirects(ctx context.Context, applicationID uuid.
 	if err != nil {
 		return nil, err
 	}
-	filtered := filterByTeam(ctx, s.store, redirects, func(r DomainRedirect) uuid.UUID {
-		return r.ApplicationID
-	})
-	if filtered == nil {
-		return []DomainRedirect{}, nil
-	}
-	return filtered, nil
+	return redirects, nil
 }
 
 func (s *redirectService) GetRedirect(ctx context.Context, id uuid.UUID) (DomainRedirect, error) {
@@ -367,13 +358,6 @@ func (s *redirectService) GetRedirect(ctx context.Context, id uuid.UUID) (Domain
 	}
 	redirect, err := s.store.GetRedirect(ctx, id)
 	if err != nil {
-		return DomainRedirect{}, err
-	}
-	app, err := s.store.GetApplication(ctx, redirect.ApplicationID)
-	if err != nil {
-		return DomainRedirect{}, err
-	}
-	if err := authorizeApp(ctx, app.TeamID, false); err != nil {
 		return DomainRedirect{}, err
 	}
 	return redirect, nil
@@ -389,9 +373,6 @@ func (s *redirectService) UpdateRedirect(ctx context.Context, id uuid.UUID, in U
 	}
 	app, err := s.store.GetApplication(ctx, existing.ApplicationID)
 	if err != nil {
-		return DomainRedirect{}, err
-	}
-	if err := authorizeApp(ctx, app.TeamID, true); err != nil {
 		return DomainRedirect{}, err
 	}
 	if err := validateRedirectApplication(app); err != nil {
@@ -451,15 +432,7 @@ func (s *redirectService) DeleteRedirect(ctx context.Context, id uuid.UUID) erro
 	if id == uuid.Nil {
 		return fmt.Errorf("%w: redirect id is required", ErrValidation)
 	}
-	existing, err := s.store.GetRedirect(ctx, id)
-	if err != nil {
-		return err
-	}
-	app, err := s.store.GetApplication(ctx, existing.ApplicationID)
-	if err != nil {
-		return err
-	}
-	if err := authorizeApp(ctx, app.TeamID, true); err != nil {
+	if _, err := s.store.GetRedirect(ctx, id); err != nil {
 		return err
 	}
 	if err := s.store.DeleteRedirect(ctx, id); err != nil {

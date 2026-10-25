@@ -10,8 +10,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func routeMessage(t *testing.T, body []byte) string {
@@ -87,7 +85,7 @@ func TestCreatePreviewApplicationInheritsEnvironment(t *testing.T) {
 	envID, serverID := uuid.New(), uuid.New()
 	baseID := uuid.New()
 	repo.apps = []Application{{
-		ID: baseID, UserID: uuid.New(), TeamID: uuid.New(),
+		ID: baseID, UserID: uuid.New(),
 		ServerID: serverID, EnvironmentID: envID,
 		Name: "base", Provider: "github", Repo: "acme/demo",
 		CloneURL: "https://github.com/acme/demo.git", Branch: "main", BuildPack: "dockerfile",
@@ -203,15 +201,13 @@ func TestServerChangeDeployCheckPassesThrough(t *testing.T) {
 	}
 }
 
-func TestUpdateApplicationTeamScope(t *testing.T) {
+func TestUpdateApplicationRejectsMissingEnvironment(t *testing.T) {
 	userID := uuid.New()
-	teamID := uuid.New()
 	app := testApplication(userID)
-	app.TeamID = teamID
 	app.EnvironmentID = uuid.New()
 	repo := &fakeRepository{app: app, resolveErr: ErrNotFound}
 	svc := newTestService(t, repo)
-	ctx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: teams.RoleAdmin})
+	ctx := context.Background()
 
 	foreign := uuid.New()
 	if _, err := svc.UpdateApplication(ctx, userID, app.ID,

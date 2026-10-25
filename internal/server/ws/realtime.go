@@ -89,7 +89,7 @@ func Mount(api chi.Router, verifier TokenVerifier, redisAddr string, logger *slo
 	return rt
 }
 
-func (rt *Realtime) SetTaskFeed(authorize TaskAuthorizer, snapshot func(teamID string) []string) {
+func (rt *Realtime) SetTaskFeed(authorize TaskAuthorizer, snapshot func(projectID string) []string) {
 	if rt == nil || rt.handler == nil {
 		return
 	}

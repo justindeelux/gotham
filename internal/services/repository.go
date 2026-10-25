@@ -14,18 +14,17 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 type Repository interface {
 	CreateService(ctx context.Context, service Service) (Service, error)
 	GetService(ctx context.Context, serviceID uuid.UUID) (Service, error)
-	ListServices(ctx context.Context, scope teams.Scope) ([]Service, error)
+	ListServices(ctx context.Context, userID uuid.UUID) ([]Service, error)
 	ListServicesByEnvironment(ctx context.Context, environmentID uuid.UUID) ([]Service, error)
 	ListServicesByProject(ctx context.Context, projectID uuid.UUID) ([]Service, error)
 	NameInEnvironment(ctx context.Context, environmentID uuid.UUID, name string, exceptID uuid.UUID) (bool, error)
-	ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error)
-	ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error)
+	ResolveEnvironment(ctx context.Context, environmentID uuid.UUID) (EnvironmentRef, error)
+	ResolveProject(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error)
 	HasActiveDeploy(ctx context.Context, serviceID uuid.UUID) (bool, error)
 	HasDeploys(ctx context.Context, serviceID uuid.UUID) (bool, error)
 	UpdateServiceConfig(ctx context.Context, service Service) (Service, error)
@@ -34,7 +33,7 @@ type Repository interface {
 	CreateServiceDeploy(ctx context.Context, deploy Deploy) (Deploy, error)
 	UpdateServiceDeploy(ctx context.Context, deploy Deploy) (Deploy, error)
 	ListServiceDeploys(ctx context.Context, serviceID uuid.UUID, limit int32) ([]Deploy, error)
-	ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error)
+	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
 }
 
 type storeRepository struct {
@@ -55,7 +54,6 @@ func (r *storeRepository) CreateService(ctx context.Context, service Service) (S
 	row, err := r.store.CreateService(ctx, sqlc.CreateServiceParams{
 		ID:            pgUUID(service.ID),
 		UserID:        pgUUID(service.UserID),
-		TeamID:        pgUUID(service.TeamID),
 		ServerID:      pgUUID(service.ServerID),
 		EnvironmentID: pgUUID(service.EnvironmentID),
 		Name:          service.Name,
@@ -102,16 +100,8 @@ func (r *storeRepository) GetService(ctx context.Context, serviceID uuid.UUID) (
 	return enriched[0], nil
 }
 
-func (r *storeRepository) ListServices(ctx context.Context, scope teams.Scope) ([]Service, error) {
-	var (
-		rows []sqlc.Service
-		err  error
-	)
-	if scope.Active() {
-		rows, err = r.store.ListServicesByTeam(ctx, pgUUID(scope.TeamID))
-	} else {
-		rows, err = r.store.ListServicesByUser(ctx, pgUUID(scope.UserID))
-	}
+func (r *storeRepository) ListServices(ctx context.Context, userID uuid.UUID) ([]Service, error) {
+	rows, err := r.store.ListServicesByUser(ctx, pgUUID(userID))
 	if err != nil {
 		return nil, fmt.Errorf("services: list services: %w", err)
 	}
@@ -170,11 +160,8 @@ func (r *storeRepository) NameInEnvironment(ctx context.Context, environmentID u
 	return collision, nil
 }
 
-func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID, teamID uuid.UUID) (EnvironmentRef, error) {
-	row, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
-		ID:     pgUUID(environmentID),
-		TeamID: pgUUID(teamID),
-	})
+func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID uuid.UUID) (EnvironmentRef, error) {
+	row, err := r.store.GetEnvironment(ctx, pgUUID(environmentID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return EnvironmentRef{}, ErrNotFound
@@ -188,11 +175,8 @@ func (r *storeRepository) ResolveEnvironment(ctx context.Context, environmentID,
 	}, nil
 }
 
-func (r *storeRepository) ResolveProject(ctx context.Context, projectID, teamID uuid.UUID) (uuid.UUID, error) {
-	if _, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
-		ID:     pgUUID(projectID),
-		TeamID: pgUUID(teamID),
-	}); err != nil {
+func (r *storeRepository) ResolveProject(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error) {
+	if _, err := r.store.GetProject(ctx, pgUUID(projectID)); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, ErrNotFound
 		}
@@ -225,10 +209,7 @@ func (r *storeRepository) enrich(ctx context.Context, services []Service) ([]Ser
 		if service.EnvironmentID != uuid.Nil {
 			env, ok := envs[service.EnvironmentID]
 			if !ok {
-				fetched, err := r.store.GetEnvironment(ctx, sqlc.GetEnvironmentParams{
-					ID:     pgUUID(service.EnvironmentID),
-					TeamID: pgUUID(service.TeamID),
-				})
+				fetched, err := r.store.GetEnvironment(ctx, pgUUID(service.EnvironmentID))
 				if err != nil {
 					return nil, fmt.Errorf("services: get environment: %w", err)
 				}
@@ -239,10 +220,7 @@ func (r *storeRepository) enrich(ctx context.Context, services []Service) ([]Ser
 			if projectID := uuidFromPG(env.ProjectID); projectID != uuid.Nil {
 				project, ok := projects[projectID]
 				if !ok {
-					fetched, err := r.store.GetProject(ctx, sqlc.GetProjectParams{
-						ID:     pgUUID(projectID),
-						TeamID: pgUUID(service.TeamID),
-					})
+					fetched, err := r.store.GetProject(ctx, pgUUID(projectID))
 					if err != nil {
 						return nil, fmt.Errorf("services: get project: %w", err)
 					}
@@ -374,19 +352,15 @@ func (r *storeRepository) ListServiceDeploys(ctx context.Context, serviceID uuid
 	return deploys, nil
 }
 
-func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
+func (r *storeRepository) ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error) {
 	if serverID == uuid.Nil {
 		return false, nil
 	}
-	row, err := r.store.GetServerByID(ctx, pgUUID(serverID))
-	if err != nil {
+	if _, err := r.store.GetServerByID(ctx, pgUUID(serverID)); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
 		return false, fmt.Errorf("services: resolve server: %w", err)
-	}
-	if err := scope.AuthorizeOptionalTeam(uuidFromPG(row.TeamID), true); err != nil {
-		return false, nil
 	}
 	return true, nil
 }
@@ -399,7 +373,6 @@ func serviceFromRow(row sqlc.Service) (Service, error) {
 	return Service{
 		ID:            uuidFromPG(row.ID),
 		UserID:        uuidFromPG(row.UserID),
-		TeamID:        uuidFromPG(row.TeamID),
 		ServerID:      uuidFromPG(row.ServerID),
 		EnvironmentID: uuidFromPG(row.EnvironmentID),
 		Name:          row.Name,

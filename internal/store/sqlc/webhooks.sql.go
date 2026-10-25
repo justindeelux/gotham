@@ -123,7 +123,7 @@ func (q *Queries) DeleteWebhookEvent(ctx context.Context, id pgtype.UUID) error 
 }
 
 const getApplicationForUser = `-- name: GetApplicationForUser :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
 WHERE id = $1 AND user_id = $2
 `
 
@@ -147,7 +147,6 @@ func (q *Queries) GetApplicationForUser(ctx context.Context, arg GetApplicationF
 		&i.BuildPack,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TeamID,
 		&i.IsPreview,
 		&i.EnvironmentID,
 		&i.SourceType,
@@ -222,7 +221,7 @@ func (q *Queries) GetWebhookEventForDelivery(ctx context.Context, arg GetWebhook
 
 const listWebhookTargetsForRepo = `-- name: ListWebhookTargetsForRepo :many
 SELECT w.application_id, w.hook_id, w.secret, w.url,
-       a.user_id, a.team_id, a.provider, a.repo, a.branch, a.clone_url,
+       a.user_id, a.provider, a.repo, a.branch, a.clone_url,
        a.name, COALESCE(d.domain, '')::text AS base_domain
 FROM application_webhooks w
 JOIN applications a ON a.id = w.application_id
@@ -246,7 +245,6 @@ type ListWebhookTargetsForRepoRow struct {
 	Secret        string      `json:"secret"`
 	Url           string      `json:"url"`
 	UserID        pgtype.UUID `json:"user_id"`
-	TeamID        pgtype.UUID `json:"team_id"`
 	Provider      string      `json:"provider"`
 	Repo          string      `json:"repo"`
 	Branch        string      `json:"branch"`
@@ -270,7 +268,6 @@ func (q *Queries) ListWebhookTargetsForRepo(ctx context.Context, arg ListWebhook
 			&i.Secret,
 			&i.Url,
 			&i.UserID,
-			&i.TeamID,
 			&i.Provider,
 			&i.Repo,
 			&i.Branch,

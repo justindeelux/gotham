@@ -51,9 +51,6 @@ func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificate
 		if err != nil {
 			return err
 		}
-		if err := authorizeApp(ctx, app.TeamID, true); err != nil {
-			return err
-		}
 		domain := NormalizeDomain(in.Domain)
 		if domain == "" {
 			domain, err = certificateDomain(app)
@@ -131,13 +128,7 @@ func (s *sslService) ListCertificates(ctx context.Context) ([]DomainCertificate,
 	if panelCertificateContext(ctx) {
 		return visible, nil
 	}
-	filtered := filterByTeam(ctx, s.store, visible, func(c DomainCertificate) uuid.UUID {
-		return c.ApplicationID
-	})
-	if filtered == nil {
-		return []DomainCertificate{}, nil
-	}
-	return filtered, nil
+	return visible, nil
 }
 
 func (s *sslService) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCertificate, error) {
@@ -146,13 +137,6 @@ func (s *sslService) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCe
 	}
 	certificate, err := s.store.GetCertificate(ctx, id)
 	if err != nil {
-		return DomainCertificate{}, err
-	}
-	app, err := s.certificateApplication(ctx, certificate)
-	if err != nil {
-		return DomainCertificate{}, err
-	}
-	if err := authorizeApp(ctx, app.TeamID, false); err != nil {
 		return DomainCertificate{}, err
 	}
 	return certificate, nil
@@ -170,9 +154,6 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 		}
 		app, err := s.certificateApplication(ctx, existing)
 		if err != nil {
-			return err
-		}
-		if err := authorizeApp(ctx, app.TeamID, true); err != nil {
 			return err
 		}
 
@@ -256,11 +237,7 @@ func (s *sslService) DeleteCertificate(ctx context.Context, id uuid.UUID) error 
 		if err != nil {
 			return err
 		}
-		app, err := s.certificateApplication(ctx, existing)
-		if err != nil {
-			return err
-		}
-		if err := authorizeApp(ctx, app.TeamID, true); err != nil {
+		if _, err := s.certificateApplication(ctx, existing); err != nil {
 			return err
 		}
 		return s.store.DeleteCertificate(ctx, id)

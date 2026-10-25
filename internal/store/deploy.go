@@ -11,7 +11,6 @@ import (
 )
 
 func (s *Store) CreateApplication(ctx context.Context, params sqlc.CreateApplicationParams) (sqlc.Application, error) {
-	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	return s.queries.CreateApplication(ctx, params)
 }
 
@@ -21,10 +20,6 @@ func (s *Store) GetApplication(ctx context.Context, id pgtype.UUID) (sqlc.Applic
 
 func (s *Store) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID) ([]sqlc.Application, error) {
 	return s.queries.ListApplicationsByUser(ctx, userID)
-}
-
-func (s *Store) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Application, error) {
-	return s.queries.ListApplicationsByTeam(ctx, teamID)
 }
 
 func (s *Store) ListApplicationsByEnvironment(ctx context.Context, params sqlc.ListApplicationsByEnvironmentParams) ([]sqlc.Application, error) {
@@ -83,7 +78,6 @@ func (s *Store) CreateApplicationWithConfig(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	queries := s.queries.WithTx(tx)
 	app, err := createApplicationWithConfigTx(ctx, queries, params, envVars, secrets, storages)
 	if err != nil {
@@ -109,7 +103,6 @@ func (s *Store) CreateApplicationWithConfigAndDomain(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	queries := s.queries.WithTx(tx)
 	app, err := createApplicationWithConfigTx(ctx, queries, params, envVars, secrets, storages)
 	if err != nil {
@@ -250,13 +243,6 @@ func (s *Store) ListDeploymentsByAppLimit(ctx context.Context, applicationID pgt
 	return s.queries.ListDeploymentsByAppLimit(ctx, sqlc.ListDeploymentsByAppLimitParams{
 		ApplicationID: applicationID,
 		Limit:         limit,
-	})
-}
-
-func (s *Store) ListRecentDeploymentsByTeam(ctx context.Context, teamID pgtype.UUID, limit int32) ([]sqlc.ListRecentDeploymentsByTeamRow, error) {
-	return s.queries.ListRecentDeploymentsByTeam(ctx, sqlc.ListRecentDeploymentsByTeamParams{
-		TeamID: teamID,
-		Limit:  limit,
 	})
 }
 

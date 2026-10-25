@@ -13,7 +13,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/services"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -117,21 +116,15 @@ func TestRuntimeOwnershipAndMetadata(t *testing.T) {
 		t.Fatalf("unsafe selection=%+v limited=%v", selected, limited)
 	}
 }
-func TestRuntimeReadOnlyAndTeamIsolation(t *testing.T) {
+func TestRuntimeSnapshotAuthorization(t *testing.T) {
 	user := uuid.New()
 	app := testApplication(user)
-	app.TeamID = uuid.New()
 	node := &runtimeTestNode{inventory: []*agentv1.ContainerInfo{runtimeFixture(app, strings.Repeat("a", 64), "running", "")}}
 	repo := &fakeRepository{app: app}
 	svc := runtimeService(t, repo, node)
-	viewer := teams.WithScope(context.Background(), teams.Scope{UserID: user, TeamID: app.TeamID, Role: teams.RoleReadOnly})
+	viewer := context.Background()
 	if out, err := svc.GetApplicationRuntime(viewer, user, app.ID); err != nil || len(out.Containers) != 1 {
 		t.Fatalf("read-only denied: %+v %v", out, err)
-	}
-	foreign := teams.WithScope(context.Background(), teams.Scope{UserID: user, TeamID: uuid.New(), Role: teams.RoleOwner})
-	node.inspect = func(map[string]string, bool, bool) { t.Fatal("foreign request reached node") }
-	if _, err := svc.GetApplicationRuntime(foreign, user, app.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("foreign team got %v", err)
 	}
 }
 func TestRuntimeSnapshotRace(t *testing.T) {

@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func TestReplayProjectPostcommitCountsAndAuthorization(t *testing.T) {
@@ -29,15 +28,15 @@ func TestReplayProjectPostcommitCountsAndAuthorization(t *testing.T) {
 	svc := NewService(Config{Store: st, Counter: counter, Logger: discardLogger()})
 	router := chi.NewRouter()
 	Mount(router, func(h http.Handler) http.Handler { return h }, func(context.Context) (uuid.UUID, bool) { return user, true }, svc)
-	send := func(role teams.Role) *httptest.ResponseRecorder {
+	send := func() *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/v1/projects", strings.NewReader(`{"name":"accepted"}`))
 		r.Header.Set("Idempotency-Key", "counts")
-		r = r.WithContext(teams.WithScope(r.Context(), teams.Scope{UserID: user, TeamID: user, Role: role}))
+		r = r.WithContext(r.Context())
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, r)
 		return w
 	}
-	first := send(teams.RoleAdmin)
+	first := send()
 	if first.Code != 201 {
 		t.Fatalf("postcommit status=%d %s", first.Code, first.Body.String())
 	}
@@ -47,12 +46,12 @@ func TestReplayProjectPostcommitCountsAndAuthorization(t *testing.T) {
 	if err := json.Unmarshal(first.Body.Bytes(), &accepted); err != nil || accepted.Receipt.ResourceID == uuid.Nil || accepted.Receipt.Outcome != "accepted_not_confirmed" {
 		t.Fatalf("lost acceptance %+v %v", accepted, err)
 	}
-	denied := send(teams.RoleReadOnly)
+	denied := send()
 	if denied.Code != 403 || strings.Contains(denied.Body.String(), accepted.Receipt.ResourceID.String()) {
 		t.Fatalf("demotion replay: %d %s", denied.Code, denied.Body.String())
 	}
 	counter.err = nil
-	replay := send(teams.RoleAdmin)
+	replay := send()
 	if replay.Code != 201 {
 		t.Fatalf("replay=%d %s", replay.Code, replay.Body.String())
 	}
@@ -90,8 +89,8 @@ func TestReplayConcurrentServiceInstances(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			ctx := teams.WithScope(context.Background(), teams.Scope{UserID: principal, TeamID: principal, Role: teams.RoleAdmin})
-			ctx = requestreplay.With(ctx, &requestreplay.Request{Principal: principal, Team: principal, Operation: "create_project", Target: uuid.Nil, Key: "concurrent"})
+			ctx := context.Background()
+			ctx = requestreplay.With(ctx, &requestreplay.Request{Principal: principal, Operation: "create_project", Target: uuid.Nil, Key: "concurrent"})
 			project, _, err := services[i%2].CreateProject(ctx, principal, "same project", "")
 			out <- result{project.ID, err}
 		}(i)
@@ -111,7 +110,7 @@ func TestReplayConcurrentServiceInstances(t *testing.T) {
 			t.Fatal("multiple accepted identities")
 		}
 	}
-	rows, err := services[0].repo.ListProjects(context.Background(), principal)
+	rows, err := services[0].repo.ListProjects(context.Background())
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("projects %d %v", len(rows), err)
 	}

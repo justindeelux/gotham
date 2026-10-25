@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/requestreplay"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const maxBodyBytes = 1 << 20
@@ -324,7 +323,7 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var replayOK bool
-	r, replayOK = requestreplay.Begin(w, r, userID, teamIDFor(r.Context(), userID), "create_application", uuid.Nil)
+	r, replayOK = requestreplay.Begin(w, r, userID, "create_application", uuid.Nil)
 	if !replayOK {
 		return
 	}
@@ -371,7 +370,7 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		if requestreplay.WriteError(w, err) {
 			return
 		}
-		if !errors.Is(err, ErrNotFound) && !errors.Is(err, teams.ErrForbidden) && requestreplay.WriteAccepted(w, r.Context(), 201) {
+		if !errors.Is(err, ErrNotFound) && requestreplay.WriteAccepted(w, r.Context(), 201) {
 			return
 		}
 		h.writeServiceError(w, err)
@@ -663,7 +662,7 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var replayOK bool
-	r, replayOK = requestreplay.Begin(w, r, userID, teamIDFor(r.Context(), userID), "deploy", appID)
+	r, replayOK = requestreplay.Begin(w, r, userID, "deploy", appID)
 	if !replayOK {
 		return
 	}
@@ -683,7 +682,7 @@ func (h *handler) deploy(w http.ResponseWriter, r *http.Request) {
 		if requestreplay.WriteError(w, err) {
 			return
 		}
-		if !errors.Is(err, ErrNotFound) && !errors.Is(err, teams.ErrForbidden) && requestreplay.WriteAccepted(w, r.Context(), 202) {
+		if !errors.Is(err, ErrNotFound) && requestreplay.WriteAccepted(w, r.Context(), 202) {
 			return
 		}
 		h.writeServiceError(w, err)
@@ -1085,8 +1084,6 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrServerNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
-	case errors.Is(err, teams.ErrForbidden):
-		writeJSON(w, http.StatusForbidden, errorBody{Message: "insufficient team role"})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrSourceNotImplemented):

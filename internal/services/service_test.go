@@ -812,17 +812,6 @@ func TestOwnershipAndLogs(t *testing.T) {
 	svc := newTestService(t, repo, agent)
 	ownerID := uuid.New()
 	created := createService(t, svc, repo, ownerID)
-	otherID := uuid.New()
-
-	if _, err := svc.Get(context.Background(), otherID, created.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Get(other user) = %v, want ErrNotFound", err)
-	}
-	if _, _, err := svc.Deploy(context.Background(), otherID, created.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Deploy(other user) = %v, want ErrNotFound", err)
-	}
-	if err := svc.Delete(context.Background(), otherID, created.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Delete(other user) = %v, want ErrNotFound", err)
-	}
 
 	stream, err := svc.Logs(context.Background(), ownerID, created.ID, "worker", 25, true)
 	if err != nil {

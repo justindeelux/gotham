@@ -277,7 +277,7 @@ func newServerRoutesTestServer(t *testing.T, fake ServerService) *Server {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	s, err := New(cfg, logger, newFakeAuthService(), nil, nil, fake, nil)
+	s, err := New(cfg, logger, ownerAuthService(), nil, nil, fake, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -660,19 +660,6 @@ func seedServer(t *testing.T, fake *fakeServerService, name string) uuid.UUID {
 	}
 	return server.ID
 }
-
-func (f *fakeServerService) setTeam(id uuid.UUID, teamID uuid.UUID) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	server, ok := f.items[id]
-	if !ok {
-		panic("server not found")
-	}
-	server.TeamID = teamID
-	f.items[id] = server
-}
-
-var _ ServerService = (*fakeServerService)(nil)
 
 func TestCreateServerRouteWithPassword(t *testing.T) {
 	fake := newFakeServerService()

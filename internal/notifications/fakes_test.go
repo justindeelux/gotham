@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const testSecret = "notifications-test-secret"
@@ -110,29 +108,29 @@ func (r *fakeRepository) CreateChannel(_ context.Context, channel Channel) (Chan
 	return channel, nil
 }
 
-func (r *fakeRepository) GetChannel(_ context.Context, teamID, channelID uuid.UUID) (Channel, error) {
+func (r *fakeRepository) GetChannel(_ context.Context, channelID uuid.UUID) (Channel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getErr != nil {
 		return Channel{}, r.getErr
 	}
 	channel, ok := r.channels[channelID]
-	if !ok || channel.TeamID != teamID {
+	if !ok {
 		return Channel{}, ErrNotFound
 	}
 	return channel, nil
 }
 
-func (r *fakeRepository) ListChannels(_ context.Context, teamID uuid.UUID) ([]Channel, error) {
+func (r *fakeRepository) ListChannels(_ context.Context) ([]Channel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
-	return r.byTeam(teamID), nil
+	return r.allChannels(), nil
 }
 
-func (r *fakeRepository) ListChannelsForEvent(_ context.Context, teamID uuid.UUID, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
+func (r *fakeRepository) ListChannelsForEvent(_ context.Context, resourceType string, resourceID uuid.UUID) ([]Channel, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.listForEventCalls++
@@ -141,7 +139,7 @@ func (r *fakeRepository) ListChannelsForEvent(_ context.Context, teamID uuid.UUI
 		return nil, r.listForEventErr
 	}
 	var matched []Channel
-	for _, channel := range r.byTeam(teamID) {
+	for _, channel := range r.allChannels() {
 		if !channel.Enabled {
 			continue
 		}
@@ -158,22 +156,20 @@ func (r *fakeRepository) UpdateChannel(_ context.Context, channel Channel) (Chan
 	if r.updateErr != nil {
 		return Channel{}, r.updateErr
 	}
-	stored, ok := r.channels[channel.ID]
-	if !ok || stored.TeamID != channel.TeamID {
+	if _, ok := r.channels[channel.ID]; !ok {
 		return Channel{}, ErrNotFound
 	}
 	r.channels[channel.ID] = channel
 	return channel, nil
 }
 
-func (r *fakeRepository) DeleteChannel(_ context.Context, teamID, channelID uuid.UUID) error {
+func (r *fakeRepository) DeleteChannel(_ context.Context, channelID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.deleteErr != nil {
 		return r.deleteErr
 	}
-	stored, ok := r.channels[channelID]
-	if !ok || stored.TeamID != teamID {
+	if _, ok := r.channels[channelID]; !ok {
 		return ErrNotFound
 	}
 	delete(r.channels, channelID)
@@ -198,14 +194,13 @@ func (r *fakeRepository) CreateDelivery(_ context.Context, delivery Delivery) er
 	return nil
 }
 
-func (r *fakeRepository) ListDeliveries(_ context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error) {
+func (r *fakeRepository) ListDeliveries(_ context.Context, channelID uuid.UUID, limit int) ([]Delivery, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listDeliveriesErr != nil {
 		return nil, r.listDeliveriesErr
 	}
-	channel, ok := r.channels[channelID]
-	if !ok || channel.TeamID != teamID {
+	if _, ok := r.channels[channelID]; !ok {
 		return []Delivery{}, nil
 	}
 	history := append([]Delivery(nil), r.deliveries[channelID]...)
@@ -231,12 +226,10 @@ func sortDeliveries(deliveries []Delivery) {
 	})
 }
 
-func (r *fakeRepository) byTeam(teamID uuid.UUID) []Channel {
+func (r *fakeRepository) allChannels() []Channel {
 	channels := make([]Channel, 0, len(r.channels))
 	for _, channel := range r.channels {
-		if channel.TeamID == teamID {
-			channels = append(channels, channel)
-		}
+		channels = append(channels, channel)
 	}
 	sort.Slice(channels, func(i, j int) bool {
 		if !channels[i].CreatedAt.Equal(channels[j].CreatedAt) {
@@ -328,11 +321,11 @@ func newTestService(t *testing.T, repo Repository) *Service {
 	return service
 }
 
-func scopedCtx(userID, teamID uuid.UUID, role teams.Role) context.Context {
-	return teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: role})
+func scopedCtx() context.Context {
+	return context.Background()
 }
 
-func sampleChannel(t *testing.T, teamID uuid.UUID) Channel {
+func sampleChannel(t *testing.T) Channel {
 	t.Helper()
 	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: "https://discord.com/api/webhooks/1184/8f2c-secret"})
 	if err != nil {
@@ -341,8 +334,7 @@ func sampleChannel(t *testing.T, teamID uuid.UUID) Channel {
 	now := time.Date(2026, 9, 29, 11, 0, 0, 0, time.UTC)
 	return Channel{
 		ID:           uuid.New(),
-		TeamID:       teamID,
-		Name:         "team alerts",
+		Name:         "alerts",
 		Kind:         KindDiscord,
 		Enabled:      true,
 		Events:       append([]EventKey(nil), AllEvents...),
@@ -352,11 +344,10 @@ func sampleChannel(t *testing.T, teamID uuid.UUID) Channel {
 	}
 }
 
-func sampleEvent(teamID uuid.UUID) Event {
+func sampleEvent() Event {
 	return Event{
 		Kind:         EventDeploy,
 		Outcome:      OutcomeFailure,
-		TeamID:       teamID,
 		ResourceType: ResourceApplication,
 		ResourceID:   uuid.New(),
 		Name:         "shop-web",

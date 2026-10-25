@@ -16,7 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const (
@@ -181,21 +180,6 @@ func (s *Service) ready() error {
 	return nil
 }
 
-func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
-	scope := teams.ScopeFor(ctx, userID)
-	if scope.Active() {
-		return scope.TeamID
-	}
-	return teams.PersonalTeamID(userID)
-}
-
-func authorizeWrite(ctx context.Context, userID uuid.UUID) error {
-	if !teams.ScopeFor(ctx, userID).CanWrite() {
-		return ErrForbidden
-	}
-	return nil
-}
-
 func (s *Service) view(channel Channel) (ChannelView, error) {
 	config, err := openConfig(s.secret, channel.SealedConfig)
 	if err != nil {
@@ -203,7 +187,6 @@ func (s *Service) view(channel Channel) (ChannelView, error) {
 	}
 	return ChannelView{
 		ID:                channel.ID,
-		TeamID:            channel.TeamID,
 		Name:              channel.Name,
 		Kind:              channel.Kind,
 		Enabled:           channel.Enabled,
@@ -231,7 +214,7 @@ func (s *Service) ListChannels(ctx context.Context, userID uuid.UUID) ([]Channel
 	if userID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	channels, err := s.repo.ListChannels(ctx, teamIDFor(ctx, userID))
+	channels, err := s.repo.ListChannels(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +236,7 @@ func (s *Service) GetChannel(ctx context.Context, userID, channelID uuid.UUID) (
 	if userID == uuid.Nil || channelID == uuid.Nil {
 		return ChannelView{}, ErrNotFound
 	}
-	channel, err := s.repo.GetChannel(ctx, teamIDFor(ctx, userID), channelID)
+	channel, err := s.repo.GetChannel(ctx, channelID)
 	if err != nil {
 		return ChannelView{}, err
 	}
@@ -266,9 +249,6 @@ func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req Chann
 	}
 	if userID == uuid.Nil {
 		return ChannelView{}, ErrNotFound
-	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return ChannelView{}, err
 	}
 	kind, err := ParseKind(string(req.Kind))
 	if err != nil {
@@ -315,7 +295,6 @@ func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req Chann
 	now := s.now().UTC()
 	created, err := s.repo.CreateChannel(ctx, Channel{
 		ID:           uuid.New(),
-		TeamID:       teamIDFor(ctx, userID),
 		Name:         name,
 		Kind:         kind,
 		Enabled:      enabled,
@@ -339,11 +318,7 @@ func (s *Service) UpdateChannel(ctx context.Context, userID, channelID uuid.UUID
 	if userID == uuid.Nil || channelID == uuid.Nil {
 		return ChannelView{}, ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return ChannelView{}, err
-	}
-	teamID := teamIDFor(ctx, userID)
-	existing, err := s.repo.GetChannel(ctx, teamID, channelID)
+	existing, err := s.repo.GetChannel(ctx, channelID)
 	if err != nil {
 		return ChannelView{}, err
 	}
@@ -418,10 +393,7 @@ func (s *Service) DeleteChannel(ctx context.Context, userID, channelID uuid.UUID
 	if userID == uuid.Nil || channelID == uuid.Nil {
 		return ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return err
-	}
-	return s.repo.DeleteChannel(ctx, teamIDFor(ctx, userID), channelID)
+	return s.repo.DeleteChannel(ctx, channelID)
 }
 
 func (s *Service) TestChannel(ctx context.Context, userID, channelID uuid.UUID) (TestResult, error) {
@@ -431,10 +403,7 @@ func (s *Service) TestChannel(ctx context.Context, userID, channelID uuid.UUID) 
 	if userID == uuid.Nil || channelID == uuid.Nil {
 		return TestResult{}, ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return TestResult{}, err
-	}
-	channel, err := s.repo.GetChannel(ctx, teamIDFor(ctx, userID), channelID)
+	channel, err := s.repo.GetChannel(ctx, channelID)
 	if err != nil {
 		return TestResult{}, err
 	}
@@ -445,7 +414,6 @@ func (s *Service) TestChannel(ctx context.Context, userID, channelID uuid.UUID) 
 	event := Event{
 		Kind:         EventTest,
 		Outcome:      OutcomeSuccess,
-		TeamID:       channel.TeamID,
 		ResourceType: channel.ResourceType,
 		ResourceID:   channel.ResourceID,
 		Name:         channel.Name,
@@ -469,11 +437,10 @@ func (s *Service) ListDeliveries(ctx context.Context, userID, channelID uuid.UUI
 	if userID == uuid.Nil || channelID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	teamID := teamIDFor(ctx, userID)
-	if _, err := s.repo.GetChannel(ctx, teamID, channelID); err != nil {
+	if _, err := s.repo.GetChannel(ctx, channelID); err != nil {
 		return nil, err
 	}
-	deliveries, err := s.repo.ListDeliveries(ctx, teamID, channelID, deliveryHistoryLimit)
+	deliveries, err := s.repo.ListDeliveries(ctx, channelID, deliveryHistoryLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -514,7 +481,6 @@ func (s *Service) DeployFinished(_ context.Context, result deploy.DeployResult) 
 	s.Dispatch(Event{
 		Kind:         EventDeploy,
 		Outcome:      outcome,
-		TeamID:       result.TeamID,
 		ResourceType: ResourceApplication,
 		ResourceID:   result.ApplicationID,
 		Name:         result.Application,
@@ -535,7 +501,6 @@ func (s *Service) BackupFinished(_ context.Context, result databases.BackupResul
 	s.Dispatch(Event{
 		Kind:         EventBackup,
 		Outcome:      outcome,
-		TeamID:       result.TeamID,
 		ResourceType: ResourceDatabase,
 		ResourceID:   result.DatabaseID,
 		Name:         result.Database,
@@ -550,9 +515,6 @@ func (s *Service) Dispatch(event Event) {
 	}
 	if event.At.IsZero() {
 		event.At = s.now().UTC()
-	}
-	if event.TeamID == uuid.Nil {
-		return
 	}
 	s.start()
 	select {
@@ -586,12 +548,12 @@ func (s *Service) worker() {
 
 func (s *Service) deliver(event Event) {
 	readCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
-	channels, err := s.repo.ListChannelsForEvent(readCtx, event.TeamID, event.ResourceType, event.ResourceID)
+	channels, err := s.repo.ListChannelsForEvent(readCtx, event.ResourceType, event.ResourceID)
 	cancel()
 	if err != nil {
 		if s.baseCtx.Err() == nil {
 			s.logger.Error("notifications: resolve channels for event",
-				"event", string(event.Key()), "team_id", event.TeamID.String(), "error", err)
+				"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
 		}
 		return
 	}

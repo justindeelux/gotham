@@ -11,11 +11,9 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 type tombstoneFixture struct {
-	teamID      uuid.UUID
 	userID      uuid.UUID
 	projectID   uuid.UUID
 	envID       uuid.UUID
@@ -35,7 +33,6 @@ func seedTombstones(t *testing.T, ctx context.Context, st *store.Store) tombston
 		t.Fatalf("CreateUser: %v", err)
 	}
 	userID := uuidOf(user.ID)
-	teamID := userID
 
 	server, err := st.CreateServer(ctx, sqlc.CreateServerParams{
 		Name:    fmt.Sprintf("tomb-node-%d", suffix),
@@ -47,9 +44,9 @@ func seedTombstones(t *testing.T, ctx context.Context, st *store.Store) tombston
 		t.Fatalf("CreateServer: %v", err)
 	}
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID: pgtype.UUID{Bytes: teamID, Valid: true},
-		Name:   fmt.Sprintf("tomb-%d", suffix),
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
+
+		Name: fmt.Sprintf("tomb-%d", suffix),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -67,17 +64,17 @@ func seedTombstones(t *testing.T, ctx context.Context, st *store.Store) tombston
 	}
 	envID, otherEnvID := mkEnv("production"), mkEnv("staging")
 
-	userPG, teamPG := pgtype.UUID{Bytes: userID, Valid: true}, pgtype.UUID{Bytes: teamID, Valid: true}
+	userPG := pgtype.UUID{Bytes: userID, Valid: true}
 	envPG := pgtype.UUID{Bytes: envID, Valid: true}
 	service, err := st.CreateService(ctx, sqlc.CreateServiceParams{
-		ID: userPG, UserID: userPG, TeamID: teamPG, ServerID: server.ID, EnvironmentID: envPG,
+		ID: userPG, UserID: userPG, ServerID: server.ID, EnvironmentID: envPG,
 		Name: "worker", Status: "creating", ComposeYaml: "services: {}", Env: []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("CreateService: %v", err)
 	}
 	database, err := st.CreateDatabase(ctx, sqlc.CreateDatabaseParams{
-		ID: userPG, UserID: userPG, TeamID: teamPG, ServerID: server.ID, EnvironmentID: envPG,
+		ID: userPG, UserID: userPG, ServerID: server.ID, EnvironmentID: envPG,
 		Name: "db", Engine: "postgres", Status: "creating", StoragePath: fmt.Sprintf("gotham-db-tomb-%d", suffix),
 	})
 	if err != nil {
@@ -94,7 +91,6 @@ func seedTombstones(t *testing.T, ctx context.Context, st *store.Store) tombston
 		t.Fatalf("soft-delete database: %v", err)
 	}
 	return tombstoneFixture{
-		teamID:      teamID,
 		userID:      userID,
 		projectID:   uuidOf(project.ID),
 		envID:       envID,
@@ -126,7 +122,7 @@ func TestDeleteEnvironmentPurgesTombstones(t *testing.T) {
 	fix := seedTombstones(t, ctx, st)
 
 	svc := NewService(Config{Store: st, Counter: StoreCounter{Store: st}, Logger: discardLogger()})
-	adminCtx := teams.WithScope(ctx, teams.Scope{UserID: fix.userID, TeamID: fix.teamID, Role: teams.RoleAdmin})
+	adminCtx := ctx
 
 	counts, err := svc.counter.CountEnvironmentResources(ctx, fix.envID)
 	if err != nil {
@@ -150,9 +146,9 @@ func TestDeleteEnvironmentPurgesTombstones(t *testing.T) {
 		t.Fatalf("CreateEnvironment(qa): %v", err)
 	}
 	live, err := st.CreateService(ctx, sqlc.CreateServiceParams{
-		ID:            pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		UserID:        pgtype.UUID{Bytes: fix.userID, Valid: true},
-		TeamID:        pgtype.UUID{Bytes: fix.teamID, Valid: true},
+		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		UserID: pgtype.UUID{Bytes: fix.userID, Valid: true},
+
 		ServerID:      pgtype.UUID{Bytes: fix.serverID, Valid: true},
 		EnvironmentID: qaEnv.ID,
 		Name:          "live", Status: "creating", ComposeYaml: "services: {}", Env: []byte("{}"),
@@ -174,7 +170,7 @@ func TestDeleteProjectPurgesTombstones(t *testing.T) {
 	fix := seedTombstones(t, ctx, st)
 
 	svc := NewService(Config{Store: st, Counter: StoreCounter{Store: st}, Logger: discardLogger()})
-	adminCtx := teams.WithScope(ctx, teams.Scope{UserID: fix.userID, TeamID: fix.teamID, Role: teams.RoleAdmin})
+	adminCtx := ctx
 
 	if err := svc.DeleteProject(adminCtx, fix.userID, fix.projectID); err != nil {
 		t.Fatalf("DeleteProject with only tombstones: %v", err)

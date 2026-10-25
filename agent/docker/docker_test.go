@@ -498,7 +498,7 @@ func TestDockerClientPullImageAuth(t *testing.T) {
 	server, state := newFakeDockerServer(t)
 	client := newFakeDockerClient(t, server.URL)
 
-	digest, err := client.PullImage(context.Background(), "registry.example.com/team/app:1.2", "robot", "s3cret-token")
+	digest, err := client.PullImage(context.Background(), "registry.example.com/acme/app:1.2", "robot", "s3cret-token")
 	if err != nil {
 		t.Fatalf("PullImage: %v", err)
 	}
@@ -543,9 +543,9 @@ func TestDockerClientPullImageHubSpellings(t *testing.T) {
 		case strings.Contains(r.URL.Path, "alpine"):
 			digests = []string{"alpine@" + digestA}
 		case strings.Contains(r.URL.Path, "app"):
-			digests = []string{"docker.io/team/app@" + digestB}
+			digests = []string{"docker.io/acme/app@" + digestB}
 		case strings.Contains(r.URL.Path, "private"):
-			digests = []string{"team/app@" + digestC, "registry.example.com/team/private@" + digestB}
+			digests = []string{"acme/app@" + digestC, "registry.example.com/acme/private@" + digestB}
 		}
 		writeJSON(t, w, map[string]any{"Id": "sha256:deadbeef", "RepoDigests": digests})
 	})
@@ -560,14 +560,14 @@ func TestDockerClientPullImageHubSpellings(t *testing.T) {
 	if digest != digestA {
 		t.Errorf("digest = %q; want the familiar-name entry %q", digest, digestA)
 	}
-	digest, err = client.PullImage(context.Background(), "index.docker.io/team/app:1", "", "")
+	digest, err = client.PullImage(context.Background(), "index.docker.io/acme/app:1", "", "")
 	if err != nil {
 		t.Fatalf("PullImage: %v", err)
 	}
 	if digest != digestB {
 		t.Errorf("digest = %q; want the normalized entry %q", digest, digestB)
 	}
-	digest, err = client.PullImage(context.Background(), "registry.example.com/team/private:1", "", "")
+	digest, err = client.PullImage(context.Background(), "registry.example.com/acme/private:1", "", "")
 	if err != nil {
 		t.Fatalf("PullImage: %v", err)
 	}

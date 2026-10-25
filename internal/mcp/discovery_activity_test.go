@@ -32,7 +32,7 @@ func TestProjectOverviewReportsActivityWindowForQuietProject(t *testing.T) {
 	if err := json.Unmarshal([]byte(resultJSON(t, out)), &overview); err != nil {
 		t.Fatal(err)
 	}
-	if out.IsError || overview.ActivityWindowLimit != 100 || len(overview.RecentActivity) != 0 || overview.ActivityCoverage != "bounded_team_window_not_complete_project_history" {
+	if out.IsError || overview.ActivityWindowLimit != 100 || len(overview.RecentActivity) != 0 || overview.ActivityCoverage != "bounded_window_not_complete_project_history" {
 		t.Fatalf("quiet project window ambiguous: %+v", overview)
 	}
 }

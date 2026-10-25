@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/providers"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 var validCreateInputCounter int64
@@ -274,7 +273,7 @@ func TestServiceCreateApplicationValidation(t *testing.T) {
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
-			if applications, _ := repo.ListApplications(context.Background(), teams.Scope{UserID: userID}); len(applications) != 0 {
+			if applications, _ := repo.ListApplications(context.Background(), userID); len(applications) != 0 {
 				t.Errorf("stored %d applications, want none", len(applications))
 			}
 		})
@@ -331,66 +330,6 @@ func TestServiceListApplications(t *testing.T) {
 		if application.UserID != userID {
 			t.Errorf("application %q belongs to %s, want %s", application.Name, application.UserID, userID)
 		}
-	}
-}
-
-func TestServiceApplicationOwnership(t *testing.T) {
-	userID := uuid.New()
-	app := testApplication(userID)
-	repo := &fakeRepository{app: app}
-	svc := newTestService(t, repo)
-	otherUser := uuid.New()
-	name := "renamed"
-
-	for _, tc := range []struct {
-		name string
-		run  func() error
-	}{
-		{"get", func() error {
-			_, err := svc.GetApplication(context.Background(), otherUser, app.ID)
-			return err
-		}},
-		{"update", func() error {
-			_, err := svc.UpdateApplication(context.Background(), otherUser, app.ID, UpdateApplicationInput{Name: &name})
-			return err
-		}},
-		{"delete", func() error {
-			return svc.DeleteApplication(context.Background(), otherUser, app.ID)
-		}},
-		{"get env", func() error {
-			_, err := svc.GetEnv(context.Background(), otherUser, app.ID)
-			return err
-		}},
-		{"replace env", func() error {
-			_, err := svc.ReplaceEnv(context.Background(), otherUser, app.ID, nil)
-			return err
-		}},
-		{"get storages", func() error {
-			_, err := svc.GetStorages(context.Background(), otherUser, app.ID)
-			return err
-		}},
-		{"replace storages", func() error {
-			_, err := svc.ReplaceStorages(context.Background(), otherUser, app.ID, nil)
-			return err
-		}},
-		{"list volumes", func() error {
-			_, err := svc.ListVolumes(context.Background(), otherUser, app.ID)
-			return err
-		}},
-		{"stop", func() error {
-			_, err := svc.Stop(context.Background(), otherUser, app.ID)
-			return err
-		}},
-		{"start", func() error {
-			_, err := svc.Start(context.Background(), otherUser, app.ID)
-			return err
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.run(); !errors.Is(err, ErrNotFound) {
-				t.Fatalf("err = %v, want ErrNotFound", err)
-			}
-		})
 	}
 }
 

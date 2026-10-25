@@ -12,7 +12,7 @@ import (
 )
 
 func TestMutationClientFailsClosed(t *testing.T) {
-	for _, mode := range []string{"old_backend", "redirect", "missing_ack", "foreign_ack", "oversized", "invalid_json", "cancelled", "unauthorized", "forbidden"} {
+	for _, mode := range []string{"old_backend", "redirect", "missing_ack", "oversized", "invalid_json", "cancelled", "unauthorized", "forbidden"} {
 		t.Run(mode, func(t *testing.T) {
 			calls := 0
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -25,9 +25,6 @@ func TestMutationClientFailsClosed(t *testing.T) {
 					http.Redirect(w, r, "/legacy", http.StatusTemporaryRedirect)
 				case "missing_ack":
 					w.Header().Del(contractHeader)
-					_, _ = fmt.Fprint(w, `{}`)
-				case "foreign_ack":
-					w.Header().Set(teamHeader, "foreign")
 					_, _ = fmt.Fprint(w, `{}`)
 				case "oversized":
 					_, _ = fmt.Fprint(w, strings.Repeat("x", maxBody+1))
@@ -48,7 +45,7 @@ func TestMutationClientFailsClosed(t *testing.T) {
 			}
 			var out map[string]any
 			err := client.mutateJSON(ctx, "/api/v1/mcp/projects", "stable-1", map[string]string{"name": "project"}, &out)
-			wantCode := map[string]string{"old_backend": "unsupported_or_not_found", "redirect": "redirect_refused", "missing_ack": "contract_mismatch", "foreign_ack": "contract_mismatch", "oversized": "response_too_large", "invalid_json": "invalid_response", "cancelled": "cancelled", "unauthorized": "unauthorized", "forbidden": "forbidden"}[mode]
+			wantCode := map[string]string{"old_backend": "unsupported_or_not_found", "redirect": "redirect_refused", "missing_ack": "contract_mismatch", "oversized": "response_too_large", "invalid_json": "invalid_response", "cancelled": "cancelled", "unauthorized": "unauthorized", "forbidden": "forbidden"}[mode]
 			wantCalls := 1
 			if mode == "cancelled" {
 				wantCalls = 0

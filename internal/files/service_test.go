@@ -18,7 +18,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -32,8 +31,8 @@ func newFakeRegistry() *fakeRegistry {
 	return &fakeRegistry{items: make(map[uuid.UUID]*servers.Server)}
 }
 
-func (f *fakeRegistry) seed(teamID uuid.UUID) *servers.Server {
-	server := &servers.Server{ID: uuid.New(), Name: "node-1", IP: "10.0.0.5", Port: 22, TeamID: teamID, Status: servers.StatusReady}
+func (f *fakeRegistry) seed(_ uuid.UUID) *servers.Server {
+	server := &servers.Server{ID: uuid.New(), Name: "node-1", IP: "10.0.0.5", Port: 22, Status: servers.StatusReady}
 	f.mu.Lock()
 	f.items[server.ID] = server
 	f.mu.Unlock()
@@ -449,92 +448,14 @@ func newTestService(t *testing.T, registry Registry, client FileClient) *Service
 	})
 }
 
-func scopeCtx(role teams.Role, teamID uuid.UUID) context.Context {
-	return teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: teamID, Role: role})
-}
-
-func TestResolveRBAC(t *testing.T) {
-	teamID := uuid.New()
-	otherTeam := uuid.New()
-
-	t.Run("foreign team is not found", func(t *testing.T) {
-		registry := newFakeRegistry()
-		server := registry.seed(otherTeam)
-		svc := newTestService(t, registry, &fakeFileClient{})
-		if _, err := svc.Roots(scopeCtx(teams.RoleOwner, teamID), server.ID); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("err = %v, want ErrNotFound", err)
-		}
-	})
-
-	t.Run("team-less legacy server is allowed", func(t *testing.T) {
-		registry := newFakeRegistry()
-		server := registry.seed(uuid.Nil)
-		svc := newTestService(t, registry, &fakeFileClient{
-			statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 2}},
-			readBody: []byte("hi"),
-		})
-		ctx := scopeCtx(teams.RoleOwner, teamID)
-		if _, err := svc.Roots(ctx, server.ID); err != nil {
-			t.Fatalf("roots err = %v, want nil", err)
-		}
-		if _, err := svc.Content(ctx, server.ID, "root", "a"); err != nil {
-			t.Fatalf("content err = %v, want nil", err)
-		}
-	})
-
-	t.Run("read_only viewer may write on a team-less legacy server", func(t *testing.T) {
-		registry := newFakeRegistry()
-		server := registry.seed(uuid.Nil)
-		svc := newTestService(t, registry, &fakeFileClient{})
-		if err := svc.AuthorizeWrite(scopeCtx(teams.RoleReadOnly, teamID), server.ID); err != nil {
-			t.Fatalf("err = %v, want nil", err)
-		}
-	})
-
-	t.Run("read_only member reads but not content", func(t *testing.T) {
-		registry := newFakeRegistry()
-		server := registry.seed(teamID)
-		svc := newTestService(t, registry, &fakeFileClient{
-			statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 2}},
-		})
-		ctx := scopeCtx(teams.RoleReadOnly, teamID)
-		if _, err := svc.Roots(ctx, server.ID); err != nil {
-			t.Fatalf("roots err = %v, want nil", err)
-		}
-		if _, err := svc.Content(ctx, server.ID, "root", "a"); !errors.Is(err, ErrForbidden) {
-			t.Fatalf("content err = %v, want ErrForbidden", err)
-		}
-		if _, err := svc.IssueDownloadTicket(ctx, server.ID, "root", "a"); !errors.Is(err, ErrForbidden) {
-			t.Fatalf("ticket err = %v, want ErrForbidden", err)
-		}
-	})
-
-	t.Run("owner reads content", func(t *testing.T) {
-		registry := newFakeRegistry()
-		server := registry.seed(teamID)
-		svc := newTestService(t, registry, &fakeFileClient{
-			statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 2}},
-			readBody: []byte("hi"),
-		})
-		if _, err := svc.Content(scopeCtx(teams.RoleOwner, teamID), server.ID, "root", "a"); err != nil {
-			t.Fatalf("content err = %v, want nil", err)
-		}
-	})
-
-	t.Run("no scope keeps the pre-teams path", func(t *testing.T) {
-		registry := newFakeRegistry()
-		server := registry.seed(uuid.Nil)
-		svc := newTestService(t, registry, &fakeFileClient{})
-		if _, err := svc.Roots(context.Background(), server.ID); err != nil {
-			t.Fatalf("err = %v, want nil", err)
-		}
-	})
+func scopeCtx(_ ...any) context.Context {
+	return context.Background()
 }
 
 func TestRootsAndListMapping(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	modified := time.Now().UTC().Truncate(time.Second)
 	client := &fakeFileClient{
 		rootsResp: &agentv1.ListRootsResponse{Roots: []*agentv1.FileRoot{{Name: "volumes", Path: "/var/lib/gotham/volumes", Writable: true, FreeBytes: 42}}},
@@ -545,7 +466,7 @@ func TestRootsAndListMapping(t *testing.T) {
 		},
 	}
 	svc := newTestService(t, registry, client)
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	ctx := scopeCtx("", projectID)
 
 	roots, err := svc.Roots(ctx, server.ID)
 	if err != nil {
@@ -572,16 +493,16 @@ func TestRootsAndListMapping(t *testing.T) {
 }
 
 func TestListEntryOwnerMapping(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{listResp: &agentv1.ListResponse{Entries: []*agentv1.FileEntry{
 		{Name: "new.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Owner: "root", Group: "wheel"},
 		{Name: "old.txt", Kind: agentv1.FileKind_FILE_KIND_FILE},
 	}}}
 	svc := newTestService(t, registry, client)
 
-	listing, err := svc.List(scopeCtx(teams.RoleOwner, teamID), server.ID, "volumes", "", "")
+	listing, err := svc.List(scopeCtx("", projectID), server.ID, "volumes", "", "")
 	if err != nil {
 		t.Fatalf("list err = %v", err)
 	}
@@ -597,10 +518,10 @@ func TestListEntryOwnerMapping(t *testing.T) {
 }
 
 func TestContentLimits(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	server := registry.seed(projectID)
+	ctx := scopeCtx("", projectID)
 
 	t.Run("over limit is a read-only tail", func(t *testing.T) {
 		svc := newTestService(t, registry, &fakeFileClient{
@@ -645,11 +566,11 @@ func TestContentLimits(t *testing.T) {
 }
 
 func TestQueryValidation(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	svc := newTestService(t, registry, &fakeFileClient{})
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	ctx := scopeCtx("", projectID)
 
 	invalid := "\xff\xfe"
 	nul := "a\x00b"
@@ -674,15 +595,15 @@ func TestQueryValidation(t *testing.T) {
 }
 
 func TestDownloadWrongServerNotBurned(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
-	other := registry.seed(teamID)
+	server := registry.seed(projectID)
+	other := registry.seed(projectID)
 	svc := newTestService(t, registry, &fakeFileClient{
 		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 2}},
 		readBody: []byte("hi"),
 	})
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	ctx := scopeCtx("", projectID)
 
 	ticket, err := svc.IssueDownloadTicket(ctx, server.ID, "root", "a")
 	if err != nil {
@@ -766,7 +687,7 @@ func TestDefaultServiceUsesProvidedLogger(t *testing.T) {
 	server := registry.seed(uuid.New())
 
 	svc := NewDefaultService(registry, logger)
-	if _, err := svc.Mkdir(scopeCtx(teams.RoleOwner, server.TeamID), server.ID, "volumes", "d", 0); err == nil {
+	if _, err := svc.Mkdir(scopeCtx(""), server.ID, "volumes", "d", 0); err == nil {
 		t.Fatal("mkdir without a dialer should fail")
 	}
 	if !strings.Contains(buf.String(), `"op":"mkdir"`) {
@@ -776,11 +697,11 @@ func TestDefaultServiceUsesProvidedLogger(t *testing.T) {
 
 func TestListWithoutDialerIsUnavailable(t *testing.T) {
 	t.Setenv(FeatureEnv, "true")
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	svc := NewService(Config{Registry: registry})
-	if _, err := svc.List(scopeCtx(teams.RoleOwner, teamID), server.ID, "root", "", ""); !errors.Is(err, ErrAgentUnavailable) {
+	if _, err := svc.List(scopeCtx("", projectID), server.ID, "root", "", ""); !errors.Is(err, ErrAgentUnavailable) {
 		t.Fatalf("err = %v, want ErrAgentUnavailable", err)
 	}
 }

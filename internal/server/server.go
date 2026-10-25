@@ -36,7 +36,6 @@ import (
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/taskevents"
-	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/templates"
 	"github.com/justindeelux/gotham/internal/terminal"
 	"github.com/justindeelux/gotham/internal/toolchain"
@@ -77,8 +76,6 @@ type Server struct {
 	ephemeralSecret bool
 
 	instanceSvc       *instance.Service
-	teamService       teams.TeamService
-	invites           auth.InviteAcceptor
 	allowRegistration bool
 	deploy            deploy.DeployService
 	proxy             proxy.ProxyService
@@ -229,7 +226,6 @@ func logDisabledFeatures(logger *slog.Logger) {
 		{"Previews", webhooks.FeatureEnv, webhooks.Enabled()},
 		{"Databases", databases.FeatureEnv, databases.Enabled()},
 		{"Services", services.FeatureEnv, services.Enabled()},
-		{"Teams", teams.FeatureEnv, teams.Enabled()},
 		{"Files", files.FeatureEnv, files.Enabled()},
 		{"Notifications", notifications.FeatureEnv, notifications.Enabled()},
 		{"Proxy", proxy.FeatureEnv, proxy.Enabled()},
@@ -294,22 +290,13 @@ func (s *Server) routes() (http.Handler, error) {
 			s.sessionSweeper.Start()
 		}
 
-		if s.persistence != nil {
-			teamSvc := teams.NewService(teams.Config{Store: s.persistence, Logger: s.logger})
-			s.teamService = teamSvc
-			s.invites = teamSvc
-		}
-		teams.Mount(api, s.adminScopeAuth, UserIDFromContext, s.teamService)
-
 		s.notify = s.notificationService()
-		notifications.Mount(api, s.withTeam(), UserIDFromContext, s.notify)
+		notifications.Mount(api, s.resourceAuth(), UserIDFromContext, s.notify)
 
 		containerService := s.containerService()
-		containers.Mount(api, s.withTeam(), containerService)
+		containers.Mount(api, s.resourceAuth(), containerService)
 
-		filesAuth := func(next http.Handler) http.Handler {
-			return s.withTeam()(s.RequireOwner(next))
-		}
+		filesAuth := s.resourceAuth()
 		files.Mount(api, filesAuth, s.fileService(), s.logger)
 
 		s.databasesRetainer = s.databasesRetention(containerService)
@@ -374,7 +361,7 @@ func (s *Server) routes() (http.Handler, error) {
 				setter.SetGitHubControlPlaneURLSource(s.controlPlaneURL)
 			}
 		}
-		proxy.Mount(api, s.withTeam(), platformOnly, s.proxy,
+		proxy.Mount(api, s.resourceAuth(), platformOnly, s.proxy,
 			proxy.NewDefaultProviderService(sslConfig),
 			proxy.NewDefaultCertificateService(sslConfig),
 			proxy.NewDefaultRedirectService(redirectConfig),
@@ -399,12 +386,12 @@ func (s *Server) routes() (http.Handler, error) {
 		githubapp.MountWithControlPlaneURL(api, s.resourceScopeAuth, UserIDFromContext, githubAppSvc, s.controlPlaneURLSource())
 
 		s.deploy = s.deployService(providerSvc, s.proxy, githubAppSvc)
-		deploy.Mount(api, s.withTeam(), UserIDFromContext, s.deploy)
+		deploy.Mount(api, s.resourceAuth(), UserIDFromContext, s.deploy)
 		if s.terminal != nil && s.deploy != nil {
 			if resolver, ok := s.deploy.(deploy.TerminalResolver); ok {
 				s.terminal.SetApplications(terminalApplicationResolver{deploy: resolver})
 				terminal.MountApplications(api, s.applicationTerminalAuth(), s.terminal, s.auth,
-					applicationTerminalAuthorizer{resolver: resolver, auth: s.auth, teams: s.teamService},
+					applicationTerminalAuthorizer{resolver: resolver, auth: s.auth},
 					UserIDFromContext, s.logger)
 			}
 		}
@@ -418,19 +405,19 @@ func (s *Server) routes() (http.Handler, error) {
 		}
 
 		s.webhooks = s.webhookService(providerSvc, githubAppSvc)
-		webhooks.Mount(api, s.withTeam(), UserIDFromContext, s.webhooks)
+		webhooks.Mount(api, s.resourceAuth(), UserIDFromContext, s.webhooks)
 		s.webhooks.StartPreviews()
 
 		databaseSvc := s.databaseService(containerService)
-		databases.Mount(api, s.withTeam(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, databaseSvc)
+		databases.Mount(api, s.resourceAuth(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, databaseSvc)
 
 		s.backups = s.backupService(containerService)
-		databases.MountBackups(api, s.withTeam(), s.resourceScopeAuth, UserIDFromContext, s.backups)
+		databases.MountBackups(api, s.resourceAuth(), s.resourceScopeAuth, UserIDFromContext, s.backups)
 
 		composeSvc := s.composeService()
-		services.Mount(api, s.withTeam(), UserIDFromContext, composeSvc)
+		services.Mount(api, s.resourceAuth(), UserIDFromContext, composeSvc)
 
-		projects.Mount(api, s.withTeam(), UserIDFromContext, s.projectService(s.deploy, composeSvc, databaseSvc))
+		projects.Mount(api, s.resourceAuth(), UserIDFromContext, s.projectService(s.deploy, composeSvc, databaseSvc))
 
 		templates.Mount(api, s.resourceScopeAuth, templates.NewDefaultService(s.logger))
 	})
@@ -546,12 +533,12 @@ func (n deployNotifier) DeployFinished(ctx context.Context, result deploy.Deploy
 	}
 }
 
-func (s *Server) taskSnapshot(teamID string) []string {
+func (s *Server) taskSnapshot(projectID string) []string {
 	tracker, ok := s.deploy.(interface{ TaskTracker() *taskevents.Tracker })
 	if !ok || tracker == nil {
-		return taskevents.NewTracker().SnapshotFrames(teamID)
+		return taskevents.NewTracker().SnapshotFrames(projectID)
 	}
-	return tracker.TaskTracker().SnapshotFrames(teamID)
+	return tracker.TaskTracker().SnapshotFrames(projectID)
 }
 
 func (s *Server) providerConnectionApplications(ctx context.Context, userID uuid.UUID) ([]providers.ConnectionApplication, error) {

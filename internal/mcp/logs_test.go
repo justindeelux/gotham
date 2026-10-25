@@ -17,7 +17,7 @@ import (
 func logSession(t *testing.T, handler http.HandlerFunc) *sdk.ClientSession {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get("X-Team-Id") != testConfig("").TeamID.String() {
+		if r.Header.Get("Authorization") != "Bearer gt1_test-secret" {
 			t.Error("fixed credentials missing")
 		}
 		acknowledge(w, r)
@@ -100,7 +100,7 @@ func TestLogToolsRejectOverridesAndInvalidLimits(t *testing.T) {
 	for _, args := range []map[string]any{
 		{"application_id": app, "tail": -1}, {"application_id": app, "tail": 1001}, {"application_id": app, "max_bytes": 262145},
 		{"application_id": "invalid"}, {"application_id": app, "replica": "2"}, {"application_id": app, "service": "web", "replica": "-1"},
-		{"application_id": app, "container_id": "foreign"}, {"application_id": app, "team_id": uuid.NewString()}, {"application_id": app, "url": "https://foreign.example"},
+		{"application_id": app, "container_id": "foreign"}, {"application_id": app, "owner_id": uuid.NewString()}, {"application_id": app, "url": "https://foreign.example"},
 	} {
 		if result := callDiscovery(t, cs, "application_logs", args); !result.IsError {
 			t.Fatalf("accepted %+v", args)

@@ -371,7 +371,6 @@ func TestErrorStatusMapping(t *testing.T) {
 		{"not editable", ErrNotEditable, http.StatusUnsupportedMediaType},
 		{"busy", ErrBusy, http.StatusTooManyRequests},
 		{"spool busy", ErrSpoolBusy, http.StatusTooManyRequests},
-		{"team busy", ErrTeamBusy, http.StatusTooManyRequests},
 		{"outdated", ErrAgentOutdated, http.StatusNotImplemented},
 		{"unavailable", ErrAgentUnavailable, http.StatusBadGateway},
 		{"disabled", ErrDisabled, http.StatusServiceUnavailable},
@@ -402,7 +401,6 @@ func TestBusyAnswerNamesTheLimit(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"team share", ErrTeamBusy, "team"},
 		{"global ceiling", ErrSpoolBusy, "uploads"},
 		{"agent busy", ErrBusy, "node is busy"},
 	} {

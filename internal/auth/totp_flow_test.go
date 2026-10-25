@@ -17,7 +17,7 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	registered, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestTOTPProfileActionsRequirePassword(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	registered, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestTOTPResetClearsSecondFactor(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	registered, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

@@ -112,7 +112,7 @@ func TestProfileDisplayNameMigration(t *testing.T) {
 		t.Fatal("display_name still exists after the down migration")
 	}
 
-	if _, err := provider.Up(ctx); err != nil {
+	if _, err := provider.UpTo(ctx, 32); err != nil {
 		t.Fatalf("migrate back up: %v", err)
 	}
 	if err := pool.QueryRow(ctx,

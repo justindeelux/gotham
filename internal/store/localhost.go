@@ -2,5 +2,5 @@ package store
 
 import _ "embed"
 
-//go:embed migrations/00051_legacy_local_node.sql
+//go:embed localhost_reconcile.sql
 var ReconcileLocalhostSQL string

@@ -375,10 +375,6 @@ func (s *Store) ListServers(ctx context.Context) ([]sqlc.Server, error) {
 	return s.queries.ListServers(ctx)
 }
 
-func (s *Store) ListServersByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Server, error) {
-	return s.queries.ListServersByTeam(ctx, teamID)
-}
-
 func (s *Store) DeleteServer(ctx context.Context, id pgtype.UUID) error {
 	return s.queries.DeleteServer(ctx, id)
 }
@@ -505,10 +501,6 @@ func (s *Store) GetPrivateKeyByID(ctx context.Context, id pgtype.UUID) (sqlc.Pri
 	return s.queries.GetPrivateKeyByID(ctx, id)
 }
 
-func (s *Store) TeamReferencesPrivateKey(ctx context.Context, params sqlc.TeamReferencesPrivateKeyParams) (bool, error) {
-	return s.queries.TeamReferencesPrivateKey(ctx, params)
-}
-
-func (s *Store) ListPrivateKeysByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.ListPrivateKeysByTeamRow, error) {
-	return s.queries.ListPrivateKeysByTeam(ctx, teamID)
+func (s *Store) ListPrivateKeys(ctx context.Context) ([]sqlc.ListPrivateKeysRow, error) {
+	return s.queries.ListPrivateKeys(ctx)
 }

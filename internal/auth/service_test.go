@@ -70,6 +70,7 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 	st := store.New(pool)
 	svc := New(st, signer, logger)
 	svc.SetSecretKey("test-credential-encryption-key")
+	svc.AllowOpenRegistration = true
 	return svc, st
 }
 
@@ -77,7 +78,7 @@ func requireClosedInstance(t *testing.T, svc *Service) {
 	t.Helper()
 
 	email := uniqueEmail("closed-seed")
-	_, err := svc.Register(context.Background(), email, "s3cret-password", "", nil, SessionMeta{})
+	_, err := svc.Register(context.Background(), email, "s3cret-password", SessionMeta{})
 	if err != nil && !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatalf("seed closed-instance account: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestServiceRegisterLoginMe(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	registered, err := svc.Register(ctx, "  "+strings.ToUpper(email)+"  ", password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, "  "+strings.ToUpper(email)+"  ", password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -150,11 +151,11 @@ func TestServiceRegisterDuplicateEmail(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	if _, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{}); err != nil {
+	if _, err := svc.Register(ctx, email, password, SessionMeta{}); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
 
-	_, err := svc.Register(ctx, strings.ToUpper(email), password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	_, err := svc.Register(ctx, strings.ToUpper(email), password, SessionMeta{})
 	if !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("second Register error = %v, want ErrEmailTaken", err)
 	}
@@ -168,7 +169,7 @@ func TestServiceLoginFailures(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	if _, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{}); err != nil {
+	if _, err := svc.Register(ctx, email, password, SessionMeta{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -222,7 +223,7 @@ func TestServiceLoginMissStillVerifies(t *testing.T) {
 
 	known := uniqueEmail("known")
 	cleanupUser(t, st, known)
-	if _, err := svc.Register(ctx, known, "right-password", newTestInvite(t, st, known), storeInvites{st}, SessionMeta{}); err != nil {
+	if _, err := svc.Register(ctx, known, "right-password", SessionMeta{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, err := svc.Login(ctx, known, "wrong-password", SessionMeta{}); !errors.Is(err, ErrInvalidCredentials) {
@@ -237,10 +238,10 @@ func TestServiceRegisterValidation(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	if _, err := svc.Register(ctx, "not-an-email", "s3cret-password", "", nil, SessionMeta{}); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Register(ctx, "not-an-email", "s3cret-password", SessionMeta{}); !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(bad email) error = %v, want ErrValidation", err)
 	}
-	if _, err := svc.Register(ctx, uniqueEmail("short"), "short", "", nil, SessionMeta{}); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Register(ctx, uniqueEmail("short"), "short", SessionMeta{}); !errors.Is(err, ErrValidation) {
 		t.Errorf("Register(short password) error = %v, want ErrValidation", err)
 	}
 }
@@ -252,7 +253,7 @@ func TestServiceRefreshRotation(t *testing.T) {
 	email := uniqueEmail("refresh")
 	cleanupUser(t, st, email)
 
-	first, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestServiceRefreshExpiredDoesNotRevokeFamily(t *testing.T) {
 	email := uniqueEmail("expired-no-revoke")
 	cleanupUser(t, st, email)
 
-	live, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	live, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -325,7 +326,7 @@ func TestServiceLogoutDeletesSession(t *testing.T) {
 	email := uniqueEmail("logout")
 	cleanupUser(t, st, email)
 
-	result, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	result, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -362,7 +363,7 @@ func TestServiceLogoutReplayDoesNotRevokeOtherSessions(t *testing.T) {
 	email := uniqueEmail("logout-replay")
 	cleanupUser(t, st, email)
 
-	loggedOut, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	loggedOut, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -390,7 +391,7 @@ func TestServiceLogoutPreservesRevokedRow(t *testing.T) {
 	email := uniqueEmail("logout-revoked")
 	cleanupUser(t, st, email)
 
-	first, err := svc.Register(ctx, email, "s3cret-password", newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	first, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -434,7 +435,7 @@ func TestServiceMeUnknownUser(t *testing.T) {
 func TestServiceRegisterOpenOverride(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()
-	if _, err := svc.Register(ctx, uniqueEmail("open-seed"), "s3cret-password", "", nil, SessionMeta{}); err != nil {
+	if _, err := svc.Register(ctx, uniqueEmail("open-seed"), "s3cret-password", SessionMeta{}); err != nil {
 		t.Fatalf("seed first account: %v", err)
 	}
 	svc.AllowOpenRegistration = true
@@ -442,7 +443,7 @@ func TestServiceRegisterOpenOverride(t *testing.T) {
 	email := uniqueEmail("open-override")
 	cleanupUser(t, st, email)
 
-	second, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	second, err := svc.Register(ctx, email, "s3cret-password", SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register with the open override: %v", err)
 	}

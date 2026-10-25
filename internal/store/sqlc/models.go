@@ -33,7 +33,6 @@ type Application struct {
 	BuildPack                  string             `json:"build_pack"`
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
-	TeamID                     pgtype.UUID        `json:"team_id"`
 	IsPreview                  bool               `json:"is_preview"`
 	EnvironmentID              pgtype.UUID        `json:"environment_id"`
 	SourceType                 string             `json:"source_type"`
@@ -157,7 +156,6 @@ type Database struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
-	TeamID        pgtype.UUID        `json:"team_id"`
 	EnvironmentID pgtype.UUID        `json:"environment_id"`
 }
 
@@ -325,21 +323,8 @@ type InstanceSettingsAudit struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
-type Invite struct {
-	ID         pgtype.UUID        `json:"id"`
-	TeamID     pgtype.UUID        `json:"team_id"`
-	Email      string             `json:"email"`
-	Role       string             `json:"role"`
-	TokenHash  string             `json:"token_hash"`
-	InvitedBy  pgtype.UUID        `json:"invited_by"`
-	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
-	AcceptedAt pgtype.Timestamptz `json:"accepted_at"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-}
-
 type NotificationChannel struct {
 	ID           pgtype.UUID        `json:"id"`
-	TeamID       pgtype.UUID        `json:"team_id"`
 	Name         string             `json:"name"`
 	Kind         string             `json:"kind"`
 	Config       string             `json:"config"`
@@ -374,7 +359,6 @@ type PreviewDelivery struct {
 type PreviewDeploy struct {
 	ID                   pgtype.UUID        `json:"id"`
 	ApplicationID        pgtype.UUID        `json:"application_id"`
-	TeamID               pgtype.UUID        `json:"team_id"`
 	Provider             string             `json:"provider"`
 	Repo                 string             `json:"repo"`
 	PrNumber             int32              `json:"pr_number"`
@@ -393,12 +377,10 @@ type PrivateKey struct {
 	Name         string             `json:"name"`
 	EncryptedKey string             `json:"encrypted_key"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	TeamID       pgtype.UUID        `json:"team_id"`
 }
 
 type Project struct {
 	ID          pgtype.UUID        `json:"id"`
-	TeamID      pgtype.UUID        `json:"team_id"`
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
@@ -447,7 +429,6 @@ type ReposCache struct {
 
 type RequestReceipt struct {
 	PrincipalID    pgtype.UUID        `json:"principal_id"`
-	TeamID         pgtype.UUID        `json:"team_id"`
 	Operation      string             `json:"operation"`
 	TargetID       pgtype.UUID        `json:"target_id"`
 	RequestKey     string             `json:"request_key"`
@@ -497,7 +478,6 @@ type Server struct {
 	LastSeen            pgtype.Timestamptz `json:"last_seen"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	TeamID              pgtype.UUID        `json:"team_id"`
 	HostKeyFingerprint  *string            `json:"host_key_fingerprint"`
 	EncryptedPassword   *string            `json:"encrypted_password"`
 	AgentKeyFingerprint *string            `json:"agent_key_fingerprint"`
@@ -528,7 +508,6 @@ type Service struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
-	TeamID        pgtype.UUID        `json:"team_id"`
 	EnvironmentID pgtype.UUID        `json:"environment_id"`
 }
 
@@ -575,21 +554,6 @@ type Storage struct {
 	HostPath      string             `json:"host_path"`
 	ContainerPath string             `json:"container_path"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-}
-
-type Team struct {
-	ID         pgtype.UUID        `json:"id"`
-	Name       string             `json:"name"`
-	IsPersonal bool               `json:"is_personal"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-}
-
-type TeamMember struct {
-	TeamID    pgtype.UUID        `json:"team_id"`
-	UserID    pgtype.UUID        `json:"user_id"`
-	Role      string             `json:"role"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type ToolchainJob struct {

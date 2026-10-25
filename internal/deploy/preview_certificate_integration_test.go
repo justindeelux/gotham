@@ -91,11 +91,11 @@ func TestCreatePreviewApplicationClonesCertificateIntent(t *testing.T) {
 		}
 	})
 
-	teamID, envID, _ := seedProjectEnvironment(t, ctx, st)
+	envID, _ := seedProjectEnvironment(t, ctx, st)
 	baseDomain := fmt.Sprintf("p8-%d.example.com", suffix)
 	base, err := repo.CreateApplication(ctx, Application{
-		UserID:        userID,
-		TeamID:        teamID,
+		UserID: userID,
+
 		ServerID:      uuid.UUID(serverRow.ID.Bytes),
 		EnvironmentID: envID,
 		Name:          fmt.Sprintf("p8-preview-%d", suffix),

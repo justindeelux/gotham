@@ -9,17 +9,14 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 func testConfig(origin string) Config {
-	return Config{URL: origin, Token: "gt1_test-secret", TeamID: uuid.MustParse("11111111-1111-4111-8111-111111111111")}
+	return Config{URL: origin, Token: "gt1_test-secret"}
 }
 
-func acknowledge(w http.ResponseWriter, r *http.Request) {
+func acknowledge(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set(contractHeader, "1")
-	w.Header().Set(teamHeader, r.Header.Get("X-Team-Id"))
 }
 
 func TestConfig(t *testing.T) {
@@ -42,11 +39,6 @@ func TestConfig(t *testing.T) {
 			t.Error("credential leaked")
 		}
 	}
-	cfg := testConfig("https://example.com")
-	cfg.TeamID = uuid.Nil
-	if _, err := NewClient(cfg); err == nil {
-		t.Error("accepted nil team")
-	}
 	_, err := ConfigFromEnv(func(string) string { return "secret" })
 	if err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatal("unsafe config error")
@@ -63,7 +55,6 @@ func TestRESTBoundary(t *testing.T) {
 	}{
 		{"valid", 200, `{"value":1}`, "valid", ""},
 		{"missing ack", 200, `{"value":1}`, "", "contract_mismatch"},
-		{"wrong team", 200, `{"value":1}`, "wrong", "contract_mismatch"},
 		{"wrong version", 200, `{"value":1}`, "version", "contract_mismatch"},
 		{"unauthorized", 401, "gt1_test-secret", "", "unauthorized"},
 		{"forbidden", 403, "gt1_test-secret", "", "forbidden"},
@@ -76,14 +67,11 @@ func TestRESTBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get(contractHeader) != "1" || r.Header.Get("X-Team-Id") != testConfig("").TeamID.String() {
+				if r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get(contractHeader) != "1" {
 					t.Error("missing fixed authority")
 				}
 				if tc.ack != "" {
 					acknowledge(w, r)
-				}
-				if tc.ack == "wrong" {
-					w.Header().Set(teamHeader, uuid.NewString())
 				}
 				if tc.ack == "version" {
 					w.Header().Set(contractHeader, "2")
@@ -162,10 +150,10 @@ func TestHealthRequiresCurrentContext(t *testing.T) {
 				return
 			}
 			acknowledge(w, r)
-			_, _ = fmt.Fprintf(w, `{"team_id":%q,"capabilities":["strict_reads"]}`, r.Header.Get("X-Team-Id"))
+			_, _ = fmt.Fprintf(w, `{"capabilities":["strict_reads"]}`)
 			return
 		}
-		if r.Header.Get("Authorization") != "" || r.Header.Get("X-Team-Id") != "" || r.Header.Get(contractHeader) != "" {
+		if r.Header.Get("Authorization") != "" || r.Header.Get(contractHeader) != "" {
 			t.Error("public health received authority headers")
 		}
 		healthCalls++

@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func TestMain(m *testing.M) {
@@ -24,12 +22,11 @@ func discardLogger() *slog.Logger {
 }
 
 type fakeRepository struct {
-	mu          sync.Mutex
-	services    map[uuid.UUID]Service
-	order       []uuid.UUID
-	deploys     map[uuid.UUID][]Deploy
-	servers     map[uuid.UUID]bool
-	serverTeams map[uuid.UUID]uuid.UUID
+	mu       sync.Mutex
+	services map[uuid.UUID]Service
+	order    []uuid.UUID
+	deploys  map[uuid.UUID][]Deploy
+	servers  map[uuid.UUID]bool
 
 	createErr     error
 	getErr        error
@@ -98,7 +95,7 @@ func (r *fakeRepository) GetService(_ context.Context, serviceID uuid.UUID) (Ser
 	return service, nil
 }
 
-func (r *fakeRepository) ListServices(_ context.Context, scope teams.Scope) ([]Service, error) {
+func (r *fakeRepository) ListServices(_ context.Context, userID uuid.UUID) ([]Service, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.listErr != nil {
@@ -107,13 +104,7 @@ func (r *fakeRepository) ListServices(_ context.Context, scope teams.Scope) ([]S
 	services := []Service{}
 	for i := len(r.order) - 1; i >= 0; i-- {
 		service := r.services[r.order[i]]
-		if scope.Active() {
-			if service.TeamID == scope.TeamID && r.live(service) {
-				services = append(services, service)
-			}
-			continue
-		}
-		if service.UserID == scope.UserID && r.live(service) {
+		if service.UserID == userID && r.live(service) {
 			services = append(services, service)
 		}
 	}
@@ -218,7 +209,7 @@ func (r *fakeRepository) ListServiceDeploys(_ context.Context, serviceID uuid.UU
 	return append([]Deploy{}, deploys...), nil
 }
 
-func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, scope teams.Scope) (bool, error) {
+func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.serverErr != nil {
@@ -227,21 +218,7 @@ func (r *fakeRepository) ServerExists(_ context.Context, serverID uuid.UUID, sco
 	if !r.servers[serverID] {
 		return false, nil
 	}
-	if err := scope.AuthorizeOptionalTeam(r.serverTeams[serverID], true); err != nil {
-		return false, nil
-	}
 	return true, nil
-}
-
-func (r *fakeRepository) seedServerForTeam(teamID uuid.UUID) uuid.UUID {
-	id := r.seedServer()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.serverTeams == nil {
-		r.serverTeams = map[uuid.UUID]uuid.UUID{}
-	}
-	r.serverTeams[id] = teamID
-	return id
 }
 
 func (r *fakeRepository) seedEnvironment() (uuid.UUID, uuid.UUID) {
@@ -293,7 +270,7 @@ func (r *fakeRepository) NameInEnvironment(_ context.Context, environmentID uuid
 	return false, nil
 }
 
-func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ uuid.UUID) (EnvironmentRef, error) {
+func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID uuid.UUID) (EnvironmentRef, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.resolveErr != nil {
@@ -305,7 +282,7 @@ func (r *fakeRepository) ResolveEnvironment(_ context.Context, environmentID, _ 
 	return EnvironmentRef{ID: environmentID}, nil
 }
 
-func (r *fakeRepository) ResolveProject(_ context.Context, projectID, _ uuid.UUID) (uuid.UUID, error) {
+func (r *fakeRepository) ResolveProject(_ context.Context, projectID uuid.UUID) (uuid.UUID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.resolveErr != nil {

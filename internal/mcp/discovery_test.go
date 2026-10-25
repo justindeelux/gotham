@@ -18,7 +18,7 @@ import (
 func discoverySession(t *testing.T, handler http.HandlerFunc) *sdk.ClientSession {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get("X-Team-Id") != testConfig("").TeamID.String() {
+		if r.Header.Get("Authorization") != "Bearer gt1_test-secret" {
 			t.Errorf("fixed authorization missing")
 		}
 		acknowledge(w, r)
@@ -110,7 +110,7 @@ func TestDiscoveryPagesAndSchemas(t *testing.T) {
 			t.Fatal("unprojected configuration leaked")
 		}
 	}
-	for _, args := range []map[string]any{{"limit": 101}, {"offset": -1}, {"team_id": uuid.NewString()}, {"url": "http://override"}, {"token": "override"}} {
+	for _, args := range []map[string]any{{"limit": 101}, {"offset": -1}, {"owner_id": uuid.NewString()}, {"url": "http://override"}, {"token": "override"}} {
 		out := callDiscovery(t, cs, "projects_list", args)
 		if !out.IsError {
 			t.Fatalf("invalid input accepted: %v", args)

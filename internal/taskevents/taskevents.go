@@ -33,12 +33,11 @@ type Event struct {
 	ServerID      string `json:"server_id,omitempty"`
 	ProjectID     string `json:"project_id,omitempty"`
 	EnvironmentID string `json:"environment_id,omitempty"`
-	TeamID        string `json:"team_id,omitempty"`
 	LogURL        string `json:"log_url,omitempty"`
 	Error         string `json:"error,omitempty"`
 }
 
-func Channel(teamID string) string { return "tasks:" + teamID }
+func Channel(projectID string) string { return "tasks:" + projectID }
 
 type Publisher interface {
 	Publish(ctx context.Context, channel, payload string) error
@@ -66,11 +65,11 @@ func (e *Emitter) Emit(ctx context.Context, ev Event) {
 	if err != nil {
 		return
 	}
-	frame, err := json.Marshal(Frame{Channel: Channel(ev.TeamID), Type: frameType, Data: string(data)})
+	frame, err := json.Marshal(Frame{Channel: Channel(ev.ProjectID), Type: frameType, Data: string(data)})
 	if err != nil {
 		return
 	}
-	_ = e.pub.Publish(ctx, Channel(ev.TeamID), string(frame))
+	_ = e.pub.Publish(ctx, Channel(ev.ProjectID), string(frame))
 }
 
 type Tracker struct {
@@ -107,7 +106,7 @@ func (t *Tracker) Set(ev Event) {
 	t.tasks[ev.TaskID] = ev
 }
 
-func (t *Tracker) Snapshot(teamID string) []Event {
+func (t *Tracker) Snapshot(projectID string) []Event {
 	if t == nil {
 		return nil
 	}
@@ -115,7 +114,7 @@ func (t *Tracker) Snapshot(teamID string) []Event {
 	defer t.mu.Unlock()
 	var out []Event
 	for _, ev := range t.tasks {
-		if ev.TeamID == teamID {
+		if ev.ProjectID == projectID {
 			out = append(out, ev)
 		}
 	}
@@ -123,20 +122,20 @@ func (t *Tracker) Snapshot(teamID string) []Event {
 	return out
 }
 
-func (t *Tracker) SnapshotFrames(teamID string) []string {
-	events := t.Snapshot(teamID)
+func (t *Tracker) SnapshotFrames(projectID string) []string {
+	events := t.Snapshot(projectID)
 	out := make([]string, 0, len(events)+1)
 	for _, ev := range events {
 		data, err := json.Marshal(ev)
 		if err != nil {
 			continue
 		}
-		frame, err := json.Marshal(Frame{Channel: Channel(teamID), Type: frameType, Data: string(data)})
+		frame, err := json.Marshal(Frame{Channel: Channel(projectID), Type: frameType, Data: string(data)})
 		if err != nil {
 			continue
 		}
 		out = append(out, string(frame))
 	}
-	end, _ := json.Marshal(Frame{Channel: Channel(teamID), Type: SnapshotType})
+	end, _ := json.Marshal(Frame{Channel: Channel(projectID), Type: SnapshotType})
 	return append(out, string(end))
 }

@@ -215,7 +215,6 @@ func TestPreviewOfLegacyProviderApp(t *testing.T) {
 		t.Run("provider "+provider, func(t *testing.T) {
 			userID := uuid.New()
 			base := testApplication(userID)
-			base.TeamID = uuid.New()
 			base.Provider = provider
 			base.SourceType = ""
 			repo := seedBaseForPreview(t, base)

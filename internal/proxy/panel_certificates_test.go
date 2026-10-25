@@ -14,7 +14,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/instance"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 type fixedPanelStatus struct{ observation CertificateStatusObservation }
@@ -216,20 +215,6 @@ func TestPanelCertificateRoutesArePlatformOnly(t *testing.T) {
 	cert := DomainCertificate{ID: uuid.New(), Domain: "panel.example.com", Enabled: true, Challenge: ChallengeHTTP01}
 	st.certificates = []DomainCertificate{cert}
 	svc := newSSLService(SSLConfig{Store: st})
-	teamCtx := teams.WithScope(context.Background(), teams.Scope{TeamID: uuid.New(), Role: teams.RoleAdmin})
-	if _, err := svc.GetCertificate(teamCtx, cert.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("team get=%v", err)
-	}
-	if _, err := svc.UpdateCertificate(teamCtx, cert.ID, UpdateCertificateInput{}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("team patch=%v", err)
-	}
-	if err := svc.DeleteCertificate(teamCtx, cert.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("team delete=%v", err)
-	}
-	rows, err := svc.ListCertificates(context.Background())
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("team list=%+v err=%v", rows, err)
-	}
 	router := chi.NewRouter()
 	auth := func(next http.Handler) http.Handler { return next }
 	platformCalls := 0

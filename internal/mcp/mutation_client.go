@@ -27,7 +27,6 @@ func (c *Client) mutateJSON(ctx context.Context, path, requestID string, input, 
 	}
 	req.GetBody = nil
 	req.Header.Set("Authorization", "Bearer "+c.config.Token)
-	req.Header.Set("X-Team-Id", c.config.TeamID.String())
 	req.Header.Set(contractHeader, "1")
 	req.Header.Set("Idempotency-Key", requestID)
 	req.Header.Set("Content-Type", "application/json")
@@ -59,7 +58,7 @@ func (c *Client) mutateJSON(ctx context.Context, path, requestID string, input, 
 		case 429:
 			code = "rate_limited"
 		}
-		if resp.Header.Get(contractHeader) == "1" && resp.Header.Get(teamHeader) == c.config.TeamID.String() {
+		if resp.Header.Get(contractHeader) == "1" {
 			var failure struct {
 				Code string `json:"code"`
 			}
@@ -72,7 +71,7 @@ func (c *Client) mutateJSON(ctx context.Context, path, requestID string, input, 
 		}
 		return &Error{Code: code, Status: resp.StatusCode}
 	}
-	if resp.Header.Get(contractHeader) != "1" || resp.Header.Get(teamHeader) != c.config.TeamID.String() {
+	if resp.Header.Get(contractHeader) != "1" {
 		return &Error{Code: "contract_mismatch"}
 	}
 	if json.Unmarshal(data, out) != nil {

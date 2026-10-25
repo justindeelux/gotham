@@ -12,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/justindeelux/gotham/internal/clientip"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
@@ -122,16 +120,6 @@ func TestDeleteWebhookWithoutHookIsNoop(t *testing.T) {
 	}
 	if len(installer.deleted) != 0 {
 		t.Errorf("provider deletions = %d, want 0", len(installer.deleted))
-	}
-}
-
-func TestDeleteWebhookForeignApplicationIsNotFound(t *testing.T) {
-	repo := newFakeRepository()
-	svc := newTestService(repo, &fakeInstaller{}, &fakeDeployer{})
-
-	_, err := svc.DeleteWebhook(context.Background(), uuid.New(), repo.app.ID)
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("error = %v, want ErrNotFound", err)
 	}
 }
 

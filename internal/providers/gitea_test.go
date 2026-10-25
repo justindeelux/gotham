@@ -17,11 +17,11 @@ func TestGiteaSourceListRepos(t *testing.T) {
 		}
 		writeJSONTest(t, w, []map[string]any{
 			{
-				"id": 7, "name": "gotham", "full_name": "team/gotham",
+				"id": 7, "name": "gotham", "full_name": "acme/gotham",
 				"private": true, "default_branch": "main",
-				"clone_url": "https://gitea.example/team/gotham.git",
-				"ssh_url":   "git@gitea.example:team/gotham.git",
-				"html_url":  "https://gitea.example/team/gotham",
+				"clone_url": "https://gitea.example/acme/gotham.git",
+				"ssh_url":   "git@gitea.example:acme/gotham.git",
+				"html_url":  "https://gitea.example/acme/gotham",
 			},
 		})
 	})
@@ -34,7 +34,7 @@ func TestGiteaSourceListRepos(t *testing.T) {
 	if len(repos) != 1 {
 		t.Fatalf("len(repos) = %d, want 1", len(repos))
 	}
-	if repos[0].ExternalID != "7" || repos[0].FullName != "team/gotham" || !repos[0].Private {
+	if repos[0].ExternalID != "7" || repos[0].FullName != "acme/gotham" || !repos[0].Private {
 		t.Errorf("repos[0] = %+v", repos[0])
 	}
 	if gotAuth != "Bearer test-token" {
@@ -68,7 +68,7 @@ func TestGiteaSourceListReposBounded(t *testing.T) {
 
 func TestGiteaSourceListBranches(t *testing.T) {
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/repos/team/gotham/branches" {
+		if r.URL.Path != "/api/v1/repos/acme/gotham/branches" {
 			http.NotFound(w, r)
 			return
 		}
@@ -78,7 +78,7 @@ func TestGiteaSourceListBranches(t *testing.T) {
 	})
 
 	source := newGiteaSource(Provider{BaseURL: srv.URL}, true)
-	branches, err := source.ListBranches(context.Background(), staticToken, "team/gotham")
+	branches, err := source.ListBranches(context.Background(), staticToken, "acme/gotham")
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
 	}

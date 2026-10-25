@@ -11,7 +11,6 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func openDomainIntegrationStore(t *testing.T, ctx context.Context) *store.Store {
@@ -34,7 +33,7 @@ func openDomainIntegrationStore(t *testing.T, ctx context.Context) *store.Store 
 	return store.New(pool)
 }
 
-func domainIntegrationService(t *testing.T, ctx context.Context, st *store.Store, teamID uuid.UUID) (*Service, context.Context, uuid.UUID) {
+func domainIntegrationService(t *testing.T, ctx context.Context, st *store.Store) (*Service, context.Context, uuid.UUID) {
 	t.Helper()
 	userRow, err := st.CreateUser(ctx, fmt.Sprintf("jus233-domains-%d@example.com", time.Now().UnixNano()), nil)
 	if err != nil {
@@ -44,7 +43,7 @@ func domainIntegrationService(t *testing.T, ctx context.Context, st *store.Store
 	repo := newStoreRepository(st, "integration-secret")
 	svc := NewService(Config{Repository: repo, Secret: "integration-secret", Logger: discardLogger()})
 	t.Cleanup(func() { _ = svc.Close() })
-	svcCtx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: teams.RoleOwner})
+	svcCtx := context.Background()
 	return svc, svcCtx, userID
 }
 
@@ -93,8 +92,8 @@ func TestDomainPromotionFlipFlopRealDB(t *testing.T) {
 	defer cancel()
 
 	st := openDomainIntegrationStore(t, ctx)
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
-	svc, svcCtx, userID := domainIntegrationService(t, ctx, st, teamID)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
+	svc, svcCtx, userID := domainIntegrationService(t, ctx, st)
 
 	app := createDomainIntegrationApp(t, svcCtx, svc, userID, envID, serverID, "flip", "a.example.com")
 	if _, err := svc.AddDomain(svcCtx, userID, app.ID, DomainInput{Domain: "b.example.com", Port: 3000, Protocol: ProtocolHTTPS}); err != nil {
@@ -134,8 +133,8 @@ func TestRemoveDomainPromotesEnabledRealDB(t *testing.T) {
 	defer cancel()
 
 	st := openDomainIntegrationStore(t, ctx)
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
-	svc, svcCtx, userID := domainIntegrationService(t, ctx, st, teamID)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
+	svc, svcCtx, userID := domainIntegrationService(t, ctx, st)
 
 	app := createDomainIntegrationApp(t, svcCtx, svc, userID, envID, serverID, "promote", "old.example.com")
 	if _, err := svc.AddDomain(svcCtx, userID, app.ID, DomainInput{Domain: "disabled.example.com", Port: 3000, Protocol: ProtocolHTTP}); err != nil {
@@ -192,8 +191,8 @@ func TestAddDomainReattachRealDB(t *testing.T) {
 	defer cancel()
 
 	st := openDomainIntegrationStore(t, ctx)
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
-	svc, svcCtx, userID := domainIntegrationService(t, ctx, st, teamID)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
+	svc, svcCtx, userID := domainIntegrationService(t, ctx, st)
 	repo := newStoreRepository(st, "integration-secret")
 
 	app := createDomainIntegrationApp(t, svcCtx, svc, userID, envID, serverID, "reattach", "base.example.com")
@@ -237,8 +236,8 @@ func TestAddDomainPreExistingIntentRealDB(t *testing.T) {
 	defer cancel()
 
 	st := openDomainIntegrationStore(t, ctx)
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
-	svc, svcCtx, userID := domainIntegrationService(t, ctx, st, teamID)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
+	svc, svcCtx, userID := domainIntegrationService(t, ctx, st)
 	repo := newStoreRepository(st, "integration-secret")
 
 	for _, tc := range []struct {

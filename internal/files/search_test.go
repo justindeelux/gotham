@@ -8,14 +8,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
 func TestServiceSearchMapping(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{
 		searchResp: &agentv1.SearchResponse{
 			Results: []*agentv1.SearchResult{
@@ -27,7 +26,7 @@ func TestServiceSearchMapping(t *testing.T) {
 	}
 	svc := newTestService(t, registry, client)
 
-	listing, err := svc.Search(scopeCtx(teams.RoleReadOnly, teamID), server.ID, "volumes", "app", "config", true)
+	listing, err := svc.Search(scopeCtx("", projectID), server.ID, "volumes", "app", "config", true)
 	if err != nil {
 		t.Fatalf("Search err = %v", err)
 	}
@@ -43,9 +42,9 @@ func TestServiceSearchMapping(t *testing.T) {
 }
 
 func TestServiceSearchValidation(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 
 	cases := []struct {
 		name      string
@@ -60,7 +59,7 @@ func TestServiceSearchValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &fakeFileClient{}
 			svc := newTestService(t, registry, client)
-			_, err := svc.Search(scopeCtx(teams.RoleOwner, teamID), server.ID, tc.root, "", tc.query, tc.recursive)
+			_, err := svc.Search(scopeCtx("", projectID), server.ID, tc.root, "", tc.query, tc.recursive)
 			if !errors.Is(err, ErrValidation) {
 				t.Fatalf("err = %v, want ErrValidation", err)
 			}
@@ -74,7 +73,7 @@ func TestServiceSearchValidation(t *testing.T) {
 func TestServiceSearchDisabled(t *testing.T) {
 	svc := newTestService(t, newFakeRegistry(), &fakeFileClient{})
 	t.Setenv(FeatureEnv, "false")
-	if _, err := svc.Search(scopeCtx(teams.RoleOwner, uuid.New()), uuid.New(), "volumes", "", "x", false); !errors.Is(err, ErrDisabled) {
+	if _, err := svc.Search(scopeCtx("", uuid.New()), uuid.New(), "volumes", "", "x", false); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("err = %v, want ErrDisabled", err)
 	}
 }

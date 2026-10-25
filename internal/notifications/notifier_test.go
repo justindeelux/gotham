@@ -188,7 +188,7 @@ func TestEmailNotifierBuildsMail(t *testing.T) {
 		Username: "ops@gotham.dev",
 		Password: "smtp-pass",
 		From:     "ops@gotham.dev",
-		To:       []string{"oncall@gotham.dev", "team@gotham.dev"},
+		To:       []string{"oncall@gotham.dev", "ops@gotham.dev"},
 	})
 
 	if err := notifier.Notify(context.Background(), fixedEvent()); err != nil {
@@ -208,7 +208,7 @@ func TestEmailNotifierBuildsMail(t *testing.T) {
 	if mail.From != "ops@gotham.dev" {
 		t.Errorf("from = %q", mail.From)
 	}
-	if strings.Join(mail.To, ",") != "oncall@gotham.dev,team@gotham.dev" {
+	if strings.Join(mail.To, ",") != "oncall@gotham.dev,ops@gotham.dev" {
 		t.Errorf("to = %v", mail.To)
 	}
 	if want := "[Gotham] Deploy failed: shop-web"; mail.Subject != want {

@@ -9,7 +9,6 @@ import (
 )
 
 func (s *Store) CreateDatabase(ctx context.Context, params sqlc.CreateDatabaseParams) (sqlc.Database, error) {
-	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	return s.queries.CreateDatabase(ctx, params)
 }
 
@@ -19,10 +18,6 @@ func (s *Store) GetDatabase(ctx context.Context, id pgtype.UUID) (sqlc.Database,
 
 func (s *Store) ListDatabasesByUser(ctx context.Context, userID pgtype.UUID) ([]sqlc.Database, error) {
 	return s.queries.ListDatabasesByUser(ctx, userID)
-}
-
-func (s *Store) ListDatabasesByTeam(ctx context.Context, teamID pgtype.UUID) ([]sqlc.Database, error) {
-	return s.queries.ListDatabasesByTeam(ctx, teamID)
 }
 
 func (s *Store) ListDatabasesByEnvironment(ctx context.Context, environmentID pgtype.UUID) ([]sqlc.Database, error) {

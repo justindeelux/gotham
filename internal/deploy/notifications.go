@@ -13,7 +13,6 @@ type DeployResult struct {
 	DeploymentID  uuid.UUID
 	ApplicationID uuid.UUID
 	Application   string
-	TeamID        uuid.UUID
 	Kind          Kind
 	State         State
 	Error         string
@@ -40,7 +39,6 @@ func (o *Orchestrator) notify(ctx context.Context, st *runState, to State) {
 		DeploymentID:  st.dep.ID,
 		ApplicationID: st.app.ID,
 		Application:   st.app.Name,
-		TeamID:        st.app.TeamID,
 		Kind:          st.dep.Kind,
 		State:         to,
 		Error:         st.dep.Error,

@@ -18,7 +18,6 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"github.com/justindeelux/gotham/toolcatalog"
 )
@@ -371,22 +370,15 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID, limit int) ([]Jo
 	return jobs, nil
 }
 
-func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) error {
+func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, _ bool) error {
 	if s.registry == nil {
 		return nil
 	}
-	server, err := s.registry.Get(ctx, serverID)
-	if err != nil {
+	if _, err := s.registry.Get(ctx, serverID); err != nil {
 		if errors.Is(err, servers.ErrNotFound) {
 			return ErrNotFound
 		}
 		return fmt.Errorf("toolchain: resolve node: %w", err)
-	}
-	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, write); err != nil {
-		if errors.Is(err, teams.ErrForbidden) {
-			return ErrForbidden
-		}
-		return ErrNotFound
 	}
 	return nil
 }

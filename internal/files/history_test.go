@@ -12,7 +12,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -89,14 +88,14 @@ func (f *fakeHistory) savedCount() int {
 
 func newHistoryService(t *testing.T, client *fakeFileClient, history HistoryStore) (*Service, uuid.UUID, uuid.UUID) {
 	t.Helper()
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	svc := newTestService(t, registry, client)
 	if history != nil {
 		svc.SetHistoryStore(history)
 	}
-	return svc, server.ID, teamID
+	return svc, server.ID, projectID
 }
 
 func TestSaveRecordsPriorBody(t *testing.T) {
@@ -106,9 +105,9 @@ func TestSaveRecordsPriorBody(t *testing.T) {
 		writeResp: writeEntry(),
 	}
 	history := &fakeHistory{}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	_, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), serverID, WriteRequest{
+	_, err := svc.Write(scopeCtx("", projectID), serverID, WriteRequest{
 		Root: "volumes", Path: "a.txt", ExpectEtag: `"v1"`, Size: 3,
 	}, strings.NewReader("new"))
 	if err != nil {
@@ -126,9 +125,9 @@ func TestSaveRecordsPriorBody(t *testing.T) {
 func TestForceSaveDoesNotSnapshot(t *testing.T) {
 	client := &fakeFileClient{writeResp: writeEntry()}
 	history := &fakeHistory{}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	if _, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), serverID, WriteRequest{
+	if _, err := svc.Write(scopeCtx("", projectID), serverID, WriteRequest{
 		Root: "volumes", Path: "a.txt", Overwrite: true, Size: 3,
 	}, strings.NewReader("new")); err != nil {
 		t.Fatalf("write: %v", err)
@@ -145,9 +144,9 @@ func TestRestoreSnapshotsCurrentBody(t *testing.T) {
 		writeResp: writeEntry(),
 	}
 	history := &fakeHistory{body: VersionBody{Version: Version{ID: uuid.New(), Size: 12}, Content: "version-body"}}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	if _, err := svc.RestoreVersion(scopeCtx(teams.RoleOwner, teamID), serverID, "volumes", "a.txt", history.body.Version.ID); err != nil {
+	if _, err := svc.RestoreVersion(scopeCtx("", projectID), serverID, "volumes", "a.txt", history.body.Version.ID); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	header := client.lastWriteHeader()
@@ -168,9 +167,9 @@ func TestRestoreRecreatesDeletedFile(t *testing.T) {
 		writeResp: &agentv1.WriteResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Etag: `"v2"`}, Created: true},
 	}
 	history := &fakeHistory{body: VersionBody{Version: Version{ID: uuid.New(), Size: 4}, Content: "body"}}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	if _, err := svc.RestoreVersion(scopeCtx(teams.RoleOwner, teamID), serverID, "volumes", "a.txt", history.body.Version.ID); err != nil {
+	if _, err := svc.RestoreVersion(scopeCtx("", projectID), serverID, "volumes", "a.txt", history.body.Version.ID); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	if header := client.lastWriteHeader(); header.GetExpectEtag() != "" {
@@ -186,9 +185,9 @@ func TestRestoreRefusesUnreadableCurrent(t *testing.T) {
 		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 9, Etag: `"v1"`}},
 	}
 	history := &fakeHistory{body: VersionBody{Version: Version{ID: uuid.New(), Size: 4}, Content: "body"}}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	_, err := svc.RestoreVersion(scopeCtx(teams.RoleOwner, teamID), serverID, "volumes", "a.txt", history.body.Version.ID)
+	_, err := svc.RestoreVersion(scopeCtx("", projectID), serverID, "volumes", "a.txt", history.body.Version.ID)
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -241,19 +240,19 @@ func TestHistoryPathConfinement(t *testing.T) {
 }
 
 func TestHistoryUnavailable(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	svc := newTestService(t, registry, &fakeFileClient{})
-	if _, err := svc.History(scopeCtx(teams.RoleOwner, teamID), server.ID, "volumes", "a.txt"); !errors.Is(err, ErrHistoryUnavailable) {
+	if _, err := svc.History(scopeCtx("", projectID), server.ID, "volumes", "a.txt"); !errors.Is(err, ErrHistoryUnavailable) {
 		t.Fatalf("err = %v, want ErrHistoryUnavailable", err)
 	}
 }
 
 func TestHistoryListsNewestFirst(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	now := time.Now()
 	history := &fakeHistory{versions: []Version{
 		{ID: uuid.New(), CreatedAt: now, Size: 2},
@@ -262,7 +261,7 @@ func TestHistoryListsNewestFirst(t *testing.T) {
 	svc := newTestService(t, registry, &fakeFileClient{})
 	svc.SetHistoryStore(history)
 
-	got, err := svc.History(scopeCtx(teams.RoleOwner, teamID), server.ID, "volumes", "a.txt")
+	got, err := svc.History(scopeCtx("", projectID), server.ID, "volumes", "a.txt")
 	if err != nil {
 		t.Fatalf("history: %v", err)
 	}
@@ -278,9 +277,9 @@ func TestSaveSkipsSnapshotOnEtagMismatch(t *testing.T) {
 		writeResp: writeEntry(),
 	}
 	history := &fakeHistory{}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	if _, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), serverID, WriteRequest{
+	if _, err := svc.Write(scopeCtx("", projectID), serverID, WriteRequest{
 		Root: "volumes", Path: "a.txt", ExpectEtag: `"v2"`, Size: 3,
 	}, strings.NewReader("new")); err != nil {
 		t.Fatalf("write: %v", err)
@@ -297,9 +296,9 @@ func TestSnapshotFailureDoesNotFailSave(t *testing.T) {
 		writeResp: writeEntry(),
 	}
 	history := &fakeHistory{saveErr: errors.New("database down")}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	if _, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), serverID, WriteRequest{
+	if _, err := svc.Write(scopeCtx("", projectID), serverID, WriteRequest{
 		Root: "volumes", Path: "a.txt", ExpectEtag: `"v1"`, Size: 3,
 	}, strings.NewReader("new")); err != nil {
 		t.Fatalf("write = %v, want the committed save to succeed", err)
@@ -310,7 +309,7 @@ func TestSnapshotFailureDoesNotFailSave(t *testing.T) {
 }
 
 func TestSnapshotInsertSurvivesRequestCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(scopeCtx(teams.RoleOwner, uuid.New()))
+	_, cancel := context.WithCancel(scopeCtx("", uuid.New()))
 	defer cancel()
 	client := &fakeFileClient{
 		statResp:     &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 4, Etag: `"v1"`}},
@@ -319,13 +318,13 @@ func TestSnapshotInsertSurvivesRequestCancellation(t *testing.T) {
 		onWriteClose: cancel,
 	}
 	history := &fakeHistory{}
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	svc := newTestService(t, registry, client)
 	svc.SetHistoryStore(history)
 
-	ctx = teams.WithScope(ctx, teams.Scope{UserID: uuid.New(), TeamID: teamID, Role: teams.RoleOwner})
+	ctx := context.Background()
 	if _, err := svc.Write(ctx, server.ID, WriteRequest{
 		Root: "volumes", Path: "a.txt", ExpectEtag: `"v1"`, Size: 3,
 	}, strings.NewReader("new")); err != nil {
@@ -349,9 +348,9 @@ func TestRestoreSnapshotsBeforeWriteAndAbortsOnFailure(t *testing.T) {
 		body:    VersionBody{Version: Version{ID: uuid.New(), Size: 4}, Content: "body"},
 		saveErr: errors.New("database down"),
 	}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	_, err := svc.RestoreVersion(scopeCtx(teams.RoleOwner, teamID), serverID, "volumes", "a.txt", history.body.Version.ID)
+	_, err := svc.RestoreVersion(scopeCtx("", projectID), serverID, "volumes", "a.txt", history.body.Version.ID)
 	if err == nil {
 		t.Fatal("restore succeeded without storing the pre-restore snapshot")
 	}
@@ -371,9 +370,9 @@ func TestRestoreDropsPreSnapshotOnConflict(t *testing.T) {
 		body:   VersionBody{Version: Version{ID: uuid.New(), Size: 4}, Content: "body"},
 		saveID: saveID,
 	}
-	svc, serverID, teamID := newHistoryService(t, client, history)
+	svc, serverID, projectID := newHistoryService(t, client, history)
 
-	_, err := svc.RestoreVersion(scopeCtx(teams.RoleOwner, teamID), serverID, "volumes", "a.txt", history.body.Version.ID)
+	_, err := svc.RestoreVersion(scopeCtx("", projectID), serverID, "volumes", "a.txt", history.body.Version.ID)
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("err = %v, want ErrConflict", err)
 	}
@@ -392,8 +391,8 @@ func TestHistoryCanonicalizesPath(t *testing.T) {
 		readBody:  []byte("current"),
 		writeResp: writeEntry(),
 	}
-	svc, serverID, teamID := newHistoryService(t, client, history)
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	svc, serverID, projectID := newHistoryService(t, client, history)
+	ctx := scopeCtx("", projectID)
 	spelling := "app//./compose.yml/"
 
 	if _, err := svc.History(ctx, serverID, "volumes", spelling); err != nil {

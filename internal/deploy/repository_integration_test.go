@@ -16,7 +16,6 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const defaultIntegrationDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
@@ -70,11 +69,10 @@ func TestStoreRepositoryDeployKeyRoundtrip(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID:        pgUUID(userID),
-		TeamID:        pgUUID(teamID),
 		ServerID:      pgUUID(serverID),
 		EnvironmentID: pgUUID(envID),
 		Name:          "deploy-key-app",
@@ -229,11 +227,10 @@ func TestStoreRepositoryDeleteDeployKeyFence(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID:        pgUUID(userID),
-		TeamID:        pgUUID(teamID),
 		ServerID:      pgUUID(serverID),
 		EnvironmentID: pgUUID(envID),
 		Name:          "fence-app",
@@ -319,7 +316,7 @@ func TestListApplicationsByEnvironmentPreviewsFlag(t *testing.T) {
 
 	st := store.New(pool)
 	repo := newStoreRepository(st, "integration-secret")
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
 
 	user, err := st.CreateUser(ctx, fmt.Sprintf("preview-flag-%d@example.com", time.Now().UnixNano()), nil)
 	if err != nil {
@@ -337,8 +334,7 @@ func TestListApplicationsByEnvironmentPreviewsFlag(t *testing.T) {
 	mkApp := func(name string, preview bool) {
 		t.Helper()
 		if _, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-			UserID: pgUUID(userID), TeamID: pgUUID(teamID),
-			ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
+			UserID: pgUUID(userID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
 			Name: name, CloneUrl: "https://github.com/acme/demo.git",
 			Branch: "main", BuildPack: "dockerfile", IsPreview: preview,
 		}); err != nil {
@@ -402,11 +398,10 @@ func TestStoreRepositoryActiveDeploymentIndex(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID:        pgUUID(userID),
-		TeamID:        pgUUID(teamID),
 		ServerID:      pgUUID(serverID),
 		EnvironmentID: pgUUID(envID),
 		Name:          "active-index-app",
@@ -493,13 +488,12 @@ func TestStoreRepositoryListDeploymentsByAppLimit(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
 
 	newApp := func(name string) uuid.UUID {
 		t.Helper()
 		app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 			UserID:        pgUUID(userID),
-			TeamID:        pgUUID(teamID),
 			ServerID:      pgUUID(serverID),
 			EnvironmentID: pgUUID(envID),
 			Name:          name,
@@ -694,10 +688,10 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
 
 	base, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), TeamID: pgUUID(teamID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
+		UserID: pgUUID(userID), EnvironmentID: pgUUID(envID), ServerID: pgUUID(serverID),
 		Name: "preview-base", Provider: "github",
 		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git",
 		Branch: "main", BuildPack: "dockerfile",
@@ -707,7 +701,7 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 	}
 	baseID := uuid.UUID(base.ID.Bytes)
 	preview, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
-		UserID: pgUUID(userID), TeamID: pgUUID(teamID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
+		UserID: pgUUID(userID), EnvironmentID: pgUUID(envID), ServerID: pgUUID(serverID),
 		Name: "preview-base-pr-7", Provider: "github",
 		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git",
 		Branch: "feat/x", BuildPack: "dockerfile",
@@ -798,11 +792,10 @@ func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
 		}
 	})
 
-	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	envID, serverID := seedProjectEnvironment(t, ctx, st)
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID:        pgUUID(userID),
-		TeamID:        pgUUID(teamID),
 		ServerID:      pgUUID(serverID),
 		EnvironmentID: pgUUID(envID),
 		Name:          "credential-app",
@@ -853,7 +846,6 @@ func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
 
 	sibling, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID:        pgUUID(userID),
-		TeamID:        pgUUID(teamID),
 		ServerID:      pgUUID(serverID),
 		EnvironmentID: pgUUID(envID),
 		Name:          "credential-sibling",
@@ -929,14 +921,13 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 	}
 	userA, userB := newUser("a"), newUser("b")
 
-	teamA, envA, serverA := seedProjectEnvironment(t, ctx, st)
-	teamB, envB, serverB := seedProjectEnvironment(t, ctx, st)
+	envA, serverA := seedProjectEnvironment(t, ctx, st)
+	envB, serverB := seedProjectEnvironment(t, ctx, st)
 
-	newApp := func(user, team, env, server uuid.UUID, name string, preview bool) uuid.UUID {
+	newApp := func(user, env, server uuid.UUID, name string, preview bool) uuid.UUID {
 		t.Helper()
 		app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 			UserID:        pgUUID(user),
-			TeamID:        pgUUID(team),
 			ServerID:      pgUUID(server),
 			EnvironmentID: pgUUID(env),
 			Name:          name,
@@ -952,9 +943,9 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 		}
 		return uuid.UUID(app.ID.Bytes)
 	}
-	appA := newApp(userA, teamA, envA, serverA, "feed-a", false)
-	appB := newApp(userB, teamB, envB, serverB, "feed-b", false)
-	previewA := newApp(userA, teamA, envA, serverA, "feed-a-preview", true)
+	appA := newApp(userA, envA, serverA, "feed-a", false)
+	appB := newApp(userB, envB, serverB, "feed-b", false)
+	previewA := newApp(userA, envA, serverA, "feed-a-preview", true)
 
 	seedRows := []Deployment{
 		{ApplicationID: appA, Kind: KindDeploy, State: StateFailed},
@@ -979,20 +970,19 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 		}
 	}
 
-	rows, err := repo.ListRecentDeployments(ctx,
-		teams.Scope{UserID: userA, TeamID: teamA, Role: teams.RoleOwner}, 10)
+	rows, err := repo.ListRecentDeployments(ctx, userA, 10)
 	if err != nil {
 		t.Fatalf("ListRecentDeployments: %v", err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("team A rows = %d, want 1 (its own non-preview app only)", len(rows))
+		t.Fatalf("user A rows = %d, want 1 (its own non-preview app only)", len(rows))
 	}
 	if rows[0].ApplicationID != appA || rows[0].ApplicationName != "feed-a" {
-		t.Errorf("team A row = %s/%q, want feed-a only (no cross-team leak)",
+		t.Errorf("user A row = %s/%q, want feed-a only (no cross-user leak)",
 			rows[0].ApplicationID, rows[0].ApplicationName)
 	}
 
-	userFeed, err := repo.ListRecentDeployments(ctx, teams.Scope{UserID: userA}, 10)
+	userFeed, err := repo.ListRecentDeployments(ctx, userA, 10)
 	if err != nil {
 		t.Fatalf("creator feed: %v", err)
 	}
@@ -1000,12 +990,11 @@ func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
 		t.Fatalf("creator rows = %d, want user A's non-preview app only", len(userFeed))
 	}
 
-	limited, err := repo.ListRecentDeployments(ctx,
-		teams.Scope{UserID: userB, TeamID: teamB, Role: teams.RoleOwner}, 0)
+	limited, err := repo.ListRecentDeployments(ctx, userB, 0)
 	if err != nil {
-		t.Fatalf("team B feed: %v", err)
+		t.Fatalf("user B feed: %v", err)
 	}
 	if len(limited) != 1 || limited[0].ApplicationID != appB {
-		t.Errorf("team B rows = %d, want exactly its own app", len(limited))
+		t.Errorf("user B rows = %d, want exactly its own app", len(limited))
 	}
 }

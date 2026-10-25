@@ -11,20 +11,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func alwaysUser(id uuid.UUID) UserIDFunc {
 	return func(context.Context) (uuid.UUID, bool) { return id, true }
 }
 
-func newRouteServer(userID, teamID uuid.UUID, role teams.Role, svc NotificationService) http.Handler {
+func newRouteServer(userID uuid.UUID, svc NotificationService) http.Handler {
 	auth := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			scope := teams.Scope{UserID: userID, TeamID: teamID, Role: role}
-			next.ServeHTTP(w, r.WithContext(teams.WithScope(r.Context(), scope)))
-		})
+		return next
 	}
 	router := chi.NewRouter()
 	Mount(router, auth, alwaysUser(userID), svc)
@@ -42,7 +37,7 @@ func doRequest(handler http.Handler, method, path, body string) *httptest.Respon
 }
 
 func discordBody(secret string) string {
-	return `{"name":"team alerts","kind":"discord","config":{"webhook_url":"` + secret + `"}}`
+	return `{"name":"alerts","kind":"discord","config":{"webhook_url":"` + secret + `"}}`
 }
 
 func decodeChannel(t *testing.T, rec *httptest.ResponseRecorder) ChannelView {
@@ -55,10 +50,10 @@ func decodeChannel(t *testing.T, rec *httptest.ResponseRecorder) ChannelView {
 }
 
 func TestChannelRoutesLifecycleAndRedaction(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
 	service := newTestService(t, repo)
-	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	handler := newRouteServer(userID, service)
 	const secret = "https://discord.com/api/webhooks/1184/8f2c-secret-value"
 
 	rec := doRequest(handler, http.MethodPost, "/v1/notification-channels", discordBody(secret))
@@ -111,9 +106,9 @@ func TestChannelRoutesLifecycleAndRedaction(t *testing.T) {
 }
 
 func TestChannelRouteValidation(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	service := newTestService(t, newFakeRepository())
-	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	handler := newRouteServer(userID, service)
 
 	cases := map[string]string{
 		"empty body":      "",
@@ -139,66 +134,10 @@ func TestChannelRouteValidation(t *testing.T) {
 	}
 }
 
-func TestChannelRouteReadOnlyCannotWrite(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
-	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamID))
-	service := newTestService(t, repo)
-	handler := newRouteServer(userID, teamID, teams.RoleReadOnly, service)
-
-	if rec := doRequest(handler, http.MethodGet, "/v1/notification-channels", ""); rec.Code != http.StatusOK {
-		t.Fatalf("read_only list = %d, want 200", rec.Code)
-	}
-	if rec := doRequest(handler, http.MethodPost, "/v1/notification-channels", discordBody("https://discord.com/api/webhooks/1/a")); rec.Code != http.StatusForbidden {
-		t.Fatalf("read_only create = %d, want 403", rec.Code)
-	}
-	if rec := doRequest(handler, http.MethodPatch, "/v1/notification-channels/"+channel.ID.String(), `{"name":"x"}`); rec.Code != http.StatusForbidden {
-		t.Fatalf("read_only update = %d, want 403", rec.Code)
-	}
-	if rec := doRequest(handler, http.MethodDelete, "/v1/notification-channels/"+channel.ID.String(), ""); rec.Code != http.StatusForbidden {
-		t.Fatalf("read_only delete = %d, want 403", rec.Code)
-	}
-	if rec := doRequest(handler, http.MethodPost, "/v1/notification-channels/"+channel.ID.String()+"/test", ""); rec.Code != http.StatusForbidden {
-		t.Fatalf("read_only test = %d, want 403", rec.Code)
-	}
-}
-
-func TestChannelRouteForeignTeamIsNotFound(t *testing.T) {
-	ownerID, teamA := uuid.New(), uuid.New()
-	strangerID, teamB := uuid.New(), uuid.New()
-	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamA))
-	service := newTestService(t, repo)
-	handler := newRouteServer(strangerID, teamB, teams.RoleOwner, service)
-	path := "/v1/notification-channels/" + channel.ID.String()
-
-	if rec := doRequest(handler, http.MethodGet, path, ""); rec.Code != http.StatusNotFound {
-		t.Fatalf("foreign get = %d, want 404", rec.Code)
-	}
-	if rec := doRequest(handler, http.MethodPatch, path, `{"name":"stolen"}`); rec.Code != http.StatusNotFound {
-		t.Fatalf("foreign update = %d, want 404", rec.Code)
-	}
-	if rec := doRequest(handler, http.MethodDelete, path, ""); rec.Code != http.StatusNotFound {
-		t.Fatalf("foreign delete = %d, want 404", rec.Code)
-	}
-	if rec := doRequest(handler, http.MethodPost, path+"/test", ""); rec.Code != http.StatusNotFound {
-		t.Fatalf("foreign test = %d, want 404", rec.Code)
-	}
-	list := doRequest(handler, http.MethodGet, "/v1/notification-channels", "")
-	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), channel.ID.String()) {
-		t.Fatalf("foreign list = %d %s, want an empty own-team list", list.Code, list.Body.String())
-	}
-
-	ownerHandler := newRouteServer(ownerID, teamA, teams.RoleOwner, service)
-	if rec := doRequest(ownerHandler, http.MethodGet, path, ""); rec.Code != http.StatusOK {
-		t.Fatalf("owner get = %d, want 200", rec.Code)
-	}
-}
-
 func TestChannelRouteEmptyListIsArray(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	service := newTestService(t, newFakeRepository())
-	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	handler := newRouteServer(userID, service)
 
 	rec := doRequest(handler, http.MethodGet, "/v1/notification-channels", "")
 	if rec.Code != http.StatusOK {
@@ -210,7 +149,7 @@ func TestChannelRouteEmptyListIsArray(t *testing.T) {
 }
 
 func TestChannelRouteTestDeliversMail(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
 	mailer := &fakeMailer{}
 	sealed, err := sealConfig(testSecret, ChannelConfig{
@@ -221,14 +160,14 @@ func TestChannelRouteTestDeliversMail(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 	channel := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "email", Kind: KindEmail,
+		ID: uuid.New(), Name: "email", Kind: KindEmail,
 		Enabled: true, Events: AllEvents, SealedConfig: sealed,
 	})
 	service := NewService(Config{
 		Repository: repo, Secret: testSecret, Logger: discardLogger(), Mailer: mailer, SendTimeout: 2 * time.Second,
 	})
 	t.Cleanup(func() { _ = service.Close() })
-	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	handler := newRouteServer(userID, service)
 
 	rec := doRequest(handler, http.MethodPost, "/v1/notification-channels/"+channel.ID.String()+"/test", "")
 	if rec.Code != http.StatusOK {
@@ -250,7 +189,7 @@ func TestChannelRouteTestDeliversMail(t *testing.T) {
 }
 
 func TestChannelRouteTestHidesTransportSecret(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	server, _ := newWebhookServer(t, http.StatusOK)
 	endpoint := server.URL + "/webhook/route-secret-token"
 	server.Close()
@@ -261,11 +200,11 @@ func TestChannelRouteTestHidesTransportSecret(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 	channel := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		ID: uuid.New(), Name: "discord", Kind: KindDiscord,
 		Enabled: true, Events: AllEvents, SealedConfig: sealed,
 	})
 	service := newTestService(t, repo)
-	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	handler := newRouteServer(userID, service)
 
 	rec := doRequest(handler, http.MethodPost, "/v1/notification-channels/"+channel.ID.String()+"/test", "")
 	if rec.Code != http.StatusOK {
@@ -287,10 +226,10 @@ func TestChannelRouteTestHidesTransportSecret(t *testing.T) {
 }
 
 func TestChannelRouteMaskedConfigPatch(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
 	service := newTestService(t, repo)
-	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	handler := newRouteServer(userID, service)
 	const webhook = "https://discord.com/api/webhooks/1184/8f2c-secret-value"
 
 	rec := doRequest(handler, http.MethodPost, "/v1/notification-channels", discordBody(webhook))
@@ -321,7 +260,7 @@ func TestChannelRouteMaskedConfigPatch(t *testing.T) {
 }
 
 func TestChannelRouteTestHidesStatusReasonPhrase(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	server := newReflectingStatusServer(t, http.StatusInternalServerError)
 	repo := newFakeRepository()
 	sealed, err := sealConfig(testSecret, ChannelConfig{WebhookURL: server.URL + "/webhook/route-reason-secret"})
@@ -329,11 +268,11 @@ func TestChannelRouteTestHidesStatusReasonPhrase(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 	channel := repo.seed(Channel{
-		ID: uuid.New(), TeamID: teamID, Name: "discord", Kind: KindDiscord,
+		ID: uuid.New(), Name: "discord", Kind: KindDiscord,
 		Enabled: true, Events: AllEvents, SealedConfig: sealed,
 	})
 	service := newTestService(t, repo)
-	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	handler := newRouteServer(userID, service)
 
 	rec := doRequest(handler, http.MethodPost, "/v1/notification-channels/"+channel.ID.String()+"/test", "")
 	if rec.Code != http.StatusOK {
@@ -355,10 +294,10 @@ func TestChannelRouteTestHidesStatusReasonPhrase(t *testing.T) {
 }
 
 func TestChannelRoutesUnmountWhenDisabled(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	t.Setenv(FeatureEnv, "false")
 	service := newTestService(t, newFakeRepository())
-	handler := newRouteServer(userID, teamID, teams.RoleOwner, service)
+	handler := newRouteServer(userID, service)
 
 	if rec := doRequest(handler, http.MethodGet, "/v1/notification-channels", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("flag off list = %d, want 404", rec.Code)
@@ -373,10 +312,10 @@ func TestChannelRoutesUnmountWhenDisabled(t *testing.T) {
 }
 
 func TestChannelRouteDeliveriesHistory(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	channel := repo.seed(sampleChannel(t, teamID))
-	empty := repo.seed(sampleChannel(t, teamID))
+	channel := repo.seed(sampleChannel(t))
+	empty := repo.seed(sampleChannel(t))
 	service := newTestService(t, repo)
 	if err := repo.CreateDelivery(context.Background(), Delivery{
 		ID:           uuid.New(),
@@ -389,7 +328,7 @@ func TestChannelRouteDeliveriesHistory(t *testing.T) {
 		t.Fatalf("CreateDelivery: %v", err)
 	}
 
-	handler := newRouteServer(userID, teamID, teams.RoleReadOnly, service)
+	handler := newRouteServer(userID, service)
 	rec := doRequest(handler, http.MethodGet, "/v1/notification-channels/"+channel.ID.String()+"/deliveries", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("deliveries = %d (body %s), want 200", rec.Code, rec.Body.String())
@@ -408,10 +347,5 @@ func TestChannelRouteDeliveriesHistory(t *testing.T) {
 	emptyRec := doRequest(handler, http.MethodGet, "/v1/notification-channels/"+empty.ID.String()+"/deliveries", "")
 	if body := strings.TrimSpace(emptyRec.Body.String()); body != `{"deliveries":[]}` {
 		t.Errorf("empty history = %s, want an empty array", body)
-	}
-
-	foreign := newRouteServer(uuid.New(), uuid.New(), teams.RoleOwner, service)
-	if rec := doRequest(foreign, http.MethodGet, "/v1/notification-channels/"+channel.ID.String()+"/deliveries", ""); rec.Code != http.StatusNotFound {
-		t.Fatalf("foreign deliveries = %d, want 404", rec.Code)
 	}
 }

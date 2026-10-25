@@ -19,7 +19,6 @@ const (
 type Database struct {
 	ID              uuid.UUID
 	UserID          uuid.UUID
-	TeamID          uuid.UUID
 	ServerID        uuid.UUID
 	EnvironmentID   uuid.UUID
 	Name            string

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -58,24 +57,6 @@ func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	ownerID, err := uuid.Parse(owner.User.ID)
-	if err != nil {
-		t.Fatalf("parse owner id: %v", err)
-	}
-	teamID := uuid.New()
-	if _, err := st.DB.Exec(ctx,
-		`INSERT INTO teams (id, name) VALUES ($1, 'disconnect-probe')`, teamID); err != nil {
-		t.Fatalf("insert team: %v", err)
-	}
-	if _, err := st.DB.Exec(ctx,
-		`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'owner')`,
-		teamID, ownerID); err != nil {
-		t.Fatalf("insert membership: %v", err)
-	}
-	team := teamID.String()
-	withTeam := func(method, path, body string) *httptest.ResponseRecorder {
-		return doTeamRequest(t, s, method, path, body, bearer, team)
-	}
 
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/providers",
 		`{"provider":"gitlab","base_url":"https://git.example","client_id":"id",`+
@@ -91,8 +72,8 @@ func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 		t.Fatalf("decode provider: %v", err)
 	}
 
-	rec = withTeam(http.MethodPost, "/api/v1/servers",
-		`{"name":"node-1","ip":"10.0.0.5","ssh_user":"root"}`)
+	rec = doRequest(t, s, http.MethodPost, "/api/v1/servers",
+		`{"name":"node-1","ip":"10.0.0.5","ssh_user":"root"}`, bearer)
 	_ = rec
 	serverID := uuid.New()
 	if _, err := st.DB.Exec(ctx,
@@ -107,7 +88,7 @@ func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 	}
 	server.Server.ID = serverID.String()
 
-	rec = withTeam(http.MethodPost, "/api/v1/projects", `{"name":"Shop"}`)
+	rec = doRequest(t, s, http.MethodPost, "/api/v1/projects", `{"name":"Shop"}`, bearer)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("project create = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -119,11 +100,11 @@ func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 		t.Fatalf("environments = %+v, want one", project.Environments)
 	}
 
-	rec = withTeam(http.MethodPost, "/api/v1/applications",
+	rec = doRequest(t, s, http.MethodPost, "/api/v1/applications",
 		`{"name":"shop","environment_id":"`+project.Environments[0].ID+`",`+
 			`"server_id":"`+server.Server.ID+`","provider":"gitlab",`+
 			`"repo":"acme/shop","clone_url":"https://git.example/acme/shop.git",`+
-			`"source_type":"gitlab_app","branch":"main"}`)
+			`"source_type":"gitlab_app","branch":"main"}`, bearer)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("application create = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -144,7 +125,7 @@ func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 		t.Fatalf("409 body = %s, want the app name without the internal prefix", body)
 	}
 
-	rec = withTeam(http.MethodDelete, "/api/v1/applications/"+application.Application.ID, "")
+	rec = doRequest(t, s, http.MethodDelete, "/api/v1/applications/"+application.Application.ID, "", bearer)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("application delete = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}

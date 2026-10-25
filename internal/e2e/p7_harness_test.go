@@ -97,7 +97,7 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 	}
 	h.serverID = uuid.UUID(serverRow.ID.Bytes)
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: userRow.ID, Name: "p7-e2e-" + suffix,
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "p7-e2e-" + suffix,
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)

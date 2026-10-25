@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,13 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -27,17 +24,14 @@ import (
 	"github.com/justindeelux/gotham/internal/deploy"
 	adapter "github.com/justindeelux/gotham/internal/mcp"
 	"github.com/justindeelux/gotham/internal/projects"
-	"github.com/justindeelux/gotham/internal/server"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
 	mcpContractHeaderE2E = "X-Gotham-MCP-Contract"
-	mcpTeamHeaderE2E     = "X-Gotham-MCP-Team-Id"
 	mcpWorkflowSecret    = "gotham-mcp-workflow-secret-key"
 )
 
@@ -45,7 +39,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	requireE2E(t)
 	requireIsolatedMCPEnvironment(t)
 	t.Setenv(cloneLocalEnv, "true")
-	t.Setenv(teams.FeatureEnv, "true")
 	t.Setenv(deploy.FeatureEnv, "")
 	t.Setenv("GOTHAM_DEV_CLONE_LOCAL", "true")
 	removeNewDanglingImages(t)
@@ -89,23 +82,7 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	userID := uuid.UUID(user.ID.Bytes)
-	teamA, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "mcp-team-a"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	teamB, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "mcp-team-b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	teamAID, teamBID := uuid.UUID(teamA.ID.Bytes), uuid.UUID(teamB.ID.Bytes)
-	for _, team := range []uuid.UUID{teamAID, teamBID} {
-		if _, err := st.CreateTeamMember(ctx, sqlc.CreateTeamMemberParams{
-			TeamID: pgtype.UUID{Bytes: team, Valid: true}, UserID: user.ID, Role: string(teams.RoleAdmin),
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	node, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "mcp-e2e-node", Ip: "127.0.0.1", Port: 22, SshUser: "root", TeamID: pgtype.UUID{Bytes: teamAID, Valid: true}})
+	node, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "mcp-e2e-node", Ip: "127.0.0.1", Port: 22, SshUser: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,25 +103,15 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cleanupCancel()
 		for _, query := range []string{
-			"DELETE FROM applications WHERE team_id IN ($1,$2)",
-			"DELETE FROM projects WHERE team_id IN ($1,$2)",
-			"DELETE FROM team_members WHERE team_id IN ($1,$2)",
+			"DELETE FROM applications WHERE user_id=$1",
+			"DELETE FROM projects WHERE name LIKE 'mcp-%'",
 		} {
-			if _, err := pool.Exec(cleanupCtx, query, teamAID, teamBID); err != nil {
+			if _, err := pool.Exec(cleanupCtx, query, userID); err != nil {
 				t.Logf("cleanup %q: %v", query, err)
 			}
 		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id=$1 OR id=$2", nodeID, legacyID); err != nil {
 			t.Logf("cleanup servers: %v", err)
-		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id IN ($1,$2)", teamAID, teamBID); err != nil {
-			t.Logf("cleanup teams: %v", err)
-		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM team_members WHERE team_id=$1", userID); err != nil {
-			t.Logf("cleanup personal membership: %v", err)
-		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id=$1", userID); err != nil {
-			t.Logf("cleanup personal team: %v", err)
 		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM request_receipts WHERE principal_id=$1", userID); err != nil {
 			t.Logf("cleanup receipts: %v", err)
@@ -152,7 +119,7 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id=$1", userID); err != nil {
 			t.Logf("cleanup user: %v", err)
 		}
-		assertMCPWorkflowClean(t, cleanupCtx, pool, userID, teamAID, teamBID, nodeID, legacyID, workflowApps)
+		assertMCPWorkflowClean(t, cleanupCtx, pool, userID, nodeID, legacyID, workflowApps)
 	})
 
 	agentCtx, agentCancel := context.WithCancel(context.Background())
@@ -170,7 +137,6 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	})
 	serverSvc := servers.NewService(servers.Config{Store: st, Secret: mcpWorkflowSecret, Logger: logger})
 	tokens := auth.NewAPITokenService(st, logger)
-	teamSvc := teams.NewService(teams.Config{Store: st, Logger: logger})
 
 	deployToken, err := tokens.Create(ctx, userID, "mcp-deploy", []string{auth.ScopeRead, auth.ScopeDeploy})
 	if err != nil {
@@ -188,14 +154,10 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &mcpWorkflowHarness{userID: userID, tokens: tokens, teams: teamSvc}
+	h := &mcpWorkflowHarness{userID: userID, tokens: tokens}
 	router := chi.NewRouter()
 	router.Route("/api", func(api chi.Router) {
 		api.With(h.authorize).Get("/v1/mcp/context", h.context)
-		api.With(h.authorize).Post("/v1/role-probe", func(w http.ResponseWriter, _ *http.Request) {
-			h.roleProbeHits.Add(1)
-			w.WriteHeader(http.StatusNoContent)
-		})
 		projects.Mount(api, h.authorize, h.currentUser, projectSvc)
 		deploy.Mount(api, h.authorize, h.currentUser, deploySvc)
 		api.With(h.authorize).Get("/v1/servers", func(w http.ResponseWriter, r *http.Request) {
@@ -228,10 +190,9 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	t.Cleanup(api.Close)
 	h.baseURL = api.URL
 
-	owner := h.session(t, deployToken.Token, teamAID)
-	readOnly := h.session(t, readToken.Token, teamAID)
-	foreign := h.session(t, deployToken.Token, teamBID)
-	if _, err := adapter.NewServer(ctx, adapter.Config{URL: api.URL, Token: revoked.Token, TeamID: teamAID}, "test", logger); err == nil {
+	owner := h.session(t, deployToken.Token)
+	readOnly := h.session(t, readToken.Token)
+	if _, err := adapter.NewServer(ctx, adapter.Config{URL: api.URL, Token: revoked.Token}, "test", logger); err == nil {
 		t.Fatal("revoked token initialized the adapter")
 	}
 
@@ -241,14 +202,7 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	}
 	ownerNodes := nodeIDSet(nodes)
 	if !ownerNodes[nodeID.String()] || !ownerNodes[legacyID.String()] {
-		t.Fatalf("team A nodes=%v want team node %s and legacy %s", ownerNodes, nodeID, legacyID)
-	}
-	foreignNodes := nodeIDSet(h.call(t, foreign, "nodes_list", map[string]any{"limit": 10}))
-	if foreignNodes[nodeID.String()] {
-		t.Fatalf("team B saw team A's node %s: %v", nodeID, foreignNodes)
-	}
-	if !foreignNodes[legacyID.String()] {
-		t.Fatalf("team B did not see the legacy shared node: %v", foreignNodes)
+		t.Fatalf("nodes=%v want %s and %s", ownerNodes, nodeID, legacyID)
 	}
 	nodeOut := h.call(t, owner, "node_overview", map[string]any{"node_id": nodeID.String()})
 	if nodeOut["node"].(map[string]any)["status"] != "ready" {
@@ -295,7 +249,7 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 		removeImages(t, "gotham/"+appID)
 		removeLabelledContainers(t, "gotham.app_id="+appID)
 	})
-	h.putEnv(t, deployToken.Token, teamAID, appID, "MCP_ECHO_SECRET", "secret-echo-sentinel")
+	h.putEnv(t, deployToken.Token, appID, "MCP_ECHO_SECRET", "secret-echo-sentinel")
 
 	image := h.call(t, owner, "application_create", map[string]any{
 		"request_id": "mcp-image", "name": "mcp-image-" + suffix,
@@ -316,22 +270,7 @@ CMD ["sh","-c","echo gotham-mcp-runtime; echo runtime-secret:${MCP_ECHO_SECRET};
 	}
 	workflowApps = append(workflowApps, image["application"].(map[string]any)["id"].(string), private["application"].(map[string]any)["id"].(string))
 
-	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='read_only' WHERE team_id=$1 AND user_id=$2", teamAID, userID); err != nil {
-		t.Fatal(err)
-	}
-	h.expectError(t, owner, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy-role"}, "forbidden")
-	if status, body := h.roleProbe(t, deployToken.Token, teamAID); status != http.StatusForbidden || !strings.Contains(body, "insufficient team role") || h.roleProbeHits.Load() != 0 {
-		t.Fatalf("production role gate admitted a read-only write: status=%d hits=%d body=%s", status, h.roleProbeHits.Load(), body)
-	}
-	if _, err := pool.Exec(ctx, "UPDATE team_members SET role='admin' WHERE team_id=$1 AND user_id=$2", teamAID, userID); err != nil {
-		t.Fatal(err)
-	}
-	if status, _ := h.roleProbe(t, deployToken.Token, teamAID); status != http.StatusNoContent || h.roleProbeHits.Load() != 1 {
-		t.Fatalf("owner/admin did not reach the role-probe handler: status=%d hits=%d", status, h.roleProbeHits.Load())
-	}
 	h.expectError(t, readOnly, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy-read"}, "forbidden")
-	h.expectError(t, foreign, "application_overview", map[string]any{"application_id": appID}, "unsupported_or_not_found")
-	h.expectError(t, foreign, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy-foreign"}, "unsupported_or_not_found")
 
 	accepted := h.call(t, owner, "application_deploy", map[string]any{"application_id": appID, "request_id": "mcp-deploy"})
 	receipt := accepted["receipt"].(map[string]any)
@@ -438,11 +377,9 @@ func requireIsolatedMCPEnvironment(t *testing.T) {
 }
 
 type mcpWorkflowHarness struct {
-	baseURL       string
-	userID        uuid.UUID
-	tokens        *auth.APITokenService
-	teams         *teams.Service
-	roleProbeHits atomic.Int32
+	baseURL string
+	userID  uuid.UUID
+	tokens  *auth.APITokenService
 }
 
 func (h *mcpWorkflowHarness) currentUser(context.Context) (uuid.UUID, bool) {
@@ -470,40 +407,21 @@ func (h *mcpWorkflowHarness) authorize(next http.Handler) http.Handler {
 			mcpWriteJSON(w, http.StatusForbidden, map[string]string{"message": "insufficient scope"})
 			return
 		}
-		teamID, err := uuid.Parse(r.Header.Get("X-Team-Id"))
-		if err != nil {
-			mcpWriteJSON(w, http.StatusBadRequest, map[string]string{"message": "explicit team required"})
-			return
-		}
-		role, err := h.teams.Membership(r.Context(), teamID, identity.UserID)
-		if err != nil {
-			mcpWriteJSON(w, http.StatusForbidden, map[string]string{"message": "not a member"})
-			return
-		}
 		w.Header().Set(mcpContractHeaderE2E, "1")
-		w.Header().Set(mcpTeamHeaderE2E, teamID.String())
-		scope := teams.Scope{UserID: identity.UserID, TeamID: teamID, Role: role}
-		ctx := teams.WithScope(r.Context(), scope)
-		if mutation {
-			server.RequireTeamRole(teams.RoleOwner, teams.RoleAdmin)(next).ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r)
 	})
 }
 
-func (h *mcpWorkflowHarness) context(w http.ResponseWriter, r *http.Request) {
-	scope, _ := teams.FromContext(r.Context())
+func (h *mcpWorkflowHarness) context(w http.ResponseWriter, _ *http.Request) {
 	mcpWriteJSON(w, http.StatusOK, map[string]any{
-		"team_id":      scope.TeamID,
 		"capabilities": []string{"context", "strict_reads", "strict_mutations", "request_replay"},
 	})
 }
 
-func (h *mcpWorkflowHarness) session(t *testing.T, token string, team uuid.UUID) *sdk.ClientSession {
+func (h *mcpWorkflowHarness) session(t *testing.T, token string) *sdk.ClientSession {
 	t.Helper()
 	ctx := context.Background()
-	server, err := adapter.NewServer(ctx, adapter.Config{URL: h.baseURL, Token: token, TeamID: team}, "test", testLogger(t))
+	server, err := adapter.NewServer(ctx, adapter.Config{URL: h.baseURL, Token: token}, "test", testLogger(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +539,7 @@ func nodeIDSet(out map[string]any) map[string]bool {
 	return ids
 }
 
-func (h *mcpWorkflowHarness) putEnv(t *testing.T, token string, team uuid.UUID, appID, key, value string) {
+func (h *mcpWorkflowHarness) putEnv(t *testing.T, token, appID, key, value string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"env":[{"key":%q,"value":%q}]}`, key, value)
 	request, err := http.NewRequest(http.MethodPut, h.baseURL+"/api/v1/applications/"+appID+"/env", strings.NewReader(body))
@@ -629,7 +547,6 @@ func (h *mcpWorkflowHarness) putEnv(t *testing.T, token string, team uuid.UUID, 
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("X-Team-Id", team.String())
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -643,35 +560,16 @@ func (h *mcpWorkflowHarness) putEnv(t *testing.T, token string, team uuid.UUID, 
 	}
 }
 
-func (h *mcpWorkflowHarness) roleProbe(t *testing.T, token string, team uuid.UUID) (int, string) {
-	t.Helper()
-	request, err := http.NewRequest(http.MethodPost, h.baseURL+"/api/v1/role-probe", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("X-Team-Id", team.String())
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	body, _ := io.ReadAll(response.Body)
-	return response.StatusCode, string(body)
-}
-
-func assertMCPWorkflowClean(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, teamA, teamB, nodeID, legacyID uuid.UUID, appIDs []string) {
+func assertMCPWorkflowClean(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, nodeID, legacyID uuid.UUID, appIDs []string) {
 	t.Helper()
 	checks := []struct {
 		name  string
 		query string
 		args  []any
 	}{
-		{"applications", "SELECT count(*) FROM applications WHERE team_id IN ($1,$2)", []any{teamA, teamB}},
-		{"projects", "SELECT count(*) FROM projects WHERE team_id IN ($1,$2)", []any{teamA, teamB}},
+		{"applications", "SELECT count(*) FROM applications WHERE user_id=$1", []any{userID}},
+		{"projects", "SELECT count(*) FROM projects WHERE name LIKE 'mcp-%'", []any{}},
 		{"servers", "SELECT count(*) FROM servers WHERE id IN ($1,$2)", []any{nodeID, legacyID}},
-		{"teams", "SELECT count(*) FROM teams WHERE id IN ($1,$2,$3)", []any{teamA, teamB, userID}},
-		{"team_members", "SELECT count(*) FROM team_members WHERE team_id IN ($1,$2,$3)", []any{teamA, teamB, userID}},
 		{"users", "SELECT count(*) FROM users WHERE id=$1", []any{userID}},
 		{"request_receipts", "SELECT count(*) FROM request_receipts WHERE principal_id=$1", []any{userID}},
 	}

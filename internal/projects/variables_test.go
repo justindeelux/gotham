@@ -16,23 +16,22 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/providers"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const testVariableSecret = "test-shared-variables-secret"
 
-func newVariableTestService(repo *fakeRepository, userID, teamID uuid.UUID, role teams.Role) (*Service, context.Context) {
+func newVariableTestService(repo *fakeRepository, _ uuid.UUID) (*Service, context.Context) {
 	svc := NewService(Config{Repository: repo, Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
-	ctx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: role})
+	ctx := context.Background()
 	return svc, ctx
 }
 
 func strPtr(value string) *string { return &value }
 
 func TestReplaceProjectVariablesRoundtrip(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	svc, ctx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newVariableTestService(repo, userID)
 
 	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -88,9 +87,9 @@ func TestReplaceProjectVariablesRoundtrip(t *testing.T) {
 }
 
 func TestReplaceKeepsSecretWhenValueOmitted(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	svc, ctx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newVariableTestService(repo, userID)
 
 	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -139,9 +138,9 @@ func TestReplaceKeepsSecretWhenValueOmitted(t *testing.T) {
 }
 
 func TestReplaceSemanticsDropMissingKeys(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	svc, ctx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newVariableTestService(repo, userID)
 
 	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -172,9 +171,9 @@ func TestReplaceSemanticsDropMissingKeys(t *testing.T) {
 }
 
 func TestVariableKeyValidation(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	svc, ctx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newVariableTestService(repo, userID)
 
 	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -209,63 +208,10 @@ func TestVariableKeyValidation(t *testing.T) {
 	}
 }
 
-func TestVariableViewerForbidden(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
-	repo := newFakeRepository()
-	admin, adminCtx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
-	project, _, err := admin.CreateProject(adminCtx, userID, "Shop", "")
-	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	viewer, viewerCtx := newVariableTestService(repo, userID, teamID, teams.RoleReadOnly)
-
-	if _, err := viewer.GetProjectVariables(viewerCtx, userID, project.ID); err != nil {
-		t.Errorf("viewer GET = %v, want success", err)
-	}
-	if _, err := viewer.ReplaceProjectVariables(viewerCtx, userID, project.ID, []VariableInput{{Key: "A", Value: strPtr("1")}}); !errors.Is(err, ErrForbidden) {
-		t.Errorf("viewer PUT = %v, want ErrForbidden", err)
-	}
-}
-
-func TestVariableCrossTeamIsNotFound(t *testing.T) {
-	userID, teamA, teamB := uuid.New(), uuid.New(), uuid.New()
-	repo := newFakeRepository()
-	svcA, ctxA := newVariableTestService(repo, userID, teamA, teams.RoleAdmin)
-	svcB, ctxB := newVariableTestService(repo, userID, teamB, teams.RoleAdmin)
-
-	project, production, err := svcA.CreateProject(ctxA, userID, "Shop", "")
-	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	_ = production
-	for name, err := range map[string]error{
-		"get project vars":     mustVarErr(svcB.GetProjectVariables(ctxB, userID, project.ID)),
-		"replace project vars": mustVarErr(svcB.ReplaceProjectVariables(ctxB, userID, project.ID, []VariableInput{{Key: "A", Value: strPtr("1")}})),
-	} {
-		if !errors.Is(err, ErrNotFound) {
-			t.Errorf("cross-team %s = %v, want ErrNotFound", name, err)
-		}
-	}
-	_, environments, err := svcA.GetProject(ctxA, userID, project.ID)
-	if err != nil || len(environments) != 1 {
-		t.Fatalf("GetProject: %+v, %v", environments, err)
-	}
-	for name, err := range map[string]error{
-		"get env vars":     mustVarErr(svcB.GetEnvironmentVariables(ctxB, userID, environments[0].ID)),
-		"replace env vars": mustVarErr(svcB.ReplaceEnvironmentVariables(ctxB, userID, environments[0].ID, []VariableInput{{Key: "A", Value: strPtr("1")}})),
-	} {
-		if !errors.Is(err, ErrNotFound) {
-			t.Errorf("cross-team %s = %v, want ErrNotFound", name, err)
-		}
-	}
-}
-
-func mustVarErr[T any](_ T, err error) error { return err }
-
 func TestVariableRoutesLifecycle(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
-	handler := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
+	handler := newRouteServer(userID, svc)
 
 	rec := doRequest(handler, http.MethodPost, "/v1/projects", `{"name":"Shop"}`)
 	if rec.Code != http.StatusCreated {
@@ -363,33 +309,6 @@ func TestVariableRoutesLifecycle(t *testing.T) {
 	}
 }
 
-func TestVariableRoutesViewerReadOnly(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
-	svc := NewService(Config{Repository: newFakeRepository(), Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
-	admin := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
-	viewer := newRouteServer(userID, teamID, teams.RoleReadOnly, svc)
-
-	rec := doRequest(admin, http.MethodPost, "/v1/projects", `{"name":"Shop"}`)
-	var created projectCreateEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode create: %v", err)
-	}
-
-	for _, path := range []string{
-		"/v1/projects/" + created.Project.ID + "/variables",
-		"/v1/environments/" + created.Environments[0].ID + "/variables",
-	} {
-		rec = doRequest(viewer, http.MethodGet, path, "")
-		if rec.Code != http.StatusOK {
-			t.Errorf("viewer GET %s = %d, want 200", path, rec.Code)
-		}
-		rec = doRequest(viewer, http.MethodPut, path, `{"variables":[]}`)
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("viewer PUT %s = %d, want 403", path, rec.Code)
-		}
-	}
-}
-
 func TestSharedVariablesScratchRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -452,7 +371,7 @@ func TestSharedVariablesScratchRoundtrip(t *testing.T) {
 		t.Fatal("duplicate keys in one scope inserted, want a uniqueness refusal")
 	}
 
-	if _, err := repo.DeleteProject(ctx, project.TeamID, project.ID); err != nil {
+	if _, err := repo.DeleteProject(ctx, project.ID); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
 	var count int
@@ -465,9 +384,9 @@ func TestSharedVariablesScratchRoundtrip(t *testing.T) {
 }
 
 func TestSecretFlagFlips(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	svc, ctx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newVariableTestService(repo, userID)
 
 	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -534,9 +453,9 @@ func TestSecretFlagFlips(t *testing.T) {
 }
 
 func TestVariableValueValidation(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	svc, ctx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newVariableTestService(repo, userID)
 
 	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -582,14 +501,14 @@ func (f *failingVariablesRepo) ReplaceVariables(_ context.Context, _ uuid.UUID, 
 }
 
 func TestVariableLogsMaskSecrets(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	secretValue := "hunter2-supersecret-value"
 	repo := &failingVariablesRepo{
 		fakeRepository: newFakeRepository(),
 		err:            errors.New("postgres: connection refused"),
 	}
 	svc := NewService(Config{Repository: repo, Counter: newFakeCounter(), Secret: testVariableSecret, Logger: discardLogger()})
-	adminCtx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: teams.RoleAdmin})
+	adminCtx := context.Background()
 	project, _, err := svc.CreateProject(adminCtx, userID, "Shop", "")
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -598,12 +517,6 @@ func TestVariableLogsMaskSecrets(t *testing.T) {
 	var logs bytes.Buffer
 	h := &handler{svc: svc, userID: alwaysUser(userID), logger: slog.New(slog.NewTextHandler(&logs, nil))}
 	router := chi.NewRouter()
-	router.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			scope := teams.Scope{UserID: userID, TeamID: teamID, Role: teams.RoleAdmin}
-			next.ServeHTTP(w, r.WithContext(teams.WithScope(r.Context(), scope)))
-		})
-	})
 	router.Get("/v1/projects/{id}/variables", h.getProjectVariables)
 	router.Put("/v1/projects/{id}/variables", h.replaceProjectVariables)
 
@@ -739,9 +652,9 @@ func TestConcurrentKeepVsNewValueStaysConsistent(t *testing.T) {
 }
 
 func TestKeepSeesLatestCommit(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	svc, ctx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newVariableTestService(repo, userID)
 
 	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -780,9 +693,9 @@ func TestKeepSeesLatestCommit(t *testing.T) {
 }
 
 func TestReplaceAgainstDeletedScopeIsNotFound(t *testing.T) {
-	userID, teamID := uuid.New(), uuid.New()
+	userID := uuid.New()
 	repo := newFakeRepository()
-	svc, ctx := newVariableTestService(repo, userID, teamID, teams.RoleAdmin)
+	svc, ctx := newVariableTestService(repo, userID)
 
 	project, _, err := svc.CreateProject(ctx, userID, "Shop", "")
 	if err != nil {
@@ -805,7 +718,7 @@ func TestReplaceAgainstDeletedScopeIsNotFound(t *testing.T) {
 		t.Fatalf("PUT vs deleted project = %v, want ErrNotFound", err)
 	}
 
-	handler := newRouteServer(userID, teamID, teams.RoleAdmin, svc)
+	handler := newRouteServer(userID, svc)
 	rec := doRequest(handler, http.MethodPut, "/v1/environments/"+staging.ID.String()+"/variables", `{"variables":[]}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("HTTP PUT vs deleted environment = %d (body %s), want 404", rec.Code, rec.Body.String())

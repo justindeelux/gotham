@@ -132,8 +132,8 @@ func registerObservationTools(server *sdk.Server, client *Client) {
 				"offset": map[string]any{"type": "integer", "minimum": 0},
 			},
 		},
-		Description: "Bounded ID-sorted snapshot of active-team and legacy shared nodes. " +
-			"Visibility does not establish team ownership. No SSH metadata.",
+		Description: "Bounded ID-sorted snapshot of configured nodes. " +
+			"No SSH metadata.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, input NodesInput) (*sdk.CallToolResult, NodesOutput, error) {
 		out, err := client.nodesList(ctx, input)
 		return nil, out, err

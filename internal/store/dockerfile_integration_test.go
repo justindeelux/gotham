@@ -40,17 +40,9 @@ func TestStoreApplicationDockerfileRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
+	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
 		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
 		Name: fmt.Sprintf("gs7-%d", time.Now().UnixNano()),
-	})
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID: team.ID,
-		Name:   fmt.Sprintf("gs7-%d", time.Now().UnixNano()),
 	})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -78,9 +70,6 @@ func TestStoreApplicationDockerfileRoundtrip(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
 			t.Logf("cleanup applications: %v", err)
 		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", server.ID); err != nil {
 			t.Logf("cleanup server: %v", err)
 		}
@@ -92,7 +81,6 @@ func TestStoreApplicationDockerfileRoundtrip(t *testing.T) {
 	newParams := func(name string) sqlc.CreateApplicationParams {
 		return sqlc.CreateApplicationParams{
 			UserID:        user.ID,
-			TeamID:        team.ID,
 			ServerID:      server.ID,
 			EnvironmentID: environment.ID,
 			Name:          name,

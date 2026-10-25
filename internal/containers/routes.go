@@ -174,7 +174,7 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrServerNotFound), errors.Is(err, ErrContainerNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
 	case errors.Is(err, ErrForbidden):
-		writeJSON(w, http.StatusForbidden, errorBody{Message: "insufficient team role"})
+		writeJSON(w, http.StatusForbidden, errorBody{Message: "forbidden"})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrAgentUnavailable):

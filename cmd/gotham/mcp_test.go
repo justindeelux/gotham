@@ -23,14 +23,12 @@ func TestMCPProcessHelper(_ *testing.T) {
 }
 
 func TestMCPDispatchAndStdout(t *testing.T) {
-	const team = "11111111-1111-4111-8111-111111111111"
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/mcp/context" {
 			t.Error("unexpected CP request")
 		}
 		w.Header().Set("X-Gotham-MCP-Contract", "1")
-		w.Header().Set("X-Gotham-MCP-Team-Id", team)
-		_, _ = fmt.Fprintf(w, `{"team_id":%q,"capabilities":["context","strict_reads"]}`, team)
+		_, _ = fmt.Fprintf(w, `{"capabilities":["context","strict_reads"]}`)
 	}))
 	defer api.Close()
 	for _, tc := range []struct {
@@ -45,7 +43,7 @@ func TestMCPDispatchAndStdout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPProcessHelper$")
-			cmd.Env = append(os.Environ(), "GOTHAM_TEST_MCP_PROCESS=1", "GOTHAM_TEST_MCP_ARGS="+tc.args, "GOTHAM_MCP_URL="+api.URL, "GOTHAM_MCP_TOKEN="+tc.token, "GOTHAM_MCP_TEAM_ID="+team, "GOTHAM_DATABASE_DSN=invalid", "GOTHAM_CA_DIR=/invalid")
+			cmd.Env = append(os.Environ(), "GOTHAM_TEST_MCP_PROCESS=1", "GOTHAM_TEST_MCP_ARGS="+tc.args, "GOTHAM_MCP_URL="+api.URL, "GOTHAM_MCP_TOKEN="+tc.token, "GOTHAM_DATABASE_DSN=invalid", "GOTHAM_CA_DIR=/invalid")
 			var stdout, stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			var err error
@@ -141,7 +139,7 @@ func TestMCPStartupErrorCode(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMCPProcessHelper$")
-			cmd.Env = append(os.Environ(), "GOTHAM_TEST_MCP_PROCESS=1", "GOTHAM_TEST_MCP_ARGS=mcp serve", "GOTHAM_MCP_URL="+api.URL, "GOTHAM_MCP_TOKEN=gt1_private-test-token", "GOTHAM_MCP_TEAM_ID=11111111-1111-4111-8111-111111111111")
+			cmd.Env = append(os.Environ(), "GOTHAM_TEST_MCP_PROCESS=1", "GOTHAM_TEST_MCP_ARGS=mcp serve", "GOTHAM_MCP_URL="+api.URL, "GOTHAM_MCP_TOKEN=gt1_private-test-token")
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout = &stdout
 			cmd.Stderr = &stderr

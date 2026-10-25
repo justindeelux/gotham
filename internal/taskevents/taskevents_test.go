@@ -19,16 +19,16 @@ func (m *memPub) Publish(_ context.Context, channel, payload string) error {
 }
 
 func TestChannelShape(t *testing.T) {
-	if Channel("team-1") != "tasks:team-1" {
-		t.Fatalf("Channel() = %q", Channel("team-1"))
+	if Channel("project-1") != "tasks:project-1" {
+		t.Fatalf("Channel() = %q", Channel("project-1"))
 	}
 }
 
 func TestEmitPublishesFramedEvent(t *testing.T) {
 	pub := &memPub{}
 	em := NewEmitter(pub)
-	em.Emit(context.Background(), Event{TaskID: "d1", Kind: KindDeploy, Name: "web", Status: StatusRunning, Step: "building", Progress: 50, TeamID: "t1"})
-	got := pub.msgs[Channel("t1")]
+	em.Emit(context.Background(), Event{TaskID: "d1", Kind: KindDeploy, Name: "web", Status: StatusRunning, Step: "building", Progress: 50, ProjectID: "p1"})
+	got := pub.msgs[Channel("p1")]
 	if len(got) != 1 {
 		t.Fatalf("expected 1 frame, got %d", len(got))
 	}
@@ -36,7 +36,7 @@ func TestEmitPublishesFramedEvent(t *testing.T) {
 	if err := json.Unmarshal([]byte(got[0]), &frame); err != nil {
 		t.Fatal(err)
 	}
-	if frame.Type != frameType || frame.Channel != Channel("t1") {
+	if frame.Type != frameType || frame.Channel != Channel("p1") {
 		t.Fatalf("unexpected frame %+v", frame)
 	}
 	var ev Event
@@ -54,18 +54,18 @@ func TestNilEmitterIsNoOp(t *testing.T) {
 	NewEmitter(nil).Emit(context.Background(), Event{TaskID: "x"})
 }
 
-func TestTrackerSnapshotPerTeam(t *testing.T) {
+func TestTrackerSnapshotPerProject(t *testing.T) {
 	tr := NewTracker()
-	tr.Set(Event{TaskID: "a", TeamID: "t1", Status: StatusRunning})
-	tr.Set(Event{TaskID: "b", TeamID: "t2", Status: StatusQueued})
-	tr.Set(Event{TaskID: "a", TeamID: "t1", Status: StatusSucceeded})
-	if got := tr.Snapshot("t1"); len(got) != 0 {
+	tr.Set(Event{TaskID: "a", ProjectID: "p1", Status: StatusRunning})
+	tr.Set(Event{TaskID: "b", ProjectID: "p2", Status: StatusQueued})
+	tr.Set(Event{TaskID: "a", ProjectID: "p1", Status: StatusSucceeded})
+	if got := tr.Snapshot("p1"); len(got) != 0 {
 		t.Fatalf("terminal event should leave the tracker, got %v", got)
 	}
-	if got := tr.Snapshot("t2"); len(got) != 1 || got[0].TaskID != "b" {
+	if got := tr.Snapshot("p2"); len(got) != 1 || got[0].TaskID != "b" {
 		t.Fatalf("unexpected snapshot %v", got)
 	}
-	frames := tr.SnapshotFrames("t2")
+	frames := tr.SnapshotFrames("p2")
 	if len(frames) != 2 {
 		t.Fatalf("expected 1 event + end marker, got %d", len(frames))
 	}
@@ -97,8 +97,8 @@ func TestTerminalSetPrunesSequenceCounters(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		id := "task-" + string(rune('a'+i%26)) + string(rune('0'+i/26))
 		tr.Next(id)
-		tr.Set(Event{TaskID: id, TeamID: "t1", Status: StatusRunning})
-		tr.Set(Event{TaskID: id, TeamID: "t1", Status: StatusSucceeded})
+		tr.Set(Event{TaskID: id, ProjectID: "p1", Status: StatusRunning})
+		tr.Set(Event{TaskID: id, ProjectID: "p1", Status: StatusSucceeded})
 	}
 	tr.mu.Lock()
 	tasks, seqs := len(tr.tasks), len(tr.seq)
@@ -114,9 +114,9 @@ func TestTerminalSetPrunesSequenceCounters(t *testing.T) {
 func TestSnapshotIsSortedByTaskID(t *testing.T) {
 	tr := NewTracker()
 	for _, id := range []string{"c", "a", "b"} {
-		tr.Set(Event{TaskID: id, TeamID: "t1", Status: StatusRunning})
+		tr.Set(Event{TaskID: id, ProjectID: "p1", Status: StatusRunning})
 	}
-	got := tr.Snapshot("t1")
+	got := tr.Snapshot("p1")
 	if len(got) != 3 || got[0].TaskID != "a" || got[1].TaskID != "b" || got[2].TaskID != "c" {
 		t.Fatalf("unordered snapshot %v", got)
 	}

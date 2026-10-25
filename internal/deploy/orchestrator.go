@@ -865,7 +865,6 @@ func (o *Orchestrator) publishTask(ctx context.Context, app Application, dep Dep
 		ServerID:      app.ServerID.String(),
 		ProjectID:     app.ProjectID.String(),
 		EnvironmentID: app.EnvironmentID.String(),
-		TeamID:        app.TeamID.String(),
 		Error:         errMsg,
 	}
 	o.tasks.Set(ev)

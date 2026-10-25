@@ -55,30 +55,6 @@ func TestServiceDeployValidatesTarget(t *testing.T) {
 	}
 }
 
-func TestServiceDeployOwnership(t *testing.T) {
-	userID := uuid.New()
-	app := testApplication(userID)
-	repo := &fakeRepository{app: app}
-	svc := newTestService(t, repo)
-	ctx := context.Background()
-
-	if _, err := svc.Deploy(ctx, uuid.New(), app.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("other user's deploy err = %v, want ErrNotFound", err)
-	}
-	if _, err := svc.Deploy(ctx, userID, uuid.New()); !errors.Is(err, ErrNotFound) {
-		t.Errorf("unknown application err = %v, want ErrNotFound", err)
-	}
-	if _, err := svc.ListDeployments(ctx, uuid.New(), app.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("other user's list err = %v, want ErrNotFound", err)
-	}
-	if _, err := svc.Deploy(ctx, userID, uuid.Nil); !errors.Is(err, ErrValidation) {
-		t.Errorf("nil application id err = %v, want ErrValidation", err)
-	}
-	if stored := listStored(t, repo, app.ID); len(stored) != 0 {
-		t.Errorf("queued %d deployments, want 0", len(stored))
-	}
-}
-
 func TestServiceDeployConflict(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
@@ -206,12 +182,6 @@ func TestServiceListDeploymentsLimit(t *testing.T) {
 		}
 		if len(deployments) != 1 {
 			t.Fatalf("len = %d, want 1", len(deployments))
-		}
-	})
-
-	t.Run("foreign application answers not found", func(t *testing.T) {
-		if _, err := svc.ListDeploymentsLimit(ctx, uuid.New(), app.ID, 1); !errors.Is(err, ErrNotFound) {
-			t.Errorf("err = %v, want ErrNotFound", err)
 		}
 	})
 }

@@ -16,7 +16,7 @@ import (
 func createSession(t *testing.T, handler http.HandlerFunc) *sdk.ClientSession {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get("X-Team-Id") != testConfig("").TeamID.String() || r.Header.Get(contractHeader) != "1" || r.Header.Get("Idempotency-Key") != "stable-1" {
+		if r.Method != "POST" || r.Header.Get("Authorization") != "Bearer gt1_test-secret" || r.Header.Get(contractHeader) != "1" || r.Header.Get("Idempotency-Key") != "stable-1" {
 			t.Errorf("incorrect mutation request: %s %s", r.Method, r.URL.Path)
 		}
 		acknowledge(w, r)

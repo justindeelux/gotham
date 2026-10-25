@@ -15,7 +15,6 @@ import (
 	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 const ProductionEnvironment = "production"
@@ -124,7 +123,7 @@ func (s *Service) ListProjects(ctx context.Context, userID uuid.UUID) ([]Project
 	if userID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	rows, err := s.repo.ListProjects(ctx, teamIDFor(ctx, userID))
+	rows, err := s.repo.ListProjects(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -146,9 +145,6 @@ func (s *Service) CreateProject(ctx context.Context, userID uuid.UUID, name, des
 	if userID == uuid.Nil {
 		return Project{}, Environment{}, ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return Project{}, Environment{}, err
-	}
 	clean, err := validateName(name)
 	if err != nil {
 		return Project{}, Environment{}, err
@@ -160,7 +156,7 @@ func (s *Service) CreateProject(ctx context.Context, userID uuid.UUID, name, des
 	if err := requestreplay.Fingerprint(ctx, "", []string{clean, cleanDescription}); err != nil {
 		return Project{}, Environment{}, err
 	}
-	project, environment, err := s.repo.CreateProject(ctx, teamIDFor(ctx, userID), clean, cleanDescription)
+	project, environment, err := s.repo.CreateProject(ctx, clean, cleanDescription)
 	if err != nil {
 		return Project{}, Environment{}, err
 	}
@@ -178,12 +174,11 @@ func (s *Service) GetProject(ctx context.Context, userID, projectID uuid.UUID) (
 	if userID == uuid.Nil || projectID == uuid.Nil {
 		return Project{}, nil, ErrNotFound
 	}
-	teamID := teamIDFor(ctx, userID)
-	project, err := s.repo.GetProject(ctx, teamID, projectID)
+	project, err := s.repo.GetProject(ctx, projectID)
 	if err != nil {
 		return Project{}, nil, err
 	}
-	rows, err := s.repo.ListEnvironments(ctx, teamID, projectID)
+	rows, err := s.repo.ListEnvironments(ctx, projectID)
 	if err != nil {
 		return Project{}, nil, err
 	}
@@ -209,11 +204,7 @@ func (s *Service) UpdateProject(ctx context.Context, userID, projectID uuid.UUID
 	if userID == uuid.Nil || projectID == uuid.Nil {
 		return Project{}, ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return Project{}, err
-	}
-	teamID := teamIDFor(ctx, userID)
-	existing, err := s.repo.GetProject(ctx, teamID, projectID)
+	existing, err := s.repo.GetProject(ctx, projectID)
 	if err != nil {
 		return Project{}, err
 	}
@@ -232,7 +223,7 @@ func (s *Service) UpdateProject(ctx context.Context, userID, projectID uuid.UUID
 		}
 		nextDescription = cleanDescription
 	}
-	updated, err := s.repo.UpdateProject(ctx, teamID, projectID, nextName, nextDescription)
+	updated, err := s.repo.UpdateProject(ctx, projectID, nextName, nextDescription)
 	if err != nil {
 		return Project{}, err
 	}
@@ -246,11 +237,7 @@ func (s *Service) DeleteProject(ctx context.Context, userID, projectID uuid.UUID
 	if userID == uuid.Nil || projectID == uuid.Nil {
 		return ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return err
-	}
-	teamID := teamIDFor(ctx, userID)
-	if _, err := s.repo.GetProject(ctx, teamID, projectID); err != nil {
+	if _, err := s.repo.GetProject(ctx, projectID); err != nil {
 		return err
 	}
 	counts, err := s.counter.CountProjectResources(ctx, projectID)
@@ -267,7 +254,7 @@ func (s *Service) DeleteProject(ctx context.Context, userID, projectID uuid.UUID
 	if previews > 0 {
 		return ErrProjectNotEmpty
 	}
-	volumes, err := s.repo.DeleteProject(ctx, teamID, projectID)
+	volumes, err := s.repo.DeleteProject(ctx, projectID)
 	if err != nil {
 		return err
 	}
@@ -282,7 +269,7 @@ func (s *Service) ListEnvironments(ctx context.Context, userID, projectID uuid.U
 	if userID == uuid.Nil || projectID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	rows, err := s.repo.ListEnvironments(ctx, teamIDFor(ctx, userID), projectID)
+	rows, err := s.repo.ListEnvironments(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -304,9 +291,6 @@ func (s *Service) CreateEnvironment(ctx context.Context, userID, projectID uuid.
 	if userID == uuid.Nil || projectID == uuid.Nil {
 		return Environment{}, ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return Environment{}, err
-	}
 	clean, err := validateName(name)
 	if err != nil {
 		return Environment{}, err
@@ -314,7 +298,7 @@ func (s *Service) CreateEnvironment(ctx context.Context, userID, projectID uuid.
 	if err := requestreplay.Fingerprint(ctx, "", clean); err != nil {
 		return Environment{}, err
 	}
-	environment, err := s.repo.CreateEnvironment(ctx, teamIDFor(ctx, userID), projectID, clean)
+	environment, err := s.repo.CreateEnvironment(ctx, projectID, clean)
 	if err != nil {
 		return Environment{}, err
 	}
@@ -328,14 +312,11 @@ func (s *Service) UpdateEnvironment(ctx context.Context, userID, environmentID u
 	if userID == uuid.Nil || environmentID == uuid.Nil {
 		return Environment{}, ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return Environment{}, err
-	}
 	clean, err := validateName(name)
 	if err != nil {
 		return Environment{}, err
 	}
-	environment, err := s.repo.UpdateEnvironment(ctx, teamIDFor(ctx, userID), environmentID, clean)
+	environment, err := s.repo.UpdateEnvironment(ctx, environmentID, clean)
 	if err != nil {
 		return Environment{}, err
 	}
@@ -349,11 +330,7 @@ func (s *Service) DeleteEnvironment(ctx context.Context, userID, environmentID u
 	if userID == uuid.Nil || environmentID == uuid.Nil {
 		return ErrNotFound
 	}
-	if err := authorizeWrite(ctx, userID); err != nil {
-		return err
-	}
-	teamID := teamIDFor(ctx, userID)
-	environment, err := s.repo.GetEnvironment(ctx, teamID, environmentID)
+	environment, err := s.repo.GetEnvironment(ctx, environmentID)
 	if err != nil {
 		return err
 	}
@@ -378,7 +355,7 @@ func (s *Service) DeleteEnvironment(ctx context.Context, userID, environmentID u
 	if previews > 0 {
 		return ErrEnvironmentNotEmpty
 	}
-	volumes, err := s.repo.DeleteEnvironmentIfNotLast(ctx, teamID, environmentID)
+	volumes, err := s.repo.DeleteEnvironmentIfNotLast(ctx, environmentID)
 	if err != nil {
 		return err
 	}
@@ -403,12 +380,11 @@ func (s *Service) GetEnvironmentResources(ctx context.Context, userID, environme
 	if userID == uuid.Nil || environmentID == uuid.Nil {
 		return EnvironmentResources{}, ErrNotFound
 	}
-	teamID := teamIDFor(ctx, userID)
-	environment, err := s.repo.GetEnvironment(ctx, teamID, environmentID)
+	environment, err := s.repo.GetEnvironment(ctx, environmentID)
 	if err != nil {
 		return EnvironmentResources{}, err
 	}
-	project, err := s.repo.GetProject(ctx, teamID, environment.ProjectID)
+	project, err := s.repo.GetProject(ctx, environment.ProjectID)
 	if err != nil {
 		return EnvironmentResources{}, err
 	}
@@ -469,7 +445,7 @@ func (s *Service) PreviewBases(ctx context.Context, userID uuid.UUID, previewApp
 	if userID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	return s.repo.PreviewBaseIDs(ctx, teamIDFor(ctx, userID), previewAppIDs)
+	return s.repo.PreviewBaseIDs(ctx, previewAppIDs)
 }
 
 func (s *Service) withProjectCounts(ctx context.Context, project Project, opts ...countOption) (Project, error) {
@@ -516,21 +492,6 @@ func withEnvironments(count int) countOption {
 func (s *Service) ready() error {
 	if s == nil || s.repo == nil {
 		return errors.New("projects: repository is not configured")
-	}
-	return nil
-}
-
-func teamIDFor(ctx context.Context, userID uuid.UUID) uuid.UUID {
-	scope := teams.ScopeFor(ctx, userID)
-	if scope.Active() {
-		return scope.TeamID
-	}
-	return teams.PersonalTeamID(userID)
-}
-
-func authorizeWrite(ctx context.Context, userID uuid.UUID) error {
-	if !teams.ScopeFor(ctx, userID).CanWrite() {
-		return ErrForbidden
 	}
 	return nil
 }

@@ -130,7 +130,6 @@ type DomainCertificate struct {
 
 type ApplicationInfo struct {
 	ID             uuid.UUID
-	TeamID         uuid.UUID
 	DomainDisabled bool
 	Domains        []string
 	BaseDomain     string
@@ -388,7 +387,6 @@ func (s storeSSL) GetApplication(ctx context.Context, id uuid.UUID) (Application
 func applicationInfoFromRow(row sqlc.Application) ApplicationInfo {
 	return ApplicationInfo{
 		ID:       uuidFromPG(row.ID),
-		TeamID:   uuidFromPG(row.TeamID),
 		ServerID: uuidFromPG(row.ServerID),
 	}
 }

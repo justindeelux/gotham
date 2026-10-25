@@ -229,7 +229,6 @@ func (s *Service) openPreview(ctx context.Context, provider string, target Targe
 		write.PRNumber = pr.Number
 		write.ReservationID = claim.Reservation.ID
 		write.LeaseHeadSHA = strings.TrimSpace(pr.HeadSHA)
-		write.TeamID = target.TeamID
 		write.Provider = provider
 		write.Repo = target.Repo
 		write.Branch = pr.HeadBranch
@@ -616,7 +615,6 @@ func (s *Service) DeployFinished(ctx context.Context, result deploy.DeployResult
 	target := Target{
 		ApplicationID: base.ID,
 		UserID:        base.UserID,
-		TeamID:        base.TeamID,
 		Provider:      base.Provider,
 		Repo:          base.Repo,
 		CloneURL:      base.CloneURL,

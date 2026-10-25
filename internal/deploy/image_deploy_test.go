@@ -25,7 +25,7 @@ func testImageApplication(t *testing.T, userID uuid.UUID) Application {
 	app.SourceType = SourceImage
 	app.Branch = ""
 	app.BuildPack = ""
-	app.ImageRef = "registry.example.com/team/app:1.2"
+	app.ImageRef = "registry.example.com/acme/app:1.2"
 	app.RegistryUsername = "robot"
 	app.RegistryPasswordCiphertext = sealed
 	return app
@@ -137,7 +137,7 @@ func TestOrchestratorImageRollbackUsesPinnedDigest(t *testing.T) {
 	app := testImageApplication(t, uuid.New())
 	repo := &fakeRepository{app: app}
 	digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	pinned := "registry.example.com/team/app@" + digest
+	pinned := "registry.example.com/acme/app@" + digest
 	dep := seedDeployment(t, repo, app, Deployment{
 		Kind:          KindRollback,
 		ImageTag:      app.ImageRef,
@@ -193,7 +193,7 @@ func TestServiceImageSourceValidation(t *testing.T) {
 		in.SourceType = SourceImage
 		in.Branch = ""
 		in.BuildPack = ""
-		in.ImageRef = "registry.example.com/team/app:1.2"
+		in.ImageRef = "registry.example.com/acme/app:1.2"
 		in.RegistryUsername = "robot"
 		in.RegistryPassword = "s3cret-token"
 		return in
@@ -205,7 +205,7 @@ func TestServiceImageSourceValidation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateApplication: %v", err)
 		}
-		if created.ImageRef != "registry.example.com/team/app:1.2" {
+		if created.ImageRef != "registry.example.com/acme/app:1.2" {
 			t.Errorf("image ref = %q", created.ImageRef)
 		}
 		if created.RegistryUsername != "robot" {
@@ -243,7 +243,7 @@ func TestServiceImageSourceValidation(t *testing.T) {
 	t.Run("create refuses the internal registry scope", func(t *testing.T) {
 		svc, _ := newImageService(t)
 		in := validImageInput(uuid.New())
-		in.ImageRef = "127.0.0.1:5000/team/app:1"
+		in.ImageRef = "127.0.0.1:5000/acme/app:1"
 		_, err := svc.CreateApplication(context.Background(), uuid.New(), in)
 		if err == nil {
 			t.Error("CreateApplication(loopback) = nil; want error")
@@ -345,7 +345,7 @@ func TestServiceImageRollbackPinsDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
-	want := "registry.example.com/team/app@" + digest
+	want := "registry.example.com/acme/app@" + digest
 	if rolled.RegistryImage != want {
 		t.Errorf("rollback image = %q, want the pinned %q", rolled.RegistryImage, want)
 	}
@@ -364,7 +364,7 @@ func TestRoutesImageApplicationRedactsCredential(t *testing.T) {
 	app.SourceType = SourceImage
 	app.Branch = ""
 	app.BuildPack = ""
-	app.ImageRef = "registry.example.com/team/app:1.2"
+	app.ImageRef = "registry.example.com/acme/app:1.2"
 	app.RegistryUsername = "robot"
 	app.RegistryPasswordCiphertext = "sealed-credential"
 	svc := &fakeDeployService{application: app}
@@ -373,7 +373,7 @@ func TestRoutesImageApplicationRedactsCredential(t *testing.T) {
 	body := `{
 		"name": "image app",
 		"source_type": "image",
-		"image_ref": "registry.example.com/team/app:1.2",
+		"image_ref": "registry.example.com/acme/app:1.2",
 		"registry_username": "robot",
 		"registry_password": "s3cret-token",
 		"environment_id": "` + uuid.New().String() + `",
@@ -395,10 +395,10 @@ func TestRoutesImageApplicationRedactsCredential(t *testing.T) {
 	if !strings.Contains(raw, `"has_registry_credential":true`) {
 		t.Errorf("create response misses the credential flag: %s", raw)
 	}
-	if !strings.Contains(raw, `"image_ref":"registry.example.com/team/app:1.2"`) {
+	if !strings.Contains(raw, `"image_ref":"registry.example.com/acme/app:1.2"`) {
 		t.Errorf("create response misses the reference: %s", raw)
 	}
-	if svc.seenCreate.ImageRef != "registry.example.com/team/app:1.2" ||
+	if svc.seenCreate.ImageRef != "registry.example.com/acme/app:1.2" ||
 		svc.seenCreate.RegistryUsername != "robot" ||
 		svc.seenCreate.RegistryPassword != "s3cret-token" {
 		t.Errorf("service saw %+v, want the image payload", svc.seenCreate)
@@ -443,7 +443,7 @@ func TestServiceImageCredentialBoundToRegistryHost(t *testing.T) {
 		in := validCreateInput(uuid.New())
 		in.Provider, in.Repo, in.CloneURL = "", "", ""
 		in.SourceType, in.Branch, in.BuildPack = SourceImage, "", ""
-		in.ImageRef = "registry.example.com/team/app:1.2"
+		in.ImageRef = "registry.example.com/acme/app:1.2"
 		in.RegistryUsername, in.RegistryPassword = "robot", "s3cret-token"
 		created, err := svc.CreateApplication(ctx, user, in)
 		if err != nil {
@@ -501,14 +501,14 @@ func TestServiceImageCredentialBoundToRegistryHost(t *testing.T) {
 		if storedErr != nil {
 			t.Fatalf("GetApplication: %v", storedErr)
 		}
-		if stored.ImageRef != "registry.example.com/team/app:1.2" || stored.RegistryUsername != "robot" {
+		if stored.ImageRef != "registry.example.com/acme/app:1.2" || stored.RegistryUsername != "robot" {
 			t.Errorf("stored = %+v; want the pre-move reference and username", stored)
 		}
 	})
 
 	t.Run("moving within the same host keeps the credential", func(t *testing.T) {
 		svc, created, user := newImageApp(t)
-		ref := "registry.example.com/team/app:2.0"
+		ref := "registry.example.com/acme/app:2.0"
 		updated, err := svc.UpdateApplication(context.Background(), user, created.ID, UpdateApplicationInput{ImageRef: &ref})
 		if err != nil {
 			t.Fatalf("UpdateApplication(same host): %v", err)
@@ -520,13 +520,13 @@ func TestServiceImageCredentialBoundToRegistryHost(t *testing.T) {
 
 	t.Run("rollback to another host pulls without the credential", func(t *testing.T) {
 		app := testImageApplication(t, uuid.New())
-		app.ImageRef = "other.example.net/team/app:2.0"
+		app.ImageRef = "other.example.net/acme/app:2.0"
 		repo := &fakeRepository{app: app}
 		digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-		pinned := "registry.example.com/team/app@" + digest
+		pinned := "registry.example.com/acme/app@" + digest
 		dep := seedDeployment(t, repo, app, Deployment{
 			Kind:          KindRollback,
-			ImageTag:      "registry.example.com/team/app:1.2",
+			ImageTag:      "registry.example.com/acme/app:1.2",
 			RegistryImage: pinned,
 			Digest:        digest,
 			RollbackFrom:  uuid.New(),
@@ -575,7 +575,7 @@ func TestServiceImageCredentialHalvesRejected(t *testing.T) {
 		in := validCreateInput(serverID)
 		in.Provider, in.Repo, in.CloneURL = "", "", ""
 		in.SourceType, in.Branch, in.BuildPack = SourceImage, "", ""
-		in.ImageRef = "registry.example.com/team/app:1.2"
+		in.ImageRef = "registry.example.com/acme/app:1.2"
 		return in
 	}
 	t.Run("create refuses a username without a password", func(t *testing.T) {
@@ -630,7 +630,7 @@ func TestServiceImageCredentialHalvesRejected(t *testing.T) {
 func TestOrchestratorImagePinMismatchFails(t *testing.T) {
 	app := testImageApplication(t, uuid.New())
 	digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	app.ImageRef = "registry.example.com/team/app@" + digest
+	app.ImageRef = "registry.example.com/acme/app@" + digest
 	repo := &fakeRepository{app: app}
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
 	node := newMockNode()

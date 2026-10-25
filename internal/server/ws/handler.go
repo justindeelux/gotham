@@ -34,7 +34,7 @@ const (
 
 type SubscriptionAuthorizer func(ctx context.Context, serverID, userID uuid.UUID) error
 
-type TaskAuthorizer func(ctx context.Context, teamID string, userID uuid.UUID) error
+type TaskAuthorizer func(ctx context.Context, projectID string, userID uuid.UUID) error
 
 type Handler struct {
 	hub       *Hub
@@ -43,7 +43,7 @@ type Handler struct {
 	logger    *slog.Logger
 
 	taskAuthorize TaskAuthorizer
-	taskSnapshot  func(teamID string) []string
+	taskSnapshot  func(projectID string) []string
 
 	writeWait    time.Duration
 	pingPeriod   time.Duration
@@ -65,7 +65,7 @@ func NewHandler(hub *Hub, verifier TokenVerifier, logger *slog.Logger, authorize
 	}
 }
 
-func (h *Handler) SetTaskFeed(authorize TaskAuthorizer, snapshot func(teamID string) []string) {
+func (h *Handler) SetTaskFeed(authorize TaskAuthorizer, snapshot func(projectID string) []string) {
 	h.taskAuthorize = authorize
 	h.taskSnapshot = snapshot
 }
@@ -188,8 +188,8 @@ func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel
 	}
 	h.hub.subscribe(client, channel)
 	subs[channel] = true
-	if teamID, ok := taskChannelTeamID(channel); ok && h.taskSnapshot != nil {
-		for _, frame := range h.taskSnapshot(teamID) {
+	if projectID, ok := taskChannelProjectID(channel); ok && h.taskSnapshot != nil {
+		for _, frame := range h.taskSnapshot(projectID) {
 			_ = h.writeFrame(conn, []byte(frame))
 		}
 	}
@@ -248,11 +248,11 @@ func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uui
 	if h.authorize == nil {
 		return true
 	}
-	if teamID, ok := taskChannelTeamID(channel); ok {
+	if projectID, ok := taskChannelProjectID(channel); ok {
 		if h.taskAuthorize == nil {
 			return true
 		}
-		if err := h.taskAuthorize(ctx, teamID, userID); err != nil {
+		if err := h.taskAuthorize(ctx, projectID, userID); err != nil {
 			h.logger.Debug("ws: task subscription denied",
 				"channel", channel, "user_id", userID.String(), "error", err)
 			return false
@@ -276,15 +276,15 @@ func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uui
 	return true
 }
 
-func taskChannelTeamID(channel string) (string, bool) {
+func taskChannelProjectID(channel string) (string, bool) {
 	if !strings.HasPrefix(channel, "tasks:") {
 		return "", false
 	}
-	teamID := strings.TrimSpace(strings.TrimPrefix(channel, "tasks:"))
-	if teamID == "" {
+	projectID := strings.TrimSpace(strings.TrimPrefix(channel, "tasks:"))
+	if projectID == "" {
 		return "", false
 	}
-	return teamID, true
+	return projectID, true
 }
 
 func logChannelServerID(channel string) (uuid.UUID, bool) {

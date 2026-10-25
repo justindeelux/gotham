@@ -15,21 +15,20 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
 func TestCompressStreamsRequestAndReturnsEntry(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{
 		compressMsgs: []*agentv1.Progress{{Path: "out.zip", BytesDone: 10, Done: true, Skipped: 1}},
 		statResp:     &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "out.zip", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 10, Etag: `"z"`}},
 	}
 	svc := newTestService(t, registry, client)
 
-	entry, err := svc.Compress(scopeCtx(teams.RoleOwner, teamID), server.ID, CompressRequest{
+	entry, err := svc.Compress(scopeCtx("", projectID), server.ID, CompressRequest{
 		Root: "volumes", Sources: []string{"a", "dir"}, Destination: "out.zip", Format: ArchiveFormatZip,
 	})
 	if err != nil {
@@ -47,13 +46,13 @@ func TestCompressStreamsRequestAndReturnsEntry(t *testing.T) {
 }
 
 func TestExtractStreamsRequest(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{extractMsgs: []*agentv1.Progress{{Path: "dir", Done: true}}}
 	svc := newTestService(t, registry, client)
 
-	if err := svc.Extract(scopeCtx(teams.RoleOwner, teamID), server.ID, ExtractRequest{
+	if err := svc.Extract(scopeCtx("", projectID), server.ID, ExtractRequest{
 		Root: "volumes", Source: "a.zip", Destination: "sub", Overwrite: true,
 	}); err != nil {
 		t.Fatalf("extract: %v", err)
@@ -65,12 +64,12 @@ func TestExtractStreamsRequest(t *testing.T) {
 }
 
 func TestArchiveValidationBeforeDial(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{}
 	svc := newTestService(t, registry, client)
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	ctx := scopeCtx("", projectID)
 
 	tooMany := make([]string, maxArchiveSources+1)
 	for i := range tooMany {
@@ -103,43 +102,11 @@ func TestArchiveValidationBeforeDial(t *testing.T) {
 	}
 }
 
-func TestArchiveRBACReadOnly(t *testing.T) {
-	teamID := uuid.New()
-	registry := newFakeRegistry()
-	server := registry.seed(teamID)
-	client := &fakeFileClient{}
-	svc := newTestService(t, registry, client)
-	ctx := scopeCtx(teams.RoleReadOnly, teamID)
-
-	if _, err := svc.Compress(ctx, server.ID, CompressRequest{Root: "volumes", Sources: []string{"a"}, Destination: "out.zip", Format: ArchiveFormatZip}); !errors.Is(err, ErrForbidden) {
-		t.Errorf("compress err = %v, want ErrForbidden", err)
-	}
-	if err := svc.Extract(ctx, server.ID, ExtractRequest{Root: "volumes", Source: "a.zip", Destination: "."}); !errors.Is(err, ErrForbidden) {
-		t.Errorf("extract err = %v, want ErrForbidden", err)
-	}
-	if client.seenCompress != nil || client.seenExtract != nil {
-		t.Fatal("a forbidden caller must not dial the agent")
-	}
-}
-
-func TestArchiveForeignTeamNotFound(t *testing.T) {
-	registry := newFakeRegistry()
-	server := registry.seed(uuid.New())
-	svc := newTestService(t, registry, &fakeFileClient{})
-	ctx := scopeCtx(teams.RoleOwner, uuid.New())
-	if _, err := svc.Compress(ctx, server.ID, CompressRequest{Root: "volumes", Sources: []string{"a"}, Destination: "out.zip", Format: ArchiveFormatZip}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("compress err = %v, want ErrNotFound", err)
-	}
-	if err := svc.Extract(ctx, server.ID, ExtractRequest{Root: "volumes", Source: "a.zip", Destination: "."}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("extract err = %v, want ErrNotFound", err)
-	}
-}
-
 func TestArchiveRPCErrorMapping(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	server := registry.seed(projectID)
+	ctx := scopeCtx("", projectID)
 
 	cases := []struct {
 		name  string
@@ -320,9 +287,9 @@ func TestArchiveRoutesDisabled(t *testing.T) {
 }
 
 func TestArchiveAudited(t *testing.T) {
-	teamID := uuid.New()
+	projectID := uuid.New()
 	registry := newFakeRegistry()
-	server := registry.seed(teamID)
+	server := registry.seed(projectID)
 	client := &fakeFileClient{
 		compressMsgs: []*agentv1.Progress{{Done: true}},
 		statResp:     &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "out.zip"}},
@@ -334,7 +301,7 @@ func TestArchiveAudited(t *testing.T) {
 		Dial:     func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
 		Logger:   slog.New(slog.NewJSONHandler(&buf, nil)),
 	})
-	ctx := scopeCtx(teams.RoleOwner, teamID)
+	ctx := scopeCtx("", projectID)
 	if _, err := svc.Compress(ctx, server.ID, CompressRequest{Root: "volumes", Sources: []string{"a"}, Destination: "out.zip", Format: ArchiveFormatZip}); err != nil {
 		t.Fatalf("compress: %v", err)
 	}

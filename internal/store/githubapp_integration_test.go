@@ -44,9 +44,6 @@ func TestGitHubAppPersistence(t *testing.T) {
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
 			t.Logf("cleanup user: %v", err)
 		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", user.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
 	})
 	other, err := st.CreateUser(ctx, "other-"+email, nil)
 	if err != nil {
@@ -57,9 +54,6 @@ func TestGitHubAppPersistence(t *testing.T) {
 		defer cleanupCancel()
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", other.ID); err != nil {
 			t.Logf("cleanup user: %v", err)
-		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", other.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
 		}
 	})
 
@@ -152,8 +146,8 @@ func TestGitHubAppPersistence(t *testing.T) {
 	}
 
 	var projectID, envID, serverID pgtype.UUID
-	if err := pool.QueryRow(ctx, `INSERT INTO projects (team_id, name) VALUES ($1, $2) RETURNING id`,
-		user.ID, "shop").Scan(&projectID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO projects (name) VALUES ($1) RETURNING id`,
+		fmt.Sprintf("shop-%d", time.Now().UnixNano())).Scan(&projectID); err != nil {
 		t.Fatalf("insert project: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO environments (project_id, name) VALUES ($1, $2) RETURNING id`,
@@ -166,8 +160,8 @@ func TestGitHubAppPersistence(t *testing.T) {
 	}
 	var appID pgtype.UUID
 	if err := pool.QueryRow(ctx, `INSERT INTO applications
-		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, github_app_id)
-		VALUES ($1, $1, $2, $3, 'web', 'github', 'acme/web', 'https://github.com/acme/web.git', 'github_app', 'main', 'dockerfile', $4)
+		(user_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, github_app_id)
+		VALUES ($1, $2, $3, 'web', 'github', 'acme/web', 'https://github.com/acme/web.git', 'github_app', 'main', 'dockerfile', $4)
 		RETURNING id`, user.ID, serverID, envID, app.ID).Scan(&appID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
@@ -200,8 +194,8 @@ func TestGitHubAppPersistence(t *testing.T) {
 		t.Fatalf("push targets = %+v", targets)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO applications
-		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack)
-		VALUES ($1, $1, $2, $3, 'legacy', 'github', 'acme/web', 'git@github.com:acme/web.git', 'github_app', 'main', 'dockerfile')`,
+		(user_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack)
+		VALUES ($1, $2, $3, 'legacy', 'github', 'acme/web', 'git@github.com:acme/web.git', 'github_app', 'main', 'dockerfile')`,
 		user.ID, serverID, envID); err != nil {
 		t.Fatalf("seed legacy application: %v", err)
 	}
@@ -219,8 +213,8 @@ func TestGitHubAppPersistence(t *testing.T) {
 		t.Fatalf("linked applications with legacy row = %+v, %v", names, err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO applications
-		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, github_app_id)
-		VALUES ($1, $1, $2, $3, 'stale', 'github', 'acme/gone', 'https://github.com/acme/gone.git', 'github_app', 'main', 'dockerfile', $4)`,
+		(user_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, github_app_id)
+		VALUES ($1, $2, $3, 'stale', 'github', 'acme/gone', 'https://github.com/acme/gone.git', 'github_app', 'main', 'dockerfile', $4)`,
 		user.ID, serverID, envID, app.ID); err != nil {
 		t.Fatalf("seed revoked application: %v", err)
 	}

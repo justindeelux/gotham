@@ -21,7 +21,7 @@ func enrollTOTP(t *testing.T, svc *Service, st *store.Store) (uuid.UUID, string,
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	registered, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestTOTPLockoutBlocksEnrollmentCode(t *testing.T) {
 	cleanupUser(t, st, email)
 	const password = "s3cret-password"
 
-	registered, err := svc.Register(ctx, email, password, newTestInvite(t, st, email), storeInvites{st}, SessionMeta{})
+	registered, err := svc.Register(ctx, email, password, SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

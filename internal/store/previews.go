@@ -161,7 +161,6 @@ type PreviewBindingWriteParams struct {
 	HeadSHA              string
 	ConsumeLease         bool
 	LiveLimit            int64
-	TeamID               pgtype.UUID
 	Provider             string
 	Repo                 string
 	Branch               string
@@ -257,7 +256,6 @@ func (s *Store) WritePreviewBinding(ctx context.Context, params PreviewBindingWr
 
 	stored, err := queries.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
 		ApplicationID:        params.ApplicationID,
-		TeamID:               params.TeamID,
 		Provider:             params.Provider,
 		Repo:                 params.Repo,
 		PrNumber:             params.PrNumber,

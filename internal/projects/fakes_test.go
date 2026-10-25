@@ -9,8 +9,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
 func discardLogger() *slog.Logger {
@@ -34,55 +32,50 @@ func newFakeRepository() *fakeRepository {
 	}
 }
 
-func (f *fakeRepository) CreateProject(_ context.Context, teamID uuid.UUID, name, description string) (Project, Environment, error) {
+func (f *fakeRepository) CreateProject(_ context.Context, name, description string) (Project, Environment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, project := range f.projects {
-		if project.TeamID == teamID && equalFold(project.Name, name) {
+		if equalFold(project.Name, name) {
 			return Project{}, Environment{}, ErrProjectExists
 		}
 	}
-	project := Project{ID: uuid.New(), TeamID: teamID, Name: name, Description: description}
+	project := Project{ID: uuid.New(), Name: name, Description: description}
 	environment := Environment{ID: uuid.New(), ProjectID: project.ID, Name: ProductionEnvironment}
 	f.projects[project.ID] = project
 	f.environments[environment.ID] = environment
 	return project, environment, nil
 }
 
-func (f *fakeRepository) ListProjects(_ context.Context, teamID uuid.UUID) ([]Project, error) {
+func (f *fakeRepository) ListProjects(_ context.Context) ([]Project, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var projects []Project
+	projects := make([]Project, 0, len(f.projects))
 	for _, project := range f.projects {
-		if project.TeamID == teamID {
-			projects = append(projects, project)
-		}
-	}
-	if projects == nil {
-		projects = []Project{}
+		projects = append(projects, project)
 	}
 	return projects, nil
 }
 
-func (f *fakeRepository) GetProject(_ context.Context, teamID, projectID uuid.UUID) (Project, error) {
+func (f *fakeRepository) GetProject(_ context.Context, projectID uuid.UUID) (Project, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	project, ok := f.projects[projectID]
-	if !ok || project.TeamID != teamID {
+	if !ok {
 		return Project{}, ErrNotFound
 	}
 	return project, nil
 }
 
-func (f *fakeRepository) UpdateProject(_ context.Context, teamID, projectID uuid.UUID, name, description string) (Project, error) {
+func (f *fakeRepository) UpdateProject(_ context.Context, projectID uuid.UUID, name, description string) (Project, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	project, ok := f.projects[projectID]
-	if !ok || project.TeamID != teamID {
+	if !ok {
 		return Project{}, ErrNotFound
 	}
 	for id, other := range f.projects {
-		if id != projectID && other.TeamID == teamID && equalFold(other.Name, name) {
+		if id != projectID && equalFold(other.Name, name) {
 			return Project{}, ErrProjectExists
 		}
 	}
@@ -91,11 +84,10 @@ func (f *fakeRepository) UpdateProject(_ context.Context, teamID, projectID uuid
 	return project, nil
 }
 
-func (f *fakeRepository) DeleteProject(_ context.Context, teamID, projectID uuid.UUID) ([]string, error) {
+func (f *fakeRepository) DeleteProject(_ context.Context, projectID uuid.UUID) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	project, ok := f.projects[projectID]
-	if !ok || project.TeamID != teamID {
+	if _, ok := f.projects[projectID]; !ok {
 		return nil, ErrNotFound
 	}
 	delete(f.projects, projectID)
@@ -107,11 +99,10 @@ func (f *fakeRepository) DeleteProject(_ context.Context, teamID, projectID uuid
 	return nil, nil
 }
 
-func (f *fakeRepository) CreateEnvironment(_ context.Context, teamID, projectID uuid.UUID, name string) (Environment, error) {
+func (f *fakeRepository) CreateEnvironment(_ context.Context, projectID uuid.UUID, name string) (Environment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	project, ok := f.projects[projectID]
-	if !ok || project.TeamID != teamID {
+	if _, ok := f.projects[projectID]; !ok {
 		return Environment{}, ErrNotFound
 	}
 	for _, environment := range f.environments {
@@ -124,48 +115,36 @@ func (f *fakeRepository) CreateEnvironment(_ context.Context, teamID, projectID 
 	return environment, nil
 }
 
-func (f *fakeRepository) ListEnvironments(_ context.Context, teamID, projectID uuid.UUID) ([]Environment, error) {
+func (f *fakeRepository) ListEnvironments(_ context.Context, projectID uuid.UUID) ([]Environment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	project, ok := f.projects[projectID]
-	if !ok || project.TeamID != teamID {
+	if _, ok := f.projects[projectID]; !ok {
 		return nil, ErrNotFound
 	}
-	var environments []Environment
+	environments := make([]Environment, 0, len(f.environments))
 	for _, environment := range f.environments {
 		if environment.ProjectID == projectID {
 			environments = append(environments, environment)
 		}
 	}
-	if environments == nil {
-		environments = []Environment{}
-	}
 	return environments, nil
 }
 
-func (f *fakeRepository) GetEnvironment(_ context.Context, teamID, environmentID uuid.UUID) (Environment, error) {
+func (f *fakeRepository) GetEnvironment(_ context.Context, environmentID uuid.UUID) (Environment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	environment, ok := f.environments[environmentID]
 	if !ok {
-		return Environment{}, ErrNotFound
-	}
-	project, ok := f.projects[environment.ProjectID]
-	if !ok || project.TeamID != teamID {
 		return Environment{}, ErrNotFound
 	}
 	return environment, nil
 }
 
-func (f *fakeRepository) UpdateEnvironment(_ context.Context, teamID, environmentID uuid.UUID, name string) (Environment, error) {
+func (f *fakeRepository) UpdateEnvironment(_ context.Context, environmentID uuid.UUID, name string) (Environment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	environment, ok := f.environments[environmentID]
 	if !ok {
-		return Environment{}, ErrNotFound
-	}
-	project, ok := f.projects[environment.ProjectID]
-	if !ok || project.TeamID != teamID {
 		return Environment{}, ErrNotFound
 	}
 	for id, other := range f.environments {
@@ -178,15 +157,11 @@ func (f *fakeRepository) UpdateEnvironment(_ context.Context, teamID, environmen
 	return environment, nil
 }
 
-func (f *fakeRepository) DeleteEnvironmentIfNotLast(_ context.Context, teamID, environmentID uuid.UUID) ([]string, error) {
+func (f *fakeRepository) DeleteEnvironmentIfNotLast(_ context.Context, environmentID uuid.UUID) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	environment, ok := f.environments[environmentID]
 	if !ok {
-		return nil, ErrNotFound
-	}
-	project, ok := f.projects[environment.ProjectID]
-	if !ok || project.TeamID != teamID {
 		return nil, ErrNotFound
 	}
 	remaining := 0
@@ -214,7 +189,7 @@ func (f *fakeRepository) CountEnvironments(_ context.Context, projectID uuid.UUI
 	return count, nil
 }
 
-func (f *fakeRepository) PreviewBaseIDs(_ context.Context, _ uuid.UUID, previewAppIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+func (f *fakeRepository) PreviewBaseIDs(_ context.Context, previewAppIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	bases := make(map[uuid.UUID]uuid.UUID, len(previewAppIDs))
@@ -268,10 +243,9 @@ func (f *fakeCounter) CountEnvironmentPreviews(_ context.Context, environmentID 
 	return f.previewEnvs[environmentID], f.err
 }
 
-func newTestService(repo *fakeRepository, counter ResourceCounter, userID, teamID uuid.UUID, role teams.Role) (*Service, context.Context) {
+func newTestService(repo *fakeRepository, counter ResourceCounter, _ uuid.UUID) (*Service, context.Context) {
 	svc := NewService(Config{Repository: repo, Counter: counter, Logger: discardLogger()})
-	ctx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: role})
-	return svc, ctx
+	return svc, context.Background()
 }
 
 func equalFold(a, b string) bool {

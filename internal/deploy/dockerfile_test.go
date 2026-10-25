@@ -295,7 +295,6 @@ func TestUpdateApplicationDockerfile(t *testing.T) {
 func TestPreviewCopiesDockerfileFields(t *testing.T) {
 	userID := uuid.New()
 	base := testApplication(userID)
-	base.TeamID = uuid.New()
 	base.SourceType = SourceDockerfile
 	base.Provider = ""
 	base.Repo = ""

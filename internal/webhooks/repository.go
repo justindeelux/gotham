@@ -30,7 +30,6 @@ type Hook struct {
 type Target struct {
 	ApplicationID uuid.UUID
 	UserID        uuid.UUID
-	TeamID        uuid.UUID
 	Provider      string
 	Repo          string
 	Branch        string
@@ -45,7 +44,6 @@ type Target struct {
 type Preview struct {
 	ID                   uuid.UUID
 	ApplicationID        uuid.UUID
-	TeamID               uuid.UUID
 	Provider             string
 	Repo                 string
 	PRNumber             int
@@ -107,7 +105,6 @@ type PreviewBindingWrite struct {
 	HeadSHA              string
 	ConsumeLease         bool
 	LiveLimit            int
-	TeamID               uuid.UUID
 	Provider             string
 	Repo                 string
 	Branch               string
@@ -162,7 +159,6 @@ type Repository interface {
 type Application struct {
 	ID         uuid.UUID
 	UserID     uuid.UUID
-	TeamID     uuid.UUID
 	Provider   string
 	Repo       string
 	Branch     string
@@ -214,7 +210,6 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 	return Application{
 		ID:         uuidFromPG(row.ID),
 		UserID:     uuidFromPG(row.UserID),
-		TeamID:     uuidFromPG(row.TeamID),
 		Provider:   row.Provider,
 		Repo:       row.Repo,
 		Branch:     row.Branch,
@@ -285,7 +280,6 @@ func (r *storeRepository) Targets(ctx context.Context, provider, repo string) ([
 		targets = append(targets, Target{
 			ApplicationID: uuidFromPG(row.ApplicationID),
 			UserID:        uuidFromPG(row.UserID),
-			TeamID:        uuidFromPG(row.TeamID),
 			Provider:      row.Provider,
 			Repo:          row.Repo,
 			Branch:        row.Branch,
@@ -363,7 +357,6 @@ func (r *storeRepository) WritePreviewBinding(ctx context.Context, write Preview
 		HeadSHA:              write.HeadSHA,
 		ConsumeLease:         write.ConsumeLease,
 		LiveLimit:            int64(write.LiveLimit),
-		TeamID:               pgUUID(write.TeamID),
 		Provider:             write.Provider,
 		Repo:                 write.Repo,
 		Branch:               write.Branch,
@@ -410,7 +403,6 @@ func (r *storeRepository) GetPreviewByApplication(ctx context.Context, previewAp
 func (r *storeRepository) UpsertPreview(ctx context.Context, preview Preview) (Preview, error) {
 	row, err := r.store.UpsertPreviewDeploy(ctx, sqlc.UpsertPreviewDeployParams{
 		ApplicationID:        pgUUID(preview.ApplicationID),
-		TeamID:               pgUUID(preview.TeamID),
 		Provider:             preview.Provider,
 		Repo:                 preview.Repo,
 		PrNumber:             int32(preview.PRNumber),
@@ -564,7 +556,6 @@ func previewFromRow(row sqlc.PreviewDeploy) Preview {
 	return Preview{
 		ID:                   uuidFromPG(row.ID),
 		ApplicationID:        uuidFromPG(row.ApplicationID),
-		TeamID:               uuidFromPG(row.TeamID),
 		Provider:             row.Provider,
 		Repo:                 row.Repo,
 		PRNumber:             int(row.PrNumber),

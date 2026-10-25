@@ -31,7 +31,6 @@ func (n *recordingNotifier) results() []DeployResult {
 
 func TestOrchestratorNotifiesSuccess(t *testing.T) {
 	app := testApplication(uuid.New())
-	app.TeamID = uuid.New()
 	app.PrimaryDomain = &ApplicationDomain{Domain: "demo.example.com", Port: 3000, Protocol: ProtocolHTTP}
 	repo := &fakeRepository{app: app}
 	envVars, secrets := testEnv(t)
@@ -60,9 +59,6 @@ func TestOrchestratorNotifiesSuccess(t *testing.T) {
 	if result.Application != app.Name || result.ApplicationID != app.ID {
 		t.Errorf("application = %q/%s, want %q/%s", result.Application, result.ApplicationID, app.Name, app.ID)
 	}
-	if result.TeamID != app.TeamID {
-		t.Errorf("team = %s, want %s", result.TeamID, app.TeamID)
-	}
 	if result.Host != app.PrimaryDomain.Domain {
 		t.Errorf("host = %q, want %q", result.Host, app.PrimaryDomain.Domain)
 	}
@@ -76,7 +72,6 @@ func TestOrchestratorNotifiesSuccess(t *testing.T) {
 
 func TestOrchestratorNotifiesFailure(t *testing.T) {
 	app := testApplication(uuid.New())
-	app.TeamID = uuid.New()
 	repo := &fakeRepository{app: app}
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
 
@@ -100,9 +95,6 @@ func TestOrchestratorNotifiesFailure(t *testing.T) {
 	}
 	if !strings.Contains(result.Error, "clone boom") {
 		t.Errorf("error = %q, want the failure cause", result.Error)
-	}
-	if result.TeamID != app.TeamID {
-		t.Errorf("team = %s, want %s", result.TeamID, app.TeamID)
 	}
 }
 

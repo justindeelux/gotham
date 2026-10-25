@@ -187,7 +187,7 @@ func TestStoreConcurrentFirstRegistrationsYieldOneOwner(t *testing.T) {
 		t.Fatalf("bootstrap race winner role = %q, want owner", winner.Role)
 	}
 
-	if err := st.DeleteUserAndPersonalTeam(ctx, winner.ID); err != nil {
+	if err := st.DeleteUser(ctx, winner.ID); err != nil {
 		t.Fatalf("cleanup winner: %v", err)
 	}
 }

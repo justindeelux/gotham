@@ -49,9 +49,6 @@ func TestBackupCompletionNotifies(t *testing.T) {
 	if result.Database != fixture.database.Name {
 		t.Errorf("database = %q, want %q", result.Database, fixture.database.Name)
 	}
-	if result.TeamID != fixture.database.TeamID {
-		t.Errorf("team = %s, want %s", result.TeamID, fixture.database.TeamID)
-	}
 	if result.Error != "" {
 		t.Errorf("error = %q, want empty on success", result.Error)
 	}

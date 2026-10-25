@@ -227,7 +227,7 @@ func newP4HarnessWithAgentOptions(t *testing.T, options ...agent.ServerOption) *
 	}
 	serverID := uuid.UUID(serverRow.ID.Bytes)
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, TeamID: pgtype.UUID{Bytes: userID, Valid: true}, Name: "p4-e2e",
+		ID: pgtype.UUID{Bytes: uuid.New(), Valid: true}, Name: "p4-e2e",
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)

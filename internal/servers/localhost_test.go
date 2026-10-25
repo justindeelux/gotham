@@ -112,12 +112,9 @@ func TestEnsureLocalhostSkipsSSHManagedNodes(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			s, st := newLocalhostTestService(t)
 			ctx := context.Background()
-			var teamID, serverID string
-			if err := st.DB.QueryRow(ctx, `INSERT INTO teams (name) VALUES ('SSH owner') RETURNING id::text`).Scan(&teamID); err != nil {
-				t.Fatal(err)
-			}
-			if err := st.DB.QueryRow(ctx, `INSERT INTO servers (name,ip,ssh_user,node_id,team_id,os)
-				VALUES ('tunnel','127.0.0.1','','tunnel-agent',$1,'linux') RETURNING id::text`, teamID).Scan(&serverID); err != nil {
+			var serverID string
+			if err := st.DB.QueryRow(ctx, `INSERT INTO servers (name,ip,ssh_user,node_id,os)
+				VALUES ('tunnel','127.0.0.1','','tunnel-agent','linux') RETURNING id::text`).Scan(&serverID); err != nil {
 				t.Fatal(err)
 			}
 			var err error
@@ -141,7 +138,7 @@ func TestEnsureLocalhostSkipsSSHManagedNodes(t *testing.T) {
 			}
 			var unchanged bool
 			if err := st.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id::text=$1
-				AND node_id='tunnel-agent' AND name='tunnel' AND ip='127.0.0.1' AND team_id::text=$2)`, serverID, teamID).Scan(&unchanged); err != nil || !unchanged {
+				AND node_id='tunnel-agent' AND name='tunnel' AND ip='127.0.0.1')`, serverID).Scan(&unchanged); err != nil || !unchanged {
 				t.Fatalf("SSH-managed node changed: preserved=%v, err=%v", unchanged, err)
 			}
 		})

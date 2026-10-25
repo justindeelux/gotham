@@ -16,7 +16,7 @@ import (
 func TestSDKLifecycle(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acknowledge(w, r)
-		_, _ = fmt.Fprintf(w, `{"team_id":%q,"capabilities":["context","strict_reads"]}`, r.Header.Get("X-Team-Id"))
+		_, _ = fmt.Fprintf(w, `{"capabilities":["context","strict_reads"]}`)
 	}))
 	defer api.Close()
 	for _, version := range sdk.SupportedProtocolVersions() {
@@ -51,8 +51,8 @@ func TestSDKLifecycle(t *testing.T) {
 			}
 			sdk.AddTool(server, &sdk.Tool{Name: "test_read", Description: "Test typed REST registration"}, func(ctx context.Context, _ *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, testOutput, error) {
 				client, _ := NewClient(testConfig(api.URL))
-				result, err := client.Context(ctx)
-				return nil, testOutput{result.TeamID.String()}, err
+				_, err := client.Context(ctx)
+				return nil, testOutput{}, err
 			})
 			result, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "test_read", Arguments: map[string]any{}})
 			if err != nil || result.IsError || result.StructuredContent == nil {
@@ -63,7 +63,7 @@ func TestSDKLifecycle(t *testing.T) {
 }
 
 type testOutput struct {
-	TeamID string `json:"team_id"`
+	Capabilities []string `json:"capabilities"`
 }
 
 func TestStartupRequiresStrictAuthorization(t *testing.T) {

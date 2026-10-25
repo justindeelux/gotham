@@ -15,10 +15,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/internal/requestreplay"
 	"github.com/justindeelux/gotham/internal/store"
-	"github.com/justindeelux/gotham/internal/teams"
 )
 
-func replayDeployFixture(t *testing.T) (*store.Store, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) {
+func replayDeployFixture(t *testing.T) (*store.Store, uuid.UUID, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	dsn := os.Getenv("GOTHAM_TEST_DSN")
 	if dsn == "" {
@@ -34,7 +33,7 @@ func replayDeployFixture(t *testing.T) (*store.Store, uuid.UUID, uuid.UUID, uuid
 		t.Fatal(err)
 	}
 	st := store.New(pool)
-	team, env, node := seedProjectEnvironment(t, ctx, st)
+	env, node := seedProjectEnvironment(t, ctx, st)
 	user, err := st.CreateUser(ctx, uuid.NewString()+"@example.com", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -44,20 +43,20 @@ func replayDeployFixture(t *testing.T) (*store.Store, uuid.UUID, uuid.UUID, uuid
 		_, _ = pool.Exec(ctx, "DELETE FROM request_receipts WHERE principal_id=$1", principal)
 		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id=$1", principal)
 	})
-	return st, principal, team, env, node
+	return st, principal, env, node
 }
-func deployReplayContext(principal, team uuid.UUID, op string, target uuid.UUID, key string) context.Context {
-	ctx := teams.WithScope(context.Background(), teams.Scope{UserID: principal, TeamID: team, Role: teams.RoleAdmin})
-	return requestreplay.With(ctx, &requestreplay.Request{Principal: principal, Team: team, Operation: op, Target: target, Key: key})
+func deployReplayContext(principal uuid.UUID, op string, target uuid.UUID, key string) context.Context {
+	ctx := context.Background()
+	return requestreplay.With(ctx, &requestreplay.Request{Principal: principal, Operation: op, Target: target, Key: key})
 }
 
 func TestReplayApplicationCanonicalSecretsAndMove(t *testing.T) {
-	st, principal, team, env, node := replayDeployFixture(t)
+	st, principal, env, node := replayDeployFixture(t)
 	cfg := Config{Store: st, Secret: testSecretKey, Logger: discardLogger()}
 	first := NewService(cfg)
 	defer first.Close()
 	input := CreateApplicationInput{Name: " image ", EnvironmentID: env, ServerID: node, SourceType: SourceImage, ImageRef: "busybox:latest", RegistryUsername: " user ", RegistryPassword: " registry-secret ", Env: []EnvEntry{{Key: " B ", Value: "two"}, {Key: "A", Value: "secret: app-secret "}}, Storage: []Storage{{Name: "data", ContainerPath: "/data"}}}
-	ctx := deployReplayContext(principal, team, "create_application", uuid.Nil, "create")
+	ctx := deployReplayContext(principal, "create_application", uuid.Nil, "create")
 	app, err := first.CreateApplication(ctx, principal, input)
 	if err != nil {
 		t.Fatal(err)
@@ -68,18 +67,18 @@ func TestReplayApplicationCanonicalSecretsAndMove(t *testing.T) {
 	input.RegistryUsername = "user"
 	input.RegistryPassword = "registry-secret"
 	input.Env = []EnvEntry{{Key: "A", Value: "secret:app-secret"}, {Key: "B", Value: "two"}}
-	replayCtx := deployReplayContext(principal, team, "create_application", uuid.Nil, "create")
+	replayCtx := deployReplayContext(principal, "create_application", uuid.Nil, "create")
 	again, err := restarted.CreateApplication(replayCtx, principal, input)
 	if err != nil || again.ID != app.ID || !requestreplay.Replayed(replayCtx) {
 		t.Fatalf("replay %v %v", again.ID, err)
 	}
 	input.RegistryPassword = "changed"
-	if _, err := restarted.CreateApplication(deployReplayContext(principal, team, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, requestreplay.ErrConflict) {
+	if _, err := restarted.CreateApplication(deployReplayContext(principal, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, requestreplay.ErrConflict) {
 		t.Fatalf("secret change: %v", err)
 	}
 	input.RegistryPassword = "registry-secret"
 	input.Env[0].Value = "secret:changed"
-	if _, err := restarted.CreateApplication(deployReplayContext(principal, team, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, requestreplay.ErrConflict) {
+	if _, err := restarted.CreateApplication(deployReplayContext(principal, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, requestreplay.ErrConflict) {
 		t.Fatalf("config change: %v", err)
 	}
 	input.Env[0].Value = "secret:app-secret"
@@ -94,27 +93,27 @@ func TestReplayApplicationCanonicalSecretsAndMove(t *testing.T) {
 	if _, err := st.DB.Exec(context.Background(), "UPDATE applications SET environment_id=$1 WHERE id=$2", moved, app.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := restarted.CreateApplication(deployReplayContext(principal, team, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, requestreplay.ErrMissing) {
+	if _, err := restarted.CreateApplication(deployReplayContext(principal, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, requestreplay.ErrMissing) {
 		t.Fatalf("move: %v", err)
 	}
 	if _, err := st.DB.Exec(context.Background(), "DELETE FROM applications WHERE id=$1", app.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := restarted.CreateApplication(deployReplayContext(principal, team, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, ErrNotFound) {
+	if _, err := restarted.CreateApplication(deployReplayContext(principal, "create_application", uuid.Nil, "create"), principal, input); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted app: %v", err)
 	}
 }
 
 func TestReplayDeployCrashWindowsAndRestart(t *testing.T) {
-	st, principal, team, env, node := replayDeployFixture(t)
+	st, principal, env, node := replayDeployFixture(t)
 	repo := newStoreRepository(st, testSecretKey)
 	for _, state := range []State{StateQueued, StateCloning, StateBuilding, StatePushing, StateStarting, StateRunning, StateFailed} {
 		t.Run(string(state), func(t *testing.T) {
-			app, err := repo.CreateApplication(context.Background(), Application{ID: uuid.New(), UserID: principal, TeamID: team, EnvironmentID: env, ServerID: node, Name: "crash-" + string(state), SourceType: SourceImage, ImageRef: "busybox:latest"}, nil, nil, nil)
+			app, err := repo.CreateApplication(context.Background(), Application{ID: uuid.New(), UserID: principal, EnvironmentID: env, ServerID: node, Name: uuid.NewString(), SourceType: SourceImage, ImageRef: "busybox:latest"}, nil, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			c := deployReplayContext(principal, team, "deploy", app.ID, "crash")
+			c := deployReplayContext(principal, "deploy", app.ID, "crash")
 			if err := requestreplay.Fingerprint(c, "", struct{}{}); err != nil {
 				t.Fatal(err)
 			}
@@ -128,7 +127,7 @@ func TestReplayDeployCrashWindowsAndRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			for i := 0; i < 2; i++ {
-				c = deployReplayContext(principal, team, "deploy", app.ID, "crash")
+				c = deployReplayContext(principal, "deploy", app.ID, "crash")
 				got, err := svc.Deploy(c, principal, app.ID)
 				if err != nil || got.ID != accepted.ID || !requestreplay.Replayed(c) {
 					t.Fatalf("restart replay %+v %v", got, err)
@@ -165,10 +164,10 @@ func (r replayEnrichmentFailure) CreateApplication(ctx context.Context, app Appl
 }
 
 func TestReplayDeployPostcommitFailures(t *testing.T) {
-	st, principal, team, env, node := replayDeployFixture(t)
+	st, principal, env, node := replayDeployFixture(t)
 	repo := newStoreRepository(st, testSecretKey)
 	for _, previousFailure := range []bool{false, true} {
-		app, err := repo.CreateApplication(context.Background(), Application{ID: uuid.New(), UserID: principal, TeamID: team, EnvironmentID: env, ServerID: node, Name: uuid.NewString(), SourceType: SourceImage, ImageRef: "busybox:latest"}, nil, nil, nil)
+		app, err := repo.CreateApplication(context.Background(), Application{ID: uuid.New(), UserID: principal, EnvironmentID: env, ServerID: node, Name: uuid.NewString(), SourceType: SourceImage, ImageRef: "busybox:latest"}, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +180,7 @@ func TestReplayDeployPostcommitFailures(t *testing.T) {
 		svc.startOnce.Do(func() {})
 		svc.queue = make(chan job)
 		svc.baseCancel()
-		ctx := deployReplayContext(principal, team, "deploy", app.ID, "failed")
+		ctx := deployReplayContext(principal, "deploy", app.ID, "failed")
 		if _, err := svc.Deploy(ctx, principal, app.ID); err == nil {
 			t.Fatal("expected postcommit failure")
 		}
@@ -189,7 +188,7 @@ func TestReplayDeployPostcommitFailures(t *testing.T) {
 		if result == nil {
 			t.Fatal("lost accepted identity")
 		}
-		ctx = deployReplayContext(principal, team, "deploy", app.ID, "failed")
+		ctx = deployReplayContext(principal, "deploy", app.ID, "failed")
 		got, err := svc.Deploy(ctx, principal, app.ID)
 		if err != nil || got.ID != result.ResourceID || got.State != StateFailed {
 			t.Fatalf("failed replay %+v %v", got, err)
@@ -220,7 +219,7 @@ func (h replayHookFailure) InstallHook(ctx context.Context, userID, appID uuid.U
 }
 
 func TestReplayHookAndPostcommitResponseLoss(t *testing.T) {
-	st, principal, team, env, node := replayDeployFixture(t)
+	st, principal, env, node := replayDeployFixture(t)
 	for _, mode := range []string{"installed", "timeout", "canceled", "request_canceled", "definite_failure", "before_hook", "outcome_loss"} {
 		t.Run(mode, func(t *testing.T) {
 			hook := &fakeHookLifecycle{}
@@ -254,7 +253,7 @@ func TestReplayHookAndPostcommitResponseLoss(t *testing.T) {
 			send := func() *httptest.ResponseRecorder {
 				r := httptest.NewRequest("POST", "/v1/applications", strings.NewReader(body))
 				r.Header.Set("Idempotency-Key", mode)
-				r = r.WithContext(teams.WithScope(r.Context(), teams.Scope{UserID: principal, TeamID: team, Role: teams.RoleAdmin}))
+				r = r.WithContext(r.Context())
 				ctx, cancel := context.WithCancel(r.Context())
 				defer cancel()
 				cancelRequest = cancel

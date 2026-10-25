@@ -396,17 +396,9 @@ func p6RunNginx(t *testing.T, ctx context.Context, engine *agent.DockerClient, n
 
 func p6SeedEnvironment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st *store.Store, suffix string) pgtype.UUID {
 	t.Helper()
-	team, err := st.CreateTeam(ctx, sqlc.CreateTeamParams{
-		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		Name: "p6-e2e-" + suffix,
-	})
-	if err != nil {
-		t.Fatalf("create team: %v", err)
-	}
 	project, err := st.CreateProject(ctx, sqlc.CreateProjectParams{
-		ID:     pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		TeamID: team.ID,
-		Name:   "p6-" + suffix,
+		ID:   pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name: "p6-" + suffix,
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -425,9 +417,6 @@ func p6SeedEnvironment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM applications WHERE environment_id = $1", environment.ID); err != nil {
 			t.Logf("cleanup applications: %v", err)
 		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
 	})
 	return environment.ID
 }
@@ -437,7 +426,7 @@ func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	_ = hostPort
 	var id pgtype.UUID
 	err := pool.QueryRow(ctx,
-		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack)
+		`INSERT INTO applications (user_id, server_id, environment_id, name, clone_url, branch, build_pack)
 		 VALUES ($1, $1, $2, $3, $4, 'https://github.com/acme/demo.git', 'main', 'dockerfile')
 		 RETURNING id`,
 		userID, serverID, envID, name).Scan(&id)

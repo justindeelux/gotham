@@ -13,10 +13,10 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-const receiptWhere = `principal_id=$1 AND team_id=$2 AND operation=$3 AND target_id=$4 AND request_key=$5`
+const receiptWhere = `principal_id=$1 AND operation=$2 AND target_id=$3 AND request_key=$4`
 
 func receiptArgs(r *requestreplay.Request) []any {
-	return []any{r.Principal, r.Team, r.Operation, r.Target, r.Key}
+	return []any{r.Principal, r.Operation, r.Target, r.Key}
 }
 
 func readReceipt(ctx context.Context, db sqlc.DBTX, r *requestreplay.Request) (*requestreplay.Result, error) {
@@ -97,14 +97,14 @@ func (s *Store) withRequestReceipt(ctx context.Context, fn func(*sqlc.Queries, *
 		}
 		args := append(receiptArgs(r), r.Fingerprint, resource, related)
 		if err := tx.QueryRow(ctx, `INSERT INTO request_receipts
-   (principal_id,team_id,operation,target_id,request_key,fingerprint,resource_id,related_id)
-   VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING accepted_at`, args...).Scan(&result.AcceptedAt); err != nil {
+   (principal_id,operation,target_id,request_key,fingerprint,resource_id,related_id)
+   VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING accepted_at`, args...).Scan(&result.AcceptedAt); err != nil {
 			return err
 		}
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM request_receipts WHERE
- (principal_id,team_id,operation,target_id,request_key) IN
- (SELECT principal_id,team_id,operation,target_id,request_key FROM request_receipts
+ (principal_id,operation,target_id,request_key) IN
+ (SELECT principal_id,operation,target_id,request_key FROM request_receipts
  WHERE accepted_at < clock_timestamp() - interval '7 days' ORDER BY accepted_at LIMIT 100 FOR UPDATE SKIP LOCKED)`); err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func (s *Store) SaveRequestHook(ctx context.Context, outcome string) error {
 		return nil
 	}
 	args := append(receiptArgs(r), outcome)
-	_, err := s.DB.Exec(ctx, `UPDATE request_receipts SET webhook_outcome=$6 WHERE `+receiptWhere, args...)
+	_, err := s.DB.Exec(ctx, `UPDATE request_receipts SET webhook_outcome=$5 WHERE `+receiptWhere, args...)
 	if err == nil {
 		r.Result.Hook = outcome
 	}
@@ -130,8 +130,8 @@ func (s *Store) SaveRequestHook(ctx context.Context, outcome string) error {
 
 func (s *Store) CleanupRequestReceipts(ctx context.Context) (int64, error) {
 	result, err := s.DB.Exec(ctx, `DELETE FROM request_receipts WHERE
- (principal_id,team_id,operation,target_id,request_key) IN
- (SELECT principal_id,team_id,operation,target_id,request_key FROM request_receipts
+ (principal_id,operation,target_id,request_key) IN
+ (SELECT principal_id,operation,target_id,request_key FROM request_receipts
  WHERE accepted_at < clock_timestamp() - interval '7 days' ORDER BY accepted_at LIMIT 100)`)
 	return result.RowsAffected(), err
 }

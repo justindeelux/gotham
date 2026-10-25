@@ -12,7 +12,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/servers"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -36,7 +35,7 @@ func (s *Server) handleStartLogStream(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.authorizeLogSubscription(r.Context(), serverID, userID); err != nil {
 		switch {
-		case errors.Is(err, servers.ErrNotFound), errors.Is(err, teams.ErrNotFound):
+		case errors.Is(err, servers.ErrNotFound), errors.Is(err, errAccessDenied):
 			writeJSON(w, http.StatusNotFound, apiError{Message: "not found"})
 		default:
 			s.logger.Error("realtime: authorize log stream",

@@ -27,7 +27,6 @@ type TerminalTargetSet struct {
 	ApplicationID   uuid.UUID
 	ApplicationName string
 	ServerID        uuid.UUID
-	TeamID          uuid.UUID
 	OwnerID         uuid.UUID
 	SourceType      string
 	Containers      []TerminalContainer
@@ -35,7 +34,6 @@ type TerminalTargetSet struct {
 
 type TerminalApplicationAccess struct {
 	ID       uuid.UUID
-	TeamID   uuid.UUID
 	OwnerID  uuid.UUID
 	ServerID uuid.UUID
 }
@@ -87,7 +85,6 @@ func (s *Service) TerminalApplicationAccess(ctx context.Context, appID uuid.UUID
 	}
 	return TerminalApplicationAccess{
 		ID:       app.ID,
-		TeamID:   app.TeamID,
 		OwnerID:  app.UserID,
 		ServerID: app.ServerID,
 	}, nil
@@ -151,7 +148,6 @@ func (s *Service) terminalTargets(ctx context.Context, userID, appID uuid.UUID) 
 		ApplicationID:   app.ID,
 		ApplicationName: app.Name,
 		ServerID:        app.ServerID,
-		TeamID:          app.TeamID,
 		OwnerID:         app.UserID,
 		SourceType:      NormalizeSourceType(app.SourceType, app.Provider),
 	}

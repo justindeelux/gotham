@@ -3,7 +3,6 @@ package servers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
-	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -124,101 +122,6 @@ func TestMetricsRangeAndRetention(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Errorf("buckets after sweep = %d, want the one fresh bucket", len(rows))
-	}
-}
-
-func TestMetricsTeamIsolation(t *testing.T) {
-	service, st := newTestService(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	suffix := time.Now().UnixNano()
-	alice, err := st.CreateUser(ctx, fmt.Sprintf("be-8.4-metrics-a-%d@example.com", suffix), nil)
-	if err != nil {
-		t.Fatalf("create user A: %v", err)
-	}
-	bob, err := st.CreateUser(ctx, fmt.Sprintf("be-8.4-metrics-b-%d@example.com", suffix), nil)
-	if err != nil {
-		t.Fatalf("create user B: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		if _, err := st.DB.Exec(cleanupCtx, "DELETE FROM users WHERE id = ANY($1)", []any{alice.ID, bob.ID}); err != nil {
-			t.Logf("cleanup users: %v", err)
-		}
-	})
-
-	shared, err := st.CreateTeamWithOwner(ctx, sqlc.CreateTeamParams{
-		ID:   pgUUID(uuid.New()),
-		Name: fmt.Sprintf("metrics-%d", suffix),
-	}, alice.ID)
-	if err != nil {
-		t.Fatalf("create team: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		if err := st.DeleteTeam(cleanupCtx, shared.ID); err != nil {
-			t.Logf("cleanup team: %v", err)
-		}
-	})
-	if _, err := st.DB.Exec(ctx,
-		"INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'read_only')", shared.ID, bob.ID); err != nil {
-		t.Fatalf("add read_only member: %v", err)
-	}
-
-	aliceTeam := teams.WithScope(ctx, teams.Scope{
-		UserID: uuid.UUID(alice.ID.Bytes),
-		TeamID: uuid.UUID(shared.ID.Bytes),
-		Role:   teams.RoleOwner,
-	})
-	node, err := service.Add(aliceTeam, uuid.UUID(alice.ID.Bytes), "metrics-team-node", "127.0.0.1", 22, "root", uuid.Nil, "")
-	if err != nil {
-		t.Fatalf("add node: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		if err := st.DeleteServer(cleanupCtx, pgUUID(node.ID)); err != nil {
-			t.Logf("cleanup server: %v", err)
-		}
-	})
-
-	sampleAt := time.Now().UTC()
-	insertMetric(t, st, node.ID, sampleAt, 0.5)
-	from := sampleAt.Add(-time.Hour)
-	to := sampleAt.Add(time.Hour)
-
-	reader := teams.WithScope(ctx, teams.Scope{
-		UserID: uuid.UUID(bob.ID.Bytes),
-		TeamID: uuid.UUID(shared.ID.Bytes),
-		Role:   teams.RoleReadOnly,
-	})
-	if points, err := service.Metrics(reader, node.ID, from, to, "1m"); err != nil {
-		t.Errorf("read_only Metrics = %v, want a series", err)
-	} else if len(points) != 1 {
-		t.Errorf("read_only points = %d, want 1", len(points))
-	}
-
-	if points, err := service.Metrics(aliceTeam, node.ID, from, to, "1m"); err != nil {
-		t.Errorf("owner Metrics = %v, want a series", err)
-	} else if len(points) != 1 {
-		t.Errorf("owner points = %d, want 1", len(points))
-	}
-
-	foreign := teams.WithScope(ctx, teams.Scope{
-		UserID: uuid.UUID(bob.ID.Bytes),
-		TeamID: teams.PersonalTeamID(uuid.UUID(bob.ID.Bytes)),
-		Role:   teams.RoleOwner,
-	})
-	if _, err := service.Metrics(foreign, node.ID, from, to, "1m"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("foreign-team Metrics = %v, want ErrNotFound", err)
-	}
-
-	if _, err := service.Metrics(aliceTeam, uuid.New(), from, to, "1m"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("unknown node Metrics = %v, want ErrNotFound", err)
 	}
 }
 

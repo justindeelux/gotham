@@ -517,7 +517,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		ID: pgUUID(uuid.New()), UserID: pgUUID(h.userID), ServerID: pgUUID(h.serverID),
 		EnvironmentID: pgUUID(uuid.MustParse(stagingID)), Name: "pe7-db-" + suffix,
 		Engine: "postgres", Status: "creating", StoragePath: "gotham-db-pe7-" + suffix,
-		TeamID: pgUUID(h.userID),
 	})
 	if err != nil {
 		t.Fatalf("seed database: %v", err)

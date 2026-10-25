@@ -41,3 +41,11 @@ func (s *Server) isOwner(r *http.Request) bool {
 }
 
 const ownerScopeDenied = "requesting the admin scope requires owner access"
+
+// resourceAuth gates instance-level resource routes. Only the owner reaches
+// them until per-project grants land (GOTHAM-65).
+func (s *Server) resourceAuth() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return s.RequireAuth(requireResourceScopes(s.RequireOwner(next)))
+	}
+}

@@ -18,7 +18,6 @@ type ResourceCounts struct {
 
 type Project struct {
 	ID               uuid.UUID
-	TeamID           uuid.UUID
 	Name             string
 	Description      string
 	EnvironmentCount int

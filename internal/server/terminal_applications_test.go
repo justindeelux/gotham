@@ -10,7 +10,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/deploy"
-	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/terminal"
 )
 
@@ -34,7 +33,7 @@ func (f fakeTerminalResolver) TerminalApplicationAccess(context.Context, uuid.UU
 	return f.access, nil
 }
 
-func newApplicationAuthorizer(t *testing.T, userID uuid.UUID, role teams.Role) (applicationTerminalAuthorizer, *rotatingAuth, uuid.UUID, deploy.TerminalApplicationAccess) {
+func newApplicationAuthorizer(t *testing.T, userID uuid.UUID) (applicationTerminalAuthorizer, *rotatingAuth, uuid.UUID, deploy.TerminalApplicationAccess) {
 	t.Helper()
 	signIn := time.Now().UTC().Truncate(time.Microsecond)
 	sessionID := uuid.New()
@@ -42,16 +41,12 @@ func newApplicationAuthorizer(t *testing.T, userID uuid.UUID, role teams.Role) (
 		user:     &auth.User{Email: "dev@example.com", Role: "member"},
 		sessions: []auth.SessionInfo{{ID: sessionID, CreatedAt: signIn}},
 	}
-	teamID := uuid.New()
-	teamService := newFakeTeamService()
-	teamService.allow(teamID, userID, role)
 	access := deploy.TerminalApplicationAccess{
 		ID:       uuid.New(),
-		TeamID:   teamID,
 		OwnerID:  userID,
 		ServerID: uuid.New(),
 	}
-	authorizer := applicationTerminalAuthorizer{resolver: fakeTerminalResolver{access: access}, auth: store, teams: teamService}
+	authorizer := applicationTerminalAuthorizer{resolver: fakeTerminalResolver{access: access}, auth: store}
 	return authorizer, store, sessionID, access
 }
 
@@ -61,7 +56,7 @@ func TestApplicationAuthorizerRequiresWriteAccess(t *testing.T) {
 	}
 	t.Run("owner", func(t *testing.T) {
 		userID := uuid.New()
-		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID)
 		target := targetFor(access)
 		marker, err := authorizer.Authorize(context.Background(), authorizerClaims(userID, sessionID), target)
 		if err != nil || marker.SignInAt.IsZero() {
@@ -71,32 +66,9 @@ func TestApplicationAuthorizerRequiresWriteAccess(t *testing.T) {
 			t.Fatalf("owner revalidate = (%v, %v)", ok, err)
 		}
 	})
-	t.Run("read-only role", func(t *testing.T) {
-		userID := uuid.New()
-		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleReadOnly)
-		target := targetFor(access)
-		if _, err := authorizer.Authorize(context.Background(), authorizerClaims(userID, sessionID), target); err == nil {
-			t.Fatal("a read-only member was authorized")
-		}
-		marker := terminal.Marker{SignInAt: time.Now().UTC()}
-		if ok, err := authorizer.Revalidate(context.Background(), authorizerClaims(userID, sessionID), marker, target); err != nil || ok {
-			t.Fatalf("read-only revalidate = (%v, %v), want (false, nil)", ok, err)
-		}
-	})
-	t.Run("cross-team member", func(t *testing.T) {
-		userID := uuid.New()
-		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleAdmin)
-		teamService := newFakeTeamService()
-		teamService.allow(access.TeamID, uuid.New(), teams.RoleOwner)
-		authorizer.teams = teamService
-		target := targetFor(access)
-		if _, err := authorizer.Authorize(context.Background(), authorizerClaims(userID, sessionID), target); err == nil {
-			t.Fatal("a cross-team caller was authorized")
-		}
-	})
 	t.Run("target kind isolation", func(t *testing.T) {
 		userID := uuid.New()
-		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID)
 		if _, err := authorizer.Authorize(context.Background(), authorizerClaims(userID, sessionID),
 			terminal.Target{Kind: terminal.TargetHost, ServerID: access.ServerID}); err == nil {
 			t.Fatal("the application authorizer accepted a host target")
@@ -108,7 +80,7 @@ func TestApplicationAuthorizerRequiresWriteAccess(t *testing.T) {
 	})
 	t.Run("application moved to another node", func(t *testing.T) {
 		userID := uuid.New()
-		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+		authorizer, _, sessionID, access := newApplicationAuthorizer(t, userID)
 		target := terminal.Target{Kind: terminal.TargetContainer, ServerID: uuid.New(), ApplicationID: access.ID}
 		if _, err := authorizer.Authorize(context.Background(), authorizerClaims(userID, sessionID), target); err == nil {
 			t.Fatal("a session on the previous node was authorized")
@@ -116,7 +88,7 @@ func TestApplicationAuthorizerRequiresWriteAccess(t *testing.T) {
 	})
 	t.Run("token without a sid", func(t *testing.T) {
 		userID := uuid.New()
-		authorizer, _, _, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+		authorizer, _, _, access := newApplicationAuthorizer(t, userID)
 		claims := authorizerClaims(userID, uuid.New())
 		claims.SessionID = ""
 		if _, err := authorizer.Authorize(context.Background(), claims, terminal.Target{
@@ -129,7 +101,7 @@ func TestApplicationAuthorizerRequiresWriteAccess(t *testing.T) {
 
 func TestApplicationAuthorizerSurvivesRefreshRotation(t *testing.T) {
 	userID := uuid.New()
-	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID)
 	target := terminal.Target{Kind: terminal.TargetContainer, ServerID: access.ServerID, ApplicationID: access.ID}
 	claims := authorizerClaims(userID, sessionID)
 	marker, err := authorizer.Authorize(context.Background(), claims, target)
@@ -149,7 +121,7 @@ func TestApplicationAuthorizerSurvivesRefreshRotation(t *testing.T) {
 
 func TestApplicationAuthorizerAcceptsPreRotationToken(t *testing.T) {
 	userID := uuid.New()
-	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID)
 	target := terminal.Target{Kind: terminal.TargetContainer, ServerID: access.ServerID, ApplicationID: access.ID}
 	claims := authorizerClaims(userID, sessionID)
 	signIn := store.sessions[0].CreatedAt
@@ -169,7 +141,7 @@ func TestApplicationAuthorizerAcceptsPreRotationToken(t *testing.T) {
 
 func TestApplicationAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.T) {
 	userID := uuid.New()
-	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID)
 	target := terminal.Target{Kind: terminal.TargetContainer, ServerID: access.ServerID, ApplicationID: access.ID}
 	claims := authorizerClaims(userID, sessionID)
 	store.rotate(sessionID, uuid.New())
@@ -182,7 +154,7 @@ func TestApplicationAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.
 
 func TestApplicationAuthorizerTransientErrorsKeepShell(t *testing.T) {
 	userID := uuid.New()
-	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID)
 	target := terminal.Target{Kind: terminal.TargetContainer, ServerID: access.ServerID, ApplicationID: access.ID}
 	claims := authorizerClaims(userID, sessionID)
 	marker, err := authorizer.Authorize(context.Background(), claims, target)

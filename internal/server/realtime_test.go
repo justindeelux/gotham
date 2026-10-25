@@ -113,9 +113,9 @@ func TestHandleStartLogStreamWiresPublisher(t *testing.T) {
 		t.Fatalf("ack = %+v, want subscribed", ack)
 	}
 
-	s := &Server{servers: dialer, realtime: rt, logger: logger}
+	s := &Server{servers: dialer, realtime: rt, logger: logger, auth: ownerAuthService()}
 	rec := httptest.NewRecorder()
-	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), uuid.New()))
+	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), testUserID))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusAccepted, rec.Body.String())
 	}
@@ -143,29 +143,6 @@ func TestHandleStartLogStreamRejectsUnknownNode(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-}
-
-func TestHandleStartLogStreamForeignNodeIsNotFound(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	base := newFakeServerService()
-	serverID := uuid.New()
-	base.items[serverID] = servers.Server{
-		ID:     serverID,
-		Name:   "node",
-		Status: servers.StatusReady,
-		TeamID: uuid.New(),
-	}
-
-	rt := ws.Mount(chi.NewRouter(), nil, "", logger, nil)
-	t.Cleanup(rt.Close)
-
-	s := &Server{servers: base, realtime: rt, logger: logger, teamService: newFakeTeamService()}
-	rec := httptest.NewRecorder()
-	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), uuid.New()))
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d for a foreign node", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -204,9 +181,9 @@ func TestHandleStartLogStreamRequiresAgentDialer(t *testing.T) {
 	rt := ws.Mount(chi.NewRouter(), nil, "", logger, nil)
 	t.Cleanup(rt.Close)
 
-	s := &Server{servers: base, realtime: rt, logger: logger}
+	s := &Server{servers: base, realtime: rt, logger: logger, auth: ownerAuthService()}
 	rec := httptest.NewRecorder()
-	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), uuid.New()))
+	s.handleStartLogStream(rec, startLogStreamRequest(serverID.String(), testUserID))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)

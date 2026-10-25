@@ -96,7 +96,7 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 	ctx := context.Background()
 
 	email := fmt.Sprintf("jus-258-%d@example.com", time.Now().UnixNano())
-	register, err := svc.Register(ctx, email, "s3cret-password", "", nil, auth.SessionMeta{})
+	register, err := svc.Register(ctx, email, "s3cret-password", auth.SessionMeta{})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

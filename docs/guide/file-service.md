@@ -219,12 +219,8 @@ file route except the ticket-gated download sits behind that gate, so a read- or
 deploy-scoped API token gets **403**, because the API exposes the node's
 filesystem.
 
-Inside the gate the team role applies to servers that belong to a team: a node
-in another team answers 404, `roots`/`list`/`stat` need any member, and
-`content`, `download-ticket`, uploads and every mutation need an owner/admin
-role. A legacy node with no team has no team role gate — every platform operator
-can use it, including writes. File bodies can hold secrets (a `0600` compose
-`.env`), so `GET /content` and `POST /download-ticket` stay owner/admin. The
+Inside the gate only the instance owner may use the file API, including reads
+and every mutation. File bodies can hold secrets (a `0600` compose `.env`). The
 ticket-gated `GET /files/download` sits outside the auth group, so the
 single-use ticket is its credential.
 
@@ -234,7 +230,6 @@ single-use ticket is its credential.
 | `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Ceiling for one write/upload body (413 above it); should match the agent's `GOTHAM_AGENT_FILE_MAX_UPLOAD`. |
 | `FILES_SPOOL_DIR` | `<tmpdir>/gotham-spool` (0700) | Directory staging a streamed upload body before it reaches the agent. |
 | `FILES_SPOOL_CONCURRENCY` | `4` | Max upload bodies staged at once; beyond it an upload answers 429. |
-| `FILES_SPOOL_TEAM_CONCURRENCY` | half of `FILES_SPOOL_CONCURRENCY`, at least 1 | Max staged uploads one team (or one user without a team) may hold while another team is staging; beyond it an upload answers 429 with a team-specific message. |
 
 A streamed body is staged on the control plane (the agent's write header must
 declare an exact size, which a multipart part does not carry). The spool is
@@ -242,18 +237,12 @@ swept at startup and hourly, and its free space is checked against the ceiling
 before any write. The file API is served by the control plane directly, so it
 does **not** traverse the node's Traefik.
 
-A team alone may use the whole global ceiling. The per-team share applies only
-while another team is staging an upload at the same time: a team at or above its
-share (half the global ceiling by default, never less than one;
-`FILES_SPOOL_TEAM_CONCURRENCY` overrides it, and a value above the global
-ceiling is clamped to it) cannot start another upload while another team holds
-a slot, though slots it already holds are never revoked. A caller without a
-team is counted per user. A 429 names whether the team share or the global
-ceiling was reached.
+`FILES_SPOOL_CONCURRENCY` is the only staging limit; a further upload while
+every slot is held answers 429.
 
 ## Permissions (chmod)
 
-`POST /files/chmod` (owner/admin team role; an API token needs the admin scope)
+`POST /files/chmod` (owner only; an API token needs the admin scope)
 changes one entry's permission bits. The body is `{root, path, mode}` and
 **`mode` is required**: an omitted field is refused **400** rather than silently
 applied as `000`. Only the low `0o777` bits are accepted: a request carrying

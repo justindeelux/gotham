@@ -233,6 +233,6 @@ func targetErrorForApplication(application deploy.Application, err error) *termi
 
 func (s *Server) terminalTargetsAuth() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return s.RequireAuth(s.requireInteractiveSession(s.requireOwnerAccount(next)))
+		return s.RequireAuth(s.requireOwnerAccount(s.requireInteractiveSession(next)))
 	}
 }

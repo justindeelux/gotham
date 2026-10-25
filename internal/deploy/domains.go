@@ -336,17 +336,20 @@ func (s *Service) SetPrimaryDomain(ctx context.Context, userID, appID, domainID 
 }
 
 func (s *Service) checkDomainClaim(ctx context.Context, appID uuid.UUID, domain string) error {
-	if claim, err := s.repo.DomainClaim(ctx, domain); err == nil {
+	claim, claimErr := s.repo.DomainClaim(ctx, domain)
+	if claimErr != nil && !errors.Is(claimErr, ErrNotFound) {
+		return claimErr
+	}
+	// Read both namespaces before comparing claims, regardless of their owner.
+	sources, err := s.repo.ListRedirectSources(ctx)
+	if err != nil {
+		return err
+	}
+	if claimErr == nil {
 		if claim.ApplicationID == appID {
 			return fmt.Errorf("%w: the domain is already attached to this application", ErrValidation)
 		}
 		return ErrDomainConflict
-	} else if !errors.Is(err, ErrNotFound) {
-		return err
-	}
-	sources, err := s.repo.ListRedirectSources(ctx)
-	if err != nil {
-		return err
 	}
 	for _, source := range sources {
 		if proxy.NormalizeDomain(source) == domain {

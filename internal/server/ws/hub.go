@@ -27,14 +27,16 @@ const clientSendBuffer = 64
 const slowClientDropLimit = 8
 
 type Client struct {
-	hub      *Hub
-	send     chan []byte
-	kick     chan struct{}
-	kickOnce sync.Once
-	dropRun  int
+	hub        *Hub
+	send       chan []byte
+	kick       chan struct{}
+	revalidate chan struct{}
+	kickOnce   sync.Once
+	dropRun    int
 
 	mu       sync.Mutex
 	channels map[string]bool
+	userID   string
 }
 
 func (c *Client) kickClient() {
@@ -162,10 +164,11 @@ func (h *Hub) Close() {
 
 func (h *Hub) newClient() *Client {
 	c := &Client{
-		hub:      h,
-		send:     make(chan []byte, clientSendBuffer),
-		kick:     make(chan struct{}),
-		channels: make(map[string]bool),
+		hub:        h,
+		send:       make(chan []byte, clientSendBuffer),
+		kick:       make(chan struct{}),
+		revalidate: make(chan struct{}, 1),
+		channels:   make(map[string]bool),
 	}
 	select {
 	case h.register <- c:

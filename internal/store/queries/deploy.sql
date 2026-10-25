@@ -35,7 +35,7 @@ SELECT * FROM applications WHERE id = $1;
 
 -- name: ListApplicationsByUser :many
 SELECT * FROM applications
-WHERE user_id = $1 AND is_preview = false
+WHERE can_access_environment(sqlc.arg(user_id)::uuid, environment_id) AND is_preview = false
 ORDER BY created_at DESC, id DESC;
 
 -- name: ListApplicationsByEnvironment :many
@@ -164,9 +164,9 @@ SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
        a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
 FROM deployments d
 JOIN applications a ON a.id = d.application_id
-WHERE a.user_id = $1 AND a.is_preview = false
+WHERE can_access_environment(sqlc.arg(user_id)::uuid, a.environment_id) AND a.is_preview = false
 ORDER BY d.created_at DESC, d.id DESC
-LIMIT $2;
+LIMIT sqlc.arg('limit');
 
 -- name: GetActiveDeploymentByApp :one
 SELECT * FROM deployments

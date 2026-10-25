@@ -168,6 +168,9 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	otherUserID, _ := seedUserAndServer(t, st)
 
 	projectID, envID := seedProjectEnvironment(t, st)
+	if err := st.GrantProject(ctx, projectID, ownerID, ownerID); err != nil {
+		t.Fatal(err)
+	}
 	otherEnvID := func() uuid.UUID {
 		environment, err := st.CreateEnvironment(ctx, sqlc.CreateEnvironmentParams{
 			ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
@@ -320,15 +323,15 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDatabasesByUser: %v", err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("owner list = %+v, want the three live rows", list)
+	if len(list) != 4 {
+		t.Fatalf("owner list = %+v, want the four live rows in the granted project", list)
 	}
 	otherList, err := repo.ListDatabases(ctx, otherUserID)
 	if err != nil {
 		t.Fatalf("ListDatabasesByUser (other): %v", err)
 	}
-	if len(otherList) != 1 {
-		t.Errorf("other user's list = %+v, want their one row", otherList)
+	if len(otherList) != 0 {
+		t.Errorf("other user's list = %+v, want no rows without a project grant", otherList)
 	}
 
 	portRow, err := repo.CreateDatabase(ctx, Database{

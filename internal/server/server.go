@@ -369,9 +369,9 @@ func (s *Server) routes() (http.Handler, error) {
 		MountProxyRouters(api, platformOnly, proxy.AsRouterService(s.proxy))
 
 		s.updates = s.updatesService()
-		updates.Mount(api, s.readScopeAuth, platformOnly, s.isOwner, s.updates)
+		updates.Mount(api, s.resourceAuth(), platformOnly, s.isOwner, s.updates)
 
-		s.realtime = ws.Mount(api, s.auth, s.cfg.Snapshot().Redis.Addr, s.logger, s.authorizeLogSubscription)
+		s.realtime = ws.Mount(api, realtimeTokenVerifier{server: s}, s.cfg.Snapshot().Redis.Addr, s.logger, s.authorizeLogSubscription)
 
 		api.Group(func(protected chi.Router) {
 			protected.Use(s.readScopeAuth)
@@ -380,10 +380,10 @@ func (s *Server) routes() (http.Handler, error) {
 
 		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger,
 			s.providerConnectionApplications)
-		providers.MountWithControlPlaneURL(api, s.resourceScopeAuth, UserIDFromContext, providerSvc, s.controlPlaneURLSource())
+		providers.MountWithControlPlaneURL(api, s.resourceAuth(), UserIDFromContext, providerSvc, s.controlPlaneURLSource())
 
 		githubAppSvc := githubapp.NewDefaultService(s.persistence, s.secretKey, s.logger)
-		githubapp.MountWithControlPlaneURL(api, s.resourceScopeAuth, UserIDFromContext, githubAppSvc, s.controlPlaneURLSource())
+		githubapp.MountWithControlPlaneURL(api, s.resourceAuth(), UserIDFromContext, githubAppSvc, s.controlPlaneURLSource())
 
 		s.deploy = s.deployService(providerSvc, s.proxy, githubAppSvc)
 		deploy.Mount(api, s.resourceAuth(), UserIDFromContext, s.deploy)
@@ -402,6 +402,8 @@ func (s *Server) routes() (http.Handler, error) {
 
 		if s.realtime != nil {
 			s.realtime.SetTaskFeed(s.authorizeTaskSubscription, s.taskSnapshot)
+			s.realtime.SetChannelAuthorizer(s.newRealtimeChannelAuthorizer)
+			s.realtime.SetFrameFilter(s.filterProjectFrame)
 		}
 
 		s.webhooks = s.webhookService(providerSvc, githubAppSvc)
@@ -412,11 +414,12 @@ func (s *Server) routes() (http.Handler, error) {
 		databases.Mount(api, s.resourceAuth(), RequireScopes(auth.ScopeDeploy), UserIDFromContext, databaseSvc)
 
 		s.backups = s.backupService(containerService)
-		databases.MountBackups(api, s.resourceAuth(), s.resourceScopeAuth, UserIDFromContext, s.backups)
+		databases.MountBackups(api, s.resourceAuth(), s.resourceAuth(), UserIDFromContext, s.backups)
 
 		composeSvc := s.composeService()
 		services.Mount(api, s.resourceAuth(), UserIDFromContext, composeSvc)
 
+		s.mountProjectMembers(api)
 		projects.Mount(api, s.resourceAuth(), UserIDFromContext, s.projectService(s.deploy, composeSvc, databaseSvc))
 
 		templates.Mount(api, s.resourceScopeAuth, templates.NewDefaultService(s.logger))

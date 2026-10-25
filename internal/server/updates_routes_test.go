@@ -126,38 +126,23 @@ func TestUpdateRoutesGating(t *testing.T) {
 	}
 
 	rec := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", "Bearer valid-token")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("check status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
-	}
-	var checkBody struct {
-		Current   string `json:"current"`
-		Available bool   `json:"available"`
-		Version   string `json:"version"`
-		Notes     string `json:"notes"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &checkBody); err != nil {
-		t.Fatalf("decode check: %v", err)
-	}
-	if !checkBody.Available || checkBody.Version != "v1.2.0" || checkBody.Current != "v1.0.0" {
-		t.Fatalf("check body = %+v", checkBody)
-	}
-	if checkBody.Notes != "" {
-		t.Errorf("plain session saw release notes %q", checkBody.Notes)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("member check=%d want 404", rec.Code)
 	}
 
 	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated apply status = %d, want 401", rec.Code)
 	}
-	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer valid-token"); rec.Code != http.StatusForbidden {
-		t.Fatalf("plain-session apply status = %d, want 403", rec.Code)
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer valid-token"); rec.Code != http.StatusNotFound {
+		t.Fatalf("plain-session apply status = %d, want 404", rec.Code)
 	}
 	for _, scope := range []string{auth.ScopeRead, auth.ScopeDeploy} {
 		token, err := tokens.Create(context.Background(), testUserID, "scoped", []string{scope})
 		if err != nil {
 			t.Fatalf("create %s token: %v", scope, err)
 		}
-		if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer "+token.Token); rec.Code != http.StatusForbidden {
-			t.Fatalf("%s-scoped apply status = %d, want 403", scope, rec.Code)
+		if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer "+token.Token); rec.Code != http.StatusNotFound {
+			t.Fatalf("%s-scoped apply status = %d, want 404", scope, rec.Code)
 		}
 	}
 
@@ -165,21 +150,12 @@ func TestUpdateRoutesGating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create member admin token: %v", err)
 	}
-	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer "+memberToken.Token); rec.Code != http.StatusForbidden {
-		t.Fatalf("member-owned admin apply status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/updates/apply", "", "Bearer "+memberToken.Token); rec.Code != http.StatusNotFound {
+		t.Fatalf("member-owned admin apply status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 	}
 	memberCheck := doRequest(t, s, http.MethodGet, "/api/v1/updates/check", "", "Bearer "+memberToken.Token)
-	if memberCheck.Code != http.StatusOK {
-		t.Fatalf("member-owned admin check status = %d, want 200", memberCheck.Code)
-	}
-	var memberBody struct {
-		Notes string `json:"notes"`
-	}
-	if err := json.Unmarshal(memberCheck.Body.Bytes(), &memberBody); err != nil {
-		t.Fatalf("decode member check: %v", err)
-	}
-	if memberBody.Notes != "" {
-		t.Fatalf("member-owned admin token saw release notes %q", memberBody.Notes)
+	if memberCheck.Code != http.StatusNotFound {
+		t.Fatalf("member-owned check=%d want 404", memberCheck.Code)
 	}
 
 	ownerToken, err := tokens.Create(context.Background(), testOwnerID, "admin", []string{auth.ScopeAdmin})

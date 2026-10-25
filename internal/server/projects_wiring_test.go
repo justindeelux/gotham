@@ -175,18 +175,18 @@ func TestProjectsWiringViewerAndTokenScopes(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
-	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects", "", viewerBearer).Code; code != http.StatusForbidden {
-		t.Fatalf("viewer list = %d, want 403", code)
+	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects", "", viewerBearer).Code; code != http.StatusOK {
+		t.Fatalf("viewer list = %d, want 200", code)
 	}
-	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects/"+created.Project.ID, "", viewerBearer).Code; code != http.StatusForbidden {
-		t.Fatalf("viewer get = %d, want 403", code)
+	if code := doRequest(t, s, http.MethodGet, "/api/v1/projects/"+created.Project.ID, "", viewerBearer).Code; code != http.StatusNotFound {
+		t.Fatalf("viewer get = %d, want 404", code)
 	}
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/v1/projects", `{"name":"Other"}`},
 		{http.MethodPatch, "/api/v1/projects/" + created.Project.ID, `{"name":"x"}`},
 		{http.MethodDelete, "/api/v1/projects/" + created.Project.ID, ""},
 	} {
-		if code := doRequest(t, s, tc.method, tc.path, tc.body, viewerBearer).Code; code != http.StatusForbidden {
+		if code := doRequest(t, s, tc.method, tc.path, tc.body, viewerBearer).Code; code != http.StatusNotFound {
 			t.Errorf("viewer %s %s = %d, want 403", tc.method, tc.path, code)
 		}
 	}

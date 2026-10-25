@@ -152,12 +152,13 @@ func TestHandleStartLogStreamTransientErrorIs500(t *testing.T) {
 	t.Cleanup(rt.Close)
 
 	s := &Server{
+		auth:     ownerAuthService(),
 		servers:  &failingGetServerService{fakeServerService: newFakeServerService()},
 		realtime: rt,
 		logger:   logger,
 	}
 	rec := httptest.NewRecorder()
-	s.handleStartLogStream(rec, startLogStreamRequest(uuid.New().String(), uuid.New()))
+	s.handleStartLogStream(rec, startLogStreamRequest(uuid.New().String(), testUserID))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d for a transient lookup error", rec.Code, http.StatusInternalServerError)

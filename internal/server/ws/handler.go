@@ -19,6 +19,47 @@ type TokenVerifier interface {
 	VerifyAccessToken(token string) (*auth.Claims, error)
 }
 
+type connectionVerifier interface {
+	VerifyConnection(context.Context, string) (*auth.Claims, string, error)
+}
+
+type connectionRevalidator interface {
+	RevalidateConnection(context.Context, string, *auth.Claims) (*auth.Claims, string, error)
+}
+
+type connectionState struct {
+	claims  *auth.Claims
+	role    string
+	version uint64
+}
+type connectionStateKey struct{}
+
+func ConnectionRole(ctx context.Context) (string, bool) {
+	state, ok := ctx.Value(connectionStateKey{}).(*connectionState)
+	if !ok || state.role == "" {
+		return "", false
+	}
+	return state.role, true
+}
+
+func AuthorizationVersion(ctx context.Context) uint64 {
+	if state, ok := ctx.Value(connectionStateKey{}).(*connectionState); ok {
+		return state.version
+	}
+	return 0
+}
+
+const AuthorizationInterval = time.Second
+const AuthorizationTimeout = time.Second
+
+func (h *Handler) verifyConnection(ctx context.Context, token string) (*auth.Claims, string, error) {
+	if verifier, ok := h.verify.(connectionVerifier); ok {
+		return verifier.VerifyConnection(ctx, token)
+	}
+	claims, err := h.verify.VerifyAccessToken(token)
+	return claims, "", err
+}
+
 const RealtimeEnv = "REALTIME_ENABLED"
 
 func RealtimeEnabled() bool {
@@ -42,8 +83,11 @@ type Handler struct {
 	authorize SubscriptionAuthorizer
 	logger    *slog.Logger
 
-	taskAuthorize TaskAuthorizer
-	taskSnapshot  func(projectID string) []string
+	channelAuthorizeFactory func() func(context.Context, string, uuid.UUID) error
+	frameFilter             func(context.Context, uuid.UUID, []byte) []byte
+	channelAuthorize        func(context.Context, string, uuid.UUID) error
+	taskAuthorize           TaskAuthorizer
+	taskSnapshot            func(projectID string) []string
 
 	writeWait    time.Duration
 	pingPeriod   time.Duration
@@ -80,7 +124,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeUnauth(w)
 		return
 	}
-	claims, err := h.verify.VerifyAccessToken(token)
+	ctx, cancel := context.WithTimeout(r.Context(), AuthorizationTimeout)
+	defer cancel()
+	claims, role, err := h.verifyConnection(ctx, token)
 	if err != nil {
 		writeUnauth(w)
 		return
@@ -89,6 +135,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if userID, parseErr := uuid.Parse(claims.Subject); parseErr == nil {
 		r = r.WithContext(context.WithValue(r.Context(), userIDKey{}, userID))
 	}
+	r = r.WithContext(context.WithValue(r.Context(), connectionStateKey{}, &connectionState{claims: claims, role: role, version: 1}))
 	websocket.Handler(h.serveConn).ServeHTTP(w, r)
 }
 
@@ -106,10 +153,18 @@ type clientRequest struct {
 func (h *Handler) serveConn(conn *websocket.Conn) {
 	defer func() { _ = conn.Close() }()
 
+	if h.channelAuthorizeFactory != nil {
+		connectionHandler := *h
+		connectionHandler.channelAuthorize = h.channelAuthorizeFactory()
+		h = &connectionHandler
+	}
 	request := conn.Request()
 	userID, _ := request.Context().Value(userIDKey{}).(uuid.UUID)
 
 	client := h.hub.newClient()
+	client.mu.Lock()
+	client.userID = userID.String()
+	client.mu.Unlock()
 	defer h.hub.remove(client)
 	select {
 	case <-h.hub.done:
@@ -134,6 +189,28 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 		}, incoming, connDone)
 	}()
 
+	check := func() bool {
+		ctx, cancel := context.WithTimeout(request.Context(), AuthorizationTimeout)
+		defer cancel()
+		state := request.Context().Value(connectionStateKey{}).(*connectionState)
+		token := request.URL.Query().Get("token")
+		var claims *auth.Claims
+		var role string
+		var err error
+		if verifier, ok := h.verify.(connectionRevalidator); ok {
+			claims, role, err = verifier.RevalidateConnection(ctx, token, state.claims)
+		} else {
+			claims, role, err = h.verifyConnection(ctx, token)
+		}
+		if err != nil || (userID != uuid.Nil && claims.Subject != userID.String()) {
+			return false
+		}
+		state.role = role
+		state.version++
+		return h.subscriptionsAllowed(ctx, userID, subs)
+	}
+	revalidate := time.NewTicker(AuthorizationInterval)
+	defer revalidate.Stop()
 	ticker := time.NewTicker(h.pingPeriod)
 	defer ticker.Stop()
 
@@ -142,6 +219,12 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 		case payload, ok := <-client.send:
 			if !ok {
 				return
+			}
+			if h.frameFilter != nil {
+				payload = h.frameFilter(request.Context(), userID, payload)
+				if payload == nil {
+					return
+				}
 			}
 			if !h.writeRaw(conn, payload) {
 				return
@@ -163,6 +246,14 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 			h.logger.Warn("ws: disconnecting slow client",
 				"user_id", userID.String(), "subscriptions", len(subs))
 			return
+		case <-client.revalidate:
+			if !check() {
+				return
+			}
+		case <-revalidate.C:
+			if !check() {
+				return
+			}
 		case <-ticker.C:
 			if !h.writeRaw(conn, mustJSON(Message{Type: TypePing})) {
 				return
@@ -172,6 +263,12 @@ func (h *Handler) serveConn(conn *websocket.Conn) {
 }
 
 func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel string, ctx context.Context, userID uuid.UUID, subs map[string]bool, authorized map[uuid.UUID]authDecision) {
+	ctx, cancel := context.WithTimeout(ctx, AuthorizationTimeout)
+	defer cancel()
+	if !h.channelAllowed(ctx, channel, userID, authorized) {
+		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied})
+		return
+	}
 	if subs[channel] {
 		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
 		return
@@ -182,15 +279,23 @@ func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel
 		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied, Data: "subscription limit reached"})
 		return
 	}
-	if !h.channelAllowed(ctx, channel, userID, authorized) {
-		_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeDenied})
-		return
-	}
 	h.hub.subscribe(client, channel)
 	subs[channel] = true
 	if projectID, ok := taskChannelProjectID(channel); ok && h.taskSnapshot != nil {
 		for _, frame := range h.taskSnapshot(projectID) {
-			_ = h.writeFrame(conn, []byte(frame))
+			if !h.channelAllowed(ctx, channel, userID, authorized) {
+				client.kickClient()
+				return
+			}
+			payload := []byte(frame)
+			if h.frameFilter != nil {
+				payload = h.frameFilter(ctx, userID, payload)
+				if payload == nil {
+					client.kickClient()
+					return
+				}
+			}
+			_ = h.writeFrame(conn, payload)
 		}
 	}
 	_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
@@ -245,6 +350,9 @@ type authDecision struct {
 }
 
 func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uuid.UUID, authorized map[uuid.UUID]authDecision) bool {
+	if h.channelAuthorize != nil {
+		return h.channelAuthorize(ctx, channel, userID) == nil
+	}
 	if h.authorize == nil {
 		return true
 	}
@@ -316,4 +424,13 @@ func initialChannels(r *http.Request) []string {
 		return []string{LogChannel(serverID, containerID)}
 	}
 	return nil
+}
+
+func (h *Handler) subscriptionsAllowed(ctx context.Context, userID uuid.UUID, subs map[string]bool) bool {
+	for channel := range subs {
+		if !h.channelAllowed(ctx, channel, userID, make(map[uuid.UUID]authDecision)) {
+			return false
+		}
+	}
+	return true
 }

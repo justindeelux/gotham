@@ -157,11 +157,11 @@ func TestAgentUpdateRoutesRequireOperator(t *testing.T) {
 	s := newServerRoutesTestServer(t, fake)
 	s.auth.(*fakeAuthService).user.Role = "member"
 
-	if rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", authHeader); rec.Code != http.StatusForbidden {
-		t.Errorf("list status = %d, want 403", rec.Code)
+	if rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/agents", "", authHeader); rec.Code != http.StatusNotFound {
+		t.Errorf("list status = %d, want 404", rec.Code)
 	}
-	if rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader); rec.Code != http.StatusForbidden {
-		t.Errorf("update-all status = %d, want 403", rec.Code)
+	if rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/agents/update-all", "", authHeader); rec.Code != http.StatusNotFound {
+		t.Errorf("update-all status = %d, want 404", rec.Code)
 	}
 }
 

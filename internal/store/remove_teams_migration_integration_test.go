@@ -167,7 +167,7 @@ func TestRemoveTeamsMigrationRenamesSeededDuplicates(t *testing.T) {
 func TestRemoveTeamsMigrationEmptyDatabaseAndIrreversibleDown(t *testing.T) {
 	ctx, dsn, provider := removeTeamsScratch(t)
 
-	if _, err := provider.Up(ctx); err != nil {
+	if _, err := provider.UpTo(ctx, 64); err != nil {
 		t.Fatalf("migrate up from empty: %v", err)
 	}
 	conn, err := pgx.Connect(ctx, dsn)

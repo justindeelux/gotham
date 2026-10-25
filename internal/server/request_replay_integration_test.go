@@ -73,7 +73,7 @@ func TestReplayBackedMutationAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	denied := send(deployToken.Token, "project", `{"name":"shop"}`)
-	if denied.Code != http.StatusForbidden || strings.Contains(denied.Body.String(), first.Receipt.ResourceID) {
+	if denied.Code != http.StatusNotFound || strings.Contains(denied.Body.String(), first.Receipt.ResourceID) {
 		t.Fatalf("demoted replay=%d %s", denied.Code, denied.Body.String())
 	}
 	if _, err := st.DB.Exec(ctx, `UPDATE users SET role='owner' WHERE id=$1`, ownerID); err != nil {
@@ -195,7 +195,7 @@ func TestMCPCreationBackedAndScoped(t *testing.T) {
 	if rec := send(readToken.Token, "mcp-read", `{"name":"read"}`+"\n", "1"); rec.Code != http.StatusForbidden {
 		t.Fatalf("owner read create=%d %s", rec.Code, rec.Body.String())
 	}
-	if rec := send(memberToken.Token, "mcp-member", `{"name":"member"}`+"\n", "1"); rec.Code != http.StatusForbidden {
+	if rec := send(memberToken.Token, "mcp-member", `{"name":"member"}`+"\n", "1"); rec.Code != http.StatusNotFound {
 		t.Fatalf("member deploy create=%d %s", rec.Code, rec.Body.String())
 	}
 	if rec := send(deployToken.Token, "mcp-contract", `{"name":"contract"}`+"\n", ""); rec.Code != http.StatusBadRequest {

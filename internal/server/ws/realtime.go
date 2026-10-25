@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -321,4 +322,50 @@ func (r *replayBuffer) snapshot() []Message {
 	out := make([]Message, len(r.data))
 	copy(out, r.data)
 	return out
+}
+
+// SetChannelAuthorizer validates the full channel before subscribing or delivery.
+func (rt *Realtime) SetChannelAuthorizer(authorize func() func(context.Context, string, uuid.UUID) error) {
+	if rt != nil && rt.handler != nil {
+		rt.handler.channelAuthorizeFactory = authorize
+	}
+}
+
+// RevokeUserSubscriptions disconnects the member when a grant is revoked.
+// Periodic checks also revalidate grants, covering changes made by another process.
+func (rt *Realtime) RevokeUserSubscriptions(userID uuid.UUID) {
+	if rt == nil || rt.Hub == nil {
+		return
+	}
+	rt.Hub.mu.RLock()
+	defer rt.Hub.mu.RUnlock()
+	for client := range rt.Hub.clients {
+		client.mu.Lock()
+		matches := client.userID == userID.String()
+		client.mu.Unlock()
+		if matches {
+			client.kickClient()
+		}
+	}
+}
+
+func (rt *Realtime) SetFrameFilter(filter func(context.Context, uuid.UUID, []byte) []byte) {
+	if rt != nil && rt.handler != nil {
+		rt.handler.frameFilter = filter
+	}
+}
+
+// InvalidateAuthorization wakes connections after successful local grant changes.
+func (rt *Realtime) InvalidateAuthorization() {
+	if rt == nil || rt.Hub == nil {
+		return
+	}
+	rt.Hub.mu.RLock()
+	defer rt.Hub.mu.RUnlock()
+	for client := range rt.Hub.clients {
+		select {
+		case client.revalidate <- struct{}{}:
+		default:
+		}
+	}
 }

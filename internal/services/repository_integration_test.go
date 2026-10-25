@@ -239,7 +239,10 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	ownerID, serverID := seedUserAndServer(t, st)
 	otherUserID, _ := seedUserAndServer(t, st)
-	_, envID := seedProjectEnvironment(t, st)
+	projectID, envID := seedProjectEnvironment(t, st)
+	if err := st.GrantProject(ctx, projectID, ownerID, ownerID); err != nil {
+		t.Fatal(err)
+	}
 
 	now := time.Now().UTC()
 	created, err := repo.CreateService(ctx, Service{

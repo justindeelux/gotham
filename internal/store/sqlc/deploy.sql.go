@@ -687,7 +687,7 @@ func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
 SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
-WHERE user_id = $1 AND is_preview = false
+WHERE can_access_environment($1::uuid, environment_id) AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
 
@@ -879,7 +879,7 @@ SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
        a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
 FROM deployments d
 JOIN applications a ON a.id = d.application_id
-WHERE a.user_id = $1 AND a.is_preview = false
+WHERE can_access_environment($1::uuid, a.environment_id) AND a.is_preview = false
 ORDER BY d.created_at DESC, d.id DESC
 LIMIT $2
 `

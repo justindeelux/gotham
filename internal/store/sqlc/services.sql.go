@@ -363,7 +363,7 @@ func (q *Queries) ListServicesByServer(ctx context.Context, serverID pgtype.UUID
 
 const listServicesByUser = `-- name: ListServicesByUser :many
 SELECT id, user_id, server_id, name, status, compose_yaml, env, created_at, updated_at, deleted_at, environment_id FROM services
-WHERE user_id = $1 AND deleted_at IS NULL
+WHERE can_access_environment($1::uuid, environment_id) AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 `
 

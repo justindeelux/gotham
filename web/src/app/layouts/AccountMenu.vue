@@ -67,6 +67,7 @@ const accountOptions = computed<DropdownOption[]>(() => [
   },
   { type: "divider", key: "header-divider" },
   { label: t("shell.profile"), key: "profile" },
+  { label: t("shell.apiTokens"), key: "api-tokens" },
   { type: "divider", key: "footer-divider" },
   { label: t("shell.signOut"), key: "sign-out" },
 ]);
@@ -74,6 +75,10 @@ const accountOptions = computed<DropdownOption[]>(() => [
 async function handleSelect(key: string | number): Promise<void> {
   if (key === "profile") {
     await router.push({ name: "profile" });
+    return;
+  }
+  if (key === "api-tokens") {
+    await router.push({ name: "api-tokens" });
     return;
   }
   if (key !== "sign-out") {

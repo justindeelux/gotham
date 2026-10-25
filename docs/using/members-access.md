@@ -103,6 +103,6 @@ list or revoke sessions.
 ## API tokens
 
 API tokens (`gt1_` with read, deploy or admin scope) can be created, rotated
-and revoked through the API, but there is no console page for them yet. See
+and revoked from **Settings → API tokens** or through the API. See
 [API tokens](/reference/api-tokens). A member's token can never hold the `admin`
 scope and stays inside the member's project grants.

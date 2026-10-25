@@ -16,8 +16,9 @@ hash SHA-256 của nó được lưu. Hãy gửi nó trong header chuẩn:
 Authorization: Bearer gt1_<token>
 ```
 
-Hiện chưa có trang nào trong bảng điều khiển cho token. Chúng được tạo, liệt kê, xoay
-vòng và thu hồi qua chính API, dùng một phiên đã đăng nhập hoặc một token sẵn có.
+Trong bảng điều khiển, mở **Cài đặt → API token** từ menu tài khoản để tạo, liệt
+kê, xoay vòng và thu hồi token của bạn. Chúng cũng có thể được quản lý qua chính
+API, dùng một phiên đã đăng nhập hoặc một token sẵn có.
 
 ## Phạm vi
 
@@ -113,5 +114,5 @@ bỏ qua bước kiểm tra phạm vi đó. Hãy cập nhật bí mật đã lư
 - Token không phải một phiên. Cài đặt tài khoản, đổi mật khẩu, quản lý phiên và xác
   thực hai yếu tố chỉ dùng được với phiên tương tác; hãy chỉ dùng token cho phần tự
   động hóa cần đến nó.
-- Bảng điều khiển chưa có màn hình token, nên API là bề mặt quản lý duy nhất; trang
-  này là tài liệu tham chiếu cho nó.
+- Trang bảng điều khiển và API quản lý cùng một bộ token; bảng điều khiển là bề
+  mặt hằng ngày, còn trang này là tài liệu tham chiếu cho tự động hóa.

@@ -212,6 +212,46 @@ func TestUploadPartialFailure(t *testing.T) {
 	}
 }
 
+func TestUploadReleasesSpoolSlotAfterPanic(t *testing.T) {
+	t.Setenv(SpoolConcurrencyEnv, "1")
+	t.Setenv(SpoolTeamConcurrencyEnv, "1")
+	id := uuid.New()
+	calls := 0
+	svc := &fakeService{
+		writeHook: func(WriteRequest) (WriteResult, error) {
+			calls++
+			if calls == 1 {
+				panic("simulated agent panic")
+			}
+			return WriteResult{Entry: Entry{Name: "a.txt"}}, nil
+		},
+	}
+	h := newTestRouter(svc)
+	body, contentType := buildMultipart(t, []struct{ name, content string }{{"a.txt", "hello"}})
+	path := "/v1/servers/" + id.String() + "/files/upload?root=volumes&path="
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("upload did not propagate the panic")
+			}
+		}()
+		doWrite(t, h, http.MethodPost, path, body, map[string]string{"Content-Type": contentType})
+	}()
+
+	rec := doWrite(t, h, http.MethodPost, path, body, map[string]string{"Content-Type": contentType})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status after panic = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var envelope uploadEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode upload: %v", err)
+	}
+	if len(envelope.Results) != 1 || envelope.Results[0].Error != "" || envelope.Results[0].Entry == nil {
+		t.Fatalf("upload after a panic did not reuse the released slot: %+v", envelope.Results)
+	}
+}
+
 func TestUploadBoundsTotalRequestBody(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()

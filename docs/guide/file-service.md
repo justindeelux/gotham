@@ -168,12 +168,19 @@ single-use ticket is its credential.
 | `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Ceiling for one write/upload body (413 above it); should match the agent's `GOTHAM_AGENT_FILE_MAX_UPLOAD`. |
 | `FILES_SPOOL_DIR` | `<tmpdir>/gotham-spool` (0700) | Directory staging a streamed upload body before it reaches the agent. |
 | `FILES_SPOOL_CONCURRENCY` | `4` | Max upload bodies staged at once; beyond it an upload answers 429. |
+| `FILES_SPOOL_TEAM_CONCURRENCY` | half of `FILES_SPOOL_CONCURRENCY`, at least 1 | Max staged uploads one team (or one user without a team) may hold; beyond it an upload answers 429 with a team-specific message. |
 
 A streamed body is staged on the control plane (the agent's write header must
 declare an exact size, which a multipart part does not carry). The spool is
 swept at startup and hourly, and its free space is checked against the ceiling
 before any write. The file API is served by the control plane directly, so it
 does **not** traverse the node's Traefik.
+
+One team cannot consume the whole global ceiling: each team (a caller without a
+team is counted per user) may hold at most half of the staging slots, never
+less than one. `FILES_SPOOL_TEAM_CONCURRENCY` overrides that share, and a value
+above the global ceiling is clamped to it. A 429 names whether the team share
+or the global ceiling was reached.
 
 ## Permissions (chmod)
 

@@ -18,6 +18,8 @@ const SpoolDirEnv = "FILES_SPOOL_DIR"
 
 const SpoolConcurrencyEnv = "FILES_SPOOL_CONCURRENCY"
 
+const SpoolTeamConcurrencyEnv = "FILES_SPOOL_TEAM_CONCURRENCY"
+
 const (
 	DefaultSpoolConcurrency = 4
 	spoolDirName            = "gotham-spool"
@@ -35,14 +37,16 @@ var spoolFreeBytes = func(dir string) uint64 {
 }
 
 type spooler struct {
-	dir    string
-	sem    chan struct{}
-	logger *slog.Logger
-	mu     sync.Mutex
-	swept  time.Time
+	dir     string
+	sem     chan struct{}
+	teamCap int
+	logger  *slog.Logger
+	mu      sync.Mutex
+	swept   time.Time
+	staged  map[string]int
 }
 
-func newSpooler(dir string, concurrency int, logger *slog.Logger) *spooler {
+func newSpooler(dir string, concurrency, teamConcurrency int, logger *slog.Logger) *spooler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -60,7 +64,22 @@ func newSpooler(dir string, concurrency int, logger *slog.Logger) *spooler {
 	if concurrency <= 0 {
 		concurrency = DefaultSpoolConcurrency
 	}
-	s := &spooler{dir: dir, sem: make(chan struct{}, concurrency), logger: logger}
+	if teamConcurrency <= 0 {
+		if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv(SpoolTeamConcurrencyEnv))); err == nil && n > 0 {
+			teamConcurrency = n
+		}
+	}
+	if teamConcurrency <= 0 {
+		teamConcurrency = max(1, concurrency/2)
+	}
+	teamConcurrency = min(teamConcurrency, concurrency)
+	s := &spooler{
+		dir:     dir,
+		sem:     make(chan struct{}, concurrency),
+		teamCap: teamConcurrency,
+		logger:  logger,
+		staged:  make(map[string]int),
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		logger.Warn("files: cannot create the upload spool directory", "dir", dir, "error", err)
 	}
@@ -68,13 +87,40 @@ func newSpooler(dir string, concurrency int, logger *slog.Logger) *spooler {
 	return s
 }
 
-func (s *spooler) stage(body io.Reader, limit int64) (*os.File, int64, func(), error) {
+func (s *spooler) acquireTeam(owner string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.staged[owner] >= s.teamCap {
+		return false
+	}
+	s.staged[owner]++
+	return true
+}
+
+func (s *spooler) releaseTeam(owner string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.staged[owner] <= 1 {
+		delete(s.staged, owner)
+		return
+	}
+	s.staged[owner]--
+}
+
+func (s *spooler) stage(owner string, body io.Reader, limit int64) (*os.File, int64, func(), error) {
 	select {
 	case s.sem <- struct{}{}:
 	default:
 		return nil, 0, func() {}, fmt.Errorf("%w: too many uploads are being staged", ErrBusy)
 	}
-	release := func() { <-s.sem }
+	if !s.acquireTeam(owner) {
+		<-s.sem
+		return nil, 0, func() {}, fmt.Errorf("%w: the team's staged upload share is in use", ErrTeamBusy)
+	}
+	release := func() {
+		s.releaseTeam(owner)
+		<-s.sem
+	}
 
 	if free := spoolFreeBytes(s.dir); free > 0 && uint64(limit) > free {
 		release()

@@ -393,6 +393,33 @@ func TestErrorStatusMapping(t *testing.T) {
 	}
 }
 
+func TestBusyAnswerNamesTheLimit(t *testing.T) {
+	id := uuid.New()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"team share", ErrTeamBusy, "team"},
+		{"global ceiling", ErrBusy, "uploads"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestRouter(&fakeService{listErr: tc.err})
+			rec := doRequest(t, h, http.MethodGet, "/v1/servers/"+id.String()+"/files/list?root=volumes")
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("status = %d, want 429", rec.Code)
+			}
+			var body errorBody
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v", err)
+			}
+			if !strings.Contains(body.Message, tc.want) || body.Code != "busy" {
+				t.Fatalf("body = %+v, want a message mentioning %q", body, tc.want)
+			}
+		})
+	}
+}
+
 func TestDownloadTicketRoute(t *testing.T) {
 	id := uuid.New()
 	h := newTestRouter(&fakeService{ticket: "tok"})

@@ -13,6 +13,7 @@ var (
 	ErrNotEditable         = errors.New("files: file is not editable text")
 	ErrConflict            = errors.New("files: conflict")
 	ErrBusy                = errors.New("files: node is busy")
+	ErrTeamBusy            = errors.New("files: team upload share is in use")
 	ErrInsufficientStorage = errors.New("files: insufficient storage")
 	ErrAgentOutdated       = errors.New("files: node agent is outdated")
 	ErrAgentUnavailable    = errors.New("files: agent unavailable")

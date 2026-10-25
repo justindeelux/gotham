@@ -165,12 +165,19 @@ thực, nên vé dùng một lần chính là thông tin đăng nhập của nó
 | `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Mức trần cho một body ghi/tải lên (413 khi vượt); nên khớp với `GOTHAM_AGENT_FILE_MAX_UPLOAD` của agent. |
 | `FILES_SPOOL_DIR` | `<tmpdir>/gotham-spool` (0700) | Thư mục dàn dựng một body tải lên dạng luồng trước khi nó tới agent. |
 | `FILES_SPOOL_CONCURRENCY` | `4` | Số body tải lên được dàn dựng cùng lúc tối đa; vượt quá thì một lần tải lên trả 429. |
+| `FILES_SPOOL_TEAM_CONCURRENCY` | một nửa `FILES_SPOOL_CONCURRENCY`, tối thiểu 1 | Số body tải lên đang dàn dựng tối đa mà một team (hoặc một người dùng không thuộc team) được giữ; vượt quá thì một lần tải lên trả 429 với thông báo riêng cho team. |
 
 Một body dạng luồng được dàn dựng trên control plane (header ghi của agent phải
 khai báo kích thước chính xác, thứ mà một phần multipart không mang). Spool được
 quét lúc khởi động và mỗi giờ, và dung lượng trống của nó được kiểm tra với mức
 trần trước mọi lần ghi. API tệp do control plane phục vụ trực tiếp, nên nó
 **không** đi qua Traefik của node.
+
+Một team không thể chiếm toàn bộ mức trần chung: mỗi team (người gọi không thuộc
+team được tính theo người dùng) chỉ được giữ tối đa một nửa số slot dàn dựng,
+không ít hơn một. `FILES_SPOOL_TEAM_CONCURRENCY` thay đổi phần chia đó, và giá
+trị lớn hơn mức trần chung bị giới hạn bằng mức trần chung. Câu trả lời 429 nêu
+rõ đã chạm phần chia của team hay mức trần chung.
 
 ## Quyền (chmod)
 

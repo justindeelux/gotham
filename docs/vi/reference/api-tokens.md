@@ -55,6 +55,33 @@ Một bản mô tả token gồm `id`, `name`, `scopes`, `last_used_at`, `revoke
 `created_at`. Điểm cuối liệt kê không bao giờ trả `token` hay hash. `last_used_at`
 được cập nhật theo mỗi yêu cầu đã xác thực theo kiểu nỗ lực tối đa.
 
+## Kết nối MCP
+
+Bảng điều khiển đọc cấu hình ứng dụng MCP từ một tuyến chỉ dành cho phiên đăng
+nhập. Tuyến này từ chối API token, nên bản văn bản thường của token không bao giờ
+đến trình duyệt:
+
+```http
+GET /api/v1/mcp/connection
+Authorization: Bearer <session>
+```
+
+```json
+{
+  "base_url": "https://<control-plane>",
+  "mcp_url": "https://<control-plane>/mcp",
+  "https": true,
+  "role": "member",
+  "capabilities": ["context", "strict_reads"]
+}
+```
+
+`base_url` là URL control-plane của instance khi đã cấu hình, ngược lại là origin
+của yêu cầu. `https` là `false` khi URL gốc dùng HTTP thường, để bảng điều khiển
+cảnh báo trước khi ứng dụng gửi thông tin xác thực. `role` là `owner` hoặc
+`member`, và `capabilities` liệt kê những gì điểm cuối MCP hỗ trợ trên instance
+này. Phản hồi không chứa token hay bí mật.
+
 ## Tạo
 
 ```sh

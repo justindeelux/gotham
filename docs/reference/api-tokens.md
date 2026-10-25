@@ -57,6 +57,32 @@ A token descriptor contains `id`, `name`, `scopes`, `last_used_at`,
 hash. `last_used_at` is updated on each authenticated request on a best-effort
 basis.
 
+## MCP connection
+
+The console reads its MCP client configuration from a session-authenticated
+route. It rejects API tokens, so the token plaintext never reaches the browser:
+
+```http
+GET /api/v1/mcp/connection
+Authorization: Bearer <session>
+```
+
+```json
+{
+  "base_url": "https://<control-plane>",
+  "mcp_url": "https://<control-plane>/mcp",
+  "https": true,
+  "role": "member",
+  "capabilities": ["context", "strict_reads"]
+}
+```
+
+`base_url` is the instance control-plane URL when one is configured, otherwise
+the origin of the request. `https` is `false` when that base URL is plain HTTP,
+so the console can warn before a client sends a credential. `role` is `owner` or
+`member`, and `capabilities` lists what the MCP endpoint supports on this
+instance. The response contains no token or secret.
+
 ## Create
 
 ```sh

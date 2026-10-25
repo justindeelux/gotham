@@ -58,19 +58,76 @@ func (s *Server) requireMCPStrict(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) mcpCapabilities() []string {
+	capabilities := []string{"context", "strict_reads"}
+	if s.persistence != nil && s.deploy != nil && deploy.Enabled() {
+		capabilities = append(capabilities, "strict_mutations")
+		if !s.ephemeralSecret {
+			capabilities = append(capabilities, "request_replay")
+		}
+	}
+	return capabilities
+}
+
 func (s *Server) mountMCPRoutes(api chi.Router) {
 	api.With(s.readScopeAuth, s.requireMCPStrict).Get("/v1/mcp/context", func(w http.ResponseWriter, r *http.Request) {
-		capabilities := []string{"context", "strict_reads"}
-		if s.persistence != nil && s.deploy != nil && deploy.Enabled() {
-			capabilities = append(capabilities, "strict_mutations")
-			if !s.ephemeralSecret {
-				capabilities = append(capabilities, "request_replay")
-			}
-		}
 		writeJSON(w, http.StatusOK, struct {
 			Capabilities []string `json:"capabilities"`
-		}{capabilities})
+		}{s.mcpCapabilities()})
 	})
+
+	api.With(s.readScopeAuth, s.requireInteractiveSession).Get("/v1/mcp/connection", s.handleMCPConnection)
+}
+
+// handleMCPConnection feeds the console's MCP client configuration. It is
+// session-only: the returned URL is meant to be pasted into an MCP client, and
+// the client authenticates with its own token.
+func (s *Server) handleMCPConnection(w http.ResponseWriter, r *http.Request) {
+	userID, ok := UserIDFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+		return
+	}
+	user, err := s.auth.Me(r.Context(), userID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, apiError{Message: "internal error"})
+		return
+	}
+	role := auth.RoleMember
+	if user.Role == auth.RoleOwner {
+		role = auth.RoleOwner
+	}
+	base := s.mcpConnectionBaseURL(r)
+	parsed, err := url.Parse(base)
+	writeJSON(w, http.StatusOK, struct {
+		BaseURL      string   `json:"base_url"`
+		MCPURL       string   `json:"mcp_url"`
+		HTTPS        bool     `json:"https"`
+		Role         string   `json:"role"`
+		Capabilities []string `json:"capabilities"`
+	}{
+		BaseURL:      base,
+		MCPURL:       base + mcpHTTPPath,
+		HTTPS:        err == nil && strings.EqualFold(parsed.Scheme, "https"),
+		Role:         role,
+		Capabilities: s.mcpCapabilities(),
+	})
+}
+
+// mcpConnectionBaseURL prefers the configured public control-plane URL and
+// falls back to the origin the console reached us on. It never uses the
+// loopback URL the MCP handler dials.
+func (s *Server) mcpConnectionBaseURL(r *http.Request) string {
+	if s.instanceSvc != nil {
+		if raw, err := s.instanceSvc.ControlPlaneURL(r.Context()); err == nil && strings.TrimSpace(raw) != "" {
+			return strings.TrimRight(strings.TrimSpace(raw), "/")
+		}
+	}
+	scheme := "http"
+	if s.isSecureRequest(r) {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }
 
 // MCPHandlerConfig describes the remote streamable HTTP MCP endpoint.

@@ -20,8 +20,7 @@ const emailPattern =
 
 export const emailSchema = z
   .string({
-    required_error: authMessages.emailRequired,
-    invalid_type_error: authMessages.emailRequired,
+    error: authMessages.emailRequired,
   })
   .min(1, authMessages.emailRequired)
   .max(320, authMessages.emailInvalid)
@@ -29,8 +28,7 @@ export const emailSchema = z
 
 export const loginPasswordSchema = z
   .string({
-    required_error: authMessages.passwordRequired,
-    invalid_type_error: authMessages.passwordRequired,
+    error: authMessages.passwordRequired,
   })
   .min(1, authMessages.passwordRequired);
 
@@ -45,8 +43,7 @@ export function loginRules(): FormRules {
 
 export const registerPasswordSchema = z
   .string({
-    required_error: authMessages.passwordRequired,
-    invalid_type_error: authMessages.passwordRequired,
+    error: authMessages.passwordRequired,
   })
   .min(1, authMessages.passwordRequired)
   .refine((value) => meetsPasswordPolicy(value), {
@@ -55,11 +52,10 @@ export const registerPasswordSchema = z
 
 export function confirmPasswordSchema(
   password: () => string,
-): z.ZodEffects<z.ZodString, string, string> {
+): z.ZodType<string, string> {
   return z
     .string({
-      required_error: authMessages.confirmRequired,
-      invalid_type_error: authMessages.confirmRequired,
+      error: authMessages.confirmRequired,
     })
     .min(1, authMessages.confirmRequired)
     .refine((value) => value === password(), {
@@ -69,8 +65,7 @@ export function confirmPasswordSchema(
 
 export const termsSchema = z
   .boolean({
-    required_error: authMessages.termsRequired,
-    invalid_type_error: authMessages.termsRequired,
+    error: authMessages.termsRequired,
   })
   .refine((value) => value === true, { message: authMessages.termsRequired });
 
@@ -81,8 +76,7 @@ export const twoFactorMessages = {
 
 export const twoFactorCodeSchema = z
   .string({
-    required_error: twoFactorMessages.codeRequired,
-    invalid_type_error: twoFactorMessages.codeRequired,
+    error: twoFactorMessages.codeRequired,
   })
   .trim()
   .min(6, twoFactorMessages.codeInvalid)

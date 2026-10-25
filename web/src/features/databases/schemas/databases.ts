@@ -15,8 +15,7 @@ export const DATABASE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
 
 export const databaseNameSchema = z
   .string({
-    required_error: databaseMessages.nameRule,
-    invalid_type_error: databaseMessages.nameRule,
+    error: databaseMessages.nameRule,
   })
   .trim()
   .regex(DATABASE_NAME_PATTERN, databaseMessages.nameRule);
@@ -45,8 +44,7 @@ export const targetBucketSchema = requiredString(
 
 export const targetKeySchema = z
   .string({
-    required_error: databaseMessages.s3KeysRequired,
-    invalid_type_error: databaseMessages.s3KeysRequired,
+    error: databaseMessages.s3KeysRequired,
   })
   .min(1, databaseMessages.s3KeysRequired);
 

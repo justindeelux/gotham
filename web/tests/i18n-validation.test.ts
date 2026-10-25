@@ -56,7 +56,7 @@ describe("validation message resolution", () => {
   });
 
   it("documents the honest Required exception in both locales", () => {
-    const absent = z.string({ required_error: "Required" });
+    const absent = z.string({ error: "Required" });
     expect(fieldErrors(absent, undefined)).toEqual([
       "This field is required",
     ]);

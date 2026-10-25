@@ -26,8 +26,7 @@ export const serverMessages = {
 
 export const serverNameSchema = z
   .string({
-    required_error: serverMessages.nameRequired,
-    invalid_type_error: serverMessages.nameRequired,
+    error: serverMessages.nameRequired,
   })
   .min(1, serverMessages.nameRequired)
   .refine((value) => value.trim() === "" || NAME_PATTERN.test(value.trim()), {
@@ -36,8 +35,7 @@ export const serverNameSchema = z
 
 export const serverHostSchema = z
   .string({
-    required_error: serverMessages.hostRequired,
-    invalid_type_error: serverMessages.hostRequired,
+    error: serverMessages.hostRequired,
   })
   .min(1, serverMessages.hostRequired)
   .refine((value) => isValidHost(value), {
@@ -46,8 +44,7 @@ export const serverHostSchema = z
 
 export const serverPortSchema = z
   .number({
-    required_error: serverMessages.portRequired,
-    invalid_type_error: serverMessages.portRequired,
+    error: serverMessages.portRequired,
   })
   .int(serverMessages.portRange)
   .min(1, serverMessages.portRange)
@@ -55,8 +52,7 @@ export const serverPortSchema = z
 
 export const serverUserSchema = z
   .string({
-    required_error: serverMessages.sshUserRequired,
-    invalid_type_error: serverMessages.sshUserRequired,
+    error: serverMessages.sshUserRequired,
   })
   .min(1, serverMessages.sshUserRequired)
   .refine((value) => value.trim() === "" || USER_PATTERN.test(value.trim()), {
@@ -65,7 +61,7 @@ export const serverUserSchema = z
 
 export function requiredField(message: string): z.ZodString {
   return z
-    .string({ required_error: message, invalid_type_error: message })
+    .string({ error: message })
     .min(1, message);
 }
 

@@ -30,15 +30,14 @@ const messages = {
 } as const;
 
 export const quickCommandLabelSchema = z
-  .string({ required_error: messages.labelRequired, invalid_type_error: messages.labelRequired })
+  .string({ error: messages.labelRequired })
   .trim()
   .min(1, messages.labelRequired)
   .max(QUICK_COMMAND_LABEL_MAX, messages.labelTooLong);
 
 export const quickCommandTextSchema = z
   .string({
-    required_error: messages.commandRequired,
-    invalid_type_error: messages.commandRequired,
+    error: messages.commandRequired,
   })
   .trim()
   .min(1, messages.commandRequired)
@@ -79,7 +78,7 @@ export type QuickCommand = z.infer<typeof quickCommandSchema>;
 export function quickCommandDraftSchema(
   commands: QuickCommand[],
   editingId = "",
-): z.ZodType<QuickCommandDraft, z.ZodTypeDef, unknown> {
+): z.ZodType<QuickCommandDraft> {
   return z
     .object({
       label: quickCommandLabelSchema,

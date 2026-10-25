@@ -23,16 +23,14 @@ export const profileMessages = {
 
 export const displayNameFieldSchema = z
   .string({
-    required_error: profileMessages.displayNameLength,
-    invalid_type_error: profileMessages.displayNameLength,
+    error: profileMessages.displayNameLength,
   })
   .trim()
   .max(64, profileMessages.displayNameLength);
 
 export const currentPasswordSchema = z
   .string({
-    required_error: profileMessages.currentPasswordRequired,
-    invalid_type_error: profileMessages.currentPasswordRequired,
+    error: profileMessages.currentPasswordRequired,
   })
   .min(1, profileMessages.currentPasswordRequired);
 

@@ -199,7 +199,7 @@ export const environmentResourceServiceSchema = z.object({
   project_name: z.string(),
   compose_project: z.string(),
   compose_yaml: z.string().optional(),
-  env: z.record(z.string()),
+  env: z.record(z.string(), z.string()),
   domains: z.array(serviceDomainRouteSchema),
   created_at: z.string(),
   updated_at: z.string(),

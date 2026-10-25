@@ -15,7 +15,7 @@ export function nonEmptyString(message: string): z.ZodString {
 
 export function requiredString(message: string): z.ZodString {
   return z
-    .string({ required_error: message, invalid_type_error: message })
+    .string({ error: message })
     .trim()
     .min(1, message);
 }
@@ -26,10 +26,7 @@ export interface IntRange {
 }
 
 export function intInRange(message: string, range?: IntRange): z.ZodNumber {
-  let schema = z.number({
-    required_error: message,
-    invalid_type_error: message,
-  });
+  let schema = z.number({ error: message });
   if (range?.min !== undefined) {
     schema = schema.min(range.min, message);
   }

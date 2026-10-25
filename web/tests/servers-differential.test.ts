@@ -34,7 +34,7 @@ interface Outcome {
 }
 
 function check(
-  schema: z.ZodType<unknown, z.ZodTypeDef, unknown>,
+  schema: z.ZodType<unknown>,
   value: unknown,
   opts?: RuleFromOptions,
 ): Outcome {

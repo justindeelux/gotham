@@ -195,7 +195,8 @@ service FileService {
   // never browsable through List.
   rpc ListTrash(ListTrashRequest) returns (ListTrashResponse);
   // Restore moves one trash entry back to its recorded original path (or to an
-  // explicit destination), refusing an existing target unless overwrite is set.
+  // explicit destination), recreating missing parent directories and refusing
+  // an existing target unless overwrite is set.
   rpc Restore(RestoreRequest) returns (RestoreResponse);
   // Purge permanently removes one trash entry.
   rpc Purge(PurgeRequest) returns (PurgeResponse);
@@ -455,7 +456,9 @@ message ListTrashResponse {
   bool truncated = 2;
 }
 
-// RestoreRequest moves one trash entry back to its original path.
+// RestoreRequest moves one trash entry back to its original path. Missing
+// parent directories are recreated with the mode recorded when the entry was
+// trashed, or 0755 when no mode was recorded.
 message RestoreRequest {
   string root = 1;
   // id is the TrashEntry handle to restore.

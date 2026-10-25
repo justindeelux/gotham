@@ -10,6 +10,7 @@ const (
 	DefaultArchiveMaxBytes      = 4 << 30
 	DefaultArchiveMaxEntries    = 100_000
 	DefaultArchiveMaxInputBytes = 1 << 30
+	DefaultTrashMaxAgeDays      = 30
 )
 
 const defaultStateRoot = "/var/lib/gotham-agent"
@@ -43,6 +44,12 @@ type Config struct {
 	FileArchiveMaxBytes      int64
 	FileArchiveMaxEntries    int64
 	FileArchiveMaxInputBytes int64
+	// FileTrashMaxAgeDays expires recycle-bin items older than this many days.
+	// Zero keeps them forever, and the agent supplies DefaultTrashMaxAgeDays.
+	FileTrashMaxAgeDays int
+	// FileTrashMaxBytes caps one root's recycle bin in bytes, removing the
+	// oldest items first. Zero keeps today's unbounded behaviour.
+	FileTrashMaxBytes int64
 }
 
 func (c *Config) applyDefaults() {
@@ -66,5 +73,11 @@ func (c *Config) applyDefaults() {
 	}
 	if c.FileArchiveMaxInputBytes <= 0 {
 		c.FileArchiveMaxInputBytes = DefaultArchiveMaxInputBytes
+	}
+	if c.FileTrashMaxAgeDays < 0 {
+		c.FileTrashMaxAgeDays = 0
+	}
+	if c.FileTrashMaxBytes < 0 {
+		c.FileTrashMaxBytes = 0
 	}
 }

@@ -3,6 +3,7 @@ package files
 import (
 	"archive/tar"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -453,5 +455,183 @@ func TestFileServerTrashRestorePurgeRace(t *testing.T) {
 				t.Fatalf("iteration %d: a successful restore left %q, %v", i, got, err)
 			}
 		}
+	}
+}
+
+func setTrashDeletedAt(t *testing.T, root, id string, at time.Time) {
+	t.Helper()
+	metaPath := filepath.Join(root, fileTrashDir, id, fileTrashMeta)
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read trash metadata: %v", err)
+	}
+	var rec trashRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatalf("decode trash metadata: %v", err)
+	}
+	rec.DeletedAt = at.UTC()
+	data, err = json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("encode trash metadata: %v", err)
+	}
+	if err := os.WriteFile(metaPath, data, fileTrashMetaMode); err != nil {
+		t.Fatalf("write trash metadata: %v", err)
+	}
+}
+
+func trashEntryByPath(t *testing.T, server *FileServer, original string) *agentv1.TrashEntry {
+	t.Helper()
+	for _, entry := range listTrash(t, server) {
+		if entry.GetOriginalPath() == original {
+			return entry
+		}
+	}
+	t.Fatalf("trash has no entry for %q", original)
+	return nil
+}
+
+func TestFileServerTrashRetentionExpiresByAge(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim.txt")
+	if err := os.WriteFile(victim, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"old.txt", "new.txt"} {
+		if _, err := write(t, server, RootVolumes, name, "", false, []byte(name)); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: name}, &collectProgressStream{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(victim, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "link"}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	old := trashEntryByPath(t, server, "old.txt")
+	link := trashEntryByPath(t, server, "link")
+	setTrashDeletedAt(t, root, old.GetId(), now.Add(-31*24*time.Hour))
+	setTrashDeletedAt(t, root, link.GetId(), now.Add(-31*24*time.Hour))
+
+	server.trashMaxAgeDays = 30
+	server.sweepTrash(now)
+	server.trashMaxAgeDays = 0
+
+	if _, err := os.Stat(filepath.Join(root, fileTrashDir, old.GetId())); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an expired item survived: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, fileTrashDir, link.GetId())); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an expired symlink item survived: %v", err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("retention followed a symlink out of the bin: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "keep.txt")); err != nil {
+		t.Fatalf("retention deleted a file outside the bin: %v", err)
+	}
+	if got := listTrash(t, server); len(got) != 1 || got[0].GetOriginalPath() != "new.txt" {
+		t.Fatalf("trash holds %+v, want only new.txt", got)
+	}
+}
+
+func TestFileServerTrashRetentionExpiresBySize(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if err := os.WriteFile(filepath.Join(root, "keep.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i, name := range []string{"old.txt", "mid.txt", "new.txt"} {
+		if _, err := write(t, server, RootVolumes, name, "", false, []byte("01234567")); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: name}, &collectProgressStream{}); err != nil {
+			t.Fatal(err)
+		}
+		entry := trashEntryByPath(t, server, name)
+		setTrashDeletedAt(t, root, entry.GetId(), now.Add(-time.Duration(3-i)*time.Hour))
+	}
+
+	server.trashMaxBytes = 12
+	server.sweepTrash(now)
+	server.trashMaxBytes = 0
+
+	if got := listTrash(t, server); len(got) != 1 || got[0].GetOriginalPath() != "new.txt" {
+		t.Fatalf("trash holds %+v, want only new.txt", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "keep.txt")); err != nil {
+		t.Fatalf("retention deleted a file outside the bin: %v", err)
+	}
+}
+
+func TestFileServerTrashRestoreRecreatesMissingParent(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: RootVolumes, Path: "d"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(root, "d"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, server, RootVolumes, "d/f.txt", "", false, []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "d/f.txt"}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "d", Recursive: true}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	id := trashEntryByPath(t, server, "d/f.txt").GetId()
+
+	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{Root: RootVolumes, Id: id}); err != nil {
+		t.Fatalf("Restore with a missing parent: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "d"))
+	if err != nil {
+		t.Fatalf("restore did not recreate the parent: %v", err)
+	}
+	if info.Mode().Perm() != 0o750 {
+		t.Fatalf("recreated parent mode = %o, want 750", info.Mode().Perm())
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "d", "f.txt")); err != nil || string(got) != "payload" {
+		t.Fatalf("restored body = %q, %v", got, err)
+	}
+}
+
+func TestFileServerTrashRestoreDestinationCreatesParents(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, RootVolumes, "a.txt", "", false, []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: RootVolumes, Path: "a.txt"}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	id := listTrash(t, server)[0].GetId()
+
+	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{
+		Root: RootVolumes, Id: id, Destination: "x/y/a.txt",
+	}); err != nil {
+		t.Fatalf("Restore to a missing parent: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "x", "y"))
+	if err != nil {
+		t.Fatalf("restore did not create the destination parents: %v", err)
+	}
+	if info.Mode().Perm() != fileTrashRestoreDirMode {
+		t.Fatalf("unrecorded parent mode = %o, want %o", info.Mode().Perm(), fileTrashRestoreDirMode)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "x", "y", "a.txt")); err != nil || string(got) != "payload" {
+		t.Fatalf("restored body = %q, %v", got, err)
 	}
 }

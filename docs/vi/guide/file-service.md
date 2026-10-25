@@ -141,6 +141,50 @@ nhưng một reverse proxy đặt trước control plane phải cho phép một 
 lâu, nếu không yêu cầu sẽ bị cắt trong khi agent vẫn đang làm việc. Traefik ở biên
 của node không đứng trước API tệp, nên các timeout của nó không áp dụng.
 
+## Thùng rác và khôi phục
+
+Xóa một mục sẽ chuyển nó vào thùng rác của gốc (`.gotham-trash`) thay vì xóa
+hẳn. Thùng rác bị ẩn khỏi danh sách, tìm kiếm và kích thước thư mục và không
+thể truy cập bằng các thao tác tệp thông thường. Thùng rác có hơn 5.000 mục chỉ
+liệt kê các mục mới nhất và báo `truncated=true`; các mục cũ nhất bị lược bỏ,
+không bao giờ âm thầm.
+
+**Khôi phục** đưa một mục về đường dẫn gốc đã ghi, hoặc tới đích do bên gọi
+cung cấp. Các thư mục cha bị thiếu được tạo lại, dùng mode đã ghi lúc mục vào
+thùng rác và `0755` cho thư mục cha chưa từng thấy; một thư mục cha đang là tệp
+hoặc tệp đặc biệt vẫn bị từ chối thay vì bị thay thế. Đích đã tồn tại trả `409`
+trừ khi chọn ghi đè. **Xóa vĩnh viễn** xóa một mục và **Làm trống thùng rác**
+xóa mọi mục trong thùng rác của gốc đó; không thể hoàn tác cả hai.
+
+### Hết hạn lưu giữ
+
+Agent tự hết hạn thùng rác của từng gốc ghi được, lúc khởi động rồi mỗi giờ.
+Cả hai giới hạn đều tính theo từng gốc, và giá trị 0 tắt giới hạn đó:
+
+| Biến | Mặc định | Tác dụng |
+|---|---|---|
+| `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` | `30` | Xóa các mục đã bị xóa quá số ngày này. `0` giữ mọi mục, đúng hành vi trước khi có thiết lập này. |
+| `GOTHAM_AGENT_FILE_TRASH_MAX_BYTES` | `0` | Giới hạn số byte thùng rác của một gốc được giữ. Khi vượt, các mục cũ nhất bị xóa cho tới khi thùng rác vừa giới hạn. `0` là không giới hạn. Có mức trần kích thước thì lần quét phải duyệt từng cây trong thùng rác để tính dung lượng, tốn hơn trên thùng rác lớn. |
+
+Lần quét chỉ xóa các id mục hợp lệ nằm dưới `.gotham-trash`, và ghi log mỗi lần
+xóa với gốc, id, đường dẫn gốc, số byte và lý do (`age` hoặc `size`). Nó không
+bao giờ chạm vào thứ khác trong gốc, kể cả đích của một liên kết tượng trưng đã
+vào thùng rác. Nó khóa từng mục một, nên một lần xóa lâu không chặn phần còn
+lại của thùng rác, nhưng xóa một cây rất lớn (ví dụ cây con được sao chép ra từ
+bind mount khác thiết bị) giữ khóa đường dẫn của mục đó tới khi bước duyệt xong
+và sẽ được thử lại ở lần quét sau nếu thất bại giữa chừng.
+
+### Thứ tự triển khai
+
+Nâng cấp control plane (hoặc bật trình quản lý tệp trong console) **trước** node
+agent:
+
+- Agent mới sau control plane cũ vẫn đưa các mục đã xóa vào thùng rác, nhưng
+  control plane cũ không có tuyến thùng rác, nên các mục này vô hình cho tới khi
+  nâng cấp. Việc hết hạn lưu giữ vẫn xóa chúng.
+- Agent cũ sau control plane mới trả **501** cho các tuyến thùng rác; bên gọi báo
+  node agent đã lỗi thời.
+
 ## Phía control plane
 
 Các tuyến `/api/v1/servers/{id}/files` được gắn mặc định; đặt `FEATURE_FILES=false`

@@ -110,6 +110,8 @@ func NewFileServer(cfg Config, log *slog.Logger) (*files.FileServer, error) {
 		FileArchiveMaxBytes:      cfg.FileArchiveMaxBytes,
 		FileArchiveMaxEntries:    cfg.FileArchiveMaxEntries,
 		FileArchiveMaxInputBytes: cfg.FileArchiveMaxInputBytes,
+		FileTrashMaxAgeDays:      cfg.FileTrashMaxAgeDays,
+		FileTrashMaxBytes:        cfg.FileTrashMaxBytes,
 	}, log)
 }
 

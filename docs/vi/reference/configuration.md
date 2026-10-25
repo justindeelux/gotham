@@ -229,6 +229,8 @@ Cấu hình dịch vụ tệp:
 | Biến | Mặc định | Mục đích |
 |---|---|---|
 | `GOTHAM_AGENT_FILE_MAX_UPLOAD` | `1073741824` (1 GiB) | Mức trần cho một body tải lên; body lớn hơn bị từ chối với `ResourceExhausted` (413). Nên khớp với `FILES_MAX_UPLOAD_BYTES` của control plane. |
+| `GOTHAM_AGENT_FILE_TRASH_MAX_AGE_DAYS` | `30` | Số ngày một mục được nằm trong thùng rác của một gốc trước khi agent xóa nó; `0` giữ mục mãi mãi. |
+| `GOTHAM_AGENT_FILE_TRASH_MAX_BYTES` | `0` (không giới hạn) | Mức trần tính bằng byte cho thùng rác của một gốc; các mục cũ nhất bị xóa trước cho tới khi thùng rác vừa giới hạn. |
 
 ## Cờ tính năng
 

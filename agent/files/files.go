@@ -85,6 +85,8 @@ type FileServer struct {
 	archiveMaxBytes      int64
 	archiveMaxEntries    int64
 	archiveMaxInputBytes int64
+	trashMaxAgeDays      int
+	trashMaxBytes        int64
 	transfers            chan struct{}
 	sizeWalks            chan struct{}
 	sizeMaxEntries       int64
@@ -112,6 +114,8 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		archiveMaxBytes:      cfg.FileArchiveMaxBytes,
 		archiveMaxEntries:    cfg.FileArchiveMaxEntries,
 		archiveMaxInputBytes: cfg.FileArchiveMaxInputBytes,
+		trashMaxAgeDays:      cfg.FileTrashMaxAgeDays,
+		trashMaxBytes:        cfg.FileTrashMaxBytes,
 		transfers:            make(chan struct{}, cfg.FileMaxTransfers),
 		sizeWalks:            make(chan struct{}, fileSizeMaxConcurrent),
 		sizeMaxEntries:       fileSizeMaxEntries,
@@ -156,6 +160,9 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		opened = append(opened, real)
 	}
 	go server.sweepTempFilesLoop()
+	if server.trashMaxAgeDays > 0 || server.trashMaxBytes > 0 {
+		go server.sweepTrashLoop()
+	}
 	return server, nil
 }
 

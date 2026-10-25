@@ -16,6 +16,7 @@ func clearAgentEnv(t *testing.T) {
 		envKey, envInsecure, envDockerSock, envComposeRoot, envLogLevel, envDockerHost,
 		envManagedVolumeRoot, envSharedManagedVolumeRoot,
 		envFileArchiveMaxBytes, envFileArchiveMaxEntries, envFileArchiveMaxInput,
+		envFileTrashMaxAgeDays, envFileTrashMaxBytes,
 	} {
 		t.Setenv(key, "")
 	}
@@ -173,6 +174,39 @@ func TestLoadArchiveLimitsFromEnv(t *testing.T) {
 	if cfg.FileArchiveMaxBytes != files.DefaultArchiveMaxBytes || cfg.FileArchiveMaxEntries != files.DefaultArchiveMaxEntries ||
 		cfg.FileArchiveMaxInputBytes != files.DefaultArchiveMaxInputBytes {
 		t.Fatalf("archive limits = %d/%d/%d, want the defaults", cfg.FileArchiveMaxBytes, cfg.FileArchiveMaxEntries, cfg.FileArchiveMaxInputBytes)
+	}
+}
+
+func TestLoadTrashRetentionFromEnv(t *testing.T) {
+	clearAgentEnv(t)
+	t.Setenv(envInsecure, "true")
+	t.Setenv(envListenAddr, "127.0.0.1:9443")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FileTrashMaxAgeDays != files.DefaultTrashMaxAgeDays || cfg.FileTrashMaxBytes != 0 {
+		t.Fatalf("trash retention = %d days / %d bytes, want the defaults", cfg.FileTrashMaxAgeDays, cfg.FileTrashMaxBytes)
+	}
+
+	t.Setenv(envFileTrashMaxAgeDays, "0")
+	t.Setenv(envFileTrashMaxBytes, "4096")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FileTrashMaxAgeDays != 0 || cfg.FileTrashMaxBytes != 4096 {
+		t.Fatalf("trash retention = %d days / %d bytes, want 0 / 4096", cfg.FileTrashMaxAgeDays, cfg.FileTrashMaxBytes)
+	}
+
+	t.Setenv(envFileTrashMaxAgeDays, "-3")
+	t.Setenv(envFileTrashMaxBytes, "nope")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FileTrashMaxAgeDays != files.DefaultTrashMaxAgeDays || cfg.FileTrashMaxBytes != 0 {
+		t.Fatalf("trash retention = %d days / %d bytes, want the defaults", cfg.FileTrashMaxAgeDays, cfg.FileTrashMaxBytes)
 	}
 }
 

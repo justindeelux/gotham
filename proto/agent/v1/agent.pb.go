@@ -1707,7 +1707,9 @@ func (x *ListTrashResponse) GetTruncated() bool {
 	return false
 }
 
-// RestoreRequest moves one trash entry back to its original path.
+// RestoreRequest moves one trash entry back to its original path. Missing
+// parent directories are recreated with the mode recorded when the entry was
+// trashed, or 0755 when no mode was recorded.
 type RestoreRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Root  string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`

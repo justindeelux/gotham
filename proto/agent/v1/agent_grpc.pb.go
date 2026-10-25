@@ -1465,7 +1465,8 @@ type FileServiceClient interface {
 	// never browsable through List.
 	ListTrash(ctx context.Context, in *ListTrashRequest, opts ...grpc.CallOption) (*ListTrashResponse, error)
 	// Restore moves one trash entry back to its recorded original path (or to an
-	// explicit destination), refusing an existing target unless overwrite is set.
+	// explicit destination), recreating missing parent directories and refusing
+	// an existing target unless overwrite is set.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
 	// Purge permanently removes one trash entry.
 	Purge(ctx context.Context, in *PurgeRequest, opts ...grpc.CallOption) (*PurgeResponse, error)
@@ -1781,7 +1782,8 @@ type FileServiceServer interface {
 	// never browsable through List.
 	ListTrash(context.Context, *ListTrashRequest) (*ListTrashResponse, error)
 	// Restore moves one trash entry back to its recorded original path (or to an
-	// explicit destination), refusing an existing target unless overwrite is set.
+	// explicit destination), recreating missing parent directories and refusing
+	// an existing target unless overwrite is set.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	// Purge permanently removes one trash entry.
 	Purge(context.Context, *PurgeRequest) (*PurgeResponse, error)

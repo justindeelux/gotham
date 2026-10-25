@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-const maxBody = 2 << 20
+const MaxBody = 2 << 20
+const maxBody = MaxBody
 const contractHeader = "X-Gotham-MCP-Contract"
 
 type Error struct {

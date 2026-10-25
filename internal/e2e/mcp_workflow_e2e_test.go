@@ -24,6 +24,7 @@ import (
 	"github.com/justindeelux/gotham/internal/deploy"
 	adapter "github.com/justindeelux/gotham/internal/mcp"
 	"github.com/justindeelux/gotham/internal/projects"
+	controlplane "github.com/justindeelux/gotham/internal/server"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -157,6 +158,7 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	}
 
 	h := &mcpWorkflowHarness{userID: userID, tokens: tokens}
+	var remoteMCP http.Handler
 	router := chi.NewRouter()
 	router.Route("/api", func(api chi.Router) {
 		api.With(h.authorize).Get("/v1/mcp/context", h.context)
@@ -188,14 +190,49 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 			mcpWriteJSON(w, http.StatusOK, map[string]any{"server": mcpNodeJSON(*item)})
 		})
 	})
+	for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
+		router.Method(method, "/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			remoteMCP.ServeHTTP(w, r)
+		}))
+	}
 	api := httptest.NewServer(router)
 	t.Cleanup(api.Close)
 	h.baseURL = api.URL
+	remoteMCP = controlplane.NewMCPHandler(controlplane.MCPHandlerConfig{
+		Tokens:  tokens,
+		BaseURL: func(*http.Request) string { return api.URL },
+		Version: "test",
+		Logger:  logger,
+	})
 
 	owner := h.session(t, deployToken.Token)
 	readOnly := h.session(t, readToken.Token)
+	remoteOwner := h.remoteSession(t, api.URL, deployToken.Token)
+	remoteRead := h.remoteSession(t, api.URL, readToken.Token)
 	if _, err := adapter.NewServer(ctx, adapter.Config{URL: api.URL, Token: revoked.Token}, "test", logger); err == nil {
 		t.Fatal("revoked token initialized the adapter")
+	}
+
+	remoteList, err := remoteOwner.ListTools(ctx, &sdk.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("remote tools/list: %v", err)
+	}
+	if len(remoteList.Tools) != 18 {
+		t.Fatalf("remote tools=%d want 18", len(remoteList.Tools))
+	}
+	remoteReadList, err := remoteRead.ListTools(ctx, &sdk.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("remote read tools/list: %v", err)
+	}
+	if len(remoteReadList.Tools) != 14 {
+		t.Fatalf("remote read tools=%d want 14", len(remoteReadList.Tools))
+	}
+	if _, err := remoteRead.CallTool(ctx, &sdk.CallToolParams{Name: "application_deploy", Arguments: map[string]any{}}); err == nil {
+		t.Fatal("remote read token reached a mutation tool")
+	}
+	remoteNodes := h.call(t, remoteOwner, "nodes_list", map[string]any{"limit": 10})
+	if remoteNodes["total"] != float64(2) {
+		t.Fatalf("remote nodes_list=%+v", remoteNodes)
 	}
 
 	nodes := h.call(t, owner, "nodes_list", map[string]any{"limit": 10})
@@ -231,6 +268,16 @@ func TestMCPAgentDeploymentWorkflow(t *testing.T) {
 	}
 	staging := h.call(t, owner, "environment_create", map[string]any{"request_id": "mcp-staging", "project_id": projectID, "name": "staging"})
 	stagingID := staging["environment"].(map[string]any)["id"].(string)
+	remoteProjects := h.call(t, remoteOwner, "projects_list", map[string]any{})
+	seenProject := false
+	for _, item := range remoteProjects["items"].([]any) {
+		if item.(map[string]any)["id"] == projectID {
+			seenProject = true
+		}
+	}
+	if !seenProject {
+		t.Fatalf("remote projects_list missing %s: %+v", projectID, remoteProjects)
+	}
 
 	marker := "gotham-mcp-v1-" + suffix
 	fixture := initFixture(t, "e2e/mcp-app-"+suffix)
@@ -438,6 +485,32 @@ func (h *mcpWorkflowHarness) session(t *testing.T, token string) *sdk.ClientSess
 	}
 	t.Cleanup(func() { _ = cs.Close() })
 	return cs
+}
+
+func (h *mcpWorkflowHarness) remoteSession(t *testing.T, baseURL, token string) *sdk.ClientSession {
+	t.Helper()
+	ctx := context.Background()
+	client := sdk.NewClient(&sdk.Implementation{Name: "remote-test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &sdk.StreamableClientTransport{
+		Endpoint:             baseURL + "/mcp",
+		HTTPClient:           &http.Client{Transport: mcpBearerTransport{token: token}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("remote connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+
+type mcpBearerTransport struct {
+	token string
+}
+
+func (t mcpBearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header.Set("Authorization", "Bearer "+t.token)
+	return http.DefaultTransport.RoundTrip(clone)
 }
 
 func (h *mcpWorkflowHarness) raw(t *testing.T, cs *sdk.ClientSession, name string, args map[string]any) *sdk.CallToolResult {

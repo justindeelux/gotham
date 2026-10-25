@@ -100,9 +100,9 @@ Replace it on the control-plane server:
 sudo -u gotham -- /var/lib/gotham/bin/gotham admin reset-password --email ops@example.com
 ```
 
-This revokes the account's refresh sessions. Bearer access tokens are stateless
-JWTs, so a token already minted stays valid until it expires (15 minutes);
-resetting is not an instant, fleet-wide logout.
+This revokes every session of the account. Bearer access tokens are checked
+against their live session on every request, so a token minted before the reset
+stops working immediately; resetting is an instant logout on every device.
 
 ## The first account is the platform administrator
 

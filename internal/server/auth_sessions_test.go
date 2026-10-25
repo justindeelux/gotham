@@ -244,12 +244,9 @@ func TestSessionsEndToEndOverHTTP(t *testing.T) {
 	if rec := doRequest(t, s, http.MethodDelete, "/api/v1/auth/me/sessions/"+ownID, "", bearer); rec.Code != http.StatusNoContent {
 		t.Fatalf("revoke own status = %d, want 204 (body %s)", rec.Code, rec.Body.String())
 	}
-	empty := doRequest(t, s, http.MethodGet, "/api/v1/auth/me/sessions", "", bearer)
-	if empty.Code != http.StatusOK {
-		t.Fatalf("empty list status = %d, want 200", empty.Code)
-	}
-	if !strings.Contains(empty.Body.String(), `"sessions":[]`) {
-		t.Errorf("empty list body = %s, want an empty array", empty.Body.String())
+	revoked := doRequest(t, s, http.MethodGet, "/api/v1/auth/me/sessions", "", bearer)
+	if revoked.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session status = %d, want 401", revoked.Code)
 	}
 }
 
@@ -367,11 +364,8 @@ func TestSessionsStaleSidConflictOverHTTP(t *testing.T) {
 	}
 
 	stale := doRequest(t, s, http.MethodPost, "/api/v1/auth/me/sessions/revoke-others", "", "Bearer "+login.AccessToken)
-	if stale.Code != http.StatusConflict {
-		t.Fatalf("stale-sid revoke-others status = %d, want 409 (body %s)", stale.Code, stale.Body.String())
-	}
-	if body := stale.Body.String(); !strings.Contains(body, `"sign in again to manage other sessions"`) {
-		t.Errorf("stale-sid body = %s, want the contract message", body)
+	if stale.Code != http.StatusUnauthorized {
+		t.Fatalf("stale-sid revoke-others status = %d, want 401 (body %s)", stale.Code, stale.Body.String())
 	}
 
 	list := doRequest(t, s, http.MethodGet, "/api/v1/auth/me/sessions", "", "Bearer "+fresh.AccessToken)

@@ -158,10 +158,11 @@ func (s *Service) ListUsers(ctx context.Context) ([]Account, error) {
 	return accounts, nil
 }
 
-// RemoveMember deletes a member account. The owner is refused; sessions, API
-// tokens and grants are revoked in the same transaction.
-func (s *Service) RemoveMember(ctx context.Context, userID uuid.UUID) error {
-	return s.store.DeleteMember(ctx, userID)
+// RemoveMember deletes a member account while keeping the resources they
+// created: those move to the owner. The owner is refused; sessions, API tokens
+// and grants are revoked in the same transaction.
+func (s *Service) RemoveMember(ctx context.Context, ownerID, userID uuid.UUID) error {
+	return s.store.DeleteMember(ctx, ownerID, userID)
 }
 
 // ResetMember drops a member's sessions and two-factor configuration. The owner

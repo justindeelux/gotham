@@ -44,10 +44,12 @@ func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 		hideResource(w)
 		return
 	}
-	if err := s.auth.RemoveMember(r.Context(), userID); err != nil {
+	ownerID, _ := UserIDFromContext(r.Context())
+	if err := s.auth.RemoveMember(r.Context(), ownerID, userID); err != nil {
 		s.writeMemberError(w, err)
 		return
 	}
+	s.auditMember(r, "member.remove", userID)
 	if s.realtime != nil {
 		s.realtime.RevokeUserSubscriptions(userID)
 	}
@@ -64,6 +66,7 @@ func (s *Server) handleResetMember(w http.ResponseWriter, r *http.Request) {
 		s.writeMemberError(w, err)
 		return
 	}
+	s.auditMember(r, "member.reset", userID)
 	if s.realtime != nil {
 		s.realtime.RevokeUserSubscriptions(userID)
 	}
@@ -92,6 +95,7 @@ func (s *Server) handleSetMemberProjects(w http.ResponseWriter, r *http.Request)
 		s.writeMemberError(w, err)
 		return
 	}
+	s.auditMember(r, "member.projects", userID, "projects", len(*req.ProjectIDs))
 	if s.realtime != nil {
 		s.realtime.InvalidateAuthorization()
 	}
@@ -132,6 +136,7 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	s.auditMember(r, "invite.create", invite.ID, "email", invite.Email, "projects", len(invite.Projects))
 	writeJSON(w, http.StatusCreated, map[string]any{"invite": invite, "token": token})
 }
 
@@ -145,7 +150,16 @@ func (s *Server) handleRevokeInvite(w http.ResponseWriter, r *http.Request) {
 		s.writeMemberError(w, err)
 		return
 	}
+	s.auditMember(r, "invite.revoke", inviteID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// auditMember records one successful owner mutation: who did what to which
+// account or invite. Tokens and credentials never reach this line.
+func (s *Server) auditMember(r *http.Request, action string, target uuid.UUID, extra ...any) {
+	actorID, _ := UserIDFromContext(r.Context())
+	fields := []any{"actor_id", actorID.String(), "action", action, "target_id", target.String()}
+	s.logger.Info("members: audit", append(fields, extra...)...)
 }
 
 func (s *Server) writeMemberError(w http.ResponseWriter, err error) {

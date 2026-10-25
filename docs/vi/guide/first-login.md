@@ -98,9 +98,9 @@ tim và hiện trong bảng điều khiển khi sẵn sàng.
 sudo -u gotham -- /var/lib/gotham/bin/gotham admin reset-password --email ops@example.com
 ```
 
-Việc này thu hồi các phiên refresh của tài khoản. Bearer access token là JWT
-không trạng thái, nên một token đã cấp vẫn hợp lệ cho đến khi hết hạn (15 phút);
-việc đặt lại không phải một lần đăng xuất tức thời trên toàn hệ thống.
+Việc này thu hồi mọi phiên của tài khoản. Bearer access token được đối chiếu với
+phiên còn sống ở mỗi yêu cầu, nên token đã cấp trước lần đặt lại mất hiệu lực
+ngay; việc đặt lại là một lần đăng xuất tức thời trên mọi thiết bị.
 
 ## Tài khoản đầu tiên là quản trị viên nền tảng
 

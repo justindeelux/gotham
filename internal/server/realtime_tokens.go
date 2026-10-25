@@ -73,13 +73,9 @@ func (v realtimeTokenVerifier) RevalidateConnection(ctx context.Context, token s
 	if err != nil {
 		return nil, "", auth.ErrUnauthorized
 	}
-	var role string
-	err = v.server.persistence.DB.QueryRow(ctx, `SELECT u.role
- FROM sessions s JOIN users u ON u.id=s.user_id
- WHERE s.id=$1 AND u.id=$2 AND s.revoked_at IS NULL AND s.expires_at>now()
- AND s.credential_version=u.credential_version`, sessionID, userID).Scan(&role)
-	if err != nil || (role != auth.RoleOwner && role != auth.RoleMember) {
-		return nil, "", auth.ErrUnauthorized
+	role, err := v.server.liveSessionRole(ctx, userID, sessionID)
+	if err != nil {
+		return nil, "", err
 	}
 	return claims, role, nil
 }

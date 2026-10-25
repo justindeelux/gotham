@@ -287,7 +287,7 @@ func (f *fakeAuthService) ListUsers(context.Context) ([]auth.Account, error) {
 	return []auth.Account{{User: *f.user, Projects: []auth.ProjectRef{}}}, nil
 }
 
-func (f *fakeAuthService) RemoveMember(context.Context, uuid.UUID) error { return nil }
+func (f *fakeAuthService) RemoveMember(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 
 func (f *fakeAuthService) ResetMember(context.Context, uuid.UUID) error { return nil }
 

@@ -44,8 +44,8 @@ and sign in with email and password. Two more sign-in paths exist:
   authenticator app, and store the recovery codes — they are shown once and each
   works once. After that, signing in asks for the password and then a code.
   Lost the authenticator? `gotham admin reset-password --email ops@example.com`
-  replaces the password, revokes refresh sessions and clears two-factor
-  authentication. Access tokens already issued stay valid until they expire.
+  replaces the password, revokes every session and clears two-factor
+  authentication. Access tokens stop working immediately.
 
 The first account holds the platform-admin role, which the platform-wide
 surfaces (instance settings, updates, DNS providers, node-wide proxy sync) check.

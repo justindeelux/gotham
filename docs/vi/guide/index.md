@@ -45,8 +45,8 @@ và đăng nhập bằng email và mật khẩu. Có thêm hai cách đăng nh�
   khôi phục — chúng chỉ hiện một lần và mỗi mã dùng được một lần. Sau đó, đăng
   nhập sẽ hỏi mật khẩu rồi đến mã. Mất ứng dụng xác thực?
   `gotham admin reset-password --email ops@example.com` thay mật khẩu, thu hồi
-  các phiên refresh và xóa xác thực hai lớp. Các access token đã cấp vẫn có hiệu
-  lực cho đến khi hết hạn.
+  mọi phiên đăng nhập và xóa xác thực hai lớp. Các access token đã cấp mất hiệu
+  lực ngay.
 
 Tài khoản đầu tiên giữ vai trò quản trị viên nền tảng, vai trò mà các bề mặt toàn
 nền tảng (cài đặt instance, cập nhật, nhà cung cấp DNS, đồng bộ proxy toàn node)

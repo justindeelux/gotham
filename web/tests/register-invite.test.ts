@@ -17,29 +17,25 @@ describe("useRegisterInvite", () => {
     expect(invite.inviteChecking.value).toBe(true);
   });
 
-  it("fills team and email on a usable token", async () => {
+  it("fills the invited email on a usable token", async () => {
     const auth = useAuthStore();
-    vi.spyOn(auth, "validateInvite").mockResolvedValue({
-      team: "Acme",
-      email: "invited@x.y",
-    });
+    vi.spyOn(auth, "validateInvite").mockResolvedValue({ email: "invited@x.y" });
     const invite = useRegisterInvite();
     invite.holdToken("tok123");
     const valid = await invite.acceptInvite();
     expect(valid).toBe(true);
-    expect(invite.inviteTeam.value).toBe("Acme");
     expect(invite.inviteEmail.value).toBe("invited@x.y");
     expect(invite.inviteChecking.value).toBe(false);
   });
 
-  it("reports an unusable token without team details", async () => {
+  it("reports an unusable token without an address", async () => {
     const auth = useAuthStore();
     vi.spyOn(auth, "validateInvite").mockRejectedValue(new Error("expired"));
     const invite = useRegisterInvite();
     invite.holdToken("stale");
     const valid = await invite.acceptInvite();
     expect(valid).toBe(false);
-    expect(invite.inviteTeam.value).toBe("");
+    expect(invite.inviteEmail.value).toBe("");
     expect(invite.inviteChecking.value).toBe(false);
   });
 });

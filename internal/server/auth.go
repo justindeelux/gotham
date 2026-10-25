@@ -45,7 +45,7 @@ type AuthService interface {
 	RevokeInvite(ctx context.Context, inviteID uuid.UUID) error
 	PeekInvite(ctx context.Context, token string) (*auth.InvitePreview, error)
 	ListUsers(ctx context.Context) ([]auth.Account, error)
-	RemoveMember(ctx context.Context, userID uuid.UUID) error
+	RemoveMember(ctx context.Context, ownerID, userID uuid.UUID) error
 	ResetMember(ctx context.Context, userID uuid.UUID) error
 	SetMemberProjects(ctx context.Context, ownerID, userID uuid.UUID, projectIDs []uuid.UUID) (*auth.Account, error)
 }
@@ -312,11 +312,34 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 			return
 		}
+		// A stateless JWT is only as live as the session it was minted from:
+		// removing a member, a password change or a reset must end its access
+		// immediately, not at token expiry.
+		if _, err := s.liveSessionRole(r.Context(), userID, parseSessionClaim(claims.SessionID)); err != nil {
+			writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+			return
+		}
 
 		ctx := context.WithValue(r.Context(), userIDKey, userID)
 		ctx = context.WithValue(ctx, sessionIDKey, parseSessionClaim(claims.SessionID))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// liveSessionAuthenticator is implemented by the real auth service. Test
+// doubles without a session store accept every verified token.
+type liveSessionAuthenticator interface {
+	LiveSessionRole(ctx context.Context, userID, sessionID uuid.UUID) (string, error)
+}
+
+// liveSessionRole refuses revoked, expired and unknown sessions. API tokens
+// authenticate against their own row and never reach this check.
+func (s *Server) liveSessionRole(ctx context.Context, userID, sessionID uuid.UUID) (string, error) {
+	svc, ok := s.auth.(liveSessionAuthenticator)
+	if !ok {
+		return auth.RoleMember, nil
+	}
+	return svc.LiveSessionRole(ctx, userID, sessionID)
 }
 
 func (s *Server) authenticateAPIToken(w http.ResponseWriter, r *http.Request, next http.Handler, token string) {

@@ -78,10 +78,17 @@ func lockMember(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
 	return nil
 }
 
-// DeleteMember removes a member account. Sessions and API tokens are revoked
-// and the account is deleted in one transaction; the database cascades drop the
-// account's grants and owned rows with it.
-func (s *Store) DeleteMember(ctx context.Context, userID uuid.UUID) error {
+// memberResourceTables lists the tables whose rows survive the member but move
+// to the owner: workloads, their history and backup destinations belong to the
+// instance, not to the person who created them. Every other user_id reference
+// is personal (sessions, API tokens, TOTP, grants, source providers, GitHub App
+// connections) and is removed by the users cascade.
+var memberResourceTables = []string{"applications", "databases", "services", "backup_targets"}
+
+// DeleteMember removes a member account while keeping every resource they
+// created. Sessions and API tokens are revoked, shared resources are handed to
+// the owner, and the account is deleted in one transaction.
+func (s *Store) DeleteMember(ctx context.Context, ownerID, userID uuid.UUID) error {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return err
@@ -90,6 +97,19 @@ func (s *Store) DeleteMember(ctx context.Context, userID uuid.UUID) error {
 
 	if err := lockMember(ctx, tx, userID); err != nil {
 		return err
+	}
+	// backup_targets are owner-level destinations, but a legacy row may still
+	// carry a member's unique (user_id, name); rename a colliding one before
+	// handing it over so the transfer cannot fail.
+	if _, err := tx.Exec(ctx, `UPDATE backup_targets SET name = name || ' (' || left(id::text, 8) || ')'
+WHERE user_id=$2 AND EXISTS (SELECT 1 FROM backup_targets o WHERE o.user_id=$1 AND o.name=backup_targets.name)`,
+		ownerID, userID); err != nil {
+		return err
+	}
+	for _, table := range memberResourceTables {
+		if _, err := tx.Exec(ctx, `UPDATE `+table+` SET user_id=$1 WHERE user_id=$2`, ownerID, userID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, userID); err != nil {
 		return err

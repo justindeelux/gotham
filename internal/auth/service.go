@@ -300,6 +300,25 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	return s.store.DeleteSession(ctx, hashRefreshToken(refreshToken))
 }
 
+// LiveSessionRole resolves the role of a session that is still live: not
+// revoked, not expired and not superseded by a credential change. Every bearer
+// request consults it, so a removed account or a revoked session loses access
+// immediately instead of at JWT expiry.
+func (s *Service) LiveSessionRole(ctx context.Context, userID, sessionID uuid.UUID) (string, error) {
+	if s.store == nil || s.store.DB == nil {
+		return "", ErrUnauthorized
+	}
+	var role string
+	err := s.store.DB.QueryRow(ctx, `SELECT u.role
+ FROM sessions s JOIN users u ON u.id=s.user_id
+ WHERE s.id=$1 AND u.id=$2 AND s.revoked_at IS NULL AND s.expires_at>now()
+ AND s.credential_version=u.credential_version`, sessionID, userID).Scan(&role)
+	if err != nil || (role != RoleOwner && role != RoleMember) {
+		return "", ErrUnauthorized
+	}
+	return role, nil
+}
+
 func (s *Service) Me(ctx context.Context, userID uuid.UUID) (*User, error) {
 	user, err := s.store.GetUserByID(ctx, pgUUID(userID))
 	if err != nil {

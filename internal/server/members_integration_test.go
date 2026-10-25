@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -175,8 +177,94 @@ func TestRemoveMemberRevokesSessionsTokensAndGrants(t *testing.T) {
 	if err := websocket.JSON.Receive(connection, &frame); err == nil {
 		t.Fatalf("removed member socket stayed open: %v", frame)
 	}
-	if code := doRequest(t, f.server, http.MethodGet, "/api/v1/projects/"+f.projects[0].String(), "", "Bearer "+f.member.AccessToken).Code; code != http.StatusNotFound {
-		t.Fatalf("removed member request = %d, want 404", code)
+	if code := doRequest(t, f.server, http.MethodGet, "/api/v1/projects/"+f.projects[0].String(), "", "Bearer "+f.member.AccessToken).Code; code != http.StatusUnauthorized {
+		t.Fatalf("removed member request = %d, want 401", code)
+	}
+	if code := doRequest(t, f.server, http.MethodGet, "/api/v1/tokens", "", "Bearer "+f.member.AccessToken).Code; code != http.StatusUnauthorized {
+		t.Fatalf("removed member personal route = %d, want 401", code)
+	}
+	if code := doRequest(t, f.server, http.MethodGet, "/api/v1/templates", "", "Bearer "+f.member.AccessToken).Code; code != http.StatusUnauthorized {
+		t.Fatalf("removed member template route = %d, want 401", code)
+	}
+}
+
+func TestRemoveMemberKeepsResourcesUnderOwner(t *testing.T) {
+	f := newAccessFixture(t)
+	ctx := context.Background()
+	memberID := uuid.MustParse(f.member.User.ID)
+	ownerID := uuid.MustParse(f.owner.User.ID)
+	ownerBearer := "Bearer " + f.owner.AccessToken
+
+	appID, databaseID, serviceID := uuid.New(), uuid.New(), uuid.New()
+	deploymentID, backupID := uuid.New(), uuid.New()
+	var nodeID uuid.UUID
+	if err := f.store.DB.QueryRow(ctx, `SELECT server_id FROM applications WHERE id=$1`, f.apps[0]).Scan(&nodeID); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO applications(id,user_id,server_id,environment_id,name) VALUES($1,$2,$3,$4,'member-app')`,
+			[]any{appID, memberID, nodeID, f.environments[0]}},
+		{`INSERT INTO databases(id,user_id,server_id,environment_id,name,engine) VALUES($1,$2,$3,$4,'member-db','postgres')`,
+			[]any{databaseID, memberID, nodeID, f.environments[0]}},
+		{`INSERT INTO services(id,user_id,server_id,environment_id,name,compose_yaml) VALUES($1,$2,$3,$4,'member-service','services: {}')`,
+			[]any{serviceID, memberID, nodeID, f.environments[0]}},
+		{`INSERT INTO deployments(id,application_id,state,container_id) VALUES($1,$2,'running','member-container')`,
+			[]any{deploymentID, appID}},
+		{`INSERT INTO backups(id,database_id,status) VALUES($1,$2,'completed')`,
+			[]any{backupID, databaseID}},
+	} {
+		if _, err := f.store.DB.Exec(ctx, stmt.query, stmt.args...); err != nil {
+			t.Fatalf("seed member resource: %v", err)
+		}
+	}
+
+	if code := doRequest(t, f.server, http.MethodDelete, "/api/v1/users/"+memberID.String(), "", ownerBearer).Code; code != http.StatusNoContent {
+		t.Fatalf("remove member = %d, want 204", code)
+	}
+
+	var creator uuid.UUID
+	if err := f.store.DB.QueryRow(ctx, `SELECT user_id FROM applications WHERE id=$1`, appID).Scan(&creator); err != nil {
+		t.Fatalf("member application vanished: %v", err)
+	}
+	if creator != ownerID {
+		t.Fatalf("application creator = %s, want owner %s", creator, ownerID)
+	}
+	for _, tc := range []struct {
+		label, query string
+		id           uuid.UUID
+	}{
+		{"database", `SELECT user_id FROM databases WHERE id=$1`, databaseID},
+		{"service", `SELECT user_id FROM services WHERE id=$1`, serviceID},
+	} {
+		if err := f.store.DB.QueryRow(ctx, tc.query, tc.id).Scan(&creator); err != nil {
+			t.Fatalf("member %s vanished: %v", tc.label, err)
+		}
+		if creator != ownerID {
+			t.Fatalf("%s creator = %s, want owner %s", tc.label, creator, ownerID)
+		}
+	}
+	var backups int
+	if err := f.store.DB.QueryRow(ctx, `SELECT count(*) FROM backups WHERE id=$1`, backupID).Scan(&backups); err != nil || backups != 1 {
+		t.Fatalf("member backup vanished: %d, %v", backups, err)
+	}
+	var state string
+	if err := f.store.DB.QueryRow(ctx, `SELECT state FROM deployments WHERE id=$1`, deploymentID).Scan(&state); err != nil {
+		t.Fatalf("member deployment vanished: %v", err)
+	}
+	if state != "running" {
+		t.Fatalf("deployment state = %q, want running", state)
+	}
+	for _, path := range []string{
+		"/api/v1/applications/" + appID.String(),
+		"/api/v1/databases/" + databaseID.String(),
+		"/api/v1/services/" + serviceID.String(),
+	} {
+		if code := doRequest(t, f.server, http.MethodGet, path, "", ownerBearer).Code; code != http.StatusOK {
+			t.Fatalf("owner read %s = %d, want 200", path, code)
+		}
 	}
 }
 
@@ -260,6 +348,45 @@ func TestResetMemberDropsSessionsAndTOTP(t *testing.T) {
 	}
 	if code := doRequest(t, f.server, http.MethodPost, "/api/v1/users/"+memberID.String()+"/reset", "", ownerBearer).Code; code != http.StatusNoContent {
 		t.Fatalf("second reset = %d, want idempotent 204", code)
+	}
+}
+
+func TestOwnerMutationsWriteAuditLines(t *testing.T) {
+	f := newAccessFixture(t)
+	var buf bytes.Buffer
+	f.server.logger = slog.New(slog.NewJSONHandler(&buf, nil))
+	ownerBearer := "Bearer " + f.owner.AccessToken
+	memberID := f.member.User.ID
+
+	created := createInvite(t, f.server, ownerBearer, uuid.NewString()+"@example.test", f.projects[0])
+	if code := doRequest(t, f.server, http.MethodDelete, "/api/v1/invites/"+created.Invite.ID.String(), "", ownerBearer).Code; code != http.StatusNoContent {
+		t.Fatalf("revoke invite = %d, want 204", code)
+	}
+	if code := doRequest(t, f.server, http.MethodPost, "/api/v1/users/"+memberID+"/reset", "", ownerBearer).Code; code != http.StatusNoContent {
+		t.Fatalf("reset member = %d, want 204", code)
+	}
+	if code := doRequest(t, f.server, http.MethodPut, "/api/v1/users/"+memberID+"/projects",
+		`{"project_ids":["`+f.projects[0].String()+`"]}`, ownerBearer).Code; code != http.StatusOK {
+		t.Fatalf("set projects = %d, want 200", code)
+	}
+	if code := doRequest(t, f.server, http.MethodDelete, "/api/v1/users/"+memberID, "", ownerBearer).Code; code != http.StatusNoContent {
+		t.Fatalf("remove member = %d, want 204", code)
+	}
+
+	logged := buf.String()
+	for _, action := range []string{"invite.create", "invite.revoke", "member.reset", "member.projects", "member.remove"} {
+		if !strings.Contains(logged, `"action":"`+action+`"`) {
+			t.Errorf("audit log missing action %q: %s", action, logged)
+		}
+	}
+	if !strings.Contains(logged, `"actor_id":"`+f.owner.User.ID+`"`) {
+		t.Errorf("audit log missing actor %s: %s", f.owner.User.ID, logged)
+	}
+	if strings.Contains(logged, created.Token) {
+		t.Error("audit log leaked the invite token")
+	}
+	if strings.Contains(logged, "password") {
+		t.Error("audit log leaked a password field")
 	}
 }
 

@@ -133,8 +133,17 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 	createReq.Header.Set("Authorization", "Bearer "+register.AccessToken)
 	createRec := httptest.NewRecorder()
 	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusUnauthorized {
+		t.Fatalf("create with the pre-rotation token = %d, want 401", createRec.Code)
+	}
+	createReq = httptest.NewRequest(http.MethodPost,
+		"/api/v1/servers/"+serverID.String()+"/terminal/sessions",
+		bytes.NewBufferString(`{"target":"host","cols":80,"rows":24}`))
+	createReq.Header.Set("Authorization", "Bearer "+rotated.AccessToken)
+	createRec = httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusCreated {
-		t.Fatalf("create with the pre-rotation token = %d, want 201: %s", createRec.Code, createRec.Body.String())
+		t.Fatalf("create with the rotated token = %d, want 201: %s", createRec.Code, createRec.Body.String())
 	}
 	var created struct {
 		ID string `json:"id"`
@@ -148,7 +157,7 @@ func TestTerminalAttachRealStackSessionLineage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("attach request: %v", err)
 		}
-		req.Header.Set("Authorization", "Bearer "+register.AccessToken)
+		req.Header.Set("Authorization", "Bearer "+rotated.AccessToken)
 		resp, err := live.Client().Do(req)
 		if err != nil {
 			t.Fatalf("attach preflight: %v", err)

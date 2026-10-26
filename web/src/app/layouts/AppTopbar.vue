@@ -8,6 +8,7 @@ import { RouterLink, useRoute } from "vue-router";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import LanguageSelect from "@/shared/ui/LanguageSelect.vue";
 import { useAuthStore } from "@/features/auth";
+import NotificationBell from "@/features/notifications/components/NotificationBell.vue";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
 import AccountMenu from "./AccountMenu.vue";
 import { useMobileNav } from "./useMobileNav";
@@ -77,6 +78,7 @@ const envLabel = computed<string>(() => {
     </span>
     <span class="channel-chip" :title="t('shell.cpPortTitle')">CP :{{ cpPort }}</span>
     <div class="topbar-right">
+      <NotificationBell v-if="authStore.isAuthenticated" />
       <LanguageSelect />
       <AccountMenu v-if="authStore.isAuthenticated" compact />
       <RouterLink v-else to="/login">

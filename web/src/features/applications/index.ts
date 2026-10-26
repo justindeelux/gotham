@@ -1,6 +1,7 @@
 export {
   countRunning,
   describeApplicationError,
+  getApplication,
   latestDeploymentStates,
   listApplications,
   listRecentDeployments,

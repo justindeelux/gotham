@@ -24,7 +24,10 @@ import { useFilesStore } from "@/features/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { useTrashStore } from "@/features/files/stores/trash";
-import { useNotificationsStore } from "@/features/notifications";
+import {
+  useNotificationInboxStore,
+  useNotificationsStore,
+} from "@/features/notifications";
 import { useProjectsStore } from "@/features/projects";
 import { useProxyStore } from "@/features/domains";
 import { useServersStore } from "@/features/servers";
@@ -132,6 +135,7 @@ export const useAuthStore = defineStore("auth", () => {
       () => useTerminalWindowStore().reset(),
       () => useTrashStore().reset(),
       () => useNotificationsStore().reset(),
+      () => useNotificationInboxStore().reset(),
       () => useProjectsStore().reset(),
       () => useServicesStore().reset(),
       () => useBackupsStore().reset(),

@@ -196,3 +196,22 @@ describe("server notification events", () => {
     expect(notificationText("server_online", params)).toBe("Máy chủ edge đã kết nối lại");
   });
 });
+
+
+describe("certificate expiry notifications", () => {
+  it("localizes expiry warnings and keeps the generic fallback", () => {
+    const params = { name: "panel.example.com", host: "panel.example.com", error: "" };
+    expect(notificationText("certificate_expiring", params)).toBe(
+      "Certificate for panel.example.com expires soon",
+    );
+    expect(notificationIcon("certificate_expiring")).toBe("shield");
+    expect(notificationTone("certificate_expiring")).toBe("danger");
+    syncComposerLocale("vi");
+    expect(notificationText("certificate_expiring", params)).toBe(
+      "Chứng chỉ cho panel.example.com sắp hết hạn",
+    );
+    expect(notificationText("future_event", params)).toBe(
+      "Cập nhật cho panel.example.com trên panel.example.com",
+    );
+  });
+});

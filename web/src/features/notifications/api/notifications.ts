@@ -10,7 +10,8 @@ export type NotificationEventKey =
   | "backup_success"
   | "backup_failure"
   | "server_offline"
-  | "server_online";
+  | "server_online"
+  | "certificate_expiring";
 
 export const defaultNotificationEvents: NotificationEventKey[] = [
   "deploy_success",
@@ -23,6 +24,7 @@ export const allNotificationEvents: NotificationEventKey[] = [
   ...defaultNotificationEvents,
   "server_offline",
   "server_online",
+  "certificate_expiring",
 ];
 
 export interface ChannelConfig {
@@ -200,6 +202,8 @@ export function eventLabel(event: NotificationEventKey): string {
       return channelText("notifications.events.server_offline", "Server offline");
     case "server_online":
       return channelText("notifications.events.server_online", "Server back online");
+    case "certificate_expiring":
+      return channelText("notifications.events.certificate_expiring", "Certificate expiring");
     default:
       return event;
   }

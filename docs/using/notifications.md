@@ -4,20 +4,21 @@ title: Notifications
 
 # Notifications
 
-Gotham records deploy and backup results and server connection changes in the
-in-app inbox, even when no notification channel is configured. Channels are an optional way to send the
-same events to Discord, Slack, Telegram or email outside the panel.
+Gotham records deploy and backup results, server connection changes and certificate
+expiry warnings in the in-app inbox, even when no notification channel is configured.
+Channels are an optional way to send the same events to Discord, Slack, Telegram or email outside the panel.
 
 ## In-app inbox
 
 Every signed-in person has a bell in the topbar, with a badge for unread
 notifications. Click it, or focus it and press Enter or Space, to open the inbox.
 It loads the newest 30 notifications you can see, newest first. Each entry shows
-the event, the application, database or server name, the host or error
-when available, and a relative time.
+the event, the resource or domain name, the host or error when available, and a
+relative time.
 
 The inbox records deploy success, deploy failure, backup success and backup
-failure, plus server offline and server back online. Server events are owner-only.
+failure, plus server offline, server back online and certificate expiry warnings.
+Server and certificate events are owner-only.
 **Send test** only tests a channel; it does not create an inbox entry.
 New notifications arrive without reloading while the page is open. If the live
 connection is unavailable, the visible page refreshes the inbox about once a
@@ -63,15 +64,17 @@ cannot be changed after creation.
 Choose the scope when creating or editing a channel:
 
 - An **All resources** channel receives every selected event, including
-  instance-wide server events.
+  instance-wide server and certificate events.
 - An application channel receives that application's deploy events.
 - A database channel receives that database's backup events.
 
 The subscribable events are `deploy_success`, `deploy_failure`,
-`backup_success`, `backup_failure`, `server_offline` and `server_online`.
-New channels start with the four deploy/backup events selected. Server events
+`backup_success`, `backup_failure`, `server_offline`, `server_online` and
+`certificate_expiring`.
+New channels start with the four deploy/backup events selected. Server and certificate events
 are opt-in for both existing and new channels: edit an **All resources** channel
-and select them. Application and database channels cannot receive server events.
+and select them. Application and database channels cannot receive these
+instance-wide events.
 A disabled channel receives nothing.
 
 A server is considered offline after at least 30 seconds without a heartbeat.
@@ -81,6 +84,15 @@ one offline event per transition and one recovery event on the first successful
 heartbeat after that. Registration alone and first enrollment do not send a
 recovery event. Shorter interruptions do not trigger an alert; repeated outages
 longer than the grace period can produce repeated offline/recovery pairs.
+
+Gotham checks enabled panel and application certificates when it starts and then
+once an hour. It warns when a certificate has seven days or less left, after two
+successful observations in that window. Already expired certificates also qualify.
+Unknown, missing or disabled certificates and failed reads are skipped without
+counting as an observation. A failed read does not reset a pending warning.
+Each certificate and expiry date produces one warning; a renewed certificate
+with a new expiry date can trigger a warning near that date.
+Restarting Gotham clears this memory, so a certificate still near expiry may notify again.
 
 ## Test send and delivery history
 

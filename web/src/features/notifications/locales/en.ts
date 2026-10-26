@@ -29,6 +29,7 @@ const en = {
       backup_failure: "Backup of {name} on {host} failed",
       server_offline: "Server {name} is offline",
       server_online: "Server {name} is back online",
+      certificate_expiring: "Certificate for {name} expires soon",
       unknown: "Update for {name} on {host}",
     },
   },
@@ -70,6 +71,7 @@ const en = {
     backup_failure: "Backup failed",
     server_offline: "Server offline",
     server_online: "Server back online",
+    certificate_expiring: "Certificate expiring",
   },
   scopeLabel: {
     allResources: "All resources",

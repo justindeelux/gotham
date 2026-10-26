@@ -381,10 +381,4 @@ onMounted(() => {
 :deep(.is-revoked td) {
   color: var(--muted);
 }
-
-@media (max-width: 640px) {
-  .page-actions {
-    margin-left: 0;
-  }
-}
 </style>

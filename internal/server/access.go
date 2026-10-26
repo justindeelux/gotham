@@ -121,6 +121,13 @@ func (s *Server) newRealtimeChannelAuthorizer() func(context.Context, string, uu
 	}
 	decisions := make(map[string]decision)
 	return func(ctx context.Context, channel string, userID uuid.UUID) error {
+		if strings.HasPrefix(channel, "notifications:") {
+			id, err := uuid.Parse(strings.TrimPrefix(channel, "notifications:"))
+			if err != nil || id != userID {
+				return errAccessDenied
+			}
+			return nil
+		}
 		if s.requireOwnerContext(ctx, userID) == nil {
 			if !ownerChannels[channel] {
 				if err := s.authorizeRealtimeChannel(ctx, channel, userID); err != nil {

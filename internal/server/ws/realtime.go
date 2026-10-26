@@ -324,6 +324,13 @@ func (r *replayBuffer) snapshot() []Message {
 	return out
 }
 
+func (rt *Realtime) Publish(ctx context.Context, channel string, payload []byte) error {
+	if rt == nil || rt.pub == nil {
+		return nil
+	}
+	return rt.pub.Publish(ctx, channel, payload)
+}
+
 // SetChannelAuthorizer validates the full channel before subscribing or delivery.
 func (rt *Realtime) SetChannelAuthorizer(authorize func() func(context.Context, string, uuid.UUID) error) {
 	if rt != nil && rt.handler != nil {

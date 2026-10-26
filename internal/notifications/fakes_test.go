@@ -3,6 +3,7 @@ package notifications
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -60,11 +61,13 @@ type fakeRepository struct {
 	createDeliveryErr error
 	listDeliveriesErr error
 
-	notifications         []Notification
-	resourceProjects      map[uuid.UUID]uuid.UUID
-	seenAt                map[uuid.UUID]time.Time
-	createNotificationErr error
-	listNotificationsErr  error
+	notifications          []Notification
+	resourceProjects       map[uuid.UUID]uuid.UUID
+	seenAt                 map[uuid.UUID]time.Time
+	createNotificationErr  error
+	listNotificationsErr   error
+	notificationRecipients map[uuid.UUID][]uuid.UUID
+	recipientsErr          error
 
 	listForEventCalls int
 	lastResourceType  string
@@ -75,10 +78,11 @@ var _ Repository = (*fakeRepository)(nil)
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		channels:         make(map[uuid.UUID]Channel),
-		deliveries:       make(map[uuid.UUID][]Delivery),
-		resourceProjects: make(map[uuid.UUID]uuid.UUID),
-		seenAt:           make(map[uuid.UUID]time.Time),
+		channels:               make(map[uuid.UUID]Channel),
+		deliveries:             make(map[uuid.UUID][]Delivery),
+		resourceProjects:       make(map[uuid.UUID]uuid.UUID),
+		seenAt:                 make(map[uuid.UUID]time.Time),
+		notificationRecipients: make(map[uuid.UUID][]uuid.UUID),
 	}
 }
 
@@ -179,6 +183,15 @@ func (r *fakeRepository) CreateNotification(_ context.Context, notification Noti
 	}
 	r.notifications = append(r.notifications, notification)
 	return nil
+}
+
+func (r *fakeRepository) ListNotificationRecipients(_ context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.recipientsErr != nil {
+		return nil, r.recipientsErr
+	}
+	return append([]uuid.UUID(nil), r.notificationRecipients[projectID]...), nil
 }
 
 func (r *fakeRepository) ListNotifications(_ context.Context, userID uuid.UUID, limit int) ([]Notification, int64, error) {
@@ -373,14 +386,19 @@ func (m *fakeMailer) delivered() []Mail {
 	return append([]Mail(nil), m.mails...)
 }
 
-func newTestService(t *testing.T, repo Repository) *Service {
+func newTestService(t *testing.T, repo Repository, publishers ...Publisher) *Service {
 	t.Helper()
+	var publisher Publisher
+	if len(publishers) > 0 {
+		publisher = publishers[0]
+	}
 	service := NewService(Config{
 		Repository:  repo,
 		Secret:      testSecret,
 		Logger:      discardLogger(),
 		Mailer:      &fakeMailer{},
 		HTTPClient:  nil,
+		Publisher:   publisher,
 		Workers:     2,
 		QueueSize:   16,
 		SendTimeout: 2 * time.Second,
@@ -388,6 +406,49 @@ func newTestService(t *testing.T, repo Repository) *Service {
 	})
 	t.Cleanup(func() { _ = service.Close() })
 	return service
+}
+
+type fakePublisher struct {
+	mu     sync.Mutex
+	frames map[string][]Frame
+	err    error
+}
+
+var _ Publisher = (*fakePublisher)(nil)
+
+func newFakePublisher() *fakePublisher {
+	return &fakePublisher{frames: make(map[string][]Frame)}
+}
+
+func (p *fakePublisher) Publish(_ context.Context, channel, payload string) error {
+	if p.err != nil {
+		return p.err
+	}
+	var frame Frame
+	if err := json.Unmarshal([]byte(payload), &frame); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.frames[channel] = append(p.frames[channel], frame)
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *fakePublisher) channels() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	channels := make([]string, 0, len(p.frames))
+	for channel := range p.frames {
+		channels = append(channels, channel)
+	}
+	sort.Strings(channels)
+	return channels
+}
+
+func (p *fakePublisher) framesFor(channel string) []Frame {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]Frame(nil), p.frames[channel]...)
 }
 
 func scopedCtx() context.Context {

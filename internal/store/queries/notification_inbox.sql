@@ -1,6 +1,15 @@
 -- name: CreateNotification :exec
-INSERT INTO notifications (event_key, resource_type, resource_id, project_id, name, host, error, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+INSERT INTO notifications (id, event_key, resource_type, resource_id, project_id, name, host, error, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+
+-- name: ListNotificationRecipients :many
+SELECT u.id FROM users u
+WHERE u.role = 'owner'
+   OR EXISTS (
+       SELECT 1 FROM project_members m
+       WHERE m.user_id = u.id
+         AND m.project_id = sqlc.narg('project_id')
+   );
 
 -- name: PruneNotifications :execrows
 -- Retention: keep only the newest $1 rows. Run in the same transaction as the

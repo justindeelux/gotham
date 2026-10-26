@@ -1,17 +1,17 @@
 -- name: GetUserByEmail :one
-SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 FROM users
 WHERE lower(email) = lower($1);
 
 -- name: GetUserByID :one
-SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 FROM users
 WHERE id = $1;
 
 -- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role;
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at;
 
 -- name: CountUsers :one
 SELECT count(*) FROM users;
@@ -33,7 +33,7 @@ WHERE lower(email) = lower($1);
 INSERT INTO users (email, password_hash, role)
 SELECT $1, $2, 'owner'
 WHERE NOT EXISTS (SELECT 1 FROM users)
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role;
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at;
 
 -- name: UpdateUserAvatar :one
 -- UpdateUserAvatar replaces the account's stored OAuth avatar URL. The caller
@@ -43,7 +43,7 @@ RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_v
 UPDATE users
 SET avatar = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role;
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at;
 
 -- name: BumpCredentialVersion :exec
 -- BumpCredentialVersion advances the account's credential version. It runs
@@ -60,7 +60,7 @@ WHERE id = $1;
 UPDATE users
 SET display_name = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role;
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at;
 
 -- name: SetUserPasswordHash :one
 -- SetUserPasswordHash replaces the account's password hash and bumps its
@@ -74,4 +74,4 @@ RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_v
 UPDATE users
 SET password_hash = $2, updated_at = now(), credential_version = credential_version + 1
 WHERE id = $1 AND password_hash IS NOT DISTINCT FROM $3
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role;
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at;

@@ -40,7 +40,7 @@ const createFirstUser = `-- name: CreateFirstUser :one
 INSERT INTO users (email, password_hash, role)
 SELECT $1, $2, 'owner'
 WHERE NOT EXISTS (SELECT 1 FROM users)
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 `
 
 type CreateFirstUserParams struct {
@@ -66,6 +66,7 @@ func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams
 		&i.CredentialVersion,
 		&i.DisplayName,
 		&i.Role,
+		&i.NotificationsSeenAt,
 	)
 	return i, err
 }
@@ -73,7 +74,7 @@ func (q *Queries) CreateFirstUser(ctx context.Context, arg CreateFirstUserParams
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash)
 VALUES ($1, $2)
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 `
 
 type CreateUserParams struct {
@@ -94,12 +95,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.CredentialVersion,
 		&i.DisplayName,
 		&i.Role,
+		&i.NotificationsSeenAt,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 FROM users
 WHERE lower(email) = lower($1)
 `
@@ -117,12 +119,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, lower string) (User, error
 		&i.CredentialVersion,
 		&i.DisplayName,
 		&i.Role,
+		&i.NotificationsSeenAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+SELECT id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 FROM users
 WHERE id = $1
 `
@@ -140,6 +143,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.CredentialVersion,
 		&i.DisplayName,
 		&i.Role,
+		&i.NotificationsSeenAt,
 	)
 	return i, err
 }
@@ -148,7 +152,7 @@ const setUserPasswordHash = `-- name: SetUserPasswordHash :one
 UPDATE users
 SET password_hash = $2, updated_at = now(), credential_version = credential_version + 1
 WHERE id = $1 AND password_hash IS NOT DISTINCT FROM $3
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 `
 
 type SetUserPasswordHashParams struct {
@@ -178,6 +182,7 @@ func (q *Queries) SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHa
 		&i.CredentialVersion,
 		&i.DisplayName,
 		&i.Role,
+		&i.NotificationsSeenAt,
 	)
 	return i, err
 }
@@ -186,7 +191,7 @@ const updateUserAvatar = `-- name: UpdateUserAvatar :one
 UPDATE users
 SET avatar = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 `
 
 type UpdateUserAvatarParams struct {
@@ -211,6 +216,7 @@ func (q *Queries) UpdateUserAvatar(ctx context.Context, arg UpdateUserAvatarPara
 		&i.CredentialVersion,
 		&i.DisplayName,
 		&i.Role,
+		&i.NotificationsSeenAt,
 	)
 	return i, err
 }
@@ -219,7 +225,7 @@ const updateUserDisplayName = `-- name: UpdateUserDisplayName :one
 UPDATE users
 SET display_name = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role
+RETURNING id, email, created_at, password_hash, avatar, updated_at, credential_version, display_name, role, notifications_seen_at
 `
 
 type UpdateUserDisplayNameParams struct {
@@ -243,6 +249,7 @@ func (q *Queries) UpdateUserDisplayName(ctx context.Context, arg UpdateUserDispl
 		&i.CredentialVersion,
 		&i.DisplayName,
 		&i.Role,
+		&i.NotificationsSeenAt,
 	)
 	return i, err
 }

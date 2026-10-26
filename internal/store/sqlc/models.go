@@ -338,6 +338,18 @@ type InviteProject struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 }
 
+type Notification struct {
+	ID           pgtype.UUID        `json:"id"`
+	EventKey     string             `json:"event_key"`
+	ResourceType *string            `json:"resource_type"`
+	ResourceID   pgtype.UUID        `json:"resource_id"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	Name         string             `json:"name"`
+	Host         string             `json:"host"`
+	Error        string             `json:"error"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type NotificationChannel struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`
@@ -612,15 +624,16 @@ type UpdateSchedule struct {
 }
 
 type User struct {
-	ID                pgtype.UUID        `json:"id"`
-	Email             string             `json:"email"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	PasswordHash      *string            `json:"password_hash"`
-	Avatar            *string            `json:"avatar"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	CredentialVersion int32              `json:"credential_version"`
-	DisplayName       *string            `json:"display_name"`
-	Role              string             `json:"role"`
+	ID                  pgtype.UUID        `json:"id"`
+	Email               string             `json:"email"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	PasswordHash        *string            `json:"password_hash"`
+	Avatar              *string            `json:"avatar"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	CredentialVersion   int32              `json:"credential_version"`
+	DisplayName         *string            `json:"display_name"`
+	Role                string             `json:"role"`
+	NotificationsSeenAt pgtype.Timestamptz `json:"notifications_seen_at"`
 }
 
 type UserTotp struct {

@@ -47,6 +47,7 @@ func TestNotificationInboxVisibility(t *testing.T) {
 	afterGrant := uuid.New()
 	otherProjectRow := uuid.New()
 	instanceWide := uuid.New()
+	redeployRow := uuid.New()
 	rows := []struct {
 		id        uuid.UUID
 		projectID uuid.UUID
@@ -68,6 +69,12 @@ func TestNotificationInboxVisibility(t *testing.T) {
 			row.id, uuid.New(), project, row.createdAt); err != nil {
 			t.Fatalf("insert notification: %v", err)
 		}
+	}
+	if _, err := st.DB.Exec(ctx,
+		`INSERT INTO notifications(id, event_key, resource_type, resource_id, project_id, name, host, error, detail, created_at)
+		 VALUES($1, 'redeploy_needed', 'application', $2, $3, 'shop-web', '', '', 'domains', $4)`,
+		redeployRow, uuid.New(), grantedProject, base.Add(25*time.Minute)); err != nil {
+		t.Fatalf("insert redeploy notification: %v", err)
 	}
 	if _, err := st.DB.Exec(ctx,
 		`INSERT INTO project_members(project_id, user_id, created_at) VALUES($1, $2, $3)`,
@@ -130,14 +137,14 @@ func TestNotificationInboxVisibility(t *testing.T) {
 		}
 	}
 
-	assertIDs("owner inbox", list(owner.ID), instanceWide, afterGrant, otherProjectRow, beforeGrant)
-	assertIDs("member inbox", list(member.ID), afterGrant)
+	assertIDs("owner inbox", list(owner.ID), instanceWide, redeployRow, afterGrant, otherProjectRow, beforeGrant)
+	assertIDs("member inbox", list(member.ID), redeployRow, afterGrant)
 	assertIDs("ungranted member inbox", list(stranger.ID))
-	if got := unread(owner.ID); got != 2 {
-		t.Errorf("owner unread at the marker = %d, want 2", got)
+	if got := unread(owner.ID); got != 3 {
+		t.Errorf("owner unread at the marker = %d, want 3", got)
 	}
-	if got := unread(member.ID); got != 1 {
-		t.Errorf("member unread = %d, want 1", got)
+	if got := unread(member.ID); got != 2 {
+		t.Errorf("member unread = %d, want 2", got)
 	}
 	if got := unread(stranger.ID); got != 0 {
 		t.Errorf("ungranted member unread = %d, want 0", got)
@@ -146,7 +153,7 @@ func TestNotificationInboxVisibility(t *testing.T) {
 	memberID := pgtype.UUID{Bytes: member.ID.Bytes, Valid: true}
 	if err := st.MarkNotificationsSeen(ctx, sqlc.MarkNotificationsSeenParams{
 		ID:      memberID,
-		Column2: pgtype.Timestamptz{Time: base.Add(20 * time.Minute), Valid: true},
+		Column2: pgtype.Timestamptz{Time: base.Add(25 * time.Minute), Valid: true},
 	}); err != nil {
 		t.Fatalf("mark seen: %v", err)
 	}
@@ -159,7 +166,7 @@ func TestNotificationInboxVisibility(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mark backwards: %v", err)
 	}
-	if got := seenAt(member.ID); !got.Equal(base.Add(20 * time.Minute)) {
+	if got := seenAt(member.ID); !got.Equal(base.Add(25 * time.Minute)) {
 		t.Errorf("marker after a backwards move = %s, want it unchanged", got)
 	}
 	before := time.Now()

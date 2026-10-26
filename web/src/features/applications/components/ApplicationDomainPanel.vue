@@ -91,6 +91,7 @@ function openCertificate(row: ApplicationDomain): void {
           :loading="domains.loadingDomains.value"
           :busy-domain-id="domains.busyDomainId.value"
           :certificate-of="certificateOf"
+          :diagnostic-of="domains.routeDiagnostic"
           @edit="domains.startEdit"
           @set-primary="domains.handleSetPrimary"
           @certificate="openCertificate"

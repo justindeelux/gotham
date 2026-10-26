@@ -50,6 +50,16 @@ const showStorageTab = computed<boolean>(
   () => detail.application.value !== null,
 );
 
+const pendingChanges = computed<string[]>(
+  () => detail.application.value?.pending_changes ?? [],
+);
+
+const pendingChangeLabel = computed<string>(() =>
+  pendingChanges.value
+    .map((change) => String(t(`applications.detail.pendingChanges.${change}`)))
+    .join(", "),
+);
+
 const activeTab = computed<string>({
   get: () => {
     const selected =
@@ -98,6 +108,31 @@ const activeTab = computed<string>({
           {{ t("applications.terminal.notAllowedTitle") }}
         </template>
         {{ t("applications.terminal.notAllowedBody") }}
+      </NAlert>
+
+      <NAlert
+        v-if="pendingChanges.length > 0"
+        type="warning"
+        :show-icon="true"
+        class="app-redeploy-banner"
+      >
+        <template #header>
+          {{ t("applications.detail.redeployTitle") }}
+        </template>
+        <NSpace align="center" justify="space-between" :size="12">
+          <span>
+            {{ t("applications.detail.redeployBody", { changes: pendingChangeLabel }) }}
+          </span>
+          <NButton
+            v-if="detail.canWrite.value"
+            size="small"
+            type="primary"
+            :loading="detail.appsStore.acting"
+            @click="detail.handleDeploy"
+          >
+            {{ t("applications.detail.deployNow") }}
+          </NButton>
+        </NSpace>
       </NAlert>
 
       <ApplicationHeader
@@ -316,6 +351,10 @@ const activeTab = computed<string>({
 }
 
 .app-blocked-terminal {
+  margin-bottom: 12px;
+}
+
+.app-redeploy-banner {
   margin-bottom: 12px;
 }
 </style>

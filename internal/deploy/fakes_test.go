@@ -61,6 +61,8 @@ type fakeRepository struct {
 	certErr      error
 	domains      []ApplicationDomain
 
+	pendingChanges map[uuid.UUID][]string
+
 	unknownServers  map[uuid.UUID]bool
 	ownedGitHubApps map[uuid.UUID]bool
 
@@ -136,6 +138,7 @@ func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (App
 		return Application{}, ErrNotFound
 	}
 	app.PrimaryDomain = r.primaryDomainLocked(app.ID)
+	app.PendingChanges = append([]string(nil), r.pendingChanges[appID]...)
 	return app, nil
 }
 
@@ -278,6 +281,7 @@ func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (
 	if r.updateErr != nil {
 		return Application{}, r.updateErr
 	}
+	app.PendingChanges = append([]string(nil), r.pendingChanges[app.ID]...)
 	if r.app.ID == app.ID {
 		app.CreatedAt = r.app.CreatedAt
 		app.UpdatedAt = time.Now().UTC()
@@ -297,10 +301,38 @@ func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (
 	return Application{}, ErrNotFound
 }
 
+func (r *fakeRepository) AddPendingChanges(_ context.Context, appID uuid.UUID, changes []string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pendingChanges == nil {
+		r.pendingChanges = make(map[uuid.UUID][]string)
+	}
+	before := len(r.pendingChanges[appID]) == 0
+	seen := make(map[string]bool, len(r.pendingChanges[appID])+len(changes))
+	merged := make([]string, 0, len(r.pendingChanges[appID])+len(changes))
+	for _, change := range append(append([]string(nil), r.pendingChanges[appID]...), changes...) {
+		if change == "" || seen[change] {
+			continue
+		}
+		seen[change] = true
+		merged = append(merged, change)
+	}
+	r.pendingChanges[appID] = SortPendingChanges(merged)
+	return before, nil
+}
+
+func (r *fakeRepository) ClearPendingChanges(_ context.Context, appID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.pendingChanges, appID)
+	return nil
+}
+
 func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.record("application deleted")
+	delete(r.pendingChanges, appID)
 	if r.app.ID == appID {
 		r.app = Application{}
 	}

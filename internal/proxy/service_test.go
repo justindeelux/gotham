@@ -462,7 +462,7 @@ func TestSyncServerIsolatesUnreachablePinnedApplications(t *testing.T) {
 	}{
 		"container missing": {nil, "no running deployment container"},
 		"container stopped": {&containers.Container{ID: "gone-container", Name: "app", State: "exited", Ports: []string{"18080:3000"}, PortsReported: true}, "not running"},
-		"legacy label only": {&containers.Container{ID: "gone-container", Name: "app", State: "running", Ports: []string{"18080:3000"}, PortsReported: false}, "engine-reported"},
+		"legacy label only": {&containers.Container{ID: "gone-container", Name: "app", State: "running", Ports: []string{"18080:3000"}, PortsReported: false}, "redeploy to apply"},
 		"loopback only": {&containers.Container{ID: "gone-container", Name: "app", State: "running",
 			Ports: []string{"127.0.0.1:18080:3000"}, PortsReported: true}, "no reachable published binding"},
 	}

@@ -12,16 +12,18 @@ const knownEventKeys = [
   "server_online",
   "certificate_expiring",
   "update_available",
+  "redeploy_needed",
 ] as const;
 
 export type NotificationLinkType = "application" | "database";
 
-export type NotificationTone = "success" | "danger" | "neutral";
+export type NotificationTone = "success" | "danger" | "neutral" | "warning";
 
 export interface NotificationTextParams {
   name: string;
   host: string;
   error: string;
+  detail?: string;
 }
 
 export function notificationText(
@@ -31,6 +33,14 @@ export function notificationText(
   const key = (knownEventKeys as readonly string[]).includes(eventKey)
     ? eventKey
     : "unknown";
+  if (key === "redeploy_needed") {
+    return String(
+      i18n.global.t("notifications.inbox.events.redeploy_needed", {
+        name: params.name,
+        changes: pendingChangeLabels(params.detail ?? ""),
+      }),
+    );
+  }
   return String(
     i18n.global.t(`notifications.inbox.events.${key}`, {
       name: params.name,
@@ -39,8 +49,19 @@ export function notificationText(
   );
 }
 
+function pendingChangeLabels(detail: string): string {
+  return detail
+    .split(",")
+    .map((change) => change.trim())
+    .filter((change) => change !== "")
+    .map((change) =>
+      String(i18n.global.t(`notifications.inbox.changes.${change}`)),
+    )
+    .join(", ");
+}
+
 export function notificationIcon(eventKey: string): IconName {
-  if (eventKey.startsWith("deploy_")) {
+  if (eventKey.startsWith("deploy_") || eventKey === "redeploy_needed") {
     return "rocket";
   }
   if (eventKey.startsWith("backup_")) {
@@ -68,6 +89,9 @@ export function notificationTone(eventKey: string): NotificationTone {
     eventKey === "certificate_expiring"
   ) {
     return "danger";
+  }
+  if (eventKey === "redeploy_needed") {
+    return "warning";
   }
   return "neutral";
 }

@@ -307,7 +307,7 @@ async function openItem(item: NotificationItem): Promise<void> {
               <span class="notif-inbox-line">
                 {{ notificationText(item.event_key, item) }}
               </span>
-              <span v-if="item.error" class="notif-inbox-error">{{ item.error }}</span>
+              <span v-if="item.error && item.event_key !== 'redeploy_needed'" class="notif-inbox-error">{{ item.error }}</span>
               <span v-if="missingId === item.id" class="notif-inbox-missing">
                 {{ t("notifications.inbox.unavailable") }}
               </span>
@@ -419,6 +419,10 @@ button.notif-inbox-item:focus-visible {
 
 .notif-inbox-icon.is-neutral {
   color: var(--muted);
+}
+
+.notif-inbox-icon.is-warning {
+  color: var(--warn);
 }
 
 .notif-inbox-body {

@@ -142,8 +142,12 @@ func (o *Orchestrator) loadComposeEnv(ctx context.Context, app Application, port
 	return composeProjectEnv(envVars, secrets, sharedProject, sharedEnvironment, o.secret, port)
 }
 
-func (o *Orchestrator) composeDomainTargets(ctx context.Context, app Application) ([]ComposePortTarget, int32, error) {
+func (o *Orchestrator) composeDomainTargets(ctx context.Context, app Application, composeRaw string) ([]ComposePortTarget, int32, error) {
 	domains, err := o.repo.ListApplicationDomains(ctx, app.ID)
+	if err != nil {
+		return nil, 0, err
+	}
+	domains, err = o.resolveAutoDomainPorts(ctx, app, domains, composeRaw)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -172,7 +176,7 @@ func (o *Orchestrator) composeDomainTargets(ctx context.Context, app Application
 }
 
 func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Application, raw string) (rendered string, images []string, env map[string]string, err error) {
-	targets, primaryPort, err := o.composeDomainTargets(ctx, app)
+	targets, primaryPort, err := o.composeDomainTargets(ctx, app, raw)
 	if err != nil {
 		return "", nil, nil, err
 	}

@@ -33,6 +33,17 @@ func (q *Queries) ApplicationNameInEnvironment(ctx context.Context, arg Applicat
 	return exists, err
 }
 
+const clearApplicationPendingChanges = `-- name: ClearApplicationPendingChanges :exec
+UPDATE applications
+SET pending_changes = '{}', updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) ClearApplicationPendingChanges(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearApplicationPendingChanges, id)
+	return err
+}
+
 const clearEnvVarsByApp = `-- name: ClearEnvVarsByApp :exec
 DELETE FROM env_vars WHERE application_id = $1
 `
@@ -140,7 +151,7 @@ VALUES (
     COALESCE($20::text, ''),
     COALESCE($21::text, '')
 )
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes
 `
 
 type CreateApplicationParams struct {
@@ -220,6 +231,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.ComposeContent,
 		&i.ComposeFile,
 		&i.ComposeService,
+		&i.PendingChanges,
 	)
 	return i, err
 }
@@ -373,7 +385,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -403,8 +415,22 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.ComposeContent,
 		&i.ComposeFile,
 		&i.ComposeService,
+		&i.PendingChanges,
 	)
 	return i, err
+}
+
+const getApplicationPendingChangesForUpdate = `-- name: GetApplicationPendingChangesForUpdate :one
+SELECT pending_changes FROM applications WHERE id = $1 FOR UPDATE
+`
+
+// The write path reads the previous set under a row lock so exactly one
+// caller observes the clear-to-set transition that notifies.
+func (q *Queries) GetApplicationPendingChangesForUpdate(ctx context.Context, id pgtype.UUID) ([]string, error) {
+	row := q.db.QueryRow(ctx, getApplicationPendingChangesForUpdate, id)
+	var pending_changes []string
+	err := row.Scan(&pending_changes)
+	return pending_changes, err
 }
 
 const getDeployment = `-- name: GetDeployment :one
@@ -538,7 +564,7 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 }
 
 const listApplicationsByEnvironment = `-- name: ListApplicationsByEnvironment :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes FROM applications
 WHERE environment_id = $1 AND (is_preview = false OR $2::bool = true)
 ORDER BY created_at DESC, id DESC
 `
@@ -583,6 +609,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 			&i.ComposeContent,
 			&i.ComposeFile,
 			&i.ComposeService,
+			&i.PendingChanges,
 		); err != nil {
 			return nil, err
 		}
@@ -595,7 +622,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 }
 
 const listApplicationsByProject = `-- name: ListApplicationsByProject :many
-SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.created_at, a.updated_at, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext, a.compose_content, a.compose_file, a.compose_service FROM applications a
+SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.created_at, a.updated_at, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext, a.compose_content, a.compose_file, a.compose_service, a.pending_changes FROM applications a
 JOIN environments e ON e.id = a.environment_id
 WHERE e.project_id = $1 AND (a.is_preview = false OR $2::bool = true)
 ORDER BY a.created_at DESC, a.id DESC
@@ -641,6 +668,7 @@ func (q *Queries) ListApplicationsByProject(ctx context.Context, arg ListApplica
 			&i.ComposeContent,
 			&i.ComposeFile,
 			&i.ComposeService,
+			&i.PendingChanges,
 		); err != nil {
 			return nil, err
 		}
@@ -686,7 +714,7 @@ func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.
 }
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes FROM applications
 WHERE can_access_environment($1::uuid, environment_id) AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -724,6 +752,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.ComposeContent,
 			&i.ComposeFile,
 			&i.ComposeService,
+			&i.PendingChanges,
 		); err != nil {
 			return nil, err
 		}
@@ -1042,6 +1071,22 @@ func (q *Queries) LockApplication(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const setApplicationPendingChanges = `-- name: SetApplicationPendingChanges :exec
+UPDATE applications
+SET pending_changes = $2, updated_at = now()
+WHERE id = $1
+`
+
+type SetApplicationPendingChangesParams struct {
+	ID             pgtype.UUID `json:"id"`
+	PendingChanges []string    `json:"pending_changes"`
+}
+
+func (q *Queries) SetApplicationPendingChanges(ctx context.Context, arg SetApplicationPendingChangesParams) error {
+	_, err := q.db.Exec(ctx, setApplicationPendingChanges, arg.ID, arg.PendingChanges)
+	return err
+}
+
 const updateApplication = `-- name: UpdateApplication :one
 UPDATE applications
 SET name = $2,
@@ -1060,7 +1105,7 @@ SET name = $2,
     compose_service = $15,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, created_at, updated_at, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service, pending_changes
 `
 
 type UpdateApplicationParams struct {
@@ -1124,6 +1169,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.ComposeContent,
 		&i.ComposeFile,
 		&i.ComposeService,
+		&i.PendingChanges,
 	)
 	return i, err
 }

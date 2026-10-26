@@ -23,6 +23,7 @@ interface Props {
   loading: boolean;
   busyDomainId: string | null;
   certificateOf: (_host: string) => Certificate | null;
+  diagnosticOf: (_host: string) => string;
 }
 
 const props = defineProps<Props>();
@@ -47,13 +48,26 @@ const columns = computed<DataTableColumns<ApplicationDomain>>(() => [
     title: t("applications.domain.host"),
     key: "domain",
     minWidth: 220,
-    render: (row) => h("span", { class: "mono domain-name" }, row.domain),
+    render: (row) => {
+      const diagnostic = props.diagnosticOf(row.domain);
+      return h("div", { class: "domain-host-cell" }, [
+        h("span", { class: "mono domain-name" }, row.domain),
+        diagnostic
+          ? h("span", { class: "domain-diagnostic" }, diagnostic)
+          : null,
+      ]);
+    },
   },
   {
     title: t("applications.domain.port"),
     key: "port",
     width: 90,
-    render: (row) => h("span", { class: "mono" }, String(row.port)),
+    render: (row) =>
+      h(
+        "span",
+        { class: "mono" },
+        row.port > 0 ? String(row.port) : t("applications.domain.portAuto"),
+      ),
   },
   {
     title: t("applications.domain.service"),
@@ -211,6 +225,18 @@ function rowProps(): Record<string, unknown> {
 }
 
 .domain-table :deep(.domain-name) {
+  overflow-wrap: anywhere;
+}
+
+.domain-table :deep(.domain-host-cell) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.domain-table :deep(.domain-diagnostic) {
+  font-size: var(--text-xs);
+  color: var(--warn);
   overflow-wrap: anywhere;
 }
 

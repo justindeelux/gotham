@@ -21,8 +21,16 @@ type DeployResult struct {
 	FinishedAt    time.Time
 }
 
+type RedeployResult struct {
+	ApplicationID uuid.UUID
+	Application   string
+	Changes       []string
+	At            time.Time
+}
+
 type Notifier interface {
 	DeployFinished(ctx context.Context, result DeployResult)
+	RedeployNeeded(ctx context.Context, result RedeployResult)
 }
 
 func (o *Orchestrator) notify(ctx context.Context, st *runState, to State) {

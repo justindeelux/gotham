@@ -314,7 +314,7 @@ describe("Domains tab behavior", () => {
 
     expect(addDomain).toHaveBeenCalledWith(
       "app-1",
-      expect.objectContaining({ domain: "new.example.com", port: 80, protocol: "http" }),
+      expect.objectContaining({ domain: "new.example.com", port: 0, protocol: "http" }),
     );
     expect(wrapper.find(".domain-submit").exists()).toBe(false);
     wrapper.unmount();

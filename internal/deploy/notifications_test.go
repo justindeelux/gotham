@@ -11,8 +11,9 @@ import (
 )
 
 type recordingNotifier struct {
-	mu       sync.Mutex
-	recorded []DeployResult
+	mu        sync.Mutex
+	recorded  []DeployResult
+	redeploys []RedeployResult
 }
 
 var _ Notifier = (*recordingNotifier)(nil)
@@ -21,6 +22,18 @@ func (n *recordingNotifier) DeployFinished(_ context.Context, result DeployResul
 	n.mu.Lock()
 	n.recorded = append(n.recorded, result)
 	n.mu.Unlock()
+}
+
+func (n *recordingNotifier) RedeployNeeded(_ context.Context, result RedeployResult) {
+	n.mu.Lock()
+	n.redeploys = append(n.redeploys, result)
+	n.mu.Unlock()
+}
+
+func (n *recordingNotifier) redeployResults() []RedeployResult {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]RedeployResult(nil), n.redeploys...)
 }
 
 func (n *recordingNotifier) results() []DeployResult {

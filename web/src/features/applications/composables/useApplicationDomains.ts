@@ -49,7 +49,7 @@ export function useApplicationDomains(application: Ref<Application>) {
   const formOpen = ref(false);
   const draft = reactive<DomainDraft>({
     domain: "",
-    port: 80,
+    port: null,
     service: "",
     protocol: "http",
   });
@@ -144,6 +144,9 @@ export function useApplicationDomains(application: Ref<Application>) {
       }
       domains.value = rows;
       domainsError.value = null;
+      if (typeof proxyStore.fetchRouters === "function") {
+        void proxyStore.fetchRouters().catch(() => undefined);
+      }
     } catch (error) {
       if (seq !== refreshSeq || application.value.id !== appID) {
         return;
@@ -156,10 +159,24 @@ export function useApplicationDomains(application: Ref<Application>) {
     }
   }
 
+  function routeDiagnostic(host: string): string {
+    for (const node of proxyStore.routerNodes ?? []) {
+      const match = node.diagnostics?.find(
+        (item) =>
+          item.application_id === application.value.id &&
+          (item.domain ?? "") === host,
+      );
+      if (match?.reason) {
+        return match.reason;
+      }
+    }
+    return "";
+  }
+
   function resetDraft(): void {
     editingId.value = null;
     draft.domain = "";
-    draft.port = 80;
+    draft.port = null;
     draft.service = "";
     draft.protocol = "http";
     formError.value = null;
@@ -181,7 +198,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     clearErrors();
     editingId.value = row.id;
     draft.domain = row.domain;
-    draft.port = row.port;
+    draft.port = row.port > 0 ? row.port : null;
     draft.service = row.service;
     draft.protocol = row.protocol;
     formOpen.value = true;
@@ -202,7 +219,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     if (domain === "" || domainIssues.length > 0) {
       return domainIssues[0] ?? tr("applications.validation.domain");
     }
-    const portIssues = fieldErrors(domainPortSchema, draft.port);
+    const portIssues = draft.port === null ? [] : fieldErrors(domainPortSchema, draft.port);
     if (portIssues.length > 0) {
       return portIssues[0];
     }
@@ -217,7 +234,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     }
     return {
       domain,
-      port: draft.port as number,
+      port: draft.port ?? 0,
       service,
       protocol: draft.protocol,
     };
@@ -365,5 +382,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     handleSave,
     handleRemoveDomain,
     handleSetPrimary,
+    routeDiagnostic,
   };
 }

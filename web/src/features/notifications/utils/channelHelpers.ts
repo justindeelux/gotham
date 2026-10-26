@@ -64,7 +64,9 @@ export function emptyChannelForm(): ChannelForm {
 export function allowedEvents(scope: ChannelScope): NotificationEventKey[] {
   switch (scope) {
     case "application":
-      return allNotificationEvents.filter((event) => event.startsWith("deploy_"));
+      return allNotificationEvents.filter(
+        (event) => event.startsWith("deploy_") || event === "redeploy_needed",
+      );
     case "database":
       return allNotificationEvents.filter((event) => event.startsWith("backup_"));
     default:

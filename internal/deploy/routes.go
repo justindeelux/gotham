@@ -94,6 +94,7 @@ type applicationResponse struct {
 	ComposeService        string            `json:"compose_service"`
 	ServerID              *string           `json:"server_id"`
 	ServerName            string            `json:"server_name"`
+	PendingChanges        []string          `json:"pending_changes"`
 	CreatedAt             time.Time         `json:"created_at"`
 	UpdatedAt             time.Time         `json:"updated_at"`
 }
@@ -134,6 +135,7 @@ type applicationListItem struct {
 	ComposeService        string    `json:"compose_service"`
 	ServerID              *string   `json:"server_id"`
 	ServerName            string    `json:"server_name"`
+	PendingChanges        []string  `json:"pending_changes"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
 }
@@ -1292,6 +1294,7 @@ func newApplicationResponse(application Application) applicationResponse {
 		ComposeService: application.ComposeService,
 		PrimaryDomain:  primaryDomainName(application),
 		ServerName:     application.ServerName,
+		PendingChanges: append([]string{}, application.PendingChanges...),
 		CreatedAt:      application.CreatedAt,
 		UpdatedAt:      application.UpdatedAt,
 	}
@@ -1326,6 +1329,7 @@ func newApplicationListItem(application Application) applicationListItem {
 		ComposeService: application.ComposeService,
 		PrimaryDomain:  primaryDomainName(application),
 		ServerName:     application.ServerName,
+		PendingChanges: append([]string{}, application.PendingChanges...),
 		CreatedAt:      application.CreatedAt,
 		UpdatedAt:      application.UpdatedAt,
 	}

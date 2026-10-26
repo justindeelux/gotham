@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/providers"
 )
 
@@ -67,6 +68,7 @@ const (
 	EventServerOnline        EventKey = "server_online"
 	EventCertificateExpiring EventKey = "certificate_expiring"
 	EventUpdateAvailable     EventKey = "update_available"
+	EventRedeployNeeded      EventKey = "redeploy_needed"
 )
 
 var defaultEvents = []EventKey{EventDeploySuccess, EventDeployFailure, EventBackupSuccess, EventBackupFailure}
@@ -74,6 +76,7 @@ var defaultEvents = []EventKey{EventDeploySuccess, EventDeployFailure, EventBack
 var AllEvents = append(
 	append([]EventKey(nil), defaultEvents...),
 	EventServerOffline, EventServerOnline, EventCertificateExpiring, EventUpdateAvailable,
+	EventRedeployNeeded,
 )
 
 func (k EventKey) Valid() bool {
@@ -94,6 +97,7 @@ const (
 	EventServer      EventKind = "server"
 	EventCertificate EventKind = "certificate"
 	EventUpdate      EventKind = "update"
+	EventRedeploy    EventKind = "redeploy"
 )
 
 type Outcome string
@@ -111,11 +115,14 @@ type Event struct {
 	Name         string
 	Host         string
 	Error        string
+	Detail       string
 	At           time.Time
 }
 
 func (e Event) Key() EventKey {
 	switch {
+	case e.Kind == EventRedeploy:
+		return EventRedeployNeeded
 	case e.Kind == EventUpdate:
 		return EventUpdateAvailable
 	case e.Kind == EventCertificate:
@@ -140,6 +147,13 @@ func (e Event) Key() EventKey {
 func (e Event) Summary() string {
 	if e.Kind == EventTest {
 		return "Test notification: " + e.Name
+	}
+	if e.Kind == EventRedeploy {
+		summary := "Redeploy needed: " + e.Name
+		if labels := deploy.PendingChangeLabels(strings.Split(e.Detail, ",")); labels != "" {
+			summary += " (" + labels + ")"
+		}
+		return summary
 	}
 	if e.Kind == EventUpdate {
 		return "Gotham update available: " + e.Name
@@ -513,6 +527,7 @@ type Notification struct {
 	Name         string
 	Host         string
 	Error        string
+	Detail       string
 	CreatedAt    time.Time
 }
 
@@ -525,6 +540,7 @@ type NotificationView struct {
 	Name         string    `json:"name"`
 	Host         string    `json:"host"`
 	Error        string    `json:"error"`
+	Detail       string    `json:"detail"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 

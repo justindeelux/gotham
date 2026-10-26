@@ -14,7 +14,11 @@ import type { NotificationChannel } from "@/features/notifications/api/notificat
 
 describe("channelHelpers", () => {
   it("scopes deliverable events by resource kind", () => {
-    expect(allowedEvents("application")).toEqual(["deploy_success", "deploy_failure"]);
+    expect(allowedEvents("application")).toEqual([
+      "deploy_success",
+      "deploy_failure",
+      "redeploy_needed",
+    ]);
     expect(allowedEvents("database")).toEqual(["backup_success", "backup_failure"]);
     expect(allowedEvents("")).toEqual([
       "deploy_success",
@@ -25,6 +29,7 @@ describe("channelHelpers", () => {
       "server_online",
       "certificate_expiring",
       "update_available",
+      "redeploy_needed",
     ]);
   });
 
@@ -33,7 +38,7 @@ describe("channelHelpers", () => {
       "deploy_success", "deploy_failure", "backup_success", "backup_failure",
     ]);
     expect(keepDeliverableEvents("application", ["server_offline"])).toEqual([
-      "deploy_success", "deploy_failure",
+      "deploy_success", "deploy_failure", "redeploy_needed",
     ]);
   });
 

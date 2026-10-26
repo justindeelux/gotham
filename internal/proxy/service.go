@@ -856,7 +856,7 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 
 func resolveDomainTarget(app ProxiedApplication, domain ProxiedDomain, backendHost string, nodeContainers []containers.Container, byID map[string]*containers.Container) (string, string) {
 	if domain.Port <= 0 {
-		return "", "domain declares no container port"
+		return "", "no running container port, redeploy to apply"
 	}
 	service := strings.TrimSpace(domain.Service)
 	var hostPort int32
@@ -1175,7 +1175,7 @@ func resolveEndpoint(container *containers.Container, port int32) (int32, string
 		return 0, "the deployment container is not running"
 	}
 	if !container.PortsReported {
-		return 0, "the container has no engine-reported published ports (or the node agent is too old to report them)"
+		return 0, "no running container port, redeploy to apply"
 	}
 	if hostPort := publishedHostPort(container, port); hostPort > 0 {
 		return hostPort, ""

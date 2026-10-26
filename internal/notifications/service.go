@@ -487,6 +487,7 @@ func notificationView(notification Notification) NotificationView {
 		Name:         notification.Name,
 		Host:         notification.Host,
 		Error:        notification.Error,
+		Detail:       notification.Detail,
 		CreatedAt:    notification.CreatedAt,
 	}
 }
@@ -527,6 +528,7 @@ func (s *Service) recordNotification(event Event) {
 		Name:         event.Name,
 		Host:         event.Host,
 		Error:        truncateText(event.Error, maxEventError),
+		Detail:       event.Detail,
 		CreatedAt:    at.UTC(),
 	}
 	if err := s.repo.CreateNotification(writeCtx, notification); err != nil {
@@ -596,6 +598,21 @@ func (s *Service) DeployFinished(_ context.Context, result deploy.DeployResult) 
 		Host:         result.Host,
 		Error:        result.Error,
 		At:           result.FinishedAt,
+	})
+}
+
+func (s *Service) RedeployNeeded(_ context.Context, result deploy.RedeployResult) {
+	if s == nil || !Enabled() {
+		return
+	}
+	s.Dispatch(Event{
+		Kind:         EventRedeploy,
+		Outcome:      OutcomeSuccess,
+		ResourceType: ResourceApplication,
+		ResourceID:   result.ApplicationID,
+		Name:         result.Application,
+		Detail:       strings.Join(deploy.SortPendingChanges(result.Changes), ","),
+		At:           result.At,
 	})
 }
 

@@ -31,7 +31,14 @@ const en = {
       server_online: "Server {name} is back online",
       certificate_expiring: "Certificate for {name} expires soon",
       update_available: "Gotham {name} is available",
+      redeploy_needed: "{name} needs a redeploy: {changes}",
       unknown: "Update for {name} on {host}",
+    },
+    changes: {
+      domains: "domains or ports",
+      environment: "environment variables",
+      secrets: "secrets",
+      storage: "storage",
     },
   },
   card: {
@@ -74,6 +81,7 @@ const en = {
     server_online: "Server back online",
     certificate_expiring: "Certificate expiring",
     update_available: "Gotham update available",
+    redeploy_needed: "Redeploy needed",
   },
   scopeLabel: {
     allResources: "All resources",

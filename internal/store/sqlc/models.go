@@ -45,6 +45,7 @@ type Application struct {
 	ComposeContent             string             `json:"compose_content"`
 	ComposeFile                string             `json:"compose_file"`
 	ComposeService             string             `json:"compose_service"`
+	PendingChanges             []string           `json:"pending_changes"`
 }
 
 type ApplicationDeployKey struct {
@@ -348,6 +349,7 @@ type Notification struct {
 	Host         string             `json:"host"`
 	Error        string             `json:"error"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Detail       string             `json:"detail"`
 }
 
 type NotificationChannel struct {

@@ -461,7 +461,8 @@ export const domainPortSchema = z
   })
   .int("applications.validation.domainPort")
   .min(1, "applications.validation.domainPort")
-  .max(65535, "applications.validation.domainPort");
+  .max(65535, "applications.validation.domainPort")
+  .nullable();
 
 export const domainProtocolSchema = z.enum(["http", "https"]);
 

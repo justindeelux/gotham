@@ -5,9 +5,10 @@ title: Notifications
 # Notifications
 
 Gotham records deploy and backup results, server connection changes, certificate
-expiry warnings and available Gotham updates in the in-app inbox, even when no
-notification channel is configured. Channels are an optional way to send the same
-events to Discord, Slack, Telegram or email outside the panel.
+expiry warnings, available Gotham updates and applications that need a redeploy
+in the in-app inbox, even when no notification channel is configured. Channels
+are an optional way to send the same events to Discord, Slack, Telegram or email
+outside the panel.
 
 ## In-app inbox
 
@@ -18,9 +19,11 @@ the event, the resource, domain or version, the host or error when available, an
 a relative time.
 
 The inbox records deploy success, deploy failure, backup success and backup
-failure, plus server offline, server back online, certificate expiry warnings and
-Gotham update availability. Server, certificate and update events are owner-only.
-**Send test** only tests a channel; it does not create an inbox entry.
+failure, plus server offline, server back online, certificate expiry warnings,
+Gotham update availability and a redeploy needed by an application. The redeploy
+entry names the pending setting (domains or ports, environment variables, secrets
+or storage) and opens the application. Server, certificate and update events are
+owner-only. **Send test** only tests a channel; it does not create an inbox entry.
 New notifications arrive without reloading while the page is open. If the live
 connection is unavailable, the visible page refreshes the inbox about once a
 minute.
@@ -66,17 +69,25 @@ Choose the scope when creating or editing a channel:
 
 - An **All resources** channel receives every selected event, including
   instance-wide server, certificate and update events.
-- An application channel receives that application's deploy events.
+- An application channel receives that application's deploy events and its
+  redeploy-needed event.
 - A database channel receives that database's backup events.
 
 The subscribable events are `deploy_success`, `deploy_failure`,
 `backup_success`, `backup_failure`, `server_offline`, `server_online`,
-`certificate_expiring` and `update_available`.
+`certificate_expiring`, `update_available` and `redeploy_needed`.
 New channels start with the four deploy/backup events selected. Server, certificate
 and update events are opt-in for both existing and new channels: edit an **All resources** channel
 and select them. Application and database channels cannot receive these
-instance-wide events.
+instance-wide events. `redeploy_needed` is opt-in as well, and only an
+**All resources** channel or a channel scoped to that application can receive it.
 A disabled channel receives nothing.
+
+An application needs a redeploy when a setting that only reaches a new container
+changes: domains or ports, environment variables, secrets, or storage. Exactly one
+`redeploy_needed` event is recorded on the first change after a successful deploy;
+further changes while it is pending are silent, and the next successful deploy
+clears the flag so a later change notifies again.
 
 A server is considered offline after at least 30 seconds without a heartbeat.
 Gotham checks every 10 seconds, even when nobody has the servers page open, and

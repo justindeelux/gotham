@@ -33,6 +33,21 @@ RETURNING *;
 -- name: GetApplication :one
 SELECT * FROM applications WHERE id = $1;
 
+-- name: GetApplicationPendingChangesForUpdate :one
+-- The write path reads the previous set under a row lock so exactly one
+-- caller observes the clear-to-set transition that notifies.
+SELECT pending_changes FROM applications WHERE id = $1 FOR UPDATE;
+
+-- name: SetApplicationPendingChanges :exec
+UPDATE applications
+SET pending_changes = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: ClearApplicationPendingChanges :exec
+UPDATE applications
+SET pending_changes = '{}', updated_at = now()
+WHERE id = $1;
+
 -- name: ListApplicationsByUser :many
 SELECT * FROM applications
 WHERE can_access_environment(sqlc.arg(user_id)::uuid, environment_id) AND is_preview = false

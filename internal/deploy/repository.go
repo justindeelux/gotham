@@ -30,6 +30,8 @@ type Repository interface {
 	CreateApplication(ctx context.Context, app Application, envVars []EnvVar, secrets []Secret, storages []Storage) (Application, error)
 	UpdateApplication(ctx context.Context, app Application) (Application, error)
 	DeleteApplication(ctx context.Context, appID uuid.UUID) error
+	AddPendingChanges(ctx context.Context, appID uuid.UUID, changes []string) (bool, error)
+	ClearPendingChanges(ctx context.Context, appID uuid.UUID) error
 	ReplaceEnvVars(ctx context.Context, appID uuid.UUID, envVars []EnvVar, secrets []Secret) error
 	ReplaceStorages(ctx context.Context, appID uuid.UUID, storages []Storage) error
 	ServerExists(ctx context.Context, serverID uuid.UUID) (bool, error)
@@ -338,6 +340,21 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 func (r *storeRepository) DeleteApplication(ctx context.Context, appID uuid.UUID) error {
 	if err := r.store.DeleteApplication(ctx, pgUUID(appID)); err != nil {
 		return fmt.Errorf("deploy: delete application: %w", err)
+	}
+	return nil
+}
+
+func (r *storeRepository) AddPendingChanges(ctx context.Context, appID uuid.UUID, changes []string) (bool, error) {
+	becamePending, err := r.store.AddApplicationPendingChanges(ctx, pgUUID(appID), changes)
+	if err != nil {
+		return false, fmt.Errorf("deploy: mark pending changes: %w", err)
+	}
+	return becamePending, nil
+}
+
+func (r *storeRepository) ClearPendingChanges(ctx context.Context, appID uuid.UUID) error {
+	if err := r.store.ClearApplicationPendingChanges(ctx, pgUUID(appID)); err != nil {
+		return fmt.Errorf("deploy: clear pending changes: %w", err)
 	}
 	return nil
 }
@@ -1031,6 +1048,7 @@ func applicationFromRow(row sqlc.Application) Application {
 		ComposeContent:             row.ComposeContent,
 		ComposeFile:                row.ComposeFile,
 		ComposeService:             row.ComposeService,
+		PendingChanges:             append([]string(nil), row.PendingChanges...),
 		IsPreview:                  row.IsPreview,
 		CreatedAt:                  timeFromPG(row.CreatedAt),
 		UpdatedAt:                  timeFromPG(row.UpdatedAt),

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NButton, NIcon, NSpace, NTag, NText, NTooltip } from "naive-ui";
+import { NButton, NIcon, NTag, NTooltip } from "naive-ui";
 import { useI18n } from "vue-i18n";
 
 import { BrandIcon } from "@/features/add-resource";
@@ -7,6 +7,7 @@ import type { BrandMark } from "@/features/add-resource";
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
+import PageHeader from "@/shared/ui/PageHeader.vue";
 
 interface Props {
   displayName: string;
@@ -35,23 +36,23 @@ const { t } = useI18n();
 </script>
 
 <template>
-  <div class="page-head">
-    <BrandIcon v-bind="props.brand" size="lg" />
-    <div class="page-head__title">
-      <NSpace align="center" :size="10">
-        <NText strong style="font-size: 20px" class="mono">{{ props.displayName || t("applications.header.fallbackName") }}</NText>
-        <DeploymentStatusTag
-          v-if="props.latest && !props.containerStopped"
-          :state="props.latest.state"
-          size="medium"
-        />
-        <NTag v-else-if="props.containerStopped" type="default" size="medium" round>
-          {{ t("applications.header.stopped") }}
-        </NTag>
-      </NSpace>
-      <NText depth="3" class="mono">{{ props.appId }}</NText>
-    </div>
-    <NSpace class="page-head__actions" align="center" :size="8">
+  <PageHeader>
+    <template #identity>
+      <BrandIcon v-bind="props.brand" size="lg" />
+    </template>
+    <template #title>{{ props.displayName || t("applications.header.fallbackName") }}</template>
+    <template #badges>
+      <DeploymentStatusTag
+        v-if="props.latest && !props.containerStopped"
+        :state="props.latest.state"
+        size="medium"
+      />
+      <NTag v-else-if="props.containerStopped" type="default" size="medium" round>
+        {{ t("applications.header.stopped") }}
+      </NTag>
+    </template>
+    <template #meta>{{ props.appId }}</template>
+    <template #actions>
       <NButton
         type="primary"
         ghost
@@ -109,36 +110,6 @@ const { t } = useI18n();
         </template>
         {{ props.controlHint }}
       </NTooltip>
-    </NSpace>
-  </div>
+    </template>
+  </PageHeader>
 </template>
-
-<style scoped>
-.mono {
-  font-family: var(--font-mono);
-}
-
-.page-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
-.page-head__title {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  flex: 1;
-  min-width: 0;
-}
-
-.page-head__actions {
-  margin-left: auto;
-  flex-shrink: 1;
-  min-width: 0;
-  max-width: 100%;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-</style>

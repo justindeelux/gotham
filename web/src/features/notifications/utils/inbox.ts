@@ -11,6 +11,7 @@ const knownEventKeys = [
   "server_offline",
   "server_online",
   "certificate_expiring",
+  "update_available",
 ] as const;
 
 export type NotificationLinkType = "application" | "database";
@@ -50,6 +51,9 @@ export function notificationIcon(eventKey: string): IconName {
   }
   if (eventKey === "certificate_expiring") {
     return "shield";
+  }
+  if (eventKey === "update_available") {
+    return "refresh";
   }
   return "bell";
 }

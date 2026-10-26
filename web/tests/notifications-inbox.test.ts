@@ -215,3 +215,22 @@ describe("certificate expiry notifications", () => {
     );
   });
 });
+
+
+describe("update availability notifications", () => {
+  it("localizes available versions with an informational tone", () => {
+    const params = { name: "v1.2.0 (stable)", host: "", error: "" };
+    expect(notificationText("update_available", params)).toBe(
+      "Gotham v1.2.0 (stable) is available",
+    );
+    expect(notificationIcon("update_available")).toBe("refresh");
+    expect(notificationTone("update_available")).toBe("neutral");
+    syncComposerLocale("vi");
+    expect(notificationText("update_available", params)).toBe(
+      "Đã có Gotham v1.2.0 (stable)",
+    );
+    expect(notificationText("future_event", params)).toBe(
+      "Cập nhật cho v1.2.0 (stable) trên ",
+    );
+  });
+});

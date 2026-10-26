@@ -4,6 +4,7 @@ import { RouterLink } from "vue-router";
 
 import { serviceStatusLabel, serviceStatusTagType } from "@/features/services/api/services";
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
+import PageHeader from "@/shared/ui/PageHeader.vue";
 import { activeLocale, i18n } from "@/shared/i18n";
 
 function t(key: string, params?: Record<string, string | number>): string {
@@ -16,8 +17,8 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
 </script>
 
 <template>
-  <div class="page-head">
-    <div class="page-head__title">
+  <PageHeader>
+    <template #breadcrumb>
       <RouterLink
         :to="
           service
@@ -34,7 +35,9 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
       >
         ← {{ service?.environment_name ?? t("services.header.backFallback") }}
       </RouterLink>
-      <h1 class="mono">{{ service?.name ?? serviceId.slice(0, 8) }}</h1>
+    </template>
+    <template #title>{{ service?.name ?? serviceId.slice(0, 8) }}</template>
+    <template #badges>
       <NSpace :size="8" align="center">
         <NTag
           v-if="service"
@@ -56,8 +59,8 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
           {{ service.compose_project }}
         </NTag>
       </NSpace>
-    </div>
-    <div class="page-actions">
+    </template>
+    <template #actions>
       <NButton
         v-if="service"
         type="primary"
@@ -93,54 +96,17 @@ const { service, serviceId, serverName, busy, handleDeploy, handleRestart, handl
         </template>
         {{ t("services.header.deleteConfirm", { name: service.name }) }}
       </NPopconfirm>
-    </div>
-  </div>
+    </template>
+  </PageHeader>
 </template>
 
 <style scoped>
-.page-head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
-.page-head__title {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
 .back {
   font-size: var(--text-xs);
   color: var(--muted);
 }
 
-.page-head h1 {
-  margin: 0;
-  font-size: var(--text-2xl);
-  line-height: 1.25;
-  color: var(--fg-2);
-  word-break: break-all;
-}
-
-.page-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
 .mono {
   font-family: var(--font-mono);
-}
-
-@media (max-width: 860px) {
-  .page-actions {
-    margin-left: 0;
-    width: 100%;
-  }
 }
 </style>

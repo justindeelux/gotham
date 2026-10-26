@@ -215,6 +215,10 @@ const vi: ApplicationsMessages = {
     editTitle: "Sửa tên miền",
     hostAria: "Tên miền",
     portAria: "Cổng container đích",
+    portPlaceholder: "Tự động",
+    portHint:
+      "Để trống cổng để chọn khi triển khai (cổng image công bố, nếu không có thì cổng được tạo) và đặt PORT theo cổng đó.",
+    portAuto: "Tự động",
     serviceAria: "Service compose",
     protocolAria: "Giao thức",
     servicePlaceholder: "Service phát hành (mặc định)",
@@ -641,6 +645,15 @@ const vi: ApplicationsMessages = {
     certRerecorded: "Đã ghi nhận lại tên miền hiện tại của ứng dụng.",
     certDeleted: "Đã xóa cấu hình chứng chỉ. Tuyến vẫn chỉ dùng HTTP.",
     deleted: "Đã xóa ứng dụng {name}.",
+    redeployTitle: "Triển khai lại để áp dụng thay đổi",
+    redeployBody:
+      "Ứng dụng này có thay đổi đang chờ chỉ có hiệu lực trong container mới: {changes}.",
+    pendingChanges: {
+      domains: "tên miền hoặc cổng",
+      environment: "biến môi trường",
+      secrets: "secret",
+      storage: "lưu trữ",
+    },
   },
   delete: {
     title: "Vùng nguy hiểm",
@@ -669,7 +682,7 @@ const vi: ApplicationsMessages = {
   validation: {
     domain:
       "Nhập hostname thuần như app.example.com (chữ cái, chữ số, gạch ngang và dấu chấm; không dùng ký tự đại diện).",
-    domainPort: "Nhập cổng đích từ 1 đến 65535.",
+    domainPort: "Nhập cổng đích từ 1 đến 65535, hoặc để trống để chọn khi triển khai.",
     domainService: "Nhập tên service compose hợp lệ hoặc để trống để dùng service phát hành.",
   },
 };

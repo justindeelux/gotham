@@ -36,8 +36,8 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context, id pgtype.UUID) 
 }
 
 const createNotification = `-- name: CreateNotification :exec
-INSERT INTO notifications (id, event_key, resource_type, resource_id, project_id, name, host, error, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO notifications (id, event_key, resource_type, resource_id, project_id, name, host, error, detail, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `
 
 type CreateNotificationParams struct {
@@ -49,6 +49,7 @@ type CreateNotificationParams struct {
 	Name         string             `json:"name"`
 	Host         string             `json:"host"`
 	Error        string             `json:"error"`
+	Detail       string             `json:"detail"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -62,6 +63,7 @@ func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotification
 		arg.Name,
 		arg.Host,
 		arg.Error,
+		arg.Detail,
 		arg.CreatedAt,
 	)
 	return err
@@ -98,7 +100,7 @@ func (q *Queries) ListNotificationRecipients(ctx context.Context, projectID pgty
 }
 
 const listVisibleNotifications = `-- name: ListVisibleNotifications :many
-SELECT n.id, n.event_key, n.resource_type, n.resource_id, n.project_id, n.name, n.host, n.error, n.created_at FROM notifications n
+SELECT n.id, n.event_key, n.resource_type, n.resource_id, n.project_id, n.name, n.host, n.error, n.created_at, n.detail FROM notifications n
 WHERE EXISTS (
     SELECT 1 FROM users u
     WHERE u.id = $1
@@ -143,6 +145,7 @@ func (q *Queries) ListVisibleNotifications(ctx context.Context, arg ListVisibleN
 			&i.Host,
 			&i.Error,
 			&i.CreatedAt,
+			&i.Detail,
 		); err != nil {
 			return nil, err
 		}

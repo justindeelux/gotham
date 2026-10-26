@@ -5,9 +5,10 @@ title: Thông báo
 # Thông báo
 
 Gotham ghi nhận kết quả triển khai, sao lưu, thay đổi kết nối máy chủ, cảnh báo
-chứng chỉ sắp hết hạn và bản cập nhật Gotham mới trong hộp thông báo ngay trên
-bảng điều khiển, kể cả khi chưa cấu hình kênh nào. Bạn có thể thêm kênh để gửi cùng
-các sự kiện đó ra ngoài qua Discord, Slack, Telegram hoặc email.
+chứng chỉ sắp hết hạn, bản cập nhật Gotham mới và ứng dụng cần triển khai lại
+trong hộp thông báo ngay trên bảng điều khiển, kể cả khi chưa cấu hình kênh nào.
+Bạn có thể thêm kênh để gửi cùng các sự kiện đó ra ngoài qua Discord, Slack,
+Telegram hoặc email.
 
 ## Hộp thông báo
 
@@ -18,8 +19,10 @@ từ mới đến cũ. Mỗi mục hiển thị sự kiện, tài nguyên, tên 
 chỉ máy chủ hoặc lỗi nếu có, và thời gian tương đối.
 
 Hộp ghi nhận triển khai thành công, triển khai thất bại, sao lưu thành công, sao
-lưu thất bại, máy chủ mất kết nối, máy chủ kết nối lại, chứng chỉ sắp hết hạn và
-bản cập nhật Gotham mới. Sự kiện máy chủ, chứng chỉ và cập nhật chỉ hiện với chủ sở hữu. **Gửi thử** chỉ kiểm tra kênh, không tạo mục trong hộp
+lưu thất bại, máy chủ mất kết nối, máy chủ kết nối lại, chứng chỉ sắp hết hạn,
+bản cập nhật Gotham mới và ứng dụng cần triển khai lại. Mục triển khai lại nêu
+thiết lập đang chờ (tên miền hoặc cổng, biến môi trường, secret hoặc lưu trữ) và
+mở ứng dụng. Sự kiện máy chủ, chứng chỉ và cập nhật chỉ hiện với chủ sở hữu. **Gửi thử** chỉ kiểm tra kênh, không tạo mục trong hộp
 thông báo. Khi trang đang mở, thông báo mới xuất hiện mà không cần tải lại trang.
 Nếu kết nối trực tiếp không khả dụng, hộp thông báo được làm mới khoảng mỗi phút
 khi trang đang hiển thị.
@@ -62,15 +65,24 @@ Chọn phạm vi khi tạo hoặc sửa kênh:
 
 - Kênh **Mọi tài nguyên** nhận mọi sự kiện đã chọn, kể cả sự kiện máy chủ, chứng chỉ và cập nhật trên
   toàn instance.
-- Kênh ứng dụng nhận sự kiện triển khai của ứng dụng đó.
+- Kênh ứng dụng nhận sự kiện triển khai của ứng dụng đó và sự kiện cần triển
+  khai lại của ứng dụng đó.
 - Kênh cơ sở dữ liệu nhận sự kiện sao lưu của cơ sở dữ liệu đó.
 
 Các sự kiện đăng ký được là `deploy_success`, `deploy_failure`, `backup_success`,
-`backup_failure`, `server_offline`, `server_online`, `certificate_expiring` và
-`update_available`. Kênh mới chỉ chọn sẵn bốn sự
+`backup_failure`, `server_offline`, `server_online`, `certificate_expiring`,
+`update_available` và `redeploy_needed`. Kênh mới chỉ chọn sẵn bốn sự
 kiện triển khai/sao lưu. Với cả kênh cũ và mới, hãy sửa kênh **Mọi tài nguyên** và
 chọn thêm sự kiện máy chủ, chứng chỉ hoặc cập nhật nếu muốn nhận. Kênh ứng dụng và cơ sở dữ
-liệu không nhận các sự kiện trên toàn instance này. Kênh bị tắt không nhận gì.
+liệu không nhận các sự kiện trên toàn instance này. `redeploy_needed` cũng phải
+chọn thêm, và chỉ kênh **Mọi tài nguyên** hoặc kênh gắn với chính ứng dụng đó mới
+nhận được. Kênh bị tắt không nhận gì.
+
+Ứng dụng cần triển khai lại khi một thiết lập chỉ áp dụng cho container mới thay
+đổi: tên miền hoặc cổng, biến môi trường, secret hoặc lưu trữ. Đúng một sự kiện
+`redeploy_needed` được ghi ở thay đổi đầu tiên sau một lần triển khai thành công;
+các thay đổi tiếp theo khi vẫn đang chờ sẽ không báo, và lần triển khai thành công
+kế tiếp xóa cờ để thay đổi sau đó báo lại.
 
 Máy chủ được coi là mất kết nối sau ít nhất 30 giây không gửi nhịp tim. Gotham
 kiểm tra mỗi 10 giây ngay cả khi không ai mở trang máy chủ, và chờ 30 giây sau khi

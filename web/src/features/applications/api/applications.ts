@@ -30,6 +30,7 @@ export interface Application {
   primary_domain: string;
   server_id: string | null;
   server_name: string;
+  pending_changes: string[];
   created_at: string;
   updated_at: string;
 }

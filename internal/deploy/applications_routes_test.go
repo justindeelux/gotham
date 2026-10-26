@@ -46,7 +46,7 @@ var applicationWireKeys = []string{
 	"branch", "build_pack",
 	"image_ref", "has_registry_credential",
 	"primary_domain", "server_id",
-	"server_name", "created_at", "updated_at",
+	"server_name", "pending_changes", "created_at", "updated_at",
 }
 
 var applicationListWireKeys = []string{
@@ -57,7 +57,7 @@ var applicationListWireKeys = []string{
 	"branch", "build_pack",
 	"image_ref", "has_registry_credential",
 	"primary_domain", "server_id",
-	"server_name", "created_at", "updated_at",
+	"server_name", "pending_changes", "created_at", "updated_at",
 }
 
 func assertJSONKeys(t *testing.T, body []byte, want ...string) {

@@ -14,7 +14,11 @@ the control plane; the node terminates traffic and performs ACME.
 Open an application and use its **Domains** tab. **Add domain** asks for:
 
 - **Host** — a DNS name such as `app.example.com`.
-- **Port** — the container port the application listens on (1–65535).
+- **Port** — the container port the application listens on (1–65535), or empty
+  to pick it at deploy time: the image's exposed port when the source declares
+  one (Dockerfile `EXPOSE` or a compose service port), otherwise a generated port.
+  Gotham publishes the chosen port and sets `PORT` to it. A typed port overrides
+  that choice.
 - **Protocol** — `http` or `https`.
 - **Service** — only for compose applications, to route to one compose
   service instead of the release service. Picking a service pre-fills its

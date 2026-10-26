@@ -579,6 +579,10 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 	if err != nil {
 		return err
 	}
+	domains, err = o.resolveAutoDomainPorts(ctx, st.app, domains, "")
+	if err != nil {
+		return err
+	}
 	domainPorts, primaryPort := domainTargetPorts(domains)
 	request, err := buildRunRequest(st.app, st.dep, envVars, secrets, storages, o.secret, domainPorts, primaryPort)
 	if err != nil {
@@ -767,6 +771,7 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 	if to.Terminal() {
 		o.notify(ctx, st, to)
 		if to == StateRunning {
+			o.clearPendingChanges(ctx, st.app.ID)
 			detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			o.publishTask(detached, st.app, st.dep, taskevents.StatusSucceeded, "", 100, "")
 			cancel()

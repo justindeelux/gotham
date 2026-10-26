@@ -176,7 +176,7 @@ describe("domain mutations work through the table and modal", () => {
     expect(wrapper.text()).toContain("www.example.com");
     expect(vi.mocked(addDomain)).toHaveBeenCalledWith(
       appId,
-      expect.objectContaining({ domain: "www.example.com", port: 80 }),
+      expect.objectContaining({ domain: "www.example.com", port: 0 }),
     );
 
     const wwwRow = () =>

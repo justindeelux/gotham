@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -86,8 +87,65 @@ type Application struct {
 	ProjectID                  uuid.UUID
 	ProjectName                string
 	ServerName                 string
+	PendingChanges             []string
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
+}
+
+// PendingChange categories match what a container reads at creation time, so
+// the banner and the notification can name the same four kinds of change.
+const (
+	PendingChangeDomains     = "domains"
+	PendingChangeEnvironment = "environment"
+	PendingChangeSecrets     = "secrets"
+	PendingChangeStorage     = "storage"
+)
+
+var pendingChangeOrder = map[string]int{
+	PendingChangeDomains:     0,
+	PendingChangeEnvironment: 1,
+	PendingChangeSecrets:     2,
+	PendingChangeStorage:     3,
+}
+
+// SortPendingChanges keeps the banner and notification order stable.
+func SortPendingChanges(changes []string) []string {
+	sorted := append([]string(nil), changes...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		left, okLeft := pendingChangeOrder[sorted[i]]
+		right, okRight := pendingChangeOrder[sorted[j]]
+		if okLeft && okRight {
+			return left < right
+		}
+		return sorted[i] < sorted[j]
+	})
+	return sorted
+}
+
+func PendingChangeLabel(change string) string {
+	switch change {
+	case PendingChangeDomains:
+		return "domains or ports"
+	case PendingChangeEnvironment:
+		return "environment variables"
+	case PendingChangeSecrets:
+		return "secrets"
+	case PendingChangeStorage:
+		return "storage"
+	default:
+		return change
+	}
+}
+
+func PendingChangeLabels(changes []string) string {
+	labels := make([]string, 0, len(changes))
+	for _, change := range SortPendingChanges(changes) {
+		if change == "" {
+			continue
+		}
+		labels = append(labels, PendingChangeLabel(change))
+	}
+	return strings.Join(labels, ", ")
 }
 
 const (

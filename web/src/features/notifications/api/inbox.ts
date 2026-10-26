@@ -15,6 +15,7 @@ export interface NotificationItem {
   name: string;
   host: string;
   error: string;
+  detail?: string;
   created_at: string;
 }
 

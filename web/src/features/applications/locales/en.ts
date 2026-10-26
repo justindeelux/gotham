@@ -213,6 +213,10 @@ const en = {
     editTitle: "Edit domain",
     hostAria: "Domain hostname",
     portAria: "Target container port",
+    portPlaceholder: "Auto",
+    portHint:
+      "Leave the port empty to pick it at deploy time (the image's exposed port, otherwise a generated one) and set PORT to it.",
+    portAuto: "Auto",
     serviceAria: "Compose service",
     protocolAria: "Protocol",
     servicePlaceholder: "Release service (default)",
@@ -640,6 +644,15 @@ const en = {
     certRerecorded: "Certificate re-recorded the current application domain.",
     certDeleted: "Certificate configuration deleted. The route stays HTTP-only.",
     deleted: "Application {name} deleted.",
+    redeployTitle: "Redeploy to apply changes",
+    redeployBody:
+      "This application has pending changes that only take effect in a new container: {changes}.",
+    pendingChanges: {
+      domains: "domains or ports",
+      environment: "environment variables",
+      secrets: "secrets",
+      storage: "storage",
+    },
   },
   delete: {
     title: "Danger zone",
@@ -668,7 +681,7 @@ const en = {
   validation: {
     domain:
       "Enter a plain hostname such as app.example.com (letters, digits, hyphens and dots; no wildcard).",
-    domainPort: "Enter a target port between 1 and 65535.",
+    domainPort: "Enter a target port between 1 and 65535, or leave it empty to pick one at deploy time.",
     domainService: "Enter a valid compose service name or leave it empty for the release service.",
   },
 };

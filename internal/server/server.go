@@ -554,6 +554,12 @@ func (n deployNotifier) DeployFinished(ctx context.Context, result deploy.Deploy
 	}
 }
 
+func (n deployNotifier) RedeployNeeded(ctx context.Context, result deploy.RedeployResult) {
+	if n.primary != nil {
+		n.primary.RedeployNeeded(ctx, result)
+	}
+}
+
 func (s *Server) taskSnapshot(projectID string) []string {
 	tracker, ok := s.deploy.(interface{ TaskTracker() *taskevents.Tracker })
 	if !ok || tracker == nil {

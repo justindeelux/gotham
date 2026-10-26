@@ -92,17 +92,28 @@ const showRenameWarning = computed<boolean>(
             @update:value="(value: string) => emit('update:domain', value)"
           />
         </NFormItem>
-        <NFormItem :label="t('applications.domain.port')">
-          <NInputNumber
-            :value="props.port"
-            class="domain-port"
-            :min="1"
-            :max="65535"
-            placeholder="3000"
-            :input-props="{ 'aria-label': t('applications.domain.portAria') }"
-            @update:value="(value: number | null) => emit('update:port', value)"
-          />
-        </NFormItem>
+        <div class="domain-routing-row">
+          <NFormItem :label="t('applications.domain.port')" class="domain-routing-field">
+            <NInputNumber
+              :value="props.port"
+              class="domain-port"
+              :min="1"
+              :max="65535"
+              :placeholder="t('applications.domain.portPlaceholder')"
+              :input-props="{ 'aria-label': t('applications.domain.portAria') }"
+              @update:value="(value: number | null) => emit('update:port', value)"
+            />
+          </NFormItem>
+          <NFormItem :label="t('applications.domain.protocol')" class="domain-routing-field">
+            <NSelect
+              :value="props.protocol"
+              class="domain-protocol"
+              :options="props.protocolOptions"
+              :aria-label="t('applications.domain.protocolAria')"
+              @update:value="(value: DomainProtocol) => emit('update:protocol', value)"
+            />
+          </NFormItem>
+        </div>
         <NFormItem
           v-if="props.isCompose"
           :label="t('applications.domain.service')"
@@ -119,16 +130,10 @@ const showRenameWarning = computed<boolean>(
             @update:value="(value: string | null) => emit('service-change', value)"
           />
         </NFormItem>
-        <NFormItem :label="t('applications.domain.protocol')">
-          <NSelect
-            :value="props.protocol"
-            class="domain-protocol"
-            :options="props.protocolOptions"
-            :aria-label="t('applications.domain.protocolAria')"
-            @update:value="(value: DomainProtocol) => emit('update:protocol', value)"
-          />
-        </NFormItem>
       </NForm>
+      <NText depth="3" class="small">
+        {{ t("applications.domain.portHint") }}
+      </NText>
       <NText v-if="props.isCompose" depth="3" class="small">
         {{ t("applications.domain.serviceHint") }}
       </NText>
@@ -158,12 +163,20 @@ const showRenameWarning = computed<boolean>(
 
 .domain-port {
   width: 100%;
-  max-width: 180px;
 }
 
 .domain-service,
 .domain-protocol {
   width: 100%;
-  max-width: 320px;
+}
+
+.domain-routing-row {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.domain-routing-field {
+  flex: 1;
+  min-width: 0;
 }
 </style>

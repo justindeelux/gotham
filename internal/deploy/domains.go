@@ -23,8 +23,8 @@ func normalizeDomainInput(app Application, in DomainInput) (ApplicationDomain, e
 	if err := proxy.ValidateDomain(domain); err != nil {
 		return ApplicationDomain{}, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
-	if in.Port < 1 || in.Port > 65535 {
-		return ApplicationDomain{}, fmt.Errorf("%w: port must be between 1 and 65535", ErrValidation)
+	if in.Port < 0 || in.Port > 65535 {
+		return ApplicationDomain{}, fmt.Errorf("%w: port must be between 0 and 65535", ErrValidation)
 	}
 	protocol := NormalizeProtocol(in.Protocol)
 	if !ValidProtocol(protocol) {
@@ -106,6 +106,7 @@ func (s *Service) AddDomain(ctx context.Context, userID, appID uuid.UUID, in Dom
 	if err != nil {
 		return ApplicationDomain{}, err
 	}
+	s.markPendingChanges(ctx, app, PendingChangeDomains)
 	s.syncProxyServer(ctx, app.ServerID)
 	return created, nil
 }
@@ -178,8 +179,18 @@ func (s *Service) UpdateDomain(ctx context.Context, userID, appID, domainID uuid
 	if err != nil {
 		return ApplicationDomain{}, err
 	}
+	if domainSettingsChanged(*target, next) {
+		s.markPendingChanges(ctx, app, PendingChangeDomains)
+	}
 	s.syncProxyServer(ctx, app.ServerID)
 	return updated, nil
+}
+
+func domainSettingsChanged(previous, next ApplicationDomain) bool {
+	return previous.Domain != next.Domain ||
+		previous.Port != next.Port ||
+		previous.Service != next.Service ||
+		previous.Protocol != next.Protocol
 }
 
 func ensureHTTPSIntent(ctx context.Context, repo Repository, app Application, domain ApplicationDomain) error {
@@ -274,6 +285,7 @@ func (s *Service) RemoveDomain(ctx context.Context, userID, appID, domainID uuid
 	if err != nil {
 		return err
 	}
+	s.markPendingChanges(ctx, app, PendingChangeDomains)
 	s.syncProxyServer(ctx, app.ServerID)
 	return nil
 }
@@ -331,6 +343,7 @@ func (s *Service) SetPrimaryDomain(ctx context.Context, userID, appID, domainID 
 	if err != nil {
 		return err
 	}
+	s.markPendingChanges(ctx, app, PendingChangeDomains)
 	s.syncProxyServer(ctx, app.ServerID)
 	return nil
 }

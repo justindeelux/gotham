@@ -523,7 +523,12 @@ func (s *Service) ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entri
 	if !Enabled() {
 		return nil, ErrDisabled
 	}
-	if _, err := s.application(ctx, userID, appID, true); err != nil {
+	app, err := s.application(ctx, userID, appID, true)
+	if err != nil {
+		return nil, err
+	}
+	previousVars, previousSecrets, err := s.repo.ListEnvConfig(ctx, appID)
+	if err != nil {
 		return nil, err
 	}
 	envVars, secrets, err := s.prepareEnv(ctx, appID, entries)
@@ -532,6 +537,9 @@ func (s *Service) ReplaceEnv(ctx context.Context, userID, appID uuid.UUID, entri
 	}
 	if err := s.repo.ReplaceEnvVars(ctx, appID, envVars, secrets); err != nil {
 		return nil, err
+	}
+	if changes := envPendingChanges(previousVars, previousSecrets, envVars, secrets); len(changes) > 0 {
+		s.markPendingChanges(ctx, app, changes...)
 	}
 	return s.envEntries(ctx, appID)
 }
@@ -568,9 +576,16 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if err != nil {
 		return nil, err
 	}
+	previous, err := s.repo.ListStorages(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
 	s.warnStorageChanges(ctx, appID, storages, normalized)
 	if err := s.repo.ReplaceStorages(ctx, appID, normalized); err != nil {
 		return nil, err
+	}
+	if storagesChanged(previous, normalized) {
+		s.markPendingChanges(ctx, app, PendingChangeStorage)
 	}
 	return s.GetStorages(ctx, userID, appID)
 }

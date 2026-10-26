@@ -9,6 +9,7 @@ export const notificationItemSchema = z.object({
   name: z.string(),
   host: z.string(),
   error: z.string(),
+  detail: z.string().optional(),
   created_at: z.string(),
 });
 

@@ -14,7 +14,11 @@ lượng và thực hiện ACME.
 Mở một ứng dụng và dùng tab **Tên miền** của nó. **Thêm tên miền** hỏi:
 
 - **Tên miền** — một tên DNS như `app.example.com`.
-- **Cổng** — cổng container mà ứng dụng lắng nghe (1–65535).
+- **Cổng** — cổng container mà ứng dụng lắng nghe (1–65535), hoặc để trống để
+  chọn khi triển khai: cổng image công bố khi nguồn có khai báo (Dockerfile
+  `EXPOSE` hoặc cổng của compose service), nếu không thì cổng được tạo. Gotham
+  công bố cổng đã chọn và đặt `PORT` theo cổng đó. Cổng bạn nhập sẽ ghi đè lựa
+  chọn này.
 - **Giao thức** — `http` hoặc `https`.
 - **Service** — chỉ với ứng dụng compose, để định tuyến tới một compose service
   thay vì dịch vụ của bản phát hành. Chọn một service sẽ điền sẵn cổng mà nó khai

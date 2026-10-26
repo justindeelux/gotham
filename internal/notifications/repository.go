@@ -184,6 +184,7 @@ func (r *storeRepository) CreateNotification(ctx context.Context, notification N
 			Name:         notification.Name,
 			Host:         notification.Host,
 			Error:        notification.Error,
+			Detail:       notification.Detail,
 			CreatedAt:    pgtype.Timestamptz{Time: notification.CreatedAt, Valid: true},
 		}); err != nil {
 			return fmt.Errorf("notifications: create notification: %w", err)
@@ -245,6 +246,7 @@ func notificationFromRow(row sqlc.Notification) Notification {
 		Name:       row.Name,
 		Host:       row.Host,
 		Error:      row.Error,
+		Detail:     row.Detail,
 		CreatedAt:  row.CreatedAt.Time,
 	}
 	if row.ResourceType != nil {

@@ -31,7 +31,14 @@ const vi = {
       server_online: "Máy chủ {name} đã kết nối lại",
       certificate_expiring: "Chứng chỉ cho {name} sắp hết hạn",
       update_available: "Đã có Gotham {name}",
+      redeploy_needed: "{name} cần triển khai lại: {changes}",
       unknown: "Cập nhật cho {name} trên {host}",
+    },
+    changes: {
+      domains: "tên miền hoặc cổng",
+      environment: "biến môi trường",
+      secrets: "secret",
+      storage: "lưu trữ",
     },
   },
   card: {
@@ -73,6 +80,7 @@ const vi = {
     server_online: "Máy chủ đã kết nối lại",
     certificate_expiring: "Chứng chỉ sắp hết hạn",
     update_available: "Có bản cập nhật Gotham",
+    redeploy_needed: "Cần triển khai lại",
   },
   scopeLabel: {
     allResources: "Mọi tài nguyên",

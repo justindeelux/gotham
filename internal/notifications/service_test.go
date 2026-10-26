@@ -220,6 +220,83 @@ func TestFailingChannelDoesNotStopOthers(t *testing.T) {
 	})
 }
 
+func TestRedeployNeededMapsEventAndHonoursChannelScope(t *testing.T) {
+	appID := uuid.New()
+	projectID := uuid.New()
+	memberID := uuid.New()
+	repo := newFakeRepository()
+	repo.resourceProjects[appID] = projectID
+	repo.notificationRecipients[projectID] = []uuid.UUID{memberID}
+
+	instanceWide := repo.seed(sampleChannel(t))
+	override := repo.seed(Channel{
+		ID: uuid.New(), Name: "app override", Kind: KindSlack,
+		Enabled: true, ResourceType: ResourceApplication, ResourceID: appID,
+		Events: AllEvents, SealedConfig: instanceWide.SealedConfig,
+	})
+	otherResource := repo.seed(Channel{
+		ID: uuid.New(), Name: "other app", Kind: KindSlack,
+		Enabled: true, ResourceType: ResourceApplication, ResourceID: uuid.New(),
+		Events: AllEvents, SealedConfig: instanceWide.SealedConfig,
+	})
+	database := repo.seed(Channel{
+		ID: uuid.New(), Name: "database", Kind: KindSlack,
+		Enabled: true, ResourceType: ResourceDatabase, ResourceID: uuid.New(),
+		Events: AllEvents, SealedConfig: instanceWide.SealedConfig,
+	})
+	service := newTestService(t, repo)
+	notifiers := map[uuid.UUID]*fakeNotifier{}
+	for _, channel := range []Channel{instanceWide, override, otherResource, database} {
+		notifiers[channel.ID] = newFakeNotifier()
+	}
+	setFactory(t, service, notifiers)
+
+	service.RedeployNeeded(context.Background(), deploy.RedeployResult{
+		ApplicationID: appID,
+		Application:   "shop-web",
+		Changes:       []string{"environment", "domains"},
+		At:            time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC),
+	})
+
+	waitFor(t, "the scoped deliveries and inbox row", func() bool {
+		return len(notifiers[instanceWide.ID].delivered()) == 1 &&
+			len(notifiers[override.ID].delivered()) == 1 &&
+			len(repo.notificationsSnapshot()) == 1
+	})
+	for id, notifier := range notifiers {
+		want := 0
+		if id == instanceWide.ID || id == override.ID {
+			want = 1
+		}
+		if got := len(notifier.delivered()); got != want {
+			t.Errorf("channel %s delivered %d events, want %d", id, got, want)
+		}
+	}
+	event := notifiers[instanceWide.ID].delivered()[0]
+	if event.Key() != EventRedeployNeeded {
+		t.Errorf("key = %q, want %q", event.Key(), EventRedeployNeeded)
+	}
+	if event.ResourceType != ResourceApplication || event.ResourceID != appID {
+		t.Errorf("resource = %s/%s, want application/%s", event.ResourceType, event.ResourceID, appID)
+	}
+	if event.Detail != "domains,environment" {
+		t.Errorf("detail = %q, want the canonical category codes", event.Detail)
+	}
+	if summary := event.Summary(); !strings.Contains(summary, "domains or ports") ||
+		!strings.Contains(summary, "environment variables") {
+		t.Errorf("summary = %q, want the pending categories", summary)
+	}
+
+	notification := repo.notificationsSnapshot()[0]
+	if notification.EventKey != EventRedeployNeeded || notification.Detail != "domains,environment" {
+		t.Errorf("notification = %+v, want a redeploy row carrying the categories", notification)
+	}
+	if notification.ResourceType != ResourceApplication || notification.ResourceID != appID {
+		t.Errorf("notification resource = %s/%s, want application/%s",
+			notification.ResourceType, notification.ResourceID, appID)
+	}
+}
+
 func TestDeployFinishedMapsTerminalOutcome(t *testing.T) {
 	appID := uuid.New()
 	repo := newFakeRepository()

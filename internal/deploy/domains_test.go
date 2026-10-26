@@ -209,6 +209,23 @@ func TestAddDomainRejectsConflicts(t *testing.T) {
 	}
 }
 
+func TestAddDomainAcceptsEmptyPort(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := newTestService(t, repo)
+
+	created, err := svc.AddDomain(context.Background(), userID, app.ID, DomainInput{
+		Domain: "auto.example.com", Port: 0, Protocol: ProtocolHTTPS,
+	})
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	if created.Port != 0 {
+		t.Errorf("port = %d, want the empty (deploy-time) port", created.Port)
+	}
+}
+
 func TestAddDomainValidatesRoutingTarget(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}
@@ -219,7 +236,7 @@ func TestAddDomainValidatesRoutingTarget(t *testing.T) {
 		name string
 		in   DomainInput
 	}{
-		{"port zero", DomainInput{Domain: "zero.example.com"}},
+		{"port negative", DomainInput{Domain: "zero.example.com", Port: -1}},
 		{"port too high", DomainInput{Domain: "high.example.com", Port: 70000}},
 		{"bad protocol", DomainInput{Domain: "proto.example.com", Port: 3000, Protocol: "tcp"}},
 		{"service on a non-compose app", DomainInput{Domain: "svc.example.com", Port: 3000, Service: "web"}},

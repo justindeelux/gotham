@@ -428,6 +428,7 @@ export function useApplicationDetail() {
         return;
       }
       envDraft.value = [...saved];
+      await appsStore.fetchApplication(target).catch(() => undefined);
       message.success(tr("applications.detail.envSaved"));
     } catch (error) {
       if (target !== appId.value || !draftGeneration.isCurrent(token)) {
@@ -450,6 +451,7 @@ export function useApplicationDetail() {
         return;
       }
       storagesDraft.value = [...saved];
+      await appsStore.fetchApplication(target).catch(() => undefined);
       message.success(tr("applications.detail.volumesSaved"));
     } catch (error) {
       if (target !== appId.value || !draftGeneration.isCurrent(token)) {
@@ -706,6 +708,12 @@ export function useApplicationDetail() {
       containerStopped.value = false;
     },
   );
+
+  watch(active, (current, previous) => {
+    if (previous !== null && current === null && appId.value !== "") {
+      void appsStore.fetchApplication(appId.value).catch(() => undefined);
+    }
+  });
 
   watch(
     [() => application.value?.id ?? "", () => route.query.tab],

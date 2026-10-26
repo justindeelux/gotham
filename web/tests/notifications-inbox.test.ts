@@ -234,3 +234,26 @@ describe("update availability notifications", () => {
     );
   });
 });
+
+describe("redeploy-needed notifications", () => {
+  it("localizes the pending categories and uses a warning tone", () => {
+    const params = {
+      name: "shop-web",
+      host: "",
+      error: "",
+      detail: "domains,environment",
+    };
+    expect(notificationText("redeploy_needed", params)).toBe(
+      "shop-web needs a redeploy: domains or ports, environment variables",
+    );
+    expect(notificationIcon("redeploy_needed")).toBe("rocket");
+    expect(notificationTone("redeploy_needed")).toBe("warning");
+    syncComposerLocale("vi");
+    expect(notificationText("redeploy_needed", params)).toBe(
+      "shop-web cần triển khai lại: tên miền hoặc cổng, biến môi trường",
+    );
+    expect(notificationText("redeploy_needed", { ...params, detail: "secrets" })).toBe(
+      "shop-web cần triển khai lại: secret",
+    );
+  });
+});

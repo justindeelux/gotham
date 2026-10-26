@@ -230,7 +230,7 @@ func TestRoutesForServerDiagnosesUnroutableRows(t *testing.T) {
 		want       string
 	}{
 		"invalid domain": {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "bad domain", Port: 80}}, ContainerID: "c"}, nil, "invalid domain"},
-		"no port":        {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com"}}, ContainerID: "c"}, nil, "no container port"},
+		"no port":        {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com"}}, ContainerID: "c"}, nil, "redeploy to apply"},
 		"pending":        {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}}, nil, "no running deployment"},
 		"container gone": {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, ContainerID: "gone"}, nil, "no running deployment container"},
 		"not published": {
@@ -243,7 +243,7 @@ func TestRoutesForServerDiagnosesUnroutableRows(t *testing.T) {
 			app: ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, ContainerID: "c1"},
 			containers: []containers.Container{{ID: "c1", Name: "app", State: "running",
 				Ports: []string{"8080:80"}, PortsReported: false}},
-			want: "engine-reported",
+			want: "redeploy to apply",
 		},
 	}
 	for name, tc := range cases {

@@ -176,6 +176,73 @@ func composePortEntries(raw any) ([]any, error) {
 	return entries, nil
 }
 
+// composeServiceContainerPort reads the first declared container port of a
+// compose service, so an empty domain port can adopt what the service already
+// listens on instead of inventing a different one.
+func composeServiceContainerPort(content, service string) int32 {
+	service = strings.TrimSpace(service)
+	if strings.TrimSpace(content) == "" || service == "" {
+		return 0
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
+		return 0
+	}
+	services, ok := doc["services"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	entry, ok := services[service].(map[string]any)
+	if !ok {
+		return 0
+	}
+	for _, key := range []string{"ports", "expose"} {
+		entries, err := composePortEntries(entry[key])
+		if err != nil {
+			continue
+		}
+		for _, raw := range entries {
+			if port := composeEntryContainerPort(raw); port > 0 {
+				return port
+			}
+		}
+	}
+	return 0
+}
+
+func composeEntryContainerPort(raw any) int32 {
+	switch value := raw.(type) {
+	case string:
+		spec := strings.TrimSpace(value)
+		if index := strings.IndexByte(spec, '/'); index >= 0 {
+			spec = spec[:index]
+		}
+		parts := strings.Split(spec, ":")
+		if len(parts) == 0 {
+			return 0
+		}
+		spec = parts[len(parts)-1]
+		if index := strings.IndexByte(spec, '-'); index > 0 {
+			spec = spec[:index]
+		}
+		port, err := strconv.Atoi(spec)
+		if err == nil && port > 0 && port <= 65535 {
+			return int32(port)
+		}
+	case map[string]any:
+		port, err := strconv.Atoi(strings.TrimSpace(scalarString(value["target"])))
+		if err == nil && port > 0 && port <= 65535 {
+			return int32(port)
+		}
+	default:
+		port, err := strconv.Atoi(strings.TrimSpace(scalarString(raw)))
+		if err == nil && port > 0 && port <= 65535 {
+			return int32(port)
+		}
+	}
+	return 0
+}
+
 func isLoopbackAddress(host string) bool {
 	trimmed := strings.TrimSpace(host)
 	if trimmed == "" {

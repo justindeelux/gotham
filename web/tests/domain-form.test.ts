@@ -9,12 +9,12 @@ import {
 import { extractComposeServicePorts } from "@/features/applications/utils/compose";
 
 describe("domain routing schemas", () => {
-  it("accepts 1-65535 target ports only", () => {
+  it("accepts 1-65535 target ports, or an empty (auto) port", () => {
     expect(domainPortSchema.safeParse(1).success).toBe(true);
     expect(domainPortSchema.safeParse(65535).success).toBe(true);
     expect(domainPortSchema.safeParse(0).success).toBe(false);
     expect(domainPortSchema.safeParse(65536).success).toBe(false);
-    expect(domainPortSchema.safeParse(null).success).toBe(false);
+    expect(domainPortSchema.safeParse(null).success).toBe(true);
     expect(domainPortSchema.safeParse(1.5).success).toBe(false);
   });
 

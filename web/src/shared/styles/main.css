@@ -42,7 +42,7 @@ h5 {
 h1 {
   font-size: var(--text-2xl);
   font-weight: 700;
-  line-height: 1.25;
+  line-height: var(--leading-title);
 }
 
 h2 {

@@ -82,7 +82,9 @@
 
   --leading-body: 1.375;
   --leading-tight: 1.1;
+  --leading-title: 1.25;
   --tracking-display: -0.02em;
+  --tracking-eyebrow: 0.08em;
 
   --space-1: 4px;
   --space-2: 8px;

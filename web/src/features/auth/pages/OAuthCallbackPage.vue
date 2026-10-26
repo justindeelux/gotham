@@ -99,8 +99,8 @@ onMounted(async () => {
 }
 
 .callback-title {
-  margin: 0 0 4px;
-  font-size: 20px;
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-xl);
   font-weight: 700;
   color: var(--fg-2);
 }

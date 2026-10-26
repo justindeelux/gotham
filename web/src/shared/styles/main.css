@@ -42,7 +42,7 @@ h5 {
 h1 {
   font-size: var(--text-2xl);
   font-weight: 700;
-  line-height: 1.25;
+  line-height: var(--leading-title);
 }
 
 h2 {
@@ -317,22 +317,53 @@ a {
 .page-head {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-5);
+  gap: var(--space-4);
   margin-bottom: var(--space-6);
   flex-wrap: wrap;
 }
 
 .page-head .eyebrow {
-  margin-bottom: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  line-height: var(--leading-body);
+  color: var(--muted);
+  margin: 0 0 var(--space-2);
 }
 
 .page-head h1 {
-  margin-bottom: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  line-height: var(--leading-title);
+  color: var(--fg-2);
+  margin: 0 0 var(--space-2);
 }
 
 .page-desc {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: var(--leading-body);
   color: var(--muted);
-  max-width: 74ch;
+  margin: 0;
+  max-width: 72ch;
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+
+@media (max-width: 860px) {
+  .page-actions {
+    margin-left: 0;
+  }
 }
 
 .form-alert {

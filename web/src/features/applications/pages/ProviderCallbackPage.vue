@@ -75,7 +75,7 @@ async function backToGitSources(): Promise<void> {
 
 .callback-title {
   margin: 0;
-  font-size: 20px;
+  font-size: var(--text-xl);
   font-weight: 700;
 }
 </style>

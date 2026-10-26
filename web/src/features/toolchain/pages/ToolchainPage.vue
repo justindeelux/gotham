@@ -545,33 +545,9 @@ watch(
   flex-direction: column;
   gap: var(--space-4);
 }
-.page-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
 .page-title {
   flex: 1 1 16rem;
   min-width: 0;
-}
-.eyebrow {
-  color: var(--fg-3);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin: 0 0 var(--space-1);
-}
-.page-head h1 {
-  margin: 0;
-  font-size: var(--text-2xl);
-  color: var(--fg-1);
-}
-.page-desc {
-  color: var(--fg-3);
-  margin: var(--space-2) 0 0;
-  max-width: 640px;
 }
 .header-controls {
   display: flex;
@@ -604,7 +580,7 @@ watch(
 .footer-status {
   margin: 0;
   margin-right: auto;
-  color: var(--fg-3);
+  color: var(--muted);
   font-size: var(--text-sm);
 }
 .footer-actions {

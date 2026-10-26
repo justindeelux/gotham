@@ -225,43 +225,6 @@ function unit(one: string, other: string, count: number): string {
   container-type: inline-size;
 }
 
-.page-head {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
-.eyebrow {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 0 0 var(--space-2);
-}
-
-.page-head h1 {
-  font-size: var(--text-2xl);
-  line-height: 1.25;
-  color: var(--fg-2);
-  margin: 0 0 var(--space-2);
-}
-
-.page-desc {
-  color: var(--muted);
-  margin: 0;
-  max-width: 72ch;
-}
-
-.page-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
 .toolbar {
   display: flex;
   gap: var(--space-3);
@@ -308,10 +271,6 @@ function unit(one: string, other: string, count: number): string {
 @container (max-width: 480px) {
   .project-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .page-actions {
-    margin-left: 0;
   }
 }
 </style>

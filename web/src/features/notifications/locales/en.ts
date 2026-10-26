@@ -15,6 +15,21 @@ const en = {
     empty: "No channels yet.",
     createFirst: "Create the first channel",
   },
+  inbox: {
+    title: "Notifications",
+    bell: "Notifications",
+    bellUnread: "Notifications, {count} unread",
+    unreadCount: "{count} unread",
+    empty: "No notifications yet.",
+    unavailable: "This item is no longer available.",
+    events: {
+      deploy_success: "{name} deployed to {host}",
+      deploy_failure: "{name} failed to deploy on {host}",
+      backup_success: "Backup of {name} on {host} succeeded",
+      backup_failure: "Backup of {name} on {host} failed",
+      unknown: "Update for {name} on {host}",
+    },
+  },
   card: {
     enabledLabel: "Enabled",
     enableAria: "Enable {name}",

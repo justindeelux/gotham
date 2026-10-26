@@ -15,6 +15,21 @@ const vi = {
     empty: "Chưa có kênh nào.",
     createFirst: "Tạo kênh đầu tiên",
   },
+  inbox: {
+    title: "Thông báo",
+    bell: "Thông báo",
+    bellUnread: "Thông báo, {count} chưa đọc",
+    unreadCount: "{count} chưa đọc",
+    empty: "Chưa có thông báo nào.",
+    unavailable: "Mục này không còn khả dụng.",
+    events: {
+      deploy_success: "{name} đã triển khai tới {host}",
+      deploy_failure: "{name} triển khai thất bại trên {host}",
+      backup_success: "Sao lưu {name} trên {host} thành công",
+      backup_failure: "Sao lưu {name} trên {host} thất bại",
+      unknown: "Cập nhật cho {name} trên {host}",
+    },
+  },
   card: {
     enabledLabel: "Đang bật",
     enableAria: "Bật {name}",

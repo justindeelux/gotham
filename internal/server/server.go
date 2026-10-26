@@ -82,6 +82,7 @@ type Server struct {
 	toolchain         toolchain.ToolchainService
 	jobLeases         *databases.JobLeases
 	notify            notifications.NotificationService
+	certificateExpiry *proxy.CertificateExpiryObserver
 	webhooks          *webhooks.Service
 	metrics           *servers.MetricsSweeper
 	sessionSweeper    *auth.SessionSweeper
@@ -371,11 +372,16 @@ func (s *Server) routes() (http.Handler, error) {
 				setter.SetGitHubControlPlaneURLSource(s.controlPlaneURL)
 			}
 		}
+		certificateStatus := proxy.NewDefaultCertificateStatusService(statusConfig)
+		expiryNotifier, _ := s.notify.(proxy.CertificateExpiryNotifier)
+		s.certificateExpiry = proxy.NewCertificateExpiryObserver(proxy.CertificateExpiryConfig{
+			Store: sslConfig.Store, Status: certificateStatus, Notifier: expiryNotifier, Logger: s.logger,
+		})
 		proxy.Mount(api, s.resourceAuth(), platformOnly, s.proxy,
 			proxy.NewDefaultProviderService(sslConfig),
 			proxy.NewDefaultCertificateService(sslConfig),
 			proxy.NewDefaultRedirectService(redirectConfig),
-			proxy.NewDefaultCertificateStatusService(statusConfig))
+			certificateStatus)
 		MountProxyRouters(api, platformOnly, proxy.AsRouterService(s.proxy))
 
 		s.updates = s.updatesService()
@@ -969,6 +975,11 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	if s.certificateExpiry != nil {
+		expiryCtx, cancelExpiry := context.WithCancel(ctx)
+		defer cancelExpiry()
+		go s.certificateExpiry.Run(expiryCtx)
+	}
 	if nodes, ok := s.servers.(interface{ RunOfflineSweep(context.Context) }); ok {
 		sweepCtx, cancelSweep := context.WithCancel(ctx)
 		defer cancelSweep()

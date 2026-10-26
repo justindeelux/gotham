@@ -29,6 +29,7 @@ const vi = {
       backup_failure: "Sao lưu {name} trên {host} thất bại",
       server_offline: "Máy chủ {name} mất kết nối",
       server_online: "Máy chủ {name} đã kết nối lại",
+      certificate_expiring: "Chứng chỉ cho {name} sắp hết hạn",
       unknown: "Cập nhật cho {name} trên {host}",
     },
   },
@@ -69,6 +70,7 @@ const vi = {
     backup_failure: "Sao lưu thất bại",
     server_offline: "Máy chủ mất kết nối",
     server_online: "Máy chủ đã kết nối lại",
+    certificate_expiring: "Chứng chỉ sắp hết hạn",
   },
   scopeLabel: {
     allResources: "Mọi tài nguyên",

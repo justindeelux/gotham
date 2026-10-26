@@ -59,17 +59,21 @@ func ParseKind(raw string) (Kind, error) {
 type EventKey string
 
 const (
-	EventDeploySuccess EventKey = "deploy_success"
-	EventDeployFailure EventKey = "deploy_failure"
-	EventBackupSuccess EventKey = "backup_success"
-	EventBackupFailure EventKey = "backup_failure"
-	EventServerOffline EventKey = "server_offline"
-	EventServerOnline  EventKey = "server_online"
+	EventDeploySuccess       EventKey = "deploy_success"
+	EventDeployFailure       EventKey = "deploy_failure"
+	EventBackupSuccess       EventKey = "backup_success"
+	EventBackupFailure       EventKey = "backup_failure"
+	EventServerOffline       EventKey = "server_offline"
+	EventServerOnline        EventKey = "server_online"
+	EventCertificateExpiring EventKey = "certificate_expiring"
 )
 
 var defaultEvents = []EventKey{EventDeploySuccess, EventDeployFailure, EventBackupSuccess, EventBackupFailure}
 
-var AllEvents = append(append([]EventKey(nil), defaultEvents...), EventServerOffline, EventServerOnline)
+var AllEvents = append(
+	append([]EventKey(nil), defaultEvents...),
+	EventServerOffline, EventServerOnline, EventCertificateExpiring,
+)
 
 func (k EventKey) Valid() bool {
 	for _, known := range AllEvents {
@@ -83,10 +87,11 @@ func (k EventKey) Valid() bool {
 type EventKind string
 
 const (
-	EventDeploy EventKind = "deploy"
-	EventBackup EventKind = "backup"
-	EventTest   EventKind = "test"
-	EventServer EventKind = "server"
+	EventDeploy      EventKind = "deploy"
+	EventBackup      EventKind = "backup"
+	EventTest        EventKind = "test"
+	EventServer      EventKind = "server"
+	EventCertificate EventKind = "certificate"
 )
 
 type Outcome string
@@ -109,6 +114,8 @@ type Event struct {
 
 func (e Event) Key() EventKey {
 	switch {
+	case e.Kind == EventCertificate:
+		return EventCertificateExpiring
 	case e.Kind == EventServer && e.Outcome == OutcomeSuccess:
 		return EventServerOnline
 	case e.Kind == EventServer && e.Outcome == OutcomeFailure:
@@ -129,6 +136,9 @@ func (e Event) Key() EventKey {
 func (e Event) Summary() string {
 	if e.Kind == EventTest {
 		return "Test notification: " + e.Name
+	}
+	if e.Kind == EventCertificate {
+		return "Certificate expires soon: " + e.Name
 	}
 	if e.Kind == EventServer {
 		if e.Outcome == OutcomeSuccess {

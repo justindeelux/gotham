@@ -59,6 +59,15 @@ func TestServerEventsOnlyReachSubscribedGlobalChannels(t *testing.T) {
 }
 
 func TestServerEventInboxIsOwnerOnly(t *testing.T) {
+	assertInstanceInboxVisibility(t, []EventKey{EventServerOffline, EventServerOnline}, func(service *Service) {
+		for _, online := range []bool{false, true} {
+			service.ServerStateChanged(context.Background(), servers.StateChange{Name: "edge", Online: online, At: time.Now()})
+		}
+	})
+}
+
+func assertInstanceInboxVisibility(t *testing.T, keys []EventKey, dispatch func(*Service)) {
+	t.Helper()
 	base := os.Getenv("GOTHAM_TEST_DSN")
 	if base == "" {
 		t.Skip("GOTHAM_TEST_DSN is required for this integration test")
@@ -99,12 +108,10 @@ func TestServerEventInboxIsOwnerOnly(t *testing.T) {
 	}
 	service := NewService(Config{Store: st, Secret: testSecret, Logger: discardLogger()})
 	defer func() { _ = service.Close() }()
-	for _, online := range []bool{false, true} {
-		service.ServerStateChanged(ctx, servers.StateChange{Name: "edge", Online: online, At: time.Now()})
-	}
+	dispatch(service)
 	waitFor(t, "owner inbox", func() bool {
 		page, err := service.ListNotifications(ctx, owner.ID.Bytes, 30)
-		return err == nil && len(page.Notifications) == 2
+		return err == nil && len(page.Notifications) == len(keys)
 	})
 	page, err := service.ListNotifications(ctx, member.ID.Bytes, 30)
 	if err != nil {
@@ -121,7 +128,7 @@ func TestServerEventInboxIsOwnerOnly(t *testing.T) {
 		if item.ProjectID != "" || item.ResourceID != "" || item.ResourceType != "" {
 			t.Fatalf("instance event has scope: %+v", item)
 		}
-		if item.EventKey != EventServerOffline && item.EventKey != EventServerOnline {
+		if !slices.Contains(keys, item.EventKey) {
 			t.Fatalf("unexpected key: %s", item.EventKey)
 		}
 	}

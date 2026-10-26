@@ -23,6 +23,7 @@ describe("channelHelpers", () => {
       "backup_failure",
       "server_offline",
       "server_online",
+      "certificate_expiring",
     ]);
   });
 

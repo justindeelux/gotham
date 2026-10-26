@@ -4,8 +4,8 @@ title: Thông báo
 
 # Thông báo
 
-Gotham ghi nhận kết quả triển khai, sao lưu và thay đổi kết nối máy chủ trong hộp
-thông báo ngay trên bảng điều khiển, kể cả khi chưa cấu hình kênh nào. Bạn có thể thêm kênh để gửi cùng các
+Gotham ghi nhận kết quả triển khai, sao lưu, thay đổi kết nối máy chủ và cảnh báo
+chứng chỉ sắp hết hạn trong hộp thông báo ngay trên bảng điều khiển, kể cả khi chưa cấu hình kênh nào. Bạn có thể thêm kênh để gửi cùng các
 sự kiện đó ra ngoài qua Discord, Slack, Telegram hoặc email.
 
 ## Hộp thông báo
@@ -13,12 +13,12 @@ sự kiện đó ra ngoài qua Discord, Slack, Telegram hoặc email.
 Mọi người đã đăng nhập đều có biểu tượng chuông trên thanh trên cùng, kèm số thông
 báo chưa xem. Nhấn vào chuông, hoặc đưa tiêu điểm đến chuông rồi nhấn Enter hay
 Space, để mở hộp thông báo. Hộp tải 30 thông báo mới nhất mà bạn được xem, sắp xếp
-từ mới đến cũ. Mỗi mục hiển thị sự kiện, tên ứng dụng, cơ sở dữ liệu hoặc máy chủ,
-địa chỉ máy chủ hoặc lỗi nếu có, và thời gian tương đối.
+từ mới đến cũ. Mỗi mục hiển thị sự kiện, tên tài nguyên hoặc tên miền, địa chỉ máy
+chủ hoặc lỗi nếu có, và thời gian tương đối.
 
 Hộp ghi nhận triển khai thành công, triển khai thất bại, sao lưu thành công, sao
-lưu thất bại, máy chủ mất kết nối và máy chủ kết nối lại. Sự kiện máy chủ chỉ hiện
-với chủ sở hữu. **Gửi thử** chỉ kiểm tra kênh, không tạo mục trong hộp
+lưu thất bại, máy chủ mất kết nối, máy chủ kết nối lại và chứng chỉ sắp hết hạn.
+Sự kiện máy chủ và chứng chỉ chỉ hiện với chủ sở hữu. **Gửi thử** chỉ kiểm tra kênh, không tạo mục trong hộp
 thông báo. Khi trang đang mở, thông báo mới xuất hiện mà không cần tải lại trang.
 Nếu kết nối trực tiếp không khả dụng, hộp thông báo được làm mới khoảng mỗi phút
 khi trang đang hiển thị.
@@ -59,16 +59,16 @@ lưu; loại kênh không thể đổi sau khi tạo.
 
 Chọn phạm vi khi tạo hoặc sửa kênh:
 
-- Kênh **Mọi tài nguyên** nhận mọi sự kiện đã chọn, kể cả sự kiện máy chủ trên
+- Kênh **Mọi tài nguyên** nhận mọi sự kiện đã chọn, kể cả sự kiện máy chủ và chứng chỉ trên
   toàn instance.
 - Kênh ứng dụng nhận sự kiện triển khai của ứng dụng đó.
 - Kênh cơ sở dữ liệu nhận sự kiện sao lưu của cơ sở dữ liệu đó.
 
 Các sự kiện đăng ký được là `deploy_success`, `deploy_failure`, `backup_success`,
-`backup_failure`, `server_offline` và `server_online`. Kênh mới chỉ chọn sẵn bốn sự
+`backup_failure`, `server_offline`, `server_online` và `certificate_expiring`. Kênh mới chỉ chọn sẵn bốn sự
 kiện triển khai/sao lưu. Với cả kênh cũ và mới, hãy sửa kênh **Mọi tài nguyên** và
-chọn thêm sự kiện máy chủ nếu muốn nhận. Kênh ứng dụng và cơ sở dữ liệu không nhận
-sự kiện máy chủ. Kênh bị tắt không nhận gì.
+chọn thêm sự kiện máy chủ hoặc chứng chỉ nếu muốn nhận. Kênh ứng dụng và cơ sở dữ
+liệu không nhận các sự kiện trên toàn instance này. Kênh bị tắt không nhận gì.
 
 Máy chủ được coi là mất kết nối sau ít nhất 30 giây không gửi nhịp tim. Gotham
 kiểm tra mỗi 10 giây ngay cả khi không ai mở trang máy chủ, và chờ 30 giây sau khi
@@ -77,6 +77,15 @@ một thông báo mất kết nối; nhịp tim thành công đầu tiên sau đ
 kết nối lại. Chỉ đăng ký lại hoặc đăng ký lần đầu không tạo thông báo kết nối lại.
 Gián đoạn ngắn hơn không tạo cảnh báo; mất kết nối lặp lại lâu hơn khoảng chờ có
 thể tạo nhiều cặp thông báo mất kết nối/kết nối lại.
+
+Gotham kiểm tra chứng chỉ đang bật của bảng điều khiển và ứng dụng khi khởi động,
+sau đó mỗi giờ một lần. Khi chứng chỉ còn tối đa bảy ngày, hai lần quan sát thành
+công trong khoảng này mới tạo cảnh báo. Chứng chỉ đã hết hạn cũng được tính.
+Chứng chỉ không rõ trạng thái, không có hoặc bị tắt và các lần đọc thất bại được
+bỏ qua, không tính là một lần quan sát. Đọc thất bại không xóa một lần quan sát
+đang chờ. Mỗi chứng chỉ và ngày hết hạn chỉ tạo một cảnh báo; chứng chỉ được gia
+hạn với ngày hết hạn mới có thể tạo cảnh báo khi gần đến ngày đó.
+Khởi động lại Gotham xóa bộ nhớ này, nên chứng chỉ vẫn gần hết hạn có thể được thông báo lại.
 
 ## Gửi thử và lịch sử gửi
 

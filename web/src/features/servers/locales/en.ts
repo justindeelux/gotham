@@ -123,10 +123,6 @@ const en = {
     addServer: "Add server",
     editorWithCount: "Code editor — {count} open",
     overview: "Overview",
-    alerts: "System alerts — {text}",
-    noAlerts: "No new alerts",
-    alertOne: "1 new alert",
-    alertOther: "{count} new alerts",
   },
   edit: {
     title: "Edit server",

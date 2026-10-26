@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NBadge, NButton, NPopover } from "naive-ui";
+import { NBadge, NButton, NPopover, NTooltip } from "naive-ui";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
@@ -19,13 +19,20 @@ import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import { activeLocale } from "@/shared/i18n";
 import { relativeTime } from "@/shared/utils/format";
 
+const props = withDefaults(
+  defineProps<{ variant?: "topbar" | "rail" }>(),
+  { variant: "topbar" },
+);
+
 const { t } = useI18n();
 const router = useRouter();
 const authStore = useAuthStore();
 const inbox = useNotificationInboxStore();
 
+const isRail = computed<boolean>(() => props.variant === "rail");
 const open = ref(false);
 const bellButton = ref<InstanceType<typeof NButton> | null>(null);
+const railButton = ref<HTMLButtonElement | null>(null);
 const popoverContent = ref<HTMLElement | null>(null);
 const pendingId = ref<string | null>(null);
 const missingId = ref<string | null>(null);
@@ -131,7 +138,7 @@ function closeFromEscape(): void {
   }
   open.value = false;
   void nextTick(() => {
-    const element = bellButton.value?.$el;
+    const element = isRail.value ? railButton.value : bellButton.value?.$el;
     if (element instanceof HTMLElement) {
       element.focus();
     }
@@ -213,13 +220,38 @@ async function openItem(item: NotificationItem): Promise<void> {
   <NPopover
     :show="open"
     trigger="click"
-    placement="bottom-end"
+    :placement="isRail ? 'right-end' : 'bottom-end'"
     :duration="0"
     :animated="false"
     @update:show="setOpen"
   >
     <template #trigger>
+      <span v-if="isRail" class="notif-rail-target">
+        <NTooltip placement="right" :disabled="open">
+          <template #trigger>
+            <button
+              ref="railButton"
+              type="button"
+              class="rail-btn notif-rail-bell"
+              :aria-label="bellLabel"
+              aria-haspopup="dialog"
+              :aria-expanded="open"
+              @keydown="markKeyboardOpen"
+              @mousedown="markMouseOpen"
+            >
+              <GothamIcon name="bell" />
+              <span
+                v-if="inbox.unreadCount > 0"
+                class="rail-badge"
+                aria-hidden="true"
+              >{{ inbox.unreadCount > 9 ? "9+" : inbox.unreadCount }}</span>
+            </button>
+          </template>
+          <span>{{ t("notifications.inbox.title") }}</span>
+        </NTooltip>
+      </span>
       <NButton
+        v-else
         ref="bellButton"
         quaternary
         circle
@@ -333,12 +365,25 @@ async function openItem(item: NotificationItem): Promise<void> {
   border-top: 1px solid var(--border);
 }
 
+.notif-rail-target {
+  display: inline-flex;
+}
+
+.notif-rail-bell {
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
 .notif-inbox-item {
   display: flex;
+  align-items: center;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-2) 0;
+  padding: var(--space-2);
   border: 0;
+  border-radius: var(--radius-sm);
   background: none;
   font: inherit;
   text-align: left;
@@ -362,7 +407,6 @@ button.notif-inbox-item:focus-visible {
   width: var(--space-4);
   height: var(--space-4);
   flex: 0 0 auto;
-  margin-top: var(--space-1);
 }
 
 .notif-inbox-icon.is-success {
@@ -379,6 +423,7 @@ button.notif-inbox-item:focus-visible {
 
 .notif-inbox-body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;

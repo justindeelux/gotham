@@ -23,8 +23,6 @@ import { authLabel, summaryLine } from "@/features/servers/utils/serverDetailVie
 import { stateLabel } from "@/features/servers/utils/containerView";
 import { noticeText } from "@/features/servers/utils/logFormat";
 import {
-  alertsLabel,
-  countAlerts,
   serverTip,
   statusDots,
   statusLabelFor,
@@ -169,17 +167,12 @@ describe("servers display helpers", () => {
       "web-1 · Sẵn sàng",
     );
     expect(statusLabelFor("offline", "vi")).toBe("Ngoại tuyến");
-    expect(alertsLabel(0, "vi")).toBe("Không có cảnh báo mới");
-    expect(alertsLabel(3, "vi")).toBe("3 cảnh báo mới");
     expect(
       noticeText({ raw: "", channel: "c", kind: "notice", receivedAt: 0, payload: {} }, "vi"),
     ).toBe("Luồng nhật ký bị gián đoạn; đang kết nối lại…");
   });
 
   it("keeps status, count and metric thresholds unchanged", () => {
-    expect(countAlerts([server({ status: "offline" }), server({ status: "error" })])).toBe(
-      2,
-    );
     expect(Object.keys(statusDots).sort()).toEqual(
       ["error", "offline", "pending", "ready", "validating"].sort(),
     );

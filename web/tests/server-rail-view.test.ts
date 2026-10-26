@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import type { Server } from "../src/features/servers/api/servers";
 import {
-  alertsLabel,
-  countAlerts,
   serverInitials,
   serverTip,
   statusDots,
@@ -58,23 +56,5 @@ describe("status maps", () => {
       expect(statusDots[status]).toBeTruthy();
       expect(statusLabels[status]).toBeTruthy();
     }
-  });
-});
-
-describe("alerts", () => {
-  it("counts offline and error servers", () => {
-    const servers = [
-      server("a", "ready"),
-      server("b", "offline"),
-      server("c", "error"),
-      server("d", "pending"),
-    ];
-    expect(countAlerts(servers)).toBe(2);
-  });
-
-  it("renders the English alert copy", () => {
-    expect(alertsLabel(0)).toBe("No new alerts");
-    expect(alertsLabel(1)).toBe("1 new alert");
-    expect(alertsLabel(3)).toBe("3 new alerts");
   });
 });

@@ -43,20 +43,3 @@ export function statusLabelFor(status: ServerStatus, locale?: string | null): st
 export function serverTip(server: Server, locale?: string | null): string {
   return `${server.name} · ${statusLabelFor(server.status, locale)}`;
 }
-
-export function countAlerts(servers: Server[]): number {
-  return servers.filter(
-    (server) => server.status === "offline" || server.status === "error",
-  ).length;
-}
-
-export function alertsLabel(alertCount: number, locale?: string | null): string {
-  const rail = catalogFor(locale).rail;
-  if (alertCount === 0) {
-    return rail.noAlerts;
-  }
-  if (alertCount === 1) {
-    return rail.alertOne;
-  }
-  return rail.alertOther.replace("{count}", String(alertCount));
-}

@@ -245,7 +245,7 @@ starts, and a disabled module logs its flag at startup.
 | `FEATURE_DATABASES` | on | Managed databases and backups |
 | `FEATURE_SERVICES` | on | Compose services |
 | `FEATURE_FILES` | on | Node file manager |
-| `FEATURE_NOTIFICATIONS` | on | Notification channels |
+| `FEATURE_NOTIFICATIONS` | on | In-app notification inbox and notification channels |
 | `FEATURE_PROXY` | on | Proxy, DNS and certificate management |
 | `FEATURE_METRICS` | on | Node metrics collection and queries |
 | `FEATURE_UPDATES` | on | Self-update surface and the automatic loop |

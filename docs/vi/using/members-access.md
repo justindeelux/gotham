@@ -37,6 +37,11 @@ sẵn sàng. Dự án không được cấp sẽ không hiện ra — danh sách
 cầu trực tiếp trả `404`, giống như tài nguyên không tồn tại. Quyền được kiểm tra ở
 mọi yêu cầu, nên thay đổi quyền có hiệu lực ngay.
 
+Hộp thông báo cũng tuân theo quyền dự án: thành viên chỉ thấy thông báo thuộc các
+dự án được cấp quyền, được tạo từ thời điểm cấp quyền trở đi. Không có thông báo
+nào ngoài các dự án đó được hiển thị, kể cả thông báo không thuộc dự án nào. Thu
+hồi quyền sẽ ẩn ngay thông báo của dự án. Chủ sở hữu thấy mọi thông báo.
+
 Dự án do chủ sở hữu tạo và xoá. Thành viên có quyền trong dự án có thể đổi tên dự
 án và quản lý nội dung của nó.
 

@@ -470,6 +470,37 @@ type DeliveryView struct {
 	CreatedAt    time.Time      `json:"created_at"`
 }
 
+const notificationRetention = 500
+
+type Notification struct {
+	ID           uuid.UUID
+	EventKey     EventKey
+	ResourceType string
+	ResourceID   uuid.UUID
+	ProjectID    uuid.UUID
+	Name         string
+	Host         string
+	Error        string
+	CreatedAt    time.Time
+}
+
+type NotificationView struct {
+	ID           uuid.UUID `json:"id"`
+	EventKey     EventKey  `json:"event_key"`
+	ResourceType string    `json:"resource_type,omitempty"`
+	ResourceID   string    `json:"resource_id,omitempty"`
+	ProjectID    string    `json:"project_id,omitempty"`
+	Name         string    `json:"name"`
+	Host         string    `json:"host"`
+	Error        string    `json:"error"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type NotificationPage struct {
+	Notifications []NotificationView `json:"notifications"`
+	UnreadCount   int64              `json:"unread_count"`
+}
+
 func parseResource(resourceType, resourceID string) (string, uuid.UUID, error) {
 	resourceType = strings.TrimSpace(resourceType)
 	resourceID = strings.TrimSpace(resourceID)

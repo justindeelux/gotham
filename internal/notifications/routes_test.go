@@ -3,6 +3,7 @@ package notifications
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -347,5 +348,82 @@ func TestChannelRouteDeliveriesHistory(t *testing.T) {
 	emptyRec := doRequest(handler, http.MethodGet, "/v1/notification-channels/"+empty.ID.String()+"/deliveries", "")
 	if body := strings.TrimSpace(emptyRec.Body.String()); body != `{"deliveries":[]}` {
 		t.Errorf("empty history = %s, want an empty array", body)
+	}
+}
+
+func TestNotificationInboxLimitsAndSeenMarker(t *testing.T) {
+	userID := uuid.New()
+	repo := newFakeRepository()
+	service := newTestService(t, repo)
+	handler := newRouteServer(userID, service)
+	base := time.Date(2026, 9, 29, 11, 0, 0, 0, time.UTC)
+	for i := 0; i < 40; i++ {
+		if err := repo.CreateNotification(context.Background(), Notification{
+			EventKey:  EventDeploySuccess,
+			Name:      fmt.Sprintf("app-%d", i),
+			CreatedAt: base.Add(time.Duration(i) * time.Minute),
+		}); err != nil {
+			t.Fatalf("seed notification: %v", err)
+		}
+	}
+
+	decodePage := func(rec *httptest.ResponseRecorder) NotificationPage {
+		t.Helper()
+		var page NotificationPage
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("decode page %q: %v", rec.Body.String(), err)
+		}
+		return page
+	}
+
+	rec := doRequest(handler, http.MethodGet, "/v1/notifications", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inbox = %d (body %s), want 200", rec.Code, rec.Body.String())
+	}
+	page := decodePage(rec)
+	if len(page.Notifications) != defaultNotificationLimit {
+		t.Errorf("default page = %d rows, want %d", len(page.Notifications), defaultNotificationLimit)
+	}
+	if page.UnreadCount != 40 {
+		t.Errorf("unread_count = %d, want 40", page.UnreadCount)
+	}
+	if got := page.Notifications[0].Name; got != "app-39" {
+		t.Errorf("first row = %q, want the newest", got)
+	}
+
+	rec = doRequest(handler, http.MethodGet, "/v1/notifications?limit=2", "")
+	if rec.Code != http.StatusOK || len(decodePage(rec).Notifications) != 2 {
+		t.Fatalf("limit=2 = %d (body %s), want 2 rows", rec.Code, rec.Body.String())
+	}
+	for _, query := range []string{"limit=0", "limit=101", "limit=abc"} {
+		rec = doRequest(handler, http.MethodGet, "/v1/notifications?"+query, "")
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", query, rec.Code)
+		}
+	}
+
+	rec = doRequest(handler, http.MethodPost, "/v1/notifications/seen", `{"seen_at":"2026-09-29T11:30:00Z"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("seen = %d (body %s), want 204", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(handler, http.MethodGet, "/v1/notifications", "")
+	if got := decodePage(rec).UnreadCount; got != 9 {
+		t.Errorf("unread_count after seen = %d, want 9", got)
+	}
+
+	rec = doRequest(handler, http.MethodPost, "/v1/notifications/seen", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("seen without body = %d (body %s), want 204", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(handler, http.MethodGet, "/v1/notifications", "")
+	if got := decodePage(rec).UnreadCount; got != 0 {
+		t.Errorf("unread_count after an empty seen body = %d, want 0", got)
+	}
+
+	for _, body := range []string{`{"seen_at":"yesterday"}`, `{"seen_at":42}`, `{"seen_at":"2026-09-29T11:30:00Z","extra":true}`} {
+		rec = doRequest(handler, http.MethodPost, "/v1/notifications/seen", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("seen %s = %d, want 400", body, rec.Code)
+		}
 	}
 }

@@ -34,6 +34,8 @@ type NotificationService interface {
 	DeleteChannel(ctx context.Context, userID, channelID uuid.UUID) error
 	TestChannel(ctx context.Context, userID, channelID uuid.UUID) (TestResult, error)
 	ListDeliveries(ctx context.Context, userID, channelID uuid.UUID) ([]DeliveryView, error)
+	ListNotifications(ctx context.Context, userID uuid.UUID, limit int) (NotificationPage, error)
+	MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, seenAt time.Time) error
 }
 
 type Config struct {
@@ -451,6 +453,78 @@ func (s *Service) ListDeliveries(ctx context.Context, userID, channelID uuid.UUI
 	return views, nil
 }
 
+func (s *Service) ListNotifications(ctx context.Context, userID uuid.UUID, limit int) (NotificationPage, error) {
+	if err := s.ready(); err != nil {
+		return NotificationPage{}, err
+	}
+	if userID == uuid.Nil {
+		return NotificationPage{Notifications: []NotificationView{}}, nil
+	}
+	notifications, unread, err := s.repo.ListNotifications(ctx, userID, limit)
+	if err != nil {
+		return NotificationPage{}, err
+	}
+	views := make([]NotificationView, 0, len(notifications))
+	for _, notification := range notifications {
+		views = append(views, NotificationView{
+			ID:           notification.ID,
+			EventKey:     notification.EventKey,
+			ResourceType: notification.ResourceType,
+			ResourceID:   resourceIDString(notification.ResourceID),
+			ProjectID:    resourceIDString(notification.ProjectID),
+			Name:         notification.Name,
+			Host:         notification.Host,
+			Error:        notification.Error,
+			CreatedAt:    notification.CreatedAt,
+		})
+	}
+	return NotificationPage{Notifications: views, UnreadCount: unread}, nil
+}
+
+func (s *Service) MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, seenAt time.Time) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if userID == uuid.Nil {
+		return ErrForbidden
+	}
+	if seenAt.IsZero() {
+		seenAt = s.now().UTC()
+	}
+	return s.repo.MarkNotificationsSeen(ctx, userID, seenAt)
+}
+
+func (s *Service) recordNotification(event Event) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	writeCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
+	defer cancel()
+	projectID, err := s.repo.ResourceProject(writeCtx, event.ResourceType, event.ResourceID)
+	if err != nil {
+		projectID = uuid.Nil
+	}
+	at := event.At
+	if at.IsZero() {
+		at = s.now().UTC()
+	}
+	if err := s.repo.CreateNotification(writeCtx, Notification{
+		EventKey:     event.Key(),
+		ResourceType: event.ResourceType,
+		ResourceID:   event.ResourceID,
+		ProjectID:    projectID,
+		Name:         event.Name,
+		Host:         event.Host,
+		Error:        truncateText(event.Error, maxEventError),
+		CreatedAt:    at.UTC(),
+	}); err != nil {
+		if s.baseCtx.Err() == nil {
+			s.logger.Error("notifications: store in-app notification",
+				"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
+		}
+	}
+}
+
 func (s *Service) recordDelivery(ctx context.Context, channelID uuid.UUID, eventType string, status DeliveryStatus, errorSummary string) {
 	if s == nil || s.repo == nil || channelID == uuid.Nil {
 		return
@@ -547,6 +621,9 @@ func (s *Service) worker() {
 }
 
 func (s *Service) deliver(event Event) {
+	if event.Key() != "" {
+		s.recordNotification(event)
+	}
 	readCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
 	channels, err := s.repo.ListChannelsForEvent(readCtx, event.ResourceType, event.ResourceID)
 	cancel()

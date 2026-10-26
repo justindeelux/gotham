@@ -3,6 +3,7 @@ package notifications
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -59,6 +60,12 @@ type fakeRepository struct {
 	createDeliveryErr error
 	listDeliveriesErr error
 
+	notifications         []Notification
+	resourceProjects      map[uuid.UUID]uuid.UUID
+	seenAt                map[uuid.UUID]time.Time
+	createNotificationErr error
+	listNotificationsErr  error
+
 	listForEventCalls int
 	lastResourceType  string
 	lastResourceID    uuid.UUID
@@ -68,8 +75,10 @@ var _ Repository = (*fakeRepository)(nil)
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		channels:   make(map[uuid.UUID]Channel),
-		deliveries: make(map[uuid.UUID][]Delivery),
+		channels:         make(map[uuid.UUID]Channel),
+		deliveries:       make(map[uuid.UUID][]Delivery),
+		resourceProjects: make(map[uuid.UUID]uuid.UUID),
+		seenAt:           make(map[uuid.UUID]time.Time),
 	}
 }
 
@@ -148,6 +157,66 @@ func (r *fakeRepository) ListChannelsForEvent(_ context.Context, resourceType st
 		}
 	}
 	return matched, nil
+}
+
+func (r *fakeRepository) ResourceProject(_ context.Context, _ string, resourceID uuid.UUID) (uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if projectID, ok := r.resourceProjects[resourceID]; ok {
+		return projectID, nil
+	}
+	return uuid.Nil, errors.New("resource has no project")
+}
+
+func (r *fakeRepository) CreateNotification(_ context.Context, notification Notification) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createNotificationErr != nil {
+		return r.createNotificationErr
+	}
+	if notification.ID == uuid.Nil {
+		notification.ID = uuid.New()
+	}
+	r.notifications = append(r.notifications, notification)
+	return nil
+}
+
+func (r *fakeRepository) ListNotifications(_ context.Context, userID uuid.UUID, limit int) ([]Notification, int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listNotificationsErr != nil {
+		return nil, 0, r.listNotificationsErr
+	}
+	notifications := append([]Notification(nil), r.notifications...)
+	sort.Slice(notifications, func(i, j int) bool {
+		if !notifications[i].CreatedAt.Equal(notifications[j].CreatedAt) {
+			return notifications[i].CreatedAt.After(notifications[j].CreatedAt)
+		}
+		return notifications[i].ID.String() > notifications[j].ID.String()
+	})
+	var unread int64
+	for _, notification := range notifications {
+		if notification.CreatedAt.After(r.seenAt[userID]) {
+			unread++
+		}
+	}
+	if limit > 0 && len(notifications) > limit {
+		notifications = notifications[:limit]
+	}
+	return notifications, unread, nil
+}
+
+func (r *fakeRepository) MarkNotificationsSeen(_ context.Context, userID uuid.UUID, seenAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seenAt[userID] = seenAt
+	return nil
+}
+
+func (r *fakeRepository) notificationsSnapshot() []Notification {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]Notification(nil), r.notifications...)
 }
 
 func (r *fakeRepository) UpdateChannel(_ context.Context, channel Channel) (Channel, error) {

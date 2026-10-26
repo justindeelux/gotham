@@ -5,16 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
-const maxBodyBytes = 1 << 20
+const (
+	maxBodyBytes             = 1 << 20
+	defaultNotificationLimit = 30
+	maxNotificationLimit     = 100
+)
 
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
@@ -58,6 +65,8 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Delete("/v1/notification-channels/{id}", h.delete)
 		protected.Post("/v1/notification-channels/{id}/test", h.test)
 		protected.Get("/v1/notification-channels/{id}/deliveries", h.deliveries)
+		protected.Get("/v1/notifications", h.inbox)
+		protected.Post("/v1/notifications/seen", h.seen)
 	})
 }
 
@@ -163,6 +172,81 @@ func (h *handler) deliveries(w http.ResponseWriter, r *http.Request) {
 		deliveries = []DeliveryView{}
 	}
 	writeJSON(w, http.StatusOK, deliveryListEnvelope{Deliveries: deliveries})
+}
+
+func (h *handler) inbox(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	limit, err := parseNotificationLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	page, err := h.svc.ListNotifications(r.Context(), userID, limit)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *handler) seen(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	seenAt, ok := decodeSeenAt(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.MarkNotificationsSeen(r.Context(), userID, seenAt); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func parseNotificationLimit(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultNotificationLimit, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > maxNotificationLimit {
+		return 0, fmt.Errorf("%w: limit must be between 1 and %d", ErrValidation, maxNotificationLimit)
+	}
+	return value, nil
+}
+
+func decodeSeenAt(w http.ResponseWriter, r *http.Request) (time.Time, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return time.Time{}, false
+	}
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return time.Time{}, true
+	}
+	var req struct {
+		SeenAt string `json:"seen_at"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return time.Time{}, false
+	}
+	if strings.TrimSpace(req.SeenAt) == "" {
+		return time.Time{}, true
+	}
+	at, err := time.Parse(time.RFC3339, req.SeenAt)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid seen_at"})
+		return time.Time{}, false
+	}
+	return at, true
 }
 
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

@@ -4,9 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import RailIconButton from "@/features/servers/components/RailIconButton.vue";
+import NotificationBell from "@/features/notifications/components/NotificationBell.vue";
 import {
-  alertsLabel,
-  countAlerts,
   serverInitials,
   serverTip,
   statusDots,
@@ -29,14 +28,6 @@ const router = useRouter();
 const { locale, t } = useI18n();
 
 const isDashboard = computed<boolean>(() => route.name === "dashboard");
-
-const alertCount = computed<number>(() => countAlerts(serversStore.servers));
-
-const alertText = computed<string>(() => alertsLabel(alertCount.value, locale.value));
-
-const alertsLabelText = computed<string>(() =>
-  t("servers.rail.alerts", { text: alertText.value }),
-);
 
 const editorCount = computed<number>(() => editor.tabs.length);
 
@@ -220,26 +211,7 @@ onMounted(() => {
         </RailIconButton>
       </div>
       <div class="rail-item">
-        <RailIconButton
-          :to="{ name: 'servers' }"
-          :label="alertsLabelText"
-          :tip="alertText"
-          :badge-count="alertCount"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path
-              d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6zM10 20a2 2 0 004 0"
-            />
-          </svg>
-        </RailIconButton>
+        <NotificationBell variant="rail" />
       </div>
     </div>
   </nav>

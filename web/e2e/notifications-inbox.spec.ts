@@ -85,10 +85,7 @@ test.describe("notification inbox", () => {
 
     await page.goto("/dashboard");
 
-    const bell = page.getByRole("button", {
-      name: "Notifications, 2 unread",
-      exact: true,
-    });
+    const bell = page.locator(".topbar .notif-bell");
     await expect(bell).toBeVisible();
     await expect(page.locator(".notif-bell-badge .n-badge-sup")).toContainText(
       "2",
@@ -103,15 +100,17 @@ test.describe("notification inbox", () => {
     await expect(dialog).toContainText("build step failed");
 
     await expect.poll(() => state.seenAt).toBe(rows[0].created_at);
-    await expect(
-      page.getByRole("button", { name: "Notifications", exact: true }),
-    ).toBeVisible();
+    await expect(page.locator(".topbar .notif-bell")).toHaveAttribute(
+      "aria-label",
+      "Notifications",
+    );
     await expect(page.locator(".notif-bell-badge .n-badge-sup")).toHaveCount(0);
 
     await page.reload();
-    await expect(
-      page.getByRole("button", { name: "Notifications", exact: true }),
-    ).toBeVisible();
+    await expect(page.locator(".topbar .notif-bell")).toHaveAttribute(
+      "aria-label",
+      "Notifications",
+    );
     await expect(page.locator(".notif-bell-badge .n-badge-sup")).toHaveCount(0);
 
     expect(state.requests.every((request) => !request.includes("limit=0"))).toBe(
@@ -131,7 +130,7 @@ test.describe("notification inbox", () => {
       await page.setViewportSize({ width, height: 800 });
       await page.goto("/dashboard");
 
-      const bell = page.getByRole("button", { name: /Notifications/ });
+      const bell = page.locator(".topbar .notif-bell");
       await bell.focus();
       await page.keyboard.press("Enter");
 
@@ -168,5 +167,53 @@ test.describe("notification inbox", () => {
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await expect(page.locator(".notif-bell")).toBeFocused();
+  });
+
+  test("the rail bell opens the same inbox with centred entry icons", async ({
+    page,
+  }) => {
+    const state = await mockInbox(page, 2);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/dashboard");
+
+    const rail = page.locator(".rail");
+    const bell = rail.locator(".notif-rail-bell");
+    await expect(bell).toBeVisible();
+    await expect(rail.locator(".notif-rail-bell")).toHaveCount(1);
+    await expect(rail.locator(".notif-rail-bell .rail-badge")).toContainText("2");
+
+    await bell.click();
+    const dialog = page.getByRole("dialog", { name: "Notifications" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".notif-inbox-row")).toHaveCount(2);
+    await expect(dialog).toContainText("orders failed to deploy on db.example.com");
+    await expect.poll(() => state.seenAt).toBe(rows[0].created_at);
+
+    const entry = dialog.locator(".notif-inbox-item").nth(1);
+    const icon = entry.locator(".notif-inbox-icon");
+    const entryBox = await entry.boundingBox();
+    const iconBox = await icon.boundingBox();
+    expect(entryBox).not.toBeNull();
+    expect(iconBox).not.toBeNull();
+    expect(
+      Math.abs(
+        iconBox!.y + iconBox!.height / 2 - (entryBox!.y + entryBox!.height / 2),
+      ),
+    ).toBeLessThanOrEqual(1);
+    expect(iconBox!.x - entryBox!.x).toBeGreaterThanOrEqual(8);
+
+    const box = await dialog.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(1281);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(801);
+
+    await expect(rail.locator(".rail-badge")).toHaveCount(0);
+    await expect(page.locator(".notif-bell-badge .n-badge-sup")).toHaveCount(0);
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(bell).toBeFocused();
   });
 });

@@ -2,12 +2,14 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
+import { nextTick } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useEditorStore } from "../src/features/files/stores/editor";
 import type { EditorTab } from "../src/features/files/stores/editor";
 import { useEditorWindowStore } from "../src/features/files/stores/editorWindow";
 import { useServersStore } from "../src/features/servers/stores/servers";
+import { useNotificationInboxStore } from "../src/features/notifications/stores/inbox";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -99,7 +101,7 @@ describe("ServerRail editor icon (JUS-232)", () => {
     wrapper.unmount();
   });
 
-  it("sits above Overview and Alert, split by dividers", async () => {
+  it("sits above Overview and Notifications, split by dividers", async () => {
     const { wrapper } = await mountRail(1);
     const items = wrapper.findAll(".rail-foot .rail-item");
     expect(items[0]!.find(".rail-btn--editor").exists()).toBe(true);
@@ -115,6 +117,42 @@ describe("ServerRail editor icon (JUS-232)", () => {
     useEditorStore().closeAll();
     await flushPromises();
     expect(wrapper.find(".rail-btn--editor").exists()).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+describe("ServerRail notifications bell", () => {
+  it("opens the inbox from the rail with a single bell", async () => {
+    const { wrapper } = await mountRail(0);
+    const inbox = useNotificationInboxStore();
+    inbox.items = [
+      {
+        id: "n-1",
+        event_key: "server_offline",
+        resource_type: "server",
+        resource_id: "srv-1",
+        project_id: "",
+        name: "build-node-03",
+        host: "10.0.0.1",
+        error: "",
+        created_at: "2026-10-26T11:00:00Z",
+      },
+    ];
+    inbox.unreadCount = 3;
+    await nextTick();
+
+    expect(wrapper.findAll(".notif-rail-bell")).toHaveLength(1);
+    const bell = wrapper.find(".notif-rail-bell");
+    expect(bell.element.tagName).toBe("BUTTON");
+    expect(bell.attributes("aria-label")).toBe("Notifications, 3 unread");
+    expect(bell.find(".rail-badge").text()).toBe("3");
+
+    await bell.trigger("click");
+    await flushPromises();
+
+    const dialog = document.querySelector(".notif-inbox");
+    expect(dialog).not.toBeNull();
+    expect(dialog?.querySelector(".notif-inbox-row")).not.toBeNull();
     wrapper.unmount();
   });
 });

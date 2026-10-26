@@ -125,10 +125,6 @@ const vi: ServersMessages = {
     addServer: "Thêm máy chủ",
     editorWithCount: "Trình soạn thảo mã — {count} đang mở",
     overview: "Tổng quan",
-    alerts: "Cảnh báo hệ thống — {text}",
-    noAlerts: "Không có cảnh báo mới",
-    alertOne: "1 cảnh báo mới",
-    alertOther: "{count} cảnh báo mới",
   },
   edit: {
     title: "Sửa máy chủ",

@@ -1,4 +1,4 @@
-/* global document: readonly */
+/* global document: readonly, HTMLElement: readonly, HTMLButtonElement: readonly, KeyboardEvent: readonly, setTimeout: readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { computed, nextTick, ref } from "vue";
@@ -110,8 +110,10 @@ describe("notification bell", () => {
 
   it("opens an accessible popover with an empty state", async () => {
     const { wrapper } = await mountBell();
+    const bell = wrapper.find(".notif-bell");
+    (bell.element as HTMLElement).focus();
 
-    await wrapper.find(".notif-bell").trigger("click");
+    await bell.trigger("click");
     await flushPromises();
     await nextTick();
 
@@ -122,6 +124,71 @@ describe("notification bell", () => {
     expect(dialog?.querySelector(".notif-inbox-empty")?.textContent?.trim()).toBe(
       "No notifications yet.",
     );
+    expect(document.activeElement).toBe(bell.element);
+    wrapper.unmount();
+  });
+
+  it("moves keyboard focus into the popover, traps Tab and restores it on Escape", async () => {
+    const { wrapper, inbox } = await mountBell();
+    inbox.items = [
+      item("n-1", "2026-10-26T11:00:00Z"),
+      item("n-2", "2026-10-26T12:00:00Z"),
+    ];
+    inbox.unreadCount = 2;
+    await nextTick();
+
+    const bell = wrapper.find(".notif-bell");
+    (bell.element as HTMLElement).focus();
+    await bell.trigger("keydown", { key: "Enter" });
+    await bell.trigger("click");
+    await flushPromises();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const dialog = document.querySelector(".notif-inbox") as HTMLElement | null;
+    expect(dialog).not.toBeNull();
+    const items = Array.from(
+      dialog!.querySelectorAll<HTMLButtonElement>("button.notif-inbox-item"),
+    );
+    expect(items).toHaveLength(2);
+    expect(document.activeElement).toBe(items[0]);
+
+    items[1].dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).toBe(items[0]);
+
+    items[0].dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(document.activeElement).toBe(items[1]);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await flushPromises();
+    await nextTick();
+
+    expect(bell.attributes("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(bell.element);
     wrapper.unmount();
   });
 });
+
+function item(id: string, createdAt: string) {
+  return {
+    id,
+    event_key: "deploy_success",
+    resource_type: "application",
+    resource_id: `app-${id}`,
+    project_id: "proj-1",
+    name: `web-${id}`,
+    host: "web.example.com",
+    error: "",
+    created_at: createdAt,
+  };
+}

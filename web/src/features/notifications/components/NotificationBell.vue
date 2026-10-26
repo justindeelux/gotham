@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NBadge, NButton, NPopover } from "naive-ui";
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
@@ -26,8 +26,10 @@ const inbox = useNotificationInboxStore();
 
 const open = ref(false);
 const bellButton = ref<InstanceType<typeof NButton> | null>(null);
+const popoverContent = ref<HTMLElement | null>(null);
 const pendingId = ref<string | null>(null);
 const missingId = ref<string | null>(null);
+let openFromKeyboard = false;
 
 const bellLabel = computed<string>(() =>
   inbox.unreadCount > 0
@@ -45,13 +47,85 @@ onMounted(() => syncUser(authStore.user?.id));
 watch(() => authStore.user?.id, syncUser);
 
 function setOpen(show: boolean): void {
+  const fromKeyboard = openFromKeyboard;
+  openFromKeyboard = false;
   open.value = show;
   if (show) {
     void inbox.markSeen().catch(() => undefined);
+    if (fromKeyboard) {
+      void focusPopover();
+    }
   }
 }
 
-function closeOnEscape(): void {
+function markKeyboardOpen(event: KeyboardEvent): void {
+  if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+    openFromKeyboard = true;
+  }
+}
+
+function markMouseOpen(): void {
+  openFromKeyboard = false;
+}
+
+async function focusPopover(attempt = 0): Promise<void> {
+  await nextTick();
+  const content = popoverContent.value;
+  if (!content) {
+    if (attempt < 10) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await focusPopover(attempt + 1);
+    }
+    return;
+  }
+  const first = content.querySelector<HTMLElement>(
+    "button.notif-inbox-item:not([disabled])",
+  );
+  (first ?? content).focus({ preventScroll: true });
+}
+
+function popoverFocusables(content: HTMLElement): HTMLElement[] {
+  return Array.from(
+    content.querySelectorAll<HTMLElement>(
+      "button:not([disabled]), [href], input:not([disabled]), " +
+        "select:not([disabled]), textarea:not([disabled]), " +
+        "[tabindex]:not([tabindex='-1'])",
+    ),
+  );
+}
+
+function onPopoverKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Tab") {
+    return;
+  }
+  const content = popoverContent.value;
+  if (!content) {
+    return;
+  }
+  const focusables = popoverFocusables(content);
+  if (focusables.length === 0) {
+    event.preventDefault();
+    content.focus({ preventScroll: true });
+    return;
+  }
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  const inside = active instanceof HTMLElement && content.contains(active);
+  if (event.shiftKey) {
+    if (!inside || active === first) {
+      event.preventDefault();
+      last.focus({ preventScroll: true });
+    }
+    return;
+  }
+  if (!inside || active === last) {
+    event.preventDefault();
+    first.focus({ preventScroll: true });
+  }
+}
+
+function closeFromEscape(): void {
   if (!open.value) {
     return;
   }
@@ -63,6 +137,30 @@ function closeOnEscape(): void {
     }
   });
 }
+
+function onDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Escape") {
+    return;
+  }
+  closeFromEscape();
+}
+
+watch(open, (value) => {
+  if (typeof document === "undefined") {
+    return;
+  }
+  if (value) {
+    document.addEventListener("keydown", onDocumentKeydown);
+    return;
+  }
+  document.removeEventListener("keydown", onDocumentKeydown);
+});
+
+onUnmounted(() => {
+  if (typeof document !== "undefined") {
+    document.removeEventListener("keydown", onDocumentKeydown);
+  }
+});
 
 function timeText(iso: string): string {
   return relativeTime(iso, activeLocale.value, { long: true });
@@ -129,7 +227,8 @@ async function openItem(item: NotificationItem): Promise<void> {
         :aria-label="bellLabel"
         aria-haspopup="dialog"
         :aria-expanded="open"
-        @keydown.esc.stop.prevent="closeOnEscape"
+        @keydown="markKeyboardOpen"
+        @mousedown="markMouseOpen"
       >
         <template #icon>
           <NBadge
@@ -146,10 +245,12 @@ async function openItem(item: NotificationItem): Promise<void> {
     </template>
 
     <div
+      ref="popoverContent"
       class="notif-inbox"
       role="dialog"
+      tabindex="-1"
       :aria-label="t('notifications.inbox.title')"
-      @keydown.esc.stop.prevent="closeOnEscape"
+      @keydown="onPopoverKeydown"
     >
       <p class="notif-inbox-title">{{ t("notifications.inbox.title") }}</p>
       <p v-if="inbox.items.length === 0" class="notif-inbox-empty">

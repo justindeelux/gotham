@@ -97,6 +97,7 @@ test.describe("notification inbox", () => {
     await bell.click();
     const dialog = page.getByRole("dialog", { name: "Notifications" });
     await expect(dialog).toBeVisible();
+    await expect(page.locator(".notif-bell")).toBeFocused();
     await expect(dialog).toContainText("web deployed to web.example.com");
     await expect(dialog).toContainText("orders failed to deploy on db.example.com");
     await expect(dialog).toContainText("build step failed");
@@ -121,10 +122,10 @@ test.describe("notification inbox", () => {
     );
   });
 
-  test("keyboard opening stays inside the viewport at 390, 480 and 1280 px", async ({
+  test("keyboard focus enters, stays inside, and returns to the bell", async ({
     page,
   }) => {
-    await mockInbox(page, 1, [rows[0]]);
+    await mockInbox(page, 1);
 
     for (const width of [390, 480, 1280]) {
       await page.setViewportSize({ width, height: 800 });
@@ -136,8 +137,17 @@ test.describe("notification inbox", () => {
 
       const dialog = page.getByRole("dialog", { name: "Notifications" });
       await expect(dialog).toBeVisible();
-      await expect(dialog.locator(".notif-inbox-row")).toHaveCount(1);
+      await expect(dialog.locator(".notif-inbox-row")).toHaveCount(2);
       await expect(dialog).toContainText("web deployed to web.example.com");
+
+      const items = dialog.locator("button.notif-inbox-item");
+      await expect(items.first()).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(items.nth(1)).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(items.first()).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(items.nth(1)).toBeFocused();
 
       const box = await dialog.boundingBox();
       expect(box).not.toBeNull();
@@ -148,6 +158,15 @@ test.describe("notification inbox", () => {
 
       await page.keyboard.press("Escape");
       await expect(dialog).toBeHidden();
+      await expect(bell).toBeFocused();
     }
+
+    await page.keyboard.press("Space");
+    const dialog = page.getByRole("dialog", { name: "Notifications" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("button.notif-inbox-item").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(".notif-bell")).toBeFocused();
   });
 });

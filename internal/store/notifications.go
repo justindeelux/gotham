@@ -24,6 +24,10 @@ func (s *Store) CountUnreadNotifications(ctx context.Context, id pgtype.UUID) (i
 	return s.queries.CountUnreadNotifications(ctx, id)
 }
 
+func (s *Store) ListNotificationRecipients(ctx context.Context, projectID pgtype.UUID) ([]pgtype.UUID, error) {
+	return s.queries.ListNotificationRecipients(ctx, projectID)
+}
+
 func (s *Store) MarkNotificationsSeen(ctx context.Context, params sqlc.MarkNotificationsSeenParams) error {
 	return s.queries.MarkNotificationsSeen(ctx, params)
 }

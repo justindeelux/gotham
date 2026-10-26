@@ -36,11 +36,12 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context, id pgtype.UUID) 
 }
 
 const createNotification = `-- name: CreateNotification :exec
-INSERT INTO notifications (event_key, resource_type, resource_id, project_id, name, host, error, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO notifications (id, event_key, resource_type, resource_id, project_id, name, host, error, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreateNotificationParams struct {
+	ID           pgtype.UUID        `json:"id"`
 	EventKey     string             `json:"event_key"`
 	ResourceType *string            `json:"resource_type"`
 	ResourceID   pgtype.UUID        `json:"resource_id"`
@@ -53,6 +54,7 @@ type CreateNotificationParams struct {
 
 func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotificationParams) error {
 	_, err := q.db.Exec(ctx, createNotification,
+		arg.ID,
 		arg.EventKey,
 		arg.ResourceType,
 		arg.ResourceID,
@@ -63,6 +65,36 @@ func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotification
 		arg.CreatedAt,
 	)
 	return err
+}
+
+const listNotificationRecipients = `-- name: ListNotificationRecipients :many
+SELECT u.id FROM users u
+WHERE u.role = 'owner'
+   OR EXISTS (
+       SELECT 1 FROM project_members m
+       WHERE m.user_id = u.id
+         AND m.project_id = $1
+   )
+`
+
+func (q *Queries) ListNotificationRecipients(ctx context.Context, projectID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listNotificationRecipients, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listVisibleNotifications = `-- name: ListVisibleNotifications :many

@@ -748,10 +748,20 @@ func (s *Server) notificationService() notifications.NotificationService {
 		return nil
 	}
 	return notifications.NewDefaultService(notifications.Config{
-		Store:  s.persistence,
-		Secret: s.secretKey,
-		Logger: s.logger,
+		Store:     s.persistence,
+		Secret:    s.secretKey,
+		Logger:    s.logger,
+		Publisher: realtimeNotificationPublisher{server: s},
 	})
+}
+
+type realtimeNotificationPublisher struct{ server *Server }
+
+func (p realtimeNotificationPublisher) Publish(ctx context.Context, channel, payload string) error {
+	if p.server.realtime == nil {
+		return nil
+	}
+	return p.server.realtime.Publish(ctx, channel, []byte(payload))
 }
 
 func (s *Server) metricsRetention() *servers.MetricsSweeper {

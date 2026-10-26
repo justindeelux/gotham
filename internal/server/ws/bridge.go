@@ -22,6 +22,8 @@ const logPattern = "logs:*:*"
 
 const taskPattern = "tasks:*"
 
+const notificationPattern = "notifications:*"
+
 func LogChannel(serverID, containerID string) string {
 	return "logs:" + serverID + ":" + containerID
 }
@@ -138,7 +140,7 @@ func NewBridge(hub *Hub, rdb *redis.Client, logger *slog.Logger) *Bridge {
 }
 
 func (b *Bridge) redisSubscribe(ctx context.Context) (messageStream, error) {
-	sub := b.rdb.PSubscribe(ctx, logPattern, taskPattern)
+	sub := b.rdb.PSubscribe(ctx, logPattern, taskPattern, notificationPattern)
 	if _, err := sub.Receive(ctx); err != nil {
 		_ = sub.Close()
 		return messageStream{}, fmt.Errorf("ws: redis subscribe: %w", err)

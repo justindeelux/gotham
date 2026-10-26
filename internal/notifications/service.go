@@ -45,6 +45,7 @@ type Config struct {
 	Logger      *slog.Logger
 	Mailer      Mailer
 	HTTPClient  *http.Client
+	Publisher   Publisher
 	Workers     int
 	QueueSize   int
 	SendTimeout time.Duration
@@ -72,6 +73,7 @@ type Service struct {
 	now         func() time.Time
 
 	factory func(Channel) (Notifier, error)
+	emitter *Emitter
 
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
@@ -132,6 +134,7 @@ func NewService(cfg Config) *Service {
 		workers:     workers,
 		sendTimeout: sendTimeout,
 		now:         now,
+		emitter:     NewEmitter(cfg.Publisher),
 		baseCtx:     baseCtx,
 		baseCancel:  baseCancel,
 		queue:       make(chan Event, queueSize),
@@ -466,19 +469,23 @@ func (s *Service) ListNotifications(ctx context.Context, userID uuid.UUID, limit
 	}
 	views := make([]NotificationView, 0, len(notifications))
 	for _, notification := range notifications {
-		views = append(views, NotificationView{
-			ID:           notification.ID,
-			EventKey:     notification.EventKey,
-			ResourceType: notification.ResourceType,
-			ResourceID:   resourceIDString(notification.ResourceID),
-			ProjectID:    resourceIDString(notification.ProjectID),
-			Name:         notification.Name,
-			Host:         notification.Host,
-			Error:        notification.Error,
-			CreatedAt:    notification.CreatedAt,
-		})
+		views = append(views, notificationView(notification))
 	}
 	return NotificationPage{Notifications: views, UnreadCount: unread}, nil
+}
+
+func notificationView(notification Notification) NotificationView {
+	return NotificationView{
+		ID:           notification.ID,
+		EventKey:     notification.EventKey,
+		ResourceType: notification.ResourceType,
+		ResourceID:   resourceIDString(notification.ResourceID),
+		ProjectID:    resourceIDString(notification.ProjectID),
+		Name:         notification.Name,
+		Host:         notification.Host,
+		Error:        notification.Error,
+		CreatedAt:    notification.CreatedAt,
+	}
 }
 
 func (s *Service) MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, seenAt time.Time) error {
@@ -508,7 +515,8 @@ func (s *Service) recordNotification(event Event) {
 	if at.IsZero() {
 		at = s.now().UTC()
 	}
-	if err := s.repo.CreateNotification(writeCtx, Notification{
+	notification := Notification{
+		ID:           uuid.New(),
 		EventKey:     event.Key(),
 		ResourceType: event.ResourceType,
 		ResourceID:   event.ResourceID,
@@ -517,10 +525,34 @@ func (s *Service) recordNotification(event Event) {
 		Host:         event.Host,
 		Error:        truncateText(event.Error, maxEventError),
 		CreatedAt:    at.UTC(),
-	}); err != nil {
+	}
+	if err := s.repo.CreateNotification(writeCtx, notification); err != nil {
 		if s.baseCtx.Err() == nil {
 			s.logger.Error("notifications: store in-app notification",
 				"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
+		}
+		return
+	}
+	s.publishNotification(writeCtx, notification)
+}
+
+func (s *Service) publishNotification(ctx context.Context, notification Notification) {
+	if s.emitter == nil || s.emitter.pub == nil {
+		return
+	}
+	recipients, err := s.repo.ListNotificationRecipients(ctx, notification.ProjectID)
+	if err != nil {
+		if s.baseCtx.Err() == nil {
+			s.logger.Error("notifications: resolve realtime recipients",
+				"event", string(notification.EventKey), "resource_id", notification.ResourceID.String(), "error", err)
+		}
+		return
+	}
+	view := notificationView(notification)
+	for _, recipient := range recipients {
+		if err := s.emitter.Emit(ctx, recipient, view); err != nil {
+			s.logger.Warn("notifications: publish realtime notification",
+				"user_id", recipient.String(), "notification_id", notification.ID.String(), "error", err)
 		}
 	}
 }

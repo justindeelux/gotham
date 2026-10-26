@@ -25,6 +25,7 @@ type Repository interface {
 	ListDeliveries(ctx context.Context, channelID uuid.UUID, limit int) ([]Delivery, error)
 	ResourceProject(ctx context.Context, resourceType string, resourceID uuid.UUID) (uuid.UUID, error)
 	CreateNotification(ctx context.Context, notification Notification) error
+	ListNotificationRecipients(ctx context.Context, projectID uuid.UUID) ([]uuid.UUID, error)
 	ListNotifications(ctx context.Context, userID uuid.UUID, limit int) ([]Notification, int64, error)
 	MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, seenAt time.Time) error
 }
@@ -175,6 +176,7 @@ func (r *storeRepository) ResourceProject(ctx context.Context, resourceType stri
 func (r *storeRepository) CreateNotification(ctx context.Context, notification Notification) error {
 	return r.store.InTx(ctx, func(tx *store.Store) error {
 		if err := tx.CreateNotification(ctx, sqlc.CreateNotificationParams{
+			ID:           pgUUID(notification.ID),
 			EventKey:     string(notification.EventKey),
 			ResourceType: nullableText(notification.ResourceType),
 			ResourceID:   pgUUID(notification.ResourceID),
@@ -191,6 +193,18 @@ func (r *storeRepository) CreateNotification(ctx context.Context, notification N
 		}
 		return nil
 	})
+}
+
+func (r *storeRepository) ListNotificationRecipients(ctx context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.store.ListNotificationRecipients(ctx, pgUUID(projectID))
+	if err != nil {
+		return nil, fmt.Errorf("notifications: list notification recipients: %w", err)
+	}
+	recipients := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		recipients = append(recipients, uuidFromPG(row))
+	}
+	return recipients, nil
 }
 
 func (r *storeRepository) ListNotifications(ctx context.Context, userID uuid.UUID, limit int) ([]Notification, int64, error) {

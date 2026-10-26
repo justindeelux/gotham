@@ -6,7 +6,6 @@ import {
   NSpace,
   NDrawer,
   NDrawerContent,
-  NText,
 } from "naive-ui";
 import { computed } from "vue";
 import { RouterLink, useRoute } from "vue-router";
@@ -16,6 +15,7 @@ import ContainersTable from "@/features/servers/components/ContainersTable.vue";
 import ContainersToolbar from "@/features/servers/components/ContainersToolbar.vue";
 import LogViewer from "@/features/servers/components/LogViewer.vue";
 import { useContainersPage } from "@/features/servers/composables/useContainersPage";
+import PageHeader from "@/shared/ui/PageHeader.vue";
 
 const route = useRoute();
 const serverId = computed<string>(() => String(route.params.id ?? ""));
@@ -54,25 +54,26 @@ const emptyDescription = computed<string>(() => {
 
 <template>
   <NSpace vertical :size="16">
-    <nav class="breadcrumb" :aria-label="$t('servers.detail.breadcrumbNav')">
-      <RouterLink to="/servers">{{ $t("servers.detail.serversBreadcrumb") }}</RouterLink>
-      <span class="breadcrumb__sep">/</span>
-      <span class="muted" aria-current="page">{{ serverName || serverId }}</span>
-    </nav>
+    <PageHeader>
+      <template #breadcrumb>
+        <nav class="breadcrumb" :aria-label="$t('servers.detail.breadcrumbNav')">
+          <RouterLink to="/servers">{{ $t("servers.detail.serversBreadcrumb") }}</RouterLink>
+          <span class="breadcrumb__sep">/</span>
+          <span class="muted" aria-current="page">{{ serverName || serverId }}</span>
+        </nav>
+      </template>
+      <template #title>{{ $t("servers.containers.title") }}</template>
+      <template #meta>
+        <span v-if="serverName">{{ serverName }}</span>
+      </template>
+      <template #actions>
+        <NButton secondary :loading="loading" @click="fetchContainers(true)">
+          {{ $t("servers.containers.refresh") }}
+        </NButton>
+      </template>
+    </PageHeader>
 
     <NCard>
-      <template #header>
-        <NSpace align="center" justify="space-between">
-          <NSpace align="center" :size="10">
-            <NText strong>{{ $t("servers.containers.title") }}</NText>
-            <NText v-if="serverName" depth="3">{{ serverName }}</NText>
-          </NSpace>
-          <NButton secondary :loading="loading" @click="fetchContainers(true)">
-            {{ $t("servers.containers.refresh") }}
-          </NButton>
-        </NSpace>
-      </template>
-
       <NAlert
         v-if="error"
         type="error"

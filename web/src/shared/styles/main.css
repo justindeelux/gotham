@@ -362,6 +362,7 @@ a {
 
 @media (max-width: 860px) {
   .page-actions {
+    width: 100%;
     margin-left: 0;
   }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAvatar, NButton, NSpace, NText } from "naive-ui";
+import { NAvatar, NButton } from "naive-ui";
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 
@@ -9,6 +9,7 @@ import {
   detailInitials,
   summaryLine,
 } from "@/features/servers/utils/serverDetailView";
+import PageHeader from "@/shared/ui/PageHeader.vue";
 
 interface Props {
   server: Server;
@@ -27,16 +28,16 @@ const summary = computed<string>(() => summaryLine(props.server));
 </script>
 
 <template>
-  <div class="page-head">
-    <NAvatar round :size="48">{{ initials }}</NAvatar>
-    <div class="page-head__title">
-      <NSpace align="center" :size="10">
-        <NText strong style="font-size: 20px">{{ server.name }}</NText>
-        <ServerStatusTag :status="server.status" size="medium" />
-      </NSpace>
-      <NText depth="3">{{ summary }}</NText>
-    </div>
-    <NSpace class="page-head__actions" align="center" :size="8">
+  <PageHeader>
+    <template #identity>
+      <NAvatar round :size="48">{{ initials }}</NAvatar>
+    </template>
+    <template #title>{{ server.name }}</template>
+    <template #badges>
+      <ServerStatusTag :status="server.status" size="medium" />
+    </template>
+    <template #meta>{{ summary }}</template>
+    <template #actions>
       <NButton @click="emit('edit')">
         {{ $t("servers.card.edit") }}
       </NButton>
@@ -53,27 +54,6 @@ const summary = computed<string>(() => summaryLine(props.server));
           </NButton>
         </template>
       </RouterLink>
-    </NSpace>
-  </div>
+    </template>
+  </PageHeader>
 </template>
-
-<style scoped>
-.page-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.page-head__title {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  flex: 1;
-  min-width: 0;
-}
-
-.page-head__actions {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-</style>

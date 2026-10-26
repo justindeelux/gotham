@@ -28,6 +28,7 @@ export default defineConfig({
     "i18n-settings-live.spec.ts",
     "modal-scroll.spec.ts",
     "page-head-layout.spec.ts",
+    "page-head-detail-layout.spec.ts",
     "profile-layout.spec.ts",
     "projects-layout.spec.ts",
     "services-templates-layout.spec.ts",

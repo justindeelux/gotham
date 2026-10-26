@@ -297,6 +297,10 @@ func (s *Server) routes() (http.Handler, error) {
 		}
 
 		s.notify = s.notificationService()
+		if nodes, ok := s.servers.(interface{ SetStateNotifier(servers.StateNotifier) }); ok {
+			notifier, _ := s.notify.(servers.StateNotifier)
+			nodes.SetStateNotifier(notifier)
+		}
 		notifications.Mount(api, s.resourceAuth(), UserIDFromContext, s.notify)
 
 		containerService := s.containerService()
@@ -965,6 +969,11 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	if nodes, ok := s.servers.(interface{ RunOfflineSweep(context.Context) }); ok {
+		sweepCtx, cancelSweep := context.WithCancel(ctx)
+		defer cancelSweep()
+		go nodes.RunOfflineSweep(sweepCtx)
+	}
 	if panel, ok := s.proxy.(interface{ RunPanelCertificates(context.Context) }); ok {
 		panelCtx, cancelPanel := context.WithCancel(ctx)
 		defer cancelPanel()

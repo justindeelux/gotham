@@ -21,6 +21,17 @@ describe("channelHelpers", () => {
       "deploy_failure",
       "backup_success",
       "backup_failure",
+      "server_offline",
+      "server_online",
+    ]);
+  });
+
+  it("keeps server events opt-in on new global channels", () => {
+    expect(emptyChannelForm().events).toEqual([
+      "deploy_success", "deploy_failure", "backup_success", "backup_failure",
+    ]);
+    expect(keepDeliverableEvents("application", ["server_offline"])).toEqual([
+      "deploy_success", "deploy_failure",
     ]);
   });
 

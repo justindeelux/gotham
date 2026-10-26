@@ -14,7 +14,7 @@ import type { NotificationItem } from "@/features/notifications/api/inbox";
 import notificationsEn from "@/features/notifications/locales/en";
 import notificationsVi from "@/features/notifications/locales/vi";
 import { useNotificationInboxStore } from "@/features/notifications/stores/inbox";
-import { notificationText } from "@/features/notifications/utils/inbox";
+import { notificationIcon, notificationTone, notificationText } from "@/features/notifications/utils/inbox";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 import {
   i18n,
@@ -179,5 +179,20 @@ describe("notification inbox copy", () => {
     } finally {
       syncComposerLocale("en");
     }
+  });
+});
+
+
+describe("server notification events", () => {
+  it("localizes server transitions and gives them distinct tones", () => {
+    const params = { name: "edge", host: "192.0.2.1", error: "" };
+    expect(notificationText("server_offline", params)).toBe("Server edge is offline");
+    expect(notificationText("server_online", params)).toBe("Server edge is back online");
+    expect(notificationIcon("server_offline")).toBe("server");
+    expect(notificationTone("server_offline")).toBe("danger");
+    expect(notificationTone("server_online")).toBe("success");
+    syncComposerLocale("vi");
+    expect(notificationText("server_offline", params)).toBe("Máy chủ edge mất kết nối");
+    expect(notificationText("server_online", params)).toBe("Máy chủ edge đã kết nối lại");
   });
 });

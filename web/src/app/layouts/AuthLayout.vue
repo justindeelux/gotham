@@ -171,8 +171,8 @@ const valueProps = computed<ValueProp[]>(() => [
 
 .eyebrow {
   font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-eyebrow);
   text-transform: uppercase;
   color: var(--muted);
 }

@@ -30,8 +30,8 @@ import { RouterLink } from "vue-router";
 
 .eyebrow {
   font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-eyebrow);
   text-transform: uppercase;
   color: var(--muted);
   margin: 0;
@@ -39,13 +39,12 @@ import { RouterLink } from "vue-router";
 
 .denied-page h1 {
   font-size: var(--text-2xl);
-  line-height: 1.25;
+  line-height: var(--leading-title);
   color: var(--fg-2);
   margin: 0 0 var(--space-2);
 }
 
 .page-desc {
-  color: var(--muted);
   margin: 0 0 var(--space-4);
 }
 </style>

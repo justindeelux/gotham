@@ -38,6 +38,12 @@ by the control plane. A project that is not granted is invisible — lists leave
 it out and a direct request answers `404`, the same as a missing resource.
 Access is checked on every request, so a grant change takes effect immediately.
 
+The notification inbox follows the same project grants: members see only
+notifications for their granted projects, created from the time of the grant
+onward. Nothing outside those projects is shown, including notifications without
+a project. Revoking access hides the project's notifications immediately. The
+owner sees every notification.
+
 Projects are created and deleted by the owner. A member with a grant can rename
 that project and manage its contents.
 

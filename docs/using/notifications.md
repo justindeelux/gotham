@@ -4,6 +4,40 @@ title: Notifications
 
 # Notifications
 
+Gotham records deploy and backup results in the in-app inbox, even when no
+notification channel is configured. Channels are an optional way to send the
+same events to Discord, Slack, Telegram or email outside the panel.
+
+## In-app inbox
+
+Every signed-in person has a bell in the topbar, with a badge for unread
+notifications. Click it, or focus it and press Enter or Space, to open the inbox.
+It loads the newest 30 notifications you can see, newest first. Each entry shows
+the deploy or backup result, the application or database name, the host or error
+when available, and a relative time.
+
+The inbox records deploy success, deploy failure, backup success and backup
+failure. **Send test** only tests a channel; it does not create an inbox entry.
+New notifications arrive without reloading while the page is open. If the live
+connection is unavailable, the visible page refreshes the inbox about once a
+minute.
+
+Opening the inbox marks notifications through the newest loaded entry as seen,
+including older entries beyond the displayed list. The unread count belongs to
+your account and is saved across reloads and devices.
+
+Click an entry to open its application or database. If the resource no longer
+exists, the notification stays in the inbox, but its destination is unavailable.
+Gotham keeps the newest 500 notifications across the whole instance and trims
+older ones automatically.
+
+The owner sees every notification. Members see only notifications for their
+granted projects, created from the time access was granted onward. Revoking a
+grant hides those notifications immediately; notifications without a project are
+owner-only. See [Members and access](/using/members-access).
+
+## Optional channels
+
 Open **Settings → Notifications** (`/settings/notifications`). A channel belongs
 to one application or one database, and only people who can reach that resource
 see it in the list.

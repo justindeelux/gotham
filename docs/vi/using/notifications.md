@@ -4,6 +4,39 @@ title: Thông báo
 
 # Thông báo
 
+Gotham ghi nhận kết quả triển khai và sao lưu trong hộp thông báo ngay trên bảng
+điều khiển, kể cả khi chưa cấu hình kênh nào. Bạn có thể thêm kênh để gửi cùng các
+sự kiện đó ra ngoài qua Discord, Slack, Telegram hoặc email.
+
+## Hộp thông báo
+
+Mọi người đã đăng nhập đều có biểu tượng chuông trên thanh trên cùng, kèm số thông
+báo chưa xem. Nhấn vào chuông, hoặc đưa tiêu điểm đến chuông rồi nhấn Enter hay
+Space, để mở hộp thông báo. Hộp tải 30 thông báo mới nhất mà bạn được xem, sắp xếp
+từ mới đến cũ. Mỗi mục hiển thị kết quả triển khai hoặc sao lưu, tên ứng dụng hoặc
+cơ sở dữ liệu, máy chủ hoặc lỗi nếu có, và thời gian tương đối.
+
+Hộp ghi nhận bốn sự kiện: triển khai thành công, triển khai thất bại, sao lưu thành
+công và sao lưu thất bại. **Gửi thử** chỉ kiểm tra kênh, không tạo mục trong hộp
+thông báo. Khi trang đang mở, thông báo mới xuất hiện mà không cần tải lại trang.
+Nếu kết nối trực tiếp không khả dụng, hộp thông báo được làm mới khoảng mỗi phút
+khi trang đang hiển thị.
+
+Mở hộp thông báo sẽ đánh dấu đã xem đến mục mới nhất đã tải, kể cả các mục cũ hơn
+nằm ngoài danh sách hiển thị. Số thông báo chưa xem được lưu theo tài khoản, giữ
+nguyên khi tải lại trang và dùng trên thiết bị khác.
+
+Nhấn vào một mục để mở ứng dụng hoặc cơ sở dữ liệu tương ứng. Nếu tài nguyên không
+còn tồn tại, thông báo vẫn được giữ trong hộp nhưng không mở được tài nguyên đó.
+Gotham giữ 500 thông báo mới nhất cho toàn bộ instance và tự động xóa các mục cũ hơn.
+
+Chủ sở hữu thấy mọi thông báo. Thành viên chỉ thấy thông báo thuộc các dự án được
+cấp quyền, được tạo từ thời điểm cấp quyền trở đi. Thu hồi quyền sẽ ẩn ngay các
+thông báo đó; thông báo không thuộc dự án nào chỉ hiện với chủ sở hữu. Xem
+[Thành viên và quyền truy cập](/vi/using/members-access).
+
+## Kênh tùy chọn
+
 Mở **Cài đặt → Thông báo** (`/settings/notifications`). Một kênh thuộc về một ứng
 dụng hoặc một cơ sở dữ liệu, và chỉ người truy cập được tài nguyên đó mới thấy kênh
 trong danh sách.

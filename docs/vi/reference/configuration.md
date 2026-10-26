@@ -242,7 +242,7 @@ trình khởi động, và một module bị tắt sẽ ghi log cờ của nó l
 | `FEATURE_DATABASES` | bật | Cơ sở dữ liệu được quản lý và sao lưu |
 | `FEATURE_SERVICES` | bật | Dịch vụ compose |
 | `FEATURE_FILES` | bật | Trình quản lý tệp trên node |
-| `FEATURE_NOTIFICATIONS` | bật | Kênh thông báo |
+| `FEATURE_NOTIFICATIONS` | bật | Hộp thông báo trong bảng điều khiển và các kênh thông báo |
 | `FEATURE_PROXY` | bật | Proxy, DNS và quản lý chứng chỉ |
 | `FEATURE_METRICS` | bật | Thu thập và truy vấn chỉ số của node |
 | `FEATURE_UPDATES` | bật | Bề mặt tự cập nhật và vòng lặp tự động |

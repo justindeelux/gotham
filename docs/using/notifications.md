@@ -4,8 +4,8 @@ title: Notifications
 
 # Notifications
 
-Gotham records deploy and backup results in the in-app inbox, even when no
-notification channel is configured. Channels are an optional way to send the
+Gotham records deploy and backup results and server connection changes in the
+in-app inbox, even when no notification channel is configured. Channels are an optional way to send the
 same events to Discord, Slack, Telegram or email outside the panel.
 
 ## In-app inbox
@@ -13,11 +13,12 @@ same events to Discord, Slack, Telegram or email outside the panel.
 Every signed-in person has a bell in the topbar, with a badge for unread
 notifications. Click it, or focus it and press Enter or Space, to open the inbox.
 It loads the newest 30 notifications you can see, newest first. Each entry shows
-the deploy or backup result, the application or database name, the host or error
+the event, the application, database or server name, the host or error
 when available, and a relative time.
 
 The inbox records deploy success, deploy failure, backup success and backup
-failure. **Send test** only tests a channel; it does not create an inbox entry.
+failure, plus server offline and server back online. Server events are owner-only.
+**Send test** only tests a channel; it does not create an inbox entry.
 New notifications arrive without reloading while the page is open. If the live
 connection is unavailable, the visible page refreshes the inbox about once a
 minute.
@@ -39,8 +40,9 @@ owner-only. See [Members and access](/using/members-access).
 ## Optional channels
 
 Open **Settings → Notifications** (`/settings/notifications`). A channel belongs
-to one application or one database, and only people who can reach that resource
-see it in the list.
+to **All resources**, one application or one database. Only the owner can see or
+manage an All resources channel; a scoped channel is visible to people who can
+reach its resource.
 
 | Kind | Configuration |
 |---|---|
@@ -58,14 +60,27 @@ cannot be changed after creation.
 
 ## Scope and events
 
-A channel watches exactly one application or one database:
+Choose the scope when creating or editing a channel:
 
+- An **All resources** channel receives every selected event, including
+  instance-wide server events.
 - An application channel receives that application's deploy events.
 - A database channel receives that database's backup events.
 
 The subscribable events are `deploy_success`, `deploy_failure`,
-`backup_success` and `backup_failure`. A new channel subscribes to all of them
-unless you select a subset. A disabled channel receives nothing.
+`backup_success`, `backup_failure`, `server_offline` and `server_online`.
+New channels start with the four deploy/backup events selected. Server events
+are opt-in for both existing and new channels: edit an **All resources** channel
+and select them. Application and database channels cannot receive server events.
+A disabled channel receives nothing.
+
+A server is considered offline after at least 30 seconds without a heartbeat.
+Gotham checks every 10 seconds, even when nobody has the servers page open, and
+waits 30 seconds after starting before checking for offline servers. It records
+one offline event per transition and one recovery event on the first successful
+heartbeat after that. Registration alone and first enrollment do not send a
+recovery event. Shorter interruptions do not trigger an alert; repeated outages
+longer than the grace period can produce repeated offline/recovery pairs.
 
 ## Test send and delivery history
 
@@ -78,6 +93,6 @@ summary for failures. A channel keeps its last 50 attempts; older rows are
 trimmed automatically. Delivery never blocks a deploy or backup — it runs on a
 bounded background queue, and a failing channel does not stop the others.
 
-Creating, editing, deleting, enabling and testing a channel needs write access
-to the project the resource belongs to. A member outside that project does not
-see the channel at all.
+For a scoped channel, creating, editing, deleting, enabling and testing needs
+write access to the project the resource belongs to. A member outside that project
+does not see the channel at all.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 )
 
@@ -612,6 +613,22 @@ func (s *Service) BackupFinished(_ context.Context, result databases.BackupResul
 		Name:         result.Database,
 		Error:        result.Error,
 		At:           result.FinishedAt,
+	})
+}
+
+func (s *Service) ServerStateChanged(_ context.Context, change servers.StateChange) {
+	if s == nil || !Enabled() {
+		return
+	}
+	outcome := OutcomeFailure
+	reason := "No heartbeat received for at least 30 seconds"
+	if change.Online {
+		outcome = OutcomeSuccess
+		reason = ""
+	}
+	s.Dispatch(Event{
+		Kind: EventServer, Outcome: outcome, Name: change.Name,
+		Host: change.Host, Error: reason, At: change.At,
 	})
 }
 

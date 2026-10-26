@@ -27,6 +27,8 @@ const vi = {
       deploy_failure: "{name} triển khai thất bại trên {host}",
       backup_success: "Sao lưu {name} trên {host} thành công",
       backup_failure: "Sao lưu {name} trên {host} thất bại",
+      server_offline: "Máy chủ {name} mất kết nối",
+      server_online: "Máy chủ {name} đã kết nối lại",
       unknown: "Cập nhật cho {name} trên {host}",
     },
   },
@@ -65,6 +67,8 @@ const vi = {
     deploy_failure: "Triển khai thất bại",
     backup_success: "Sao lưu thành công",
     backup_failure: "Sao lưu thất bại",
+    server_offline: "Máy chủ mất kết nối",
+    server_online: "Máy chủ đã kết nối lại",
   },
   scopeLabel: {
     allResources: "Mọi tài nguyên",

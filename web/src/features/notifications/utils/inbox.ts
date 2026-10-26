@@ -8,6 +8,8 @@ const knownEventKeys = [
   "deploy_failure",
   "backup_success",
   "backup_failure",
+  "server_offline",
+  "server_online",
 ] as const;
 
 export type NotificationLinkType = "application" | "database";
@@ -42,14 +44,17 @@ export function notificationIcon(eventKey: string): IconName {
   if (eventKey.startsWith("backup_")) {
     return "db";
   }
+  if (eventKey === "server_offline" || eventKey === "server_online") {
+    return "server";
+  }
   return "bell";
 }
 
 export function notificationTone(eventKey: string): NotificationTone {
-  if (eventKey.endsWith("_success")) {
+  if (eventKey.endsWith("_success") || eventKey === "server_online") {
     return "success";
   }
-  if (eventKey.endsWith("_failure")) {
+  if (eventKey.endsWith("_failure") || eventKey === "server_offline") {
     return "danger";
   }
   return "neutral";

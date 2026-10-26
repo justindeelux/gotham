@@ -1,4 +1,7 @@
-import { allNotificationEvents } from "@/features/notifications/api/notifications";
+import {
+  allNotificationEvents,
+  defaultNotificationEvents,
+} from "@/features/notifications/api/notifications";
 import { channelText } from "@/features/notifications/api/notifications";
 import type {
   ChannelConfig,
@@ -43,7 +46,7 @@ export function emptyChannelForm(): ChannelForm {
     name: "",
     kind: "discord",
     enabled: true,
-    events: [...allNotificationEvents],
+    events: [...defaultNotificationEvents],
     resourceType: "",
     resourceId: "",
     webhook_url: "",

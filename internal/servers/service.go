@@ -94,6 +94,8 @@ type ServerService struct {
 	version     string
 	logger      *slog.Logger
 	updater     AgentUpdateOfferer
+	notifier    StateNotifier
+	sweepAfter  time.Time
 	agentUpdate agentUpdateState
 
 	metricMu     sync.Mutex
@@ -126,6 +128,7 @@ func NewService(cfg Config) *ServerService {
 		},
 		lastMetricAt: map[string]time.Time{},
 		now:          time.Now,
+		sweepAfter:   time.Now().Add(heartbeatOfflineAfter),
 	}
 }
 
@@ -977,15 +980,25 @@ func (s *ServerService) RecordHeartbeat(ctx context.Context, nodeID string, req 
 	cpu, mem, disk := req.GetCpuUsage(), req.GetMemUsage(), req.GetDiskUsage()
 	count := req.GetContainerCount()
 
-	updated, err := s.store.UpdateServerMetrics(ctx, sqlc.UpdateServerMetricsParams{
-		ID:             row.ID,
-		CpuUsage:       &cpu,
-		MemUsage:       &mem,
-		DiskUsage:      &disk,
-		ContainerCount: &count,
+	var updated sqlc.Server
+	wasOffline := false
+	err = s.store.InTx(ctx, func(tx *store.Store) error {
+		locked, err := tx.GetServerByIDForUpdate(ctx, row.ID)
+		if err != nil {
+			return err
+		}
+		wasOffline = locked.Status == StatusOffline
+		updated, err = tx.UpdateServerMetrics(ctx, sqlc.UpdateServerMetricsParams{
+			ID: row.ID, CpuUsage: &cpu, MemUsage: &mem,
+			DiskUsage: &disk, ContainerCount: &count,
+		})
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("record heartbeat: %w", err)
+	}
+	if wasOffline {
+		s.notifyState(ctx, updated, true)
 	}
 
 	s.recordMetric(ctx, row.ID, req)
@@ -1003,9 +1016,17 @@ func (s *ServerService) RecordHeartbeat(ctx context.Context, nodeID string, req 
 }
 
 func (s *ServerService) sweepOffline(ctx context.Context) {
+	if s.now().Before(s.sweepAfter) {
+		return
+	}
 	cutoff := s.now().Add(-heartbeatOfflineAfter)
-	if err := s.store.MarkStaleServersOffline(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true}); err != nil {
+	rows, err := s.store.MarkStaleServersOffline(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+	if err != nil {
 		s.logger.Warn("servers: offline sweep", "error", err)
+		return
+	}
+	for _, row := range rows {
+		s.notifyState(ctx, row, false)
 	}
 }
 

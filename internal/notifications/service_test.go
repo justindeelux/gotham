@@ -369,7 +369,7 @@ func TestCreateChannelSealsAndRedacts(t *testing.T) {
 	if view.Config.WebhookURL == webhook || strings.Contains(view.Config.WebhookURL, "8f2c-secret") {
 		t.Errorf("view leaks the webhook: %q", view.Config.WebhookURL)
 	}
-	if len(view.Events) != len(AllEvents) {
+	if len(view.Events) != len(defaultEvents) {
 		t.Errorf("events = %v, want the default subscription", view.Events)
 	}
 	if !view.Enabled {

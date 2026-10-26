@@ -63,9 +63,13 @@ const (
 	EventDeployFailure EventKey = "deploy_failure"
 	EventBackupSuccess EventKey = "backup_success"
 	EventBackupFailure EventKey = "backup_failure"
+	EventServerOffline EventKey = "server_offline"
+	EventServerOnline  EventKey = "server_online"
 )
 
-var AllEvents = []EventKey{EventDeploySuccess, EventDeployFailure, EventBackupSuccess, EventBackupFailure}
+var defaultEvents = []EventKey{EventDeploySuccess, EventDeployFailure, EventBackupSuccess, EventBackupFailure}
+
+var AllEvents = append(append([]EventKey(nil), defaultEvents...), EventServerOffline, EventServerOnline)
 
 func (k EventKey) Valid() bool {
 	for _, known := range AllEvents {
@@ -82,6 +86,7 @@ const (
 	EventDeploy EventKind = "deploy"
 	EventBackup EventKind = "backup"
 	EventTest   EventKind = "test"
+	EventServer EventKind = "server"
 )
 
 type Outcome string
@@ -104,6 +109,10 @@ type Event struct {
 
 func (e Event) Key() EventKey {
 	switch {
+	case e.Kind == EventServer && e.Outcome == OutcomeSuccess:
+		return EventServerOnline
+	case e.Kind == EventServer && e.Outcome == OutcomeFailure:
+		return EventServerOffline
 	case e.Kind == EventDeploy && e.Outcome == OutcomeSuccess:
 		return EventDeploySuccess
 	case e.Kind == EventDeploy && e.Outcome == OutcomeFailure:
@@ -120,6 +129,12 @@ func (e Event) Key() EventKey {
 func (e Event) Summary() string {
 	if e.Kind == EventTest {
 		return "Test notification: " + e.Name
+	}
+	if e.Kind == EventServer {
+		if e.Outcome == OutcomeSuccess {
+			return "Server is back online: " + e.Name
+		}
+		return "Server is offline: " + e.Name
 	}
 	noun := "Deploy"
 	if e.Kind == EventBackup {
@@ -522,7 +537,7 @@ func parseResource(resourceType, resourceID string) (string, uuid.UUID, error) {
 
 func normalizeEvents(events []EventKey) ([]EventKey, error) {
 	if events == nil {
-		return append([]EventKey(nil), AllEvents...), nil
+		return append([]EventKey(nil), defaultEvents...), nil
 	}
 	if len(events) == 0 {
 		return nil, fmt.Errorf("%w: events must name at least one event", ErrValidation)

@@ -363,19 +363,60 @@ func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
 	return items, nil
 }
 
-const markStaleServersOffline = `-- name: MarkStaleServersOffline :exec
+const markStaleServersOffline = `-- name: MarkStaleServersOffline :many
 UPDATE servers
 SET status = 'offline',
     updated_at = now()
 WHERE status = 'ready' AND (last_seen IS NULL OR last_seen < $1)
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, host_key_fingerprint, encrypted_password, agent_key_fingerprint, agent_legacy_leaf
 `
 
 // Flips nodes that were ready but have not heartbeated since the cutoff to
 // offline, so the read path always reports the live status the FE understands
 // (A4-6). A ready row with no last_seen is stale by definition.
-func (q *Queries) MarkStaleServersOffline(ctx context.Context, lastSeen pgtype.Timestamptz) error {
-	_, err := q.db.Exec(ctx, markStaleServersOffline, lastSeen)
-	return err
+func (q *Queries) MarkStaleServersOffline(ctx context.Context, lastSeen pgtype.Timestamptz) ([]Server, error) {
+	rows, err := q.db.Query(ctx, markStaleServersOffline, lastSeen)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Server{}
+	for rows.Next() {
+		var i Server
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Ip,
+			&i.Port,
+			&i.SshUser,
+			&i.SshKeyID,
+			&i.Status,
+			&i.NodeID,
+			&i.Os,
+			&i.DockerVersion,
+			&i.Arch,
+			&i.TotalMem,
+			&i.TotalDisk,
+			&i.CpuUsage,
+			&i.MemUsage,
+			&i.DiskUsage,
+			&i.ContainerCount,
+			&i.LastSeen,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HostKeyFingerprint,
+			&i.EncryptedPassword,
+			&i.AgentKeyFingerprint,
+			&i.AgentLegacyLeaf,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const pinServerHostKey = `-- name: PinServerHostKey :one

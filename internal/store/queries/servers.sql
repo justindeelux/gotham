@@ -126,14 +126,15 @@ WHERE id = (
 )
 RETURNING *;
 
--- name: MarkStaleServersOffline :exec
+-- name: MarkStaleServersOffline :many
 -- Flips nodes that were ready but have not heartbeated since the cutoff to
 -- offline, so the read path always reports the live status the FE understands
 -- (A4-6). A ready row with no last_seen is stale by definition.
 UPDATE servers
 SET status = 'offline',
     updated_at = now()
-WHERE status = 'ready' AND (last_seen IS NULL OR last_seen < $1);
+WHERE status = 'ready' AND (last_seen IS NULL OR last_seen < $1)
+RETURNING *;
 
 -- name: UpdateServerMetrics :one
 UPDATE servers

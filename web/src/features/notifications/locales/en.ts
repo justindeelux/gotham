@@ -27,6 +27,8 @@ const en = {
       deploy_failure: "{name} failed to deploy on {host}",
       backup_success: "Backup of {name} on {host} succeeded",
       backup_failure: "Backup of {name} on {host} failed",
+      server_offline: "Server {name} is offline",
+      server_online: "Server {name} is back online",
       unknown: "Update for {name} on {host}",
     },
   },
@@ -66,6 +68,8 @@ const en = {
     deploy_failure: "Deploy failed",
     backup_success: "Backup succeeded",
     backup_failure: "Backup failed",
+    server_offline: "Server offline",
+    server_online: "Server back online",
   },
   scopeLabel: {
     allResources: "All resources",

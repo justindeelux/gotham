@@ -367,7 +367,11 @@ func (s *Store) ClaimServerByNodeID(ctx context.Context, params sqlc.ClaimServer
 	return s.queries.ClaimServerByNodeID(ctx, params)
 }
 
-func (s *Store) MarkStaleServersOffline(ctx context.Context, cutoff pgtype.Timestamptz) error {
+func (s *Store) GetServerByIDForUpdate(ctx context.Context, id pgtype.UUID) (sqlc.Server, error) {
+	return s.queries.GetServerByIDForUpdate(ctx, id)
+}
+
+func (s *Store) MarkStaleServersOffline(ctx context.Context, cutoff pgtype.Timestamptz) ([]sqlc.Server, error) {
 	return s.queries.MarkStaleServersOffline(ctx, cutoff)
 }
 

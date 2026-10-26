@@ -811,6 +811,7 @@ func (s *Server) updatesService() updates.Service {
 		}
 	}
 	config, err := updates.FromEnv(current, s.logger)
+	config.Notifier, _ = s.notify.(updates.AvailabilityNotifier)
 	if s.persistence != nil {
 		config.Schedules = updates.NewStoreSchedule(s.persistence)
 	}

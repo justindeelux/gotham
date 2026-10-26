@@ -18,6 +18,7 @@ import (
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/updates"
 )
 
 const (
@@ -640,6 +641,16 @@ func (s *Service) CertificateExpiring(_ context.Context, expiry proxy.Certificat
 	s.Dispatch(Event{
 		Kind: EventCertificate, Outcome: OutcomeFailure, Name: expiry.Domain, Host: expiry.Domain,
 		Error: "Certificate expires at " + expiry.NotAfter.UTC().Format(time.RFC3339), At: expiry.At,
+	})
+}
+
+func (s *Service) UpdateAvailable(_ context.Context, update updates.AvailableUpdate) {
+	if s == nil || !Enabled() {
+		return
+	}
+	s.Dispatch(Event{
+		Kind: EventUpdate, Outcome: OutcomeSuccess,
+		Name: update.Version + " (" + string(update.Channel) + ")", At: update.At,
 	})
 }
 

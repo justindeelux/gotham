@@ -4,21 +4,22 @@ title: Notifications
 
 # Notifications
 
-Gotham records deploy and backup results, server connection changes and certificate
-expiry warnings in the in-app inbox, even when no notification channel is configured.
-Channels are an optional way to send the same events to Discord, Slack, Telegram or email outside the panel.
+Gotham records deploy and backup results, server connection changes, certificate
+expiry warnings and available Gotham updates in the in-app inbox, even when no
+notification channel is configured. Channels are an optional way to send the same
+events to Discord, Slack, Telegram or email outside the panel.
 
 ## In-app inbox
 
 Every signed-in person has a bell in the topbar, with a badge for unread
 notifications. Click it, or focus it and press Enter or Space, to open the inbox.
 It loads the newest 30 notifications you can see, newest first. Each entry shows
-the event, the resource or domain name, the host or error when available, and a
-relative time.
+the event, the resource, domain or version, the host or error when available, and
+a relative time.
 
 The inbox records deploy success, deploy failure, backup success and backup
-failure, plus server offline, server back online and certificate expiry warnings.
-Server and certificate events are owner-only.
+failure, plus server offline, server back online, certificate expiry warnings and
+Gotham update availability. Server, certificate and update events are owner-only.
 **Send test** only tests a channel; it does not create an inbox entry.
 New notifications arrive without reloading while the page is open. If the live
 connection is unavailable, the visible page refreshes the inbox about once a
@@ -64,15 +65,15 @@ cannot be changed after creation.
 Choose the scope when creating or editing a channel:
 
 - An **All resources** channel receives every selected event, including
-  instance-wide server and certificate events.
+  instance-wide server, certificate and update events.
 - An application channel receives that application's deploy events.
 - A database channel receives that database's backup events.
 
 The subscribable events are `deploy_success`, `deploy_failure`,
-`backup_success`, `backup_failure`, `server_offline`, `server_online` and
-`certificate_expiring`.
-New channels start with the four deploy/backup events selected. Server and certificate events
-are opt-in for both existing and new channels: edit an **All resources** channel
+`backup_success`, `backup_failure`, `server_offline`, `server_online`,
+`certificate_expiring` and `update_available`.
+New channels start with the four deploy/backup events selected. Server, certificate
+and update events are opt-in for both existing and new channels: edit an **All resources** channel
 and select them. Application and database channels cannot receive these
 instance-wide events.
 A disabled channel receives nothing.
@@ -93,6 +94,15 @@ counting as an observation. A failed read does not reset a pending warning.
 Each certificate and expiry date produces one warning; a renewed certificate
 with a new expiry date can trigger a warning near that date.
 Restarting Gotham clears this memory, so a certificate still near expiry may notify again.
+
+An update-available notification is created when a successful manual or scheduled
+Gotham update check finds a newer version for the selected update channel. Each
+channel/version pair notifies once; a failed check or an up-to-date result does
+not clear that memory. Notifications require the update service to be running:
+`FEATURE_UPDATES=false` disables it. With auto-update off, scheduled checks are
+off by default, so only manual checks in the panel notify unless a check schedule
+has been enabled. These notifications do not enable checks or automatic updates.
+Restarting Gotham clears this memory, so the same available update may notify again.
 
 ## Test send and delivery history
 

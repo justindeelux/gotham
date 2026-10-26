@@ -24,6 +24,7 @@ describe("channelHelpers", () => {
       "server_offline",
       "server_online",
       "certificate_expiring",
+      "update_available",
     ]);
   });
 

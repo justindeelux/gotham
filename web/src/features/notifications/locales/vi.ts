@@ -30,6 +30,7 @@ const vi = {
       server_offline: "Máy chủ {name} mất kết nối",
       server_online: "Máy chủ {name} đã kết nối lại",
       certificate_expiring: "Chứng chỉ cho {name} sắp hết hạn",
+      update_available: "Đã có Gotham {name}",
       unknown: "Cập nhật cho {name} trên {host}",
     },
   },
@@ -71,6 +72,7 @@ const vi = {
     server_offline: "Máy chủ mất kết nối",
     server_online: "Máy chủ đã kết nối lại",
     certificate_expiring: "Chứng chỉ sắp hết hạn",
+    update_available: "Có bản cập nhật Gotham",
   },
   scopeLabel: {
     allResources: "Mọi tài nguyên",

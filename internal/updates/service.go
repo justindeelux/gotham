@@ -61,6 +61,7 @@ type Config struct {
 	Schedules       ScheduleStore
 	Timezone        func() string
 	GOARCH          string
+	Notifier        AvailabilityNotifier
 
 	Client  *http.Client
 	Restart RestartFunc
@@ -75,6 +76,8 @@ type service struct {
 	backoff  *updateBackoff
 	logger   *slog.Logger
 	interval time.Duration
+	notifier AvailabilityNotifier
+	notified map[updateNotificationKey]bool
 
 	schedules        ScheduleStore
 	timezone         func() string
@@ -167,6 +170,8 @@ func NewService(cfg Config) (Service, error) {
 		backoff:  newUpdateBackoff(backoffStore, logger),
 		logger:   logger,
 		interval: interval,
+		notifier: cfg.Notifier,
+		notified: make(map[updateNotificationKey]bool),
 
 		schedules: cfg.Schedules,
 		timezone:  cfg.Timezone,
@@ -192,6 +197,9 @@ func (s *service) checkOn(ctx context.Context, channel Channel) (*Release, error
 	}
 	release, err := checker.Check(ctx, s.current)
 	s.recordCheck(err)
+	if err == nil {
+		s.notifyAvailable(ctx, checker.channel(), release)
+	}
 	return release, err
 }
 

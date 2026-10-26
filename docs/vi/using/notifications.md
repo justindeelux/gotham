@@ -4,21 +4,22 @@ title: Thông báo
 
 # Thông báo
 
-Gotham ghi nhận kết quả triển khai, sao lưu, thay đổi kết nối máy chủ và cảnh báo
-chứng chỉ sắp hết hạn trong hộp thông báo ngay trên bảng điều khiển, kể cả khi chưa cấu hình kênh nào. Bạn có thể thêm kênh để gửi cùng các
-sự kiện đó ra ngoài qua Discord, Slack, Telegram hoặc email.
+Gotham ghi nhận kết quả triển khai, sao lưu, thay đổi kết nối máy chủ, cảnh báo
+chứng chỉ sắp hết hạn và bản cập nhật Gotham mới trong hộp thông báo ngay trên
+bảng điều khiển, kể cả khi chưa cấu hình kênh nào. Bạn có thể thêm kênh để gửi cùng
+các sự kiện đó ra ngoài qua Discord, Slack, Telegram hoặc email.
 
 ## Hộp thông báo
 
 Mọi người đã đăng nhập đều có biểu tượng chuông trên thanh trên cùng, kèm số thông
 báo chưa xem. Nhấn vào chuông, hoặc đưa tiêu điểm đến chuông rồi nhấn Enter hay
 Space, để mở hộp thông báo. Hộp tải 30 thông báo mới nhất mà bạn được xem, sắp xếp
-từ mới đến cũ. Mỗi mục hiển thị sự kiện, tên tài nguyên hoặc tên miền, địa chỉ máy
-chủ hoặc lỗi nếu có, và thời gian tương đối.
+từ mới đến cũ. Mỗi mục hiển thị sự kiện, tài nguyên, tên miền hoặc phiên bản, địa
+chỉ máy chủ hoặc lỗi nếu có, và thời gian tương đối.
 
 Hộp ghi nhận triển khai thành công, triển khai thất bại, sao lưu thành công, sao
-lưu thất bại, máy chủ mất kết nối, máy chủ kết nối lại và chứng chỉ sắp hết hạn.
-Sự kiện máy chủ và chứng chỉ chỉ hiện với chủ sở hữu. **Gửi thử** chỉ kiểm tra kênh, không tạo mục trong hộp
+lưu thất bại, máy chủ mất kết nối, máy chủ kết nối lại, chứng chỉ sắp hết hạn và
+bản cập nhật Gotham mới. Sự kiện máy chủ, chứng chỉ và cập nhật chỉ hiện với chủ sở hữu. **Gửi thử** chỉ kiểm tra kênh, không tạo mục trong hộp
 thông báo. Khi trang đang mở, thông báo mới xuất hiện mà không cần tải lại trang.
 Nếu kết nối trực tiếp không khả dụng, hộp thông báo được làm mới khoảng mỗi phút
 khi trang đang hiển thị.
@@ -59,15 +60,16 @@ lưu; loại kênh không thể đổi sau khi tạo.
 
 Chọn phạm vi khi tạo hoặc sửa kênh:
 
-- Kênh **Mọi tài nguyên** nhận mọi sự kiện đã chọn, kể cả sự kiện máy chủ và chứng chỉ trên
+- Kênh **Mọi tài nguyên** nhận mọi sự kiện đã chọn, kể cả sự kiện máy chủ, chứng chỉ và cập nhật trên
   toàn instance.
 - Kênh ứng dụng nhận sự kiện triển khai của ứng dụng đó.
 - Kênh cơ sở dữ liệu nhận sự kiện sao lưu của cơ sở dữ liệu đó.
 
 Các sự kiện đăng ký được là `deploy_success`, `deploy_failure`, `backup_success`,
-`backup_failure`, `server_offline`, `server_online` và `certificate_expiring`. Kênh mới chỉ chọn sẵn bốn sự
+`backup_failure`, `server_offline`, `server_online`, `certificate_expiring` và
+`update_available`. Kênh mới chỉ chọn sẵn bốn sự
 kiện triển khai/sao lưu. Với cả kênh cũ và mới, hãy sửa kênh **Mọi tài nguyên** và
-chọn thêm sự kiện máy chủ hoặc chứng chỉ nếu muốn nhận. Kênh ứng dụng và cơ sở dữ
+chọn thêm sự kiện máy chủ, chứng chỉ hoặc cập nhật nếu muốn nhận. Kênh ứng dụng và cơ sở dữ
 liệu không nhận các sự kiện trên toàn instance này. Kênh bị tắt không nhận gì.
 
 Máy chủ được coi là mất kết nối sau ít nhất 30 giây không gửi nhịp tim. Gotham
@@ -86,6 +88,15 @@ bỏ qua, không tính là một lần quan sát. Đọc thất bại không xó
 đang chờ. Mỗi chứng chỉ và ngày hết hạn chỉ tạo một cảnh báo; chứng chỉ được gia
 hạn với ngày hết hạn mới có thể tạo cảnh báo khi gần đến ngày đó.
 Khởi động lại Gotham xóa bộ nhớ này, nên chứng chỉ vẫn gần hết hạn có thể được thông báo lại.
+
+Thông báo có bản cập nhật được tạo khi lần kiểm tra cập nhật Gotham thủ công hoặc
+theo lịch thành công tìm thấy phiên bản mới hơn cho kênh cập nhật đã chọn. Mỗi cặp
+kênh/phiên bản chỉ thông báo một lần; lần kiểm tra thất bại hoặc kết quả đang ở
+bản mới nhất không xóa bộ nhớ này. Thông báo cần dịch vụ cập nhật đang chạy:
+`FEATURE_UPDATES=false` tắt dịch vụ đó. Khi tắt cập nhật tự động, kiểm tra theo lịch
+mặc định cũng tắt, nên chỉ kiểm tra thủ công trên bảng điều khiển tạo thông báo
+nếu chưa bật lịch kiểm tra. Thông báo không bật kiểm tra hay cập nhật tự động.
+Khởi động lại Gotham xóa bộ nhớ này, nên cùng bản cập nhật có thể được thông báo lại.
 
 ## Gửi thử và lịch sử gửi
 

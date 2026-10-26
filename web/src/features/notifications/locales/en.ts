@@ -30,6 +30,7 @@ const en = {
       server_offline: "Server {name} is offline",
       server_online: "Server {name} is back online",
       certificate_expiring: "Certificate for {name} expires soon",
+      update_available: "Gotham {name} is available",
       unknown: "Update for {name} on {host}",
     },
   },
@@ -72,6 +73,7 @@ const en = {
     server_offline: "Server offline",
     server_online: "Server back online",
     certificate_expiring: "Certificate expiring",
+    update_available: "Gotham update available",
   },
   scopeLabel: {
     allResources: "All resources",

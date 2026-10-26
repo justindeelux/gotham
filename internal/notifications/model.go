@@ -66,13 +66,14 @@ const (
 	EventServerOffline       EventKey = "server_offline"
 	EventServerOnline        EventKey = "server_online"
 	EventCertificateExpiring EventKey = "certificate_expiring"
+	EventUpdateAvailable     EventKey = "update_available"
 )
 
 var defaultEvents = []EventKey{EventDeploySuccess, EventDeployFailure, EventBackupSuccess, EventBackupFailure}
 
 var AllEvents = append(
 	append([]EventKey(nil), defaultEvents...),
-	EventServerOffline, EventServerOnline, EventCertificateExpiring,
+	EventServerOffline, EventServerOnline, EventCertificateExpiring, EventUpdateAvailable,
 )
 
 func (k EventKey) Valid() bool {
@@ -92,6 +93,7 @@ const (
 	EventTest        EventKind = "test"
 	EventServer      EventKind = "server"
 	EventCertificate EventKind = "certificate"
+	EventUpdate      EventKind = "update"
 )
 
 type Outcome string
@@ -114,6 +116,8 @@ type Event struct {
 
 func (e Event) Key() EventKey {
 	switch {
+	case e.Kind == EventUpdate:
+		return EventUpdateAvailable
 	case e.Kind == EventCertificate:
 		return EventCertificateExpiring
 	case e.Kind == EventServer && e.Outcome == OutcomeSuccess:
@@ -136,6 +140,9 @@ func (e Event) Key() EventKey {
 func (e Event) Summary() string {
 	if e.Kind == EventTest {
 		return "Test notification: " + e.Name
+	}
+	if e.Kind == EventUpdate {
+		return "Gotham update available: " + e.Name
 	}
 	if e.Kind == EventCertificate {
 		return "Certificate expires soon: " + e.Name

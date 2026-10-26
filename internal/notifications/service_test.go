@@ -878,3 +878,62 @@ func TestTestEventIsClearlyLabelledAndNeverDispatched(t *testing.T) {
 		t.Errorf("Message = %q, want the test headline", event.Message())
 	}
 }
+
+func TestInboxRowIsWrittenWithoutChannels(t *testing.T) {
+	repo := newFakeRepository()
+	event := sampleEvent()
+	projectID := uuid.New()
+	repo.resourceProjects[event.ResourceID] = projectID
+	service := newTestService(t, repo)
+
+	service.Dispatch(event)
+
+	waitFor(t, "the inbox row", func() bool {
+		return len(repo.notificationsSnapshot()) == 1
+	})
+	row := repo.notificationsSnapshot()[0]
+	if row.EventKey != EventDeployFailure {
+		t.Errorf("event_key = %q, want %q", row.EventKey, EventDeployFailure)
+	}
+	if row.ProjectID != projectID {
+		t.Errorf("project_id = %s, want %s", row.ProjectID, projectID)
+	}
+	if row.Name != event.Name || row.Host != event.Host || row.Error != event.Error {
+		t.Errorf("row = %+v, want the event facts", row)
+	}
+	if !row.CreatedAt.Equal(event.At) {
+		t.Errorf("created_at = %s, want %s", row.CreatedAt, event.At)
+	}
+}
+
+func TestFailedInboxInsertStillDelivers(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	repo.createNotificationErr = errors.New("inbox insert failed")
+	service := newTestService(t, repo)
+	notifier := newFakeNotifier()
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
+
+	service.Dispatch(sampleEvent())
+
+	waitFor(t, "the channel delivery", func() bool {
+		return len(notifier.delivered()) == 1
+	})
+	if rows := repo.notificationsSnapshot(); len(rows) != 0 {
+		t.Fatalf("stored %d rows despite the failing insert", len(rows))
+	}
+}
+
+func TestTestSendWritesNoInboxRow(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: newFakeNotifier()})
+
+	if _, err := service.TestChannel(context.Background(), uuid.New(), channel.ID); err != nil {
+		t.Fatalf("test channel: %v", err)
+	}
+	if rows := repo.notificationsSnapshot(); len(rows) != 0 {
+		t.Fatalf("test send stored %d inbox rows, want none", len(rows))
+	}
+}

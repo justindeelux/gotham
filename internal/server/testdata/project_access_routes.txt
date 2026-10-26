@@ -66,6 +66,7 @@ personal GET /api/v1/mcp/context
 project GET /api/v1/notification-channels
 project GET /api/v1/notification-channels/{id}
 project GET /api/v1/notification-channels/{id}/deliveries
+personal GET /api/v1/notifications
 project GET /api/v1/projects
 project GET /api/v1/projects/{id}
 project GET /api/v1/projects/{id}/environments
@@ -186,6 +187,7 @@ owner POST /api/v1/mcp/projects
 project POST /api/v1/mcp/projects/{id}/environments
 project POST /api/v1/notification-channels
 project POST /api/v1/notification-channels/{id}/test
+personal POST /api/v1/notifications/seen
 owner POST /api/v1/private-keys
 owner POST /api/v1/projects
 project POST /api/v1/projects/{id}/environments

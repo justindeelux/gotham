@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,6 +23,10 @@ type Repository interface {
 	DeleteChannel(ctx context.Context, channelID uuid.UUID) error
 	CreateDelivery(ctx context.Context, delivery Delivery) error
 	ListDeliveries(ctx context.Context, channelID uuid.UUID, limit int) ([]Delivery, error)
+	ResourceProject(ctx context.Context, resourceType string, resourceID uuid.UUID) (uuid.UUID, error)
+	CreateNotification(ctx context.Context, notification Notification) error
+	ListNotifications(ctx context.Context, userID uuid.UUID, limit int) ([]Notification, int64, error)
+	MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, seenAt time.Time) error
 }
 
 type storeRepository struct {
@@ -161,6 +166,77 @@ func deliveryFromRow(row sqlc.NotificationDelivery) Delivery {
 		ErrorSummary: row.ErrorSummary,
 		CreatedAt:    row.CreatedAt.Time,
 	}
+}
+
+func (r *storeRepository) ResourceProject(ctx context.Context, resourceType string, resourceID uuid.UUID) (uuid.UUID, error) {
+	return r.store.ResourceProject(ctx, resourceType, resourceID)
+}
+
+func (r *storeRepository) CreateNotification(ctx context.Context, notification Notification) error {
+	return r.store.InTx(ctx, func(tx *store.Store) error {
+		if err := tx.CreateNotification(ctx, sqlc.CreateNotificationParams{
+			EventKey:     string(notification.EventKey),
+			ResourceType: nullableText(notification.ResourceType),
+			ResourceID:   pgUUID(notification.ResourceID),
+			ProjectID:    pgUUID(notification.ProjectID),
+			Name:         notification.Name,
+			Host:         notification.Host,
+			Error:        notification.Error,
+			CreatedAt:    pgtype.Timestamptz{Time: notification.CreatedAt, Valid: true},
+		}); err != nil {
+			return fmt.Errorf("notifications: create notification: %w", err)
+		}
+		if _, err := tx.PruneNotifications(ctx, notificationRetention); err != nil {
+			return fmt.Errorf("notifications: prune notifications: %w", err)
+		}
+		return nil
+	})
+}
+
+func (r *storeRepository) ListNotifications(ctx context.Context, userID uuid.UUID, limit int) ([]Notification, int64, error) {
+	rows, err := r.store.ListVisibleNotifications(ctx, sqlc.ListVisibleNotificationsParams{
+		ID:    pgUUID(userID),
+		Limit: int32(limit),
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("notifications: list notifications: %w", err)
+	}
+	unread, err := r.store.CountUnreadNotifications(ctx, pgUUID(userID))
+	if err != nil {
+		return nil, 0, fmt.Errorf("notifications: count unread notifications: %w", err)
+	}
+	notifications := make([]Notification, 0, len(rows))
+	for _, row := range rows {
+		notifications = append(notifications, notificationFromRow(row))
+	}
+	return notifications, unread, nil
+}
+
+func (r *storeRepository) MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, seenAt time.Time) error {
+	if err := r.store.MarkNotificationsSeen(ctx, sqlc.MarkNotificationsSeenParams{
+		ID:      pgUUID(userID),
+		Column2: pgtype.Timestamptz{Time: seenAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("notifications: mark notifications seen: %w", err)
+	}
+	return nil
+}
+
+func notificationFromRow(row sqlc.Notification) Notification {
+	notification := Notification{
+		ID:         uuidFromPG(row.ID),
+		EventKey:   EventKey(row.EventKey),
+		ResourceID: uuidFromPG(row.ResourceID),
+		ProjectID:  uuidFromPG(row.ProjectID),
+		Name:       row.Name,
+		Host:       row.Host,
+		Error:      row.Error,
+		CreatedAt:  row.CreatedAt.Time,
+	}
+	if row.ResourceType != nil {
+		notification.ResourceType = *row.ResourceType
+	}
+	return notification
 }
 
 func channelFromRow(row sqlc.NotificationChannel) Channel {

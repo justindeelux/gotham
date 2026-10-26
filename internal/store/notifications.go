@@ -8,6 +8,26 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
+func (s *Store) CreateNotification(ctx context.Context, params sqlc.CreateNotificationParams) error {
+	return s.queries.CreateNotification(ctx, params)
+}
+
+func (s *Store) PruneNotifications(ctx context.Context, limit int32) (int64, error) {
+	return s.queries.PruneNotifications(ctx, limit)
+}
+
+func (s *Store) ListVisibleNotifications(ctx context.Context, params sqlc.ListVisibleNotificationsParams) ([]sqlc.Notification, error) {
+	return s.queries.ListVisibleNotifications(ctx, params)
+}
+
+func (s *Store) CountUnreadNotifications(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.queries.CountUnreadNotifications(ctx, id)
+}
+
+func (s *Store) MarkNotificationsSeen(ctx context.Context, params sqlc.MarkNotificationsSeenParams) error {
+	return s.queries.MarkNotificationsSeen(ctx, params)
+}
+
 func (s *Store) CreateNotificationChannel(ctx context.Context, params sqlc.CreateNotificationChannelParams) (sqlc.NotificationChannel, error) {
 	return s.queries.CreateNotificationChannel(ctx, params)
 }

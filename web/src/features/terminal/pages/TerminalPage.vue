@@ -292,28 +292,6 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
   flex: 0 0 auto;
 }
 
-.eyebrow {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 0 0 var(--space-2);
-}
-
-.page-head h1 {
-  font-size: var(--text-2xl);
-  line-height: 1.25;
-  color: var(--fg-2);
-  margin: 0 0 var(--space-2);
-}
-
-.page-desc {
-  color: var(--muted);
-  margin: 0;
-  max-width: 72ch;
-}
-
 .term-page-alert {
   flex: 0 0 auto;
 }

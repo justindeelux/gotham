@@ -97,6 +97,7 @@ type ServerService struct {
 	notifier    StateNotifier
 	incidents   IncidentRecorder
 	pressure    PressureRecorder
+	runtime     RuntimeObserver
 	sweepAfter  time.Time
 	agentUpdate agentUpdateState
 
@@ -238,6 +239,13 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 		return err
 	} else if blocking != "" {
 		return fmt.Errorf("%w: server still has resources: %s", ErrConflict, blocking)
+	}
+	if s.runtime != nil {
+		// The incident rows cascade their node_id to NULL on delete, so close
+		// runtime incidents while the node link is still readable.
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		s.runtime.NodeDeleted(closeCtx, id)
+		cancel()
 	}
 	volumes, err := s.store.DeleteServerPurging(ctx, pgUUID(id))
 	if err != nil {

@@ -318,12 +318,15 @@ func containerObservation(container *agentv1.ContainerInfo, details docker.Conta
 		Health:         details.Health,
 		RestartCount:   details.RestartCount,
 		OomKilled:      details.OOMKilled,
+		ExitCode:       details.ExitCode,
+		RestartPolicy:  details.RestartPolicy,
 		Managed:        labels["gotham.managed"] == "true",
 		AppId:          labels["gotham.app_id"],
 		DeploymentId:   labels["gotham.deployment_id"],
 		DatabaseId:     labels["gotham.db_id"],
 		ComposeProject: labels["com.docker.compose.project"],
 		ComposeService: labels["com.docker.compose.service"],
+		Replica:        labels["com.docker.compose.container-number"],
 		Role:           labels["gotham.role"],
 	}
 	if observation.State == "" {

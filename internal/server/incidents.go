@@ -4,11 +4,13 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/incidents"
 	"github.com/justindeelux/gotham/internal/notifications"
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 	"github.com/justindeelux/gotham/internal/servers"
 )
 
@@ -32,6 +34,15 @@ func (n incidentNotifier) NotifyIncident(_ context.Context, delivery incidents.D
 	if !ok {
 		return nil
 	}
+	key := notifications.EventKey("")
+	if strings.HasPrefix(delivery.Detector, "runtime_") {
+		switch delivery.Transition {
+		case "recovered":
+			key = notifications.EventRuntimeRecovery
+		default:
+			key = notifications.EventRuntimeFailure
+		}
+	}
 	return enqueuer.Enqueue(notifications.Event{
 		Kind:         notifications.EventIncident,
 		Outcome:      notifications.OutcomeFailure,
@@ -43,6 +54,7 @@ func (n incidentNotifier) NotifyIncident(_ context.Context, delivery incidents.D
 		Name:         delivery.Name,
 		Detail:       delivery.Evidence,
 		At:           delivery.At,
+		KeyOverride:  key,
 	})
 }
 
@@ -50,8 +62,9 @@ func (n incidentNotifier) NotifyIncident(_ context.Context, delivery incidents.D
 // the lifecycle while the existing server_offline/server_online notification
 // remains the single user-visible connectivity message.
 type incidentConnectivity struct {
-	svc    *incidents.Service
-	logger *slog.Logger
+	svc     *incidents.Service
+	runtime *runtimewatch.Service
+	logger  *slog.Logger
 }
 
 func (r incidentConnectivity) NodeDeleted(ctx context.Context, serverID uuid.UUID) {
@@ -86,5 +99,8 @@ func (r incidentConnectivity) NodeConnectivity(ctx context.Context, change serve
 	})
 	if err != nil && r.logger != nil {
 		r.logger.Warn("incidents: record node connectivity", "server_id", change.ServerID.String(), "error", err)
+	}
+	if r.runtime != nil && !change.Online {
+		r.runtime.NodeUnknown(ctx, change.ServerID, change.At)
 	}
 }

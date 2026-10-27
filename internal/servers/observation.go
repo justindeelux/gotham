@@ -89,6 +89,8 @@ type ContainerObservation struct {
 	Health         string     `json:"health"`
 	RestartCount   int64      `json:"restart_count"`
 	OOMKilled      bool       `json:"oom_killed"`
+	ExitCode       int32      `json:"exit_code"`
+	RestartPolicy  string     `json:"restart_policy,omitempty"`
 	CreatedAt      *time.Time `json:"created_at,omitempty"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	FinishedAt     *time.Time `json:"finished_at,omitempty"`
@@ -98,6 +100,7 @@ type ContainerObservation struct {
 	DatabaseID     string     `json:"database_id,omitempty"`
 	ComposeProject string     `json:"compose_project,omitempty"`
 	ComposeService string     `json:"compose_service,omitempty"`
+	Replica        string     `json:"replica,omitempty"`
 	Role           string     `json:"role,omitempty"`
 }
 
@@ -384,6 +387,8 @@ func validateInventory(inventory *agentv1.ContainerInventory) (ContainerInventor
 			Health:         boundedText(container.GetHealth(), 32),
 			RestartCount:   container.GetRestartCount(),
 			OOMKilled:      container.GetOomKilled(),
+			ExitCode:       container.GetExitCode(),
+			RestartPolicy:  boundedText(container.GetRestartPolicy(), 32),
 			CreatedAt:      protoTime(container.GetCreatedAt()),
 			StartedAt:      protoTime(container.GetStartedAt()),
 			FinishedAt:     protoTime(container.GetFinishedAt()),
@@ -393,6 +398,7 @@ func validateInventory(inventory *agentv1.ContainerInventory) (ContainerInventor
 			DatabaseID:     container.GetDatabaseId(),
 			ComposeProject: project,
 			ComposeService: boundedText(container.GetComposeService(), maxObservationName),
+			Replica:        boundedText(container.GetReplica(), 32),
 			Role:           boundedText(container.GetRole(), maxObservationName),
 		})
 	}
@@ -559,6 +565,13 @@ func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, re
 	if s.pressure != nil {
 		pressureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		s.pressure.RecordHostPressure(pressureCtx, uuid.UUID(row.ID.Bytes), row.Name, observation)
+		cancel()
+	}
+	if s.runtime != nil {
+		// Runtime detection follows the accepted generation. It gets its own
+		// timeout and cannot turn a stored observation into a failed push.
+		runtimeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		s.runtime.Observe(runtimeCtx, observation)
 		cancel()
 	}
 	return &agentv1.ObservationAck{

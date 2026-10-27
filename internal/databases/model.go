@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 )
 
 type Status string
@@ -28,6 +30,7 @@ type Database struct {
 	ContainerID     string
 	PublicPort      int32
 	StoragePath     string
+	RuntimeHealth   *runtimewatch.Health
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       time.Time

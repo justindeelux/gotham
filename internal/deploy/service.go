@@ -16,6 +16,7 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/requestreplay"
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/taskevents"
 )
@@ -107,6 +108,8 @@ type Config struct {
 	HealthPoll           time.Duration
 	ControlTimeout       time.Duration
 	ToolStatus           ToolStatus
+	RuntimeMonitor       RuntimeMonitor
+	RuntimeHealth        *runtimewatch.Reader
 }
 
 func (c Config) repository() Repository {
@@ -128,6 +131,8 @@ type Service struct {
 	hooks          func() HookLifecycle
 	hookTimeout    time.Duration
 	controlTimeout time.Duration
+	runtimeMonitor RuntimeMonitor
+	runtimeHealth  *runtimewatch.Reader
 	locks          appLocks
 	probeMu        sync.Mutex
 	probeLast      map[probeThrottleKey]time.Time
@@ -175,6 +180,8 @@ func NewService(cfg Config) *Service {
 		hooks:          cfg.Hooks,
 		hookTimeout:    hookTimeout,
 		controlTimeout: controlTimeout,
+		runtimeMonitor: cfg.RuntimeMonitor,
+		runtimeHealth:  cfg.RuntimeHealth,
 	}
 }
 
@@ -244,7 +251,12 @@ func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployme
 		}
 		return s.repo.GetDeployment(ctx, app.ID, result.ResourceID)
 	}
-	return s.deployApplication(ctx, app)
+	deployment, err := s.deployApplication(ctx, app)
+	if err == nil {
+		// Only an accepted deploy clears an intentional stop.
+		s.setDesiredState(ctx, app.ID, "running", 0)
+	}
+	return deployment, err
 }
 
 func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment, error) {

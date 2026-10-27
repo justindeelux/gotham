@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/requestreplay"
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 )
 
 const maxBodyBytes = 1 << 20
@@ -71,32 +72,33 @@ type rollbackRequest struct {
 }
 
 type applicationResponse struct {
-	ID                    string            `json:"id"`
-	Name                  string            `json:"name"`
-	EnvironmentID         string            `json:"environment_id"`
-	EnvironmentName       string            `json:"environment_name"`
-	ProjectID             string            `json:"project_id"`
-	ProjectName           string            `json:"project_name"`
-	Provider              string            `json:"provider"`
-	Repo                  string            `json:"repo"`
-	CloneURL              string            `json:"clone_url"`
-	SourceType            string            `json:"source_type"`
-	GitHubAppID           string            `json:"github_app_id"`
-	Branch                string            `json:"branch"`
-	BuildPack             string            `json:"build_pack"`
-	ImageRef              string            `json:"image_ref"`
-	HasRegistryCredential bool              `json:"has_registry_credential"`
-	PrimaryDomain         string            `json:"primary_domain"`
-	DockerfileContent     string            `json:"dockerfile_content"`
-	BuildArgs             map[string]string `json:"build_args"`
-	ComposeContent        string            `json:"compose_content"`
-	ComposeFile           string            `json:"compose_file"`
-	ComposeService        string            `json:"compose_service"`
-	ServerID              *string           `json:"server_id"`
-	ServerName            string            `json:"server_name"`
-	PendingChanges        []string          `json:"pending_changes"`
-	CreatedAt             time.Time         `json:"created_at"`
-	UpdatedAt             time.Time         `json:"updated_at"`
+	ID                    string               `json:"id"`
+	Name                  string               `json:"name"`
+	EnvironmentID         string               `json:"environment_id"`
+	EnvironmentName       string               `json:"environment_name"`
+	ProjectID             string               `json:"project_id"`
+	ProjectName           string               `json:"project_name"`
+	Provider              string               `json:"provider"`
+	Repo                  string               `json:"repo"`
+	CloneURL              string               `json:"clone_url"`
+	SourceType            string               `json:"source_type"`
+	GitHubAppID           string               `json:"github_app_id"`
+	Branch                string               `json:"branch"`
+	BuildPack             string               `json:"build_pack"`
+	ImageRef              string               `json:"image_ref"`
+	HasRegistryCredential bool                 `json:"has_registry_credential"`
+	PrimaryDomain         string               `json:"primary_domain"`
+	DockerfileContent     string               `json:"dockerfile_content"`
+	BuildArgs             map[string]string    `json:"build_args"`
+	ComposeContent        string               `json:"compose_content"`
+	ComposeFile           string               `json:"compose_file"`
+	ComposeService        string               `json:"compose_service"`
+	ServerID              *string              `json:"server_id"`
+	ServerName            string               `json:"server_name"`
+	PendingChanges        []string             `json:"pending_changes"`
+	RuntimeHealth         *runtimewatch.Health `json:"runtime_health,omitempty"`
+	CreatedAt             time.Time            `json:"created_at"`
+	UpdatedAt             time.Time            `json:"updated_at"`
 }
 
 type applicationEnvelope struct {
@@ -115,29 +117,30 @@ type applicationListEnvelope struct {
 }
 
 type applicationListItem struct {
-	ID                    string    `json:"id"`
-	Name                  string    `json:"name"`
-	EnvironmentID         string    `json:"environment_id"`
-	EnvironmentName       string    `json:"environment_name"`
-	ProjectID             string    `json:"project_id"`
-	ProjectName           string    `json:"project_name"`
-	Provider              string    `json:"provider"`
-	Repo                  string    `json:"repo"`
-	CloneURL              string    `json:"clone_url"`
-	SourceType            string    `json:"source_type"`
-	GitHubAppID           string    `json:"github_app_id"`
-	Branch                string    `json:"branch"`
-	BuildPack             string    `json:"build_pack"`
-	ImageRef              string    `json:"image_ref"`
-	HasRegistryCredential bool      `json:"has_registry_credential"`
-	PrimaryDomain         string    `json:"primary_domain"`
-	ComposeFile           string    `json:"compose_file"`
-	ComposeService        string    `json:"compose_service"`
-	ServerID              *string   `json:"server_id"`
-	ServerName            string    `json:"server_name"`
-	PendingChanges        []string  `json:"pending_changes"`
-	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	ID                    string               `json:"id"`
+	Name                  string               `json:"name"`
+	EnvironmentID         string               `json:"environment_id"`
+	EnvironmentName       string               `json:"environment_name"`
+	ProjectID             string               `json:"project_id"`
+	ProjectName           string               `json:"project_name"`
+	Provider              string               `json:"provider"`
+	Repo                  string               `json:"repo"`
+	CloneURL              string               `json:"clone_url"`
+	SourceType            string               `json:"source_type"`
+	GitHubAppID           string               `json:"github_app_id"`
+	Branch                string               `json:"branch"`
+	BuildPack             string               `json:"build_pack"`
+	ImageRef              string               `json:"image_ref"`
+	HasRegistryCredential bool                 `json:"has_registry_credential"`
+	PrimaryDomain         string               `json:"primary_domain"`
+	ComposeFile           string               `json:"compose_file"`
+	ComposeService        string               `json:"compose_service"`
+	ServerID              *string              `json:"server_id"`
+	ServerName            string               `json:"server_name"`
+	PendingChanges        []string             `json:"pending_changes"`
+	RuntimeHealth         *runtimewatch.Health `json:"runtime_health,omitempty"`
+	CreatedAt             time.Time            `json:"created_at"`
+	UpdatedAt             time.Time            `json:"updated_at"`
 }
 
 type envEntryRequest struct {
@@ -228,6 +231,8 @@ type updateApplicationRequest struct {
 	ComposeContent    *string            `json:"compose_content"`
 	ComposeFile       *string            `json:"compose_file"`
 	ComposeService    *string            `json:"compose_service"`
+	MonitorEnabled    *bool              `json:"monitor_enabled"`
+	MonitorGrace      *int               `json:"monitor_grace_seconds"`
 }
 
 type errorBody struct {
@@ -484,6 +489,8 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 		ComposeContent:    req.ComposeContent,
 		ComposeFile:       req.ComposeFile,
 		ComposeService:    req.ComposeService,
+		MonitorEnabled:    req.MonitorEnabled,
+		MonitorGrace:      req.MonitorGrace,
 	}
 	if req.ServerID != nil {
 		serverID, parsed := applicationServerID(w, *req.ServerID)
@@ -1295,6 +1302,7 @@ func newApplicationResponse(application Application) applicationResponse {
 		PrimaryDomain:  primaryDomainName(application),
 		ServerName:     application.ServerName,
 		PendingChanges: append([]string{}, application.PendingChanges...),
+		RuntimeHealth:  application.RuntimeHealth,
 		CreatedAt:      application.CreatedAt,
 		UpdatedAt:      application.UpdatedAt,
 	}
@@ -1330,6 +1338,7 @@ func newApplicationListItem(application Application) applicationListItem {
 		PrimaryDomain:  primaryDomainName(application),
 		ServerName:     application.ServerName,
 		PendingChanges: append([]string{}, application.PendingChanges...),
+		RuntimeHealth:  application.RuntimeHealth,
 		CreatedAt:      application.CreatedAt,
 		UpdatedAt:      application.UpdatedAt,
 	}

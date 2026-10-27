@@ -13,6 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 )
 
 const maxBodyBytes = 1 << 20
@@ -20,22 +22,23 @@ const maxBodyBytes = 1 << 20
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
 type databaseResponse struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	EnvironmentID   string    `json:"environment_id"`
-	EnvironmentName string    `json:"environment_name"`
-	ProjectID       string    `json:"project_id"`
-	ProjectName     string    `json:"project_name"`
-	Engine          string    `json:"engine"`
-	Version         string    `json:"version,omitempty"`
-	Status          Status    `json:"status"`
-	ServerID        string    `json:"server_id"`
-	ServerName      string    `json:"server_name"`
-	ContainerID     string    `json:"container_id,omitempty"`
-	PublicPort      int32     `json:"public_port"`
-	Volume          string    `json:"volume"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	EnvironmentID   string               `json:"environment_id"`
+	EnvironmentName string               `json:"environment_name"`
+	ProjectID       string               `json:"project_id"`
+	ProjectName     string               `json:"project_name"`
+	Engine          string               `json:"engine"`
+	Version         string               `json:"version,omitempty"`
+	Status          Status               `json:"status"`
+	ServerID        string               `json:"server_id"`
+	ServerName      string               `json:"server_name"`
+	ContainerID     string               `json:"container_id,omitempty"`
+	PublicPort      int32                `json:"public_port"`
+	Volume          string               `json:"volume"`
+	RuntimeHealth   *runtimewatch.Health `json:"runtime_health,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
 type databaseEnvelope struct {
@@ -65,9 +68,11 @@ type createRequest struct {
 }
 
 type updateRequest struct {
-	Name          *string `json:"name,omitempty"`
-	EnvironmentID *string `json:"environment_id,omitempty"`
-	ServerID      *string `json:"server_id,omitempty"`
+	Name           *string `json:"name,omitempty"`
+	EnvironmentID  *string `json:"environment_id,omitempty"`
+	ServerID       *string `json:"server_id,omitempty"`
+	MonitorEnabled *bool   `json:"monitor_enabled,omitempty"`
+	MonitorGrace   *int    `json:"monitor_grace_seconds,omitempty"`
 }
 
 type errorBody struct {
@@ -191,7 +196,11 @@ func (h *handler) update(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	in := UpdateRequest{Name: req.Name}
+	in := UpdateRequest{
+		Name:           req.Name,
+		MonitorEnabled: req.MonitorEnabled,
+		MonitorGrace:   req.MonitorGrace,
+	}
 	if req.EnvironmentID != nil {
 		environmentID, err := uuid.Parse(strings.TrimSpace(*req.EnvironmentID))
 		if err != nil {
@@ -351,6 +360,7 @@ func newDatabaseResponse(database Database) databaseResponse {
 		ContainerID:     database.ContainerID,
 		PublicPort:      database.PublicPort,
 		Volume:          database.StoragePath,
+		RuntimeHealth:   database.RuntimeHealth,
 		CreatedAt:       database.CreatedAt,
 		UpdatedAt:       database.UpdatedAt,
 	}

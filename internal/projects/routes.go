@@ -16,6 +16,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/requestreplay"
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 	servicespkg "github.com/justindeelux/gotham/internal/services"
 )
 
@@ -91,25 +92,26 @@ type (
 )
 
 type environmentResourceApplication struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	EnvironmentID   string    `json:"environment_id"`
-	EnvironmentName string    `json:"environment_name"`
-	ProjectID       string    `json:"project_id"`
-	ProjectName     string    `json:"project_name"`
-	Provider        string    `json:"provider"`
-	Repo            string    `json:"repo"`
-	CloneURL        string    `json:"clone_url"`
-	SourceType      string    `json:"source_type"`
-	Branch          string    `json:"branch"`
-	BuildPack       string    `json:"build_pack"`
-	PrimaryDomain   string    `json:"primary_domain"`
-	ServerID        string    `json:"server_id"`
-	ServerName      string    `json:"server_name"`
-	IsPreview       bool      `json:"is_preview"`
-	PreviewOf       string    `json:"preview_of,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	EnvironmentID   string               `json:"environment_id"`
+	EnvironmentName string               `json:"environment_name"`
+	ProjectID       string               `json:"project_id"`
+	ProjectName     string               `json:"project_name"`
+	Provider        string               `json:"provider"`
+	Repo            string               `json:"repo"`
+	CloneURL        string               `json:"clone_url"`
+	SourceType      string               `json:"source_type"`
+	Branch          string               `json:"branch"`
+	BuildPack       string               `json:"build_pack"`
+	PrimaryDomain   string               `json:"primary_domain"`
+	ServerID        string               `json:"server_id"`
+	ServerName      string               `json:"server_name"`
+	IsPreview       bool                 `json:"is_preview"`
+	PreviewOf       string               `json:"preview_of,omitempty"`
+	RuntimeHealth   *runtimewatch.Health `json:"runtime_health,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
 func primaryDomain(application deploy.Application) string {
@@ -122,21 +124,22 @@ func primaryDomain(application deploy.Application) string {
 type environmentResourceService = servicespkg.ServiceResponse
 
 type environmentResourceDatabase struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	EnvironmentID   string    `json:"environment_id"`
-	EnvironmentName string    `json:"environment_name"`
-	ProjectID       string    `json:"project_id"`
-	ProjectName     string    `json:"project_name"`
-	Engine          string    `json:"engine"`
-	Version         string    `json:"version,omitempty"`
-	Status          string    `json:"status"`
-	ServerID        string    `json:"server_id"`
-	ServerName      string    `json:"server_name"`
-	PublicPort      int32     `json:"public_port"`
-	Volume          string    `json:"volume"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	EnvironmentID   string               `json:"environment_id"`
+	EnvironmentName string               `json:"environment_name"`
+	ProjectID       string               `json:"project_id"`
+	ProjectName     string               `json:"project_name"`
+	Engine          string               `json:"engine"`
+	Version         string               `json:"version,omitempty"`
+	Status          string               `json:"status"`
+	ServerID        string               `json:"server_id"`
+	ServerName      string               `json:"server_name"`
+	PublicPort      int32                `json:"public_port"`
+	Volume          string               `json:"volume"`
+	RuntimeHealth   *runtimewatch.Health `json:"runtime_health,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
 type environmentResourcesEnvelope struct {
@@ -396,6 +399,7 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 			ServerName:      application.ServerName,
 			IsPreview:       application.IsPreview,
 			PreviewOf:       previewOf,
+			RuntimeHealth:   application.RuntimeHealth,
 			CreatedAt:       application.CreatedAt,
 			UpdatedAt:       application.UpdatedAt,
 		})
@@ -420,6 +424,7 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 			ServerName:      database.ServerName,
 			PublicPort:      database.PublicPort,
 			Volume:          database.StoragePath,
+			RuntimeHealth:   database.RuntimeHealth,
 			CreatedAt:       database.CreatedAt,
 			UpdatedAt:       database.UpdatedAt,
 		})

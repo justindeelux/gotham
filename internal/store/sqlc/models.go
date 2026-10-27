@@ -339,6 +339,23 @@ type InviteProject struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 }
 
+type NodeObservation struct {
+	ServerID            pgtype.UUID        `json:"server_id"`
+	SessionID           string             `json:"session_id"`
+	Sequence            int64              `json:"sequence"`
+	ObservedAt          pgtype.Timestamptz `json:"observed_at"`
+	ReceivedAt          pgtype.Timestamptz `json:"received_at"`
+	SamplingIntervalMs  int64              `json:"sampling_interval_ms"`
+	AgentVersion        string             `json:"agent_version"`
+	Host                []byte             `json:"host"`
+	Filesystems         []byte             `json:"filesystems"`
+	Inventory           []byte             `json:"inventory"`
+	InventoryComplete   bool               `json:"inventory_complete"`
+	InventoryReason     string             `json:"inventory_reason"`
+	InventoryObservedAt pgtype.Timestamptz `json:"inventory_observed_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Notification struct {
 	ID           pgtype.UUID        `json:"id"`
 	EventKey     string             `json:"event_key"`

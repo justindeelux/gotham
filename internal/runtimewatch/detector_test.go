@@ -109,19 +109,19 @@ func TestRestartWindowBaselineResetAndLoop(t *testing.T) {
 	c.RestartCount = 4
 	state := ReplicaState{ContainerID: "a", RestartCount: 4, ObservedAt: now.Add(-15 * time.Second)}
 
-	events, loop := updateRestartWindow(state, c, now)
+	events, loop, _ := updateRestartWindow(state, c, now)
 	if len(events) != 0 || loop {
 		t.Fatalf("first sample produced events=%d loop=%v", len(events), loop)
 	}
 
 	c.RestartCount = 7
-	events, loop = updateRestartWindow(state, c, now)
+	events, loop, _ = updateRestartWindow(state, c, now)
 	if len(events) != 3 || !loop {
 		t.Fatalf("three increases did not trigger: events=%d loop=%v", len(events), loop)
 	}
 
 	c.RestartCount = 1 // counter reset after recreate
-	events, loop = updateRestartWindow(state, c, now)
+	events, loop, _ = updateRestartWindow(state, c, now)
 	if len(events) != 0 || loop {
 		t.Fatalf("counter reset produced events=%d loop=%v", len(events), loop)
 	}
@@ -129,7 +129,7 @@ func TestRestartWindowBaselineResetAndLoop(t *testing.T) {
 	state = ReplicaState{ContainerID: "a", RestartCount: 10, ObservedAt: now.Add(-15 * time.Second)}
 	c = container("b")
 	c.RestartCount = 13
-	if events, loop = updateRestartWindow(state, c, now); len(events) != 0 || loop {
+	if events, loop, _ = updateRestartWindow(state, c, now); len(events) != 0 || loop {
 		t.Fatalf("recreated container inherited a previous window: %d %v", len(events), loop)
 	}
 
@@ -141,7 +141,7 @@ func TestRestartWindowBaselineResetAndLoop(t *testing.T) {
 	}
 	c = container("a")
 	c.RestartCount = 13
-	events, loop = updateRestartWindow(state, c, now)
+	events, loop, _ = updateRestartWindow(state, c, now)
 	if len(events) != 3 || !loop {
 		t.Fatalf("old events were not pruned: %d %v", len(events), loop)
 	}
@@ -152,7 +152,7 @@ func TestRestartWindowStaleGapBaselines(t *testing.T) {
 	c := container("a")
 	c.RestartCount = 9
 	state := ReplicaState{ContainerID: "a", RestartCount: 0, ObservedAt: now.Add(-10 * time.Minute)}
-	events, loop := updateRestartWindow(state, c, now)
+	events, loop, _ := updateRestartWindow(state, c, now)
 	if len(events) != 0 || loop {
 		t.Fatalf("stale gap produced events=%d loop=%v", len(events), loop)
 	}
@@ -160,7 +160,7 @@ func TestRestartWindowStaleGapBaselines(t *testing.T) {
 	state.RestartCount = 9
 	state.ObservedAt = now
 	c.RestartCount = 11
-	events, loop = updateRestartWindow(state, c, now.Add(15*time.Second))
+	events, loop, _ = updateRestartWindow(state, c, now.Add(15*time.Second))
 	if len(events) != 2 || loop {
 		t.Fatalf("events after baseline=%d loop=%v", len(events), loop)
 	}

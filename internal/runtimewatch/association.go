@@ -170,11 +170,18 @@ func finishedAt(c ContainerEvidence) time.Time {
 
 // updateRestartWindow baselines the first observation and every recreated or
 // reset container, then counts the increases seen inside the rolling window.
-func updateRestartWindow(state ReplicaState, c ContainerEvidence, now time.Time) ([]time.Time, bool) {
+// lastEvent is the newest increase seen before the window is pruned, so
+// recovery can wait five minutes after the last restart rather than after the
+// oldest one.
+func updateRestartWindow(state ReplicaState, c ContainerEvidence, now time.Time) ([]time.Time, bool, time.Time) {
 	events := make([]time.Time, 0, len(state.RestartEvents))
+	var lastEvent time.Time
 	stale := state.ObservedAt.IsZero() || now.Sub(state.ObservedAt) > restartWindow
 	if state.ContainerID != "" && state.ContainerID == c.ID && !stale && c.RestartCount >= state.RestartCount {
 		for _, at := range state.RestartEvents {
+			if at.After(lastEvent) {
+				lastEvent = at
+			}
 			if now.Sub(at) <= restartWindow {
 				events = append(events, at)
 			}
@@ -188,7 +195,17 @@ func updateRestartWindow(state ReplicaState, c ContainerEvidence, now time.Time)
 			}
 		}
 	}
-	return events, len(events) >= 3
+	if len(events) > 0 && events[len(events)-1].After(lastEvent) {
+		lastEvent = events[len(events)-1]
+	}
+	return events, len(events) >= 3, lastEvent
+}
+
+// restartRecoveryAllowed is true only once five minutes have passed since the
+// last restart increase. The three-in-window rule opens the incident; this
+// rule closes it.
+func restartRecoveryAllowed(lastEvent, now time.Time) bool {
+	return lastEvent.IsZero() || now.Sub(lastEvent) >= restartWindow
 }
 
 // suppressionReason says why an expected transition should hide a failure.

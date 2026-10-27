@@ -284,9 +284,12 @@ func (s *Service) evaluate(ctx context.Context, target Target, obs servers.NodeO
 		if err := s.reportHealth(ctx, target, next, observedAt, obs.SamplingInterval); err != nil {
 			return err
 		}
+		restartLoop := next.Reason == "restart_loop"
+		restartWaiting := !restartLoop && !restartRecoveryAllowed(next.LastRestartAt, observedAt)
 		if err := s.reportRestartEvidence(ctx, target, next, observedAt,
-			next.Reason == "restart_loop",
-			next.State == "running" && next.Health != "unhealthy"); err != nil {
+			restartLoop,
+			next.State == "running" && next.Health != "unhealthy" && !restartWaiting,
+			restartWaiting); err != nil {
 			return err
 		}
 	}
@@ -356,8 +359,9 @@ func evaluateReplica(ev replicaEvidence, prev ReplicaState, observedAt, now time
 		next.ObservedAt = observedAt
 		return next
 	}
-	events, loop := updateRestartWindow(prev, c, now)
+	events, loop, lastEvent := updateRestartWindow(prev, c, now)
 	next.RestartEvents = events
+	next.LastRestartAt = lastEvent
 	switch next.State {
 	case "running":
 		switch c.Health {
@@ -389,7 +393,7 @@ func evaluateReplica(ev replicaEvidence, prev ReplicaState, observedAt, now time
 		next.State = "unknown"
 		next.Reason = "unknown_state"
 	}
-	if loop && next.State == "running" {
+	if loop && next.State != "stopped" && next.State != "missing" {
 		next.State = "unhealthy"
 		next.Reason = "restart_loop"
 	}
@@ -476,7 +480,8 @@ func (s *Service) reportUnknown(ctx context.Context, target Target, state Replic
 	}
 }
 
-func (s *Service) reportRestartEvidence(ctx context.Context, target Target, state ReplicaState, at time.Time, loop, healthy bool) error {
+func (s *Service) reportRestartEvidence(ctx context.Context, target Target, state ReplicaState, at time.Time, loop, healthy bool, waiting ...bool) error {
+	hold := len(waiting) > 0 && waiting[0]
 	obs := s.baseObservation(target, state, DetectorRestart, at, 0)
 	switch {
 	case loop:
@@ -484,6 +489,11 @@ func (s *Service) reportRestartEvidence(ctx context.Context, target Target, stat
 		obs.Unhealthy = true
 		obs.Severity = incidents.SeverityWarning
 		obs.Evidence = fmt.Sprintf("%s restarts=%d window=%s", replicaEvidenceText(state), len(state.RestartEvents), restartWindow)
+	case hold:
+		// The three-in-window condition has cleared, but the last restart is
+		// still inside its quiet window; hold the incident open.
+		obs.Valid = false
+		obs.Evidence = fmt.Sprintf("%s last_restart=%s", replicaEvidenceText(state), state.LastRestartAt.UTC().Format(time.RFC3339))
 	case healthy:
 		obs.Valid = true
 		obs.RecoverFor = 0

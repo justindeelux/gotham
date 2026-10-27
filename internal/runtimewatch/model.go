@@ -113,5 +113,6 @@ type ReplicaState struct {
 	RestartEvents []time.Time
 	OOMContainer  string
 	OOMAt         time.Time
+	LastRestartAt time.Time
 	ObservedAt    time.Time
 }

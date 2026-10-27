@@ -418,8 +418,11 @@ func (s *Service) reportHealth(ctx context.Context, target Target, state Replica
 			obs.Valid = true
 			obs.RecoverFor = healthRecoverFor
 		} else {
-			// A running container without a healthcheck is not proven healthy.
-			obs.Valid = false
+			// A running container without a healthcheck is not proven healthy,
+			// so the summary stays unknown. It is still valid recovery
+			// evidence: the container is running again after a stop or crash.
+			obs.Valid = true
+			obs.RecoverFor = healthRecoverFor
 		}
 	case "unhealthy", "paused":
 		obs.Valid = true

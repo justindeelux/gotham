@@ -120,7 +120,7 @@ func (q *Queries) GetRuntimeMonitorSettings(ctx context.Context, arg GetRuntimeM
 }
 
 const listActiveIncidentsByResources = `-- name: ListActiveIncidentsByResources :many
-SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at FROM incidents
+SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since FROM incidents
 WHERE resource_type = $1
   AND resource_id = ANY($2::uuid[])
   AND lifecycle <> 'resolved'
@@ -175,6 +175,7 @@ func (q *Queries) ListActiveIncidentsByResources(ctx context.Context, arg ListAc
 			&i.Evidence,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SeveritySince,
 		); err != nil {
 			return nil, err
 		}
@@ -187,7 +188,7 @@ func (q *Queries) ListActiveIncidentsByResources(ctx context.Context, arg ListAc
 }
 
 const listActiveIncidentsForNode = `-- name: ListActiveIncidentsForNode :many
-SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at FROM incidents
+SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since FROM incidents
 WHERE node_id = $1 AND lifecycle <> 'resolved'
 `
 
@@ -234,6 +235,7 @@ func (q *Queries) ListActiveIncidentsForNode(ctx context.Context, nodeID pgtype.
 			&i.Evidence,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SeveritySince,
 		); err != nil {
 			return nil, err
 		}

@@ -54,7 +54,9 @@ Các chuyển đổi sau không tạo sự cố runtime:
 - Cơ sở dữ liệu đang **creating, deleting hoặc stopped**.
 - **Tác vụ một lần** được hỗ trợ: container thoát với mã 0 dưới chính sách
   Docker `restart: "no"`. Dùng `restart: "no"` cho tác vụ; dịch vụ chạy lâu nên
-  dùng `always` hoặc `unless-stopped`.
+  dùng `always` hoặc `unless-stopped`. Vì `no` cũng là mặc định của Compose,
+  một dịch vụ chạy lâu bị dừng gọn gàng ngoài Gotham có thể trông như tác vụ
+  một lần đã xong; chính sách khởi động lại ở trên tránh âm tính giả này.
 
 Thời gian chờ khởi động mặc định là **120 giây** và có thể chỉnh từ **30 đến
 600 giây** trong thẻ runtime bởi chủ sở hữu hoặc người viết dự án. Một thao tác

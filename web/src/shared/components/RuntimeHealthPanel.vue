@@ -15,7 +15,12 @@ import { useI18n } from "vue-i18n";
 import type { RuntimeHealth, RuntimeHealthState, RuntimeReplicaHealth } from "@/shared/types/runtimeHealth";
 import { runtimeHealthTag } from "@/shared/types/runtimeHealth";
 import { relativeTime } from "@/shared/utils/format";
-import { isRuntimeMonitorGraceValid } from "@/shared/validation/monitoring";
+import {
+  RUNTIME_MONITOR_DEFAULT_GRACE_SECONDS,
+  RUNTIME_MONITOR_MAX_GRACE_SECONDS,
+  RUNTIME_MONITOR_MIN_GRACE_SECONDS,
+  isRuntimeMonitorGraceValid,
+} from "@/shared/validation/monitoring";
 
 interface Props {
   health?: RuntimeHealth | null;
@@ -44,18 +49,30 @@ const emit = defineEmits<{
 const { t, te } = useI18n();
 
 const enabled = ref<boolean>(props.health?.enabled ?? true);
-const grace = ref<number>(props.health?.grace_seconds ?? 120);
+const grace = ref<number>(props.health?.grace_seconds ?? RUNTIME_MONITOR_DEFAULT_GRACE_SECONDS);
+const dirty = ref(false);
 
 watch(
   () => props.health,
   (value) => {
-    if (!value) {
+    if (!value || dirty.value) {
       return;
     }
     enabled.value = value.enabled;
     grace.value = value.grace_seconds;
   },
   { immediate: true },
+);
+
+// A successful save clears the dirty flag once its response arrives; a
+// background refetch must not overwrite an edit that is still pending.
+watch(
+  () => props.saving,
+  (saving, previous) => {
+    if (previous && !saving && !props.error) {
+      dirty.value = false;
+    }
+  },
 );
 
 const state = computed<string>(() => props.health?.state ?? "unknown");
@@ -167,18 +184,23 @@ function submit(): void {
       <section v-if="props.canWrite" class="controls" :aria-label="t('runtimeHealth.monitoring')">
         <NText depth="3">{{ t("runtimeHealth.monitoringHint") }}</NText>
         <label class="control-row">
-          <NSwitch v-model:value="enabled" :aria-label="t('runtimeHealth.enabled')" />
+          <NSwitch
+            v-model:value="enabled"
+            :aria-label="t('runtimeHealth.enabled')"
+            @update:value="dirty = true"
+          />
           <NText>{{ t("runtimeHealth.enabled") }}</NText>
         </label>
         <label class="control-row">
           <NText>{{ t("runtimeHealth.grace") }}</NText>
           <NInputNumber
             v-model:value="grace"
-            :min="30"
-            :max="600"
+            class="grace-input"
+            :min="RUNTIME_MONITOR_MIN_GRACE_SECONDS"
+            :max="RUNTIME_MONITOR_MAX_GRACE_SECONDS"
             :step="10"
             :status="graceError ? 'error' : undefined"
-            style="width: 140px"
+            @update:value="dirty = true"
           />
         </label>
         <NText v-if="graceError" type="error" depth="3">{{ graceError }}</NText>
@@ -201,6 +223,10 @@ function submit(): void {
 <style scoped>
 .mono {
   font-family: var(--font-mono);
+}
+
+.grace-input {
+  width: var(--field-width-narrow);
 }
 
 .summary {

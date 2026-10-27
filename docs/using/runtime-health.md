@@ -55,7 +55,10 @@ These transitions do not raise a runtime failure:
 - A database that is **creating, deleting or stopped**.
 - A supported **one-shot job**: a container that exits with code 0 under the
   Docker `restart: "no"` policy. Use `restart: "no"` for jobs; long-running
-  services should use `always` or `unless-stopped`.
+  services should use `always` or `unless-stopped`. Because `no` is also the
+  Compose default, a long-running service that is stopped cleanly outside
+  Gotham can look like a completed one-shot; the restart policy above avoids
+  that false negative.
 
 The startup grace defaults to **120 seconds** and can be tuned from **30 to 600
 seconds** in the runtime card by the owner or a project writer. An operation

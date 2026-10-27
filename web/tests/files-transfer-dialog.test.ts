@@ -254,6 +254,7 @@ describe("copy to a node", () => {
   });
 
   it("does not present a copy with nested skips as complete success", async () => {
+
     const { wrapper } = await mountPage();
     const finished: TransferSummary = {
       transfer_id: "t-1",
@@ -321,6 +322,128 @@ describe("copy to a node", () => {
     expect(
       wrapper.find(".server-files__transfer").attributes("data-tone"),
     ).toBe("warning");
+    wrapper.unmount();
+  });
+
+  it("never offers uncertain entries for retry", async () => {
+    const { wrapper } = await mountPage();
+    const store = useFilesTransferStore();
+    store.openNodeCopy({
+      serverId: "server-1",
+      pane: "left",
+      root: "volumes",
+      path: "",
+      names: ["server-1.txt", "data"],
+      sizes: { "server-1.txt": 0 },
+      directories: ["data"],
+    });
+    await flushPromises();
+
+    const session = (
+      entries: TransferSummary["entries"],
+      status: TransferSummary["status"],
+      counts: Partial<TransferSummary> = {},
+    ): TransferSummary => ({
+      transfer_id: "t-1",
+      mode: "bundle",
+      status,
+      copied: 0,
+      conflicts: 0,
+      skipped: 0,
+      failed: 0,
+      cancelled: 0,
+      uncertain: 0,
+      entries,
+      skipped_count: 0,
+      ...counts,
+    });
+
+    const cases: Array<{
+      label: string;
+      summary: TransferSummary;
+    }> = [
+      {
+        label: "user cancel",
+        summary: session(
+          [
+            { name: "server-1.txt", status: "uncertain", reason: "unconfirmed" },
+            { name: "data", status: "uncertain", reason: "unconfirmed" },
+          ],
+          "cancelled",
+          { uncertain: 2 },
+        ),
+      },
+      {
+        label: "missing summary",
+        summary: session(
+          [
+            { name: "server-1.txt", status: "uncertain", reason: "interrupted" },
+            { name: "data", status: "uncertain", reason: "interrupted" },
+          ],
+          "uncertain",
+          { uncertain: 2 },
+        ),
+      },
+      {
+        label: "real uncertain result",
+        summary: session(
+          [{ name: "server-1.txt", status: "uncertain", reason: "lost ack" }],
+          "uncertain",
+          { uncertain: 1 },
+        ),
+      },
+    ];
+
+    for (const item of cases) {
+      store.summary = item.summary;
+      store.state = "finished";
+      await flushPromises();
+
+      const dialog = wrapper.find(".transfer-modal");
+      expect(dialog.text(), item.label).toContain("refresh the destination");
+      expect(dialog.find(".transfer-retry").exists(), item.label).toBe(false);
+      expect(
+        dialog.findAll(".transfer-list__item[data-status='uncertain']").length,
+        item.label,
+      ).toBe(item.summary.entries.length);
+    }
+
+    store.summary = session(
+      [
+        { name: "server-1.txt", status: "skipped", reason: "nested" },
+        { name: "data", status: "failed", reason: "busy" },
+        { name: "report.txt", status: "cancelled", reason: "cancelled" },
+        { name: "other.txt", status: "uncertain", reason: "lost ack" },
+        { name: "kept.txt", status: "copied" },
+        { name: "exists.txt", status: "conflict", reason: "exists" },
+      ],
+      "partial",
+      {
+        skipped: 1,
+        failed: 1,
+        cancelled: 1,
+        uncertain: 1,
+        copied: 1,
+        conflicts: 1,
+      },
+    );
+    store.state = "finished";
+    await flushPromises();
+
+    const dialog = wrapper.find(".transfer-modal");
+    const retry = dialog.find(".transfer-retry");
+    expect(retry.exists()).toBe(true);
+    const names = retry
+      .findAll(".n-checkbox")
+      .map((box) => box.attributes("aria-label"))
+      .sort();
+    expect(names).toEqual(["data", "report.txt", "server-1.txt"]);
+    for (const box of retry.findAll(".n-checkbox")) {
+      expect(box.attributes("aria-checked")).toBe("true");
+    }
+    expect(retry.text()).not.toContain("other.txt");
+    expect(retry.text()).not.toContain("kept.txt");
+    expect(retry.text()).not.toContain("exists.txt");
     wrapper.unmount();
   });
 });

@@ -444,6 +444,7 @@ test("a stream without a terminal summary is interrupted, never success", async 
   await dialog.getByRole("button", { name: "Start copy" }).click();
   await expect(dialog).toContainText("Copy interrupted");
   await expect(dialog).toContainText("Uncertain");
+  await expect(dialog.getByRole("button", { name: "Retry selected" })).toHaveCount(0);
   await expect(dialog).not.toContainText("Copy finished");
 });
 
@@ -464,6 +465,7 @@ test("cancelling reports cancelled work and never a success toast", async ({ pag
 
   await expect(dialog).toContainText("Copy cancelled");
   await expect(dialog.locator(".transfer-list__item[data-status='uncertain']")).toHaveCount(1);
+  await expect(dialog.getByRole("button", { name: "Retry selected" })).toHaveCount(0);
   await expect(dialog).not.toContainText("Copy finished");
 });
 

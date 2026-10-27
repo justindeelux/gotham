@@ -357,7 +357,7 @@ const en = {
     interrupted:
       "The connection closed before the destination reported the result. The entries below are uncertain — refresh the destination before retrying.",
     uncertainNote:
-      "Uncertain — refresh the destination to see whether these entries arrived. Retry checks the destination again before copying.",
+      "Uncertain — refresh the destination to see whether these entries arrived before retrying. Automatic retry is not offered.",
     timeoutTitle: "Copy stopped at the 30-minute limit",
     timeout:
       "The transfer reached the 30-minute limit. Entries the destination acknowledged are listed below; check anything else on the destination.",

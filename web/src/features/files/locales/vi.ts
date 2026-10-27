@@ -357,7 +357,7 @@ const vi = {
     interrupted:
       "Kết nối đóng trước khi đích báo kết quả. Các mục bên dưới là không chắc chắn — hãy làm mới đích trước khi thử lại.",
     uncertainNote:
-      "Không chắc chắn — làm mới đích để xem các mục này đã đến chưa. Thử lại sẽ kiểm tra đích trước khi chép.",
+      "Không chắc chắn — làm mới đích để xem các mục này đã đến chưa trước khi thử lại. Không tự động thử lại.",
     timeoutTitle: "Sao chép dừng ở giới hạn 30 phút",
     timeout:
       "Lần truyền chạm giới hạn 30 phút. Các mục đích đã xác nhận được liệt kê bên dưới; hãy kiểm tra phần còn lại trên đích.",

@@ -479,8 +479,7 @@ const retryNames = computed<string[]>(() =>
       (entry) =>
         entry.status === "skipped" ||
         entry.status === "failed" ||
-        entry.status === "cancelled" ||
-        entry.status === "uncertain",
+        entry.status === "cancelled",
     )
     .map((entry) => entry.name),
 );

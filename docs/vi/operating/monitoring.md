@@ -79,3 +79,29 @@ Thẻ **Tổng quan** của nút hiển thị sự cố áp lực đang hoạt �
 và độ mới của dữ liệu (mới, cũ hoặc chưa rõ). Thẻ liệt kê điểm gắn, mục đích,
 dung lượng trống/tổng và inode trống/tổng của từng hệ thống tệp, kèm liên kết tới
 tab **Chỉ số**. Gợi ý xử lý là kiểm tra lưu trữ hoặc nhật ký, hay giảm tải.
+
+## Sức khỏe runtime của ứng dụng và cơ sở dữ liệu
+
+Áp lực máy chủ chỉ là một nửa bức tranh: một nút có thể còn CPU và đĩa trong khi
+ứng dụng hoặc cơ sở dữ liệu được quản lý đã dừng, lỗi healthcheck hoặc đang khởi
+động lại. Cùng các quan sát được chấp nhận cũng nuôi sức khỏe runtime cho ứng
+dụng và cơ sở dữ liệu. Đánh giá này độc lập với trạng thái triển khai, tiếp tục
+chạy khi không mở trình duyệt và không thêm lịch thăm dò Docker trên control
+plane.
+
+Container đang chạy không có healthcheck là **chưa rõ**, không phải khỏe mạnh.
+Cần kiểm kê đầy đủ để chứng minh container vắng mặt; báo cáo một phần, agent cũ
+hoặc nút offline hiển thị độ phủ chưa rõ thay vì báo mọi container đã mất.
+Replica Compose được theo dõi theo dịch vụ và số container, nên một replica cùng
+dịch vụ đang khỏe không thể che giấu replica lỗi. Người dùng dừng, triển khai
+đang chạy và thời gian chờ khởi động 30–600 giây sẽ che các chuyển đổi dự kiến;
+vòng lặp khởi động lại cần ba lần tăng trong năm phút và vẫn mở đến năm phút sau
+lần khởi động lại mới nhất. OOM chỉ được báo từ cờ `OOMKilled` tường minh của
+Docker trên một lần lỗi mới.
+
+Thẻ runtime ở chi tiết ứng dụng và cơ sở dữ liệu hiển thị trạng thái, replica bị
+ảnh hưởng, thời điểm quan sát, bằng chứng khởi động lại/OOM gần nhất và liên kết
+tới nhật ký, triển khai. Thông báo runtime là hai sự kiện riêng
+`runtime_failure` và `runtime_recovery`; đăng ký kênh hiện có không bị mở rộng.
+Xem [Sức khỏe runtime](/vi/using/runtime-health) để biết đầy đủ ngữ nghĩa và
+giới hạn.

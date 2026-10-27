@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 )
 
 const (
@@ -88,6 +90,7 @@ type Application struct {
 	ProjectName                string
 	ServerName                 string
 	PendingChanges             []string
+	RuntimeHealth              *runtimewatch.Health
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/containers"
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 	"github.com/justindeelux/gotham/internal/store"
 )
 
@@ -38,9 +39,11 @@ type CreateRequest struct {
 }
 
 type UpdateRequest struct {
-	Name          *string    `json:"name,omitempty"`
-	EnvironmentID *uuid.UUID `json:"-"`
-	ServerID      *uuid.UUID `json:"-"`
+	Name           *string    `json:"name,omitempty"`
+	EnvironmentID  *uuid.UUID `json:"-"`
+	ServerID       *uuid.UUID `json:"-"`
+	MonitorEnabled *bool      `json:"-"`
+	MonitorGrace   *int       `json:"-"`
 }
 
 type DatabaseFilter struct {
@@ -61,14 +64,16 @@ type DatabaseService interface {
 }
 
 type Config struct {
-	Store         *store.Store
-	Repository    Repository
-	Containers    containers.ContainerService
-	Secret        string
-	Logger        *slog.Logger
-	HealthTimeout time.Duration
-	HealthPoll    time.Duration
-	Leases        *JobLeases
+	Store          *store.Store
+	Repository     Repository
+	Containers     containers.ContainerService
+	Secret         string
+	Logger         *slog.Logger
+	HealthTimeout  time.Duration
+	HealthPoll     time.Duration
+	Leases         *JobLeases
+	RuntimeMonitor RuntimeMonitor
+	RuntimeHealth  *runtimewatch.Reader
 }
 
 func (c Config) repository() Repository {
@@ -82,13 +87,15 @@ func (c Config) repository() Repository {
 }
 
 type Service struct {
-	repo          Repository
-	containers    containers.ContainerService
-	secret        string
-	logger        *slog.Logger
-	healthTimeout time.Duration
-	healthPoll    time.Duration
-	leases        *JobLeases
+	repo           Repository
+	containers     containers.ContainerService
+	secret         string
+	logger         *slog.Logger
+	healthTimeout  time.Duration
+	healthPoll     time.Duration
+	leases         *JobLeases
+	runtimeMonitor RuntimeMonitor
+	runtimeHealth  *runtimewatch.Reader
 }
 
 var _ DatabaseService = (*Service)(nil)
@@ -103,13 +110,15 @@ func NewService(cfg Config) *Service {
 		poll = defaultHealthPoll
 	}
 	return &Service{
-		repo:          cfg.repository(),
-		containers:    cfg.Containers,
-		secret:        cfg.Secret,
-		logger:        logger,
-		healthTimeout: cfg.HealthTimeout,
-		healthPoll:    poll,
-		leases:        cfg.Leases,
+		repo:           cfg.repository(),
+		containers:     cfg.Containers,
+		secret:         cfg.Secret,
+		logger:         logger,
+		healthTimeout:  cfg.HealthTimeout,
+		healthPoll:     poll,
+		leases:         cfg.Leases,
+		runtimeMonitor: cfg.RuntimeMonitor,
+		runtimeHealth:  cfg.RuntimeHealth,
 	}
 }
 
@@ -252,13 +261,23 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, filter DatabaseFil
 		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID); err != nil {
 			return nil, err
 		}
-		return s.repo.ListDatabasesByEnvironment(ctx, filter.EnvironmentID)
+		databases, err := s.repo.ListDatabasesByEnvironment(ctx, filter.EnvironmentID)
+		if err != nil {
+			return nil, err
+		}
+		s.applyRuntimeHealth(ctx, databases)
+		return databases, nil
 	}
 	if filter.ProjectID != uuid.Nil {
 		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID); err != nil {
 			return nil, err
 		}
-		return s.repo.ListDatabasesByProject(ctx, filter.ProjectID)
+		databases, err := s.repo.ListDatabasesByProject(ctx, filter.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		s.applyRuntimeHealth(ctx, databases)
+		return databases, nil
 	}
 	databases, err := s.repo.ListDatabases(ctx, userID)
 	if err != nil {
@@ -267,11 +286,34 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, filter DatabaseFil
 	if databases == nil {
 		return []Database{}, nil
 	}
+	s.applyRuntimeHealth(ctx, databases)
 	return databases, nil
 }
 
+func (s *Service) applyRuntimeHealth(ctx context.Context, databases []Database) {
+	if s == nil || s.runtimeHealth == nil || len(databases) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(databases))
+	for _, database := range databases {
+		ids = append(ids, database.ID)
+	}
+	health := s.runtimeHealth.DatabaseHealthMany(ctx, ids)
+	for i := range databases {
+		if value, ok := health[databases[i].ID]; ok {
+			databases[i].RuntimeHealth = &value
+		}
+	}
+}
+
 func (s *Service) Get(ctx context.Context, userID, databaseID uuid.UUID) (Database, error) {
-	return s.database(ctx, userID, databaseID, false)
+	database, err := s.database(ctx, userID, databaseID, false)
+	if err != nil {
+		return Database{}, err
+	}
+	one := []Database{database}
+	s.applyRuntimeHealth(ctx, one)
+	return one[0], nil
 }
 
 func (s *Service) Credentials(ctx context.Context, userID, databaseID uuid.UUID) (Credentials, error) {
@@ -287,6 +329,11 @@ func (s *Service) Credentials(ctx context.Context, userID, databaseID uuid.UUID)
 }
 
 func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req UpdateRequest) (Database, error) {
+	if req.MonitorGrace != nil &&
+		(*req.MonitorGrace < runtimewatch.MinGraceSeconds || *req.MonitorGrace > runtimewatch.MaxGraceSeconds) {
+		return Database{}, fmt.Errorf("%w: monitor grace seconds must be between %d and %d",
+			ErrValidation, runtimewatch.MinGraceSeconds, runtimewatch.MaxGraceSeconds)
+	}
 	database, err := s.database(ctx, userID, databaseID, true)
 	if err != nil {
 		return Database{}, err
@@ -362,7 +409,21 @@ func (s *Service) Update(ctx context.Context, userID, databaseID uuid.UUID, req 
 	} else {
 		database.ServerID = uuid.Nil
 	}
-	return s.repo.UpdateDatabaseTarget(ctx, database)
+	updated, err := s.repo.UpdateDatabaseTarget(ctx, database)
+	if err != nil {
+		return Database{}, err
+	}
+	if req.MonitorEnabled != nil || req.MonitorGrace != nil {
+		if s.runtimeMonitor == nil {
+			return Database{}, fmt.Errorf("%w: monitoring controls are unavailable", ErrValidation)
+		}
+		if err := s.runtimeMonitor.SetSettings(ctx, runtimewatch.ResourceDatabase, database.ID, req.MonitorEnabled, req.MonitorGrace); err != nil {
+			return Database{}, fmt.Errorf("%w: %s", ErrValidation, err)
+		}
+	}
+	one := []Database{updated}
+	s.applyRuntimeHealth(ctx, one)
+	return one[0], nil
 }
 
 func (s *Service) claimUpdate(databaseID uuid.UUID) error {
@@ -406,6 +467,9 @@ func (s *Service) Delete(ctx context.Context, userID, databaseID uuid.UUID) erro
 	}
 	s.logger.Info("databases: deleted; volume retained for the grace window",
 		"database_id", database.ID.String(), "volume", database.StoragePath)
+	if s.runtimeMonitor != nil {
+		s.runtimeMonitor.CloseResource(ctx, runtimewatch.ResourceDatabase, database.ID, "resource_deleted")
+	}
 	return nil
 }
 
@@ -425,11 +489,13 @@ func (s *Service) Start(ctx context.Context, userID, databaseID uuid.UUID) (Data
 	if err := s.containers.Start(ctx, database.ServerID, database.ContainerID); err != nil {
 		return Database{}, mapContainerError(err)
 	}
+	s.setDesiredState(ctx, database.ID, "running", 0)
 	if err := s.waitHealthy(ctx, database, engine.Healthcheck()); err != nil {
 		s.markError(ctx, database, err)
 		return Database{}, err
 	}
-	return s.setStatus(ctx, database, StatusRunning)
+	updated, statusErr := s.setStatus(ctx, database, StatusRunning)
+	return s.finishLifecycle(ctx, updated, statusErr)
 }
 
 func (s *Service) Stop(ctx context.Context, userID, databaseID uuid.UUID) (Database, error) {
@@ -440,7 +506,9 @@ func (s *Service) Stop(ctx context.Context, userID, databaseID uuid.UUID) (Datab
 	if err := s.containers.Stop(ctx, database.ServerID, database.ContainerID); err != nil {
 		return Database{}, mapContainerError(err)
 	}
-	return s.setStatus(ctx, database, StatusStopped)
+	s.setDesiredState(ctx, database.ID, "stopped", 0)
+	updated, statusErr := s.setStatus(ctx, database, StatusStopped)
+	return s.finishLifecycle(ctx, updated, statusErr)
 }
 
 func (s *Service) Restart(ctx context.Context, userID, databaseID uuid.UUID) (Database, error) {
@@ -459,11 +527,24 @@ func (s *Service) Restart(ctx context.Context, userID, databaseID uuid.UUID) (Da
 	if err := s.containers.Restart(ctx, database.ServerID, database.ContainerID); err != nil {
 		return Database{}, mapContainerError(err)
 	}
+	s.setDesiredState(ctx, database.ID, "running", 0)
 	if err := s.waitHealthy(ctx, database, engine.Healthcheck()); err != nil {
 		s.markError(ctx, database, err)
 		return Database{}, err
 	}
-	return s.setStatus(ctx, database, StatusRunning)
+	updated, statusErr := s.setStatus(ctx, database, StatusRunning)
+	return s.finishLifecycle(ctx, updated, statusErr)
+}
+
+// finishLifecycle attaches the read-only runtime summary to an action
+// response so the detail page updates without another round trip.
+func (s *Service) finishLifecycle(ctx context.Context, database Database, err error) (Database, error) {
+	if err != nil {
+		return Database{}, err
+	}
+	one := []Database{database}
+	s.applyRuntimeHealth(ctx, one)
+	return one[0], nil
 }
 
 func (s *Service) ready() error {

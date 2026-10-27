@@ -159,6 +159,33 @@ export function parseEnvironment(
   });
 }
 
+export const runtimeReplicaHealthSchema = z.object({
+  service: z.string().optional(),
+  replica: z.string().optional(),
+  container_id: z.string().optional(),
+  deployment_id: z.string().optional(),
+  state: z.string(),
+  health: z.string(),
+  reason: z.string().optional(),
+  coverage: z.string(),
+  observed_at: z.string().optional(),
+  last_restart_at: z.string().optional(),
+  last_oom_at: z.string().optional(),
+});
+
+export const runtimeHealthSchema = z
+  .object({
+    state: z.string(),
+    coverage: z.string(),
+    reason: z.string().optional(),
+    observed_at: z.string().optional(),
+    enabled: z.boolean(),
+    grace_seconds: z.number().int(),
+    incident_id: z.string().optional(),
+    affected: z.array(runtimeReplicaHealthSchema).default([]),
+  })
+  .nullish();
+
 export const environmentResourceApplicationSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -179,6 +206,7 @@ export const environmentResourceApplicationSchema = z.object({
   updated_at: z.string(),
   is_preview: z.boolean(),
   preview_of: z.string().optional(),
+  runtime_health: runtimeHealthSchema,
 });
 
 export const serviceDomainRouteSchema = z.object({
@@ -221,6 +249,7 @@ export const environmentResourceDatabaseSchema = z.object({
   volume: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
+  runtime_health: runtimeHealthSchema,
 });
 
 export const environmentResourcesEnvelopeSchema = z.object({

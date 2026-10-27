@@ -65,10 +65,19 @@ export function allowedEvents(scope: ChannelScope): NotificationEventKey[] {
   switch (scope) {
     case "application":
       return allNotificationEvents.filter(
-        (event) => event.startsWith("deploy_") || event === "redeploy_needed",
+        (event) =>
+          event.startsWith("deploy_") ||
+          event === "redeploy_needed" ||
+          event === "runtime_failure" ||
+          event === "runtime_recovery",
       );
     case "database":
-      return allNotificationEvents.filter((event) => event.startsWith("backup_"));
+      return allNotificationEvents.filter(
+        (event) =>
+          event.startsWith("backup_") ||
+          event === "runtime_failure" ||
+          event === "runtime_recovery",
+      );
     default:
       return [...allNotificationEvents];
   }

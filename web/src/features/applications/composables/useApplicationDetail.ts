@@ -736,10 +736,35 @@ export function useApplicationDetail() {
     appsStore.stopAllPolling();
   });
 
+  const monitorSaving = ref(false);
+  const monitorError = ref<string | null>(null);
+
+  async function handleMonitoringSave(value: { enabled: boolean; graceSeconds: number }): Promise<void> {
+    const current = application.value;
+    if (!current) {
+      return;
+    }
+    monitorSaving.value = true;
+    monitorError.value = null;
+    try {
+      await appsStore.update(current.id, {
+        monitor_enabled: value.enabled,
+        monitor_grace_seconds: value.graceSeconds,
+      });
+    } catch (error) {
+      monitorError.value = describeApplicationError(error);
+    } finally {
+      monitorSaving.value = false;
+    }
+  }
+
   return {
     appId,
     activeTab,
     application,
+    monitorSaving,
+    monitorError,
+    handleMonitoringSave,
     displayName,
     shortId,
     brand,

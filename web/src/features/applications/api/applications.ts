@@ -5,6 +5,7 @@ import { volumeListingSchema } from "@/features/applications/schemas/volumes";
 import { parseWith } from "@/shared/validation/parse";
 import { i18n } from "@/shared/i18n";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
+import type { RuntimeHealth } from "@/shared/types/runtimeHealth";
 
 export interface Application {
   id: string;
@@ -31,6 +32,7 @@ export interface Application {
   server_id: string | null;
   server_name: string;
   pending_changes: string[];
+  runtime_health?: RuntimeHealth | null;
   created_at: string;
   updated_at: string;
 }
@@ -118,6 +120,8 @@ export interface UpdateApplicationInput {
   compose_content?: string;
   compose_file?: string;
   compose_service?: string;
+  monitor_enabled?: boolean;
+  monitor_grace_seconds?: number;
 }
 
 export interface RollbackInput {

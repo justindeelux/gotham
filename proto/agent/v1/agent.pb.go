@@ -4806,8 +4806,21 @@ type ContainerObservation struct {
 	ComposeProject string                 `protobuf:"bytes,13,opt,name=compose_project,json=composeProject,proto3" json:"compose_project,omitempty"`
 	ComposeService string                 `protobuf:"bytes,14,opt,name=compose_service,json=composeService,proto3" json:"compose_service,omitempty"`
 	Role           string                 `protobuf:"bytes,15,opt,name=role,proto3" json:"role,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// exit_code is Docker's recorded exit code for a terminated container. It
+	// is evidence only: a non-zero code never proves OOM, and zero alone does
+	// not make a long-running service a completed one-shot job.
+	ExitCode int32 `protobuf:"varint,16,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	// restart_policy is the container's native Docker restart policy ("no",
+	// "always", "unless-stopped" or "on-failure"). Empty from an agent that
+	// predates it or when the engine could not answer. The runtime detector
+	// treats a successful exit under "no" as a supported one-shot completion.
+	RestartPolicy string `protobuf:"bytes,17,opt,name=restart_policy,json=restartPolicy,proto3" json:"restart_policy,omitempty"`
+	// replica is the Compose container number (com.docker.compose.container-number)
+	// so replicas of one service stay distinct across recreations. Empty for a
+	// non-Compose container or an older agent.
+	Replica       string `protobuf:"bytes,18,opt,name=replica,proto3" json:"replica,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ContainerObservation) Reset() {
@@ -4941,6 +4954,27 @@ func (x *ContainerObservation) GetComposeService() string {
 func (x *ContainerObservation) GetRole() string {
 	if x != nil {
 		return x.Role
+	}
+	return ""
+}
+
+func (x *ContainerObservation) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *ContainerObservation) GetRestartPolicy() string {
+	if x != nil {
+		return x.RestartPolicy
+	}
+	return ""
+}
+
+func (x *ContainerObservation) GetReplica() string {
+	if x != nil {
+		return x.Replica
 	}
 	return ""
 }
@@ -8906,7 +8940,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\ftotal_inodes\x18\t \x01(\x04R\vtotalInodes\x12\x1f\n" +
 	"\vfree_inodes\x18\n" +
 	" \x01(\x04R\n" +
-	"freeInodes\"\xa8\x04\n" +
+	"freeInodes\"\x86\x05\n" +
 	"\x14ContainerObservation\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x16\n" +
@@ -8928,7 +8962,10 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"databaseId\x12'\n" +
 	"\x0fcompose_project\x18\r \x01(\tR\x0ecomposeProject\x12'\n" +
 	"\x0fcompose_service\x18\x0e \x01(\tR\x0ecomposeService\x12\x12\n" +
-	"\x04role\x18\x0f \x01(\tR\x04role\"\xa6\x01\n" +
+	"\x04role\x18\x0f \x01(\tR\x04role\x12\x1b\n" +
+	"\texit_code\x18\x10 \x01(\x05R\bexitCode\x12%\n" +
+	"\x0erestart_policy\x18\x11 \x01(\tR\rrestartPolicy\x12\x18\n" +
+	"\areplica\x18\x12 \x01(\tR\areplica\"\xa6\x01\n" +
 	"\x12ContainerInventory\x12\x1a\n" +
 	"\bcomplete\x18\x01 \x01(\bR\bcomplete\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1c\n" +

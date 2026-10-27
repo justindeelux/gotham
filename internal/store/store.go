@@ -436,6 +436,70 @@ func (s *Store) DeleteNodeObservation(ctx context.Context, serverID pgtype.UUID)
 	return s.queries.DeleteNodeObservation(ctx, serverID)
 }
 
+func (s *Store) GetRuntimeMonitorSettings(ctx context.Context, params sqlc.GetRuntimeMonitorSettingsParams) (sqlc.GetRuntimeMonitorSettingsRow, error) {
+	return s.queries.GetRuntimeMonitorSettings(ctx, params)
+}
+
+func (s *Store) UpsertRuntimeMonitorSettings(ctx context.Context, params sqlc.UpsertRuntimeMonitorSettingsParams) error {
+	return s.queries.UpsertRuntimeMonitorSettings(ctx, params)
+}
+
+func (s *Store) SetRuntimeMonitorDesiredState(ctx context.Context, params sqlc.SetRuntimeMonitorDesiredStateParams) error {
+	return s.queries.SetRuntimeMonitorDesiredState(ctx, params)
+}
+
+func (s *Store) ListRuntimeMonitorApplications(ctx context.Context, serverID pgtype.UUID) ([]sqlc.ListRuntimeMonitorApplicationsRow, error) {
+	return s.queries.ListRuntimeMonitorApplications(ctx, serverID)
+}
+
+func (s *Store) ListRuntimeMonitorDatabases(ctx context.Context, serverID pgtype.UUID) ([]sqlc.ListRuntimeMonitorDatabasesRow, error) {
+	return s.queries.ListRuntimeMonitorDatabases(ctx, serverID)
+}
+
+func (s *Store) ListRuntimeMonitorReplicaStates(ctx context.Context, params sqlc.ListRuntimeMonitorReplicaStatesParams) ([]sqlc.RuntimeMonitorReplica, error) {
+	return s.queries.ListRuntimeMonitorReplicaStates(ctx, params)
+}
+
+func (s *Store) ListRuntimeMonitorReplicaStatesByResources(ctx context.Context, params sqlc.ListRuntimeMonitorReplicaStatesByResourcesParams) ([]sqlc.RuntimeMonitorReplica, error) {
+	return s.queries.ListRuntimeMonitorReplicaStatesByResources(ctx, params)
+}
+
+func (s *Store) ListRuntimeMonitorReplicaStatesForNode(ctx context.Context, nodeID pgtype.UUID) ([]sqlc.RuntimeMonitorReplica, error) {
+	return s.queries.ListRuntimeMonitorReplicaStatesForNode(ctx, nodeID)
+}
+
+func (s *Store) UpsertRuntimeMonitorReplicaState(ctx context.Context, params sqlc.UpsertRuntimeMonitorReplicaStateParams) error {
+	return s.queries.UpsertRuntimeMonitorReplicaState(ctx, params)
+}
+
+func (s *Store) DeleteRuntimeMonitorReplicaState(ctx context.Context, params sqlc.DeleteRuntimeMonitorReplicaStateParams) error {
+	return s.queries.DeleteRuntimeMonitorReplicaState(ctx, params)
+}
+
+func (s *Store) DeleteRuntimeMonitorStateForNode(ctx context.Context, nodeID pgtype.UUID) error {
+	return s.queries.DeleteRuntimeMonitorStateForNode(ctx, nodeID)
+}
+
+func (s *Store) DeleteRuntimeMonitorStateForResource(ctx context.Context, params sqlc.DeleteRuntimeMonitorStateForResourceParams) error {
+	return s.queries.DeleteRuntimeMonitorStateForResource(ctx, params)
+}
+
+func (s *Store) DeleteRuntimeMonitorStateOnOtherNodes(ctx context.Context, params sqlc.DeleteRuntimeMonitorStateOnOtherNodesParams) error {
+	return s.queries.DeleteRuntimeMonitorStateOnOtherNodes(ctx, params)
+}
+
+func (s *Store) DeleteRuntimeMonitorSettings(ctx context.Context, params sqlc.DeleteRuntimeMonitorSettingsParams) error {
+	return s.queries.DeleteRuntimeMonitorSettings(ctx, params)
+}
+
+func (s *Store) ListActiveIncidentsByResources(ctx context.Context, params sqlc.ListActiveIncidentsByResourcesParams) ([]sqlc.Incident, error) {
+	return s.queries.ListActiveIncidentsByResources(ctx, params)
+}
+
+func (s *Store) ListActiveIncidentsForNode(ctx context.Context, nodeID pgtype.UUID) ([]sqlc.Incident, error) {
+	return s.queries.ListActiveIncidentsForNode(ctx, nodeID)
+}
+
 func (s *Store) SetServerStatus(ctx context.Context, params sqlc.SetServerStatusParams) (sqlc.Server, error) {
 	return s.queries.SetServerStatus(ctx, params)
 }

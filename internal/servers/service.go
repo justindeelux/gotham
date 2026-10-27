@@ -88,17 +88,26 @@ type Config struct {
 }
 
 type ServerService struct {
-	store       *store.Store
-	authority   *Authority
-	secret      string
-	version     string
-	logger      *slog.Logger
-	updater     AgentUpdateOfferer
-	notifier    StateNotifier
-	incidents   IncidentRecorder
-	pressure    PressureRecorder
-	sweepAfter  time.Time
-	agentUpdate agentUpdateState
+	store     *store.Store
+	authority *Authority
+	secret    string
+	version   string
+	logger    *slog.Logger
+	updater   AgentUpdateOfferer
+	notifier  StateNotifier
+	incidents IncidentRecorder
+	pressure  PressureRecorder
+	runtime   RuntimeObserver
+
+	runtimeMu      sync.Mutex
+	runtimeCtx     context.Context
+	runtimeCancel  context.CancelFunc
+	runtimeLatest  map[uuid.UUID]NodeObservation
+	runtimeRunning map[uuid.UUID]bool
+	runtimeClosed  bool
+	runtimeWG      sync.WaitGroup
+	sweepAfter     time.Time
+	agentUpdate    agentUpdateState
 
 	metricMu     sync.Mutex
 	lastMetricAt map[string]time.Time
@@ -238,6 +247,13 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 		return err
 	} else if blocking != "" {
 		return fmt.Errorf("%w: server still has resources: %s", ErrConflict, blocking)
+	}
+	if s.runtime != nil {
+		// The incident rows cascade their node_id to NULL on delete, so close
+		// runtime incidents while the node link is still readable.
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		s.runtime.NodeDeleted(closeCtx, id)
+		cancel()
 	}
 	volumes, err := s.store.DeleteServerPurging(ctx, pgUUID(id))
 	if err != nil {

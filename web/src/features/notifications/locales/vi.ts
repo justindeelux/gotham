@@ -32,6 +32,8 @@ const vi = {
       certificate_expiring: "Chứng chỉ cho {name} sắp hết hạn",
       update_available: "Đã có Gotham {name}",
       redeploy_needed: "{name} cần triển khai lại: {changes}",
+      runtime_failure: "Lỗi runtime: {name}",
+      runtime_recovery: "Runtime đã phục hồi: {name}",
       unknown: "Cập nhật cho {name} trên {host}",
     },
     changes: {
@@ -81,6 +83,8 @@ const vi = {
     certificate_expiring: "Chứng chỉ sắp hết hạn",
     update_available: "Có bản cập nhật Gotham",
     redeploy_needed: "Cần triển khai lại",
+    runtime_failure: "Lỗi runtime",
+    runtime_recovery: "Runtime đã phục hồi",
   },
   scopeLabel: {
     allResources: "Mọi tài nguyên",

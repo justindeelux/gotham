@@ -15,6 +15,7 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/requestreplay"
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 	"github.com/justindeelux/gotham/internal/services"
 )
 
@@ -63,6 +64,8 @@ type UpdateApplicationInput struct {
 	ComposeContent    *string
 	ComposeFile       *string
 	ComposeService    *string
+	MonitorEnabled    *bool
+	MonitorGrace      *int
 }
 
 type ApplicationFilter struct {
@@ -76,7 +79,8 @@ func (in UpdateApplicationInput) empty() bool {
 		in.ImageRef == nil && in.RegistryUsername == nil && in.RegistryPassword == nil &&
 		in.ServerID == nil && in.EnvironmentID == nil && in.GitHubAppID == nil &&
 		in.DockerfileContent == nil && in.BuildArgs == nil &&
-		in.ComposeContent == nil && in.ComposeFile == nil && in.ComposeService == nil
+		in.ComposeContent == nil && in.ComposeFile == nil && in.ComposeService == nil &&
+		in.MonitorEnabled == nil && in.MonitorGrace == nil
 }
 
 func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in CreateApplicationInput) (Application, error) {
@@ -218,13 +222,23 @@ func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID, filter
 		if _, err := s.repo.ResolveEnvironment(ctx, filter.EnvironmentID); err != nil {
 			return nil, err
 		}
-		return s.repo.ListApplicationsByEnvironment(ctx, filter.EnvironmentID, filter.IncludePreviews)
+		applications, err := s.repo.ListApplicationsByEnvironment(ctx, filter.EnvironmentID, filter.IncludePreviews)
+		if err != nil {
+			return nil, err
+		}
+		s.applyRuntimeHealth(ctx, applications)
+		return applications, nil
 	}
 	if filter.ProjectID != uuid.Nil {
 		if _, err := s.repo.ResolveProject(ctx, filter.ProjectID); err != nil {
 			return nil, err
 		}
-		return s.repo.ListApplicationsByProject(ctx, filter.ProjectID, filter.IncludePreviews)
+		applications, err := s.repo.ListApplicationsByProject(ctx, filter.ProjectID, filter.IncludePreviews)
+		if err != nil {
+			return nil, err
+		}
+		s.applyRuntimeHealth(ctx, applications)
+		return applications, nil
 	}
 	applications, err := s.repo.ListApplications(ctx, userID)
 	if err != nil {
@@ -233,11 +247,36 @@ func (s *Service) ListApplications(ctx context.Context, userID uuid.UUID, filter
 	if applications == nil {
 		return []Application{}, nil
 	}
+	s.applyRuntimeHealth(ctx, applications)
 	return applications, nil
 }
 
+// applyRuntimeHealth attaches the read-only pushed-evidence summary. It is a
+// best-effort enrichment: a monitoring read failure cannot hide the resource.
+func (s *Service) applyRuntimeHealth(ctx context.Context, applications []Application) {
+	if s == nil || s.runtimeHealth == nil || len(applications) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(applications))
+	for _, app := range applications {
+		ids = append(ids, app.ID)
+	}
+	health := s.runtimeHealth.ApplicationHealthMany(ctx, ids)
+	for i := range applications {
+		if value, ok := health[applications[i].ID]; ok {
+			applications[i].RuntimeHealth = &value
+		}
+	}
+}
+
 func (s *Service) GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error) {
-	return s.application(ctx, userID, appID, false)
+	app, err := s.application(ctx, userID, appID, false)
+	if err != nil {
+		return Application{}, err
+	}
+	one := []Application{app}
+	s.applyRuntimeHealth(ctx, one)
+	return one[0], nil
 }
 
 func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error) {
@@ -246,6 +285,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	}
 	if in.empty() {
 		return Application{}, fmt.Errorf("%w: no fields to update", ErrValidation)
+	}
+	if in.MonitorGrace != nil &&
+		(*in.MonitorGrace < runtimewatch.MinGraceSeconds || *in.MonitorGrace > runtimewatch.MaxGraceSeconds) {
+		return Application{}, fmt.Errorf("%w: monitor grace seconds must be between %d and %d",
+			ErrValidation, runtimewatch.MinGraceSeconds, runtimewatch.MaxGraceSeconds)
 	}
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
@@ -443,6 +487,14 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		}
 		return Application{}, updateErr
 	}
+	if in.MonitorEnabled != nil || in.MonitorGrace != nil {
+		if s.runtimeMonitor == nil {
+			return Application{}, fmt.Errorf("%w: monitoring controls are unavailable", ErrValidation)
+		}
+		if err := s.runtimeMonitor.SetSettings(ctx, runtimewatch.ResourceApplication, app.ID, in.MonitorEnabled, in.MonitorGrace); err != nil {
+			return Application{}, fmt.Errorf("%w: %s", ErrValidation, err)
+		}
+	}
 	moved := updated.ServerID != previousServer
 	if moved {
 		s.stopContainerOnNode(ctx, previousServer, s.latestContainer(ctx, app.ID))
@@ -452,7 +504,9 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 			s.syncProxyServer(ctx, updated.ServerID)
 		}
 	}
-	return updated, nil
+	one := []Application{updated}
+	s.applyRuntimeHealth(ctx, one)
+	return one[0], nil
 }
 
 func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error {
@@ -505,6 +559,9 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	s.removeApplicationContainers(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
+	}
+	if s.runtimeMonitor != nil {
+		s.runtimeMonitor.CloseResource(ctx, runtimewatch.ResourceApplication, appID, "resource_deleted")
 	}
 	if app.PrimaryDomain != nil {
 		s.syncProxyServer(ctx, app.ServerID)
@@ -662,6 +719,11 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 	}
 	if err != nil {
 		return Deployment{}, err
+	}
+	if start {
+		s.setDesiredState(ctx, app.ID, "running")
+	} else {
+		s.setDesiredState(ctx, app.ID, "stopped")
 	}
 	return target, nil
 }

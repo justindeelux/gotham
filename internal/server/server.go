@@ -33,6 +33,7 @@ import (
 	"github.com/justindeelux/gotham/internal/projects"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/proxy"
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 	"github.com/justindeelux/gotham/internal/server/ws"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/services"
@@ -86,6 +87,7 @@ type Server struct {
 	notify            notifications.NotificationService
 	incidents         *incidents.Service
 	monitoring        *monitoring.Service
+	runtime           *runtimewatch.Service
 	certificateExpiry *proxy.CertificateExpiryObserver
 	webhooks          *webhooks.Service
 	metrics           *servers.MetricsSweeper
@@ -190,6 +192,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		}
 		if closer, ok := s.toolchain.(interface{ Close() error }); ok {
 			_ = closer.Close()
+		}
+		if closer, ok := s.servers.(interface{ Close() }); ok {
+			closer.Close()
 		}
 		_ = redisClient.Close()
 		limiter.Close()
@@ -311,10 +316,20 @@ func (s *Server) routes() (http.Handler, error) {
 		s.incidents = s.incidentService()
 		if s.incidents != nil {
 			incidents.Mount(api, s.incidentAuth(), UserIDFromContext, s.incidents)
+			s.runtime = runtimewatch.NewService(runtimewatch.Config{
+				Store:     s.persistence,
+				Incidents: s.incidents,
+				Logger:    s.logger,
+			})
 			if nodes, ok := s.servers.(interface {
 				SetIncidentRecorder(servers.IncidentRecorder)
 			}); ok {
-				nodes.SetIncidentRecorder(incidentConnectivity{svc: s.incidents, logger: s.logger})
+				nodes.SetIncidentRecorder(incidentConnectivity{svc: s.incidents, runtime: s.runtime, logger: s.logger})
+			}
+			if nodes, ok := s.servers.(interface {
+				SetRuntimeObserver(servers.RuntimeObserver)
+			}); ok && s.runtime != nil {
+				nodes.SetRuntimeObserver(s.runtime)
 			}
 		}
 
@@ -510,6 +525,8 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		RedisAddr:            s.cfg.Snapshot().Redis.Addr,
 		Logger:               s.logger,
 		GitAllowPrivateHosts: s.cfg.Snapshot().Deploy.GitAllowPrivateHosts,
+		RuntimeMonitor:       s.runtime,
+		RuntimeHealth:        runtimewatch.NewReader(s.persistence),
 	}
 	cfg.TLSForDomains = s.defaultDomainTLS
 	if githubAppSvc != nil {
@@ -757,11 +774,13 @@ func (s *Server) databaseService(containerService containers.ContainerService) d
 		return nil
 	}
 	return databases.NewDefaultService(databases.Config{
-		Store:      s.persistence,
-		Containers: containerService,
-		Secret:     s.secretKey,
-		Logger:     s.logger,
-		Leases:     s.jobLeases,
+		Store:          s.persistence,
+		Containers:     containerService,
+		Secret:         s.secretKey,
+		Logger:         s.logger,
+		Leases:         s.jobLeases,
+		RuntimeMonitor: s.runtime,
+		RuntimeHealth:  runtimewatch.NewReader(s.persistence),
 	})
 }
 

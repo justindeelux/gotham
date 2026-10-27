@@ -225,6 +225,7 @@ const errorPrefixPackages = new Set([
   "projects",
   "proxy",
   "replay",
+  "runtimewatch",
   "server",
   "servers",
   "services",

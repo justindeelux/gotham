@@ -85,3 +85,27 @@ and whether coverage is fresh, stale or unknown. It lists each filesystem's
 mount, purpose, free/total space and free/total inodes, and links to the
 **Metrics** tab for the underlying charts. Suggested action is to inspect
 storage or logs, or reduce load.
+
+## Application and database runtime health
+
+Host pressure is only half of the picture: a node can have spare CPU and disk
+while an application or managed database is stopped, unhealthy or restarting.
+The same accepted observations also feed runtime health for applications and
+databases. That evaluation is independent of deploy status, keeps running with
+no browser open, and does not add a Docker poll on the control plane.
+
+A running container without a healthcheck is **unknown**, not healthy. Complete
+inventories are required to prove a container absent, and partial reports, an
+old agent or an offline node show unknown coverage instead of reporting every
+container missing. Compose replicas are tracked by service and container number,
+so a healthy sibling cannot hide a failed replica. User stops, active
+deployments and the 30–600 second startup grace suppress expected transitions;
+restart loops need three increases in five minutes and stay open until five
+minutes after the newest restart. OOM is reported only from Docker's explicit
+`OOMKilled` flag on a new failed occurrence.
+
+The runtime card on application and database details shows the state, affected
+replica, observation time, last restart/OOM evidence and links to logs and
+deployments. Runtime notifications are the separate `runtime_failure` and
+`runtime_recovery` events; existing channel subscriptions are not broadened.
+See [Runtime health](/using/runtime-health) for the full semantics and limits.

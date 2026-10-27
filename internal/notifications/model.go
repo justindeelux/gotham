@@ -72,6 +72,8 @@ const (
 	EventIncidentOpened      EventKey = "incident_opened"
 	EventIncidentSeverity    EventKey = "incident_severity_changed"
 	EventIncidentRecovered   EventKey = "incident_recovered"
+	EventRuntimeFailure      EventKey = "runtime_failure"
+	EventRuntimeRecovery     EventKey = "runtime_recovery"
 )
 
 var defaultEvents = []EventKey{
@@ -82,7 +84,7 @@ var defaultEvents = []EventKey{
 var AllEvents = append(
 	append([]EventKey(nil), defaultEvents...),
 	EventServerOffline, EventServerOnline, EventCertificateExpiring, EventUpdateAvailable,
-	EventRedeployNeeded,
+	EventRedeployNeeded, EventRuntimeFailure, EventRuntimeRecovery,
 )
 
 func (k EventKey) Valid() bool {
@@ -129,9 +131,15 @@ type Event struct {
 	IncidentID uuid.UUID
 	Severity   string
 	Action     string
+	// KeyOverride selects an explicit event key (runtime health events) while
+	// keeping the incident rendering. Empty uses the normal mapping.
+	KeyOverride EventKey
 }
 
 func (e Event) Key() EventKey {
+	if e.KeyOverride != "" {
+		return e.KeyOverride
+	}
 	switch {
 	case e.Kind == EventIncident:
 		switch e.Action {

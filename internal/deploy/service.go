@@ -16,6 +16,7 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/requestreplay"
+	"github.com/justindeelux/gotham/internal/runtimewatch"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/taskevents"
 )
@@ -107,6 +108,8 @@ type Config struct {
 	HealthPoll           time.Duration
 	ControlTimeout       time.Duration
 	ToolStatus           ToolStatus
+	RuntimeMonitor       RuntimeMonitor
+	RuntimeHealth        *runtimewatch.Reader
 }
 
 func (c Config) repository() Repository {
@@ -128,6 +131,8 @@ type Service struct {
 	hooks          func() HookLifecycle
 	hookTimeout    time.Duration
 	controlTimeout time.Duration
+	runtimeMonitor RuntimeMonitor
+	runtimeHealth  *runtimewatch.Reader
 	locks          appLocks
 	probeMu        sync.Mutex
 	probeLast      map[probeThrottleKey]time.Time
@@ -175,6 +180,8 @@ func NewService(cfg Config) *Service {
 		hooks:          cfg.Hooks,
 		hookTimeout:    hookTimeout,
 		controlTimeout: controlTimeout,
+		runtimeMonitor: cfg.RuntimeMonitor,
+		runtimeHealth:  cfg.RuntimeHealth,
 	}
 }
 
@@ -561,6 +568,9 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 		return Deployment{}, err
 	}
 	if requestreplay.Replayed(ctx) {
+		// A replayed deployment was accepted earlier; clear an intentional
+		// stop so runtime monitoring does not keep suppressing it.
+		s.setDesiredState(ctx, app.ID, "running")
 		return created, nil
 	}
 	s.publishTask(ctx, app, created, taskevents.StatusQueued, "", 0, "")
@@ -572,6 +582,8 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 		s.abandon(app, created, err)
 		return Deployment{}, err
 	}
+	// This is the single accepted path for Deploy, DeploySystem and Rollback.
+	s.setDesiredState(ctx, app.ID, "running")
 	return created, nil
 }
 

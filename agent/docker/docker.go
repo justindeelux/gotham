@@ -133,13 +133,15 @@ func (c *DockerClient) DockerRootDir(ctx context.Context) (string, error) {
 // deliberately limited to state, health, restart/OOM evidence and lifecycle
 // timestamps: labels and environment are handled by the caller.
 type ContainerDetails struct {
-	State        string
-	Health       string
-	RestartCount int64
-	OOMKilled    bool
-	CreatedAt    time.Time
-	StartedAt    time.Time
-	FinishedAt   time.Time
+	State         string
+	Health        string
+	RestartCount  int64
+	OOMKilled     bool
+	ExitCode      int32
+	RestartPolicy string
+	CreatedAt     time.Time
+	StartedAt     time.Time
+	FinishedAt    time.Time
 }
 
 func (c *DockerClient) InspectContainer(ctx context.Context, id string) (ContainerDetails, error) {
@@ -152,6 +154,7 @@ func (c *DockerClient) InspectContainer(ctx context.Context, id string) (Contain
 			Status     string    `json:"Status"`
 			OOMKilled  bool      `json:"OOMKilled"`
 			Restarting bool      `json:"Restarting"`
+			ExitCode   int32     `json:"ExitCode"`
 			StartedAt  time.Time `json:"StartedAt"`
 			FinishedAt time.Time `json:"FinishedAt"`
 			Health     *struct {
@@ -159,6 +162,11 @@ func (c *DockerClient) InspectContainer(ctx context.Context, id string) (Contain
 			} `json:"Health"`
 		} `json:"State"`
 		RestartCount int64 `json:"RestartCount"`
+		HostConfig   struct {
+			RestartPolicy struct {
+				Name string `json:"Name"`
+			} `json:"RestartPolicy"`
+		} `json:"HostConfig"`
 	}
 	path := "/containers/" + url.PathEscape(id) + "/json"
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
@@ -169,13 +177,15 @@ func (c *DockerClient) InspectContainer(ctx context.Context, id string) (Contain
 		health = out.State.Health.Status
 	}
 	return ContainerDetails{
-		State:        out.State.Status,
-		Health:       health,
-		RestartCount: out.RestartCount,
-		OOMKilled:    out.State.OOMKilled,
-		CreatedAt:    out.Created,
-		StartedAt:    out.State.StartedAt,
-		FinishedAt:   out.State.FinishedAt,
+		State:         out.State.Status,
+		Health:        health,
+		RestartCount:  out.RestartCount,
+		OOMKilled:     out.State.OOMKilled,
+		ExitCode:      out.State.ExitCode,
+		RestartPolicy: out.HostConfig.RestartPolicy.Name,
+		CreatedAt:     out.Created,
+		StartedAt:     out.State.StartedAt,
+		FinishedAt:    out.State.FinishedAt,
 	}, nil
 }
 

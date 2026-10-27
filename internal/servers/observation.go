@@ -89,6 +89,8 @@ type ContainerObservation struct {
 	Health         string     `json:"health"`
 	RestartCount   int64      `json:"restart_count"`
 	OOMKilled      bool       `json:"oom_killed"`
+	ExitCode       int32      `json:"exit_code"`
+	RestartPolicy  string     `json:"restart_policy,omitempty"`
 	CreatedAt      *time.Time `json:"created_at,omitempty"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	FinishedAt     *time.Time `json:"finished_at,omitempty"`
@@ -98,6 +100,7 @@ type ContainerObservation struct {
 	DatabaseID     string     `json:"database_id,omitempty"`
 	ComposeProject string     `json:"compose_project,omitempty"`
 	ComposeService string     `json:"compose_service,omitempty"`
+	Replica        string     `json:"replica,omitempty"`
 	Role           string     `json:"role,omitempty"`
 }
 
@@ -384,6 +387,8 @@ func validateInventory(inventory *agentv1.ContainerInventory) (ContainerInventor
 			Health:         boundedText(container.GetHealth(), 32),
 			RestartCount:   container.GetRestartCount(),
 			OOMKilled:      container.GetOomKilled(),
+			ExitCode:       container.GetExitCode(),
+			RestartPolicy:  boundedText(container.GetRestartPolicy(), 32),
 			CreatedAt:      protoTime(container.GetCreatedAt()),
 			StartedAt:      protoTime(container.GetStartedAt()),
 			FinishedAt:     protoTime(container.GetFinishedAt()),
@@ -393,6 +398,7 @@ func validateInventory(inventory *agentv1.ContainerInventory) (ContainerInventor
 			DatabaseID:     container.GetDatabaseId(),
 			ComposeProject: project,
 			ComposeService: boundedText(container.GetComposeService(), maxObservationName),
+			Replica:        boundedText(container.GetReplica(), 32),
 			Role:           boundedText(container.GetRole(), maxObservationName),
 		})
 	}
@@ -561,6 +567,9 @@ func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, re
 		s.pressure.RecordHostPressure(pressureCtx, uuid.UUID(row.ID.Bytes), row.Name, observation)
 		cancel()
 	}
+	// Queue detection after the accepted generation is stored. Enqueueing is a
+	// map write, so a slow detector never delays the acknowledgement.
+	s.enqueueRuntime(observation)
 	return &agentv1.ObservationAck{
 		ReceivedAt:         timestamppb.New(receivedAt.UTC()),
 		AcceptedSequence:   uint64(stored.Sequence),

@@ -13,7 +13,9 @@ export type NotificationEventKey =
   | "server_online"
   | "certificate_expiring"
   | "update_available"
-  | "redeploy_needed";
+  | "redeploy_needed"
+  | "runtime_failure"
+  | "runtime_recovery";
 
 export const defaultNotificationEvents: NotificationEventKey[] = [
   "deploy_success",
@@ -29,6 +31,8 @@ export const allNotificationEvents: NotificationEventKey[] = [
   "certificate_expiring",
   "update_available",
   "redeploy_needed",
+  "runtime_failure",
+  "runtime_recovery",
 ];
 
 export interface ChannelConfig {
@@ -212,6 +216,10 @@ export function eventLabel(event: NotificationEventKey): string {
       return channelText("notifications.events.update_available", "Gotham update available");
     case "redeploy_needed":
       return channelText("notifications.events.redeploy_needed", "Redeploy needed");
+    case "runtime_failure":
+      return channelText("notifications.events.runtime_failure", "Runtime failure");
+    case "runtime_recovery":
+      return channelText("notifications.events.runtime_recovery", "Runtime recovered");
     default:
       return event;
   }

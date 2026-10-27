@@ -983,6 +983,19 @@ message ContainerObservation {
   string compose_project = 13;
   string compose_service = 14;
   string role = 15;
+  // exit_code is Docker's recorded exit code for a terminated container. It
+  // is evidence only: a non-zero code never proves OOM, and zero alone does
+  // not make a long-running service a completed one-shot job.
+  int32 exit_code = 16;
+  // restart_policy is the container's native Docker restart policy ("no",
+  // "always", "unless-stopped" or "on-failure"). Empty from an agent that
+  // predates it or when the engine could not answer. The runtime detector
+  // treats a successful exit under "no" as a supported one-shot completion.
+  string restart_policy = 17;
+  // replica is the Compose container number (com.docker.compose.container-number)
+  // so replicas of one service stay distinct across recreations. Empty for a
+  // non-Compose container or an older agent.
+  string replica = 18;
 }
 
 // ContainerInventory is one generation of managed container evidence.

@@ -606,6 +606,36 @@ type Restore struct {
 	FinishedAt pgtype.Timestamptz `json:"finished_at"`
 }
 
+type RuntimeMonitorReplica struct {
+	NodeID        pgtype.UUID        `json:"node_id"`
+	ResourceType  string             `json:"resource_type"`
+	ResourceID    pgtype.UUID        `json:"resource_id"`
+	Service       string             `json:"service"`
+	Replica       string             `json:"replica"`
+	ContainerID   string             `json:"container_id"`
+	DeploymentID  string             `json:"deployment_id"`
+	State         string             `json:"state"`
+	Health        string             `json:"health"`
+	Reason        string             `json:"reason"`
+	Coverage      string             `json:"coverage"`
+	RestartCount  int64              `json:"restart_count"`
+	RestartEvents []byte             `json:"restart_events"`
+	OomContainer  string             `json:"oom_container"`
+	OomAt         pgtype.Timestamptz `json:"oom_at"`
+	ObservedAt    pgtype.Timestamptz `json:"observed_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type RuntimeMonitorSetting struct {
+	ResourceType string             `json:"resource_type"`
+	ResourceID   pgtype.UUID        `json:"resource_id"`
+	Enabled      bool               `json:"enabled"`
+	GraceSeconds int32              `json:"grace_seconds"`
+	DesiredState string             `json:"desired_state"`
+	GraceUntil   pgtype.Timestamptz `json:"grace_until"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Secret struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

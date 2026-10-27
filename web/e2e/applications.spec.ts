@@ -290,4 +290,199 @@ test.describe("applications", () => {
 
     expect(guardrails.apiFailures).toEqual([]);
   });
+
+  test("shows runtime health and saves monitoring settings", async ({
+    page,
+    guardrails,
+    request,
+  }) => {
+    const account = loadAccount();
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const nodeId = await seedNode(request, headers);
+    const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
+    const name = `ui-e2e-runtime-${uniqueSuffix()}`;
+    const created = await request.post("/api/v1/applications", {
+      headers,
+      data: {
+        name,
+        environment_id: environmentId,
+        provider: "github",
+        repo: "docker/welcome-to-docker",
+        clone_url: cloneURL,
+        branch: "main",
+        build_pack: "auto",
+        server_id: nodeId,
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { application } = (await created.json()) as {
+      application: { id: string };
+    };
+
+    await page.goto(environmentURL(projectId, environmentId));
+    const row = page.locator(".resource-table tbody tr").filter({ hasText: name });
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId("runtime-health-row")).toBeVisible();
+
+    const settled = waitForDetailReads(page, application.id);
+    await page.goto(nestedURL(projectId, environmentId, "applications", application.id));
+    await settled;
+    await expect(page.getByTestId("runtime-health-state")).toHaveText("unknown");
+
+    const grace = page.getByRole("textbox", { name: /Startup grace/ });
+    await grace.fill("90");
+    const saved = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().endsWith(`/api/v1/applications/${application.id}`),
+    );
+    await page.getByTestId("runtime-health-save").click();
+    const response = await saved;
+    expect(response.status()).toBe(200);
+    const body = (await response.json()) as {
+      application: { runtime_health?: { grace_seconds: number; enabled: boolean } };
+    };
+    expect(body.application.runtime_health?.grace_seconds).toBe(90);
+    expect(body.application.runtime_health?.enabled).toBe(true);
+
+    const toggle = page.getByRole("switch", { name: "Monitor this resource" });
+    await toggle.click();
+    const disabledSave = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().endsWith(`/api/v1/applications/${application.id}`),
+    );
+    await page.getByTestId("runtime-health-save").click();
+    const disabledBody = (await (await disabledSave).json()) as {
+      application: { runtime_health?: { enabled: boolean } };
+    };
+    expect(disabledBody.application.runtime_health?.enabled).toBe(false);
+    await expect(page.getByTestId("runtime-health-state")).toHaveText("monitoring off");
+
+    await toggle.click();
+    const enabledSave = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().endsWith(`/api/v1/applications/${application.id}`),
+    );
+    await page.getByTestId("runtime-health-save").click();
+    const enabledBody = (await (await enabledSave).json()) as {
+      application: { runtime_health?: { enabled: boolean } };
+    };
+    expect(enabledBody.application.runtime_health?.enabled).toBe(true);
+
+    await page.getByRole("button", { name: "View logs" }).click();
+    await expect(
+      page.locator(".n-tabs-tab").filter({ hasText: /^Logs/ }),
+    ).toHaveClass(/n-tabs-tab--active/);
+    await page.locator(".n-tabs-tab").filter({ hasText: /^Overview$/ }).click();
+    await page.getByRole("button", { name: "View deployments" }).click();
+    await expect(
+      page.locator(".n-tabs-tab").filter({ hasText: /^Deployments/ }),
+    ).toHaveClass(/n-tabs-tab--active/);
+
+    expect(guardrails.apiFailures).toEqual([]);
+  });
+
+  test("renders degraded runtime evidence and row badges wrap on phones", async ({
+    page,
+    guardrails,
+    request,
+  }) => {
+    const account = loadAccount();
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const nodeId = await seedNode(request, headers);
+    const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
+    const name = `ui-e2e-degraded-${uniqueSuffix()}`;
+    const created = await request.post("/api/v1/applications", {
+      headers,
+      data: {
+        name,
+        environment_id: environmentId,
+        provider: "github",
+        repo: "docker/welcome-to-docker",
+        clone_url: cloneURL,
+        branch: "main",
+        build_pack: "auto",
+        server_id: nodeId,
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { application } = (await created.json()) as { application: { id: string } };
+    const observedAt = new Date().toISOString();
+
+    await page.route(`**/api/v1/applications/${application.id}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = (await response.json()) as {
+        application: Record<string, unknown>;
+      };
+      body.application.runtime_health = {
+        state: "degraded",
+        coverage: "complete",
+        reason: "unhealthy",
+        observed_at: observedAt,
+        enabled: true,
+        grace_seconds: 120,
+        affected: [
+          {
+            service: "web",
+            replica: "2",
+            container_id: "c0ffee123456",
+            deployment_id: "dep-123",
+            state: "unhealthy",
+            health: "unhealthy",
+            reason: "unhealthy",
+            coverage: "complete",
+            observed_at: observedAt,
+            last_restart_at: observedAt,
+            last_oom_at: observedAt,
+          },
+        ],
+      };
+      await route.fulfill({ response, json: body });
+    });
+
+    const settled = waitForDetailReads(page, application.id);
+    await page.goto(nestedURL(projectId, environmentId, "applications", application.id));
+    await settled;
+    await expect(page.getByTestId("runtime-health-state")).toHaveText("degraded");
+    await expect(page.getByTestId("runtime-health-replica").first()).toContainText("web · 2");
+    await expect(page.getByTestId("runtime-health-replica").first()).toContainText(
+      "Last restart",
+    );
+    await expect(page.getByTestId("runtime-health-replica").first()).toContainText("Last OOM");
+
+    await page.getByRole("button", { name: "View logs" }).click();
+    await expect(
+      page.locator(".n-tabs-tab").filter({ hasText: /^Logs/ }),
+    ).toHaveClass(/n-tabs-tab--active/);
+    await page.locator(".n-tabs-tab").filter({ hasText: /^Overview$/ }).click();
+    await page.getByRole("button", { name: "View deployments" }).click();
+    await expect(
+      page.locator(".n-tabs-tab").filter({ hasText: /^Deployments/ }),
+    ).toHaveClass(/n-tabs-tab--active/);
+
+    await page.goto(environmentURL(projectId, environmentId));
+    const row = page.locator(".resource-table tbody tr").filter({ hasText: name });
+    await expect(row).toHaveCount(1);
+    for (const width of [390, 480]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.reload();
+      const badge = row.getByTestId("runtime-health-row");
+      await expect(badge).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `page overflow at ${width}px`).toBeLessThanOrEqual(1);
+      const box = await badge.boundingBox();
+      expect(box, `badge box at ${width}px`).not.toBeNull();
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+    }
+
+    expect(guardrails.apiFailures).toEqual([]);
+  });
 });

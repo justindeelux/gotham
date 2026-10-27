@@ -26,6 +26,7 @@ import type { Service } from "@/features/services/api/services";
 import { isApiError } from "@/features/servers";
 import { useProjectsStore } from "@/features/projects/stores/projects";
 import { createRequestGeneration } from "@/shared/utils/requestGeneration";
+import type { RuntimeHealthState } from "@/shared/types/runtimeHealth";
 
 export type EnvironmentResourceKind = "application" | "service" | "database";
 
@@ -40,6 +41,8 @@ export interface EnvironmentRow {
   serverName: string;
   statusText: string;
   statusTag: "success" | "warning" | "error" | "default";
+  runtimeState?: RuntimeHealthState;
+  runtimeReason?: string;
   preview: boolean;
   to: { name: string; params: Record<string, string> };
 }
@@ -138,6 +141,8 @@ export function buildEnvironmentRows(
       serverName: application.server_name || statusText("projects.environment.unassigned"),
       statusText: view.text,
       statusTag: view.tag,
+      runtimeState: application.runtime_health?.state,
+      runtimeReason: application.runtime_health?.reason,
       preview,
       to: { name: "application-detail", params: { projectId, environmentId, id: application.id } },
     };
@@ -181,6 +186,8 @@ export function buildEnvironmentRows(
       serverName: database.server_name,
       statusText: view.text,
       statusTag: view.tag,
+      runtimeState: database.runtime_health?.state,
+      runtimeReason: database.runtime_health?.reason,
       preview: false,
       to: { name: "database-detail", params: { projectId, environmentId, id: database.id } },
     });

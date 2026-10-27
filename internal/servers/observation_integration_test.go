@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -360,4 +361,87 @@ func mustServerID(t *testing.T, service *ServerService, nodeID string) uuid.UUID
 		t.Fatalf("GetServerByNodeID: %v", err)
 	}
 	return uuid.UUID(row.ID.Bytes)
+}
+
+type blockingRuntimeObserver struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	calls   []NodeObservation
+}
+
+func (o *blockingRuntimeObserver) Observe(ctx context.Context, obs NodeObservation) {
+	o.mu.Lock()
+	o.calls = append(o.calls, obs)
+	o.mu.Unlock()
+	o.once.Do(func() { close(o.started) })
+	select {
+	case <-o.release:
+	case <-ctx.Done():
+	}
+}
+
+func (o *blockingRuntimeObserver) NodeUnknown(context.Context, uuid.UUID, time.Time) {}
+func (o *blockingRuntimeObserver) NodeDeleted(context.Context, uuid.UUID)            {}
+
+func (o *blockingRuntimeObserver) snapshot() []NodeObservation {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]NodeObservation(nil), o.calls...)
+}
+
+func TestRuntimeObservationDoesNotDelayAckAndCoalesces(t *testing.T) {
+	service, _ := newTestService(t)
+	t.Cleanup(service.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	nodeID := addObservationNode(t, service)
+	observer := &blockingRuntimeObserver{started: make(chan struct{}), release: make(chan struct{})}
+	service.SetRuntimeObserver(observer)
+
+	base := time.Now().UTC().Truncate(time.Second)
+	report := func(sequence uint64, observed time.Time) *agentv1.ObservationReport {
+		value := validObservationReport(nodeID)
+		value.Sequence = sequence
+		value.ObservedAt = timestamppb.New(observed)
+		return value
+	}
+
+	started := time.Now()
+	ack, err := service.RecordObservation(ctx, nodeID, report(1, base), base)
+	if err != nil {
+		t.Fatalf("first observation: %v", err)
+	}
+	if !ack.GetAccepted() {
+		t.Fatal("first observation not accepted")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("ack delayed by the detector: %s", elapsed)
+	}
+	select {
+	case <-observer.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detector never started")
+	}
+
+	for sequence := uint64(2); sequence <= 3; sequence++ {
+		observed := base.Add(time.Duration(sequence) * time.Second)
+		if _, err := service.RecordObservation(ctx, nodeID, report(sequence, observed), observed); err != nil {
+			t.Fatalf("burst observation %d: %v", sequence, err)
+		}
+	}
+	close(observer.release)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for len(observer.snapshot()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	calls := observer.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("detector calls = %d, want 2 (in-flight + latest)", len(calls))
+	}
+	if calls[0].Sequence != 1 || calls[1].Sequence != 3 {
+		t.Fatalf("coalesced sequences = %d,%d; want 1,3", calls[0].Sequence, calls[1].Sequence)
+	}
 }

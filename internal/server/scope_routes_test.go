@@ -240,6 +240,11 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 		"read cannot mkdir trailing slash":        {http.MethodPost, "/api/v1/servers/x/files/mkdir/", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"read cannot mkdir with query":            {http.MethodPost, "/api/v1/servers/x/files/mkdir?root=r&path=p", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"read cannot upload double slash":         {http.MethodPost, "/api/v1/servers/x/files//upload", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot plan transfer":               {http.MethodPost, "/api/v1/servers/x/files/transfers/plan", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy plans transfer":                   {http.MethodPost, "/api/v1/servers/x/files/transfers/plan", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"admin plans transfer":                    {http.MethodPost, "/api/v1/servers/x/files/transfers/plan", []string{auth.ScopeAdmin}, true, http.StatusOK},
+		"read cannot execute transfer":            {http.MethodPost, "/api/v1/servers/x/files/transfers", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy executes transfer":                {http.MethodPost, "/api/v1/servers/x/files/transfers", []string{auth.ScopeDeploy}, true, http.StatusOK},
 		"jwt mutates":                             {http.MethodPost, "/api/v1/servers", nil, false, http.StatusOK},
 	}
 
@@ -312,6 +317,8 @@ func TestFilesWriteScopeGate(t *testing.T) {
 		{"copy", http.MethodPost, base + "copy", `{"root":"volumes","source":"a","destination":"b"}`},
 		{"chmod", http.MethodPost, base + "chmod", `{"root":"volumes","path":"a","mode":384}`},
 		{"delete", http.MethodDelete, base + "entry?root=volumes&path=a", ""},
+		{"plan transfer", http.MethodPost, base + "transfers/plan", `{"source_root":"volumes","source_directory":"","sources":["a"],"destination":{"server_id":"` + uuid.NewString() + `","root":"volumes","path":""}}`},
+		{"execute transfer", http.MethodPost, base + "transfers", `{"source_root":"volumes","source_directory":"","sources":["a"],"destination":{"server_id":"` + uuid.NewString() + `","root":"volumes","path":""}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

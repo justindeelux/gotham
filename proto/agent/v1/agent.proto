@@ -16,6 +16,12 @@ service AgentService {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   // Heartbeat is a client stream: the agent pushes one message every 10s.
   rpc Heartbeat(stream HeartbeatRequest) returns (HeartbeatResponse);
+  // PushObservations is a client stream: the agent pushes one observation
+  // generation every collection interval (15s). It is a separate stream from
+  // Heartbeat so a slow or failing telemetry push never delays the heartbeat.
+  // A server that predates this RPC answers codes.Unimplemented and the agent
+  // stays on heartbeat-only monitoring.
+  rpc PushObservations(stream ObservationReport) returns (ObservationAck);
 }
 
 // UpdateService runs on the control plane. Skeleton until Phase 9 implements
@@ -898,6 +904,129 @@ message HeartbeatRequest {
 // HeartbeatResponse acknowledges the stream once it closes.
 message HeartbeatResponse {
   google.protobuf.Timestamp received_at = 1;
+}
+
+// MetricStatus distinguishes a measured value from missing evidence. A
+// METRIC_STATUS_OK value is a real measurement: zero is a real measured zero.
+// Every other status means the value must be ignored (not rendered as zero).
+enum MetricStatus {
+  METRIC_STATUS_UNSPECIFIED = 0;
+  // METRIC_STATUS_OK means the value was measured in this report.
+  METRIC_STATUS_OK = 1;
+  // METRIC_STATUS_UNSUPPORTED means the platform cannot report this metric.
+  METRIC_STATUS_UNSUPPORTED = 2;
+  // METRIC_STATUS_ERROR means the read failed in this report.
+  METRIC_STATUS_ERROR = 3;
+  // METRIC_STATUS_WARMING means the metric needs a previous counter sample;
+  // rates are not known yet and must not be reported as zero.
+  METRIC_STATUS_WARMING = 4;
+}
+
+// Metric is one measured value with its evidence. Values are validated by the
+// control plane: fractions are 0..1 and rates are bytes/second.
+message Metric {
+  MetricStatus status = 1;
+  double value = 2;
+  // reason is a short machine-readable detail for a non-OK status.
+  string reason = 3;
+}
+
+// HostObservation is the host-level evidence in one report.
+message HostObservation {
+  Metric cpu_usage = 1;       // fraction 0..1
+  Metric mem_usage = 2;       // fraction 0..1
+  Metric disk_usage = 3;      // fraction 0..1
+  Metric net_rx_bps = 4;      // bytes/second
+  Metric net_tx_bps = 5;      // bytes/second
+  Metric disk_read_bps = 6;   // bytes/second
+  Metric disk_write_bps = 7;  // bytes/second
+  uint64 total_mem = 8;       // bytes, 0 when unknown
+  uint64 total_disk = 9;      // bytes, 0 when unknown
+}
+
+// FilesystemObservation is one local filesystem's capacity evidence. Paths on
+// the same device are deduplicated by the agent, so a separate Docker or backup
+// mount is reported independently from the root filesystem.
+message FilesystemObservation {
+  string path = 1;
+  // purpose is one of "root", "docker_data", "managed_storage" or "backup".
+  string purpose = 2;
+  MetricStatus status = 3;
+  // reason is a short machine-readable detail for a non-OK status.
+  string reason = 4;
+  uint64 total_bytes = 5;
+  uint64 available_bytes = 6;
+  // inode_status is METRIC_STATUS_UNSUPPORTED when the filesystem reports no
+  // inode data; total_inodes/free_inodes are then unknown, not zero.
+  MetricStatus inode_status = 7;
+  string inode_reason = 8;
+  uint64 total_inodes = 9;
+  uint64 free_inodes = 10;
+}
+
+// ContainerObservation is one managed container. Only Gotham's ownership
+// labels are carried; environment variables, secrets, arbitrary labels and
+// logs are never collected.
+message ContainerObservation {
+  string id = 1;
+  string state = 2;
+  string health = 3;
+  int64 restart_count = 4;
+  bool oom_killed = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp finished_at = 8;
+  bool managed = 9;
+  string app_id = 10;
+  string deployment_id = 11;
+  string database_id = 12;
+  string compose_project = 13;
+  string compose_service = 14;
+  string role = 15;
+}
+
+// ContainerInventory is one generation of managed container evidence.
+message ContainerInventory {
+  // complete is false when the collection failed, was capped or an inspect
+  // failed. An incomplete inventory cannot prove a container disappeared.
+  bool complete = 1;
+  // reason is a short machine-readable detail when complete is false.
+  string reason = 2;
+  bool truncated = 3;
+  repeated ContainerObservation containers = 4;
+}
+
+// ObservationReport is one observation generation pushed by the agent.
+message ObservationReport {
+  // node_id must match the authenticated peer; the control plane rejects a
+  // mismatch instead of attributing the report to another node.
+  string node_id = 1;
+  // session_id changes on every agent process start, so a reconnect starts a
+  // new session and an old session's reports can never overwrite newer state.
+  string session_id = 2;
+  // sequence increases within one session; duplicates and out-of-order
+  // reports are ignored by the control plane.
+  uint64 sequence = 3;
+  // observed_at is when the agent collected this generation.
+  google.protobuf.Timestamp observed_at = 4;
+  // sampling_interval_ms is the agent's effective collection interval.
+  int64 sampling_interval_ms = 5;
+  HostObservation host = 6;
+  repeated FilesystemObservation filesystems = 7;
+  ContainerInventory inventory = 8;
+  string agent_version = 9;
+}
+
+// ObservationAck reports whether the control plane accepted a report.
+message ObservationAck {
+  google.protobuf.Timestamp received_at = 1;
+  // accepted_sequence is the newest sequence the control plane stored for the
+  // node's session.
+  uint64 accepted_sequence = 2;
+  // accepted is false for a duplicate, obsolete or otherwise superseded report.
+  bool accepted = 3;
+  // expected_interval_ms is the control plane's effective sampling interval.
+  int64 expected_interval_ms = 4;
 }
 
 // UpdateRequest asks the CP about available agent versions. The agent reports

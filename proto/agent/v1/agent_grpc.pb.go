@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Register_FullMethodName  = "/agent.v1.AgentService/Register"
-	AgentService_Heartbeat_FullMethodName = "/agent.v1.AgentService/Heartbeat"
+	AgentService_Register_FullMethodName         = "/agent.v1.AgentService/Register"
+	AgentService_Heartbeat_FullMethodName        = "/agent.v1.AgentService/Heartbeat"
+	AgentService_PushObservations_FullMethodName = "/agent.v1.AgentService/PushObservations"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -37,6 +38,12 @@ type AgentServiceClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	// Heartbeat is a client stream: the agent pushes one message every 10s.
 	Heartbeat(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[HeartbeatRequest, HeartbeatResponse], error)
+	// PushObservations is a client stream: the agent pushes one observation
+	// generation every collection interval (15s). It is a separate stream from
+	// Heartbeat so a slow or failing telemetry push never delays the heartbeat.
+	// A server that predates this RPC answers codes.Unimplemented and the agent
+	// stays on heartbeat-only monitoring.
+	PushObservations(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ObservationReport, ObservationAck], error)
 }
 
 type agentServiceClient struct {
@@ -70,6 +77,19 @@ func (c *agentServiceClient) Heartbeat(ctx context.Context, opts ...grpc.CallOpt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_HeartbeatClient = grpc.ClientStreamingClient[HeartbeatRequest, HeartbeatResponse]
 
+func (c *agentServiceClient) PushObservations(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ObservationReport, ObservationAck], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[1], AgentService_PushObservations_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ObservationReport, ObservationAck]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_PushObservationsClient = grpc.ClientStreamingClient[ObservationReport, ObservationAck]
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -84,6 +104,12 @@ type AgentServiceServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	// Heartbeat is a client stream: the agent pushes one message every 10s.
 	Heartbeat(grpc.ClientStreamingServer[HeartbeatRequest, HeartbeatResponse]) error
+	// PushObservations is a client stream: the agent pushes one observation
+	// generation every collection interval (15s). It is a separate stream from
+	// Heartbeat so a slow or failing telemetry push never delays the heartbeat.
+	// A server that predates this RPC answers codes.Unimplemented and the agent
+	// stays on heartbeat-only monitoring.
+	PushObservations(grpc.ClientStreamingServer[ObservationReport, ObservationAck]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -99,6 +125,9 @@ func (UnimplementedAgentServiceServer) Register(context.Context, *RegisterReques
 }
 func (UnimplementedAgentServiceServer) Heartbeat(grpc.ClientStreamingServer[HeartbeatRequest, HeartbeatResponse]) error {
 	return status.Error(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedAgentServiceServer) PushObservations(grpc.ClientStreamingServer[ObservationReport, ObservationAck]) error {
+	return status.Error(codes.Unimplemented, "method PushObservations not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -146,6 +175,13 @@ func _AgentService_Heartbeat_Handler(srv interface{}, stream grpc.ServerStream) 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_HeartbeatServer = grpc.ClientStreamingServer[HeartbeatRequest, HeartbeatResponse]
 
+func _AgentService_PushObservations_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentServiceServer).PushObservations(&grpc.GenericServerStream[ObservationReport, ObservationAck]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_PushObservationsServer = grpc.ClientStreamingServer[ObservationReport, ObservationAck]
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -162,6 +198,11 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Heartbeat",
 			Handler:       _AgentService_Heartbeat_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "PushObservations",
+			Handler:       _AgentService_PushObservations_Handler,
 			ClientStreams: true,
 		},
 	},

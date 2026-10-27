@@ -110,6 +110,39 @@ func TestExecuteTransferStreamsNDJSON(t *testing.T) {
 	}
 }
 
+func TestExecuteTransferRouteStreamsResultBeforeSummary(t *testing.T) {
+	src, dst := directFakes(t)
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+	authorize := TransferAuthorizerFunc(func(context.Context, uuid.UUID, uuid.UUID) error { return nil })
+	h := newTransferRouter(svc, authorize)
+
+	body := `{"source_root":"volumes","source_directory":"data","sources":["a.txt"],"destination":{"server_id":"` + destinationID.String() + `","root":"volumes","path":"incoming"}}`
+	rec := doWrite(t, h, http.MethodPost, "/v1/servers/"+sourceID.String()+"/files/transfers", body, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("lines = %d, want at least a phase, result and summary (%s)", len(lines), rec.Body.String())
+	}
+	var result, summary TransferEvent
+	if err := json.Unmarshal([]byte(lines[len(lines)-2]), &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if result.Type != TransferEventResult || result.Name != "a.txt" || result.Status != TransferStatusCopied {
+		t.Fatalf("result line = %+v", result)
+	}
+	if summary.Type != TransferEventSummary || summary.Summary == nil || summary.Summary.Copied != 1 {
+		t.Fatalf("summary line = %+v", summary)
+	}
+	if entries := summary.Summary.Entries; len(entries) != 1 || entries[0].Name != "a.txt" {
+		t.Fatalf("summary entries = %+v", entries)
+	}
+}
+
 func TestExecuteTransferPreStreamErrorIsJSON(t *testing.T) {
 	id := uuid.New()
 	destination := uuid.New()

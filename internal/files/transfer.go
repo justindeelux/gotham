@@ -580,6 +580,10 @@ func mapTransferRPCError(err error) error {
 }
 
 type transferResults struct {
+	// ctx and events stream each entry's result as soon as it is recorded. They
+	// are nil for a run that only collects outcomes.
+	ctx             context.Context
+	events          chan<- TransferEvent
 	entries         []TransferOutcome
 	seen            map[string]struct{}
 	skippedCount    int
@@ -591,6 +595,9 @@ func newTransferResults() *transferResults {
 	return &transferResults{seen: make(map[string]struct{})}
 }
 
+// add records an entry's terminal outcome once and, while the run is live,
+// streams it as a result event. A client cancel reaches the client no further
+// events, so a late outcome stays summary-only.
 func (r *transferResults) add(name, status, reason string) {
 	if name == "" {
 		return
@@ -600,6 +607,9 @@ func (r *transferResults) add(name, status, reason string) {
 	}
 	r.seen[name] = struct{}{}
 	r.entries = append(r.entries, TransferOutcome{Name: name, Status: status, Reason: reason})
+	if r.events != nil && r.ctx != nil && r.ctx.Err() == nil {
+		emitTransferEvent(r.ctx, r.events, TransferEvent{Type: TransferEventResult, Name: name, Status: status, Reason: reason})
+	}
 }
 
 func (r *transferResults) counts() TransferSummary {
@@ -678,6 +688,7 @@ func emitTransferPhase(ctx context.Context, events chan<- TransferEvent, phase s
 
 func (s *Service) executeTransfer(ctx context.Context, events chan TransferEvent, src, dst FileClient, in transferInput, pre *transferPreflight, id string) {
 	results := newTransferResults()
+	results.ctx, results.events = ctx, events
 	defer func() { s.auditTransfer(in, finalTransferSummary(results, id, pre.mode, ctx)) }()
 	if pre.mode == TransferModeDirect {
 		s.runDirectTransfer(ctx, events, src, dst, in, pre, results)

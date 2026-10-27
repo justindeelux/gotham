@@ -20,7 +20,7 @@ Report findings only; do not rewrite code. Stack: Vue 3.5 `<script setup lang="t
 ```bash
 npm run lint && npm run type-check && npm run build
 npm run test:unit
-npm run e2e      # whole Playwright suite if UI or its API changed (see docs/test-server.md: own throwaway Postgres+Redis, never the shared gotham-dev-* containers)
+npm run e2e      # whole Playwright suite if UI or its API changed (see web/playwright.config.ts: own throwaway Postgres+Redis, never the shared gotham-dev-* containers)
 ```
 Red gate = BLOCK. If `web/` changed, also confirm `internal/server/webdist` was rebuilt and committed (CI drift check).
 

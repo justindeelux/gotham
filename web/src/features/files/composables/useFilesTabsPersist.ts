@@ -90,10 +90,7 @@ export function useFilesTabsPersist(
   onBeforeUnmount(() => {
     window.removeEventListener("pagehide", flush);
     document.removeEventListener("visibilitychange", onVisibility);
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
+    flush();
   });
 
   function readFirstUseSnapshot(

@@ -5,6 +5,7 @@ import { RouterView, useRoute } from "vue-router";
 
 import { TaskProgressCards } from "@/features/tasks";
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
+import { useFilesPaneSession } from "@/features/files/stores/paneSession";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
 import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers";
@@ -16,6 +17,7 @@ import { provideMobileNav } from "./useMobileNav";
 const { mobileNavOpen, closeMobileNav } = provideMobileNav();
 const authStore = useAuthStore();
 const serversStore = useServersStore();
+const filesPanes = useFilesPaneSession();
 
 const isMobile = useMediaQuery("(max-width: 1024px)");
 
@@ -64,7 +66,8 @@ const widePage = computed(() => route.meta.wide === true);
 
     <TaskProgressCards />
 
-    <FilesEditor />
+    <FilesEditor pane="left" :active="filesPanes.activePane === 'left'" />
+    <FilesEditor pane="right" :active="filesPanes.activePane === 'right'" />
 
     <TerminalWindow />
 

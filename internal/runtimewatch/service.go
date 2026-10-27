@@ -309,7 +309,6 @@ func (s *Service) evaluate(ctx context.Context, target Target, obs servers.NodeO
 		missing.Reason = "missing"
 		missing.Coverage = CoverageComplete
 		missing.ContainerID = ""
-		missing.DeploymentID = ""
 		if err := s.storeState(ctx, target, missing, CoverageComplete, observedAt); err != nil {
 			return err
 		}
@@ -329,6 +328,7 @@ func evaluateReplica(ev replicaEvidence, prev ReplicaState, observedAt, now time
 		Service:      ev.Service,
 		Replica:      ev.Replica,
 		ContainerID:  c.ID,
+		DeploymentID: c.DeploymentID,
 		State:        normalizedState(c.State),
 		Health:       c.Health,
 		Coverage:     CoverageComplete,
@@ -575,8 +575,8 @@ func replicaIdentity(detector string, target Target, service, replica string) st
 }
 
 func replicaEvidenceText(state ReplicaState) string {
-	return fmt.Sprintf("service=%s replica=%s container=%s state=%s health=%s reason=%s coverage=%s",
-		state.Service, state.Replica, state.ContainerID, state.State, state.Health, state.Reason, state.Coverage)
+	return fmt.Sprintf("service=%s replica=%s container=%s deployment=%s state=%s health=%s reason=%s coverage=%s",
+		state.Service, state.Replica, state.ContainerID, state.DeploymentID, state.State, state.Health, state.Reason, state.Coverage)
 }
 
 func stateKey(service, replica string) string {

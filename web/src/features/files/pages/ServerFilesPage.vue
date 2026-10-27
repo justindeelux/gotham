@@ -10,7 +10,6 @@ import type { Server } from "@/features/servers/api/servers";
 import { getServer, isApiError } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers";
 import { useFilesStore } from "@/features/files";
-import { useEditorStore } from "@/features/files/stores/editor";
 import { provideFilesPane } from "@/features/files/stores/filesPane";
 import { isRootRelativePath } from "@/features/files/utils/deepLink";
 
@@ -19,7 +18,6 @@ const router = useRouter();
 const { t } = useI18n();
 const serversStore = useServersStore();
 const files = useFilesStore();
-const editor = useEditorStore("left");
 provideFilesPane("left");
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
@@ -169,12 +167,9 @@ onMounted(() => {
   }
 });
 
-async function switchNode(next: string | number | null): Promise<void> {
+function switchNode(next: string | number | null): void {
   const id = String(next ?? "");
   if (id === "" || id === serverId.value) {
-    return;
-  }
-  if (editor.hasDirty && (await editor.confirmDiscard()) !== "leave") {
     return;
   }
   void router.push({ name: "server-files", params: { id } });

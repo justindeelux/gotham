@@ -5,7 +5,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { describeFilesError } from "@/features/files/api/files";
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import type { NameKind } from "@/features/files/utils/files";
 import {
   normalizeEntryName,
@@ -26,7 +26,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const message = useMessage();
-const files = useFilesStore();
+const files = useFilesPane().files;
 
 const name = ref("");
 const touched = ref(false);

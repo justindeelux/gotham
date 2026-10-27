@@ -12,6 +12,7 @@ import {
 } from "@/features/servers/utils/serverRailView";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useEditorStore } from "@/features/files/stores/editor";
+import { useFilesPaneSession } from "@/features/files/stores/paneSession";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { useAuthStore } from "@/features/auth";
 import { useTerminalStore, useTerminalWindowStore } from "@/features/terminal";
@@ -19,7 +20,8 @@ import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
 const serversStore = useServersStore();
 const authStore = useAuthStore();
-const editor = useEditorStore();
+const filesPanes = useFilesPaneSession();
+const editor = computed(() => useEditorStore(filesPanes.activePane));
 const editorWindow = useEditorWindowStore();
 const terminal = useTerminalStore();
 const terminalWindow = useTerminalWindowStore();
@@ -29,7 +31,7 @@ const { locale, t } = useI18n();
 
 const isDashboard = computed<boolean>(() => route.name === "dashboard");
 
-const editorCount = computed<number>(() => editor.tabs.length);
+const editorCount = computed<number>(() => editor.value.tabs.length);
 
 const editorLabel = computed<string>(() =>
   t("servers.rail.editorWithCount", { count: editorCount.value }),

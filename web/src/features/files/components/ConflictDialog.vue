@@ -4,11 +4,11 @@ import { useMessage } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 
 const { t } = useI18n();
 const message = useMessage();
-const files = useFilesStore();
+const files = useFilesPane().files;
 
 const show = computed<boolean>(() => files.conflictPrompt !== null);
 const names = computed<string[]>(() => files.conflictPrompt?.names ?? []);

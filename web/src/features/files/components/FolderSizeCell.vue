@@ -19,17 +19,18 @@ import {
   requestFolderSize,
 } from "@/features/files/composables/useFolderSize";
 import type { FilesEntry } from "@/features/files/schemas/files";
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import { formatBytes } from "@/shared/utils/format";
 
 const props = defineProps<{ entry: FilesEntry; path: string }>();
 
 const { t } = useI18n();
-const files = useFilesStore();
+const pane = useFilesPane();
+const files = pane.files;
 const errorId = `fm-size-error-${nextFolderSizeErrorId()}`;
 
 const state = computed(() =>
-  folderSizeState(files.serverId, files.rootName, props.path),
+  folderSizeState(files.serverId, files.rootName, props.path, pane.id),
 );
 
 const resultText = computed(() =>
@@ -68,11 +69,12 @@ function calculate(): void {
     files.serverId,
     files.rootName,
     props.path,
+    pane.id,
   );
 }
 
 function cancel(): void {
-  cancelFolderSize(files.serverId, files.rootName, props.path);
+  cancelFolderSize(files.serverId, files.rootName, props.path, pane.id);
 }
 </script>
 

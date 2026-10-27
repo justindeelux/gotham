@@ -193,6 +193,7 @@ const vi = {
     transferIntoItself: "Không thể di chuyển hoặc sao chép thư mục vào chính nó. Hãy chọn đích nằm ngoài nó.",
     transferPartial: "Lỗi {failed} — {error}",
     pasteCrossRoot: "Bộ nhớ tạm được cắt hoặc sao chép ở thư mục gốc khác. Hãy cắt hoặc sao chép các mục tại đây trước.",
+    pasteCrossNode: "Bộ nhớ tạm được cắt hoặc sao chép ở máy chủ khác. Hãy cắt hoặc sao chép các mục tại đây trước.",
     moved: "Đã di chuyển {count}.",
     copied: "Đã sao chép {count}.",
     uploadTitle: "Tải tệp lên",

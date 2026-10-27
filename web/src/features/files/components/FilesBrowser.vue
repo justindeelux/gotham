@@ -63,10 +63,10 @@ import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import { useFilesTabsPersist } from "@/features/files/composables/useFilesTabsPersist";
 import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
 import type { FilesEntry } from "@/features/files/schemas/files";
-import { useEditorStore } from "@/features/files/stores/editor";
-import { useFilesStore } from "@/features/files/stores/files";
 import type { FilesTab } from "@/features/files/stores/files";
-import { useTrashStore } from "@/features/files/stores/trash";
+import { provideFilesPane } from "@/features/files/stores/filesPane";
+import { useFilesPaneSession } from "@/features/files/stores/paneSession";
+import type { FilesPaneId } from "@/features/files/stores/paneSession";
 import type { FilesSortKey, NameKind, TransferProblem } from "@/features/files/utils/files";
 import {
   disambiguatedTabLabels,
@@ -109,26 +109,33 @@ import { formatBytes, relativeTime } from "@/shared/utils/format";
 
 interface Props {
   serverId: string;
+  pane?: FilesPaneId;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { pane: "left" });
 
 const { t, locale } = useI18n();
 const message = useMessage();
-const files = useFilesStore();
-const trash = useTrashStore();
-const editor = useEditorStore();
+const paneSession = useFilesPaneSession();
+const pane = provideFilesPane(props.pane);
+const files = pane.files;
+const trash = pane.trash;
+const editor = pane.editor;
+
+function activatePane(): void {
+  paneSession.activate(props.pane);
+}
 const auth = useAuthStore();
 const serversStore = useServersStore();
 const terminal = useTerminalStore();
 const { download } = useFileDownload();
-const { initBrowser } = useFilesTabsPersist(() => props.serverId);
+const { initBrowser } = useFilesTabsPersist(() => props.serverId, props.pane);
 
 watch(
   () => props.serverId,
   (next) => {
     trash.reset();
-    resetFolderSizes();
+    resetFolderSizes(props.pane);
     void initBrowser(next);
   },
 );
@@ -138,7 +145,7 @@ watch(
   () => files.rootName,
   () => {
     trash.reset();
-    resetFolderSizes();
+    resetFolderSizes(props.pane);
   },
 );
 onMounted(() => void initBrowser(props.serverId));
@@ -230,7 +237,7 @@ onBeforeUnmount(() => {
   if (selectionAnnounceTimer !== null) {
     clearTimeout(selectionAnnounceTimer);
   }
-  resetFolderSizes();
+  resetFolderSizes(props.pane);
 });
 
 const footSummary = computed<string>(() => {
@@ -265,9 +272,11 @@ const currentPath = computed<string>(() =>
 );
 
 function pasteProblemMessage(
-  problem: "cross-root" | TransferProblem | null,
+  problem: "cross-node" | "cross-root" | TransferProblem | null,
 ): string {
   switch (problem) {
+    case "cross-node":
+      return String(t("files.dialogs.pasteCrossNode"));
     case "cross-root":
       return String(t("files.dialogs.pasteCrossRoot"));
     case "same-folder":
@@ -434,6 +443,7 @@ function openInEditor(entry: FilesEntry): void {
   if (entry.kind !== "file" || !files.canReadContent) {
     return;
   }
+  activatePane();
   void editor.openFile(
     props.serverId,
     files.rootName,
@@ -1969,6 +1979,8 @@ function onFolderMenu(key: string): void {
     @dragover="onDragOver"
     @dragleave="onDragLeave"
     @drop="onDrop"
+    @pointerdown.capture="activatePane"
+    @focusin="activatePane"
   >
     <div class="fm-topbar">
     <div class="fm-tabs">

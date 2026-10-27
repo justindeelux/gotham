@@ -1,4 +1,3 @@
-import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
@@ -51,9 +50,17 @@ import type {
   TransferProblem,
 } from "@/features/files/utils/files";
 import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
+import type { FilesPaneId } from "@/features/files/stores/paneSession";
+import {
+  refreshOtherPaneListings,
+  registerListingRefresher,
+  useFilesPaneSession,
+} from "@/features/files/stores/paneSession";
+import { definePaneStore } from "@/features/files/stores/paneStore";
 
 export interface FilesClipboard {
   mode: "copy" | "cut";
+  serverId: string;
   root: string;
   path: string;
   names: string[];
@@ -116,9 +123,12 @@ interface EditorSync {
   applyDelete: (_root: string, _dir: string, _names: string[]) => void;
 }
 
-async function withEditor(sync: (_editor: EditorSync) => void): Promise<void> {
+async function withEditor(
+  pane: FilesPaneId,
+  sync: (_editor: EditorSync) => void,
+): Promise<void> {
   const { useEditorStore } = await import("@/features/files/stores/editor");
-  sync(useEditorStore());
+  sync(useEditorStore(pane));
 }
 
 let tabSeq = 0;
@@ -128,7 +138,10 @@ function nextTabId(): string {
   return `ft-${Date.now().toString(36)}-${tabSeq}`;
 }
 
-export const useFilesStore = defineStore("files", () => {
+export const useFilesStore = definePaneStore("files", createFilesStore);
+
+function createFilesStore(pane: FilesPaneId) {
+  const session = useFilesPaneSession();
   const serverId = ref("");
   const roots = ref<FilesRoot[]>([]);
   const rootsServerId = ref("");
@@ -304,7 +317,12 @@ export const useFilesStore = defineStore("files", () => {
   });
 
   const acting = ref(false);
-  const clipboard = ref<FilesClipboard | null>(null);
+  const clipboard = computed<FilesClipboard | null>({
+    get: () => session.clipboard,
+    set: (value) => {
+      session.clipboard = value;
+    },
+  });
   const conflictPrompt = ref<ConflictPrompt | null>(null);
   const searchAborts = new Map<string, AbortController>();
   const pendingRestore = new Set<string>();
@@ -381,10 +399,13 @@ export const useFilesStore = defineStore("files", () => {
 
   function pasteProblemAt(
     destination: string,
-  ): "cross-root" | TransferProblem | null {
+  ): "cross-node" | "cross-root" | TransferProblem | null {
     const clip = clipboard.value;
     if (!clip || clip.names.length === 0) {
       return null;
+    }
+    if (clip.serverId !== serverId.value) {
+      return "cross-node";
     }
     if (clip.root !== rootName.value) {
       return "cross-root";
@@ -396,8 +417,8 @@ export const useFilesStore = defineStore("files", () => {
     );
   }
 
-  const pasteProblem = computed<"cross-root" | TransferProblem | null>(() =>
-    pasteProblemAt(path.value),
+  const pasteProblem = computed<"cross-node" | "cross-root" | TransferProblem | null>(
+    () => pasteProblemAt(path.value),
   );
 
 
@@ -475,7 +496,7 @@ export const useFilesStore = defineStore("files", () => {
     if (!clip || names.length === 0) {
       return;
     }
-    if (clip.root !== root || clip.path !== dir) {
+    if (clip.serverId !== serverId.value || clip.root !== root || clip.path !== dir) {
       return;
     }
     const gone = new Set(names);
@@ -517,7 +538,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.errorRaw = null;
     tab.disabled = false;
     tab.disabledOnNode = false;
-    resetFolderSizes();
+    resetFolderSizes(pane);
     try {
       const list = await listRoots(server);
       if (gen !== tab.generation || server !== serverId.value) {
@@ -560,7 +581,7 @@ export const useFilesStore = defineStore("files", () => {
     const gen = ++tab.generation;
     tab.loading = true;
     tab.errorRaw = null;
-    resetFolderSizes();
+    resetFolderSizes(pane);
     try {
       const listing = await listEntries(serverId.value, {
         root: tab.rootName,
@@ -603,7 +624,18 @@ export const useFilesStore = defineStore("files", () => {
         dirs.includes(tab.path),
     );
     await Promise.all(targets.map((tab) => loadEntriesFor(tab)));
+    await refreshOtherPaneListings(pane, serverId.value, root, dirs);
   }
+
+  registerListingRefresher(pane, async (sourceServerId, root, dirs) => {
+    if (sourceServerId !== serverId.value || serverId.value === "") {
+      return;
+    }
+    const targets = tabs.value.filter(
+      (tab) => tab.rootName === root && dirs.includes(tab.path),
+    );
+    await Promise.all(targets.map((tab) => loadEntriesFor(tab)));
+  });
 
   let initPromise: Promise<void> | null = null;
 
@@ -695,7 +727,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.errorRaw = null;
     tab.disabled = false;
     tab.disabledOnNode = false;
-    resetFolderSizes();
+    resetFolderSizes(pane);
     try {
       const list = await listRoots(server);
       if (gen !== tab.generation || server !== serverId.value) {
@@ -742,9 +774,10 @@ export const useFilesStore = defineStore("files", () => {
     );
     if (matching.length === 0) {
       await loadEntries();
-      return;
+    } else {
+      await Promise.all(matching.map((tab) => loadEntriesFor(tab)));
     }
-    await Promise.all(matching.map((tab) => loadEntriesFor(tab)));
+    await refreshOtherPaneListings(pane, serverId.value, root, [dir]);
   }
 
   async function retry(): Promise<void> {
@@ -875,7 +908,7 @@ export const useFilesStore = defineStore("files", () => {
     }
     const gen = ++tab.generation;
     tab.errorRaw = null;
-    resetFolderSizes();
+    resetFolderSizes(pane);
     let target = tab.path;
     for (;;) {
       if (gen !== tab.generation) {
@@ -999,7 +1032,7 @@ export const useFilesStore = defineStore("files", () => {
         destination: joinPath(dir, next),
       });
       renameSelection(tab, entry.name, next);
-      await withEditor((editor) =>
+      await withEditor(pane, (editor) =>
         editor.applyRename(root, dir, entry.name, next),
       );
       const clip = clipboard.value;
@@ -1099,7 +1132,7 @@ export const useFilesStore = defineStore("files", () => {
         }
       }
       pruneClipboard(summary.done, root, dir);
-      await withEditor((editor) => editor.applyDelete(root, dir, summary.done));
+      await withEditor(pane, (editor) => editor.applyDelete(root, dir, summary.done));
       await loadEntriesFor(tab);
       await refreshTabsShowing(root, [dir], tab.id);
       return summary;
@@ -1135,7 +1168,7 @@ export const useFilesStore = defineStore("files", () => {
       }
     }
     if (op === "move" && summary.done.length > 0) {
-      await withEditor((editor) =>
+      await withEditor(pane, (editor) =>
         editor.applyMove(root, source, destination, summary.done),
       );
     }
@@ -1212,6 +1245,7 @@ export const useFilesStore = defineStore("files", () => {
       .map((entry) => entry.name);
     clipboard.value = {
       mode,
+      serverId: serverId.value,
       root: rootName.value,
       path: path.value,
       names: [...names],
@@ -1220,7 +1254,7 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   function clearClipboard(): void {
-    clipboard.value = null;
+    session.clearClipboard();
   }
 
   async function pasteInto(destination: string): Promise<TransferSummary> {
@@ -1316,7 +1350,7 @@ export const useFilesStore = defineStore("files", () => {
     }
     const gen = ++tab.generation;
     tab.loading = true;
-    resetFolderSizes();
+    resetFolderSizes(pane);
     try {
       const listing = await listEntries(serverId.value, {
         root: tab.rootName,
@@ -1548,12 +1582,13 @@ export const useFilesStore = defineStore("files", () => {
     roots.value = [];
     rootsServerId.value = "";
     acting.value = false;
-    clipboard.value = null;
     conflictPrompt.value = null;
   }
 
   function reset(): void {
     resetBrowser();
+    resetFolderSizes(pane);
+    session.clearClipboard();
     serverId.value = "";
   }
 
@@ -1661,4 +1696,4 @@ export const useFilesStore = defineStore("files", () => {
     pasteInto,
     reset,
   };
-});
+}

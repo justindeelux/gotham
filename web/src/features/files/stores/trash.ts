@@ -1,4 +1,3 @@
-import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
@@ -10,8 +9,12 @@ import {
 } from "@/features/files/api/files";
 import type { TrashEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
+import type { FilesPaneId } from "@/features/files/stores/paneSession";
+import { definePaneStore } from "@/features/files/stores/paneStore";
 
-export const useTrashStore = defineStore("files-trash", () => {
+export const useTrashStore = definePaneStore("files-trash", createTrashStore);
+
+function createTrashStore(pane: FilesPaneId) {
   const entries = ref<TrashEntry[]>([]);
   const truncated = ref(false);
   const loading = ref(false);
@@ -23,7 +26,7 @@ export const useTrashStore = defineStore("files-trash", () => {
   let generation = 0;
 
   function browser() {
-    return useFilesStore();
+    return useFilesStore(pane);
   }
 
 
@@ -162,4 +165,4 @@ export const useTrashStore = defineStore("files-trash", () => {
     empty,
     reset,
   };
-});
+}

@@ -7,6 +7,7 @@ import { useRouter } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
 import { useEditorStore } from "@/features/files/stores/editor";
+import { FILES_PANE_IDS } from "@/features/files/stores/paneSession";
 import { useTerminalStore } from "@/features/terminal";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
@@ -84,10 +85,11 @@ async function handleSelect(key: string | number): Promise<void> {
   if (key !== "sign-out") {
     return;
   }
-  const editor = useEditorStore();
-  if ((await editor.confirmDiscard()) !== "leave") {
-    restoreAccountTrigger();
-    return;
+  for (const pane of FILES_PANE_IDS) {
+    if ((await useEditorStore(pane).confirmDiscard()) !== "leave") {
+      restoreAccountTrigger();
+      return;
+    }
   }
   const terminal = useTerminalStore();
   if (!(await terminal.confirmCloseAll())) {

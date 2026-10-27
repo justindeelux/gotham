@@ -7,7 +7,7 @@ import { useI18n } from "vue-i18n";
 import { describeFilesError } from "@/features/files/api/files";
 import type { ArchiveFormat } from "@/features/files/api/files";
 import type { FilesEntry } from "@/features/files/schemas/files";
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import {
   archiveExtension,
   defaultArchiveName,
@@ -28,7 +28,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const message = useMessage();
-const files = useFilesStore();
+const files = useFilesPane().files;
 const conflict = useNameConflict();
 
 const format = ref<ArchiveFormat>("zip");

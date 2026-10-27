@@ -6,8 +6,7 @@ import { useI18n } from "vue-i18n";
 
 import { describeFilesError, isConflictError } from "@/features/files/api/files";
 import type { TrashEntry } from "@/features/files/schemas/files";
-import { useFilesStore } from "@/features/files/stores/files";
-import { useTrashStore } from "@/features/files/stores/trash";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import { entryTypeLabel, formatTimestamp } from "@/features/files/utils/files";
 import { formatBytes } from "@/shared/utils/format";
 
@@ -22,8 +21,9 @@ const emit = defineEmits<{
 
 const { t, locale } = useI18n();
 const message = useMessage();
-const trash = useTrashStore();
-const files = useFilesStore();
+const pane = useFilesPane();
+const trash = pane.trash;
+const files = pane.files;
 
 const conflictName = ref<string | null>(null);
 

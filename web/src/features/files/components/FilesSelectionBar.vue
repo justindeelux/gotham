@@ -5,7 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import { isSelectable } from "@/features/files/utils/files";
 import { formatBytes } from "@/shared/utils/format";
 
@@ -17,7 +17,7 @@ const emit = defineEmits<{
   clear: [];
 }>();
 
-const files = useFilesStore();
+const files = useFilesPane().files;
 const { t } = useI18n();
 const hasSelection = computed<boolean>(() => files.selectedNames.length > 0);
 const selection = computed<FilesEntry[]>(() =>

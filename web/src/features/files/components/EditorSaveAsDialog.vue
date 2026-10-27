@@ -3,15 +3,15 @@ import { NButton, NFormItem, NInput, NModal, useMessage } from "naive-ui";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { useEditorStore } from "@/features/files/stores/editor";
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import { normalizeEntryName, validateEntryName } from "@/features/files/utils/files";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
 const { t } = useI18n();
 const message = useMessage();
-const editor = useEditorStore();
-const files = useFilesStore();
+const pane = useFilesPane();
+const editor = pane.editor;
+const files = pane.files;
 
 const name = ref("");
 const touched = ref(false);

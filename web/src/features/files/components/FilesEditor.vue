@@ -55,12 +55,13 @@ import {
 } from "@/features/files/api/files";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { FilesVersion } from "@/features/files/schemas/files";
-import { useEditorStore } from "@/features/files/stores/editor";
+import { useFilesPaneSession } from "@/features/files/stores/paneSession";
+import type { FilesPaneId } from "@/features/files/stores/paneSession";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { EDITOR_WINDOW_CHROME_MARGIN } from "@/features/files/schemas/editorWindow";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
-import { useFilesStore } from "@/features/files/stores/files";
+import { provideFilesPane } from "@/features/files/stores/filesPane";
 import {
   encodingLabel,
   scrollTabIntoView,
@@ -80,6 +81,7 @@ import { formatBytes, formatDateTime } from "@/shared/utils/format";
 
 interface Props {
   serverId?: string;
+  pane?: FilesPaneId;
 }
 
 const props = withDefaults(defineProps<Props>(), { serverId: "" });
@@ -88,10 +90,13 @@ const { t } = useI18n();
 const message = useMessage();
 // global dirty guard only registers when one is injected (JUS-232).
 const router = inject<Router | null>(routerKey as InjectionKey<Router | null>, null);
-const editor = useEditorStore();
+const paneId =
+  props.pane ?? useFilesPaneSession().activePane;
+const filesPane = provideFilesPane(paneId);
+const editor = filesPane.editor;
 const editorWindow = useEditorWindowStore();
 const editorSettings = useEditorSettingsStore();
-const files = useFilesStore();
+const files = filesPane.files;
 const { download } = useFileDownload();
 const activeServerId = computed<string>(() =>
   props.serverId !== "" ? props.serverId : editor.serverId,
@@ -100,7 +105,7 @@ const {
   prompt: draftPrompt,
   restore: restoreDraftPrompt,
   discard: discardDraftPrompt,
-} = useEditorDrafts(() => activeServerId.value);
+} = useEditorDrafts(() => activeServerId.value, paneId);
 
 const sessions = new Map<string, EditorSession>();
 const hosts = new Map<string, HTMLElement>();

@@ -13,6 +13,7 @@ import {
 import type { EditorDraftStorage } from "@/features/files/utils/editorDrafts";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
+import type { FilesPaneId } from "@/features/files/stores/paneSession";
 
 export const EDITOR_DRAFT_DEBOUNCE_MS = 800;
 
@@ -31,13 +32,16 @@ export interface EditorDraftPrompt {
   conflict: boolean;
 }
 
-export function useEditorDrafts(getServerId: () => string): {
+export function useEditorDrafts(
+  getServerId: () => string,
+  pane: FilesPaneId = "left",
+): {
   prompt: ComputedRef<EditorDraftPrompt | null>;
   restore: () => void;
   discard: () => void;
 } {
-  const editor = useEditorStore();
-  const files = useFilesStore();
+  const editor = useEditorStore(pane);
+  const files = useFilesStore(pane);
   const auth = useAuthStore();
 
   const prompts = ref<EditorDraftPrompt[]>([]);
@@ -46,6 +50,10 @@ export function useEditorDrafts(getServerId: () => string): {
   );
   const stored = new Map<string, string>();
   const checked = new Set<string>();
+  // Guards two panes editing one file: a delayed autosave must not replace a
+  // draft another pane wrote after this pane's last edit.
+  const seen = new Map<string, string>();
+  const touchedAt = new Map<string, number>();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   function storage(): EditorDraftStorage | null {
@@ -88,6 +96,10 @@ export function useEditorDrafts(getServerId: () => string): {
         continue;
       }
       const key = editorDraftStorageKey(prefix, tab.root, tab.path);
+      const saved = readEditorDraft(store, key);
+      if (saved && saved.doc !== tab.doc && saved.savedAt > (touchedAt.get(tab.id) ?? 0)) {
+        continue;
+      }
       if (previous && previous !== key) {
         removeEditorDraft(store, previous);
         stored.delete(tab.id);
@@ -110,6 +122,18 @@ export function useEditorDrafts(getServerId: () => string): {
         removeEditorDraft(store, key);
         stored.delete(id);
       }
+    }
+  }
+
+  function markTouched(): void {
+    const now = Date.now();
+    for (const tab of editor.tabs) {
+      const stamp = `${tab.doc}\u0000${tab.eol}\u0000${tab.bom}`;
+      const previous = seen.get(tab.id);
+      if (previous !== undefined && previous !== stamp) {
+        touchedAt.set(tab.id, now);
+      }
+      seen.set(tab.id, stamp);
     }
   }
 
@@ -239,6 +263,7 @@ export function useEditorDrafts(getServerId: () => string): {
   watch(
     () => editor.tabs,
     () => {
+      markTouched();
       pruneSaved();
       checkDrafts();
       schedule();

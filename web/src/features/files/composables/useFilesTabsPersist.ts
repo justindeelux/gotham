@@ -1,19 +1,25 @@
 import { onBeforeUnmount, watch } from "vue";
 
 import { useAuthStore } from "@/features/auth/stores/auth";
+import type { FilesTabsSnapshot } from "@/features/files/schemas/tabsPersist";
 import { useFilesStore } from "@/features/files/stores/files";
+import type { FilesPaneId } from "@/features/files/stores/paneSession";
 import {
   filesTabsStorageKey,
+  legacyFilesTabsStorageKey,
   readFilesTabsSnapshot,
   writeFilesTabsSnapshot,
 } from "@/features/files/utils/tabsPersist";
 
 export const FILES_TABS_PERSIST_DEBOUNCE_MS = 250;
 
-export function useFilesTabsPersist(getServerId: () => string): {
+export function useFilesTabsPersist(
+  getServerId: () => string,
+  pane: FilesPaneId = "left",
+): {
   initBrowser: (_serverId: string) => Promise<void>;
 } {
-  const files = useFilesStore();
+  const files = useFilesStore(pane);
   const auth = useAuthStore();
 
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -30,7 +36,7 @@ export function useFilesTabsPersist(getServerId: () => string): {
   }
 
   function persistNow(serverId: string, userId: string): void {
-    const key = filesTabsStorageKey(serverId, userId);
+    const key = filesTabsStorageKey(serverId, userId, pane);
     if (key === "" || !decided.has(key) || files.serverId !== serverId) {
       return;
     }
@@ -90,15 +96,29 @@ export function useFilesTabsPersist(getServerId: () => string): {
     }
   });
 
+  function readFirstUseSnapshot(
+    store: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null,
+    serverId: string,
+    userId: string,
+    key: string,
+  ): FilesTabsSnapshot | null {
+    if (store === null) {
+      return null;
+    }
+    const own = key !== "" ? readFilesTabsSnapshot(store, key) : null;
+    if (own !== null || pane !== "left") {
+      return own;
+    }
+    const legacy = legacyFilesTabsStorageKey(serverId, userId);
+    return legacy !== "" ? readFilesTabsSnapshot(store, legacy) : null;
+  }
+
   async function initBrowser(serverId: string): Promise<void> {
     flush();
     const userId = auth.user?.id ?? "";
-    const key = filesTabsStorageKey(serverId, userId);
+    const key = filesTabsStorageKey(serverId, userId, pane);
     const store = storage();
-    const snapshot =
-      store !== null && key !== ""
-        ? readFilesTabsSnapshot(store, key)
-        : null;
+    const snapshot = readFirstUseSnapshot(store, serverId, userId, key);
     await files.init(serverId, snapshot);
     if (getServerId() !== serverId) {
       return;

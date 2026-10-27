@@ -6,7 +6,7 @@ import { useI18n } from "vue-i18n";
 import { describeFilesError } from "@/features/files/api/files";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { filesOctalModeSchema } from "@/features/files/schemas/files";
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import {
   formatMode,
   formatOctalMode,
@@ -29,7 +29,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const message = useMessage();
-const files = useFilesStore();
+const files = useFilesPane().files;
 
 const octal = ref("644");
 const touched = ref(false);

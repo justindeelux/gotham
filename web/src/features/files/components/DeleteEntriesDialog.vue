@@ -5,7 +5,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import type { TransferSummary } from "@/features/files/stores/files";
 
 interface Props {
@@ -20,7 +20,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const message = useMessage();
-const files = useFilesStore();
+const files = useFilesPane().files;
 
 const summary = ref<TransferSummary | null>(null);
 

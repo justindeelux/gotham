@@ -1,4 +1,3 @@
-import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
@@ -21,6 +20,7 @@ import {
   tabTitle,
   unrepresentableChars,
 } from "@/features/files/utils/editor";
+import { definePaneStore } from "@/features/files/stores/paneStore";
 import { joinPath } from "@/features/files/utils/files";
 
 export type EditorTabStatus =
@@ -98,7 +98,7 @@ function nextTabId(): string {
   return `tab-${Date.now().toString(36)}-${tabSeq}`;
 }
 
-export const useEditorStore = defineStore("filesEditor", () => {
+export const useEditorStore = definePaneStore("filesEditor", () => {
   const serverId = ref("");
   const tabs = ref<EditorTab[]>([]);
   const activeId = ref("");

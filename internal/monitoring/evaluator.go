@@ -490,7 +490,7 @@ func (s *Service) NodeStatus(ctx context.Context, nodeID uuid.UUID) (NodeStatus,
 		return NodeStatus{}, err
 	}
 	for _, inc := range rows {
-		if inc.NodeID != nodeID || !isPressureDetector(inc.Detector) {
+		if inc.NodeID != nodeID || !isPressureDetector(inc.Detector) || inc.Lifecycle != incidents.LifecycleFiring {
 			continue
 		}
 		status.Active = append(status.Active, ActivePressure{

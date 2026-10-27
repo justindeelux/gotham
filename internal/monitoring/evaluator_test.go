@@ -15,6 +15,7 @@ import (
 type recordingReporter struct {
 	reports []incidents.Observation
 	closed  []string
+	active  []incidents.Incident
 }
 
 func (r *recordingReporter) Report(_ context.Context, obs incidents.Observation) (*incidents.Incident, incidents.Transition, error) {
@@ -28,7 +29,7 @@ func (r *recordingReporter) Close(_ context.Context, identity, _ string) error {
 }
 
 func (r *recordingReporter) ActiveNodeIncidents(context.Context) ([]incidents.Incident, error) {
-	return nil, nil
+	return r.active, nil
 }
 
 func hostObservation(at time.Time, cpu servers.ObservedMetric, mem servers.ObservedMetric) servers.NodeObservation {

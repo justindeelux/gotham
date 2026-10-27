@@ -154,6 +154,24 @@ func TestFullDataMountOpensOneIncidentWithHealthyRoot(t *testing.T) {
 	}
 }
 
+func TestNodeStatusShowsOnlyFiringPressure(t *testing.T) {
+	st := scratchStore(t)
+	nodeID := createNode(t, st)
+	reporter := &recordingReporter{active: []incidents.Incident{
+		{ID: uuid.New(), NodeID: nodeID, Detector: DetectorSpace, Lifecycle: incidents.LifecyclePending, ResourceName: "/pending"},
+		{ID: uuid.New(), NodeID: nodeID, Detector: DetectorSpace, Lifecycle: incidents.LifecycleFiring, ResourceName: "/firing", Severity: incidents.SeverityWarning},
+		{ID: uuid.New(), NodeID: nodeID, Detector: "connectivity", Lifecycle: incidents.LifecycleFiring, ResourceName: "node"},
+	}}
+	svc := NewService(Config{Store: st, Incidents: reporter})
+	status, err := svc.NodeStatus(context.Background(), nodeID)
+	if err != nil {
+		t.Fatalf("node status: %v", err)
+	}
+	if len(status.Active) != 1 || status.Active[0].ResourceName != "/firing" {
+		t.Fatalf("active = %+v; want only the firing pressure incident", status.Active)
+	}
+}
+
 func TestMissingFilesystemStaysUnknownUntilFreshEvidence(t *testing.T) {
 	base := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
 	full := servers.FilesystemObservation{

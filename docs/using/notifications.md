@@ -75,13 +75,27 @@ Choose the scope when creating or editing a channel:
 
 The subscribable events are `deploy_success`, `deploy_failure`,
 `backup_success`, `backup_failure`, `server_offline`, `server_online`,
-`certificate_expiring`, `update_available` and `redeploy_needed`.
-New channels start with the four deploy/backup events selected. Server, certificate
+`certificate_expiring`, `update_available`, `redeploy_needed`,
+`incident_opened`, `incident_severity_changed` and `incident_recovered`.
+New channels start with the deploy/backup events and the three incident events
+selected. Server, certificate
 and update events are opt-in for both existing and new channels: edit an **All resources** channel
 and select them. Application and database channels cannot receive these
 instance-wide events. `redeploy_needed` is opt-in as well, and only an
 **All resources** channel or a channel scoped to that application can receive it.
 A disabled channel receives nothing.
+
+A monitoring incident is a condition that is still actionable, not a single
+delivered event. Gotham keeps it pending until the condition is sustained, then
+firing, and only marks it recovered after stable healthy evidence; restarting
+the control plane does not erase a firing incident. An occurrence opens once,
+reports a severity change once and resolves once. Acknowledging or snoozing an
+incident silences delivery without changing its severity or lifecycle, and the
+panel shows why delivery is held. Resolved incidents stay in history for 30
+days; active incidents are never pruned. Node connectivity still uses the
+existing `server_offline`/`server_online` event: the incident view groups the
+node's dependent problems beneath it with unknown coverage instead of sending a
+second connectivity message or claiming a cause.
 
 An application needs a redeploy when a setting that only reaches a new container
 changes: domains or ports, environment variables, secrets, or storage. Exactly one

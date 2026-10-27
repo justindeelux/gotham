@@ -294,6 +294,68 @@ type GithubRepoCache struct {
 	CachedAt       pgtype.Timestamptz `json:"cached_at"`
 }
 
+type Incident struct {
+	ID                   pgtype.UUID        `json:"id"`
+	IdentityKey          string             `json:"identity_key"`
+	DetectorKey          string             `json:"detector_key"`
+	ScopeKind            string             `json:"scope_kind"`
+	ScopeID              pgtype.UUID        `json:"scope_id"`
+	NodeID               pgtype.UUID        `json:"node_id"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
+	ResourceType         string             `json:"resource_type"`
+	ResourceID           pgtype.UUID        `json:"resource_id"`
+	ResourceName         string             `json:"resource_name"`
+	Severity             string             `json:"severity"`
+	Lifecycle            string             `json:"lifecycle"`
+	Coverage             string             `json:"coverage"`
+	FirstObservedAt      pgtype.Timestamptz `json:"first_observed_at"`
+	LastObservedAt       pgtype.Timestamptz `json:"last_observed_at"`
+	LastValidAt          pgtype.Timestamptz `json:"last_valid_at"`
+	ConfirmedAt          pgtype.Timestamptz `json:"confirmed_at"`
+	RecoveryStartedAt    pgtype.Timestamptz `json:"recovery_started_at"`
+	ResolvedAt           pgtype.Timestamptz `json:"resolved_at"`
+	CloseReason          string             `json:"close_reason"`
+	AcknowledgedAt       pgtype.Timestamptz `json:"acknowledged_at"`
+	AcknowledgedBy       pgtype.UUID        `json:"acknowledged_by"`
+	SnoozedUntil         pgtype.Timestamptz `json:"snoozed_until"`
+	SnoozeNotifiedUntil  pgtype.Timestamptz `json:"snooze_notified_until"`
+	DeliveryState        string             `json:"delivery_state"`
+	DeliveryHold         string             `json:"delivery_hold"`
+	DeliveryEvent        string             `json:"delivery_event"`
+	DeliveryAttempts     int32              `json:"delivery_attempts"`
+	DeliveryError        string             `json:"delivery_error"`
+	LastNotifiedSeverity string             `json:"last_notified_severity"`
+	Evidence             string             `json:"evidence"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type IncidentDeliveryIntent struct {
+	ID         pgtype.UUID        `json:"id"`
+	IncidentID pgtype.UUID        `json:"incident_id"`
+	Transition string             `json:"transition"`
+	Severity   string             `json:"severity"`
+	State      string             `json:"state"`
+	Attempts   int32              `json:"attempts"`
+	LastError  string             `json:"last_error"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type IncidentEvent struct {
+	ID            pgtype.UUID        `json:"id"`
+	IncidentID    pgtype.UUID        `json:"incident_id"`
+	Kind          string             `json:"kind"`
+	FromLifecycle string             `json:"from_lifecycle"`
+	ToLifecycle   string             `json:"to_lifecycle"`
+	FromSeverity  string             `json:"from_severity"`
+	ToSeverity    string             `json:"to_severity"`
+	Reason        string             `json:"reason"`
+	ActorID       pgtype.UUID        `json:"actor_id"`
+	Detail        string             `json:"detail"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type InstanceSetting struct {
 	ID                     int16              `json:"id"`
 	ControlPlaneUrl        *string            `json:"control_plane_url"`

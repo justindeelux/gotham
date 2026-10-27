@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -672,8 +673,15 @@ func (s *Service) UpdateAvailable(_ context.Context, update updates.AvailableUpd
 }
 
 func (s *Service) Dispatch(event Event) {
+	_ = s.Enqueue(event)
+}
+
+// Enqueue is the durable handoff used by the incident lifecycle: it reports a
+// full queue so the caller can keep its local intent retryable instead of
+// discarding it.
+func (s *Service) Enqueue(event Event) error {
 	if s == nil || s.repo == nil || !Enabled() {
-		return
+		return errNotReady
 	}
 	if event.At.IsZero() {
 		event.At = s.now().UTC()
@@ -681,9 +689,11 @@ func (s *Service) Dispatch(event Event) {
 	s.start()
 	select {
 	case s.queue <- event:
+		return nil
 	default:
-		s.logger.Warn("notifications: queue is full; dropping event",
+		s.logger.Warn("notifications: queue is full; keeping incident intent retryable",
 			"event", string(event.Key()), "resource_id", event.ResourceID.String())
+		return errors.New("notifications: queue is full")
 	}
 }
 

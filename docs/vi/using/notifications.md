@@ -71,12 +71,25 @@ Chọn phạm vi khi tạo hoặc sửa kênh:
 
 Các sự kiện đăng ký được là `deploy_success`, `deploy_failure`, `backup_success`,
 `backup_failure`, `server_offline`, `server_online`, `certificate_expiring`,
-`update_available` và `redeploy_needed`. Kênh mới chỉ chọn sẵn bốn sự
-kiện triển khai/sao lưu. Với cả kênh cũ và mới, hãy sửa kênh **Mọi tài nguyên** và
+`update_available`, `redeploy_needed`, `incident_opened`,
+`incident_severity_changed` và `incident_recovered`. Kênh mới chọn sẵn các sự
+kiện triển khai/sao lưu và ba sự kiện sự cố. Với cả kênh cũ và mới, hãy sửa kênh **Mọi tài nguyên** và
 chọn thêm sự kiện máy chủ, chứng chỉ hoặc cập nhật nếu muốn nhận. Kênh ứng dụng và cơ sở dữ
 liệu không nhận các sự kiện trên toàn instance này. `redeploy_needed` cũng phải
 chọn thêm, và chỉ kênh **Mọi tài nguyên** hoặc kênh gắn với chính ứng dụng đó mới
 nhận được. Kênh bị tắt không nhận gì.
+
+Sự cố giám sát là tình trạng vẫn cần xử lý, không phải một sự kiện đã gửi. Gotham
+giữ sự cố ở trạng thái chờ đến khi tình trạng kéo dài, rồi chuyển sang đang hoạt
+động, và chỉ đánh dấu đã khắc phục sau khi có bằng chứng khỏe mạnh ổn định; khởi
+động lại bảng điều khiển không xóa sự cố đang hoạt động. Mỗi lần xuất hiện chỉ mở
+một lần, báo thay đổi mức độ một lần và khắc phục một lần. Xác nhận hoặc tạm hoãn
+sự cố sẽ tắt việc gửi thông báo mà không đổi mức độ hay vòng đời, và bảng điều
+khiển cho biết lý do đang giữ thông báo. Sự cố đã khắc phục được giữ trong lịch sử
+30 ngày; sự cố đang hoạt động không bao giờ bị xóa. Kết nối máy chủ vẫn dùng sự
+kiện `server_offline`/`server_online` hiện có: giao diện sự cố nhóm các vấn đề phụ
+thuộc bên dưới máy chủ với độ phủ chưa xác định, không gửi thêm thông báo kết nối
+và không suy đoán nguyên nhân.
 
 Ứng dụng cần triển khai lại khi một thiết lập chỉ áp dụng cho container mới thay
 đổi: tên miền hoặc cổng, biến môi trường, secret hoặc lưu trữ. Đúng một sự kiện

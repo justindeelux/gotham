@@ -238,14 +238,15 @@ func aggregateRows(rows []replicaRow) (string, string) {
 		switch {
 		case row.State == "missing" || row.State == "paused":
 			return StateUnavailable, row.Reason
+		case row.OOMContainer != "" && row.ContainerID == row.OOMContainer && row.State == "stopped":
+			// OOM is current only while the same container is still
+			// terminated. A recreated or policy-restarted healthy container
+			// keeps last_oom_at as evidence but no longer degrades the summary.
+			return StateUnavailable, "oom_killed"
 		case row.State == "stopped" && row.Reason != "one_shot_completed" && row.Reason != "intentionally_stopped":
 			return StateUnavailable, row.Reason
 		case row.State == "unhealthy":
 			return StateDegraded, row.Reason
-		case row.OOMContainer != "" && row.ContainerID == row.OOMContainer:
-			return StateUnavailable, "oom_killed"
-		case row.OOMContainer != "":
-			state, reason = StateDegraded, "oom_evidence"
 		case row.State == "starting":
 			starting = true
 		case row.State == "stopped":

@@ -516,7 +516,9 @@ func (s *Service) reportOOM(ctx context.Context, target Target, ev replicaEviden
 	}
 	obs := s.baseObservation(target, *next, DetectorOOM, at, 0)
 	obs.RecoverFor = 0
-	if next.ContainerID == next.OOMContainer && isTerminal(next.State) {
+	if next.ContainerID == next.OOMContainer && next.State != "running" {
+		// The same container is still stopped, restarting or unhealthy after
+		// the kill; the incident stays firing until it runs again.
 		obs.Valid = true
 		obs.Unhealthy = true
 		obs.Severity = incidents.SeverityCritical

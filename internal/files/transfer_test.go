@@ -122,6 +122,16 @@ func phasesOf(events []TransferEvent) []string {
 	return phases
 }
 
+func resultEvents(events []TransferEvent) []TransferEvent {
+	var results []TransferEvent
+	for _, event := range events {
+		if event.Type == TransferEventResult {
+			results = append(results, event)
+		}
+	}
+	return results
+}
+
 func directFakes(t *testing.T) (*fakeFileClient, *fakeFileClient) {
 	t.Helper()
 	src := &fakeFileClient{
@@ -339,9 +349,79 @@ func TestDirectTransferLostAcknowledgementIsUncertain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
-	summary := summaryOf(t, collectTransferEvents(t, run))
+	events := collectTransferEvents(t, run)
+	summary := summaryOf(t, events)
 	if summary.Uncertain != 1 || summary.Status != TransferStatusUncertain {
 		t.Fatalf("summary = %+v, want an uncertain entry", summary)
+	}
+	results := resultEvents(events)
+	if len(results) != 1 || results[0].Status != TransferStatusUncertain {
+		t.Fatalf("result events = %+v, want the entry emitted as uncertain", results)
+	}
+}
+
+func TestDirectTransferEmitsOneResultEvent(t *testing.T) {
+	src, dst := directFakes(t)
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+
+	run, err := svc.Transfer(context.Background(), sourceID, transferRequest(destinationID, "a.txt"))
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	events := collectTransferEvents(t, run)
+	results := resultEvents(events)
+	if len(results) != 1 {
+		t.Fatalf("result events = %+v, want exactly one", results)
+	}
+	if results[0].Name != "a.txt" || results[0].Status != TransferStatusCopied {
+		t.Fatalf("result = %+v", results[0])
+	}
+	if last := events[len(events)-1]; last.Type != TransferEventSummary {
+		t.Fatalf("last event = %+v, want the summary after the result", last)
+	}
+	summary := summaryOf(t, events)
+	if len(summary.Entries) != 1 || summary.Entries[0].Name != "a.txt" {
+		t.Fatalf("summary entries = %+v, want the entry list unchanged", summary.Entries)
+	}
+}
+
+func TestDirectTransferEmitsAKnownConflictResult(t *testing.T) {
+	src, dst := directFakes(t)
+	dst.statHook = func(in *agentv1.StatRequest) (*agentv1.StatResponse, error) {
+		if in.GetPath() == "incoming" {
+			return dirStat("incoming"), nil
+		}
+		return fileStat(`"existing"`), nil
+	}
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+
+	run, err := svc.Transfer(context.Background(), sourceID, transferRequest(destinationID, "a.txt"))
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	results := resultEvents(collectTransferEvents(t, run))
+	if len(results) != 1 || results[0].Name != "a.txt" || results[0].Status != TransferStatusConflict {
+		t.Fatalf("result events = %+v, want the known conflict", results)
+	}
+}
+
+func TestTransferResultsEmitsEachNameOnce(t *testing.T) {
+	events := make(chan TransferEvent, 4)
+	results := newTransferResults()
+	results.ctx, results.events = context.Background(), events
+	results.add("a.txt", TransferStatusConflict, "destination already exists")
+	results.add("a.txt", TransferStatusCopied, "")
+	close(events)
+
+	var emitted []TransferEvent
+	for event := range events {
+		emitted = append(emitted, event)
+	}
+	if len(emitted) != 1 || emitted[0].Name != "a.txt" || emitted[0].Status != TransferStatusConflict {
+		t.Fatalf("emitted = %+v, want the first outcome only", emitted)
+	}
+	if len(results.entries) != 1 || results.entries[0].Status != TransferStatusConflict {
+		t.Fatalf("entries = %+v", results.entries)
 	}
 }
 
@@ -411,6 +491,13 @@ func TestBundleTransferRelaysAppliesAndDiscards(t *testing.T) {
 		if !strings.Contains(phases, want) {
 			t.Fatalf("phases = %q, missing %q", phases, want)
 		}
+	}
+	results := resultEvents(events)
+	if len(results) != 1 || results[0].Name != "dir" || results[0].Status != TransferStatusCopied {
+		t.Fatalf("result events = %+v, want the published top-level", results)
+	}
+	if last := events[len(events)-1]; last.Type != TransferEventSummary {
+		t.Fatalf("last event = %+v, want the summary after the results", last)
 	}
 	receive := dst.lastReceiveStream()
 	if receive == nil {
@@ -490,6 +577,46 @@ func TestTransferCancellationCleansBothSides(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBundleTransferCancelKeepsPublishedResultsAndDropsTheRest(t *testing.T) {
+	src, dst := bundleFakes(t)
+	src.prepareResp.TopLevel = []string{"a", "b"}
+	src.prepareResp.SkippedCount = 0
+	src.prepareResp.Skipped = nil
+	dst.applyEvents = []*agentv1.ApplyArtifactEvent{
+		{Event: &agentv1.ApplyArtifactEvent_Phase{Phase: &agentv1.TransferPhase{Phase: "publish", Path: "a"}}},
+		{Event: &agentv1.ApplyArtifactEvent_Outcome{Outcome: &agentv1.TransferOutcome{
+			Name: "a", Status: agentv1.TransferOutcomeStatus_TRANSFER_OUTCOME_STATUS_PUBLISHED,
+		}}},
+		{Event: &agentv1.ApplyArtifactEvent_Phase{Phase: &agentv1.TransferPhase{Phase: "publish", Path: "b"}}},
+		{Event: &agentv1.ApplyArtifactEvent_Outcome{Outcome: &agentv1.TransferOutcome{
+			Name: "b", Status: agentv1.TransferOutcomeStatus_TRANSFER_OUTCOME_STATUS_PUBLISHED,
+		}}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dst.applyHook = func(index int) {
+		if index == 2 {
+			cancel()
+		}
+	}
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+
+	run, err := svc.Transfer(ctx, sourceID, transferRequest(destinationID, "a", "b"))
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	events := collectTransferEvents(t, run)
+	results := resultEvents(events)
+	if len(results) != 1 || results[0].Name != "a" || results[0].Status != TransferStatusCopied {
+		t.Fatalf("result events = %+v, want only the entry published before the cancel", results)
+	}
+	for _, event := range events {
+		if event.Type == TransferEventSummary {
+			t.Fatalf("a client cancel delivered a summary: %+v", event)
+		}
 	}
 }
 
@@ -608,9 +735,14 @@ func TestBundleTransferReportsLostPublicationAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
-	summary := summaryOf(t, collectTransferEvents(t, run))
+	events := collectTransferEvents(t, run)
+	summary := summaryOf(t, events)
 	if summary.Uncertain != 1 || summary.Status != TransferStatusUncertain {
 		t.Fatalf("summary = %+v, want the in-flight publication marked uncertain", summary)
+	}
+	results := resultEvents(events)
+	if len(results) != 1 || results[0].Status != TransferStatusUncertain {
+		t.Fatalf("result events = %+v, want the entry emitted as uncertain, never copied", results)
 	}
 }
 
@@ -699,12 +831,17 @@ func TestBundleTransferOnlyReportsSelectedTopLevelSkips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
-	summary := summaryOf(t, collectTransferEvents(t, run))
+	events := collectTransferEvents(t, run)
+	summary := summaryOf(t, events)
 	if len(summary.Entries) != 1 || summary.Entries[0].Name != "dir" || summary.Entries[0].Status != TransferStatusSkipped {
 		t.Fatalf("entries = %+v, want only the selected top-level skip", summary.Entries)
 	}
 	if summary.Skipped != 1 || summary.SkippedCount != 2 || len(summary.SkippedSamples) != 2 {
 		t.Fatalf("summary = %+v, want nested skips kept in samples", summary)
+	}
+	results := resultEvents(events)
+	if len(results) != 1 || results[0].Name != "dir" || results[0].Status != TransferStatusSkipped {
+		t.Fatalf("result events = %+v, want the prepare-time skip emitted once", results)
 	}
 }
 

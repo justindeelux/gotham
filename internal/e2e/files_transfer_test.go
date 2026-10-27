@@ -178,6 +178,26 @@ func transferSummary(t *testing.T, events []files.TransferEvent) files.TransferS
 	return *last.Summary
 }
 
+// transferResultByName returns the streamed result for a top-level entry and
+// fails when the entry was streamed more than once.
+func transferResultByName(t *testing.T, events []files.TransferEvent, name string) files.TransferEvent {
+	t.Helper()
+	var found []files.TransferEvent
+	for index, event := range events {
+		if event.Type != files.TransferEventResult || event.Name != name {
+			continue
+		}
+		if index == len(events)-1 {
+			t.Fatalf("result for %q arrived after the summary", name)
+		}
+		found = append(found, event)
+	}
+	if len(found) != 1 {
+		t.Fatalf("result events for %q = %+v, want exactly one before the summary", name, found)
+	}
+	return found[0]
+}
+
 func TestFilesCrossNodeTransferEndToEnd(t *testing.T) {
 	requireE2E(t)
 	t.Setenv(files.FeatureEnv, "true")
@@ -223,9 +243,13 @@ func TestFilesCrossNodeTransferEndToEnd(t *testing.T) {
 		t.Fatalf("plan created the destination file: %v", err)
 	}
 
-	summary := transferSummary(t, h.streamTransfer(t, body("hello.txt")))
+	directEvents := h.streamTransfer(t, body("hello.txt"))
+	summary := transferSummary(t, directEvents)
 	if summary.Status != files.TransferStatusCopied || summary.Copied != 1 {
 		t.Fatalf("direct summary = %+v", summary)
+	}
+	if result := transferResultByName(t, directEvents, "hello.txt"); result.Status != files.TransferStatusCopied {
+		t.Fatalf("direct result = %+v", result)
 	}
 	copied, err := os.ReadFile(filepath.Join(h.destRoot, "hello.txt"))
 	if err != nil || string(copied) != "hello\n" {
@@ -236,9 +260,13 @@ func TestFilesCrossNodeTransferEndToEnd(t *testing.T) {
 		t.Fatalf("source content changed: %q, err %v", source, err)
 	}
 
-	summary = transferSummary(t, h.streamTransfer(t, body("hello.txt")))
+	conflictEvents := h.streamTransfer(t, body("hello.txt"))
+	summary = transferSummary(t, conflictEvents)
 	if summary.Conflicts != 1 || summary.Copied != 0 {
 		t.Fatalf("conflict summary = %+v", summary)
+	}
+	if result := transferResultByName(t, conflictEvents, "hello.txt"); result.Status != files.TransferStatusConflict {
+		t.Fatalf("conflict result = %+v", result)
 	}
 	if copied, _ := os.ReadFile(filepath.Join(h.destRoot, "hello.txt")); string(copied) != "hello\n" {
 		t.Fatalf("a conflicting destination was overwritten: %q", copied)
@@ -264,6 +292,9 @@ func TestFilesCrossNodeTransferEndToEnd(t *testing.T) {
 	summary = transferSummary(t, events)
 	if summary.Status != files.TransferStatusCopied || summary.Copied != 1 || summary.SkippedCount != 1 {
 		t.Fatalf("bundle summary = %+v", summary)
+	}
+	if result := transferResultByName(t, events, "data"); result.Status != files.TransferStatusCopied {
+		t.Fatalf("bundle result = %+v", result)
 	}
 	for _, name := range []string{"a.txt", "b.txt"} {
 		if got, err := os.ReadFile(filepath.Join(h.destRoot, "data", name)); err != nil || string(got) != map[string]string{"a.txt": "alpha\n", "b.txt": "beta\n"}[name] {

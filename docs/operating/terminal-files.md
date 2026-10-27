@@ -75,6 +75,23 @@ volumes root is still protected from rename and delete while a container mounts
 it. The deeper explanation of modes, ownership and permissions is in
 [Remote file service](/guide/file-service).
 
+### Split view
+
+**Split view** opens a second file browser beside the first. Each pane keeps its
+own node, root, folder, tabs, selection, view mode and scroll position, so one
+pane can sit on one server while the other browses a different server or root.
+
+- The **active** pane is marked, and clicking or double-clicking inside a pane
+  makes it active. Row actions, the keyboard and the folder menus apply only to
+  the active pane.
+- On a phone or a narrow window the two panes are shown one at a time, with an
+  explicit **Show left pane** / **Show right pane** switch that keeps both
+  contexts.
+- The divider between panes can be dragged or moved with the keyboard. Its
+  ratio is not persisted: after a reload the panes open at the default split.
+- The floating editor window follows the active pane; closing split view keeps
+  the editor and its drafts.
+
 ### Browse and search
 
 The browser offers list and grid views, sorting, a per-folder name filter, a
@@ -113,11 +130,63 @@ target filesystem is low on space it answers `507`.
 
 **New** creates a file or folder; **Rename** changes one name; **Copy** and
 **Cut** fill a clipboard that **Paste** applies in the current folder. All
-transfers stay inside one root — a clipboard taken in another root is refused
-with a message, not silently converted. A name may not be empty, `.`, `..`,
-contain `/`, `\` or a NUL byte, or exceed 255 bytes; an existing name is a
+clipboard transfers stay inside one root — a clipboard taken in another root is
+refused with a message, not silently converted. A name may not be empty, `.`,
+`..`, contain `/`, `\` or a NUL byte, or exceed 255 bytes; an existing name is a
 `409`. A folder cannot be moved or copied into itself, and pasting into the
 folder the entries already live in is refused.
+
+### Copy to another node
+
+**Copy to node…** sends the selected entries to a folder on another managed
+node; **Copy to the other pane** uses the other pane's node, root and folder as
+the destination. The destination is captured when the copy dialog opens: moving
+or changing the destination pane while the copy is running does not retarget
+it. The target must be a **Ready** node with a writable root; a read-only root
+is refused.
+
+- A single regular file is streamed directly. More than one selection, or a
+  folder, becomes one temporary `tar.gz` bundle on the source node; the browser
+  only receives progress events, never the archive.
+- Same node and same root uses the ordinary local copy. Copying between two
+  roots on the same node is not supported, and there is no cross-node cut or
+  move — this action always copies.
+- Limits are negotiated between the two nodes: **1 GiB** compressed bundle (or
+  the control plane's lower single-file ceiling), **4 GiB** expanded bytes,
+  **100,000** archive entries, **1,024** selected top-level names and **8**
+  concurrent transfers per node. A single file above the control plane's
+  ceiling fails the destination check with an explicit "too large" reason
+  instead of returning bounds. A transfer runs for at most **30 minutes**.
+- An existing top-level name, file or whole folder, is a **conflict** and is
+  skipped. Nothing is overwritten and folders are never merged recursively.
+  Symbolic links and special files are left out of the archive; the report
+  says how many nested entries were skipped. A selection with nothing
+  transferable is refused while preparing, with the entry marked failed, and
+  creates no destination entry.
+- Progress moves through **preparing**, **transferring**, **extracting**,
+  **publishing** and **cleaning up**. The dialog lists each top-level entry as
+  copied, conflicted, skipped, failed, cancelled or uncertain.
+- **Cancel** stops the run and keeps entries the destination already
+  acknowledged. A cancelled run sends no terminal summary: only the per-entry
+  results received so far are trustworthy, and anything else is unconfirmed.
+  Refresh the destination before retrying. If the final acknowledgement is
+  lost, the affected entry is reported **uncertain**, never copied, and is
+  never retried automatically; the destination staging artifact may remain
+  until its normal expiry cleanup removes it.
+- The copy reads the source and never changes or deletes it. A read-only source
+  root can be copied from. Refresh the destination listing after the run to
+  see the published entries.
+- Leaving this workspace or logging out while a copy runs asks first and
+  cancels the copy if you leave. A finished copy is not resumed in the
+  background, and the selection is not atomic: some top-level entries can be
+  published while others fail.
+
+This is a one-way copy, not synchronization, shared storage or a live database
+backup. There is no automatic retry, resume, background completion or
+whole-selection atomicity.
+
+Bundled folders keep each entry's mode. A single-file direct copy lands with
+the node's default file mode (`0644`).
 
 ### Permissions (chmod)
 

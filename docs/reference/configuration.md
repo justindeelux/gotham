@@ -262,4 +262,10 @@ Control-plane file limit:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Ceiling for one write/upload body (413 above it); should match the node's `GOTHAM_AGENT_FILE_MAX_UPLOAD`. |
+| `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Ceiling for one write/upload body (413 above it); should match the node's `GOTHAM_AGENT_FILE_MAX_UPLOAD`. Also caps a single-file cross-node copy and lowers the bundle ceiling when it is below 1 GiB. |
+
+A cross-node copy negotiates the smaller limits reported by the two nodes:
+1 GiB compressed bundle (or `FILES_MAX_UPLOAD_BYTES` when lower), 4 GiB
+expanded bytes, 100,000 archive entries, 1,024 top-level sources and 8
+concurrent transfers per node, with a 30-minute run. The archive limits are
+fixed defaults; only the single-file upload ceiling above is configurable.

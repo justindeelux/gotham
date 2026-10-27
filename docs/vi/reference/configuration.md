@@ -259,4 +259,10 @@ Giới hạn tệp phía control plane:
 
 | Biến | Mặc định | Mục đích |
 |---|---|---|
-| `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Mức trần cho một body ghi/tải lên (413 khi vượt); nên khớp với `GOTHAM_AGENT_FILE_MAX_UPLOAD` của node. |
+| `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Mức trần cho một body ghi/tải lên (413 khi vượt); nên khớp với `GOTHAM_AGENT_FILE_MAX_UPLOAD` của node. Cũng giới hạn một tệp sao chép giữa các node và hạ mức trần gói nén khi thấp hơn 1 GiB. |
+
+Một lượt sao chép giữa các node thương lượng giới hạn nhỏ hơn mà hai node báo:
+gói nén 1 GiB (hoặc `FILES_MAX_UPLOAD_BYTES` khi thấp hơn), 4 GiB sau khi giải
+nén, 100.000 mục trong kho, 1.024 tên cấp cao nhất và 8 lượt truyền đồng thời mỗi
+node, trong tối đa 30 phút. Các giới hạn kho là mặc định cố định; chỉ mức trần một
+tệp ở trên là cấu hình được.

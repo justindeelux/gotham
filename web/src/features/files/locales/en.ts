@@ -285,6 +285,117 @@ const en = {
     summary: "{done} done · {failed} failed",
     truncated: "The upload was cut short; the file was not committed.",
   },
+  transfer: {
+    title: "Copy to another node",
+    titlePane: "Copy to the other pane",
+    copyToNode: "Copy to node…",
+    source: "Source",
+    sourceNode: "{node} · root {root}",
+    sourcePath: "Folder: {path}",
+    selection: "{count} selected: {names}",
+    destination: "Destination",
+    destinationNode: "Node",
+    destinationRoot: "Root",
+    destinationPath: "Folder",
+    destinationPathPlaceholder: "e.g. backups · leave blank for the root folder",
+    checking: "Checking…",
+    check: "Check destination",
+    start: "Start copy",
+    cancel: "Cancel copy",
+    hide: "Hide",
+    close: "Close",
+    unavailableTitle: "Copy unavailable",
+    unavailableReason: "{reason}",
+    unavailableNodeOffline: "The destination node is {status}. Only a ready node accepts a copy.",
+    unavailableAgentOutdated:
+      "The destination node's agent is too old for cross-node copies. Update the node agent first.",
+    unavailableLoading: "The destination pane is still loading. Try again in a moment.",
+    unavailableNoRoot: "Choose a destination root.",
+    unavailableReadOnly: "The destination root is read-only.",
+    unavailableSameCrossRoot:
+      "Copying between roots on the same node is not supported. Pick another node or the same root.",
+    unavailableIntoItself:
+      "The destination folder is inside the source folder. Pick a folder outside it.",
+    unavailableSameFolder: "This is the source folder. Pick another destination folder.",
+    unavailableInvalidPath:
+      "Enter a folder relative to the root without leading slashes or “..”.",
+    localSourceChanged:
+      "The source pane is no longer in root “{root}”. Reopen the copy from that folder to use the local copy.",
+    unavailableBusy:
+      "Another copy is already running in this workspace. Finish or cancel it first.",
+    unavailableRoots: "The destination roots could not be loaded: {reason}",
+    sameNodeSameRoot:
+      "Same node and root: the existing local copy is used instead of a cross-node transfer.",
+    preflight: "Destination check",
+    modeDirect: "Single file — direct transfer",
+    modeBundle: "Archive transfer — automatic and invisible in the UI",
+    bounds:
+      "Transport limit {bundle} · expanded {expanded} · {entries} entries · {sources} sources",
+    available: "Free space at the destination: {free}",
+    fits: "The selected file fits in the free space.",
+    doesNotFit: "The selected file does not fit in the destination's free space.",
+    conflicts: "{count} existing name will be skipped: {names}",
+    unsupported: "{count} entry cannot be copied: {names}",
+    skippedNote:
+      "Conflicting top-level names, including whole folders, are skipped. Nothing is overwritten or merged.",
+    allUnavailable:
+      "Every selected entry is conflicting or unsupported, so no copy will be performed.",
+    planTooLarge:
+      "{name} is larger than the destination's single-file copy limit, so no copy was performed. The smallest limit reported by the destination is {bound}.",
+    planTooLargeNoBound:
+      "{name} is larger than the destination's single-file copy limit, so no copy was performed. Alternatively free space on the destination or copy it in smaller pieces.",
+    planFailed: "The destination check failed: {reason}",
+    preparing: "Preparing",
+    transferring: "Transferring",
+    extracting: "Extracting",
+    publishing: "Publishing",
+    cleaning: "Cleaning up",
+    transferred: "{bytes} of {total}",
+    transferredUnknown: "{bytes} transferred · total unknown",
+    indeterminate: "Waiting for the destination…",
+    interruptedTitle: "Copy interrupted",
+    interrupted:
+      "The connection closed before the destination reported the result. The entries below are uncertain — refresh the destination before retrying.",
+    uncertainNote:
+      "Uncertain — refresh the destination to see whether these entries arrived. Automatic retry is not offered.",
+    timeoutTitle: "Copy stopped at the 30-minute limit",
+    timeout:
+      "The transfer reached the 30-minute limit. Entries the destination acknowledged are listed below; check anything else on the destination.",
+    cancelledTitle: "Copy cancelled",
+    cancelled:
+      "The request was cancelled. The server cannot confirm entries it had already published — refresh the destination before retrying.",
+    runErrorTitle: "Copy failed",
+    runError: "The copy could not start: {reason}",
+    partialTitle: "Copy finished with issues",
+    doneTitle: "Copy finished",
+    done: "{count} copied.",
+    counts:
+      "{copied} copied · {conflicts} conflicts · {skipped} skipped · {failed} failed · {cancelled} cancelled · {uncertain} uncertain",
+    nestedSkipped: "{count} nested entries were left out of the archive.",
+    cleanupFailures:
+      "{count} staging cleanups failed; the node expires them automatically.",
+    entries: "Entries",
+    statusCopied: "Copied",
+    statusConflict: "Conflict",
+    statusSkipped: "Skipped",
+    statusFailed: "Failed",
+    statusCancelled: "Cancelled",
+    statusUncertain: "Uncertain",
+    reasonTimeout: "30-minute limit",
+    reasonInterrupted: "Interrupted",
+    reasonCancelled: "Cancelled",
+    retryTitle: "Retry unresolved entries",
+    retryHint:
+      "Retry runs the destination check again. Uncertain entries are not offered.",
+    retry: "Retry selected",
+    retryNone: "Nothing to retry.",
+    leaveTitle: "Cancel the running copy?",
+    leaveMessage:
+      "A cross-node copy is still running. Leaving this workspace cancels it; entries it already published stay on the destination.",
+    leaveStay: "Stay",
+    leaveCancel: "Cancel transfer and leave",
+    leaveUnload: "A cross-node copy is still running. Leaving this page cancels it.",
+  },
   types: {
     folder: "Folder",
     file: "File",

@@ -3,6 +3,7 @@ import {
   Archive,
   ArchiveRestore,
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Check,
   ChevronDown,
@@ -64,9 +65,13 @@ import { useFilesTabsPersist } from "@/features/files/composables/useFilesTabsPe
 import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import type { FilesTab } from "@/features/files/stores/files";
+import { useFilesStore } from "@/features/files/stores/files";
 import { provideFilesPane } from "@/features/files/stores/filesPane";
-import { useFilesPaneSession } from "@/features/files/stores/paneSession";
+import { otherPane, useFilesPaneSession } from "@/features/files/stores/paneSession";
 import type { FilesPaneId } from "@/features/files/stores/paneSession";
+import { useFilesTransferStore } from "@/features/files/stores/transfer";
+import type { CopyTargetProblem } from "@/features/files/utils/transfer";
+import { copyTargetProblem } from "@/features/files/utils/transfer";
 import type { FilesSortKey, NameKind, TransferProblem } from "@/features/files/utils/files";
 import {
   disambiguatedTabLabels,
@@ -120,6 +125,171 @@ const pane = provideFilesPane(props.pane);
 const files = pane.files;
 const trash = pane.trash;
 const editor = pane.editor;
+const transfer = useFilesTransferStore();
+const otherFiles = useFilesStore(otherPane(props.pane));
+
+function sourceForTransfer(names: string[]): {
+  serverId: string;
+  pane: FilesPaneId;
+  root: string;
+  path: string;
+  names: string[];
+  sizes: Record<string, number>;
+  directories: string[];
+} | null {
+  if (names.length === 0 || files.serverId === "" || files.rootName === "") {
+    return null;
+  }
+  const wanted = new Set(names);
+  const sizes: Record<string, number> = {};
+  const directories: string[] = [];
+  for (const entry of files.entries) {
+    if (!wanted.has(entry.name)) {
+      continue;
+    }
+    sizes[entry.name] = entry.size;
+    if (entry.kind === "directory") {
+      directories.push(entry.name);
+    }
+  }
+  return {
+    serverId: files.serverId,
+    pane: props.pane,
+    root: files.rootName,
+    path: files.path,
+    names: [...names],
+    sizes,
+    directories,
+  };
+}
+
+const otherPaneTarget = computed(() => ({
+  serverId: otherFiles.serverId,
+  root: otherFiles.rootName,
+  path: otherFiles.path,
+}));
+
+function paneProblemFor(names: string[]): CopyTargetProblem | null {
+  if (!paneSession.splitEnabled) {
+    return null;
+  }
+  if (otherFiles.serverId === "") {
+    return "no-server";
+  }
+  const wanted = new Set(names);
+  const server = serversStore.servers.find(
+    (item) => item.id === otherFiles.serverId,
+  );
+  return copyTargetProblem({
+    sourceServerId: files.serverId,
+    sourceRoot: files.rootName,
+    sourcePath: files.path,
+    sourceDirectories: files.entries
+      .filter((entry) => wanted.has(entry.name) && entry.kind === "directory")
+      .map((entry) => entry.name),
+    destination: {
+      serverId: otherFiles.serverId,
+      root: otherFiles.rootName,
+      path: otherFiles.path,
+      serverStatus: server?.status,
+      writable: otherFiles.currentRoot?.writable,
+      fileManagerDisabled: otherFiles.disabled || otherFiles.disabledOnNode,
+      metadataUnavailable: !otherFiles.loaded,
+    },
+  });
+}
+
+const otherPaneProblem = computed<CopyTargetProblem | null>(() =>
+  paneProblemFor(files.selectedNames),
+);
+
+function copyProblemLabel(problem: CopyTargetProblem | null): string {
+  switch (problem) {
+    case "no-server":
+    case "offline":
+      return String(t("files.transfer.unavailableNodeOffline", { status: "offline" }));
+    case "disabled":
+      return String(t("files.transfer.unavailableNodeOffline", { status: "disabled" }));
+    case "outdated":
+      return String(t("files.transfer.unavailableAgentOutdated"));
+    case "not-ready":
+      return String(t("files.transfer.unavailableLoading"));
+    case "no-root":
+      return String(t("files.transfer.unavailableNoRoot"));
+    case "read-only":
+      return String(t("files.transfer.unavailableReadOnly"));
+    case "invalid-path":
+      return String(t("files.transfer.unavailableInvalidPath"));
+    case "same-cross-root":
+      return String(t("files.transfer.unavailableSameCrossRoot"));
+    case "same-folder":
+      return String(t("files.transfer.unavailableSameFolder"));
+    case "into-itself":
+      return String(t("files.transfer.unavailableIntoItself"));
+    default:
+      return "";
+  }
+}
+
+const copyToPaneLabel = computed<string>(() => {
+  const base = String(t("files.transfer.titlePane"));
+  const problem = transfer.isBusy
+    ? String(t("files.transfer.unavailableBusy"))
+    : copyProblemLabel(otherPaneProblem.value);
+  return problem === "" ? base : `${base} — ${problem}`;
+});
+
+const copyToNodeLabel = computed<string>(() => {
+  const base = String(t("files.transfer.copyToNode"));
+  return transfer.isBusy
+    ? `${base} — ${String(t("files.transfer.unavailableBusy"))}`
+    : base;
+});
+
+function canCopyToPane(names: string[]): boolean {
+  if (
+    !paneSession.splitEnabled ||
+    transfer.isBusy ||
+    names.length === 0 ||
+    files.serverId === "" ||
+    files.rootName === ""
+  ) {
+    return false;
+  }
+  return paneProblemFor(names) === null && !files.acting;
+}
+
+function openCopyToPane(names: string[]): void {
+  const origin = sourceForTransfer(names);
+  if (origin === null) {
+    return;
+  }
+  if (!canCopyToPane(names)) {
+    message.warning(copyProblemLabel(paneProblemFor(names)));
+    return;
+  }
+  transfer.openPaneCopy(origin, {
+    serverId: otherPaneTarget.value.serverId,
+    root: otherPaneTarget.value.root,
+    path: otherPaneTarget.value.path,
+  });
+}
+
+function openCopyToNode(names: string[]): void {
+  const origin = sourceForTransfer(names);
+  if (origin === null) {
+    return;
+  }
+  if (transfer.isBusy) {
+    message.warning(String(t("files.transfer.unavailableBusy")));
+    transfer.openDialog();
+    return;
+  }
+  if (files.acting) {
+    return;
+  }
+  transfer.openNodeCopy(origin);
+}
 
 function activatePane(): void {
   paneSession.activate(props.pane);
@@ -1391,6 +1561,10 @@ const fileOpsOptions = computed(() => {
         return menuIcon(Scissors);
       case "copy":
         return menuIcon(Copy);
+      case "copy-to-node":
+        return menuIcon(Copy);
+      case "copy-to-pane":
+        return menuIcon(ArrowRight);
       case "paste":
         return menuIcon(ClipboardPaste);
       case "compress":
@@ -1413,6 +1587,16 @@ const fileOpsOptions = computed(() => {
       "paste",
       files.acting || !files.hasClipboard || files.pasteProblem !== null,
     ),
+    item(copyToNodeLabel.value, "copy-to-node", !canAct || transfer.isBusy),
+    ...(paneSession.splitEnabled
+      ? [
+          item(
+            copyToPaneLabel.value,
+            "copy-to-pane",
+            !canCopyToPane(names),
+          ),
+        ]
+      : []),
     item(String(t("files.actions.compress")), "compress", !canAct),
     item(
       String(t("files.actions.extract")),
@@ -1439,6 +1623,12 @@ function onFileOps(key: string): void {
       if (names.length > 0) {
         files.copySelection(names);
       }
+      break;
+    case "copy-to-node":
+      openCopyToNode(names);
+      break;
+    case "copy-to-pane":
+      openCopyToPane(names);
       break;
     case "paste":
       void pasteAction();
@@ -1763,6 +1953,7 @@ const menuContext = computed(() => ({
 
 function rowMenu(entry: FilesEntry): FilesMenuItem[] {
   const base = menuContext.value;
+  const names = files.targetsForRow(entry).map((item) => item.name);
   const canPaste =
     entry.kind === "directory" &&
     files.hasClipboard &&
@@ -1770,6 +1961,13 @@ function rowMenu(entry: FilesEntry): FilesMenuItem[] {
   return rowMenuOptions(entry, {
     ...base,
     canPaste,
+    canCopyToNode: !files.acting && !transfer.isBusy && names.length > 0,
+    copyToNodeLabel: copyToNodeLabel.value,
+    canCopyToPane: paneSession.splitEnabled
+      ? canCopyToPane(names)
+      : undefined,
+    copyToPaneLabel: copyToPaneLabel.value,
+    copyToPaneReason: copyProblemLabel(paneProblemFor(names)),
     symlinkTargetPath: symlinkTargetPath(entry),
     symlinkTargetDirectory: symlinkDirectory(entry),
   });
@@ -1806,6 +2004,12 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       break;
     case "copy":
       files.copySelection(files.targetsForRow(entry).map((item) => item.name));
+      break;
+    case "copy-to-node":
+      openCopyToNode(files.targetsForRow(entry).map((item) => item.name));
+      break;
+    case "copy-to-pane":
+      openCopyToPane(files.targetsForRow(entry).map((item) => item.name));
       break;
     case "cut":
       files.cutSelection(files.targetsForRow(entry).map((item) => item.name));
@@ -2317,9 +2521,13 @@ function onFolderMenu(key: string): void {
       >
         <FilesSelectionBar
           :count-reserve="countReserve"
+          :show-copy-to-pane="paneSession.splitEnabled"
+          :copy-to-pane-disabled="!canCopyToPane(files.selectedNames)"
+          :copy-to-pane-label="copyToPaneLabel"
           @download="() => void downloadSelected()"
           @compress="openCompress"
           @remove="openDelete"
+          @copy-to-other-pane="(selection) => openCopyToPane(selection.map((entry) => entry.name))"
           @clear="files.clearSelection()"
         />
       </div>
@@ -2492,9 +2700,13 @@ function onFolderMenu(key: string): void {
               </NDropdown>
               <FilesSelectionBar
                 :count-reserve="countReserve"
+                :show-copy-to-pane="paneSession.splitEnabled"
+                :copy-to-pane-disabled="!canCopyToPane(files.selectedNames)"
+                :copy-to-pane-label="copyToPaneLabel"
                 @download="() => void downloadSelected()"
                 @compress="openCompress"
                 @remove="openDelete"
+                @copy-to-other-pane="(selection) => openCopyToPane(selection.map((entry) => entry.name))"
                 @clear="files.clearSelection()"
               />
             </div>

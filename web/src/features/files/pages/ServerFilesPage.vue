@@ -2,17 +2,20 @@
 import { PanelLeft, Server as ServerIcon, X } from "@lucide/vue";
 import { useElementSize } from "@vueuse/core";
 import { NAlert, NButton, NSelect } from "naive-ui";
-import { computed, onMounted, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
+import CopyTransferDialog from "@/features/files/components/CopyTransferDialog.vue";
 import FilesBrowser from "@/features/files/components/FilesBrowser.vue";
+import TransferLeaveDialog from "@/features/files/components/TransferLeaveDialog.vue";
 import { useResizeHandle } from "@/features/files/composables/useResizeHandle";
 import { useFilesStore } from "@/features/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { provideFilesPane } from "@/features/files/stores/filesPane";
 import { useFilesPaneSession } from "@/features/files/stores/paneSession";
 import type { FilesPaneId } from "@/features/files/stores/paneSession";
+import { useFilesTransferStore } from "@/features/files/stores/transfer";
 import { isRootRelativePath } from "@/features/files/utils/deepLink";
 import {
   filesTabsStorageKey,
@@ -29,6 +32,7 @@ const { t } = useI18n();
 const serversStore = useServersStore();
 const auth = useAuthStore();
 const paneSession = useFilesPaneSession();
+const transfer = useFilesTransferStore();
 const files = useFilesStore("left");
 const rightEditor = useEditorStore("right");
 provideFilesPane("left");
@@ -271,6 +275,77 @@ function switchPane(pane: FilesPaneId): void {
 }
 
 const PANES: readonly FilesPaneId[] = ["left", "right"];
+
+const transferVisible = computed<boolean>(
+  () => transfer.source !== null && transfer.state !== "idle",
+);
+
+const transferStatusText = computed<string>(() => {
+  if (transfer.state === "planning") {
+    return String(t("files.transfer.checking"));
+  }
+  if (transfer.state === "running") {
+    const phase = transfer.phase;
+    const labels: Record<string, string> = {
+      preparing: String(t("files.transfer.preparing")),
+      transferring: String(t("files.transfer.transferring")),
+      extracting: String(t("files.transfer.extracting")),
+      publishing: String(t("files.transfer.publishing")),
+      cleaning_up: String(t("files.transfer.cleaning")),
+    };
+    const label = phase === null ? "" : labels[phase] ?? "";
+    return label;
+  }
+  if (transfer.state === "finished") {
+    const summary = transfer.summary;
+    if (summary === null) {
+      return String(t("files.transfer.runErrorTitle"));
+    }
+    return String(
+      t("files.transfer.counts", {
+        copied: summary.copied,
+        conflicts: summary.conflicts,
+        skipped: summary.skipped,
+        failed: summary.failed,
+        cancelled: summary.cancelled,
+        uncertain: summary.uncertain,
+      }),
+    );
+  }
+  return "";
+});
+
+const transferFinishedTone = computed<"warning" | "success" | "error">(() => {
+  const summary = transfer.summary;
+  if (transfer.runError !== null || transfer.interrupted) {
+    return "error";
+  }
+  if (summary === null) {
+    return "error";
+  }
+  return summary.status === "copied" ? "success" : "warning";
+});
+
+function onBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!transfer.isBusy) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = "";
+}
+
+onMounted(() => {
+  window.addEventListener("beforeunload", onBeforeUnload);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeunload", onBeforeUnload);
+  transfer.reset();
+});
+
+onBeforeRouteLeave(async () => {
+  return transfer.confirmLeave();
+});
 </script>
 
 <template>
@@ -283,6 +358,28 @@ const PANES: readonly FilesPaneId[] = ["left", "right"];
     >
       {{ deepLinkNotice }}
     </NAlert>
+
+    <div
+      v-if="transferVisible"
+      class="server-files__transfer"
+      :data-tone="transfer.state === 'finished' ? transferFinishedTone : 'info'"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="server-files__transfer-text">{{ transferStatusText }}</span>
+      <NButton size="tiny" secondary @click="transfer.openDialog()">
+        {{ t("files.transfer.preflight") }}
+      </NButton>
+      <NButton
+        v-if="transfer.isBusy"
+        size="tiny"
+        type="error"
+        secondary
+        @click="transfer.cancel()"
+      >
+        {{ t("files.transfer.cancel") }}
+      </NButton>
+    </div>
 
     <div v-if="splitEnabled && isNarrow" class="server-files__switch" role="group" :aria-label="t('files.split.panes')">
       <NButton
@@ -388,6 +485,9 @@ const PANES: readonly FilesPaneId[] = ["left", "right"];
         </FilesBrowser>
       </section>
     </div>
+
+    <CopyTransferDialog />
+    <TransferLeaveDialog />
   </div>
 </template>
 
@@ -404,6 +504,37 @@ const PANES: readonly FilesPaneId[] = ["left", "right"];
   display: flex;
   gap: var(--space-2);
   flex: 0 0 auto;
+}
+
+.server-files__transfer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-warm);
+  font-size: var(--text-sm);
+}
+
+.server-files__transfer[data-tone="success"] {
+  border-color: color-mix(in oklab, var(--success, #2e7d32) 45%, var(--border));
+}
+
+.server-files__transfer[data-tone="warning"] {
+  border-color: color-mix(in oklab, var(--warning, #b26a00) 45%, var(--border));
+}
+
+.server-files__transfer[data-tone="error"] {
+  border-color: color-mix(in oklab, var(--danger, #c0392b) 45%, var(--border));
+}
+
+.server-files__transfer-text {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .server-files__panes {

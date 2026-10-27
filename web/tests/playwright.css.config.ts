@@ -17,6 +17,7 @@ export default defineConfig({
     "files-split-view.spec.ts",
     "files-tabs.spec.ts",
     "files-terminal.spec.ts",
+    "files-transfer.spec.ts",
     "files-virtual.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",

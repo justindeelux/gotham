@@ -217,6 +217,14 @@ describe("split view", () => {
     ];
     rightEditor.activeId = "right-tab";
     const confirm = vi.spyOn(rightEditor, "confirmDiscard");
+    expect(right.serverId).toBe("server-1");
+    await vi.waitFor(() => {
+      expect(
+        wrapper
+          .find('.files-browser[data-pane="right"] .fm-node__select')
+          .exists(),
+      ).toBe(true);
+    });
 
     const select = wrapper.findComponent(
       '.files-browser[data-pane="right"] .fm-node__select',

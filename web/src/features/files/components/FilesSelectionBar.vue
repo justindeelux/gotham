@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ChevronRight, Copy, Download, Scissors, Trash2, X } from "@lucide/vue";
+import { Archive, ArrowRight, ChevronRight, Copy, Download, Scissors, Trash2, X } from "@lucide/vue";
 import { NButton } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -9,11 +9,23 @@ import { useFilesPane } from "@/features/files/stores/filesPane";
 import { isSelectable } from "@/features/files/utils/files";
 import { formatBytes } from "@/shared/utils/format";
 
-defineProps<{ countReserve: string }>();
+interface Props {
+  countReserve: string;
+  showCopyToPane?: boolean;
+  copyToPaneDisabled?: boolean;
+  copyToPaneLabel?: string;
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  showCopyToPane: false,
+  copyToPaneDisabled: true,
+  copyToPaneLabel: "",
+});
 const emit = defineEmits<{
   download: [];
   compress: [selection: FilesEntry[]];
   remove: [selection: FilesEntry[]];
+  copyToOtherPane: [selection: FilesEntry[]];
   clear: [];
 }>();
 
@@ -31,6 +43,9 @@ const canBulkDownload = computed<boolean>(
 );
 const canBulkAct = computed<boolean>(
   () => files.canWrite && !files.acting && selection.value.length > 0,
+);
+const canCopyOut = computed<boolean>(
+  () => !files.acting && selection.value.length > 0,
 );
 
 function onBulkDownload(): void {
@@ -51,6 +66,11 @@ function onBulkCut(): void {
 function onBulkCompress(): void {
   if (canBulkAct.value) {
     emit("compress", selection.value);
+  }
+}
+function onBulkCopyToPane(): void {
+  if (canCopyOut.value && !props.copyToPaneDisabled) {
+    emit("copyToOtherPane", selection.value);
   }
 }
 function onBulkDelete(): void {
@@ -171,6 +191,21 @@ watch(hasSelection, async () => {
         <span class="fm-btn-label">{{ t("common.actions.delete") }}</span>
       </NButton>
     </template>
+    <NButton
+      v-if="props.showCopyToPane"
+      size="small"
+      secondary
+      :aria-disabled="!canCopyOut || props.copyToPaneDisabled"
+      :title="props.copyToPaneLabel"
+      :aria-label="props.copyToPaneLabel || t('files.transfer.titlePane')"
+      data-action="copy-to-pane"
+      @click="onBulkCopyToPane"
+    >
+      <template #icon>
+        <ArrowRight :size="14" :stroke-width="1.8" aria-hidden="true" />
+      </template>
+      <span class="fm-btn-label">{{ t("files.transfer.titlePane") }}</span>
+    </NButton>
     <NButton
       :disabled="!hasSelection"
       size="small"

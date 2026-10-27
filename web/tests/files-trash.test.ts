@@ -20,6 +20,7 @@ import {
 } from "@/features/files/schemas/files";
 import type { TrashEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
+import { filesPane } from "@/features/files/stores/filesPane";
 import { useTrashStore } from "@/features/files/stores/trash";
 
 const root = {
@@ -183,6 +184,25 @@ describe("trash api", () => {
 });
 
 describe("trash store", () => {
+  it("keeps a separate bin scope per pane and node", async () => {
+    routeGet();
+    const left = filesPane("left");
+    const right = filesPane("right");
+    await left.files.init("server-1");
+    await right.files.init("server-2");
+    await right.files.setRoot("volumes");
+
+    await left.trash.load();
+    expect(left.trash.scopeMatches).toBe(true);
+    expect(right.trash.scopeMatches).toBe(false);
+    expect(right.trash.entries).toEqual([]);
+
+    await right.trash.load();
+    expect(http.get).toHaveBeenCalledWith("/servers/server-2/files/trash", {
+      params: { root: "volumes" },
+    });
+  });
+
   it("loads the bound root's bin and surfaces truncation", async () => {
     routeGet();
     const files = useFilesStore();

@@ -27,6 +27,7 @@ import {
 } from "@/features/files/schemas/editorDraft";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
+import { filesPane } from "@/features/files/stores/filesPane";
 import {
   editorDraftStorageKey,
   editorDraftStoragePrefix,
@@ -240,6 +241,38 @@ describe("editor drafts composable", () => {
     await nextTick();
     expect(readEditorDraft(window.localStorage, key)).toBeNull();
     expect(drafts.prompt.value).toBeNull();
+  });
+
+  it("keeps the newer draft when another pane flushes a stale buffer", async () => {
+    vi.useFakeTimers();
+    getContentMock.mockResolvedValue(content("base\n", '"v1"'));
+    const right = filesPane("right").files;
+    right.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
+    right.rootName = "volumes";
+    const leftEditor = useEditorStore("left");
+    const rightEditor = useEditorStore("right");
+    const leftScope = effectScope();
+    const rightScope = effectScope();
+    leftScope.run(() => useEditorDrafts(() => server, "left"));
+    rightScope.run(() => useEditorDrafts(() => server, "right"));
+    await leftEditor.openFile(server, "volumes", "app.yaml");
+    await rightEditor.openFile(server, "volumes", "app.yaml");
+    await nextTick();
+
+    leftEditor.setDoc(leftEditor.activeTab!.id, "left edit\n");
+    await nextTick();
+    vi.advanceTimersByTime(800);
+    const key = editorDraftStorageKey(prefix, "volumes", "app.yaml");
+    expect(readEditorDraft(window.localStorage, key)?.doc).toBe("left edit\n");
+
+    rightEditor.setDoc(rightEditor.activeTab!.id, "right edit\n");
+    await nextTick();
+    vi.advanceTimersByTime(800);
+    expect(readEditorDraft(window.localStorage, key)?.doc).toBe("right edit\n");
+
+    leftScope.stop();
+    expect(readEditorDraft(window.localStorage, key)?.doc).toBe("right edit\n");
+    rightScope.stop();
   });
 
   it("offers a stored draft on reopen and restores the exact buffer", async () => {

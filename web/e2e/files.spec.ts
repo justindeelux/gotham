@@ -829,6 +829,55 @@ plainTest.describe("files disabled", () => {
   });
 });
 
+plainTest.describe("files node agent states", () => {
+  plainTest.use({ storageState: storageStatePath });
+
+  plainTest("a node with the file manager turned off shows its own hint", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await page.route(/\/api\/v1\/servers\/[^/]+\/files\//, (route) =>
+      json(route, 409, {
+        message: "files: file manager is disabled on the node",
+        code: "file_manager_disabled",
+      }),
+    );
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(
+      page.getByText(
+        "The file manager is turned off on this node. Turn it on by setting GOTHAM_AGENT_FILES=true in /etc/gotham/agent.env on the node and restarting gotham-agent.",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "The file manager is turned off on this control plane. Ask the owner to enable it.",
+      ),
+    ).toHaveCount(0);
+  });
+
+  plainTest("an outdated agent asks the owner to update the node", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) =>
+        json(route, 501, {
+          message: "files: node agent is outdated",
+          code: "agent_outdated",
+        }),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(
+      page.getByText("Update the node agent — it predates the file manager."),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  });
+});
+
 test.describe("files read-only root", () => {
   test("a read-only root hides write controls and shows the banner", async ({
     page,

@@ -74,6 +74,23 @@ gốc volume được quản lý vẫn được bảo vệ khỏi đổi tên v�
 mount nó. Giải thích chi tiết hơn về các chế độ, quyền sở hữu và quyền truy cập
 nằm trong [Dịch vụ tệp từ xa](/vi/guide/file-service).
 
+### Chia đôi khung nhìn
+
+**Chia đôi khung nhìn** mở thêm một trình duyệt tệp bên cạnh trình duyệt đầu tiên.
+Mỗi khung giữ riêng node, thư mục gốc, thư mục hiện tại, tab, lựa chọn, kiểu xem và
+vị trí cuộn, nên một khung có thể đứng trên một server trong khi khung kia duyệt
+một server hoặc thư mục gốc khác.
+
+- Khung **đang hoạt động** được đánh dấu; nhấp hoặc nhấp đúp vào một khung sẽ biến
+  nó thành khung hoạt động. Thao tác trên dòng, bàn phím và menu thư mục chỉ áp
+  dụng cho khung đang hoạt động.
+- Trên điện thoại hoặc cửa sổ hẹp, hai khung hiện lần lượt, kèm nút **Hiện khung
+  trái** / **Hiện khung phải** để giữ cả hai ngữ cảnh.
+- Có thể kéo vách ngăn hoặc di chuyển nó bằng bàn phím. Tỉ lệ này không được lưu:
+  sau khi tải lại, hai khung mở ở tỉ lệ mặc định.
+- Cửa sổ trình soạn thảo nổi đi theo khung đang hoạt động; đóng khung chia đôi vẫn
+  giữ trình soạn thảo và bản nháp của nó.
+
 ### Duyệt và tìm kiếm
 
 Trình duyệt có dạng danh sách và dạng lưới, sắp xếp, bộ lọc tên theo từng thư mục,
@@ -114,6 +131,55 @@ chối kèm thông báo, không được tự động chuyển đổi. Tên khô
 `..`, chứa `/`, `\` hay một byte NUL, hoặc dài quá 255 byte; tên đã tồn tại là
 `409`. Không thể di chuyển hay sao chép thư mục vào chính nó, và việc dán vào
 thư mục mà các mục đang nằm trong đó bị từ chối.
+
+### Sao chép sang node khác
+
+**Sao chép sang node…** gửi các mục đã chọn tới một thư mục trên node được quản lý
+khác; **Sao chép sang khung kia** dùng node, thư mục gốc và thư mục của khung kia
+làm đích. Đích được chốt khi hộp thoại sao chép mở ra: di chuyển hoặc đổi khung
+đích trong lúc đang sao chép không làm đổi đích. Đích phải là node **Sẵn sàng** có
+thư mục gốc ghi được; thư mục gốc chỉ đọc bị từ chối.
+
+- Một tệp thường duy nhất được truyền trực tiếp. Nhiều mục được chọn, hoặc một thư
+  mục, được đóng thành một `tar.gz` tạm trên node nguồn; trình duyệt chỉ nhận sự
+  kiện tiến trình, không bao giờ nhận tệp nén.
+- Cùng node và cùng thư mục gốc dùng bản sao chép cục bộ thông thường. Sao chép
+  giữa hai thư mục gốc trên cùng một node không được hỗ trợ, và không có cắt hay
+  di chuyển giữa các node — thao tác này luôn là sao chép.
+- Giới hạn được thương lượng giữa hai node: gói nén **1 GiB** (hoặc mức trần một
+  tệp thấp hơn của control plane), **4 GiB** sau khi giải nén, **100.000** mục
+  trong kho, **1.024** tên cấp cao nhất được chọn và **8** lượt truyền đồng thời
+  mỗi node. Một tệp vượt mức trần của control plane làm bước kiểm tra đích thất
+  bại với lý do "quá lớn" rõ ràng thay vì trả về giới hạn. Một lượt truyền chạy
+  tối đa **30 phút**.
+- Tên cấp cao nhất đã tồn tại, dù là tệp hay cả thư mục, là **xung đột** và bị bỏ
+  qua. Không có gì bị ghi đè và thư mục không bao giờ được gộp đệ quy. Liên kết
+  tượng trưng và tệp đặc biệt bị loại khỏi kho; báo cáo cho biết có bao nhiêu mục
+  lồng nhau bị bỏ. Một lựa chọn không có gì truyền được bị từ chối ngay khi chuẩn
+  bị, mục đó được đánh dấu thất bại và không tạo mục nào ở đích.
+- Tiến trình đi qua **chuẩn bị**, **đang truyền**, **đang giải nén**, **đang xuất
+  bản** và **đang dọn dẹp**. Hộp thoại liệt kê từng mục cấp cao nhất là đã sao
+  chép, xung đột, bỏ qua, thất bại, bị hủy hoặc chưa chắc chắn.
+- **Hủy** dừng lượt chạy và giữ các mục đích đã xác nhận. Một lượt bị hủy không
+  gửi tổng kết cuối: chỉ các kết quả từng mục đã nhận là đáng tin, phần còn lại
+  chưa được xác nhận. Hãy làm mới đích trước khi thử lại. Nếu mất xác nhận cuối,
+  mục bị ảnh hưởng được báo là **chưa chắc chắn**, không bao giờ là đã sao chép,
+  và không bao giờ được tự động thử lại; tệp tạm ở đích có thể còn tới khi chu kỳ
+  dọn dẹp hết hạn xóa nó.
+- Lượt sao chép chỉ đọc nguồn, không đổi hay xóa nguồn. Có thể sao chép từ thư mục
+  gốc nguồn chỉ đọc. Làm mới danh sách đích sau khi chạy để thấy các mục đã xuất
+  bản.
+- Rời workspace hoặc đăng xuất khi đang sao chép sẽ hỏi trước và hủy lượt sao chép
+  nếu bạn rời đi. Một lượt đã xong không được tiếp tục chạy nền, và lựa chọn không
+  phải một giao dịch nguyên tử: một số mục cấp cao nhất có thể đã được xuất bản
+  trong khi mục khác thất bại.
+
+Đây là sao chép một chiều, không phải đồng bộ, lưu trữ chia sẻ hay bản sao lưu cơ
+sở dữ liệu đang chạy. Không có tự động thử lại, tiếp tục, hoàn tất chạy nền hay
+tính nguyên tử cho cả lựa chọn.
+
+Thư mục được đóng gói giữ mode của từng mục. Một tệp sao chép trực tiếp nhận mode
+tệp mặc định của node (`0644`).
 
 ### Quyền (chmod)
 

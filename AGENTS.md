@@ -64,6 +64,7 @@ Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, sim
 
 ## UI Design
 
+- Any frontend (`web/`) work follows the design system in `DESIGN.md` (repo root): read it first and match its rules. Never edit `DESIGN.md`; if a change seems to need a deviation, stop and ask.
 - Keep Naive UI as the component base — do not rebuild components from raw CSS. Colors, fonts, spacing and radii come from the design tokens in `web/src/shared/styles/tokens.css`, not hard-coded hex/px.
 - UI copy follows the project's language policy (see Language below); rewrite from the mockups where they differ.
 - Modals: header and footer stay fixed, only the content region scrolls, max-height is bounded to the viewport and a modal never exceeds it (shared `.app-modal`/`.wizard-modal` contract in `web/src/shared/styles/main.css`).

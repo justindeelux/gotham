@@ -15,6 +15,18 @@ const en = {
       "The link “{path}” in root “{root}” is not a valid location. Showing the “{fallback}” root instead.",
     notFound: "The folder “{path}” was not found in root “{root}”.",
   },
+  split: {
+    panes: "File panes",
+    leftPane: "Left pane",
+    rightPane: "Right pane",
+    showLeft: "Show left pane",
+    showRight: "Show right pane",
+    toggleOn: "Split view",
+    toggleOff: "Close split view",
+    closeRight: "Close right pane",
+    divider: "Resize panes",
+    switchRightNode: "Switch agent node in the right pane",
+  },
   browser: {
     heading: "File browser",
     rootLabel: "Root",

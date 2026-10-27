@@ -15,6 +15,18 @@ const vi = {
       "Liên kết “{path}” trong root “{root}” không phải là vị trí hợp lệ. Đang hiển thị root “{fallback}”.",
     notFound: "Không tìm thấy thư mục “{path}” trong root “{root}”.",
   },
+  split: {
+    panes: "Khung tệp",
+    leftPane: "Khung trái",
+    rightPane: "Khung phải",
+    showLeft: "Hiện khung trái",
+    showRight: "Hiện khung phải",
+    toggleOn: "Chế độ chia đôi",
+    toggleOff: "Đóng chế độ chia đôi",
+    closeRight: "Đóng khung phải",
+    divider: "Đổi kích thước khung",
+    switchRightNode: "Đổi node agent ở khung phải",
+  },
   browser: {
     heading: "Trình duyệt tệp",
     rootLabel: "Thư mục gốc",

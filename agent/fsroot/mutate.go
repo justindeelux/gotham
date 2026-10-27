@@ -58,6 +58,31 @@ func randomName(dir string) (string, error) {
 	return path.Join(dir, TempPrefix+hex.EncodeToString(suffix[:])), nil
 }
 
+// MkdirTemp creates one uniquely named directory under dir and returns its
+// root-relative path. The name uses TempPrefix, so RemoveStaleTemps reclaims an
+// abandoned one.
+func (r *Root) MkdirTemp(dir string, mode os.FileMode) (string, error) {
+	if err := r.requireWritable(); err != nil {
+		return "", err
+	}
+	d, err := cleanRel(dir)
+	if err != nil {
+		return "", err
+	}
+	for range tempNameTries {
+		name, err := randomName(d)
+		if err != nil {
+			return "", err
+		}
+		if mkdirErr := r.root.Mkdir(name, mode.Perm()); mkdirErr == nil {
+			return name, nil
+		} else if !errors.Is(mkdirErr, os.ErrExist) {
+			return "", mapError("mkdir temp", mkdirErr)
+		}
+	}
+	return "", fmt.Errorf("%w: could not create a temporary directory", ErrExists)
+}
+
 func (r *Root) OpenWrite(rel string) (*os.File, Entry, error) {
 	if err := r.requireWritable(); err != nil {
 		return nil, Entry{}, err

@@ -94,7 +94,7 @@ func (w *searchWalk) visit(dir string, level int, base bool) error {
 				w.truncated = true
 				return nil
 			}
-			if dir == "." && entry.Name == fileTrashDir {
+			if dir == "." && (entry.Name == fileTrashDir || entry.Name == fileTransferDir) {
 				continue
 			}
 			path := entry.Name

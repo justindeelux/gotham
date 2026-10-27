@@ -87,7 +87,7 @@ func (w *dirSizeWalk) walk(ctx context.Context, rel string, depth int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if rel == "." && name == fileTrashDir {
+		if rel == "." && (name == fileTrashDir || name == fileTransferDir) {
 			return nil
 		}
 		if w.entries >= w.maxEntries {

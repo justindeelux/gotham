@@ -95,17 +95,26 @@ func firstComponent(rel string) string {
 }
 
 func guardTrash(root *fsroot.Root, action, rel string) error {
+	if err := guardReservedName(root, action, rel, fileTrashDir, "the recycle bin"); err != nil {
+		return err
+	}
+	return guardReservedName(root, action, rel, fileTransferDir, "file transfers")
+}
+
+// guardReservedName refuses a path whose first component (directly or after
+// resolving symbolic links) is a reserved directory name.
+func guardReservedName(root *fsroot.Root, action, rel, reserved, what string) error {
 	if rel == "" || rel == "." {
 		return nil
 	}
-	if firstComponent(rel) == fileTrashDir {
-		return status.Errorf(codes.InvalidArgument, "%s: %q is reserved for the recycle bin", action, rel)
+	if firstComponent(rel) == reserved {
+		return status.Errorf(codes.InvalidArgument, "%s: %q is reserved for %s", action, rel, what)
 	}
 	for p := rel; ; {
 		resolved, err := root.Resolve(p)
 		if err == nil {
-			if firstComponent(resolved) == fileTrashDir {
-				return status.Errorf(codes.InvalidArgument, "%s: %q resolves into the recycle bin", action, rel)
+			if firstComponent(resolved) == reserved {
+				return status.Errorf(codes.InvalidArgument, "%s: %q resolves into %s", action, rel, what)
 			}
 			return nil
 		}
@@ -131,7 +140,7 @@ func hideTrashEntries(rel string, entries []fsroot.Entry) []fsroot.Entry {
 	}
 	out := entries[:0]
 	for _, e := range entries {
-		if e.Name == fileTrashDir {
+		if e.Name == fileTrashDir || e.Name == fileTransferDir {
 			continue
 		}
 		out = append(out, e)

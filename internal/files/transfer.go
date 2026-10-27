@@ -69,6 +69,7 @@ const (
 	transferTrashDir    = ".gotham-trash"
 
 	transferCleanupTimeout = 15 * time.Second
+	transferSummaryTimeout = 5 * time.Second
 	transferProgress       = time.Second
 )
 
@@ -149,6 +150,7 @@ type TransferSummary struct {
 	TransferID      string            `json:"transfer_id"`
 	Mode            string            `json:"mode"`
 	Status          string            `json:"status"`
+	Reason          string            `json:"reason,omitempty"`
 	Copied          int               `json:"copied"`
 	Conflicts       int               `json:"conflicts"`
 	Skipped         int               `json:"skipped"`
@@ -621,21 +623,42 @@ func (r *transferResults) counts() TransferSummary {
 	return summary
 }
 
-func (r *transferResults) summary(id, mode string, cancelled bool) TransferSummary {
+func (r *transferResults) summary(id, mode string) TransferSummary {
 	summary := r.counts()
 	summary.TransferID = id
 	summary.Mode = mode
 	switch {
-	case cancelled || summary.Cancelled > 0:
-		summary.Status = TransferStatusCancelled
 	case summary.Uncertain > 0:
 		summary.Status = TransferStatusUncertain
+	case summary.Cancelled > 0:
+		summary.Status = TransferStatusCancelled
 	case summary.Failed > 0:
 		summary.Status = TransferStatusFailed
 	case summary.Conflicts > 0:
 		summary.Status = "partial"
 	default:
 		summary.Status = TransferStatusCopied
+	}
+	return summary
+}
+
+// finalTransferSummary derives the terminal status from the recorded entries,
+// then marks an interrupted run that produced no entry of its own. The deadline
+// is reported distinctly from a client cancel, because a deadline keeps the
+// browser connected and can still deliver the terminal event.
+func finalTransferSummary(results *transferResults, id, mode string, ctx context.Context) TransferSummary {
+	summary := results.summary(id, mode)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if len(summary.Entries) == 0 && summary.Status == TransferStatusCopied {
+			summary.Status = TransferStatusFailed
+		}
+		if summary.Status != TransferStatusCopied {
+			summary.Reason = "timeout"
+		}
+		return summary
+	}
+	if ctx.Err() != nil && len(summary.Entries) == 0 && summary.Status == TransferStatusCopied {
+		summary.Status = TransferStatusCancelled
 	}
 	return summary
 }
@@ -655,17 +678,27 @@ func emitTransferPhase(ctx context.Context, events chan<- TransferEvent, phase s
 
 func (s *Service) executeTransfer(ctx context.Context, events chan TransferEvent, src, dst FileClient, in transferInput, pre *transferPreflight, id string) {
 	results := newTransferResults()
-	defer func() { s.auditTransfer(in, results.summary(id, pre.mode, ctx.Err() != nil)) }()
+	defer func() { s.auditTransfer(in, finalTransferSummary(results, id, pre.mode, ctx)) }()
 	if pre.mode == TransferModeDirect {
 		s.runDirectTransfer(ctx, events, src, dst, in, pre, results)
 	} else {
 		s.runBundleTransfer(ctx, events, src, dst, in, pre, results, id)
 	}
 	if ctx.Err() == nil {
-		summary := results.summary(id, pre.mode, false)
+		summary := results.summary(id, pre.mode)
 		event := TransferEvent{Type: TransferEventSummary, Summary: &summary, Status: summary.Status}
 		emitTransferEvent(ctx, events, event)
+		return
 	}
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		// A client cancel has no listener left; skip the terminal event.
+		return
+	}
+	summary := finalTransferSummary(results, id, pre.mode, ctx)
+	event := TransferEvent{Type: TransferEventSummary, Summary: &summary, Status: summary.Status}
+	emitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), transferSummaryTimeout)
+	defer cancel()
+	emitTransferEvent(emitCtx, events, event)
 }
 
 func (s *Service) runDirectTransfer(ctx context.Context, events chan TransferEvent, src, dst FileClient, in transferInput, pre *transferPreflight, results *transferResults) {
@@ -762,7 +795,7 @@ func (s *Service) runDirectTransfer(ctx context.Context, events chan TransferEve
 	emitTransferPhase(ctx, events, TransferPhaseTransferring, sent, &entry.Size)
 	response, err := write.CloseAndRecv()
 	if err != nil {
-		results.add(name, transferAcknowledgementStatus(err, ctx), transferFailureReason(err))
+		results.add(name, transferAcknowledgementStatus(err), transferFailureReason(err))
 		return
 	}
 	if response.GetEntry() == nil {
@@ -789,8 +822,17 @@ func (s *Service) runBundleTransfer(ctx context.Context, events chan TransferEve
 		}
 		return
 	}
+	selected := make(map[string]struct{}, len(in.sources))
+	for _, name := range in.sources {
+		selected[name] = struct{}{}
+	}
 	for _, sample := range prepared.GetSkipped() {
-		results.add(sample.GetPath(), TransferStatusSkipped, sample.GetReason())
+		// Samples name nested archive paths; only a sample that names a selected
+		// top-level source is a top-level outcome. Nested skips stay in
+		// SkippedCount/SkippedSamples so Entries remains per-top-level.
+		if _, ok := selected[sample.GetPath()]; ok {
+			results.add(sample.GetPath(), TransferStatusSkipped, sample.GetReason())
+		}
 	}
 	results.skippedCount = int(prepared.GetSkippedCount())
 	for _, sample := range prepared.GetSkipped() {
@@ -812,9 +854,6 @@ func (s *Service) runBundleTransfer(ctx context.Context, events chan TransferEve
 	if err != nil {
 		status := transferFailureStatus(err)
 		reason := transferFailureReason(err)
-		if errors.Is(err, ErrTransferCancelled) && ctx.Err() != nil {
-			status = TransferStatusCancelled
-		}
 		for _, name := range prepared.GetTopLevel() {
 			results.add(name, status, reason)
 		}
@@ -822,8 +861,9 @@ func (s *Service) runBundleTransfer(ctx context.Context, events chan TransferEve
 		return
 	}
 	if ctx.Err() != nil {
+		status, reason := transferInterruption(ctx)
 		for _, name := range prepared.GetTopLevel() {
-			results.add(name, TransferStatusCancelled, "cancelled")
+			results.add(name, status, reason)
 		}
 		cleanupTransferArtifacts(ctx, events, s, src, dst, results, id, prepared.GetArtifact(), received)
 		return
@@ -929,6 +969,9 @@ func (s *Service) relayBundle(ctx context.Context, events chan TransferEvent, sr
 	if err := <-readErr; err != nil {
 		dstCancel()
 		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return "", fmt.Errorf("%w: %v", ErrTransferTimeout, err)
+			}
 			return "", fmt.Errorf("%w: %v", ErrTransferCancelled, err)
 		}
 		return "", err
@@ -980,11 +1023,13 @@ func (s *Service) applyBundle(ctx context.Context, events chan TransferEvent, ds
 				if _, ok := pending[name]; !ok {
 					continue
 				}
-				if ctx.Err() != nil {
-					results.add(name, TransferStatusCancelled, "cancelled")
-				} else if name == inFlight {
+				switch {
+				case name == inFlight:
 					results.add(name, TransferStatusUncertain, "publication acknowledgement was lost")
-				} else {
+				case ctx.Err() != nil:
+					status, reason := transferInterruption(ctx)
+					results.add(name, status, reason)
+				default:
 					results.add(name, transferFailureStatus(mapTransferRPCError(recvErr)), transferFailureReason(recvErr))
 				}
 			}
@@ -1017,14 +1062,26 @@ func (s *Service) applyBundle(ctx context.Context, events chan TransferEvent, ds
 		}
 	}
 	for _, name := range prepared.GetTopLevel() {
-		if _, ok := pending[name]; ok {
-			if ctx.Err() != nil {
-				results.add(name, TransferStatusCancelled, "cancelled")
-			} else {
-				results.add(name, TransferStatusFailed, "the destination did not acknowledge the entry")
-			}
+		if _, ok := pending[name]; !ok {
+			continue
+		}
+		switch {
+		case name == inFlight:
+			results.add(name, TransferStatusUncertain, "publication acknowledgement was lost")
+		case ctx.Err() != nil:
+			status, reason := transferInterruption(ctx)
+			results.add(name, status, reason)
+		default:
+			results.add(name, TransferStatusFailed, "the destination did not acknowledge the entry")
 		}
 	}
+}
+
+func transferInterruption(ctx context.Context) (string, string) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return TransferStatusFailed, "timeout"
+	}
+	return TransferStatusCancelled, "cancelled"
 }
 
 func cleanupTransferArtifacts(ctx context.Context, events chan TransferEvent, s *Service, src, dst FileClient, results *transferResults, id, sourceArtifact, destArtifact string) {
@@ -1067,10 +1124,12 @@ func transferFailureStatus(err error) string {
 	}
 }
 
-func transferAcknowledgementStatus(err error, ctx context.Context) string {
-	if ctx.Err() != nil || errors.Is(err, ErrTransferCancelled) {
-		return TransferStatusCancelled
-	}
+// transferAcknowledgementStatus classifies a failure after the commit message
+// was sent. The destination may already hold the entry, so a missing or
+// transport-level acknowledgement is uncertain even when the request context
+// is canceled or its deadline expired. A typed refusal from the destination is
+// still a definite conflict or failure.
+func transferAcknowledgementStatus(err error) string {
 	if errors.Is(err, ErrConflict) {
 		return TransferStatusConflict
 	}

@@ -397,8 +397,14 @@ func TestBundleTransferRelaysAppliesAndDiscards(t *testing.T) {
 	}
 	events := collectTransferEvents(t, run)
 	summary := summaryOf(t, events)
-	if summary.Status != TransferStatusCopied || summary.Copied != 1 || summary.SkippedCount != 1 {
+	if summary.Status != TransferStatusCopied || summary.Copied != 1 || summary.Skipped != 0 || summary.SkippedCount != 1 {
 		t.Fatalf("summary = %+v", summary)
+	}
+	if len(summary.Entries) != 1 || summary.Entries[0].Name != "dir" || summary.Entries[0].Status != TransferStatusCopied {
+		t.Fatalf("entries = %+v, want only the selected top-level", summary.Entries)
+	}
+	if len(summary.SkippedSamples) != 1 || summary.SkippedSamples[0].Path != "dir/link" {
+		t.Fatalf("skipped samples = %+v, want the nested sample kept separately", summary.SkippedSamples)
 	}
 	phases := strings.Join(phasesOf(events), ",")
 	for _, want := range []string{TransferPhasePreparing, TransferPhaseTransferring, TransferPhaseExtracting, TransferPhasePublishing, TransferPhaseCleaningUp} {
@@ -623,5 +629,127 @@ func TestBundleTransferDestinationRejectsTheStream(t *testing.T) {
 	}
 	if got := strings.Join(src.discardedArtifacts(), ","); got != "source-artifact" {
 		t.Fatalf("source staging was not discarded after a rejected bundle: %q", got)
+	}
+}
+
+func directTransferPreflight(t *testing.T, sourceID, destinationID uuid.UUID) transferInput {
+	t.Helper()
+	in, err := validateTransferRequest(sourceID, transferRequest(destinationID, "a.txt"))
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	return in
+}
+
+func TestDirectCancelAfterCommitWithoutAcknowledgementIsUncertain(t *testing.T) {
+	src, dst := directFakes(t)
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+	in := directTransferPreflight(t, sourceID, destinationID)
+	pre := &transferPreflight{
+		mode:    TransferModeDirect,
+		sources: []TransferPlanSource{{Name: "a.txt", Kind: "file", Size: 5}},
+		entries: map[string]Entry{"a.txt": {Name: "a.txt", Kind: "file", Size: 5, Etag: `"etag-1"`}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dst.writeCloseErr = status.Error(codes.Canceled, "client disconnected")
+	dst.onWriteClose = cancel
+	results := newTransferResults()
+	affected := make(chan TransferEvent, 16)
+	svc.runDirectTransfer(ctx, affected, src, dst, in, pre, results)
+
+	if len(results.entries) != 1 || results.entries[0].Status != TransferStatusUncertain {
+		t.Fatalf("entries = %+v, want the committed entry marked uncertain", results.entries)
+	}
+}
+
+func TestApplyBundleCancelDuringPublishIsUncertain(t *testing.T) {
+	src, dst := bundleFakes(t)
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+	in, err := validateTransferRequest(sourceID, transferRequest(destinationID, "dir"))
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dst.applyEvents = []*agentv1.ApplyArtifactEvent{
+		{Event: &agentv1.ApplyArtifactEvent_Phase{Phase: &agentv1.TransferPhase{Phase: "publish", Path: "dir"}}},
+	}
+	dst.applyStreamErr = status.Error(codes.Canceled, "client disconnected")
+	results := newTransferResults()
+	events := make(chan TransferEvent, 16)
+	svc.applyBundle(ctx, events, dst, in, src.prepareResp, "destination-artifact", "transfer-1", results)
+
+	if len(results.entries) != 1 || results.entries[0].Name != "dir" || results.entries[0].Status != TransferStatusUncertain {
+		t.Fatalf("entries = %+v, want the in-flight publication marked uncertain", results.entries)
+	}
+}
+
+func TestBundleTransferOnlyReportsSelectedTopLevelSkips(t *testing.T) {
+	src, dst := bundleFakes(t)
+	src.prepareResp.SkippedCount = 2
+	src.prepareResp.Skipped = []*agentv1.SkippedEntry{
+		{Path: "dir", Reason: "special"},
+		{Path: "dir/link", Reason: "symlink"},
+	}
+	dst.applyEvents = nil
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+
+	run, err := svc.Transfer(context.Background(), sourceID, transferRequest(destinationID, "dir"))
+	if err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	summary := summaryOf(t, collectTransferEvents(t, run))
+	if len(summary.Entries) != 1 || summary.Entries[0].Name != "dir" || summary.Entries[0].Status != TransferStatusSkipped {
+		t.Fatalf("entries = %+v, want only the selected top-level skip", summary.Entries)
+	}
+	if summary.Skipped != 1 || summary.SkippedCount != 2 || len(summary.SkippedSamples) != 2 {
+		t.Fatalf("summary = %+v, want nested skips kept in samples", summary)
+	}
+}
+
+func TestDeadlineEmitsTerminalSummaryWithTimeout(t *testing.T) {
+	src, dst := directFakes(t)
+	src.readErr = status.Error(codes.DeadlineExceeded, "transfer deadline")
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+	in := directTransferPreflight(t, sourceID, destinationID)
+	pre := &transferPreflight{
+		mode:    TransferModeDirect,
+		sources: []TransferPlanSource{{Name: "a.txt", Kind: "file", Size: 5}},
+		entries: map[string]Entry{"a.txt": {Name: "a.txt", Kind: "file", Size: 5, Etag: `"etag-1"`}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	events := make(chan TransferEvent, 16)
+	svc.executeTransfer(ctx, events, src, dst, in, pre, "transfer-deadline")
+	close(events)
+
+	var delivered []TransferEvent
+	for event := range events {
+		delivered = append(delivered, event)
+	}
+	summary := summaryOf(t, delivered)
+	if summary.Reason != "timeout" || summary.Status != TransferStatusFailed {
+		t.Fatalf("summary = %+v, want a terminal timeout summary", summary)
+	}
+}
+
+func TestApplyBundleCleanEOFWithInFlightEntryIsUncertain(t *testing.T) {
+	src, dst := bundleFakes(t)
+	svc, sourceID, destinationID := newTransferTestService(t, src, dst)
+	in, err := validateTransferRequest(sourceID, transferRequest(destinationID, "dir"))
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	dst.applyEvents = []*agentv1.ApplyArtifactEvent{
+		{Event: &agentv1.ApplyArtifactEvent_Phase{Phase: &agentv1.TransferPhase{Phase: "publish", Path: "dir"}}},
+	}
+	results := newTransferResults()
+	events := make(chan TransferEvent, 16)
+	svc.applyBundle(context.Background(), events, dst, in, src.prepareResp, "destination-artifact", "transfer-1", results)
+
+	if len(results.entries) != 1 || results.entries[0].Status != TransferStatusUncertain {
+		t.Fatalf("entries = %+v, want the in-flight entry marked uncertain on EOF", results.entries)
 	}
 }

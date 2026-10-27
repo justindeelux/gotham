@@ -1,11 +1,35 @@
 <script setup lang="ts">
 import { NButton, NModal } from "naive-ui";
+import { nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useFilesTransferStore } from "@/features/files/stores/transfer";
 
 const { t } = useI18n();
 const transfer = useFilesTransferStore();
+const stayButton = ref<InstanceType<typeof NButton> | null>(null);
+let restoreFocus: HTMLElement | null = null;
+
+watch(
+  () => transfer.leaveOpen,
+  async (open) => {
+    if (open) {
+      restoreFocus =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      await nextTick();
+      stayButton.value?.$el?.focus?.();
+      return;
+    }
+    await nextTick();
+    if (restoreFocus !== null && restoreFocus.isConnected) {
+      restoreFocus.focus();
+    }
+    restoreFocus = null;
+  },
+  { flush: "post" },
+);
 </script>
 
 <template>
@@ -18,10 +42,12 @@ const transfer = useFilesTransferStore();
     :mask-closable="false"
     @update:show="(value: boolean) => { if (!value) transfer.resolveLeave(false); }"
   >
-    <p class="leave-message">{{ t("files.transfer.leaveMessage") }}</p>
+    <div>
+      <p class="leave-message">{{ t("files.transfer.leaveMessage") }}</p>
+    </div>
     <template #footer>
       <div class="leave-foot">
-        <NButton @click="transfer.resolveLeave(false)">
+        <NButton ref="stayButton" @click="transfer.resolveLeave(false)">
           {{ t("files.transfer.leaveStay") }}
         </NButton>
         <NButton type="warning" @click="transfer.resolveLeave(true)">

@@ -357,7 +357,7 @@ const vi = {
     interrupted:
       "Kết nối đóng trước khi đích báo kết quả. Các mục bên dưới là không chắc chắn — hãy làm mới đích trước khi thử lại.",
     uncertainNote:
-      "Không chắc chắn — làm mới đích để xem các mục này đã đến chưa. Không tự động thử lại.",
+      "Không chắc chắn — làm mới đích để xem các mục này đã đến chưa. Thử lại sẽ kiểm tra đích trước khi chép.",
     timeoutTitle: "Sao chép dừng ở giới hạn 30 phút",
     timeout:
       "Lần truyền chạm giới hạn 30 phút. Các mục đích đã xác nhận được liệt kê bên dưới; hãy kiểm tra phần còn lại trên đích.",
@@ -369,6 +369,10 @@ const vi = {
     partialTitle: "Sao chép xong nhưng có vấn đề",
     doneTitle: "Sao chép hoàn tất",
     done: "Đã sao chép {count}.",
+    doneWithNested:
+      "Đã sao chép {count}, nhưng {skipped} mục lồng bên trong bị loại khỏi tệp nén.",
+    doneWithCleanup:
+      "Đã sao chép {count}, nhưng {failures} lần dọn tệp tạm thất bại; node sẽ tự hết hạn chúng.",
     counts:
       "{copied} đã chép · {conflicts} xung đột · {skipped} bỏ qua · {failed} lỗi · {cancelled} đã hủy · {uncertain} không chắc",
     nestedSkipped: "{count} mục lồng bên trong bị loại khỏi tệp nén.",
@@ -385,7 +389,7 @@ const vi = {
     reasonCancelled: "Đã hủy",
     retryTitle: "Thử lại các mục chưa xong",
     retryHint:
-      "Thử lại sẽ kiểm tra đích lần nữa. Các mục không chắc chắn không được đưa vào.",
+      "Thử lại sẽ kiểm tra đích một lần nữa trước khi chép.",
     retry: "Thử lại mục đã chọn",
     retryNone: "Không có gì để thử lại.",
     leaveTitle: "Hủy bản sao chép đang chạy?",

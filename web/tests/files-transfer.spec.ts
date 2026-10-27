@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 
-/* global setTimeout, window:readonly, URL */
+/* global Event, document:readonly, setTimeout, window:readonly, URL */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -399,15 +399,15 @@ test("a plan hard failure over the single-file limit is human readable", async (
   await expect(dialog.getByRole("button", { name: "Start copy" })).toHaveCount(0);
 });
 
-test("a summary with conflicts is partial and offers a bounded retry", async ({ page }) => {
+test("a summary with a failure is partial and offers a bounded retry", async ({ page }) => {
   await openFiles(page);
   harness.transferResponse = () => ({
     status: 200,
     body: summaryBody({
       status: "partial",
       copied: 0,
-      conflicts: 1,
-      entries: [{ name: "report.txt", status: "conflict", reason: "destination exists" }],
+      failed: 1,
+      entries: [{ name: "report.txt", status: "failed", reason: "busy" }],
     }),
     delayMs: 0,
   });
@@ -417,7 +417,7 @@ test("a summary with conflicts is partial and offers a bounded retry", async ({ 
   const dialog = page.locator(".transfer-modal");
   await dialog.getByRole("button", { name: "Start copy" }).click();
   await expect(dialog).toContainText("Copy finished with issues");
-  await expect(dialog.locator(".transfer-list__item[data-status='conflict']")).toHaveCount(1);
+  await expect(dialog.locator(".transfer-list__item[data-status='failed']")).toHaveCount(1);
 
   await dialog.getByRole("button", { name: "Retry selected" }).click();
   await expect.poll(() => harness.plans.length).toBe(2);
@@ -463,17 +463,181 @@ test("cancelling reports cancelled work and never a success toast", async ({ pag
   await dialog.getByRole("button", { name: "Cancel copy" }).click();
 
   await expect(dialog).toContainText("Copy cancelled");
-  await expect(dialog.locator(".transfer-list__item[data-status='cancelled']")).toHaveCount(1);
+  await expect(dialog.locator(".transfer-list__item[data-status='uncertain']")).toHaveCount(1);
   await expect(dialog).not.toContainText("Copy finished");
 });
 
-test("the copy dialog fits a 390px screen", async ({ page }) => {
-  await openFiles(page, 390);
+test("a copy that only skipped nested entries is a warning, not success", async ({ page }) => {
+  await openFiles(page);
+  harness.transferResponse = () => ({
+    status: 200,
+    body: summaryBody({ status: "copied", copied: 1, skipped_count: 3 }),
+    delayMs: 0,
+  });
   await openNodeCopy(page);
+  await checkNodeCopy(page);
+
   const dialog = page.locator(".transfer-modal");
-  const box = await dialog.boundingBox();
-  expect(box).not.toBeNull();
-  expect(box!.width).toBeLessThanOrEqual(390);
-  await expect(dialog.getByRole("button", { name: "Check destination" })).toBeVisible();
-  await expect(dialog.locator(".transfer-field--path input")).toBeVisible();
+  await dialog.getByRole("button", { name: "Start copy" }).click();
+  await expect(dialog).toContainText("Copy finished with issues");
+  await expect(dialog).toContainText("3 nested entries");
+  await expect(
+    page.locator(".server-files__transfer"),
+  ).toHaveAttribute("data-tone", "warning");
 });
+
+test("results survive an interrupted stream and show acknowledged entries", async ({
+  page,
+}) => {
+  await openFiles(page);
+  harness.transferResponse = () => ({
+    status: 200,
+    body: `${JSON.stringify({
+      type: "result",
+      name: "report.txt",
+      status: "copied",
+    })}\n`,
+    delayMs: 0,
+  });
+  await openNodeCopy(page);
+  await checkNodeCopy(page);
+
+  const dialog = page.locator(".transfer-modal");
+  await dialog.getByRole("button", { name: "Start copy" }).click();
+
+  await expect(dialog).toContainText("Copy interrupted");
+  await expect(dialog.locator(".transfer-list__item[data-status='copied']")).toHaveCount(
+    1,
+  );
+  await expect(dialog.locator(".transfer-list__item[data-status='uncertain']")).toHaveCount(
+    0,
+  );
+  await expect(dialog).not.toContainText("Copy finished");
+});
+
+test("route leave asks to stay or cancel the transfer and leave", async ({ page }) => {
+  await openFiles(page);
+  harness.transferResponse = () => ({
+    status: 200,
+    body: summaryBody(),
+    delayMs: 5000,
+  });
+  await openNodeCopy(page);
+  await checkNodeCopy(page);
+  await page.locator(".transfer-modal").getByRole("button", { name: "Start copy" }).click();
+  await page.locator(".transfer-modal").getByRole("button", { name: "Hide" }).click();
+  await expect(page.locator(".server-files__transfer")).toBeVisible();
+
+  await page.getByRole("link", { name: "File manager" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Cancel the running copy?", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stay" })).toBeFocused();
+  await page.getByRole("button", { name: "Stay" }).click();
+  await expect(page).toHaveURL(new RegExp(`/servers/${server1}/files`));
+  await expect(page.locator(".server-files__transfer")).toBeVisible();
+
+  await page.getByRole("link", { name: "File manager" }).click();
+  await page.getByRole("button", { name: "Cancel transfer and leave" }).click();
+  await expect(page).toHaveURL(/\/files$/);
+});
+
+test("logout asks to stay or cancel the transfer and leave", async ({ page }) => {
+  await openFiles(page);
+  harness.transferResponse = () => ({
+    status: 200,
+    body: summaryBody(),
+    delayMs: 5000,
+  });
+  await openNodeCopy(page);
+  await checkNodeCopy(page);
+  await page.locator(".transfer-modal").getByRole("button", { name: "Start copy" }).click();
+  await page.locator(".transfer-modal").getByRole("button", { name: "Hide" }).click();
+
+  await page.locator(".topbar").getByRole("button", { name: "Account" }).click();
+  await page.locator(".n-dropdown-option", { hasText: "Sign out" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Cancel the running copy?", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Stay" }).click();
+  await expect(page).toHaveURL(new RegExp(`/servers/${server1}/files`));
+
+  await page.locator(".topbar").getByRole("button", { name: "Account" }).click();
+  await page.locator(".n-dropdown-option", { hasText: "Sign out" }).click();
+  await page.getByRole("button", { name: "Cancel transfer and leave" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+});
+
+test("beforeunload warns only while a copy is running", async ({ page }) => {
+  await openFiles(page);
+  const idlePrevented = await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(idlePrevented).toBe(false);
+
+  harness.transferResponse = () => ({
+    status: 200,
+    body: summaryBody(),
+    delayMs: 5000,
+  });
+  await openNodeCopy(page);
+  await checkNodeCopy(page);
+  await page.locator(".transfer-modal").getByRole("button", { name: "Start copy" }).click();
+
+  const runningPrevented = await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(runningPrevented).toBe(true);
+});
+
+test("closing the copy dialog returns focus to the file operations trigger", async ({ page }) => {
+  await openFiles(page);
+  await openNodeCopy(page);
+  await page.locator(".transfer-modal").getByRole("button", { name: "Cancel" }).click();
+  const focus = await page.evaluate(() => ({
+    label: document.activeElement?.getAttribute("aria-label") ?? "",
+  }));
+  expect(focus.label).toBe("File operations");
+});
+
+test("closing the leave dialog returns focus to the link that asked to leave", async ({
+  page,
+}) => {
+  await openFiles(page);
+  harness.transferResponse = () => ({
+    status: 200,
+    body: summaryBody(),
+    delayMs: 5000,
+  });
+  await openNodeCopy(page);
+  await checkNodeCopy(page);
+  await page.locator(".transfer-modal").getByRole("button", { name: "Start copy" }).click();
+  await page.locator(".transfer-modal").getByRole("button", { name: "Hide" }).click();
+
+  await page.getByRole("link", { name: "File manager" }).click();
+  await expect(page.getByRole("button", { name: "Stay" })).toBeFocused();
+  await page.getByRole("button", { name: "Stay" }).click();
+  const focus = await page.evaluate(() => ({
+    text: document.activeElement?.textContent?.trim() ?? "",
+  }));
+  expect(focus.text).toContain("File manager");
+});
+
+for (const width of [390, 480, 1280, 1366]) {
+  test(`the copy dialog fits a ${width}px screen`, async ({ page }) => {
+    await openFiles(page, width);
+    await openNodeCopy(page);
+    const dialog = page.locator(".transfer-modal");
+    const box = await dialog.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeLessThanOrEqual(width);
+    await expect(
+      dialog.getByRole("button", { name: "Check destination" }),
+    ).toBeVisible();
+    await expect(dialog.locator(".transfer-field--path input")).toBeVisible();
+  });
+}

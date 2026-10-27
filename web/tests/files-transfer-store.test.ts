@@ -16,6 +16,7 @@ import {
   planTransfer,
   streamTransfer,
   TransferIncompleteError,
+  TransferStreamError,
 } from "@/features/files/api/transfer";
 import type {
   TransferPlan,
@@ -155,9 +156,171 @@ describe("workspace transfer store", () => {
     expect(store.cancelledByUser).toBe(true);
     expect(store.summary?.status).toBe("cancelled");
     expect(store.summary?.entries.map((entry) => entry.status)).toEqual([
-      "cancelled",
-      "cancelled",
+      "uncertain",
+      "uncertain",
     ]);
+    expect(store.summary?.entries.map((entry) => entry.reason)).toEqual([
+      "unconfirmed",
+      "unconfirmed",
+    ]);
+  });
+
+  it("keeps acknowledged results when the user cancels", async () => {
+    vi.mocked(streamTransfer).mockImplementation(
+      (_serverId, _request, options) =>
+        new Promise((_resolve, reject) => {
+          options?.onEvent?.({
+            type: "result",
+            name: "report.txt",
+            status: "copied",
+          });
+          options?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+    const store = useFilesTransferStore();
+    store.openPaneCopy(source, destination);
+    await vi.waitFor(() => expect(store.state).toBe("ready"));
+    const running = store.start();
+    store.cancel();
+    await running;
+
+    expect(store.summary?.status).toBe("cancelled");
+    expect(store.summary?.entries).toEqual([
+      { name: "report.txt", status: "copied", reason: undefined },
+      { name: "data", status: "uncertain", reason: "unconfirmed" },
+    ]);
+  });
+
+  it("keeps each acknowledged result once", async () => {
+    vi.mocked(streamTransfer).mockImplementation(
+      async (_serverId, _request, options) => {
+        options?.onEvent?.({
+          type: "result",
+          name: "report.txt",
+          status: "copied",
+        });
+        options?.onEvent?.({
+          type: "result",
+          name: "report.txt",
+          status: "failed",
+          reason: "duplicate",
+        });
+        throw new TransferIncompleteError();
+      },
+    );
+    const store = useFilesTransferStore();
+    store.openPaneCopy(source, destination);
+    await vi.waitFor(() => expect(store.state).toBe("ready"));
+    await store.start();
+
+    expect(store.acknowledged).toEqual([
+      { name: "report.txt", status: "copied", reason: undefined },
+    ]);
+    expect(store.summary?.entries).toEqual([
+      { name: "report.txt", status: "copied" },
+      { name: "data", status: "uncertain", reason: "interrupted" },
+    ]);
+  });
+
+  it("lets the terminal summary win over streamed results", async () => {
+    vi.mocked(streamTransfer).mockImplementation(
+      async (_serverId, _request, options) => {
+        options?.onEvent?.({
+          type: "result",
+          name: "report.txt",
+          status: "copied",
+        });
+        return summary({
+          status: "partial",
+          copied: 0,
+          failed: 1,
+          entries: [{ name: "report.txt", status: "failed", reason: "busy" }],
+        });
+      },
+    );
+    const store = useFilesTransferStore();
+    store.openPaneCopy(source, destination);
+    await vi.waitFor(() => expect(store.state).toBe("ready"));
+    await store.start();
+
+    expect(store.summary?.entries).toEqual([
+      { name: "report.txt", status: "failed", reason: "busy" },
+    ]);
+    expect(store.summary?.failed).toBe(1);
+  });
+
+  it("does not replace a received summary with a later stream error", async () => {
+    vi.mocked(streamTransfer).mockImplementation(
+      async (_serverId, _request, options) => {
+        options?.onEvent?.({
+          type: "summary",
+          status: "copied",
+          summary: summary(),
+        });
+        throw new TransferStreamError("trailing event");
+      },
+    );
+    const store = useFilesTransferStore();
+    store.openPaneCopy(source, destination);
+    await vi.waitFor(() => expect(store.state).toBe("ready"));
+    await store.start();
+
+    expect(store.summary?.status).toBe("copied");
+    expect(store.summary?.entries).toEqual([
+      { name: "report.txt", status: "copied" },
+    ]);
+    expect(store.interrupted).toBe(false);
+  });
+
+  it("reports a non-2xx response as a start failure", async () => {
+    vi.mocked(streamTransfer).mockRejectedValue({
+      status: 503,
+      message: "files are disabled",
+      code: "disabled",
+      cause: null,
+    });
+    const store = useFilesTransferStore();
+    store.openPaneCopy(source, destination);
+    await vi.waitFor(() => expect(store.state).toBe("ready"));
+    await store.start();
+
+    expect(store.state).toBe("finished");
+    expect(store.runError).toMatchObject({ status: 503 });
+    expect(store.summary).toBeNull();
+    expect(store.interrupted).toBe(false);
+  });
+
+  it("treats a connection failure before the first event as uncertain", async () => {
+    vi.mocked(streamTransfer).mockRejectedValue(
+      new TypeError("Failed to fetch"),
+    );
+    const store = useFilesTransferStore();
+    store.openPaneCopy(source, destination);
+    await vi.waitFor(() => expect(store.state).toBe("ready"));
+    await store.start();
+
+    expect(store.runError).toBeNull();
+    expect(store.interrupted).toBe(true);
+    expect(store.summary?.status).toBe("uncertain");
+    expect(
+      store.summary?.entries.every((entry) => entry.status === "uncertain"),
+    ).toBe(true);
+  });
+
+  it("treats a malformed first line as uncertain, not a start failure", async () => {
+    vi.mocked(streamTransfer).mockRejectedValue(
+      new TransferStreamError("transfer event has an unknown shape"),
+    );
+    const store = useFilesTransferStore();
+    store.openPaneCopy(source, destination);
+    await vi.waitFor(() => expect(store.state).toBe("ready"));
+    await store.start();
+
+    expect(store.runError).toBeNull();
+    expect(store.interrupted).toBe(true);
+    expect(store.summary?.status).toBe("uncertain");
   });
 
   it("keeps the timeout reason and acknowledged entries", async () => {

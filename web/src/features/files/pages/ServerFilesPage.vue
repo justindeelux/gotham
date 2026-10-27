@@ -323,7 +323,16 @@ const transferFinishedTone = computed<"warning" | "success" | "error">(() => {
   if (summary === null) {
     return "error";
   }
-  return summary.status === "copied" ? "success" : "warning";
+  if (summary.status !== "copied") {
+    return "warning";
+  }
+  if (
+    summary.skipped_count > 0 ||
+    (summary.cleanup_failures ?? 0) > 0
+  ) {
+    return "warning";
+  }
+  return "success";
 });
 
 function onBeforeUnload(event: BeforeUnloadEvent): void {

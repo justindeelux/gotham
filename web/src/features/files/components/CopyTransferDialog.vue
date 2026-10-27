@@ -11,7 +11,7 @@ import {
   NSpin,
   useMessage,
 } from "naive-ui";
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import {
@@ -368,6 +368,14 @@ const progressText = computed<string>(() => {
 });
 
 const summary = computed(() => transfer.summary);
+const copiedWithIssues = computed<boolean>(() => {
+  const current = summary.value;
+  return (
+    current?.status === "copied" &&
+    (current.skipped_count > 0 || (current.cleanup_failures ?? 0) > 0)
+  );
+});
+
 const reportTitle = computed<string>(() => {
   const current = summary.value;
   if (current === null) {
@@ -381,6 +389,9 @@ const reportTitle = computed<string>(() => {
   }
   if (current.status === "cancelled") {
     return String(t("files.transfer.cancelledTitle"));
+  }
+  if (copiedWithIssues.value) {
+    return String(t("files.transfer.partialTitle"));
   }
   if (current.status === "copied") {
     return String(t("files.transfer.doneTitle"));
@@ -401,6 +412,22 @@ const reportMessage = computed<string>(() => {
   }
   if (current.status === "cancelled") {
     return String(t("files.transfer.cancelled"));
+  }
+  if (copiedWithIssues.value) {
+    if (current.skipped_count > 0) {
+      return String(
+        t("files.transfer.doneWithNested", {
+          count: current.copied,
+          skipped: current.skipped_count,
+        }),
+      );
+    }
+    return String(
+      t("files.transfer.doneWithCleanup", {
+        count: current.copied,
+        failures: current.cleanup_failures ?? 0,
+      }),
+    );
   }
   if (current.status === "copied") {
     return String(t("files.transfer.done", { count: current.copied }));
@@ -450,10 +477,10 @@ const retryNames = computed<string[]>(() =>
   transfer.entries
     .filter(
       (entry) =>
-        entry.status === "conflict" ||
         entry.status === "skipped" ||
         entry.status === "failed" ||
-        entry.status === "cancelled",
+        entry.status === "cancelled" ||
+        entry.status === "uncertain",
     )
     .map((entry) => entry.name),
 );
@@ -655,6 +682,67 @@ const runErrorText = computed<string>(() => {
   return describeFilesError(transfer.runError);
 });
 
+const dialogBody = ref<HTMLElement | null>(null);
+let restoreFocus: HTMLElement | null = null;
+let restorePane = "left";
+
+function focusDialog(): void {
+  const body = dialogBody.value;
+  if (body === null) {
+    return;
+  }
+  const field = body.querySelector<HTMLElement>(
+    ".transfer-node-select input, .transfer-field--path input",
+  );
+  if (field !== null) {
+    field.focus();
+    return;
+  }
+  const primary = Array.from(
+    body.querySelectorAll<HTMLElement>("button"),
+  ).find((button) => {
+    const label = button.getAttribute("aria-label") ?? "";
+    return (
+      label === String(t("files.transfer.check")) ||
+      label === String(t("files.transfer.start"))
+    );
+  });
+  (primary ?? body.querySelector<HTMLElement>("button"))?.focus();
+}
+
+function restoreDialogFocus(): void {
+  const target = restoreFocus;
+  restoreFocus = null;
+  if (target !== null && target !== document.body && target.isConnected) {
+    target.focus();
+    return;
+  }
+  document
+    .querySelector<HTMLElement>(
+      `.files-browser[data-pane="${restorePane}"] button[aria-label="File operations"]`,
+    )
+    ?.focus();
+}
+
+watch(
+  () => transfer.dialogOpen,
+  async (open) => {
+    if (open) {
+      restorePane = transfer.source?.pane ?? "left";
+      restoreFocus =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      await nextTick();
+      focusDialog();
+      return;
+    }
+    await nextTick();
+    restoreDialogFocus();
+  },
+  { flush: "post" },
+);
+
 const announcement = computed<string>(() => {
   if (transfer.state === "running") {
     return phaseLabel.value;
@@ -679,7 +767,7 @@ const announcement = computed<string>(() => {
     :mask-closable="!transfer.isBusy"
     @update:show="(value: boolean) => { if (!value) close(); }"
   >
-    <div v-if="source" class="transfer-form">
+    <div v-if="source" ref="dialogBody" class="transfer-form">
       <section class="transfer-block" data-testid="transfer-source">
         <h4 class="transfer-block__title">{{ t("files.transfer.source") }}</h4>
         <p class="transfer-line">

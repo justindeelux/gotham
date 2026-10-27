@@ -357,7 +357,7 @@ const en = {
     interrupted:
       "The connection closed before the destination reported the result. The entries below are uncertain — refresh the destination before retrying.",
     uncertainNote:
-      "Uncertain — refresh the destination to see whether these entries arrived. Automatic retry is not offered.",
+      "Uncertain — refresh the destination to see whether these entries arrived. Retry checks the destination again before copying.",
     timeoutTitle: "Copy stopped at the 30-minute limit",
     timeout:
       "The transfer reached the 30-minute limit. Entries the destination acknowledged are listed below; check anything else on the destination.",
@@ -369,6 +369,10 @@ const en = {
     partialTitle: "Copy finished with issues",
     doneTitle: "Copy finished",
     done: "{count} copied.",
+    doneWithNested:
+      "{count} copied, but {skipped} nested entries were left out of the archive.",
+    doneWithCleanup:
+      "{count} copied, but {failures} staging cleanups failed; the node expires them automatically.",
     counts:
       "{copied} copied · {conflicts} conflicts · {skipped} skipped · {failed} failed · {cancelled} cancelled · {uncertain} uncertain",
     nestedSkipped: "{count} nested entries were left out of the archive.",
@@ -386,7 +390,7 @@ const en = {
     reasonCancelled: "Cancelled",
     retryTitle: "Retry unresolved entries",
     retryHint:
-      "Retry runs the destination check again. Uncertain entries are not offered.",
+      "Retry runs the destination check again before copying.",
     retry: "Retry selected",
     retryNone: "Nothing to retry.",
     leaveTitle: "Cancel the running copy?",

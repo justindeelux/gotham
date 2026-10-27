@@ -124,14 +124,11 @@ function parseLine(line: string): TransferEvent {
   } catch {
     throw new TransferStreamError("transfer event is not valid JSON");
   }
-  try {
-    return parseWith(transferEventSchema, data, {
-      context: "FileTransferEvent",
-      strict: true,
-    });
-  } catch {
+  const parsed = transferEventSchema.safeParse(data);
+  if (!parsed.success) {
     throw new TransferStreamError("transfer event has an unknown shape");
   }
+  return parsed.data;
 }
 
 /**

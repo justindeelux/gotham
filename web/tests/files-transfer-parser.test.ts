@@ -1,10 +1,11 @@
-/* global ReadableStream, TextEncoder */
-import { describe, expect, it } from "vitest";
+/* global ReadableStream, Response, TextEncoder */
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   TransferIncompleteError,
   TransferStreamError,
   readTransferStream,
+  streamTransfer,
   transferLineLimit,
 } from "@/features/files/api/transfer";
 import type { TransferEvent } from "@/features/files/schemas/transfer";
@@ -109,10 +110,75 @@ describe("transfer NDJSON parser", () => {
   it("rejects unknown event types", async () => {
     await expect(
       readTransferStream(
-        streamOf([bytes('{"type":"result","name":"a","status":"copied"}\n')]),
+        streamOf([bytes('{"type":"nope","name":"a","status":"copied"}\n')]),
         () => undefined,
       ),
     ).rejects.toBeInstanceOf(TransferStreamError);
+  });
+
+  it("accepts result events before the summary", async () => {
+    const events: TransferEvent[] = [];
+    const summary = await readTransferStream(
+      streamOf([
+        bytes(
+          `${JSON.stringify({
+            type: "result",
+            name: "report.txt",
+            status: "copied",
+          })}\n${summaryLine()}`,
+        ),
+      ]),
+      (event) => events.push(event),
+    );
+    expect(events.map((event) => event.type)).toEqual(["result", "summary"]);
+    expect(summary.status).toBe("copied");
+  });
+
+  it("accepts duplicate result events and leaves dedupe to the store", async () => {
+    const events: TransferEvent[] = [];
+    await readTransferStream(
+      streamOf([
+        bytes(
+          `${JSON.stringify({
+            type: "result",
+            name: "report.txt",
+            status: "copied",
+          })}\n${JSON.stringify({
+            type: "result",
+            name: "report.txt",
+            status: "copied",
+          })}\n${summaryLine()}`,
+        ),
+      ]),
+      (event) => events.push(event),
+    );
+    expect(events.filter((event) => event.type === "result")).toHaveLength(2);
+  });
+
+  it("rejects a result event with an unknown status", async () => {
+    await expect(
+      readTransferStream(
+        streamOf([
+          bytes(
+            '{"type":"result","name":"a","status":"mystery"}\n' + summaryLine(),
+          ),
+        ]),
+        () => undefined,
+      ),
+    ).rejects.toBeInstanceOf(TransferStreamError);
+  });
+
+  it("accepts a timeout summary with null entries", async () => {
+    const summary = await readTransferStream(
+      streamOf([
+        bytes(
+          summaryLine({ status: "failed", reason: "timeout", entries: null }),
+        ),
+      ]),
+      () => undefined,
+    );
+    expect(summary.reason).toBe("timeout");
+    expect(summary.entries).toEqual([]);
   });
 
   it("rejects an event after the terminal summary", async () => {
@@ -168,5 +234,65 @@ describe("transfer plan schema", () => {
       fits: false,
     });
     expect(plan.success).toBe(true);
+  });
+});
+
+const request = {
+  source_root: "volumes",
+  source_directory: "",
+  sources: ["report.txt"],
+  destination: { server_id: "server-b", root: "volumes", path: "" },
+};
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("transfer stream client", () => {
+  it("throws an ApiError with a numeric status for a non-2xx response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({ message: "files are disabled", code: "disabled" }),
+          { status: 503, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(streamTransfer("server-a", request)).rejects.toMatchObject({
+      status: 503,
+      code: "disabled",
+    });
+  });
+
+  it("propagates a connection failure from fetch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+
+    await expect(streamTransfer("server-a", request)).rejects.toBeInstanceOf(
+      TypeError,
+    );
+  });
+
+  it("rejects a malformed first line of an HTTP 200 stream", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(bytes('{"type":"nope"}\n'), {
+            status: 200,
+            headers: { "content-type": "application/x-ndjson" },
+          }),
+      ),
+    );
+
+    await expect(streamTransfer("server-a", request)).rejects.toBeInstanceOf(
+      TransferStreamError,
+    );
   });
 });

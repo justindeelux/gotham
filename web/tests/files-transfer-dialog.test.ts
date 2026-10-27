@@ -40,10 +40,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 
 import { listEntries, listRoots } from "@/features/files/api/files";
-import { planTransfer } from "@/features/files/api/transfer";
+import { planTransfer, streamTransfer } from "@/features/files/api/transfer";
 import ServerFilesPage from "@/features/files/pages/ServerFilesPage.vue";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
-import type { TransferPlan } from "@/features/files/schemas/transfer";
+import type {
+  TransferPlan,
+  TransferSummary,
+} from "@/features/files/schemas/transfer";
 import { filesPane } from "@/features/files/stores/filesPane";
 import { useFilesTransferStore } from "@/features/files/stores/transfer";
 import { useServersStore } from "@/features/servers";
@@ -197,6 +200,7 @@ describe("copy to the other pane", () => {
     const after = wrapper.find(".transfer-modal").text();
     expect(after).toContain("backups");
     expect(after).not.toContain("moved");
+    wrapper.unmount();
   });
 });
 
@@ -246,5 +250,77 @@ describe("copy to a node", () => {
     const dialog = wrapper.find(".transfer-modal");
     expect(dialog.text()).toContain("Destination");
     expect(dialog.text()).toContain("server-1.txt");
+    wrapper.unmount();
+  });
+
+  it("does not present a copy with nested skips as complete success", async () => {
+    const { wrapper } = await mountPage();
+    const finished: TransferSummary = {
+      transfer_id: "t-1",
+      mode: "bundle",
+      status: "copied",
+      copied: 2,
+      conflicts: 0,
+      skipped: 0,
+      failed: 0,
+      cancelled: 0,
+      uncertain: 0,
+      entries: [
+        { name: "server-1.txt", status: "copied" },
+        { name: "data", status: "copied" },
+      ],
+      skipped_count: 3,
+    };
+    vi.mocked(streamTransfer).mockResolvedValue(finished);
+
+    const left = filesPane("left").files;
+    left.selectOnly("server-1.txt");
+    await flushPromises();
+    const operations = wrapper
+      .find('.files-browser[data-pane="left"]')
+      .findAll("button")
+      .find((item) => item.attributes("aria-label") === "File operations");
+    expect(operations).toBeTruthy();
+    await operations!.trigger("click");
+    await flushPromises();
+    const copyToNode = wrapper
+      .findAll(".n-dropdown-option-body")
+      .find((item) => item.text().includes("Copy to node"));
+    expect(copyToNode).toBeTruthy();
+    await copyToNode!.trigger("click");
+    await flushPromises();
+
+    const dialog = wrapper.find(".transfer-modal");
+    const store = useFilesTransferStore();
+    await vi.waitFor(() => {
+      expect(dialog.find('button[aria-label="Check destination"]').exists()).toBe(
+        true,
+      );
+    });
+
+    await dialog.get('button[aria-label="Check destination"]').trigger("click");
+    await vi.waitFor(() => {
+      expect(store.state).toBe("ready");
+    });
+    await flushPromises();
+
+    const plannedDialog = wrapper.find(".transfer-modal");
+    await plannedDialog
+      .get('button[aria-label="Start copy"]')
+      .trigger("click");
+    await flushPromises();
+
+    await vi.waitFor(() => {
+      expect(store.state).toBe("finished");
+    });
+    await flushPromises();
+
+    const report = wrapper.find(".transfer-modal");
+    expect(report.text()).toContain("Copy finished with issues");
+    expect(report.text()).toContain("3 nested entries");
+    expect(
+      wrapper.find(".server-files__transfer").attributes("data-tone"),
+    ).toBe("warning");
+    wrapper.unmount();
   });
 });

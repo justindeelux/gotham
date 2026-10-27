@@ -3,22 +3,20 @@ import { computed, ref } from "vue";
 
 import {
   isTransferAborted,
-  isTransferIncomplete,
   planTransfer,
   streamTransfer,
 } from "@/features/files/api/transfer";
 import type {
-  TransferEntryStatus,
   TransferMode,
   TransferOutcome,
   TransferPhase,
   TransferPlan,
   TransferRequest,
   TransferSummary,
-  TransferSummaryStatus,
 } from "@/features/files/schemas/transfer";
 import { refreshAllPaneListings } from "@/features/files/stores/paneSession";
 import type { FilesPaneId } from "@/features/files/stores/paneSession";
+import { isApiError } from "@/features/servers";
 
 export interface TransferSource {
   serverId: string;
@@ -67,7 +65,8 @@ function cloneTarget(target: TransferTarget): TransferTarget {
   };
 }
 
-function requestFor(target: TransferTarget): TransferRequest {  return {
+function requestFor(target: TransferTarget): TransferRequest {
+  return {
     source_root: target.source.root,
     source_directory: target.source.path,
     sources: target.source.names,
@@ -121,18 +120,30 @@ function entryCounts(entries: TransferOutcome[]): {
 
 function syntheticSummary(
   names: string[],
-  status: TransferEntryStatus,
+  acknowledged: TransferOutcome[],
+  fallbackStatus: "cancelled" | "uncertain",
   reason: string,
   mode: TransferMode,
 ): TransferSummary {
-  const entries = names.map((name) => ({ name, status, reason: reason || undefined }));
+  const known = new Map<string, TransferOutcome>();
+  for (const entry of acknowledged) {
+    if (names.includes(entry.name) && !known.has(entry.name)) {
+      known.set(entry.name, entry);
+    }
+  }
+  const entries: TransferOutcome[] = names.map(
+    (name) =>
+      known.get(name) ?? {
+        name,
+        status: "uncertain" as const,
+        reason: fallbackStatus === "cancelled" ? "unconfirmed" : reason,
+      },
+  );
   const counts = entryCounts(entries);
-  const summaryStatus: TransferSummaryStatus =
-    status === "uncertain" ? "uncertain" : "cancelled";
   return {
     transfer_id: "",
     mode,
-    status: summaryStatus,
+    status: fallbackStatus,
     reason,
     ...counts,
     entries,
@@ -150,6 +161,7 @@ export const useFilesTransferStore = defineStore("filesTransfer", () => {
   const planError = ref<unknown>(null);
   const runError = ref<unknown>(null);
   const summary = ref<TransferSummary | null>(null);
+  const acknowledged = ref<TransferOutcome[]>([]);
   const phase = ref<TransferPhase | null>(null);
   const bytes = ref(0);
   const totalBytes = ref<number | null>(null);
@@ -166,7 +178,7 @@ export const useFilesTransferStore = defineStore("filesTransfer", () => {
   let generation = 0;
 
   const entries = computed<TransferOutcome[]>(
-    () => summary.value?.entries ?? [],
+    () => summary.value?.entries ?? acknowledged.value,
   );
   const isBusy = computed<boolean>(
     () => state.value === "planning" || state.value === "running",
@@ -185,6 +197,7 @@ export const useFilesTransferStore = defineStore("filesTransfer", () => {
     planError.value = null;
     runError.value = null;
     summary.value = null;
+    acknowledged.value = [];
     phase.value = null;
     bytes.value = 0;
     totalBytes.value = null;
@@ -301,6 +314,21 @@ export const useFilesTransferStore = defineStore("filesTransfer", () => {
               return;
             }
             sawProgress.value = true;
+            if (event.type === "result") {
+              if (
+                !acknowledged.value.some((entry) => entry.name === event.name)
+              ) {
+                acknowledged.value = [
+                  ...acknowledged.value,
+                  {
+                    name: event.name,
+                    status: event.status,
+                    reason: event.reason,
+                  },
+                ];
+              }
+              return;
+            }
             phase.value = event.phase;
             bytes.value = event.bytes ?? 0;
             totalBytes.value = event.total_bytes ?? null;
@@ -315,24 +343,34 @@ export const useFilesTransferStore = defineStore("filesTransfer", () => {
       if (run !== generation) {
         return;
       }
+      if (summary.value !== null) {
+        // A terminal summary already arrived; a later transport error cannot
+        // replace the authoritative report.
+        return;
+      }
       if (isTransferAborted(err)) {
         cancelledByUser.value = true;
         summary.value = syntheticSummary(
           current.source.names,
+          acknowledged.value,
           "cancelled",
           "cancelled",
           plannedMode,
         );
-      } else if (isTransferIncomplete(err) || sawProgress.value) {
+      } else if (isApiError(err) && typeof err.status === "number") {
+        // Only a non-2xx response proves the request never started the copy.
+        runError.value = err;
+      } else {
+        // The transfer was issued (connection reset, malformed first line,
+        // reader error): the destination may already hold entries.
         interrupted.value = true;
         summary.value = syntheticSummary(
           current.source.names,
+          acknowledged.value,
           "uncertain",
           "interrupted",
           plannedMode,
         );
-      } else {
-        runError.value = err;
       }
     } finally {
       if (run === generation) {
@@ -431,6 +469,7 @@ export const useFilesTransferStore = defineStore("filesTransfer", () => {
     planError,
     runError,
     summary,
+    acknowledged,
     phase,
     bytes,
     totalBytes,

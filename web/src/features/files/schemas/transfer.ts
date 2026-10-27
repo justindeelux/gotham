@@ -86,7 +86,10 @@ export const transferSummarySchema = z.object({
   failed: z.number().int().nonnegative(),
   cancelled: z.number().int().nonnegative(),
   uncertain: z.number().int().nonnegative(),
-  entries: z.array(transferOutcomeSchema),
+  entries: z
+    .array(transferOutcomeSchema)
+    .nullable()
+    .transform((value) => value ?? []),
   skipped_count: z.number().int().nonnegative(),
   skipped_samples: z.array(transferSkippedSchema).optional(),
   cleanup_failures: z.number().int().nonnegative().optional(),
@@ -100,6 +103,13 @@ const transferPhaseEventSchema = z.object({
   total_bytes: z.number().int().nonnegative().optional(),
 });
 
+const transferResultEventSchema = z.object({
+  type: z.literal("result"),
+  name: z.string(),
+  status: transferEntryStatusSchema,
+  reason: z.string().optional(),
+});
+
 const transferSummaryEventSchema = z.object({
   type: z.literal("summary"),
   status: transferSummaryStatusSchema,
@@ -108,6 +118,7 @@ const transferSummaryEventSchema = z.object({
 
 export const transferEventSchema = z.discriminatedUnion("type", [
   transferPhaseEventSchema,
+  transferResultEventSchema,
   transferSummaryEventSchema,
 ]);
 export type TransferEvent = z.infer<typeof transferEventSchema>;

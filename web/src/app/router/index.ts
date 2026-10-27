@@ -185,6 +185,12 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.instance", requiresAuth: true, requiresOwner: true },
       },
       {
+        path: "settings/monitoring",
+        name: "monitoring",
+        component: () => import("@/features/monitoring/pages/MonitoringSettingsPage.vue"),
+        meta: { titleKey: "titles.monitoring", requiresAuth: true, requiresOwner: true },
+      },
+      {
         path: "settings/updates",
         name: "updates",
         component: () => import("@/features/updates/pages/UpdatesPage.vue"),

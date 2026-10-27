@@ -96,6 +96,7 @@ type ServerService struct {
 	updater     AgentUpdateOfferer
 	notifier    StateNotifier
 	incidents   IncidentRecorder
+	pressure    PressureRecorder
 	sweepAfter  time.Time
 	agentUpdate agentUpdateState
 

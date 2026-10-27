@@ -487,6 +487,15 @@ func (s *Service) Deliveries(ctx context.Context, userID, incidentID uuid.UUID) 
 	return s.repo.ListDeliveries(ctx, incidentID, 10)
 }
 
+// ActiveNodeIncidents returns every open node-scoped incident. Monitoring
+// sweeps it to keep missing node evidence from looking like a recovery.
+func (s *Service) ActiveNodeIncidents(ctx context.Context) ([]Incident, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	return s.repo.ListActiveNodeIncidents(ctx)
+}
+
 func (s *Service) nodeGrouping(ctx context.Context) (map[uuid.UUID]Incident, error) {
 	rows, err := s.repo.ListActiveNodeIncidents(ctx)
 	if err != nil {

@@ -65,6 +65,7 @@ export default defineConfig({
               items: [
                 { text: "Overview", link: "/operating/" },
                 { text: "Nodes and containers", link: "/operating/nodes-containers" },
+                { text: "Host pressure monitoring", link: "/operating/monitoring" },
                 { text: "Terminal and files", link: "/operating/terminal-files" },
                 { text: "App store", link: "/operating/app-store" },
                 { text: "Instance network", link: "/operating/instance-network" },
@@ -142,6 +143,7 @@ export default defineConfig({
               items: [
                 { text: "Tổng quan", link: "/vi/operating/" },
                 { text: "Node và container", link: "/vi/operating/nodes-containers" },
+                { text: "Giám sát áp lực máy chủ", link: "/vi/operating/monitoring" },
                 { text: "Terminal và tệp", link: "/vi/operating/terminal-files" },
                 { text: "Kho ứng dụng", link: "/vi/operating/app-store" },
                 { text: "Mạng của instance", link: "/vi/operating/instance-network" },

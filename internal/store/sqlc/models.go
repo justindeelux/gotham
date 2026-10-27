@@ -256,6 +256,38 @@ type FileVersion struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type FilesystemIdentity struct {
+	ID            pgtype.UUID        `json:"id"`
+	NodeID        pgtype.UUID        `json:"node_id"`
+	FilesystemKey string             `json:"filesystem_key"`
+	Path          string             `json:"path"`
+	Purpose       string             `json:"purpose"`
+	Segment       int32              `json:"segment"`
+	TotalBytes    int64              `json:"total_bytes"`
+	TotalInodes   int64              `json:"total_inodes"`
+	FirstSeenAt   pgtype.Timestamptz `json:"first_seen_at"`
+	LastSeenAt    pgtype.Timestamptz `json:"last_seen_at"`
+}
+
+type FilesystemUsageBucket struct {
+	IdentityID     pgtype.UUID        `json:"identity_id"`
+	Segment        int32              `json:"segment"`
+	BucketAt       pgtype.Timestamptz `json:"bucket_at"`
+	Samples        int32              `json:"samples"`
+	FreshSamples   int32              `json:"fresh_samples"`
+	PartialSamples int32              `json:"partial_samples"`
+	UnknownSamples int32              `json:"unknown_samples"`
+	MinUsedBytes   *int64             `json:"min_used_bytes"`
+	MaxUsedBytes   *int64             `json:"max_used_bytes"`
+	LastUsedBytes  *int64             `json:"last_used_bytes"`
+	MinUsedInodes  *int64             `json:"min_used_inodes"`
+	MaxUsedInodes  *int64             `json:"max_used_inodes"`
+	LastUsedInodes *int64             `json:"last_used_inodes"`
+	TotalBytes     int64              `json:"total_bytes"`
+	TotalInodes    int64              `json:"total_inodes"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type GithubApp struct {
 	ID                  pgtype.UUID        `json:"id"`
 	UserID              pgtype.UUID        `json:"user_id"`
@@ -328,6 +360,7 @@ type Incident struct {
 	Evidence             string             `json:"evidence"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	SeveritySince        pgtype.Timestamptz `json:"severity_since"`
 }
 
 type IncidentDeliveryIntent struct {
@@ -399,6 +432,15 @@ type Invite struct {
 type InviteProject struct {
 	InviteID  pgtype.UUID `json:"invite_id"`
 	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+type MonitoringPolicy struct {
+	ID        pgtype.UUID        `json:"id"`
+	Scope     string             `json:"scope"`
+	NodeID    pgtype.UUID        `json:"node_id"`
+	Rules     []byte             `json:"rules"`
+	UpdatedBy pgtype.UUID        `json:"updated_by"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type NodeObservation struct {

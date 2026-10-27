@@ -95,10 +95,7 @@ func advance(inc *Incident, obs Observation, now time.Time) (*Incident, Transiti
 		inc.Coverage = CoverageFresh
 		inc.LastValidAt = timePtr(at)
 		inc.RecoveryStartedAt = nil
-		severityChanged := obs.Severity.Valid() && obs.Severity != inc.Severity
-		if obs.Severity.Valid() {
-			inc.Severity = obs.Severity
-		}
+		severityChanged := advanceSeverity(inc, obs, at, gap)
 		if previous == LifecyclePending {
 			if gap > obs.maxGap() {
 				inc.FirstObservedAt = at
@@ -123,6 +120,7 @@ func advance(inc *Incident, obs Observation, now time.Time) (*Incident, Transiti
 	case stateHealthy:
 		inc.Coverage = CoverageFresh
 		inc.LastValidAt = timePtr(at)
+		inc.SeveritySince = nil
 		if gap > obs.maxGap() || inc.RecoveryStartedAt == nil {
 			// A restart or a stale gap cannot borrow recovery time: the stable
 			// window restarts at the first fresh healthy report.
@@ -151,15 +149,22 @@ func advance(inc *Incident, obs Observation, now time.Time) (*Incident, Transiti
 	case stateIndeterminate:
 		inc.Coverage = CoveragePartial
 		inc.RecoveryStartedAt = nil
+		severityChanged := advanceSeverity(inc, obs, at, gap)
 		if previous == LifecyclePending {
 			// Evidence that is neither healthy nor unhealthy cannot confirm a
 			// sustained condition; the run restarts when evidence returns.
 			inc.FirstObservedAt = at
 		}
+		if previous == LifecycleFiring && severityChanged {
+			inc.DeliveryEvent = TransitionSeverityChanged
+			inc.DeliveryState = DeliveryPending
+			return inc, Transition{Event: TransitionSeverityChanged}
+		}
 
 	case stateExpected:
 		inc.Coverage = CoverageExpected
 		inc.RecoveryStartedAt = nil
+		inc.SeveritySince = nil
 		if previous == LifecyclePending {
 			inc.FirstObservedAt = at
 		}
@@ -167,11 +172,35 @@ func advance(inc *Incident, obs Observation, now time.Time) (*Incident, Transiti
 	case stateUnknown:
 		inc.Coverage = CoverageUnknown
 		inc.RecoveryStartedAt = nil
+		inc.SeveritySince = nil
 		if previous == LifecyclePending {
 			inc.FirstObservedAt = at
 		}
 	}
 	return inc, Transition{}
+}
+
+// advanceSeverity moves the incident between warning and critical only after
+// SeverityFor has elapsed. Evidence gaps restart the window, so a single sample
+// never flips the severity.
+func advanceSeverity(inc *Incident, obs Observation, at time.Time, gap time.Duration) bool {
+	if !obs.Severity.Valid() {
+		inc.SeveritySince = nil
+		return false
+	}
+	if obs.Severity == inc.Severity {
+		inc.SeveritySince = nil
+		return false
+	}
+	if gap > obs.maxGap() || inc.SeveritySince == nil {
+		inc.SeveritySince = timePtr(at)
+	}
+	if obs.SeverityFor > 0 && at.Sub(*inc.SeveritySince) < obs.SeverityFor {
+		return false
+	}
+	inc.Severity = obs.Severity
+	inc.SeveritySince = nil
+	return true
 }
 
 func open(obs Observation, state evidenceState, at, now time.Time) (*Incident, Transition) {

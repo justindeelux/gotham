@@ -15,7 +15,7 @@ const acknowledgeIncident = `-- name: AcknowledgeIncident :one
 UPDATE incidents
 SET acknowledged_at = $2, acknowledged_by = $3, updated_at = $2
 WHERE id = $1 AND lifecycle <> 'resolved'
-RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at
+RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since
 `
 
 type AcknowledgeIncidentParams struct {
@@ -61,6 +61,7 @@ func (q *Queries) AcknowledgeIncident(ctx context.Context, arg AcknowledgeIncide
 		&i.Evidence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SeveritySince,
 	)
 	return i, err
 }
@@ -123,7 +124,7 @@ const clearExpiredSnooze = `-- name: ClearExpiredSnooze :one
 UPDATE incidents
 SET snoozed_until = NULL, snooze_notified_until = $2, updated_at = $3
 WHERE id = $1 AND snoozed_until IS NOT NULL AND snoozed_until <= $3
-RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at
+RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since
 `
 
 type ClearExpiredSnoozeParams struct {
@@ -169,6 +170,7 @@ func (q *Queries) ClearExpiredSnooze(ctx context.Context, arg ClearExpiredSnooze
 		&i.Evidence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SeveritySince,
 	)
 	return i, err
 }
@@ -181,14 +183,14 @@ INSERT INTO incidents (
     recovery_started_at, resolved_at, close_reason, acknowledged_at,
     acknowledged_by, snoozed_until, snooze_notified_until, delivery_state,
     delivery_hold, delivery_event, delivery_attempts, delivery_error,
-    last_notified_severity, evidence, created_at, updated_at
+    last_notified_severity, evidence, created_at, updated_at, severity_since
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
     $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31,
-    $32, $33
+    $32, $33, $34
 )
 ON CONFLICT (identity_key) WHERE lifecycle <> 'resolved' DO NOTHING
-RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at
+RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since
 `
 
 type CreateIncidentParams struct {
@@ -225,6 +227,7 @@ type CreateIncidentParams struct {
 	Evidence             string             `json:"evidence"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	SeveritySince        pgtype.Timestamptz `json:"severity_since"`
 }
 
 func (q *Queries) CreateIncident(ctx context.Context, arg CreateIncidentParams) (Incident, error) {
@@ -262,6 +265,7 @@ func (q *Queries) CreateIncident(ctx context.Context, arg CreateIncidentParams) 
 		arg.Evidence,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.SeveritySince,
 	)
 	var i Incident
 	err := row.Scan(
@@ -298,6 +302,7 @@ func (q *Queries) CreateIncident(ctx context.Context, arg CreateIncidentParams) 
 		&i.Evidence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SeveritySince,
 	)
 	return i, err
 }
@@ -367,7 +372,7 @@ func (q *Queries) CreateIncidentEvent(ctx context.Context, arg CreateIncidentEve
 }
 
 const getActiveIncidentByIdentity = `-- name: GetActiveIncidentByIdentity :one
-SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at FROM incidents
+SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since FROM incidents
 WHERE identity_key = $1 AND lifecycle <> 'resolved'
 FOR UPDATE
 `
@@ -409,12 +414,13 @@ func (q *Queries) GetActiveIncidentByIdentity(ctx context.Context, identityKey s
 		&i.Evidence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SeveritySince,
 	)
 	return i, err
 }
 
 const getIncident = `-- name: GetIncident :one
-SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at FROM incidents WHERE id = $1
+SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since FROM incidents WHERE id = $1
 `
 
 func (q *Queries) GetIncident(ctx context.Context, id pgtype.UUID) (Incident, error) {
@@ -454,12 +460,13 @@ func (q *Queries) GetIncident(ctx context.Context, id pgtype.UUID) (Incident, er
 		&i.Evidence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SeveritySince,
 	)
 	return i, err
 }
 
 const getIncidentForUpdate = `-- name: GetIncidentForUpdate :one
-SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at FROM incidents WHERE id = $1 FOR UPDATE
+SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since FROM incidents WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetIncidentForUpdate(ctx context.Context, id pgtype.UUID) (Incident, error) {
@@ -499,12 +506,13 @@ func (q *Queries) GetIncidentForUpdate(ctx context.Context, id pgtype.UUID) (Inc
 		&i.Evidence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SeveritySince,
 	)
 	return i, err
 }
 
 const listActiveNodeIncidents = `-- name: ListActiveNodeIncidents :many
-SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at FROM incidents
+SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since FROM incidents
 WHERE node_id IS NOT NULL AND lifecycle <> 'resolved'
 `
 
@@ -551,6 +559,7 @@ func (q *Queries) ListActiveNodeIncidents(ctx context.Context) ([]Incident, erro
 			&i.Evidence,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SeveritySince,
 		); err != nil {
 			return nil, err
 		}
@@ -563,7 +572,7 @@ func (q *Queries) ListActiveNodeIncidents(ctx context.Context) ([]Incident, erro
 }
 
 const listExpiredSnoozes = `-- name: ListExpiredSnoozes :many
-SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at FROM incidents
+SELECT id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since FROM incidents
 WHERE lifecycle = 'firing'
   AND snoozed_until IS NOT NULL
   AND snoozed_until <= $1
@@ -619,6 +628,7 @@ func (q *Queries) ListExpiredSnoozes(ctx context.Context, arg ListExpiredSnoozes
 			&i.Evidence,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SeveritySince,
 		); err != nil {
 			return nil, err
 		}
@@ -728,7 +738,7 @@ func (q *Queries) ListIncidentEvents(ctx context.Context, arg ListIncidentEvents
 }
 
 const listIncidents = `-- name: ListIncidents :many
-SELECT i.id, i.identity_key, i.detector_key, i.scope_kind, i.scope_id, i.node_id, i.project_id, i.resource_type, i.resource_id, i.resource_name, i.severity, i.lifecycle, i.coverage, i.first_observed_at, i.last_observed_at, i.last_valid_at, i.confirmed_at, i.recovery_started_at, i.resolved_at, i.close_reason, i.acknowledged_at, i.acknowledged_by, i.snoozed_until, i.snooze_notified_until, i.delivery_state, i.delivery_hold, i.delivery_event, i.delivery_attempts, i.delivery_error, i.last_notified_severity, i.evidence, i.created_at, i.updated_at FROM incidents i
+SELECT i.id, i.identity_key, i.detector_key, i.scope_kind, i.scope_id, i.node_id, i.project_id, i.resource_type, i.resource_id, i.resource_name, i.severity, i.lifecycle, i.coverage, i.first_observed_at, i.last_observed_at, i.last_valid_at, i.confirmed_at, i.recovery_started_at, i.resolved_at, i.close_reason, i.acknowledged_at, i.acknowledged_by, i.snoozed_until, i.snooze_notified_until, i.delivery_state, i.delivery_hold, i.delivery_event, i.delivery_attempts, i.delivery_error, i.last_notified_severity, i.evidence, i.created_at, i.updated_at, i.severity_since FROM incidents i
 WHERE (
         $1::boolean
         OR (
@@ -816,6 +826,7 @@ func (q *Queries) ListIncidents(ctx context.Context, arg ListIncidentsParams) ([
 			&i.Evidence,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SeveritySince,
 		); err != nil {
 			return nil, err
 		}
@@ -944,7 +955,7 @@ const snoozeIncident = `-- name: SnoozeIncident :one
 UPDATE incidents
 SET snoozed_until = $2, snooze_notified_until = NULL, updated_at = $3
 WHERE id = $1 AND lifecycle <> 'resolved'
-RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at
+RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since
 `
 
 type SnoozeIncidentParams struct {
@@ -990,6 +1001,7 @@ func (q *Queries) SnoozeIncident(ctx context.Context, arg SnoozeIncidentParams) 
 		&i.Evidence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SeveritySince,
 	)
 	return i, err
 }
@@ -1014,9 +1026,10 @@ SET severity = $2,
     delivery_error = $17,
     last_notified_severity = $18,
     evidence = $19,
-    updated_at = $20
+    updated_at = $20,
+    severity_since = $21
 WHERE id = $1
-RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at
+RETURNING id, identity_key, detector_key, scope_kind, scope_id, node_id, project_id, resource_type, resource_id, resource_name, severity, lifecycle, coverage, first_observed_at, last_observed_at, last_valid_at, confirmed_at, recovery_started_at, resolved_at, close_reason, acknowledged_at, acknowledged_by, snoozed_until, snooze_notified_until, delivery_state, delivery_hold, delivery_event, delivery_attempts, delivery_error, last_notified_severity, evidence, created_at, updated_at, severity_since
 `
 
 type UpdateIncidentParams struct {
@@ -1040,6 +1053,7 @@ type UpdateIncidentParams struct {
 	LastNotifiedSeverity string             `json:"last_notified_severity"`
 	Evidence             string             `json:"evidence"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	SeveritySince        pgtype.Timestamptz `json:"severity_since"`
 }
 
 func (q *Queries) UpdateIncident(ctx context.Context, arg UpdateIncidentParams) (Incident, error) {
@@ -1064,6 +1078,7 @@ func (q *Queries) UpdateIncident(ctx context.Context, arg UpdateIncidentParams) 
 		arg.LastNotifiedSeverity,
 		arg.Evidence,
 		arg.UpdatedAt,
+		arg.SeveritySince,
 	)
 	var i Incident
 	err := row.Scan(
@@ -1100,6 +1115,7 @@ func (q *Queries) UpdateIncident(ctx context.Context, arg UpdateIncidentParams) 
 		&i.Evidence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SeveritySince,
 	)
 	return i, err
 }

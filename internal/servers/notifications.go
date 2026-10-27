@@ -30,6 +30,17 @@ func (s *ServerService) SetIncidentRecorder(recorder IncidentRecorder) {
 	s.incidents = recorder
 }
 
+// PressureRecorder consumes accepted observations for host resource alerts. It
+// is a separate handoff so recording an observation never fails because an
+// alert could not be evaluated.
+type PressureRecorder interface {
+	RecordHostPressure(context.Context, uuid.UUID, string, NodeObservation)
+}
+
+func (s *ServerService) SetPressureRecorder(recorder PressureRecorder) {
+	s.pressure = recorder
+}
+
 type StateNotifier interface {
 	ServerStateChanged(context.Context, StateChange)
 }

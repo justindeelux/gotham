@@ -20,6 +20,7 @@ owner DELETE /api/v1/users/{id}
 owner DELETE /api/v1/proxy/certificates/{id}
 owner DELETE /api/v1/proxy/dns-providers/{id}
 owner DELETE /api/v1/proxy/redirects/{id}
+owner DELETE /api/v1/monitoring/settings
 owner DELETE /api/v1/servers/{id}
 owner DELETE /api/v1/servers/{id}/files/entry
 owner DELETE /api/v1/servers/{id}/files/history/{version}
@@ -93,6 +94,8 @@ owner GET /api/v1/proxy/panel-certificates/{id}
 owner GET /api/v1/proxy/redirects
 owner GET /api/v1/proxy/redirects/{id}
 owner GET /api/v1/proxy/routers
+owner GET /api/v1/monitoring/nodes/{id}/status
+owner GET /api/v1/monitoring/settings
 owner GET /api/v1/servers
 owner GET /api/v1/servers/agents
 owner GET /api/v1/servers/{id}
@@ -252,6 +255,7 @@ owner PUT /api/v1/instance/settings/system
 owner PUT /api/v1/projects/{id}/members
 owner PUT /api/v1/users/{id}/projects
 project PUT /api/v1/projects/{id}/variables
+owner PUT /api/v1/monitoring/settings
 owner PUT /api/v1/servers/{id}/files/content
 owner PUT /api/v1/updates/schedule
 personal GET /api/v1/incidents

@@ -83,7 +83,7 @@ describe("navSections", () => {
       items.filter((item) => item.ownerOnly).map((item) => item.key),
     );
     expect(flagged).toEqual(
-      new Set(["files", "terminal", "servers", "domains", "users", "instance", "updates"]),
+      new Set(["files", "terminal", "servers", "domains", "users", "instance", "monitoring", "updates"]),
     );
   });
 

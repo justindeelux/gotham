@@ -243,3 +243,74 @@ func TestRecurrenceCreatesNewOccurrence(t *testing.T) {
 		t.Fatalf("recurrence = %+v %q; want a new occurrence", next, tr.Event)
 	}
 }
+
+func filesystemObservation(ob time.Time, value float64, severity Severity) Observation {
+	warning, clear := 90.0, 85.0
+	return Observation{
+		Identity: "filesystem_space|filesystem|node|/mnt/backup|1", Detector: "filesystem_space",
+		At: ob, Valid: true, Severity: severity, Value: &value,
+		TriggerThreshold: &warning, ClearThreshold: &clear,
+		ConfirmFor: 60 * time.Second, RecoverFor: 60 * time.Second,
+		SeverityFor: 60 * time.Second, MaxGap: 120 * time.Second,
+	}
+}
+
+func TestFilesystemThresholdsSustainEscalateDowngradeAndRecover(t *testing.T) {
+	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+
+	inc, tr := advance(nil, filesystemObservation(at(base, 0), 92, SeverityWarning), at(base, 0))
+	if inc == nil || inc.Lifecycle != LifecyclePending || tr.Event != "" {
+		t.Fatalf("warning onset = %+v %+v; want silent pending", inc, tr)
+	}
+	inc, tr = advance(inc, filesystemObservation(at(base, 30), 92, SeverityWarning), at(base, 30))
+	if inc.Lifecycle != LifecyclePending || tr.Event != "" {
+		t.Fatalf("short warning spike fired early: %s %q", inc.Lifecycle, tr.Event)
+	}
+	inc, tr = advance(inc, filesystemObservation(at(base, 60), 96, SeverityCritical), at(base, 60))
+	if inc.Lifecycle != LifecycleFiring || tr.Event != TransitionOpened || inc.Severity != SeverityWarning {
+		t.Fatalf("warning confirmation = %s %s %q; want firing warning", inc.Lifecycle, inc.Severity, tr.Event)
+	}
+
+	inc, tr = advance(inc, filesystemObservation(at(base, 90), 94, ""), at(base, 90))
+	if tr.Event != "" || inc.Severity != SeverityWarning {
+		t.Fatalf("intermediate band changed severity: %s %q", inc.Severity, tr.Event)
+	}
+	inc, tr = advance(inc, filesystemObservation(at(base, 120), 96, SeverityCritical), at(base, 120))
+	if tr.Event != "" || inc.Severity != SeverityWarning {
+		t.Fatalf("critical escalated before its window: %s %q", inc.Severity, tr.Event)
+	}
+	inc, tr = advance(inc, filesystemObservation(at(base, 180), 96, SeverityCritical), at(base, 180))
+	if tr.Event != TransitionSeverityChanged || inc.Severity != SeverityCritical {
+		t.Fatalf("sustained critical = %s %q; want severity changed", inc.Severity, tr.Event)
+	}
+
+	inc, tr = advance(inc, filesystemObservation(at(base, 240), 90, SeverityWarning), at(base, 240))
+	if tr.Event != "" || inc.Severity != SeverityCritical {
+		t.Fatalf("downgrade was immediate: %s %q", inc.Severity, tr.Event)
+	}
+	inc, tr = advance(inc, filesystemObservation(at(base, 300), 89, SeverityWarning), at(base, 300))
+	if tr.Event != TransitionSeverityChanged || inc.Severity != SeverityWarning {
+		t.Fatalf("sustained downgrade = %s %q; want warning", inc.Severity, tr.Event)
+	}
+
+	inc, tr = advance(inc, filesystemObservation(at(base, 330), 84, ""), at(base, 330))
+	if tr.Event != "" || inc.Lifecycle != LifecycleFiring {
+		t.Fatalf("recovery was immediate: %s %q", inc.Lifecycle, tr.Event)
+	}
+	inc, tr = advance(inc, filesystemObservation(at(base, 390), 84, ""), at(base, 390))
+	if inc.Lifecycle != LifecycleResolved || tr.Event != TransitionRecovered {
+		t.Fatalf("stable recovery = %s %q; want resolved", inc.Lifecycle, tr.Event)
+	}
+}
+
+func TestFilesystemSpikeShorterThanWindowIsSilent(t *testing.T) {
+	base := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
+	inc, _ := advance(nil, filesystemObservation(at(base, 0), 96, SeverityCritical), at(base, 0))
+	inc, tr := advance(inc, filesystemObservation(at(base, 30), 80, ""), at(base, 30))
+	if tr.Event != "" && tr.Event != "closed" {
+		t.Fatalf("short spike emitted %q", tr.Event)
+	}
+	if inc.Lifecycle == LifecycleFiring || inc.DeliveryState == DeliveryPending {
+		t.Fatalf("short spike fired: %+v", inc)
+	}
+}

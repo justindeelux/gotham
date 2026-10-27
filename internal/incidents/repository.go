@@ -351,6 +351,7 @@ func (t *storeTx) Create(ctx context.Context, incident Incident) (Incident, erro
 		Evidence:             incident.Evidence,
 		CreatedAt:            ts(incident.CreatedAt),
 		UpdatedAt:            ts(incident.UpdatedAt),
+		SeveritySince:        tsPtr(incident.SeveritySince),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -385,6 +386,7 @@ func (t *storeTx) Update(ctx context.Context, incident Incident) (Incident, erro
 		LastNotifiedSeverity: string(incident.LastNotifiedSeverity),
 		Evidence:             incident.Evidence,
 		UpdatedAt:            ts(incident.UpdatedAt),
+		SeveritySince:        tsPtr(incident.SeveritySince),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -467,6 +469,7 @@ func incidentFromRow(row sqlc.Incident) Incident {
 		Evidence:             row.Evidence,
 		CreatedAt:            row.CreatedAt.Time.UTC(),
 		UpdatedAt:            row.UpdatedAt.Time.UTC(),
+		SeveritySince:        timeFromPG(row.SeveritySince),
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/justindeelux/gotham/agent/docker"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -17,6 +18,10 @@ type fakeDockerClient struct {
 	listAll        bool
 	listLabels     map[string]string
 	version        string
+	dockerRootDir  string
+	details        *docker.ContainerDetails
+	detailsByID    map[string]docker.ContainerDetails
+	inspectErrByID map[string]error
 	err            error
 	logs           []byte
 	logStreamErr   error
@@ -30,6 +35,29 @@ type fakeDockerClient struct {
 
 func (f *fakeDockerClient) Version(context.Context) (string, error) {
 	return f.version, f.err
+}
+
+func (f *fakeDockerClient) DockerRootDir(context.Context) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.dockerRootDir, nil
+}
+
+func (f *fakeDockerClient) InspectContainer(_ context.Context, id string) (docker.ContainerDetails, error) {
+	if f.err != nil {
+		return docker.ContainerDetails{}, f.err
+	}
+	if err, ok := f.inspectErrByID[id]; ok {
+		return docker.ContainerDetails{}, err
+	}
+	if details, ok := f.detailsByID[id]; ok {
+		return details, nil
+	}
+	if f.details != nil {
+		return *f.details, nil
+	}
+	return docker.ContainerDetails{}, nil
 }
 
 func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {

@@ -42,11 +42,16 @@ type fakeAgentService struct {
 	registerGate  chan struct{}
 	heartbeatFail bool
 
+	observationCh            chan *agentv1.ObservationReport
+	observationFail          bool
+	observationUnimplemented bool
+
 	mu             sync.Mutex
 	registers      []*agentv1.RegisterRequest
 	heartbeats     []*agentv1.HeartbeatRequest
 	registerTokens []string
 	heartbeatNodes []string
+	observations   []*agentv1.ObservationReport
 }
 
 func (f *fakeAgentService) Register(ctx context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
@@ -100,6 +105,33 @@ func (f *fakeAgentService) Heartbeat(stream grpc.ClientStreamingServer[agentv1.H
 			case f.heartbeatCh <- req:
 			default:
 			}
+		}
+	}
+}
+
+func (f *fakeAgentService) PushObservations(stream grpc.ClientStreamingServer[agentv1.ObservationReport, agentv1.ObservationAck]) error {
+	if f.observationUnimplemented {
+		return status.Error(codes.Unimplemented, "observations are not implemented")
+	}
+	for {
+		report, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return stream.SendAndClose(&agentv1.ObservationAck{ReceivedAt: timestamppb.Now(), Accepted: true})
+		}
+		if err != nil {
+			return err
+		}
+		f.mu.Lock()
+		f.observations = append(f.observations, report)
+		f.mu.Unlock()
+		if f.observationCh != nil {
+			select {
+			case f.observationCh <- report:
+			default:
+			}
+		}
+		if f.observationFail {
+			return errors.New("observation stream reset")
 		}
 	}
 }

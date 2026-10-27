@@ -27,6 +27,7 @@ const (
 	envEnrollmentToken = "GOTHAM_AGENT_ENROLLMENT_TOKEN"
 	envDockerSock      = "GOTHAM_AGENT_DOCKER_SOCK"
 	envComposeRoot     = "GOTHAM_AGENT_COMPOSE_ROOT"
+	envBackupRoot      = "GOTHAM_AGENT_BACKUP_ROOT"
 	envLogLevel        = "GOTHAM_AGENT_LOG_LEVEL"
 
 	envManagedVolumeRoot       = "GOTHAM_AGENT_MANAGED_VOLUME_ROOT"
@@ -92,6 +93,7 @@ type Config struct {
 	DockerSock        string
 	ComposeRoot       string
 	ManagedVolumeRoot string
+	BackupRoot        string
 	LogLevel          string
 
 	Files                    bool
@@ -140,6 +142,7 @@ func Load() (Config, error) {
 		LogLevel:        envOr(envLogLevel, defaultLogLevel),
 
 		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, docker.DefaultManagedVolumeRoot)),
+		BackupRoot:        strings.TrimSpace(os.Getenv(envBackupRoot)),
 
 		Files:            !envOff(envFiles),
 		FileFullAccess:   !envOff(envFileFullAccess),

@@ -31,11 +31,12 @@ func TestFilesystemCollectorRealStatfs(t *testing.T) {
 		t.Error("root total_bytes = 0; want a measured capacity")
 	}
 
-	// A path that cannot be read is an explicit error, never a zero capacity.
+	// A configured path that does not exist yet is omitted: there is no
+	// filesystem to describe, and it must not look like a node problem.
 	now := time.Now().Add(2 * time.Minute)
 	collector.now = func() time.Time { return now }
 	missing := collector.Collect([]FilesystemCandidate{{Path: "/does/not/exist/gotham", Purpose: PurposeBackup}})
-	if len(missing) != 1 || missing[0].Status != MetricError {
-		t.Errorf("missing filesystem = %+v; want an explicit error", missing)
+	if len(missing) != 0 {
+		t.Errorf("missing filesystem = %+v; want it omitted", missing)
 	}
 }

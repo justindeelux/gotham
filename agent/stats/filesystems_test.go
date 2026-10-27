@@ -2,6 +2,7 @@ package stats
 
 import (
 	"errors"
+	"io/fs"
 	"testing"
 	"time"
 )
@@ -90,6 +91,93 @@ func TestFilesystemCollectorRefreshesTopologyAtMostOncePerWindow(t *testing.T) {
 	collector.Collect([]FilesystemCandidate{{Path: "/", Purpose: PurposeRoot}})
 	if calls-afterRefresh < 2 {
 		t.Errorf("capacity reads after the window = %d; want a topology refresh plus a sample", calls-afterRefresh)
+	}
+}
+
+func TestFilesystemCollectorOmitsMissingCandidate(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	values := map[string]fakeCapacity{
+		"/":                       {capacity: capacity{totalBytes: 100, availableBytes: 40, totalInodes: 10, freeInodes: 4, kind: 1}},
+		"/var/lib/gotham/volumes": {err: &fs.PathError{Op: "statfs", Path: "/var/lib/gotham/volumes", Err: fs.ErrNotExist}},
+		"/same-device":            {capacity: capacity{totalBytes: 100, availableBytes: 40, totalInodes: 10, freeInodes: 4, kind: 1}},
+		"/mnt/backup":             {capacity: capacity{totalBytes: 200, availableBytes: 10, totalInodes: 20, freeInodes: 2, kind: 2}},
+	}
+	devices := map[string]uint64{
+		"/": 7, "/same-device": 7, "/mnt/backup": 8,
+	}
+	collector := newTestFilesystemCollector(&now, values, devices)
+	filesystems := collector.Collect([]FilesystemCandidate{
+		{Path: "/", Purpose: PurposeRoot},
+		{Path: "/var/lib/gotham/volumes", Purpose: PurposeManagedStorage},
+		{Path: "/same-device", Purpose: PurposeDockerData},
+		{Path: "/mnt/backup", Purpose: PurposeBackup},
+	})
+	if len(filesystems) != 2 {
+		t.Fatalf("filesystems = %+v; want root and the separate backup mount only", filesystems)
+	}
+	if filesystems[0].Path != "/" || filesystems[0].Status != MetricOK {
+		t.Errorf("root = %+v; want it reported", filesystems[0])
+	}
+	if filesystems[1].Path != "/mnt/backup" || filesystems[1].Status != MetricOK {
+		t.Errorf("backup = %+v; want the existing separate mount reported", filesystems[1])
+	}
+	for _, filesystem := range filesystems {
+		if filesystem.Path == "/var/lib/gotham/volumes" {
+			t.Errorf("a not-yet-created path was reported: %+v", filesystem)
+		}
+	}
+}
+
+func TestFilesystemCollectorReportsPermissionFailure(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	values := map[string]fakeCapacity{
+		"/":          {capacity: capacity{totalBytes: 100, availableBytes: 40, totalInodes: 10, freeInodes: 4, kind: 1}},
+		"/forbidden": {err: &fs.PathError{Op: "statfs", Path: "/forbidden", Err: fs.ErrPermission}},
+	}
+	collector := newTestFilesystemCollector(&now, values, map[string]uint64{"/": 7, "/forbidden": 8})
+	filesystems := collector.Collect([]FilesystemCandidate{
+		{Path: "/", Purpose: PurposeRoot},
+		{Path: "/forbidden", Purpose: PurposeBackup},
+	})
+	if len(filesystems) != 2 {
+		t.Fatalf("filesystems = %+v; want the readable root and the failed candidate", filesystems)
+	}
+	failed := filesystems[1]
+	if failed.Status != MetricError || failed.Reason != "read_failed" ||
+		failed.InodeStatus != MetricError || failed.TotalBytes != 0 {
+		t.Errorf("permission failure = %+v; want error/read_failed, never a zero measurement", failed)
+	}
+}
+
+func TestFilesystemCollectorOmitsPathThatDisappears(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	calls := 0
+	collector := &FilesystemCollector{
+		now:    func() time.Time { return now },
+		maxAge: time.Minute,
+		capacity: func(path string) (capacity, error) {
+			if path == "/gone" {
+				calls++
+				if calls == 1 {
+					return capacity{totalBytes: 10, availableBytes: 5, totalInodes: 1, freeInodes: 1, kind: 1}, nil
+				}
+				return capacity{}, fs.ErrNotExist
+			}
+			return capacity{totalBytes: 100, availableBytes: 40, totalInodes: 10, freeInodes: 4, kind: 1}, nil
+		},
+		device: func(path string) (uint64, error) {
+			if path == "/gone" {
+				return 8, nil
+			}
+			return 7, nil
+		},
+	}
+	filesystems := collector.Collect([]FilesystemCandidate{
+		{Path: "/", Purpose: PurposeRoot},
+		{Path: "/gone", Purpose: PurposeBackup},
+	})
+	if len(filesystems) != 1 || filesystems[0].Path != "/" {
+		t.Errorf("filesystems = %+v; a path that disappeared must be omitted, not failed", filesystems)
 	}
 }
 

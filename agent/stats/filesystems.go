@@ -1,6 +1,8 @@
 package stats
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,7 +60,8 @@ type topologyEntry struct {
 // FilesystemCollector discovers the candidate filesystems at most once per
 // topology window and samples their capacity counters on every call. Paths on
 // the same device are deduplicated; a candidate whose capacity read fails is
-// reported as an error rather than as zero.
+// reported as an error rather than as zero, except a path that does not exist
+// yet, which is omitted until it appears.
 type FilesystemCollector struct {
 	mu          sync.Mutex
 	now         func() time.Time
@@ -93,6 +96,14 @@ func (c *FilesystemCollector) Collect(candidates []FilesystemCandidate) []Filesy
 		observation := Filesystem{Path: entry.path, Purpose: entry.purpose}
 		value, err := c.capacity(entry.path)
 		if err != nil {
+			// A configured path that does not exist yet (for example the managed
+			// storage root before the first volume) is not a read failure: there
+			// is no filesystem to describe. It reappears on the next topology
+			// refresh once it exists.
+			if errors.Is(err, fs.ErrNotExist) {
+				c.refreshedAt = time.Time{}
+				continue
+			}
 			observation.Status, observation.Reason = MetricError, "read_failed"
 			observation.InodeStatus, observation.InodeReason = MetricError, "read_failed"
 			// A path that stopped answering is a known topology change: re-
@@ -134,6 +145,9 @@ func (c *FilesystemCollector) resolve(candidates []FilesystemCandidate) []topolo
 		seenPath[path] = true
 		value, err := c.capacity(path)
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
 			entries = append(entries, topologyEntry{path: path, purpose: candidate.Purpose})
 			continue
 		}

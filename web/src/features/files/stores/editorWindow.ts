@@ -11,6 +11,7 @@ import {
 } from "@/features/files/schemas/editorWindow";
 import type { EditorWindowState } from "@/features/files/schemas/editorWindow";
 import { useEditorStore } from "@/features/files/stores/editor";
+import { useFilesPaneSession } from "@/features/files/stores/paneSession";
 import {
   clampEditorSize,
   readEditorWindow,
@@ -32,7 +33,9 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
   const y = ref<number | null>(initial.y);
   const minimized = ref<boolean>(initial.minimized);
 
-  const openCount = computed<number>(() => useEditorStore().tabs.length);
+  const openCount = computed<number>(() =>
+    useEditorStore(useFilesPaneSession().activePane).tabs.length,
+  );
 
   function viewportSize(): { width: number; height: number } {
     if (typeof window === "undefined") {

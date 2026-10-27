@@ -4,11 +4,27 @@ import {
   filesTabsSnapshotSchema,
 } from "@/features/files/schemas/tabsPersist";
 import type { FilesTabsSnapshot } from "@/features/files/schemas/tabsPersist";
+import type { FilesPaneId } from "@/features/files/stores/paneSession";
 import { parseWith } from "@/shared/validation/parse";
 
 export type FilesTabsStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-export function filesTabsStorageKey(serverId: string, userId: string): string {
+export function filesTabsStorageKey(
+  serverId: string,
+  userId: string,
+  pane: FilesPaneId = "left",
+): string {
+  if (serverId === "" || userId === "") {
+    return "";
+  }
+  return `gotham.files.tabs.v2.${encodeURIComponent(serverId)}.${encodeURIComponent(userId)}.${pane}`;
+}
+
+/** Pre-pane key: its snapshot becomes the left pane's tabs on first load. */
+export function legacyFilesTabsStorageKey(
+  serverId: string,
+  userId: string,
+): string {
   if (serverId === "" || userId === "") {
     return "";
   }

@@ -31,9 +31,8 @@ import { useResizeHandle } from "@/features/files/composables/useResizeHandle";
 import { useTreeKeyboard } from "@/features/files/composables/useTreeKeyboard";
 import { describeFilesError, isConflictError } from "@/features/files/api/files";
 import "@/features/files/locales/editorMessages";
-import { ExplorerDirtyError, useExplorerStore } from "@/features/files/stores/explorer";
-import { useEditorStore } from "@/features/files/stores/editor";
-import { useFilesStore } from "@/features/files/stores/files";
+import { ExplorerDirtyError } from "@/features/files/stores/explorer";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import type {
   ExplorerDialogMode,
   ExplorerEntryRow,
@@ -60,9 +59,10 @@ const emit = defineEmits<{ resize: [width: number] }>();
 
 const { t } = useI18n();
 const message = useMessage();
-const explorer = useExplorerStore();
-const editor = useEditorStore();
-const files = useFilesStore();
+const pane = useFilesPane();
+const explorer = pane.explorer;
+const editor = pane.editor;
+const files = pane.files;
 
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;

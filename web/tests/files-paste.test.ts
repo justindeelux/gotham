@@ -31,12 +31,18 @@ vi.mock("@/features/files/api/files", async (importOriginal) => {
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 
-import { listEntries, listRoots, moveEntry } from "@/features/files/api/files";
+import {
+  copyEntry,
+  listEntries,
+  listRoots,
+  moveEntry,
+} from "@/features/files/api/files";
 import FilesBrowser from "@/features/files/components/FilesBrowser.vue";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
+import { filesPane } from "@/features/files/stores/filesPane";
 import { i18n, registerDiscoveredCatalogs, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const root: FilesRoot = {
@@ -71,6 +77,29 @@ beforeEach(() => {
     ],
     truncated: false,
     cursor: "",
+  });
+});
+
+describe("files pane clipboard", () => {
+  it("pastes a copy taken in another pane on the same node", async () => {
+    vi.mocked(copyEntry).mockResolvedValue(entry({ name: "app.yaml" }));
+    const left = filesPane("left").files;
+    const right = filesPane("right").files;
+    await left.init("server-1");
+    await right.init("server-1");
+    left.selectOnly("app.yaml");
+    left.copySelection();
+    await right.openDirectory("data");
+
+    const summary = await right.paste();
+
+    expect(vi.mocked(copyEntry)).toHaveBeenCalledWith("server-1", {
+      root: "volumes",
+      source: "app.yaml",
+      destination: "data/app.yaml",
+      overwrite: false,
+    });
+    expect(summary.done).toEqual(["app.yaml"]);
   });
 });
 

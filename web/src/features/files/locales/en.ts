@@ -193,6 +193,7 @@ const en = {
     transferIntoItself: "A folder cannot be moved or copied into itself. Pick a destination outside it.",
     transferPartial: "{failed} failed — {error}",
     pasteCrossRoot: "The clipboard was cut or copied in another root. Copy or cut the entries here first.",
+    pasteCrossNode: "The clipboard was cut or copied on another node. Copy or cut the entries here first.",
     moved: "{count} moved.",
     copied: "{count} copied.",
     uploadTitle: "Upload files",

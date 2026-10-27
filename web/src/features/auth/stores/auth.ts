@@ -23,6 +23,11 @@ import { useDatabasesStore } from "@/features/databases";
 import { useFilesStore } from "@/features/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
+import { useExplorerStore } from "@/features/files/stores/explorer";
+import {
+  FILES_PANE_IDS,
+  useFilesPaneSession,
+} from "@/features/files/stores/paneSession";
 import { useTrashStore } from "@/features/files/stores/trash";
 import {
   useNotificationInboxStore,
@@ -128,12 +133,26 @@ export const useAuthStore = defineStore("auth", () => {
       () => useServersStore().reset(),
       () => useApplicationsStore().reset(),
       () => useDatabasesStore().reset(),
-      () => useFilesStore().reset(),
-      () => useEditorStore().reset(),
+      () => {
+        for (const pane of FILES_PANE_IDS) {
+          useFilesStore(pane).reset();
+        }
+        useFilesPaneSession().reset();
+      },
+      () => {
+        for (const pane of FILES_PANE_IDS) {
+          useEditorStore(pane).reset();
+        }
+      },
       () => useEditorWindowStore().reset(),
       () => useTerminalStore().reset(),
       () => useTerminalWindowStore().reset(),
-      () => useTrashStore().reset(),
+      () => {
+        for (const pane of FILES_PANE_IDS) {
+          useTrashStore(pane).reset();
+          useExplorerStore(pane).reset();
+        }
+      },
       () => useNotificationsStore().reset(),
       () => useNotificationInboxStore().reset(),
       () => useProjectsStore().reset(),

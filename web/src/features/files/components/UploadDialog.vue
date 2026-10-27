@@ -6,7 +6,7 @@ import { useI18n } from "vue-i18n";
 
 import type { UploadItem } from "@/features/files/composables/useFileUpload";
 import { useFileUpload } from "@/features/files/composables/useFileUpload";
-import { useFilesStore } from "@/features/files/stores/files";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 import { filesFromDrop, isFileDrag } from "@/features/files/utils/files";
 import { formatBytes } from "@/shared/utils/format";
 
@@ -22,7 +22,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const message = useMessage();
-const files = useFilesStore();
+const files = useFilesPane().files;
 const upload = useFileUpload();
 
 const dragging = ref(false);

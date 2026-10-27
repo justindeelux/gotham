@@ -10,6 +10,7 @@ import type { Server } from "@/features/servers/api/servers";
 import { getServer, isApiError } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers";
 import { useFilesStore } from "@/features/files";
+import { provideFilesPane } from "@/features/files/stores/filesPane";
 import { isRootRelativePath } from "@/features/files/utils/deepLink";
 
 const route = useRoute();
@@ -17,6 +18,7 @@ const router = useRouter();
 const { t } = useI18n();
 const serversStore = useServersStore();
 const files = useFilesStore();
+provideFilesPane("left");
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
 const server = ref<Server | null>(null);

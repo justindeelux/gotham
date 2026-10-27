@@ -3,11 +3,11 @@ import { NButton, NModal, NPopconfirm, useMessage } from "naive-ui";
 import { computed, nextTick, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { useEditorStore } from "@/features/files/stores/editor";
+import { useFilesPane } from "@/features/files/stores/filesPane";
 
 const { t } = useI18n();
 const message = useMessage();
-const editor = useEditorStore();
+const editor = useFilesPane().editor;
 
 const show = computed<boolean>(() => editor.conflictTab !== null);
 const tab = computed(() => editor.conflictTab);

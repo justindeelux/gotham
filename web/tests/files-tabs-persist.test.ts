@@ -108,6 +108,12 @@ describe("files tabs storage key", () => {
     expect(filesTabsStorageKey("server-1", "user-2")).not.toBe(key);
   });
 
+  it("separates panes even when server and user match", () => {
+    const left = filesTabsStorageKey("server-1", "user-1", "left");
+    expect(left).toBe(filesTabsStorageKey("server-1", "user-1"));
+    expect(left).not.toBe(filesTabsStorageKey("server-1", "user-1", "right"));
+  });
+
   it("refuses an empty server or user instead of pooling state", () => {
     expect(filesTabsStorageKey("", "user-1")).toBe("");
     expect(filesTabsStorageKey("server-1", "")).toBe("");

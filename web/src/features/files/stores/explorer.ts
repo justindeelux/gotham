@@ -1,4 +1,3 @@
-import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
@@ -14,6 +13,8 @@ import {
 import type { FilesSearchHit } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
+import type { FilesPaneId } from "@/features/files/stores/paneSession";
+import { definePaneStore } from "@/features/files/stores/paneStore";
 import type { ExplorerDirState } from "@/features/files/utils/explorer";
 import {
   joinPath,
@@ -52,9 +53,14 @@ function loadingDir(path: string, entries: ExplorerDirState["entries"] = []): Ex
   };
 }
 
-export const useExplorerStore = defineStore("filesExplorer", () => {
-  const files = useFilesStore();
-  const editor = useEditorStore();
+export const useExplorerStore = definePaneStore(
+  "filesExplorer",
+  createExplorerStore,
+);
+
+function createExplorerStore(pane: FilesPaneId) {
+  const files = useFilesStore(pane);
+  const editor = useEditorStore(pane);
 
   const serverId = ref("");
   const rootName = ref("");
@@ -439,4 +445,4 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     clearSearch,
     reset,
   };
-});
+}

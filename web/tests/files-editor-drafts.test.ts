@@ -275,6 +275,82 @@ describe("editor drafts composable", () => {
     rightScope.stop();
   });
 
+  it("keeps the other pane's newer draft when one pane closes its tab", async () => {
+    vi.useFakeTimers();
+    getContentMock.mockResolvedValue(content("base\n", '"v1"'));
+    const right = filesPane("right").files;
+    right.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
+    right.rootName = "volumes";
+    const leftEditor = useEditorStore("left");
+    const rightEditor = useEditorStore("right");
+    const leftScope = effectScope();
+    const rightScope = effectScope();
+    leftScope.run(() => useEditorDrafts(() => server, "left"));
+    rightScope.run(() => useEditorDrafts(() => server, "right"));
+    await leftEditor.openFile(server, "volumes", "app.yaml");
+    await rightEditor.openFile(server, "volumes", "app.yaml");
+    await nextTick();
+
+    leftEditor.setDoc(leftEditor.activeTab!.id, "left edit\n");
+    await nextTick();
+    vi.advanceTimersByTime(800);
+    rightEditor.setDoc(rightEditor.activeTab!.id, "right edit\n");
+    await nextTick();
+    vi.advanceTimersByTime(800);
+    const key = editorDraftStorageKey(prefix, "volumes", "app.yaml");
+    expect(readEditorDraft(window.localStorage, key)?.doc).toBe("right edit\n");
+
+    leftEditor.close(leftEditor.activeTab!.id);
+    await nextTick();
+    vi.advanceTimersByTime(800);
+
+    expect(readEditorDraft(window.localStorage, key)?.doc).toBe("right edit\n");
+    leftScope.stop();
+    rightScope.stop();
+  });
+
+  it("keeps the other pane's newer draft when one pane saves", async () => {
+    vi.useFakeTimers();
+    getContentMock.mockResolvedValue(content("base\n", '"v1"'));
+    putContentMock.mockResolvedValue({
+      name: "app.yaml",
+      kind: "file",
+      size: 12,
+      mode: 0o100644,
+      modified_at: "2026-10-18T10:00:00Z",
+      etag: '"v2"',
+    });
+    const right = filesPane("right").files;
+    right.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
+    right.rootName = "volumes";
+    const leftEditor = useEditorStore("left");
+    const rightEditor = useEditorStore("right");
+    const leftScope = effectScope();
+    const rightScope = effectScope();
+    leftScope.run(() => useEditorDrafts(() => server, "left"));
+    rightScope.run(() => useEditorDrafts(() => server, "right"));
+    await leftEditor.openFile(server, "volumes", "app.yaml");
+    await rightEditor.openFile(server, "volumes", "app.yaml");
+    await nextTick();
+
+    leftEditor.setDoc(leftEditor.activeTab!.id, "left edit\n");
+    await nextTick();
+    vi.advanceTimersByTime(800);
+    rightEditor.setDoc(rightEditor.activeTab!.id, "right edit\n");
+    await nextTick();
+    vi.advanceTimersByTime(800);
+    const key = editorDraftStorageKey(prefix, "volumes", "app.yaml");
+    expect(readEditorDraft(window.localStorage, key)?.doc).toBe("right edit\n");
+
+    expect(await leftEditor.save(leftEditor.activeTab!.id)).toBe("saved");
+    await nextTick();
+    vi.advanceTimersByTime(800);
+
+    expect(readEditorDraft(window.localStorage, key)?.doc).toBe("right edit\n");
+    leftScope.stop();
+    rightScope.stop();
+  });
+
   it("offers a stored draft on reopen and restores the exact buffer", async () => {
     const key = editorDraftStorageKey(prefix, "volumes", "app.yaml");
     writeEditorDraft(window.localStorage, prefix, draft({ doc: "recovered\n" }));

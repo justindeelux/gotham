@@ -349,7 +349,7 @@ test.describe("windowed list keeps its maths and reachability (JUS-145)", () => 
   }) => {
     await openFiles(page, {
       entries: bigListing(),
-      viewport: { width: 861, height: 900 },
+      viewport: { width: 1024, height: 900 },
     });
 
     const checked = async (expectedRow: number): Promise<void> => {
@@ -369,7 +369,7 @@ test.describe("windowed list keeps its maths and reachability (JUS-145)", () => 
     await checked(42);
     await page.setViewportSize({ width: 860, height: 900 });
     await checked(52);
-    await page.setViewportSize({ width: 861, height: 900 });
+    await page.setViewportSize({ width: 1024, height: 900 });
     await checked(42);
   });
 

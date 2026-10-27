@@ -290,4 +290,61 @@ test.describe("applications", () => {
 
     expect(guardrails.apiFailures).toEqual([]);
   });
+
+  test("shows runtime health and saves monitoring settings", async ({
+    page,
+    guardrails,
+    request,
+  }) => {
+    const account = loadAccount();
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const nodeId = await seedNode(request, headers);
+    const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
+    const name = `ui-e2e-runtime-${uniqueSuffix()}`;
+    const created = await request.post("/api/v1/applications", {
+      headers,
+      data: {
+        name,
+        environment_id: environmentId,
+        provider: "github",
+        repo: "docker/welcome-to-docker",
+        clone_url: cloneURL,
+        branch: "main",
+        build_pack: "auto",
+        server_id: nodeId,
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { application } = (await created.json()) as {
+      application: { id: string };
+    };
+
+    await page.goto(environmentURL(projectId, environmentId));
+    const row = page.locator(".resource-table tbody tr").filter({ hasText: name });
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId("runtime-health-row")).toBeVisible();
+
+    const settled = waitForDetailReads(page, application.id);
+    await page.goto(nestedURL(projectId, environmentId, "applications", application.id));
+    await settled;
+    await expect(page.getByTestId("runtime-health-state")).toHaveText("unknown");
+
+    const grace = page.getByRole("textbox", { name: /Startup grace/ });
+    await grace.fill("90");
+    const saved = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().endsWith(`/api/v1/applications/${application.id}`),
+    );
+    await page.getByTestId("runtime-health-save").click();
+    const response = await saved;
+    expect(response.status()).toBe(200);
+    const body = (await response.json()) as {
+      application: { runtime_health?: { grace_seconds: number; enabled: boolean } };
+    };
+    expect(body.application.runtime_health?.grace_seconds).toBe(90);
+    expect(body.application.runtime_health?.enabled).toBe(true);
+
+    expect(guardrails.apiFailures).toEqual([]);
+  });
 });

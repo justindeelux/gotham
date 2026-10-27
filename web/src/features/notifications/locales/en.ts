@@ -32,6 +32,8 @@ const en = {
       certificate_expiring: "Certificate for {name} expires soon",
       update_available: "Gotham {name} is available",
       redeploy_needed: "{name} needs a redeploy: {changes}",
+      runtime_failure: "Runtime failure: {name}",
+      runtime_recovery: "Runtime recovered: {name}",
       unknown: "Update for {name} on {host}",
     },
     changes: {
@@ -82,6 +84,8 @@ const en = {
     certificate_expiring: "Certificate expiring",
     update_available: "Gotham update available",
     redeploy_needed: "Redeploy needed",
+    runtime_failure: "Runtime failure",
+    runtime_recovery: "Runtime recovered",
   },
   scopeLabel: {
     allResources: "All resources",

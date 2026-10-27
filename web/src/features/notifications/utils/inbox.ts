@@ -13,6 +13,8 @@ const knownEventKeys = [
   "certificate_expiring",
   "update_available",
   "redeploy_needed",
+  "runtime_failure",
+  "runtime_recovery",
 ] as const;
 
 export type NotificationLinkType = "application" | "database";

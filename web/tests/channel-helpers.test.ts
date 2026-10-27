@@ -18,8 +18,15 @@ describe("channelHelpers", () => {
       "deploy_success",
       "deploy_failure",
       "redeploy_needed",
+      "runtime_failure",
+      "runtime_recovery",
     ]);
-    expect(allowedEvents("database")).toEqual(["backup_success", "backup_failure"]);
+    expect(allowedEvents("database")).toEqual([
+      "backup_success",
+      "backup_failure",
+      "runtime_failure",
+      "runtime_recovery",
+    ]);
     expect(allowedEvents("")).toEqual([
       "deploy_success",
       "deploy_failure",
@@ -30,6 +37,8 @@ describe("channelHelpers", () => {
       "certificate_expiring",
       "update_available",
       "redeploy_needed",
+      "runtime_failure",
+      "runtime_recovery",
     ]);
   });
 
@@ -39,6 +48,7 @@ describe("channelHelpers", () => {
     ]);
     expect(keepDeliverableEvents("application", ["server_offline"])).toEqual([
       "deploy_success", "deploy_failure", "redeploy_needed",
+      "runtime_failure", "runtime_recovery",
     ]);
   });
 
@@ -49,6 +59,8 @@ describe("channelHelpers", () => {
     expect(keepDeliverableEvents("database", ["deploy_success"])).toEqual([
       "backup_success",
       "backup_failure",
+      "runtime_failure",
+      "runtime_recovery",
     ]);
   });
 

@@ -1,6 +1,7 @@
 import { http } from "@/shared/api/http";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 import { i18n } from "@/shared/i18n";
+import type { RuntimeHealth } from "@/shared/types/runtimeHealth";
 
 export type DatabaseStatus =
   | "creating"
@@ -31,6 +32,7 @@ export interface Database {
   container_id: string;
   public_port: number;
   volume: string;
+  runtime_health?: RuntimeHealth | null;
   created_at: string;
   updated_at: string;
 }
@@ -59,6 +61,8 @@ export interface UpdateDatabaseInput {
   name?: string;
   environment_id?: string;
   server_id?: string;
+  monitor_enabled?: boolean;
+  monitor_grace_seconds?: number;
 }
 
 interface DatabaseEnvelope {

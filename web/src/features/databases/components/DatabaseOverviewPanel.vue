@@ -10,9 +10,11 @@ import {
   NSpin,
   NText,
 } from "naive-ui";
-import { inject } from "vue";
+import { inject, ref } from "vue";
 
+import { describeDatabaseError } from "@/features/databases/api/databases";
 import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
+import RuntimeHealthPanel from "@/shared/components/RuntimeHealthPanel.vue";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -22,6 +24,26 @@ function t(key: string, params?: Record<string, string | number>): string {
 }
 
 const detail = inject(databaseDetailKey)!;
+const monitorSaving = ref(false);
+const monitorError = ref<string | null>(null);
+
+async function saveMonitoring(value: { enabled: boolean; graceSeconds: number }): Promise<void> {
+  if (!detail.database.value) {
+    return;
+  }
+  monitorSaving.value = true;
+  monitorError.value = null;
+  try {
+    await detail.databasesStore.update(detail.database.value.id, {
+      monitor_enabled: value.enabled,
+      monitor_grace_seconds: value.graceSeconds,
+    });
+  } catch (error) {
+    monitorError.value = describeDatabaseError(error);
+  } finally {
+    monitorSaving.value = false;
+  }
+}
 </script>
 
 <template>
@@ -57,6 +79,15 @@ const detail = inject(databaseDetailKey)!;
         </NDescriptionsItem>
       </NDescriptions>
     </NCard>
+
+    <RuntimeHealthPanel
+      v-if="detail.database.value"
+      :health="detail.database.value.runtime_health"
+      :can-write="detail.canWrite.value"
+      :saving="monitorSaving"
+      :error="monitorError"
+      @save="saveMonitoring"
+    />
 
     <NCard :title="t('databases.detail.credentials.title')">
       <template #header-extra>

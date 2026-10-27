@@ -2,6 +2,7 @@ import { http } from "@/shared/api/http";
 import { activeLocale, i18n } from "@/shared/i18n";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
 import type { Service } from "@/features/services/api/services";
+import type { RuntimeHealth } from "@/shared/types/runtimeHealth";
 import {
   parseCreatedProject,
   parseEnvironment,
@@ -79,6 +80,7 @@ export interface EnvironmentResourceApplication {
   preview_of?: string;
   created_at: string;
   updated_at: string;
+  runtime_health?: RuntimeHealth | null;
 }
 
 export interface EnvironmentResourceDatabase {
@@ -97,6 +99,7 @@ export interface EnvironmentResourceDatabase {
   volume: string;
   created_at: string;
   updated_at: string;
+  runtime_health?: RuntimeHealth | null;
 }
 
 export interface EnvironmentResources {

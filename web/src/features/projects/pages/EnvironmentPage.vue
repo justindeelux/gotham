@@ -27,6 +27,7 @@ import type { EnvironmentResourceTab } from "@/features/projects/composables/use
 import { useSharedVariables } from "@/features/projects/composables/useSharedVariables";
 import type { InheritedVariable } from "@/features/projects/schemas/variables";
 import { activeLocale, i18n } from "@/shared/i18n";
+import { runtimeHealthTag } from "@/shared/types/runtimeHealth";
 
 const router = useRouter();
 const page = useEnvironmentPage();
@@ -285,7 +286,18 @@ function afterServiceCreate(service: Service): void {
                 </td>
                 <td :data-label="t('projects.environment.table.server')" class="mono muted">{{ row.serverName }}</td>
                 <td :data-label="t('projects.environment.table.status')">
-                  <NTag size="small" :type="row.statusTag">{{ row.statusText }}</NTag>
+                  <NSpace :size="4" align="center">
+                    <NTag size="small" :type="row.statusTag">{{ row.statusText }}</NTag>
+                    <NTag
+                      v-if="row.runtimeState"
+                      size="small"
+                      :type="runtimeHealthTag(row.runtimeState)"
+                      :title="row.runtimeReason ? t(`runtimeHealth.reasons.${row.runtimeReason}`) : undefined"
+                      data-testid="runtime-health-row"
+                    >
+                      {{ t(`runtimeHealth.states.${row.runtimeState}`) }}
+                    </NTag>
+                  </NSpace>
                 </td>
               </tr>
             </tbody>

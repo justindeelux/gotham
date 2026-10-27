@@ -556,6 +556,11 @@ func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, re
 		"sequence", stored.Sequence,
 		"inventory_complete", stored.InventoryComplete,
 	)
+	if s.pressure != nil {
+		pressureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		s.pressure.RecordHostPressure(pressureCtx, uuid.UUID(row.ID.Bytes), row.Name, observation)
+		cancel()
+	}
 	return &agentv1.ObservationAck{
 		ReceivedAt:         timestamppb.New(receivedAt.UTC()),
 		AcceptedSequence:   uint64(stored.Sequence),

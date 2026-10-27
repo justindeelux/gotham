@@ -28,6 +28,7 @@ import (
 	"github.com/justindeelux/gotham/internal/githubapp"
 	"github.com/justindeelux/gotham/internal/incidents"
 	"github.com/justindeelux/gotham/internal/instance"
+	"github.com/justindeelux/gotham/internal/monitoring"
 	"github.com/justindeelux/gotham/internal/notifications"
 	"github.com/justindeelux/gotham/internal/projects"
 	"github.com/justindeelux/gotham/internal/providers"
@@ -84,6 +85,7 @@ type Server struct {
 	jobLeases         *databases.JobLeases
 	notify            notifications.NotificationService
 	incidents         *incidents.Service
+	monitoring        *monitoring.Service
 	certificateExpiry *proxy.CertificateExpiryObserver
 	webhooks          *webhooks.Service
 	metrics           *servers.MetricsSweeper
@@ -347,6 +349,15 @@ func (s *Server) routes() (http.Handler, error) {
 		}
 		platformOnly := func(next http.Handler) http.Handler {
 			return s.RequireAuth(s.RequireOwner(next))
+		}
+		s.monitoring = s.monitoringService()
+		if s.monitoring != nil {
+			if nodes, ok := s.servers.(interface {
+				SetPressureRecorder(servers.PressureRecorder)
+			}); ok {
+				nodes.SetPressureRecorder(s.monitoring)
+			}
+			monitoring.Mount(api, platformOnly, UserIDFromContext, s.monitoring)
 		}
 		if s.auth != nil && s.servers != nil {
 			s.terminal = s.terminalService()
@@ -782,6 +793,17 @@ func (s *Server) incidentService() *incidents.Service {
 	return incidents.NewService(cfg)
 }
 
+func (s *Server) monitoringService() *monitoring.Service {
+	if s.persistence == nil || s.incidents == nil {
+		return nil
+	}
+	return monitoring.NewService(monitoring.Config{
+		Store:     s.persistence,
+		Incidents: s.incidents,
+		Logger:    s.logger,
+	})
+}
+
 func (s *Server) notificationService() notifications.NotificationService {
 	if s.persistence == nil {
 		return nil
@@ -1019,6 +1041,11 @@ func (s *Server) Run(ctx context.Context) error {
 		incidentCtx, cancelIncidents := context.WithCancel(ctx)
 		defer cancelIncidents()
 		go s.incidents.Run(incidentCtx)
+	}
+	if s.monitoring != nil {
+		monitorCtx, cancelMonitor := context.WithCancel(ctx)
+		defer cancelMonitor()
+		go s.monitoring.Run(monitorCtx)
 	}
 	if panel, ok := s.proxy.(interface{ RunPanelCertificates(context.Context) }); ok {
 		panelCtx, cancelPanel := context.WithCancel(ctx)

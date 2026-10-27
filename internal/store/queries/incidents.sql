@@ -6,11 +6,11 @@ INSERT INTO incidents (
     recovery_started_at, resolved_at, close_reason, acknowledged_at,
     acknowledged_by, snoozed_until, snooze_notified_until, delivery_state,
     delivery_hold, delivery_event, delivery_attempts, delivery_error,
-    last_notified_severity, evidence, created_at, updated_at
+    last_notified_severity, evidence, created_at, updated_at, severity_since
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
     $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31,
-    $32, $33
+    $32, $33, $34
 )
 ON CONFLICT (identity_key) WHERE lifecycle <> 'resolved' DO NOTHING
 RETURNING *;
@@ -75,7 +75,8 @@ SET severity = $2,
     delivery_error = $17,
     last_notified_severity = $18,
     evidence = $19,
-    updated_at = $20
+    updated_at = $20,
+    severity_since = $21
 WHERE id = $1
 RETURNING *;
 

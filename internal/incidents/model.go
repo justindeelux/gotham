@@ -99,6 +99,10 @@ type Incident struct {
 	Lifecycle Lifecycle
 	Coverage  Coverage
 
+	// SeveritySince starts the sustained window before a firing incident moves
+	// between warning and critical.
+	SeveritySince *time.Time
+
 	FirstObservedAt   time.Time
 	LastObservedAt    time.Time
 	LastValidAt       *time.Time
@@ -164,6 +168,9 @@ type Observation struct {
 
 	ConfirmFor time.Duration
 	RecoverFor time.Duration
+	// SeverityFor is the sustained window before Severity moves a firing
+	// incident between warning and critical. Zero changes it immediately.
+	SeverityFor time.Duration
 	// MaxGap bounds the evidence gap that still counts as continuous.
 	MaxGap time.Duration
 
@@ -239,7 +246,7 @@ func (o Observation) validate() error {
 	if o.Severity != "" && !o.Severity.Valid() {
 		return fmt.Errorf("%w: severity must be warning or critical", ErrValidation)
 	}
-	if o.ConfirmFor < 0 || o.RecoverFor < 0 || o.MaxGap < 0 {
+	if o.ConfirmFor < 0 || o.RecoverFor < 0 || o.SeverityFor < 0 || o.MaxGap < 0 {
 		return fmt.Errorf("%w: durations must not be negative", ErrValidation)
 	}
 	return nil

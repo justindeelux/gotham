@@ -1038,6 +1038,7 @@ function createFilesStore(pane: FilesPaneId) {
       const clip = clipboard.value;
       if (
         clip &&
+        clip.serverId === serverId.value &&
         clip.root === root &&
         clip.path === dir &&
         clip.names.includes(entry.name)

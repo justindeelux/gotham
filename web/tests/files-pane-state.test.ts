@@ -28,6 +28,7 @@ vi.mock("@/features/files/api/files", async (importOriginal) => {
     getContent: vi.fn(),
     listEntries: vi.fn(),
     listRoots: vi.fn(),
+    renameEntry: vi.fn(),
   };
 });
 
@@ -37,6 +38,7 @@ import {
   getContent,
   listEntries,
   listRoots,
+  renameEntry,
 } from "@/features/files/api/files";
 import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue";
 import FilesBrowser from "@/features/files/components/FilesBrowser.vue";
@@ -263,6 +265,26 @@ describe("files pane clipboard", () => {
     await right.files.paste();
     expect(vi.mocked(copyEntry)).not.toHaveBeenCalled();
     expect(left.files.pasteProblem).not.toBe("cross-node");
+  });
+});
+
+describe("files pane rename", () => {
+  it("keeps a clipboard taken on another node through a same-named rename", async () => {
+    vi.mocked(renameEntry).mockResolvedValue(entry({ name: "renamed.yaml" }));
+    const left = filesPane("left").files;
+    const right = filesPane("right").files;
+    await left.init("server-1");
+    await right.init("server-2");
+    left.rootName = "volumes";
+    right.rootName = "volumes";
+    left.selectOnly("app.yaml");
+    left.copySelection();
+
+    await right.rename(entry({ name: "app.yaml" }), "renamed.yaml");
+
+    expect(right.clipboard?.serverId).toBe("server-1");
+    expect(right.clipboard?.names).toEqual(["app.yaml"]);
+    expect(left.pasteProblem).not.toBe("cross-node");
   });
 });
 

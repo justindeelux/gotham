@@ -1,20 +1,19 @@
 ---
 name: postgres-patterns
-description: PostgreSQL database patterns for query optimization, schema design, indexing, and security. Based on Supabase best practices. Use when designing PostgreSQL schemas, indexes, or RLS policies, or when a query is too slow.
+description: PostgreSQL database patterns for query optimization, schema design, indexing, and security. Use when designing PostgreSQL schemas or indexes, or when a query is too slow.
 metadata:
   origin: ECC
 ---
 
 # PostgreSQL Patterns
 
-Quick reference for PostgreSQL best practices. For detailed guidance, use the `database-reviewer` agent.
+Quick reference for PostgreSQL best practices.
 
 ## When to Activate
 
 - Writing SQL queries or migrations
 - Designing database schemas
 - Troubleshooting slow queries
-- Implementing Row Level Security
 - Setting up connection pooling
 
 ## Quick Reference
@@ -59,12 +58,6 @@ CREATE INDEX idx ON users (email) INCLUDE (name, created_at);
 ```sql
 CREATE INDEX idx ON users (email) WHERE deleted_at IS NULL;
 -- Smaller index, only includes active users
-```
-
-**RLS Policy (Optimized):**
-```sql
-CREATE POLICY policy ON orders
-  USING ((SELECT auth.uid()) = user_id);  -- Wrap in SELECT!
 ```
 
 **UPSERT:**
@@ -139,9 +132,8 @@ SELECT pg_reload_conf();
 
 ## Related
 
-- Agent: `database-reviewer` - Full database review workflow
-- Skill: `clickhouse-io` - ClickHouse analytics patterns
-- Skill: `backend-patterns` - API and backend patterns
+- Skill: `golang-patterns` — Go persistence and error handling
+- Skill: `golang-testing` — database integration tests
 
 ---
 

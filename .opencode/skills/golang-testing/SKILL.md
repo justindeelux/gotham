@@ -644,6 +644,9 @@ func TestAPIHandler(t *testing.T) {
 
 ## Testing Commands
 
+Before database-backed tests, configure a throwaway PostgreSQL/Redis environment and
+set `GOTHAM_TEST_DSN` explicitly; never let test helpers fall back to shared development data.
+
 ```bash
 # Run all tests
 go test ./...
@@ -707,7 +710,7 @@ test:
     - uses: actions/checkout@v4
     - uses: actions/setup-go@v5
       with:
-        go-version: '1.22'
+        go-version-file: 'go.mod'
 
     - name: Run tests
       run: go test -race -coverprofile=coverage.out ./...

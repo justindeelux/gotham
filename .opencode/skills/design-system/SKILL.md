@@ -19,10 +19,11 @@ metadata:
 
 ### Mode 1: Generate Design System
 
-Analyzes your codebase and generates a cohesive design system:
+Analyzes your codebase and generates a cohesive design system. When a system already
+exists, reuse its tokens and Naive UI components; generate a replacement only when requested:
 
 ```
-1. Scan CSS/Tailwind/styled-components for existing patterns
+1. Scan CSS, Vue SFC styles, and Naive UI theme overrides for existing patterns
 2. Extract: colors, typography, spacing, border-radius, shadows, breakpoints
 3. Research 3 competitor sites for inspiration (via browser MCP)
 4. Propose a design token set (JSON + CSS custom properties)

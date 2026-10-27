@@ -1,7 +1,7 @@
 ---
 name: frontend-a11y
 description: >
-  Accessibility patterns for React and Next.js — semantic HTML, ARIA attributes,
+  Accessibility patterns for Vue 3 and Naive UI — semantic HTML, ARIA attributes,
   form labeling, keyboard navigation, focus management, and screen reader support.
   Use when building any interactive UI component or form.
 metadata:
@@ -10,13 +10,13 @@ metadata:
 
 # Frontend Accessibility Patterns
 
-Practical accessibility patterns for React and Next.js. Covers the issues most commonly flagged in code review: missing form labels, incorrect ARIA usage, non-semantic interactive elements, and broken keyboard navigation.
+Practical accessibility patterns for Vue 3 and Naive UI. Covers the issues most commonly flagged in code review: missing form labels, incorrect ARIA usage, non-semantic interactive elements, and broken keyboard navigation.
 
 ## When to Activate
 
 - Building or reviewing form components (`<input>`, `<select>`, `<textarea>`)
 - Creating interactive elements (modals, dropdowns, tooltips, tabs)
-- Using `<div>` or `<span>` with `onClick`
+- Using `<div>` or `<span>` with `@click`
 - Adding `aria-*` attributes to any element
 - Implementing keyboard navigation or focus management
 - Receiving accessibility feedback from code review tools (CodeRabbit, ESLint a11y)
@@ -24,158 +24,182 @@ Practical accessibility patterns for React and Next.js. Covers the issues most c
 
 ## Form Accessibility
 
-Missing `htmlFor` / `id` pairing and disconnected error messages are the most common issues flagged in code review.
+Missing `for` / `id` pairing and disconnected error messages are the most common issues flagged in code review.
 
 ### Label Connection
 
-```tsx
-// BAD: label has no connection to input — screen readers cannot associate them
+```vue
+<template>
+<!-- BAD: label has no connection to input — screen readers cannot associate them -->
 <label>Email</label>
 <input type="email" />
 
-// GOOD: htmlFor matches input id
-<label htmlFor="email">Email</label>
+<!-- GOOD: for matches input id -->
+<label for="email">Email</label>
 <input id="email" type="email" />
+</template>
 ```
 
 ### Required Fields
 
-```tsx
-// BAD: visual-only asterisk conveys nothing to screen readers
-<label htmlFor="email">Email *</label>
+```vue
+<template>
+<!-- BAD: visual-only asterisk conveys nothing to screen readers -->
+<label for="email">Email *</label>
 <input id="email" type="email" />
 
-// GOOD: required enables native browser validation; aria-required signals it to screen readers
-<label htmlFor="email">
+<!-- GOOD: required enables native browser validation; aria-required signals it to screen readers -->
+<label for="email">
   Email <span aria-hidden="true">*</span>
 </label>
 <input id="email" type="email" required aria-required="true" />
+</template>
 ```
 
 ### Error Messages
 
-```tsx
-// BAD: error text exists visually but is not linked to the input
-<input id="email" type="email" />
-<span className="error">Invalid email address</span>
+```vue
+<template>
+<!-- BAD: error text exists visually but is not linked to the input -->
+<input id="email" />
+<span class="error">Invalid email address</span>
 
-// GOOD: aria-describedby connects input to its error message
-// aria-invalid signals the invalid state to screen readers
+<!-- GOOD: description connects the error; invalid exposes the field state -->
 <input
   id="email"
   type="email"
   aria-describedby="email-error"
-  aria-invalid={!!error}
+  :aria-invalid="Boolean(error)"
 />
-{error && (
-  <span id="email-error" role="alert">
-    {error}
-  </span>
-)}
+<span v-if="error" id="email-error" role="alert">{{ error }}</span>
+</template>
 ```
 
 ### Complete Accessible Form
 
-```tsx
-interface LoginFormProps {
-  onSubmit: (email: string, password: string) => void
-}
+Use Naive UI's form components and adapt Zod schemas through `ruleFrom`. Keep
+the schema in the feature's `schemas/` directory.
 
-export function LoginForm({ onSubmit }: LoginFormProps) {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [errors, setErrors] = useState<{ email?: string; password?: string }>({})
+```typescript
+// schemas/login.ts
+import { z } from "zod";
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    const newErrors: typeof errors = {}
-    if (!email) newErrors.email = 'Email is required'
-    if (!password) newErrors.password = 'Password is required'
-    if (Object.keys(newErrors).length) {
-      setErrors(newErrors)
-      return
-    }
-    onSubmit(email, password)
-  }
-
-  return (
-    <form onSubmit={handleSubmit} noValidate>
-      <div>
-        <label htmlFor="email">
-          Email <span aria-hidden="true">*</span>
-        </label>
-        <input
-          id="email"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          aria-required="true"
-          aria-describedby={errors.email ? 'email-error' : undefined}
-          aria-invalid={!!errors.email}
-          autoComplete="email"
-        />
-        {errors.email && (
-          <span id="email-error" role="alert">
-            {errors.email}
-          </span>
-        )}
-      </div>
-
-      <div>
-        <label htmlFor="password">
-          Password <span aria-hidden="true">*</span>
-        </label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          aria-required="true"
-          aria-describedby={errors.password ? 'password-error' : undefined}
-          aria-invalid={!!errors.password}
-          autoComplete="current-password"
-        />
-        {errors.password && (
-          <span id="password-error" role="alert">
-            {errors.password}
-          </span>
-        )}
-      </div>
-
-      <button type="submit">Log in</button>
-    </form>
-  )
-}
+export const loginSchema = z.object({
+  email: z.email(),
+  password: z.string().min(1, "Password is required"),
+});
 ```
+
+```vue
+<script setup lang="ts">
+import { computed, ref } from "vue";
+import { NButton, NForm, NFormItem, NInput } from "naive-ui";
+import type { FormInst } from "naive-ui";
+import { fieldErrors, ruleFrom } from "@/shared/validation/naiveAdapter";
+import { loginSchema } from "./schemas/login";
+
+const emit = defineEmits<{
+  submit: [email: string, password: string];
+}>();
+const formRef = ref<FormInst | null>(null);
+const model = ref({ email: "", password: "" });
+const submitted = ref(false);
+const errors = computed(() => ({
+  email: submitted.value ? fieldErrors(loginSchema.shape.email, model.value.email) : [],
+  password: submitted.value ? fieldErrors(loginSchema.shape.password, model.value.password) : [],
+}));
+const rules = {
+  email: ruleFrom(loginSchema.shape.email, { required: true }),
+  password: ruleFrom(loginSchema.shape.password, { required: true }),
+};
+
+async function handleSubmit(): Promise<void> {
+  if (!formRef.value) return;
+  submitted.value = true;
+  try {
+    await formRef.value.validate();
+  } catch {
+    return; // The form displays validation errors; do not submit invalid input.
+  }
+  emit("submit", model.value.email, model.value.password);
+}
+</script>
+
+<template>
+  <n-form ref="formRef" :model="model" :rules="rules" @submit.prevent="handleSubmit">
+    <n-form-item label="Email" :label-props="{ for: 'email' }" path="email">
+      <n-input
+        v-model:value="model.email"
+        :input-props="{
+          id: 'email',
+          'aria-required': true,
+          'aria-describedby': 'email-error',
+          'aria-invalid': errors.email.length > 0,
+        }"
+        autocomplete="email"
+      />
+      <template #feedback>
+        <span id="email-error" role="alert">{{ errors.email[0] ?? "" }}</span>
+      </template>
+    </n-form-item>
+    <n-form-item label="Password" :label-props="{ for: 'password' }" path="password">
+      <n-input
+        v-model:value="model.password"
+        type="password"
+        :input-props="{
+          id: 'password',
+          'aria-required': true,
+          'aria-describedby': 'password-error',
+          'aria-invalid': errors.password.length > 0,
+        }"
+        autocomplete="current-password"
+      />
+      <template #feedback>
+        <span id="password-error" role="alert">{{ errors.password[0] ?? "" }}</span>
+      </template>
+    </n-form-item>
+    <n-button attr-type="submit">Log in</n-button>
+  </n-form>
+</template>
+```
+
+Verify that the rendered controls expose their labels and validation errors.
+Use the project's i18n pattern for labels and messages in production.
 
 ## Semantic HTML
 
 Use the element that matches the intent. Screen readers and keyboard users depend on native semantics.
 
-```tsx
-// BAD: div has no role, no keyboard support, no accessible name
-<div onClick={handleClick}>Submit</div>
+```vue
+<template>
+<!-- BAD: div has no role, no keyboard support, no accessible name -->
+<div @click="handleClick">Submit</div>
 
-// GOOD: button is focusable, activates on Enter/Space, announces as "button"
-<button type="button" onClick={handleClick}>Submit</button>
+<!-- GOOD: button is focusable, activates on Enter/Space, announces as "button" -->
+<button type="button" @click="handleClick">Submit</button>
+</template>
 ```
 
-```tsx
-// BAD: non-semantic navigation
-<div onClick={() => navigate('/home')}>Home</div>
+```vue
+<template>
+<!-- BAD: non-semantic navigation -->
+<div @click="router.push('/home')">Home</div>
 
-// GOOD: anchor supports right-click, middle-click, and keyboard navigation
+<!-- GOOD: anchor supports right-click, middle-click, and keyboard navigation -->
 <a href="/home">Home</a>
+</template>
 ```
 
-```tsx
-// BAD: heading hierarchy skipped (h1 to h4)
+```vue
+<template>
+<!-- BAD: heading hierarchy skipped (h1 to h4) -->
 <h1>Dashboard</h1>
 <h4>Recent Activity</h4>
 
-// GOOD: sequential heading levels
+<!-- GOOD: sequential heading levels -->
 <h1>Dashboard</h1>
 <h2>Recent Activity</h2>
+</template>
 ```
 
 ## ARIA Attributes
@@ -184,145 +208,123 @@ Use ARIA only when native HTML semantics are insufficient. Wrong ARIA is worse t
 
 ### aria-label vs aria-labelledby
 
-```tsx
-// aria-label: inline string label — use when no visible label text exists
+```vue
+<template>
+<!-- aria-label: inline string label — use when no visible label text exists -->
 <button aria-label="Close modal">
   <XIcon />
 </button>
 
-// aria-labelledby: references another element's text — use when a visible label exists
+<!-- aria-labelledby: references another element's text — use when a visible label exists -->
 <section aria-labelledby="section-title">
   <h2 id="section-title">Recent Orders</h2>
-  {/* content */}
+  <!-- content -->
 </section>
+</template>
 ```
 
 ### aria-describedby
 
-```tsx
-// Provides supplementary description beyond the label
+```vue
+<template>
+<!-- Provides supplementary description beyond the label -->
 <button
   aria-describedby="delete-warning"
-  onClick={handleDelete}
+  @click="handleDelete"
 > Delete account
 </button>
 <p id="delete-warning">This action cannot be undone.</p>
+</template>
 ```
 
 ### aria-live for Dynamic Content
 
-```tsx
-// Use aria-live to announce content that updates without a page reload
-// polite: waits for user to finish current action before announcing
-// assertive: interrupts immediately — use only for urgent errors
-
-export function StatusMessage({ message, isError }: { message: string; isError?: boolean }) {
-  return (
-    <div role="status" aria-live={isError ? 'assertive' : 'polite'} aria-atomic="true">
-      {message}
-    </div>
-  )
+```vue
+<script setup lang="ts">
+interface Props {
+  message: string;
+  isError?: boolean;
 }
+defineProps<Props>();
+</script>
+
+<template>
+  <!-- Keep the live region mounted; polite waits, assertive interrupts. -->
+  <div :role="isError ? 'alert' : 'status'" :aria-live="isError ? 'assertive' : 'polite'" aria-atomic="true">
+    {{ message }}
+  </div>
+</template>
 ```
 
 ### aria-expanded and aria-controls
 
-```tsx
-export function Accordion({ title, children }: { title: string; children: React.ReactNode }) {
-  const [isOpen, setIsOpen] = useState(false)
-  const contentId = useId()
+```vue
+<script setup lang="ts">
+import { ref, useId } from "vue";
 
-  return (
-    <div>
-      <button
-        aria-expanded={isOpen}
-        aria-controls={contentId}
-        onClick={() => setIsOpen((prev) => !prev)}
-      >
-        {title}
-      </button>
-      <div id={contentId} hidden={!isOpen}>
-        {children}
-      </div>
+defineProps<{ title: string }>();
+const isOpen = ref(false);
+const contentId = useId();
+</script>
+
+<template>
+  <div>
+    <button
+      type="button"
+      :aria-expanded="isOpen"
+      :aria-controls="contentId"
+      @click="isOpen = !isOpen"
+    >
+      {{ title }}
+    </button>
+    <div :id="contentId" :hidden="!isOpen">
+      <slot />
     </div>
-  )
-}
+  </div>
+</template>
 ```
 
 ## Keyboard Navigation
 
 Every interactive element must be reachable and operable by keyboard alone.
 
-### Custom Dropdown
+### Dropdown
 
-```tsx
-export function Dropdown({
-  options,
-  onSelect,
-}: {
-  options: string[]
-  onSelect: (value: string) => void
-}) {
-  const [isOpen, setIsOpen] = useState(false)
-  const [activeIndex, setActiveIndex] = useState(0)
-  const listId = useId()
+Use the existing Naive UI select/dropdown rather than rebuilding its keyboard model.
 
-  if (!options.length) return null
+```vue
+<script setup lang="ts">
+import { computed, ref } from "vue";
+import { NSelect } from "naive-ui";
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        setActiveIndex((i) => Math.min(i + 1, options.length - 1))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        setActiveIndex((i) => Math.max(i - 1, 0))
-        break
-      case 'Enter':
-      case ' ':
-        e.preventDefault()
-        if (isOpen) onSelect(options[activeIndex])
-        setIsOpen((prev) => !prev)
-        break
-      case 'Escape':
-        setIsOpen(false)
-        break
-    }
-  }
+const props = defineProps<{ options: string[] }>();
+const emit = defineEmits<{ select: [value: string] }>();
+const selected = ref<string | null>(null);
+const selectOptions = computed(() =>
+  props.options.map((value) => ({ label: value, value })),
+);
 
-  return (
-    <div
-      role="combobox"
-      aria-expanded={isOpen}
-      aria-haspopup="listbox"
-      aria-controls={listId}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      onClick={() => setIsOpen((prev) => !prev)}
-    >
-      <span>{options[activeIndex]}</span>
-      {isOpen && (
-        <ul id={listId} role="listbox">
-          {options.map((option, index) => (
-            <li
-              key={option}
-              role="option"
-              aria-selected={index === activeIndex}
-              onClick={() => {
-                onSelect(option)
-                setIsOpen(false)
-              }}
-            >
-              {option}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
+function handleSelect(value: string): void {
+  selected.value = value;
+  emit("select", value);
 }
+</script>
+
+<template>
+  <n-select
+    v-if="selectOptions.length"
+    :value="selected"
+    :options="selectOptions"
+    aria-label="Choose an option"
+    @update:value="handleSelect"
+  />
+</template>
 ```
+
+Verify ArrowUp/ArrowDown navigation, Enter/Space activation, Escape dismissal,
+and Tab movement on the rendered control. A custom listbox also needs an active
+option, `aria-expanded`, `aria-controls`, and `aria-selected`; a click handler alone
+is insufficient.
 
 ## Focus Management
 
@@ -330,144 +332,138 @@ Focus must move logically when UI state changes — especially for modals and ro
 
 ### Modal Focus Restoration
 
-> This example covers initial focus and restoration. For a full focus trap (Tab/Shift+Tab cycling within the modal), use a library like [`focus-trap-react`](https://github.com/focus-trap/focus-trap-react) which handles edge cases like dynamic content and nested portals.
+Use Naive UI's modal focus trap and initial focus behavior. Restore the invoking
+element after the closing transition, if it still exists.
 
-```tsx
-export function Modal({
-  isOpen,
-  onClose,
-  title,
-  children,
-}: {
-  isOpen: boolean
-  onClose: () => void
-  title: string
-  children: React.ReactNode
-}) {
-  const modalRef = useRef<HTMLDivElement>(null)
-  const previousFocusRef = useRef<HTMLElement | null>(null)
+```vue
+<script setup lang="ts">
+import { watch } from "vue";
+import { NModal } from "naive-ui";
 
-  useEffect(() => {
-    if (isOpen) {
-      // Save currently focused element and move focus into modal
-      previousFocusRef.current = document.activeElement as HTMLElement
-      modalRef.current?.focus()
-    } else {
-      // Restore focus to the element that opened the modal
-      previousFocusRef.current?.focus()
-    }
-  }, [isOpen])
-
-  if (!isOpen) return null
-
-  return (
-    <div
-      ref={modalRef}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="modal-title"
-      tabIndex={-1}
-      onKeyDown={(e) => e.key === 'Escape' && onClose()}
-    >
-      <h2 id="modal-title">{title}</h2>
-      {children}
-      <button onClick={onClose}>Close</button>
-    </div>
-  )
+interface Props {
+  isOpen: boolean;
+  title: string;
 }
+const props = defineProps<Props>();
+const emit = defineEmits<{ close: [] }>();
+let previousFocus: HTMLElement | null = null;
+
+watch(() => props.isOpen, (isOpen) => {
+  if (isOpen) {
+    previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  }
+});
+
+function restoreFocus(): void {
+  if (previousFocus?.isConnected) previousFocus.focus();
+}
+</script>
+
+<template>
+  <n-modal
+    :show="isOpen"
+    preset="dialog"
+    :title="title"
+    :auto-focus="true"
+    :trap-focus="true"
+    @update:show="(show) => { if (!show) emit('close'); }"
+    @after-leave="restoreFocus"
+  >
+    <slot />
+  </n-modal>
+</template>
 ```
+
+Verify Tab/Shift+Tab remain inside, Escape follows the dialog's dismissal policy,
+and focus returns to the trigger. Use the shared bounded modal layout.
 
 ## Images and Icons
 
-```tsx
-// BAD: decorative icon announced as unlabeled image
+```vue
+<template>
+<!-- BAD: decorative icon announced as unlabeled image -->
 <img src="/icon.svg" />
 
-// GOOD: decorative image hidden from screen readers
+<!-- GOOD: decorative image hidden from screen readers -->
 <img src="/decoration.png" alt="" aria-hidden="true" />
 
-// GOOD: meaningful image with descriptive alt text
+<!-- GOOD: meaningful image with descriptive alt text -->
 <img src="/chart.png" alt="Monthly revenue increased 23% from January to March" />
 
-// GOOD: icon button with accessible label
+<!-- GOOD: icon button with accessible label -->
 <button aria-label="Delete item">
   <TrashIcon aria-hidden="true" />
 </button>
+</template>
 ```
 
 ## Reduced Motion
 
-Respect users who have requested reduced motion in their OS settings.
+Respect users who have requested reduced motion in their OS settings. VueUse already
+provides a reactive media-query preference.
 
-```tsx
-export function useReducedMotion(): boolean {
-  const [prefersReduced, setPrefersReduced] = useState(false)
+```vue
+<script setup lang="ts">
+import { usePreferredReducedMotion } from "@vueuse/core";
 
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
-    setPrefersReduced(mq.matches)
-    const handler = (e: MediaQueryListEvent) => setPrefersReduced(e.matches)
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [])
+const reducedMotion = usePreferredReducedMotion();
+</script>
 
-  return prefersReduced
+<template>
+  <div :class="{ 'reduce-motion': reducedMotion === 'reduce' }">
+    <slot />
+  </div>
+</template>
+
+<style scoped>
+.reduce-motion {
+  transition: none;
+  animation: none;
 }
-
-// Usage
-export function AnimatedCard({ children }: { children: React.ReactNode }) {
-  const reduceMotion = useReducedMotion()
-
-  return (
-    <div
-      style={{
-        transition: reduceMotion ? 'none' : 'transform 300ms ease',
-      }}
-    >
-      {children}
-    </div>
-  )
-}
+</style>
 ```
 
 ## Anti-Patterns
 
-```tsx
-// BAD: onClick on non-interactive element with no keyboard support
-<div onClick={handleClick}>Click me</div>
+```vue
+<template>
+<!-- BAD: @click on non-interactive element with no keyboard support -->
+<div @click="handleClick">Click me</div>
 
-// BAD: aria-label on a div that has no role
+<!-- BAD: aria-label on a div that has no role -->
 <div aria-label="Navigation">...</div>
 
-// BAD: placeholder used as a substitute for label
+<!-- BAD: placeholder used as a substitute for label -->
 <input placeholder="Enter your email" />
 
-// BAD: positive tabIndex creates unpredictable tab order
-<button tabIndex={3}>Submit</button>
+<!-- BAD: positive tabindex creates unpredictable tab order -->
+<button :tabindex="3">Submit</button>
 
-// BAD: aria-hidden on a focusable element — keyboard users get trapped
+<!-- BAD: aria-hidden on a focusable element — keyboard users get trapped -->
 <button aria-hidden="true">Open</button>
 
-// BAD: role="button" on div without keyboard handler
-<div role="button" onClick={handleClick}>Submit</div>
-// Missing: tabIndex={0}, onKeyDown for Enter/Space
+<!-- BAD: role="button" on div without keyboard handler -->
+<div role="button" @click="handleClick">Submit</div>
+<!-- Missing: tabindex={0}, @keydown for Enter/Space -->
+</template>
 ```
 
 ## Checklist
 
 Before submitting any interactive component for review:
 
-- [ ] Every `<input>`, `<select>`, and `<textarea>` has a connected `<label>` via `htmlFor`/`id`
+- [ ] Every `<input>`, `<select>`, and `<textarea>` has a connected `<label>` via `for`/`id`
 - [ ] Error messages are linked with `aria-describedby` and marked `role="alert"`
-- [ ] No `onClick` on `<div>` or `<span>` without `role`, `tabIndex`, and `onKeyDown`
+- [ ] No `@click` on `<div>` or `<span>` without `role`, `tabindex`, and `@keydown`
 - [ ] Icon-only buttons have `aria-label`
 - [ ] Decorative images use `alt=""` and `aria-hidden="true"`
-- [ ] Modals restore focus on close (for full focus trapping with Tab/Shift+Tab cycling, use a library like `focus-trap-react`)
+- [ ] Modals restore focus on close (for full focus trapping with Tab/Shift+Tab cycling, use Naive UI's modal focus trap)
 - [ ] Dynamic content updates use `aria-live`
 - [ ] `prefers-reduced-motion` is respected for animations
 
 ## Related Skills
 
-- `frontend-patterns` — general React component and state patterns
+- `vue` — Vue component, state, and testing patterns
 - `design-system` — design token and component consistency
-- `motion-ui` — animation patterns with accessibility considerations

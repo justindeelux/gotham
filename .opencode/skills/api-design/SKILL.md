@@ -174,6 +174,8 @@ Location: /api/v1/users/abc-123
 
 ### Response Envelope Variants
 
+These are alternatives; preserve the existing endpoint's contract when extending an API.
+
 ```typescript
 // Option A: Envelope with data wrapper (recommended for public APIs)
 interface ApiResponse<T> {
@@ -309,20 +311,24 @@ X-API-Key: sk_live_abc123
 
 ### Authorization Patterns
 
-```typescript
-// Resource-level: check ownership
-app.get("/api/v1/orders/:id", async (req, res) => {
-  const order = await Order.findById(req.params.id);
-  if (!order) return res.status(404).json({ error: { code: "not_found" } });
-  if (order.userId !== req.user.id) return res.status(403).json({ error: { code: "forbidden" } });
-  return res.json({ data: order });
-});
+```go
+// Resource-level: check ownership after authenticating the caller.
+order, err := store.GetOrder(r.Context(), orderID)
+if errors.Is(err, pgx.ErrNoRows) {
+    writeError(w, http.StatusNotFound, "not_found", "Order not found")
+    return
+}
+if err != nil {
+    writeError(w, http.StatusInternalServerError, "internal_error", "Internal error")
+    return
+}
+if order.UserID != requester.ID {
+    writeError(w, http.StatusForbidden, "forbidden", "Access denied")
+    return
+}
+writeJSON(w, http.StatusOK, map[string]any{"data": order})
 
-// Role-based: check permissions
-app.delete("/api/v1/users/:id", requireRole("admin"), async (req, res) => {
-  await User.delete(req.params.id);
-  return res.status(204).send();
-});
+// Role-based: use the existing permission middleware around sensitive handlers.
 ```
 
 ## Rate Limiting
@@ -399,82 +405,6 @@ Accept: application/vnd.myapp.v2+json
 
 ## Implementation Patterns
 
-### TypeScript (Next.js API Route)
-
-```typescript
-import { z } from "zod";
-import { NextRequest, NextResponse } from "next/server";
-
-const createUserSchema = z.object({
-  email: z.string().email(),
-  name: z.string().min(1).max(100),
-});
-
-export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const parsed = createUserSchema.safeParse(body);
-
-  if (!parsed.success) {
-    return NextResponse.json({
-      error: {
-        code: "validation_error",
-        message: "Request validation failed",
-        details: parsed.error.issues.map(i => ({
-          field: i.path.join("."),
-          message: i.message,
-          code: i.code,
-        })),
-      },
-    }, { status: 422 });
-  }
-
-  const user = await createUser(parsed.data);
-
-  return NextResponse.json(
-    { data: user },
-    {
-      status: 201,
-      headers: { Location: `/api/v1/users/${user.id}` },
-    },
-  );
-}
-```
-
-### Python (Django REST Framework)
-
-```python
-from rest_framework import serializers, viewsets, status
-from rest_framework.response import Response
-
-class CreateUserSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    name = serializers.CharField(max_length=100)
-
-class UserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ["id", "email", "name", "created_at"]
-
-class UserViewSet(viewsets.ModelViewSet):
-    serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_serializer_class(self):
-        if self.action == "create":
-            return CreateUserSerializer
-        return UserSerializer
-
-    def create(self, request):
-        serializer = CreateUserSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = UserService.create(**serializer.validated_data)
-        return Response(
-            {"data": UserSerializer(user).data},
-            status=status.HTTP_201_CREATED,
-            headers={"Location": f"/api/v1/users/{user.id}"},
-        )
-```
-
 ### Go (net/http)
 
 ```go
@@ -513,7 +443,7 @@ Before shipping a new endpoint:
 - [ ] Resource URL follows naming conventions (plural, kebab-case, no verbs)
 - [ ] Correct HTTP method used (GET for reads, POST for creates, etc.)
 - [ ] Appropriate status codes returned (not 200 for everything)
-- [ ] Input validated with schema (Zod, Pydantic, Bean Validation)
+- [ ] Input validated on the Go server; frontend form schemas use Zod
 - [ ] Error responses follow standard format with codes and messages
 - [ ] Pagination implemented for list endpoints (cursor or offset)
 - [ ] Authentication required (or explicitly marked as public)

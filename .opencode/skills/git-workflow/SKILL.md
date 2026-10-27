@@ -628,10 +628,11 @@ git commit --amend --no-edit
 # .git/hooks/pre-commit
 
 # Run linting
-npm run lint || exit 1
+go vet ./... || exit 1
+(cd web && npm run lint) || exit 1
 
-# Run tests
-npm test || exit 1
+# Run frontend tests
+(cd web && npm run test:unit) || exit 1
 
 # Check for secrets
 if git diff --cached | grep -E '(password|api_key|secret)'; then
@@ -647,7 +648,10 @@ fi
 # .git/hooks/pre-push
 
 # Run full test suite
-npm run test:all || exit 1
+# Configure isolated PostgreSQL/Redis before database-backed tests
+: "${GOTHAM_TEST_DSN:?Set a throwaway PostgreSQL DSN before running tests}"
+go test ./... || exit 1
+(cd web && npm run type-check && npm run build) || exit 1
 
 # Check for console.log statements
 if git diff origin/main | grep -E 'console\.log'; then

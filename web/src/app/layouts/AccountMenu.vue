@@ -8,6 +8,7 @@ import { useRouter } from "vue-router";
 import { useAuthStore } from "@/features/auth";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { FILES_PANE_IDS } from "@/features/files/stores/paneSession";
+import { useFilesTransferStore } from "@/features/files/stores/transfer";
 import { useTerminalStore } from "@/features/terminal";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
@@ -83,6 +84,10 @@ async function handleSelect(key: string | number): Promise<void> {
     return;
   }
   if (key !== "sign-out") {
+    return;
+  }
+  if (!(await useFilesTransferStore().confirmLeave())) {
+    restoreAccountTrigger();
     return;
   }
   for (const pane of FILES_PANE_IDS) {

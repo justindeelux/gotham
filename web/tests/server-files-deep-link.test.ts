@@ -68,7 +68,11 @@ async function mountPage(url: string) {
   const wrapper = mount(ServerFilesPage, {
     global: {
       plugins: [router, i18n],
-      stubs: { FilesBrowser: true },
+      stubs: {
+        FilesBrowser: true,
+        CopyTransferDialog: true,
+        TransferLeaveDialog: true,
+      },
     },
   });
   await nextTick();

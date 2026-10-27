@@ -148,7 +148,7 @@ test("right-click on a file opens the custom menu, not the native one", async ({
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Edit in editor" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Cut" })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Copy" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Copy", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Move", exact: true })).toHaveCount(0);
 
   await page.keyboard.press("Escape");
@@ -222,7 +222,7 @@ test("folder-row Paste copies into that folder", async ({ page }) => {
   await rowFor(page, "app.yaml").click({ button: "right" });
   const fileMenu = page.getByRole("menu", { name: "More actions for app.yaml" });
   await expect(fileMenu).toBeVisible();
-  await fileMenu.getByRole("menuitem", { name: "Copy" }).click();
+  await fileMenu.getByRole("menuitem", { name: "Copy", exact: true }).click();
 
   await rowFor(page, "config").click({ button: "right" });
   const folderMenu = page.getByRole("menu", { name: "More actions for config" });

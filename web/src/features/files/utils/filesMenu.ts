@@ -1,6 +1,7 @@
 import type { DropdownOption } from "naive-ui";
 import {
   ArchiveRestore,
+  ArrowRight,
   ChevronRight,
   ClipboardPaste,
   Copy,
@@ -34,6 +35,11 @@ export interface FilesMenuContext {
   symlinkTargetPath?: string | null;
   canOpenTerminal: boolean;
   symlinkTargetDirectory?: boolean;
+  canCopyToNode?: boolean;
+  copyToNodeLabel?: string;
+  canCopyToPane?: boolean;
+  copyToPaneLabel?: string;
+  copyToPaneReason?: string;
   t: (_key: string, _named?: Record<string, unknown>) => string;
 }
 
@@ -158,6 +164,27 @@ export function rowMenuOptions(
     options.push(
       item(t("files.actions.copy"), "copy", !canWrite, menuIcon(Copy)),
     );
+    if (ctx.canCopyToNode !== undefined) {
+      options.push(
+        item(
+          ctx.copyToNodeLabel ?? t("files.transfer.copyToNode"),
+          "copy-to-node",
+          !ctx.canCopyToNode,
+          menuIcon(Copy),
+        ),
+      );
+    }
+    if (ctx.canCopyToPane !== undefined) {
+      options.push(
+        item(
+          ctx.copyToPaneLabel ?? t("files.transfer.titlePane"),
+          "copy-to-pane",
+          !ctx.canCopyToPane,
+          menuIcon(ArrowRight),
+          ctx.copyToPaneReason,
+        ),
+      );
+    }
     if (entry.kind === "directory") {
       options.push(
         item(

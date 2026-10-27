@@ -215,11 +215,28 @@ async function mockApi(page: Page): Promise<Harness> {
       });
     });
   }
+  await page.route("**/api/v1/servers/*/files/content*", async (route) => {
+    await route.fulfill({
+      json: {
+        content: "hello\n",
+        etag: '"v1"',
+        sha256: "abc",
+        size: 6,
+        mode: 0o100644,
+        encoding: "utf-8",
+      },
+    });
+  });
   return harness;
 }
 
 function pane(page: Page, side: "left" | "right") {
   return page.locator(`.files-browser[data-pane="${side}"]`);
+}
+
+/** Focuses a row so the pane's focusin handler activates it without opening a row. */
+async function focusPane(page: Page, side: "left" | "right"): Promise<void> {
+  await pane(page, side).locator(".fm-label").first().focus();
 }
 
 async function openFiles(page: Page): Promise<void> {
@@ -393,6 +410,17 @@ test("the active pane is marked and double-click opens a directory only there", 
   await pane(page, "right").locator('.fm-row[data-entry="target"] .fm-label').click();
   await expect(pane(page, "right")).toHaveClass(/is-active-pane/);
   await expect(pane(page, "left")).not.toHaveClass(/is-active-pane/);
+  await expect(pane(page, "right")).toHaveAttribute("aria-current", "true");
+  await expect(pane(page, "left")).not.toHaveAttribute("aria-current", "true");
+  await expect(page.locator('.files-browser[aria-current="true"]')).toHaveCount(1);
+  await expect(page.locator(".fm-active-tag")).toHaveCount(1);
+  await expect(pane(page, "right").locator(".fm-active-tag")).toBeVisible();
+
+  await pane(page, "left").locator(".fm-foot").click();
+  await expect(pane(page, "left")).toHaveAttribute("aria-current", "true");
+  await expect(pane(page, "right")).not.toHaveAttribute("aria-current", "true");
+  await expect(page.locator('.files-browser[aria-current="true"]')).toHaveCount(1);
+  await expect(pane(page, "left").locator(".fm-active-tag")).toBeVisible();
 
   const calls = harness.listCalls.length;
   await pane(page, "right")
@@ -413,4 +441,63 @@ test("the active pane is marked and double-click opens a directory only there", 
     )
     .toBe(1);
   expect(harness.listCalls.length).toBeGreaterThanOrEqual(calls);
+});
+
+test.describe("rail editor button across panes", () => {
+  async function openInPane(page: Page, side: "left" | "right"): Promise<void> {
+    await pane(page, side)
+      .locator('.fm-row[data-entry="report.txt"] .fm-label')
+      .dblclick();
+    await expect(page.locator(".ed-window")).toBeVisible();
+    await expect(page.locator(".cm-content").first()).toBeVisible();
+  }
+
+  for (const dirty of [false, true]) {
+    test(`shows the inactive pane's ${dirty ? "dirty" : "clean"} editor`, async ({
+      page,
+    }) => {
+      await openFiles(page);
+      await enableSplit(page);
+      await openInPane(page, "left");
+
+      if (dirty) {
+        await page.locator(".cm-content").first().click();
+        await page.keyboard.type(" edited");
+        await expect(page.locator(".ed-window-dirty")).toBeVisible();
+      }
+
+      await focusPane(page, "right");
+      await expect(pane(page, "right")).toHaveAttribute("aria-current", "true");
+      await expect(page.locator(".ed-window")).toBeHidden();
+
+      await page.locator(".rail-btn--editor").click();
+
+      await expect(pane(page, "left")).toHaveAttribute("aria-current", "true");
+      await expect(pane(page, "right")).not.toHaveAttribute("aria-current", "true");
+      await expect(page.locator(".ed-window")).toBeVisible();
+      await expect(page.locator(".ed-window .ed-tab-name").first()).toBeVisible();
+      if (dirty) {
+        await expect(page.locator(".ed-window-dirty")).toBeVisible();
+      }
+    });
+  }
+
+  test("activates the right pane when it holds the only editor", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await enableSplit(page);
+    await openInPane(page, "right");
+
+    await focusPane(page, "left");
+    await expect(pane(page, "left")).toHaveAttribute("aria-current", "true");
+    await expect(page.locator(".ed-window")).toBeHidden();
+
+    await page.locator(".rail-btn--editor").click();
+
+    await expect(pane(page, "right")).toHaveAttribute("aria-current", "true");
+    await expect(pane(page, "left")).not.toHaveAttribute("aria-current", "true");
+    await expect(page.locator(".ed-window")).toBeVisible();
+    await expect(page.locator(".ed-window .ed-tab-name").first()).toBeVisible();
+  });
 });

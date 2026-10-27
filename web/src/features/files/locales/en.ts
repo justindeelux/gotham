@@ -26,6 +26,7 @@ const en = {
     closeRight: "Close right pane",
     divider: "Resize panes",
     switchRightNode: "Switch agent node in the right pane",
+    active: "Active",
   },
   browser: {
     heading: "File browser",

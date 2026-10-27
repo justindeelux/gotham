@@ -26,6 +26,7 @@ const vi = {
     closeRight: "Đóng khung phải",
     divider: "Đổi kích thước khung",
     switchRightNode: "Đổi node agent ở khung phải",
+    active: "Đang hoạt động",
   },
   browser: {
     heading: "Trình duyệt tệp",

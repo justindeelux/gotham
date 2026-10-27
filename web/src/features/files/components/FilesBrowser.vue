@@ -124,6 +124,9 @@ const editor = pane.editor;
 function activatePane(): void {
   paneSession.activate(props.pane);
 }
+const isActivePane = computed<boolean>(
+  () => paneSession.splitEnabled && paneSession.activePane === props.pane,
+);
 const auth = useAuthStore();
 const serversStore = useServersStore();
 const terminal = useTerminalStore();
@@ -1998,6 +2001,7 @@ function onFolderMenu(key: string): void {
     class="files-browser"
     role="region"
     :data-pane="props.pane"
+    :aria-current="isActivePane ? 'true' : undefined"
     :aria-label="
       $t('files.browser.heading') +
       ' — ' +
@@ -2006,7 +2010,7 @@ function onFolderMenu(key: string): void {
     :class="{
       'is-dragging': dragActive,
       'is-compact': isCompactList,
-      'is-active-pane': paneSession.splitEnabled && paneSession.activePane === props.pane,
+      'is-active-pane': isActivePane,
     }"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
@@ -2067,6 +2071,9 @@ function onFolderMenu(key: string): void {
       </div>
     </div>
       <div class="fm-contextbar">
+        <span v-if="isActivePane" class="fm-active-tag" aria-hidden="true">
+          {{ $t("files.split.active") }}
+        </span>
         <slot name="header-tools" />
       </div>
     </div>
@@ -2868,6 +2875,18 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
   min-width: 0;
   margin-left: auto;
+}
+
+.fm-active-tag {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  color: var(--accent-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .fm-tabs {

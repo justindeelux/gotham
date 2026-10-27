@@ -13,6 +13,7 @@ import {
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
+import { useFilesPaneSession } from "@/features/files/stores/paneSession";
 import { useAuthStore } from "@/features/auth";
 import { useTerminalStore, useTerminalWindowStore } from "@/features/terminal";
 import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
@@ -21,6 +22,7 @@ const serversStore = useServersStore();
 const authStore = useAuthStore();
 const leftEditor = useEditorStore("left");
 const rightEditor = useEditorStore("right");
+const filesPanes = useFilesPaneSession();
 const editorWindow = useEditorWindowStore();
 const terminal = useTerminalStore();
 const terminalWindow = useTerminalWindowStore();
@@ -43,7 +45,22 @@ const editorLabel = computed<string>(() =>
 );
 
 function toggleEditor(): void {
-  editorWindow.setMinimized(!editorWindow.minimized);
+  const activeHasTabs =
+    filesPanes.activePane === "left"
+      ? leftEditor.tabs.length > 0
+      : rightEditor.tabs.length > 0;
+  if (editorWindow.minimized || !activeHasTabs) {
+    if (!activeHasTabs) {
+      if (leftEditor.tabs.length > 0) {
+        filesPanes.activate("left");
+      } else if (rightEditor.tabs.length > 0) {
+        filesPanes.activate("right");
+      }
+    }
+    editorWindow.setMinimized(false);
+    return;
+  }
+  editorWindow.setMinimized(true);
 }
 
 const terminalTabs = computed(() =>

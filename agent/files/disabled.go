@@ -101,3 +101,27 @@ func (*DisabledFileServer) Purge(context.Context, *agentv1.PurgeRequest) (*agent
 func (*DisabledFileServer) EmptyTrash(context.Context, *agentv1.EmptyTrashRequest) (*agentv1.EmptyTrashResponse, error) {
 	return nil, disabledError()
 }
+
+func (*DisabledFileServer) TransferCapabilities(context.Context, *agentv1.TransferCapabilitiesRequest) (*agentv1.TransferCapabilitiesResponse, error) {
+	return nil, disabledError()
+}
+
+func (*DisabledFileServer) PrepareBundle(context.Context, *agentv1.PrepareBundleRequest) (*agentv1.PrepareBundleResponse, error) {
+	return nil, disabledError()
+}
+
+func (*DisabledFileServer) ReadArtifact(*agentv1.ReadArtifactRequest, grpc.ServerStreamingServer[agentv1.ArtifactChunk]) error {
+	return disabledError()
+}
+
+func (*DisabledFileServer) ReceiveArtifact(grpc.ClientStreamingServer[agentv1.ReceiveArtifactRequest, agentv1.ReceiveArtifactResponse]) error {
+	return disabledError()
+}
+
+func (*DisabledFileServer) ApplyArtifact(*agentv1.ApplyArtifactRequest, grpc.ServerStreamingServer[agentv1.ApplyArtifactEvent]) error {
+	return disabledError()
+}
+
+func (*DisabledFileServer) DiscardArtifact(context.Context, *agentv1.DiscardArtifactRequest) (*agentv1.DiscardArtifactResponse, error) {
+	return nil, disabledError()
+}

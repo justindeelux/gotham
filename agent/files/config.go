@@ -1,6 +1,8 @@
 package files
 
 import (
+	"path/filepath"
+
 	"github.com/justindeelux/gotham/agent/proxy"
 )
 
@@ -29,12 +31,16 @@ type Config struct {
 	ManagedVolumeRoot string
 	ComposeRoot       string
 	FileRoots         string
-	CertDir           string
-	KeyFile           string
-	CA                string
-	BinaryPath        string
-	AgentStateRoot    string
-	ProxyRoot         string
+	// FileTransferRoot is the private, agent-owned directory bundle staging is
+	// written to. It must not be inside a file root. Empty derives
+	// <AgentStateRoot>/file-transfers.
+	FileTransferRoot string
+	CertDir          string
+	KeyFile          string
+	CA               string
+	BinaryPath       string
+	AgentStateRoot   string
+	ProxyRoot        string
 
 	UpdateScript      string
 	UpdateStatusPath  string
@@ -62,6 +68,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.ProxyRoot == "" {
 		c.ProxyRoot = proxy.DefaultRoot
+	}
+	if c.FileTransferRoot == "" {
+		c.FileTransferRoot = filepath.Join(c.AgentStateRoot, "file-transfers")
 	}
 	if c.FileMaxUpload <= 0 {
 		c.FileMaxUpload = DefaultMaxUpload

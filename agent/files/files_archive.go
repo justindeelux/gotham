@@ -68,6 +68,17 @@ type archiveCounter struct {
 	entries      int64
 	bytes        int64
 	skipped      int
+	skipSamples  []*agentv1.SkippedEntry
+	sampleCap    int
+}
+
+// skip records one entry the archive refused to store, retaining at most
+// sampleCap samples.
+func (c *archiveCounter) skip(name, reason string) {
+	c.skipped++
+	if len(c.skipSamples) < c.sampleCap {
+		c.skipSamples = append(c.skipSamples, &agentv1.SkippedEntry{Path: name, Reason: reason})
+	}
 }
 
 func (c *archiveCounter) addEntry(size int64) error {
@@ -122,11 +133,37 @@ func (c *cappedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// cappedWriter refuses to write past limit bytes, so a bundle that would
+// exceed the archive input budget fails while it is produced rather than after
+// it fills the disk.
+type cappedWriter struct {
+	w       io.Writer
+	limit   int64
+	written int64
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > c.limit-c.written {
+		return 0, fmt.Errorf("%w: bundle exceeds %d bytes", fsroot.ErrTooLarge, c.limit)
+	}
+	n, err := c.w.Write(p)
+	c.written += int64(n)
+	return n, err
+}
+
+// archiveProgress reports a Compress or Extract run on a Progress stream.
 type archiveProgress struct {
 	stream    grpc.ServerStreamingServer[agentv1.Progress]
 	path      string
 	bytesDone int64
 	last      time.Time
+}
+
+// progressSender is the narrow sink the archive walkers report progress to, so
+// Extract can also drive an ApplyArtifact event stream.
+type progressSender interface {
+	add(name string, n int64) error
+	done(skipped uint64) error
 }
 
 func (p *archiveProgress) add(name string, n int64) error {
@@ -371,7 +408,7 @@ func (s *FileServer) Compress(req *agentv1.CompressRequest, stream grpc.ServerSt
 	return progress.done(uint64(counter.skipped))
 }
 
-func (s *FileServer) compressEntry(ctx context.Context, root *fsroot.Root, sink archiveSink, rel, name string, tmpInfo os.FileInfo, counter *archiveCounter, progress *archiveProgress, depth int) error {
+func (s *FileServer) compressEntry(ctx context.Context, root *fsroot.Root, sink archiveSink, rel, name string, tmpInfo os.FileInfo, counter *archiveCounter, progress progressSender, depth int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -409,9 +446,12 @@ func (s *FileServer) compressEntry(ctx context.Context, root *fsroot.Root, sink 
 		if err := sink.addFile(ctx, name, opened, file); err != nil {
 			return err
 		}
+		if progress == nil {
+			return nil
+		}
 		return progress.add(name, opened.Size)
 	default:
-		counter.skipped++
+		counter.skip(name, transferSkipReason(entry.Kind))
 		return nil
 	}
 }
@@ -478,7 +518,7 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 	return progress.done(0)
 }
 
-func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, archive *os.File, size int64, format agentv1.ArchiveFormat, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress *archiveProgress) error {
+func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, archive *os.File, size int64, format agentv1.ArchiveFormat, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress progressSender) error {
 	switch format {
 	case agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP:
 		dir, err := zipCentralDirectoryBounds(archive, size)
@@ -634,7 +674,7 @@ func zip64CentralDirectoryBounds(f io.ReaderAt, eocdOffset, size int64) (zipCent
 	return dir, true, nil
 }
 
-func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf *zip.File, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress *archiveProgress) error {
+func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf *zip.File, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress progressSender) error {
 	rel, err := archiveEntryPath(zf.Name, true)
 	if err != nil {
 		return err
@@ -673,7 +713,7 @@ func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf 
 	return s.extractFile(ctx, root, target, mode.Perm(), int64(zf.UncompressedSize64), overwrite, src, body, state, progress)
 }
 
-func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Reader, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress *archiveProgress) error {
+func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Reader, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress progressSender) error {
 	tr := tar.NewReader(r)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -766,7 +806,7 @@ func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.File
 	return nil
 }
 
-func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target string, mode os.FileMode, size int64, overwrite bool, src string, r io.Reader, state *extractState, progress *archiveProgress) error {
+func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target string, mode os.FileMode, size int64, overwrite bool, src string, r io.Reader, state *extractState, progress progressSender) error {
 	if err := guardTrash(root, "extract", target); err != nil {
 		return err
 	}

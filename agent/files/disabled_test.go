@@ -33,6 +33,19 @@ func TestDisabledFileServerAnswersFailedPrecondition(t *testing.T) {
 	assertDisabledError(t, err)
 }
 
+func TestUnimplementedFileServerLeavesTransferRPCsUnimplemented(t *testing.T) {
+	var old agentv1.UnimplementedFileServiceServer
+	if _, err := old.TransferCapabilities(context.Background(), &agentv1.TransferCapabilitiesRequest{}); status.Code(err) != codes.Unimplemented {
+		t.Errorf("TransferCapabilities code = %v, want Unimplemented", status.Code(err))
+	}
+	if err := old.ReadArtifact(&agentv1.ReadArtifactRequest{}, nil); status.Code(err) != codes.Unimplemented {
+		t.Errorf("ReadArtifact code = %v, want Unimplemented", status.Code(err))
+	}
+	if err := old.ApplyArtifact(&agentv1.ApplyArtifactRequest{}, nil); status.Code(err) != codes.Unimplemented {
+		t.Errorf("ApplyArtifact code = %v, want Unimplemented", status.Code(err))
+	}
+}
+
 func assertDisabledError(t *testing.T, err error) {
 	t.Helper()
 	if status.Code(err) != codes.FailedPrecondition {

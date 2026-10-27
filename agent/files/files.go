@@ -88,6 +88,9 @@ type FileServer struct {
 	trashMaxAgeDays      int
 	trashMaxBytes        int64
 	transfers            chan struct{}
+	transferRoot         string
+	artifacts            map[string]map[string]*transferArtifact
+	artifactsMu          sync.Mutex
 	sizeWalks            chan struct{}
 	sizeMaxEntries       int64
 	locks                []sync.Mutex
@@ -106,6 +109,10 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		log = slog.Default()
 	}
 	cfg.applyDefaults()
+	transferRoot := cfg.FileTransferRoot
+	if abs, err := filepath.Abs(transferRoot); err == nil {
+		transferRoot = abs
+	}
 	protected := fileProtectedPaths(cfg)
 	server := &FileServer{
 		log:                  log,
@@ -117,6 +124,8 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		trashMaxAgeDays:      cfg.FileTrashMaxAgeDays,
 		trashMaxBytes:        cfg.FileTrashMaxBytes,
 		transfers:            make(chan struct{}, cfg.FileMaxTransfers),
+		transferRoot:         transferRoot,
+		artifacts:            make(map[string]map[string]*transferArtifact),
 		sizeWalks:            make(chan struct{}, fileSizeMaxConcurrent),
 		sizeMaxEntries:       fileSizeMaxEntries,
 		locks:                make([]sync.Mutex, fileLockStripes),
@@ -202,7 +211,9 @@ func (s *FileServer) Close() error {
 }
 
 func (s *FileServer) sweepTempFilesLoop() {
-	s.sweepTempFiles(time.Now().Add(-fileTempSweepAge))
+	now := time.Now()
+	s.sweepTransfers(now)
+	s.sweepTempFiles(now.Add(-fileTempSweepAge))
 	ticker := time.NewTicker(fileTempSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -210,6 +221,7 @@ func (s *FileServer) sweepTempFilesLoop() {
 		case <-s.stop:
 			return
 		case now := <-ticker.C:
+			s.sweepTransfers(now)
 			s.sweepTempFiles(now.Add(-fileTempSweepAge))
 		}
 	}

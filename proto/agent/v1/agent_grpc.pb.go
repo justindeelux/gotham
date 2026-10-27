@@ -1373,24 +1373,30 @@ var ComposeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	FileService_ListRoots_FullMethodName     = "/agent.v1.FileService/ListRoots"
-	FileService_List_FullMethodName          = "/agent.v1.FileService/List"
-	FileService_Stat_FullMethodName          = "/agent.v1.FileService/Stat"
-	FileService_Search_FullMethodName        = "/agent.v1.FileService/Search"
-	FileService_Read_FullMethodName          = "/agent.v1.FileService/Read"
-	FileService_DirectorySize_FullMethodName = "/agent.v1.FileService/DirectorySize"
-	FileService_Write_FullMethodName         = "/agent.v1.FileService/Write"
-	FileService_Copy_FullMethodName          = "/agent.v1.FileService/Copy"
-	FileService_Delete_FullMethodName        = "/agent.v1.FileService/Delete"
-	FileService_Mkdir_FullMethodName         = "/agent.v1.FileService/Mkdir"
-	FileService_Rename_FullMethodName        = "/agent.v1.FileService/Rename"
-	FileService_Chmod_FullMethodName         = "/agent.v1.FileService/Chmod"
-	FileService_Compress_FullMethodName      = "/agent.v1.FileService/Compress"
-	FileService_Extract_FullMethodName       = "/agent.v1.FileService/Extract"
-	FileService_ListTrash_FullMethodName     = "/agent.v1.FileService/ListTrash"
-	FileService_Restore_FullMethodName       = "/agent.v1.FileService/Restore"
-	FileService_Purge_FullMethodName         = "/agent.v1.FileService/Purge"
-	FileService_EmptyTrash_FullMethodName    = "/agent.v1.FileService/EmptyTrash"
+	FileService_ListRoots_FullMethodName            = "/agent.v1.FileService/ListRoots"
+	FileService_List_FullMethodName                 = "/agent.v1.FileService/List"
+	FileService_Stat_FullMethodName                 = "/agent.v1.FileService/Stat"
+	FileService_Search_FullMethodName               = "/agent.v1.FileService/Search"
+	FileService_Read_FullMethodName                 = "/agent.v1.FileService/Read"
+	FileService_DirectorySize_FullMethodName        = "/agent.v1.FileService/DirectorySize"
+	FileService_Write_FullMethodName                = "/agent.v1.FileService/Write"
+	FileService_Copy_FullMethodName                 = "/agent.v1.FileService/Copy"
+	FileService_Delete_FullMethodName               = "/agent.v1.FileService/Delete"
+	FileService_Mkdir_FullMethodName                = "/agent.v1.FileService/Mkdir"
+	FileService_Rename_FullMethodName               = "/agent.v1.FileService/Rename"
+	FileService_Chmod_FullMethodName                = "/agent.v1.FileService/Chmod"
+	FileService_Compress_FullMethodName             = "/agent.v1.FileService/Compress"
+	FileService_Extract_FullMethodName              = "/agent.v1.FileService/Extract"
+	FileService_TransferCapabilities_FullMethodName = "/agent.v1.FileService/TransferCapabilities"
+	FileService_PrepareBundle_FullMethodName        = "/agent.v1.FileService/PrepareBundle"
+	FileService_ReadArtifact_FullMethodName         = "/agent.v1.FileService/ReadArtifact"
+	FileService_ReceiveArtifact_FullMethodName      = "/agent.v1.FileService/ReceiveArtifact"
+	FileService_ApplyArtifact_FullMethodName        = "/agent.v1.FileService/ApplyArtifact"
+	FileService_DiscardArtifact_FullMethodName      = "/agent.v1.FileService/DiscardArtifact"
+	FileService_ListTrash_FullMethodName            = "/agent.v1.FileService/ListTrash"
+	FileService_Restore_FullMethodName              = "/agent.v1.FileService/Restore"
+	FileService_Purge_FullMethodName                = "/agent.v1.FileService/Purge"
+	FileService_EmptyTrash_FullMethodName           = "/agent.v1.FileService/EmptyTrash"
 )
 
 // FileServiceClient is the client API for FileService service.
@@ -1460,6 +1466,32 @@ type FileServiceClient interface {
 	// and the total uncompressed size, the entry count and the compression ratio
 	// are bounded.
 	Extract(ctx context.Context, in *ExtractRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error)
+	// TransferCapabilities reports whether this node stages transfer bundles and
+	// the effective limits a caller must respect. A node that does not implement
+	// this RPC answers codes.Unimplemented; one with the file manager disabled
+	// answers FailedPrecondition.
+	TransferCapabilities(ctx context.Context, in *TransferCapabilitiesRequest, opts ...grpc.CallOption) (*TransferCapabilitiesResponse, error)
+	// PrepareBundle writes a fixed tar.gz bundle of the selected sources to
+	// private agent-owned staging, outside every file root, and returns the
+	// opaque artifact handle the other transfer calls take. The source roots may
+	// be read-only: nothing is written inside them.
+	PrepareBundle(ctx context.Context, in *PrepareBundleRequest, opts ...grpc.CallOption) (*PrepareBundleResponse, error)
+	// ReadArtifact streams a prepared bundle back in bounded chunks. The artifact
+	// is bound to the calling transfer: another transfer's handle is refused.
+	ReadArtifact(ctx context.Context, in *ReadArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ArtifactChunk], error)
+	// ReceiveArtifact streams a bundle into private staging on the destination
+	// filesystem, bound to one transfer, root and directory. The first request
+	// must carry ReceiveArtifactHeader; the following requests carry the body.
+	// The bundle is usable only when the declared length and SHA-256 both match.
+	ReceiveArtifact(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReceiveArtifactRequest, ReceiveArtifactResponse], error)
+	// ApplyArtifact extracts a received bundle into private staging, verifies the
+	// extracted top-level names and publishes each complete top-level entry with
+	// an exclusive rename, streaming per-entry outcomes. Whole-selection
+	// atomicity is not promised; already published entries survive a failure.
+	ApplyArtifact(ctx context.Context, in *ApplyArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyArtifactEvent], error)
+	// DiscardArtifact removes one artifact's transfer-owned staging. It never
+	// touches published entries or any other path.
+	DiscardArtifact(ctx context.Context, in *DiscardArtifactRequest, opts ...grpc.CallOption) (*DiscardArtifactResponse, error)
 	// ListTrash lists a root's recycle bin, newest first. Entries are deleted
 	// entries the service moved into the root's trash; the trash tree itself is
 	// never browsable through List.
@@ -1670,6 +1702,87 @@ func (c *fileServiceClient) Extract(ctx context.Context, in *ExtractRequest, opt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FileService_ExtractClient = grpc.ServerStreamingClient[Progress]
 
+func (c *fileServiceClient) TransferCapabilities(ctx context.Context, in *TransferCapabilitiesRequest, opts ...grpc.CallOption) (*TransferCapabilitiesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TransferCapabilitiesResponse)
+	err := c.cc.Invoke(ctx, FileService_TransferCapabilities_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) PrepareBundle(ctx context.Context, in *PrepareBundleRequest, opts ...grpc.CallOption) (*PrepareBundleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareBundleResponse)
+	err := c.cc.Invoke(ctx, FileService_PrepareBundle_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) ReadArtifact(ctx context.Context, in *ReadArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ArtifactChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[6], FileService_ReadArtifact_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReadArtifactRequest, ArtifactChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ReadArtifactClient = grpc.ServerStreamingClient[ArtifactChunk]
+
+func (c *fileServiceClient) ReceiveArtifact(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReceiveArtifactRequest, ReceiveArtifactResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[7], FileService_ReceiveArtifact_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReceiveArtifactRequest, ReceiveArtifactResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ReceiveArtifactClient = grpc.ClientStreamingClient[ReceiveArtifactRequest, ReceiveArtifactResponse]
+
+func (c *fileServiceClient) ApplyArtifact(ctx context.Context, in *ApplyArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ApplyArtifactEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[8], FileService_ApplyArtifact_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ApplyArtifactRequest, ApplyArtifactEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ApplyArtifactClient = grpc.ServerStreamingClient[ApplyArtifactEvent]
+
+func (c *fileServiceClient) DiscardArtifact(ctx context.Context, in *DiscardArtifactRequest, opts ...grpc.CallOption) (*DiscardArtifactResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiscardArtifactResponse)
+	err := c.cc.Invoke(ctx, FileService_DiscardArtifact_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *fileServiceClient) ListTrash(ctx context.Context, in *ListTrashRequest, opts ...grpc.CallOption) (*ListTrashResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListTrashResponse)
@@ -1777,6 +1890,32 @@ type FileServiceServer interface {
 	// and the total uncompressed size, the entry count and the compression ratio
 	// are bounded.
 	Extract(*ExtractRequest, grpc.ServerStreamingServer[Progress]) error
+	// TransferCapabilities reports whether this node stages transfer bundles and
+	// the effective limits a caller must respect. A node that does not implement
+	// this RPC answers codes.Unimplemented; one with the file manager disabled
+	// answers FailedPrecondition.
+	TransferCapabilities(context.Context, *TransferCapabilitiesRequest) (*TransferCapabilitiesResponse, error)
+	// PrepareBundle writes a fixed tar.gz bundle of the selected sources to
+	// private agent-owned staging, outside every file root, and returns the
+	// opaque artifact handle the other transfer calls take. The source roots may
+	// be read-only: nothing is written inside them.
+	PrepareBundle(context.Context, *PrepareBundleRequest) (*PrepareBundleResponse, error)
+	// ReadArtifact streams a prepared bundle back in bounded chunks. The artifact
+	// is bound to the calling transfer: another transfer's handle is refused.
+	ReadArtifact(*ReadArtifactRequest, grpc.ServerStreamingServer[ArtifactChunk]) error
+	// ReceiveArtifact streams a bundle into private staging on the destination
+	// filesystem, bound to one transfer, root and directory. The first request
+	// must carry ReceiveArtifactHeader; the following requests carry the body.
+	// The bundle is usable only when the declared length and SHA-256 both match.
+	ReceiveArtifact(grpc.ClientStreamingServer[ReceiveArtifactRequest, ReceiveArtifactResponse]) error
+	// ApplyArtifact extracts a received bundle into private staging, verifies the
+	// extracted top-level names and publishes each complete top-level entry with
+	// an exclusive rename, streaming per-entry outcomes. Whole-selection
+	// atomicity is not promised; already published entries survive a failure.
+	ApplyArtifact(*ApplyArtifactRequest, grpc.ServerStreamingServer[ApplyArtifactEvent]) error
+	// DiscardArtifact removes one artifact's transfer-owned staging. It never
+	// touches published entries or any other path.
+	DiscardArtifact(context.Context, *DiscardArtifactRequest) (*DiscardArtifactResponse, error)
 	// ListTrash lists a root's recycle bin, newest first. Entries are deleted
 	// entries the service moved into the root's trash; the trash tree itself is
 	// never browsable through List.
@@ -1840,6 +1979,24 @@ func (UnimplementedFileServiceServer) Compress(*CompressRequest, grpc.ServerStre
 }
 func (UnimplementedFileServiceServer) Extract(*ExtractRequest, grpc.ServerStreamingServer[Progress]) error {
 	return status.Error(codes.Unimplemented, "method Extract not implemented")
+}
+func (UnimplementedFileServiceServer) TransferCapabilities(context.Context, *TransferCapabilitiesRequest) (*TransferCapabilitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TransferCapabilities not implemented")
+}
+func (UnimplementedFileServiceServer) PrepareBundle(context.Context, *PrepareBundleRequest) (*PrepareBundleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareBundle not implemented")
+}
+func (UnimplementedFileServiceServer) ReadArtifact(*ReadArtifactRequest, grpc.ServerStreamingServer[ArtifactChunk]) error {
+	return status.Error(codes.Unimplemented, "method ReadArtifact not implemented")
+}
+func (UnimplementedFileServiceServer) ReceiveArtifact(grpc.ClientStreamingServer[ReceiveArtifactRequest, ReceiveArtifactResponse]) error {
+	return status.Error(codes.Unimplemented, "method ReceiveArtifact not implemented")
+}
+func (UnimplementedFileServiceServer) ApplyArtifact(*ApplyArtifactRequest, grpc.ServerStreamingServer[ApplyArtifactEvent]) error {
+	return status.Error(codes.Unimplemented, "method ApplyArtifact not implemented")
+}
+func (UnimplementedFileServiceServer) DiscardArtifact(context.Context, *DiscardArtifactRequest) (*DiscardArtifactResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiscardArtifact not implemented")
 }
 func (UnimplementedFileServiceServer) ListTrash(context.Context, *ListTrashRequest) (*ListTrashResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTrash not implemented")
@@ -2080,6 +2237,89 @@ func _FileService_Extract_Handler(srv interface{}, stream grpc.ServerStream) err
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FileService_ExtractServer = grpc.ServerStreamingServer[Progress]
 
+func _FileService_TransferCapabilities_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TransferCapabilitiesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).TransferCapabilities(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_TransferCapabilities_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).TransferCapabilities(ctx, req.(*TransferCapabilitiesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_PrepareBundle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareBundleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).PrepareBundle(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_PrepareBundle_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).PrepareBundle(ctx, req.(*PrepareBundleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_ReadArtifact_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReadArtifactRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FileServiceServer).ReadArtifact(m, &grpc.GenericServerStream[ReadArtifactRequest, ArtifactChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ReadArtifactServer = grpc.ServerStreamingServer[ArtifactChunk]
+
+func _FileService_ReceiveArtifact_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FileServiceServer).ReceiveArtifact(&grpc.GenericServerStream[ReceiveArtifactRequest, ReceiveArtifactResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ReceiveArtifactServer = grpc.ClientStreamingServer[ReceiveArtifactRequest, ReceiveArtifactResponse]
+
+func _FileService_ApplyArtifact_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ApplyArtifactRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FileServiceServer).ApplyArtifact(m, &grpc.GenericServerStream[ApplyArtifactRequest, ApplyArtifactEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ApplyArtifactServer = grpc.ServerStreamingServer[ApplyArtifactEvent]
+
+func _FileService_DiscardArtifact_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiscardArtifactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).DiscardArtifact(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_DiscardArtifact_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).DiscardArtifact(ctx, req.(*DiscardArtifactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _FileService_ListTrash_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListTrashRequest)
 	if err := dec(in); err != nil {
@@ -2192,6 +2432,18 @@ var FileService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _FileService_Chmod_Handler,
 		},
 		{
+			MethodName: "TransferCapabilities",
+			Handler:    _FileService_TransferCapabilities_Handler,
+		},
+		{
+			MethodName: "PrepareBundle",
+			Handler:    _FileService_PrepareBundle_Handler,
+		},
+		{
+			MethodName: "DiscardArtifact",
+			Handler:    _FileService_DiscardArtifact_Handler,
+		},
+		{
 			MethodName: "ListTrash",
 			Handler:    _FileService_ListTrash_Handler,
 		},
@@ -2237,6 +2489,21 @@ var FileService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Extract",
 			Handler:       _FileService_Extract_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "ReadArtifact",
+			Handler:       _FileService_ReadArtifact_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "ReceiveArtifact",
+			Handler:       _FileService_ReceiveArtifact_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "ApplyArtifact",
+			Handler:       _FileService_ApplyArtifact_Handler,
 			ServerStreams: true,
 		},
 	},

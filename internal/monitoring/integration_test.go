@@ -154,6 +154,50 @@ func TestFullDataMountOpensOneIncidentWithHealthyRoot(t *testing.T) {
 	}
 }
 
+func TestSweepMarksOfflinePressureUnknown(t *testing.T) {
+	st := scratchStore(t)
+	nodeID := createNode(t, st)
+	reporter := &recordingReporter{active: []incidents.Incident{{
+		ID: uuid.New(), NodeID: nodeID, Detector: DetectorCPU, Identity: incidents.Identity(DetectorCPU, ResourceNode, nodeID),
+		Lifecycle: incidents.LifecycleFiring, ResourceType: ResourceNode, ResourceID: nodeID,
+	}}}
+	svc := NewService(Config{Store: st, Incidents: reporter, Now: func() time.Time {
+		return time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC)
+	}})
+	if err := svc.Sweep(context.Background()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(reporter.reports) != 1 {
+		t.Fatalf("reports = %d; want one unknown report", len(reporter.reports))
+	}
+	report := reporter.reports[0]
+	if report.Valid || report.Evidence != "no fresh observation" || report.Detector != DetectorCPU {
+		t.Fatalf("offline report = %+v; want unknown cpu evidence", report)
+	}
+}
+
+func TestFilesystemMidBandKeepsSeverityUnchanged(t *testing.T) {
+	reporter := &recordingReporter{}
+	svc := &Service{incidents: reporter}
+	nodeID := uuid.New()
+	identity := sqlc.FilesystemIdentity{
+		ID: pgUUID(uuid.New()), FilesystemKey: "/mnt/data", Path: "/mnt/data", Purpose: "backup", Segment: 1,
+	}
+	fs := servers.FilesystemObservation{
+		Path: "/mnt/data", Purpose: "backup", Status: servers.MetricStatusOK,
+		TotalBytes: 1000, AvailableBytes: 80, InodeStatus: servers.MetricStatusOK,
+		TotalInodes: 1000, FreeInodes: 800,
+	}
+	svc.evaluateFilesystemCounter(context.Background(), nodeID, "node-a", fs, identity, Defaults().Space, DetectorSpace, time.Now())
+	if len(reporter.reports) != 1 {
+		t.Fatalf("reports = %d, want 1", len(reporter.reports))
+	}
+	report := reporter.reports[0]
+	if !report.Valid || report.Severity != "" || report.Value == nil || *report.Value != 92 {
+		t.Fatalf("mid-band report = %+v; want valid 92 with unchanged severity", report)
+	}
+}
+
 func TestNodeStatusShowsOnlyFiringPressure(t *testing.T) {
 	st := scratchStore(t)
 	nodeID := createNode(t, st)

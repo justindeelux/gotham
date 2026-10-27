@@ -48,7 +48,21 @@ type transferHarness struct {
 	client        *http.Client
 }
 
+// transferHarnessOptions lets a proof test give each node its own file roots
+// and limits, and wrap a node's client to inject a transport fault.
+type transferHarnessOptions struct {
+	sourceConfig      agentfiles.Config
+	destinationConfig agentfiles.Config
+	serviceConfig     files.Config
+	dialWrap          func(uuid.UUID, files.FileClient) files.FileClient
+}
+
 func newTransferHarness(t *testing.T, ctx context.Context) *transferHarness {
+	t.Helper()
+	return newTransferHarnessWith(t, ctx, transferHarnessOptions{})
+}
+
+func newTransferHarnessWith(t *testing.T, ctx context.Context, options transferHarnessOptions) *transferHarness {
 	t.Helper()
 	logger := testLogger(t)
 	engine, err := agent.NewDockerClient(e2eDockerSock(), agent.WithRegistryStateDir(t.TempDir()))
@@ -59,14 +73,24 @@ func newTransferHarness(t *testing.T, ctx context.Context) *transferHarness {
 	agents := make(map[uuid.UUID]transferAgent)
 	registry := &transferRegistry{items: make(map[uuid.UUID]*servers.Server)}
 	roots := make(map[uuid.UUID]string)
+	configs := map[string]agentfiles.Config{
+		"source":      options.sourceConfig,
+		"destination": options.destinationConfig,
+	}
 	for _, node := range []string{"source", "destination"} {
 		root := canonicalTempDir(t)
-		fileServer, err := agentfiles.NewFileServer(agentfiles.Config{
-			ManagedVolumeRoot: root,
-			ComposeRoot:       canonicalTempDir(t),
-			CertDir:           canonicalTempDir(t),
-			AgentStateRoot:    t.TempDir(),
-		}, logger)
+		cfg := configs[node]
+		cfg.ManagedVolumeRoot = root
+		if cfg.ComposeRoot == "" {
+			cfg.ComposeRoot = canonicalTempDir(t)
+		}
+		if cfg.CertDir == "" {
+			cfg.CertDir = canonicalTempDir(t)
+		}
+		if cfg.AgentStateRoot == "" {
+			cfg.AgentStateRoot = t.TempDir()
+		}
+		fileServer, err := agentfiles.NewFileServer(cfg, logger)
 		if err != nil {
 			t.Fatalf("%s agent file server: %v", node, err)
 		}
@@ -80,11 +104,19 @@ func newTransferHarness(t *testing.T, ctx context.Context) *transferHarness {
 	}
 
 	svc := files.NewService(files.Config{
-		Registry: registry,
-		Logger:   logger,
+		Registry:       registry,
+		Logger:         logger,
+		MaxUploadBytes: options.serviceConfig.MaxUploadBytes,
 		Dial: func(dialCtx context.Context, server *servers.Server) (files.FileClient, error) {
 			target := agents[server.ID]
-			return servers.DialFileClient(dialCtx, target.address, target.authority, servers.WithDockerServerName(target.nodeID))
+			client, err := servers.DialFileClient(dialCtx, target.address, target.authority, servers.WithDockerServerName(target.nodeID))
+			if err != nil {
+				return nil, err
+			}
+			if options.dialWrap != nil {
+				return options.dialWrap(server.ID, client), nil
+			}
+			return client, nil
 		},
 	})
 
@@ -114,14 +146,23 @@ func newTransferHarness(t *testing.T, ctx context.Context) *transferHarness {
 
 func (h *transferHarness) request(t *testing.T, path, body string) (int, string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, h.baseURL+path, strings.NewReader(body))
+	return h.do(t, http.MethodPost, path, body)
+}
+
+func (h *transferHarness) do(t *testing.T, method, path, body string) (int, string) {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, h.baseURL+path, reader)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	response, err := h.client.Do(req)
 	if err != nil {
-		t.Fatalf("post %s: %v", path, err)
+		t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	payload, err := io.ReadAll(response.Body)

@@ -251,6 +251,37 @@ async function enableSplit(page: Page): Promise<void> {
   await expect(pane(page, "right")).toBeVisible();
 }
 
+test("a legacy pre-pane snapshot restores into the left pane", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.addInitScript(
+    ({ key, value }) => {
+      window.localStorage.setItem(key, value);
+    },
+    {
+      key: `gotham.files.tabs.v1.${encodeURIComponent(server1)}.u-1`,
+      value: JSON.stringify({
+        version: 1,
+        tabs: [{ id: "legacy", root: "volumes", path: "www" }],
+        activeTabId: "legacy",
+        viewMode: "list",
+      }),
+    },
+  );
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".files-browser")).toHaveCount(1);
+  await expect(
+    pane(page, "left").locator(".fm-tab", { hasText: "www" }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      harness.listCalls.some(
+        (call) => call.serverId === server1 && call.path === "www",
+      ),
+    )
+    .toBe(true);
+});
+
 test("split duplicates the location and keeps node, root and scroll per pane", async ({
   page,
 }) => {

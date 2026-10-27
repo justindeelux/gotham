@@ -95,7 +95,7 @@ func (a *Agent) sendObservation(ctx context.Context, stream agentv1.AgentService
 }
 
 func (a *Agent) collectObservation(ctx context.Context) *agentv1.ObservationReport {
-	usage, _ := a.sampler.Sample()
+	usage, _ := a.observationSampler.Sample()
 	observedAt := usage.ObservedAt
 	if observedAt.IsZero() {
 		observedAt = time.Now()

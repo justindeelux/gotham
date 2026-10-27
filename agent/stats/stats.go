@@ -88,13 +88,39 @@ func byteRate(current, previous uint64, elapsed time.Duration) float64 {
 
 type Sampler struct {
 	mu       sync.Mutex
+	reads    samplerReads
+	now      func() time.Time
 	lastCPU  cpuTimes
 	haveCPU  bool
 	lastNet  counterPair
 	lastDisk counterPair
 }
 
-func New() *Sampler { return &Sampler{} }
+// samplerReads lets a test drive real sampler state with controlled counters;
+// production uses the platform readers below.
+type samplerReads struct {
+	readCPU     func() (idle, total uint64, err error)
+	readMemory  func() (used, total uint64, err error)
+	readDisk    func(path string) (used, total uint64, err error)
+	readNetwork func() (rx, tx uint64, err error)
+	readDiskIO  func() (read, write uint64, err error)
+}
+
+func defaultReads() samplerReads {
+	return samplerReads{
+		readCPU:     readCPUTimes,
+		readMemory:  readMemory,
+		readDisk:    readDisk,
+		readNetwork: readNetwork,
+		readDiskIO:  readDiskIO,
+	}
+}
+
+func New() *Sampler { return newSampler(defaultReads(), time.Now) }
+
+func newSampler(reads samplerReads, now func() time.Time) *Sampler {
+	return &Sampler{reads: reads, now: now}
+}
 
 func (s *Sampler) Sample() (Usage, error) {
 	var (
@@ -102,9 +128,9 @@ func (s *Sampler) Sample() (Usage, error) {
 		read    bool
 		lastErr error
 	)
-	usage.ObservedAt = time.Now()
+	usage.ObservedAt = s.now()
 
-	if idle, total, err := readCPUTimes(); err != nil {
+	if idle, total, err := s.reads.readCPU(); err != nil {
 		usage.CPUStatus, usage.CPUReason = statusFor(err)
 		lastErr = err
 	} else {
@@ -127,7 +153,7 @@ func (s *Sampler) Sample() (Usage, error) {
 		read = true
 	}
 
-	if used, total, err := readMemory(); err != nil {
+	if used, total, err := s.reads.readMemory(); err != nil {
 		usage.MemStatus, usage.MemReason = statusFor(err)
 		lastErr = err
 	} else if total > 0 {
@@ -139,7 +165,7 @@ func (s *Sampler) Sample() (Usage, error) {
 		usage.MemStatus, usage.MemReason = MetricError, "empty"
 	}
 
-	if used, total, err := readDisk("/"); err != nil {
+	if used, total, err := s.reads.readDisk("/"); err != nil {
 		usage.DiskStatus, usage.DiskReason = statusFor(err)
 		lastErr = err
 	} else if total > 0 {
@@ -151,11 +177,11 @@ func (s *Sampler) Sample() (Usage, error) {
 		usage.DiskStatus, usage.DiskReason = MetricError, "empty"
 	}
 
-	rx, tx, netErr := readNetwork()
-	diskRead, diskWrite, diskIOErr := readDiskIO()
+	rx, tx, netErr := s.reads.readNetwork()
+	diskRead, diskWrite, diskIOErr := s.reads.readDiskIO()
 
 	s.mu.Lock()
-	now := time.Now()
+	now := s.now()
 	if netErr == nil {
 		current := counterPair{in: rx, out: tx, at: now, valid: true}
 		if current.reset(s.lastNet) {

@@ -24,6 +24,16 @@ func observationAgent(t *testing.T, dockerClient docker.Client) *Agent {
 	return NewAgent(cfg, discardLogger(), dockerClient)
 }
 
+func TestObservationAndHeartbeatUseSeparateSamplers(t *testing.T) {
+	runner := observationAgent(t, &fakeDockerClient{})
+	if runner.sampler == nil || runner.observationSampler == nil {
+		t.Fatal("both consumers need a sampler")
+	}
+	if runner.sampler == runner.observationSampler {
+		t.Fatal("observation sampling would reset the heartbeat's delta baseline")
+	}
+}
+
 func TestCollectObservationReportsManagedInventory(t *testing.T) {
 	appID := uuid.NewString()
 	deploymentID := uuid.NewString()

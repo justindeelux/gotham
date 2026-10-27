@@ -154,6 +154,82 @@ func TestFullDataMountOpensOneIncidentWithHealthyRoot(t *testing.T) {
 	}
 }
 
+func TestMissingFilesystemStaysUnknownUntilFreshEvidence(t *testing.T) {
+	base := time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC)
+	full := servers.FilesystemObservation{
+		Path: "/mnt/backup", Purpose: "backup", Status: servers.MetricStatusOK,
+		TotalBytes: 1000, AvailableBytes: 80, InodeStatus: servers.MetricStatusOK,
+		TotalInodes: 1000, FreeInodes: 800,
+	}
+	healthy := full
+	healthy.AvailableBytes = 500
+
+	for _, tc := range []struct {
+		name          string
+		returned      servers.FilesystemObservation
+		wantRecovered int
+	}{
+		{name: "returns still full", returned: full, wantRecovered: 0},
+		{name: "returns healthy", returned: healthy, wantRecovered: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := scratchStore(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			nodeID := createNode(t, st)
+			now := func() time.Time { return base }
+			notifier := &countingNotifier{}
+			incidentSvc := incidents.NewService(incidents.Config{Store: st, Notifier: notifier, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: now})
+			svc := NewService(Config{Store: st, Incidents: incidentSvc, Now: now})
+			observe := func(offset int, filesystems []servers.FilesystemObservation) {
+				t.Helper()
+				svc.RecordHostPressure(ctx, nodeID, "node-a", servers.NodeObservation{
+					ServerID: nodeID, ObservedAt: base.Add(time.Duration(offset) * time.Second),
+					Host: servers.HostObservation{
+						CPUUsage: servers.ObservedMetric{Status: servers.MetricStatusOK, Value: 0.4},
+						MemUsage: servers.ObservedMetric{Status: servers.MetricStatusOK, Value: 0.4},
+					},
+					Filesystems: filesystems,
+				})
+			}
+			for offset := 0; offset <= 60; offset += 15 {
+				observe(offset, []servers.FilesystemObservation{full})
+			}
+			for offset := 75; offset <= 90; offset += 15 {
+				observe(offset, nil)
+			}
+			active, err := incidentSvc.ActiveNodeIncidents(ctx)
+			if err != nil {
+				t.Fatalf("active while missing: %v", err)
+			}
+			var space *incidents.Incident
+			for i, inc := range active {
+				if inc.Detector == DetectorSpace {
+					space = &active[i]
+				}
+			}
+			if space == nil || space.Lifecycle != incidents.LifecycleFiring || space.Coverage != incidents.CoverageUnknown {
+				t.Fatalf("missing filesystem incident = %+v; want firing with unknown coverage", active)
+			}
+			for offset := 105; offset <= 180; offset += 15 {
+				observe(offset, []servers.FilesystemObservation{tc.returned})
+			}
+			recovered, opened := 0, 0
+			for _, delivery := range notifier.deliveries {
+				switch delivery.Transition {
+				case incidents.TransitionRecovered:
+					recovered++
+				case incidents.TransitionOpened:
+					opened++
+				}
+			}
+			if recovered != tc.wantRecovered || opened != 1 {
+				t.Fatalf("deliveries opened=%d recovered=%d (%+v); want opened 1 recovered %d", opened, recovered, notifier.deliveries, tc.wantRecovered)
+			}
+		})
+	}
+}
+
 func TestResizeKeepsTheSameIncidentAndRecoversAfterClear(t *testing.T) {
 	st := scratchStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

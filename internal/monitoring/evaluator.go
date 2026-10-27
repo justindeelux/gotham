@@ -26,7 +26,7 @@ func (s *Service) evaluateHost(ctx context.Context, serverID uuid.UUID, nodeName
 func (s *Service) evaluateHostMetric(ctx context.Context, serverID uuid.UUID, nodeName string, obs servers.NodeObservation, detector string, rule Rule, metric servers.ObservedMetric) {
 	identity := incidents.Identity(detector, ResourceNode, serverID)
 	if !rule.Enabled {
-		s.close(ctx, identity, "rule_disabled")
+		s.closeRuleDisabled(ctx, identity)
 		return
 	}
 	at := obs.ObservedAt
@@ -77,13 +77,13 @@ func (s *Service) evaluateFilesystems(ctx context.Context, serverID uuid.UUID, n
 		s.evaluateFilesystemCounter(ctx, serverID, nodeName, fs, identity, rules.Space, DetectorSpace, obs.ObservedAt)
 		s.evaluateFilesystemCounter(ctx, serverID, nodeName, fs, identity, rules.Inode, DetectorInodes, obs.ObservedAt)
 	}
-	s.closeMissingFilesystems(ctx, serverID, seen)
+	s.markMissingFilesystems(ctx, serverID, seen, obs.ObservedAt, rules)
 }
 
 func (s *Service) evaluateFilesystemCounter(ctx context.Context, serverID uuid.UUID, nodeName string, fs servers.FilesystemObservation, identity sqlc.FilesystemIdentity, rule FilesystemRule, detector string, at time.Time) {
 	key := filesystemIdentity(detector, serverID, identity.FilesystemKey)
 	if !rule.Enabled {
-		s.close(ctx, key, "rule_disabled")
+		s.closeRuleDisabled(ctx, key)
 		return
 	}
 	base := incidents.Observation{
@@ -294,7 +294,9 @@ func (s *Service) recordFilesystemBucket(ctx context.Context, identity sqlc.File
 	})
 }
 
-func (s *Service) closeMissingFilesystems(ctx context.Context, serverID uuid.UUID, seen map[string]bool) {
+// markMissingFilesystems keeps a filesystem that is absent from an accepted
+// report active with unknown coverage. A disappeared mount is not a recovery.
+func (s *Service) markMissingFilesystems(ctx context.Context, serverID uuid.UUID, seen map[string]bool, at time.Time, rules Rules) {
 	rows, err := s.store.ListFilesystemIdentitiesByNode(ctx, pgUUID(serverID))
 	if err != nil {
 		s.logger.Warn("monitoring: list filesystems", "server_id", serverID.String(), "error", err)
@@ -304,8 +306,28 @@ func (s *Service) closeMissingFilesystems(ctx context.Context, serverID uuid.UUI
 		if seen[row.FilesystemKey] {
 			continue
 		}
-		s.close(ctx, filesystemIdentity(DetectorSpace, serverID, row.FilesystemKey), "filesystem_disappeared")
-		s.close(ctx, filesystemIdentity(DetectorInodes, serverID, row.FilesystemKey), "filesystem_disappeared")
+		spaceIdentity := filesystemIdentity(DetectorSpace, serverID, row.FilesystemKey)
+		inodeIdentity := filesystemIdentity(DetectorInodes, serverID, row.FilesystemKey)
+		if !rules.Space.Enabled {
+			s.closeRuleDisabled(ctx, spaceIdentity)
+		} else {
+			s.reportUnknown(ctx, incidents.Observation{
+				Identity: spaceIdentity, Detector: DetectorSpace, ScopeKind: incidents.ScopeNode,
+				ScopeID: serverID, NodeID: serverID, ResourceType: ResourceFilesystem,
+				ResourceID: uuid.UUID(row.ID.Bytes), ResourceName: row.Path, At: at,
+				Evidence: "filesystem not reported",
+			})
+		}
+		if !rules.Inode.Enabled {
+			s.closeRuleDisabled(ctx, inodeIdentity)
+		} else {
+			s.reportUnknown(ctx, incidents.Observation{
+				Identity: inodeIdentity, Detector: DetectorInodes, ScopeKind: incidents.ScopeNode,
+				ScopeID: serverID, NodeID: serverID, ResourceType: ResourceFilesystem,
+				ResourceID: uuid.UUID(row.ID.Bytes), ResourceName: row.Path, At: at,
+				Evidence: "filesystem not reported",
+			})
+		}
 	}
 }
 
@@ -315,9 +337,9 @@ func (s *Service) reportUnknown(ctx context.Context, obs incidents.Observation) 
 	s.logReport(obs.Detector, obs.NodeID, err)
 }
 
-func (s *Service) close(ctx context.Context, identity, reason string) {
-	if err := s.incidents.Close(ctx, identity, reason); err != nil {
-		s.logger.Warn("monitoring: close incident", "identity", identity, "reason", reason, "error", err)
+func (s *Service) closeRuleDisabled(ctx context.Context, identity string) {
+	if err := s.incidents.Close(ctx, identity, "rule_disabled"); err != nil {
+		s.logger.Warn("monitoring: close incident", "identity", identity, "reason", "rule_disabled", "error", err)
 	}
 }
 

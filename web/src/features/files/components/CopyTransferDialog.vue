@@ -35,6 +35,9 @@ const transfer = useFilesTransferStore();
 const servers = useServersStore();
 
 const source = computed(() => transfer.source);
+const shownNames = computed<string[]>(
+  () => transfer.target?.source.names ?? source.value?.names ?? [],
+);
 const isPaneOrigin = computed<boolean>(() => transfer.origin === "pane");
 const sourceNodeName = computed<string>(() => nodeName(source.value?.serverId ?? ""));
 const destinationNodeName = computed<string>(() =>
@@ -204,7 +207,7 @@ const maxSelected = computed<{ name: string; size: number } | null>(() => {
     return null;
   }
   let best: { name: string; size: number } | null = null;
-  for (const name of origin.names) {
+  for (const name of shownNames.value) {
     const size = origin.sizes[name] ?? 0;
     if (best === null || size > best.size) {
       best = { name, size };
@@ -686,7 +689,7 @@ const announcement = computed<string>(() => {
           {{ t("files.transfer.sourcePath", { path: source.path === "" ? "/" : source.path }) }}
         </p>
         <p class="transfer-line">
-          {{ t("files.transfer.selection", { count: source.names.length, names: source.names.join(", ") }) }}
+          {{ t("files.transfer.selection", { count: shownNames.length, names: shownNames.join(", ") }) }}
         </p>
       </section>
 

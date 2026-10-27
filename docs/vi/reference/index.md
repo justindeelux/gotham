@@ -14,6 +14,9 @@ token.
   `GOTHAM_*` ghi đè chúng, môi trường của agent, và chín công tắc `FEATURE_*`.
 - [API token](/vi/reference/api-tokens) — token `gt1_`, các phạm vi `read`, `deploy`
   và `admin`, và cách tạo, xoay vòng và thu hồi chúng.
+- [Hệ thống thiết kế](/vi/design-system/DESIGN) — các token đang phát hành, ánh xạ
+  Naive UI, quy tắc bố cục và thành phần, lưu ý về khả năng truy cập, cùng các
+  artifact token JSON/CSS di động kèm bản xem trước ngoại tuyến.
 
 Các trang này mô tả hành vi đã phát hành, không phải lộ trình. Khi một trang và tệp
 nhị phân nói khác nhau thì tệp nhị phân đúng: `gotham help`, `gotham admin help`,

@@ -15,6 +15,9 @@ environment variable, and the API-token model.
   `FEATURE_*` switches.
 - [API tokens](/reference/api-tokens) — `gt1_` tokens, the `read`, `deploy` and
   `admin` scopes, and how to create, rotate and revoke them.
+- [Design system](/design-system/DESIGN) — the shipped tokens, the Naive UI
+  mapping, layout and component rules, accessibility caveats, and the portable
+  JSON/CSS token artifacts with an offline preview.
 
 These pages describe the shipped behaviour, not a roadmap. Where a page and the
 binary disagree, the binary is right: `gotham help`, `gotham admin help`,

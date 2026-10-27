@@ -19,25 +19,24 @@ services:
       context: .
       target: dev                     # Use dev stage of multi-stage Dockerfile
     ports:
-      - "3000:3000"
+      - "8000:8000"
     volumes:
       - .:/app                        # Bind mount for hot reload
-      - /app/node_modules             # Anonymous volume -- preserves container deps
+      - go-mod-cache:/go/pkg/mod       # Preserve downloaded Go modules
     environment:
       - DATABASE_URL=postgres://postgres:postgres@db:5432/app_dev
       - REDIS_URL=redis://redis:6379/0
-      - NODE_ENV=development
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_started
-    command: npm run dev
+    command: go run ./cmd/gotham serve
 
   db:
     image: postgres:16-alpine
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -54,58 +53,50 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
 
-  mailpit:                            # Local email testing
-    image: axllent/mailpit
-    ports:
-      - "8025:8025"                   # Web UI
-      - "1025:1025"                   # SMTP
 
 volumes:
   pgdata:
   redisdata:
+  go-mod-cache:
 ```
 
 ### Development vs Production Dockerfile
 
 ```dockerfile
-# Stage: dependencies
-FROM node:22-alpine AS deps
+# Match the Go image version to go.mod.
+FROM golang:1.27-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Stage: dev (hot reload, debug tools)
-FROM node:22-alpine AS dev
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+# Stage: dev
+FROM deps AS dev
 COPY . .
-EXPOSE 3000
-CMD ["npm", "run", "dev"]
+EXPOSE 8000
+CMD ["go", "run", "./cmd/gotham", "serve"]
 
 # Stage: build
-FROM node:22-alpine AS build
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+FROM deps AS build
 COPY . .
-RUN npm run build && npm prune --production
+RUN CGO_ENABLED=0 go build -o /out/app ./cmd/gotham
 
-# Stage: production (minimal image)
-FROM node:22-alpine AS production
-WORKDIR /app
-RUN addgroup -g 1001 -S appgroup && adduser -S appuser -u 1001
+# Stage: production (no Go or Node runtime required)
+FROM alpine:3.22 AS production
+RUN apk add --no-cache ca-certificates && \
+    addgroup -g 1001 -S appgroup && adduser -S appuser -u 1001 -G appgroup
 USER appuser
-COPY --from=build --chown=appuser:appgroup /app/dist ./dist
-COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules
-COPY --from=build --chown=appuser:appgroup /app/package.json ./
-ENV NODE_ENV=production
-EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:3000/health || exit 1
-CMD ["node", "dist/server.js"]
+COPY --from=build --chown=appuser:appgroup /out/app /usr/local/bin/app
+EXPOSE 8000
+CMD ["app", "serve"]
 ```
+
+If the Go binary embeds the Vue SPA, build
+the frontend with Node/npm before the Go build and include its generated assets.
+Node is a frontend build dependency, not the production HTTP server.
 
 ### Override Files
 
@@ -114,10 +105,7 @@ CMD ["node", "dist/server.js"]
 services:
   app:
     environment:
-      - DEBUG=app:*
       - LOG_LEVEL=debug
-    ports:
-      - "9229:9229"                   # Node.js debugger
 
 # docker-compose.prod.yml (explicit for production)
 services:
@@ -194,7 +182,7 @@ volumes:
   # - ./src:/app/src
 
   # Anonymous volume: preserves container-generated content from bind mount override
-  # - /app/node_modules
+  # - /go/pkg/mod
 ```
 
 ### Common Patterns
@@ -204,8 +192,8 @@ services:
   app:
     volumes:
       - .:/app                   # Source code (bind mount for hot reload)
-      - /app/node_modules        # Protect container's node_modules from host
-      - /app/.next               # Protect build cache
+      - /go/pkg/mod              # Preserve downloaded Go modules
+      - /root/.cache/go-build    # Preserve Go build cache
 
   db:
     volumes:
@@ -219,7 +207,7 @@ services:
 
 ```dockerfile
 # 1. Use specific tags (never :latest)
-FROM node:22.12-alpine3.20
+FROM alpine:3.22
 
 # 2. Run as non-root
 RUN addgroup -g 1001 -S app && adduser -S app -u 1001
@@ -258,7 +246,7 @@ services:
     environment:
       - API_KEY                  # Inherits from host environment
 
-# GOOD: Docker secrets (Swarm mode)
+# GOOD: Compose secrets (mounted as files; the application must support file-based secrets)
 secrets:
   db_password:
     file: ./secrets/db_password.txt
@@ -293,149 +281,16 @@ Do not claim that a Linux container validates macOS or Windows behavior.
 - Copy the source project into a writable `tmpfs` workspace before any mutation.
 - Mount `/workspace` with `noexec`, UID/GID 1000, and `mode=0700` so only the
   container user can inspect project data.
-- Keep npm and npx's executable cache at `NPM_CONFIG_CACHE=/tmp/npm-cache` on
-  the executable `/tmp` mount. Its default size is 2 GiB and can be adjusted
-  with `ECC_TMPFS_SIZE`; `ECC_WORKSPACE_SIZE` separately controls the private
-  workspace mount.
 - Set `read_only: true`, `no-new-privileges:true`, `cap_drop: [ALL]`, and a finite `pids_limit`.
 - Keep the default real-CLI services on `network_mode: none`. Add network access
   only through a visibly named opt-in service for an authenticated provider
   session; never make it an accidental environment-driven default.
 - Create only the writable temporary paths the tool needs.
 - Do not pass host credentials into the container by default.
-- Default to a dry run and whitelist only the explicit `dry-run`, `install`,
-  `plugin`, and `shell` modes.
-- Use argument arrays or `spawnSync(..., { shell: false })` for cross-platform runners. Never interpolate project paths into a shell command.
-
-### Exercise the ECC Plugin Setup Harness
-
-Use `docker/plugin-setup/compose.yaml` as the reference implementation. It provides:
-
-- `fixture-tests` for the focused install manifest, target, and executor suite.
-- `real-cli` for the pinned Debian-based generic Linux image.
-- `real-cli-ubuntu` for the pinned Ubuntu image.
-
-Validate the Compose model before building:
-
-```bash
-docker compose -f docker/plugin-setup/compose.yaml config --quiet
-```
-
-Build both real Linux images:
-
-```bash
-docker compose -f docker/plugin-setup/compose.yaml \
-  build real-cli real-cli-ubuntu
-```
-
-Run the safe default flow in each image:
-
-```bash
-docker compose -p ecc-plugin-debian-test \
-  -f docker/plugin-setup/compose.yaml \
-  run --rm -T real-cli dry-run
-
-docker compose -p ecc-plugin-ubuntu-test \
-  -f docker/plugin-setup/compose.yaml \
-  run --rm -T real-cli-ubuntu dry-run
-```
-
-The dry run executes the current public command contract:
-
-```bash
-ecc install --profile core --target claude-project --dry-run --json
-```
-
-Before that command runs, the container creates a locally packed npm artifact
-from the read-only checkout with `npm pack --ignore-scripts`. It extracts the
-self-created tarball under `/tmp`, validates the `ecc-universal` package name,
-required install manifests, and the confined `package.json` `bin.ecc` mapping,
-then invokes the extracted `ecc` executable. The runtime stays on
-`network_mode: none`, does not execute package lifecycle scripts, and does not
-rely on host `node_modules`; its exact pinned production dependencies are
-already present in the image.
-
-The harness rejects an empty plan, a non-`claude-project` target, any operation
-outside `/workspace/project/.claude`, or any dry run that creates the target
-directory. `install` performs the isolated apply twice, checks its managed
-install state, lists the installed target, and runs `doctor`.
-
-### Start, Open, Reconnect, and Clean Up a Named Session
-
-Start a detached container without `--rm` so leaving a terminal does not remove
-the session:
-
-```bash
-docker compose -p ecc-plugin-session \
-  -f docker/plugin-setup/compose.yaml \
-  run --detach --name ecc-plugin-shell real-cli shell
-```
-
-The container copies the read-only fixture to the stable private directory
-`/workspace/project`. Confirm it is running, then emit the Docker side of the
-terminal-opener v1 data contract:
-
-```bash
-docker inspect --format '{{.State.Running}}' ecc-plugin-shell
-node docker/plugin-setup/interactive-plan.js \
-  --container ecc-plugin-shell \
-  --workdir /workspace/project \
-  --json \
-  -- bash
-```
-
-The JSON result has exactly an `executable` and `argv` boundary (plus
-`contractVersion: 1`): the executable is `docker`, and argv begins with
-`exec`, `-it`, and `-w`. Pass that data to the separate terminal-opener skill
-when it is installed. This Docker harness deliberately does not import a
-terminal adapter, interpolate a shell command, or manage a host GUI process.
-Until then, open the same PTY in the current host terminal directly:
-
-```bash
-docker exec -it -w /workspace/project ecc-plugin-shell bash
-```
-
-Exit the shell without stopping the detached container. Reconnect with the
-same `docker exec -it` command. When finished, remove the exact named container
-and its Compose project resources:
-
-```bash
-docker rm --force ecc-plugin-shell
-docker compose -p ecc-plugin-session \
-  -f docker/plugin-setup/compose.yaml \
-  down --remove-orphans
-```
-
-Host credentials are absent by default and credential directories are never
-mounted. The default service also has no network access. When an authenticated
-provider session genuinely needs a network, build `real-cli` first and then opt
-in visibly with `docker compose --profile networked run real-cli-networked
-shell`. Prefer authenticating inside that disposable session. If a CI run must
-inherit a host environment credential, make that opt-in at invocation with an
-explicit Compose `--env NAME` flag, understand that the value is inspectable
-and can be exfiltrated for the container lifetime, and remove the exact named
-container immediately after.
-
-Run the same focused suite natively on the host:
-
-```bash
-npm run test:plugin-setup-platform
-```
-
-Inspect the produced identity and environment before trusting the image:
-
-```bash
-docker image inspect ecc-plugin-setup:debian ecc-plugin-setup:ubuntu
-```
-
-Clean each named test project without deleting unrelated volumes or images:
-
-```bash
-docker compose -p ecc-plugin-debian-test \
-  -f docker/plugin-setup/compose.yaml down --remove-orphans
-docker compose -p ecc-plugin-ubuntu-test \
-  -f docker/plugin-setup/compose.yaml down --remove-orphans
-```
+- Use the installer's supported dry-run mode when available. Do not assume a dry run
+  exists; run real installs only in the disposable test target.
+- Use argument arrays, such as `exec.CommandContext` in Go, for test runners.
+  Never interpolate project paths into a shell command.
 
 ## .dockerignore
 
@@ -445,14 +300,13 @@ node_modules
 .env
 .env.*
 dist
+bin
 coverage
 *.log
-.next
 .cache
 docker-compose*.yml
 Dockerfile*
 README.md
-tests/
 ```
 
 ## Debugging
@@ -490,7 +344,7 @@ docker system prune                   # Remove unused images/containers
 docker compose exec app nslookup db
 
 # Check connectivity
-docker compose exec app wget -qO- http://api:3000/health
+docker compose exec app wget -qO- http://api:8000/health
 
 # Inspect network
 docker network ls
@@ -500,14 +354,14 @@ docker network inspect <project>_default
 ## Anti-Patterns
 
 ```
-# BAD: Using docker compose in production without orchestration
-# Use Kubernetes, ECS, or Docker Swarm for production multi-container workloads
+# BAD: Introducing a mandatory orchestrator for a supported Compose deployment
+# Docker Compose is valid for self-hosted workloads; choose topology for the actual need
 
 # BAD: Storing data in containers without volumes
 # Containers are ephemeral -- all data lost on restart without volumes
 
 # BAD: Running as root
-# Always create and use a non-root user
+# Use a non-root user where possible; keep explicitly privileged host/agent work isolated
 
 # BAD: Using :latest tag
 # Pin to specific versions for reproducible builds

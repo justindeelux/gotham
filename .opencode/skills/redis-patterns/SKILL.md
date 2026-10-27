@@ -39,96 +39,79 @@ Redis is an in-memory data structure store that supports strings, hashes, lists,
 
 ### Cache-Aside (Lazy Loading)
 
-```python
-import redis
-import json
+Redis command sequence (JSON encoding/decoding stays in Go):
 
-r = redis.Redis(host='localhost', port=6379, decode_responses=True)
-
-def get_product(product_id: int):
-    cache_key = f"product:{product_id}"
-    cached = r.get(cache_key)
-
-    if cached:
-        return json.loads(cached)
-
-    product = db.query("SELECT * FROM products WHERE id = %s", product_id)
-    r.setex(cache_key, 3600, json.dumps(product))  # TTL: 1 hour
-    return product
+```text
+GET product:123
+# On a miss, load the product from PostgreSQL, then:
+SET product:123 '{"id":123,"name":"Example"}' EX 3600
 ```
+
+Treat a cache miss separately from a Redis connection error. Use the existing
+go-redis client and propagate or handle failures according to the cache's policy.
 
 ### Write-Through Cache
 
-```python
-def update_product(product_id: int, data: dict):
-    # Write to DB first
-    db.execute("UPDATE products SET ... WHERE id = %s", product_id)
+After the PostgreSQL write succeeds, update the serialized cache value:
 
-    # Immediately update cache
-    cache_key = f"product:{product_id}"
-    r.setex(cache_key, 3600, json.dumps(data))
+```text
+SET product:123 '{"id":123,"name":"Updated"}' EX 3600
 ```
+
+Handle cache-write failure explicitly; the database write has already committed.
 
 ### Cache Invalidation
 
-```python
-# Tag-based invalidation — group related keys under a set
-def cache_product(product_id: int, category_id: int, data: dict):
-    key = f"product:{product_id}"
-    tag = f"tag:category:{category_id}"
-    pipe = r.pipeline(transaction=True)
-    pipe.setex(key, 3600, json.dumps(data))
-    pipe.sadd(tag, key)
-    pipe.expire(tag, 3600)
-    pipe.execute()
+Tag-based invalidation groups related keys under a set:
 
-def invalidate_category(category_id: int):
-    tag = f"tag:category:{category_id}"
-    keys = r.smembers(tag)
-    if keys:
-        r.delete(*keys)
-    r.delete(tag)
+```text
+MULTI
+SET product:123 '{"id":123,"category_id":7}' EX 3600
+SADD tag:category:7 product:123
+EXPIRE tag:category:7 3600
+EXEC
+
+# To invalidate: read the set, delete the returned keys, then remove the tag.
+SMEMBERS tag:category:7
+DEL product:123
+DEL tag:category:7
 ```
+
+The Go caller builds the deletion from the returned set members. Bound the set size;
+concurrent writers require a stronger invalidation scheme when strict consistency matters.
 
 ### Session Storage
 
-```python
-import time
-import uuid
+Generate an unpredictable session ID in Go, then store and expire its hash atomically:
 
-def create_session(user_id: int, ttl: int = 86400) -> str:
-    session_id = str(uuid.uuid4())
-    key = f"session:{session_id}"
-    pipe = r.pipeline(transaction=True)
-    pipe.hset(key, mapping={
-        "user_id": user_id,
-        "created_at": int(time.time()),
-    })
-    pipe.expire(key, ttl)
-    pipe.execute()
-    return session_id
+```text
+MULTI
+HSET session:generated-id user_id 123 created_at 1700000000
+EXPIRE session:generated-id 86400
+EXEC
 
-def get_session(session_id: str) -> dict | None:
-    data = r.hgetall(f"session:{session_id}")
-    return data if data else None
-
-def delete_session(session_id: str):
-    r.delete(f"session:{session_id}")
+HGETALL session:generated-id
+DEL session:generated-id
 ```
+
+This is a Redis storage pattern, not a requirement to move existing sessions out of
+PostgreSQL. Preserve the application's authentication/session design.
 
 ## Rate Limiting
 
 ### Fixed Window (Simple)
 
-```python
-def is_rate_limited(user_id: int, limit: int = 100, window: int = 60) -> bool:
-    key = f"ratelimit:{user_id}:{int(time.time()) // window}"
-    pipe = r.pipeline(transaction=True)
-    pipe.incr(key)
-    pipe.expire(key, window)
-    count, _ = pipe.execute()
-    return count > limit
+Derive a key from the user ID and current time bucket in Go, then:
+
+```text
+MULTI
+INCR ratelimit:123:time-bucket
+EXPIRE ratelimit:123:time-bucket 60
+EXEC
 ```
+
+Compare the returned count with the limit. Use a transaction (`TxPipeline` in go-redis),
+not an ordinary pipeline, and distinguish command errors from an allowed request.
 
 ### Sliding Window (Lua — Atomic)
 
@@ -154,89 +137,71 @@ end
 return 0
 ```
 
-```python
-sliding_window = r.register_script(open('sliding_window.lua').read())
-
-def allow_request(user_id: int) -> bool:
-    key = f"ratelimit:sliding:{user_id}"
-    now = int(time.time() * 1000)
-    return bool(sliding_window(keys=[key], args=[now, 60000, 100]))
+```bash
+# now_ms is the current Unix time in milliseconds supplied by the caller.
+redis-cli --eval sliding_window.lua ratelimit:sliding:123 , "$now_ms" 60000 100
 ```
+
+The Go caller can execute the same Lua script through its existing Redis client.
+A result of 1 allows the request; 0 denies it. Handle execution errors explicitly.
 
 ## Distributed Locks
 
 ### Distributed Lock (Single Node — SET NX PX)
 
-```python
-import uuid
+Generate a unique ownership token for every acquisition in Go:
 
-def acquire_lock(resource: str, ttl_ms: int = 5000) -> str | None:
-    lock_key = f"lock:{resource}"
-    token = str(uuid.uuid4())
-    acquired = r.set(lock_key, token, px=ttl_ms, nx=True)
-    return token if acquired else None
-
-def release_lock(resource: str, token: str) -> bool:
-    release_script = """
-    if redis.call('get', KEYS[1]) == ARGV[1] then
-        return redis.call('del', KEYS[1])
-    else
-        return 0
-    end
-    """
-    result = r.eval(release_script, 1, f"lock:{resource}", token)
-    return bool(result)
-
-# Usage
-token = acquire_lock("order:payment:123")
-if token:
-    try:
-        process_payment()
-    finally:
-        release_lock("order:payment:123", token)
+```text
+SET lock:order:123 unique-owner-token NX PX 5000
 ```
 
-> For multi-node setups use the `redlock-py` library which implements the full Redlock algorithm.
+A nil result means another owner holds the lock. Release atomically only if the token
+still matches; an expired owner must not delete its successor's lock:
+
+```lua
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+```
+
+Use `defer` for release in the Go caller. The TTL must cover the work or be safely
+renewed; expiry does not stop the original worker.
+
+> For coordination across multiple Redis nodes, choose a mechanism that meets the required failure guarantees; do not assume a single-node lease remains safe through failover.
 
 ## Pub/Sub & Streams
 
 ### Pub/Sub (Fire-and-Forget)
 
-```python
-# Publisher
-def publish_event(channel: str, payload: dict):
-    r.publish(channel, json.dumps(payload))
+```text
+# Subscriber connection:
+SUBSCRIBE events:orders
 
-# Subscriber (blocking — run in separate thread/process)
-def subscribe_events(channel: str):
-    pubsub = r.pubsub()
-    pubsub.subscribe(channel)
-    for message in pubsub.listen():
-        if message['type'] == 'message':
-            handle(json.loads(message['data']))
+# Separate publisher connection:
+PUBLISH events:orders '{"id":123,"status":"created"}'
 ```
+
+In Go, own the subscription's context and goroutine, handle disconnection, and close it
+on shutdown. Pub/Sub does not retain events for disconnected subscribers.
 
 ### Redis Streams (Durable Queue)
 
-```python
-# Producer
-def emit(stream: str, event: dict):
-    r.xadd(stream, event, maxlen=10000)  # Cap stream length
+```text
+# Producer (bounded stream):
+XADD events:orders MAXLEN ~ 10000 * order_id 123 status created
 
-# Consumer group — guarantees at-least-once delivery
-try:
-    r.xgroup_create('events:orders', 'processor', id='0', mkstream=True)
-except Exception:
-    pass  # Group already exists
+# Create once; only BUSYGROUP means the group already exists.
+XGROUP CREATE events:orders processor 0 MKSTREAM
 
-def consume(stream: str, group: str, consumer: str):
-    while True:
-        messages = r.xreadgroup(group, consumer, {stream: '>'}, count=10, block=2000)
-        for _, entries in (messages or []):
-            for msg_id, data in entries:
-                process(data)
-                r.xack(stream, group, msg_id)
+# Consumer:
+XREADGROUP GROUP processor worker-1 COUNT 10 BLOCK 2000 STREAMS events:orders >
+# Process each entry successfully before acknowledging its returned ID:
+XACK events:orders processor returned-entry-id
 ```
+
+Handle command failures, cancellation, and pending-entry recovery in the Go consumer.
+Replayed work must be idempotent for at-least-once processing.
 
 > Prefer **Streams** over Pub/Sub when you need delivery guarantees, consumer groups, or replay.
 
@@ -275,45 +240,42 @@ Always set a TTL. Keys without TTL accumulate indefinitely and cause memory pres
 
 ### Connection Pooling
 
-```python
-from redis import ConnectionPool, Redis
+```go
+import (
+    "time"
 
-pool = ConnectionPool(
-    host='localhost',
-    port=6379,
-    db=0,
-    max_connections=20,
-    decode_responses=True,
-    socket_connect_timeout=2,
-    socket_timeout=2,
+    "github.com/redis/go-redis/v9"
 )
 
-r = Redis(connection_pool=pool)
+client := redis.NewClient(&redis.Options{
+    Addr:         "localhost:6379",
+    DB:           0,
+    PoolSize:     20,
+    DialTimeout:  2 * time.Second,
+    ReadTimeout:  2 * time.Second,
+    WriteTimeout: 2 * time.Second,
+})
+// Share the client; close it when its owning service shuts down.
 ```
 
 ### Cluster Mode
 
-```python
-from redis.cluster import RedisCluster
+For a Redis Cluster deployment, use the Go client's cluster support and supply its
+startup addresses. Command-line diagnosis follows redirects with:
 
-r = RedisCluster(
-    startup_nodes=[{"host": "redis-1", "port": 6379}],
-    decode_responses=True,
-    skip_full_coverage_check=True,
-)
+```bash
+redis-cli -c -h redis-1 -p 6379 PING
 ```
+
+Multi-key transactions and Lua scripts require compatible key hash slots.
 
 ### Sentinel (High Availability)
 
-```python
-from redis.sentinel import Sentinel
+For a Sentinel-managed deployment, configure the Go client's failover support with the
+master name and Sentinel addresses. Discover the current primary with:
 
-sentinel = Sentinel(
-    [('sentinel-1', 26379), ('sentinel-2', 26379)],
-    socket_timeout=0.5,
-)
-master = sentinel.master_for('mymaster', decode_responses=True)
-replica = sentinel.slave_for('mymaster', decode_responses=True)
+```bash
+redis-cli -h sentinel-1 -p 26379 SENTINEL get-master-addr-by-name mymaster
 ```
 
 ## Eviction Policies
@@ -342,42 +304,29 @@ Set via `redis.conf`: `maxmemory-policy allkeys-lru`
 
 ### Cache Miss Stampede Prevention
 
-```python
-import threading
+For a single Go process:
 
-_locks: dict[str, threading.Lock] = {}
-_locks_mutex = threading.Lock()
+1. Read the cache.
+2. Coalesce concurrent misses for the same key with the existing `singleflight.Group`
+   from `golang.org/x/sync/singleflight`.
+3. Recheck the cache inside the shared call.
+4. Fetch from the authoritative source only on a miss.
+5. Cache the result with a TTL and return it; handle fetch and cache errors explicitly.
 
-def get_with_lock(key: str, fetch_fn, ttl: int = 300):
-    cached = r.get(key)
-    if cached:
-        return json.loads(cached)
+Keep unrelated keys independent and honor caller cancellation.
 
-    with _locks_mutex:
-        if key not in _locks:
-            _locks[key] = threading.Lock()
-        lock = _locks[key]
-    with lock:
-        cached = r.get(key)  # Re-check after acquiring lock
-        if cached:
-            return json.loads(cached)
-        value = fetch_fn()
-        r.setex(key, ttl, json.dumps(value))
-        return value
-```
-
-> Note: for multi-process deployments, replace the in-process lock with `acquire_lock`/`release_lock` from the Distributed Locks section above.
+> Note: for multi-process deployments, use an ownership-token lease from the Distributed Locks section above instead of relying only on in-process coalescing.
 
 ## Examples
 
-**Add caching to a Django/Flask API endpoint:**
-Use cache-aside with `setex` and a 5-minute TTL on the response. Key on the request parameters.
+**Add caching to a Go API endpoint:**
+Use cache-aside with `SET ... EX` and a 5-minute TTL on the response. Key on the request parameters.
 
 **Rate-limit an API by user:**
-Use fixed-window with `pipeline(transaction=True)` for low-traffic endpoints; use sliding-window Lua for accurate per-user throttling.
+Use fixed-window with a transaction for low-traffic endpoints; use sliding-window Lua for accurate per-user throttling.
 
 **Coordinate a background job across workers:**
-Use `acquire_lock` with a TTL that exceeds the expected job duration. Always release in a `finally` block.
+Use an ownership-token lease with a TTL that exceeds the expected job duration. Release with an atomic token check in a deferred Go cleanup.
 
 **Fan-out notifications to multiple subscribers:**
 Use Pub/Sub for fire-and-forget. Switch to Streams if you need guaranteed delivery or replay for late consumers.
@@ -398,7 +347,4 @@ Use Pub/Sub for fire-and-forget. Switch to Streams if you need guaranteed delive
 ## Related
 
 - Skill: `postgres-patterns` — relational data patterns
-- Skill: `backend-patterns` — API and service layer patterns
-- Skill: `database-migrations` — schema versioning
-- Skill: `django-patterns` — Django cache framework integration
-- Agent: `database-reviewer` — full database review workflow
+- Skill: `golang-patterns` — Go concurrency and resource ownership

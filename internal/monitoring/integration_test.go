@@ -23,6 +23,15 @@ import (
 
 const defaultTestDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 
+type countingNotifier struct {
+	deliveries []incidents.Delivery
+}
+
+func (n *countingNotifier) NotifyIncident(_ context.Context, delivery incidents.Delivery) error {
+	n.deliveries = append(n.deliveries, delivery)
+	return nil
+}
+
 func scratchStore(t *testing.T) *store.Store {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -145,6 +154,102 @@ func TestFullDataMountOpensOneIncidentWithHealthyRoot(t *testing.T) {
 	}
 }
 
+func TestResizeKeepsTheSameIncidentAndRecoversAfterClear(t *testing.T) {
+	st := scratchStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	nodeID := createNode(t, st)
+	base := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return base }
+	notifier := &countingNotifier{}
+	incidentSvc := incidents.NewService(incidents.Config{Store: st, Notifier: notifier, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: now})
+	svc := NewService(Config{Store: st, Incidents: incidentSvc, Now: now})
+	fs := servers.FilesystemObservation{
+		Path: "/mnt/backup", Purpose: "backup", Status: servers.MetricStatusOK,
+		TotalBytes: 1000, AvailableBytes: 80, InodeStatus: servers.MetricStatusOK,
+		TotalInodes: 1000, FreeInodes: 800,
+	}
+	observe := func(at time.Time, observation servers.FilesystemObservation) {
+		t.Helper()
+		svc.RecordHostPressure(ctx, nodeID, "node-a", servers.NodeObservation{
+			ServerID: nodeID, ObservedAt: at,
+			Host: servers.HostObservation{
+				CPUUsage: servers.ObservedMetric{Status: servers.MetricStatusOK, Value: 0.4},
+				MemUsage: servers.ObservedMetric{Status: servers.MetricStatusOK, Value: 0.4},
+			},
+			Filesystems: []servers.FilesystemObservation{observation},
+		})
+	}
+	for offset := 0; offset <= 60; offset += 15 {
+		observe(base.Add(time.Duration(offset)*time.Second), fs)
+	}
+	before, err := incidentSvc.ActiveNodeIncidents(ctx)
+	if err != nil {
+		t.Fatalf("active after warning: %v", err)
+	}
+	var incidentID uuid.UUID
+	for _, inc := range before {
+		if inc.Detector == DetectorSpace {
+			incidentID = inc.ID
+		}
+	}
+	if incidentID == uuid.Nil {
+		t.Fatalf("no space incident after sustained warning: %+v", before)
+	}
+
+	fs.TotalBytes = 2000
+	fs.AvailableBytes = 100
+	for offset := 75; offset <= 135; offset += 15 {
+		observe(base.Add(time.Duration(offset)*time.Second), fs)
+	}
+	afterResize, err := incidentSvc.ActiveNodeIncidents(ctx)
+	if err != nil {
+		t.Fatalf("active after resize: %v", err)
+	}
+	var resizedIncident *incidents.Incident
+	for i, inc := range afterResize {
+		if inc.Detector == DetectorSpace {
+			resizedIncident = &afterResize[i]
+		}
+	}
+	if resizedIncident == nil || resizedIncident.ID != incidentID {
+		t.Fatalf("resize replaced the incident: old=%s active=%+v", incidentID, afterResize)
+	}
+	opened := 0
+	for _, delivery := range notifier.deliveries {
+		if delivery.Transition == incidents.TransitionOpened {
+			opened++
+		}
+	}
+	if opened != 1 {
+		t.Fatalf("opened deliveries = %d (%+v); resize must not re-open", opened, notifier.deliveries)
+	}
+
+	fs.TotalBytes = 4000
+	fs.AvailableBytes = 1000
+	for offset := 150; offset <= 210; offset += 15 {
+		observe(base.Add(time.Duration(offset)*time.Second), fs)
+	}
+	recovered := 0
+	for _, delivery := range notifier.deliveries {
+		if delivery.Transition == incidents.TransitionRecovered {
+			recovered++
+		}
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered deliveries = %d (%+v); want one stable recovery", recovered, notifier.deliveries)
+	}
+	remaining, err := incidentSvc.ActiveNodeIncidents(ctx)
+	if err != nil {
+		t.Fatalf("active after recovery: %v", err)
+	}
+	for _, inc := range remaining {
+		if inc.Detector == DetectorSpace {
+			t.Fatalf("space incident still active after stable clear: %+v", inc)
+		}
+	}
+}
+
 func TestSettingsPersistAcrossRestartAndReset(t *testing.T) {
 	st := scratchStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -241,17 +346,11 @@ func TestFilesystemHistoryKeepsCapacityBoundariesAndQuality(t *testing.T) {
 	if resized.Segment != 2 || resized.TotalBytes != 2000 {
 		t.Fatalf("resize = %+v; want segment 2 with new capacity", resized)
 	}
-	foundOld := false
-	for _, identity := range reporter.closed {
-		if identity == filesystemIdentity(DetectorSpace, nodeID, "/mnt/backup", 1) {
-			foundOld = true
-		}
-		if identity == filesystemIdentity(DetectorSpace, nodeID, "/mnt/backup", 2) {
-			t.Fatalf("new segment was closed: %v", reporter.closed)
-		}
+	if resized.ID != first.ID {
+		t.Fatalf("resize changed filesystem identity: %v -> %v", first.ID, resized.ID)
 	}
-	if !foundOld {
-		t.Fatalf("old segment was not closed: %v", reporter.closed)
+	if len(reporter.closed) != 0 {
+		t.Fatalf("resize closed an incident: %v", reporter.closed)
 	}
 
 	var samples, fresh int

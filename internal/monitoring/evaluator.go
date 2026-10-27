@@ -81,7 +81,7 @@ func (s *Service) evaluateFilesystems(ctx context.Context, serverID uuid.UUID, n
 }
 
 func (s *Service) evaluateFilesystemCounter(ctx context.Context, serverID uuid.UUID, nodeName string, fs servers.FilesystemObservation, identity sqlc.FilesystemIdentity, rule FilesystemRule, detector string, at time.Time) {
-	key := filesystemIdentity(detector, serverID, identity.FilesystemKey, identity.Segment)
+	key := filesystemIdentity(detector, serverID, identity.FilesystemKey)
 	if !rule.Enabled {
 		s.close(ctx, key, "rule_disabled")
 		return
@@ -214,12 +214,8 @@ func (s *Service) observeFilesystem(ctx context.Context, serverID uuid.UUID, fs 
 	if fs.InodeStatus == servers.MetricStatusOK && fs.TotalInodes > 0 && row.TotalInodes > 0 && clampInt64(fs.TotalInodes) != row.TotalInodes {
 		segment++
 	}
-	if segment != row.Segment {
-		// A replacement or resize is a discontinuity: close the old segment so
-		// no later forecast or alert crosses it.
-		s.close(ctx, filesystemIdentity(DetectorSpace, serverID, row.FilesystemKey, row.Segment), "filesystem_replaced")
-		s.close(ctx, filesystemIdentity(DetectorInodes, serverID, row.FilesystemKey, row.Segment), "filesystem_replaced")
-	}
+	// The segment bounds only the history. Incident identity stays on the
+	// stable filesystem key, so a resize keeps the same active incident.
 	if fs.Status == servers.MetricStatusOK && fs.TotalBytes > 0 {
 		totalBytes = clampInt64(fs.TotalBytes)
 	}
@@ -308,8 +304,8 @@ func (s *Service) closeMissingFilesystems(ctx context.Context, serverID uuid.UUI
 		if seen[row.FilesystemKey] {
 			continue
 		}
-		s.close(ctx, filesystemIdentity(DetectorSpace, serverID, row.FilesystemKey, row.Segment), "filesystem_disappeared")
-		s.close(ctx, filesystemIdentity(DetectorInodes, serverID, row.FilesystemKey, row.Segment), "filesystem_disappeared")
+		s.close(ctx, filesystemIdentity(DetectorSpace, serverID, row.FilesystemKey), "filesystem_disappeared")
+		s.close(ctx, filesystemIdentity(DetectorInodes, serverID, row.FilesystemKey), "filesystem_disappeared")
 	}
 }
 
@@ -331,8 +327,8 @@ func (s *Service) logReport(detector string, serverID uuid.UUID, err error) {
 	}
 }
 
-func filesystemIdentity(detector string, serverID uuid.UUID, key string, segment int32) string {
-	return incidents.Identity(detector, ResourceFilesystem, serverID, key, strconv.Itoa(int(segment)))
+func filesystemIdentity(detector string, serverID uuid.UUID, key string) string {
+	return incidents.Identity(detector, ResourceFilesystem, serverID, key)
 }
 
 // mergeAliases collapses paths that describe the same filesystem within one

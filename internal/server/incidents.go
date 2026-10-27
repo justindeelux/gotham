@@ -54,6 +54,15 @@ type incidentConnectivity struct {
 	logger *slog.Logger
 }
 
+func (r incidentConnectivity) NodeDeleted(ctx context.Context, serverID uuid.UUID) {
+	if r.svc == nil || serverID == uuid.Nil {
+		return
+	}
+	if err := r.svc.Close(ctx, incidents.Identity("connectivity", "node", serverID), "node_deleted"); err != nil && r.logger != nil {
+		r.logger.Warn("incidents: close deleted node incident", "server_id", serverID.String(), "error", err)
+	}
+}
+
 func (r incidentConnectivity) NodeConnectivity(ctx context.Context, change servers.StateChange) {
 	if r.svc == nil || change.ServerID == uuid.Nil {
 		return

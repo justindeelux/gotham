@@ -23,6 +23,7 @@ type StateChange struct {
 // connectivity message.
 type IncidentRecorder interface {
 	NodeConnectivity(context.Context, StateChange)
+	NodeDeleted(context.Context, uuid.UUID)
 }
 
 func (s *ServerService) SetIncidentRecorder(recorder IncidentRecorder) {

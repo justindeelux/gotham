@@ -256,6 +256,13 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 		s.logger.Warn("servers: purged database tombstone left its volume on the node",
 			"server_id", id, "volume", volume)
 	}
+	if s.incidents != nil {
+		// The node is gone, so its connectivity incident must close rather
+		// than stay active forever. A failure here cannot undo the deletion.
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		s.incidents.NodeDeleted(closeCtx, id)
+		cancel()
+	}
 	return nil
 }
 

@@ -38,6 +38,7 @@ const rules = ref<MonitoringRules | null>(null);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
+let loadToken = 0;
 
 const options = computed(() => [
   { label: t("monitoring.scope.instance"), value: "instance" },
@@ -68,18 +69,30 @@ const validationError = computed(() => {
 });
 
 async function load(): Promise<void> {
+  const token = ++loadToken;
+  const selected = scope.value;
   loading.value = true;
   error.value = "";
+  rules.value = null;
+  settings.value = null;
   try {
     const next = await getMonitoringSettings(
-      scope.value === "instance" ? undefined : scope.value,
+      selected === "instance" ? undefined : selected,
     );
+    if (token !== loadToken) {
+      return;
+    }
     settings.value = next;
     rules.value = JSON.parse(JSON.stringify(next.effective)) as MonitoringRules;
   } catch (err) {
+    if (token !== loadToken) {
+      return;
+    }
     error.value = describeMonitoringError(err);
   } finally {
-    loading.value = false;
+    if (token === loadToken) {
+      loading.value = false;
+    }
   }
 }
 
@@ -184,27 +197,31 @@ onMounted(async () => {
             {{ validationError }}
           </NAlert>
 
-          <NSpace>
-            <NButton
-              type="primary"
-              :loading="saving"
-              :disabled="Boolean(validationError)"
-              @click="save"
-            >
-              {{ t("monitoring.actions.save") }}
-            </NButton>
-            <NButton :loading="saving" @click="reset">
-              {{
-                scope === "instance"
-                  ? t("monitoring.actions.reset")
-                  : t("monitoring.actions.resetNode")
-              }}
-            </NButton>
-          </NSpace>
-
           <p class="muted" :lang="locale">
             {{ t("monitoring.rules.defaultsNote") }}
           </p>
+        </NSpace>
+
+        <NSpace class="monitoring-actions">
+          <NButton
+            type="primary"
+            :loading="saving"
+            :disabled="Boolean(validationError) || loading || !rules"
+            @click="save"
+          >
+            {{ t("monitoring.actions.save") }}
+          </NButton>
+          <NButton
+            :loading="saving"
+            :disabled="loading || !rules"
+            @click="reset"
+          >
+            {{
+              scope === "instance"
+                ? t("monitoring.actions.reset")
+                : t("monitoring.actions.resetNode")
+            }}
+          </NButton>
         </NSpace>
       </NSpin>
     </NSpace>
@@ -218,6 +235,10 @@ onMounted(async () => {
 
 .scope-select {
   min-width: 220px;
+}
+
+.monitoring-actions {
+  margin-top: var(--space-4);
 }
 
 .rule-hint {

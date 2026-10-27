@@ -190,6 +190,32 @@ service FileService {
   // and the total uncompressed size, the entry count and the compression ratio
   // are bounded.
   rpc Extract(ExtractRequest) returns (stream Progress);
+  // TransferCapabilities reports whether this node stages transfer bundles and
+  // the effective limits a caller must respect. A node that does not implement
+  // this RPC answers codes.Unimplemented; one with the file manager disabled
+  // answers FailedPrecondition.
+  rpc TransferCapabilities(TransferCapabilitiesRequest) returns (TransferCapabilitiesResponse);
+  // PrepareBundle writes a fixed tar.gz bundle of the selected sources to
+  // private agent-owned staging, outside every file root, and returns the
+  // opaque artifact handle the other transfer calls take. The source roots may
+  // be read-only: nothing is written inside them.
+  rpc PrepareBundle(PrepareBundleRequest) returns (PrepareBundleResponse);
+  // ReadArtifact streams a prepared bundle back in bounded chunks. The artifact
+  // is bound to the calling transfer: another transfer's handle is refused.
+  rpc ReadArtifact(ReadArtifactRequest) returns (stream ArtifactChunk);
+  // ReceiveArtifact streams a bundle into private staging on the destination
+  // filesystem, bound to one transfer, root and directory. The first request
+  // must carry ReceiveArtifactHeader; the following requests carry the body.
+  // The bundle is usable only when the declared length and SHA-256 both match.
+  rpc ReceiveArtifact(stream ReceiveArtifactRequest) returns (ReceiveArtifactResponse);
+  // ApplyArtifact extracts a received bundle into private staging, verifies the
+  // extracted top-level names and publishes each complete top-level entry with
+  // an exclusive rename, streaming per-entry outcomes. Whole-selection
+  // atomicity is not promised; already published entries survive a failure.
+  rpc ApplyArtifact(ApplyArtifactRequest) returns (stream ApplyArtifactEvent);
+  // DiscardArtifact removes one artifact's transfer-owned staging. It never
+  // touches published entries or any other path.
+  rpc DiscardArtifact(DiscardArtifactRequest) returns (DiscardArtifactResponse);
   // ListTrash lists a root's recycle bin, newest first. Entries are deleted
   // entries the service moved into the root's trash; the trash tree itself is
   // never browsable through List.
@@ -549,6 +575,181 @@ message ExtractRequest {
   // reused, never removed.
   bool overwrite = 4;
 }
+
+// TransferCapabilitiesRequest is empty: bounds are node-local configuration.
+message TransferCapabilitiesRequest {}
+
+// TransferCapabilitiesResponse reports whether bundles are supported and the
+// effective bounds. A caller must not offer the feature when available is
+// false, and must cap its request by these values rather than its own.
+message TransferCapabilitiesResponse {
+  // available is true when this node implements bundle staging.
+  bool available = 1;
+  // max_bundle_bytes caps the compressed bundle (the archive a Prepare returns
+  // and a Receive accepts).
+  uint64 max_bundle_bytes = 2;
+  // max_expanded_bytes caps the extracted contents.
+  uint64 max_expanded_bytes = 3;
+  // max_entries caps the number of archive entries.
+  uint64 max_entries = 4;
+  // max_sources caps how many relative paths one PrepareBundle may select.
+  uint32 max_sources = 5;
+  // max_concurrency is the number of transfer operations this node runs at
+  // once. It is the same slot pool Compress/Extract/Write use.
+  uint32 max_concurrency = 6;
+}
+
+// PrepareBundleRequest selects sources from one root.
+message PrepareBundleRequest {
+  // transfer_id identifies the caller's transfer. Artifacts are scoped to it.
+  string transfer_id = 1;
+  // root is the FileService root name the sources are read from. It may be a
+  // read-only root.
+  string root = 2;
+  // sources are relative paths of files or directories under root. A name
+  // whose base name duplicates another selection is refused, as is one that
+  // overlaps another selection. At most 1,024 sources are accepted.
+  repeated string sources = 3;
+}
+
+// SkippedEntry is one source entry a bundle left out, for reporting.
+message SkippedEntry {
+  // path is the entry's path inside the bundle.
+  string path = 1;
+  // reason is "symlink" or "special".
+  string reason = 2;
+}
+
+// PrepareBundleResponse describes the completed bundle.
+message PrepareBundleResponse {
+  string transfer_id = 1;
+  // artifact is the opaque handle ReadArtifact/DiscardArtifact take. It is not
+  // a filesystem path and is unguessable.
+  string artifact = 2;
+  // compressed_bytes is the bundle's exact size.
+  uint64 compressed_bytes = 3;
+  // sha256 is the bundle's hex SHA-256; a Receive must present the same digest.
+  string sha256 = 4;
+  // expanded_bytes is the sum of the regular-file sizes the bundle expands to.
+  uint64 expanded_bytes = 5;
+  // entry_count is the number of archive entries (directories included).
+  uint64 entry_count = 6;
+  // top_level are the top-level names the bundle stores, in selection order.
+  repeated string top_level = 7;
+  // skipped_count counts symbolic links and special files left out.
+  uint64 skipped_count = 8;
+  // skipped holds up to a bounded number of skipped-entry samples; skipped_count
+  // is authoritative when it is larger.
+  repeated SkippedEntry skipped = 9;
+}
+
+// ReadArtifactRequest reads one prepared artifact.
+message ReadArtifactRequest {
+  string transfer_id = 1;
+  string artifact = 2;
+}
+
+// ArtifactChunk is one slice of a bundle.
+message ArtifactChunk {
+  bytes data = 1;
+}
+
+// ReceiveArtifactRequest is one message of a ReceiveArtifact stream.
+message ReceiveArtifactRequest {
+  oneof part {
+    // header must be the first message of the stream.
+    ReceiveArtifactHeader header = 1;
+    // data is a slice of the bundle.
+    bytes data = 2;
+  }
+}
+
+// ReceiveArtifactHeader binds a received bundle to its transfer and destination.
+message ReceiveArtifactHeader {
+  string transfer_id = 1;
+  // root is the destination FileService root; it must be writable.
+  string root = 2;
+  // directory is the destination directory relative to root. It must already
+  // exist; missing parent directories are never created.
+  string directory = 3;
+  // length is the exact number of body bytes that follow.
+  uint64 length = 4;
+  // sha256 is the hex digest of the whole body; a mismatch refuses the bundle.
+  string sha256 = 5;
+  // expanded_bytes and entry_count are the values the PrepareBundle response
+  // reported. ApplyArtifact checks the extracted archive against them.
+  uint64 expanded_bytes = 6;
+  uint64 entry_count = 7;
+  // top_level is the prepared selection's top-level names. ApplyArtifact
+  // publishes exactly these names and refuses an archive that stores others.
+  repeated string top_level = 8;
+}
+
+// ReceiveArtifactResponse reports the staged artifact.
+message ReceiveArtifactResponse {
+  string transfer_id = 1;
+  string artifact = 2;
+  uint64 length = 3;
+  string sha256 = 4;
+}
+
+// ApplyArtifactRequest applies one received artifact.
+message ApplyArtifactRequest {
+  string transfer_id = 1;
+  string artifact = 2;
+  // root and directory must match the values the bundle was received for.
+  string root = 3;
+  string directory = 4;
+  // top_level must match the selection the bundle was received for.
+  repeated string top_level = 5;
+}
+
+// ApplyArtifactEvent is one message of an ApplyArtifact stream.
+message ApplyArtifactEvent {
+  oneof event {
+    TransferPhase phase = 1;
+    TransferOutcome outcome = 2;
+  }
+}
+
+// TransferPhase reports which phase the apply is in and its progress.
+message TransferPhase {
+  // phase is "extract", "publish" or "done".
+  string phase = 1;
+  // path is the entry or top-level name in flight, relative to the destination
+  // directory.
+  string path = 2;
+  int64 bytes_done = 3;
+  // bytes_total is -1 when unknown.
+  int64 bytes_total = 4;
+}
+
+// TransferOutcomeStatus is the durable filesystem result for one top-level.
+enum TransferOutcomeStatus {
+  TRANSFER_OUTCOME_STATUS_UNSPECIFIED = 0;
+  // PUBLISHED means the top-level was renamed into place.
+  TRANSFER_OUTCOME_STATUS_PUBLISHED = 1;
+  // SKIPPED means an existing destination name was left untouched.
+  TRANSFER_OUTCOME_STATUS_SKIPPED = 2;
+}
+
+// TransferOutcome reports one top-level name's result.
+message TransferOutcome {
+  // name is the top-level basename, relative to the destination directory.
+  string name = 1;
+  TransferOutcomeStatus status = 2;
+  // reason carries the conflict detail when status is SKIPPED.
+  string reason = 3;
+}
+
+// DiscardArtifactRequest drops one artifact's staging.
+message DiscardArtifactRequest {
+  string transfer_id = 1;
+  string artifact = 2;
+}
+
+// DiscardArtifactResponse is empty.
+message DiscardArtifactResponse {}
 
 // MkdirRequest creates one directory.
 message MkdirRequest {

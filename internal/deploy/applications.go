@@ -721,9 +721,9 @@ func (s *Service) controlContainer(ctx context.Context, userID, appID uuid.UUID,
 		return Deployment{}, err
 	}
 	if start {
-		s.setDesiredState(ctx, app.ID, "running", 0)
+		s.setDesiredState(ctx, app.ID, "running")
 	} else {
-		s.setDesiredState(ctx, app.ID, "stopped", 0)
+		s.setDesiredState(ctx, app.ID, "stopped")
 	}
 	return target, nil
 }

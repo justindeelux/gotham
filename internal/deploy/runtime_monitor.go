@@ -18,11 +18,11 @@ type RuntimeMonitor interface {
 	CloseResource(ctx context.Context, resourceType string, resourceID uuid.UUID, reason string)
 }
 
-func (s *Service) setDesiredState(ctx context.Context, appID uuid.UUID, desired string, grace time.Duration) {
+func (s *Service) setDesiredState(ctx context.Context, appID uuid.UUID, desired string) {
 	if s == nil || s.runtimeMonitor == nil {
 		return
 	}
-	if err := s.runtimeMonitor.SetDesiredState(ctx, runtimewatch.ResourceApplication, appID, desired, grace); err != nil && s.logger != nil {
+	if err := s.runtimeMonitor.SetDesiredState(ctx, runtimewatch.ResourceApplication, appID, desired, 0); err != nil && s.logger != nil {
 		s.logger.Warn("deploy: record runtime desired state", "application_id", appID.String(), "error", err)
 	}
 }

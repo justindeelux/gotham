@@ -251,12 +251,7 @@ func (s *Service) Deploy(ctx context.Context, userID, appID uuid.UUID) (Deployme
 		}
 		return s.repo.GetDeployment(ctx, app.ID, result.ResourceID)
 	}
-	deployment, err := s.deployApplication(ctx, app)
-	if err == nil {
-		// Only an accepted deploy clears an intentional stop.
-		s.setDesiredState(ctx, app.ID, "running", 0)
-	}
-	return deployment, err
+	return s.deployApplication(ctx, app)
 }
 
 func (s *Service) DeploySystem(ctx context.Context, appID uuid.UUID) (Deployment, error) {
@@ -573,6 +568,9 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 		return Deployment{}, err
 	}
 	if requestreplay.Replayed(ctx) {
+		// A replayed deployment was accepted earlier; clear an intentional
+		// stop so runtime monitoring does not keep suppressing it.
+		s.setDesiredState(ctx, app.ID, "running")
 		return created, nil
 	}
 	s.publishTask(ctx, app, created, taskevents.StatusQueued, "", 0, "")
@@ -584,6 +582,8 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 		s.abandon(app, created, err)
 		return Deployment{}, err
 	}
+	// This is the single accepted path for Deploy, DeploySystem and Rollback.
+	s.setDesiredState(ctx, app.ID, "running")
 	return created, nil
 }
 

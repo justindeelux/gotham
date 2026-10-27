@@ -137,18 +137,34 @@ func (f *fakeRepo) ListDeliveries(_ context.Context, incidentID uuid.UUID, limit
 	return out, nil
 }
 
-func (f *fakeRepo) ListPendingDeliveries(_ context.Context, limit, maxAttempts int) ([]DeliveryIntent, error) {
+func (f *fakeRepo) ClaimPendingDeliveries(_ context.Context, limit, maxAttempts int) ([]DeliveryIntent, error) {
 	out := make([]DeliveryIntent, 0)
-	for _, intent := range f.intents {
+	ids := make([]uuid.UUID, 0, len(f.intents))
+	for id := range f.intents {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		left, right := f.intents[ids[i]], f.intents[ids[j]]
+		if !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.Before(right.CreatedAt)
+		}
+		return left.ID.String() < right.ID.String()
+	})
+	for _, id := range ids {
+		intent := f.intents[id]
 		if (intent.State == DeliveryPending || intent.State == DeliveryFailed) && intent.Attempts < maxAttempts {
+			intent.State = DeliverySending
 			out = append(out, *intent)
+			if limit > 0 && len(out) == limit {
+				break
+			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
 	return out, nil
+}
+
+func (f *fakeRepo) ReclaimStaleDeliveries(context.Context) (int64, error) {
+	return 0, nil
 }
 
 func (f *fakeRepo) MarkDelivery(_ context.Context, intentID, incidentID uuid.UUID, state, hold, transition string, severity Severity, attempts int, errorText string, at time.Time) error {

@@ -82,7 +82,8 @@ type Repository interface {
 	ListEvents(ctx context.Context, filter EventFilter) ([]Event, error)
 	ListActiveNodeIncidents(ctx context.Context) ([]Incident, error)
 	ListDeliveries(ctx context.Context, incidentID uuid.UUID, limit int) ([]DeliveryIntent, error)
-	ListPendingDeliveries(ctx context.Context, limit, maxAttempts int) ([]DeliveryIntent, error)
+	ClaimPendingDeliveries(ctx context.Context, limit, maxAttempts int) ([]DeliveryIntent, error)
+	ReclaimStaleDeliveries(ctx context.Context) (int64, error)
 	MarkDelivery(ctx context.Context, intentID, incidentID uuid.UUID, state, hold, transition string, severity Severity, attempts int, errorText string, at time.Time) error
 	ClearExpiredSnooze(ctx context.Context, id uuid.UUID, notifiedUntil, at time.Time) (Incident, error)
 	ListExpiredSnoozes(ctx context.Context, now time.Time, limit int) ([]Incident, error)
@@ -175,15 +176,19 @@ func (r *storeRepository) ListDeliveries(ctx context.Context, incidentID uuid.UU
 	return intentsFromRows(rows), nil
 }
 
-func (r *storeRepository) ListPendingDeliveries(ctx context.Context, limit, maxAttempts int) ([]DeliveryIntent, error) {
-	rows, err := r.st.ListPendingIncidentDeliveries(ctx, sqlc.ListPendingIncidentDeliveriesParams{
+func (r *storeRepository) ClaimPendingDeliveries(ctx context.Context, limit, maxAttempts int) ([]DeliveryIntent, error) {
+	rows, err := r.st.ClaimPendingIncidentDeliveries(ctx, sqlc.ClaimPendingIncidentDeliveriesParams{
 		Limit:    int32(limit),
 		Attempts: int32(maxAttempts),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("incidents: list pending deliveries: %w", err)
+		return nil, fmt.Errorf("incidents: claim pending deliveries: %w", err)
 	}
 	return intentsFromRows(rows), nil
+}
+
+func (r *storeRepository) ReclaimStaleDeliveries(ctx context.Context) (int64, error) {
+	return r.st.ReclaimStaleIncidentDeliveries(ctx)
 }
 
 func (r *storeRepository) MarkDelivery(ctx context.Context, intentID, incidentID uuid.UUID, state, hold, transition string, severity Severity, attempts int, errorText string, at time.Time) error {

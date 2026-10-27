@@ -68,8 +68,12 @@ func (s *Store) CreateIncidentDeliveryIntent(ctx context.Context, params sqlc.Cr
 	return s.queries.CreateIncidentDeliveryIntent(ctx, params)
 }
 
-func (s *Store) ListPendingIncidentDeliveries(ctx context.Context, params sqlc.ListPendingIncidentDeliveriesParams) ([]sqlc.IncidentDeliveryIntent, error) {
-	return s.queries.ListPendingIncidentDeliveries(ctx, params)
+func (s *Store) ClaimPendingIncidentDeliveries(ctx context.Context, params sqlc.ClaimPendingIncidentDeliveriesParams) ([]sqlc.IncidentDeliveryIntent, error) {
+	return s.queries.ClaimPendingIncidentDeliveries(ctx, params)
+}
+
+func (s *Store) ReclaimStaleIncidentDeliveries(ctx context.Context) (int64, error) {
+	return s.queries.ReclaimStaleIncidentDeliveries(ctx)
 }
 
 func (s *Store) ListIncidentDeliveries(ctx context.Context, params sqlc.ListIncidentDeliveriesParams) ([]sqlc.IncidentDeliveryIntent, error) {

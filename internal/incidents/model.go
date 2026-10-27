@@ -75,6 +75,7 @@ const (
 const (
 	DeliveryNone       = "none"
 	DeliveryPending    = "pending"
+	DeliverySending    = "sending"
 	DeliveryDispatched = "dispatched"
 	DeliveryFailed     = "failed"
 	DeliverySuppressed = "suppressed"

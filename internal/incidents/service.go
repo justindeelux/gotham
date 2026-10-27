@@ -561,9 +561,12 @@ func (s *Service) dispatch(ctx context.Context) {
 	if s.notifier == nil {
 		return
 	}
-	intents, err := s.repo.ListPendingDeliveries(ctx, deliveryBatch, maxDeliveryAttempts)
+	if _, err := s.repo.ReclaimStaleDeliveries(ctx); err != nil {
+		s.logger.Warn("incidents: reclaim stale deliveries", "error", err)
+	}
+	intents, err := s.repo.ClaimPendingDeliveries(ctx, deliveryBatch, maxDeliveryAttempts)
 	if err != nil {
-		s.logger.Warn("incidents: list pending deliveries", "error", err)
+		s.logger.Warn("incidents: claim pending deliveries", "error", err)
 		return
 	}
 	for _, intent := range intents {
@@ -574,6 +577,9 @@ func (s *Service) dispatch(ctx context.Context) {
 func (s *Service) deliver(ctx context.Context, intent DeliveryIntent) {
 	inc, err := s.repo.Get(ctx, intent.IncidentID)
 	if err != nil {
+		if markErr := s.repo.MarkDelivery(ctx, intent.ID, intent.IncidentID, DeliverySuppressed, "incident not found", intent.Transition, "", 0, "", s.now().UTC()); markErr != nil {
+			s.logger.Warn("incidents: drop delivery for missing incident", "error", markErr)
+		}
 		return
 	}
 	now := s.now().UTC()

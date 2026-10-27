@@ -65,6 +65,60 @@ func (q *Queries) AcknowledgeIncident(ctx context.Context, arg AcknowledgeIncide
 	return i, err
 }
 
+const claimPendingIncidentDeliveries = `-- name: ClaimPendingIncidentDeliveries :many
+WITH claimed AS (
+    SELECT d.id FROM incident_delivery_intents AS d
+    WHERE d.state IN ('pending', 'failed') AND d.attempts < $2
+    ORDER BY d.created_at ASC, d.id ASC
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE incident_delivery_intents AS i
+SET state = 'sending', updated_at = now()
+FROM claimed
+WHERE i.id = claimed.id
+RETURNING i.id, i.incident_id, i.transition, i.severity, i.state, i.attempts, i.last_error, i.created_at, i.updated_at
+`
+
+type ClaimPendingIncidentDeliveriesParams struct {
+	Limit    int32 `json:"limit"`
+	Attempts int32 `json:"attempts"`
+}
+
+// Handoff attempts that still need the notifications layer. Claiming flips the
+// row to 'sending' in the same statement, so overlapping Report/Sweep calls
+// hand each intent off exactly once. A failed handoff stays retryable; provider
+// retry is a later package.
+func (q *Queries) ClaimPendingIncidentDeliveries(ctx context.Context, arg ClaimPendingIncidentDeliveriesParams) ([]IncidentDeliveryIntent, error) {
+	rows, err := q.db.Query(ctx, claimPendingIncidentDeliveries, arg.Limit, arg.Attempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IncidentDeliveryIntent{}
+	for rows.Next() {
+		var i IncidentDeliveryIntent
+		if err := rows.Scan(
+			&i.ID,
+			&i.IncidentID,
+			&i.Transition,
+			&i.Severity,
+			&i.State,
+			&i.Attempts,
+			&i.LastError,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const clearExpiredSnooze = `-- name: ClearExpiredSnooze :one
 UPDATE incidents
 SET snoozed_until = NULL, snooze_notified_until = $2, updated_at = $3
@@ -773,51 +827,6 @@ func (q *Queries) ListIncidents(ctx context.Context, arg ListIncidentsParams) ([
 	return items, nil
 }
 
-const listPendingIncidentDeliveries = `-- name: ListPendingIncidentDeliveries :many
-SELECT id, incident_id, transition, severity, state, attempts, last_error, created_at, updated_at FROM incident_delivery_intents
-WHERE state IN ('pending', 'failed') AND attempts < $2
-ORDER BY created_at ASC, id ASC
-LIMIT $1
-`
-
-type ListPendingIncidentDeliveriesParams struct {
-	Limit    int32 `json:"limit"`
-	Attempts int32 `json:"attempts"`
-}
-
-// Handoff attempts that still need the notifications layer. A failed handoff
-// stays retryable (bounded) instead of being discarded; provider retry is a
-// later package.
-func (q *Queries) ListPendingIncidentDeliveries(ctx context.Context, arg ListPendingIncidentDeliveriesParams) ([]IncidentDeliveryIntent, error) {
-	rows, err := q.db.Query(ctx, listPendingIncidentDeliveries, arg.Limit, arg.Attempts)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []IncidentDeliveryIntent{}
-	for rows.Next() {
-		var i IncidentDeliveryIntent
-		if err := rows.Scan(
-			&i.ID,
-			&i.IncidentID,
-			&i.Transition,
-			&i.Severity,
-			&i.State,
-			&i.Attempts,
-			&i.LastError,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const markIncidentDelivery = `-- name: MarkIncidentDelivery :exec
 UPDATE incident_delivery_intents
 SET state = $2, attempts = attempts + 1, last_error = $3, updated_at = $4
@@ -872,6 +881,22 @@ WHERE lifecycle = 'resolved' AND resolved_at < $1
 
 func (q *Queries) PruneResolvedIncidents(ctx context.Context, resolvedAt pgtype.Timestamptz) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneResolvedIncidents, resolvedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const reclaimStaleIncidentDeliveries = `-- name: ReclaimStaleIncidentDeliveries :execrows
+UPDATE incident_delivery_intents
+SET state = 'failed', last_error = 'handoff interrupted', updated_at = now()
+WHERE state = 'sending' AND updated_at < now() - interval '2 minutes'
+`
+
+// A crash between claim and result leaves 'sending' behind; after a short
+// timeout it becomes retryable again instead of being stranded forever.
+func (q *Queries) ReclaimStaleIncidentDeliveries(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, reclaimStaleIncidentDeliveries)
 	if err != nil {
 		return 0, err
 	}

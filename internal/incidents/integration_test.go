@@ -7,14 +7,17 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/incidents"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
 const defaultTestDSN = "postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
@@ -172,5 +175,88 @@ func TestReportPersistsAcrossRestartAndHonoursGrants(t *testing.T) {
 	}
 	if _, err := restarted.Get(ctx, memberID, incident.ID); err != incidents.ErrNotFound {
 		t.Fatalf("revoked grant still readable: %v", err)
+	}
+}
+
+type lockedNotifier struct {
+	mu         sync.Mutex
+	deliveries []incidents.Delivery
+}
+
+func (n *lockedNotifier) NotifyIncident(_ context.Context, delivery incidents.Delivery) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.deliveries = append(n.deliveries, delivery)
+	return nil
+}
+
+func (n *lockedNotifier) snapshot() []incidents.Delivery {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]incidents.Delivery(nil), n.deliveries...)
+}
+
+func TestConcurrentReportsHandEachIntentOffOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	notifier := &lockedNotifier{}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	svc := incidents.NewService(incidents.Config{
+		Store: st, Notifier: notifier, Logger: logger,
+		Now: func() time.Time { return now },
+	})
+
+	const reports = 30
+	incidentIDs := make(chan uuid.UUID, reports)
+	var wg sync.WaitGroup
+	for i := 0; i < reports; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			incident, _, err := svc.Report(ctx, incidents.Observation{
+				Identity: incidents.Identity("app.health", "application", uuid.New()),
+				Detector: "app.health", At: now, Valid: true, Unhealthy: true,
+				Severity: incidents.SeverityWarning,
+			})
+			if err != nil {
+				t.Errorf("Report: %v", err)
+				return
+			}
+			incidentIDs <- incident.ID
+		}()
+	}
+	wg.Wait()
+	close(incidentIDs)
+
+	deliveries := notifier.snapshot()
+	if len(deliveries) != reports {
+		t.Fatalf("deliveries = %d; want exactly one per intent (%d)", len(deliveries), reports)
+	}
+	seen := make(map[uuid.UUID]int, len(deliveries))
+	for _, delivery := range deliveries {
+		seen[delivery.IncidentID]++
+	}
+	if len(seen) != reports {
+		t.Fatalf("distinct incidents delivered = %d; want %d", len(seen), reports)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Errorf("incident %s delivered %d times", id, count)
+		}
+	}
+
+	for id := range seen {
+		intents, err := st.ListIncidentDeliveries(ctx, sqlc.ListIncidentDeliveriesParams{
+			IncidentID: pgtype.UUID{Bytes: id, Valid: true},
+			Limit:      10,
+		})
+		if err != nil || len(intents) != 1 {
+			t.Fatalf("incident %s intents = %d %v; want one", id, len(intents), err)
+		}
+		if intents[0].State != incidents.DeliveryDispatched {
+			t.Errorf("incident %s intent state = %q", id, intents[0].State)
+		}
 	}
 }

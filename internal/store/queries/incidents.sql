@@ -137,14 +137,30 @@ INSERT INTO incident_delivery_intents (
     created_at, updated_at
 ) VALUES ($1, $2, $3, $4, 'pending', 0, '', $5, $5);
 
--- name: ListPendingIncidentDeliveries :many
--- Handoff attempts that still need the notifications layer. A failed handoff
--- stays retryable (bounded) instead of being discarded; provider retry is a
--- later package.
-SELECT * FROM incident_delivery_intents
-WHERE state IN ('pending', 'failed') AND attempts < $2
-ORDER BY created_at ASC, id ASC
-LIMIT $1;
+-- name: ClaimPendingIncidentDeliveries :many
+-- Handoff attempts that still need the notifications layer. Claiming flips the
+-- row to 'sending' in the same statement, so overlapping Report/Sweep calls
+-- hand each intent off exactly once. A failed handoff stays retryable; provider
+-- retry is a later package.
+WITH claimed AS (
+    SELECT d.id FROM incident_delivery_intents AS d
+    WHERE d.state IN ('pending', 'failed') AND d.attempts < $2
+    ORDER BY d.created_at ASC, d.id ASC
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE incident_delivery_intents AS i
+SET state = 'sending', updated_at = now()
+FROM claimed
+WHERE i.id = claimed.id
+RETURNING i.*;
+
+-- name: ReclaimStaleIncidentDeliveries :execrows
+-- A crash between claim and result leaves 'sending' behind; after a short
+-- timeout it becomes retryable again instead of being stranded forever.
+UPDATE incident_delivery_intents
+SET state = 'failed', last_error = 'handoff interrupted', updated_at = now()
+WHERE state = 'sending' AND updated_at < now() - interval '2 minutes';
 
 -- name: ListIncidentDeliveries :many
 SELECT * FROM incident_delivery_intents

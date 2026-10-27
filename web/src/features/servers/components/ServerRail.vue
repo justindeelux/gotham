@@ -12,16 +12,17 @@ import {
 } from "@/features/servers/utils/serverRailView";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useEditorStore } from "@/features/files/stores/editor";
-import { useFilesPaneSession } from "@/features/files/stores/paneSession";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
+import { useFilesPaneSession } from "@/features/files/stores/paneSession";
 import { useAuthStore } from "@/features/auth";
 import { useTerminalStore, useTerminalWindowStore } from "@/features/terminal";
 import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
 const serversStore = useServersStore();
 const authStore = useAuthStore();
+const leftEditor = useEditorStore("left");
+const rightEditor = useEditorStore("right");
 const filesPanes = useFilesPaneSession();
-const editor = computed(() => useEditorStore(filesPanes.activePane));
 const editorWindow = useEditorWindowStore();
 const terminal = useTerminalStore();
 const terminalWindow = useTerminalWindowStore();
@@ -31,14 +32,35 @@ const { locale, t } = useI18n();
 
 const isDashboard = computed<boolean>(() => route.name === "dashboard");
 
-const editorCount = computed<number>(() => editor.value.tabs.length);
+const editorCount = computed<number>(
+  () => leftEditor.tabs.length + rightEditor.tabs.length,
+);
+
+const editorDirty = computed<boolean>(
+  () => leftEditor.hasDirty || rightEditor.hasDirty,
+);
 
 const editorLabel = computed<string>(() =>
   t("servers.rail.editorWithCount", { count: editorCount.value }),
 );
 
 function toggleEditor(): void {
-  editorWindow.setMinimized(!editorWindow.minimized);
+  const activeHasTabs =
+    filesPanes.activePane === "left"
+      ? leftEditor.tabs.length > 0
+      : rightEditor.tabs.length > 0;
+  if (editorWindow.minimized || !activeHasTabs) {
+    if (!activeHasTabs) {
+      if (leftEditor.tabs.length > 0) {
+        filesPanes.activate("left");
+      } else if (rightEditor.tabs.length > 0) {
+        filesPanes.activate("right");
+      }
+    }
+    editorWindow.setMinimized(false);
+    return;
+  }
+  editorWindow.setMinimized(true);
 }
 
 const terminalTabs = computed(() =>
@@ -164,6 +186,7 @@ onMounted(() => {
           <span class="rail-badge" aria-hidden="true">{{
             editorCount > 9 ? "9+" : editorCount
           }}</span>
+          <span v-if="editorDirty" class="rail-dirty" aria-hidden="true"></span>
         </button>
       </div>
       <div v-if="terminalCount > 0" class="rail-item">
@@ -308,6 +331,10 @@ onMounted(() => {
   cursor: pointer;
 }
 
+.rail-btn--editor {
+  position: relative;
+}
+
 .rail-btn--editor .rail-badge,
 .rail-btn--terminal .rail-badge {
   top: calc(-1 * var(--space-1));
@@ -317,6 +344,16 @@ onMounted(() => {
   padding: 0;
   box-sizing: border-box;
   border-radius: 50%;
+}
+
+.rail-btn--editor .rail-dirty {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
 }
 
 .rail-item.is-active :deep(.rail-btn) {

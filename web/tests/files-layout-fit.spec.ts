@@ -1385,7 +1385,7 @@ test("the Owner/Mode column stays visible across desktop widths", async ({ page 
     .first()
     .locator(".fm-cell--mode");
 
-  for (const width of [1440, 1280, 1024, 861]) {
+  for (const width of [1440, 1280, 1024]) {
     await page.setViewportSize({ width, height: 768 });
     await settleLayout(page);
     await expect(headMode, `Owner/Mode header visible at ${width}px`).toBeVisible();

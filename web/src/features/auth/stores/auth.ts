@@ -86,6 +86,7 @@ export const useAuthStore = defineStore("auth", () => {
         try {
           useTerminalStore().reset();
           useEditorWindowStore().reloadForUser(nextAccountId);
+          useFilesPaneSession().reloadForUser(nextAccountId);
           useTerminalWindowStore().reloadForUser(nextAccountId);
         } catch {
         }

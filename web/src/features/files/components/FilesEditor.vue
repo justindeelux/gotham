@@ -82,9 +82,13 @@ import { formatBytes, formatDateTime } from "@/shared/utils/format";
 interface Props {
   serverId?: string;
   pane?: FilesPaneId;
+  active?: boolean;
 }
 
-const props = withDefaults(defineProps<Props>(), { serverId: "" });
+const props = withDefaults(defineProps<Props>(), {
+  serverId: "",
+  active: true,
+});
 
 const { t } = useI18n();
 const message = useMessage();
@@ -277,7 +281,12 @@ const tabMenuOptions = computed<DropdownOption[]>(() => {
 watch(
   () => files.serverId,
   (next) => {
-    if (!next || next === editor.serverId || !editor.hasDirty) {
+    if (
+      paneId !== "left" ||
+      !next ||
+      next === editor.serverId ||
+      !editor.hasDirty
+    ) {
       return;
     }
     void editor.confirmDiscard().then((outcome) => {
@@ -1046,6 +1055,7 @@ function discardAndClose(): void {
 
 function onEditorKeydown(event: KeyboardEvent): void {
   if (
+    !props.active ||
     event.defaultPrevented ||
     event.isComposing ||
     editor.tabs.length === 0 ||
@@ -1073,13 +1083,18 @@ function onEditorKeydown(event: KeyboardEvent): void {
 }
 
 function focusCloseButton(): void {
-  document.querySelector<HTMLElement>(".ed-window-close")?.focus();
+  [...document.querySelectorAll<HTMLElement>(".ed-window-close")]
+    .find((element) => element.offsetParent !== null)
+    ?.focus();
 }
 
 function returnFocusToBrowser(): void {
+  const browser = document.querySelector<HTMLElement>(
+    `.files-browser[data-pane="${paneId}"]`,
+  );
   const target =
-    document.querySelector<HTMLElement>(".fm-search input") ??
-    document.querySelector<HTMLElement>(".fm-label");
+    browser?.querySelector<HTMLElement>(".fm-search input") ??
+    browser?.querySelector<HTMLElement>(".fm-label");
   target?.focus();
 }
 
@@ -1170,7 +1185,7 @@ onBeforeUnmount(() => {
 <template>
   <FloatingWindow
     v-if="editor.tabs.length > 0"
-    v-show="!editorWindow.minimized"
+    v-show="!editorWindow.minimized && active"
     class="ed-window files-editor"
     :style="windowStyle"
     :window-label="t('files.editor.windowLabel')"

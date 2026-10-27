@@ -48,10 +48,16 @@ export function useEditorDrafts(
   const prompt = computed<EditorDraftPrompt | null>(
     () => prompts.value[0] ?? null,
   );
-  const stored = new Map<string, string>();
+  interface StoredDraft {
+    key: string;
+    savedAt: number;
+    doc: string;
+  }
+  const stored = new Map<string, StoredDraft>();
   const checked = new Set<string>();
   // Guards two panes editing one file: a delayed autosave must not replace a
-  // draft another pane wrote after this pane's last edit.
+  // draft another pane wrote after this pane's last edit, and a pane that
+  // saves or closes must not delete the other pane's newer draft for that key.
   const seen = new Map<string, string>();
   const touchedAt = new Map<string, number>();
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -66,6 +72,35 @@ export function useEditorDrafts(
 
   function draftPrefix(): string {
     return editorDraftStoragePrefix(getServerId(), auth.user?.id ?? "");
+  }
+
+  function removeIfOwn(store: EditorDraftStorage, entry: StoredDraft): void {
+    const current = readEditorDraft(store, entry.key);
+    if (
+      current === null ||
+      (current.savedAt === entry.savedAt && current.doc === entry.doc)
+    ) {
+      removeEditorDraft(store, entry.key);
+    }
+  }
+
+  function pruneTracking(): void {
+    const live = new Set(editor.tabs.map((tab) => tab.id));
+    for (const id of seen.keys()) {
+      if (!live.has(id)) {
+        seen.delete(id);
+      }
+    }
+    for (const id of touchedAt.keys()) {
+      if (!live.has(id)) {
+        touchedAt.delete(id);
+      }
+    }
+    for (const id of checked) {
+      if (!live.has(id)) {
+        checked.delete(id);
+      }
+    }
   }
 
   function flush(): void {
@@ -87,7 +122,7 @@ export function useEditorDrafts(
         tab.kind === "file" && tab.status === "ready" && editor.isDirty(tab);
       if (!dirty) {
         if (previous) {
-          removeEditorDraft(store, previous);
+          removeIfOwn(store, previous);
           stored.delete(tab.id);
         }
         continue;
@@ -100,10 +135,11 @@ export function useEditorDrafts(
       if (saved && saved.doc !== tab.doc && saved.savedAt > (touchedAt.get(tab.id) ?? 0)) {
         continue;
       }
-      if (previous && previous !== key) {
-        removeEditorDraft(store, previous);
+      if (previous && previous.key !== key) {
+        removeIfOwn(store, previous);
         stored.delete(tab.id);
       }
+      const savedAt = Date.now();
       const written = writeEditorDraft(store, prefix, {
         root: tab.root,
         path: tab.path,
@@ -111,18 +147,19 @@ export function useEditorDrafts(
         etag: tab.etag,
         eol: tab.eol,
         bom: tab.bom,
-        savedAt: Date.now(),
+        savedAt,
       });
       if (written) {
-        stored.set(tab.id, key);
+        stored.set(tab.id, { key, savedAt, doc: tab.doc });
       }
     }
-    for (const [id, key] of stored) {
+    for (const [id, entry] of stored) {
       if (!live.has(id)) {
-        removeEditorDraft(store, key);
+        removeIfOwn(store, entry);
         stored.delete(id);
       }
     }
+    pruneTracking();
   }
 
   function markTouched(): void {
@@ -156,7 +193,7 @@ export function useEditorDrafts(
     if (store === null || draftPrefix() === "") {
       return;
     }
-    for (const [id, key] of stored) {
+    for (const [id, entry] of stored) {
       const tab = editor.tabs.find((item) => item.id === id);
       const dirty =
         tab !== undefined &&
@@ -164,13 +201,14 @@ export function useEditorDrafts(
         tab.status === "ready" &&
         editor.isDirty(tab);
       if (!dirty) {
-        removeEditorDraft(store, key);
+        removeIfOwn(store, entry);
         stored.delete(id);
       }
     }
   }
 
   function checkDrafts(): void {
+    pruneTracking();
     const live = new Set(editor.tabs.map((tab) => tab.id));
     if (prompts.value.some((item) => !live.has(item.tabId))) {
       prompts.value = prompts.value.filter((item) => live.has(item.tabId));
@@ -255,7 +293,11 @@ export function useEditorDrafts(
     const prefix = draftPrefix();
     const store = storage();
     if (prefix !== "" && store !== null) {
-      removeEditorDraft(store, editorDraftStorageKey(prefix, item.root, item.path));
+      const key = editorDraftStorageKey(prefix, item.root, item.path);
+      const current = readEditorDraft(store, key);
+      if (current === null || current.savedAt === item.savedAt) {
+        removeEditorDraft(store, key);
+      }
     }
     dropPrompt(item);
   }

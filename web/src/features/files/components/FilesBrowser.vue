@@ -104,7 +104,6 @@ import {
 } from "@/features/files/utils/virtual";
 import { useServersStore } from "@/features/servers";
 import { useTerminalStore } from "@/features/terminal";
-import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
 interface Props {
@@ -125,6 +124,9 @@ const editor = pane.editor;
 function activatePane(): void {
   paneSession.activate(props.pane);
 }
+const isActivePane = computed<boolean>(
+  () => paneSession.splitEnabled && paneSession.activePane === props.pane,
+);
 const auth = useAuthStore();
 const serversStore = useServersStore();
 const terminal = useTerminalStore();
@@ -709,7 +711,12 @@ function rowDetails(entry: FilesEntry): string {
   );
 }
 
-const ROW_DETAILS_ID = "fm-row-details";
+const ROW_DETAILS_ID = computed<string>(() =>
+  props.pane === "left" ? "fm-row-details" : `fm-row-details-${props.pane}`,
+);
+const PANEL_ID = computed<string>(() =>
+  props.pane === "left" ? "fm-tabpanel" : `fm-tabpanel-${props.pane}`,
+);
 
 const rovingEntry = computed<FilesEntry | null>(() => {
   const name = rovingTabName.value;
@@ -726,7 +733,7 @@ const rovingDetails = computed<string>(() => {
 });
 
 function rowDescribedBy(entry: FilesEntry): string | undefined {
-  return entry.name === rovingTabName.value ? ROW_DETAILS_ID : undefined;
+  return entry.name === rovingTabName.value ? ROW_DETAILS_ID.value : undefined;
 }
 
 const NARROW_TAB_PX = 90;
@@ -752,6 +759,17 @@ function updateNarrowTabs(): void {
 
 let narrowObserver: ResizeObserver | null = null;
 onMounted(() => {
+  const card = cardEl.value?.$el as HTMLElement | undefined;
+  if (card && typeof ResizeObserver !== "undefined") {
+    browserWidth.value = card.getBoundingClientRect().width;
+    compactObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        browserWidth.value = entry.contentRect.width;
+      }
+    });
+    compactObserver.observe(card);
+  }
   if (typeof ResizeObserver !== "undefined") {
     narrowObserver = new ResizeObserver(() => updateNarrowTabs());
     if (tabListEl.value) {
@@ -763,6 +781,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   narrowObserver?.disconnect();
   narrowObserver = null;
+  compactObserver?.disconnect();
+  compactObserver = null;
 });
 watch(
   () => files.tabs.map((tab) => `${tab.id}:${tabLabel(tab)}`),
@@ -1445,7 +1465,12 @@ function onFileOps(key: string): void {
 
 const sortMenuOpen = ref(false);
 const bulkSortMenuOpen = ref(false);
-const isCompactList = useMediaQuery("(max-width: 860px)");
+const cardEl = ref<InstanceType<typeof NCard> | null>(null);
+const browserWidth = ref(0);
+let compactObserver: ResizeObserver | null = null;
+const isCompactList = computed<boolean>(
+  () => browserWidth.value > 0 && browserWidth.value < 860,
+);
 const showSortControl = computed<boolean>(
   () => isCompactList.value || files.viewMode === "grid",
 );
@@ -1972,10 +1997,21 @@ function onFolderMenu(key: string): void {
 
 <template>
   <NCard
+    ref="cardEl"
     class="files-browser"
     role="region"
-    :aria-label="$t('files.browser.heading')"
-    :class="{ 'is-dragging': dragActive }"
+    :data-pane="props.pane"
+    :aria-current="isActivePane ? 'true' : undefined"
+    :aria-label="
+      $t('files.browser.heading') +
+      ' — ' +
+      $t(props.pane === 'left' ? 'files.split.leftPane' : 'files.split.rightPane')
+    "
+    :class="{
+      'is-dragging': dragActive,
+      'is-compact': isCompactList,
+      'is-active-pane': isActivePane,
+    }"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
     @drop="onDrop"
@@ -1997,7 +2033,7 @@ function onFolderMenu(key: string): void {
           }"
           role="tab"
           :id="'fm-tab-' + tab.id"
-          aria-controls="fm-tabpanel"
+          :aria-controls="PANEL_ID"
           aria-keyshortcuts="Delete"
           :aria-selected="tab.id === files.activeTabId"
           :tabindex="tab.id === files.activeTabId ? 0 : -1"
@@ -2035,6 +2071,9 @@ function onFolderMenu(key: string): void {
       </div>
     </div>
       <div class="fm-contextbar">
+        <span v-if="isActivePane" class="fm-active-tag" aria-hidden="true">
+          {{ $t("files.split.active") }}
+        </span>
         <slot name="header-tools" />
       </div>
     </div>
@@ -2287,7 +2326,7 @@ function onFolderMenu(key: string): void {
     </div>
 
     <div
-      id="fm-tabpanel"
+      :id="PANEL_ID"
       class="fm-panel"
       role="tabpanel"
       :aria-labelledby="'fm-tab-' + files.activeTabId"
@@ -2797,6 +2836,11 @@ function onFolderMenu(key: string): void {
   max-height: none;
 }
 
+.files-browser.is-active-pane {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .files-browser :deep(.n-card-content) {
   display: flex;
   flex-direction: column;
@@ -2831,6 +2875,18 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
   min-width: 0;
   margin-left: auto;
+}
+
+.fm-active-tag {
+  flex: 0 0 auto;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  color: var(--accent-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .fm-tabs {
@@ -3459,11 +3515,9 @@ function onFolderMenu(key: string): void {
   visibility: hidden;
 }
 
-@media (max-width: 860px) {
-  .fm-head-cols {
-    grid-template-columns: minmax(0, 1fr) 64px 64px;
-    gap: var(--space-2);
-  }
+.files-browser.is-compact .fm-head-cols {
+  grid-template-columns: minmax(0, 1fr) 64px 64px;
+  gap: var(--space-2);
 }
 
 .fm-head-bulk {
@@ -4032,74 +4086,72 @@ function onFolderMenu(key: string): void {
   }
 }
 
-@media (max-width: 860px) {
-  .fm-table {
-    min-width: 0;
-  }
+.files-browser.is-compact {
+  --fm-row-height: 52px;
+}
 
-  .files-browser {
-    --fm-row-height: 52px;
-  }
+.files-browser.is-compact .fm-table {
+  min-width: 0;
+}
 
-  .fm-row {
-    grid-template-columns: 30px minmax(0, 1fr) 64px 64px;
-    gap: var(--space-2);
-    padding-block: 3px;
-  }
+.files-browser.is-compact .fm-row {
+  grid-template-columns: 30px minmax(0, 1fr) 64px 64px;
+  gap: var(--space-2);
+  padding-block: 3px;
+}
 
-  .fm-cell--modified,
-  .fm-cell--mode {
-    display: none;
-  }
+.files-browser.is-compact .fm-cell--modified,
+.files-browser.is-compact .fm-cell--mode {
+  display: none;
+}
 
-  .fm-name {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas:
-      "icon label"
-      "icon sub";
-    align-items: center;
-    column-gap: var(--space-3);
-    row-gap: 0;
-  }
+.files-browser.is-compact .fm-name {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "icon label"
+    "icon sub";
+  align-items: center;
+  column-gap: var(--space-3);
+  row-gap: 0;
+}
 
-  .fm-name > .fm-mark {
-    grid-area: icon;
-  }
+.files-browser.is-compact .fm-name > .fm-mark {
+  grid-area: icon;
+}
 
-  .fm-name .fm-label {
-    grid-area: label;
-    margin-right: 0;
-  }
+.files-browser.is-compact .fm-name .fm-label {
+  grid-area: label;
+  margin-right: 0;
+}
 
-  .fm-name-sub {
-    grid-area: sub;
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-width: 0;
-  }
+.files-browser.is-compact .fm-name-sub {
+  grid-area: sub;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
 
-  .fm-row-sub {
-    display: block;
-    flex: 0 1 auto;
-    min-width: 0;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+.files-browser.is-compact .fm-row-sub {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-  .fm-actions .fm-action {
-    display: none;
-  }
+.files-browser.is-compact .fm-actions .fm-action {
+  display: none;
+}
 
-  .fm-actions :deep(.n-button) {
-    min-width: 44px;
-    height: 44px;
-  }
+.files-browser.is-compact .fm-actions :deep(.n-button) {
+  min-width: 44px;
+  height: 44px;
 }
 
 @media (hover: none) and (min-width: 861px) {

@@ -69,9 +69,15 @@ const (
 	EventCertificateExpiring EventKey = "certificate_expiring"
 	EventUpdateAvailable     EventKey = "update_available"
 	EventRedeployNeeded      EventKey = "redeploy_needed"
+	EventIncidentOpened      EventKey = "incident_opened"
+	EventIncidentSeverity    EventKey = "incident_severity_changed"
+	EventIncidentRecovered   EventKey = "incident_recovered"
 )
 
-var defaultEvents = []EventKey{EventDeploySuccess, EventDeployFailure, EventBackupSuccess, EventBackupFailure}
+var defaultEvents = []EventKey{
+	EventDeploySuccess, EventDeployFailure, EventBackupSuccess, EventBackupFailure,
+	EventIncidentOpened, EventIncidentSeverity, EventIncidentRecovered,
+}
 
 var AllEvents = append(
 	append([]EventKey(nil), defaultEvents...),
@@ -98,6 +104,7 @@ const (
 	EventCertificate EventKind = "certificate"
 	EventUpdate      EventKind = "update"
 	EventRedeploy    EventKind = "redeploy"
+	EventIncident    EventKind = "incident"
 )
 
 type Outcome string
@@ -117,10 +124,24 @@ type Event struct {
 	Error        string
 	Detail       string
 	At           time.Time
+
+	// Incident fields feed the persistent lifecycle notifications.
+	IncidentID uuid.UUID
+	Severity   string
+	Action     string
 }
 
 func (e Event) Key() EventKey {
 	switch {
+	case e.Kind == EventIncident:
+		switch e.Action {
+		case "recovered":
+			return EventIncidentRecovered
+		case "severity_changed":
+			return EventIncidentSeverity
+		default:
+			return EventIncidentOpened
+		}
 	case e.Kind == EventRedeploy:
 		return EventRedeployNeeded
 	case e.Kind == EventUpdate:
@@ -145,6 +166,19 @@ func (e Event) Key() EventKey {
 }
 
 func (e Event) Summary() string {
+	if e.Kind == EventIncident {
+		switch e.Action {
+		case "recovered":
+			return "Incident recovered: " + e.Name
+		case "severity_changed":
+			return "Incident severity changed (" + e.Severity + "): " + e.Name
+		default:
+			if e.Severity != "" {
+				return "Incident opened (" + e.Severity + "): " + e.Name
+			}
+			return "Incident opened: " + e.Name
+		}
+	}
 	if e.Kind == EventTest {
 		return "Test notification: " + e.Name
 	}
@@ -182,6 +216,9 @@ const maxEventError = 500
 
 func (e Event) Message() string {
 	lines := []string{e.Summary()}
+	if e.Severity != "" && e.Kind == EventIncident {
+		lines = append(lines, "Severity: "+e.Severity)
+	}
 	if e.Host != "" {
 		lines = append(lines, "Host: "+e.Host)
 	}

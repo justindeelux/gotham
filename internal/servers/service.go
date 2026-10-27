@@ -95,6 +95,7 @@ type ServerService struct {
 	logger      *slog.Logger
 	updater     AgentUpdateOfferer
 	notifier    StateNotifier
+	incidents   IncidentRecorder
 	sweepAfter  time.Time
 	agentUpdate agentUpdateState
 

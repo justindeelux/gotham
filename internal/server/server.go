@@ -26,6 +26,7 @@ import (
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/files"
 	"github.com/justindeelux/gotham/internal/githubapp"
+	"github.com/justindeelux/gotham/internal/incidents"
 	"github.com/justindeelux/gotham/internal/instance"
 	"github.com/justindeelux/gotham/internal/notifications"
 	"github.com/justindeelux/gotham/internal/projects"
@@ -82,6 +83,7 @@ type Server struct {
 	toolchain         toolchain.ToolchainService
 	jobLeases         *databases.JobLeases
 	notify            notifications.NotificationService
+	incidents         *incidents.Service
 	certificateExpiry *proxy.CertificateExpiryObserver
 	webhooks          *webhooks.Service
 	metrics           *servers.MetricsSweeper
@@ -303,6 +305,16 @@ func (s *Server) routes() (http.Handler, error) {
 			nodes.SetStateNotifier(notifier)
 		}
 		notifications.Mount(api, s.resourceAuth(), UserIDFromContext, s.notify)
+
+		s.incidents = s.incidentService()
+		if s.incidents != nil {
+			incidents.Mount(api, s.incidentAuth(), UserIDFromContext, s.incidents)
+			if nodes, ok := s.servers.(interface {
+				SetIncidentRecorder(servers.IncidentRecorder)
+			}); ok {
+				nodes.SetIncidentRecorder(incidentConnectivity{svc: s.incidents, logger: s.logger})
+			}
+		}
 
 		containerService := s.containerService()
 		containers.Mount(api, s.resourceAuth(), containerService)
@@ -759,6 +771,17 @@ func (s *Server) backupService(containerService containers.ContainerService) dat
 	return databases.NewDefaultBackupService(cfg)
 }
 
+func (s *Server) incidentService() *incidents.Service {
+	if s.persistence == nil {
+		return nil
+	}
+	cfg := incidents.Config{Store: s.persistence, Logger: s.logger}
+	if s.notify != nil {
+		cfg.Notifier = incidentNotifier{notify: s.notify}
+	}
+	return incidents.NewService(cfg)
+}
+
 func (s *Server) notificationService() notifications.NotificationService {
 	if s.persistence == nil {
 		return nil
@@ -991,6 +1014,11 @@ func (s *Server) Run(ctx context.Context) error {
 		sweepCtx, cancelSweep := context.WithCancel(ctx)
 		defer cancelSweep()
 		go nodes.RunOfflineSweep(sweepCtx)
+	}
+	if s.incidents != nil {
+		incidentCtx, cancelIncidents := context.WithCancel(ctx)
+		defer cancelIncidents()
+		go s.incidents.Run(incidentCtx)
 	}
 	if panel, ok := s.proxy.(interface{ RunPanelCertificates(context.Context) }); ok {
 		panelCtx, cancelPanel := context.WithCancel(ctx)

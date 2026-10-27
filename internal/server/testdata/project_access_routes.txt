@@ -254,3 +254,9 @@ owner PUT /api/v1/users/{id}/projects
 project PUT /api/v1/projects/{id}/variables
 owner PUT /api/v1/servers/{id}/files/content
 owner PUT /api/v1/updates/schedule
+personal GET /api/v1/incidents
+personal GET /api/v1/incidents/{id}
+personal GET /api/v1/incidents/{id}/deliveries
+personal GET /api/v1/incidents/{id}/history
+personal POST /api/v1/incidents/{id}/acknowledge
+personal POST /api/v1/incidents/{id}/snooze

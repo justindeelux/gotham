@@ -51,6 +51,14 @@ cho lần chạy đầu tiên, vì nếu không, một kẻ chen giữa ở lầ
 | `Offline` | Không có nhịp tim trong 30 giây. Việc chuyển trạng thái xảy ra khi danh sách node được đọc. |
 | `Error` | Lần kiểm tra SSH gần nhất thất bại. |
 
+## Quan sát sức khỏe node
+
+Agent mới còn gửi quan sát về máy chủ, hệ thống tệp và container được quản lý
+mỗi 15 giây qua kết nối đã xác thực. Mỗi chỉ số cho biết đã đo được, không hỗ
+trợ hay đọc lỗi, nên lần đọc lỗi không bị hiển thị là 0; container chỉ được coi
+là đã biến mất từ một danh mục đầy đủ. Dữ liệu cũ hơn ba chu kỳ thu thập được
+coi là cũ, và node chạy agent cũ sẽ báo “cần cập nhật agent” thay vì số 0.
+
 ## Sửa, kiểm tra lại, đặt lại, xóa
 
 **Sửa** thay đổi tên, địa chỉ, cổng SSH, người dùng SSH hoặc thông tin xác thực.

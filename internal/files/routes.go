@@ -35,19 +35,20 @@ type errorBody struct {
 }
 
 type handler struct {
-	svc    FileService
-	logger *slog.Logger
-	spool  *spooler
+	svc          FileService
+	logger       *slog.Logger
+	spool        *spooler
+	transferAuth TransferAuthorizer
 }
 
-func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, logger *slog.Logger) {
+func Mount(r chi.Router, auth func(http.Handler) http.Handler, transferAuth TransferAuthorizer, svc FileService, logger *slog.Logger) {
 	if svc == nil {
 		return
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	h := &handler{svc: svc, logger: logger, spool: newSpooler("", 0, logger)}
+	h := &handler{svc: svc, logger: logger, spool: newSpooler("", 0, logger), transferAuth: transferAuth}
 	r.Get("/v1/servers/{id}/files/download", h.download)
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
@@ -77,6 +78,8 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 		protected.Post("/v1/servers/{id}/files/trash/purge", h.purgeTrash)
 		protected.Post("/v1/servers/{id}/files/trash/empty", h.emptyTrash)
 		protected.Post("/v1/servers/{id}/files/download-ticket", h.issueTicket)
+		protected.Post("/v1/servers/{id}/files/transfers/plan", h.planTransfer)
+		protected.Post("/v1/servers/{id}/files/transfers", h.executeTransfer)
 	})
 }
 
@@ -242,6 +245,10 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, errorBody{Message: "file manager is turned off on this node", Code: "file_manager_disabled"})
 	case errors.Is(err, ErrAgentUnavailable):
 		writeJSON(w, http.StatusBadGateway, errorBody{Message: "agent unavailable", Code: "agent_unavailable"})
+	case errors.Is(err, ErrTransferTimeout):
+		writeJSON(w, http.StatusGatewayTimeout, errorBody{Message: "transfer timed out", Code: "timeout"})
+	case errors.Is(err, ErrTransferCancelled):
+		writeJSON(w, http.StatusRequestTimeout, errorBody{Message: "transfer cancelled", Code: "cancelled"})
 	case errors.Is(err, ErrDisabled):
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "files are disabled", Code: "disabled"})
 	case errors.Is(err, ErrHistoryUnavailable):

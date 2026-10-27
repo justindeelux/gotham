@@ -20,4 +20,6 @@ var (
 	ErrAgentUnavailable    = errors.New("files: agent unavailable")
 	ErrDisabled            = errors.New("files: feature disabled")
 	ErrHistoryUnavailable  = errors.New("files: file history is unavailable")
+	ErrTransferTimeout     = errors.New("files: transfer timed out")
+	ErrTransferCancelled   = errors.New("files: transfer cancelled")
 )

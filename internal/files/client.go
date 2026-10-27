@@ -29,6 +29,12 @@ type FileClient interface {
 	Restore(ctx context.Context, in *agentv1.RestoreRequest, opts ...grpc.CallOption) (*agentv1.RestoreResponse, error)
 	Purge(ctx context.Context, in *agentv1.PurgeRequest, opts ...grpc.CallOption) (*agentv1.PurgeResponse, error)
 	EmptyTrash(ctx context.Context, in *agentv1.EmptyTrashRequest, opts ...grpc.CallOption) (*agentv1.EmptyTrashResponse, error)
+	TransferCapabilities(ctx context.Context, in *agentv1.TransferCapabilitiesRequest, opts ...grpc.CallOption) (*agentv1.TransferCapabilitiesResponse, error)
+	PrepareBundle(ctx context.Context, in *agentv1.PrepareBundleRequest, opts ...grpc.CallOption) (*agentv1.PrepareBundleResponse, error)
+	ReadArtifact(ctx context.Context, in *agentv1.ReadArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ArtifactChunk], error)
+	ReceiveArtifact(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[agentv1.ReceiveArtifactRequest, agentv1.ReceiveArtifactResponse], error)
+	ApplyArtifact(ctx context.Context, in *agentv1.ApplyArtifactRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ApplyArtifactEvent], error)
+	DiscardArtifact(ctx context.Context, in *agentv1.DiscardArtifactRequest, opts ...grpc.CallOption) (*agentv1.DiscardArtifactResponse, error)
 }
 
 var _ FileClient = agentv1.FileServiceClient(nil)

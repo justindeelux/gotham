@@ -24,7 +24,7 @@ func newRouterWithService(t *testing.T, svc FileService, projectID uuid.UUID) ht
 	t.Helper()
 	t.Setenv(FeatureEnv, "true")
 	r := chi.NewRouter()
-	Mount(r, scopeAuth("", projectID), svc, nil)
+	Mount(r, scopeAuth("", projectID), nil, svc, nil)
 	return r
 }
 
@@ -46,7 +46,7 @@ func newRealRouter(t *testing.T, _ any, _ uuid.UUID, client FileClient) (http.Ha
 		Dial:     func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
 	})
 	r := chi.NewRouter()
-	Mount(r, scopeAuth("", uuid.New()), svc, nil)
+	Mount(r, scopeAuth("", uuid.New()), nil, svc, nil)
 	return r, server
 }
 

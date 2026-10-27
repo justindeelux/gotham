@@ -80,6 +80,7 @@ type fakeFileClient struct {
 	listErr    error
 	statResp   *agentv1.StatResponse
 	statErr    error
+	seenStat   *agentv1.StatRequest
 	searchResp *agentv1.SearchResponse
 	searchErr  error
 	seenSearch *agentv1.SearchRequest
@@ -93,25 +94,26 @@ type fakeFileClient struct {
 	sizeErr  error
 	seenSize *agentv1.DirectorySizeRequest
 
-	writeResp    *agentv1.WriteResponse
-	writeErr     error
-	onWriteClose func()
-	lastWrite    *fakeWriteStream
-	writeCtx     context.Context
-	mkdirResp    *agentv1.MkdirResponse
-	mkdirErr     error
-	renameResp   *agentv1.RenameResponse
-	renameErr    error
-	chmodErr     error
-	copyMsgs     []*agentv1.Progress
-	copyErr      error
-	deleteMsgs   []*agentv1.Progress
-	deleteErr    error
-	seenRename   *agentv1.RenameRequest
-	seenCopy     *agentv1.CopyRequest
-	seenDelete   *agentv1.DeleteRequest
-	seenMkdir    *agentv1.MkdirRequest
-	seenChmod    *agentv1.ChmodRequest
+	writeResp     *agentv1.WriteResponse
+	writeErr      error
+	writeCloseErr error
+	onWriteClose  func()
+	lastWrite     *fakeWriteStream
+	writeCtx      context.Context
+	mkdirResp     *agentv1.MkdirResponse
+	mkdirErr      error
+	renameResp    *agentv1.RenameResponse
+	renameErr     error
+	chmodErr      error
+	copyMsgs      []*agentv1.Progress
+	copyErr       error
+	deleteMsgs    []*agentv1.Progress
+	deleteErr     error
+	seenRename    *agentv1.RenameRequest
+	seenCopy      *agentv1.CopyRequest
+	seenDelete    *agentv1.DeleteRequest
+	seenMkdir     *agentv1.MkdirRequest
+	seenChmod     *agentv1.ChmodRequest
 
 	compressMsgs []*agentv1.Progress
 	compressErr  error
@@ -130,6 +132,30 @@ type fakeFileClient struct {
 	seenRestore    *agentv1.RestoreRequest
 	seenPurge      *agentv1.PurgeRequest
 	seenEmpty      *agentv1.EmptyTrashRequest
+
+	capResp          *agentv1.TransferCapabilitiesResponse
+	capErr           error
+	prepareResp      *agentv1.PrepareBundleResponse
+	prepareErr       error
+	seenPrepare      *agentv1.PrepareBundleRequest
+	artifactChunks   [][]byte
+	artifactErr      error
+	seenReadArtifact *agentv1.ReadArtifactRequest
+	onArtifactRecv   func()
+	receiveResp      *agentv1.ReceiveArtifactResponse
+	receiveErr       error
+	receiveCloseErr  error
+	receiveHook      func(*agentv1.ReceiveArtifactRequest) error
+	lastReceive      *fakeReceiveStream
+	applyEvents      []*agentv1.ApplyArtifactEvent
+	applyErr         error
+	applyStreamErr   error
+	applyHook        func(int)
+	seenApply        *agentv1.ApplyArtifactRequest
+	discardErr       error
+	discarded        []string
+	readChunks       [][]byte
+	statHook         func(*agentv1.StatRequest) (*agentv1.StatResponse, error)
 }
 
 func (f *fakeFileClient) ListRoots(context.Context, *agentv1.ListRootsRequest, ...grpc.CallOption) (*agentv1.ListRootsResponse, error) {
@@ -157,14 +183,23 @@ func (f *fakeFileClient) List(_ context.Context, in *agentv1.ListRequest, _ ...g
 	return &agentv1.ListResponse{}, nil
 }
 
-func (f *fakeFileClient) Stat(context.Context, *agentv1.StatRequest, ...grpc.CallOption) (*agentv1.StatResponse, error) {
+func (f *fakeFileClient) Stat(_ context.Context, in *agentv1.StatRequest, _ ...grpc.CallOption) (*agentv1.StatResponse, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.statErr != nil {
-		return nil, f.statErr
+	if f.statHook != nil {
+		hook := f.statHook
+		f.mu.Unlock()
+		return hook(in)
 	}
-	if f.statResp != nil {
-		return f.statResp, nil
+	f.seenStat = in
+	if f.statErr != nil {
+		err := f.statErr
+		f.mu.Unlock()
+		return nil, err
+	}
+	response := f.statResp
+	f.mu.Unlock()
+	if response != nil {
+		return response, nil
 	}
 	return &agentv1.StatResponse{}, nil
 }
@@ -202,6 +237,9 @@ func (f *fakeFileClient) Read(_ context.Context, in *agentv1.ReadRequest, _ ...g
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
+	if len(f.readChunks) > 0 {
+		return &fakeReadStream{chunks: f.readChunks}, nil
+	}
 	body := f.readBody
 	if start := in.GetOffset(); start > 0 || in.GetLimit() > 0 {
 		if start > int64(len(body)) {
@@ -223,7 +261,7 @@ func (f *fakeFileClient) Write(ctx context.Context, _ ...grpc.CallOption) (grpc.
 	if f.writeErr != nil {
 		return nil, f.writeErr
 	}
-	stream := &fakeWriteStream{resp: f.writeResp, onClose: f.onWriteClose}
+	stream := &fakeWriteStream{resp: f.writeResp, closeErr: f.writeCloseErr, onClose: f.onWriteClose}
 	f.lastWrite = stream
 	return stream, nil
 }
@@ -352,6 +390,155 @@ func (f *fakeFileClient) EmptyTrash(_ context.Context, in *agentv1.EmptyTrashReq
 	return &agentv1.EmptyTrashResponse{}, nil
 }
 
+func (f *fakeFileClient) TransferCapabilities(context.Context, *agentv1.TransferCapabilitiesRequest, ...grpc.CallOption) (*agentv1.TransferCapabilitiesResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.capErr != nil {
+		return nil, f.capErr
+	}
+	if f.capResp != nil {
+		return f.capResp, nil
+	}
+	return &agentv1.TransferCapabilitiesResponse{}, nil
+}
+
+func (f *fakeFileClient) PrepareBundle(_ context.Context, in *agentv1.PrepareBundleRequest, _ ...grpc.CallOption) (*agentv1.PrepareBundleResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenPrepare = in
+	if f.prepareErr != nil {
+		return nil, f.prepareErr
+	}
+	if f.prepareResp != nil {
+		return f.prepareResp, nil
+	}
+	return &agentv1.PrepareBundleResponse{TransferId: in.GetTransferId()}, nil
+}
+
+func (f *fakeFileClient) ReadArtifact(_ context.Context, in *agentv1.ReadArtifactRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ArtifactChunk], error) {
+	f.mu.Lock()
+	f.seenReadArtifact = in
+	if f.artifactErr != nil {
+		err := f.artifactErr
+		f.mu.Unlock()
+		return nil, err
+	}
+	stream := &fakeArtifactStream{chunks: f.artifactChunks, onRecv: f.onArtifactRecv}
+	f.mu.Unlock()
+	return stream, nil
+}
+
+func (f *fakeFileClient) ReceiveArtifact(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[agentv1.ReceiveArtifactRequest, agentv1.ReceiveArtifactResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.receiveErr != nil {
+		return nil, f.receiveErr
+	}
+	stream := &fakeReceiveStream{resp: f.receiveResp, closeErr: f.receiveCloseErr, parent: f, sendHook: f.receiveHook}
+	f.lastReceive = stream
+	return stream, nil
+}
+
+func (f *fakeFileClient) ApplyArtifact(_ context.Context, in *agentv1.ApplyArtifactRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ApplyArtifactEvent], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenApply = in
+	if f.applyErr != nil {
+		return nil, f.applyErr
+	}
+	return &fakeApplyStream{events: f.applyEvents, err: f.applyStreamErr, hook: f.applyHook}, nil
+}
+
+func (f *fakeFileClient) DiscardArtifact(_ context.Context, in *agentv1.DiscardArtifactRequest, _ ...grpc.CallOption) (*agentv1.DiscardArtifactResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.discarded = append(f.discarded, in.GetArtifact())
+	if f.discardErr != nil {
+		return nil, f.discardErr
+	}
+	return &agentv1.DiscardArtifactResponse{}, nil
+}
+
+type fakeArtifactStream struct {
+	grpc.ClientStream
+	chunks [][]byte
+	index  int
+	onRecv func()
+}
+
+func (s *fakeArtifactStream) Recv() (*agentv1.ArtifactChunk, error) {
+	if s.onRecv != nil {
+		s.onRecv()
+	}
+	if s.index >= len(s.chunks) {
+		return nil, io.EOF
+	}
+	data := s.chunks[s.index]
+	s.index++
+	return &agentv1.ArtifactChunk{Data: data}, nil
+}
+
+type fakeReceiveStream struct {
+	grpc.ClientStream
+	parent    *fakeFileClient
+	header    *agentv1.ReceiveArtifactHeader
+	body      []byte
+	resp      *agentv1.ReceiveArtifactResponse
+	closeErr  error
+	sendHook  func(*agentv1.ReceiveArtifactRequest) error
+	closeOnce bool
+}
+
+func (s *fakeReceiveStream) Send(msg *agentv1.ReceiveArtifactRequest) error {
+	switch part := msg.GetPart().(type) {
+	case *agentv1.ReceiveArtifactRequest_Header:
+		s.header = part.Header
+	case *agentv1.ReceiveArtifactRequest_Data:
+		s.body = append(s.body, part.Data...)
+	}
+	if s.sendHook != nil {
+		return s.sendHook(msg)
+	}
+	return nil
+}
+
+func (s *fakeReceiveStream) CloseAndRecv() (*agentv1.ReceiveArtifactResponse, error) {
+	if s.closeOnce {
+		return nil, io.EOF
+	}
+	s.closeOnce = true
+	if s.closeErr != nil {
+		return nil, s.closeErr
+	}
+	if s.resp != nil {
+		return s.resp, nil
+	}
+	return &agentv1.ReceiveArtifactResponse{Artifact: "dest-artifact"}, nil
+}
+
+type fakeApplyStream struct {
+	grpc.ClientStream
+	events []*agentv1.ApplyArtifactEvent
+	index  int
+	err    error
+	hook   func(int)
+}
+
+func (s *fakeApplyStream) Recv() (*agentv1.ApplyArtifactEvent, error) {
+	if s.hook != nil {
+		s.hook(s.index)
+	}
+	if s.index >= len(s.events) {
+		if s.err != nil {
+			return nil, s.err
+		}
+		return nil, io.EOF
+	}
+	event := s.events[s.index]
+	s.index++
+	return event, nil
+}
+
 func (f *fakeFileClient) lastWriteHeader() *agentv1.WriteHeader {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -378,12 +565,15 @@ func (f *fakeFileClient) lastWriteClosed() bool {
 
 type fakeWriteStream struct {
 	grpc.ClientStream
-	mu      sync.Mutex
-	header  *agentv1.WriteHeader
-	body    []byte
-	resp    *agentv1.WriteResponse
-	closed  bool
-	onClose func()
+	mu        sync.Mutex
+	header    *agentv1.WriteHeader
+	body      []byte
+	commit    *agentv1.WriteCommit
+	resp      *agentv1.WriteResponse
+	closeErr  error
+	closed    bool
+	closeCall int
+	onClose   func()
 }
 
 func (s *fakeWriteStream) Send(msg *agentv1.WriteRequest) error {
@@ -395,6 +585,7 @@ func (s *fakeWriteStream) Send(msg *agentv1.WriteRequest) error {
 	case *agentv1.WriteRequest_Data:
 		s.body = append(s.body, part.Data...)
 	case *agentv1.WriteRequest_Commit:
+		s.commit = part.Commit
 	}
 	return nil
 }
@@ -406,6 +597,10 @@ func (s *fakeWriteStream) CloseAndRecv() (*agentv1.WriteResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
+	s.closeCall++
+	if s.closeErr != nil {
+		return nil, s.closeErr
+	}
 	if s.resp != nil {
 		return s.resp, nil
 	}
@@ -707,4 +902,44 @@ func TestListWithoutDialerIsUnavailable(t *testing.T) {
 	if _, err := svc.List(scopeCtx("", projectID), server.ID, "root", "", ""); !errors.Is(err, ErrAgentUnavailable) {
 		t.Fatalf("err = %v, want ErrAgentUnavailable", err)
 	}
+}
+
+func (f *fakeFileClient) lastWriteStream() *fakeWriteStream {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastWrite
+}
+
+func (f *fakeFileClient) discardedArtifacts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.discarded...)
+}
+
+func (f *fakeFileClient) seenReadRequest() *agentv1.ReadRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seenRead
+}
+
+func (f *fakeFileClient) seenPrepareRequest() *agentv1.PrepareBundleRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seenPrepare
+}
+
+func (f *fakeFileClient) lastReceiveStream() *fakeReceiveStream {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReceive
+}
+
+func (s *fakeWriteStream) snapshot() (*agentv1.WriteHeader, []byte, *agentv1.WriteCommit, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.header, append([]byte(nil), s.body...), s.commit, s.closeCall
+}
+
+func (s *fakeReceiveStream) snapshot() (*agentv1.ReceiveArtifactHeader, []byte) {
+	return s.header, append([]byte(nil), s.body...)
 }

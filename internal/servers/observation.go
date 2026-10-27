@@ -153,6 +153,12 @@ func validateObservation(nodeID string, report *agentv1.ObservationReport, recei
 	if observedAt.After(receivedAt.Add(observationClockSkew)) {
 		return NodeObservation{}, fmt.Errorf("%w: observed_at is in the future", ErrValidation)
 	}
+	// A fast clock may date a report up to the allowed skew ahead of receipt.
+	// Clamp it to receipt time so a future date can never extend freshness or
+	// block a later session restart.
+	if observedAt.After(receivedAt) {
+		observedAt = receivedAt.UTC()
+	}
 	interval := time.Duration(report.GetSamplingIntervalMs()) * time.Millisecond
 	if interval < minObservationInterval || interval > maxObservationInterval {
 		return NodeObservation{}, fmt.Errorf("%w: sampling_interval_ms is out of range", ErrValidation)
@@ -635,8 +641,8 @@ func observationFresh(now, observedAt time.Time, interval time.Duration) bool {
 		return false
 	}
 	age := now.Sub(observedAt)
-	if age < -observationClockSkew {
+	if age < 0 || age > observationFreshIntervals*interval {
 		return false
 	}
-	return age <= observationFreshIntervals*interval
+	return true
 }

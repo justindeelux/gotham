@@ -354,6 +354,10 @@ func publicError(err error) string {
 		return "insufficient_storage"
 	case errors.Is(err, ErrAgentOutdated):
 		return "agent_outdated"
+	case errors.Is(err, ErrTransferTimeout):
+		return "timeout"
+	case errors.Is(err, ErrTransferCancelled):
+		return "cancelled"
 	case errors.Is(err, ErrDisabledOnNode):
 		return "file_manager_disabled"
 	case errors.Is(err, ErrAgentUnavailable):

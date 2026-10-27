@@ -214,6 +214,8 @@ owner POST /api/v1/servers/{id}/files/compress
 owner POST /api/v1/servers/{id}/files/copy
 owner POST /api/v1/servers/{id}/files/create
 owner POST /api/v1/servers/{id}/files/download-ticket
+owner POST /api/v1/servers/{id}/files/transfers
+owner POST /api/v1/servers/{id}/files/transfers/plan
 owner POST /api/v1/servers/{id}/files/extract
 owner POST /api/v1/servers/{id}/files/history/{version}/restore
 owner POST /api/v1/servers/{id}/files/mkdir

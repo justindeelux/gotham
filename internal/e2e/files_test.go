@@ -174,7 +174,7 @@ func TestFilesEndToEndDisabled(t *testing.T) {
 	registry := &staticRegistry{server: &servers.Server{ID: uuid.New(), Name: "disabled-node"}}
 	svc := files.NewService(files.Config{Registry: registry, Logger: testLogger(t)})
 	api := chi.NewRouter()
-	files.Mount(api, passthroughAuth, svc, testLogger(t))
+	files.Mount(api, passthroughAuth, nil, svc, testLogger(t))
 	httpServer := httptest.NewServer(api)
 	t.Cleanup(httpServer.Close)
 
@@ -234,7 +234,7 @@ func newFilesHarness(t *testing.T, ctx context.Context) *filesHarness {
 	})
 
 	api := chi.NewRouter()
-	files.Mount(api, passthroughAuth, svc, logger)
+	files.Mount(api, passthroughAuth, nil, svc, logger)
 	httpServer := httptest.NewServer(api)
 	t.Cleanup(httpServer.Close)
 

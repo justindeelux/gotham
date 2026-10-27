@@ -77,6 +77,12 @@ type fakeService struct {
 	restoreVersion    WriteResult
 	restoreVersionErr error
 	deleteVersionErr  error
+
+	transferPlan    TransferPlan
+	transferPlanErr error
+	transferErr     error
+	transferEvents  []TransferEvent
+	seenTransfer    *TransferRequest
 }
 
 func (f *fakeService) record(call string) {
@@ -268,11 +274,35 @@ func (f *fakeService) EmptyTrash(_ context.Context, _ uuid.UUID, _ string) (uint
 	return f.emptyRemoved, f.emptyErr
 }
 
+func (f *fakeService) PlanTransfer(_ context.Context, _ uuid.UUID, req TransferRequest) (TransferPlan, error) {
+	f.record("plan_transfer")
+	f.mu.Lock()
+	f.seenTransfer = &req
+	f.mu.Unlock()
+	return f.transferPlan, f.transferPlanErr
+}
+
+func (f *fakeService) Transfer(_ context.Context, _ uuid.UUID, req TransferRequest) (*TransferRun, error) {
+	f.record("transfer")
+	f.mu.Lock()
+	f.seenTransfer = &req
+	f.mu.Unlock()
+	if f.transferErr != nil {
+		return nil, f.transferErr
+	}
+	events := make(chan TransferEvent, len(f.transferEvents))
+	for _, event := range f.transferEvents {
+		events <- event
+	}
+	close(events)
+	return &TransferRun{ID: "test-transfer", Mode: TransferModeDirect, Events: events}, nil
+}
+
 func passthroughAuth(next http.Handler) http.Handler { return next }
 
 func newTestRouter(svc FileService) http.Handler {
 	r := chi.NewRouter()
-	Mount(r, passthroughAuth, svc, nil)
+	Mount(r, passthroughAuth, nil, svc, nil)
 	return r
 }
 

@@ -137,6 +137,9 @@ type FileService interface {
 	Restore(ctx context.Context, serverID uuid.UUID, root, id, destination string, overwrite bool) (Entry, error)
 	Purge(ctx context.Context, serverID uuid.UUID, root, id string) error
 	EmptyTrash(ctx context.Context, serverID uuid.UUID, root string) (uint64, error)
+
+	PlanTransfer(ctx context.Context, serverID uuid.UUID, req TransferRequest) (TransferPlan, error)
+	Transfer(ctx context.Context, serverID uuid.UUID, req TransferRequest) (*TransferRun, error)
 }
 
 type Config struct {

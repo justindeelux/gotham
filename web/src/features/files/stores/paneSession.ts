@@ -44,6 +44,18 @@ export async function refreshOtherPaneListings(
   await Promise.all(jobs);
 }
 
+/** Refresh every mounted pane showing this location, whatever pane started it. */
+export async function refreshAllPaneListings(
+  serverId: string,
+  root: string,
+  dirs: string[],
+): Promise<void> {
+  const jobs = [...listingRefreshers.values()].map((refresh) =>
+    refresh(serverId, root, dirs),
+  );
+  await Promise.all(jobs);
+}
+
 export const useFilesPaneSession = defineStore("filesPanes", () => {
   const storage = typeof localStorage === "undefined" ? null : localStorage;
   const userId = ref<string>(getSession().user?.id ?? "");

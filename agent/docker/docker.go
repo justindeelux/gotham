@@ -116,6 +116,69 @@ func (c *DockerClient) Version(ctx context.Context) (string, error) {
 	return out.Version, nil
 }
 
+// DockerRootDir reports the engine's data root from /info. Monitoring uses it
+// as engine mount evidence so a separate Docker data mount is reported
+// independently from the root filesystem.
+func (c *DockerClient) DockerRootDir(ctx context.Context) (string, error) {
+	var out struct {
+		DockerRootDir string `json:"DockerRootDir"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/info", nil, &out); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.DockerRootDir), nil
+}
+
+// ContainerDetails is the per-container evidence monitoring reports. It is
+// deliberately limited to state, health, restart/OOM evidence and lifecycle
+// timestamps: labels and environment are handled by the caller.
+type ContainerDetails struct {
+	State        string
+	Health       string
+	RestartCount int64
+	OOMKilled    bool
+	CreatedAt    time.Time
+	StartedAt    time.Time
+	FinishedAt   time.Time
+}
+
+func (c *DockerClient) InspectContainer(ctx context.Context, id string) (ContainerDetails, error) {
+	if strings.TrimSpace(id) == "" {
+		return ContainerDetails{}, errors.New("docker: container id is required")
+	}
+	var out struct {
+		Created time.Time `json:"Created"`
+		State   struct {
+			Status     string    `json:"Status"`
+			OOMKilled  bool      `json:"OOMKilled"`
+			Restarting bool      `json:"Restarting"`
+			StartedAt  time.Time `json:"StartedAt"`
+			FinishedAt time.Time `json:"FinishedAt"`
+			Health     *struct {
+				Status string `json:"Status"`
+			} `json:"Health"`
+		} `json:"State"`
+		RestartCount int64 `json:"RestartCount"`
+	}
+	path := "/containers/" + url.PathEscape(id) + "/json"
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return ContainerDetails{}, err
+	}
+	health := ""
+	if out.State.Health != nil {
+		health = out.State.Health.Status
+	}
+	return ContainerDetails{
+		State:        out.State.Status,
+		Health:       health,
+		RestartCount: out.RestartCount,
+		OOMKilled:    out.State.OOMKilled,
+		CreatedAt:    out.Created,
+		StartedAt:    out.State.StartedAt,
+		FinishedAt:   out.State.FinishedAt,
+	}, nil
+}
+
 func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {
 	path := "/containers/json?all=0"
 	if all {

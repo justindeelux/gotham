@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/justindeelux/gotham/agent"
+	"github.com/justindeelux/gotham/agent/docker"
 	"github.com/justindeelux/gotham/internal/proxy"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -19,6 +20,12 @@ import (
 type fakeBindDocker struct{}
 
 func (fakeBindDocker) Version(context.Context) (string, error) { return "test", nil }
+func (fakeBindDocker) DockerRootDir(context.Context) (string, error) {
+	return "", nil
+}
+func (fakeBindDocker) InspectContainer(context.Context, string) (docker.ContainerDetails, error) {
+	return docker.ContainerDetails{}, nil
+}
 func (fakeBindDocker) ListContainers(context.Context, bool, map[string]string, bool) ([]*agentv1.ContainerInfo, error) {
 	return nil, nil
 }

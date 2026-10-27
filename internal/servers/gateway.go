@@ -421,6 +421,71 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 	}
 }
 
+func (g *Gateway) PushObservations(stream grpc.ClientStreamingServer[agentv1.ObservationReport, agentv1.ObservationAck]) error {
+	ctx := stream.Context()
+	peer := peerAddress(ctx)
+	limiterKey := peerHost(ctx)
+
+	nodeID, cert, legacyLeaf, err := g.heartbeatIdentity(ctx, peer)
+	if err != nil {
+		return err
+	}
+	if nodeID == "" {
+		g.logger.Warn("servers: observation push from unidentifiable peer", "peer", peer)
+		return status.Error(codes.Unauthenticated, "client certificate is required")
+	}
+	var keyFingerprint string
+	if cert != nil {
+		fingerprint, err := NodeKeyFingerprint(cert.PublicKey)
+		if err != nil {
+			return status.Error(codes.Internal, "internal error")
+		}
+		keyFingerprint = fingerprint
+	}
+
+	ack := &agentv1.ObservationAck{
+		ReceivedAt:         timestamppb.New(g.now().UTC()),
+		Accepted:           false,
+		ExpectedIntervalMs: expectedObservationInterval.Milliseconds(),
+	}
+	for {
+		report, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return stream.SendAndClose(ack)
+		}
+		if err != nil {
+			return err
+		}
+		if !g.heartbeatLimiter.allow(limiterKey) {
+			return status.Error(codes.ResourceExhausted, "observation rate limit exceeded")
+		}
+		if keyFingerprint != "" {
+			if err := g.nodeKeyError(nodeID, "", g.service.AuthorizeNodeKey(ctx, nodeID, keyFingerprint, legacyLeaf)); err != nil {
+				return err
+			}
+		}
+		receivedAt := g.now().UTC()
+		result, err := g.service.RecordObservation(ctx, nodeID, report, receivedAt)
+		switch {
+		case err == nil:
+			ack = result
+		case errors.Is(err, ErrNotFound):
+			g.logger.Warn("servers: observation for unknown node", "node_id", nodeID)
+			ack = &agentv1.ObservationAck{
+				ReceivedAt:         timestamppb.New(receivedAt),
+				Accepted:           false,
+				ExpectedIntervalMs: expectedObservationInterval.Milliseconds(),
+			}
+		case isDomainError(err):
+			g.logger.Warn("servers: rejected observation", "node_id", nodeID, "error", err)
+			return toGRPCError(err)
+		default:
+			g.logger.Warn("servers: observation", "node_id", nodeID, "error", err)
+			return status.Error(codes.Internal, "internal error")
+		}
+	}
+}
+
 func (g *Gateway) heartbeatIdentity(ctx context.Context, peer string) (string, *x509.Certificate, bool, error) {
 	authenticated, cert, legacyLeaf, err := g.peerNodeIdentity(ctx)
 	if err != nil {

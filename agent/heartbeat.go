@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/justindeelux/gotham/agent/docker"
 	"github.com/justindeelux/gotham/agent/stats"
 	"github.com/justindeelux/gotham/agent/updates"
@@ -37,19 +38,30 @@ const (
 )
 
 type Agent struct {
-	cfg               Config
-	log               *slog.Logger
-	docker            docker.Client
-	sampler           *stats.Sampler
-	interval          time.Duration
-	minBackoff        time.Duration
-	maxBackoff        time.Duration
-	backoffResetAfter time.Duration
-	registerTimeout   time.Duration
-	renewBefore       time.Duration
-	dialOptions       []grpc.DialOption
-	randFloat         func() float64
-	sleep             func(context.Context, time.Duration) bool
+	cfg                Config
+	log                *slog.Logger
+	docker             docker.Client
+	sampler            *stats.Sampler
+	observationSampler *stats.Sampler
+	interval           time.Duration
+	minBackoff         time.Duration
+	maxBackoff         time.Duration
+	backoffResetAfter  time.Duration
+	registerTimeout    time.Duration
+	renewBefore        time.Duration
+	dialOptions        []grpc.DialOption
+	randFloat          func() float64
+	sleep              func(context.Context, time.Duration) bool
+
+	observationInterval time.Duration
+	filesystems         *stats.FilesystemCollector
+	observationSession  string
+	sequenceMu          sync.Mutex
+	observationSequence uint64
+
+	dockerRootMu sync.Mutex
+	dockerRoot   string
+	dockerRootAt time.Time
 
 	versionMu sync.Mutex
 	version   string
@@ -112,19 +124,24 @@ func NewAgent(cfg Config, log *slog.Logger, docker docker.Client, options ...Opt
 		log = slog.Default()
 	}
 	agent := &Agent{
-		cfg:               cfg,
-		log:               log,
-		docker:            docker,
-		sampler:           stats.New(),
-		interval:          defaultHeartbeatInterval,
-		minBackoff:        defaultMinBackoff,
-		maxBackoff:        defaultMaxBackoff,
-		backoffResetAfter: defaultBackoffResetAfter,
-		registerTimeout:   defaultRegisterTimeout,
-		renewBefore:       defaultRenewBefore,
-		randFloat:         rand.Float64,
-		sleep:             sleepContext,
-		version:           cfg.Version,
+		cfg:                cfg,
+		log:                log,
+		docker:             docker,
+		sampler:            stats.New(),
+		observationSampler: stats.New(),
+		interval:           defaultHeartbeatInterval,
+		minBackoff:         defaultMinBackoff,
+		maxBackoff:         defaultMaxBackoff,
+		backoffResetAfter:  defaultBackoffResetAfter,
+		registerTimeout:    defaultRegisterTimeout,
+		renewBefore:        defaultRenewBefore,
+		randFloat:          rand.Float64,
+		sleep:              sleepContext,
+		version:            cfg.Version,
+
+		observationInterval: defaultObservationInterval,
+		filesystems:         stats.NewFilesystemCollector(),
+		observationSession:  uuid.NewString(),
 	}
 	for _, option := range options {
 		option(agent)
@@ -235,11 +252,19 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			}()
 		}
 
+		var observationWG sync.WaitGroup
+		observationWG.Add(1)
+		go func() {
+			defer observationWG.Done()
+			a.pushObservations(sessionCtx, client)
+		}()
+
 		heartbeatErr := a.heartbeat(sessionCtx, client)
 		if sessionCancel != nil {
 			sessionCancel()
 		}
 		hbCancel()
+		observationWG.Wait()
 		updateWG.Wait()
 		if heartbeatErr != nil && ctx.Err() == nil {
 			if errors.Is(heartbeatErr, context.DeadlineExceeded) {

@@ -13,6 +13,18 @@ import (
 	"time"
 )
 
+// MetricStatus reports whether a value was measured in this sample. A measured
+// zero is MetricOK; every other status means the value must not be shown as a
+// zero measurement.
+type MetricStatus string
+
+const (
+	MetricOK          MetricStatus = "ok"
+	MetricUnsupported MetricStatus = "unsupported"
+	MetricError       MetricStatus = "error"
+	MetricWarming     MetricStatus = "warming"
+)
+
 type Usage struct {
 	CPU          float64
 	Mem          float64
@@ -23,6 +35,22 @@ type Usage struct {
 	DiskWriteBps float64
 	TotalMem     uint64
 	TotalDisk    uint64
+
+	// Status/reason per metric. CPU, memory and disk usage are sampled
+	// directly. The two I/O pairs share the status of their read, and start as
+	// MetricWarming on the first counter sample instead of reporting zero.
+	CPUStatus    MetricStatus
+	CPUReason    string
+	MemStatus    MetricStatus
+	MemReason    string
+	DiskStatus   MetricStatus
+	DiskReason   string
+	NetStatus    MetricStatus
+	NetReason    string
+	DiskIOStatus MetricStatus
+	DiskIOReason string
+
+	ObservedAt time.Time
 }
 
 var errUnsupported = errors.New("stats: metric unsupported on this platform")
@@ -47,6 +75,10 @@ func (c counterPair) rates(previous counterPair) (in, out float64) {
 	return byteRate(c.in, previous.in, elapsed), byteRate(c.out, previous.out, elapsed)
 }
 
+func (c counterPair) reset(previous counterPair) bool {
+	return previous.valid && (c.in < previous.in || c.out < previous.out)
+}
+
 func byteRate(current, previous uint64, elapsed time.Duration) float64 {
 	if elapsed <= 0 || current < previous {
 		return 0
@@ -56,13 +88,39 @@ func byteRate(current, previous uint64, elapsed time.Duration) float64 {
 
 type Sampler struct {
 	mu       sync.Mutex
+	reads    samplerReads
+	now      func() time.Time
 	lastCPU  cpuTimes
 	haveCPU  bool
 	lastNet  counterPair
 	lastDisk counterPair
 }
 
-func New() *Sampler { return &Sampler{} }
+// samplerReads lets a test drive real sampler state with controlled counters;
+// production uses the platform readers below.
+type samplerReads struct {
+	readCPU     func() (idle, total uint64, err error)
+	readMemory  func() (used, total uint64, err error)
+	readDisk    func(path string) (used, total uint64, err error)
+	readNetwork func() (rx, tx uint64, err error)
+	readDiskIO  func() (read, write uint64, err error)
+}
+
+func defaultReads() samplerReads {
+	return samplerReads{
+		readCPU:     readCPUTimes,
+		readMemory:  readMemory,
+		readDisk:    readDisk,
+		readNetwork: readNetwork,
+		readDiskIO:  readDiskIO,
+	}
+}
+
+func New() *Sampler { return newSampler(defaultReads(), time.Now) }
+
+func newSampler(reads samplerReads, now func() time.Time) *Sampler {
+	return &Sampler{reads: reads, now: now}
+}
 
 func (s *Sampler) Sample() (Usage, error) {
 	var (
@@ -70,8 +128,10 @@ func (s *Sampler) Sample() (Usage, error) {
 		read    bool
 		lastErr error
 	)
+	usage.ObservedAt = s.now()
 
-	if idle, total, err := readCPUTimes(); err != nil {
+	if idle, total, err := s.reads.readCPU(); err != nil {
+		usage.CPUStatus, usage.CPUReason = statusFor(err)
 		lastErr = err
 	} else {
 		s.mu.Lock()
@@ -79,6 +139,13 @@ func (s *Sampler) Sample() (Usage, error) {
 			totalDelta := float64(total - s.lastCPU.total)
 			idleDelta := float64(idle - s.lastCPU.idle)
 			usage.CPU = clampFraction((totalDelta - idleDelta) / totalDelta)
+			usage.CPUStatus = MetricOK
+		} else if s.haveCPU {
+			usage.CPUStatus = MetricWarming
+			usage.CPUReason = "no_delta"
+		} else {
+			usage.CPUStatus = MetricWarming
+			usage.CPUReason = "first_sample"
 		}
 		s.lastCPU = cpuTimes{idle: idle, total: total}
 		s.haveCPU = true
@@ -86,38 +153,64 @@ func (s *Sampler) Sample() (Usage, error) {
 		read = true
 	}
 
-	if used, total, err := readMemory(); err != nil {
+	if used, total, err := s.reads.readMemory(); err != nil {
+		usage.MemStatus, usage.MemReason = statusFor(err)
 		lastErr = err
 	} else if total > 0 {
 		usage.TotalMem = total
 		usage.Mem = clampFraction(float64(used) / float64(total))
+		usage.MemStatus = MetricOK
 		read = true
+	} else {
+		usage.MemStatus, usage.MemReason = MetricError, "empty"
 	}
 
-	if used, total, err := readDisk("/"); err != nil {
+	if used, total, err := s.reads.readDisk("/"); err != nil {
+		usage.DiskStatus, usage.DiskReason = statusFor(err)
 		lastErr = err
 	} else if total > 0 {
 		usage.TotalDisk = total
 		usage.Disk = clampFraction(float64(used) / float64(total))
+		usage.DiskStatus = MetricOK
 		read = true
+	} else {
+		usage.DiskStatus, usage.DiskReason = MetricError, "empty"
 	}
 
-	rx, tx, netErr := readNetwork()
-	diskRead, diskWrite, diskIOErr := readDiskIO()
+	rx, tx, netErr := s.reads.readNetwork()
+	diskRead, diskWrite, diskIOErr := s.reads.readDiskIO()
 
 	s.mu.Lock()
-	now := time.Now()
+	now := s.now()
 	if netErr == nil {
 		current := counterPair{in: rx, out: tx, at: now, valid: true}
+		if current.reset(s.lastNet) {
+			usage.NetStatus, usage.NetReason = MetricError, "counter_reset"
+		} else if !s.lastNet.valid {
+			usage.NetStatus, usage.NetReason = MetricWarming, "first_sample"
+		} else {
+			usage.NetStatus = MetricOK
+		}
 		usage.NetRxBps, usage.NetTxBps = current.rates(s.lastNet)
 		s.lastNet = current
 		read = true
+	} else {
+		usage.NetStatus, usage.NetReason = statusFor(netErr)
 	}
 	if diskIOErr == nil {
 		current := counterPair{in: diskRead, out: diskWrite, at: now, valid: true}
+		if current.reset(s.lastDisk) {
+			usage.DiskIOStatus, usage.DiskIOReason = MetricError, "counter_reset"
+		} else if !s.lastDisk.valid {
+			usage.DiskIOStatus, usage.DiskIOReason = MetricWarming, "first_sample"
+		} else {
+			usage.DiskIOStatus = MetricOK
+		}
 		usage.DiskReadBps, usage.DiskWriteBps = current.rates(s.lastDisk)
 		s.lastDisk = current
 		read = true
+	} else {
+		usage.DiskIOStatus, usage.DiskIOReason = statusFor(diskIOErr)
 	}
 	s.mu.Unlock()
 
@@ -132,9 +225,16 @@ func (s *Sampler) Sample() (Usage, error) {
 		if lastErr == nil {
 			lastErr = errUnsupported
 		}
-		return Usage{}, lastErr
+		return usage, lastErr
 	}
 	return usage, nil
+}
+
+func statusFor(err error) (MetricStatus, string) {
+	if errors.Is(err, errUnsupported) {
+		return MetricUnsupported, "unsupported"
+	}
+	return MetricError, "read_failed"
 }
 
 func OSVersion() string { return osVersion() }

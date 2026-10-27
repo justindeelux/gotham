@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 
+	"github.com/justindeelux/gotham/agent/docker"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -13,10 +15,15 @@ func discardLogger() *slog.Logger {
 }
 
 type fakeDockerClient struct {
+	mu             sync.Mutex
 	containers     []*agentv1.ContainerInfo
 	listAll        bool
 	listLabels     map[string]string
 	version        string
+	dockerRootDir  string
+	details        *docker.ContainerDetails
+	detailsByID    map[string]docker.ContainerDetails
+	inspectErrByID map[string]error
 	err            error
 	logs           []byte
 	logStreamErr   error
@@ -29,10 +36,41 @@ type fakeDockerClient struct {
 }
 
 func (f *fakeDockerClient) Version(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.version, f.err
 }
 
+func (f *fakeDockerClient) DockerRootDir(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.dockerRootDir, nil
+}
+
+func (f *fakeDockerClient) InspectContainer(_ context.Context, id string) (docker.ContainerDetails, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return docker.ContainerDetails{}, f.err
+	}
+	if err, ok := f.inspectErrByID[id]; ok {
+		return docker.ContainerDetails{}, err
+	}
+	if details, ok := f.detailsByID[id]; ok {
+		return details, nil
+	}
+	if f.details != nil {
+		return *f.details, nil
+	}
+	return docker.ContainerDetails{}, nil
+}
+
 func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string, resolveDevices bool) ([]*agentv1.ContainerInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.listAll = all
 	f.listLabels = labels
 	if f.err != nil {
@@ -42,6 +80,8 @@ func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels ma
 }
 
 func (f *fakeDockerClient) Start(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
@@ -50,6 +90,8 @@ func (f *fakeDockerClient) Start(_ context.Context, id string) error {
 }
 
 func (f *fakeDockerClient) Stop(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
@@ -58,6 +100,8 @@ func (f *fakeDockerClient) Stop(_ context.Context, id string) error {
 }
 
 func (f *fakeDockerClient) Restart(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
@@ -66,6 +110,8 @@ func (f *fakeDockerClient) Restart(_ context.Context, id string) error {
 }
 
 func (f *fakeDockerClient) Remove(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
@@ -74,6 +120,8 @@ func (f *fakeDockerClient) Remove(_ context.Context, id string) error {
 }
 
 func (f *fakeDockerClient) RemoveVolume(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
@@ -82,6 +130,8 @@ func (f *fakeDockerClient) RemoveVolume(_ context.Context, name string) error {
 }
 
 func (f *fakeDockerClient) PullImage(context.Context, string, string, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return "", f.err
 	}
@@ -89,6 +139,8 @@ func (f *fakeDockerClient) PullImage(context.Context, string, string, string) (s
 }
 
 func (f *fakeDockerClient) CreateContainer(context.Context, *agentv1.CreateContainerRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return "", f.err
 	}
@@ -99,6 +151,8 @@ func (f *fakeDockerClient) CreateContainer(context.Context, *agentv1.CreateConta
 }
 
 func (f *fakeDockerClient) RunImage(_ context.Context, _ *agentv1.CreateContainerRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return "", f.err
 	}
@@ -111,6 +165,8 @@ func (f *fakeDockerClient) RunImage(_ context.Context, _ *agentv1.CreateContaine
 }
 
 func (f *fakeDockerClient) Logs(context.Context, string, bool, int64) (<-chan LogMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.err != nil {
 		return nil, f.err
 	}

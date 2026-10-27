@@ -54,6 +54,15 @@ would otherwise also capture the password.
 | `Offline` | No heartbeat for 30 seconds. The switch happens when the node list is read. |
 | `Error` | The last SSH validation failed. |
 
+## Health observations
+
+A current agent also pushes host, filesystem and managed-container observations
+every 15 seconds over its authenticated connection. Each metric says whether it
+was measured, unsupported or failed, so a failed read is not shown as zero; a
+container is only treated as disappeared from a complete inventory. Evidence
+older than three collection intervals is stale, and a node whose agent predates
+these observations reports “agent update required” instead of zeros.
+
 ## Edit, revalidate, reset, delete
 
 **Edit** changes the name, address, SSH port, SSH user or credential. Key and

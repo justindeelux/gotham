@@ -420,6 +420,22 @@ func (s *Store) UpdateServerMetrics(ctx context.Context, params sqlc.UpdateServe
 	return s.queries.UpdateServerMetrics(ctx, params)
 }
 
+func (s *Store) UpsertNodeObservation(ctx context.Context, params sqlc.UpsertNodeObservationParams) (sqlc.NodeObservation, error) {
+	return s.queries.UpsertNodeObservation(ctx, params)
+}
+
+func (s *Store) GetNodeObservation(ctx context.Context, serverID pgtype.UUID) (sqlc.NodeObservation, error) {
+	return s.queries.GetNodeObservation(ctx, serverID)
+}
+
+func (s *Store) ListForeignObservationOwnership(ctx context.Context, params sqlc.ListForeignObservationOwnershipParams) ([]sqlc.ListForeignObservationOwnershipRow, error) {
+	return s.queries.ListForeignObservationOwnership(ctx, params)
+}
+
+func (s *Store) DeleteNodeObservation(ctx context.Context, serverID pgtype.UUID) error {
+	return s.queries.DeleteNodeObservation(ctx, serverID)
+}
+
 func (s *Store) SetServerStatus(ctx context.Context, params sqlc.SetServerStatusParams) (sqlc.Server, error) {
 	return s.queries.SetServerStatus(ctx, params)
 }

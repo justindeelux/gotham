@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/justindeelux/gotham/agent"
+	"github.com/justindeelux/gotham/agent/docker"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -281,6 +282,12 @@ type e2eDockerClient struct {
 }
 
 func (f *e2eDockerClient) Version(context.Context) (string, error) { return f.version, nil }
+
+func (f *e2eDockerClient) DockerRootDir(context.Context) (string, error) { return "", nil }
+
+func (f *e2eDockerClient) InspectContainer(context.Context, string) (docker.ContainerDetails, error) {
+	return docker.ContainerDetails{}, nil
+}
 
 func (f *e2eDockerClient) ListContainers(context.Context, bool, map[string]string, bool) ([]*agentv1.ContainerInfo, error) {
 	return f.containers, nil

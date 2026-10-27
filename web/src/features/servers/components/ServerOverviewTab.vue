@@ -12,6 +12,7 @@ import {
 import { computed } from "vue";
 
 import type { Server } from "@/features/servers/api/servers";
+import ServerPressureCard from "@/features/monitoring/components/ServerPressureCard.vue";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import {
   authLabel,
@@ -39,6 +40,7 @@ const descColumns = computed<number>(() => (isNarrow.value ? 1 : 2));
 
 <template>
   <NSpace vertical :size="16" style="margin-top: 16px">
+    <ServerPressureCard :server-id="server.id" />
     <NCard :title="$t('servers.overview.nodeInfo')">
       <NDescriptions :column="descColumns" bordered label-placement="left">
         <NDescriptionsItem :label="$t('servers.overview.name')">

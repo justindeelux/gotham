@@ -1,31 +1,5 @@
 import { defineConfig } from "vitepress";
 
-const referenceSidebar = [
-  {
-    text: "Reference",
-    items: [
-      { text: "Overview", link: "/reference/" },
-      { text: "CLI", link: "/reference/cli" },
-      { text: "Configuration", link: "/reference/configuration" },
-      { text: "API tokens", link: "/reference/api-tokens" },
-      { text: "Design system", link: "/design-system/DESIGN" },
-    ],
-  },
-];
-
-const viReferenceSidebar = [
-  {
-    text: "Tham chiếu",
-    items: [
-      { text: "Tổng quan", link: "/vi/reference/" },
-      { text: "CLI", link: "/vi/reference/cli" },
-      { text: "Cấu hình", link: "/vi/reference/configuration" },
-      { text: "API token", link: "/vi/reference/api-tokens" },
-      { text: "Hệ thống thiết kế", link: "/vi/design-system/DESIGN" },
-    ],
-  },
-];
-
 export default defineConfig({
   lang: "en",
   title: "Gotham",
@@ -99,8 +73,17 @@ export default defineConfig({
               ],
             },
           ],
-          "/reference/": referenceSidebar,
-          "/design-system/": referenceSidebar,
+          "/reference/": [
+            {
+              text: "Reference",
+              items: [
+                { text: "Overview", link: "/reference/" },
+                { text: "CLI", link: "/reference/cli" },
+                { text: "Configuration", link: "/reference/configuration" },
+                { text: "API tokens", link: "/reference/api-tokens" },
+              ],
+            },
+          ],
         },
       },
     },
@@ -167,8 +150,17 @@ export default defineConfig({
               ],
             },
           ],
-          "/vi/reference/": viReferenceSidebar,
-          "/vi/design-system/": viReferenceSidebar,
+          "/vi/reference/": [
+            {
+              text: "Tham chiếu",
+              items: [
+                { text: "Tổng quan", link: "/vi/reference/" },
+                { text: "CLI", link: "/vi/reference/cli" },
+                { text: "Cấu hình", link: "/vi/reference/configuration" },
+                { text: "API token", link: "/vi/reference/api-tokens" },
+              ],
+            },
+          ],
         },
       },
     },

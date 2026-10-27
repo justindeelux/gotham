@@ -567,13 +567,9 @@ func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, re
 		s.pressure.RecordHostPressure(pressureCtx, uuid.UUID(row.ID.Bytes), row.Name, observation)
 		cancel()
 	}
-	if s.runtime != nil {
-		// Runtime detection follows the accepted generation. It gets its own
-		// timeout and cannot turn a stored observation into a failed push.
-		runtimeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		s.runtime.Observe(runtimeCtx, observation)
-		cancel()
-	}
+	// Queue detection after the accepted generation is stored. Enqueueing is a
+	// map write, so a slow detector never delays the acknowledgement.
+	s.enqueueRuntime(observation)
 	return &agentv1.ObservationAck{
 		ReceivedAt:         timestamppb.New(receivedAt.UTC()),
 		AcceptedSequence:   uint64(stored.Sequence),

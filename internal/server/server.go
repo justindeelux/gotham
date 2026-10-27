@@ -193,6 +193,9 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		if closer, ok := s.toolchain.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
+		if closer, ok := s.servers.(interface{ Close() }); ok {
+			closer.Close()
+		}
 		_ = redisClient.Close()
 		limiter.Close()
 		refreshLimiter.Close()

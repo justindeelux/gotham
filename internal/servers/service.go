@@ -88,18 +88,26 @@ type Config struct {
 }
 
 type ServerService struct {
-	store       *store.Store
-	authority   *Authority
-	secret      string
-	version     string
-	logger      *slog.Logger
-	updater     AgentUpdateOfferer
-	notifier    StateNotifier
-	incidents   IncidentRecorder
-	pressure    PressureRecorder
-	runtime     RuntimeObserver
-	sweepAfter  time.Time
-	agentUpdate agentUpdateState
+	store     *store.Store
+	authority *Authority
+	secret    string
+	version   string
+	logger    *slog.Logger
+	updater   AgentUpdateOfferer
+	notifier  StateNotifier
+	incidents IncidentRecorder
+	pressure  PressureRecorder
+	runtime   RuntimeObserver
+
+	runtimeMu      sync.Mutex
+	runtimeCtx     context.Context
+	runtimeCancel  context.CancelFunc
+	runtimeLatest  map[uuid.UUID]NodeObservation
+	runtimeRunning map[uuid.UUID]bool
+	runtimeClosed  bool
+	runtimeWG      sync.WaitGroup
+	sweepAfter     time.Time
+	agentUpdate    agentUpdateState
 
 	metricMu     sync.Mutex
 	lastMetricAt map[string]time.Time

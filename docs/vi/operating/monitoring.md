@@ -43,8 +43,9 @@ Agent báo mọi hệ thống tệp ứng viên là thiết bị riêng:
 Các đường dẫn trên cùng thiết bị được gộp, ưu tiên ứng viên đầu tiên (gốc,
 Docker, lưu trữ được quản lý, sao lưu), nên một bind mount qua hai đường dẫn chỉ
 tạo một sự cố. Vì vậy một ổ Docker hoặc sao lưu đầy chỉ mở một sự cố dù phân
-vùng gốc khỏe. Ổ gắn biến mất được đóng với lý do `filesystem_disappeared`; đó
-không phải phục hồi và không gửi thông báo phục hồi.
+vùng gốc khỏe. Hệ thống tệp vắng mặt trong một báo cáo được chấp nhận sẽ được
+báo là chưa rõ cho quy tắc dung lượng và inode, nên sự cố đang hoạt động vẫn
+hiển thị và không bao giờ tự phục hồi cho đến khi có bằng chứng mới.
 
 Không bao gồm: SMART/nhiệt độ, quét kích thước thư mục, dự báo dung lượng và dọn
 dẹp tự động. Gotham không bao giờ xóa dữ liệu hay khởi động lại khối lượng công

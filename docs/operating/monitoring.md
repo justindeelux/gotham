@@ -46,9 +46,9 @@ The agent reports every candidate filesystem that is a distinct device:
 Paths on the same device are deduplicated, preferring the first candidate
 (root, Docker, managed storage, backup), so a bind mount reached through two
 paths produces one incident. One full Docker or backup mount therefore opens
-one incident even when the root partition is healthy. Mounts that disappear are
-closed as `filesystem_disappeared`; that is not a recovery and sends no recovery
-notification.
+one incident even when the root partition is healthy. A filesystem absent from
+an accepted report is reported as unknown for its space and inode rules, so its
+active incident stays visible and never resolves until fresh evidence arrives.
 
 Not covered: SMART/temperature, directory-size crawls, disk forecasting and
 automatic cleanup. Gotham never deletes data or restarts workloads to relieve

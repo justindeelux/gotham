@@ -441,6 +441,42 @@ func boundedText(value string, limit int) string {
 	return value
 }
 
+func (s *ServerService) rejectForeignObservationOwnership(ctx context.Context, serverID pgtype.UUID, inventory ContainerInventory) error {
+	seenApp := map[string]bool{}
+	seenDatabase := map[string]bool{}
+	applicationIDs := make([]pgtype.UUID, 0, len(inventory.Containers))
+	databaseIDs := make([]pgtype.UUID, 0, len(inventory.Containers))
+	for _, container := range inventory.Containers {
+		if container.AppID != "" && !seenApp[container.AppID] {
+			seenApp[container.AppID] = true
+			if id, err := uuid.Parse(container.AppID); err == nil {
+				applicationIDs = append(applicationIDs, pgUUID(id))
+			}
+		}
+		if container.DatabaseID != "" && !seenDatabase[container.DatabaseID] {
+			seenDatabase[container.DatabaseID] = true
+			if id, err := uuid.Parse(container.DatabaseID); err == nil {
+				databaseIDs = append(databaseIDs, pgUUID(id))
+			}
+		}
+	}
+	if len(applicationIDs) == 0 && len(databaseIDs) == 0 {
+		return nil
+	}
+	foreign, err := s.store.ListForeignObservationOwnership(ctx, sqlc.ListForeignObservationOwnershipParams{
+		ApplicationIds: applicationIDs,
+		ServerID:       serverID,
+		DatabaseIds:    databaseIDs,
+	})
+	if err != nil {
+		return fmt.Errorf("check container ownership: %w", err)
+	}
+	if len(foreign) > 0 {
+		return fmt.Errorf("%w: container ownership does not belong to this node", ErrValidation)
+	}
+	return nil
+}
+
 func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, report *agentv1.ObservationReport, receivedAt time.Time) (*agentv1.ObservationAck, error) {
 	if s.store == nil {
 		return nil, errors.New("servers: store is not configured")
@@ -457,6 +493,10 @@ func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, re
 		return nil, fmt.Errorf("lookup server by node id: %w", err)
 	}
 	observation.ServerID = uuid.UUID(row.ID.Bytes)
+
+	if err := s.rejectForeignObservationOwnership(ctx, row.ID, observation.Inventory); err != nil {
+		return nil, err
+	}
 
 	hostJSON, err := json.Marshal(observation.Host)
 	if err != nil {

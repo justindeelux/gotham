@@ -428,6 +428,10 @@ func (s *Store) GetNodeObservation(ctx context.Context, serverID pgtype.UUID) (s
 	return s.queries.GetNodeObservation(ctx, serverID)
 }
 
+func (s *Store) ListForeignObservationOwnership(ctx context.Context, params sqlc.ListForeignObservationOwnershipParams) ([]sqlc.ListForeignObservationOwnershipRow, error) {
+	return s.queries.ListForeignObservationOwnership(ctx, params)
+}
+
 func (s *Store) DeleteNodeObservation(ctx context.Context, serverID pgtype.UUID) error {
 	return s.queries.DeleteNodeObservation(ctx, serverID)
 }

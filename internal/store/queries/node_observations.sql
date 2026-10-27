@@ -58,5 +58,19 @@ RETURNING *;
 -- name: GetNodeObservation :one
 SELECT * FROM node_observations WHERE server_id = $1;
 
+-- name: ListForeignObservationOwnership :many
+-- Returns the application/database IDs an observation claims that are not
+-- assigned to the reporting server. Empty slices are ignored by ANY, so the
+-- caller only runs this when it has ownership IDs to check.
+SELECT a.id, 'application'::text AS kind
+FROM applications a
+WHERE a.id = ANY(sqlc.arg(application_ids)::uuid[])
+  AND a.server_id IS DISTINCT FROM sqlc.arg(server_id)
+UNION ALL
+SELECT d.id, 'database'::text AS kind
+FROM databases d
+WHERE d.id = ANY(sqlc.arg(database_ids)::uuid[])
+  AND d.server_id IS DISTINCT FROM sqlc.arg(server_id);
+
 -- name: DeleteNodeObservation :exec
 DELETE FROM node_observations WHERE server_id = $1;

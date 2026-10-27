@@ -46,6 +46,52 @@ func (q *Queries) GetNodeObservation(ctx context.Context, serverID pgtype.UUID) 
 	return i, err
 }
 
+const listForeignObservationOwnership = `-- name: ListForeignObservationOwnership :many
+SELECT a.id, 'application'::text AS kind
+FROM applications a
+WHERE a.id = ANY($1::uuid[])
+  AND a.server_id IS DISTINCT FROM $2
+UNION ALL
+SELECT d.id, 'database'::text AS kind
+FROM databases d
+WHERE d.id = ANY($3::uuid[])
+  AND d.server_id IS DISTINCT FROM $2
+`
+
+type ListForeignObservationOwnershipParams struct {
+	ApplicationIds []pgtype.UUID `json:"application_ids"`
+	ServerID       pgtype.UUID   `json:"server_id"`
+	DatabaseIds    []pgtype.UUID `json:"database_ids"`
+}
+
+type ListForeignObservationOwnershipRow struct {
+	ID   pgtype.UUID `json:"id"`
+	Kind string      `json:"kind"`
+}
+
+// Returns the application/database IDs an observation claims that are not
+// assigned to the reporting server. Empty slices are ignored by ANY, so the
+// caller only runs this when it has ownership IDs to check.
+func (q *Queries) ListForeignObservationOwnership(ctx context.Context, arg ListForeignObservationOwnershipParams) ([]ListForeignObservationOwnershipRow, error) {
+	rows, err := q.db.Query(ctx, listForeignObservationOwnership, arg.ApplicationIds, arg.ServerID, arg.DatabaseIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListForeignObservationOwnershipRow{}
+	for rows.Next() {
+		var i ListForeignObservationOwnershipRow
+		if err := rows.Scan(&i.ID, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertNodeObservation = `-- name: UpsertNodeObservation :one
 INSERT INTO node_observations (
     server_id,

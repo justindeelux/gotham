@@ -264,6 +264,93 @@ func TestPushObservationsRejectsCrossNodeMetadata(t *testing.T) {
 	}
 }
 
+func TestRecordObservationBindsContainerOwnershipToNode(t *testing.T) {
+	service, st := newTestService(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	nodeID := addObservationNode(t, service)
+	foreignNodeID := addObservationNode(t, service)
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID: %v", err)
+	}
+	foreignRow, err := st.GetServerByNodeID(ctx, &foreignNodeID)
+	if err != nil {
+		t.Fatalf("GetServerByNodeID(foreign): %v", err)
+	}
+	user, err := st.CreateUser(ctx, uniqueNodeID("observation-owner")+"@example.com", nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	var projectID, environmentID string
+	if err := st.DB.QueryRow(ctx,
+		"INSERT INTO projects (name) VALUES ($1) RETURNING id::text",
+		uniqueNodeID("obs-project")).Scan(&projectID); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if err := st.DB.QueryRow(ctx,
+		"INSERT INTO environments (project_id, name) VALUES ($1, 'production') RETURNING id::text",
+		projectID).Scan(&environmentID); err != nil {
+		t.Fatalf("insert environment: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = st.DB.Exec(cleanupCtx, "DELETE FROM applications WHERE user_id = $1", user.ID)
+		_, _ = st.DB.Exec(cleanupCtx, "DELETE FROM databases WHERE user_id = $1", user.ID)
+		_, _ = st.DB.Exec(cleanupCtx, "DELETE FROM projects WHERE id = $1", projectID)
+		_, _ = st.DB.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	var ownApp, foreignApp, ownDatabase, foreignDatabase string
+	if err := st.DB.QueryRow(ctx,
+		"INSERT INTO applications (user_id, server_id, environment_id, name) VALUES ($1, $2, $3, $4) RETURNING id::text",
+		user.ID, row.ID, environmentID, uniqueNodeID("obs-own-app")).Scan(&ownApp); err != nil {
+		t.Fatalf("insert own application: %v", err)
+	}
+	if err := st.DB.QueryRow(ctx,
+		"INSERT INTO applications (user_id, server_id, environment_id, name) VALUES ($1, $2, $3, $4) RETURNING id::text",
+		user.ID, foreignRow.ID, environmentID, uniqueNodeID("obs-foreign-app")).Scan(&foreignApp); err != nil {
+		t.Fatalf("insert foreign application: %v", err)
+	}
+	if err := st.DB.QueryRow(ctx,
+		"INSERT INTO databases (user_id, server_id, environment_id, name, engine) VALUES ($1, $2, $3, $4, 'postgres') RETURNING id::text",
+		user.ID, row.ID, environmentID, uniqueNodeID("obs-own-db")).Scan(&ownDatabase); err != nil {
+		t.Fatalf("insert own database: %v", err)
+	}
+	if err := st.DB.QueryRow(ctx,
+		"INSERT INTO databases (user_id, server_id, environment_id, name, engine) VALUES ($1, $2, $3, $4, 'postgres') RETURNING id::text",
+		user.ID, foreignRow.ID, environmentID, uniqueNodeID("obs-foreign-db")).Scan(&foreignDatabase); err != nil {
+		t.Fatalf("insert foreign database: %v", err)
+	}
+
+	base := time.Now().UTC().Truncate(time.Second)
+	service.now = func() time.Time { return base }
+	own := validObservationReport(nodeID)
+	own.ObservedAt = timestamppb.New(base)
+	own.Inventory.Containers[0].AppId = ownApp
+	own.Inventory.Containers[0].DatabaseId = ownDatabase
+	if _, err := service.RecordObservation(ctx, nodeID, own, base); err != nil {
+		t.Fatalf("own-node ownership was rejected: %v", err)
+	}
+
+	foreignAppReport := validObservationReport(nodeID)
+	foreignAppReport.Sequence = 2
+	foreignAppReport.ObservedAt = timestamppb.New(base.Add(defaultObservationInterval))
+	foreignAppReport.Inventory.Containers[0].AppId = foreignApp
+	if _, err := service.RecordObservation(ctx, nodeID, foreignAppReport, base.Add(defaultObservationInterval)); !errors.Is(err, ErrValidation) {
+		t.Fatalf("foreign app_id = %v; want ErrValidation", err)
+	}
+
+	foreignDatabaseReport := validObservationReport(nodeID)
+	foreignDatabaseReport.Sequence = 3
+	foreignDatabaseReport.ObservedAt = timestamppb.New(base.Add(2 * defaultObservationInterval))
+	foreignDatabaseReport.Inventory.Containers[0].DatabaseId = foreignDatabase
+	if _, err := service.RecordObservation(ctx, nodeID, foreignDatabaseReport, base.Add(2*defaultObservationInterval)); !errors.Is(err, ErrValidation) {
+		t.Fatalf("foreign database_id = %v; want ErrValidation", err)
+	}
+}
+
 func mustServerID(t *testing.T, service *ServerService, nodeID string) uuid.UUID {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

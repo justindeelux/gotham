@@ -78,7 +78,8 @@ func (r *ResourceHistorySweeper) Sweep(ctx context.Context) (int64, error) {
 	now := r.now().UTC()
 	minuteLookback := resourceMinuteLookback
 	hourLookback := resourceHourLookback
-	if r.backfill {
+	backfill := r.backfill
+	if backfill {
 		// One bounded backfill at start closes rollup gaps left by downtime;
 		// later sweeps only recompute the recent window. The hour tier reads
 		// the full minute retention so a long outage still reaches day 30.
@@ -94,6 +95,15 @@ func (r *ResourceHistorySweeper) Sweep(ctx context.Context) (int64, error) {
 	// partial one on every sweep.
 	minuteStart := alignResourceStart(now.Add(-minuteLookback), time.Minute)
 	hourStart := alignResourceStart(now.Add(-hourLookback), time.Hour)
+	if backfill {
+		// The previous process already expired rows before the retention edge.
+		// Starting the backfill on that partly expired bucket would replace a
+		// complete rollup with the surviving tail, so skip to the next whole
+		// bucket. The steady window keeps the aligned-down start and only
+		// revisits buckets whose rows are all still present.
+		minuteStart = alignResourceStartCeil(now.Add(-minuteLookback), time.Minute)
+		hourStart = alignResourceStartCeil(now.Add(-hourLookback), time.Hour)
+	}
 
 	minuteRows, err := r.store.UpsertResourceMinuteRollups(ctx, minuteStart, now)
 	if err != nil {
@@ -126,6 +136,15 @@ func (r *ResourceHistorySweeper) Sweep(ctx context.Context) (int64, error) {
 
 func alignResourceStart(value time.Time, bucket time.Duration) time.Time {
 	return value.UTC().Truncate(bucket)
+}
+
+func alignResourceStartCeil(value time.Time, bucket time.Duration) time.Time {
+	value = value.UTC()
+	floor := value.Truncate(bucket)
+	if floor.Equal(value) {
+		return floor
+	}
+	return floor.Add(bucket)
 }
 
 func (r *ResourceHistorySweeper) loop(ctx context.Context) {

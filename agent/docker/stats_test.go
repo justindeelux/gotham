@@ -62,3 +62,17 @@ func TestContainerStatsMarksMissingSectionsUnsupported(t *testing.T) {
 		t.Errorf("missing sections = memory:%v net:%v disk:%v; want all false", stats.MemorySupported, stats.NetSupported, stats.DiskSupported)
 	}
 }
+
+func TestContainerStatsEmptyMemoryObjectIsUnsupported(t *testing.T) {
+	client := statsServer(t, `{
+		"cpu_stats": {"cpu_usage": {"total_usage": 400}, "system_cpu_usage": 40000, "online_cpus": 4},
+		"memory_stats": {}
+	}`)
+	stats, err := client.ContainerStats(context.Background(), "abc")
+	if err != nil {
+		t.Fatalf("ContainerStats: %v", err)
+	}
+	if stats.MemorySupported {
+		t.Error("empty memory_stats object counted as measured memory")
+	}
+}

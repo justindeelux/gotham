@@ -1908,7 +1908,9 @@ func (c *DockerClient) ContainerStats(ctx context.Context, id string) (Container
 		NetSupported:  len(out.Networks) > 0,
 		DiskSupported: len(out.BlkioStats.IOServiceBytesRecursive) > 0,
 	}
-	if out.MemoryStats != nil {
+	// An empty memory_stats object also means memory accounting is
+	// unavailable; it must not look like a measured zero with no limit.
+	if out.MemoryStats != nil && (out.MemoryStats.Usage > 0 || out.MemoryStats.Limit > 0 || len(out.MemoryStats.Stats) > 0) {
 		stats.MemorySupported = true
 		stats.MemoryUsage = out.MemoryStats.Usage
 		stats.MemoryLimit = out.MemoryStats.Limit

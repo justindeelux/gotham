@@ -214,6 +214,7 @@ const errorPrefixPackages = new Set([
   "databases",
   "deploy",
   "docker",
+  "domainwatch",
   "files",
   "githubapp",
   "incidents",

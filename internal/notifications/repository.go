@@ -26,15 +26,18 @@ type Repository interface {
 
 	// Durable delivery queue.
 	PersistDeliveries(ctx context.Context, deliveries []Delivery) error
+	PersistEvent(ctx context.Context, notification Notification, deliveries []Delivery) (bool, error)
 	ClaimDeliveries(ctx context.Context, now, leaseUntil time.Time, limit int) ([]Delivery, error)
 	ReclaimDeliveries(ctx context.Context, now time.Time, maxAttempts int) (int64, error)
-	ExpireDeliveries(ctx context.Context, now, cutoff time.Time) (int64, error)
+	ExpireDeliveries(ctx context.Context, now time.Time) (int64, error)
 	CleanupDeliveries(ctx context.Context, cutoff time.Time) (int64, error)
 	FinishDelivery(ctx context.Context, delivery Delivery) error
 	CancelDelivery(ctx context.Context, deliveryID uuid.UUID, reason string, at time.Time) error
 	GetDelivery(ctx context.Context, deliveryID uuid.UUID) (Delivery, error)
 	RetryDelivery(ctx context.Context, deliveryID uuid.UUID, at time.Time) (bool, error)
+	PruneDelivered(ctx context.Context, retention int) (int64, error)
 	HasDeliveredOpening(ctx context.Context, incidentID, channelID uuid.UUID) (bool, error)
+	HasLaterIncidentTransition(ctx context.Context, incidentID, channelID uuid.UUID, after Delivery) (bool, error)
 	ListTerminalFailures(ctx context.Context, limit int) ([]DeliveryFailure, error)
 	ChannelHealth(ctx context.Context) (map[uuid.UUID]ChannelHealth, error)
 
@@ -166,14 +169,12 @@ func deliveryParams(delivery Delivery) sqlc.CreateNotificationDeliveryParams {
 		IncidentID:   pgUUID(delivery.IncidentID),
 		Column10:     ts(delivery.NextAttemptAt),
 		CompletedAt:  tsPtr(completed),
+		Column12:     ts(delivery.ExpiresAt),
 	}
 	return params
 }
 
-func (r *storeRepository) PersistDeliveries(ctx context.Context, deliveries []Delivery) error {
-	if len(deliveries) == 0 {
-		return nil
-	}
+func pendingDeliveryParams(deliveries []Delivery) sqlc.CreatePendingDeliveriesParams {
 	params := sqlc.CreatePendingDeliveriesParams{
 		Ids:         make([]pgtype.UUID, 0, len(deliveries)),
 		ChannelIds:  make([]pgtype.UUID, 0, len(deliveries)),
@@ -182,6 +183,7 @@ func (r *storeRepository) PersistDeliveries(ctx context.Context, deliveries []De
 		IncidentIds: make([]pgtype.UUID, 0, len(deliveries)),
 		EventType:   deliveries[0].EventType,
 		CreatedAt:   ts(deliveries[0].CreatedAt),
+		ExpiresAt:   ts(deliveries[0].ExpiresAt),
 	}
 	for _, delivery := range deliveries {
 		params.Ids = append(params.Ids, pgUUID(delivery.ID))
@@ -190,10 +192,80 @@ func (r *storeRepository) PersistDeliveries(ctx context.Context, deliveries []De
 		params.Payloads = append(params.Payloads, delivery.Payload)
 		params.IncidentIds = append(params.IncidentIds, pgUUID(delivery.IncidentID))
 	}
-	if _, err := r.store.CreatePendingDeliveries(ctx, params); err != nil {
+	return params
+}
+
+func (r *storeRepository) PersistDeliveries(ctx context.Context, deliveries []Delivery) error {
+	if len(deliveries) == 0 {
+		return nil
+	}
+	if _, err := r.store.CreatePendingDeliveries(ctx, pendingDeliveryParams(deliveries)); err != nil {
 		return fmt.Errorf("notifications: persist deliveries: %w", err)
 	}
 	return nil
+}
+
+// PersistEvent writes the inbox row and all event/channel deliveries in one
+// transaction, so a crash or failure cannot leave an inbox event with no work.
+func (r *storeRepository) PersistEvent(ctx context.Context, notification Notification, deliveries []Delivery) (bool, error) {
+	inserted := false
+	err := r.store.InTx(ctx, func(tx *store.Store) error {
+		id, err := tx.CreateNotification(ctx, notificationParams(notification))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return fmt.Errorf("notifications: create notification: %w", err)
+		}
+		inserted = id.Valid
+		if len(deliveries) > 0 {
+			if _, err := tx.CreatePendingDeliveries(ctx, pendingDeliveryParams(deliveries)); err != nil {
+				return fmt.Errorf("notifications: persist deliveries: %w", err)
+			}
+		}
+		if inserted {
+			if _, err := tx.PruneNotifications(ctx, notificationRetention); err != nil {
+				return fmt.Errorf("notifications: prune notifications: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return inserted, nil
+}
+
+func (r *storeRepository) PruneDelivered(ctx context.Context, retention int) (int64, error) {
+	channels, err := r.store.ListNotificationChannels(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("notifications: list channels for prune: %w", err)
+	}
+	var total int64
+	for _, channel := range channels {
+		count, err := r.store.PruneNotificationDeliveries(ctx, sqlc.PruneNotificationDeliveriesParams{
+			ChannelID: channel.ID,
+			Limit:     int32(retention),
+		})
+		if err != nil {
+			return total, fmt.Errorf("notifications: prune delivered history: %w", err)
+		}
+		total += count
+	}
+	return total, nil
+}
+
+func (r *storeRepository) HasLaterIncidentTransition(ctx context.Context, incidentID, channelID uuid.UUID, after Delivery) (bool, error) {
+	ok, err := r.store.HasLaterIncidentTransition(ctx, sqlc.HasLaterIncidentTransitionParams{
+		IncidentID: pgUUID(incidentID),
+		ChannelID:  pgUUID(channelID),
+		Column3:    ts(after.CreatedAt),
+		Column4:    pgUUID(after.ID),
+	})
+	if err != nil {
+		return false, fmt.Errorf("notifications: check later incident transition: %w", err)
+	}
+	return ok, nil
 }
 
 func (r *storeRepository) HasDeliveredOpening(ctx context.Context, incidentID, channelID uuid.UUID) (bool, error) {
@@ -246,11 +318,8 @@ func (r *storeRepository) ReclaimDeliveries(ctx context.Context, now time.Time, 
 	return count, nil
 }
 
-func (r *storeRepository) ExpireDeliveries(ctx context.Context, now, cutoff time.Time) (int64, error) {
-	count, err := r.store.ExpireNotificationDeliveries(ctx, sqlc.ExpireNotificationDeliveriesParams{
-		Now:    ts(now),
-		Cutoff: ts(cutoff),
-	})
+func (r *storeRepository) ExpireDeliveries(ctx context.Context, now time.Time) (int64, error) {
+	count, err := r.store.ExpireNotificationDeliveries(ctx, ts(now))
 	if err != nil {
 		return 0, fmt.Errorf("notifications: expire deliveries: %w", err)
 	}
@@ -303,8 +372,9 @@ func (r *storeRepository) GetDelivery(ctx context.Context, deliveryID uuid.UUID)
 
 func (r *storeRepository) RetryDelivery(ctx context.Context, deliveryID uuid.UUID, at time.Time) (bool, error) {
 	affected, err := r.store.RetryNotificationDelivery(ctx, sqlc.RetryNotificationDeliveryParams{
-		Now: ts(at),
-		ID:  pgUUID(deliveryID),
+		Now:       ts(at),
+		ExpiresAt: ts(at.Add(maxDeliveryAge)),
+		ID:        pgUUID(deliveryID),
 	})
 	if err != nil {
 		return false, fmt.Errorf("notifications: retry delivery: %w", err)
@@ -407,6 +477,7 @@ func deliveryFromRow(row sqlc.NotificationDelivery) Delivery {
 		IncidentID:    uuidFromPG(row.IncidentID),
 		Attempts:      int(row.Attempts),
 		NextAttemptAt: row.NextAttemptAt.Time,
+		ExpiresAt:     row.ExpiresAt.Time,
 		UpdatedAt:     row.UpdatedAt.Time,
 	}
 	if row.LeaseUntil.Valid {

@@ -647,10 +647,10 @@ func (s *Service) MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, s
 	return s.repo.MarkNotificationsSeen(ctx, userID, seenAt)
 }
 
-func (s *Service) recordNotification(event Event) (Notification, bool) {
+func (s *Service) buildNotification(event Event) Notification {
 	notification := Notification{}
 	if s == nil || s.repo == nil {
-		return notification, false
+		return notification
 	}
 	writeCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
 	defer cancel()
@@ -675,15 +675,7 @@ func (s *Service) recordNotification(event Event) (Notification, bool) {
 		CreatedAt:    at.UTC(),
 		DedupeKey:    event.Identity(),
 	}
-	inserted, err := s.repo.CreateNotification(writeCtx, notification)
-	if err != nil {
-		if s.baseCtx.Err() == nil {
-			s.logger.Error("notifications: store in-app notification",
-				"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
-		}
-		return notification, false
-	}
-	return notification, inserted
+	return notification
 }
 
 func (s *Service) publishNotification(ctx context.Context, notification Notification) {
@@ -822,7 +814,15 @@ func (s *Service) UpdateAvailable(_ context.Context, update updates.AvailableUpd
 }
 
 func (s *Service) Dispatch(event Event) {
-	_ = s.Enqueue(event)
+	if s == nil {
+		return
+	}
+	if err := s.Enqueue(event); err != nil && s.repo != nil && Enabled() {
+		// The producer never retries these events, so make the loss visible.
+		event.At = s.now().UTC()
+		s.logger.Error("notifications: dispatch failed",
+			"event", string(event.Key()), "identity", event.Identity(), "error", err)
+	}
 }
 
 // Enqueue persists the inbox row and one pending delivery per matching channel
@@ -837,12 +837,7 @@ func (s *Service) Enqueue(event Event) error {
 	}
 	s.start()
 
-	notification, inserted := s.recordNotification(event)
-	if inserted {
-		publishCtx, publishCancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
-		s.publishNotification(publishCtx, notification)
-		publishCancel()
-	}
+	notification := s.buildNotification(event)
 
 	readCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
 	channels, err := s.repo.ListChannelsForEvent(readCtx, event.ResourceType, event.ResourceID)
@@ -881,14 +876,22 @@ func (s *Service) Enqueue(event Event) error {
 			Payload:       payload,
 			IncidentID:    event.IncidentID,
 			NextAttemptAt: createdAt,
+			ExpiresAt:     createdAt.Add(maxDeliveryAge),
 		})
 	}
 	writeCtx, writeCancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
 	defer writeCancel()
-	if err := s.repo.PersistDeliveries(writeCtx, deliveries); err != nil {
-		s.logger.Error("notifications: persist deliveries",
-			"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
+	inserted, err := s.repo.PersistEvent(writeCtx, notification, deliveries)
+	if err != nil {
+		s.logger.Error("notifications: persist event",
+			"event", string(event.Key()), "identity", identity,
+			"resource_id", event.ResourceID.String(), "error", err)
 		return err
+	}
+	if inserted {
+		publishCtx, publishCancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
+		s.publishNotification(publishCtx, notification)
+		publishCancel()
 	}
 	s.kick()
 	return nil
@@ -938,11 +941,14 @@ func (s *Service) processDeliveries() {
 	if _, err := s.repo.ReclaimDeliveries(s.baseCtx, now, s.maxAttempts); err != nil && s.baseCtx.Err() == nil {
 		s.logger.Warn("notifications: reclaim abandoned deliveries", "error", err)
 	}
-	if _, err := s.repo.ExpireDeliveries(s.baseCtx, now, now.Add(-maxDeliveryAge)); err != nil && s.baseCtx.Err() == nil {
+	if _, err := s.repo.ExpireDeliveries(s.baseCtx, now); err != nil && s.baseCtx.Err() == nil {
 		s.logger.Warn("notifications: expire stale deliveries", "error", err)
 	}
 	if _, err := s.repo.CleanupDeliveries(s.baseCtx, now.Add(-terminalRetention)); err != nil && s.baseCtx.Err() == nil {
 		s.logger.Warn("notifications: clean up terminal deliveries", "error", err)
+	}
+	if _, err := s.repo.PruneDelivered(s.baseCtx, deliveryRetention); err != nil && s.baseCtx.Err() == nil {
+		s.logger.Warn("notifications: prune delivered history", "error", err)
 	}
 	for {
 		claimed, err := s.repo.ClaimDeliveries(s.baseCtx, now, now.Add(s.lease), deliveryClaimBatch)
@@ -980,6 +986,10 @@ func (s *Service) sendDelivery(delivery Delivery) {
 		s.cancelDelivery(delivery, "channel disabled or unsubscribed")
 		return
 	}
+	if event.IncidentID != uuid.Nil && event.Action != "recovered" && s.hasLaterIncidentTransition(delivery) {
+		s.cancelDelivery(delivery, "incident already progressed")
+		return
+	}
 	if event.Action == "recovered" && !s.openingDelivered(delivery) {
 		s.cancelDelivery(delivery, "opening was not delivered")
 		return
@@ -1008,6 +1018,15 @@ func (s *Service) sendDelivery(delivery Delivery) {
 	s.finishDelivery(delivery, DeliverySucceeded, "", time.Time{})
 }
 
+func (s *Service) hasLaterIncidentTransition(delivery Delivery) bool {
+	ok, err := s.repo.HasLaterIncidentTransition(s.baseCtx, delivery.IncidentID, delivery.ChannelID, delivery)
+	if err != nil {
+		s.logger.Warn("notifications: check later incident transition", "error", err)
+		return false
+	}
+	return ok
+}
+
 func (s *Service) openingDelivered(delivery Delivery) bool {
 	if delivery.IncidentID == uuid.Nil {
 		return true
@@ -1022,7 +1041,7 @@ func (s *Service) openingDelivered(delivery Delivery) bool {
 
 func (s *Service) retryOrFail(delivery Delivery, retryAfter time.Duration, reason string) {
 	now := s.now().UTC()
-	if delivery.Attempts >= s.maxAttempts || now.Sub(delivery.CreatedAt) >= maxDeliveryAge {
+	if delivery.Attempts >= s.maxAttempts || (!delivery.ExpiresAt.IsZero() && !now.Before(delivery.ExpiresAt)) {
 		summary := truncateText(reason, maxDeliveryError)
 		if delivery.Attempts >= s.maxAttempts {
 			summary = truncateText(reason+"; giving up after "+strconv.Itoa(delivery.Attempts)+" attempts", maxDeliveryError)

@@ -72,8 +72,8 @@ func (s *Store) ReclaimNotificationDeliveries(ctx context.Context, params sqlc.R
 	return s.queries.ReclaimNotificationDeliveries(ctx, params)
 }
 
-func (s *Store) ExpireNotificationDeliveries(ctx context.Context, params sqlc.ExpireNotificationDeliveriesParams) (int64, error) {
-	return s.queries.ExpireNotificationDeliveries(ctx, params)
+func (s *Store) ExpireNotificationDeliveries(ctx context.Context, now pgtype.Timestamptz) (int64, error) {
+	return s.queries.ExpireNotificationDeliveries(ctx, now)
 }
 
 func (s *Store) CleanupNotificationDeliveries(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
@@ -94,6 +94,10 @@ func (s *Store) GetNotificationDelivery(ctx context.Context, id pgtype.UUID) (sq
 
 func (s *Store) RetryNotificationDelivery(ctx context.Context, params sqlc.RetryNotificationDeliveryParams) (int64, error) {
 	return s.queries.RetryNotificationDelivery(ctx, params)
+}
+
+func (s *Store) HasLaterIncidentTransition(ctx context.Context, params sqlc.HasLaterIncidentTransitionParams) (bool, error) {
+	return s.queries.HasLaterIncidentTransition(ctx, params)
 }
 
 func (s *Store) HasDeliveredIncidentOpening(ctx context.Context, params sqlc.HasDeliveredIncidentOpeningParams) (bool, error) {

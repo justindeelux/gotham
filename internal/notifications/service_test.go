@@ -986,7 +986,7 @@ func TestInboxRowIsWrittenWithoutChannels(t *testing.T) {
 	}
 }
 
-func TestFailedInboxInsertStillDelivers(t *testing.T) {
+func TestFailedInboxInsertRollsBackDeliveries(t *testing.T) {
 	repo := newFakeRepository()
 	channel := repo.seed(sampleChannel(t))
 	repo.createNotificationErr = errors.New("inbox insert failed")
@@ -996,11 +996,17 @@ func TestFailedInboxInsertStillDelivers(t *testing.T) {
 
 	service.Dispatch(sampleEvent())
 
-	waitFor(t, "the channel delivery", func() bool {
-		return len(notifier.delivered()) == 1
+	waitFor(t, "the failed dispatch to settle", func() bool {
+		return service.baseCtx.Err() == nil
 	})
 	if rows := repo.notificationsSnapshot(); len(rows) != 0 {
-		t.Fatalf("stored %d rows despite the failing insert", len(rows))
+		t.Fatalf("stored %d inbox rows despite the failing insert", len(rows))
+	}
+	if rows := repo.deliveriesFor(channel.ID); len(rows) != 0 {
+		t.Fatalf("stored %d deliveries despite the failed inbox transaction", len(rows))
+	}
+	if len(notifier.delivered()) != 0 {
+		t.Fatal("a failed enqueue still sent through the channel")
 	}
 }
 
@@ -1034,6 +1040,7 @@ func persistPending(t *testing.T, repo *fakeRepository, event Event, channel Cha
 		Payload:       event.encode(),
 		IncidentID:    event.IncidentID,
 		NextAttemptAt: at,
+		ExpiresAt:     at.Add(maxDeliveryAge),
 	}
 	if err := repo.PersistDeliveries(context.Background(), []Delivery{delivery}); err != nil {
 		t.Fatalf("persist delivery: %v", err)

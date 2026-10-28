@@ -214,6 +214,9 @@ func (r *fakeRepository) PersistDeliveries(_ context.Context, deliveries []Deliv
 		if delivery.Status == "" {
 			delivery.Status = DeliveryPending
 		}
+		if delivery.ExpiresAt.IsZero() {
+			delivery.ExpiresAt = delivery.CreatedAt.Add(maxDeliveryAge)
+		}
 		duplicate := false
 		for _, existing := range r.deliveries[delivery.ChannelID] {
 			if delivery.DedupeKey != "" && existing.DedupeKey == delivery.DedupeKey {
@@ -229,6 +232,17 @@ func (r *fakeRepository) PersistDeliveries(_ context.Context, deliveries []Deliv
 		r.deliveries[delivery.ChannelID] = history
 	}
 	return nil
+}
+
+func (r *fakeRepository) PersistEvent(ctx context.Context, notification Notification, deliveries []Delivery) (bool, error) {
+	inserted, err := r.CreateNotification(ctx, notification)
+	if err != nil {
+		return false, err
+	}
+	if err := r.PersistDeliveries(ctx, deliveries); err != nil {
+		return false, err
+	}
+	return inserted, nil
 }
 
 func (r *fakeRepository) ClaimDeliveries(_ context.Context, now, leaseUntil time.Time, limit int) ([]Delivery, error) {
@@ -309,7 +323,7 @@ func (r *fakeRepository) ReclaimDeliveries(_ context.Context, now time.Time, max
 	return count, nil
 }
 
-func (r *fakeRepository) ExpireDeliveries(_ context.Context, now, cutoff time.Time) (int64, error) {
+func (r *fakeRepository) ExpireDeliveries(_ context.Context, now time.Time) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var count int64
@@ -317,7 +331,10 @@ func (r *fakeRepository) ExpireDeliveries(_ context.Context, now, cutoff time.Ti
 		history := r.deliveries[channelID]
 		for i := range history {
 			delivery := &history[i]
-			if (delivery.Status != DeliveryPending && delivery.Status != DeliveryRetrying) || !delivery.CreatedAt.Before(cutoff) {
+			if delivery.Status != DeliveryPending && delivery.Status != DeliveryRetrying {
+				continue
+			}
+			if delivery.ExpiresAt.IsZero() || now.Before(delivery.ExpiresAt) {
 				continue
 			}
 			delivery.Status = DeliveryFailed
@@ -356,6 +373,9 @@ func (r *fakeRepository) FinishDelivery(_ context.Context, delivery Delivery) er
 	history := r.deliveries[delivery.ChannelID]
 	for i := range history {
 		if history[i].ID == delivery.ID {
+			if delivery.Status == DeliverySucceeded || delivery.Status == DeliveryFailed || delivery.Status == DeliveryCancelled {
+				delivery.Payload = ""
+			}
 			history[i] = delivery
 			return nil
 		}
@@ -408,9 +428,54 @@ func (r *fakeRepository) RetryDelivery(_ context.Context, deliveryID uuid.UUID, 
 			history[i].Status = DeliveryPending
 			history[i].Attempts = 0
 			history[i].NextAttemptAt = at
+			history[i].ExpiresAt = at.Add(maxDeliveryAge)
 			history[i].CompletedAt = nil
 			history[i].LeaseUntil = nil
 			history[i].UpdatedAt = at
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *fakeRepository) PruneDelivered(_ context.Context, retention int) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var total int64
+	for _, channelID := range r.order {
+		history := r.deliveries[channelID]
+		kept := make([]Delivery, 0, len(history))
+		delivered := 0
+		// The fake keeps the list newest-first, matching the SQL read order.
+		for _, delivery := range history {
+			if delivery.Status != DeliverySucceeded {
+				kept = append(kept, delivery)
+				continue
+			}
+			delivered++
+			if delivered <= retention || delivery.IncidentID != uuid.Nil {
+				kept = append(kept, delivery)
+			} else {
+				total++
+			}
+		}
+		r.deliveries[channelID] = kept
+	}
+	return total, nil
+}
+
+func (r *fakeRepository) HasLaterIncidentTransition(_ context.Context, incidentID, channelID uuid.UUID, after Delivery) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, delivery := range r.deliveries[channelID] {
+		if delivery.IncidentID != incidentID || delivery.ID == after.ID {
+			continue
+		}
+		if delivery.Status != DeliverySucceeded && delivery.Status != DeliveryFailed && delivery.Status != DeliveryCancelled {
+			continue
+		}
+		if delivery.CreatedAt.After(after.CreatedAt) ||
+			(delivery.CreatedAt.Equal(after.CreatedAt) && delivery.ID.String() > after.ID.String()) {
 			return true, nil
 		}
 	}

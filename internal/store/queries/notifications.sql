@@ -37,8 +37,8 @@ RETURNING *;
 DELETE FROM notification_channels WHERE id = $1;
 
 -- name: CreateNotificationDelivery :one
-INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at, completed_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()), $11)
+INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at, completed_at, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()), $11, COALESCE($12::timestamptz, now() + interval '24 hours'))
 ON CONFLICT (channel_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
 RETURNING *;
 
@@ -46,10 +46,11 @@ RETURNING *;
 -- Durable enqueue: the caller persists every matching event/channel delivery
 -- before it wakes a worker. A duplicate producer conflicts on the local
 -- identity and returns no row.
-INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at)
+INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at, expires_at)
 SELECT unnest(sqlc.arg(ids)::uuid[]), unnest(sqlc.arg(channel_ids)::uuid[]), sqlc.arg(event_type),
        'pending', '', sqlc.arg(created_at), unnest(sqlc.arg(dedupe_keys)::text[]),
-       unnest(sqlc.arg(payloads)::text[]), unnest(sqlc.arg(incident_ids)::uuid[]), sqlc.arg(created_at)
+       unnest(sqlc.arg(payloads)::text[]), unnest(sqlc.arg(incident_ids)::uuid[]), sqlc.arg(created_at),
+       sqlc.arg(expires_at)
 ON CONFLICT (channel_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
 RETURNING *;
 
@@ -99,7 +100,9 @@ SET status = CASE WHEN attempts >= sqlc.arg(max_attempts) THEN 'terminal_failed'
 WHERE status = 'sending' AND lease_until < sqlc.arg(now);
 
 -- name: ExpireNotificationDeliveries :execrows
--- Pending work never outlives the 24-hour delivery age.
+-- Pending work never outlives the 24-hour delivery age. The age basis is
+-- expires_at, which an owner retry moves forward; created_at still orders the
+-- incident transitions.
 UPDATE notification_deliveries
 SET status = 'terminal_failed',
     error_summary = 'delivery expired after 24 hours',
@@ -107,7 +110,7 @@ SET status = 'terminal_failed',
     completed_at = sqlc.arg(now),
     updated_at = sqlc.arg(now)
 WHERE status IN ('pending', 'retrying')
-  AND created_at < sqlc.arg(cutoff);
+  AND expires_at < sqlc.arg(now);
 
 -- name: CleanupNotificationDeliveries :execrows
 -- Terminal details are retained for 30 days; pending rows are bounded by the
@@ -117,12 +120,15 @@ WHERE status IN ('terminal_failed', 'cancelled')
   AND completed_at < sqlc.arg(cutoff);
 
 -- name: FinishNotificationDelivery :exec
+-- Completion clears the rendered event so terminal/delivered details stay
+-- bounded and never retain a stale payload for the retention window.
 UPDATE notification_deliveries
 SET status = sqlc.arg(status),
     error_summary = sqlc.arg(error_summary),
     next_attempt_at = sqlc.arg(next_attempt_at),
     lease_until = NULL,
     completed_at = sqlc.narg(completed_at),
+    payload = CASE WHEN sqlc.arg(status) IN ('delivered', 'terminal_failed', 'cancelled') THEN '' ELSE payload END,
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id);
 
@@ -145,6 +151,7 @@ UPDATE notification_deliveries
 SET status = 'pending',
     attempts = 0,
     next_attempt_at = sqlc.arg(now),
+    expires_at = sqlc.arg(expires_at),
     lease_until = NULL,
     completed_at = NULL,
     updated_at = sqlc.arg(now)
@@ -157,6 +164,17 @@ SELECT EXISTS (
       AND d.channel_id = $2
       AND d.status = 'delivered'
       AND d.event_type IN ('incident_opened', 'incident_severity_changed', 'runtime_failure')
+);
+
+-- name: HasLaterIncidentTransition :one
+-- An owner retry of an opening must not send a stale "opened" after a later
+-- transition for the same incident/channel already completed or was cancelled.
+SELECT EXISTS (
+    SELECT 1 FROM notification_deliveries d
+    WHERE d.incident_id = $1
+      AND d.channel_id = $2
+      AND d.status IN ('delivered', 'terminal_failed', 'cancelled')
+      AND (d.created_at, d.id) > ($3::timestamptz, $4::uuid)
 );
 
 -- name: ListTerminalDeliveryFailures :many
@@ -199,17 +217,23 @@ ORDER BY d.created_at DESC, d.id DESC
 LIMIT $2;
 
 -- name: PruneNotificationDeliveries :execrows
--- Retention: keep only the newest $2 attempts of one channel, dropping the
--- rest. Run in the same transaction as the insert so history stays bounded.
--- Terminal failures and cancellations are retained for the 30-day cleanup
--- instead of the per-channel cap, so a broken channel keeps its evidence.
+-- Retention: keep only the newest $2 delivered attempts of one channel. Only
+-- delivered rows are pruned; in-flight work is never deleted, terminal
+-- failures/cancellations keep the 30-day cleanup, and a delivered opening for
+-- an active incident is kept while recovery suppression still needs it.
 DELETE FROM notification_deliveries AS d
 WHERE d.channel_id = $1
-  AND d.status NOT IN ('terminal_failed', 'cancelled')
+  AND d.status = 'delivered'
   AND d.id NOT IN (
       SELECT keep.id FROM notification_deliveries AS keep
       WHERE keep.channel_id = $1
-        AND keep.status NOT IN ('terminal_failed', 'cancelled')
       ORDER BY keep.created_at DESC, keep.id DESC
       LIMIT $2
+  )
+  AND NOT (
+      d.incident_id IS NOT NULL
+      AND EXISTS (
+          SELECT 1 FROM incidents i
+          WHERE i.id = d.incident_id AND i.lifecycle <> 'resolved'
+      )
   );

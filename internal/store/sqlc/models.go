@@ -540,6 +540,7 @@ type NotificationDelivery struct {
 	IncidentID    pgtype.UUID        `json:"incident_id"`
 	Attempts      int32              `json:"attempts"`
 	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
 	LeaseUntil    pgtype.Timestamptz `json:"lease_until"`
 	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`

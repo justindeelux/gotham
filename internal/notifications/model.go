@@ -191,7 +191,14 @@ func (e Event) Identity() string {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	return string(e.Key()) + ":" + e.ResourceType + ":" + e.ResourceID.String() + ":" + at.UTC().Format(time.RFC3339Nano)
+	identity := string(e.Key()) + ":" + e.ResourceType + ":" + e.ResourceID.String()
+	if e.ResourceID == uuid.Nil {
+		// Instance-wide events have no resource to distinguish them. Certificate
+		// events in one pass share a timestamp, so the subject must be part of
+		// the identity or the second alert is silently deduplicated.
+		identity += ":" + e.Name + ":" + e.Host
+	}
+	return identity + ":" + at.UTC().Format(time.RFC3339Nano)
 }
 
 func (e Event) encode() string {
@@ -605,6 +612,7 @@ type Delivery struct {
 	IncidentID    uuid.UUID
 	Attempts      int
 	NextAttemptAt time.Time
+	ExpiresAt     time.Time
 	LeaseUntil    *time.Time
 	CompletedAt   *time.Time
 	UpdatedAt     time.Time

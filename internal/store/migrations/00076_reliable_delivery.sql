@@ -21,9 +21,15 @@ ALTER TABLE notification_deliveries
     ADD COLUMN incident_id uuid REFERENCES incidents(id) ON DELETE SET NULL,
     ADD COLUMN attempts integer NOT NULL DEFAULT 0,
     ADD COLUMN next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    -- Age basis for the 24-hour delivery expiry. Owner retry moves this
+    -- forward while created_at keeps the ordering/inbox identity.
+    ADD COLUMN expires_at timestamptz NOT NULL DEFAULT now(),
     ADD COLUMN lease_until timestamptz,
     ADD COLUMN completed_at timestamptz,
     ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
+
+UPDATE notification_deliveries SET expires_at = created_at + interval '24 hours';
+ALTER TABLE notification_deliveries ALTER COLUMN expires_at SET DEFAULT (now() + interval '24 hours');
 
 -- One local delivery per event/channel. Producers that hand the same logical
 -- occurrence twice conflict instead of enqueueing a duplicate.
@@ -60,6 +66,7 @@ ALTER TABLE notification_deliveries
     DROP COLUMN IF EXISTS completed_at,
     DROP COLUMN IF EXISTS lease_until,
     DROP COLUMN IF EXISTS next_attempt_at,
+    DROP COLUMN IF EXISTS expires_at,
     DROP COLUMN IF EXISTS attempts,
     DROP COLUMN IF EXISTS incident_id,
     DROP COLUMN IF EXISTS payload,

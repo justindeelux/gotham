@@ -249,3 +249,57 @@ func int64Ptr(value int64) *int64 { return &value }
 func almostEquals(a, b float64) bool {
 	return math.Abs(a-b) < 1e-9
 }
+
+func TestFilterExistingResourceRowsDropsStaleLabels(t *testing.T) {
+	valid := uuid.New()
+	stale := uuid.New()
+	rows := []sqlc.InsertResourceSamplesParams{
+		{ResourceType: ResourceTypeApplication, ResourceID: pgUUID(valid), ApplicationID: pgUUID(valid)},
+		{ResourceType: ResourceTypeApplication, ResourceID: pgUUID(stale), ApplicationID: pgUUID(stale)},
+	}
+	filtered := filterExistingResourceRows(rows, map[string]map[uuid.UUID]bool{
+		ResourceTypeApplication: {valid: true},
+	})
+	if len(filtered) != 1 || filtered[0].ResourceID.Bytes != valid {
+		t.Fatalf("filtered = %+v; want only the live application", filtered)
+	}
+}
+
+func TestResourcePointMarksPerMetricReplicaGapsPartial(t *testing.T) {
+	series := make(map[string]*ResourceHistorySeries)
+	at := time.Unix(1000, 0).UTC().Truncate(30 * time.Second)
+	cpu := 0.2
+	memA := int64(1000)
+	memB := int64(2000)
+	rows := []sqlc.ListResourceSamplesRow{
+		{ObservedAt: pgTime(at), Service: "web", DeploymentID: "d1", Replica: "1", CpuCores: &cpu, MemWorkingSetBytes: &memA},
+		{ObservedAt: pgTime(at), Service: "web", DeploymentID: "d1", Replica: "2", MemWorkingSetBytes: &memB},
+	}
+	buildRawResourceSeries(series, rows, 30*time.Second)
+	point := series["web|d1"].Points[0]
+	if point.Coverage != ResourceCoveragePartial {
+		t.Errorf("coverage = %s; want partial because CPU has only one replica", point.Coverage)
+	}
+	// The CPU value is one replica's measurement, not scaled to the two-replica
+	// point, even though coverage says the metric is partial.
+	if point.CPUCores == nil || !almostEquals(*point.CPUCores, 0.2) {
+		t.Errorf("CPU = %v; want the one measured replica value", point.CPUCores)
+	}
+}
+
+func TestRollupDoesNotScaleOneReplicaByThePointReplicaCount(t *testing.T) {
+	series := make(map[string]*ResourceHistorySeries)
+	at := time.Unix(1000, 0).UTC().Truncate(5 * time.Minute)
+	rows := []sqlc.ListResourceRollupPointsRow{
+		{Bucket: pgTime(at), Service: "web", DeploymentID: "d1", Metric: "cpu_cores", Samples: 1, Replicas: 1, ExpectedReplicas: 2, ValueSum: 0.2, ValueMin: 0.2, ValueMax: 0.2, LatestAt: pgTime(at)},
+		{Bucket: pgTime(at), Service: "web", DeploymentID: "d1", Metric: "mem_working_set_bytes", Samples: 2, Replicas: 2, ExpectedReplicas: 2, ValueSum: 3000, ValueMin: 1000, ValueMax: 2000, LatestAt: pgTime(at)},
+	}
+	buildRollupResourceSeries(series, rows, 5*time.Minute)
+	point := series["web|d1"].Points[0]
+	if point.CPUCores == nil || !almostEquals(*point.CPUCores, 0.2) {
+		t.Errorf("CPU = %v; want 0.2 from the single covered replica", point.CPUCores)
+	}
+	if point.Coverage != ResourceCoveragePartial {
+		t.Errorf("coverage = %s; want partial", point.Coverage)
+	}
+}

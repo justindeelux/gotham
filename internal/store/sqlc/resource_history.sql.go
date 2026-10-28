@@ -98,6 +98,49 @@ type InsertResourceSamplesParams struct {
 	CoveragePartial    bool               `json:"coverage_partial"`
 }
 
+const listExistingResourceOwners = `-- name: ListExistingResourceOwners :many
+SELECT a.id, 'application'::text AS kind
+FROM applications a
+WHERE a.id = ANY($1::uuid[])
+UNION ALL
+SELECT d.id, 'database'::text AS kind
+FROM databases d
+WHERE d.id = ANY($2::uuid[])
+`
+
+type ListExistingResourceOwnersParams struct {
+	ApplicationIds []pgtype.UUID `json:"application_ids"`
+	DatabaseIds    []pgtype.UUID `json:"database_ids"`
+}
+
+type ListExistingResourceOwnersRow struct {
+	ID   pgtype.UUID `json:"id"`
+	Kind string      `json:"kind"`
+}
+
+// Filters labelled container samples against live owners. A stale label from a
+// deleted application/database must not make the batch COPY fail for every
+// other resource on the node.
+func (q *Queries) ListExistingResourceOwners(ctx context.Context, arg ListExistingResourceOwnersParams) ([]ListExistingResourceOwnersRow, error) {
+	rows, err := q.db.Query(ctx, listExistingResourceOwners, arg.ApplicationIds, arg.DatabaseIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListExistingResourceOwnersRow{}
+	for rows.Next() {
+		var i ListExistingResourceOwnersRow
+		if err := rows.Scan(&i.ID, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listResourceRollupPoints = `-- name: ListResourceRollupPoints :many
 SELECT
     bucket,

@@ -304,3 +304,16 @@ func TestCommitObservationSequenceOnlyAdvances(t *testing.T) {
 		t.Errorf("sequences = %d then %d; want monotonic", first, second)
 	}
 }
+
+func TestContainerSampleGateToleratesJitter(t *testing.T) {
+	last := time.Unix(1000, 0)
+	if containerSampleDue(last, last.Add(24*time.Second)) {
+		t.Error("a 24-second gap must wait for the next observation tick")
+	}
+	if !containerSampleDue(last, last.Add(25*time.Second)) {
+		t.Error("a 25-second gap must not skip to a 45-second cadence")
+	}
+	if !containerSampleDue(time.Time{}, last) {
+		t.Error("the first sample must be due")
+	}
+}

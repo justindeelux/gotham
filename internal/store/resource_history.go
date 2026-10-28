@@ -68,3 +68,7 @@ func (s *Store) ResourceHistoryExists(ctx context.Context, resourceType string, 
 		ResourceID:   resourceID,
 	})
 }
+
+func (s *Store) ListExistingResourceOwners(ctx context.Context, params sqlc.ListExistingResourceOwnersParams) ([]sqlc.ListExistingResourceOwnersRow, error) {
+	return s.queries.ListExistingResourceOwners(ctx, params)
+}

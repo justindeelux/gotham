@@ -249,3 +249,15 @@ SELECT EXISTS (
     UNION ALL
     SELECT 1 FROM resource_metric_rollups rr WHERE rr.resource_type = $1 AND rr.resource_id = $2
 ) AS exists;
+
+-- name: ListExistingResourceOwners :many
+-- Filters labelled container samples against live owners. A stale label from a
+-- deleted application/database must not make the batch COPY fail for every
+-- other resource on the node.
+SELECT a.id, 'application'::text AS kind
+FROM applications a
+WHERE a.id = ANY(sqlc.arg(application_ids)::uuid[])
+UNION ALL
+SELECT d.id, 'database'::text AS kind
+FROM databases d
+WHERE d.id = ANY(sqlc.arg(database_ids)::uuid[]);

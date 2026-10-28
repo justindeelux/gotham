@@ -200,6 +200,10 @@ func (s *ServerService) recordResourceSamples(ctx context.Context, serverID uuid
 	if len(rows) == 0 {
 		return
 	}
+	rows = s.filterExistingResourceRows(ctx, rows)
+	if len(rows) == 0 {
+		return
+	}
 	if err := s.store.InsertResourceSamples(ctx, rows); err != nil {
 		s.logger.Warn("servers: recording resource samples failed",
 			"server_id", serverID.String(), "samples", len(rows), "error", err)
@@ -280,6 +284,54 @@ func buildResourceSampleRows(serverID uuid.UUID, observation NodeObservation, sa
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// filterExistingResourceRows drops a stale label whose application/database
+// row is already gone, so one orphan container cannot fail the node's whole
+// COPY. A missing lookup is treated as no rows rather than as permission to
+// insert a foreign key that will fail.
+func (s *ServerService) filterExistingResourceRows(ctx context.Context, rows []sqlc.InsertResourceSamplesParams) []sqlc.InsertResourceSamplesParams {
+	appIDs := make([]pgtype.UUID, 0, len(rows))
+	dbIDs := make([]pgtype.UUID, 0, len(rows))
+	seenApp := make(map[pgtype.UUID]bool, len(rows))
+	seenDB := make(map[pgtype.UUID]bool, len(rows))
+	for _, row := range rows {
+		if row.ApplicationID.Valid && !seenApp[row.ApplicationID] {
+			seenApp[row.ApplicationID] = true
+			appIDs = append(appIDs, row.ApplicationID)
+		}
+		if row.DatabaseID.Valid && !seenDB[row.DatabaseID] {
+			seenDB[row.DatabaseID] = true
+			dbIDs = append(dbIDs, row.DatabaseID)
+		}
+	}
+	existing, err := s.store.ListExistingResourceOwners(ctx, sqlc.ListExistingResourceOwnersParams{
+		ApplicationIds: appIDs,
+		DatabaseIds:    dbIDs,
+	})
+	if err != nil {
+		s.logger.Warn("servers: checking resource owners failed", "error", err)
+		return nil
+	}
+	allowed := make(map[string]map[uuid.UUID]bool, 2)
+	for _, row := range existing {
+		if allowed[row.Kind] == nil {
+			allowed[row.Kind] = make(map[uuid.UUID]bool)
+		}
+		allowed[row.Kind][uuid.UUID(row.ID.Bytes)] = true
+	}
+	return filterExistingResourceRows(rows, allowed)
+}
+
+func filterExistingResourceRows(rows []sqlc.InsertResourceSamplesParams, allowed map[string]map[uuid.UUID]bool) []sqlc.InsertResourceSamplesParams {
+	out := make([]sqlc.InsertResourceSamplesParams, 0, len(rows))
+	for _, row := range rows {
+		id := uuid.UUID(row.ResourceID.Bytes)
+		if allowed[row.ResourceType][id] {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 func resourceOwnershipFor(container ContainerObservation) (resourceOwnership, bool) {
@@ -455,6 +507,7 @@ type resourceBucketBuilder struct {
 	latestAt         time.Time
 	replicas         int
 	replicaSet       map[string]bool
+	metricReplicas   map[string]int
 	expectedReplicas int
 	coveragePartial  bool
 	memLimit         int64
@@ -517,6 +570,10 @@ func buildRawResourceSeries(seriesMap map[string]*ResourceHistorySeries, rows []
 		addRawMetric(builder, "disk_write_bps", replica, row.DiskWriteBps)
 	}
 	for key, builder := range builders {
+		builder.metricReplicas = make(map[string]int, len(builder.values))
+		for metric, values := range builder.values {
+			builder.metricReplicas[metric] = len(values)
+		}
 		series := seriesMap[key.series]
 		series.Points = append(series.Points, resourcePoint(key.bucket, builder))
 	}
@@ -551,6 +608,15 @@ func resourcePoint(at time.Time, builder *resourceBucketBuilder) ResourceHistory
 	}
 	if builder.coveragePartial || builder.expectedReplicas > builder.replicas {
 		point.Coverage = ResourceCoveragePartial
+	}
+	// A metric missing one replica's sample is a partial metric even when the
+	// point as a whole has every replica (for example the first CPU sample
+	// after a restart next to a measured memory value).
+	for _, replicas := range builder.metricReplicas {
+		if replicas > 0 && replicas < builder.replicas {
+			point.Coverage = ResourceCoveragePartial
+			break
+		}
 	}
 	point.CPUCores = replicaSum(builder.values["cpu_cores"])
 	point.NetRxBps = replicaSum(builder.values["net_rx_bps"])
@@ -601,7 +667,10 @@ func buildRollupResourceSeries(seriesMap map[string]*ResourceHistorySeries, rows
 		key := pointKey{series: series.Service + "|" + series.DeploymentID, bucket: at}
 		builder, ok := builders[key]
 		if !ok {
-			builder = &resourceBucketBuilder{values: make(map[string]map[string]float64)}
+			builder = &resourceBucketBuilder{
+				values:         make(map[string]map[string]float64),
+				metricReplicas: make(map[string]int),
+			}
 			builders[key] = builder
 		}
 		if row.LatestAt.Valid && row.LatestAt.Time.After(builder.latestAt) {
@@ -654,6 +723,9 @@ func buildRollupResourceSeries(seriesMap map[string]*ResourceHistorySeries, rows
 		// concurrent replicas additive. A partially covered bucket says so.
 		value := acc.valueSum / float64(acc.samples) * float64(acc.replicas)
 		builderAdd(builder, ak.metric, "rollup", value)
+		if acc.replicas > builder.metricReplicas[ak.metric] {
+			builder.metricReplicas[ak.metric] = acc.replicas
+		}
 	}
 	for key, builder := range builders {
 		series := seriesMap[key.series]

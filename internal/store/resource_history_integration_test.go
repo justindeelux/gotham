@@ -254,3 +254,21 @@ func maxInt64(a, b int64) int64 {
 	}
 	return b
 }
+
+func TestResourceHistoryExistingOwners(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIntegrationStore(t, ctx)
+	appID, _ := resourceTestScope(t, ctx, st)
+	missing := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+
+	rows, err := st.ListExistingResourceOwners(ctx, sqlc.ListExistingResourceOwnersParams{
+		ApplicationIds: []pgtype.UUID{appID, missing},
+	})
+	if err != nil {
+		t.Fatalf("ListExistingResourceOwners: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Kind != "application" {
+		t.Errorf("existing owners = %+v; want only the live application", rows)
+	}
+}

@@ -571,8 +571,8 @@ func (s *ServerService) RecordObservation(ctx context.Context, nodeID string, re
 		s.pressure.RecordHostPressure(pressureCtx, uuid.UUID(row.ID.Bytes), row.Name, observation)
 		cancel()
 	}
-	// Resource samples are numeric evidence, so they are recorded with their own
-	// bounded context and never delay the observation acknowledgement.
+	// Resource samples are written before this observation is acknowledged, but
+	// on their own bounded context: they never delay the heartbeat stream.
 	if len(resourceSamples) > 0 {
 		sampleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		s.recordResourceSamples(sampleCtx, uuid.UUID(row.ID.Bytes), observation, resourceSamples)

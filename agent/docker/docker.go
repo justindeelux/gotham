@@ -1847,16 +1847,19 @@ func boolParam(value bool) string {
 // values are monotonic counters; the agent derives rates from consecutive
 // readings so it can use the actual elapsed time and detect counter resets.
 type ContainerStats struct {
-	CPUTotal    uint64
-	SystemCPU   uint64
-	OnlineCPUs  uint32
-	MemoryUsage uint64
-	MemoryCache uint64
-	MemoryLimit uint64
-	NetRx       uint64
-	NetTx       uint64
-	DiskRead    uint64
-	DiskWrite   uint64
+	CPUTotal        uint64
+	SystemCPU       uint64
+	OnlineCPUs      uint32
+	MemorySupported bool
+	MemoryUsage     uint64
+	MemoryCache     uint64
+	MemoryLimit     uint64
+	NetSupported    bool
+	NetRx           uint64
+	NetTx           uint64
+	DiskSupported   bool
+	DiskRead        uint64
+	DiskWrite       uint64
 }
 
 // ContainerStats reads one non-streaming stats sample. It deliberately does
@@ -1875,7 +1878,7 @@ func (c *DockerClient) ContainerStats(ctx context.Context, id string) (Container
 			SystemCPUUsage uint64 `json:"system_cpu_usage"`
 			OnlineCPUs     uint32 `json:"online_cpus"`
 		} `json:"cpu_stats"`
-		MemoryStats struct {
+		MemoryStats *struct {
 			Usage uint64            `json:"usage"`
 			Limit uint64            `json:"limit"`
 			Stats map[string]uint64 `json:"stats"`
@@ -1896,18 +1899,26 @@ func (c *DockerClient) ContainerStats(ctx context.Context, id string) (Container
 		return ContainerStats{}, err
 	}
 	stats := ContainerStats{
-		CPUTotal:    out.CPUStats.CPUUsage.TotalUsage,
-		SystemCPU:   out.CPUStats.SystemCPUUsage,
-		OnlineCPUs:  out.CPUStats.OnlineCPUs,
-		MemoryUsage: out.MemoryStats.Usage,
-		MemoryLimit: out.MemoryStats.Limit,
+		CPUTotal:   out.CPUStats.CPUUsage.TotalUsage,
+		SystemCPU:  out.CPUStats.SystemCPUUsage,
+		OnlineCPUs: out.CPUStats.OnlineCPUs,
+		// net/disk have no counters when the engine omits the section, for
+		// example network_mode host/none or a cgroup without blkio. Keep that
+		// unknown instead of summing an empty map into a measured zero.
+		NetSupported:  len(out.Networks) > 0,
+		DiskSupported: len(out.BlkioStats.IOServiceBytesRecursive) > 0,
 	}
-	// cgroup v2 reports inactive_file; cgroup v1 reports cache. Both are
-	// reclaimable page cache and are subtracted from the working set.
-	if cache, ok := out.MemoryStats.Stats["inactive_file"]; ok {
-		stats.MemoryCache = cache
-	} else if cache, ok := out.MemoryStats.Stats["cache"]; ok {
-		stats.MemoryCache = cache
+	if out.MemoryStats != nil {
+		stats.MemorySupported = true
+		stats.MemoryUsage = out.MemoryStats.Usage
+		stats.MemoryLimit = out.MemoryStats.Limit
+		// cgroup v2 reports inactive_file; cgroup v1 reports cache. Both are
+		// reclaimable page cache and are subtracted from the working set.
+		if cache, ok := out.MemoryStats.Stats["inactive_file"]; ok {
+			stats.MemoryCache = cache
+		} else if cache, ok := out.MemoryStats.Stats["cache"]; ok {
+			stats.MemoryCache = cache
+		}
 	}
 	for _, network := range out.Networks {
 		stats.NetRx += network.RxBytes

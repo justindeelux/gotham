@@ -88,12 +88,19 @@ func (r *ResourceHistorySweeper) Sweep(ctx context.Context) (int64, error) {
 	}
 	var total int64
 
-	minuteRows, err := r.store.UpsertResourceMinuteRollups(ctx, now.Add(-minuteLookback), now)
+	// Align each window down to its tier bucket: an unaligned start would
+	// rebuild the oldest bucket from only the rows after the boundary, and the
+	// replace-on-conflict upsert would overwrite a complete bucket with that
+	// partial one on every sweep.
+	minuteStart := alignResourceStart(now.Add(-minuteLookback), time.Minute)
+	hourStart := alignResourceStart(now.Add(-hourLookback), time.Hour)
+
+	minuteRows, err := r.store.UpsertResourceMinuteRollups(ctx, minuteStart, now)
 	if err != nil {
 		return total, err
 	}
 	total += minuteRows
-	hourRows, err := r.store.UpsertResourceHourRollups(ctx, now.Add(-hourLookback), now)
+	hourRows, err := r.store.UpsertResourceHourRollups(ctx, hourStart, now)
 	if err != nil {
 		return total, err
 	}
@@ -115,6 +122,10 @@ func (r *ResourceHistorySweeper) Sweep(ctx context.Context) (int64, error) {
 	}
 	total += hourDeleted
 	return total, nil
+}
+
+func alignResourceStart(value time.Time, bucket time.Duration) time.Time {
+	return value.UTC().Truncate(bucket)
 }
 
 func (r *ResourceHistorySweeper) loop(ctx context.Context) {

@@ -10,19 +10,29 @@ import (
 // limit (it reports a very large limit instead of omitting it).
 const unlimitedMemory = uint64(1) << 62
 
+// maxContainerSampleElapsed is the longest interval that still describes the
+// same sampling run. A longer gap means the stream or agent was away, so the
+// old counters are not a baseline for a value stamped at reconnect time.
+const maxContainerSampleElapsed = 3 * 30 * time.Second
+
 // ContainerCounters is one raw Docker stats reading. All counters are
 // monotonic; a decrease means the container or engine counter restarted.
+// The *Supported flags distinguish a measured zero from a metric the engine
+// or container mode does not report at all.
 type ContainerCounters struct {
-	CPUTotal    uint64
-	SystemCPU   uint64
-	OnlineCPUs  uint32
-	MemoryUsage uint64
-	MemoryCache uint64
-	MemoryLimit uint64
-	NetRx       uint64
-	NetTx       uint64
-	DiskRead    uint64
-	DiskWrite   uint64
+	CPUTotal        uint64
+	SystemCPU       uint64
+	OnlineCPUs      uint32
+	MemorySupported bool
+	MemoryUsage     uint64
+	MemoryCache     uint64
+	MemoryLimit     uint64
+	NetSupported    bool
+	NetRx           uint64
+	NetTx           uint64
+	DiskSupported   bool
+	DiskRead        uint64
+	DiskWrite       uint64
 }
 
 // ContainerSample is the derived numeric evidence for one container.
@@ -30,7 +40,7 @@ type ContainerCounters struct {
 // reset or nonpositive interval); they are never zero in that case.
 type ContainerSample struct {
 	CPUCores           *float64
-	MemWorkingSetBytes uint64
+	MemWorkingSetBytes *uint64
 	MemLimitBytes      *uint64
 	MemUnlimited       bool
 	NetRxBps           *float64
@@ -56,14 +66,16 @@ func NewContainerSampler() *ContainerSampler {
 }
 
 func (s *ContainerSampler) Observe(id string, counters ContainerCounters, at time.Time) ContainerSample {
-	sample := ContainerSample{
-		MemWorkingSetBytes: workingSet(counters.MemoryUsage, counters.MemoryCache),
-	}
-	limit := counters.MemoryLimit
-	if limit == 0 || limit >= unlimitedMemory {
-		sample.MemUnlimited = true
-	} else {
-		sample.MemLimitBytes = &limit
+	sample := ContainerSample{}
+	if counters.MemorySupported {
+		workingSet := workingSet(counters.MemoryUsage, counters.MemoryCache)
+		sample.MemWorkingSetBytes = &workingSet
+		limit := counters.MemoryLimit
+		if limit == 0 || limit >= unlimitedMemory {
+			sample.MemUnlimited = true
+		} else {
+			sample.MemLimitBytes = &limit
+		}
 	}
 
 	s.mu.Lock()
@@ -74,7 +86,7 @@ func (s *ContainerSampler) Observe(id string, counters ContainerCounters, at tim
 		return sample
 	}
 	elapsed := at.Sub(previous.at)
-	if elapsed <= 0 {
+	if elapsed <= 0 || elapsed > maxContainerSampleElapsed {
 		return sample
 	}
 
@@ -86,10 +98,14 @@ func (s *ContainerSampler) Observe(id string, counters ContainerCounters, at tim
 			sample.CPUCores = &cores
 		}
 	}
-	sample.NetRxBps = counterRate(counters.NetRx, previous.NetRx, elapsed)
-	sample.NetTxBps = counterRate(counters.NetTx, previous.NetTx, elapsed)
-	sample.DiskReadBps = counterRate(counters.DiskRead, previous.DiskRead, elapsed)
-	sample.DiskWriteBps = counterRate(counters.DiskWrite, previous.DiskWrite, elapsed)
+	if counters.NetSupported && previous.NetSupported {
+		sample.NetRxBps = counterRate(counters.NetRx, previous.NetRx, elapsed)
+		sample.NetTxBps = counterRate(counters.NetTx, previous.NetTx, elapsed)
+	}
+	if counters.DiskSupported && previous.DiskSupported {
+		sample.DiskReadBps = counterRate(counters.DiskRead, previous.DiskRead, elapsed)
+		sample.DiskWriteBps = counterRate(counters.DiskWrite, previous.DiskWrite, elapsed)
+	}
 	return sample
 }
 

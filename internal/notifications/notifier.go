@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Notifier interface {
@@ -135,35 +136,76 @@ func (n *emailNotifier) Notify(ctx context.Context, event Event) error {
 
 const defaultSubjectPrefix = "[Gotham] "
 
+// sendFailure carries the retry classification of a provider attempt without
+// exposing credentials or raw remote content. The message is the existing
+// bounded, user-visible summary.
+type sendFailure struct {
+	message    string
+	permanent  bool
+	retryAfter time.Duration
+}
+
+func (e *sendFailure) Error() string { return e.message }
+
+// classifyDeliveryError separates permanent configuration/auth/rejection
+// failures from transient connection, timeout, 429 and 5xx failures.
+func classifyDeliveryError(err error, kind Kind) (permanent bool, retryAfter time.Duration) {
+	var failure *sendFailure
+	if errors.As(err, &failure) {
+		return failure.permanent, failure.retryAfter
+	}
+	if errors.Is(err, ErrValidation) {
+		return true, 0
+	}
+	if kind == KindEmail {
+		text := err.Error()
+		for _, marker := range []string{"smtp auth failed (status 5", "smtp sender failed (status 5", "smtp recipient failed (status 5"} {
+			if strings.Contains(text, marker) {
+				return true, 0
+			}
+		}
+	}
+	return false, 0
+}
+
 func postJSON(ctx context.Context, client *http.Client, endpoint string, payload any) error {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("notifications: encode payload: %w", err)
+		return &sendFailure{message: "notifications: encode payload failed", permanent: true}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("notifications: build request for %s: invalid endpoint", endpointHost(endpoint))
+		return &sendFailure{message: fmt.Sprintf("notifications: build request for %s: invalid endpoint", endpointHost(endpoint)), permanent: true}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	guarded := *client
 	guarded.CheckRedirect = checkRedirect
 	resp, err := guarded.Do(req)
 	if err != nil {
-		return fmt.Errorf("notifications: post to %s: %s", endpointHost(endpoint), transportCategory(err))
+		return &sendFailure{
+			message:   fmt.Sprintf("notifications: post to %s: %s", endpointHost(endpoint), transportCategory(err)),
+			permanent: errors.Is(err, errRedirectRefused),
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		if resp.StatusCode == http.StatusTooManyRequests {
 			if seconds, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {
-				return fmt.Errorf("notifications: %s rate limited (retry after %ds)", endpointHost(endpoint), seconds)
+				return &sendFailure{
+					message:    fmt.Sprintf("notifications: %s rate limited (retry after %ds)", endpointHost(endpoint), seconds),
+					retryAfter: time.Duration(seconds) * time.Second,
+				}
 			}
-			return fmt.Errorf("notifications: %s rate limited", endpointHost(endpoint))
+			return &sendFailure{message: fmt.Sprintf("notifications: %s rate limited", endpointHost(endpoint))}
 		}
-		return fmt.Errorf("notifications: %s answered status %d", endpointHost(endpoint), resp.StatusCode)
+		return &sendFailure{
+			message:   fmt.Sprintf("notifications: %s answered status %d", endpointHost(endpoint), resp.StatusCode),
+			permanent: resp.StatusCode < 500 && resp.StatusCode != http.StatusRequestTimeout,
+		}
 	}
 	return nil
 }

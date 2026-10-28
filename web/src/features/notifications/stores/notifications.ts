@@ -8,11 +8,14 @@ import {
   isFeatureDisabled,
   listChannels,
   listDeliveries,
+  listDeliveryFailures,
+  retryDelivery as retryDeliveryRequest,
   testChannel,
   updateChannel,
 } from "@/features/notifications/api/notifications";
 import type {
   ChannelInput,
+  DeliveryFailure,
   NotificationChannel,
   NotificationDelivery,
   TestResult,
@@ -107,6 +110,14 @@ export const useNotificationsStore = defineStore("notifications", () => {
     return listDeliveries(id);
   }
 
+  function failures(): Promise<DeliveryFailure[]> {
+    return listDeliveryFailures();
+  }
+
+  async function retryDelivery(id: string): Promise<void> {
+    await retryDeliveryRequest(id);
+  }
+
   function reset(): void {
     listReadToken += 1;
     clearList();
@@ -125,6 +136,8 @@ export const useNotificationsStore = defineStore("notifications", () => {
     remove,
     test,
     history,
+    failures,
+    retryDelivery,
     reset,
   };
 });

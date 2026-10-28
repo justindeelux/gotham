@@ -65,6 +65,10 @@ func (s *Server) projectAccess(next http.Handler) http.Handler {
 			hideResource(w)
 			return
 		}
+		if policy.ownerOnly {
+			hideResource(w)
+			return
+		}
 		if policy.listKey == "" && !policy.create && !s.canAccessResource(r.Context(), userID, policy.kind, chi.URLParam(r, "id")) {
 			hideResource(w)
 			return

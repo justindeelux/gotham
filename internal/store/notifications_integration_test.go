@@ -5,14 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -158,7 +162,7 @@ func TestNotificationChannelPersistence(t *testing.T) {
 			ID:           pgtype.UUID{Bytes: uuid.New(), Valid: true},
 			ChannelID:    created.ID,
 			EventType:    "deploy_failure",
-			Status:       "failure",
+			Status:       "delivered",
 			ErrorSummary: "connection failed",
 			CreatedAt:    pgtype.Timestamptz{Time: time.Now().UTC().Add(time.Duration(i) * time.Second), Valid: true},
 		}); err != nil {
@@ -359,7 +363,7 @@ func TestNotificationDeliveryRetentionUnderConcurrency(t *testing.T) {
 						ID:           pgtype.UUID{Bytes: uuid.New(), Valid: true},
 						ChannelID:    channelKey,
 						EventType:    "deploy_failure",
-						Status:       "failure",
+						Status:       "delivered",
 						ErrorSummary: "connection failed",
 						CreatedAt:    pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 					}); err != nil {
@@ -393,5 +397,481 @@ func TestNotificationDeliveryRetentionUnderConcurrency(t *testing.T) {
 	}
 	if len(history) != cap {
 		t.Errorf("history = %d rows, want exactly the %d cap", len(history), cap)
+	}
+}
+
+func TestReliableDeliveryQueueQueries(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+
+	channel, err := st.CreateNotificationChannel(ctx, sqlc.CreateNotificationChannelParams{
+		ID:         pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name:       "reliable",
+		Kind:       "discord",
+		Config:     "sealed",
+		Enabled:    true,
+		Events:     []string{"deploy_failure"},
+		ResourceID: pgtype.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	now := time.Now().UTC()
+	incidentID := uuid.New()
+	deliveryID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO incidents (id, identity_key, detector_key, scope_kind, severity, lifecycle, first_observed_at, last_observed_at, created_at, updated_at) VALUES ($1,$2,$3,'global','critical','firing',$4,$4,$4,$4)`, incidentID, "identity-"+incidentID.String(), "detector", now); err != nil {
+		t.Fatalf("seed incident: %v", err)
+	}
+	params := sqlc.CreatePendingDeliveriesParams{
+		Ids:         []pgtype.UUID{{Bytes: deliveryID, Valid: true}, {Bytes: uuid.New(), Valid: true}},
+		ChannelIds:  []pgtype.UUID{channel.ID, channel.ID},
+		DedupeKeys:  []string{"incident:one", "incident:one"},
+		Payloads:    []string{`{"Kind":"incident"}`, `{"Kind":"incident"}`},
+		IncidentIds: []pgtype.UUID{{Bytes: incidentID, Valid: true}, {Bytes: incidentID, Valid: true}},
+		EventType:   "incident_opened",
+		CreatedAt:   pgtype.Timestamptz{Time: now.Add(-time.Minute), Valid: true},
+		ExpiresAt:   pgtype.Timestamptz{Time: now.Add(23 * time.Hour), Valid: true},
+	}
+	inserted, err := st.CreatePendingDeliveries(ctx, params)
+	if err != nil {
+		t.Fatalf("CreatePendingDeliveries: %v", err)
+	}
+	if len(inserted) != 1 {
+		t.Fatalf("inserted = %d, want one row after the duplicate conflicts", len(inserted))
+	}
+
+	claimed, err := st.ClaimNotificationDeliveries(ctx, sqlc.ClaimNotificationDeliveriesParams{
+		Now:        pgtype.Timestamptz{Time: now, Valid: true},
+		LeaseUntil: pgtype.Timestamptz{Time: now.Add(2 * time.Minute), Valid: true},
+		Batch:      10,
+	})
+	if err != nil {
+		t.Fatalf("ClaimNotificationDeliveries: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].Status != "sending" || claimed[0].Attempts != 1 || !claimed[0].LeaseUntil.Valid {
+		t.Fatalf("claimed = %+v, want one leased sending row", claimed)
+	}
+
+	delivered := now
+	if err := st.FinishNotificationDelivery(ctx, sqlc.FinishNotificationDeliveryParams{
+		Status:        "delivered",
+		ErrorSummary:  "",
+		NextAttemptAt: pgtype.Timestamptz{Time: now, Valid: true},
+		CompletedAt:   pgtype.Timestamptz{Time: delivered, Valid: true},
+		UpdatedAt:     pgtype.Timestamptz{Time: now, Valid: true},
+		ID:            claimed[0].ID,
+	}); err != nil {
+		t.Fatalf("FinishNotificationDelivery: %v", err)
+	}
+	hasOpening, err := st.HasDeliveredIncidentOpening(ctx, sqlc.HasDeliveredIncidentOpeningParams{
+		IncidentID: pgtype.UUID{Bytes: incidentID, Valid: true},
+		ChannelID:  channel.ID,
+	})
+	if err != nil || !hasOpening {
+		t.Fatalf("HasDeliveredIncidentOpening = %v, %v; want true", hasOpening, err)
+	}
+
+	health, err := st.ListNotificationChannelHealth(ctx)
+	if err != nil || len(health) != 1 || !health[0].LastDeliveredAt.Valid {
+		t.Fatalf("health = %+v, %v; want a delivered channel", health, err)
+	}
+
+	// Inbox deduplication: the second insert with the same key returns no row.
+	notification := sqlc.CreateNotificationParams{
+		ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		EventKey:  "incident_opened",
+		Name:      "app",
+		CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		DedupeKey: "incident:one",
+	}
+	if _, err := st.CreateNotification(ctx, notification); err != nil {
+		t.Fatalf("CreateNotification: %v", err)
+	}
+	notification.ID = pgtype.UUID{Bytes: uuid.New(), Valid: true}
+	if _, err := st.CreateNotification(ctx, notification); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("duplicate CreateNotification err = %v, want pgx.ErrNoRows", err)
+	}
+
+	// Lease recovery after a simulated crash.
+	staleID := uuid.New()
+	if err := st.InTx(ctx, func(tx *store.Store) error {
+		_, err := tx.CreateNotificationDelivery(ctx, sqlc.CreateNotificationDeliveryParams{
+			ID:          pgtype.UUID{Bytes: staleID, Valid: true},
+			ChannelID:   channel.ID,
+			EventType:   "deploy_failure",
+			Status:      "sending",
+			CreatedAt:   pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+			Column10:    pgtype.Timestamptz{Time: now, Valid: true},
+			Column12:    pgtype.Timestamptz{Time: now.Add(24 * time.Hour), Valid: true},
+			DedupeKey:   "stale",
+			Payload:     `{}`,
+			IncidentID:  pgtype.UUID{},
+			CompletedAt: pgtype.Timestamptz{},
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("seed stale sending row: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx, `UPDATE notification_deliveries SET lease_until = $1 WHERE id = $2`, now.Add(-time.Minute), staleID); err != nil {
+		t.Fatalf("expire lease: %v", err)
+	}
+	if n, err := st.ReclaimNotificationDeliveries(ctx, sqlc.ReclaimNotificationDeliveriesParams{
+		Now:         pgtype.Timestamptz{Time: now, Valid: true},
+		MaxAttempts: 8,
+	}); err != nil || n < 1 {
+		t.Fatalf("ReclaimNotificationDeliveries = %d, %v; want the stale lease", n, err)
+	}
+
+	// Terminal failure listing and owner retry.
+	if err := st.FinishNotificationDelivery(ctx, sqlc.FinishNotificationDeliveryParams{
+		Status:        "terminal_failed",
+		ErrorSummary:  "answered status 500",
+		NextAttemptAt: pgtype.Timestamptz{Time: now, Valid: true},
+		CompletedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:     pgtype.Timestamptz{Time: now, Valid: true},
+		ID:            pgtype.UUID{Bytes: staleID, Valid: true},
+	}); err != nil {
+		t.Fatalf("finish terminal: %v", err)
+	}
+	failures, err := st.ListTerminalDeliveryFailures(ctx, 10)
+	if err != nil || len(failures) != 1 || failures[0].ChannelName != "reliable" {
+		t.Fatalf("failures = %+v, %v", failures, err)
+	}
+	if latest, err := st.ListLatestDeliveryFailures(ctx); err != nil || len(latest) != 1 {
+		t.Fatalf("latest failures = %+v, %v", latest, err)
+	}
+	if n, err := st.RetryNotificationDelivery(ctx, sqlc.RetryNotificationDeliveryParams{
+		Now:       pgtype.Timestamptz{Time: now, Valid: true},
+		ExpiresAt: pgtype.Timestamptz{Time: now.Add(24 * time.Hour), Valid: true},
+		ID:        pgtype.UUID{Bytes: staleID, Valid: true},
+	}); err != nil || n != 1 {
+		t.Fatalf("RetryNotificationDelivery = %d, %v", n, err)
+	}
+	retried, err := st.GetNotificationDelivery(ctx, pgtype.UUID{Bytes: staleID, Valid: true})
+	if err != nil || retried.Status != "pending" || retried.Attempts != 0 {
+		t.Fatalf("retried = %+v, %v", retried, err)
+	}
+	if n, err := st.RetryNotificationDelivery(ctx, sqlc.RetryNotificationDeliveryParams{
+		Now:       pgtype.Timestamptz{Time: now, Valid: true},
+		ExpiresAt: pgtype.Timestamptz{Time: now.Add(24 * time.Hour), Valid: true},
+		ID:        pgtype.UUID{Bytes: staleID, Valid: true},
+	}); err != nil || n != 0 {
+		t.Fatalf("duplicate retry = %d, %v; want no second transition", n, err)
+	}
+
+	// Cancellation and the bounded cleanups.
+	if err := st.CancelNotificationDelivery(ctx, sqlc.CancelNotificationDeliveryParams{
+		ErrorSummary: "channel disabled or unsubscribed",
+		CompletedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		ID:           pgtype.UUID{Bytes: staleID, Valid: true},
+	}); err != nil {
+		t.Fatalf("CancelNotificationDelivery: %v", err)
+	}
+	oldPending := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, next_attempt_at, expires_at) VALUES ($1,$2,'deploy_failure','pending',$3,$4,$3,$3)`, oldPending, channel.ID, now.Add(-25*time.Hour), "old-pending"); err != nil {
+		t.Fatalf("seed old pending row: %v", err)
+	}
+	if n, err := st.ExpireNotificationDeliveries(ctx, pgtype.Timestamptz{Time: now, Valid: true}); err != nil || n < 1 {
+		t.Fatalf("ExpireNotificationDeliveries = %d, %v; want the 24-hour-old pending row", n, err)
+	}
+	oldTerminal := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, completed_at, dedupe_key, next_attempt_at) VALUES ($1,$2,'deploy_failure','terminal_failed',$3,$3,$4,$3)`, oldTerminal, channel.ID, now.Add(-40*24*time.Hour), "old-terminal"); err != nil {
+		t.Fatalf("seed old terminal row: %v", err)
+	}
+	if n, err := st.CleanupNotificationDeliveries(ctx, pgtype.Timestamptz{Time: now.Add(-30 * 24 * time.Hour), Valid: true}); err != nil || n < 1 {
+		t.Fatalf("CleanupNotificationDeliveries = %d, %v; want terminal rows removed", n, err)
+	}
+}
+
+func seedTestChannel(t *testing.T, st *store.Store) sqlc.NotificationChannel {
+	t.Helper()
+	channel, err := st.CreateNotificationChannel(context.Background(), sqlc.CreateNotificationChannelParams{
+		ID:         pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Name:       "retention",
+		Kind:       "discord",
+		Config:     "sealed",
+		Enabled:    true,
+		Events:     []string{"deploy_failure"},
+		ResourceID: pgtype.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	return channel
+}
+
+func TestRetryResetsDeliveryExpiry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+	channel := seedTestChannel(t, st)
+	now := time.Now().UTC()
+	deliveryID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, next_attempt_at, expires_at, completed_at)
+		VALUES ($1,$2,'deploy_failure','terminal_failed','answered status 401',$3,$4,$3,$5,$3)`,
+		deliveryID, channel.ID, now.Add(-26*time.Hour), "old-terminal", now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("seed old terminal row: %v", err)
+	}
+
+	if n, err := st.RetryNotificationDelivery(ctx, sqlc.RetryNotificationDeliveryParams{
+		Now:       pgtype.Timestamptz{Time: now, Valid: true},
+		ExpiresAt: pgtype.Timestamptz{Time: now.Add(24 * time.Hour), Valid: true},
+		ID:        pgtype.UUID{Bytes: deliveryID, Valid: true},
+	}); err != nil || n != 1 {
+		t.Fatalf("RetryNotificationDelivery = %d, %v", n, err)
+	}
+	if n, err := st.ExpireNotificationDeliveries(ctx, pgtype.Timestamptz{Time: now.Add(time.Hour), Valid: true}); err != nil || n != 0 {
+		t.Fatalf("Expire after retry = %d, %v; want the retried row to stay eligible", n, err)
+	}
+	row, err := st.GetNotificationDelivery(ctx, pgtype.UUID{Bytes: deliveryID, Valid: true})
+	if err != nil || row.Status != "pending" || !row.ExpiresAt.Valid || !row.ExpiresAt.Time.After(now.Add(23*time.Hour)) {
+		t.Fatalf("retried row = %+v, %v; want a fresh 24-hour expiry", row, err)
+	}
+	if n, err := st.ExpireNotificationDeliveries(ctx, pgtype.Timestamptz{Time: now.Add(25 * time.Hour), Valid: true}); err != nil || n != 1 {
+		t.Fatalf("Expire after the retried 24 hours = %d, %v; want the row expired", n, err)
+	}
+}
+
+func TestPruneKeepsInFlightAndActiveIncidentOpenings(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+	channel := seedTestChannel(t, st)
+	now := time.Now().UTC()
+
+	incidentID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO incidents (id, identity_key, detector_key, scope_kind, severity, lifecycle, first_observed_at, last_observed_at, created_at, updated_at)
+		VALUES ($1,$2,'detector','global','critical','firing',$3,$3,$3,$3)`, incidentID, "identity-"+incidentID.String(), now); err != nil {
+		t.Fatalf("seed incident: %v", err)
+	}
+	openingID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, incident_id, next_attempt_at, expires_at, completed_at)
+		VALUES ($1,$2,'incident_opened','delivered',$3,'opening','{}',$4,$3,$3,$3)`, openingID, channel.ID, now.Add(-4*time.Hour), incidentID); err != nil {
+		t.Fatalf("seed opening: %v", err)
+	}
+	retryingID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, next_attempt_at, expires_at)
+		VALUES ($1,$2,'deploy_failure','retrying',$3,'retrying','{}',$3,$4)`, retryingID, channel.ID, now.Add(-3*time.Hour), now.Add(20*time.Hour)); err != nil {
+		t.Fatalf("seed retrying: %v", err)
+	}
+	for i := 0; i < 55; i++ {
+		id := uuid.New()
+		at := now.Add(-time.Duration(i) * time.Minute)
+		if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, next_attempt_at, expires_at, completed_at)
+			VALUES ($1,$2,'deploy_failure','delivered',$3,$4,'{}',$3,$3,$3)`, id, channel.ID, at, "delivered-"+id.String()); err != nil {
+			t.Fatalf("seed delivered row: %v", err)
+		}
+	}
+
+	if _, err := st.PruneNotificationDeliveries(ctx, sqlc.PruneNotificationDeliveriesParams{
+		ChannelID: channel.ID,
+		Limit:     50,
+	}); err != nil {
+		t.Fatalf("PruneNotificationDeliveries: %v", err)
+	}
+	if _, err := st.GetNotificationDelivery(ctx, pgtype.UUID{Bytes: retryingID, Valid: true}); err != nil {
+		t.Fatalf("retrying row was deleted by history prune: %v", err)
+	}
+	if _, err := st.GetNotificationDelivery(ctx, pgtype.UUID{Bytes: openingID, Valid: true}); err != nil {
+		t.Fatalf("active incident opening was deleted by history prune: %v", err)
+	}
+	hasOpening, err := st.HasDeliveredIncidentOpening(ctx, sqlc.HasDeliveredIncidentOpeningParams{
+		IncidentID: pgtype.UUID{Bytes: incidentID, Valid: true},
+		ChannelID:  channel.ID,
+	})
+	if err != nil || !hasOpening {
+		t.Fatalf("HasDeliveredIncidentOpening after prune = %v, %v; want the active opening kept", hasOpening, err)
+	}
+}
+
+func TestDeliveredHistoryIsBoundedAndPayloadCleared(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+	channel := seedTestChannel(t, st)
+	now := time.Now().UTC()
+
+	payloadID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, next_attempt_at, expires_at)
+		VALUES ($1,$2,'deploy_failure','pending',$3,'payload-check','{"Kind":"deploy"}',$3,$4)`, payloadID, channel.ID, now, now.Add(24*time.Hour)); err != nil {
+		t.Fatalf("seed payload row: %v", err)
+	}
+	if err := st.FinishNotificationDelivery(ctx, sqlc.FinishNotificationDeliveryParams{
+		Status:        "delivered",
+		ErrorSummary:  "",
+		NextAttemptAt: pgtype.Timestamptz{Time: now, Valid: true},
+		CompletedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:     pgtype.Timestamptz{Time: now, Valid: true},
+		ID:            pgtype.UUID{Bytes: payloadID, Valid: true},
+	}); err != nil {
+		t.Fatalf("FinishNotificationDelivery: %v", err)
+	}
+	cleared, err := st.GetNotificationDelivery(ctx, pgtype.UUID{Bytes: payloadID, Valid: true})
+	if err != nil || cleared.Payload != "" {
+		t.Fatalf("payload = %q, %v; want it cleared on completion", cleared.Payload, err)
+	}
+	terminalID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, next_attempt_at, expires_at)
+		VALUES ($1,$2,'deploy_failure','pending',$3,'terminal-payload','{"Kind":"deploy"}',$3,$4)`, terminalID, channel.ID, now, now.Add(24*time.Hour)); err != nil {
+		t.Fatalf("seed terminal payload row: %v", err)
+	}
+	if err := st.FinishNotificationDelivery(ctx, sqlc.FinishNotificationDeliveryParams{
+		Status:        "terminal_failed",
+		ErrorSummary:  "answered status 500",
+		NextAttemptAt: pgtype.Timestamptz{Time: now, Valid: true},
+		CompletedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:     pgtype.Timestamptz{Time: now, Valid: true},
+		ID:            pgtype.UUID{Bytes: terminalID, Valid: true},
+	}); err != nil {
+		t.Fatalf("finish terminal: %v", err)
+	}
+	retained, err := st.GetNotificationDelivery(ctx, pgtype.UUID{Bytes: terminalID, Valid: true})
+	if err != nil || retained.Payload == "" {
+		t.Fatalf("terminal payload = %q, %v; want it retained for owner Retry", retained.Payload, err)
+	}
+
+	for i := 0; i < 119; i++ {
+		id := uuid.New()
+		at := now.Add(-time.Duration(i) * time.Second)
+		if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, next_attempt_at, expires_at, completed_at)
+			VALUES ($1,$2,'deploy_failure','delivered',$3,$4,'{}',$3,$3,$3)`, id, channel.ID, at, "bound-"+id.String()); err != nil {
+			t.Fatalf("seed delivered row: %v", err)
+		}
+	}
+	if _, err := st.PruneNotificationDeliveries(ctx, sqlc.PruneNotificationDeliveriesParams{
+		ChannelID: channel.ID,
+		Limit:     50,
+	}); err != nil {
+		t.Fatalf("PruneNotificationDeliveries: %v", err)
+	}
+	var remaining int
+	if err := st.DB.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE channel_id=$1 AND status='delivered'`, channel.ID).Scan(&remaining); err != nil {
+		t.Fatalf("count delivered: %v", err)
+	}
+	if remaining > 50 {
+		t.Fatalf("delivered rows = %d, want the newest 50 bound", remaining)
+	}
+}
+
+func TestHasLaterIncidentTransitionQuery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchStore(t)
+	channel := seedTestChannel(t, st)
+	now := time.Now().UTC()
+	incidentID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO incidents (id, identity_key, detector_key, scope_kind, severity, lifecycle, first_observed_at, last_observed_at, created_at, updated_at)
+		VALUES ($1,$2,'detector','global','warning','resolved',$3,$3,$3,$3)`, incidentID, "identity-"+incidentID.String(), now); err != nil {
+		t.Fatalf("seed incident: %v", err)
+	}
+	openingID, recoveryID := uuid.New(), uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, incident_id, next_attempt_at, expires_at, completed_at)
+		VALUES ($1,$2,'incident_opened','terminal_failed',$3,'late-opening','{}',$4,$3,$3,$3)`, openingID, channel.ID, now.Add(-time.Hour), incidentID); err != nil {
+		t.Fatalf("seed opening: %v", err)
+	}
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, incident_id, next_attempt_at, expires_at, completed_at)
+		VALUES ($1,$2,'incident_recovered','delivered',$3,'recovery','{}',$4,$3,$3,$3)`, recoveryID, channel.ID, now.Add(-30*time.Minute), incidentID); err != nil {
+		t.Fatalf("seed recovery: %v", err)
+	}
+	ok, err := st.HasLaterIncidentTransition(ctx, sqlc.HasLaterIncidentTransitionParams{
+		IncidentID: pgtype.UUID{Bytes: incidentID, Valid: true},
+		ChannelID:  channel.ID,
+		Column3:    pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+		Column4:    pgtype.UUID{Bytes: openingID, Valid: true},
+	})
+	if err != nil || !ok {
+		t.Fatalf("HasLaterIncidentTransition = %v, %v; want the recovery found", ok, err)
+	}
+}
+
+func TestReliableDeliveryMigrationOnPopulatedSchema(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	base := testDSN()
+	if err := store.ProbeOnce(ctx, base); err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	parsed, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse DSN: %v", err)
+	}
+	name := fmt.Sprintf("mig76%d%d", time.Now().UnixNano(), os.Getpid())
+	admin, err := pgx.Connect(ctx, base)
+	if err != nil {
+		t.Fatalf("admin connect: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
+		_ = admin.Close(ctx)
+		t.Fatalf("create scratch database: %v", err)
+	}
+	_ = admin.Close(ctx)
+	parsed.Path = "/" + name
+	dsn := parsed.String()
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		conn, err := pgx.Connect(cleanupCtx, base)
+		if err == nil {
+			_, _ = conn.Exec(cleanupCtx, `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
+			_ = conn.Close(cleanupCtx)
+		}
+	})
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open sql: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, store.Migrations())
+	if err != nil {
+		t.Fatalf("init migrations: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 75); err != nil {
+		t.Fatalf("migrate to 00075: %v", err)
+	}
+	channelID := uuid.New()
+	if _, err := db.ExecContext(ctx, `INSERT INTO notification_channels (id, name, kind, config, enabled, events) VALUES ($1,'old','discord','sealed',true,'{deploy_failure}')`, channelID); err != nil {
+		t.Fatalf("seed old channel: %v", err)
+	}
+	oldSuccess, oldFailure := uuid.New(), uuid.New()
+	if _, err := db.ExecContext(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary) VALUES ($1,$2,'deploy_success','success',''),($3,$2,'deploy_failure','failure','answered status 500')`, oldSuccess, channelID, oldFailure); err != nil {
+		t.Fatalf("seed old deliveries: %v", err)
+	}
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatalf("apply 00076 on a populated database: %v", err)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id, status, expires_at, payload FROM notification_deliveries ORDER BY created_at`)
+	if err != nil {
+		t.Fatalf("read migrated deliveries: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	count := 0
+	for rows.Next() {
+		var id uuid.UUID
+		var status, payload string
+		var expires sql.NullTime
+		if err := rows.Scan(&id, &status, &expires, &payload); err != nil {
+			t.Fatalf("scan migrated row: %v", err)
+		}
+		count++
+		if id == oldSuccess && status != "delivered" {
+			t.Errorf("old success row status = %q, want delivered", status)
+		}
+		if id == oldFailure && status != "terminal_failed" {
+			t.Errorf("old failure row status = %q, want terminal_failed", status)
+		}
+		if !expires.Valid || payload != "" {
+			t.Errorf("migrated row %s expires=%v payload=%q, want backfilled expiry and empty payload", id, expires, payload)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate migrated rows: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("migrated rows = %d, want the two pre-existing rows", count)
 	}
 }

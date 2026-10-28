@@ -1,6 +1,8 @@
--- name: CreateNotification :exec
-INSERT INTO notifications (id, event_key, resource_type, resource_id, project_id, name, host, error, detail, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+-- name: CreateNotification :one
+INSERT INTO notifications (id, event_key, resource_type, resource_id, project_id, name, host, error, detail, created_at, dedupe_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (dedupe_key) WHERE dedupe_key <> '' DO NOTHING
+RETURNING id;
 
 -- name: ListNotificationRecipients :many
 SELECT u.id FROM users u

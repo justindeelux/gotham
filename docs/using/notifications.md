@@ -164,17 +164,54 @@ for runtime failures), the server metrics, or notification settings. Unknown
 detectors and resource types get a neutral label; raw evidence, errors, secrets
 and host paths are never shown for them.
 
-## Test send and delivery history
+## Test send, retries and delivery history
 
 **Send test** delivers a synthetic test message to that one channel and reports
-the result immediately. It is recorded in the history like a real attempt.
+the result immediately. It is recorded in the history like a real attempt and
+updates the channel health, but it creates no inbox entry.
 
 **Delivery history** shows the channel's newest 20 attempts, newest first: the
-event (or **Test message**), delivered or failed, the time, and a bounded error
-summary for failures. A channel keeps its last 50 attempts; older rows are
-trimmed automatically. Delivery never blocks a deploy or backup — it runs on a
-bounded background queue, and a failing channel does not stop the others.
+event (or **Test message**), the state, the time, the attempt count, the next
+retry time and a bounded error summary. States are **Pending**, **Sending**,
+**Retrying**, **Delivered**, **Failed** and **Cancelled**. Cancelled means the
+work became obsolete (the channel was disabled, deleted or unsubscribed, or an
+opening was never delivered); it is never shown as delivered. A channel keeps
+its last 50 non-terminal attempts. Terminal failures and cancellations are kept
+for 30 days so the evidence survives, and are then removed automatically.
+
+Delivery work is written to the database before a worker is woken, so a
+control-plane restart or a crash between persistence and send resumes eligible
+work instead of losing it. A worker claims a bounded batch, and an abandoned
+sending lease is recovered after a restart. Failures retry with exponential
+backoff and jitter: connection failures, timeouts, HTTP 429 and 5xx. A bounded
+`Retry-After` is respected. Each delivery stops after at most 8 attempts or 24
+hours. Invalid configuration, authentication failures and provider rejections
+are terminal until an operator acts. One failing channel does not block the
+others or a deploy/backup.
+
+Before sending, Gotham re-reads the channel's enabled state, subscription, scope
+and encrypted configuration. Disabled, deleted or unsubscribed work is
+cancelled. Per-incident/channel transitions keep their order, so an opening is
+not delivered after its recovery; if an opening expired or was cancelled before
+any successful send, the recovery for that channel is suppressed with the reason
+kept in history.
+
+Settings shows each channel's current health: **Delivering**, **Retrying**,
+**Cannot deliver** or **No attempts yet**. When the owner has terminal delivery
+failures, **Needs attention** lists them with the channel, event and bounded
+error, and offers **Retry**. A successful explicit retest or a later valid
+delivery clears the current health failure; the historical failure stays in the
+history. If the only configured destination is broken, the in-panel health and
+attention item are the fallback; Gotham never sends a failure through the same
+broken channel. Retry reuses the existing local identity and the current
+configuration, so it creates no duplicate inbox event.
+
+Delivery blocks nothing and runs on the control plane. Retries and local
+enqueue are guaranteed to be deduplicated locally, but not external
+exactly-once delivery: a provider may accept a message whose response is lost,
+and the retry can then deliver it a second time.
 
 For a scoped channel, creating, editing, deleting, enabling and testing needs
 write access to the project the resource belongs to. A member outside that project
-does not see the channel at all.
+does not see the channel. Channel health and terminal delivery errors are
+owner-only.

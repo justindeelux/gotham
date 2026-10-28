@@ -15,7 +15,10 @@ export type NotificationEventKey =
   | "update_available"
   | "redeploy_needed"
   | "runtime_failure"
-  | "runtime_recovery";
+  | "runtime_recovery"
+  | "incident_opened"
+  | "incident_severity_changed"
+  | "incident_recovered";
 
 export const defaultNotificationEvents: NotificationEventKey[] = [
   "deploy_success",
@@ -47,6 +50,16 @@ export interface ChannelConfig {
   to?: string[];
 }
 
+export type ChannelHealthStatus = "ok" | "failing" | "pending" | "unknown";
+
+export interface ChannelHealth {
+  status: ChannelHealthStatus;
+  last_delivered_at?: string;
+  last_failed_at?: string;
+  last_error?: string;
+  pending: number;
+}
+
 export interface NotificationChannel {
   id: string;
   name: string;
@@ -57,6 +70,7 @@ export interface NotificationChannel {
   resource_id?: string;
   config: ChannelConfig;
   secrets_configured: boolean;
+  health?: ChannelHealth;
   created_at: string;
   updated_at: string;
 }
@@ -124,7 +138,13 @@ export async function testChannel(id: string): Promise<TestResult> {
   return response.data.check;
 }
 
-export type DeliveryStatus = "success" | "failure";
+export type DeliveryStatus =
+  | "pending"
+  | "retrying"
+  | "sending"
+  | "delivered"
+  | "terminal_failed"
+  | "cancelled";
 
 export interface NotificationDelivery {
   id: string;
@@ -133,10 +153,30 @@ export interface NotificationDelivery {
   status: DeliveryStatus;
   error_summary?: string;
   created_at: string;
+  attempts: number;
+  next_retry_at?: string;
+  completed_at?: string;
+  retryable: boolean;
+}
+
+export interface DeliveryFailure {
+  id: string;
+  channel_id: string;
+  channel_name: string;
+  channel_kind: NotificationKind;
+  event_type: string;
+  error_summary: string;
+  attempts: number;
+  failed_at: string;
+  retryable: boolean;
 }
 
 interface DeliveryListEnvelope {
   deliveries: NotificationDelivery[];
+}
+
+interface FailureListEnvelope {
+  failures: DeliveryFailure[];
 }
 
 export async function listDeliveries(
@@ -146,6 +186,17 @@ export async function listDeliveries(
     `/notification-channels/${id}/deliveries`,
   );
   return response.data.deliveries ?? [];
+}
+
+export async function listDeliveryFailures(): Promise<DeliveryFailure[]> {
+  const response = await http.get<FailureListEnvelope>(
+    "/notification-channels/failures",
+  );
+  return response.data.failures ?? [];
+}
+
+export async function retryDelivery(id: string): Promise<void> {
+  await http.post(`/notification-channels/deliveries/${id}/retry`, {});
 }
 
 export type TextParams = Record<string, string | number>;
@@ -220,6 +271,15 @@ export function eventLabel(event: NotificationEventKey): string {
       return channelText("notifications.events.runtime_failure", "Runtime failure");
     case "runtime_recovery":
       return channelText("notifications.events.runtime_recovery", "Runtime recovered");
+    case "incident_opened":
+      return channelText("notifications.events.incident_opened", "Incident opened");
+    case "incident_severity_changed":
+      return channelText(
+        "notifications.events.incident_severity_changed",
+        "Incident severity changed",
+      );
+    case "incident_recovered":
+      return channelText("notifications.events.incident_recovered", "Incident recovered");
     default:
       return event;
   }
@@ -229,16 +289,32 @@ export function deliveryEventLabel(eventType: string): string {
   if (eventType === "test") {
     return channelText("notifications.history.testEvent", "Test message");
   }
-  if ((allNotificationEvents as string[]).includes(eventType)) {
+  if (
+    (allNotificationEvents as string[]).includes(eventType) ||
+    eventType.startsWith("incident_")
+  ) {
     return eventLabel(eventType as NotificationEventKey);
   }
   return eventType;
 }
 
 export function deliveryStatusLabel(status: DeliveryStatus): string {
-  return status === "success"
-    ? channelText("notifications.history.delivered", "Delivered")
-    : channelText("notifications.history.failed", "Failed");
+  switch (status) {
+    case "delivered":
+      return channelText("notifications.history.delivered", "Delivered");
+    case "terminal_failed":
+      return channelText("notifications.history.failed", "Failed");
+    case "pending":
+      return channelText("notifications.history.pending", "Pending");
+    case "retrying":
+      return channelText("notifications.history.retrying", "Retrying");
+    case "sending":
+      return channelText("notifications.history.sending", "Sending");
+    case "cancelled":
+      return channelText("notifications.history.cancelled", "Cancelled");
+    default:
+      return status;
+  }
 }
 
 export function isFeatureDisabled(error: unknown): boolean {

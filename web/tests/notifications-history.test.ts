@@ -59,7 +59,7 @@ function attempt(overrides: Partial<NotificationDelivery>): NotificationDelivery
     id: "d1",
     channel_id: "ch1",
     event_type: "deploy_failure",
-    status: "failure",
+    status: "terminal_failed",
     error_summary: "connection failed",
     created_at: "2026-09-29T12:00:00Z",
     ...overrides,
@@ -76,15 +76,18 @@ function deferred<T>() {
 
 describe("JUS-195 delivery labels", () => {
   it("localizes status and event labels, keeping wire keys raw", () => {
-    expect(deliveryStatusLabel("success")).toBe("Delivered");
-    expect(deliveryStatusLabel("failure")).toBe("Failed");
+    expect(deliveryStatusLabel("delivered")).toBe("Delivered");
+    expect(deliveryStatusLabel("terminal_failed")).toBe("Failed");
+    expect(deliveryStatusLabel("retrying")).toBe("Retrying");
+    expect(deliveryStatusLabel("cancelled")).toBe("Cancelled");
     expect(deliveryEventLabel("deploy_failure")).toBe("Deploy failed");
     expect(deliveryEventLabel("test")).toBe("Test message");
     expect(deliveryEventLabel("deploy_exploded")).toBe("deploy_exploded");
 
     setLocale("vi", null);
-    expect(deliveryStatusLabel("success")).toBe("Đã gửi");
-    expect(deliveryStatusLabel("failure")).toBe("Thất bại");
+    expect(deliveryStatusLabel("delivered")).toBe("Đã gửi");
+    expect(deliveryStatusLabel("terminal_failed")).toBe("Thất bại");
+    expect(deliveryStatusLabel("retrying")).toBe("Đang thử lại");
     expect(deliveryEventLabel("deploy_failure")).toBe("Triển khai thất bại");
     expect(deliveryEventLabel("test")).toBe("Tin nhắn thử");
   });
@@ -123,8 +126,8 @@ describe("JUS-195 channel history panel", () => {
 
   it("loads history on open and renders each attempt", async () => {
     vi.mocked(listDeliveries).mockResolvedValueOnce([
-      attempt({ id: "d1", status: "failure", error_summary: "connection failed" }),
-      attempt({ id: "d2", status: "success", event_type: "test", error_summary: "" }),
+      attempt({ id: "d1", status: "terminal_failed", error_summary: "connection failed" }),
+      attempt({ id: "d2", status: "delivered", event_type: "test", error_summary: "" }),
     ]);
     const wrapper = await cardHarness();
 
@@ -178,7 +181,7 @@ describe("JUS-195 channel history panel", () => {
     expect(vi.mocked(listDeliveries)).toHaveBeenCalledTimes(2);
 
     second.resolve([
-      attempt({ id: "new", status: "success", event_type: "test", error_summary: "" }),
+      attempt({ id: "new", status: "delivered", event_type: "test", error_summary: "" }),
     ]);
     await flushPromises();
     expect(wrapper.findAll("[data-test-channel-history-row]")).toHaveLength(1);

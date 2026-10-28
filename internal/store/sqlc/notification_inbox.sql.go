@@ -35,9 +35,11 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context, id pgtype.UUID) 
 	return count, err
 }
 
-const createNotification = `-- name: CreateNotification :exec
-INSERT INTO notifications (id, event_key, resource_type, resource_id, project_id, name, host, error, detail, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+const createNotification = `-- name: CreateNotification :one
+INSERT INTO notifications (id, event_key, resource_type, resource_id, project_id, name, host, error, detail, created_at, dedupe_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (dedupe_key) WHERE dedupe_key <> '' DO NOTHING
+RETURNING id
 `
 
 type CreateNotificationParams struct {
@@ -51,10 +53,11 @@ type CreateNotificationParams struct {
 	Error        string             `json:"error"`
 	Detail       string             `json:"detail"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	DedupeKey    string             `json:"dedupe_key"`
 }
 
-func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotificationParams) error {
-	_, err := q.db.Exec(ctx, createNotification,
+func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotificationParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, createNotification,
 		arg.ID,
 		arg.EventKey,
 		arg.ResourceType,
@@ -65,8 +68,11 @@ func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotification
 		arg.Error,
 		arg.Detail,
 		arg.CreatedAt,
+		arg.DedupeKey,
 	)
-	return err
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const listNotificationRecipients = `-- name: ListNotificationRecipients :many
@@ -100,7 +106,7 @@ func (q *Queries) ListNotificationRecipients(ctx context.Context, projectID pgty
 }
 
 const listVisibleNotifications = `-- name: ListVisibleNotifications :many
-SELECT n.id, n.event_key, n.resource_type, n.resource_id, n.project_id, n.name, n.host, n.error, n.created_at, n.detail FROM notifications n
+SELECT n.id, n.event_key, n.resource_type, n.resource_id, n.project_id, n.name, n.host, n.error, n.created_at, n.detail, n.dedupe_key FROM notifications n
 WHERE EXISTS (
     SELECT 1 FROM users u
     WHERE u.id = $1
@@ -146,6 +152,7 @@ func (q *Queries) ListVisibleNotifications(ctx context.Context, arg ListVisibleN
 			&i.Error,
 			&i.CreatedAt,
 			&i.Detail,
+			&i.DedupeKey,
 		); err != nil {
 			return nil, err
 		}

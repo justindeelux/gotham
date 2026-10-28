@@ -2,9 +2,10 @@ package server
 
 // Each member route is reviewed explicitly; unknown routes remain owner-only.
 type projectPolicy struct {
-	kind    string
-	listKey string
-	create  bool
+	kind      string
+	listKey   string
+	create    bool
+	ownerOnly bool
 }
 
 var projectPolicies = map[string]projectPolicy{
@@ -89,6 +90,8 @@ var projectPolicies = map[string]projectPolicy{
 	"DELETE /api/v1/notification-channels/{id}":                         {kind: "channel"},
 	"POST /api/v1/notification-channels/{id}/test":                      {kind: "channel"},
 	"GET /api/v1/notification-channels/{id}/deliveries":                 {kind: "channel"},
+	"GET /api/v1/notification-channels/failures":                        {ownerOnly: true},
+	"POST /api/v1/notification-channels/deliveries/{id}/retry":          {ownerOnly: true},
 	"POST /api/v1/applications/{id}/webhooks":                           {kind: "application"},
 	"DELETE /api/v1/applications/{id}/webhooks":                         {kind: "application"},
 	"GET /api/v1/applications/{id}/previews":                            {kind: "application"},

@@ -358,7 +358,7 @@ func TestNotificationInboxLimitsAndSeenMarker(t *testing.T) {
 	handler := newRouteServer(userID, service)
 	base := time.Date(2026, 9, 29, 11, 0, 0, 0, time.UTC)
 	for i := 0; i < 40; i++ {
-		if err := repo.CreateNotification(context.Background(), Notification{
+		if _, err := repo.CreateNotification(context.Background(), Notification{
 			EventKey:  EventDeploySuccess,
 			Name:      fmt.Sprintf("app-%d", i),
 			CreatedAt: base.Add(time.Duration(i) * time.Minute),
@@ -424,6 +424,43 @@ func TestNotificationInboxLimitsAndSeenMarker(t *testing.T) {
 		rec = doRequest(handler, http.MethodPost, "/v1/notifications/seen", body)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("seen %s = %d, want 400", body, rec.Code)
+		}
+	}
+}
+
+func TestDeliveryFailureRoutesAreOwnerOnly(t *testing.T) {
+	userID := uuid.New()
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: newFakeNotifier()})
+
+	deliveryID := uuid.New()
+	if err := repo.PersistDeliveries(context.Background(), []Delivery{{
+		ID: deliveryID, ChannelID: channel.ID, EventType: string(EventDeployFailure),
+		Status: DeliveryFailed, ErrorSummary: "answered status 500", Payload: sampleEvent().encode(),
+	}}); err != nil {
+		t.Fatalf("seed terminal delivery: %v", err)
+	}
+	handler := newRouteServer(userID, service)
+
+	rec := doRequest(handler, http.MethodGet, "/v1/notification-channels/failures", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "answered status 500") {
+		t.Fatalf("owner failures = %d (body %s), want the retained failure", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(handler, http.MethodPost, "/v1/notification-channels/deliveries/"+deliveryID.String()+"/retry", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("owner retry = %d (body %s), want 204", rec.Code, rec.Body.String())
+	}
+
+	repo.nonOwners[userID] = true
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/v1/notification-channels/failures"},
+		{http.MethodPost, "/v1/notification-channels/deliveries/" + deliveryID.String() + "/retry"},
+	} {
+		rec = doRequest(handler, tc.method, tc.path, "")
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("member %s %s = %d, want 403", tc.method, tc.path, rec.Code)
 		}
 	}
 }

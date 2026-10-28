@@ -873,15 +873,18 @@ func TestDispatchRecordsDeliveryHistory(t *testing.T) {
 	service.Dispatch(sampleEvent())
 
 	waitFor(t, "both history rows", func() bool {
-		return len(repo.deliveriesFor(healthyChannel.ID)) == 1 && len(repo.deliveriesFor(brokenChannel.ID)) == 1
+		healthyRows := repo.deliveriesFor(healthyChannel.ID)
+		brokenRows := repo.deliveriesFor(brokenChannel.ID)
+		return len(healthyRows) == 1 && healthyRows[0].Status == DeliverySucceeded &&
+			len(brokenRows) == 1 && brokenRows[0].Status == DeliveryRetrying
 	})
 	success := repo.deliveriesFor(healthyChannel.ID)[0]
 	if success.Status != DeliverySucceeded || success.EventType != string(EventDeployFailure) || success.ErrorSummary != "" {
 		t.Errorf("success row = %+v, want a successful deploy_failure with no summary", success)
 	}
 	failed := repo.deliveriesFor(brokenChannel.ID)[0]
-	if failed.Status != DeliveryFailed || failed.EventType != string(EventDeployFailure) || failed.ErrorSummary == "" {
-		t.Errorf("failure row = %+v, want a failed deploy_failure with a summary", failed)
+	if failed.Status != DeliveryRetrying || failed.EventType != string(EventDeployFailure) || failed.ErrorSummary == "" {
+		t.Errorf("failure row = %+v, want a retrying deploy_failure with a summary", failed)
 	}
 }
 
@@ -983,7 +986,7 @@ func TestInboxRowIsWrittenWithoutChannels(t *testing.T) {
 	}
 }
 
-func TestFailedInboxInsertStillDelivers(t *testing.T) {
+func TestFailedInboxInsertRollsBackDeliveries(t *testing.T) {
 	repo := newFakeRepository()
 	channel := repo.seed(sampleChannel(t))
 	repo.createNotificationErr = errors.New("inbox insert failed")
@@ -993,11 +996,17 @@ func TestFailedInboxInsertStillDelivers(t *testing.T) {
 
 	service.Dispatch(sampleEvent())
 
-	waitFor(t, "the channel delivery", func() bool {
-		return len(notifier.delivered()) == 1
+	waitFor(t, "the failed dispatch to settle", func() bool {
+		return service.baseCtx.Err() == nil
 	})
 	if rows := repo.notificationsSnapshot(); len(rows) != 0 {
-		t.Fatalf("stored %d rows despite the failing insert", len(rows))
+		t.Fatalf("stored %d inbox rows despite the failing insert", len(rows))
+	}
+	if rows := repo.deliveriesFor(channel.ID); len(rows) != 0 {
+		t.Fatalf("stored %d deliveries despite the failed inbox transaction", len(rows))
+	}
+	if len(notifier.delivered()) != 0 {
+		t.Fatal("a failed enqueue still sent through the channel")
 	}
 }
 
@@ -1012,5 +1021,248 @@ func TestTestSendWritesNoInboxRow(t *testing.T) {
 	}
 	if rows := repo.notificationsSnapshot(); len(rows) != 0 {
 		t.Fatalf("test send stored %d inbox rows, want none", len(rows))
+	}
+}
+
+func persistPending(t *testing.T, repo *fakeRepository, event Event, channel Channel) Delivery {
+	t.Helper()
+	at := event.At
+	if at.IsZero() {
+		at = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	}
+	delivery := Delivery{
+		ID:            uuid.New(),
+		ChannelID:     channel.ID,
+		EventType:     string(event.Key()),
+		Status:        DeliveryPending,
+		CreatedAt:     at,
+		DedupeKey:     event.Identity(),
+		Payload:       event.encode(),
+		IncidentID:    event.IncidentID,
+		NextAttemptAt: at,
+		ExpiresAt:     at.Add(maxDeliveryAge),
+	}
+	if err := repo.PersistDeliveries(context.Background(), []Delivery{delivery}); err != nil {
+		t.Fatalf("persist delivery: %v", err)
+	}
+	return delivery
+}
+
+func TestTransientFailuresRetryThenTerminateBounded(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	service.retryBase = time.Millisecond
+	notifier := newFakeNotifier()
+	notifier.err = &sendFailure{message: "answered status 503"}
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
+
+	persistPending(t, repo, sampleEvent(), channel)
+	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < maxDeliveryAttempts+2; i++ {
+		service.processDeliveries()
+		rows := repo.deliveriesFor(channel.ID)
+		if len(rows) == 1 && rows[0].Status == DeliveryFailed {
+			if rows[0].Attempts != maxDeliveryAttempts {
+				t.Fatalf("attempts = %d, want %d", rows[0].Attempts, maxDeliveryAttempts)
+			}
+			return
+		}
+		// Advance the scheduled retry into the fixed test clock.
+		for j := range repo.deliveries[channel.ID] {
+			repo.deliveries[channel.ID][j].NextAttemptAt = at
+		}
+	}
+	t.Fatalf("delivery did not terminate: %+v", repo.deliveriesFor(channel.ID))
+}
+
+func TestPermanentProviderFailureIsTerminalImmediately(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	notifier := newFakeNotifier()
+	notifier.err = &sendFailure{message: "answered status 401", permanent: true}
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
+
+	persistPending(t, repo, sampleEvent(), channel)
+	service.processDeliveries()
+	rows := repo.deliveriesFor(channel.ID)
+	if len(rows) != 1 || rows[0].Status != DeliveryFailed || rows[0].Attempts != 1 {
+		t.Fatalf("rows = %+v, want one terminal attempt", rows)
+	}
+	if rows[0].CompletedAt == nil {
+		t.Error("completed_at is not set on a terminal failure")
+	}
+}
+
+func TestRetryScheduleHonoursBoundedRetryAfter(t *testing.T) {
+	service := newTestService(t, newFakeRepository())
+	if got := service.retryDelay(3, 2*time.Hour); got != maxRetryDelay {
+		t.Errorf("retry delay = %s, want the %s cap", got, maxRetryDelay)
+	}
+	if got := service.retryDelay(3, 10*time.Second); got != 10*time.Second {
+		t.Errorf("retry delay = %s, want the bounded Retry-After", got)
+	}
+	for attempts := 1; attempts <= maxDeliveryAttempts; attempts++ {
+		got := service.retryDelay(attempts, 0)
+		if got <= 0 || got > maxRetryDelay+maxRetryDelay/5 {
+			t.Fatalf("attempt %d delay = %s, want jittered exponential backoff", attempts, got)
+		}
+	}
+}
+
+func TestDisabledChannelCancelsPendingDelivery(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	notifier := newFakeNotifier()
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
+
+	dispatched := sampleEvent()
+	persistPending(t, repo, dispatched, channel)
+	channel.Enabled = false
+	repo.seed(channel)
+
+	service.processDeliveries()
+	if len(notifier.delivered()) != 0 {
+		t.Fatal("a disabled channel was sent to")
+	}
+	rows := repo.deliveriesFor(channel.ID)
+	if len(rows) != 1 || rows[0].Status != DeliveryCancelled || !strings.Contains(rows[0].ErrorSummary, "disabled") {
+		t.Fatalf("rows = %+v, want a cancelled delivery with the reason", rows)
+	}
+}
+
+func TestCancelledOpeningSuppressesStandaloneRecovery(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	notifier := newFakeNotifier()
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
+
+	incidentID := uuid.New()
+	opening := Event{Kind: EventIncident, Action: "opened", IncidentID: incidentID, Severity: "critical", Name: "app", At: time.Date(2026, 9, 29, 11, 58, 0, 0, time.UTC)}
+	recovery := Event{Kind: EventIncident, Action: "recovered", IncidentID: incidentID, Name: "app", At: time.Date(2026, 9, 29, 11, 59, 0, 0, time.UTC)}
+	openingRow := persistPending(t, repo, opening, channel)
+	if err := repo.CancelDelivery(context.Background(), openingRow.ID, "channel disabled or unsubscribed", time.Now().UTC()); err != nil {
+		t.Fatalf("cancel opening: %v", err)
+	}
+	persistPending(t, repo, recovery, channel)
+
+	service.processDeliveries()
+	if len(notifier.delivered()) != 0 {
+		t.Fatal("a recovery was sent although no opening reached the provider")
+	}
+	rows := repo.deliveriesFor(channel.ID)
+	var recoveryRow *Delivery
+	for i := range rows {
+		if rows[i].EventType == string(EventIncidentRecovered) {
+			recoveryRow = &rows[i]
+		}
+	}
+	if recoveryRow == nil || recoveryRow.Status != DeliveryCancelled || !strings.Contains(recoveryRow.ErrorSummary, "opening") {
+		t.Fatalf("recovery row = %+v, want a cancellation explaining the missing opening", recoveryRow)
+	}
+}
+
+func TestDuplicateProducerDoesNotDuplicateInboxOrDelivery(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: newFakeNotifier()})
+
+	event := sampleEvent()
+	if err := service.Enqueue(event); err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	if err := service.Enqueue(event); err != nil {
+		t.Fatalf("duplicate enqueue: %v", err)
+	}
+	if got := len(repo.notificationsSnapshot()); got != 1 {
+		t.Errorf("inbox rows = %d, want one", got)
+	}
+	waitFor(t, "the delivery", func() bool {
+		rows := repo.deliveriesFor(channel.ID)
+		return len(rows) == 1 && rows[0].Status == DeliverySucceeded
+	})
+	if rows := repo.deliveriesFor(channel.ID); len(rows) != 1 {
+		t.Errorf("delivery rows = %d, want one", len(rows))
+	}
+}
+
+func TestIncidentTransitionOrderBlocksLaterRecoveryClaim(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	incidentID := uuid.New()
+	opening := Event{Kind: EventIncident, Action: "opened", IncidentID: incidentID, Severity: "critical", Name: "app", At: time.Date(2026, 9, 29, 11, 58, 0, 0, time.UTC)}
+	recovery := Event{Kind: EventIncident, Action: "recovered", IncidentID: incidentID, Name: "app", At: time.Date(2026, 9, 29, 11, 59, 0, 0, time.UTC)}
+	openingRow := persistPending(t, repo, opening, channel)
+	persistPending(t, repo, recovery, channel)
+	repo.deliveriesFor(channel.ID)
+	// Make the opening ineligible for this claim pass while it is still open work.
+	for i := range repo.deliveries[channel.ID] {
+		if repo.deliveries[channel.ID][i].ID == openingRow.ID {
+			repo.deliveries[channel.ID][i].NextAttemptAt = time.Date(2026, 9, 29, 13, 0, 0, 0, time.UTC)
+		}
+	}
+
+	at := time.Date(2026, 9, 29, 12, 5, 0, 0, time.UTC)
+	claimed, err := repo.ClaimDeliveries(context.Background(), at, at.Add(time.Minute), 10)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	for _, delivery := range claimed {
+		if delivery.EventType == string(EventIncidentRecovered) {
+			t.Fatal("the recovery was claimed before its opening finished")
+		}
+	}
+}
+
+func TestDeliveryHealthAndFailuresAreOwnerOnly(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	userID := uuid.New()
+	if _, err := service.ListDeliveryFailures(scopedCtx(), userID); err != nil {
+		t.Fatalf("owner ListDeliveryFailures: %v", err)
+	}
+	repo.nonOwners[userID] = true
+	if _, err := service.ListDeliveryFailures(scopedCtx(), userID); !errors.Is(err, ErrForbidden) {
+		t.Errorf("member ListDeliveryFailures err = %v, want ErrForbidden", err)
+	}
+	views, err := service.ListChannels(scopedCtx(), userID)
+	if err != nil || len(views) != 1 {
+		t.Fatalf("member ListChannels = %+v, %v", views, err)
+	}
+	if views[0].Health != nil {
+		t.Errorf("health = %+v, want it hidden from a member", views[0].Health)
+	}
+	delete(repo.nonOwners, userID)
+	views, err = service.ListChannels(scopedCtx(), userID)
+	if err != nil || views[0].Health == nil {
+		t.Fatalf("owner ListChannels health = %+v, %v", views[0].Health, err)
+	}
+	_ = channel
+}
+
+func TestRetryRejectsDeliveryWithoutRetainedPayload(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	userID := uuid.New()
+	delivery := Delivery{
+		ID: uuid.New(), ChannelID: channel.ID, EventType: string(EventDeployFailure),
+		Status: DeliveryFailed, ErrorSummary: "legacy row", CreatedAt: time.Now().UTC(),
+	}
+	if err := repo.PersistDeliveries(context.Background(), []Delivery{delivery}); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	err := service.RetryDelivery(scopedCtx(), userID, delivery.ID)
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "no retained payload") {
+		t.Fatalf("RetryDelivery without payload = %v, want a clear validation error", err)
+	}
+	rows := repo.deliveriesFor(channel.ID)
+	if len(rows) != 1 || rows[0].Status != DeliveryFailed {
+		t.Fatalf("rows = %+v, want the terminal row untouched", rows)
 	}
 }

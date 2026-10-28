@@ -24,6 +24,7 @@ import {
   severityTagType,
 } from "@/features/incidents/utils/incidents";
 import { groupIncidents } from "@/features/incidents/utils/incidents";
+import DeliveryFailuresList from "@/features/notifications/components/DeliveryFailuresList.vue";
 import { useNotificationInboxStore } from "@/features/notifications/stores/inbox";
 import { useServersStore } from "@/features/servers";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
@@ -278,6 +279,8 @@ onUnmounted(() => {
         </template>
       </NEmpty>
     </NCard>
+
+    <DeliveryFailuresList v-if="authStore.isOwner" />
 
     <div class="resolved">
       <NButton

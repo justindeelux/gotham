@@ -72,6 +72,8 @@ type fakeRepository struct {
 	listForEventCalls int
 	lastResourceType  string
 	lastResourceID    uuid.UUID
+
+	nonOwners map[uuid.UUID]bool
 }
 
 var _ Repository = (*fakeRepository)(nil)
@@ -83,6 +85,7 @@ func newFakeRepository() *fakeRepository {
 		resourceProjects:       make(map[uuid.UUID]uuid.UUID),
 		seenAt:                 make(map[uuid.UUID]time.Time),
 		notificationRecipients: make(map[uuid.UUID][]uuid.UUID),
+		nonOwners:              make(map[uuid.UUID]bool),
 	}
 }
 
@@ -172,17 +175,385 @@ func (r *fakeRepository) ResourceProject(_ context.Context, _ string, resourceID
 	return uuid.Nil, errors.New("resource has no project")
 }
 
-func (r *fakeRepository) CreateNotification(_ context.Context, notification Notification) error {
+func (r *fakeRepository) CreateNotification(_ context.Context, notification Notification) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.createNotificationErr != nil {
-		return r.createNotificationErr
+		return false, r.createNotificationErr
+	}
+	if notification.DedupeKey != "" {
+		for _, existing := range r.notifications {
+			if existing.DedupeKey == notification.DedupeKey {
+				return false, nil
+			}
+		}
 	}
 	if notification.ID == uuid.Nil {
 		notification.ID = uuid.New()
 	}
 	r.notifications = append(r.notifications, notification)
+	return true, nil
+}
+
+func (r *fakeRepository) IsOwner(_ context.Context, userID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.nonOwners[userID], nil
+}
+
+func (r *fakeRepository) PersistDeliveries(_ context.Context, deliveries []Delivery) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createDeliveryErr != nil {
+		return r.createDeliveryErr
+	}
+	for _, delivery := range deliveries {
+		if delivery.ID == uuid.Nil {
+			delivery.ID = uuid.New()
+		}
+		if delivery.Status == "" {
+			delivery.Status = DeliveryPending
+		}
+		if delivery.ExpiresAt.IsZero() {
+			delivery.ExpiresAt = delivery.CreatedAt.Add(maxDeliveryAge)
+		}
+		duplicate := false
+		for _, existing := range r.deliveries[delivery.ChannelID] {
+			if delivery.DedupeKey != "" && existing.DedupeKey == delivery.DedupeKey {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		history := append(r.deliveries[delivery.ChannelID], delivery)
+		sortDeliveries(history)
+		r.deliveries[delivery.ChannelID] = history
+	}
 	return nil
+}
+
+func (r *fakeRepository) PersistEvent(ctx context.Context, notification Notification, deliveries []Delivery) (bool, error) {
+	inserted, err := r.CreateNotification(ctx, notification)
+	if err != nil {
+		return false, err
+	}
+	if err := r.PersistDeliveries(ctx, deliveries); err != nil {
+		return false, err
+	}
+	return inserted, nil
+}
+
+func (r *fakeRepository) ClaimDeliveries(_ context.Context, now, leaseUntil time.Time, limit int) ([]Delivery, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var claimed []Delivery
+	for _, channelID := range r.order {
+		history := r.deliveries[channelID]
+		for i := range history {
+			delivery := &history[i]
+			if delivery.Status != DeliveryPending && delivery.Status != DeliveryRetrying {
+				continue
+			}
+			if delivery.NextAttemptAt.After(now) {
+				continue
+			}
+			if delivery.IncidentID != uuid.Nil && r.hasEarlierOpen(history, i) {
+				continue
+			}
+			if len(claimed) >= limit {
+				r.deliveries[channelID] = history
+				return claimed, nil
+			}
+			delivery.Status = DeliverySending
+			delivery.Attempts++
+			lease := leaseUntil
+			delivery.LeaseUntil = &lease
+			delivery.UpdatedAt = now
+			claimed = append(claimed, *delivery)
+		}
+		r.deliveries[channelID] = history
+	}
+	return claimed, nil
+}
+
+func (r *fakeRepository) hasEarlierOpen(history []Delivery, index int) bool {
+	delivery := history[index]
+	for _, earlier := range history {
+		if earlier.ID == delivery.ID || earlier.IncidentID != delivery.IncidentID || earlier.ChannelID != delivery.ChannelID {
+			continue
+		}
+		if earlier.CreatedAt.After(delivery.CreatedAt) ||
+			(earlier.CreatedAt.Equal(delivery.CreatedAt) && earlier.ID.String() > delivery.ID.String()) {
+			continue
+		}
+		if earlier.Status == DeliveryPending || earlier.Status == DeliveryRetrying || earlier.Status == DeliverySending {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *fakeRepository) ReclaimDeliveries(_ context.Context, now time.Time, maxAttempts int) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var count int64
+	for _, channelID := range r.order {
+		history := r.deliveries[channelID]
+		for i := range history {
+			delivery := &history[i]
+			if delivery.Status != DeliverySending || delivery.LeaseUntil == nil || !delivery.LeaseUntil.Before(now) {
+				continue
+			}
+			delivery.LeaseUntil = nil
+			delivery.NextAttemptAt = now
+			delivery.UpdatedAt = now
+			if delivery.Attempts >= maxAttempts {
+				delivery.Status = DeliveryFailed
+				delivery.CompletedAt = &now
+				delivery.ErrorSummary = "delivery lease expired"
+			} else {
+				delivery.Status = DeliveryRetrying
+			}
+			count++
+		}
+		r.deliveries[channelID] = history
+	}
+	return count, nil
+}
+
+func (r *fakeRepository) ExpireDeliveries(_ context.Context, now time.Time) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var count int64
+	for _, channelID := range r.order {
+		history := r.deliveries[channelID]
+		for i := range history {
+			delivery := &history[i]
+			if delivery.Status != DeliveryPending && delivery.Status != DeliveryRetrying {
+				continue
+			}
+			if delivery.ExpiresAt.IsZero() || now.Before(delivery.ExpiresAt) {
+				continue
+			}
+			delivery.Status = DeliveryFailed
+			delivery.ErrorSummary = "delivery expired after 24 hours"
+			delivery.CompletedAt = &now
+			delivery.UpdatedAt = now
+			count++
+		}
+		r.deliveries[channelID] = history
+	}
+	return count, nil
+}
+
+func (r *fakeRepository) CleanupDeliveries(_ context.Context, cutoff time.Time) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var count int64
+	for _, channelID := range r.order {
+		kept := make([]Delivery, 0, len(r.deliveries[channelID]))
+		for _, delivery := range r.deliveries[channelID] {
+			terminal := delivery.Status == DeliveryFailed || delivery.Status == DeliveryCancelled
+			if terminal && delivery.CompletedAt != nil && delivery.CompletedAt.Before(cutoff) {
+				count++
+				continue
+			}
+			kept = append(kept, delivery)
+		}
+		r.deliveries[channelID] = kept
+	}
+	return count, nil
+}
+
+func (r *fakeRepository) FinishDelivery(_ context.Context, delivery Delivery) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	history := r.deliveries[delivery.ChannelID]
+	for i := range history {
+		if history[i].ID == delivery.ID {
+			if delivery.Status == DeliverySucceeded || delivery.Status == DeliveryFailed || delivery.Status == DeliveryCancelled {
+				delivery.Payload = ""
+			}
+			history[i] = delivery
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (r *fakeRepository) CancelDelivery(_ context.Context, deliveryID uuid.UUID, reason string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, channelID := range r.order {
+		history := r.deliveries[channelID]
+		for i := range history {
+			if history[i].ID != deliveryID {
+				continue
+			}
+			history[i].Status = DeliveryCancelled
+			history[i].ErrorSummary = reason
+			history[i].CompletedAt = &at
+			history[i].UpdatedAt = at
+			history[i].LeaseUntil = nil
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (r *fakeRepository) GetDelivery(_ context.Context, deliveryID uuid.UUID) (Delivery, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, channelID := range r.order {
+		for _, delivery := range r.deliveries[channelID] {
+			if delivery.ID == deliveryID {
+				return delivery, nil
+			}
+		}
+	}
+	return Delivery{}, ErrNotFound
+}
+
+func (r *fakeRepository) RetryDelivery(_ context.Context, deliveryID uuid.UUID, at time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, channelID := range r.order {
+		history := r.deliveries[channelID]
+		for i := range history {
+			if history[i].ID != deliveryID || history[i].Status != DeliveryFailed {
+				continue
+			}
+			history[i].Status = DeliveryPending
+			history[i].Attempts = 0
+			history[i].NextAttemptAt = at
+			history[i].ExpiresAt = at.Add(maxDeliveryAge)
+			history[i].CompletedAt = nil
+			history[i].LeaseUntil = nil
+			history[i].UpdatedAt = at
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *fakeRepository) PruneDelivered(_ context.Context, retention int) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var total int64
+	for _, channelID := range r.order {
+		history := r.deliveries[channelID]
+		kept := make([]Delivery, 0, len(history))
+		delivered := 0
+		// The fake keeps the list newest-first, matching the SQL read order.
+		for _, delivery := range history {
+			if delivery.Status != DeliverySucceeded {
+				kept = append(kept, delivery)
+				continue
+			}
+			delivered++
+			if delivered <= retention || delivery.IncidentID != uuid.Nil {
+				kept = append(kept, delivery)
+			} else {
+				total++
+			}
+		}
+		r.deliveries[channelID] = kept
+	}
+	return total, nil
+}
+
+func (r *fakeRepository) HasLaterIncidentTransition(_ context.Context, incidentID, channelID uuid.UUID, after Delivery) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, delivery := range r.deliveries[channelID] {
+		if delivery.IncidentID != incidentID || delivery.ID == after.ID {
+			continue
+		}
+		if delivery.Status != DeliverySucceeded && delivery.Status != DeliveryFailed && delivery.Status != DeliveryCancelled {
+			continue
+		}
+		if delivery.CreatedAt.After(after.CreatedAt) ||
+			(delivery.CreatedAt.Equal(after.CreatedAt) && delivery.ID.String() > after.ID.String()) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *fakeRepository) HasDeliveredOpening(_ context.Context, incidentID, channelID uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, delivery := range r.deliveries[channelID] {
+		if delivery.IncidentID == incidentID && delivery.Status == DeliverySucceeded {
+			switch delivery.EventType {
+			case string(EventIncidentOpened), string(EventIncidentSeverity), string(EventRuntimeFailure):
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (r *fakeRepository) ListTerminalFailures(_ context.Context, limit int) ([]DeliveryFailure, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var failures []DeliveryFailure
+	for _, channelID := range r.order {
+		for _, delivery := range r.deliveries[channelID] {
+			if delivery.Status != DeliveryFailed {
+				continue
+			}
+			channel := r.channels[channelID]
+			failedAt := time.Time{}
+			if delivery.CompletedAt != nil {
+				failedAt = *delivery.CompletedAt
+			}
+			failures = append(failures, DeliveryFailure{
+				ID: delivery.ID, ChannelID: channelID, ChannelName: channel.Name,
+				ChannelKind: channel.Kind, EventType: delivery.EventType,
+				ErrorSummary: delivery.ErrorSummary, Attempts: delivery.Attempts, FailedAt: failedAt,
+				Payload: delivery.Payload,
+			})
+		}
+	}
+	sort.Slice(failures, func(i, j int) bool { return failures[i].FailedAt.After(failures[j].FailedAt) })
+	if limit > 0 && len(failures) > limit {
+		failures = failures[:limit]
+	}
+	return failures, nil
+}
+
+func (r *fakeRepository) ChannelHealth(_ context.Context) (map[uuid.UUID]ChannelHealth, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	health := make(map[uuid.UUID]ChannelHealth)
+	for _, channelID := range r.order {
+		item := ChannelHealth{Status: "ok"}
+		for _, delivery := range r.deliveries[channelID] {
+			switch delivery.Status {
+			case DeliverySucceeded:
+				if delivery.CompletedAt != nil {
+					item.LastDeliveredAt = delivery.CompletedAt
+				}
+			case DeliveryFailed:
+				if delivery.CompletedAt != nil {
+					item.LastFailedAt = delivery.CompletedAt
+					item.LastError = delivery.ErrorSummary
+				}
+			case DeliveryPending, DeliveryRetrying, DeliverySending:
+				item.Pending++
+			}
+		}
+		if item.LastFailedAt != nil && (item.LastDeliveredAt == nil || item.LastFailedAt.After(*item.LastDeliveredAt)) {
+			item.Status = "failing"
+		} else if item.Pending > 0 {
+			item.Status = "pending"
+		}
+		health[channelID] = item
+	}
+	return health, nil
 }
 
 func (r *fakeRepository) ListNotificationRecipients(_ context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
@@ -348,8 +719,21 @@ func (n *fakeNotifier) Notify(_ context.Context, event Event) error {
 	}
 	n.mu.Lock()
 	n.events = append(n.events, event)
+	err := n.err
 	n.mu.Unlock()
-	return n.err
+	return err
+}
+
+func (n *fakeNotifier) setErr(err error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.err = err
+}
+
+func (n *fakeNotifier) clear() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.events = nil
 }
 
 func (n *fakeNotifier) delivered() []Event {

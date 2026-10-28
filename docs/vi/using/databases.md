@@ -136,3 +136,20 @@ từ đích đó, nên việc khôi phục từ chúng sẽ thất bại. Thư m
 > Sao lưu sẽ dừng cơ sở dữ liệu. Với một cơ sở dữ liệu đang bận rộn, hãy lên lịch
 > kết xuất dữ liệu vào khung giờ ít tải và thông báo cho người dùng về khoảng gián
 > đoạn ngắn đó.
+
+## Lịch sử tài nguyên
+
+Tab **Số liệu** vẽ CPU, bộ nhớ, mạng và I/O đĩa cho container cơ sở dữ liệu trong
+các khoảng 1 giờ, 24 giờ, 7 ngày và 30 ngày. Nó dùng cùng mẫu agent, đơn vị và thời
+gian lưu giữ như lịch sử ứng dụng: CPU theo lõi (`1.0` = một lõi đầy đủ), bộ nhớ là
+working set sau khi trừ bộ nhớ đệm trang có thể thu hồi, và tốc độ byte mỗi giây từ
+chênh lệch bộ đếm theo thời gian thực tế. Mẫu đầu tiên, bộ đếm đặt lại hoặc khoảng
+thời gian không dương là chỗ trống, không phải số 0. Khi không có giới hạn bộ nhớ,
+biểu đồ hiển thị byte và **không giới hạn**, không bao giờ là phần trăm tự đặt ra.
+Nhãn **một phần** cho thấy thiếu bao phủ bản sao, và mốc triển khai phân tách các thế
+hệ container để một lần khởi động lại hoặc thay thế không trộn với container trước.
+Mẫu thô giữ 24 giờ, tổng hợp 1 phút giữ 7 ngày và tổng hợp 1 giờ giữ 30 ngày.
+
+API là `GET /api/v1/databases/{id}/metrics?range=1h|24h|7d|30d&service=`. Agent cũ
+báo chưa có lịch sử thay vì một biểu đồ trống trông khỏe mạnh. Thành viên dự án chỉ
+thấy cơ sở dữ liệu trong dự án được cấp.

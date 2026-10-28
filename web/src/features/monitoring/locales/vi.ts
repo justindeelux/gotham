@@ -85,6 +85,31 @@ const vi: MonitoringMessages = {
     available: "còn {available} trên {total}",
     unsupported: "Chưa rõ",
   },
+  resourceHistory: {
+    tab: "Số liệu",
+    rangeLabel: "Khoảng thời gian",
+    serviceLabel: "Dịch vụ",
+    allServices: "Tất cả dịch vụ",
+    refresh: "Làm mới",
+    retry: "Thử lại",
+    partial:
+      "Chỉ có một phần bản sao: ít nhất một bản sao không được lấy mẫu trong khoảng này. Biểu đồ không lấp chỗ trống.",
+    seriesCount: "{count} chuỗi",
+    unavailableTitle: "Chưa có lịch sử tài nguyên",
+    unavailableBody:
+      "Agent của nút này chưa gửi mẫu tài nguyên container. Agent cũ báo không có lịch sử thay vì một biểu đồ trống trông khỏe mạnh.",
+    emptyRange:
+      "Không có mẫu trong khoảng này. Mẫu thiếu là chỗ trống, không phải giá trị 0.",
+    memoryLimit: "Giới hạn bộ nhớ: {limit}",
+    units:
+      "CPU tính theo lõi (1.0 = một lõi đầy đủ). Bộ nhớ là working set: mức dùng trừ bộ nhớ đệm trang có thể thu hồi. Tốc độ tính từ chênh lệch bộ đếm theo thời gian thực tế; mẫu đầu tiên, bộ đếm đặt lại và khoảng thời gian không dương là chỗ trống. Mẫu thô giữ 24 giờ, tổng hợp 1 phút giữ 7 ngày và 1 giờ giữ 30 ngày. Mốc triển khai phân tách các thế hệ container.",
+    charts: {
+      cpu: "CPU",
+      memory: "Bộ nhớ",
+      network: "Mạng",
+      disk: "I/O đĩa",
+    },
+  },
 };
 
 export default vi;

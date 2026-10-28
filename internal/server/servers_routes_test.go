@@ -257,6 +257,21 @@ func (f *fakeServerService) AddPrivateKey(_ context.Context, name, privateKeyPEM
 	return &servers.PrivateKey{ID: uuid.New(), Name: name, CreatedAt: time.Now().UTC()}, nil
 }
 
+func (f *fakeServerService) ResourceHistory(_ context.Context, resourceType string, id uuid.UUID, rangeName, _ string) (servers.ResourceHistory, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.metricsErr != nil {
+		return servers.ResourceHistory{}, f.metricsErr
+	}
+	return servers.ResourceHistory{
+		Range:      rangeName,
+		Capability: servers.ResourceCapabilityUnavailable,
+		Coverage:   servers.ResourceCoverageUnknown,
+		Series:     []servers.ResourceHistorySeries{},
+		Markers:    []servers.ResourceDeploymentMarker{},
+	}, nil
+}
+
 func (f *fakeServerService) Metrics(_ context.Context, id uuid.UUID, _, _ time.Time, _ string) ([]servers.MetricPoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

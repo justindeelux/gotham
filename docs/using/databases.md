@@ -138,3 +138,21 @@ directory is a control-plane setting on the host.
 > [!TIP]
 > Backups stop the database. For a busy database, schedule dumps for a quiet
 > window and tell users about the short interruption.
+
+## Resource history
+
+The **Metrics** tab charts CPU, memory, network and disk I/O for the database
+container over 1h, 24h, 7d and 30d ranges. It uses the same agent samples,
+units and retention as application history: CPU in cores (`1.0` = one full
+core), memory as the working set after subtracting reclaimable page cache, and
+bytes-per-second rates from counter deltas over the actual elapsed time. A
+first sample, a counter reset or a nonpositive interval is a gap, not zero.
+With no memory limit the chart shows bytes and **unlimited**, never an invented
+percentage. A **partial** badge exposes missing replica coverage, and deployment
+markers separate container incarnations so a restart or replacement does not
+merge with the previous container. Raw samples are kept for 24 hours,
+1-minute rollups for 7 days and 1-hour rollups for 30 days.
+
+The API is `GET /api/v1/databases/{id}/metrics?range=1h|24h|7d|30d&service=`.
+An older agent reports history as unavailable instead of an empty healthy
+chart. Project members see only databases in a granted project.

@@ -58,6 +58,8 @@ type Agent struct {
 	observationSession  string
 	sequenceMu          sync.Mutex
 	observationSequence uint64
+	containerSamples    *stats.ContainerSampler
+	containerSampleAt   time.Time
 
 	dockerRootMu sync.Mutex
 	dockerRoot   string
@@ -142,6 +144,7 @@ func NewAgent(cfg Config, log *slog.Logger, docker docker.Client, options ...Opt
 		observationInterval: defaultObservationInterval,
 		filesystems:         stats.NewFilesystemCollector(),
 		observationSession:  uuid.NewString(),
+		containerSamples:    stats.NewContainerSampler(),
 	}
 	for _, option := range options {
 		option(agent)

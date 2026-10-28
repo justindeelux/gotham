@@ -16,6 +16,7 @@ import ApplicationTerminalTab from "@/features/applications/components/Applicati
 import DomainEditor from "@/features/applications/components/DomainEditor.vue";
 import RollbackDialog from "@/features/applications/components/RollbackDialog.vue";
 import { useApplicationDetail } from "@/features/applications/composables/useApplicationDetail";
+import ResourceHistoryPanel from "@/features/monitoring/components/ResourceHistoryPanel.vue";
 import { useApplicationTerminalAccess } from "@/features/applications/composables/useApplicationTerminalAccess";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
@@ -176,6 +177,17 @@ const activeTab = computed<string>({
           <ApplicationImagePanel
             v-if="detail.application.value && detail.application.value.source_type === 'image' && detail.canWrite.value"
             :application="detail.application.value"
+          />
+        </NTabPane>
+
+        <NTabPane
+          v-if="detail.application.value"
+          name="metrics"
+          :tab="t('monitoring.resourceHistory.tab')"
+        >
+          <ResourceHistoryPanel
+            resource-type="application"
+            :resource-id="detail.application.value.id"
           />
         </NTabPane>
 

@@ -39,6 +39,7 @@ project GET /api/v1/applications/{id}/domains/{domainId}/monitoring
 project GET /api/v1/applications/{id}/env
 owner GET /api/v1/applications/{id}/git-credential
 project GET /api/v1/applications/{id}/logs
+project GET /api/v1/applications/{id}/metrics
 project GET /api/v1/applications/{id}/previews
 project GET /api/v1/applications/{id}/runtime
 owner GET /api/v1/applications/{id}/storages
@@ -56,6 +57,7 @@ project GET /api/v1/databases/{id}
 project GET /api/v1/databases/{id}/backups
 project GET /api/v1/databases/{id}/backups/{backupId}
 project GET /api/v1/databases/{id}/credentials
+project GET /api/v1/databases/{id}/metrics
 project GET /api/v1/databases/{id}/restores
 project GET /api/v1/databases/{id}/schedules
 project GET /api/v1/deployments

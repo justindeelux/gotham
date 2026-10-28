@@ -289,6 +289,10 @@ func (f *e2eDockerClient) InspectContainer(context.Context, string) (docker.Cont
 	return docker.ContainerDetails{}, nil
 }
 
+func (f *e2eDockerClient) ContainerStats(context.Context, string) (docker.ContainerStats, error) {
+	return docker.ContainerStats{}, nil
+}
+
 func (f *e2eDockerClient) ListContainers(context.Context, bool, map[string]string, bool) ([]*agentv1.ContainerInfo, error) {
 	return f.containers, nil
 }

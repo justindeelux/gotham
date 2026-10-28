@@ -634,6 +634,53 @@ type RequestReceipt struct {
 	WebhookOutcome string             `json:"webhook_outcome"`
 }
 
+type ResourceMetricRollup struct {
+	Tier             string             `json:"tier"`
+	ResourceType     string             `json:"resource_type"`
+	ResourceID       pgtype.UUID        `json:"resource_id"`
+	ApplicationID    pgtype.UUID        `json:"application_id"`
+	DatabaseID       pgtype.UUID        `json:"database_id"`
+	Service          string             `json:"service"`
+	DeploymentID     string             `json:"deployment_id"`
+	Bucket           pgtype.Timestamptz `json:"bucket"`
+	Metric           string             `json:"metric"`
+	Samples          int64              `json:"samples"`
+	Replicas         int32              `json:"replicas"`
+	ExpectedReplicas int32              `json:"expected_replicas"`
+	CoveragePartial  bool               `json:"coverage_partial"`
+	ValueSum         float64            `json:"value_sum"`
+	ValueMin         float64            `json:"value_min"`
+	ValueMax         float64            `json:"value_max"`
+	LatestAt         pgtype.Timestamptz `json:"latest_at"`
+	MemLimitBytes    int64              `json:"mem_limit_bytes"`
+	MemUnlimited     bool               `json:"mem_unlimited"`
+}
+
+type ResourceSample struct {
+	ID                 int64              `json:"id"`
+	ServerID           pgtype.UUID        `json:"server_id"`
+	ResourceType       string             `json:"resource_type"`
+	ResourceID         pgtype.UUID        `json:"resource_id"`
+	ApplicationID      pgtype.UUID        `json:"application_id"`
+	DatabaseID         pgtype.UUID        `json:"database_id"`
+	Service            string             `json:"service"`
+	DeploymentID       string             `json:"deployment_id"`
+	Replica            string             `json:"replica"`
+	ContainerID        string             `json:"container_id"`
+	ObservedAt         pgtype.Timestamptz `json:"observed_at"`
+	CpuCores           *float64           `json:"cpu_cores"`
+	MemWorkingSetBytes *int64             `json:"mem_working_set_bytes"`
+	MemLimitBytes      *int64             `json:"mem_limit_bytes"`
+	MemUnlimited       bool               `json:"mem_unlimited"`
+	NetRxBps           *float64           `json:"net_rx_bps"`
+	NetTxBps           *float64           `json:"net_tx_bps"`
+	DiskReadBps        *float64           `json:"disk_read_bps"`
+	DiskWriteBps       *float64           `json:"disk_write_bps"`
+	ExpectedReplicas   int32              `json:"expected_replicas"`
+	ObservedReplicas   int32              `json:"observed_replicas"`
+	CoveragePartial    bool               `json:"coverage_partial"`
+}
+
 type Restore struct {
 	ID         pgtype.UUID        `json:"id"`
 	DatabaseID pgtype.UUID        `json:"database_id"`

@@ -83,6 +83,31 @@ const en = {
     available: "{available} free of {total}",
     unsupported: "Unknown",
   },
+  resourceHistory: {
+    tab: "Metrics",
+    rangeLabel: "History range",
+    serviceLabel: "Service",
+    allServices: "All services",
+    refresh: "Refresh",
+    retry: "Retry",
+    partial:
+      "Partial replica coverage: at least one replica was not sampled in this range. The chart does not fill the gap.",
+    seriesCount: "{count} series",
+    unavailableTitle: "Resource history unavailable",
+    unavailableBody:
+      "This node's agent has not pushed container resource samples yet. An older agent reports no history instead of an empty healthy chart.",
+    emptyRange:
+      "No samples in this range. A missing sample is a gap, not a zero measurement.",
+    memoryLimit: "Memory limit: {limit}",
+    units:
+      "CPU is measured in cores (1.0 = one full core). Memory is the working set: usage minus reclaimable page cache. Rates come from counter deltas over the actual elapsed time; first samples, counter resets and nonpositive intervals are gaps. Raw samples are kept 24 hours, 1-minute rollups 7 days and 1-hour rollups 30 days. Deployment markers separate container incarnations.",
+    charts: {
+      cpu: "CPU",
+      memory: "Memory",
+      network: "Network",
+      disk: "Disk I/O",
+    },
+  },
 };
 
 export type MonitoringMessages = typeof en;

@@ -222,3 +222,34 @@ and delete. A project that is not granted is hidden.
 
 The owner manages nodes and the host surfaces around the application. See
 [Members and access](/using/members-access).
+
+## Resource history
+
+The **Metrics** tab charts CPU, memory, network and disk I/O for the
+application's managed containers over 1h, 24h, 7d and 30d ranges. The node agent
+samples running containers about every 30 seconds; the control plane never
+invents a point for a bucket it did not receive.
+
+- CPU is in core units: `1.0` means one full core, `0.5` half a core.
+- Memory is the working set: container usage minus reclaimable page cache. With
+  no configured memory limit the chart shows bytes and **unlimited**, never a
+  percentage of an invented limit. With a limit, the limit is shown separately.
+- Network RX/TX and block read/write are bytes per second, calculated from
+  monotonic counter deltas over the actual elapsed time. A first sample, a
+  counter reset, a container restart or a nonpositive interval is a gap, never
+  a negative or spiking rate.
+- A **partial** badge means at least one replica of the service was not sampled
+  in that range. The chart leaves that coverage gap visible.
+- Deployment markers separate container incarnations. A redeploy keeps the
+  application's history and starts a new segment instead of mixing the replaced
+  container into the current service.
+- Raw samples are kept for 24 hours, 1-minute rollups for 7 days and 1-hour
+  rollups for 30 days. Each tier expires independently.
+- Open the **Service** selector to isolate one Compose service when an
+  application has several.
+
+The API is `GET /api/v1/applications/{id}/metrics?range=1h|24h|7d|30d&service=`.
+If the node's agent is too old to push container samples, the tab reports that
+history is unavailable instead of drawing an empty healthy chart. Project
+members see history only for applications in a granted project; unrelated
+containers, raw host paths and server details are never included.

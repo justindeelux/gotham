@@ -63,49 +63,55 @@ const (
 // ScheduleEvidence is one persisted schedule plus its newest qualifying
 // success and newest running run for the same database/target.
 type ScheduleEvidence struct {
-	ScheduleID    uuid.UUID
-	DatabaseID    uuid.UUID
-	DatabaseName  string
-	ProjectID     uuid.UUID
-	Cron          string
-	TargetID      uuid.UUID
-	TargetName    string
-	Enabled       bool
-	NextRunAt     time.Time
-	LastSlotAt    time.Time
-	LastRunAt     time.Time
-	MaxRunSeconds int
-	LastSuccessAt *time.Time
-	RunningID     uuid.UUID
-	RunningSince  *time.Time
+	ScheduleID      uuid.UUID
+	DatabaseID      uuid.UUID
+	DatabaseName    string
+	ProjectID       uuid.UUID
+	Cron            string
+	TargetID        uuid.UUID
+	TargetName      string
+	Enabled         bool
+	NextRunAt       time.Time
+	LastSlotAt      time.Time
+	LastRunAt       time.Time
+	TargetChangedAt time.Time
+	MaxRunSeconds   int
+	LastSuccessAt   *time.Time
+	LastSuccessID   uuid.UUID
+	RunningID       uuid.UUID
+	RunningSince    *time.Time
 }
 
 // Evaluation is the pure result of one schedule at one instant.
 type Evaluation struct {
-	Status        string
-	DueSlotAt     *time.Time
-	DeadlineAt    *time.Time
-	OverdueSince  *time.Time
-	LastSuccessAt *time.Time
-	RunningSince  *time.Time
-	MaxRun        time.Duration
-	Evidence      string
+	Status          string
+	DueSlotAt       *time.Time
+	DeadlineAt      *time.Time
+	OverdueSince    *time.Time
+	LastSuccessAt   *time.Time
+	LastSuccessID   uuid.UUID
+	RunningSince    *time.Time
+	RunningBackupID uuid.UUID
+	MaxRun          time.Duration
+	Evidence        string
 }
 
 // ScheduleView is the API representation of one evaluated schedule.
 type ScheduleView struct {
-	ScheduleID     string     `json:"schedule_id"`
-	Cron           string     `json:"cron"`
-	TargetID       string     `json:"target_id,omitempty"`
-	TargetName     string     `json:"target_name,omitempty"`
-	Status         string     `json:"status"`
-	LastSuccessAt  *time.Time `json:"last_success_at,omitempty"`
-	ExpectedSlot   *time.Time `json:"expected_slot_at,omitempty"`
-	DeadlineAt     *time.Time `json:"deadline_at,omitempty"`
-	OverdueSince   *time.Time `json:"overdue_since,omitempty"`
-	OverdueSeconds int64      `json:"overdue_seconds"`
-	RunningSince   *time.Time `json:"running_since,omitempty"`
-	MaxRunSeconds  int        `json:"max_run_seconds"`
+	ScheduleID      string     `json:"schedule_id"`
+	Cron            string     `json:"cron"`
+	TargetID        string     `json:"target_id,omitempty"`
+	TargetName      string     `json:"target_name,omitempty"`
+	Status          string     `json:"status"`
+	LastSuccessAt   *time.Time `json:"last_success_at,omitempty"`
+	LastBackupID    string     `json:"last_backup_id,omitempty"`
+	ExpectedSlot    *time.Time `json:"expected_slot_at,omitempty"`
+	DeadlineAt      *time.Time `json:"deadline_at,omitempty"`
+	OverdueSince    *time.Time `json:"overdue_since,omitempty"`
+	OverdueSeconds  int64      `json:"overdue_seconds"`
+	RunningSince    *time.Time `json:"running_since,omitempty"`
+	RunningBackupID string     `json:"running_backup_id,omitempty"`
+	MaxRunSeconds   int        `json:"max_run_seconds"`
 }
 
 // Summary is the protection view of one database.
@@ -124,14 +130,36 @@ func Identity(scheduleID uuid.UUID) string {
 // Evaluate applies the persisted deadline rules. It is pure so the observer and
 // the API always agree.
 func Evaluate(now time.Time, ev ScheduleEvidence, lease LeaseState) Evaluation {
+	return evaluate(now, ev, lease, false)
+}
+
+// EvaluateOpen evaluates an already-open occurrence without the target-change
+// grace, so editing a schedule cannot close a firing incident.
+func EvaluateOpen(now time.Time, ev ScheduleEvidence, lease LeaseState) Evaluation {
+	return evaluate(now, ev, lease, true)
+}
+
+func evaluate(now time.Time, ev ScheduleEvidence, lease LeaseState, keepOpen bool) Evaluation {
 	now = now.UTC()
 	maxRun := maxRunDuration(ev.MaxRunSeconds)
-	result := Evaluation{LastSuccessAt: ev.LastSuccessAt, MaxRun: maxRun}
+	result := Evaluation{
+		LastSuccessAt: ev.LastSuccessAt,
+		LastSuccessID: ev.LastSuccessID,
+		MaxRun:        maxRun,
+	}
 	result.Status = StatusScheduled
 
 	slot := dueSlot(ev, now)
 	if slot == nil {
 		result.Evidence = evidence(ev, "next slot "+formatTime(ev.NextRunAt), "no success needed yet")
+		return result
+	}
+	// A slot covered by the old target is not evidence about the new target.
+	// Wait for the next slot instead of alerting for a slot that was in fact
+	// protected before the edit. An already-open incident bypasses this.
+	if !keepOpen && !ev.TargetChangedAt.IsZero() && !slot.After(ev.TargetChangedAt) {
+		result.Evidence = evidence(ev, "target changed "+formatTime(ev.TargetChangedAt),
+			"waiting for the next slot")
 		return result
 	}
 	deadline := slot.Add(OverdueGrace)
@@ -146,19 +174,24 @@ func Evaluate(now time.Time, ev ScheduleEvidence, lease LeaseState) Evaluation {
 
 	if ev.RunningSince != nil && !ev.RunningSince.Before(*slot) {
 		result.RunningSince = ev.RunningSince
+		result.RunningBackupID = ev.RunningID
 		stuck := false
 		reason := ""
 		switch lease {
 		case LeaseLive:
-			// A live job may legitimately exceed the maximum; it keeps the
-			// deadline deferred until the lease ends.
+			if now.Sub(*ev.RunningSince) > maxRun {
+				stuck = true
+				reason = fmt.Sprintf("live lease, running for %s (max %s)",
+					formatDuration(now.Sub(*ev.RunningSince)), formatDuration(maxRun))
+			}
 		case LeaseExpired:
 			stuck = true
 			reason = "lease expired"
 		default:
 			if now.Sub(*ev.RunningSince) > maxRun {
 				stuck = true
-				reason = fmt.Sprintf("no live lease, running for %s (max %s)", formatDuration(now.Sub(*ev.RunningSince)), formatDuration(maxRun))
+				reason = fmt.Sprintf("no live lease, running for %s (max %s)",
+					formatDuration(now.Sub(*ev.RunningSince)), formatDuration(maxRun))
 			}
 		}
 		if stuck {
@@ -239,8 +272,10 @@ func OverdueElapsed(now time.Time, deadline time.Time) time.Duration {
 }
 
 // Summarize reduces the per-schedule evaluations to one database status. The
-// worst state wins so a protected sibling cannot hide a missed schedule.
-func Summarize(sqlcRows []ScheduleEvidence, now time.Time, lease func(uuid.UUID) LeaseState) Summary {
+// worst state wins so a protected sibling cannot hide a missed schedule. An
+// open occurrence is evaluated from its original slot even after a target
+// edit, matching the observer.
+func Summarize(sqlcRows []ScheduleEvidence, now time.Time, lease func(uuid.UUID, uuid.UUID) LeaseState, open func(uuid.UUID) bool) Summary {
 	enabled := make([]ScheduleEvidence, 0, len(sqlcRows))
 	for _, row := range sqlcRows {
 		if row.Enabled {
@@ -255,9 +290,12 @@ func Summarize(sqlcRows []ScheduleEvidence, now time.Time, lease func(uuid.UUID)
 	for _, row := range enabled {
 		state := LeaseUnknown
 		if lease != nil {
-			state = lease(row.DatabaseID)
+			state = lease(row.DatabaseID, row.RunningID)
 		}
 		evaluated := Evaluate(now, row, state)
+		if open != nil && open(row.ScheduleID) {
+			evaluated = EvaluateOpen(now, row, state)
+		}
 		view := viewOf(row, evaluated, now)
 		summary.Schedules = append(summary.Schedules, view)
 		if statusRank(view.Status) > statusRank(summary.Status) {
@@ -282,6 +320,12 @@ func viewOf(row ScheduleEvidence, evaluated Evaluation, now time.Time) ScheduleV
 	}
 	if row.TargetID != uuid.Nil {
 		view.TargetID = row.TargetID.String()
+	}
+	if evaluated.LastSuccessID != uuid.Nil {
+		view.LastBackupID = evaluated.LastSuccessID.String()
+	}
+	if evaluated.RunningBackupID != uuid.Nil {
+		view.RunningBackupID = evaluated.RunningBackupID.String()
 	}
 	if evaluated.DeadlineAt != nil {
 		view.OverdueSeconds = int64(OverdueElapsed(now, *evaluated.DeadlineAt) / time.Second)

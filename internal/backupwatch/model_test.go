@@ -105,10 +105,17 @@ func TestEvaluateRunningLeaseStates(t *testing.T) {
 		MaxRunSeconds: int(15 * time.Minute / time.Second),
 	}
 
-	t.Run("live lease defers a long legitimate run", func(t *testing.T) {
-		got := Evaluate(slot.Add(6*time.Hour), ev, LeaseLive)
+	t.Run("live lease still defers inside the maximum", func(t *testing.T) {
+		got := Evaluate(slot.Add(10*time.Minute), ev, LeaseLive)
 		if got.Status != StatusRunning {
 			t.Fatalf("status = %q, want running", got.Status)
+		}
+	})
+
+	t.Run("live lease past the maximum is stuck", func(t *testing.T) {
+		got := Evaluate(slot.Add(6*time.Hour), ev, LeaseLive)
+		if got.Status != StatusStuck {
+			t.Fatalf("status = %q, want stuck", got.Status)
 		}
 	})
 
@@ -130,6 +137,30 @@ func TestEvaluateRunningLeaseStates(t *testing.T) {
 	})
 }
 
+func TestEvaluateTargetChangeDoesNotReuseTheOldSlot(t *testing.T) {
+	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
+	changed := slot.Add(10 * time.Minute)
+	ev := ScheduleEvidence{
+		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+		NextRunAt: slot, LastSlotAt: slot, TargetChangedAt: changed,
+		MaxRunSeconds: int(MaxRunDefault / time.Second),
+	}
+	if got := Evaluate(slot.Add(2*time.Hour), ev, LeaseUnknown); got.Status != StatusScheduled {
+		t.Fatalf("target-changed status = %q, want scheduled", got.Status)
+	}
+	if got := EvaluateOpen(slot.Add(2*time.Hour), ev, LeaseUnknown); got.Status != StatusOverdue {
+		t.Fatalf("open incident status = %q, want overdue", got.Status)
+	}
+
+	// The next real slot after the change is not suppressed.
+	next := changed.Add(24 * time.Hour)
+	ev.NextRunAt = next
+	ev.LastSlotAt = next
+	if got := Evaluate(next.Add(OverdueGrace), ev, LeaseUnknown); got.Status != StatusOverdue {
+		t.Fatalf("next-slot status = %q, want overdue", got.Status)
+	}
+}
+
 func TestSummarizeDoesNotHideAMissedSchedule(t *testing.T) {
 	now := time.Date(2026, 10, 27, 3, 0, 0, 0, time.UTC)
 	databaseID := uuid.New()
@@ -144,7 +175,7 @@ func TestSummarizeDoesNotHideAMissedSchedule(t *testing.T) {
 		NextRunAt:     now.Add(-3 * time.Hour),
 		MaxRunSeconds: int(MaxRunDefault / time.Second),
 	}
-	summary := Summarize([]ScheduleEvidence{protected, missed}, now, nil)
+	summary := Summarize([]ScheduleEvidence{protected, missed}, now, nil, nil)
 	if summary.Status != StatusOverdue {
 		t.Fatalf("status = %q, want overdue", summary.Status)
 	}
@@ -156,10 +187,10 @@ func TestSummarizeDoesNotHideAMissedSchedule(t *testing.T) {
 func TestSummarizeNotConfigured(t *testing.T) {
 	now := time.Now().UTC()
 	disabled := ScheduleEvidence{Enabled: false}
-	if got := Summarize([]ScheduleEvidence{disabled}, now, nil); got.Status != StatusNotConfigured {
+	if got := Summarize([]ScheduleEvidence{disabled}, now, nil, nil); got.Status != StatusNotConfigured {
 		t.Fatalf("status = %q, want not_configured", got.Status)
 	}
-	if got := Summarize(nil, now, nil); got.Status != StatusNotConfigured {
+	if got := Summarize(nil, now, nil, nil); got.Status != StatusNotConfigured {
 		t.Fatalf("empty status = %q, want not_configured", got.Status)
 	}
 }

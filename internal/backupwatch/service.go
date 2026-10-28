@@ -23,11 +23,11 @@ type IncidentReporter interface {
 	Close(context.Context, string, string) error
 }
 
-// LeaseReader reports whether the control plane still holds a live backup job
-// lease for a database. Absence of evidence leaves the MaxRun fallback in
-// charge instead of guessing.
+// LeaseReader reports whether the control plane still holds the lease for the
+// exact backup run. Absence of evidence leaves the MaxRun fallback in charge
+// instead of guessing, and a different run cannot shadow an orphaned row.
 type LeaseReader interface {
-	BackupJobActive(uuid.UUID) bool
+	BackupRunActive(databaseID, backupID uuid.UUID) bool
 }
 
 type Config struct {
@@ -124,7 +124,11 @@ func (s *Service) tick(ctx context.Context) {
 			}
 			continue
 		}
-		evaluated := Evaluate(now, schedule, s.leaseState(schedule.DatabaseID))
+		state := s.leaseState(schedule.DatabaseID, schedule.RunningID)
+		evaluated := Evaluate(now, schedule, state)
+		if activeSet[identity] {
+			evaluated = EvaluateOpen(now, schedule, state)
+		}
 		s.observe(ctx, schedule, evaluated, now)
 	}
 	for _, identity := range active {
@@ -186,11 +190,11 @@ func (s *Service) close(ctx context.Context, identity, reason string) {
 	}
 }
 
-func (s *Service) leaseState(databaseID uuid.UUID) LeaseState {
+func (s *Service) leaseState(databaseID, backupID uuid.UUID) LeaseState {
 	if s.leases == nil {
 		return LeaseUnknown
 	}
-	if s.leases.BackupJobActive(databaseID) {
+	if s.leases.BackupRunActive(databaseID, backupID) {
 		return LeaseLive
 	}
 	return LeaseExpired
@@ -208,13 +212,29 @@ func (s *Service) Summary(ctx context.Context, databaseID uuid.UUID) (Summary, e
 	if err != nil {
 		return Summary{}, err
 	}
+	active, err := s.source.ActiveProtectionIncidents(ctx)
+	if err != nil {
+		return Summary{}, err
+	}
+	openIDs := make(map[uuid.UUID]bool, len(active))
+	byIdentity := make(map[string]uuid.UUID, len(schedules))
+	for _, schedule := range schedules {
+		byIdentity[Identity(schedule.ScheduleID)] = schedule.ScheduleID
+	}
+	for _, identity := range active {
+		if scheduleID, ok := byIdentity[identity]; ok {
+			openIDs[scheduleID] = true
+		}
+	}
 	rows := make([]ScheduleEvidence, 0, len(schedules))
 	for _, schedule := range schedules {
 		if schedule.DatabaseID == databaseID {
 			rows = append(rows, schedule)
 		}
 	}
-	summary := Summarize(rows, s.now().UTC(), s.leaseState)
+	summary := Summarize(rows, s.now().UTC(), s.leaseState, func(id uuid.UUID) bool {
+		return openIDs[id]
+	})
 	summary.DatabaseID = db.ID.String()
 	return summary, nil
 }

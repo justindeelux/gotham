@@ -120,6 +120,9 @@ func (m *BackupManager) UpdateSchedule(ctx context.Context, userID, databaseID, 
 		(schedule.LastSlotAt.IsZero() || schedule.NextRunAt.After(schedule.LastSlotAt)) {
 		schedule.LastSlotAt = schedule.NextRunAt
 	}
+	if targetID != schedule.TargetID {
+		schedule.TargetChangedAt = now
+	}
 	schedule.Cron = cron
 	schedule.TargetID = targetID
 	schedule.Enabled = enabled

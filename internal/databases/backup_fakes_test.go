@@ -688,6 +688,13 @@ func (r *fakeBackupRepository) DeleteBackupTarget(_ context.Context, targetID, u
 		return BackupTarget{}, ErrNotFound
 	}
 	delete(r.targets, targetID)
+	for id, schedule := range r.schedules {
+		if schedule.TargetID == targetID {
+			schedule.TargetID = uuid.Nil
+			schedule.TargetChangedAt = time.Now().UTC()
+			r.schedules[id] = schedule
+		}
+	}
 	for i, id := range r.targetOrder {
 		if id == targetID {
 			r.targetOrder = append(r.targetOrder[:i], r.targetOrder[i+1:]...)

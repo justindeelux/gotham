@@ -52,6 +52,7 @@ SELECT
     s.last_run_at,
     s.next_run_at,
     s.last_slot_at,
+    s.target_changed_at,
     s.max_run_seconds,
     s.created_at,
     s.updated_at,
@@ -99,6 +100,7 @@ type ListBackupProtectionSchedulesRow struct {
 	LastRunAt         pgtype.Timestamptz `json:"last_run_at"`
 	NextRunAt         pgtype.Timestamptz `json:"next_run_at"`
 	LastSlotAt        pgtype.Timestamptz `json:"last_slot_at"`
+	TargetChangedAt   pgtype.Timestamptz `json:"target_changed_at"`
 	MaxRunSeconds     int32              `json:"max_run_seconds"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
@@ -134,6 +136,7 @@ func (q *Queries) ListBackupProtectionSchedules(ctx context.Context) ([]ListBack
 			&i.LastRunAt,
 			&i.NextRunAt,
 			&i.LastSlotAt,
+			&i.TargetChangedAt,
 			&i.MaxRunSeconds,
 			&i.CreatedAt,
 			&i.UpdatedAt,

@@ -85,6 +85,7 @@ const backups = inject(databaseBackupsKey)!;
       >
         <div
           v-for="backup in (backups.backups.value as DatabaseBackup[])"
+          :id="`backup-run-${backup.id}`"
           :key="backup.id"
           class="backup-row"
         >

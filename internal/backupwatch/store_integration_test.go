@@ -154,6 +154,19 @@ func TestProtectionSchedulesMatchDatabaseAndTarget(t *testing.T) {
 	if row.MaxRunSeconds != 7200 {
 		t.Fatalf("max run = %d", row.MaxRunSeconds)
 	}
+	if !row.TargetChangedAt.IsZero() {
+		t.Fatalf("target change = %v, want zero", row.TargetChangedAt)
+	}
+	if err := st.MarkBackupSchedulesTargetChanged(ctx, pgUUID(targetA)); err != nil {
+		t.Fatalf("mark target changed: %v", err)
+	}
+	rows, err = source.ProtectionSchedules(ctx)
+	if err != nil {
+		t.Fatalf("ProtectionSchedules after target change: %v", err)
+	}
+	if len(rows) != 1 || rows[0].TargetChangedAt.IsZero() {
+		t.Fatalf("target change not persisted: %+v", rows)
+	}
 
 	// A deleted database is not evidence: its schedule disappears and the
 	// observer closes the incident as a resource removal instead of recovering.

@@ -295,13 +295,14 @@ func (r *storeBackupRepository) UpdateBackupSchedule(ctx context.Context, schedu
 		maxRunSeconds = DefaultMaxBackupRunSeconds
 	}
 	row, err := r.store.UpdateBackupSchedule(ctx, sqlc.UpdateBackupScheduleParams{
-		ID:            pgUUID(schedule.ID),
-		Cron:          schedule.Cron,
-		TargetID:      pgUUID(schedule.TargetID),
-		Enabled:       schedule.Enabled,
-		NextRunAt:     timeToPG(schedule.NextRunAt),
-		LastSlotAt:    timeToPG(schedule.LastSlotAt),
-		MaxRunSeconds: int32(maxRunSeconds),
+		ID:              pgUUID(schedule.ID),
+		Cron:            schedule.Cron,
+		TargetID:        pgUUID(schedule.TargetID),
+		Enabled:         schedule.Enabled,
+		NextRunAt:       timeToPG(schedule.NextRunAt),
+		LastSlotAt:      timeToPG(schedule.LastSlotAt),
+		TargetChangedAt: timeToPG(schedule.TargetChangedAt),
+		MaxRunSeconds:   int32(maxRunSeconds),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -493,6 +494,9 @@ func targetSecretParams(secrets []TargetSecret) []sqlc.UpsertBackupTargetSecretP
 }
 
 func (r *storeBackupRepository) DeleteBackupTarget(ctx context.Context, targetID, userID uuid.UUID) (BackupTarget, error) {
+	if err := r.store.MarkBackupSchedulesTargetChanged(ctx, pgUUID(targetID)); err != nil {
+		return BackupTarget{}, fmt.Errorf("databases: record target change: %w", err)
+	}
 	row, err := r.store.DeleteBackupTarget(ctx, sqlc.DeleteBackupTargetParams{
 		ID:     pgUUID(targetID),
 		UserID: pgUUID(userID),
@@ -574,17 +578,18 @@ func restoreFromRow(row sqlc.Restore) Restore {
 
 func scheduleFromRow(row sqlc.BackupSchedule) BackupSchedule {
 	return BackupSchedule{
-		ID:            uuidFromPG(row.ID),
-		DatabaseID:    uuidFromPG(row.DatabaseID),
-		Cron:          row.Cron,
-		TargetID:      uuidFromPG(row.TargetID),
-		Enabled:       row.Enabled,
-		LastRunAt:     timeFromPG(row.LastRunAt),
-		NextRunAt:     timeFromPG(row.NextRunAt),
-		LastSlotAt:    timeFromPG(row.LastSlotAt),
-		MaxRunSeconds: int(row.MaxRunSeconds),
-		CreatedAt:     timeFromPG(row.CreatedAt),
-		UpdatedAt:     timeFromPG(row.UpdatedAt),
+		ID:              uuidFromPG(row.ID),
+		DatabaseID:      uuidFromPG(row.DatabaseID),
+		Cron:            row.Cron,
+		TargetID:        uuidFromPG(row.TargetID),
+		Enabled:         row.Enabled,
+		LastRunAt:       timeFromPG(row.LastRunAt),
+		NextRunAt:       timeFromPG(row.NextRunAt),
+		LastSlotAt:      timeFromPG(row.LastSlotAt),
+		TargetChangedAt: timeFromPG(row.TargetChangedAt),
+		MaxRunSeconds:   int(row.MaxRunSeconds),
+		CreatedAt:       timeFromPG(row.CreatedAt),
+		UpdatedAt:       timeFromPG(row.UpdatedAt),
 	}
 }
 

@@ -207,11 +207,13 @@ func (m *BackupManager) Close() error {
 	return nil
 }
 
-// BackupJobActive reports whether this control plane still holds the backup
-// lease for a database. The backup-protection observer uses it as lease
+// BackupRunActive reports whether this control plane still holds the lease for
+// the exact backup run. The backup-protection observer uses it as lease
 // evidence; it never starts or cancels a job itself.
-func (m *BackupManager) BackupJobActive(databaseID uuid.UUID) bool {
-	return m != nil && m.leases.Held(databaseID) == JobLeaseBackup
+func (m *BackupManager) BackupRunActive(databaseID, backupID uuid.UUID) bool {
+	return m != nil && backupID != uuid.Nil &&
+		m.leases.Held(databaseID) == JobLeaseBackup &&
+		m.leases.Run(databaseID) == backupID
 }
 
 func normalizeMaxRunSeconds(value *int, fallback int) (int, error) {
@@ -514,6 +516,10 @@ func (m *BackupManager) databaseCredentials(ctx context.Context, database Databa
 
 func (m *BackupManager) claim(databaseID uuid.UUID) bool {
 	return m.leases.Claim(databaseID, JobLeaseBackup)
+}
+
+func (m *BackupManager) claimRun(databaseID, backupID uuid.UUID) bool {
+	return m.leases.ClaimRun(databaseID, JobLeaseBackup, backupID)
 }
 
 func (m *BackupManager) claimRestore(databaseID uuid.UUID) bool {

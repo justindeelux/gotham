@@ -113,6 +113,10 @@ func (s *Store) DeleteBackupSchedule(ctx context.Context, id pgtype.UUID) (sqlc.
 	return s.queries.DeleteBackupSchedule(ctx, id)
 }
 
+func (s *Store) MarkBackupSchedulesTargetChanged(ctx context.Context, targetID pgtype.UUID) error {
+	return s.queries.MarkBackupSchedulesTargetChanged(ctx, targetID)
+}
+
 func (s *Store) ListDueBackupSchedules(ctx context.Context, nextRunAt pgtype.Timestamptz) ([]sqlc.BackupSchedule, error) {
 	return s.queries.ListDueBackupSchedules(ctx, nextRunAt)
 }

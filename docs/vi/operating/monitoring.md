@@ -197,6 +197,10 @@ thông báo thành công hoặc thất bại của từng lần sao lưu vẫn g
   từng lịch trong khoảng **15 phút đến 24 giờ**.
 - Bản sao lưu thành công tới đích khác, lịch bị sửa hoặc tắt, và bản sao lưu bắt
   đầu trước kỳ đó **không** thỏa mãn kỳ.
+- Đổi đích mở một cửa sổ hạn mới: kỳ tại hoặc trước thời điểm đổi không bị đọc
+  lại theo đích mới, nên lịch đã được bảo vệ trên đích cũ không cảnh báo ngay.
+  Sự cố đang mở vẫn mở cho tới khi có bản sao lưu đủ điều kiện, và kỳ tiếp theo
+  sau thay đổi được đánh giá bình thường.
 - Xóa cơ sở dữ liệu hoặc xóa lịch sẽ đóng sự cố với lý do tài nguyên. Tắt lịch
   đóng sự cố với lý do chính sách. Cả hai đều không gửi thông báo phục hồi.
 - Cơ sở dữ liệu không có lịch đang bật hiển thị **Chưa cấu hình sao lưu** và

@@ -43,22 +43,26 @@ func (s *storeSource) ProtectionSchedules(ctx context.Context) ([]ScheduleEviden
 	out := make([]ScheduleEvidence, 0, len(rows))
 	for _, row := range rows {
 		evidence := ScheduleEvidence{
-			ScheduleID:    uuidFromPG(row.ID),
-			DatabaseID:    uuidFromPG(row.DatabaseID),
-			DatabaseName:  row.DatabaseName,
-			ProjectID:     uuidFromPG(row.ProjectID),
-			Cron:          row.Cron,
-			TargetID:      uuidFromPG(row.TargetID),
-			TargetName:    row.TargetName,
-			Enabled:       row.Enabled,
-			NextRunAt:     timeFromPG(row.NextRunAt),
-			LastSlotAt:    timeFromPG(row.LastSlotAt),
-			LastRunAt:     timeFromPG(row.LastRunAt),
-			MaxRunSeconds: int(row.MaxRunSeconds),
+			ScheduleID:      uuidFromPG(row.ID),
+			DatabaseID:      uuidFromPG(row.DatabaseID),
+			DatabaseName:    row.DatabaseName,
+			ProjectID:       uuidFromPG(row.ProjectID),
+			Cron:            row.Cron,
+			TargetID:        uuidFromPG(row.TargetID),
+			TargetName:      row.TargetName,
+			Enabled:         row.Enabled,
+			NextRunAt:       timeFromPG(row.NextRunAt),
+			LastSlotAt:      timeFromPG(row.LastSlotAt),
+			LastRunAt:       timeFromPG(row.LastRunAt),
+			TargetChangedAt: timeFromPG(row.TargetChangedAt),
+			MaxRunSeconds:   int(row.MaxRunSeconds),
 		}
 		if row.SuccessCreatedAt.Valid {
 			success := timeFromPG(row.SuccessCreatedAt)
 			evidence.LastSuccessAt = &success
+		}
+		if row.SuccessID.Valid {
+			evidence.LastSuccessID = uuidFromPG(row.SuccessID)
 		}
 		if row.RunID.Valid {
 			running := timeFromPG(row.RunCreatedAt)

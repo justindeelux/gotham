@@ -56,17 +56,18 @@ type Restore struct {
 }
 
 type BackupSchedule struct {
-	ID            uuid.UUID
-	DatabaseID    uuid.UUID
-	Cron          string
-	TargetID      uuid.UUID
-	Enabled       bool
-	LastRunAt     time.Time
-	NextRunAt     time.Time
-	LastSlotAt    time.Time
-	MaxRunSeconds int
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID              uuid.UUID
+	DatabaseID      uuid.UUID
+	Cron            string
+	TargetID        uuid.UUID
+	Enabled         bool
+	LastRunAt       time.Time
+	NextRunAt       time.Time
+	LastSlotAt      time.Time
+	TargetChangedAt time.Time
+	MaxRunSeconds   int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type TargetKind string

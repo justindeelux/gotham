@@ -35,10 +35,12 @@ func (f *fakeSource) Database(context.Context, uuid.UUID) (DatabaseInfo, error) 
 }
 
 type fakeLeases struct {
-	live map[uuid.UUID]bool
+	live map[uuid.UUID]uuid.UUID
 }
 
-func (f fakeLeases) BackupJobActive(id uuid.UUID) bool { return f.live[id] }
+func (f fakeLeases) BackupRunActive(databaseID, backupID uuid.UUID) bool {
+	return backupID != uuid.Nil && f.live[databaseID] == backupID
+}
 
 type fakeIncidents struct {
 	reports []incidents.Observation
@@ -81,7 +83,8 @@ func TestObserverFollowsOverdueStuckAndLateSuccess(t *testing.T) {
 	}
 	source := &fakeSource{schedules: []ScheduleEvidence{schedule}}
 	reporter := &fakeIncidents{}
-	leases := fakeLeases{live: map[uuid.UUID]bool{}}
+	runID := uuid.New()
+	leases := fakeLeases{live: map[uuid.UUID]uuid.UUID{}}
 	service := newTestService(source, reporter, leases, &now)
 
 	service.tick(context.Background())
@@ -92,7 +95,8 @@ func TestObserverFollowsOverdueStuckAndLateSuccess(t *testing.T) {
 	// A live job starts: it defers but never counts as recovery.
 	running := slot.Add(time.Hour)
 	source.schedules[0].RunningSince = &running
-	leases.live[databaseID] = true
+	source.schedules[0].RunningID = runID
+	leases.live[databaseID] = runID
 	service.tick(context.Background())
 	last := reporter.reports[len(reporter.reports)-1]
 	if last.Valid || last.Unhealthy {
@@ -126,6 +130,90 @@ func TestObserverFollowsOverdueStuckAndLateSuccess(t *testing.T) {
 	last = reporter.reports[len(reporter.reports)-1]
 	if !last.Valid || last.Unhealthy {
 		t.Fatalf("late success report = %+v", last)
+	}
+}
+
+func TestObserverStuckThresholdAppliesToLiveLease(t *testing.T) {
+	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
+	databaseID, runID := uuid.New(), uuid.New()
+	running := slot.Add(time.Minute)
+	schedule := ScheduleEvidence{
+		ScheduleID: uuid.New(), DatabaseID: databaseID, Enabled: true,
+		NextRunAt: slot, RunningSince: &running, RunningID: runID,
+		MaxRunSeconds: int(15 * time.Minute / time.Second),
+	}
+	source := &fakeSource{schedules: []ScheduleEvidence{schedule}}
+	reporter := &fakeIncidents{}
+	leases := fakeLeases{live: map[uuid.UUID]uuid.UUID{}}
+	now := slot.Add(10 * time.Minute)
+	service := newTestService(source, reporter, leases, &now)
+
+	// A live run inside the maximum is only deferred.
+	leases.live[databaseID] = runID
+	service.tick(context.Background())
+	if reporter.reports[0].Valid {
+		t.Fatal("short live run must report unknown")
+	}
+
+	// A live run past the schedule maximum is stuck: a lease cannot hide it
+	// indefinitely.
+	now = slot.Add(17 * time.Minute)
+	service.tick(context.Background())
+	last := reporter.reports[len(reporter.reports)-1]
+	if !last.Unhealthy || last.Severity != incidents.SeverityCritical {
+		t.Fatalf("long live run = %+v", last)
+	}
+
+	// Another run on the same database must not shadow this orphaned row.
+	otherRun := uuid.New()
+	leases.live[databaseID] = otherRun
+	short := slot.Add(16 * time.Minute)
+	source.schedules[0].RunningSince = &short
+	service.tick(context.Background())
+	last = reporter.reports[len(reporter.reports)-1]
+	if !last.Unhealthy || last.Severity != incidents.SeverityCritical {
+		t.Fatalf("other-run lease = %+v", last)
+	}
+}
+
+func TestObserverTargetChangeDoesNotAlertForTheOldSlot(t *testing.T) {
+	slot := time.Date(2026, 10, 27, 2, 0, 0, 0, time.UTC)
+	changed := slot.Add(10 * time.Minute)
+	schedule := ScheduleEvidence{
+		ScheduleID: uuid.New(), DatabaseID: uuid.New(), Enabled: true,
+		NextRunAt: slot, LastSlotAt: slot, TargetChangedAt: changed,
+		MaxRunSeconds: 7200,
+	}
+	source := &fakeSource{schedules: []ScheduleEvidence{schedule}}
+	reporter := &fakeIncidents{}
+	now := slot.Add(2 * time.Hour)
+	service := newTestService(source, reporter, nil, &now)
+
+	service.tick(context.Background())
+	if len(reporter.reports) != 0 {
+		t.Fatalf("target change alerted for the old slot: %+v", reporter.reports)
+	}
+
+	// The next real slot after the change still alerts when missed.
+	next := changed.Add(24 * time.Hour)
+	source.schedules[0].NextRunAt = next
+	source.schedules[0].LastSlotAt = next
+	now = next.Add(OverdueGrace + time.Minute)
+	service.tick(context.Background())
+	last := reporter.reports[len(reporter.reports)-1]
+	if !last.Unhealthy || last.Severity != incidents.SeverityWarning {
+		t.Fatalf("next slot report = %+v", last)
+	}
+
+	// An already-open incident is evaluated from its old slot and stays open.
+	now = slot.Add(2 * time.Hour)
+	source.schedules[0].NextRunAt = slot
+	source.schedules[0].LastSlotAt = slot
+	source.active = []string{Identity(schedule.ScheduleID)}
+	service.tick(context.Background())
+	last = reporter.reports[len(reporter.reports)-1]
+	if !last.Valid || !last.Unhealthy {
+		t.Fatalf("open incident was closed by the target edit: %+v", last)
 	}
 }
 

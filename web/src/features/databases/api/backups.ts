@@ -53,11 +53,13 @@ export interface BackupProtectionSchedule {
   target_name?: string;
   status: BackupProtectionStatus;
   last_success_at?: string;
+  last_backup_id?: string;
   expected_slot_at?: string;
   deadline_at?: string;
   overdue_since?: string;
   overdue_seconds: number;
   running_since?: string;
+  running_backup_id?: string;
   max_run_seconds: number;
 }
 

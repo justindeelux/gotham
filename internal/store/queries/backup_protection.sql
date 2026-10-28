@@ -11,6 +11,7 @@ SELECT
     s.last_run_at,
     s.next_run_at,
     s.last_slot_at,
+    s.target_changed_at,
     s.max_run_seconds,
     s.created_at,
     s.updated_at,

@@ -849,7 +849,9 @@ func (s *Server) backupwatchService() *backupwatch.Service {
 		Incidents: s.incidents,
 		Logger:    s.logger,
 	}
-	if leases, ok := s.backups.(interface{ BackupJobActive(uuid.UUID) bool }); ok {
+	if leases, ok := s.backups.(interface {
+		BackupRunActive(databaseID, backupID uuid.UUID) bool
+	}); ok {
 		cfg.Leases = leases
 	}
 	return backupwatch.NewService(cfg)

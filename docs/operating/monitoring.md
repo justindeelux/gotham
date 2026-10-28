@@ -205,6 +205,11 @@ existing behaviour.
   hours** and can be set per schedule between **15 minutes and 24 hours**.
 - A successful backup to a different target, an edited or disabled schedule,
   and a backup that started before the slot do **not** satisfy it.
+- Changing the target starts a fresh deadline window: a slot at or before the
+  change is not re-read against the new target, so a schedule protected on the
+  old target does not alert immediately. An already-open incident stays open
+  until a qualifying success, and the next slot after the change is evaluated
+  normally.
 - Deleting a database or removing a schedule closes the incident with a
   resource reason. Disabling a schedule closes it with a policy reason. Neither
   sends a recovery message.

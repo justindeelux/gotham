@@ -9,6 +9,7 @@
 -- control-plane restart.
 ALTER TABLE backup_schedules
     ADD COLUMN last_slot_at timestamptz,
+    ADD COLUMN target_changed_at timestamptz,
     ADD COLUMN max_run_seconds integer NOT NULL DEFAULT 7200
         CONSTRAINT backup_schedules_max_run_check
         CHECK (max_run_seconds BETWEEN 900 AND 86400);
@@ -23,4 +24,5 @@ WHERE last_run_at IS NOT NULL;
 -- +goose Down
 ALTER TABLE backup_schedules
     DROP COLUMN IF EXISTS max_run_seconds,
+    DROP COLUMN IF EXISTS target_changed_at,
     DROP COLUMN IF EXISTS last_slot_at;

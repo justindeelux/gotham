@@ -101,13 +101,28 @@ function maxRunLabel(seconds: number): string {
                 }}
               </NTag>
               <NText class="mono" strong>{{ item.cron }}</NText>
-              <NTag size="small" :bordered="false">
+              <a
+                v-if="item.target_id"
+                class="protection-link"
+                :href="`#backup-target-${item.target_id}`"
+              >
+                {{ backups.targetLabel(item.target_id) }}
+              </a>
+              <NTag v-else size="small" :bordered="false">
                 {{ backups.targetLabel(item.target_id) }}
               </NTag>
             </NSpace>
             <NText depth="3">
               {{ t("databases.backups.protection.lastSuccess") }}
-              <span v-if="item.last_success_at" :title="item.last_success_at">
+              <a
+                v-if="item.last_success_at && item.last_backup_id"
+                class="protection-link"
+                :href="`#backup-run-${item.last_backup_id}`"
+                :title="item.last_success_at"
+              >
+                {{ relativeTime(item.last_success_at) }}
+              </a>
+              <span v-else-if="item.last_success_at" :title="item.last_success_at">
                 {{ relativeTime(item.last_success_at) }}
               </span>
               <span v-else>{{ t("databases.backups.protection.never") }}</span>
@@ -130,6 +145,13 @@ function maxRunLabel(seconds: number): string {
               {{ t("databases.backups.protection.runningSince", {
                 time: relativeTime(item.running_since),
               }) }}
+              <a
+                v-if="item.running_backup_id"
+                class="protection-link"
+                :href="`#backup-run-${item.running_backup_id}`"
+              >
+                {{ t("databases.backups.runs.title") }}
+              </a>
             </NText>
             <NText depth="3">
               {{ maxRunLabel(item.max_run_seconds) }}
@@ -142,3 +164,14 @@ function maxRunLabel(seconds: number): string {
 </template>
 
 <style scoped src="./backupRows.css"></style>
+
+<style scoped>
+.protection-link {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.protection-link:hover {
+  text-decoration: underline;
+}
+</style>

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { NButton, NCard, NPopconfirm, NSpace, NSwitch, NTag, NText, useMessage } from "naive-ui";
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type {
   NotificationChannel,
   NotificationDelivery,
   TestResult,
 } from "@/features/notifications/api/notifications";
+import { useAuthStore } from "@/features/auth";
 import {
   channelText,
   deliveryEventLabel,
@@ -30,8 +32,19 @@ interface Props {
 const props = defineProps<Props>();
 
 const message = useMessage();
+const { t } = useI18n();
+const authStore = useAuthStore();
 const channelsStore = useNotificationsStore();
 const { canMutate, openEdit, resolveResourceName } = useChannelDialog();
+
+const canRetry = computed<boolean>(() => authStore.isOwner);
+const retryingId = ref<string | null>(null);
+const retryErrorRaw = ref<unknown>(null);
+const retryError = computed<string | null>(() =>
+  retryErrorRaw.value === null
+    ? null
+    : describeChannelError(retryErrorRaw.value),
+);
 
 const testing = ref(false);
 const testResult = ref<TestResult | null>(null);
@@ -105,6 +118,65 @@ async function handleDelete(channel: NotificationChannel): Promise<void> {
   }
 }
 
+const statusType = (status: NotificationDelivery["status"]) => {
+  switch (status) {
+    case "delivered":
+      return "success";
+    case "terminal_failed":
+      return "error";
+    case "retrying":
+      return "warning";
+    case "pending":
+    case "sending":
+      return "info";
+    default:
+      return "default";
+  }
+};
+
+const healthType = computed(() => {
+  switch (props.channel.health?.status) {
+    case "failing":
+      return "error";
+    case "pending":
+      return "warning";
+    case "ok":
+      return "success";
+    default:
+      return "default";
+  }
+});
+
+const healthLabel = computed<string>(() => {
+  switch (props.channel.health?.status) {
+    case "failing":
+      return t("notifications.health.failing");
+    case "pending":
+      return t("notifications.health.pending");
+    case "ok":
+      return t("notifications.health.ok");
+    default:
+      return t("notifications.health.unknown");
+  }
+});
+
+async function handleRetry(
+  channel: NotificationChannel,
+  delivery: NotificationDelivery,
+): Promise<void> {
+  retryingId.value = delivery.id;
+  retryErrorRaw.value = null;
+  try {
+    await channelsStore.retryDelivery(delivery.id);
+    message.success(t("notifications.history.retryQueued"));
+    await Promise.all([loadHistory(channel), channelsStore.fetchChannels()]);
+  } catch (error) {
+    retryErrorRaw.value = error;
+  } finally {
+    retryingId.value = null;
+  }
+}
+
 async function handleTest(channel: NotificationChannel): Promise<void> {
   testing.value = true;
   testResult.value = null;
@@ -145,6 +217,15 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
           type="info"
         >
           {{ $t("notifications.card.secretConfigured") }}
+        </NTag>
+        <NTag
+          v-if="props.channel.health"
+          size="small"
+          round
+          :type="healthType"
+          data-test-channel-health
+        >
+          {{ healthLabel }}
         </NTag>
       </NSpace>
     </template>
@@ -243,6 +324,17 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             >
               {{ $t("notifications.history.empty") }}
             </NText>
+            <NText
+              v-if="retryError"
+              type="error"
+              depth="1"
+              class="small"
+              role="status"
+              aria-live="polite"
+              data-test-channel-retry-error
+            >
+              {{ retryError }}
+            </NText>
             <ul v-else class="history-list">
               <li
                 v-for="attempt in deliveries"
@@ -254,7 +346,7 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
                   <NTag
                     size="tiny"
                     :bordered="false"
-                    :type="attempt.status === 'success' ? 'success' : 'error'"
+                    :type="statusType(attempt.status)"
                   >
                     {{ deliveryStatusLabel(attempt.status) }}
                   </NTag>
@@ -264,14 +356,35 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
                   <NText depth="3" class="small">
                     {{ relativeTime(attempt.created_at) }}
                   </NText>
+                  <NText v-if="attempt.attempts > 0" depth="3" class="small">
+                    {{ $t("notifications.history.attempts", { count: attempt.attempts }) }}
+                  </NText>
+                  <NButton
+                    v-if="canRetry && attempt.retryable"
+                    size="tiny"
+                    secondary
+                    :loading="retryingId === attempt.id"
+                    @click="void handleRetry(props.channel, attempt)"
+                  >
+                    {{ $t("notifications.history.retry") }}
+                  </NButton>
                 </NSpace>
                 <NText
                   v-if="attempt.error_summary"
-                  type="error"
+                  :type="attempt.status === 'terminal_failed' ? 'error' : 'default'"
                   depth="2"
                   class="small history-error"
                 >
                   {{ attempt.error_summary }}
+                </NText>
+                <NText
+                  v-if="attempt.next_retry_at"
+                  depth="3"
+                  class="small"
+                >
+                  {{ $t("notifications.history.nextRetry", {
+                    time: relativeTime(attempt.next_retry_at),
+                  }) }}
                 </NText>
               </li>
             </ul>

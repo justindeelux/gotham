@@ -173,6 +173,43 @@ func (e Event) Key() EventKey {
 	}
 }
 
+// Identity is the stable local identity of one logical occurrence. Duplicate
+// producers handing the same occurrence conflict on it instead of creating a
+// second inbox event or delivery row.
+func (e Event) Identity() string {
+	if e.IncidentID != uuid.Nil {
+		identity := "incident:" + e.IncidentID.String() + ":" + e.Action
+		if e.Action == "severity_changed" {
+			identity += ":" + e.Severity
+		}
+		if e.Action == "reminder" {
+			identity += ":" + e.At.UTC().Format(time.RFC3339Nano)
+		}
+		return identity
+	}
+	at := e.At
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	return string(e.Key()) + ":" + e.ResourceType + ":" + e.ResourceID.String() + ":" + at.UTC().Format(time.RFC3339Nano)
+}
+
+func (e Event) encode() string {
+	plain, err := json.Marshal(e)
+	if err != nil {
+		return ""
+	}
+	return string(plain)
+}
+
+func decodeEvent(raw string) (Event, error) {
+	var event Event
+	if err := json.Unmarshal([]byte(raw), &event); err != nil {
+		return Event{}, fmt.Errorf("notifications: decode delivery payload: %w", err)
+	}
+	return event, nil
+}
+
 func (e Event) Summary() string {
 	if e.Kind == EventIncident {
 		switch e.Action {
@@ -501,17 +538,18 @@ func (c Channel) Wants(event Event) bool {
 }
 
 type ChannelView struct {
-	ID                uuid.UUID     `json:"id"`
-	Name              string        `json:"name"`
-	Kind              Kind          `json:"kind"`
-	Enabled           bool          `json:"enabled"`
-	Events            []EventKey    `json:"events"`
-	ResourceType      string        `json:"resource_type,omitempty"`
-	ResourceID        string        `json:"resource_id,omitempty"`
-	Config            ChannelConfig `json:"config"`
-	SecretsConfigured bool          `json:"secrets_configured"`
-	CreatedAt         time.Time     `json:"created_at"`
-	UpdatedAt         time.Time     `json:"updated_at"`
+	ID                uuid.UUID      `json:"id"`
+	Name              string         `json:"name"`
+	Kind              Kind           `json:"kind"`
+	Enabled           bool           `json:"enabled"`
+	Events            []EventKey     `json:"events"`
+	ResourceType      string         `json:"resource_type,omitempty"`
+	ResourceID        string         `json:"resource_id,omitempty"`
+	Config            ChannelConfig  `json:"config"`
+	SecretsConfigured bool           `json:"secrets_configured"`
+	Health            *ChannelHealth `json:"health,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
 }
 
 type ChannelRequest struct {
@@ -534,31 +572,90 @@ const (
 	deliveryRetention    = 50
 	deliveryHistoryLimit = 20
 	testEventType        = "test"
+
+	maxDeliveryAttempts = 8
+	maxDeliveryAge      = 24 * time.Hour
+	terminalRetention   = 30 * 24 * time.Hour
+	deliveryClaimBatch  = 10
+	deliveryLease       = 2 * time.Minute
 )
 
-type DeliveryStatus string
+// DeliveryState is the local lifecycle of one event/channel delivery.
+type DeliveryState string
 
 const (
-	DeliverySucceeded DeliveryStatus = "success"
-	DeliveryFailed    DeliveryStatus = "failure"
+	DeliveryPending   DeliveryState = "pending"
+	DeliveryRetrying  DeliveryState = "retrying"
+	DeliverySending   DeliveryState = "sending"
+	DeliverySucceeded DeliveryState = "delivered"
+	DeliveryFailed    DeliveryState = "terminal_failed"
+	DeliveryCancelled DeliveryState = "cancelled"
 )
 
 type Delivery struct {
 	ID           uuid.UUID
 	ChannelID    uuid.UUID
 	EventType    string
-	Status       DeliveryStatus
+	Status       DeliveryState
 	ErrorSummary string
 	CreatedAt    time.Time
+
+	DedupeKey     string
+	Payload       string
+	IncidentID    uuid.UUID
+	Attempts      int
+	NextAttemptAt time.Time
+	LeaseUntil    *time.Time
+	CompletedAt   *time.Time
+	UpdatedAt     time.Time
 }
 
 type DeliveryView struct {
-	ID           uuid.UUID      `json:"id"`
-	ChannelID    uuid.UUID      `json:"channel_id"`
-	EventType    string         `json:"event_type"`
-	Status       DeliveryStatus `json:"status"`
-	ErrorSummary string         `json:"error_summary,omitempty"`
-	CreatedAt    time.Time      `json:"created_at"`
+	ID           uuid.UUID     `json:"id"`
+	ChannelID    uuid.UUID     `json:"channel_id"`
+	EventType    string        `json:"event_type"`
+	Status       DeliveryState `json:"status"`
+	ErrorSummary string        `json:"error_summary,omitempty"`
+	CreatedAt    time.Time     `json:"created_at"`
+	Attempts     int           `json:"attempts"`
+	NextRetryAt  *time.Time    `json:"next_retry_at,omitempty"`
+	CompletedAt  *time.Time    `json:"completed_at,omitempty"`
+	Retryable    bool          `json:"retryable"`
+}
+
+// ChannelHealth is the current outcome of a channel, derived from delivery
+// history. A later successful test or delivery clears a previous failure.
+type ChannelHealth struct {
+	Status          string     `json:"status"` // ok, failing, pending
+	LastDeliveredAt *time.Time `json:"last_delivered_at,omitempty"`
+	LastFailedAt    *time.Time `json:"last_failed_at,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	Pending         int64      `json:"pending"`
+}
+
+// DeliveryFailure is one retained terminal delivery for the owner attention
+// list.
+type DeliveryFailure struct {
+	ID           uuid.UUID
+	ChannelID    uuid.UUID
+	ChannelName  string
+	ChannelKind  Kind
+	EventType    string
+	ErrorSummary string
+	Attempts     int
+	FailedAt     time.Time
+}
+
+type DeliveryFailureView struct {
+	ID           uuid.UUID `json:"id"`
+	ChannelID    uuid.UUID `json:"channel_id"`
+	ChannelName  string    `json:"channel_name"`
+	ChannelKind  Kind      `json:"channel_kind"`
+	EventType    string    `json:"event_type"`
+	ErrorSummary string    `json:"error_summary"`
+	Attempts     int       `json:"attempts"`
+	FailedAt     time.Time `json:"failed_at"`
+	Retryable    bool      `json:"retryable"`
 }
 
 const notificationRetention = 500
@@ -574,6 +671,7 @@ type Notification struct {
 	Error        string
 	Detail       string
 	CreatedAt    time.Time
+	DedupeKey    string
 }
 
 type NotificationView struct {

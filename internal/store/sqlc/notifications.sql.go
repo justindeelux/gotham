@@ -11,6 +11,117 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelNotificationDelivery = `-- name: CancelNotificationDelivery :exec
+UPDATE notification_deliveries
+SET status = 'cancelled',
+    error_summary = $1,
+    lease_until = NULL,
+    completed_at = $2,
+    updated_at = $2
+WHERE id = $3
+`
+
+type CancelNotificationDeliveryParams struct {
+	ErrorSummary string             `json:"error_summary"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+	ID           pgtype.UUID        `json:"id"`
+}
+
+func (q *Queries) CancelNotificationDelivery(ctx context.Context, arg CancelNotificationDeliveryParams) error {
+	_, err := q.db.Exec(ctx, cancelNotificationDelivery, arg.ErrorSummary, arg.CompletedAt, arg.ID)
+	return err
+}
+
+const claimNotificationDeliveries = `-- name: ClaimNotificationDeliveries :many
+WITH candidate AS (
+    SELECT d.id
+    FROM notification_deliveries d
+    WHERE d.status IN ('pending', 'retrying')
+      AND d.next_attempt_at <= $2
+      AND (
+          d.incident_id IS NULL
+          OR NOT EXISTS (
+              SELECT 1 FROM notification_deliveries earlier
+              WHERE earlier.incident_id = d.incident_id
+                AND earlier.channel_id = d.channel_id
+                AND earlier.status IN ('pending', 'retrying', 'sending')
+                AND (earlier.created_at, earlier.id) < (d.created_at, d.id)
+          )
+      )
+    ORDER BY d.next_attempt_at ASC, d.id ASC
+    LIMIT $3
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE notification_deliveries d
+SET status = 'sending',
+    attempts = d.attempts + 1,
+    lease_until = $1,
+    updated_at = $2
+FROM candidate
+WHERE d.id = candidate.id
+RETURNING d.id, d.channel_id, d.event_type, d.status, d.error_summary, d.created_at, d.dedupe_key, d.payload, d.incident_id, d.attempts, d.next_attempt_at, d.lease_until, d.completed_at, d.updated_at
+`
+
+type ClaimNotificationDeliveriesParams struct {
+	LeaseUntil pgtype.Timestamptz `json:"lease_until"`
+	Now        pgtype.Timestamptz `json:"now"`
+	Batch      int32              `json:"batch"`
+}
+
+// Atomically claim a bounded batch for sending. SKIP LOCKED lets several
+// workers share the queue; the NOT EXISTS preserves per-incident/channel
+// transition order so an opening is not sent after its recovery.
+func (q *Queries) ClaimNotificationDeliveries(ctx context.Context, arg ClaimNotificationDeliveriesParams) ([]NotificationDelivery, error) {
+	rows, err := q.db.Query(ctx, claimNotificationDeliveries, arg.LeaseUntil, arg.Now, arg.Batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NotificationDelivery{}
+	for rows.Next() {
+		var i NotificationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.EventType,
+			&i.Status,
+			&i.ErrorSummary,
+			&i.CreatedAt,
+			&i.DedupeKey,
+			&i.Payload,
+			&i.IncidentID,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseUntil,
+			&i.CompletedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const cleanupNotificationDeliveries = `-- name: CleanupNotificationDeliveries :execrows
+DELETE FROM notification_deliveries
+WHERE status IN ('terminal_failed', 'cancelled')
+  AND completed_at < $1
+`
+
+// Terminal details are retained for 30 days; pending rows are bounded by the
+// expiry above, not by this cleanup.
+func (q *Queries) CleanupNotificationDeliveries(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, cleanupNotificationDeliveries, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createNotificationChannel = `-- name: CreateNotificationChannel :one
 INSERT INTO notification_channels (
     id, name, kind, config, enabled, resource_type, resource_id, events
@@ -57,9 +168,10 @@ func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotif
 }
 
 const createNotificationDelivery = `-- name: CreateNotificationDelivery :one
-INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, channel_id, event_type, status, error_summary, created_at
+INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at, completed_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()), $11)
+ON CONFLICT (channel_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
+RETURNING id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, attempts, next_attempt_at, lease_until, completed_at, updated_at
 `
 
 type CreateNotificationDeliveryParams struct {
@@ -69,6 +181,11 @@ type CreateNotificationDeliveryParams struct {
 	Status       string             `json:"status"`
 	ErrorSummary string             `json:"error_summary"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	DedupeKey    string             `json:"dedupe_key"`
+	Payload      string             `json:"payload"`
+	IncidentID   pgtype.UUID        `json:"incident_id"`
+	Column10     pgtype.Timestamptz `json:"column_10"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
 }
 
 func (q *Queries) CreateNotificationDelivery(ctx context.Context, arg CreateNotificationDeliveryParams) (NotificationDelivery, error) {
@@ -79,6 +196,11 @@ func (q *Queries) CreateNotificationDelivery(ctx context.Context, arg CreateNoti
 		arg.Status,
 		arg.ErrorSummary,
 		arg.CreatedAt,
+		arg.DedupeKey,
+		arg.Payload,
+		arg.IncidentID,
+		arg.Column10,
+		arg.CompletedAt,
 	)
 	var i NotificationDelivery
 	err := row.Scan(
@@ -88,8 +210,81 @@ func (q *Queries) CreateNotificationDelivery(ctx context.Context, arg CreateNoti
 		&i.Status,
 		&i.ErrorSummary,
 		&i.CreatedAt,
+		&i.DedupeKey,
+		&i.Payload,
+		&i.IncidentID,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseUntil,
+		&i.CompletedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const createPendingDeliveries = `-- name: CreatePendingDeliveries :many
+INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at)
+SELECT unnest($1::uuid[]), unnest($2::uuid[]), $3,
+       'pending', '', $4, unnest($5::text[]),
+       unnest($6::text[]), unnest($7::uuid[]), $4
+ON CONFLICT (channel_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
+RETURNING id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, attempts, next_attempt_at, lease_until, completed_at, updated_at
+`
+
+type CreatePendingDeliveriesParams struct {
+	Ids         []pgtype.UUID      `json:"ids"`
+	ChannelIds  []pgtype.UUID      `json:"channel_ids"`
+	EventType   string             `json:"event_type"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	DedupeKeys  []string           `json:"dedupe_keys"`
+	Payloads    []string           `json:"payloads"`
+	IncidentIds []pgtype.UUID      `json:"incident_ids"`
+}
+
+// Durable enqueue: the caller persists every matching event/channel delivery
+// before it wakes a worker. A duplicate producer conflicts on the local
+// identity and returns no row.
+func (q *Queries) CreatePendingDeliveries(ctx context.Context, arg CreatePendingDeliveriesParams) ([]NotificationDelivery, error) {
+	rows, err := q.db.Query(ctx, createPendingDeliveries,
+		arg.Ids,
+		arg.ChannelIds,
+		arg.EventType,
+		arg.CreatedAt,
+		arg.DedupeKeys,
+		arg.Payloads,
+		arg.IncidentIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NotificationDelivery{}
+	for rows.Next() {
+		var i NotificationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.EventType,
+			&i.Status,
+			&i.ErrorSummary,
+			&i.CreatedAt,
+			&i.DedupeKey,
+			&i.Payload,
+			&i.IncidentID,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseUntil,
+			&i.CompletedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const deleteNotificationChannel = `-- name: DeleteNotificationChannel :execrows
@@ -102,6 +297,63 @@ func (q *Queries) DeleteNotificationChannel(ctx context.Context, id pgtype.UUID)
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const expireNotificationDeliveries = `-- name: ExpireNotificationDeliveries :execrows
+UPDATE notification_deliveries
+SET status = 'terminal_failed',
+    error_summary = 'delivery expired after 24 hours',
+    lease_until = NULL,
+    completed_at = $1,
+    updated_at = $1
+WHERE status IN ('pending', 'retrying')
+  AND created_at < $2
+`
+
+type ExpireNotificationDeliveriesParams struct {
+	Now    pgtype.Timestamptz `json:"now"`
+	Cutoff pgtype.Timestamptz `json:"cutoff"`
+}
+
+// Pending work never outlives the 24-hour delivery age.
+func (q *Queries) ExpireNotificationDeliveries(ctx context.Context, arg ExpireNotificationDeliveriesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, expireNotificationDeliveries, arg.Now, arg.Cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finishNotificationDelivery = `-- name: FinishNotificationDelivery :exec
+UPDATE notification_deliveries
+SET status = $1,
+    error_summary = $2,
+    next_attempt_at = $3,
+    lease_until = NULL,
+    completed_at = $4,
+    updated_at = $5
+WHERE id = $6
+`
+
+type FinishNotificationDeliveryParams struct {
+	Status        string             `json:"status"`
+	ErrorSummary  string             `json:"error_summary"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID            pgtype.UUID        `json:"id"`
+}
+
+func (q *Queries) FinishNotificationDelivery(ctx context.Context, arg FinishNotificationDeliveryParams) error {
+	_, err := q.db.Exec(ctx, finishNotificationDelivery,
+		arg.Status,
+		arg.ErrorSummary,
+		arg.NextAttemptAt,
+		arg.CompletedAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
 }
 
 const getNotificationChannel = `-- name: GetNotificationChannel :one
@@ -124,6 +376,128 @@ func (q *Queries) GetNotificationChannel(ctx context.Context, id pgtype.UUID) (N
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getNotificationDelivery = `-- name: GetNotificationDelivery :one
+SELECT id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, attempts, next_attempt_at, lease_until, completed_at, updated_at FROM notification_deliveries WHERE id = $1
+`
+
+func (q *Queries) GetNotificationDelivery(ctx context.Context, id pgtype.UUID) (NotificationDelivery, error) {
+	row := q.db.QueryRow(ctx, getNotificationDelivery, id)
+	var i NotificationDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.EventType,
+		&i.Status,
+		&i.ErrorSummary,
+		&i.CreatedAt,
+		&i.DedupeKey,
+		&i.Payload,
+		&i.IncidentID,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.LeaseUntil,
+		&i.CompletedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const hasDeliveredIncidentOpening = `-- name: HasDeliveredIncidentOpening :one
+SELECT EXISTS (
+    SELECT 1 FROM notification_deliveries d
+    WHERE d.incident_id = $1
+      AND d.channel_id = $2
+      AND d.status = 'delivered'
+      AND d.event_type IN ('incident_opened', 'incident_severity_changed', 'runtime_failure')
+)
+`
+
+type HasDeliveredIncidentOpeningParams struct {
+	IncidentID pgtype.UUID `json:"incident_id"`
+	ChannelID  pgtype.UUID `json:"channel_id"`
+}
+
+func (q *Queries) HasDeliveredIncidentOpening(ctx context.Context, arg HasDeliveredIncidentOpeningParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasDeliveredIncidentOpening, arg.IncidentID, arg.ChannelID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const listLatestDeliveryFailures = `-- name: ListLatestDeliveryFailures :many
+SELECT DISTINCT ON (channel_id) channel_id, error_summary, completed_at
+FROM notification_deliveries
+WHERE status = 'terminal_failed'
+ORDER BY channel_id, completed_at DESC, id DESC
+`
+
+type ListLatestDeliveryFailuresRow struct {
+	ChannelID    pgtype.UUID        `json:"channel_id"`
+	ErrorSummary string             `json:"error_summary"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+}
+
+func (q *Queries) ListLatestDeliveryFailures(ctx context.Context) ([]ListLatestDeliveryFailuresRow, error) {
+	rows, err := q.db.Query(ctx, listLatestDeliveryFailures)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLatestDeliveryFailuresRow{}
+	for rows.Next() {
+		var i ListLatestDeliveryFailuresRow
+		if err := rows.Scan(&i.ChannelID, &i.ErrorSummary, &i.CompletedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationChannelHealth = `-- name: ListNotificationChannelHealth :many
+SELECT channel_id,
+       max(completed_at) FILTER (WHERE status = 'delivered')::timestamptz AS last_delivered_at,
+       max(completed_at) FILTER (WHERE status = 'terminal_failed')::timestamptz AS last_failed_at,
+       count(*) FILTER (WHERE status IN ('pending', 'retrying', 'sending')) AS pending_count
+FROM notification_deliveries
+GROUP BY channel_id
+`
+
+type ListNotificationChannelHealthRow struct {
+	ChannelID       pgtype.UUID        `json:"channel_id"`
+	LastDeliveredAt pgtype.Timestamptz `json:"last_delivered_at"`
+	LastFailedAt    pgtype.Timestamptz `json:"last_failed_at"`
+	PendingCount    int64              `json:"pending_count"`
+}
+
+func (q *Queries) ListNotificationChannelHealth(ctx context.Context) ([]ListNotificationChannelHealthRow, error) {
+	rows, err := q.db.Query(ctx, listNotificationChannelHealth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNotificationChannelHealthRow{}
+	for rows.Next() {
+		var i ListNotificationChannelHealthRow
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.LastDeliveredAt,
+			&i.LastFailedAt,
+			&i.PendingCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listNotificationChannels = `-- name: ListNotificationChannels :many
@@ -209,7 +583,7 @@ func (q *Queries) ListNotificationChannelsForEvent(ctx context.Context, arg List
 }
 
 const listNotificationDeliveries = `-- name: ListNotificationDeliveries :many
-SELECT d.id, d.channel_id, d.event_type, d.status, d.error_summary, d.created_at FROM notification_deliveries d
+SELECT d.id, d.channel_id, d.event_type, d.status, d.error_summary, d.created_at, d.dedupe_key, d.payload, d.incident_id, d.attempts, d.next_attempt_at, d.lease_until, d.completed_at, d.updated_at FROM notification_deliveries d
 WHERE d.channel_id = $1
 ORDER BY d.created_at DESC, d.id DESC
 LIMIT $2
@@ -238,6 +612,79 @@ func (q *Queries) ListNotificationDeliveries(ctx context.Context, arg ListNotifi
 			&i.Status,
 			&i.ErrorSummary,
 			&i.CreatedAt,
+			&i.DedupeKey,
+			&i.Payload,
+			&i.IncidentID,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseUntil,
+			&i.CompletedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTerminalDeliveryFailures = `-- name: ListTerminalDeliveryFailures :many
+SELECT d.id, d.channel_id, d.event_type, d.status, d.error_summary, d.created_at, d.dedupe_key, d.payload, d.incident_id, d.attempts, d.next_attempt_at, d.lease_until, d.completed_at, d.updated_at, c.name AS channel_name, c.kind AS channel_kind
+FROM notification_deliveries d
+JOIN notification_channels c ON c.id = d.channel_id
+WHERE d.status = 'terminal_failed'
+ORDER BY d.completed_at DESC, d.id DESC
+LIMIT $1
+`
+
+type ListTerminalDeliveryFailuresRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	ChannelID     pgtype.UUID        `json:"channel_id"`
+	EventType     string             `json:"event_type"`
+	Status        string             `json:"status"`
+	ErrorSummary  string             `json:"error_summary"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	DedupeKey     string             `json:"dedupe_key"`
+	Payload       string             `json:"payload"`
+	IncidentID    pgtype.UUID        `json:"incident_id"`
+	Attempts      int32              `json:"attempts"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseUntil    pgtype.Timestamptz `json:"lease_until"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ChannelName   string             `json:"channel_name"`
+	ChannelKind   string             `json:"channel_kind"`
+}
+
+func (q *Queries) ListTerminalDeliveryFailures(ctx context.Context, rowLimit int32) ([]ListTerminalDeliveryFailuresRow, error) {
+	rows, err := q.db.Query(ctx, listTerminalDeliveryFailures, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTerminalDeliveryFailuresRow{}
+	for rows.Next() {
+		var i ListTerminalDeliveryFailuresRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.EventType,
+			&i.Status,
+			&i.ErrorSummary,
+			&i.CreatedAt,
+			&i.DedupeKey,
+			&i.Payload,
+			&i.IncidentID,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.LeaseUntil,
+			&i.CompletedAt,
+			&i.UpdatedAt,
+			&i.ChannelName,
+			&i.ChannelKind,
 		); err != nil {
 			return nil, err
 		}
@@ -267,9 +714,11 @@ func (q *Queries) LockNotificationChannelHistory(ctx context.Context, dollar_1 s
 const pruneNotificationDeliveries = `-- name: PruneNotificationDeliveries :execrows
 DELETE FROM notification_deliveries AS d
 WHERE d.channel_id = $1
+  AND d.status NOT IN ('terminal_failed', 'cancelled')
   AND d.id NOT IN (
       SELECT keep.id FROM notification_deliveries AS keep
       WHERE keep.channel_id = $1
+        AND keep.status NOT IN ('terminal_failed', 'cancelled')
       ORDER BY keep.created_at DESC, keep.id DESC
       LIMIT $2
   )
@@ -282,8 +731,63 @@ type PruneNotificationDeliveriesParams struct {
 
 // Retention: keep only the newest $2 attempts of one channel, dropping the
 // rest. Run in the same transaction as the insert so history stays bounded.
+// Terminal failures and cancellations are retained for the 30-day cleanup
+// instead of the per-channel cap, so a broken channel keeps its evidence.
 func (q *Queries) PruneNotificationDeliveries(ctx context.Context, arg PruneNotificationDeliveriesParams) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneNotificationDeliveries, arg.ChannelID, arg.Limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const reclaimNotificationDeliveries = `-- name: ReclaimNotificationDeliveries :execrows
+UPDATE notification_deliveries
+SET status = CASE WHEN attempts >= $1 THEN 'terminal_failed' ELSE 'retrying' END,
+    next_attempt_at = $2,
+    lease_until = NULL,
+    error_summary = CASE WHEN attempts >= $1 THEN 'delivery lease expired' ELSE error_summary END,
+    completed_at = CASE WHEN attempts >= $1 THEN $2 ELSE NULL END,
+    updated_at = $2
+WHERE status = 'sending' AND lease_until < $2
+`
+
+type ReclaimNotificationDeliveriesParams struct {
+	MaxAttempts int32              `json:"max_attempts"`
+	Now         pgtype.Timestamptz `json:"now"`
+}
+
+// A restart or crash leaves rows in 'sending' with a lease that is never
+// renewed. Reclaim them so the next claim pass retries (or terminates once the
+// attempt budget is spent).
+func (q *Queries) ReclaimNotificationDeliveries(ctx context.Context, arg ReclaimNotificationDeliveriesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, reclaimNotificationDeliveries, arg.MaxAttempts, arg.Now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const retryNotificationDelivery = `-- name: RetryNotificationDelivery :execrows
+UPDATE notification_deliveries
+SET status = 'pending',
+    attempts = 0,
+    next_attempt_at = $1,
+    lease_until = NULL,
+    completed_at = NULL,
+    updated_at = $1
+WHERE id = $2 AND status = 'terminal_failed'
+`
+
+type RetryNotificationDeliveryParams struct {
+	Now pgtype.Timestamptz `json:"now"`
+	ID  pgtype.UUID        `json:"id"`
+}
+
+// Owner retry keeps the same local identity, so no duplicate inbox event or
+// delivery row is created.
+func (q *Queries) RetryNotificationDelivery(ctx context.Context, arg RetryNotificationDeliveryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retryNotificationDelivery, arg.Now, arg.ID)
 	if err != nil {
 		return 0, err
 	}

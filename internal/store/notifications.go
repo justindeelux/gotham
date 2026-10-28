@@ -8,7 +8,7 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
 
-func (s *Store) CreateNotification(ctx context.Context, params sqlc.CreateNotificationParams) error {
+func (s *Store) CreateNotification(ctx context.Context, params sqlc.CreateNotificationParams) (pgtype.UUID, error) {
 	return s.queries.CreateNotification(ctx, params)
 }
 
@@ -58,6 +58,58 @@ func (s *Store) DeleteNotificationChannel(ctx context.Context, id pgtype.UUID) (
 
 func (s *Store) CreateNotificationDelivery(ctx context.Context, params sqlc.CreateNotificationDeliveryParams) (sqlc.NotificationDelivery, error) {
 	return s.queries.CreateNotificationDelivery(ctx, params)
+}
+
+func (s *Store) CreatePendingDeliveries(ctx context.Context, params sqlc.CreatePendingDeliveriesParams) ([]sqlc.NotificationDelivery, error) {
+	return s.queries.CreatePendingDeliveries(ctx, params)
+}
+
+func (s *Store) ClaimNotificationDeliveries(ctx context.Context, params sqlc.ClaimNotificationDeliveriesParams) ([]sqlc.NotificationDelivery, error) {
+	return s.queries.ClaimNotificationDeliveries(ctx, params)
+}
+
+func (s *Store) ReclaimNotificationDeliveries(ctx context.Context, params sqlc.ReclaimNotificationDeliveriesParams) (int64, error) {
+	return s.queries.ReclaimNotificationDeliveries(ctx, params)
+}
+
+func (s *Store) ExpireNotificationDeliveries(ctx context.Context, params sqlc.ExpireNotificationDeliveriesParams) (int64, error) {
+	return s.queries.ExpireNotificationDeliveries(ctx, params)
+}
+
+func (s *Store) CleanupNotificationDeliveries(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	return s.queries.CleanupNotificationDeliveries(ctx, cutoff)
+}
+
+func (s *Store) FinishNotificationDelivery(ctx context.Context, params sqlc.FinishNotificationDeliveryParams) error {
+	return s.queries.FinishNotificationDelivery(ctx, params)
+}
+
+func (s *Store) CancelNotificationDelivery(ctx context.Context, params sqlc.CancelNotificationDeliveryParams) error {
+	return s.queries.CancelNotificationDelivery(ctx, params)
+}
+
+func (s *Store) GetNotificationDelivery(ctx context.Context, id pgtype.UUID) (sqlc.NotificationDelivery, error) {
+	return s.queries.GetNotificationDelivery(ctx, id)
+}
+
+func (s *Store) RetryNotificationDelivery(ctx context.Context, params sqlc.RetryNotificationDeliveryParams) (int64, error) {
+	return s.queries.RetryNotificationDelivery(ctx, params)
+}
+
+func (s *Store) HasDeliveredIncidentOpening(ctx context.Context, params sqlc.HasDeliveredIncidentOpeningParams) (bool, error) {
+	return s.queries.HasDeliveredIncidentOpening(ctx, params)
+}
+
+func (s *Store) ListTerminalDeliveryFailures(ctx context.Context, rowLimit int32) ([]sqlc.ListTerminalDeliveryFailuresRow, error) {
+	return s.queries.ListTerminalDeliveryFailures(ctx, rowLimit)
+}
+
+func (s *Store) ListNotificationChannelHealth(ctx context.Context) ([]sqlc.ListNotificationChannelHealthRow, error) {
+	return s.queries.ListNotificationChannelHealth(ctx)
+}
+
+func (s *Store) ListLatestDeliveryFailures(ctx context.Context) ([]sqlc.ListLatestDeliveryFailuresRow, error) {
+	return s.queries.ListLatestDeliveryFailures(ctx)
 }
 
 func (s *Store) LockNotificationChannelHistory(ctx context.Context, channelID string) error {

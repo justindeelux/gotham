@@ -157,17 +157,49 @@ số liệu máy chủ, hoặc cài đặt thông báo. Bộ phát hiện và lo
 biết nhận nhãn trung tính; bằng chứng thô, lỗi, secret và đường dẫn máy chủ
 không bao giờ được hiển thị cho chúng.
 
-## Gửi thử và lịch sử gửi
+## Gửi thử, thử lại và lịch sử gửi
 
 **Gửi thử** gửi một tin nhắn thử tổng hợp tới đúng kênh đó và báo kết quả ngay. Nó
-được ghi vào lịch sử như một lần thử thật.
+được ghi vào lịch sử như một lần thử thật và cập nhật tình trạng kênh, nhưng không
+tạo mục trong hộp thông báo.
 
 **Lịch sử gửi** hiển thị 20 lần thử mới nhất của kênh, mới nhất trước: sự kiện (hoặc
-**Tin nhắn thử**), đã gửi hay thất bại, thời điểm, và một tóm tắt lỗi có giới hạn cho
-các lần thất bại. Mỗi kênh giữ 50 lần thử cuối; các dòng cũ hơn bị cắt tự động. Việc
-gửi không bao giờ chặn một lần triển khai hay sao lưu — nó chạy trên một hàng đợi nền
-có giới hạn, và một kênh lỗi không làm dừng các kênh khác.
+**Tin nhắn thử**), trạng thái, thời điểm, số lần thử, thời điểm thử lại tiếp theo và
+một tóm tắt lỗi có giới hạn. Các trạng thái là **Đang chờ**, **Đang gửi**, **Đang thử
+lại**, **Đã gửi**, **Thất bại** và **Đã hủy**. Đã hủy nghĩa là công việc không còn cần
+thiết (kênh bị tắt, xóa hoặc hủy đăng ký, hoặc một lần mở sự cố chưa từng gửi được);
+trạng thái này không bao giờ hiện là đã gửi. Mỗi kênh giữ 50 lần thử chưa kết thúc
+cuối. Các lần thất bại và đã hủy được giữ 30 ngày để còn bằng chứng, sau đó tự động
+xóa.
+
+Công việc gửi được ghi vào cơ sở dữ liệu trước khi đánh thức worker, nên khi control
+plane khởi động lại hoặc gặp sự cố giữa lúc lưu và lúc gửi, công việc hợp lệ được
+tiếp tục thay vì mất. Worker nhận một lô có giới hạn, và lease gửi bị bỏ dở được thu
+hồi sau khi khởi động lại. Lỗi được thử lại với backoff lũy thừa và jitter: lỗi kết
+nối, timeout, HTTP 429 và 5xx. `Retry-After` có giới hạn được tôn trọng. Mỗi lần gửi
+dừng sau tối đa 8 lần thử hoặc 24 giờ. Cấu hình sai, lỗi xác thực và bị nhà cung cấp
+từ chối là lỗi vĩnh viễn cho đến khi người vận hành xử lý. Một kênh lỗi không chặn
+các kênh khác hay một lần triển khai/sao lưu.
+
+Trước khi gửi, Gotham đọc lại trạng thái bật, đăng ký sự kiện, phạm vi và cấu hình đã
+mã hóa của kênh. Công việc của kênh bị tắt, xóa hoặc hủy đăng ký sẽ bị hủy. Thứ tự
+chuyển trạng thái của từng sự cố/kênh được giữ, nên một lần mở không bị gửi sau khi
+đã phục hồi; nếu lần mở hết hạn hoặc bị hủy trước khi gửi thành công, thông báo phục
+hồi cho kênh đó bị chặn và lý do được giữ trong lịch sử.
+
+Cài đặt hiển thị tình trạng hiện tại của từng kênh: **Đang gửi được**, **Đang thử
+lại**, **Không gửi được** hoặc **Chưa gửi lần nào**. Khi chủ sở hữu có lần gửi thất
+bại vĩnh viễn, **Cần chú ý** liệt kê chúng kèm kênh, sự kiện và lỗi có giới hạn, và
+có nút **Thử lại**. Một lần gửi thử thành công hoặc một lần gửi hợp lệ sau đó xóa tình
+trạng lỗi hiện tại; lỗi lịch sử vẫn còn trong lịch sử. Nếu kênh đích duy nhất bị lỗi,
+tình trạng trong bảng và mục Cần chú ý là phương án dự phòng; Gotham không bao giờ gửi
+thông báo lỗi qua chính kênh đang lỗi. Thử lại dùng lại định danh cục bộ và cấu hình
+hiện tại, nên không tạo mục hộp thông báo trùng.
+
+Việc gửi không chặn gì và chạy trên control plane. Việc thử lại và xếp hàng cục bộ
+được chống trùng cục bộ, nhưng không phải gửi đúng một lần ra bên ngoài: nhà cung cấp
+có thể đã nhận tin nhắn dù phản hồi bị mất, và lần thử lại có thể gửi nó lần thứ hai.
 
 Với kênh thuộc một tài nguyên, tạo, sửa, xóa, bật và thử cần quyền ghi vào dự án
-chứa tài nguyên. Thành
-viên ngoài dự án đó không thấy kênh.
+chứa tài nguyên. Thành viên ngoài dự án đó không thấy kênh. Tình trạng kênh và lỗi
+gửi vĩnh viễn chỉ dành cho chủ sở hữu.

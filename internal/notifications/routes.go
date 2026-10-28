@@ -41,6 +41,10 @@ type deliveryListEnvelope struct {
 	Deliveries []DeliveryView `json:"deliveries"`
 }
 
+type failureListEnvelope struct {
+	Failures []DeliveryFailureView `json:"failures"`
+}
+
 type errorBody struct {
 	Message string `json:"message"`
 }
@@ -65,6 +69,8 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Delete("/v1/notification-channels/{id}", h.delete)
 		protected.Post("/v1/notification-channels/{id}/test", h.test)
 		protected.Get("/v1/notification-channels/{id}/deliveries", h.deliveries)
+		protected.Get("/v1/notification-channels/failures", h.failures)
+		protected.Post("/v1/notification-channels/deliveries/{id}/retry", h.retry)
 		protected.Get("/v1/notifications", h.inbox)
 		protected.Post("/v1/notifications/seen", h.seen)
 	})
@@ -172,6 +178,39 @@ func (h *handler) deliveries(w http.ResponseWriter, r *http.Request) {
 		deliveries = []DeliveryView{}
 	}
 	writeJSON(w, http.StatusOK, deliveryListEnvelope{Deliveries: deliveries})
+}
+
+func (h *handler) failures(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	failures, err := h.svc.ListDeliveryFailures(r.Context(), userID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	if failures == nil {
+		failures = []DeliveryFailureView{}
+	}
+	writeJSON(w, http.StatusOK, failureListEnvelope{Failures: failures})
+}
+
+func (h *handler) retry(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	deliveryID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid delivery id"})
+		return
+	}
+	if err := h.svc.RetryDelivery(r.Context(), userID, deliveryID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handler) inbox(w http.ResponseWriter, r *http.Request) {

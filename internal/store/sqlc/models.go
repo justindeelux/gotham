@@ -512,6 +512,7 @@ type Notification struct {
 	Error        string             `json:"error"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	Detail       string             `json:"detail"`
+	DedupeKey    string             `json:"dedupe_key"`
 }
 
 type NotificationChannel struct {
@@ -528,12 +529,20 @@ type NotificationChannel struct {
 }
 
 type NotificationDelivery struct {
-	ID           pgtype.UUID        `json:"id"`
-	ChannelID    pgtype.UUID        `json:"channel_id"`
-	EventType    string             `json:"event_type"`
-	Status       string             `json:"status"`
-	ErrorSummary string             `json:"error_summary"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ID            pgtype.UUID        `json:"id"`
+	ChannelID     pgtype.UUID        `json:"channel_id"`
+	EventType     string             `json:"event_type"`
+	Status        string             `json:"status"`
+	ErrorSummary  string             `json:"error_summary"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	DedupeKey     string             `json:"dedupe_key"`
+	Payload       string             `json:"payload"`
+	IncidentID    pgtype.UUID        `json:"incident_id"`
+	Attempts      int32              `json:"attempts"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseUntil    pgtype.Timestamptz `json:"lease_until"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type PreviewDelivery struct {

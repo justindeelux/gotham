@@ -944,6 +944,8 @@ async function main() {
           "export const isFeatureDisabled = () => false;",
           "export const listChannels = async () => [];",
           "export const listDeliveries = async () => [];",
+          "export const listDeliveryFailures = async () => [];",
+          "export const retryDelivery = async () => {};",
           "export const testChannel = async () => { throw new Error('unused'); };",
           "export const updateChannel = async () => { throw new Error('unused'); };",
         ].join("\n"),

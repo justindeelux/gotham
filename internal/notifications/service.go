@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	mathrand "math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +30,10 @@ const (
 	defaultSendTimeout    = 10 * time.Second
 	dispatchReadTimeout   = 5 * time.Second
 	deliveryRecordTimeout = 5 * time.Second
+
+	defaultSweepInterval = 15 * time.Second
+	defaultRetryBase     = 30 * time.Second
+	maxRetryDelay        = time.Hour
 )
 
 type NotificationService interface {
@@ -38,6 +44,8 @@ type NotificationService interface {
 	DeleteChannel(ctx context.Context, userID, channelID uuid.UUID) error
 	TestChannel(ctx context.Context, userID, channelID uuid.UUID) (TestResult, error)
 	ListDeliveries(ctx context.Context, userID, channelID uuid.UUID) ([]DeliveryView, error)
+	ListDeliveryFailures(ctx context.Context, userID uuid.UUID) ([]DeliveryFailureView, error)
+	RetryDelivery(ctx context.Context, userID, deliveryID uuid.UUID) error
 	ListNotifications(ctx context.Context, userID uuid.UUID, limit int) (NotificationPage, error)
 	MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, seenAt time.Time) error
 }
@@ -54,6 +62,11 @@ type Config struct {
 	QueueSize   int
 	SendTimeout time.Duration
 	Now         func() time.Time
+
+	SweepInterval time.Duration
+	RetryBase     time.Duration
+	MaxAttempts   int
+	Lease         time.Duration
 }
 
 func (c Config) repository() Repository {
@@ -81,10 +94,15 @@ type Service struct {
 
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
-	queue      chan Event
+	wake       chan struct{}
 	wg         sync.WaitGroup
 	startOnce  sync.Once
 	closeOnce  sync.Once
+
+	sweepInterval time.Duration
+	retryBase     time.Duration
+	maxAttempts   int
+	lease         time.Duration
 }
 
 var (
@@ -106,10 +124,6 @@ func NewService(cfg Config) *Service {
 	if workers <= 0 {
 		workers = defaultWorkers
 	}
-	queueSize := cfg.QueueSize
-	if queueSize <= 0 {
-		queueSize = defaultQueueSize
-	}
 	client := cfg.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: sendTimeout}
@@ -122,6 +136,22 @@ func NewService(cfg Config) *Service {
 	if now == nil {
 		now = time.Now
 	}
+	sweepInterval := cfg.SweepInterval
+	if sweepInterval <= 0 {
+		sweepInterval = defaultSweepInterval
+	}
+	retryBase := cfg.RetryBase
+	if retryBase <= 0 {
+		retryBase = defaultRetryBase
+	}
+	maxAttempts := cfg.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = maxDeliveryAttempts
+	}
+	lease := cfg.Lease
+	if lease <= 0 {
+		lease = deliveryLease
+	}
 	secret := strings.TrimSpace(cfg.Secret)
 	if secret == "" {
 		secret = randomSecret()
@@ -130,18 +160,22 @@ func NewService(cfg Config) *Service {
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 
 	service := &Service{
-		repo:        cfg.repository(),
-		secret:      secret,
-		logger:      logger,
-		client:      client,
-		mailer:      mailer,
-		workers:     workers,
-		sendTimeout: sendTimeout,
-		now:         now,
-		emitter:     NewEmitter(cfg.Publisher),
-		baseCtx:     baseCtx,
-		baseCancel:  baseCancel,
-		queue:       make(chan Event, queueSize),
+		repo:          cfg.repository(),
+		secret:        secret,
+		logger:        logger,
+		client:        client,
+		mailer:        mailer,
+		workers:       workers,
+		sendTimeout:   sendTimeout,
+		now:           now,
+		emitter:       NewEmitter(cfg.Publisher),
+		baseCtx:       baseCtx,
+		baseCancel:    baseCancel,
+		wake:          make(chan struct{}, 1),
+		sweepInterval: sweepInterval,
+		retryBase:     retryBase,
+		maxAttempts:   maxAttempts,
+		lease:         lease,
 	}
 	service.factory = service.notifierFor
 	return service
@@ -235,7 +269,29 @@ func (s *Service) ListChannels(ctx context.Context, userID uuid.UUID) ([]Channel
 		}
 		views = append(views, view)
 	}
+	if err := s.attachHealth(ctx, userID, views); err != nil {
+		return nil, err
+	}
 	return views, nil
+}
+
+func (s *Service) attachHealth(ctx context.Context, userID uuid.UUID, views []ChannelView) error {
+	owner, err := s.repo.IsOwner(ctx, userID)
+	if err != nil || !owner {
+		return err
+	}
+	health, err := s.repo.ChannelHealth(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range views {
+		item, ok := health[views[i].ID]
+		if !ok {
+			item = ChannelHealth{Status: "unknown"}
+		}
+		views[i].Health = &item
+	}
+	return nil
 }
 
 func (s *Service) GetChannel(ctx context.Context, userID, channelID uuid.UUID) (ChannelView, error) {
@@ -249,7 +305,15 @@ func (s *Service) GetChannel(ctx context.Context, userID, channelID uuid.UUID) (
 	if err != nil {
 		return ChannelView{}, err
 	}
-	return s.view(channel)
+	view, err := s.view(channel)
+	if err != nil {
+		return ChannelView{}, err
+	}
+	views := []ChannelView{view}
+	if err := s.attachHealth(ctx, userID, views); err != nil {
+		return ChannelView{}, err
+	}
+	return views[0], nil
 }
 
 func (s *Service) CreateChannel(ctx context.Context, userID uuid.UUID, req ChannelRequest) (ChannelView, error) {
@@ -455,9 +519,86 @@ func (s *Service) ListDeliveries(ctx context.Context, userID, channelID uuid.UUI
 	}
 	views := make([]DeliveryView, 0, len(deliveries))
 	for _, delivery := range deliveries {
-		views = append(views, DeliveryView(delivery))
+		views = append(views, deliveryView(delivery))
 	}
 	return views, nil
+}
+
+func deliveryView(delivery Delivery) DeliveryView {
+	view := DeliveryView{
+		ID:           delivery.ID,
+		ChannelID:    delivery.ChannelID,
+		EventType:    delivery.EventType,
+		Status:       delivery.Status,
+		ErrorSummary: delivery.ErrorSummary,
+		CreatedAt:    delivery.CreatedAt,
+		Attempts:     delivery.Attempts,
+		CompletedAt:  delivery.CompletedAt,
+		Retryable:    delivery.Status == DeliveryFailed,
+	}
+	if delivery.Status == DeliveryRetrying && !delivery.NextAttemptAt.IsZero() {
+		next := delivery.NextAttemptAt
+		view.NextRetryAt = &next
+	}
+	return view
+}
+
+func (s *Service) ListDeliveryFailures(ctx context.Context, userID uuid.UUID) ([]DeliveryFailureView, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	owner, err := s.repo.IsOwner(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !owner {
+		return nil, ErrForbidden
+	}
+	failures, err := s.repo.ListTerminalFailures(ctx, deliveryHistoryLimit)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]DeliveryFailureView, 0, len(failures))
+	for _, failure := range failures {
+		views = append(views, DeliveryFailureView{
+			ID:           failure.ID,
+			ChannelID:    failure.ChannelID,
+			ChannelName:  failure.ChannelName,
+			ChannelKind:  failure.ChannelKind,
+			EventType:    failure.EventType,
+			ErrorSummary: failure.ErrorSummary,
+			Attempts:     failure.Attempts,
+			FailedAt:     failure.FailedAt,
+			Retryable:    true,
+		})
+	}
+	return views, nil
+}
+
+func (s *Service) RetryDelivery(ctx context.Context, userID, deliveryID uuid.UUID) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	owner, err := s.repo.IsOwner(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !owner {
+		return ErrForbidden
+	}
+	if deliveryID == uuid.Nil {
+		return ErrNotFound
+	}
+	ok, err := s.repo.RetryDelivery(ctx, deliveryID, s.now().UTC())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	s.start()
+	s.kick()
+	return nil
 }
 
 func (s *Service) ListNotifications(ctx context.Context, userID uuid.UUID, limit int) (NotificationPage, error) {
@@ -506,9 +647,10 @@ func (s *Service) MarkNotificationsSeen(ctx context.Context, userID uuid.UUID, s
 	return s.repo.MarkNotificationsSeen(ctx, userID, seenAt)
 }
 
-func (s *Service) recordNotification(event Event) {
+func (s *Service) recordNotification(event Event) (Notification, bool) {
+	notification := Notification{}
 	if s == nil || s.repo == nil {
-		return
+		return notification, false
 	}
 	writeCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
 	defer cancel()
@@ -520,7 +662,7 @@ func (s *Service) recordNotification(event Event) {
 	if at.IsZero() {
 		at = s.now().UTC()
 	}
-	notification := Notification{
+	notification = Notification{
 		ID:           uuid.New(),
 		EventKey:     event.Key(),
 		ResourceType: event.ResourceType,
@@ -531,15 +673,17 @@ func (s *Service) recordNotification(event Event) {
 		Error:        truncateText(event.Error, maxEventError),
 		Detail:       event.Detail,
 		CreatedAt:    at.UTC(),
+		DedupeKey:    event.Identity(),
 	}
-	if err := s.repo.CreateNotification(writeCtx, notification); err != nil {
+	inserted, err := s.repo.CreateNotification(writeCtx, notification)
+	if err != nil {
 		if s.baseCtx.Err() == nil {
 			s.logger.Error("notifications: store in-app notification",
 				"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
 		}
-		return
+		return notification, false
 	}
-	s.publishNotification(writeCtx, notification)
+	return notification, inserted
 }
 
 func (s *Service) publishNotification(ctx context.Context, notification Notification) {
@@ -563,19 +707,24 @@ func (s *Service) publishNotification(ctx context.Context, notification Notifica
 	}
 }
 
-func (s *Service) recordDelivery(ctx context.Context, channelID uuid.UUID, eventType string, status DeliveryStatus, errorSummary string) {
+func (s *Service) recordDelivery(ctx context.Context, channelID uuid.UUID, eventType string, status DeliveryState, errorSummary string) {
 	if s == nil || s.repo == nil || channelID == uuid.Nil {
 		return
 	}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deliveryRecordTimeout)
 	defer cancel()
+	now := s.now().UTC()
+	completed := now
 	if err := s.repo.CreateDelivery(writeCtx, Delivery{
-		ID:           uuid.New(),
-		ChannelID:    channelID,
-		EventType:    eventType,
-		Status:       status,
-		ErrorSummary: truncateText(errorSummary, maxDeliveryError),
-		CreatedAt:    s.now().UTC(),
+		ID:            uuid.New(),
+		ChannelID:     channelID,
+		EventType:     eventType,
+		Status:        status,
+		ErrorSummary:  truncateText(errorSummary, maxDeliveryError),
+		CreatedAt:     now,
+		NextAttemptAt: now,
+		CompletedAt:   &completed,
+		UpdatedAt:     now,
 	}); err != nil {
 		s.logger.Warn("notifications: record delivery",
 			"channel_id", channelID.String(), "status", string(status), "error", err)
@@ -676,9 +825,9 @@ func (s *Service) Dispatch(event Event) {
 	_ = s.Enqueue(event)
 }
 
-// Enqueue is the durable handoff used by the incident lifecycle: it reports a
-// full queue so the caller can keep its local intent retryable instead of
-// discarding it.
+// Enqueue persists the inbox row and one pending delivery per matching channel
+// before it wakes a worker. A persisted delivery survives a restart even when
+// the wake is lost; a duplicate producer conflicts on the local identity.
 func (s *Service) Enqueue(event Event) error {
 	if s == nil || s.repo == nil || !Enabled() {
 		return errNotReady
@@ -687,13 +836,68 @@ func (s *Service) Enqueue(event Event) error {
 		event.At = s.now().UTC()
 	}
 	s.start()
+
+	notification, inserted := s.recordNotification(event)
+	if inserted {
+		publishCtx, publishCancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
+		s.publishNotification(publishCtx, notification)
+		publishCancel()
+	}
+
+	readCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
+	channels, err := s.repo.ListChannelsForEvent(readCtx, event.ResourceType, event.ResourceID)
+	cancel()
+	if err != nil {
+		s.logger.Error("notifications: resolve channels for event",
+			"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
+		return fmt.Errorf("notifications: resolve channels: %w", err)
+	}
+	identity := event.Identity()
+	payload := event.encode()
+	now := s.now().UTC()
+	// Incident transitions are persisted in lifecycle order; their own time is
+	// the stable ordering key the claim uses across restarts.
+	createdAt := now
+	if event.IncidentID != uuid.Nil && !event.At.IsZero() {
+		createdAt = event.At.UTC()
+	}
+	seen := make(map[uuid.UUID]struct{}, len(channels))
+	deliveries := make([]Delivery, 0, len(channels))
+	for _, channel := range channels {
+		if _, ok := seen[channel.ID]; ok {
+			continue
+		}
+		seen[channel.ID] = struct{}{}
+		if !channel.Enabled || !channel.Wants(event) {
+			continue
+		}
+		deliveries = append(deliveries, Delivery{
+			ID:            uuid.New(),
+			ChannelID:     channel.ID,
+			EventType:     string(event.Key()),
+			Status:        DeliveryPending,
+			CreatedAt:     createdAt,
+			DedupeKey:     identity,
+			Payload:       payload,
+			IncidentID:    event.IncidentID,
+			NextAttemptAt: createdAt,
+		})
+	}
+	writeCtx, writeCancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
+	defer writeCancel()
+	if err := s.repo.PersistDeliveries(writeCtx, deliveries); err != nil {
+		s.logger.Error("notifications: persist deliveries",
+			"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
+		return err
+	}
+	s.kick()
+	return nil
+}
+
+func (s *Service) kick() {
 	select {
-	case s.queue <- event:
-		return nil
+	case s.wake <- struct{}{}:
 	default:
-		s.logger.Warn("notifications: queue is full; keeping incident intent retryable",
-			"event", string(event.Key()), "resource_id", event.ResourceID.String())
-		return errors.New("notifications: queue is full")
 	}
 }
 
@@ -703,53 +907,86 @@ func (s *Service) start() {
 			s.wg.Add(1)
 			go s.worker()
 		}
+		// Resume work persisted by a previous process.
+		s.kick()
 	})
 }
 
 func (s *Service) worker() {
 	defer s.wg.Done()
+	ticker := time.NewTicker(s.sweepInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-s.baseCtx.Done():
 			return
-		case event := <-s.queue:
-			s.deliver(event)
+		case <-s.wake:
+			s.processDeliveries()
+		case <-ticker.C:
+			s.processDeliveries()
 		}
 	}
 }
 
-func (s *Service) deliver(event Event) {
-	if event.Key() != "" {
-		s.recordNotification(event)
-	}
-	readCtx, cancel := context.WithTimeout(s.baseCtx, dispatchReadTimeout)
-	channels, err := s.repo.ListChannelsForEvent(readCtx, event.ResourceType, event.ResourceID)
-	cancel()
-	if err != nil {
-		if s.baseCtx.Err() == nil {
-			s.logger.Error("notifications: resolve channels for event",
-				"event", string(event.Key()), "resource_id", event.ResourceID.String(), "error", err)
-		}
+// processDeliveries reclaims abandoned leases, expires stale work and sends
+// bounded claimed batches until the queue has nothing eligible.
+func (s *Service) processDeliveries() {
+	if s == nil || s.repo == nil {
 		return
 	}
-	seen := make(map[uuid.UUID]struct{}, len(channels))
-	for _, channel := range channels {
-		if _, ok := seen[channel.ID]; ok {
-			continue
+	now := s.now().UTC()
+	if _, err := s.repo.ReclaimDeliveries(s.baseCtx, now, s.maxAttempts); err != nil && s.baseCtx.Err() == nil {
+		s.logger.Warn("notifications: reclaim abandoned deliveries", "error", err)
+	}
+	if _, err := s.repo.ExpireDeliveries(s.baseCtx, now, now.Add(-maxDeliveryAge)); err != nil && s.baseCtx.Err() == nil {
+		s.logger.Warn("notifications: expire stale deliveries", "error", err)
+	}
+	if _, err := s.repo.CleanupDeliveries(s.baseCtx, now.Add(-terminalRetention)); err != nil && s.baseCtx.Err() == nil {
+		s.logger.Warn("notifications: clean up terminal deliveries", "error", err)
+	}
+	for {
+		claimed, err := s.repo.ClaimDeliveries(s.baseCtx, now, now.Add(s.lease), deliveryClaimBatch)
+		if err != nil {
+			if s.baseCtx.Err() == nil {
+				s.logger.Warn("notifications: claim deliveries", "error", err)
+			}
+			return
 		}
-		seen[channel.ID] = struct{}{}
-		if !channel.Enabled || !channel.Wants(event) {
-			continue
+		for _, delivery := range claimed {
+			s.sendDelivery(delivery)
 		}
-		s.send(channel, event)
+		if len(claimed) < deliveryClaimBatch {
+			return
+		}
+		now = s.now().UTC()
 	}
 }
 
-func (s *Service) send(channel Channel, event Event) {
+func (s *Service) sendDelivery(delivery Delivery) {
+	event, err := decodeEvent(delivery.Payload)
+	if err != nil {
+		s.finishDelivery(delivery, DeliveryFailed, "invalid delivery payload", time.Time{})
+		return
+	}
+	channel, err := s.repo.GetChannel(s.baseCtx, delivery.ChannelID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return // the channel row and its deliveries were deleted together
+		}
+		s.retryOrFail(delivery, 0, "channel lookup failed")
+		return
+	}
+	if !channel.Enabled || !channel.Wants(event) {
+		s.cancelDelivery(delivery, "channel disabled or unsubscribed")
+		return
+	}
+	if event.Action == "recovered" && !s.openingDelivered(delivery) {
+		s.cancelDelivery(delivery, "opening was not delivered")
+		return
+	}
 	notifier, err := s.factory(channel)
 	if err != nil {
-		s.logger.Error("notifications: build notifier",
-			"channel_id", channel.ID.String(), "kind", string(channel.Kind), "error", err)
+		s.finishDelivery(delivery, DeliveryFailed, truncateText(err.Error(), maxDeliveryError), time.Time{})
 		return
 	}
 	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(s.baseCtx), s.sendTimeout)
@@ -758,12 +995,91 @@ func (s *Service) send(channel Channel, event Event) {
 		s.logger.Warn("notifications: delivery failed",
 			"channel_id", channel.ID.String(), "kind", string(channel.Kind),
 			"event", string(event.Key()), "error", err)
-		s.recordDelivery(s.baseCtx, channel.ID, string(event.Key()), DeliveryFailed, err.Error())
+		permanent, retryAfter := classifyDeliveryError(err, channel.Kind)
+		if permanent {
+			s.finishDelivery(delivery, DeliveryFailed, err.Error(), time.Time{})
+			return
+		}
+		s.retryOrFail(delivery, retryAfter, err.Error())
 		return
 	}
 	s.logger.Info("notifications: delivered",
 		"channel_id", channel.ID.String(), "kind", string(channel.Kind), "event", string(event.Key()))
-	s.recordDelivery(s.baseCtx, channel.ID, string(event.Key()), DeliverySucceeded, "")
+	s.finishDelivery(delivery, DeliverySucceeded, "", time.Time{})
+}
+
+func (s *Service) openingDelivered(delivery Delivery) bool {
+	if delivery.IncidentID == uuid.Nil {
+		return true
+	}
+	ok, err := s.repo.HasDeliveredOpening(s.baseCtx, delivery.IncidentID, delivery.ChannelID)
+	if err != nil {
+		s.logger.Warn("notifications: check delivered opening", "error", err)
+		return true
+	}
+	return ok
+}
+
+func (s *Service) retryOrFail(delivery Delivery, retryAfter time.Duration, reason string) {
+	now := s.now().UTC()
+	if delivery.Attempts >= s.maxAttempts || now.Sub(delivery.CreatedAt) >= maxDeliveryAge {
+		summary := truncateText(reason, maxDeliveryError)
+		if delivery.Attempts >= s.maxAttempts {
+			summary = truncateText(reason+"; giving up after "+strconv.Itoa(delivery.Attempts)+" attempts", maxDeliveryError)
+		}
+		s.finishDelivery(delivery, DeliveryFailed, summary, now)
+		return
+	}
+	s.finishDelivery(delivery, DeliveryRetrying, reason, now.Add(s.retryDelay(delivery.Attempts, retryAfter)))
+}
+
+func (s *Service) retryDelay(attempts int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		if retryAfter > maxRetryDelay {
+			return maxRetryDelay
+		}
+		return retryAfter
+	}
+	delay := s.retryBase
+	for i := 1; i < attempts && delay < maxRetryDelay; i++ {
+		delay *= 2
+	}
+	if delay > maxRetryDelay {
+		delay = maxRetryDelay
+	}
+	jitter := time.Duration(mathrand.Int63n(int64(delay/5) + 1))
+	return delay + jitter
+}
+
+func (s *Service) finishDelivery(delivery Delivery, status DeliveryState, summary string, next time.Time) {
+	now := s.now().UTC()
+	delivery.Status = status
+	delivery.ErrorSummary = truncateText(summary, maxDeliveryError)
+	delivery.LeaseUntil = nil
+	delivery.UpdatedAt = now
+	if next.IsZero() {
+		delivery.NextAttemptAt = now
+	} else {
+		delivery.NextAttemptAt = next
+	}
+	if status == DeliveryFailed || status == DeliverySucceeded || status == DeliveryCancelled {
+		completed := now
+		delivery.CompletedAt = &completed
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(s.baseCtx), deliveryRecordTimeout)
+	defer cancel()
+	if err := s.repo.FinishDelivery(writeCtx, delivery); err != nil {
+		s.logger.Warn("notifications: record delivery outcome",
+			"delivery_id", delivery.ID.String(), "status", string(status), "error", err)
+	}
+}
+
+func (s *Service) cancelDelivery(delivery Delivery, reason string) {
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(s.baseCtx), deliveryRecordTimeout)
+	defer cancel()
+	if err := s.repo.CancelDelivery(writeCtx, delivery.ID, truncateText(reason, maxDeliveryError), s.now().UTC()); err != nil {
+		s.logger.Warn("notifications: cancel delivery", "delivery_id", delivery.ID.String(), "error", err)
+	}
 }
 
 func (s *Service) notifierFor(channel Channel) (Notifier, error) {

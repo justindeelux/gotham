@@ -711,6 +711,25 @@ func TestDeliveredHistoryIsBoundedAndPayloadCleared(t *testing.T) {
 	if err != nil || cleared.Payload != "" {
 		t.Fatalf("payload = %q, %v; want it cleared on completion", cleared.Payload, err)
 	}
+	terminalID := uuid.New()
+	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries (id, channel_id, event_type, status, created_at, dedupe_key, payload, next_attempt_at, expires_at)
+		VALUES ($1,$2,'deploy_failure','pending',$3,'terminal-payload','{"Kind":"deploy"}',$3,$4)`, terminalID, channel.ID, now, now.Add(24*time.Hour)); err != nil {
+		t.Fatalf("seed terminal payload row: %v", err)
+	}
+	if err := st.FinishNotificationDelivery(ctx, sqlc.FinishNotificationDeliveryParams{
+		Status:        "terminal_failed",
+		ErrorSummary:  "answered status 500",
+		NextAttemptAt: pgtype.Timestamptz{Time: now, Valid: true},
+		CompletedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt:     pgtype.Timestamptz{Time: now, Valid: true},
+		ID:            pgtype.UUID{Bytes: terminalID, Valid: true},
+	}); err != nil {
+		t.Fatalf("finish terminal: %v", err)
+	}
+	retained, err := st.GetNotificationDelivery(ctx, pgtype.UUID{Bytes: terminalID, Valid: true})
+	if err != nil || retained.Payload == "" {
+		t.Fatalf("terminal payload = %q, %v; want it retained for owner Retry", retained.Payload, err)
+	}
 
 	for i := 0; i < 119; i++ {
 		id := uuid.New()

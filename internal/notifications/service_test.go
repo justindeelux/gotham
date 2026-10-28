@@ -1244,3 +1244,25 @@ func TestDeliveryHealthAndFailuresAreOwnerOnly(t *testing.T) {
 	}
 	_ = channel
 }
+
+func TestRetryRejectsDeliveryWithoutRetainedPayload(t *testing.T) {
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t))
+	service := newTestService(t, repo)
+	userID := uuid.New()
+	delivery := Delivery{
+		ID: uuid.New(), ChannelID: channel.ID, EventType: string(EventDeployFailure),
+		Status: DeliveryFailed, ErrorSummary: "legacy row", CreatedAt: time.Now().UTC(),
+	}
+	if err := repo.PersistDeliveries(context.Background(), []Delivery{delivery}); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	err := service.RetryDelivery(scopedCtx(), userID, delivery.ID)
+	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "no retained payload") {
+		t.Fatalf("RetryDelivery without payload = %v, want a clear validation error", err)
+	}
+	rows := repo.deliveriesFor(channel.ID)
+	if len(rows) != 1 || rows[0].Status != DeliveryFailed {
+		t.Fatalf("rows = %+v, want the terminal row untouched", rows)
+	}
+}

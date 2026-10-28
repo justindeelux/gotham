@@ -83,6 +83,7 @@ onMounted(() => {
             {{ failure.error_summary }}
           </NText>
           <NButton
+            v-if="failure.retryable"
             size="tiny"
             secondary
             :loading="retryingId === failure.id"

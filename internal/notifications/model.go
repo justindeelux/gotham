@@ -652,6 +652,7 @@ type DeliveryFailure struct {
 	ErrorSummary string
 	Attempts     int
 	FailedAt     time.Time
+	Payload      string
 }
 
 type DeliveryFailureView struct {

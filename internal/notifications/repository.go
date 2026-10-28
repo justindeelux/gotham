@@ -170,6 +170,7 @@ func deliveryParams(delivery Delivery) sqlc.CreateNotificationDeliveryParams {
 		Column10:     ts(delivery.NextAttemptAt),
 		CompletedAt:  tsPtr(completed),
 		Column12:     ts(delivery.ExpiresAt),
+		Attempts:     int32(delivery.Attempts),
 	}
 	return params
 }
@@ -398,6 +399,7 @@ func (r *storeRepository) ListTerminalFailures(ctx context.Context, limit int) (
 			ErrorSummary: row.ErrorSummary,
 			Attempts:     int(row.Attempts),
 			FailedAt:     row.CompletedAt.Time,
+			Payload:      row.Payload,
 		})
 	}
 	return failures, nil

@@ -37,8 +37,8 @@ RETURNING *;
 DELETE FROM notification_channels WHERE id = $1;
 
 -- name: CreateNotificationDelivery :one
-INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at, completed_at, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()), $11, COALESCE($12::timestamptz, now() + interval '24 hours'))
+INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at, completed_at, expires_at, attempts)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()), $11, COALESCE($12::timestamptz, now() + interval '24 hours'), $13)
 ON CONFLICT (channel_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
 RETURNING *;
 
@@ -120,15 +120,16 @@ WHERE status IN ('terminal_failed', 'cancelled')
   AND completed_at < sqlc.arg(cutoff);
 
 -- name: FinishNotificationDelivery :exec
--- Completion clears the rendered event so terminal/delivered details stay
--- bounded and never retain a stale payload for the retention window.
+-- Completion clears the rendered event for delivered/cancelled rows. A
+-- terminal failure keeps it so owner Retry can replay the same message; the
+-- 30-day terminal cleanup deletes the retained row (and its payload).
 UPDATE notification_deliveries
 SET status = sqlc.arg(status),
     error_summary = sqlc.arg(error_summary),
     next_attempt_at = sqlc.arg(next_attempt_at),
     lease_until = NULL,
     completed_at = sqlc.narg(completed_at),
-    payload = CASE WHEN sqlc.arg(status) IN ('delivered', 'terminal_failed', 'cancelled') THEN '' ELSE payload END,
+    payload = CASE WHEN sqlc.arg(status) IN ('delivered', 'cancelled') THEN '' ELSE payload END,
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id);
 

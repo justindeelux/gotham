@@ -438,7 +438,7 @@ func TestDeliveryFailureRoutesAreOwnerOnly(t *testing.T) {
 	deliveryID := uuid.New()
 	if err := repo.PersistDeliveries(context.Background(), []Delivery{{
 		ID: deliveryID, ChannelID: channel.ID, EventType: string(EventDeployFailure),
-		Status: DeliveryFailed, ErrorSummary: "answered status 500",
+		Status: DeliveryFailed, ErrorSummary: "answered status 500", Payload: sampleEvent().encode(),
 	}}); err != nil {
 		t.Fatalf("seed terminal delivery: %v", err)
 	}

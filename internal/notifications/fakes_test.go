@@ -514,6 +514,7 @@ func (r *fakeRepository) ListTerminalFailures(_ context.Context, limit int) ([]D
 				ID: delivery.ID, ChannelID: channelID, ChannelName: channel.Name,
 				ChannelKind: channel.Kind, EventType: delivery.EventType,
 				ErrorSummary: delivery.ErrorSummary, Attempts: delivery.Attempts, FailedAt: failedAt,
+				Payload: delivery.Payload,
 			})
 		}
 	}
@@ -718,8 +719,21 @@ func (n *fakeNotifier) Notify(_ context.Context, event Event) error {
 	}
 	n.mu.Lock()
 	n.events = append(n.events, event)
+	err := n.err
 	n.mu.Unlock()
-	return n.err
+	return err
+}
+
+func (n *fakeNotifier) setErr(err error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.err = err
+}
+
+func (n *fakeNotifier) clear() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.events = nil
 }
 
 func (n *fakeNotifier) delivered() []Event {

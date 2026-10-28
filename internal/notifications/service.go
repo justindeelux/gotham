@@ -534,7 +534,7 @@ func deliveryView(delivery Delivery) DeliveryView {
 		CreatedAt:    delivery.CreatedAt,
 		Attempts:     delivery.Attempts,
 		CompletedAt:  delivery.CompletedAt,
-		Retryable:    delivery.Status == DeliveryFailed,
+		Retryable:    delivery.Status == DeliveryFailed && delivery.EventType != testEventType && delivery.Payload != "",
 	}
 	if delivery.Status == DeliveryRetrying && !delivery.NextAttemptAt.IsZero() {
 		next := delivery.NextAttemptAt
@@ -569,7 +569,7 @@ func (s *Service) ListDeliveryFailures(ctx context.Context, userID uuid.UUID) ([
 			ErrorSummary: failure.ErrorSummary,
 			Attempts:     failure.Attempts,
 			FailedAt:     failure.FailedAt,
-			Retryable:    true,
+			Retryable:    failure.EventType != testEventType && failure.Payload != "",
 		})
 	}
 	return views, nil
@@ -588,6 +588,16 @@ func (s *Service) RetryDelivery(ctx context.Context, userID, deliveryID uuid.UUI
 	}
 	if deliveryID == uuid.Nil {
 		return ErrNotFound
+	}
+	delivery, err := s.repo.GetDelivery(ctx, deliveryID)
+	if err != nil {
+		return err
+	}
+	if delivery.EventType == testEventType {
+		return fmt.Errorf("%w: a test delivery cannot be retried; send a new test", ErrValidation)
+	}
+	if delivery.Payload == "" {
+		return fmt.Errorf("%w: delivery has no retained payload to retry", ErrValidation)
 	}
 	ok, err := s.repo.RetryDelivery(ctx, deliveryID, s.now().UTC())
 	if err != nil {
@@ -713,6 +723,7 @@ func (s *Service) recordDelivery(ctx context.Context, channelID uuid.UUID, event
 		EventType:     eventType,
 		Status:        status,
 		ErrorSummary:  truncateText(errorSummary, maxDeliveryError),
+		Attempts:      1,
 		CreatedAt:     now,
 		NextAttemptAt: now,
 		CompletedAt:   &completed,

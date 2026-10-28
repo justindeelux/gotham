@@ -169,8 +169,8 @@ func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotif
 }
 
 const createNotificationDelivery = `-- name: CreateNotificationDelivery :one
-INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at, completed_at, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()), $11, COALESCE($12::timestamptz, now() + interval '24 hours'))
+INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, next_attempt_at, completed_at, expires_at, attempts)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()), $11, COALESCE($12::timestamptz, now() + interval '24 hours'), $13)
 ON CONFLICT (channel_id, dedupe_key) WHERE dedupe_key <> '' DO NOTHING
 RETURNING id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, incident_id, attempts, next_attempt_at, expires_at, lease_until, completed_at, updated_at
 `
@@ -188,6 +188,7 @@ type CreateNotificationDeliveryParams struct {
 	Column10     pgtype.Timestamptz `json:"column_10"`
 	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
 	Column12     pgtype.Timestamptz `json:"column_12"`
+	Attempts     int32              `json:"attempts"`
 }
 
 func (q *Queries) CreateNotificationDelivery(ctx context.Context, arg CreateNotificationDeliveryParams) (NotificationDelivery, error) {
@@ -204,6 +205,7 @@ func (q *Queries) CreateNotificationDelivery(ctx context.Context, arg CreateNoti
 		arg.Column10,
 		arg.CompletedAt,
 		arg.Column12,
+		arg.Attempts,
 	)
 	var i NotificationDelivery
 	err := row.Scan(
@@ -336,7 +338,7 @@ SET status = $1,
     next_attempt_at = $3,
     lease_until = NULL,
     completed_at = $4,
-    payload = CASE WHEN $1 IN ('delivered', 'terminal_failed', 'cancelled') THEN '' ELSE payload END,
+    payload = CASE WHEN $1 IN ('delivered', 'cancelled') THEN '' ELSE payload END,
     updated_at = $5
 WHERE id = $6
 `
@@ -350,8 +352,9 @@ type FinishNotificationDeliveryParams struct {
 	ID            pgtype.UUID        `json:"id"`
 }
 
-// Completion clears the rendered event so terminal/delivered details stay
-// bounded and never retain a stale payload for the retention window.
+// Completion clears the rendered event for delivered/cancelled rows. A
+// terminal failure keeps it so owner Retry can replay the same message; the
+// 30-day terminal cleanup deletes the retained row (and its payload).
 func (q *Queries) FinishNotificationDelivery(ctx context.Context, arg FinishNotificationDeliveryParams) error {
 	_, err := q.db.Exec(ctx, finishNotificationDelivery,
 		arg.Status,

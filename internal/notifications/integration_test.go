@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -114,44 +115,86 @@ func TestEnqueueWritesInboxAndDeliveriesInOneTransaction(t *testing.T) {
 	}
 }
 
-func TestOwnerRetrySendsDeliveryOlderThan24Hours(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	st := scratchNotificationStore(t)
-	channel := integrationChannel(t, st)
-	owner, err := st.CreateFirstUser(ctx, "retry-owner@example.com", nil)
-	if err != nil {
-		t.Fatalf("create owner: %v", err)
-	}
-	service, notifiers := newIntegrationService(t, st, channel)
-
-	now := time.Now().UTC()
-	event := Event{
-		Kind: EventDeploy, Outcome: OutcomeFailure, ResourceType: ResourceApplication,
-		ResourceID: uuid.New(), Name: "shop-web", Error: "build failed", At: now.Add(-26 * time.Hour),
-	}
-	deliveryID := uuid.New()
-	if _, err := st.DB.Exec(ctx, `INSERT INTO notification_deliveries
-		(id, channel_id, event_type, status, error_summary, created_at, dedupe_key, payload, next_attempt_at, expires_at, completed_at)
-		VALUES ($1,$2,$3,'terminal_failed','answered status 401',$4,$5,$6,$4,$7,$4)`,
-		deliveryID, channel.ID, string(event.Key()), now.Add(-26*time.Hour), event.Identity(), event.encode(), now.Add(-2*time.Hour)); err != nil {
-		t.Fatalf("seed old terminal delivery: %v", err)
-	}
-	if err := service.RetryDelivery(ctx, uuidFromPG(owner.ID), deliveryID); err != nil {
-		t.Fatalf("RetryDelivery: %v", err)
-	}
-	waitFor(t, "the retried delivery", func() bool {
-		return len(notifiers[channel.ID].delivered()) == 1
+func waitDeliveryStatus(t *testing.T, service *Service, channelID uuid.UUID, status DeliveryState) Delivery {
+	t.Helper()
+	var found Delivery
+	waitFor(t, "delivery status "+string(status), func() bool {
+		rows, err := service.repo.ListDeliveries(context.Background(), channelID, 10)
+		if err != nil {
+			return false
+		}
+		for _, row := range rows {
+			if row.Status == status {
+				found = row
+				return true
+			}
+		}
+		return false
 	})
-	row, err := service.repo.GetDelivery(ctx, deliveryID)
-	if err != nil {
-		t.Fatalf("get retried delivery: %v", err)
+	return found
+}
+
+func TestOwnerRetryResendsTerminalFailuresFromRealPath(t *testing.T) {
+	cases := []struct {
+		name       string
+		failure    error
+		maxAttempt int
+		age        bool
+	}{
+		{name: "permanent", failure: &sendFailure{message: "answered status 401", permanent: true}},
+		{name: "attempts exhausted", failure: &sendFailure{message: "answered status 503"}, maxAttempt: 1},
+		{name: "older than 24 hours", failure: &sendFailure{message: "answered status 401", permanent: true}, age: true},
 	}
-	if row.Status != DeliverySucceeded {
-		t.Fatalf("retried delivery status = %q, want delivered", row.Status)
-	}
-	if !row.ExpiresAt.After(now.Add(23 * time.Hour)) {
-		t.Fatalf("expires_at = %s, want a fresh 24-hour window from the retry", row.ExpiresAt)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := scratchNotificationStore(t)
+			channel := integrationChannel(t, st)
+			owner, err := st.CreateFirstUser(context.Background(), "retry-"+uuid.NewString()+"@example.com", nil)
+			if err != nil {
+				t.Fatalf("create owner: %v", err)
+			}
+			service, notifiers := newIntegrationService(t, st, channel)
+			if tc.maxAttempt > 0 {
+				service.maxAttempts = tc.maxAttempt
+			}
+			notifier := notifiers[channel.ID]
+			notifier.setErr(tc.failure)
+			event := Event{
+				Kind: EventDeploy, Outcome: OutcomeFailure, ResourceType: ResourceApplication,
+				ResourceID: uuid.New(), Name: "shop-web", Error: "build failed", At: time.Now().UTC(),
+			}
+			if err := service.Enqueue(event); err != nil {
+				t.Fatalf("enqueue: %v", err)
+			}
+			failed := waitDeliveryStatus(t, service, channel.ID, DeliveryFailed)
+			if failed.Payload == "" {
+				t.Fatal("terminal failure cleared the payload Retry needs")
+			}
+			if failed.Attempts < 1 {
+				t.Fatalf("terminal attempts = %d, want the recorded provider attempt", failed.Attempts)
+			}
+			if tc.age {
+				if _, err := st.DB.Exec(context.Background(), `UPDATE notification_deliveries SET created_at = created_at - interval '26 hours', expires_at = now() - interval '2 hours' WHERE id = $1`, failed.ID); err != nil {
+					t.Fatalf("age terminal row: %v", err)
+				}
+			}
+			notifier.setErr(nil)
+			notifier.clear()
+			if err := service.RetryDelivery(context.Background(), uuidFromPG(owner.ID), failed.ID); err != nil {
+				t.Fatalf("RetryDelivery: %v", err)
+			}
+			delivered := waitDeliveryStatus(t, service, channel.ID, DeliverySucceeded)
+			if delivered.Payload != "" {
+				t.Fatalf("delivered payload = %q, want it cleared", delivered.Payload)
+			}
+			sent := notifier.delivered()
+			if len(sent) != 1 || sent[0].Name != "shop-web" {
+				t.Fatalf("sent = %+v, want the retried message delivered once", sent)
+			}
+			if !delivered.ExpiresAt.After(time.Now().Add(23 * time.Hour)) {
+				t.Fatalf("delivered expires_at = %s, want a fresh retry window", delivered.ExpiresAt)
+			}
+		})
 	}
 }
 
@@ -234,5 +277,55 @@ func TestFinishDeliveryClearsPayloadOnRealTable(t *testing.T) {
 	row, err := repo.GetDelivery(ctx, delivery.ID)
 	if err != nil || row.Payload != "" {
 		t.Fatalf("payload = %q, %v; want it cleared on completion", row.Payload, err)
+	}
+}
+
+func TestTestSendIsNotRetryableAndUpdatesHealth(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := scratchNotificationStore(t)
+	channel := integrationChannel(t, st)
+	owner, err := st.CreateFirstUser(ctx, "testsend-"+uuid.NewString()+"@example.com", nil)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	service, notifiers := newIntegrationService(t, st, channel)
+	notifier := notifiers[channel.ID]
+	notifier.setErr(&sendFailure{message: "answered status 500"})
+
+	result, err := service.TestChannel(ctx, uuidFromPG(owner.ID), channel.ID)
+	if err != nil || result.OK {
+		t.Fatalf("TestChannel(failing) = %+v, %v; want a failed result", result, err)
+	}
+	history, err := service.ListDeliveries(ctx, uuidFromPG(owner.ID), channel.ID)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("history = %+v, %v", history, err)
+	}
+	failure := history[0]
+	if failure.Status != DeliveryFailed || failure.Attempts != 1 || failure.Retryable {
+		t.Fatalf("test-send history = %+v, want a terminal non-retryable row with one attempt", failure)
+	}
+	if failure.ErrorSummary == "" {
+		t.Fatal("test-send failure lost its reason")
+	}
+	if err := service.RetryDelivery(ctx, uuidFromPG(owner.ID), failure.ID); !errors.Is(err, ErrValidation) {
+		t.Fatalf("RetryDelivery(test) = %v, want a clear validation error", err)
+	}
+	attention, err := service.ListDeliveryFailures(ctx, uuidFromPG(owner.ID))
+	if err != nil || len(attention) != 1 || attention[0].Retryable {
+		t.Fatalf("attention failures = %+v, %v; want the test-send hidden from Retry", attention, err)
+	}
+
+	notifier.setErr(nil)
+	if result, err := service.TestChannel(ctx, uuidFromPG(owner.ID), channel.ID); err != nil || !result.OK {
+		t.Fatalf("TestChannel(recovered) = %+v, %v; want a delivered retest", result, err)
+	}
+	history, err = service.ListDeliveries(ctx, uuidFromPG(owner.ID), channel.ID)
+	if err != nil || len(history) != 2 || history[0].Status != DeliverySucceeded {
+		t.Fatalf("history after retest = %+v, %v; want the delivered retest newest", history, err)
+	}
+	views, err := service.ListChannels(ctx, uuidFromPG(owner.ID))
+	if err != nil || len(views) != 1 || views[0].Health == nil || views[0].Health.Status != "ok" {
+		t.Fatalf("channel health after retest = %+v, %v; want ok", views, err)
 	}
 }

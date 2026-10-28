@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
+import { waitForLayoutSettled } from "./support";
+
 /* global document:readonly, HTMLElement:readonly, URL:readonly, window:readonly */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
@@ -1004,8 +1006,16 @@ test("the theme menu on a container session sends no PTY input and shows no host
   const rows = await page.locator(".term-surface .xterm-rows").innerText();
   expect(rows).not.toContain("Gotham");
 
-  await page.locator(".term-theme-btn").click();
-  await page.locator(".term-theme-option", { hasText: "Gotham Light" }).click();
+  await waitForLayoutSettled(page);
+  const themeButton = page.locator(".term-theme-btn");
+  await expect(themeButton).toBeVisible();
+  await themeButton.click();
+  await expect(themeButton).toHaveAttribute("aria-expanded", "true");
+  const lightOption = page.locator(".term-theme-option", {
+    hasText: "Gotham Light",
+  });
+  await expect(lightOption).toBeVisible();
+  await lightOption.click();
   await expect(page.locator(".term-surface")).toHaveAttribute(
     "data-theme",
     "gotham-light",
@@ -1013,4 +1023,3 @@ test("the theme menu on a container session sends no PTY input and shows no host
   expect(ledger.inputs).toEqual([]);
   expect(ledger.creates).toHaveLength(1);
 });
-

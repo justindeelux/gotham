@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { waitForLayoutSettled } from "./support";
+
 /* global URL, document, getComputedStyle, window:readonly, Element, HTMLElement */
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
@@ -195,6 +197,7 @@ test("ordinary page headers share one computed style contract", async ({ page })
     await page.setViewportSize({ width: 1366, height: 900 });
     await page.goto(`${baseURL}${route}`);
     await page.locator(".page-head .eyebrow").first().waitFor();
+    await waitForLayoutSettled(page);
     const desktop = await measure(page);
 
     expect(desktop.gap, `${route} header gap`).toBe("16px");
@@ -251,6 +254,7 @@ test("ordinary page headers share one computed style contract", async ({ page })
     }
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await waitForLayoutSettled(page);
     const mobile = await measure(page);
     expect(mobile.overflow, `${route} horizontal overflow at 390px`).toBe(false);
     expect(mobile.eyebrow.fontSize, `${route} eyebrow size at 390px`).toBe(
